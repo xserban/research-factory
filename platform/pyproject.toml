@@ -2,7 +2,7 @@
 name = "factory"
 version = "0.1.0"
 requires-python = ">=3.11"
-dependencies = ["pydantic>=2.7", "sqlalchemy>=2.0", "typer>=0.12", "mcp>=1.6"]
+dependencies = ["pydantic>=2.7", "sqlalchemy>=2.0", "typer>=0.12", "mcp>=2.3,<3"]
 
 [project.scripts]
 factory = "factory.cli.main:app"
