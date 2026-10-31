@@ -7,6 +7,7 @@ from factory.events.blobs import BlobStore
 from factory.events.catalog import EventCatalog, EventType
 from factory.events.envelope import Actor
 from factory.events.factory import EventFactory
+from factory.events.writer import EventWriter
 from factory.model.identity import IdGenerator
 from tests.helpers import S2, SESSION, T0, Demo
 
@@ -36,6 +37,16 @@ def cat() -> EventCatalog:
 @pytest.fixture
 def blobs(tmp_path: Path) -> BlobStore:
     return BlobStore(tmp_path / "blobs")
+
+
+@pytest.fixture
+def events_dir(tmp_path: Path) -> Path:
+    return tmp_path / "events"
+
+
+@pytest.fixture
+def writer(events_dir: Path, cat: EventCatalog, blobs: BlobStore) -> EventWriter:
+    return EventWriter(events_dir, project="demo", catalog=cat, blobs=blobs)
 
 
 @pytest.fixture
