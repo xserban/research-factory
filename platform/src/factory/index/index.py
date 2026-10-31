@@ -1,3 +1,4 @@
+import fcntl
 import hashlib
 import os
 from collections.abc import Iterator
@@ -13,6 +14,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Connection
 
 from factory.canonical import canonical_json
+from factory.clock import format_ts
 from factory.events.catalog import EventCatalog
 from factory.events.envelope import Event
 from factory.events.reader import event_files, read_file
@@ -45,9 +47,40 @@ class Index:
         self._catalog = catalog
         self._projection = projection
         self._engine = _make_engine(db_path)
+        self._identity = _file_identity(db_path)
 
     def sync(self) -> SyncResult:
         """Apply new events incrementally, or rebuild when the index can't be trusted."""
+        with self._locked():
+            return self._sync()
+
+    def rebuild(self) -> str:
+        """Rebuild the projection from the event log and return its state hash."""
+        with self._locked():
+            self._build()
+            return self.state_hash()
+
+    @contextmanager
+    def _locked(self) -> Iterator[None]:
+        """Hold the exclusive cross-process lock, with an engine on the current DB file."""
+        self._db_path.parent.mkdir(parents=True, exist_ok=True)
+        with (self._db_path.parent / "lock").open("a") as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                self._refresh_engine()
+                yield
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+    def _refresh_engine(self) -> None:
+        """Replace the engine if another process swapped in a new DB file."""
+        identity = _file_identity(self._db_path)
+        if identity is not None and identity != self._identity:
+            self._engine.dispose()
+            self._engine = _make_engine(self._db_path)
+            self._identity = identity
+
+    def _sync(self) -> SyncResult:
         if not self._db_path.exists():
             return self._rebuilt()
         stored = self._read_stored()
@@ -84,12 +117,8 @@ class Index:
             self._set_meta(conn, _LAST_EVENT_ID, new[-1].id)
         return SyncResult(applied=len(new), rebuilt=False)
 
-    def rebuild(self) -> str:
-        """Rebuild the projection from the event log and return its state hash."""
-        self._build()
-        return self.state_hash()
-
     def state_hash(self) -> str:
+        self._refresh_engine()
         digest = hashlib.sha256()
         tables = sorted(
             (
@@ -111,6 +140,7 @@ class Index:
     @contextmanager
     def connect(self) -> Iterator[Connection]:
         """A connection for read access; services must not write through it."""
+        self._refresh_engine()
         with self._engine.connect() as conn:
             yield conn
 
@@ -121,7 +151,7 @@ class Index:
         """Build a fresh DB beside the live one, then atomically swap it in."""
         events, offsets = self._read_everything()
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self._db_path.with_name(self._db_path.name + ".tmp")
+        tmp = self._db_path.with_name(f"{self._db_path.name}.tmp-{os.getpid()}")
         _remove_files(*_with_sidecars(tmp))
 
         engine = _make_engine(tmp)
@@ -132,14 +162,18 @@ class Index:
                 self._set_meta(conn, _PROJECTION_VERSION, self._projection.version)
                 if events:
                     self._set_meta(conn, _LAST_EVENT_ID, events[-1].id)
-        finally:
+        except BaseException:
             engine.dispose()
+            _remove_files(*_with_sidecars(tmp))
+            raise
+        engine.dispose()
 
         # Cached connections must not hold the old file open across the swap.
         self._engine.dispose()
         _remove_files(*_sidecars(self._db_path))
         os.replace(tmp, self._db_path)
         self._engine = _make_engine(self._db_path)
+        self._identity = _file_identity(self._db_path)
         return len(events)
 
     def _read_everything(self) -> tuple[list[Event], dict[str, int]]:
@@ -214,7 +248,7 @@ def _event_row(event: Event) -> dict[str, JsonValue]:
     refs: list[JsonValue] = [*event.refs]
     return {
         "id": event.id,
-        "ts": event.model_dump(mode="json", by_alias=True)["ts"],
+        "ts": format_ts(event.ts),
         "type": event.type,
         "actor_kind": event.actor.kind,
         "actor_id": event.actor.id,
@@ -225,6 +259,14 @@ def _event_row(event: Event) -> dict[str, JsonValue]:
         "input_blob": event.input_blob,
         "refs": canonical_json(refs).decode(),
     }
+
+
+def _file_identity(path: Path) -> tuple[int, int] | None:
+    try:
+        stat = path.stat()
+    except FileNotFoundError:
+        return None
+    return stat.st_dev, stat.st_ino
 
 
 def _relative(path: Path, events_dir: Path) -> str:
