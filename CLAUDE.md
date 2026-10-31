@@ -3,7 +3,7 @@
 ## What this project is
 A deterministic platform that lets Claude run rigorous, traceable research (literature search, screening, extraction, hypothesis testing). Read `README.md` for the document index.
 
-**Status:** planning complete for slice 1; implementation not started.
+**Status:** planning complete for slice 1; sub-plan 1 (platform core) implemented — see docs/plans/2026-10-31-platform-core.md.
 
 ## Binding documents (read before planning or coding)
 1. `docs/specs/00-system.md` — system contracts (layout, IDs, events, index, MCP conventions, quality bars).
