@@ -5,7 +5,7 @@ from factory.index.projection import Handler, Projection, core_tables
 from factory.index.tasks import task_handlers, tasks_table
 
 # Bump on any change to the tables or handlers below; the index is then rebuilt.
-PROJECTION_VERSION = "2"
+PROJECTION_VERSION = "3"
 
 
 def default_projection() -> Projection:

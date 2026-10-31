@@ -304,3 +304,39 @@ def test_empty_result_ref_is_rejected_and_writes_nothing(project: Project, agent
         complete_task(project, agent, t.task_id, [""])
     assert err.value.issues[0].field == "result_refs"
     assert get_task(project, t.task_id).status == TaskStatus.CLAIMED  # type: ignore[union-attr]
+
+
+def _claim_with_generator_ahead(
+    project: Project, agent: Actor, clock: FixedClock
+) -> tuple[str, FixedClock]:
+    """Claim a task, then push the ID generator to the lease end while the clock guard passes."""
+    create_tasks(project, project.system_actor(), [TaskSpec("demo", 1)])
+    t = claim_next(project, agent, "demo")
+    assert t is not None and t.lease_until is not None
+    just_before = clock.now()
+    clock.advance(t.lease_until - clock.now())
+    project.ids.ulid()  # the monotonic generator now never issues a ts before the lease end
+    clock.advance(timedelta(milliseconds=-1) - (clock.now() - t.lease_until))
+    assert clock.now() < t.lease_until and clock.now() > just_before
+    return t.task_id, clock
+
+
+def test_complete_raises_when_the_lease_lapses_before_the_event_is_recorded(
+    project: Project, agent: Actor, clock: FixedClock
+) -> None:
+    task_id, _ = _claim_with_generator_ahead(project, agent, clock)
+    with pytest.raises(FactoryValidationError) as err:
+        complete_task(project, agent, task_id)
+    assert err.value.issues[0].field == "task_id"
+    assert "lease expired" in err.value.issues[0].reason
+    assert get_task(project, task_id).status == TaskStatus.CLAIMED  # type: ignore[union-attr]
+
+
+def test_release_raises_when_the_lease_lapses_before_the_event_is_recorded(
+    project: Project, agent: Actor, clock: FixedClock
+) -> None:
+    task_id, _ = _claim_with_generator_ahead(project, agent, clock)
+    with pytest.raises(FactoryValidationError) as err:
+        release_task(project, agent, task_id, "gave up")
+    assert "lease expired" in err.value.issues[0].reason
+    assert get_task(project, task_id).status == TaskStatus.CLAIMED  # type: ignore[union-attr]

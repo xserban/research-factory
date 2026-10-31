@@ -80,4 +80,3 @@ def project_status(project: Project) -> ProjectStatus:
         last_event_at=parse_ts(str(last)) if last is not None else None,
         tasks=task_counts(project),
     )
-

@@ -117,6 +117,7 @@ def complete_task(
             )
         ]
     )
+    _require_outcome(project, task_id, TaskStatus.COMPLETED)
 
 
 def release_task(project: Project, actor: Actor, task_id: str, reason: str) -> None:
@@ -132,6 +133,7 @@ def release_task(project: Project, actor: Actor, task_id: str, reason: str) -> N
             )
         ]
     )
+    _require_outcome(project, task_id, TaskStatus.OPEN)
 
 
 def get_task(project: Project, task_id: str) -> Task | None:
@@ -241,6 +243,18 @@ def _require_holder(project: Project, actor: Actor, task_id: str) -> Task:
             [ValidationIssue("task_id", "not actively claimed by this session")]
         )
     return task
+
+
+def _require_outcome(project: Project, task_id: str, expected: TaskStatus) -> None:
+    """The projector re-checks the lease at the event's own timestamp; surface a disagreement.
+
+    The event stays in the log (append-only); the projector ignored it.
+    """
+    task = get_task(project, task_id)
+    if task is None or task.status != expected:
+        raise FactoryValidationError(
+            [ValidationIssue("task_id", "lease expired before the event was recorded")]
+        )
 
 
 def _opt_str(value: Any) -> str | None:

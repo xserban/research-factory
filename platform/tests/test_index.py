@@ -232,3 +232,47 @@ def test_deleted_index_is_rebuilt_on_sync(
     # A missing DB is rebuilt from the event log and yields the same state.
     assert result.rebuilt
     assert index.state_hash() == before
+
+
+def test_handler_failure_mid_batch_leaves_the_index_unchanged(
+    tmp_path: Path, clock: FixedClock
+) -> None:
+    metadata = MetaData()
+    core_tables(metadata)
+
+    def explode(conn: Connection, event: Event) -> None:
+        if event.payload["n"] == 99:
+            raise RuntimeError("bad event")
+
+    projection = Projection(version="t1", metadata=metadata, handlers={"demo.recorded": explode})
+    index = Index(
+        tmp_path / ".index" / "factory.sqlite", tmp_path / "events", demo_catalog(), projection
+    )
+    writer = EventWriter(
+        tmp_path / "events", project="demo", catalog=demo_catalog(), blobs=BlobStore(tmp_path / "b")
+    )
+    factory = EventFactory("demo", demo_catalog(), IdGenerator(clock))
+    actor = Actor(kind="human", id="obd", user="obd", session=SESSION)
+    writer.append([factory.make("demo.recorded", Demo(n=1), actor)])
+    index.sync()
+
+    def snapshot() -> tuple[str, list[tuple[str, int]], int]:
+        with index.connect() as conn:
+            offsets = [
+                (str(f), int(o))
+                for f, o in conn.execute(text("SELECT file, offset FROM sync_state ORDER BY file"))
+            ]
+            count = int(conn.execute(text("SELECT COUNT(*) FROM events")).scalar_one())
+        return index.state_hash(), offsets, count
+
+    before = snapshot()
+    clock.advance(timedelta(milliseconds=1))
+    writer.append(
+        [
+            factory.make("demo.recorded", Demo(n=2), actor),
+            factory.make("demo.recorded", Demo(n=99), actor),
+        ]
+    )
+    with pytest.raises(RuntimeError):
+        index.sync()
+    assert snapshot() == before
