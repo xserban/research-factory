@@ -113,3 +113,18 @@ def test_read_from_offset_returns_only_new_events(
     res = read_file(path, cat, start=first.end_offset)
     assert [e.id for e in res.events] == [second_event.id]
     assert res.end_offset == path.stat().st_size and not res.truncated_tail
+
+
+def test_append_after_partial_write_recovers(
+    writer: EventWriter, factory: EventFactory, human: Actor, events_dir: Path, cat: EventCatalog
+) -> None:
+    first_event = factory.make("demo.recorded", Demo(n=1), human)
+    writer.append([first_event])
+    path = event_files(events_dir)[0]
+    with path.open("ab") as f:
+        f.write(b'{"id": "ev_')
+    second_event = factory.make("demo.recorded", Demo(n=2), human)
+    writer.append([second_event])
+    res = read_file(path, cat)
+    assert [e.id for e in res.events] == [first_event.id, second_event.id]
+    assert not res.truncated_tail
