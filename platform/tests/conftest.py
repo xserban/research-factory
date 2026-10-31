@@ -3,12 +3,15 @@ from pathlib import Path
 import pytest
 
 from factory.clock import FixedClock
+from factory.config import Settings
 from factory.events.blobs import BlobStore
 from factory.events.catalog import EventCatalog, EventType
 from factory.events.envelope import Actor
 from factory.events.factory import EventFactory
 from factory.events.writer import EventWriter
 from factory.model.identity import IdGenerator
+from factory.services.context import Project
+from factory.services.project import init_project
 from tests.helpers import S2, SESSION, T0, Demo
 
 
@@ -74,3 +77,13 @@ def agent() -> Actor:
         model="claude-opus-5-5",
         skill="rf-screen@1a2b3c4d",
     )
+
+
+@pytest.fixture
+def settings(tmp_path: Path) -> Settings:
+    return Settings(root=tmp_path, user="obd")
+
+
+@pytest.fixture
+def project(settings: Settings, clock: FixedClock) -> Project:
+    return init_project(settings, "demo", "pilot", session=SESSION, clock=clock)

@@ -2,6 +2,7 @@ import re
 from dataclasses import dataclass
 
 from factory.model.base import StrictModel
+from factory.model.project import ProjectCreated
 
 _NAME_RE = re.compile(r"[a-z][a-z_]*\.[a-z][a-z_]*")
 
@@ -37,5 +38,7 @@ class EventCatalog:
 
 
 def default_catalog() -> EventCatalog:
-    """The production catalog; Tasks 6-7 register the project and task events."""
-    return EventCatalog()
+    """The production catalog: every event type the platform writes."""
+    catalog = EventCatalog()
+    catalog.register(EventType("project.created", ProjectCreated, 1))
+    return catalog
