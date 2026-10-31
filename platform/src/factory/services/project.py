@@ -8,6 +8,7 @@ from factory.errors import FactoryValidationError, ProjectNotFoundError, Validat
 from factory.model.base import StrictModel
 from factory.model.project import ProjectCreated, RigorMode
 from factory.services.context import Project, ProjectPaths, build_project, slug_issues
+from factory.services.tasks import TaskCounts, task_counts
 
 
 class ProjectStatus(StrictModel):
@@ -17,6 +18,7 @@ class ProjectStatus(StrictModel):
     events_total: int
     events_by_type: dict[str, int]
     last_event_at: datetime | None
+    tasks: TaskCounts
 
 
 def init_project(
@@ -71,6 +73,7 @@ def project_status(project: Project) -> ProjectStatus:
         events_total=sum(by_type.values()),
         events_by_type=by_type,
         last_event_at=_parse_ts(str(last)) if last is not None else None,
+        tasks=task_counts(project),
     )
 
 

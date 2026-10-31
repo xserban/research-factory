@@ -5,9 +5,11 @@ import pytest
 from factory.clock import FixedClock
 from factory.config import Settings
 from factory.errors import FactoryValidationError, ProjectNotFoundError
+from factory.events.envelope import Actor
 from factory.model.project import RigorMode
 from factory.services.context import Project, list_projects, open_project
 from factory.services.project import init_project, project_status
+from factory.services.tasks import TaskCounts, TaskSpec, claim_next, create_tasks
 from tests.helpers import SESSION
 
 
@@ -73,3 +75,9 @@ def test_status_survives_index_deletion(project: Project) -> None:
     before = project_status(project)
     shutil.rmtree(project.paths.dir / ".index")
     assert project_status(project) == before
+
+
+def test_status_reports_task_counts(project: Project, agent: Actor) -> None:
+    create_tasks(project, project.system_actor(), [TaskSpec("demo", 1), TaskSpec("demo", 2)])
+    assert claim_next(project, agent, "demo") is not None
+    assert project_status(project).tasks == TaskCounts(open=1, claimed=1, expired=0, completed=0)

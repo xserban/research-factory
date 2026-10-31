@@ -11,6 +11,7 @@ from pydantic import (
 )
 
 from factory.canonical import canonical_json
+from factory.clock import format_ts
 from factory.events.blobs import BLOB_REF_RE
 from factory.model.base import StrictModel
 from factory.model.identity import ACTOR_ID_RE, SLUG_RE, ULID_RE, ulid_time
@@ -19,7 +20,6 @@ ActorKind = Literal["human", "agent", "system"]
 
 SKILL_RE = r"^[a-z0-9][a-z0-9-]*@[0-9a-f]{8,64}$"
 EVENT_ID_RE = rf"^ev_{ULID_RE}$"
-_TS_FORMAT = "%Y-%m-%dT%H:%M:%S."
 _ZERO = timedelta(0)
 
 
@@ -78,7 +78,7 @@ class Event(StrictModel):
 
     @field_serializer("ts", when_used="json")
     def _serialize_ts(self, value: datetime) -> str:
-        return value.strftime(_TS_FORMAT) + f"{value.microsecond // 1000:03d}Z"
+        return format_ts(value)
 
     def to_line(self) -> bytes:
         data: dict[str, JsonValue] = self.model_dump(mode="json", by_alias=True)

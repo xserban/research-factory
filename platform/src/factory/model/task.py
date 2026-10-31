@@ -1,0 +1,51 @@
+from datetime import datetime, timedelta
+from enum import StrEnum
+
+from pydantic import AwareDatetime, Field
+
+from factory.model.base import StrictModel
+from factory.model.identity import ULID_RE
+
+TASK_LEASE = timedelta(minutes=30)
+TASK_KIND_RE = r"^[a-z][a-z_]*$"
+TASK_ID_RE = rf"^tsk_{ULID_RE}$"
+
+
+class TaskStatus(StrEnum):
+    OPEN = "open"
+    CLAIMED = "claimed"
+    COMPLETED = "completed"
+
+
+class Task(StrictModel):
+    """Read model of one task, as the projection holds it."""
+
+    task_id: str
+    kind: str
+    status: TaskStatus
+    content_blob: str
+    refs: tuple[str, ...]
+    created_at: datetime
+    claimed_by: str | None
+    claim_session: str | None
+    lease_until: datetime | None
+
+
+class TaskCreated(StrictModel):
+    task_id: str = Field(pattern=TASK_ID_RE)
+    kind: str = Field(pattern=TASK_KIND_RE)
+
+
+class TaskClaimed(StrictModel):
+    task_id: str = Field(pattern=TASK_ID_RE)
+    lease_until: AwareDatetime
+
+
+class TaskCompleted(StrictModel):
+    task_id: str = Field(pattern=TASK_ID_RE)
+    result_refs: tuple[str, ...] = ()
+
+
+class TaskReleased(StrictModel):
+    task_id: str = Field(pattern=TASK_ID_RE)
+    reason: str

@@ -3,6 +3,7 @@ from dataclasses import dataclass
 
 from factory.model.base import StrictModel
 from factory.model.project import ProjectCreated
+from factory.model.task import TaskClaimed, TaskCompleted, TaskCreated, TaskReleased
 
 _NAME_RE = re.compile(r"[a-z][a-z_]*\.[a-z][a-z_]*")
 
@@ -41,4 +42,8 @@ def default_catalog() -> EventCatalog:
     """The production catalog: every event type the platform writes."""
     catalog = EventCatalog()
     catalog.register(EventType("project.created", ProjectCreated, 1))
+    catalog.register(EventType("task.created", TaskCreated, 1))
+    catalog.register(EventType("task.claimed", TaskClaimed, 1))
+    catalog.register(EventType("task.completed", TaskCompleted, 1))
+    catalog.register(EventType("task.released", TaskReleased, 1))
     return catalog

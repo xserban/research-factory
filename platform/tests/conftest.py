@@ -10,7 +10,7 @@ from factory.events.envelope import Actor
 from factory.events.factory import EventFactory
 from factory.events.writer import EventWriter
 from factory.model.identity import IdGenerator
-from factory.services.context import Project
+from factory.services.context import Project, open_project
 from factory.services.project import init_project
 from tests.helpers import S2, SESSION, T0, Demo
 
@@ -80,6 +80,18 @@ def agent() -> Actor:
 
 
 @pytest.fixture
+def agent_other() -> Actor:
+    return Actor(
+        kind="agent",
+        id="screener-b",
+        user="obd",
+        session=S2,
+        model="claude-opus-5-5",
+        skill="rf-screen@1a2b3c4d",
+    )
+
+
+@pytest.fixture
 def settings(tmp_path: Path) -> Settings:
     return Settings(root=tmp_path, user="obd")
 
@@ -87,3 +99,8 @@ def settings(tmp_path: Path) -> Settings:
 @pytest.fixture
 def project(settings: Settings, clock: FixedClock) -> Project:
     return init_project(settings, "demo", "pilot", session=SESSION, clock=clock)
+
+
+@pytest.fixture
+def project_other_session(settings: Settings, clock: FixedClock, project: Project) -> Project:
+    return open_project(settings, "demo", session=S2, clock=clock)
