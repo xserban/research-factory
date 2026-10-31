@@ -1,12 +1,14 @@
 import shutil
+from datetime import timedelta
 
 import pytest
+from sqlalchemy import text
 
 from factory.clock import FixedClock
 from factory.config import Settings
 from factory.errors import FactoryValidationError, ProjectNotFoundError
 from factory.events.envelope import Actor
-from factory.model.project import RigorMode
+from factory.model.project import ProjectCreated, RigorMode
 from factory.services.context import Project, list_projects, open_project
 from factory.services.project import init_project, project_status
 from factory.services.tasks import TaskCounts, TaskSpec, claim_next, create_tasks
@@ -81,3 +83,51 @@ def test_status_reports_task_counts(project: Project, agent: Actor) -> None:
     create_tasks(project, project.system_actor(), [TaskSpec("demo", 1), TaskSpec("demo", 2)])
     assert claim_next(project, agent, "demo") is not None
     assert project_status(project).tasks == TaskCounts(open=1, claimed=1, expired=0, completed=0)
+
+
+def test_duplicate_project_created_does_not_brick_the_index(
+    project: Project, project_other_session: Project, clock: FixedClock
+) -> None:
+    clock.advance(timedelta(milliseconds=1))
+    project_other_session.record(
+        [
+            project_other_session.events.make(
+                "project.created",
+                ProjectCreated(slug="demo", rigor_mode=RigorMode.EXPLORATORY),
+                project_other_session.human_actor(),
+            )
+        ]
+    )
+    project.index.sync()
+    assert project.index.state_hash() == project.index.rebuild()
+    status = project_status(project)
+    assert status.rigor_mode == RigorMode.PILOT
+    assert status.events_total == 2
+
+
+def test_project_row_is_keyed_on_the_event_project(project: Project) -> None:
+    other = project.events.make(
+        "project.created",
+        ProjectCreated(slug="elsewhere", rigor_mode=RigorMode.PILOT),
+        project.human_actor(),
+    )
+    project.writer.append([other])
+    project.index.rebuild()
+    assert project_status(project).slug == "demo"
+    with project.index.connect() as conn:
+        slugs = conn.execute(text("SELECT slug FROM project")).scalars().all()
+    assert slugs == ["demo"]
+
+
+def test_failed_init_removes_its_directory_and_can_be_retried(
+    settings: Settings, clock: FixedClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def boom(self: Project, events: object) -> None:
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(Project, "record", boom)
+    with pytest.raises(RuntimeError):
+        init_project(settings, "demo", "pilot", session=SESSION, clock=clock)
+    assert not (settings.root / "projects" / "demo").exists()
+    monkeypatch.undo()
+    assert project_status(init_project(settings, "demo", "pilot", session=SESSION, clock=clock))

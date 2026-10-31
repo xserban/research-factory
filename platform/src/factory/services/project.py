@@ -1,8 +1,9 @@
+import shutil
 from datetime import datetime
 
 from sqlalchemy import text
 
-from factory.clock import Clock
+from factory.clock import Clock, parse_ts
 from factory.config import Settings
 from factory.errors import FactoryValidationError, ProjectNotFoundError, ValidationIssue
 from factory.model.base import StrictModel
@@ -43,13 +44,17 @@ def init_project(
     except FileExistsError as exc:
         raise FactoryValidationError([ValidationIssue("slug", "project already exists")]) from exc
 
-    project = build_project(settings, slug, session=session, clock=clock)
-    event = project.events.make(
-        "project.created",
-        ProjectCreated(slug=slug, rigor_mode=mode),
-        project.human_actor(),
-    )
-    project.record([event])
+    try:
+        project = build_project(settings, slug, session=session, clock=clock)
+        event = project.events.make(
+            "project.created",
+            ProjectCreated(slug=slug, rigor_mode=mode),
+            project.human_actor(),
+        )
+        project.record([event])
+    except BaseException:
+        shutil.rmtree(paths.dir, ignore_errors=True)
+        raise
     return project
 
 
@@ -69,14 +74,10 @@ def project_status(project: Project) -> ProjectStatus:
     return ProjectStatus(
         slug=slug,
         rigor_mode=RigorMode(row[0]),
-        created_at=_parse_ts(str(row[1])),
+        created_at=parse_ts(str(row[1])),
         events_total=sum(by_type.values()),
         events_by_type=by_type,
-        last_event_at=_parse_ts(str(last)) if last is not None else None,
+        last_event_at=parse_ts(str(last)) if last is not None else None,
         tasks=task_counts(project),
     )
 
-
-def _parse_ts(value: str) -> datetime:
-    # Stored as `YYYY-MM-DDTHH:MM:SS.mmmZ`, which fromisoformat reads once `Z` becomes an offset.
-    return datetime.fromisoformat(value.replace("Z", "+00:00"))
