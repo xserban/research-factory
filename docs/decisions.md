@@ -1,0 +1,42 @@
+# Decision log
+
+Status: **Decided** · **Proposed** (recommended, not yet confirmed) · **Open**.
+
+| # | Topic | Status | Decision / options |
+| --- | --- | --- | --- |
+| 1 | Model access | Decided | Claude subscriptions (Claude Code, claude.ai), not the API |
+| 2 | Language | Decided | Python |
+| 3 | Storage at stage 0 | Decided | SQLite via SQLAlchemy; no Docker, no DB server for now |
+| 4 | Knowledge model | Decided | Graph (regions, foci); onion is a view, not the structure |
+| 5 | Typing | Decided | Strict core (source, claim, provenance); free labels/relations elsewhere; scheduled consolidation and promotion |
+| 6 | Platform calls models? | Decided | No — deterministic platform; all reasoning by Claude via MCP tools |
+| 7 | Source of truth | Decided | Append-only event files (JSONL, one file per writing session) in git as source of truth; SQLite as rebuildable index/projection. See specs/00-system.md §4 |
+| 8 | Orchestration | Decided | Agents pull tasks from a work queue (tasks with leases). See specs/00-system.md §8 |
+| 9 | Embeddings | Open | Whether to use embeddings at all (cheap triage/routing/dedup without spending usage) vs. keyword/citation routing vs. Claude reading everything. If adopted: local model chosen and evaluated for scientific text; record the model behind every vector. Do not inherit arxiv-miner's model |
+| 10 | Teams | Proposed | Ownership + per-person workspaces from day one |
+| 11 | Repository | Proposed | Monorepo: platform / plugin / domain-packs / projects |
+| 12 | Agent packaging | Proposed | Shared Claude Code plugin (skills, subagents, hooks, commands) |
+| 13 | Graph DB | Proposed | Relational property graph first; no graph database |
+| 14 | First step | Proposed | Manual pilot before building |
+| 15 | Pilot idea | Open | Linear attention for vision (B), PINNs for TAVI (A), or reconstruction (C) |
+| 16 | Thesis case study | Open | Keep ND (gold standard exists) vs. switch to own programme; or validate on ND and deploy on own programme |
+| 17 | Property vocabulary | Open | Hand-curated vs. agent-proposed with review (lean: curated first) |
+| 18 | Formalisation level | Decided | v1 strict types: Work, Question, Protocol, Criterion, Seed, Query, SearchRun, Merge, Decision, Task. Generic nodes/edges/labels with the graph slice; claims with the extraction slice |
+| 19 | Workflow | Open | A (drive in VS Code) → B (supervised sessions) + C review for critical code |
+| 20 | Team plan | Open | Whether to move the lab to a Claude Team plan |
+| 21 | Experiment tracker | Open | Which existing tracker to reuse |
+| 22 | Claim format | Open | Nanopublications vs. own schema compatible with them |
+| 23 | Reuse of arxiv-miner | Decided | Extract selectively (see 09-existing-assets.md); no wholesale copy |
+| 24 | Rigor modes | Proposed | Adopt exploratory / pilot / systematic with retroactive promotion (gap list); provenance and protocol versioning mandatory in all modes |
+| 25 | Protocol changes | Proposed | "Amend freely, record always": versioned protocol (hash over criteria, sources, queries, limits — not prose), amendments with reason, semantic flag, computed stale decisions. Replaces "immutable protocol" |
+| 26 | Agent interface | Decided | MCP tools (immediate validation) instead of task/answer files; log the exact task payload the agent saw |
+| 27 | Reuse of research-factory-old | Proposed | Port the literature core (model, ids, dedup, sources, fulltext, screening) with tests; adopt its specs for stages 00–04; rewrite claims/entities generically; drop file store as source of truth, cli.py, vendored skills |
+| 28 | Scope probe | Proposed | Add a scope-probe stage with positive and negative seed papers before any protocol is fixed |
+| 29 | Dual screening | Proposed | Two independent passes, Cohen's κ floor, human calibration set; on Claude-only, use different models/contexts and measure agreement |
+| 30 | Development methodology | Proposed | Use obra/superpowers (MIT) as the process for *building* the platform: install as a Claude Code plugin (not vendored copies), record the version used; TDD mandatory for `platform/`, relaxed for experiment/prototype code; subagent-driven mode for critical modules (provenance, claims, screening, falsification), inline mode for small tasks; specs and plans live in `docs/`; set `SUPERPOWERS_DISABLE_TELEMETRY`. Kept separate from the factory's own research plugin; its `writing-skills` skill used to author and pressure-test the research skills |
+| 31 | Skill sourcing | Proposed | Three plugin groups: (1) development — superpowers (official plugin) + kaizen family, pragmatic-programmer, refactoring-patterns, repo-learning; (2) factory research plugin — written new, drawing on research-factory-old `rf-*` skills, scientific-critical-thinking references, critical-analysis, creative-thinking / ideation lenses; (3) writing plugin for theses and papers. Every plugin carries a provenance manifest pinned to commit SHAs; no skill that calls external model APIs |
+| 32 | Specification approach | Decided | System contracts (specs/00-system.md) fixed before code; detailed spec only for the next slice; later slices outlined (specs/README.md) and specified just in time |
+| 33 | First slice | Proposed | Slice 1 = literature review tracer bullet (specs/slice-1.md); pilot idea "best linear attention for vision" |
+| 34 | Rigour requirements | Proposed | specs/01-rigour.md is binding on every slice (R-01–R-54), consolidated from research-factory-old specs plus agentic additions (skill/model versioning, verified quotes in rationales, statelessness, engineered independence, temporal hold-out contamination). Old specs kept for reference in docs/reference/research-factory-old-spec/ |
+| 35 | Method profiles and defence | Proposed | Protocols declare a method profile (systematic, scoping, SE systematic review, mapping study, rapid, living); PRESS review before searching (in slice 1); defence stage before release (AMSTAR 2 / ROBIS or NeurIPS checklist, simulated peer review, viva, sign-off) in later slices. References verified in references.md (M1–M14) |
+| 36 | Seed hold-out | Proposed | Split positive seeds at random into development (~2/3) and held-out (~1/3) before the scope probe; report held-out recall as the honest figure (R-20, R-24; slice-1 AC 22). First applied in the manual pilot (docs/pilot/) |

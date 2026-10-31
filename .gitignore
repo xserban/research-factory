@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# Factory: rebuildable index and large binaries (decision pending for PDFs)
+projects/*/.index/
+projects/*/blobs/**/*.pdf
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/settings.json
+
+# Claude Code: personal settings stay local; shared project settings are committed
+.claude/settings.local.json
