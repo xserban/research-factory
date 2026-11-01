@@ -295,3 +295,18 @@ def test_systematic_needs_two_passes() -> None:
     assert "screening.passes" in _fields(_check(one_pass, RigorMode.SYSTEMATIC).gaps)
     two_pass = _spec(screening=_screening(passes=2, kappa_enforced=True, dual_sample=None))
     assert _check(two_pass, RigorMode.SYSTEMATIC).gaps == []
+
+
+def test_pilot_rejects_audit_minimum_below_50() -> None:
+    small = _spec(screening=_screening(audit_minimum=49, kappa_enforced=False))
+    fields = _fields(_check(small, RigorMode.PILOT).gaps)
+    assert "screening.audit_minimum" in fields
+    thin = _spec(screening=_screening(audit_fraction=0.01, kappa_enforced=False))
+    assert "screening.audit_fraction" in _fields(_check(thin, RigorMode.PILOT).gaps)
+
+
+def test_exploratory_allows_small_audit() -> None:
+    small = _spec(screening=_screening(audit_minimum=10, audit_fraction=0.01))
+    fields = _fields(_check(small, RigorMode.EXPLORATORY).gaps)
+    assert "screening.audit_minimum" not in fields
+    assert "screening.audit_fraction" not in fields

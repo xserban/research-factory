@@ -27,6 +27,7 @@ from factory.model.protocol import (
     ProtocolAmended,
     ProtocolSpec,
     ReviewerRole,
+    ScreeningPlan,
     ScreeningStage,
     SourcePlan,
     StaleRule,
@@ -171,6 +172,8 @@ def _criterion_dump(criterion: Criterion) -> object:
 PARENT_MISSING = "every criterion names its parent question element or non-goal (R-11)"
 UNKNOWN_SEED = "unknown seed"
 KAPPA_FLOOR_MIN = 0.7
+AUDIT_FRACTION_MIN = 0.02
+AUDIT_MINIMUM_MIN = 50
 SLOT_PREFIX = "slot:"
 
 
@@ -351,6 +354,7 @@ def _pilot_screening_gaps(spec: ProtocolSpec) -> list[ValidationIssue]:
         )
     if screening.kappa_floor is None:
         gaps.append(ValidationIssue("screening.kappa_floor", "a kappa floor must be declared"))
+    gaps.extend(_audit_gaps(screening))
     return gaps
 
 
@@ -375,6 +379,25 @@ def _systematic_screening_gaps(spec: ProtocolSpec) -> list[ValidationIssue]:
     if not screening.kappa_enforced:
         gaps.append(
             ValidationIssue("screening.kappa_enforced", "systematic screening enforces the floor")
+        )
+    gaps.extend(_audit_gaps(screening))
+    return gaps
+
+
+def _audit_gaps(screening: ScreeningPlan) -> list[ValidationIssue]:
+    gaps: list[ValidationIssue] = []
+    if screening.audit_fraction < AUDIT_FRACTION_MIN:
+        gaps.append(
+            ValidationIssue(
+                "screening.audit_fraction",
+                f"the audit samples at least {AUDIT_FRACTION_MIN:.0%} of agreed decisions",
+            )
+        )
+    if screening.audit_minimum < AUDIT_MINIMUM_MIN:
+        gaps.append(
+            ValidationIssue(
+                "screening.audit_minimum", f"the audit draws at least {AUDIT_MINIMUM_MIN} works"
+            )
         )
     return gaps
 

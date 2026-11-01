@@ -9,7 +9,9 @@ is canonical JSON, or NULL). `pass_sessions` keeps the session that joined each 
 and `resolutions` and `audit_items.human_verdict` keep the latest human label per key. `audits`
 and `audit_items` hold each audit sample; `agreed_verdict` is computed when the sample is written
 from the live screening decisions of the two passes under the protocol then current: `include`
-when both promote, `exclude` when both do not, NULL otherwise. `label_sessions` keeps every session
+when both promote, `exclude` when both do not and neither is `unsure`, NULL otherwise. Each sample
+also keeps `population_digest`, the digest of the whole agreed set at that time, which the audit
+service compares to refuse a second open audit. `label_sessions` keeps every session
 that relayed a human label over MCP; a pass may not be joined from one of them.
 
 Handlers are total: an event naming an unknown work or pass is stored, not refused. A second
@@ -23,7 +25,7 @@ from sqlalchemy import Column, Integer, MetaData, String, Table, select, text, u
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Connection
 
-from factory.canonical import canonical_json
+from factory.canonical import canonical_json, population_digest
 from factory.events.envelope import Event
 from factory.index.projection import Handler
 from factory.model.screening import (
@@ -121,6 +123,7 @@ def screening_tables(metadata: MetaData) -> ScreeningTables:
         Column("population", Integer, nullable=False),
         Column("exclusions", Integer, nullable=False),
         Column("inclusions", Integer, nullable=False),
+        Column("population_digest", String, nullable=False),
     )
     audit_items = Table(
         "audit_items",
@@ -289,6 +292,7 @@ def _calibration_labelled(t: ScreeningTables) -> Handler:
 def _audit_sampled(t: ScreeningTables) -> Handler:
     def audit_sampled(conn: Connection, event: Event) -> None:
         payload = AuditSampled.model_validate(event.payload)
+        agreed = _agreed_by_work(conn, t, _current_protocol_id(conn))
         conn.execute(
             sqlite_insert(t.audits)
             .values(
@@ -297,17 +301,17 @@ def _audit_sampled(t: ScreeningTables) -> Handler:
                 population=payload.population,
                 exclusions=payload.exclusions,
                 inclusions=payload.inclusions,
+                population_digest=population_digest(agreed.items()),
             )
             .on_conflict_do_nothing(index_elements=["audit_id"])
         )
-        current = _current_protocol_id(conn)
         for work_id in payload.work_ids:
             conn.execute(
                 sqlite_insert(t.audit_items)
                 .values(
                     audit_id=payload.audit_id,
                     work_id=work_id,
-                    agreed_verdict=_agreed_outcome(conn, t, work_id, current),
+                    agreed_verdict=agreed.get(work_id),
                     human_verdict=None,
                     criterion=None,
                 )
@@ -351,24 +355,30 @@ def _current_protocol_id(conn: Connection) -> str | None:
     return None if row is None else str(row[0])
 
 
-def _agreed_outcome(
-    conn: Connection, t: ScreeningTables, work_id: str, protocol_id: str | None
-) -> str | None:
-    """`include` when both passes' live screening decisions under `protocol_id` promote the work,
-    `exclude` when neither does, NULL when the passes disagree or one has no live decision."""
+def _agreed_by_work(
+    conn: Connection, t: ScreeningTables, protocol_id: str | None
+) -> dict[str, str]:
+    """The agreed outcome of every work both passes screened under `protocol_id`: `include` when
+    both live screening decisions promote, `exclude` when neither does. A work with an `unsure`
+    verdict, or whose passes disagree, is not agreed and is absent."""
     if protocol_id is None:
-        return None
+        return {}
     rows = conn.execute(
-        select(t.decisions.c.pass_label, t.decisions.c.verdict)
-        .where(t.decisions.c.work_id == work_id)
+        select(t.decisions.c.pass_label, t.decisions.c.work_id, t.decisions.c.verdict)
         .where(t.decisions.c.phase == "screening")
         .where(t.decisions.c.protocol_id == protocol_id)
         .where(t.decisions.c.superseded_by.is_(None))
         .order_by(t.decisions.c.event_id)
     ).all()
-    promotes: dict[str, bool] = {}
-    for pass_label, verdict in rows:
-        promotes[str(pass_label)] = Verdict(str(verdict)).promotes
-    if set(promotes) != {"A", "B"} or promotes["A"] != promotes["B"]:
-        return None
-    return "include" if promotes["A"] else "exclude"
+    verdicts: dict[str, dict[str, Verdict]] = {}
+    for pass_label, work_id, verdict in rows:
+        verdicts.setdefault(str(work_id), {})[str(pass_label)] = Verdict(str(verdict))
+    agreed: dict[str, str] = {}
+    for work_id, by_pass in verdicts.items():
+        if set(by_pass) != {"A", "B"}:
+            continue
+        a, b = by_pass["A"], by_pass["B"]
+        if Verdict.UNSURE in (a, b) or a.promotes != b.promotes:
+            continue
+        agreed[work_id] = "include" if a.promotes else "exclude"
+    return agreed

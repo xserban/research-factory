@@ -220,6 +220,37 @@ def resolve_disagreement(
     return event.id
 
 
+class AgreedWork(StrictModel):
+    """A dual-coded work the passes agree on: its outcome, and for an exclusion the bare criteria
+    either pass cited (sorted)."""
+
+    verdict: Literal["include", "exclude"]
+    criteria: list[str]
+
+
+def agreed_works(project: Project) -> dict[str, AgreedWork]:
+    """The ordinary works both passes decided and agree on, with their agreed outcome.
+
+    Agreement is read-only and needs no finished passes: a work counts when both passes hold a live,
+    non-stale decision under the current protocol, neither verdict is `unsure`, and the outcomes
+    match. Calibration works are left out. Empty before a protocol is recorded or while a pass is
+    unopened.
+    """
+    project.index.sync()
+    screen = _load(project)
+    if screen is None or not screen.known:
+        return {}
+    agreed: dict[str, AgreedWork] = {}
+    for work in sorted(screen.dual):
+        a, b = screen.decided[PassLabel.A].get(work), screen.decided[PassLabel.B].get(work)
+        if a is None or b is None or _disagreement(a.verdict, b.verdict) is not None:
+            continue
+        verdict: Literal["include", "exclude"] = "include" if a.verdict.promotes else "exclude"
+        criteria = sorted({c for c in (_exclusion(a), _exclusion(b)) if c is not None})
+        agreed[work] = AgreedWork(verdict=verdict, criteria=criteria)
+    return agreed
+
+
 def final_outcomes(project: Project) -> dict[str, Outcome]:
     """The outcome of every work of the corpus: the human's label for a calibration work; for any
     other work its resolution, else the agreed outcome of both passes, else the single-pass
