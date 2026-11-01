@@ -6,6 +6,7 @@ from pathlib import Path
 
 from factory.clock import FixedClock, SystemClock
 from factory.config import Settings
+from factory.index.index import _file_identity
 from factory.model.identity import IdGenerator
 from factory.services.context import open_project
 from factory.services.project import init_project, project_status
@@ -68,10 +69,16 @@ def test_second_index_object_follows_the_others_rebuild(
     p1 = init_project(settings, "demo", "pilot", session=SESSION, clock=clock)
     p2 = open_project(settings, "demo", session=S2, clock=clock)
     p2.index.sync()  # p2's engine is open on the current file
+    old_engine = p2.index._engine
+    old_identity = p2.index._identity
     clock.advance(ONE_MS)
     create_tasks(p1, p1.system_actor(), [TaskSpec("demo", 1)])
     p1.index.rebuild()  # replaces the DB file (new inode)
     assert project_status(p2).tasks.open == 1  # p2 must see the new file, not the unlinked one
+    # Observed directly: p2 re-pointed its engine at the file the rebuild installed.
+    assert p2.index._identity == _file_identity(p2.paths.index_path)
+    assert p2.index._identity != old_identity
+    assert p2.index._engine is not old_engine
 
 
 def test_readers_wait_for_a_rebuild_in_progress(tmp_path: Path) -> None:
@@ -91,3 +98,21 @@ def test_readers_wait_for_a_rebuild_in_progress(tmp_path: Path) -> None:
         fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
     assert done.wait(2)
     reader.join()
+
+
+def test_readers_share_the_lock(tmp_path: Path) -> None:
+    index = make_index(tmp_path)
+    index.sync()
+    done = threading.Event()
+
+    def read() -> None:
+        index.state_hash()
+        done.set()
+
+    with (tmp_path / ".index" / "lock").open("a") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_SH)  # another reader holds the lock
+        reader = threading.Thread(target=read, daemon=True)
+        reader.start()
+        assert done.wait(2)  # a reader must not block behind a shared holder
+        reader.join()
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
