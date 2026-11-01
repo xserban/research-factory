@@ -72,3 +72,5 @@ Full text and claim extraction; PubMed and other sources; graph, regions and lab
 - Threshold for acceptable seed recall in the probe (proposal: ≥ 0.9 in `pilot`, 1.0 in `systematic`).
 - κ floor in `pilot` mode (proposal: advisory; floor 0.7 in `systematic`).
 - How the two screening passes are made independent on Claude only (different models per pass; separate sessions; no shared context) and how that is recorded.
+- **Session identity (from plan-1 review):** subagents of one Claude Code session share the MCP server process and hence its session ID, so task claims cannot tell them apart. Proposal: passes A and B run as separate Claude Code sessions (enforced: `screen_agreement` refuses passes sharing a session ID); alternatively a per-agent claim token. Decide in plan 4.
+- **Provenance trust (from plan-1 review):** `model` and `skill` are currently tool arguments supplied by Claude. Proposal: the platform computes the skill hash from the plugin's skill file; investigate whether a Claude Code hook can supply the serving model; otherwise store `model` as agent-reported and say so in `report_methods`. Decide in plans 3–4.

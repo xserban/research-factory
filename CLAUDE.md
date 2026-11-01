@@ -21,6 +21,9 @@ Background only (not binding): `docs/00-…09-*.md`, `docs/reference/research-fa
 - **Provenance everywhere:** every agent-written event carries model, skill version and `input_blob`.
 - **Scripts never judge; agents never do bookkeeping.** Counts, hashes, PRISMA numbers are computed, never typed.
 
+## Backlog
+New ideas go to `docs/backlog.md` using its template. Do not implement a backlog item unless a slice spec includes it.
+
 ## Pilot hold-out
 Never open `docs/pilot/heldout-seeds.md` unless the task is the post-search seed check; record any opening in `docs/pilot/log.md`.
 

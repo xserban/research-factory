@@ -60,15 +60,17 @@ IDs are never reused and never change. A changed entity is a new version or a su
   "project": "linear-attention-vision",
   "type": "screening.decision_recorded",
   "schema": 1,
-  "actor": {"kind": "agent", "id": "screener-a", "user": "obd", "session": "01J...", "model": "claude-opus-5-5"},
+  "actor": {"kind": "agent", "id": "screener-a", "user": "obd", "session": "01J...", "model": "claude-opus-5-5", "skill": "rf-screen@1a2b3c4d"},
   "refs": ["rf:...", "P@d4e5f6"],
   "input_blob": "sha256:...",
   "payload": { }
 }
 ```
 - `type` is `<area>.<past-tense verb>`; each type has a pydantic payload model and a schema version.
-- `actor.kind` is `human`, `agent` or `system`. `model` is required when `kind = agent`.
-- `input_blob` (optional): the exact task content the agent saw, stored as a blob (auditability).
+- `actor.kind` is `human`, `agent` or `system`. When `kind = agent`, `model` and `skill` (`<name>@<hash>`) are required; for other kinds both are absent.
+- `input_blob`: the exact task content the agent saw, stored as a blob (auditability). **Required for agent events**, optional otherwise.
+- `id` and `ts` come from one monotonic ULID: `ts` equals the timestamp encoded in `id`, so ID order is the global event order.
+- Provenance trust levels: `model` is *reported by the agent* unless supplied by the harness (e.g. a hook); `skill` hashes should be computed by the platform from the installed skill file, not supplied by the agent. Reports state which applies.
 - An event that fails validation is rejected; nothing is written.
 
 ### 4.3 Blobs
@@ -94,7 +96,7 @@ Each project declares `exploratory | pilot | systematic` (decision #24). Provena
 
 - Names: `<area>_<verb>` (e.g. `screen_next`, `screen_record`).
 - Every mutating tool: validates fully before writing; on failure returns structured errors (field, reason) and writes nothing; on success returns the new IDs.
-- Every mutating tool receives `actor` context: user from configuration, agent role and model as parameters; the session ID from the server process.
+- Every mutating tool receives `actor` context: user from configuration, agent role and model as parameters; the session ID from the server process. One MCP server process serves one Claude Code session **including all its subagents**, so subagents share a session ID; anything that must be independent (e.g. screening passes A and B) runs in separate Claude Code sessions.
 - Batch tools accept partial success: valid items are written, invalid ones are returned with reasons.
 - Read tools are paginated and return at most a fixed number of items per call.
 - Tools that hand work to an agent (`*_next`) create a `Task` with a lease; the task content is stored as `input_blob`.
