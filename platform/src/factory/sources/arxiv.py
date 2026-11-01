@@ -63,8 +63,28 @@ def _parse_date(value: str | None) -> datetime | None:
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
-def _split_ids(text: str) -> list[str]:
-    return [part for raw in text.split(",") if (part := raw.strip())]
+def _requested_ids(text: str) -> list[str]:
+    """The distinct arXiv ids named in an id_list query, normalised, in the order given.
+
+    A version suffix or a repeated id is the same request, so it is collapsed here, before
+    anything is counted: `reported_count` for an id_list is the number of distinct ids asked for.
+    """
+    normalised = [normalize_arxiv(raw) for raw in text.split(",") if raw.strip()]
+    return list(dict.fromkeys(normalised))
+
+
+def _id_list_note(requested: list[str], works: list[Work], skipped: int) -> str | None:
+    """Name the requested ids that did not come back, so an unresolved id is never silent."""
+    returned = {w.identifiers.arxiv for w in works}
+    missing = [arxiv_id for arxiv_id in requested if arxiv_id not in returned]
+    if not missing:
+        return None
+    note = f"{len(missing)} requested id(s) not returned: {', '.join(missing[:10])}"
+    if len(missing) > 10:
+        note += f" (+{len(missing) - 10} more)"
+    if skipped:
+        note += f"; {skipped} {_SKIPPED}"
+    return note
 
 
 def _feed(body: str) -> tuple[int | None, list[ElementTree.Element]]:
@@ -120,17 +140,19 @@ class ArxivSource:
         """
         if spec.kind not in self.kinds:
             raise ValueError(f"arxiv does not take {spec.kind.value} queries")
-        ids = _split_ids(spec.text) if spec.kind is QueryKind.ID_LIST else []
-        if spec.kind is QueryKind.ID_LIST and not ids:
+        is_ids = spec.kind is QueryKind.ID_LIST
+        ids = _requested_ids(spec.text) if is_ids else []
+        if is_ids and not ids:
             raise ValueError("an id_list query must name at least one arXiv id")
 
-        query_sent = ",".join(ids) if spec.kind is QueryKind.ID_LIST else spec.text
+        query_sent = ",".join(ids) if is_ids else spec.text
         method = _METHODS.get(spec.purpose, ProvenanceMethod.DATABASE)
         works: list[Work] = []
         seen: set[str] = set()
         skipped = 0
         pages = 0
-        reported: int | None = None
+        # For an id_list the source's own total is not the measure: what was asked for is.
+        reported: int | None = len(ids) if is_ids else None
         truncated = False
         start = int(resume_from) if resume_from else 0
 
@@ -164,12 +186,8 @@ class ArxivSource:
             pages += 1
 
             page_total, entries = _feed(response.text)
-            if page_total is not None:
-                if spec.kind is QueryKind.ID_LIST:
-                    # Each batch reports the ids it matched; the run's total is their sum.
-                    reported = (reported or 0) + page_total
-                elif reported is None:
-                    reported = page_total
+            if not is_ids and reported is None:
+                reported = page_total
 
             for entry in entries:
                 work = self._to_work(
@@ -202,7 +220,9 @@ class ArxivSource:
             status, note = RunStatus.PARTIAL, _TRUNCATED
         else:
             status, note = RunStatus.COMPLETE, None
-            if reported is not None and len(works) < reported:
+            if is_ids:
+                note = _id_list_note(ids, works, skipped)
+            elif reported is not None and len(works) < reported:
                 note = f"{skipped} {_SKIPPED}"
                 if len(works) + skipped != reported:
                     note += "; source count differs"

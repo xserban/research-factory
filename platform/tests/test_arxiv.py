@@ -49,6 +49,18 @@ MATCH_ONE = """<?xml version="1.0" encoding="UTF-8"?>
 </feed>
 """
 
+# A single titled entry for 2301.00001, as arXiv answers an id_list that names it.
+ONE_ENTRY_2301_00001 = """<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom"
+      xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/">
+  <opensearch:totalResults>1</opensearch:totalResults>
+  <entry>
+    <id>http://arxiv.org/abs/2301.00001v1</id>
+    <title>A paper that exists</title>
+  </entry>
+</feed>
+"""
+
 # Two entries, one of which has no title and so cannot be screened.
 UNTITLED = """<?xml version="1.0" encoding="UTF-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom"
@@ -250,6 +262,20 @@ class TestExhaustiveness:
         spec = QuerySpec(source="arxiv", kind=QueryKind.ID_LIST, text=" , ")
         with pytest.raises(ValueError):
             search(source_returning(EMPTY), spec)
+
+    def test_id_list_missing_id_is_an_explained_shortfall(self) -> None:
+        """A seed that arXiv does not return must be visible, not silently absent."""
+        spec = QuerySpec(source="arxiv", kind=QueryKind.ID_LIST, text="2301.00001,2301.99999")
+        result = search(source_returning(ONE_ENTRY_2301_00001), spec)
+        assert result.status is RunStatus.COMPLETE
+        assert (result.reported_count, result.retrieved_count) == (2, 1)
+        assert result.note is not None and "2301.99999" in result.note
+
+    def test_id_list_duplicate_requests_count_once(self) -> None:
+        spec = QuerySpec(source="arxiv", kind=QueryKind.ID_LIST, text="2301.00001, 2301.00001v2")
+        result = search(source_returning(ONE_ENTRY_2301_00001), spec)
+        assert result.reported_count == 1
+        assert result.query_sent == "2301.00001"
 
     def test_matching_intersects_ids_with_query(self) -> None:
         seen: list[httpx.Request] = []
