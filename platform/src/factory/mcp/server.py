@@ -59,15 +59,35 @@ def build_server(
     adapters = dict(default_sources() if sources is None else sources)
     server = MCPServer("factory")
 
+    def _reply(
+        project_slug: str,
+        fn: Callable[[], JsonValue],
+        rename: Callable[[str], str] = str,
+    ) -> dict[str, JsonValue]:
+        """`guarded`, with every agent-facing response scrubbed of held-out identifiers (R-20).
+
+        A success is scrubbed by its tool (`_withheld`), and a refusal here, as defence in depth:
+        the services never name a held-out seed."""
+        result = guarded(fn, rename)
+        if result["ok"] is True:
+            return result
+        try:
+            opened = open_project(settings, project_slug, session=session, clock=clock)
+        except ProjectNotFoundError:
+            return result
+        scrubbed = withhold(result, _held_out_tokens(opened))
+        return scrubbed if isinstance(scrubbed, dict) else result
+
     @server.tool()
     def project_status(project: str) -> dict[str, JsonValue]:
         """Report a project's rigor mode, event counts and task queue state."""
 
         def status() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
-            return project_service.project_status(opened).model_dump(mode="json")
+            report = project_service.project_status(opened).model_dump(mode="json")
+            return _withheld(opened, report)
 
-        return guarded(status)
+        return _reply(project, status)
 
     @server.tool()
     def search_run(
@@ -104,9 +124,9 @@ def build_server(
             summary = search_service.run_query(
                 opened, query_id, sources=adapters, resume_run=resume_run, actor=actor
             )
-            return summary.model_dump(mode="json")
+            return _withheld(opened, summary.model_dump(mode="json"))
 
-        return guarded(search)
+        return _reply(project, search)
 
     @server.tool()
     def dedup_run(project: str, role: str, model: str, skill: str) -> dict[str, JsonValue]:
@@ -115,26 +135,10 @@ def build_server(
         def dedup() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
             make_agent_actor(settings, session, role, model, skill)
-            return dedup_service.dedup_run(opened).model_dump(mode="json")
+            report = dedup_service.dedup_run(opened).model_dump(mode="json")
+            return _withheld(opened, report)
 
-        return guarded(dedup)
-
-    def _reply(
-        project_slug: str,
-        fn: Callable[[], JsonValue],
-        rename: Callable[[str], str] = str,
-    ) -> dict[str, JsonValue]:
-        """`guarded`, and a refusal is scrubbed of every held-out identifier too (R-20): the
-        refusal path is defence in depth, the services never name a held-out seed."""
-        result = guarded(fn, rename)
-        if result["ok"] is True:
-            return result
-        try:
-            opened = open_project(settings, project_slug, session=session, clock=clock)
-        except ProjectNotFoundError:
-            return result
-        scrubbed = withhold(result, _held_out_tokens(opened))
-        return scrubbed if isinstance(scrubbed, dict) else result
+        return _reply(project, dedup)
 
     @server.tool()
     def question_record(

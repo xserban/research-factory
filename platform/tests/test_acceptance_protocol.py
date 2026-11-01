@@ -7,7 +7,8 @@ here touches the network. Each test states the acceptance criterion it proves.
 import json
 import re
 from datetime import timedelta
-from typing import Any
+from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 from mcp import Client
@@ -20,6 +21,9 @@ from factory.config import Settings
 from factory.events.envelope import Actor
 from factory.events.reader import read_all
 from factory.mcp.server import build_server
+from factory.model.search import QueryKind, QuerySpec
+from factory.services import dedup as dedup_service
+from factory.services import project as project_service
 from factory.services.context import Project
 from factory.services.protocol import (
     confirm_press,
@@ -30,6 +34,7 @@ from factory.services.protocol import (
 )
 from factory.services.question import current_question
 from factory.services.seeds import SeedRole, all_seeds
+from factory.sources.base import Source, SearchResult, SourceError
 from factory.sources.registry import SourceFactory
 from tests.helpers import (
     openalex_item,
@@ -345,6 +350,7 @@ async def test_agent_tools_never_reveal_held_out_seeds(
         },
     )
     responses.append(review)
+    clock.advance(timedelta(milliseconds=1))  # the confirmation is not in the review's millisecond
     confirm_press(project, human, review["data"]["review_id"], ("Accepted.",))
     ready = await _call(
         settings,
@@ -391,10 +397,44 @@ async def test_agent_tools_never_reveal_held_out_seeds(
         },
     )
     responses.append(duplicate)
+    responses.append(await _call(settings, clock, {}, "dedup_run", {"project": "demo", **AGENT}))
+    responses.append(
+        await _call(
+            settings,
+            clock,
+            dict(mock_sources(openalex=[_item(n) for n in (1, 2, 3, 9)])),
+            "search_run",
+            {"project": "demo", "source": "openalex", "query": "attention", **AGENT},
+        )
+    )
+    # A chase is refused by search_run; its refusal is scanned like every other response.
+    refused_chase = await _call(
+        settings,
+        clock,
+        {},
+        "search_run",
+        {"project": "demo", "source": "openalex", "query": "attention", "purpose": "chase", **AGENT},
+    )
+    assert refused_chase["ok"] is False
+    assert _leaks(json.dumps(refused_chase), tokens) == []
 
-    assert all(response["ok"] is True for response in responses), responses
+    assert all(response["ok"] is True for response in responses), [r for r in responses if r["ok"] is not True]
     for response in responses:
         assert _leaks(json.dumps(response), tokens) == []
+
+    # Raw probe pages are human-only: no agent response carries a page's blob reference or the
+    # keys of a raw OpenAlex record (final review, finding 2).
+    archived = [
+        event.payload["raw_blob"]
+        for event in read_all(project.paths.events_dir, project.catalog)
+        if event.type == "probe.page_archived"
+    ]
+    assert archived, "the probe archived its raw pages"
+    everything = json.dumps([*responses, refused_chase])
+    for blob in archived:
+        assert blob not in everything
+    for raw_key in ('"display_name"', '"publication_date"', '"authorships"'):
+        assert raw_key not in everything
 
     # Error payloads are scanned too (acceptance 22): a parentless criterion, and a worked
     # example that is held out, which must be refused with the same message as an unknown seed.
@@ -593,3 +633,57 @@ async def test_protocol_rebuild_is_deterministic(
     assert second.exit_code == 0
     assert second.stdout == first.stdout
     assert project.paths.index_path.exists()
+
+
+class _Unreachable:
+    """An OpenAlex stand-in whose every run fails with `message`, as a transport error would."""
+
+    kinds = frozenset({QueryKind.KEYWORD})
+
+    def __init__(self, message: str) -> None:
+        self._message = message
+
+    def run(self, spec: QuerySpec, **_kwargs: Any) -> SearchResult:
+        raise SourceError(self._message)
+
+
+@pytest.mark.anyio
+async def test_search_run_and_dedup_run_outputs_are_scrubbed_of_held_out_identifiers(
+    settings: Settings,
+    project: Project,
+    clock: FixedClock,
+    mock_sources: MockSources,
+    agent: Actor,
+    human: Actor,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Final review, finding 2: search_run, dedup_run and project_status go through the same
+    # scrubbing as every other tool, so a held-out identifier in their output is withheld.
+    ready_protocol(project, agent, human, mock_sources)
+    held = next(seed for seed in all_seeds(project) if seed.role is SeedRole.HELD_OUT)
+    assert held.doi is not None
+    failing = {
+        "openalex": SourceFactory(
+            frozenset({QueryKind.KEYWORD}),
+            lambda _s, _c: cast(Source, _Unreachable(f"cannot reach {held.doi} today")),
+        )
+    }
+    searched = await _call(
+        settings,
+        clock,
+        failing,
+        "search_run",
+        {"project": "demo", "source": "openalex", "query": "attention", **AGENT},
+    )
+    assert searched["ok"] is True, searched
+    assert held.doi not in json.dumps(searched)
+    assert "[withheld]" in searched["data"]["note"]
+
+    leaking = SimpleNamespace(model_dump=lambda mode: {"note": f"touched {held.doi}"})
+    monkeypatch.setattr(dedup_service, "dedup_run", lambda _project: leaking)
+    monkeypatch.setattr(project_service, "project_status", lambda _project: leaking)
+    for name, args in (("dedup_run", {}), ("project_status", {})):
+        body = await _call(settings, clock, {}, name, {"project": "demo", **AGENT, **args})
+        assert body["ok"] is True, body
+        assert held.doi not in json.dumps(body)
+        assert "[withheld]" in body["data"]["note"]
