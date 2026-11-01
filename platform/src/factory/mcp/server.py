@@ -95,7 +95,7 @@ def build_server(
         def status() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
             report = project_service.project_status(opened).model_dump(mode="json")
-            return _withheld(opened, report)
+            return _withheld(opened, _without_rates(report))
 
         return _reply(project, status)
 
@@ -384,10 +384,12 @@ def build_server(
         skill: str | None = None,
     ) -> dict[str, JsonValue]:
         """The agreement of the two passes: κ, per-criterion κ, disagreements and cannot-assess
-        rates. Read-only. The actor is an agent when role, model or skill is given, else human."""
+        rates. Read-only. The actor is an agent when role, model or skill is given, else human.
+        Refused to a session that has joined a pass."""
 
         def agreement() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
             if role is None and model is None and skill is None:
                 actor = opened.human_actor()
             else:
@@ -405,12 +407,14 @@ def build_server(
         criterion: str | None = None,
     ) -> dict[str, JsonValue]:
         """With no `work_id`: the next unlabelled calibration record and the counts. With one: the
-        human's label on it. The first call draws the calibration set. Labels are human acts."""
+        human's label on it. The first no-argument call draws the calibration set. Labels are human
+        acts; a session that has joined a pass cannot use this tool."""
 
         def label() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
             human = opened.human_actor()
             if work_id is None:
+                _refuse_pass_session(opened)
                 if verdict is not None or criterion is not None:
                     raise FactoryValidationError(
                         [ValidationIssue("work_id", "is required to record a label")]
@@ -442,10 +446,12 @@ def build_server(
     @server.tool()
     def audit_sample(project: str) -> dict[str, JsonValue]:
         """Draw the audit sample of the agreed works, for the human to label: each work's id,
-        title and agreed verdict, with the population and the counts."""
+        title and agreed verdict, with the population and the counts. Refused to a session that has
+        joined a pass."""
 
         def sample() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
             drawn = audit_service.audit_sample(opened, opened.human_actor())
             titles = {work.id: work.title for work in list_works(opened)}
             agreed = agreement_service.agreed_works(opened)
@@ -511,6 +517,26 @@ def build_server(
         return _reply(project, deviate)
 
     return server
+
+
+def _refuse_pass_session(project: Project) -> None:
+    """A session that screens must not read the other pass's results or the answer key (R-20)."""
+    if calibration_service.is_pass_session(project, project.session):
+        raise FactoryValidationError(
+            [ValidationIssue("session", "this session has joined a pass and cannot use this tool")]
+        )
+
+
+def _without_rates(report: dict[str, JsonValue]) -> dict[str, JsonValue]:
+    """The project status for an agent: screening counts and flags only. Label-derived rates
+    (sensitivity, specificity, false-exclusion) stay in the CLI status and the human's reports."""
+    screening = report.get("screening")
+    if isinstance(screening, dict):
+        screening.pop("false_exclusion_rate", None)
+        calibration = screening.get("calibration")
+        if isinstance(calibration, dict):
+            calibration.pop("per_pass", None)
+    return report
 
 
 def _withheld(project: Project, value: JsonValue, include_work_ids: bool = True) -> JsonValue:

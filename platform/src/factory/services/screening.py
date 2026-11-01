@@ -71,9 +71,9 @@ from factory.services.screening_stats import quote_in
 from factory.services.search import list_works
 from factory.services.tasks import (
     TaskSpec,
+    build_task_events,
     claim_next,
     complete_task,
-    build_task_events,
     require_holder,
     task_content,
 )

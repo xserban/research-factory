@@ -141,7 +141,7 @@ def label_calibration(
                 issues.append(ValidationIssue("criterion", "not a criterion of the protocol"))
             else:
                 qualified = f"{protocol.protocol_id}:{criterion}"
-        if channel is Channel.MCP and _is_pass_session(project, actor.session):
+        if channel is Channel.MCP and is_pass_session(project, actor.session):
             issues.append(ValidationIssue("channel", "this session has joined a pass"))
         if issues:
             raise FactoryValidationError(issues)
@@ -292,7 +292,9 @@ def _live_decisions(project: Project, protocol_id: str | None) -> dict[str, dict
     return decided
 
 
-def _is_pass_session(project: Project, session: str) -> bool:
+def is_pass_session(project: Project, session: str) -> bool:
+    """Whether the session has joined a screening pass."""
+    project.index.sync()
     with project.index.connect() as conn:
         row = conn.execute(
             text("SELECT 1 FROM pass_sessions WHERE session = :session"), {"session": session}

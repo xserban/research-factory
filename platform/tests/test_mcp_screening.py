@@ -5,6 +5,7 @@ Code session does. Screening tools withhold held-out seed identifiers but not he
 """
 
 import json
+import re
 from typing import Any
 
 import pytest
@@ -333,3 +334,105 @@ async def test_labelled_call_with_unknown_criterion_writes_nothing(
     assert _fields(body) == ["criterion"]
     assert len(read_all(project.paths.events_dir, project.catalog)) == before
     assert _of_type(project, "calibration.labelled") == []
+
+
+def _exclude(record: dict[str, Any]) -> dict[str, Any]:
+    return {**_include(record), "verdict": "exclude", "criterion": "EX01"}
+
+
+@pytest.mark.anyio
+async def test_pass_session_sees_no_label_derived_rate(
+    settings: Settings,
+    project: Project,
+    clock: FixedClock,
+    mock_sources: Any,
+    agent: Any,
+    human: Any,
+) -> None:
+    """A screener's status and blocked reasons carry calibration counts and a passed flag, never a
+    sensitivity, a specificity, a threshold or a false-exclusion rate."""
+    _setup(project, agent, human, mock_sources)
+    for item in _draw(project):
+        label_calibration(project, human, item, "include", None, Channel.CLI)
+    async with open_session(settings, clock) as screener:
+        while True:
+            body = await screener.call("screen_next", project="demo", pass_label="A", **AGENT)
+            batch = body["data"]["batch"]
+            if batch is None:
+                break
+            items = [_exclude(record) for record in batch["records"]]
+            await screener.call(
+                "screen_record", project="demo", task_id=batch["task_id"], items=items, **AGENT
+            )
+        blocked = body["data"]["blocked"]
+        status = await screener.call("project_status", project="demo")
+
+    assert blocked, "the gate must be closed: every positive was excluded"
+    assert not re.search(r"\d\.\d", json.dumps(blocked)), blocked
+    calibration = status["data"]["screening"]["calibration"]
+    assert set(calibration) == {"drawn", "labelled", "required", "passed"}
+    assert calibration["passed"] == {"A": False, "B": False}
+    assert not re.search(r"sensitiv|specific|threshold|false_exclusion", json.dumps(status))
+
+
+@pytest.mark.anyio
+async def test_pass_session_cannot_read_agreement_or_draw_an_audit(
+    settings: Settings,
+    project: Project,
+    clock: FixedClock,
+    mock_sources: Any,
+    agent: Any,
+    human: Any,
+) -> None:
+    _setup(project, agent, human, mock_sources)
+    _draw(project)
+    async with open_session(settings, clock) as screener:
+        await screener.call("screen_next", project="demo", pass_label="A", **AGENT)
+        before = len(read_all(project.paths.events_dir, project.catalog))
+        agreement = await screener.call("screen_agreement", project="demo")
+        sample = await screener.call("audit_sample", project="demo")
+    assert _fields(agreement) == ["session"]
+    assert _fields(sample) == ["session"]
+    assert len(read_all(project.paths.events_dir, project.catalog)) == before
+    assert _of_type(project, "audit.sampled") == []
+
+
+@pytest.mark.anyio
+async def test_pass_session_cannot_draw_the_calibration_set_or_read_a_record(
+    settings: Settings,
+    project: Project,
+    clock: FixedClock,
+    mock_sources: Any,
+    agent: Any,
+    human: Any,
+) -> None:
+    _setup(project, agent, human, mock_sources)
+    _draw(project)
+    async with open_session(settings, clock) as screener:
+        await screener.call("screen_next", project="demo", pass_label="A", **AGENT)
+        body = await screener.call("calibration_label", project="demo")
+    assert _fields(body) == ["session"]
+
+
+@pytest.mark.anyio
+async def test_session_that_labelled_over_mcp_cannot_screen(
+    settings: Settings,
+    project: Project,
+    clock: FixedClock,
+    mock_sources: Any,
+    agent: Any,
+    human: Any,
+) -> None:
+    _setup(project, agent, human, mock_sources)
+    async with open_session(settings, clock) as reviewer:
+        first = await reviewer.call("calibration_label", project="demo")
+        labelled = await reviewer.call(
+            "calibration_label",
+            project="demo",
+            work_id=first["data"]["record"]["work_id"],
+            verdict="include",
+        )
+        assert labelled["ok"] is True
+        refused = await reviewer.call("screen_next", project="demo", pass_label="A", **AGENT)
+    assert _fields(refused) == ["session"]
+    assert _of_type(project, "screening.pass_joined") == []
