@@ -1,14 +1,36 @@
 import hashlib
 import json
-from collections.abc import Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, date, datetime
 from typing import Any
 
 from factory.config import Settings
+from factory.events.envelope import Actor
 from factory.model.base import StrictModel
+from factory.model.protocol import (
+    Criterion,
+    MethodProfile,
+    PlannedQuery,
+    PressElement,
+    PressFinding,
+    ProtocolSpec,
+    Reviewer,
+    ReviewerRole,
+    ScreeningPlan,
+    ScreeningStage,
+    SourcePlan,
+)
+from factory.model.question import NonGoal, QuestionSpec, Slot
 from factory.model.search import QueryKind, QuerySpec, RunStatus
+from factory.model.seed import SeedKind, SeedSpec
 from factory.model.work import Author, Dates, Identifiers, Provenance, Work, WorkType
+from factory.services.context import Project
+from factory.services.probe import run_probe
+from factory.services.protocol import confirm_press, press_review, record_protocol
+from factory.services.question import record_question, state_goal
+from factory.services.seeds import add_seeds
 from factory.sources.base import PageSink, RawPage, SearchResult, SourceError
+from factory.sources.registry import SourceFactory
 
 T0 = datetime(2026, 10, 31, 12, 0, tzinfo=UTC)
 SESSION = "01JZ9Q3K5M7N8P0R2S4T6V8W0X"
@@ -220,3 +242,104 @@ def install_skill(settings: Settings, name: str, text: str = "test skill") -> st
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(data)
     return f"{name}@{hashlib.sha256(data).hexdigest()[:8]}"
+
+
+# --- A ready pilot protocol, for tests that exercise searches under the gate ---
+
+SourcesFor = Callable[..., Mapping[str, SourceFactory]]
+
+
+def pilot_question_spec(
+    primary: str = "Does linear attention match softmax on vision?",
+) -> QuestionSpec:
+    return QuestionSpec(
+        scheme="PICO",
+        primary_question=primary,
+        slots=(
+            Slot(name="population", value="vision transformers"),
+            Slot(name="outcome", open="which accuracy metric", resolve_in="protocol"),
+        ),
+        non_goals=tuple(NonGoal(id=f"NG{i:02d}", text=f"not topic {i}") for i in (1, 2, 3)),
+        rationale="Vision is the target domain.",
+        objectives="Compare accuracy and cost.",
+        scheme_rationale="PICO fits a comparison.",
+    )
+
+
+def record_pilot_question(project: Project, actor: Actor, primary: str | None = None) -> str:
+    """Record the goal and the pilot question; returns the question id."""
+    state_goal(project, actor, "Compare attention on vision")
+    spec = pilot_question_spec() if primary is None else pilot_question_spec(primary)
+    return record_question(project, actor, spec).question_id
+
+
+def _seed_item(n: int) -> dict[str, Any]:
+    return openalex_item(
+        title=f"Paper {n}",
+        author="Ada Zhou",
+        published="2020-01-01",
+        openalex_id=f"W{n}",
+        doi=f"10.1000/p{n}",
+    )
+
+
+def ready_protocol(
+    project: Project,
+    agent: Actor,
+    human: Actor,
+    mock_sources: SourcesFor,
+    *,
+    queries: tuple[PlannedQuery, ...] | None = None,
+    press: bool = True,
+) -> str:
+    """Make a ready pilot protocol on a fresh project, and return its id.
+
+    Records the question, three positive seeds, a probe that measured the included source
+    (openalex), the protocol declared ready, and, when `press` is true, a PRESS review by the
+    agent confirmed by the human. Searches of the planned queries are then authorised.
+    """
+    question_id = record_pilot_question(project, agent)
+    for n in (1, 2, 3):
+        seed = SeedSpec(kind=SeedKind.POSITIVE, cite=f"Paper {n}", doi=f"10.1000/p{n}")
+        add_seeds(project, agent, [seed], sources=mock_sources(openalex=[_seed_item(n)]))
+    probe = QuerySpec(source="openalex", kind=QueryKind.KEYWORD, text="attention")
+    report = run_probe(project, agent, [probe], sources=mock_sources(openalex=[_seed_item(1)]))
+
+    criteria = (
+        Criterion(
+            id="IN01",
+            parent="slot:population",
+            statement="vision transformer studies",
+            rule="include studies of vision transformers",
+            applies_at=ScreeningStage.TITLE_ABSTRACT,
+        ),
+        *(
+            Criterion(
+                id=f"EX{n:02d}",
+                parent=f"NG{n:02d}",
+                statement=f"not topic {n}",
+                rule=f"exclude topic {n}",
+                applies_at=ScreeningStage.TITLE_ABSTRACT,
+                priority=n,
+            )
+            for n in (1, 2, 3)
+        ),
+    )
+    reviewer = Reviewer(role=ReviewerRole.REVIEWER_OF_RECORD, actor=human.id, kind="human")
+    spec = ProtocolSpec(
+        question_id=question_id,
+        method_profile=MethodProfile.SCOPING_REVIEW,
+        criteria=criteria,
+        sources=(SourcePlan(name="openalex", included=True, probe_id=report.probe_id),),
+        queries=queries
+        or (PlannedQuery(source="openalex", kind=QueryKind.KEYWORD, text="attention"),),
+        screening=ScreeningPlan(passes=2, dual_sample=0.5, kappa_floor=0.7, reviewers=(reviewer,)),
+    )
+    protocol_id = record_protocol(project, agent, spec, ready=True).protocol_id
+    if press:
+        finding = PressFinding(
+            element=PressElement.TEXT_WORDS, finding="Add a synonym.", severity="minor"
+        )
+        review_id = press_review(project, agent, protocol_id, (finding,))
+        confirm_press(project, human, review_id, ("Accepted; the synonym is in the next version.",))
+    return protocol_id

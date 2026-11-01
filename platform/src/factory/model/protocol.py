@@ -20,12 +20,15 @@ from pydantic import Field, JsonValue, StringConstraints, model_validator
 
 from factory.canonical import canonical_json
 from factory.model.base import StrictModel
+from factory.model.identity import ULID_RE
 from factory.model.question import QUESTION_ID_RE
 from factory.model.search import QueryKind, QuerySpec
 
 CRITERION_ID_RE = r"^(IN|EX)\d{2}$"
 PARENT_RE = r"^(slot:.+|NG\d{2})$"
 PROTOCOL_ID_RE = r"^P@[0-9a-f]{8}$"
+REVIEW_ID_RE = rf"^prs_{ULID_RE}$"
+DEVIATION_ID_RE = rf"^dev_{ULID_RE}$"
 
 PROSE_KEYS = frozenset(
     {
@@ -215,3 +218,63 @@ def search_strategy_hash(spec: ProtocolSpec) -> str:
 def criterion_ref(protocol_id: str, cid: str) -> str:
     """The reference to one criterion under one protocol version, e.g. `P@1a2b3c4d:IN01`."""
     return f"{protocol_id}:{cid}"
+
+
+# --- Event payloads (schema 1). Written by `factory.services.protocol`, folded by
+# `factory.index.protocol`. `protocol_id` must be the version hash of `spec`.
+
+
+class ProtocolStatus(StrEnum):
+    DRAFT = "draft"
+    READY = "ready"
+
+
+class ProtocolRecorded(StrictModel):
+    protocol_id: str = Field(pattern=PROTOCOL_ID_RE)
+    status: ProtocolStatus
+    spec: ProtocolSpec
+
+    @model_validator(mode="after")
+    def _id_matches_spec(self) -> Self:
+        if self.protocol_id != protocol_version(self.spec):
+            raise ValueError("protocol_id must be the version hash of spec")
+        return self
+
+
+class PressElement(StrEnum):
+    """The six elements of the PRESS 2015 peer review of electronic search strategies."""
+
+    TRANSLATION = "translation"
+    BOOLEAN_PROXIMITY = "boolean-proximity"
+    SUBJECT_HEADINGS = "subject-headings"
+    TEXT_WORDS = "text-words"
+    SPELLING_SYNTAX_LINE_NUMBERS = "spelling-syntax-line-numbers"
+    LIMITS_FILTERS = "limits-filters"
+
+
+class PressFinding(StrictModel):
+    element: PressElement
+    finding: str = Field(min_length=1)
+    severity: Literal["minor", "major"]
+
+
+class PressReviewed(StrictModel):
+    review_id: str = Field(pattern=REVIEW_ID_RE)
+    protocol_id: str = Field(pattern=PROTOCOL_ID_RE)
+    findings: tuple[PressFinding, ...]
+
+
+class PressConfirmed(StrictModel):
+    """A human's response to each finding of a review, in the order of the findings."""
+
+    review_id: str = Field(pattern=REVIEW_ID_RE)
+    protocol_id: str = Field(pattern=PROTOCOL_ID_RE)
+    responses: tuple[str, ...]
+
+
+class DeviationRecorded(StrictModel):
+    deviation_id: str = Field(pattern=DEVIATION_ID_RE)
+    protocol_id: str = Field(pattern=PROTOCOL_ID_RE)
+    description: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
+    affects: tuple[str, ...] = ()

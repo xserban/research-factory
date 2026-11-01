@@ -246,13 +246,15 @@ def test_agent_view_before_split_shows_all_seeds_unflagged(
 
 
 def test_seed_check_retrieved_explained_missing(
-    project: Project, agent: Actor, mock_sources: SourcesFor
+    explore_project: Project, agent: Actor, mock_sources: SourcesFor
 ) -> None:
     for n in (1, 2, 3):
-        _resolved(project, agent, mock_sources, n)
-    _corpus(project, mock_sources, [_item(1, 2020)])
-    explain_seed_miss(project, agent, "SEED02", "behind a paywall", ProvenanceMethod.HAND_SEARCH)
-    checks = {check.seed_id: check for check in seed_check(project)}
+        _resolved(explore_project, agent, mock_sources, n)
+    _corpus(explore_project, mock_sources, [_item(1, 2020)])
+    explain_seed_miss(
+        explore_project, agent, "SEED02", "behind a paywall", ProvenanceMethod.HAND_SEARCH
+    )
+    checks = {check.seed_id: check for check in seed_check(explore_project)}
     assert checks["SEED01"].status == "retrieved"
     assert checks["SEED01"].matched_work is not None
     assert checks["SEED02"].status == "explained"
@@ -262,12 +264,12 @@ def test_seed_check_retrieved_explained_missing(
 
 
 def test_seed_check_matches_a_bridged_identifier(
-    project: Project, agent: Actor, mock_sources: SourcesFor
+    explore_project: Project, agent: Actor, mock_sources: SourcesFor
 ) -> None:
     body = arxiv_atom([("2301.01234v1", "Preprint title", 2023, "Ada Zhou")])
     spec = SeedSpec(kind=SeedKind.POSITIVE, cite="Zhou 2023", arxiv="2301.01234")
     sources = mock_sources(arxiv=body)
-    add_seeds(project, agent, [spec], sources=sources)
+    add_seeds(explore_project, agent, [spec], sources=sources)
     published = openalex_item(
         title="Published title",
         author="Ada Zhou",
@@ -275,8 +277,8 @@ def test_seed_check_matches_a_bridged_identifier(
         openalex_id="W77",
         doi="https://doi.org/10.48550/arXiv.2301.01234",
     )
-    _corpus(project, mock_sources, [published])
-    [check] = seed_check(project)
+    _corpus(explore_project, mock_sources, [published])
+    [check] = seed_check(explore_project)
     assert check.status == "retrieved"
 
 
@@ -304,35 +306,35 @@ def test_explain_refuses_unknown_and_negative_seeds(
 
 
 def test_recall_reported_separately_for_development_and_held_out(
-    project: Project, agent: Actor, mock_sources: SourcesFor
+    explore_project: Project, agent: Actor, mock_sources: SourcesFor
 ) -> None:
-    assert seed_recall(project).development is None
+    assert seed_recall(explore_project).development is None
     for n in range(1, 7):
-        _resolved(project, agent, mock_sources, n, year=2020 + n % 3)
-    assert seed_recall(project).held_out is None
-    split_seeds(project, random_seed=11)
-    roles = {record.seed_id: record.role for record in all_seeds(project)}
+        _resolved(explore_project, agent, mock_sources, n, year=2020 + n % 3)
+    assert seed_recall(explore_project).held_out is None
+    split_seeds(explore_project, random_seed=11)
+    roles = {record.seed_id: record.role for record in all_seeds(explore_project)}
     dev_items = [
         _item(int(seed[4:]), 2020 + int(seed[4:]) % 3)
         for seed, role in roles.items()
         if role is SeedRole.DEVELOPMENT
     ]
-    _corpus(project, mock_sources, dev_items)
-    recall = seed_recall(project)
+    _corpus(explore_project, mock_sources, dev_items)
+    recall = seed_recall(explore_project)
     assert recall.development == 1.0
     assert recall.held_out == 0.0
 
 
 def test_split_projection_rebuild_equals_incremental(
-    project: Project, agent: Actor, mock_sources: SourcesFor
+    explore_project: Project, agent: Actor, mock_sources: SourcesFor
 ) -> None:
     for n in range(1, 4):
-        _resolved(project, agent, mock_sources, n)
-    _corpus(project, mock_sources, [_item(1, 2020)])
-    split_seeds(project, random_seed=9)
-    explain_seed_miss(project, agent, "SEED02", "why", ProvenanceMethod.CITATION_CHASE)
-    before = project.index.state_hash()
-    assert project.index.rebuild() == before
+        _resolved(explore_project, agent, mock_sources, n)
+    _corpus(explore_project, mock_sources, [_item(1, 2020)])
+    split_seeds(explore_project, random_seed=9)
+    explain_seed_miss(explore_project, agent, "SEED02", "why", ProvenanceMethod.CITATION_CHASE)
+    before = explore_project.index.state_hash()
+    assert explore_project.index.rebuild() == before
 
 
 def _events(project: Project) -> list[Any]:

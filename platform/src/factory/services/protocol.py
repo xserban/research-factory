@@ -1,0 +1,411 @@
+"""The protocol as recorded: its versions, PRESS reviews, deviations and the search gate.
+
+`record_protocol` validates a spec with `protocol_rules.protocol_issues`. Errors always refuse
+the write. Gaps refuse a `ready` declaration and are returned with a draft. A ready protocol on
+the current question cannot be replaced; a stale one (built on an earlier question) is amended
+by recording a new version on the current question. An identical spec and status writes nothing.
+
+`search_authorization` is the gate `services.search.register_query` applies to searches in pilot
+and systematic projects: the current protocol must be ready and built on the current question, a
+confirmed PRESS review must cover its search strategy, and the query must be planned or named by
+a deviation of the current protocol. Probe and exploratory searches are not gated.
+"""
+
+import json
+from collections.abc import Sequence
+from datetime import datetime
+from typing import Literal
+
+from sqlalchemy import text
+
+from factory.clock import parse_ts
+from factory.errors import FactoryValidationError, ValidationIssue
+from factory.events.envelope import Actor
+from factory.model.base import StrictModel
+from factory.model.project import RigorMode
+from factory.model.protocol import (
+    DeviationRecorded,
+    PressConfirmed,
+    PressFinding,
+    PressReviewed,
+    ProtocolRecorded,
+    ProtocolSpec,
+    ProtocolStatus,
+    protocol_version,
+    search_strategy_hash,
+)
+from factory.model.search import QueryPurpose, QuerySpec
+from factory.services.context import Project
+from factory.services.protocol_rules import protocol_issues
+from factory.services.question import current_question, get_question
+from factory.services.seeds import all_seeds
+from factory.sources.registry import default_sources
+
+
+class ProtocolResult(StrictModel):
+    """`created` is false when the spec and status were already current; `gaps` are returned
+    whether or not the protocol was written."""
+
+    protocol_id: str
+    status: ProtocolStatus
+    created: bool
+    gaps: list[ValidationIssue]
+
+
+class ProtocolVersion(StrictModel):
+    protocol_id: str
+    spec: ProtocolSpec
+    status: ProtocolStatus
+    recorded_at: datetime
+    press: Literal["none", "reviewed", "confirmed"]
+
+
+_RIGOR_MODES_GATED = frozenset({RigorMode.PILOT, RigorMode.SYSTEMATIC})
+
+
+def record_protocol(
+    project: Project, actor: Actor, spec: ProtocolSpec, *, ready: bool
+) -> ProtocolResult:
+    """Record the protocol as a draft or as ready. Writes nothing if the spec does not fit."""
+    with project.index.exclusive():
+        project.index.sync()
+        question = current_question(project)
+        if question is None:
+            raise FactoryValidationError(
+                [ValidationIssue("question", "record a question before the protocol")]
+            )
+        spec_question = get_question(project, spec.question_id)
+        if spec_question is None:
+            raise FactoryValidationError([ValidationIssue("question_id", "unknown question")])
+
+        check = protocol_issues(
+            spec,
+            question=spec_question,
+            current_question_id=question.question_id,
+            mode=_rigor_mode(project),
+            seeds=all_seeds(project),
+            probes=_measured_probes(project),
+            known_sources=set(default_sources()),
+        )
+        if check.errors:
+            raise FactoryValidationError(check.errors)
+
+        status = ProtocolStatus.READY if ready else ProtocolStatus.DRAFT
+        protocol_id = protocol_version(spec)
+        current = current_protocol(project)
+        if current is not None and current.spec == spec and current.status is status:
+            return ProtocolResult(
+                protocol_id=protocol_id, status=status, created=False, gaps=check.gaps
+            )
+        if (
+            current is not None
+            and current.status is ProtocolStatus.READY
+            and current.spec.question_id == question.question_id
+        ):
+            raise FactoryValidationError(
+                [ValidationIssue("protocol", "protocol is ready; change it with protocol_amend")]
+            )
+        if ready and check.gaps:
+            raise FactoryValidationError(check.gaps)
+
+        payload = ProtocolRecorded(protocol_id=protocol_id, status=status, spec=spec)
+        input_blob = (
+            project.blobs.put_json({"spec": spec.model_dump(mode="json"), "status": status.value})
+            if actor.kind == "agent"
+            else None
+        )
+        project.record(
+            [
+                project.events.make(
+                    "protocol.recorded",
+                    payload,
+                    actor,
+                    refs=(protocol_id,),
+                    input_blob=input_blob,
+                )
+            ]
+        )
+    return ProtocolResult(protocol_id=protocol_id, status=status, created=True, gaps=check.gaps)
+
+
+def current_protocol(project: Project) -> ProtocolVersion | None:
+    """The latest recorded protocol, with the state of its PRESS review."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        row = conn.execute(
+            text(
+                "SELECT protocol_id, status, spec, at FROM protocols ORDER BY event_id DESC LIMIT 1"
+            )
+        ).one_or_none()
+        if row is None:
+            return None
+        protocol_id = str(row[0])
+        reviews = conn.execute(
+            text("SELECT responses FROM press_reviews WHERE protocol_id = :protocol"),
+            {"protocol": protocol_id},
+        ).all()
+    if any(responses is not None for (responses,) in reviews):
+        press: Literal["none", "reviewed", "confirmed"] = "confirmed"
+    elif reviews:
+        press = "reviewed"
+    else:
+        press = "none"
+    return ProtocolVersion(
+        protocol_id=protocol_id,
+        spec=ProtocolSpec.model_validate_json(str(row[2])),
+        status=ProtocolStatus(str(row[1])),
+        recorded_at=parse_ts(str(row[3])),
+        press=press,
+    )
+
+
+def press_review(
+    project: Project,
+    actor: Actor,
+    protocol_id: str,
+    findings: Sequence[PressFinding],
+) -> str:
+    """Record an agent's PRESS review of the current protocol, and return its review id."""
+    issues: list[ValidationIssue] = []
+    if actor.kind != "agent":
+        issues.append(ValidationIssue("actor", "a PRESS review is written by an agent"))
+    with project.index.exclusive():
+        current = current_protocol(project)
+        if current is None or current.protocol_id != protocol_id:
+            issues.append(ValidationIssue("protocol_id", "must be the current protocol"))
+        if issues:
+            raise FactoryValidationError(issues)
+        review_id = project.ids.new("prs")
+        payload = PressReviewed(
+            review_id=review_id, protocol_id=protocol_id, findings=tuple(findings)
+        )
+        input_blob = project.blobs.put_json(
+            {
+                "protocol_id": protocol_id,
+                "findings": [finding.model_dump(mode="json") for finding in findings],
+            }
+        )
+        project.record(
+            [
+                project.events.make(
+                    "protocol.press_reviewed",
+                    payload,
+                    actor,
+                    refs=(review_id,),
+                    input_blob=input_blob,
+                )
+            ]
+        )
+    return review_id
+
+
+def confirm_press(project: Project, actor: Actor, review_id: str, responses: Sequence[str]) -> None:
+    """A human's confirmation of a PRESS review: one non-empty response per finding."""
+    issues: list[ValidationIssue] = []
+    if actor.kind != "human":
+        issues.append(ValidationIssue("actor", "a PRESS confirmation is human-only"))
+    with project.index.exclusive():
+        project.index.sync()
+        review = _review(project, review_id)
+        if review is None:
+            issues.append(ValidationIssue("review_id", "unknown review"))
+        elif review.confirmed:
+            issues.append(ValidationIssue("review_id", "already confirmed"))
+        elif len(responses) != review.finding_count or any(
+            not response.strip() for response in responses
+        ):
+            issues.append(
+                ValidationIssue("responses", "one non-empty response per finding is required")
+            )
+        if issues or review is None:
+            raise FactoryValidationError(issues)
+        payload = PressConfirmed(
+            review_id=review_id, protocol_id=review.protocol_id, responses=tuple(responses)
+        )
+        project.record(
+            [project.events.make("protocol.press_confirmed", payload, actor, refs=(review_id,))]
+        )
+
+
+def record_deviation(
+    project: Project,
+    actor: Actor,
+    *,
+    description: str,
+    reason: str,
+    affects: Sequence[str] = (),
+) -> str:
+    """Record a deviation from the current protocol, and return its id."""
+    issues: list[ValidationIssue] = []
+    if not description.strip():
+        issues.append(ValidationIssue("description", "must not be empty"))
+    if not reason.strip():
+        issues.append(ValidationIssue("reason", "must not be empty"))
+    with project.index.exclusive():
+        project.index.sync()
+        current = current_protocol(project)
+        if current is None:
+            issues.append(ValidationIssue("protocol", "record a protocol before a deviation"))
+        if issues or current is None:
+            raise FactoryValidationError(issues)
+        deviation_id = project.ids.new("dev")
+        payload = DeviationRecorded(
+            deviation_id=deviation_id,
+            protocol_id=current.protocol_id,
+            description=description,
+            reason=reason,
+            affects=tuple(affects),
+        )
+        input_blob = (
+            project.blobs.put_json(
+                {
+                    "description": description,
+                    "reason": reason,
+                    "affects": list(affects),
+                }
+            )
+            if actor.kind == "agent"
+            else None
+        )
+        project.record(
+            [
+                project.events.make(
+                    "protocol.deviation_recorded",
+                    payload,
+                    actor,
+                    refs=(deviation_id,),
+                    input_blob=input_blob,
+                )
+            ]
+        )
+    return deviation_id
+
+
+def search_authorization(
+    project: Project, spec: QuerySpec, *, deviation_id: str | None
+) -> list[ValidationIssue]:
+    """Why a search may not run under the protocol. Empty when it may, or when it is not gated.
+
+    A `deviation_id`, when given, must name a deviation of the current protocol, whether or not
+    the query is planned: a stale or foreign id is refused rather than recorded in the events.
+    """
+    if spec.purpose is not QueryPurpose.SEARCH or _rigor_mode(project) not in _RIGOR_MODES_GATED:
+        return []
+    current = current_protocol(project)
+    if current is None:
+        return [ValidationIssue("protocol", "record and ready a protocol before searching")]
+
+    issues: list[ValidationIssue] = []
+    if current.status is not ProtocolStatus.READY:
+        issues.append(ValidationIssue("protocol", "the protocol is not ready"))
+    question = current_question(project)
+    if question is not None and current.spec.question_id != question.question_id:
+        issues.append(
+            ValidationIssue(
+                "protocol",
+                f"protocol is built on {current.spec.question_id}; "
+                "amend it to the current question",
+            )
+        )
+    if not _strategy_confirmed(project, search_strategy_hash(current.spec)):
+        issues.append(ValidationIssue("press", "a confirmed PRESS review is required"))
+    if deviation_id is not None and not _is_deviation_of(
+        project, deviation_id, current.protocol_id
+    ):
+        issues.append(
+            ValidationIssue("deviation_id", "must name a deviation of the current protocol")
+        )
+    planned = any(query.matches(spec) for query in current.spec.queries)
+    if not planned and deviation_id is None:
+        issues.append(
+            ValidationIssue("query", "not planned by the current protocol; record a deviation")
+        )
+    return issues
+
+
+def search_refs(project: Project, spec: QuerySpec, deviation_id: str | None) -> tuple[str, ...]:
+    """The ids a registered search refers to: the current protocol, when one exists, and the
+    deviation it was run under. Probe and other non-search queries refer to nothing here."""
+    if spec.purpose is not QueryPurpose.SEARCH:
+        return ()
+    current = current_protocol(project)
+    refs: list[str] = []
+    if current is not None:
+        refs.append(current.protocol_id)
+    if deviation_id is not None:
+        refs.append(deviation_id)
+    return tuple(refs)
+
+
+class _Review(StrictModel):
+    protocol_id: str
+    finding_count: int
+    confirmed: bool
+
+
+def _review(project: Project, review_id: str) -> _Review | None:
+    with project.index.connect() as conn:
+        row = conn.execute(
+            text(
+                "SELECT protocol_id, findings, responses FROM press_reviews "
+                "WHERE review_id = :review"
+            ),
+            {"review": review_id},
+        ).one_or_none()
+    if row is None:
+        return None
+    protocol_id, findings, responses = row
+    return _Review(
+        protocol_id=str(protocol_id),
+        finding_count=len(_json_list(findings)),
+        confirmed=responses is not None,
+    )
+
+
+def _strategy_confirmed(project: Project, search_hash: str) -> bool:
+    with project.index.connect() as conn:
+        row = conn.execute(
+            text(
+                "SELECT 1 FROM press_reviews r JOIN protocols p ON p.protocol_id = r.protocol_id "
+                "WHERE p.search_hash = :hash AND r.responses IS NOT NULL LIMIT 1"
+            ),
+            {"hash": search_hash},
+        ).one_or_none()
+    return row is not None
+
+
+def _is_deviation_of(project: Project, deviation_id: str, protocol_id: str) -> bool:
+    with project.index.connect() as conn:
+        row = conn.execute(
+            text(
+                "SELECT 1 FROM deviations WHERE deviation_id = :deviation "
+                "AND protocol_id = :protocol"
+            ),
+            {"deviation": deviation_id, "protocol": protocol_id},
+        ).one_or_none()
+    return row is not None
+
+
+def _measured_probes(project: Project) -> dict[str, set[str]]:
+    """The sources each probe measured, keyed by probe id."""
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text("SELECT DISTINCT probe_id, source FROM probes WHERE status = 'measured'")
+        ).all()
+    measured: dict[str, set[str]] = {}
+    for probe_id, source in rows:
+        measured.setdefault(str(probe_id), set()).add(str(source))
+    return measured
+
+
+def _rigor_mode(project: Project) -> RigorMode:
+    with project.index.connect() as conn:
+        value = conn.execute(
+            text("SELECT rigor_mode FROM project WHERE slug = :slug"),
+            {"slug": project.paths.slug},
+        ).scalar_one()
+    return RigorMode(str(value))
+
+
+def _json_list(stored: object) -> list[object]:
+    return list(json.loads(str(stored)))

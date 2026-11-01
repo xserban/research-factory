@@ -77,32 +77,45 @@ def register_query(
     spec: QuerySpec,
     *,
     sources: Mapping[str, SourceFactory],
+    deviation_id: str | None = None,
 ) -> str:
-    """Record a query as the caller stated it. Writes nothing if the spec does not fit."""
-    issues = _spec_issues(project, spec, sources)
-    if issues:
-        raise FactoryValidationError(issues)
-    query_id = project.ids.new("qry")
-    # An agent's request is kept verbatim, so the query can be reproduced and audited later.
-    input_blob = (
-        project.blobs.put_json(spec.model_dump(mode="json")) if actor.kind == "agent" else None
-    )
-    payload = QueryRegistered(
-        query_id=query_id,
-        spec=spec,
-        interface=INTERFACES.get(spec.source, spec.source),
-    )
-    project.record(
-        [
-            project.events.make(
-                "query.registered",
-                payload,
-                actor,
-                refs=(query_id,),
-                input_blob=input_blob,
-            )
-        ]
-    )
+    """Record a query as the caller stated it. Writes nothing if the spec does not fit.
+
+    A search in a pilot or systematic project must be authorised by the protocol
+    (`protocol.search_authorization`); `deviation_id` names a recorded deviation that allows a
+    query the protocol does not plan. The event refers to the protocol and the deviation.
+    """
+    # Imported here: the protocol service reads seeds, which read this module.
+    from factory.services import protocol as protocol_service
+
+    with project.index.exclusive():
+        project.index.sync()
+        issues = _spec_issues(project, spec, sources)
+        issues += protocol_service.search_authorization(project, spec, deviation_id=deviation_id)
+        if issues:
+            raise FactoryValidationError(issues)
+        query_id = project.ids.new("qry")
+        # An agent's request is kept verbatim, so the query can be reproduced and audited later.
+        input_blob = (
+            project.blobs.put_json(spec.model_dump(mode="json")) if actor.kind == "agent" else None
+        )
+        payload = QueryRegistered(
+            query_id=query_id,
+            spec=spec,
+            interface=INTERFACES.get(spec.source, spec.source),
+        )
+        refs = protocol_service.search_refs(project, spec, deviation_id)
+        project.record(
+            [
+                project.events.make(
+                    "query.registered",
+                    payload,
+                    actor,
+                    refs=(query_id, *refs),
+                    input_blob=input_blob,
+                )
+            ]
+        )
     return query_id
 
 

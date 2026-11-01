@@ -112,7 +112,7 @@ def test_status_human_output(tmp_path: Path) -> None:
 def test_status_shows_works_searches_and_shortfalls(tmp_path: Path) -> None:
     settings = Settings(root=tmp_path, user="obd")
     clock = FixedClock(datetime(2026, 10, 31, 12, 0, tzinfo=UTC))
-    project = init_project(settings, "demo", "pilot", session=SESSION, clock=clock)
+    project = init_project(settings, "demo", "exploratory", session=SESSION, clock=clock)
     # The fake source reports 5 records and delivers 3: the shortfall must be shown.
     sources: dict[str, SourceFactory] = {
         "fake": SourceFactory(FakeSource.kinds, lambda _s, _c: FakeSource(FAKE_PAGES, reported=5))

@@ -72,158 +72,162 @@ def _work_id(project: Project, *, doi: str | None = None, arxiv: str | None = No
 
 
 def test_cross_identifier_duplicates_become_one_recorded_merge(
-    project: Project, fake_sources: SourcesFor
+    explore_project: Project, fake_sources: SourcesFor
 ) -> None:
-    _ingest(project, fake_sources, [[PUBLISHED, PREPRINT]])
-    summary = dedup_run(project)
+    _ingest(explore_project, fake_sources, [[PUBLISHED, PREPRINT]])
+    summary = dedup_run(explore_project)
     assert len(summary.created) == 1 and summary.reverted == []
     assert (summary.works, summary.canonical) == (2, 1)
     assert summary.records == 2
 
-    [merge] = active_merges(project)
+    [merge] = active_merges(explore_project)
     assert merge.merge_id == summary.created[0]
-    assert merge.primary == _work_id(project, doi="10.1000/x")
-    assert merge.absorbed == (_work_id(project, arxiv="2301.00001"),)
+    assert merge.primary == _work_id(explore_project, doi="10.1000/x")
+    assert merge.absorbed == (_work_id(explore_project, arxiv="2301.00001"),)
     assert merge.rule.startswith("title+author")
     assert merge.records == 2
-    [event] = _of_type(project, "dedup.merged")
+    [event] = _of_type(explore_project, "dedup.merged")
     assert event.refs == (merge.primary, *merge.absorbed)
 
 
-def test_rerun_is_idempotent(project: Project, fake_sources: SourcesFor) -> None:
-    _ingest(project, fake_sources, [[PUBLISHED, PREPRINT]])
-    first = dedup_run(project)
-    second = dedup_run(project)
+def test_rerun_is_idempotent(explore_project: Project, fake_sources: SourcesFor) -> None:
+    _ingest(explore_project, fake_sources, [[PUBLISHED, PREPRINT]])
+    first = dedup_run(explore_project)
+    second = dedup_run(explore_project)
     assert len(first.created) == 1
     assert second.created == [] and second.reverted == [] and second.unchanged == 1
-    assert len(_of_type(project, "dedup.merged")) == 1
-    assert _of_type(project, "dedup.reverted") == []
+    assert len(_of_type(explore_project, "dedup.merged")) == 1
+    assert _of_type(explore_project, "dedup.reverted") == []
 
 
 def test_new_record_joining_a_group_supersedes_the_merge(
-    project: Project, fake_sources: SourcesFor
+    explore_project: Project, fake_sources: SourcesFor
 ) -> None:
-    _ingest(project, fake_sources, [[PUBLISHED, PREPRINT]])
-    first = dedup_run(project)
-    _ingest(project, fake_sources, [[OPENALEX_COPY]])
-    second = dedup_run(project)
+    _ingest(explore_project, fake_sources, [[PUBLISHED, PREPRINT]])
+    first = dedup_run(explore_project)
+    _ingest(explore_project, fake_sources, [[OPENALEX_COPY]])
+    second = dedup_run(explore_project)
 
     assert second.reverted == first.created
     assert len(second.created) == 1
-    [revert] = _of_type(project, "dedup.reverted")
+    [revert] = _of_type(explore_project, "dedup.reverted")
     assert revert.payload["merge_id"] == first.created[0]
     assert revert.payload["manual"] is False
     assert revert.payload["reason"] == f"superseded by {second.created[0]}"
     assert revert.input_blob is None
 
-    [merge] = active_merges(project)
+    [merge] = active_merges(explore_project)
     assert merge.merge_id == second.created[0]
     assert len(merge.absorbed) == 2
-    assert {merge.primary, *merge.absorbed} == {w.id for w in list_works(project)}
-    assert len(canonical_works(project)) == 1
+    assert {merge.primary, *merge.absorbed} == {w.id for w in list_works(explore_project)}
+    assert len(canonical_works(explore_project)) == 1
 
 
 def test_manual_revert_is_not_reapplied(
-    project: Project, agent: Actor, fake_sources: SourcesFor
+    explore_project: Project, agent: Actor, fake_sources: SourcesFor
 ) -> None:
-    _ingest(project, fake_sources, [[PUBLISHED, PREPRINT]])
-    mid = dedup_run(project).created[0]
-    revert_merge(project, agent, mid, "different papers")
+    _ingest(explore_project, fake_sources, [[PUBLISHED, PREPRINT]])
+    mid = dedup_run(explore_project).created[0]
+    revert_merge(explore_project, agent, mid, "different papers")
 
-    [revert] = _of_type(project, "dedup.reverted")
+    [revert] = _of_type(explore_project, "dedup.reverted")
     assert revert.payload["manual"] is True and revert.input_blob is not None
 
-    again = dedup_run(project)
+    again = dedup_run(explore_project)
     assert again.created == [] and again.reverted == [] and again.unchanged == 0
-    assert len(canonical_works(project)) == 2
-    assert project_status(project).merges_active == 0
+    assert len(canonical_works(explore_project)) == 2
+    assert project_status(explore_project).merges_active == 0
 
 
 def test_manual_revert_of_a_three_way_merge_keeps_every_pair_apart(
-    project: Project, human: Actor, fake_sources: SourcesFor
+    explore_project: Project, human: Actor, fake_sources: SourcesFor
 ) -> None:
-    _ingest(project, fake_sources, [[PUBLISHED, PREPRINT, OPENALEX_COPY]])
-    [mid] = dedup_run(project).created
-    [merge] = active_merges(project)
+    _ingest(explore_project, fake_sources, [[PUBLISHED, PREPRINT, OPENALEX_COPY]])
+    [mid] = dedup_run(explore_project).created
+    [merge] = active_merges(explore_project)
     assert len(merge.absorbed) == 2
 
-    revert_merge(project, human, mid, "three different papers")
-    again = dedup_run(project)
+    revert_merge(explore_project, human, mid, "three different papers")
+    again = dedup_run(explore_project)
 
-    assert again.created == [] and active_merges(project) == []
-    assert len(canonical_works(project)) == 3
-    _, blocked = _dedup_rows(project)
+    assert again.created == [] and active_merges(explore_project) == []
+    assert len(canonical_works(explore_project)) == 3
+    _, blocked = _dedup_rows(explore_project)
     assert len(blocked) == 3  # every pair among the three members, not just primary-absorbed
 
 
-def test_revert_validation(project: Project, human: Actor, fake_sources: SourcesFor) -> None:
-    _ingest(project, fake_sources, [[PUBLISHED, PREPRINT]])
-    mid = dedup_run(project).created[0]
+def test_revert_validation(
+    explore_project: Project, human: Actor, fake_sources: SourcesFor
+) -> None:
+    _ingest(explore_project, fake_sources, [[PUBLISHED, PREPRINT]])
+    mid = dedup_run(explore_project).created[0]
 
     with pytest.raises(FactoryValidationError) as unknown:
-        revert_merge(project, human, f"mrg_{SESSION}", "different papers")
+        revert_merge(explore_project, human, f"mrg_{SESSION}", "different papers")
     assert [issue.field for issue in unknown.value.issues] == ["merge_id"]
 
     with pytest.raises(FactoryValidationError) as blank:
-        revert_merge(project, human, mid, "   ")
+        revert_merge(explore_project, human, mid, "   ")
     assert [issue.field for issue in blank.value.issues] == ["reason"]
 
     with pytest.raises(FactoryValidationError) as both:
-        revert_merge(project, human, f"mrg_{SESSION}", "")
+        revert_merge(explore_project, human, f"mrg_{SESSION}", "")
     assert [issue.field for issue in both.value.issues] == ["merge_id", "reason"]
 
-    revert_merge(project, human, mid, "  different papers  ")
-    [revert] = _of_type(project, "dedup.reverted")
+    revert_merge(explore_project, human, mid, "  different papers  ")
+    [revert] = _of_type(explore_project, "dedup.reverted")
     assert revert.input_blob is None
     assert revert.payload["reason"] == "different papers"
 
     with pytest.raises(FactoryValidationError) as twice:
-        revert_merge(project, human, mid, "again")
+        revert_merge(explore_project, human, mid, "again")
     assert [issue.field for issue in twice.value.issues] == ["merge_id"]
 
 
 def test_status_counts_active_merges(
-    project: Project, human: Actor, fake_sources: SourcesFor
+    explore_project: Project, human: Actor, fake_sources: SourcesFor
 ) -> None:
-    _ingest(project, fake_sources, [[PUBLISHED, PREPRINT]])
-    assert project_status(project).merges_active == 0
-    mid = dedup_run(project).created[0]
-    assert project_status(project).merges_active == 1
-    revert_merge(project, human, mid, "different papers")
-    assert project_status(project).merges_active == 0
+    _ingest(explore_project, fake_sources, [[PUBLISHED, PREPRINT]])
+    assert project_status(explore_project).merges_active == 0
+    mid = dedup_run(explore_project).created[0]
+    assert project_status(explore_project).merges_active == 1
+    revert_merge(explore_project, human, mid, "different papers")
+    assert project_status(explore_project).merges_active == 0
 
 
 def test_dedup_rebuild_equals_incremental(
-    project: Project, agent: Actor, fake_sources: SourcesFor
+    explore_project: Project, agent: Actor, fake_sources: SourcesFor
 ) -> None:
-    _ingest(project, fake_sources, [[PUBLISHED, PREPRINT]])
-    dedup_run(project)
-    _ingest(project, fake_sources, [[OPENALEX_COPY]])
-    dedup_run(project)
-    [merge] = active_merges(project)
-    revert_merge(project, agent, merge.merge_id, "different papers")
-    dedup_run(project)
+    _ingest(explore_project, fake_sources, [[PUBLISHED, PREPRINT]])
+    dedup_run(explore_project)
+    _ingest(explore_project, fake_sources, [[OPENALEX_COPY]])
+    dedup_run(explore_project)
+    [merge] = active_merges(explore_project)
+    revert_merge(explore_project, agent, merge.merge_id, "different papers")
+    dedup_run(explore_project)
 
-    assert project.index.state_hash() == project.index.rebuild()
+    assert explore_project.index.state_hash() == explore_project.index.rebuild()
 
 
-def test_merge_no_longer_produced_is_reverted(project: Project, fake_sources: SourcesFor) -> None:
+def test_merge_no_longer_produced_is_reverted(
+    explore_project: Project, fake_sources: SourcesFor
+) -> None:
     # Three unrelated records: the cascade produces no merge, so a merge recorded by hand is stale.
     sources = fake_sources()
     qid = register_query(
-        project,
-        project.human_actor(),
+        explore_project,
+        explore_project.human_actor(),
         QuerySpec(source="fake", kind=QueryKind.KEYWORD, text="attention"),
         sources=sources,
     )
-    run_query(project, qid, sources=sources)
-    works = list_works(project)
+    run_query(explore_project, qid, sources=sources)
+    works = list_works(explore_project)
     first = next(w.id for w in works if w.title == "Linear attention")
     second = next(w.id for w in works if w.title == "Sparse attention")
-    merge_id = project.ids.new("mrg")
-    project.record(
+    merge_id = explore_project.ids.new("mrg")
+    explore_project.record(
         [
-            project.events.make(
+            explore_project.events.make(
                 "dedup.merged",
                 DedupMerged(
                     merge_id=merge_id,
@@ -232,43 +236,45 @@ def test_merge_no_longer_produced_is_reverted(project: Project, fake_sources: So
                     rule="identifier:doi",
                     records=2,
                 ),
-                project.system_actor(),
+                explore_project.system_actor(),
                 refs=(first, second),
             )
         ]
     )
 
-    summary = dedup_run(project)
+    summary = dedup_run(explore_project)
     assert summary.created == [] and summary.reverted == [merge_id]
-    [revert] = [e for e in _of_type(project, "dedup.reverted") if e.payload["merge_id"] == merge_id]
+    [revert] = [
+        e for e in _of_type(explore_project, "dedup.reverted") if e.payload["merge_id"] == merge_id
+    ]
     assert revert.payload["reason"] == "no longer matched"
-    assert active_merges(project) == []
+    assert active_merges(explore_project) == []
 
 
 def test_canonical_merges_the_members_that_exist(
-    project: Project, fake_sources: SourcesFor
+    explore_project: Project, fake_sources: SourcesFor
 ) -> None:
-    _ingest(project, fake_sources, [[PUBLISHED, PREPRINT]])
-    works = list_works(project)
+    _ingest(explore_project, fake_sources, [[PUBLISHED, PREPRINT]])
+    works = list_works(explore_project)
     other = next(w.id for w in works if w.title == "Linear attention in transformers")
     missing = "rf:missing-00000000"
-    project.record(
+    explore_project.record(
         [
-            project.events.make(
+            explore_project.events.make(
                 "dedup.merged",
                 DedupMerged(
-                    merge_id=project.ids.new("mrg"),
+                    merge_id=explore_project.ids.new("mrg"),
                     primary=other,
                     absorbed=(missing,),
                     rule="identifier:doi",
                     records=2,
                 ),
-                project.system_actor(),
+                explore_project.system_actor(),
                 refs=(other, missing),
             )
         ]
     )
-    assert len(canonical_works(project)) == 2
+    assert len(canonical_works(explore_project)) == 2
 
 
 def _dedup_rows(project: Project) -> tuple[list[Any], list[Any]]:
@@ -279,25 +285,33 @@ def _dedup_rows(project: Project) -> tuple[list[Any], list[Any]]:
 
 
 def test_projection_ignores_reverts_of_unknown_or_reverted_merges(
-    project: Project, human: Actor, fake_sources: SourcesFor
+    explore_project: Project, human: Actor, fake_sources: SourcesFor
 ) -> None:
-    _ingest(project, fake_sources, [[PUBLISHED, PREPRINT]])
-    mid = dedup_run(project).created[0]
-    before = _dedup_rows(project)
+    _ingest(explore_project, fake_sources, [[PUBLISHED, PREPRINT]])
+    mid = dedup_run(explore_project).created[0]
+    before = _dedup_rows(explore_project)
     unknown = DedupReverted(merge_id=f"mrg_{SESSION}", reason="stale", manual=True)
-    project.record(
-        [project.events.make("dedup.reverted", unknown, project.system_actor(), refs=(mid,))]
+    explore_project.record(
+        [
+            explore_project.events.make(
+                "dedup.reverted", unknown, explore_project.system_actor(), refs=(mid,)
+            )
+        ]
     )
-    assert _dedup_rows(project) == before
+    assert _dedup_rows(explore_project) == before
 
-    revert_merge(project, human, mid, "different papers")
-    after = _dedup_rows(project)
+    revert_merge(explore_project, human, mid, "different papers")
+    after = _dedup_rows(explore_project)
     assert len(after[1]) == 1  # the manual revert blocked the one pair
     repeat = DedupReverted(merge_id=mid, reason="again", manual=True)
-    project.record(
-        [project.events.make("dedup.reverted", repeat, project.system_actor(), refs=(mid,))]
+    explore_project.record(
+        [
+            explore_project.events.make(
+                "dedup.reverted", repeat, explore_project.system_actor(), refs=(mid,)
+            )
+        ]
     )
-    assert _dedup_rows(project) == after
+    assert _dedup_rows(explore_project) == after
 
 
 def test_merge_payloads_are_validated() -> None:
@@ -311,9 +325,9 @@ def test_merge_payloads_are_validated() -> None:
 
 
 def test_concurrent_dedup_runs_record_one_merge(
-    project: Project, fake_sources: SourcesFor, settings: Settings
+    explore_project: Project, fake_sources: SourcesFor, settings: Settings
 ) -> None:
-    _ingest(project, fake_sources, [[PUBLISHED, PREPRINT]])
+    _ingest(explore_project, fake_sources, [[PUBLISHED, PREPRINT]])
     barrier = threading.Barrier(2)
     created: list[list[str]] = []
     lock = threading.Lock()
@@ -331,4 +345,4 @@ def test_concurrent_dedup_runs_record_one_merge(
     for thread in threads:
         thread.join()
     assert sorted(len(ids) for ids in created) == [0, 1]
-    assert len(_of_type(project, "dedup.merged")) == 1
+    assert len(_of_type(explore_project, "dedup.merged")) == 1

@@ -46,7 +46,7 @@ def _sources(mock_sources: Any) -> dict[str, SourceFactory]:
 
 @pytest.mark.anyio
 async def test_search_run_tool(
-    settings: Settings, project: Project, clock: FixedClock, mock_sources: Any
+    settings: Settings, explore_project: Project, clock: FixedClock, mock_sources: Any
 ) -> None:
     clock.advance(timedelta(milliseconds=1))
     server = build_server(settings, clock=clock, sources=_sources(mock_sources))
@@ -65,7 +65,7 @@ async def test_search_run_tool(
     assert data["retrieved_count"] == 1 and data["new_works"] == 1
     [registered] = [
         e
-        for e in read_all(project.paths.events_dir, project.catalog)
+        for e in read_all(explore_project.paths.events_dir, explore_project.catalog)
         if e.type == "query.registered"
     ]
     assert registered.actor.kind == "agent"
@@ -148,14 +148,14 @@ async def test_search_run_unknown_resume_run(
 
 @pytest.mark.anyio
 async def test_search_run_refuses_to_resume_a_complete_run(
-    settings: Settings, project: Project, clock: FixedClock, mock_sources: Any
+    settings: Settings, explore_project: Project, clock: FixedClock, mock_sources: Any
 ) -> None:
     # Only a partial or failed run can be resumed; a complete one is refused, and no query is
     # registered on the way.
     spec = QuerySpec(source="openalex", kind=QueryKind.KEYWORD, text="linear attention")
     sources = _sources(mock_sources)
-    query_id = register_query(project, project.human_actor(), spec, sources=sources)
-    first = run_query(project, query_id, sources=sources)
+    query_id = register_query(explore_project, explore_project.human_actor(), spec, sources=sources)
+    first = run_query(explore_project, query_id, sources=sources)
     clock.advance(timedelta(milliseconds=1))
 
     server = build_server(settings, clock=clock, sources=sources)
@@ -175,7 +175,7 @@ async def test_search_run_refuses_to_resume_a_complete_run(
     assert body["ok"] is False and body["errors"][0]["field"] == "resume_run"
     registered = [
         e
-        for e in read_all(project.paths.events_dir, project.catalog)
+        for e in read_all(explore_project.paths.events_dir, explore_project.catalog)
         if e.type == "query.registered"
     ]
     assert len(registered) == 1
@@ -197,15 +197,15 @@ async def _resume(
 )
 async def test_search_run_refuses_a_resume_that_restates_the_query_differently(
     settings: Settings,
-    project: Project,
+    explore_project: Project,
     clock: FixedClock,
     fake_sources: Any,
     changed: dict[str, str],
 ) -> None:
     spec = QuerySpec(source="fake", kind=QueryKind.KEYWORD, text="linear attention")
     seeded = fake_sources(fail_after=1)
-    query_id = register_query(project, project.human_actor(), spec, sources=seeded)
-    partial = run_query(project, query_id, sources=seeded)
+    query_id = register_query(explore_project, explore_project.human_actor(), spec, sources=seeded)
+    partial = run_query(explore_project, query_id, sources=seeded)
     clock.advance(timedelta(milliseconds=1))
 
     args = {"source": "fake", "query": "linear attention", "resume_run": partial.run_id}
@@ -215,18 +215,18 @@ async def test_search_run_refuses_a_resume_that_restates_the_query_differently(
 
     assert body["ok"] is False
     assert [e["field"] for e in body["errors"]] == ["resume_run"]
-    events = read_all(project.paths.events_dir, project.catalog)
+    events = read_all(explore_project.paths.events_dir, explore_project.catalog)
     assert [e.type for e in events].count("search.run_started") == 1  # nothing was written
 
 
 @pytest.mark.anyio
 async def test_search_run_resumes_a_partial_run_through_the_tool(
-    settings: Settings, project: Project, clock: FixedClock, fake_sources: Any
+    settings: Settings, explore_project: Project, clock: FixedClock, fake_sources: Any
 ) -> None:
     spec = QuerySpec(source="fake", kind=QueryKind.KEYWORD, text="linear attention")
     seeded = fake_sources(fail_after=1)
-    query_id = register_query(project, project.human_actor(), spec, sources=seeded)
-    partial = run_query(project, query_id, sources=seeded)
+    query_id = register_query(explore_project, explore_project.human_actor(), spec, sources=seeded)
+    partial = run_query(explore_project, query_id, sources=seeded)
     assert partial.status == "partial"
     clock.advance(timedelta(milliseconds=1))
 
@@ -243,7 +243,7 @@ async def test_search_run_resumes_a_partial_run_through_the_tool(
     assert body["data"]["status"] == "complete" and body["data"]["query_id"] == query_id
     registered = [
         e
-        for e in read_all(project.paths.events_dir, project.catalog)
+        for e in read_all(explore_project.paths.events_dir, explore_project.catalog)
         if e.type == "query.registered"
     ]
     assert len(registered) == 1  # resuming reuses the query
@@ -251,7 +251,7 @@ async def test_search_run_resumes_a_partial_run_through_the_tool(
 
 @pytest.mark.anyio
 async def test_dedup_run_tool(
-    settings: Settings, project: Project, clock: FixedClock, mock_sources: Any
+    settings: Settings, explore_project: Project, clock: FixedClock, mock_sources: Any
 ) -> None:
     sources = dict(
         mock_sources(
@@ -271,8 +271,10 @@ async def test_dedup_run_tool(
     )
     for source, text_ in (("openalex", "linear"), ("arxiv", "linear")):
         spec = QuerySpec(source=source, kind=QueryKind.KEYWORD, text=text_)
-        query_id = register_query(project, project.human_actor(), spec, sources=sources)
-        run_query(project, query_id, sources=sources)
+        query_id = register_query(
+            explore_project, explore_project.human_actor(), spec, sources=sources
+        )
+        run_query(explore_project, query_id, sources=sources)
         clock.advance(timedelta(milliseconds=1))
 
     server = build_server(settings, clock=clock, sources=sources)
@@ -284,7 +286,7 @@ async def test_dedup_run_tool(
     assert len(data["created"]) == 1 and data["reverted"] == []
     assert (data["works"], data["canonical"]) == (2, 1)
     # The service is idempotent: the same merge is not recorded twice.
-    assert dedup_run(project).created == []
+    assert dedup_run(explore_project).created == []
 
 
 @pytest.mark.anyio

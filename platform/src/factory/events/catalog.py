@@ -5,6 +5,12 @@ from factory.model.base import StrictModel
 from factory.model.dedup import DedupMerged, DedupReverted
 from factory.model.probe import ProbeFailed, ProbeMeasured, ProbePageArchived
 from factory.model.project import ProjectCreated
+from factory.model.protocol import (
+    DeviationRecorded,
+    PressConfirmed,
+    PressReviewed,
+    ProtocolRecorded,
+)
 from factory.model.question import GoalStated, QuestionRecorded
 from factory.model.search import (
     QueryRegistered,
@@ -80,4 +86,8 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("probe.page_archived", ProbePageArchived, 1))
     catalog.register(EventType("probe.measured", ProbeMeasured, 1))
     catalog.register(EventType("probe.failed", ProbeFailed, 1))
+    catalog.register(EventType("protocol.recorded", ProtocolRecorded, 1))
+    catalog.register(EventType("protocol.press_reviewed", PressReviewed, 1))
+    catalog.register(EventType("protocol.press_confirmed", PressConfirmed, 1))
+    catalog.register(EventType("protocol.deviation_recorded", DeviationRecorded, 1))
     return catalog

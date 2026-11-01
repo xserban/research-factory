@@ -132,6 +132,12 @@ def project(settings: Settings, clock: FixedClock) -> Project:
 
 
 @pytest.fixture
+def explore_project(settings: Settings, clock: FixedClock) -> Project:
+    """An exploratory project: searches are not gated by a protocol."""
+    return init_project(settings, "demo", "exploratory", session=SESSION, clock=clock)
+
+
+@pytest.fixture
 def project_other_session(settings: Settings, clock: FixedClock, project: Project) -> Project:
     return open_project(settings, "demo", session=S2, clock=clock)
 

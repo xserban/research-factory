@@ -76,7 +76,7 @@ def test_plugin_dir_defaults_to_root_plugin(
 @pytest.mark.anyio
 async def test_tool_records_platform_computed_skill(
     settings: Settings,
-    project: Project,
+    explore_project: Project,
     clock: FixedClock,
     mock_sources: Any,
 ) -> None:
@@ -98,7 +98,7 @@ async def test_tool_records_platform_computed_skill(
     assert res.is_error is not True
     registered = [
         e
-        for e in read_all(project.paths.events_dir, project.catalog)
+        for e in read_all(explore_project.paths.events_dir, explore_project.catalog)
         if e.type == "query.registered"
     ]
     assert len(registered) == 1

@@ -47,7 +47,7 @@ def _search(
 
 
 def test_datacite_doi_and_bare_arxiv_id_are_one_work(
-    project: Project, mock_sources: MockSources, clock: FixedClock
+    explore_project: Project, mock_sources: MockSources, clock: FixedClock
 ) -> None:
     # Acceptance 3, same metadata: OpenAlex's DOI and arXiv's bare id meet under one work id.
     sources = mock_sources(
@@ -62,18 +62,18 @@ def test_datacite_doi_and_bare_arxiv_id_are_one_work(
         ],
         arxiv=arxiv_atom([("2301.01234v2", "Linear attention", 2023, "Ada Zhou")]),
     )
-    _search(project, sources, "openalex", "linear attention")
+    _search(explore_project, sources, "openalex", "linear attention")
     clock.advance(timedelta(milliseconds=1))
-    _search(project, sources, "arxiv", "linear attention")
+    _search(explore_project, sources, "arxiv", "linear attention")
 
-    [work] = list_works(project)
+    [work] = list_works(explore_project)
     assert work.sources == ["openalex", "arxiv"]
     assert len(work.provenance) == 2
-    assert dedup_run(project).created == []  # one work already: no merge to record
+    assert dedup_run(explore_project).created == []  # one work already: no merge to record
 
 
 def test_datacite_doi_and_bare_arxiv_id_with_differing_metadata_merge_reversibly(
-    project: Project, agent: Actor, mock_sources: MockSources, clock: FixedClock
+    explore_project: Project, agent: Actor, mock_sources: MockSources, clock: FixedClock
 ) -> None:
     # Acceptance 3, differing metadata (OpenAlex 2024, arXiv 2023): two works, one merge.
     sources = mock_sources(
@@ -88,26 +88,26 @@ def test_datacite_doi_and_bare_arxiv_id_with_differing_metadata_merge_reversibly
         ],
         arxiv=arxiv_atom([("2301.01234v2", "Linear attention", 2023, "Ada Zhou")]),
     )
-    _search(project, sources, "openalex", "linear attention")
+    _search(explore_project, sources, "openalex", "linear attention")
     clock.advance(timedelta(milliseconds=1))
-    _search(project, sources, "arxiv", "linear attention")
-    assert len(list_works(project)) == 2
+    _search(explore_project, sources, "arxiv", "linear attention")
+    assert len(list_works(explore_project)) == 2
 
-    summary = dedup_run(project)
+    summary = dedup_run(explore_project)
     assert len(summary.created) == 1
-    [merge] = active_merges(project)
+    [merge] = active_merges(explore_project)
     assert merge.merge_id == summary.created[0]
     assert "identifier:arxiv" in merge.rule
 
     clock.advance(timedelta(milliseconds=1))
-    revert_merge(project, agent, merge.merge_id, "test")
-    assert len(canonical_works(project)) == 2
-    again = dedup_run(project)
+    revert_merge(explore_project, agent, merge.merge_id, "test")
+    assert len(canonical_works(explore_project)) == 2
+    again = dedup_run(explore_project)
     assert again.created == []
 
 
 def test_published_and_preprint_merge_is_listed_and_reversible(
-    project: Project, agent: Actor, mock_sources: MockSources, clock: FixedClock
+    explore_project: Project, agent: Actor, mock_sources: MockSources, clock: FixedClock
 ) -> None:
     # Acceptance 3, cross-identifier case: a published DOI and a preprint of the same paper.
     sources = mock_sources(
@@ -122,24 +122,24 @@ def test_published_and_preprint_merge_is_listed_and_reversible(
         ],
         arxiv=arxiv_atom([("2301.00001v1", "Linear attention in transformers", 2024, "Ada Zhou")]),
     )
-    _search(project, sources, "openalex", "linear attention")
+    _search(explore_project, sources, "openalex", "linear attention")
     clock.advance(timedelta(milliseconds=1))
-    _search(project, sources, "arxiv", "linear attention")
+    _search(explore_project, sources, "arxiv", "linear attention")
 
-    summary = dedup_run(project)
+    summary = dedup_run(explore_project)
     assert len(summary.created) == 1
-    [merge] = active_merges(project)
+    [merge] = active_merges(explore_project)
     assert merge.merge_id == summary.created[0]
 
     clock.advance(timedelta(milliseconds=1))
-    revert_merge(project, agent, merge.merge_id, "different papers")
-    assert active_merges(project) == []
-    assert len(canonical_works(project)) == 2
-    assert dedup_run(project).created == []
+    revert_merge(explore_project, agent, merge.merge_id, "different papers")
+    assert active_merges(explore_project) == []
+    assert len(canonical_works(explore_project)) == 2
+    assert dedup_run(explore_project).created == []
 
 
 def test_every_run_stores_reported_and_retrieved_and_shortfall_is_visible(
-    project: Project, mock_sources: MockSources
+    explore_project: Project, mock_sources: MockSources
 ) -> None:
     # Acceptance 4: OpenAlex reports 5, delivers 2 (one untitled record skipped); the run says why.
     items = [
@@ -152,12 +152,12 @@ def test_every_run_stores_reported_and_retrieved_and_shortfall_is_visible(
         openalex_item(title="", author="Cai Wu", published="2023-03-05", openalex_id="W3"),
     ]
     sources = mock_sources(openalex=items, openalex_count=5)
-    summary = _search(project, sources, "openalex", "attention")
+    summary = _search(explore_project, sources, "openalex", "attention")
 
     assert summary.status == RunStatus.COMPLETE
     assert (summary.reported_count, summary.retrieved_count) == (5, 2)
     assert summary.note is not None and "skipped" in summary.note
-    [shortfall] = search_counts(project).shortfalls
+    [shortfall] = search_counts(explore_project).shortfalls
     assert (shortfall.run_id, shortfall.reported_count, shortfall.retrieved_count) == (
         summary.run_id,
         5,
@@ -167,7 +167,7 @@ def test_every_run_stores_reported_and_retrieved_and_shortfall_is_visible(
 
 
 def test_adapters_never_request_relevance_sorting(
-    project: Project, mock_sources: MockSources, http_log: list[httpx.Request]
+    explore_project: Project, mock_sources: MockSources, http_log: list[httpx.Request]
 ) -> None:
     # Acceptance 14 (R-21): OpenAlex sends no `sort`/`search`; arXiv sorts by submission date.
     sources = mock_sources(
@@ -181,8 +181,8 @@ def test_adapters_never_request_relevance_sorting(
         ],
         arxiv=arxiv_atom(),
     )
-    _search(project, sources, "openalex", "linear attention")
-    _search(project, sources, "arxiv", "linear attention")
+    _search(explore_project, sources, "openalex", "linear attention")
+    _search(explore_project, sources, "arxiv", "linear attention")
 
     openalex = [r for r in http_log if r.url.host == "api.openalex.org"]
     arxiv = [r for r in http_log if r.url.host == "export.arxiv.org"]
@@ -196,7 +196,7 @@ def test_adapters_never_request_relevance_sorting(
 
 def test_acquisition_rebuild_is_deterministic(
     settings: Settings,
-    project: Project,
+    explore_project: Project,
     agent: Actor,
     mock_sources: MockSources,
     clock: FixedClock,
@@ -214,17 +214,17 @@ def test_acquisition_rebuild_is_deterministic(
         ],
         arxiv=arxiv_atom([("2301.01234v2", "Linear attention", 2023, "Ada Zhou")]),
     )
-    _search(project, sources, "openalex", "linear attention")
+    _search(explore_project, sources, "openalex", "linear attention")
     clock.advance(timedelta(milliseconds=1))
-    _search(project, sources, "arxiv", "linear attention")
+    _search(explore_project, sources, "arxiv", "linear attention")
     clock.advance(timedelta(milliseconds=1))
-    [merge_id] = dedup_run(project).created
+    [merge_id] = dedup_run(explore_project).created
     clock.advance(timedelta(milliseconds=1))
-    revert_merge(project, agent, merge_id, "test")
-    dedup_run(project)
+    revert_merge(explore_project, agent, merge_id, "test")
+    dedup_run(explore_project)
 
-    before = project.index.state_hash()
-    shutil.rmtree(project.paths.dir / ".index")
+    before = explore_project.index.state_hash()
+    shutil.rmtree(explore_project.paths.dir / ".index")
     out = CliRunner().invoke(
         app,
         ["--root", str(settings.root), "rebuild"],
@@ -239,7 +239,7 @@ def test_contact_address_never_reaches_the_event_log(tmp_path: Path, clock: Fixe
     # URL, not in an HTTP-failure note, and so not anywhere under events/ or blobs/.
     mailto = "team@example.org"
     settings = Settings(root=tmp_path, user="obd", mailto=mailto)
-    project = init_project(settings, "demo", "pilot", session=SESSION, clock=clock)
+    explore_project = init_project(settings, "demo", "exploratory", session=SESSION, clock=clock)
     failing = {"on": False}
     sent: list[httpx.Request] = []
 
@@ -277,16 +277,16 @@ def test_contact_address_never_reaches_the_event_log(tmp_path: Path, clock: Fixe
         ),
     }
 
-    ok = _search(project, sources, "openalex", "vessel")
+    ok = _search(explore_project, sources, "openalex", "vessel")
     assert ok.status == RunStatus.COMPLETE
-    _search(project, sources, "arxiv", "vessel")
+    _search(explore_project, sources, "arxiv", "vessel")
     failing["on"] = True
     for name in ("openalex", "arxiv"):
-        failed = _search(project, sources, name, "vessel")
+        failed = _search(explore_project, sources, name, "vessel")
         assert failed.status == RunStatus.FAILED
         assert failed.note is not None and mailto not in failed.note
 
-    for path in project.paths.events_dir.rglob("*"):
+    for path in explore_project.paths.events_dir.rglob("*"):
         if path.is_file():
             text = path.read_text(encoding="utf-8")
             # The URL form is percent-encoded, so check that and the parameter name as well.
