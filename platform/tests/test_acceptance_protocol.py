@@ -396,6 +396,46 @@ async def test_agent_tools_never_reveal_held_out_seeds(
     for response in responses:
         assert _leaks(json.dumps(response), tokens) == []
 
+    # Error payloads are scanned too (acceptance 22): a parentless criterion, and a worked
+    # example that is held out, which must be refused with the same message as an unknown seed.
+    held_id = next(seed.seed_id for seed in held)
+    parentless = {
+        **spec,
+        "criteria": [{**spec["criteria"][0], "parent": None}, *spec["criteria"][1:]],
+    }
+    with_held = {
+        **spec,
+        "criteria": [
+            spec["criteria"][0],
+            {**spec["criteria"][1], "examples": {"include": [held_id], "exclude": []}},
+            *spec["criteria"][2:],
+        ],
+    }
+    with_unknown = {
+        **spec,
+        "criteria": [
+            spec["criteria"][0],
+            {**spec["criteria"][1], "examples": {"include": ["SEED99"], "exclude": []}},
+            *spec["criteria"][2:],
+        ],
+    }
+    refusals = [
+        await _call(
+            settings,
+            clock,
+            {},
+            "protocol_record",
+            {"project": "demo", "spec": candidate, "ready": False, **AGENT},
+        )
+        for candidate in (parentless, with_held, with_unknown)
+    ]
+    for refusal in refusals:
+        assert refusal["ok"] is False, refusal
+        assert _leaks(json.dumps(refusal), tokens) == []
+    assert refusals[1]["errors"] == refusals[2]["errors"]
+    assert "spec.criteria.0.parent" in [error["field"] for error in refusals[0]["errors"]]
+    assert "rejected" not in json.dumps(refusals)  # no stray key in an error payload
+
 
 @pytest.mark.anyio
 async def test_question_to_gated_search_flow(

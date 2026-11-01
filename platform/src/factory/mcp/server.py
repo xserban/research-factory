@@ -1,6 +1,6 @@
 """The MCP server: one session per process. Tools parse input, call a service and format output."""
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from typing import Annotated
 
 from mcp.server.mcpserver import MCPServer
@@ -8,7 +8,7 @@ from pydantic import Field, JsonValue, StringConstraints, ValidationError
 
 from factory.clock import Clock, SystemClock
 from factory.config import Settings
-from factory.errors import FactoryValidationError, ValidationIssue
+from factory.errors import FactoryValidationError, ProjectNotFoundError, ValidationIssue
 from factory.mcp.conventions import (
     PAGE_LIMIT,
     dotted,
@@ -119,6 +119,23 @@ def build_server(
 
         return guarded(dedup)
 
+    def _reply(
+        project_slug: str,
+        fn: Callable[[], JsonValue],
+        rename: Callable[[str], str] = str,
+    ) -> dict[str, JsonValue]:
+        """`guarded`, and a refusal is scrubbed of every held-out identifier too (R-20): the
+        refusal path is defence in depth, the services never name a held-out seed."""
+        result = guarded(fn, rename)
+        if result["ok"] is True:
+            return result
+        try:
+            opened = open_project(settings, project_slug, session=session, clock=clock)
+        except ProjectNotFoundError:
+            return result
+        scrubbed = withhold(result, _held_out_tokens(opened))
+        return scrubbed if isinstance(scrubbed, dict) else result
+
     @server.tool()
     def question_record(
         project: str,
@@ -136,17 +153,16 @@ def build_server(
             opened = open_project(settings, project, session=session, clock=clock)
             actor = make_agent_actor(settings, session, role, model, skill)
             parsed = parse_input(QuestionSpec, spec, "spec")
-            goal_id = None
-            if raw_goal is not None:
-                goal_id = question_service.state_goal(opened, actor, raw_goal)
-            result = question_service.record_question(opened, actor, parsed, reason=reason)
+            result = question_service.record_question(
+                opened, actor, parsed, reason=reason, raw_goal=raw_goal
+            )
             return {
                 "question_id": result.question_id,
                 "created": result.created,
-                "goal_event_id": goal_id,
+                "goal_event_id": result.goal_event_id,
             }
 
-        return guarded(record, rename=spec_path)
+        return _reply(project, record, rename=spec_path)
 
     @server.tool()
     def seed_add(
@@ -181,7 +197,7 @@ def build_server(
             )
             return _withheld(opened, batch.model_dump(mode="json"))
 
-        return guarded(add)
+        return _reply(project, add)
 
     @server.tool()
     def seed_list(
@@ -201,7 +217,7 @@ def build_server(
                 },
             )
 
-        return guarded(listing)
+        return _reply(project, listing)
 
     @server.tool()
     def probe_run(
@@ -218,7 +234,7 @@ def build_server(
             report = probe_service.run_probe(opened, actor, specs, sources=adapters)
             return _withheld(opened, report.model_dump(mode="json"))
 
-        return guarded(probe, rename=dotted)
+        return _reply(project, probe, rename=dotted)
 
     @server.tool()
     def protocol_record(
@@ -243,7 +259,7 @@ def build_server(
             ]
             return _withheld(opened, data)
 
-        return guarded(record, rename=spec_path)
+        return _reply(project, record, rename=spec_path)
 
     @server.tool()
     def protocol_press_review(
@@ -266,7 +282,7 @@ def build_server(
             review_id = protocol_service.press_review(opened, actor, protocol_id, parsed)
             return {"review_id": review_id}
 
-        return guarded(review, rename=dotted)
+        return _reply(project, review, rename=dotted)
 
     @server.tool()
     def protocol_amend(
@@ -292,7 +308,7 @@ def build_server(
             )
             return _withheld(opened, result.model_dump(mode="json"))
 
-        return guarded(amend, rename=spec_path)
+        return _reply(project, amend, rename=spec_path)
 
     @server.tool()
     def protocol_deviation(
@@ -315,7 +331,7 @@ def build_server(
             )
             return {"deviation_id": deviation_id}
 
-        return guarded(deviate)
+        return _reply(project, deviate)
 
     return server
 

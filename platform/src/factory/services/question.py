@@ -14,7 +14,7 @@ from sqlalchemy.engine import Row
 
 from factory.clock import parse_ts
 from factory.errors import FactoryValidationError, ValidationIssue
-from factory.events.envelope import Actor
+from factory.events.envelope import Actor, Event
 from factory.model.base import StrictModel
 from factory.model.project import RigorMode
 from factory.model.question import (
@@ -27,10 +27,12 @@ from factory.services.context import Project
 
 
 class QuestionResult(StrictModel):
-    """`created` is true when a `question.recorded` event was written, false if unchanged."""
+    """`created` is true when a `question.recorded` event was written, false if unchanged.
+    `goal_event_id` is the goal written with it, when a raw goal was given."""
 
     question_id: str
     created: bool
+    goal_event_id: str | None = None
 
 
 class QuestionVersion(StrictModel):
@@ -70,11 +72,21 @@ def record_question(
     spec: QuestionSpec,
     *,
     reason: str | None = None,
+    raw_goal: str | None = None,
 ) -> QuestionResult:
-    """Record a question version, or its prose, or nothing when the spec is unchanged."""
+    """Record a question version, or its prose, or nothing when the spec is unchanged.
+
+    `raw_goal`, when given, is the goal verbatim and is written with the question, in the same
+    write. It counts as the goal the question needs, so a first question may come with its goal.
+    Every check runs before anything is written: a refused question writes no goal either.
+    """
+    if raw_goal is not None and not raw_goal.strip():
+        raise FactoryValidationError(
+            [ValidationIssue("raw_goal", "must contain a non-whitespace character")]
+        )
     with project.index.exclusive():
         project.index.sync()
-        if _goal_count(project) == 0:
+        if raw_goal is None and _goal_count(project) == 0:
             raise FactoryValidationError(
                 [ValidationIssue("raw_goal", "state the goal with question.goal_stated first")]
             )
@@ -83,33 +95,63 @@ def record_question(
             raise FactoryValidationError(issues)
 
         current = current_question(project)
-        if current is not None and current.spec == spec:
-            return QuestionResult(question_id=current.question_id, created=False)
-
-        question_id = question_version(spec)
+        unchanged = current is not None and current.spec == spec
         clean_reason = reason.strip() if reason is not None and reason.strip() else None
+        question_id = current.question_id if unchanged and current else question_version(spec)
         supersedes: str | None = None
-        if current is not None and question_id != current.question_id:
+        if current is not None and not unchanged and question_id != current.question_id:
             if clean_reason is None:
                 raise FactoryValidationError(
                     [ValidationIssue("reason", "required when the question's version changes")]
                 )
             supersedes = current.question_id
 
-        payload = QuestionRecorded(
+        events: list[Event] = []
+        goal_event_id: str | None = None
+        if raw_goal is not None:
+            goal = _goal_event(project, actor, raw_goal)
+            events.append(goal)
+            goal_event_id = goal.id
+        if not unchanged:
+            events.append(
+                _question_event(project, actor, spec, question_id, supersedes, clean_reason)
+            )
+        if events:
+            project.record(events)
+        return QuestionResult(
             question_id=question_id,
-            supersedes=supersedes,
-            reason=clean_reason,
-            spec=spec,
+            created=not unchanged,
+            goal_event_id=goal_event_id,
         )
-        input_blob = (
-            project.blobs.put_json({"spec": spec.model_dump(mode="json"), "reason": clean_reason})
-            if actor.kind == "agent"
-            else None
-        )
-        event = project.events.make("question.recorded", payload, actor, input_blob=input_blob)
-        project.record([event])
-        return QuestionResult(question_id=question_id, created=True)
+
+
+def _goal_event(project: Project, actor: Actor, text: str) -> Event:
+    payload = GoalStated(text=text)
+    # An agent's goal keeps its input, so what the agent was given can be audited later.
+    input_blob = project.blobs.put_json({"text": text}) if actor.kind == "agent" else None
+    return project.events.make("question.goal_stated", payload, actor, input_blob=input_blob)
+
+
+def _question_event(
+    project: Project,
+    actor: Actor,
+    spec: QuestionSpec,
+    question_id: str,
+    supersedes: str | None,
+    reason: str | None,
+) -> Event:
+    payload = QuestionRecorded(
+        question_id=question_id,
+        supersedes=supersedes,
+        reason=reason,
+        spec=spec,
+    )
+    input_blob = (
+        project.blobs.put_json({"spec": spec.model_dump(mode="json"), "reason": reason})
+        if actor.kind == "agent"
+        else None
+    )
+    return project.events.make("question.recorded", payload, actor, input_blob=input_blob)
 
 
 def current_question(project: Project) -> QuestionVersion | None:

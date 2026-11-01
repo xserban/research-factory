@@ -217,3 +217,32 @@ def test_question_rebuild_equals_incremental(project: Project, agent: Actor) -> 
     assert project.index.rebuild() == before
     current = current_question(project)
     assert current is not None and current.spec.primary_question == "Other?"
+
+
+def test_raw_goal_with_rigor_failure_writes_nothing(project: Project, agent: Actor) -> None:
+    # Invalid input writes nothing: a refused question takes its goal with it.
+    before = project_status(project).events_total
+    with pytest.raises(FactoryValidationError) as refused:
+        record_question(project, agent, spec(non_goals=()), raw_goal="Compare attention")
+    assert [issue.field for issue in refused.value.issues] == ["non_goals"]
+    assert project_status(project).events_total == before
+    assert goals(project) == []
+    assert current_question(project) is None
+
+
+def test_raw_goal_and_question_are_written_together(project: Project, agent: Actor) -> None:
+    result = record_question(project, agent, spec(), raw_goal="Compare attention on vision")
+    assert result.created is True
+    assert result.goal_event_id is not None
+    assert [goal.text for goal in goals(project)] == ["Compare attention on vision"]
+    assert current_question(project) is not None
+    assert project_status(project).events_by_type["question.goal_stated"] == 1
+    assert project_status(project).events_by_type["question.recorded"] == 1
+
+
+def test_blank_raw_goal_refused_before_any_write(project: Project, agent: Actor) -> None:
+    before = project_status(project).events_total
+    with pytest.raises(FactoryValidationError) as refused:
+        record_question(project, agent, spec(), raw_goal="   ")
+    assert [issue.field for issue in refused.value.issues] == ["raw_goal"]
+    assert project_status(project).events_total == before
