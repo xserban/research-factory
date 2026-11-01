@@ -10,6 +10,7 @@ from mcp.types import CallToolResult, TextContent
 
 from factory.clock import FixedClock
 from factory.config import Settings
+from factory.events.envelope import Actor
 from factory.events.reader import read_all
 from factory.mcp.server import build_server
 from factory.model.search import QueryKind, QuerySpec
@@ -17,7 +18,7 @@ from factory.services.context import Project
 from factory.services.dedup import dedup_run
 from factory.services.search import register_query, run_query
 from factory.sources.registry import SourceFactory
-from tests.helpers import arxiv_atom, openalex_item
+from tests.helpers import arxiv_atom, openalex_item, ready_protocol
 
 AGENT = {"role": "screener-a", "model": "claude-opus-5-5", "skill": "rf-screen"}
 
@@ -308,3 +309,37 @@ async def test_dedup_run_requires_a_valid_agent(
             )
         )
     assert body["ok"] is False and body["errors"][0]["field"] == "model"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("purpose", ["chase", "seed", "probe"])
+async def test_search_run_refuses_every_purpose_but_search_and_writes_nothing(
+    settings: Settings,
+    project: Project,
+    agent: Actor,
+    human: Actor,
+    clock: FixedClock,
+    mock_sources: Any,
+    purpose: str,
+) -> None:
+    # Final review, finding 1: only probes and seed lookups make other queries, through their tools.
+    ready_protocol(project, agent, human, mock_sources)
+    before = len(read_all(project.paths.events_dir, project.catalog))
+    clock.advance(timedelta(milliseconds=1))
+    server = build_server(settings, clock=clock, sources=_sources(mock_sources))
+    async with Client(server) as client:
+        body = _body(
+            await client.call_tool(
+                "search_run",
+                {
+                    "project": "demo",
+                    "source": "openalex",
+                    "query": "attention",
+                    "purpose": purpose,
+                    **AGENT,
+                },
+            )
+        )
+    assert body["ok"] is False
+    assert [error["field"] for error in body["errors"]] == ["purpose"]
+    assert len(read_all(project.paths.events_dir, project.catalog)) == before

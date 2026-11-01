@@ -2,6 +2,7 @@
 
 from typing import Any
 
+import httpx
 import pytest
 
 from factory.errors import FactoryValidationError
@@ -21,7 +22,7 @@ from factory.model.protocol import (
     ScreeningStage,
     SourcePlan,
 )
-from factory.model.search import QueryKind, QueryPurpose, QuerySpec
+from factory.model.search import QueryKind, QueryPurpose, QuerySpec, RunStatus
 from factory.services.context import Project
 from factory.services.project import init_project
 from factory.services.protocol import (
@@ -34,9 +35,13 @@ from factory.services.protocol import (
 )
 from factory.services.question import current_question, record_question
 from factory.services.search import register_query, run_query
+from factory.sources.http import PoliteClient
+from factory.sources.openalex import OpenAlexSource
+from factory.sources.registry import SourceFactory
 from tests.helpers import (
     SESSION,
     SourcesFor,
+    openalex_item,
     pilot_question_spec,
     ready_protocol,
     record_pilot_question,
@@ -410,3 +415,66 @@ def test_protocol_rebuild_equals_incremental(
 
     assert project.index.rebuild() == before
     assert current_protocol(project) == current
+
+
+# --- Every agent purpose is gated like a search; probes stay ungated (final review, finding 1) ---
+
+
+@pytest.mark.parametrize("purpose", [QueryPurpose.CHASE, QueryPurpose.SEED])
+def test_chase_and_seed_queries_are_gated_like_searches_in_pilot(
+    project: Project, agent: Actor, mock_sources: SourcesFor, purpose: QueryPurpose
+) -> None:
+    _question_id(project, agent)
+    spec = QuerySpec(source="openalex", kind=QueryKind.KEYWORD, text="attention", purpose=purpose)
+    with pytest.raises(FactoryValidationError) as raised:
+        register_query(project, agent, spec, sources=mock_sources(openalex=[]))
+
+    assert [i.field for i in raised.value.issues] == ["protocol"]
+    assert _events(project, "query.registered") == []
+
+
+# --- Registered queries are re-gated at run time (final review, finding 3) ---
+
+
+def _flaky_openalex() -> dict[str, SourceFactory]:
+    """OpenAlex whose first page is good and whose second is not JSON: a PARTIAL, resumable run."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.params.get("cursor") == "*":
+            page = {"meta": {"count": 2, "next_cursor": "c2"}, "results": [openalex_item(
+                title="Paper 9", author="Ada Zhou", published="2020-01-01", openalex_id="W9"
+            )]}
+            return httpx.Response(200, json=page)
+        return httpx.Response(200, text="<html>not json</html>")
+
+    polite = PoliteClient(httpx.Client(transport=httpx.MockTransport(handler)), sleep=lambda _s: None)
+    return {
+        "openalex": SourceFactory(
+            OpenAlexSource.kinds,
+            lambda s, c: OpenAlexSource(polite, clock=c, mailto=s.mailto),
+        )
+    }
+
+
+def test_registered_query_is_refused_at_run_and_resume_once_the_question_is_superseded(
+    project: Project, agent: Actor, mock_sources: SourcesFor
+) -> None:
+    human = project.human_actor()
+    ready_protocol(project, agent, human, mock_sources)
+    flaky = _flaky_openalex()
+    query_id = register_query(project, agent, SEARCH, sources=flaky)
+    partial = run_query(project, query_id, sources=flaky)
+    assert partial.status is RunStatus.PARTIAL and partial.resume_token == "c2"
+
+    record_question(
+        project, human, pilot_question_spec("Does linear attention match softmax on speech?"),
+        reason="scope changed",
+    )
+    starts = len(_events(project, "search.run_started"))
+    with pytest.raises(FactoryValidationError) as fresh:
+        run_query(project, query_id, sources=flaky)
+    assert [i.field for i in fresh.value.issues] == ["protocol"]
+    with pytest.raises(FactoryValidationError) as resumed:
+        run_query(project, query_id, sources=flaky, resume_run=partial.run_id)
+    assert [i.field for i in resumed.value.issues] == ["protocol"]
+    assert len(_events(project, "search.run_started")) == starts

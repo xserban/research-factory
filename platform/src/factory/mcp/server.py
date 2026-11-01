@@ -391,10 +391,9 @@ def _spec(source: str, query: str, kind: str, purpose: str, limit: int | None) -
         kind_value = QueryKind(kind)
     except ValueError:
         issues.append(ValidationIssue("kind", f"must be one of: {_choices(QueryKind)}"))
-    try:
-        purpose_value = QueryPurpose(purpose)
-    except ValueError:
-        issues.append(ValidationIssue("purpose", f"must be one of: {_choices(QueryPurpose)}"))
+    # Chases and seeds come from their own tools; this tool only runs searches.
+    if purpose != QueryPurpose.SEARCH.value:
+        issues.append(ValidationIssue("purpose", f"must be {QueryPurpose.SEARCH.value}"))
     if issues:
         raise FactoryValidationError(issues)
     try:
@@ -402,7 +401,7 @@ def _spec(source: str, query: str, kind: str, purpose: str, limit: int | None) -
             source=source,
             kind=kind_value,
             text=query,
-            purpose=purpose_value,
+            purpose=QueryPurpose.SEARCH,
             limit=limit,
         )
     except ValidationError as exc:

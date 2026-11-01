@@ -481,12 +481,16 @@ def record_deviation(
 def search_authorization(
     project: Project, spec: QuerySpec, *, deviation_id: str | None
 ) -> list[ValidationIssue]:
-    """Why a search may not run under the protocol. Empty when it may, or when it is not gated.
+    """Why a query may not run under the protocol. Empty when it may, or when it is not gated.
+
+    Every purpose except a probe is gated the same way: a search, a citation chase and a seed
+    lookup each need the protocol, unless the project is exploratory. Probes measure the seeds
+    and are not gated.
 
     A `deviation_id`, when given, must name a deviation of the current protocol, whether or not
     the query is planned: a stale or foreign id is refused rather than recorded in the events.
     """
-    if spec.purpose is not QueryPurpose.SEARCH or _rigor_mode(project) not in _RIGOR_MODES_GATED:
+    if spec.purpose is QueryPurpose.PROBE or _rigor_mode(project) not in _RIGOR_MODES_GATED:
         return []
     current = current_protocol(project)
     if current is None:
@@ -521,9 +525,9 @@ def search_authorization(
 
 
 def search_refs(project: Project, spec: QuerySpec, deviation_id: str | None) -> tuple[str, ...]:
-    """The ids a registered search refers to: the current protocol, when one exists, and the
-    deviation it was run under. Probe and other non-search queries refer to nothing here."""
-    if spec.purpose is not QueryPurpose.SEARCH:
+    """The ids a registered query refers to: the current protocol, when one exists, and the
+    deviation it was run under. A probe refers to nothing here."""
+    if spec.purpose is QueryPurpose.PROBE:
         return ()
     current = current_protocol(project)
     refs: list[str] = []
