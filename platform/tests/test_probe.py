@@ -30,7 +30,7 @@ from factory.services.seeds import (
 )
 from factory.sources.base import PageSink, Prober, Source, SourceError
 from factory.sources.registry import SourceFactory
-from tests.helpers import SESSION, arxiv_atom, openalex_item
+from tests.helpers import SESSION, _leaks, arxiv_atom, openalex_item
 
 SourcesFor = Callable[..., Mapping[str, SourceFactory]]
 PROBE_EVENTS = {"query.registered", "probe.page_archived", "probe.measured", "probe.failed"}
@@ -215,9 +215,9 @@ def _assert_probe_writes_clean(
             raw_pages.append(project.blobs.get(event.payload["raw_blob"]).decode("utf-8"))
     texts.extend(unquote(str(request.url)) for request in http_log)
 
+    # Whole-identifier matching, as `withhold` does: `W1` is not found inside `W12`.
     for text in texts:
-        for needle in needles:
-            assert needle not in text, f"held-out identifier {needle!r} leaked"
+        assert _leaks(text, needles) == [], "held-out identifier leaked"
     # The exception is real: the source's own answer carried a held-out record into a raw page.
     assert any(needle in page for page in raw_pages for needle in needles)
 
@@ -255,8 +255,7 @@ def test_probe_never_mentions_held_out_seeds(
             sources=sources,
         )
     for issue in refused.value.issues:
-        for needle in needles:
-            assert needle not in issue.reason and needle not in issue.field
+        assert _leaks(f"{issue.field} {issue.reason}", needles) == []
 
 
 def test_probe_never_sends_held_out_arxiv_ids(
