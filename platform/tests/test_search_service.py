@@ -1,3 +1,4 @@
+import threading
 from collections.abc import Callable, Mapping
 from typing import Any
 
@@ -5,6 +6,7 @@ import pydantic
 import pytest
 from sqlalchemy import text
 
+from factory.clock import SystemClock
 from factory.errors import FactoryError, FactoryValidationError
 from factory.events.envelope import Actor, Event
 from factory.events.reader import read_all
@@ -17,7 +19,7 @@ from factory.model.search import (
     SearchRunFinished,
     SearchRunStarted,
 )
-from factory.services.context import Project
+from factory.services.context import Project, open_project
 from factory.services.project import project_status
 from factory.services.search import (
     RunSummary,
@@ -575,6 +577,35 @@ def test_run_cannot_be_resumed_twice(project: Project, fake_sources: SourcesFor)
         ("resume_run", f"already resumed by {first.run_id}")
     ]
     assert len(_of_type(project, "search.run_started")) == 2
+
+
+def test_concurrent_resumes_start_one_run(project: Project, fake_sources: SourcesFor) -> None:
+    seeded = fake_sources(fail_after=1)
+    qid = _register(project, seeded)
+    partial = run_query(project, qid, sources=seeded)
+    barrier = threading.Barrier(2)
+    errors: list[FactoryValidationError] = []
+
+    def resume() -> None:
+        opened = open_project(project.settings, "demo", session=SESSION, clock=SystemClock())
+        barrier.wait()
+        try:
+            run_query(opened, qid, sources=fake_sources(), resume_run=partial.run_id)
+        except FactoryValidationError as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=resume) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    resumed = [
+        e
+        for e in _of_type(project, "search.run_started")
+        if e.payload["resume_of"] == partial.run_id
+    ]
+    assert len(resumed) == 1
+    assert len(errors) == 1 and errors[0].issues[0].reason.startswith("already resumed by ")
 
 
 def test_resume_lookup_raises_when_the_run_query_row_is_missing(

@@ -127,7 +127,6 @@ def run_query(
     spec = _query_spec(project, query_id)
     if spec is None:
         raise FactoryValidationError([ValidationIssue("query_id", "unknown query")])
-    resume_token = None if resume_run is None else _resume_token(project, query_id, resume_run)
     factory = sources.get(spec.source)
     if factory is None:
         raise FactoryValidationError([ValidationIssue("source", f"no adapter for {spec.source!r}")])
@@ -142,22 +141,27 @@ def run_query(
         if started_by.kind == "agent"
         else None
     )
-    project.record(
-        [
-            project.events.make(
-                "search.run_started",
-                SearchRunStarted(
-                    run_id=run_id,
-                    query_id=query_id,
-                    resume_of=resume_run,
-                    resume_from=resume_token,
-                ),
-                started_by,
-                refs=(run_id,),
-                input_blob=input_blob,
-            )
-        ]
-    )
+    # The resume check and the run's start are one critical section, so two resumes of the same
+    # run cannot both pass the check. The lock is not held during the fetch that follows.
+    with project.index.exclusive():
+        project.index.sync()
+        resume_token = None if resume_run is None else _resume_token(project, query_id, resume_run)
+        project.record(
+            [
+                project.events.make(
+                    "search.run_started",
+                    SearchRunStarted(
+                        run_id=run_id,
+                        query_id=query_id,
+                        resume_of=resume_run,
+                        resume_from=resume_token,
+                    ),
+                    started_by,
+                    refs=(run_id,),
+                    input_blob=input_blob,
+                )
+            ]
+        )
 
     archived: list[str] = []
 

@@ -75,6 +75,7 @@ class Index:
         """Hold the cross-process lock, with an engine on the current DB file.
 
         Writers take it exclusively; readers share it so they wait for any rebuild in progress.
+        Limit: the hold is per instance, ignores `shared` once held, and is not thread-safe.
         """
         if self._holding:
             yield
