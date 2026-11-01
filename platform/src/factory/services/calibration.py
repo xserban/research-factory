@@ -162,6 +162,13 @@ def calibration_items(project: Project) -> list[str]:
     return _drawn_items(project)
 
 
+def calibration_labels(project: Project) -> dict[str, str]:
+    """The live human label per labelled calibration work (`include` or `exclude`); empty when none
+    is labelled."""
+    project.index.sync()
+    return _labels(project)
+
+
 def calibration_drawn(project: Project) -> bool:
     """Whether the calibration set has been drawn, even when the draw yielded no items."""
     project.index.sync()
