@@ -40,6 +40,7 @@ Rule: business logic lives in `services/`. `mcp/` and `cli/` only parse input, c
 | Work (any citable source) | `rf:<surname><year>-<slug>-<hash8>` | Deterministic from content; hash basis DOI → arXiv ID → normalised title/first author/year; arXiv DataCite DOIs bridged to the arXiv ID (ported from research-factory-old `ids.py`) |
 | Question version | `Q@<sha8>` | Hash of the question's decision-relevant fields |
 | Protocol version | `P@<sha8>` | Hash over criteria, sources, queries, limits, schemas and `Q@` — **not prose** |
+| Search strategy | `S@<sha8>` | Hash over sources, queries and limits only; carries a PRESS confirmation across protocol versions |
 | Criterion | `P@<sha8>:<CID>` | `CID` like `IN01`, `EX03`; always version-qualified when referenced |
 | Seed | `SEED<nn>` / `NEG<nn>` | Positive / negative known items per project |
 | Other entities (query, search run, merge, decision, task) | `<prefix>_<ULID>` | e.g. `qry_`, `run_`, `mrg_`, `dec_`, `tsk_` |
