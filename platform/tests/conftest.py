@@ -2,6 +2,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 
 from factory.clock import FixedClock
@@ -15,8 +16,11 @@ from factory.model.identity import IdGenerator
 from factory.model.work import Provenance
 from factory.services.context import Project, open_project
 from factory.services.project import init_project
+from factory.sources.arxiv import ArxivSource
+from factory.sources.http import PoliteClient
+from factory.sources.openalex import OpenAlexSource
 from factory.sources.registry import SourceFactory
-from tests.helpers import FAKE_PAGES, S2, SESSION, T0, Demo, FakeSource
+from tests.helpers import FAKE_PAGES, S2, SESSION, T0, Demo, FakeSource, arxiv_atom
 
 
 @pytest.fixture
@@ -147,5 +151,53 @@ def fake_sources() -> Callable[..., dict[str, SourceFactory]]:
             raise_error=raise_error,
         )
         return {"fake": lambda _settings, _clock: source}
+
+    return make
+
+
+@pytest.fixture
+def http_log() -> list[httpx.Request]:
+    """Every request the mocked sources receive, in order, for inspection."""
+    return []
+
+
+@pytest.fixture
+def mock_sources(http_log: list[httpx.Request]) -> Callable[..., dict[str, SourceFactory]]:
+    """Build a `sources` mapping of the REAL OpenAlex and arXiv adapters over MockTransport.
+
+    No network: each adapter's HTTP client answers from the scripted payloads. `openalex` is the
+    list of `results` entries; `openalex_count` overrides the `meta.count` it reports. `arxiv`
+    is an Atom body (see `helpers.arxiv_atom`). Every request is appended to `http_log`.
+    """
+
+    def make(
+        *,
+        openalex: list[dict[str, Any]] | None = None,
+        openalex_count: int | None = None,
+        arxiv: str | None = None,
+    ) -> dict[str, SourceFactory]:
+        items = openalex or []
+        count = len(items) if openalex_count is None else openalex_count
+        atom = arxiv if arxiv is not None else arxiv_atom()
+
+        def openalex_handler(request: httpx.Request) -> httpx.Response:
+            http_log.append(request)
+            page = {"meta": {"count": count, "next_cursor": None}, "results": items}
+            return httpx.Response(200, json=page)
+
+        def arxiv_handler(request: httpx.Request) -> httpx.Response:
+            http_log.append(request)
+            return httpx.Response(200, text=atom)
+
+        def polite(handler: Callable[[httpx.Request], httpx.Response]) -> PoliteClient:
+            transport = httpx.MockTransport(handler)
+            return PoliteClient(httpx.Client(transport=transport), sleep=lambda _seconds: None)
+
+        return {
+            "openalex": lambda s, c: OpenAlexSource(
+                polite(openalex_handler), clock=c, mailto=s.mailto
+            ),
+            "arxiv": lambda _s, c: ArxivSource(polite(arxiv_handler), clock=c),
+        }
 
     return make

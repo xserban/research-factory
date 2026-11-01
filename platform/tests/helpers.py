@@ -1,4 +1,5 @@
 import json
+from collections.abc import Sequence
 from datetime import UTC, date, datetime
 from typing import Any
 
@@ -166,4 +167,45 @@ def _work(record: dict[str, Any], *, run_id: str, query_id: str, raw_blob: str) 
                 raw_blob=raw_blob,
             )
         ],
+    )
+
+
+def openalex_item(
+    *,
+    title: str,
+    author: str,
+    published: str,
+    openalex_id: str,
+    doi: str | None = None,
+    type_: str = "article",
+) -> dict[str, Any]:
+    """One OpenAlex `results` entry, shaped as the REST API returns it."""
+    item: dict[str, Any] = {
+        "id": f"https://openalex.org/{openalex_id}",
+        "display_name": title,
+        "publication_date": published,
+        "type": type_,
+        "authorships": [{"author": {"display_name": author}, "institutions": []}],
+    }
+    if doi is not None:
+        item["doi"] = f"https://doi.org/{doi}"
+    return item
+
+
+def arxiv_atom(entries: Sequence[tuple[str, str, int, str]] = ()) -> str:
+    """An arXiv Atom feed. Each entry is (versioned id, title, published year, first author)."""
+    body = "".join(
+        f"<entry><id>http://arxiv.org/abs/{arxiv_id}</id>"
+        f"<published>{year}-03-01T12:00:00Z</published>"
+        f"<updated>{year}-03-01T12:00:00Z</updated>"
+        f"<title>{title}</title><summary>Abstract.</summary>"
+        f"<author><name>{author}</name></author></entry>"
+        for arxiv_id, title, year, author in entries
+    )
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<feed xmlns="http://www.w3.org/2005/Atom" '
+        'xmlns:arxiv="http://arxiv.org/schemas/atom" '
+        'xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/">'
+        f"<opensearch:totalResults>{len(entries)}</opensearch:totalResults>{body}</feed>"
     )

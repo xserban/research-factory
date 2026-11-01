@@ -23,7 +23,7 @@ async def test_project_status_tool(settings: Settings, project: Project, clock: 
     server = build_server(settings, clock=clock)
     async with Client(server) as client:
         names = [t.name for t in (await client.list_tools()).tools]
-        assert names == ["project_status"]
+        assert names == ["project_status", "search_run", "dedup_run"]
         res = await client.call_tool("project_status", {"project": "demo"})
         body = _body(res)
     assert body["ok"] is True

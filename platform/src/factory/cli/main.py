@@ -143,6 +143,17 @@ def status(
         f"tasks: open {tasks.open} / claimed {tasks.claimed} / "
         f"expired {tasks.expired} / completed {tasks.completed}"
     )
+    typer.echo(f"works: {report.works} (records {report.records}, merges {report.merges_active})")
+    search = report.search
+    typer.echo(
+        f"searches: {search.runs} runs (complete {search.complete} / partial {search.partial} / "
+        f"failed {search.failed} / interrupted {search.interrupted})"
+    )
+    for short in search.shortfalls:
+        typer.echo(
+            f"shortfall: {short.run_id} {short.source} "
+            f"{short.retrieved_count}/{short.reported_count} \u2014 {short.note or 'no note'}"
+        )
 
 
 @app.command()

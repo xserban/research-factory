@@ -240,6 +240,16 @@ def run_query(
     )
 
 
+def run_query_id(project: Project, run_id: str) -> str | None:
+    """The query a run belongs to, or None if no run has that id."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        row = conn.execute(
+            text("SELECT query_id FROM runs WHERE run_id = :run"), {"run": run_id}
+        ).one_or_none()
+    return None if row is None else str(row[0])
+
+
 def get_work(project: Project, work_id: str) -> Work | None:
     """One work, with every provenance row that names it."""
     works = _load_works(project, work_id)

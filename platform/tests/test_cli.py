@@ -1,10 +1,18 @@
 import json
 import re
+from datetime import UTC, datetime
 from pathlib import Path
 
 from typer.testing import CliRunner
 
 from factory.cli.main import app
+from factory.clock import FixedClock
+from factory.config import Settings
+from factory.model.search import QueryKind, QuerySpec
+from factory.services.project import init_project
+from factory.services.search import register_query, run_query
+from factory.sources.registry import SourceFactory
+from tests.helpers import FAKE_PAGES, SESSION, FakeSource
 
 runner = CliRunner()
 
@@ -96,7 +104,28 @@ def test_status_human_output(tmp_path: Path) -> None:
         "rigor mode: systematic\n"
         "events: 1\n"
         "tasks: open 0 / claimed 0 / expired 0 / completed 0\n"
+        "works: 0 (records 0, merges 0)\n"
+        "searches: 0 runs (complete 0 / partial 0 / failed 0 / interrupted 0)\n"
     )
+
+
+def test_status_shows_works_searches_and_shortfalls(tmp_path: Path) -> None:
+    settings = Settings(root=tmp_path, user="obd")
+    clock = FixedClock(datetime(2026, 10, 31, 12, 0, tzinfo=UTC))
+    project = init_project(settings, "demo", "pilot", session=SESSION, clock=clock)
+    # The fake source reports 5 records and delivers 3: the shortfall must be shown.
+    sources: dict[str, SourceFactory] = {"fake": lambda _s, _c: FakeSource(FAKE_PAGES, reported=5)}
+    spec = QuerySpec(source="fake", kind=QueryKind.KEYWORD, text="attention")
+    query_id = register_query(project, project.human_actor(), spec, sources=sources)
+    summary = run_query(project, query_id, sources=sources)
+
+    result = runner.invoke(app, ["status"], env=_env(tmp_path))
+    assert result.exit_code == 0
+    assert result.stdout.splitlines()[-3:] == [
+        "works: 3 (records 3, merges 0)",
+        "searches: 1 runs (complete 1 / partial 0 / failed 0 / interrupted 0)",
+        f"shortfall: {summary.run_id} fake 3/5 \u2014 2 of 5 reported not delivered",
+    ]
 
 
 def test_serve_is_registered(tmp_path: Path) -> None:
