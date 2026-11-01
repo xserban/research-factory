@@ -12,7 +12,14 @@ from factory.config import Settings
 from factory.errors import FactoryValidationError
 from factory.events.envelope import Actor, Event
 from factory.events.reader import read_all
-from factory.model.protocol import PressElement, PressFinding, ScreeningStage
+from factory.model.protocol import (
+    Criterion,
+    CriterionEffect,
+    PressElement,
+    PressFinding,
+    ScreeningStage,
+    protocol_version,
+)
 from factory.model.screening import (
     Channel,
     DecisionRecorded,
@@ -27,11 +34,18 @@ from factory.services.calibration import calibration_items, draw_calibration, la
 from factory.services.context import Project
 from factory.services.probe import run_probe
 from factory.services.project import init_project
-from factory.services.protocol import confirm_press, press_review, record_protocol
+from factory.services.protocol import (
+    amend_protocol,
+    confirm_press,
+    current_protocol,
+    press_review,
+    record_protocol,
+)
 from factory.services.screening import (
     SCREEN_BATCH,
     join_pass,
     live_decisions,
+    obsolete_tasks,
     open_pass,
     screen_next,
 )
@@ -435,3 +449,119 @@ def test_calibration_items_are_public(
     assert calibration_items(project) == []
     items = _draw(project)
     assert calibration_items(project) == items
+
+
+def _queued(project: Project, protocol_id: str) -> set[str]:
+    """Every work id named in a task created under one protocol version."""
+    works: set[str] = set()
+    for event in _of_type(project, "task.created"):
+        assert event.input_blob is not None
+        content: Any = project.blobs.get_json(event.input_blob)
+        if content.get("protocol_id") == protocol_id:
+            works.update(record["work_id"] for record in content["records"])
+    return works
+
+
+def _loosen_ex01(project: Project, agent: Actor) -> str:
+    """Amend the current protocol so that EX01 is loosened; returns the new version id."""
+    current = current_protocol(project)
+    assert current is not None
+    criteria = tuple(
+        Criterion(
+            id="EX01",
+            parent="NG01",
+            statement="not topic 1",
+            rule="exclude only severe topic one",
+            applies_at=ScreeningStage.TITLE_ABSTRACT,
+            priority=1,
+        )
+        if c.id == "EX01"
+        else c
+        for c in current.spec.criteria
+    )
+    loosened = current.spec.model_copy(update={"criteria": criteria})
+    amend_protocol(
+        project,
+        agent,
+        loosened,
+        reason="loosen EX01",
+        semantic=True,
+        effects={"EX01": CriterionEffect.LOOSENED},
+    )
+    return protocol_version(loosened)
+
+
+def _pass_calibration_under(
+    project: Project, agent: Actor, human: Actor, protocol_id: str
+) -> list[str]:
+    """Label every calibration item include and decide it include under `protocol_id`."""
+    items = calibration_items(project)
+    for item in items:
+        label_calibration(project, human, item, "include", None, Channel.CLI)
+        _decide(project, agent, item, "A", "calibration", "include", None, protocol_id)
+    return items
+
+
+def test_sensitivity_below_threshold_is_named_in_blocked(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    protocol_id = _setup(project, agent, human, mock_sources)
+    items = _draw(project)
+    for item in items:
+        label_calibration(project, human, item, "include", None, Channel.CLI)
+    for index, item in enumerate(items):
+        if index < 10:
+            _decide(project, agent, item, "A", "calibration", "include", None, protocol_id)
+        else:
+            _decide(project, agent, item, "A", "calibration", "exclude", "EX01", protocol_id)
+
+    result = screen_next(project, agent, PassLabel.A)
+    assert result.batch is None
+    assert any(
+        "sensitivity 0.33 is below the 0.90 threshold" in reason for reason in result.blocked
+    )
+
+
+def test_amendment_requeues_open_tasks_under_the_new_version(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    protocol_id = _setup(project, agent, human, mock_sources)
+    items = _draw(project)
+    _serve_calibration(project, agent, math.ceil(len(items) / SCREEN_BATCH))
+    _pass_calibration_under(project, agent, human, protocol_id)
+
+    stale_batch = screen_next(project, agent, PassLabel.A).batch
+    assert stale_batch is not None
+    assert stale_batch.phase is ScreeningPhase.SCREENING
+    old_works = {r["work_id"] for r in stale_batch.records}
+
+    new_id = _loosen_ex01(project, agent)
+    _pass_calibration_under(project, agent, human, new_id)
+    assert stale_batch.task_id in obsolete_tasks(project, PassLabel.A)
+
+    served = screen_next(project, agent, PassLabel.A).batch
+    assert served is not None
+    assert served.protocol_id == new_id
+    assert old_works <= {r["work_id"] for r in served.records}
+    assert served.task_id != stale_batch.task_id
+
+
+def test_stale_decision_is_queued_again_and_counted_in_remaining(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    protocol_id = _setup(project, agent, human, mock_sources)
+    items = _draw(project)
+    _serve_calibration(project, agent, math.ceil(len(items) / SCREEN_BATCH))
+    _pass_calibration_under(project, agent, human, protocol_id)
+
+    ordinary = sorted(w.id for w in list_works(project) if w.id not in set(items))
+    work = ordinary[0]
+    _decide(project, agent, work, "A", "screening", "exclude", "EX01", protocol_id)
+    before = screen_next(project, agent, PassLabel.A).remaining
+    assert before == len(ordinary) - 1
+
+    new_id = _loosen_ex01(project, agent)
+    _pass_calibration_under(project, agent, human, new_id)
+    after = screen_next(project, agent, PassLabel.A)
+    assert after.remaining == len(ordinary)
+    assert work in _queued(project, new_id)

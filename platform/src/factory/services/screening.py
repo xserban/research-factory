@@ -213,19 +213,34 @@ def screen_next(project: Project, actor: Actor, label: PassLabel) -> ScreenNext:
                 ],
                 remaining=0,
             )
-        join_pass(project, actor, label)
         open_pass(project, actor, label)
+        join_pass(project, actor, label)
         gate_closed = status.required and not status.passed[label.value]
         remaining = _enqueue(project, actor, label, protocol)
         task = claim_next(
             project,
             actor,
             TASK_KIND[label],
-            accept=lambda content: _servable(content, gate_closed),
+            accept=lambda content: _servable(content, gate_closed, protocol.protocol_id),
         )
         blocked = _gate_reasons(project, status, label) if gate_closed else []
         batch = None if task is None else _claimed_batch(project, task)
         return ScreenNext(batch=batch, blocked=blocked, remaining=remaining)
+
+
+def obsolete_tasks(project: Project, label: PassLabel) -> list[str]:
+    """Open or claimed tasks of the pass whose protocol version is no longer current, sorted.
+
+    Such a task is never served, and its works are queued again under the current version. A
+    task that is completed is never obsolete: it is history."""
+    protocol = current_protocol(project)
+    if protocol is None:
+        return []
+    return [
+        task_id
+        for task_id, status, content in _kind_tasks(project, TASK_KIND[label])
+        if status != TaskStatus.COMPLETED.value and content.protocol_id != protocol.protocol_id
+    ]
 
 
 def live_decisions(project: Project, label: PassLabel | None = None) -> list[DecisionRecorded]:
@@ -279,8 +294,8 @@ def _enqueue(project: Project, actor: Actor, label: PassLabel, protocol: Protoco
     done = _done_keys(project, label)
     open_keys = {
         (str(record["work_id"]), content.phase.value)
-        for status, content in tasks
-        if status != TaskStatus.COMPLETED.value
+        for _, status, content in tasks
+        if status != TaskStatus.COMPLETED.value and content.protocol_id == protocol.protocol_id
         for record in content.records
     }
     cal_phase = ScreeningPhase.CALIBRATION.value
@@ -380,28 +395,35 @@ def _done_keys(project: Project, label: PassLabel) -> set[tuple[str, str]]:
     }
 
 
-def _kind_tasks(project: Project, kind: str) -> list[tuple[str, ScreenBatchContent]]:
-    """Every task of `kind` with its status, in task-ID order."""
+def _kind_tasks(project: Project, kind: str) -> list[tuple[str, str, ScreenBatchContent]]:
+    """Every task of `kind` as (task id, status, content), in task-ID order."""
     with project.index.connect() as conn:
         rows = conn.execute(
-            text("SELECT status, content_blob FROM tasks WHERE kind = :kind ORDER BY task_id"),
+            text(
+                "SELECT task_id, status, content_blob FROM tasks WHERE kind = :kind "
+                "ORDER BY task_id"
+            ),
             {"kind": kind},
         ).all()
     return [
-        (str(status), ScreenBatchContent.model_validate(project.blobs.get_json(str(blob))))
-        for status, blob in rows
+        (
+            str(task_id),
+            str(status),
+            ScreenBatchContent.model_validate(project.blobs.get_json(str(blob))),
+        )
+        for task_id, status, blob in rows
     ]
 
 
 # --- Serving ---
 
 
-def _servable(content: JsonValue, gate_closed: bool) -> bool:
-    """Whether a task may be claimed: any task when the gate is open, calibration batches only
-    when it is closed."""
-    if not gate_closed:
-        return True
-    return isinstance(content, dict) and content.get("phase") == ScreeningPhase.CALIBRATION.value
+def _servable(content: JsonValue, gate_closed: bool, protocol_id: str) -> bool:
+    """Whether a task may be claimed: only tasks of the current protocol version, and, while the
+    gate is closed, calibration batches only."""
+    if not isinstance(content, dict) or content.get("protocol_id") != protocol_id:
+        return False
+    return not gate_closed or content.get("phase") == ScreeningPhase.CALIBRATION.value
 
 
 def _claimed_batch(project: Project, task: Task) -> ScreenBatch:
