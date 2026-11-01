@@ -1,0 +1,127 @@
+"""Deterministic identity for works.
+
+A work's id must be stable across re-runs, or every search re-run churns the corpus and
+`rf trace` points at files that no longer exist. Identity is therefore derived from the
+work's own content, never from retrieval order, timestamps, or the source that found it.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import re
+import unicodedata
+
+WORK_ID_RE = r"^rf:\S+-[0-9a-f]{8}$"
+_PUNCT = re.compile(r"[^\w\s]", re.UNICODE)
+_WS = re.compile(r"\s+")
+_DOI_PREFIX = re.compile(r"^(?:https?://(?:dx\.)?doi\.org/|doi:)", re.IGNORECASE)
+_ARXIV_VERSION = re.compile(r"v\d+$")
+# DataCite mints a DOI for every arXiv preprint. OpenAlex returns that DOI where the arXiv
+# adapter returns the bare id, so without this the same preprint arrives as two works.
+_ARXIV_DOI = re.compile(r"^10\.48550/arxiv\.(?P<id>.+)$", re.IGNORECASE)
+
+# Words too common to make a slug recognisable.
+_STOPWORDS = frozenset(
+    {
+        "a",
+        "an",
+        "the",
+        "of",
+        "for",
+        "and",
+        "or",
+        "in",
+        "on",
+        "at",
+        "to",
+        "with",
+        "from",
+        "via",
+        "using",
+        "towards",
+        "toward",
+    }
+)
+
+
+def normalize_title(title: str) -> str:
+    """Casefold, strip accents and punctuation, collapse whitespace.
+
+    Used for both identity hashing and (later) dedup title matching, so the two can never
+    disagree about whether two titles are the same string.
+    """
+    folded = unicodedata.normalize("NFKD", title)
+    folded = "".join(c for c in folded if not unicodedata.combining(c))
+    folded = _PUNCT.sub(" ", folded.casefold())
+    return _WS.sub(" ", folded).strip()
+
+
+def normalize_doi(doi: str) -> str:
+    """Strip resolver prefixes and casefold. DOIs are case-insensitive by specification."""
+    return _DOI_PREFIX.sub("", doi.strip()).casefold()
+
+
+def normalize_arxiv(arxiv_id: str) -> str:
+    """Strip the URL form and any version suffix.
+
+    `2301.01234v3` and `2301.01234` are the same work; keeping the version in the identity
+    would mint a new work every time a preprint is revised.
+    """
+    ident = arxiv_id.strip().rsplit("/", 1)[-1]
+    ident = ident.removeprefix("arXiv:").removeprefix("arxiv:")
+    return _ARXIV_VERSION.sub("", ident).casefold()
+
+
+def arxiv_id_from_doi(doi: str) -> str | None:
+    """Recover the arXiv id from a DataCite arXiv DOI, if that is what this is."""
+    match = _ARXIV_DOI.match(normalize_doi(doi))
+    return normalize_arxiv(match.group("id")) if match else None
+
+
+def _surname(author: str) -> str:
+    """Best-effort surname from a display name. Latin-alphabet assumption, stated plainly."""
+    cleaned = normalize_title(author)
+    if not cleaned:
+        return "anon"
+    return cleaned.split()[-1]
+
+
+def _title_slug(title: str, words: int = 3) -> str:
+    tokens = [t for t in normalize_title(title).split() if t not in _STOPWORDS]
+    return "-".join(tokens[:words]) or "untitled"
+
+
+def work_id(
+    *,
+    title: str,
+    authors: list[str],
+    year: int | None,
+    doi: str | None = None,
+    arxiv: str | None = None,
+) -> str:
+    """Build a stable `rf:` identifier.
+
+    The hash basis is the strongest available identifier, in order: DOI, then arXiv id, then
+    a normalised title/author/year triple. This ordering matters for stability — a work first
+    seen as a bare preprint and later matched to a DOI would otherwise change identity, which
+    is the one thing an identifier may never do.
+
+    The human-readable slug is cosmetic. Only the hash carries identity, so two works with
+    identical slugs remain distinct.
+    """
+    # A DataCite arXiv DOI denotes the same preprint as the bare id. Folding them here means
+    # the two records share an identity rather than relying on dedup to notice afterwards.
+    if doi and (bridged := arxiv_id_from_doi(doi)):
+        arxiv, doi = bridged, None
+
+    if doi:
+        basis = f"doi:{normalize_doi(doi)}"
+    elif arxiv:
+        basis = f"arxiv:{normalize_arxiv(arxiv)}"
+    else:
+        first = _surname(authors[0]) if authors else "anon"
+        basis = f"tay:{first}|{year or ''}|{normalize_title(title)}"
+
+    digest = hashlib.sha256(basis.encode("utf-8")).hexdigest()[:8]
+    surname = _surname(authors[0]) if authors else "anon"
+    return f"rf:{surname}{year or ''}-{_title_slug(title)}-{digest}"
