@@ -132,6 +132,9 @@ def run_query(
     `actor` is the triggering actor, recorded on `search.run_started`; without one the run is
     recorded as the system's. An agent's run keeps its input (`query_id`, `resume_run`) verbatim.
 
+    A query that the protocol no longer authorises (see `protocol.search_authorization`) is
+    refused before anything is written, including on a resume.
+
     Raw pages are archived as they arrive. Records are recorded once the adapter returns, one
     `search.records_parsed` per page. A `SourceError` is an outcome, recorded and returned; any
     other exception is recorded as a failed run and then re-raised.
@@ -145,20 +148,30 @@ def run_query(
         raise FactoryValidationError([ValidationIssue("source", f"no adapter for {spec.source!r}")])
     adapter = factory(project.settings, project.clock)
 
+    # Imported here: the protocol service reads seeds, which read this module.
+    from factory.services import protocol as protocol_service
+
     system = project.system_actor()
     started_by = actor or system
     known = _known_work_ids(project)
     run_id = project.ids.new("run")
-    input_blob = (
-        project.blobs.put_json({"query_id": query_id, "resume_run": resume_run})
-        if started_by.kind == "agent"
-        else None
-    )
-    # The resume check and the run's start are one critical section, so two resumes of the same
-    # run cannot both pass the check. The lock is not held during the fetch that follows.
+    # The gate is re-checked at run time: the protocol or question may have changed since the
+    # query was registered. The check, the resume check and the run's start are one critical
+    # section, so two resumes of the same run cannot both pass. The lock is not held during the
+    # fetch that follows.
     with project.index.exclusive():
         project.index.sync()
+        gate = protocol_service.search_authorization(
+            project, spec, deviation_id=protocol_service.registered_deviation(project, query_id)
+        )
+        if gate:
+            raise FactoryValidationError(gate)
         resume_token = None if resume_run is None else _resume_token(project, query_id, resume_run)
+        input_blob = (
+            project.blobs.put_json({"query_id": query_id, "resume_run": resume_run})
+            if started_by.kind == "agent"
+            else None
+        )
         project.record(
             [
                 project.events.make(

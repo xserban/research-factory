@@ -524,6 +524,25 @@ def search_authorization(
     return issues
 
 
+def registered_deviation(project: Project, query_id: str) -> str | None:
+    """The deviation a registered query was run under, read from its `query.registered` refs,
+    or None when it was planned. A ref is a deviation when the deviations table names it."""
+    with project.index.connect() as conn:
+        events = conn.execute(
+            text("SELECT refs FROM events WHERE type = 'query.registered' AND refs LIKE :pattern"),
+            {"pattern": f'%"{query_id}"%'},
+        ).all()
+        for (refs,) in events:
+            for ref in json.loads(str(refs)):
+                known = conn.execute(
+                    text("SELECT 1 FROM deviations WHERE deviation_id = :deviation"),
+                    {"deviation": ref},
+                ).one_or_none()
+                if known is not None:
+                    return str(ref)
+    return None
+
+
 def search_refs(project: Project, spec: QuerySpec, deviation_id: str | None) -> tuple[str, ...]:
     """The ids a registered query refers to: the current protocol, when one exists, and the
     deviation it was run under. A probe refers to nothing here."""
