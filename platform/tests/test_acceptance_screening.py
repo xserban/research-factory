@@ -16,7 +16,6 @@ from typer.testing import CliRunner
 from factory.cli.main import app
 from factory.clock import FixedClock
 from factory.config import Settings
-from factory.events.reader import read_all
 from factory.model.protocol import PressElement, PressFinding
 from factory.model.search import QueryKind, QuerySpec
 from factory.model.seed import SeedKind, SeedSpec
@@ -225,13 +224,9 @@ async def test_screening_agreement_and_audit_over_two_sessions(
         audit_id = sample["data"]["audit_id"]
         items = sample["data"]["items"]
         assert len(items) == sample["data"]["population"] > 0
-        # The sample's work ids are the audit log's; a held-out work's id is withheld in the
-        # response, so the human labels by the drawn order of the log.
-        [drawn] = [e for e in _events_of(project) if e.type == "audit.sampled"]
-        work_ids = drawn.payload["work_ids"]
-        assert len(work_ids) == len(items)
         overturned = False
-        for work_id, item in zip(work_ids, items, strict=True):
+        for item in items:
+            work_id = item["work_id"]
             if item["agreed_verdict"] == "exclude" and not overturned:
                 verdict, criterion = "include", None
                 overturned = True
@@ -269,7 +264,3 @@ async def test_screening_agreement_and_audit_over_two_sessions(
     project.paths.index_path.unlink()
     after = cli.invoke(app, ["rebuild"], env=env)
     assert after.stdout == before.stdout
-
-
-def _events_of(project: Project) -> list[Any]:
-    return read_all(project.paths.events_dir, project.catalog)

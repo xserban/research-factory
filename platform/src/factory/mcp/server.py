@@ -416,7 +416,7 @@ def build_server(
                     raise FactoryValidationError(
                         [ValidationIssue("work_id", "is required to record a label")]
                     )
-                return _withheld(opened, _next_calibration(opened))
+                return _withheld(opened, _next_calibration(opened), include_work_ids=False)
             if verdict is None:
                 raise FactoryValidationError(
                     [ValidationIssue("verdict", "is required with a work_id")]
@@ -426,7 +426,7 @@ def build_server(
             )
             return {"event_id": event_id}
 
-        return _reply(project, label)
+        return _reply(project, label, include_work_ids=False)
 
     @server.tool()
     def audit_sample(project: str) -> dict[str, JsonValue]:
@@ -452,9 +452,9 @@ def build_server(
                 "exclusions": drawn.exclusions,
                 "inclusions": drawn.inclusions,
             }
-            return _withheld(opened, data)
+            return _withheld(opened, data, include_work_ids=False)
 
-        return _reply(project, sample)
+        return _reply(project, sample, include_work_ids=False)
 
     @server.tool()
     def audit_record(
@@ -474,7 +474,7 @@ def build_server(
             )
             return {"event_id": event_id}
 
-        return _reply(project, record)
+        return _reply(project, record, include_work_ids=False)
 
     @server.tool()
     def protocol_deviation(
