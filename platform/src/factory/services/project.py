@@ -9,6 +9,7 @@ from factory.errors import FactoryValidationError, ProjectNotFoundError, Validat
 from factory.model.base import StrictModel
 from factory.model.project import ProjectCreated, RigorMode
 from factory.services.context import Project, ProjectPaths, build_project, slug_issues
+from factory.services.search import SearchCounts, search_counts
 from factory.services.tasks import TaskCounts, task_counts
 
 
@@ -20,6 +21,9 @@ class ProjectStatus(StrictModel):
     events_by_type: dict[str, int]
     last_event_at: datetime | None
     tasks: TaskCounts
+    search: SearchCounts
+    works: int
+    records: int
 
 
 def init_project(
@@ -68,6 +72,8 @@ def project_status(project: Project) -> ProjectStatus:
             text("SELECT rigor_mode, created_at FROM project WHERE slug = :slug"),
             {"slug": slug},
         ).one_or_none()
+        works = conn.execute(text("SELECT COUNT(*) FROM works")).scalar_one()
+        records = conn.execute(text("SELECT COUNT(*) FROM provenance")).scalar_one()
     if row is None:
         raise ProjectNotFoundError(f"project {slug!r} has no project.created event")
     by_type = {str(name): int(count) for name, count in counts}
@@ -79,4 +85,7 @@ def project_status(project: Project) -> ProjectStatus:
         events_by_type=by_type,
         last_event_at=parse_ts(str(last)) if last is not None else None,
         tasks=task_counts(project),
+        search=search_counts(project),
+        works=int(works),
+        records=int(records),
     )

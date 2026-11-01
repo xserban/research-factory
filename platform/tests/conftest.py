@@ -1,4 +1,6 @@
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -13,7 +15,8 @@ from factory.model.identity import IdGenerator
 from factory.model.work import Provenance
 from factory.services.context import Project, open_project
 from factory.services.project import init_project
-from tests.helpers import S2, SESSION, T0, Demo
+from factory.sources.registry import SourceFactory
+from tests.helpers import FAKE_PAGES, S2, SESSION, T0, Demo, FakeSource
 
 
 @pytest.fixture
@@ -116,3 +119,31 @@ def project(settings: Settings, clock: FixedClock) -> Project:
 @pytest.fixture
 def project_other_session(settings: Settings, clock: FixedClock, project: Project) -> Project:
     return open_project(settings, "demo", session=S2, clock=clock)
+
+
+@pytest.fixture
+def fake_sources() -> Callable[..., dict[str, SourceFactory]]:
+    """Build a `sources` mapping whose only source is a scripted `FakeSource` named "fake".
+
+    Defaults to `FAKE_PAGES` (three distinct records over two pages). Scripting arguments
+    are passed straight to `FakeSource`.
+    """
+
+    def make(
+        pages: list[list[dict[str, Any]]] | None = None,
+        *,
+        reported: int | None = None,
+        fail_after: int | None = None,
+        raise_at: int | None = None,
+        raise_error: Exception | None = None,
+    ) -> dict[str, SourceFactory]:
+        source = FakeSource(
+            pages if pages is not None else FAKE_PAGES,
+            reported=reported,
+            fail_after=fail_after,
+            raise_at=raise_at,
+            raise_error=raise_error,
+        )
+        return {"fake": lambda _settings, _clock: source}
+
+    return make

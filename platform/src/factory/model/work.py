@@ -15,7 +15,7 @@ from pydantic import AwareDatetime, ConfigDict, Field, field_validator
 
 from factory.model.base import StrictModel
 from factory.model.identity import BLOB_REF_RE, ULID_RE
-from factory.model.work_ids import normalize_arxiv, normalize_doi, work_id
+from factory.model.work_ids import WORK_ID_RE, normalize_arxiv, normalize_doi, work_id
 
 RUN_ID_RE = rf"^run_{ULID_RE}$"
 QUERY_ID_RE = rf"^qry_{ULID_RE}$"
@@ -131,7 +131,7 @@ class Provenance(_WorkModel):
 
 
 class Work(_WorkModel):
-    id: str
+    id: str = Field(pattern=WORK_ID_RE)
     type: WorkType = WorkType.OTHER
     title: str
     abstract: str | None = None

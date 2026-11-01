@@ -3,6 +3,13 @@ from dataclasses import dataclass
 
 from factory.model.base import StrictModel
 from factory.model.project import ProjectCreated
+from factory.model.search import (
+    QueryRegistered,
+    SearchPageArchived,
+    SearchRecordsParsed,
+    SearchRunFinished,
+    SearchRunStarted,
+)
 from factory.model.task import TaskClaimed, TaskCompleted, TaskCreated, TaskReleased
 
 _NAME_RE = re.compile(r"[a-z][a-z_]*\.[a-z][a-z_]*")
@@ -46,4 +53,9 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("task.claimed", TaskClaimed, 1))
     catalog.register(EventType("task.completed", TaskCompleted, 1))
     catalog.register(EventType("task.released", TaskReleased, 1))
+    catalog.register(EventType("query.registered", QueryRegistered, 1))
+    catalog.register(EventType("search.run_started", SearchRunStarted, 1))
+    catalog.register(EventType("search.page_archived", SearchPageArchived, 1))
+    catalog.register(EventType("search.records_parsed", SearchRecordsParsed, 1))
+    catalog.register(EventType("search.run_finished", SearchRunFinished, 1))
     return catalog
