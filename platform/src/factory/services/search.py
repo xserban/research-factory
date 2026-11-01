@@ -303,9 +303,27 @@ def get_work(project: Project, work_id: str) -> Work | None:
     return works[0] if works else None
 
 
-def list_works(project: Project) -> list[Work]:
-    """Every work, sorted by id."""
-    return _load_works(project)
+def list_works(project: Project, *, include_probe: bool = False) -> list[Work]:
+    """The corpus, sorted by id: works with at least one provenance row from a non-probe query.
+
+    A corpus work carries only its non-probe provenance, so its records are the corpus's records.
+    `include_probe` lists every stored work, probe-only ones included, with all their provenance.
+    """
+    return _load_works(project, corpus=not include_probe)
+
+
+def corpus_size(project: Project) -> tuple[int, int]:
+    """The corpus's (works, records), counted as `list_works` would see them."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        works, records = conn.execute(
+            text(
+                "SELECT COUNT(DISTINCT work_id), COUNT(*) FROM provenance "
+                "WHERE query_id NOT IN (SELECT query_id FROM queries WHERE purpose = :probe)"
+            ),
+            {"probe": QueryPurpose.PROBE.value},
+        ).one()
+    return int(works), int(records)
 
 
 def search_counts(project: Project) -> SearchCounts:
@@ -466,8 +484,13 @@ def _records_events(project: Project, run_id: str, works: list[Work]) -> list[Ev
     ]
 
 
-def _load_works(project: Project, work_id: str | None = None) -> list[Work]:
-    """Works rebuilt from their stored records and all their provenance, sorted by id."""
+def _load_works(
+    project: Project, work_id: str | None = None, *, corpus: bool = False
+) -> list[Work]:
+    """Works rebuilt from their stored records and their provenance, sorted by id.
+
+    With `corpus`, probe-purpose provenance rows are dropped and a work left with none is omitted.
+    """
     project.index.sync()
     where = " WHERE work_id = :work" if work_id is not None else ""
     params: dict[str, Any] = {"work": work_id} if work_id is not None else {}
@@ -483,8 +506,21 @@ def _load_works(project: Project, work_id: str | None = None) -> list[Work]:
             .mappings()
             .all()
         )
+        probe_queries = (
+            {
+                str(row[0])
+                for row in conn.execute(
+                    text("SELECT query_id FROM queries WHERE purpose = :probe"),
+                    {"probe": QueryPurpose.PROBE.value},
+                ).all()
+            }
+            if corpus
+            else set()
+        )
     by_work: dict[str, list[Provenance]] = {}
     for row in prov_rows:
+        if str(row["query_id"]) in probe_queries:
+            continue
         by_work.setdefault(str(row["work_id"]), []).append(
             Provenance(
                 source=str(row["source"]),
@@ -496,7 +532,9 @@ def _load_works(project: Project, work_id: str | None = None) -> list[Work]:
                 method=ProvenanceMethod(row["method"]),
             )
         )
-    return [
-        Work.model_validate({**json.loads(str(data)), "provenance": by_work.get(str(wid), [])})
-        for wid, data in rows
-    ]
+    works: list[Work] = []
+    for wid, data in rows:
+        provenance = by_work.get(str(wid), [])
+        if provenance or not corpus:
+            works.append(Work.model_validate({**json.loads(str(data)), "provenance": provenance}))
+    return works

@@ -17,7 +17,7 @@ from factory.model.dedup import DedupMerged, DedupReverted, MergeStatus
 from factory.model.work import Work
 from factory.services.context import Project
 from factory.services.dedup_cascade import CascadeMerge, dedup, merge_works
-from factory.services.search import list_works
+from factory.services.search import corpus_size, list_works
 
 
 class DedupSummary(StrictModel):
@@ -89,7 +89,7 @@ def _reconcile(project: Project) -> DedupSummary:
         created=new_ids,
         reverted=[merge.merge_id for merge in stale],
         unchanged=len(kept),
-        records=_provenance_rows(project),
+        records=corpus_size(project)[1],
         works=len(works),
         canonical=len(canonical_works(project)),
     )
@@ -193,8 +193,3 @@ def _is_active(project: Project, merge_id: str) -> bool:
             text("SELECT status FROM merges WHERE merge_id = :merge"), {"merge": merge_id}
         ).one_or_none()
     return row is not None and row[0] == MergeStatus.ACTIVE.value
-
-
-def _provenance_rows(project: Project) -> int:
-    with project.index.connect() as conn:
-        return int(conn.execute(text("SELECT COUNT(*) FROM provenance")).scalar_one())

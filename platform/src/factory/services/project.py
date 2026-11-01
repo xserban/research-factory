@@ -10,7 +10,7 @@ from factory.model.base import StrictModel
 from factory.model.dedup import MergeStatus
 from factory.model.project import ProjectCreated, RigorMode
 from factory.services.context import Project, ProjectPaths, build_project, slug_issues
-from factory.services.search import SearchCounts, search_counts
+from factory.services.search import SearchCounts, corpus_size, search_counts
 from factory.services.tasks import TaskCounts, task_counts
 
 
@@ -74,14 +74,13 @@ def project_status(project: Project) -> ProjectStatus:
             text("SELECT rigor_mode, created_at FROM project WHERE slug = :slug"),
             {"slug": slug},
         ).one_or_none()
-        works = conn.execute(text("SELECT COUNT(*) FROM works")).scalar_one()
         merges = conn.execute(
             text("SELECT COUNT(*) FROM merges WHERE status = :active"),
             {"active": MergeStatus.ACTIVE.value},
         ).scalar_one()
-        records = conn.execute(text("SELECT COUNT(*) FROM provenance")).scalar_one()
     if row is None:
         raise ProjectNotFoundError(f"project {slug!r} has no project.created event")
+    works, records = corpus_size(project)
     by_type = {str(name): int(count) for name, count in counts}
     return ProjectStatus(
         slug=slug,
@@ -93,6 +92,6 @@ def project_status(project: Project) -> ProjectStatus:
         tasks=task_counts(project),
         search=search_counts(project),
         merges_active=int(merges),
-        works=int(works),
-        records=int(records),
+        works=works,
+        records=records,
     )

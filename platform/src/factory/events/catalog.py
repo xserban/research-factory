@@ -12,6 +12,7 @@ from factory.model.search import (
     SearchRunFinished,
     SearchRunStarted,
 )
+from factory.model.seed import SeedAdded, SeedResolved, SeedUnresolved
 from factory.model.task import TaskClaimed, TaskCompleted, TaskCreated, TaskReleased
 
 _NAME_RE = re.compile(r"[a-z][a-z_]*\.[a-z][a-z_]*")
@@ -64,4 +65,7 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("dedup.reverted", DedupReverted, 1))
     catalog.register(EventType("question.goal_stated", GoalStated, 1))
     catalog.register(EventType("question.recorded", QuestionRecorded, 1))
+    catalog.register(EventType("seed.added", SeedAdded, 1))
+    catalog.register(EventType("seed.resolved", SeedResolved, 1))
+    catalog.register(EventType("seed.unresolved", SeedUnresolved, 1))
     return catalog
