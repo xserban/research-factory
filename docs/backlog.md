@@ -114,3 +114,12 @@ Status: new · Added: 2026-11-01 · Slice: 5 · Depends on: IDEA-03, IDEA-10
 **What:** pending decisions routed to the responsible person; a weekly lab-meeting pack per project (progress, amendments, disagreements to discuss, new literature); handover reports when someone leaves a project.
 **Why:** keeps a team synchronised without status meetings; continuity across student cohorts.
 **Open questions:** visibility rules for unpublished ideas across projects and people.
+
+## Plan 4 review carry-over (added 2026-11-01)
+
+### IDEA-15 — Screening, calibration and audit: deferred review minors
+Status: new · Added: 2026-11-01 · Slice: — · Depends on: slice 1 plan 4
+**What:** minor findings of the plan 4 final review, not fixed in slice 1: count validators on `AuditSampled` and `CalibrationDrawn`; negative-input guards in `draw_audit` and `audit_size`; the private `_rigor_mode` has a third copy; audit labels for unsampled pairs are dropped silently; the batch-order test may pass by chance and the shuffle seed depends on the task count; `screen_record` marks the answered set after an invalid first item; untested paths (task kind mismatch, lease expiry, re-record after an amendment); direct tests for the obsolete-task and stale-decision agreement rulings; `cannot_assess_rate` typed `float | None`; `project_status` recomputes agreement and audit on every call; a pass that fails the sensitivity gate has no in-pass recovery (it needs an amendment).
+**Why:** each is a small gap in evidence or robustness that does not change a result today.
+**Rigour notes:** none changes an event or a verdict; the validators and the silent drop touch the audit record and should come first.
+**Open questions:** whether the `project_status` cost matters before slice 3.

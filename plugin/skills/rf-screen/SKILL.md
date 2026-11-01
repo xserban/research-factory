@@ -20,7 +20,8 @@ one batch at a time. Each judgement is recorded with a verbatim quote so that it
 ## Procedure
 
 1. Call `screen_next` with the pass label. It serves a batch of records and the criteria, or
-   says why none is served.
+   says why none is served. Calibration batches arrive with the gate reason in `blocked`;
+   screen them like any batch.
 2. Judge each record only from its title and abstract, against the protocol criteria as served.
    Do not use outside knowledge of the paper, its full text, or its citations.
 3. Choose one verdict per record:
@@ -41,9 +42,13 @@ one batch at a time. Each judgement is recorded with a verbatim quote so that it
    rejected item, re-read the title and abstract, find the span that supports the verdict and
    resubmit the item. Never retry by paraphrasing or editing the quote to pass the check; if no
    span supports the verdict, change the verdict (`cannot-assess` or `unsure`).
-7. Repeat from step 1. Stop when `remaining` is 0 or `blocked` is non-empty.
-8. If `blocked` is non-empty, report its reasons to the researcher verbatim. Calibration,
-   agreement and audit are human steps; do not attempt them and do not work around the block.
+7. Repeat from step 1. Stop when `batch` is null. Screen every served batch even if `blocked`
+   is non-empty (calibration batches arrive with the gate reason).
+8. If `batch` is null and `blocked` is non-empty, report the reasons verbatim to the
+   researcher. If `batch` is null, `blocked` is empty and `remaining` > 0, other sessions hold
+   the work; report and stop. Calibration, agreement and audit are human steps; do not
+   attempt them and do not work around the block. A pass that fails calibration needs a
+   protocol amendment by the researcher; do not retry it.
 
 ## Tool arguments
 
@@ -53,4 +58,4 @@ not send one. Pass `rf-screen` as `skill`. `project_status` shows the current st
 
 ## Done when
 
-`remaining` is 0 for this pass, or a block has been reported to the researcher.
+`batch` is null: `remaining` is 0 for this pass, or the block or the held work has been reported to the researcher.
