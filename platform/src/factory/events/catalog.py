@@ -13,6 +13,16 @@ from factory.model.protocol import (
     ProtocolRecorded,
 )
 from factory.model.question import GoalStated, QuestionRecorded
+from factory.model.screening import (
+    AuditLabelled,
+    AuditSampled,
+    CalibrationDrawn,
+    CalibrationLabelled,
+    DecisionRecorded,
+    DisagreementResolved,
+    PassJoined,
+    PassOpened,
+)
 from factory.model.search import (
     QueryRegistered,
     SearchPageArchived,
@@ -92,4 +102,12 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("protocol.press_confirmed", PressConfirmed, 1))
     catalog.register(EventType("protocol.deviation_recorded", DeviationRecorded, 1))
     catalog.register(EventType("protocol.amended", ProtocolAmended, 1))
+    catalog.register(EventType("screening.pass_opened", PassOpened, 1))
+    catalog.register(EventType("screening.pass_joined", PassJoined, 1))
+    catalog.register(EventType("screening.decision_recorded", DecisionRecorded, 1))
+    catalog.register(EventType("screening.disagreement_resolved", DisagreementResolved, 1))
+    catalog.register(EventType("calibration.drawn", CalibrationDrawn, 1))
+    catalog.register(EventType("calibration.labelled", CalibrationLabelled, 1))
+    catalog.register(EventType("audit.sampled", AuditSampled, 1))
+    catalog.register(EventType("audit.labelled", AuditLabelled, 1))
     return catalog
