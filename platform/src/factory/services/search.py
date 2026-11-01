@@ -368,6 +368,13 @@ def search_counts(project: Project) -> SearchCounts:
     )
 
 
+def query_issues(
+    project: Project, spec: QuerySpec, sources: Mapping[str, SourceFactory]
+) -> list[ValidationIssue]:
+    """Every problem `register_query` would refuse the spec for, without writing anything."""
+    return _spec_issues(project, spec, sources)
+
+
 def _spec_issues(
     project: Project, spec: QuerySpec, sources: Mapping[str, SourceFactory]
 ) -> list[ValidationIssue]:

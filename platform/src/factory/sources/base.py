@@ -122,6 +122,7 @@ class Source(Protocol):
         ...
 
 
+@runtime_checkable
 class Prober(Protocol):
     """Measures a query at a source without retrieving its records.
 

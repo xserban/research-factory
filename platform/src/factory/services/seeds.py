@@ -549,6 +549,11 @@ def _load_seeds(project: Project) -> list[_Seed]:
     ]
 
 
+def split_is_drawn(project: Project) -> bool:
+    """Whether the hold-out split has been recorded for this project."""
+    return _split(project) is not None
+
+
 def _split(project: Project) -> _Split | None:
     project.index.sync()
     with project.index.connect() as conn:

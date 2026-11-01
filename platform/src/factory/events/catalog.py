@@ -3,6 +3,7 @@ from dataclasses import dataclass
 
 from factory.model.base import StrictModel
 from factory.model.dedup import DedupMerged, DedupReverted
+from factory.model.probe import ProbeFailed, ProbeMeasured, ProbePageArchived
 from factory.model.project import ProjectCreated
 from factory.model.question import GoalStated, QuestionRecorded
 from factory.model.search import (
@@ -76,4 +77,7 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("seed.unresolved", SeedUnresolved, 1))
     catalog.register(EventType("seed.split_drawn", SeedSplitDrawn, 1))
     catalog.register(EventType("seed.miss_explained", SeedMissExplained, 1))
+    catalog.register(EventType("probe.page_archived", ProbePageArchived, 1))
+    catalog.register(EventType("probe.measured", ProbeMeasured, 1))
+    catalog.register(EventType("probe.failed", ProbeFailed, 1))
     return catalog
