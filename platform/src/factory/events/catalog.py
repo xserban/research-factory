@@ -2,6 +2,7 @@ import re
 from dataclasses import dataclass
 
 from factory.model.base import StrictModel
+from factory.model.dedup import DedupMerged, DedupReverted
 from factory.model.project import ProjectCreated
 from factory.model.search import (
     QueryRegistered,
@@ -58,4 +59,6 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("search.page_archived", SearchPageArchived, 1))
     catalog.register(EventType("search.records_parsed", SearchRecordsParsed, 1))
     catalog.register(EventType("search.run_finished", SearchRunFinished, 1))
+    catalog.register(EventType("dedup.merged", DedupMerged, 1))
+    catalog.register(EventType("dedup.reverted", DedupReverted, 1))
     return catalog

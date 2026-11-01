@@ -4,7 +4,7 @@ from typing import Any
 
 from factory.model.base import StrictModel
 from factory.model.search import QueryKind, QuerySpec, RunStatus
-from factory.model.work import Author, Dates, Identifiers, Provenance, Work
+from factory.model.work import Author, Dates, Identifiers, Provenance, Work, WorkType
 from factory.sources.base import PageSink, RawPage, SearchResult, SourceError
 
 T0 = datetime(2026, 10, 31, 12, 0, tzinfo=UTC)
@@ -155,6 +155,7 @@ def _work(record: dict[str, Any], *, run_id: str, query_id: str, raw_blob: str) 
             doi=record.get("doi"), arxiv=record.get("arxiv"), openalex=record.get("openalex")
         ),
         dates=Dates(published=date(year, 1, 1)) if year else Dates(),
+        type=WorkType(record["type"]) if "type" in record else WorkType.OTHER,
         abstract=record.get("abstract"),
         provenance=[
             Provenance(

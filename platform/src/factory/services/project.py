@@ -7,6 +7,7 @@ from factory.clock import Clock, parse_ts
 from factory.config import Settings
 from factory.errors import FactoryValidationError, ProjectNotFoundError, ValidationIssue
 from factory.model.base import StrictModel
+from factory.model.dedup import MergeStatus
 from factory.model.project import ProjectCreated, RigorMode
 from factory.services.context import Project, ProjectPaths, build_project, slug_issues
 from factory.services.search import SearchCounts, search_counts
@@ -22,6 +23,7 @@ class ProjectStatus(StrictModel):
     last_event_at: datetime | None
     tasks: TaskCounts
     search: SearchCounts
+    merges_active: int
     works: int
     records: int
 
@@ -73,6 +75,10 @@ def project_status(project: Project) -> ProjectStatus:
             {"slug": slug},
         ).one_or_none()
         works = conn.execute(text("SELECT COUNT(*) FROM works")).scalar_one()
+        merges = conn.execute(
+            text("SELECT COUNT(*) FROM merges WHERE status = :active"),
+            {"active": MergeStatus.ACTIVE.value},
+        ).scalar_one()
         records = conn.execute(text("SELECT COUNT(*) FROM provenance")).scalar_one()
     if row is None:
         raise ProjectNotFoundError(f"project {slug!r} has no project.created event")
@@ -86,6 +92,7 @@ def project_status(project: Project) -> ProjectStatus:
         last_event_at=parse_ts(str(last)) if last is not None else None,
         tasks=task_counts(project),
         search=search_counts(project),
+        merges_active=int(merges),
         works=int(works),
         records=int(records),
     )
