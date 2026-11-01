@@ -13,6 +13,7 @@ for screening, and should not be quoted as if it were the author's prose.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import date, datetime
 from typing import Any
 
@@ -35,6 +36,7 @@ from factory.sources.http import PoliteClient, redact
 
 _ENDPOINT = "https://api.openalex.org/works"
 _PAGE_SIZE = 200  # the documented maximum
+_PROBE_BATCH = 50  # ids per probe request: one page, no cursor to follow
 
 # OpenAlex `type` -> our vocabulary. Unmapped types become OTHER rather than guessing.
 _TYPES: dict[str, WorkType] = {
@@ -252,6 +254,74 @@ class OpenAlexSource:
             skipped=skipped,
             note=note,
         )
+
+    def count(self, spec: QuerySpec, *, archive: PageSink) -> int | None:
+        """OpenAlex's own total for `spec`, from one request for a single record."""
+        self._require_known_kind(spec)
+        meta, _ = self._probe_get(
+            {"filter": self._filter_expression(spec), "per-page": 1},
+            ordinal=0,
+            archive=archive,
+        )
+        count = meta.get("count")
+        return count if isinstance(count, int) else None
+
+    def matching(self, ids: Sequence[str], spec: QuerySpec, *, archive: PageSink) -> set[str]:
+        """Which of `ids` `spec` retrieves, measured in batches of at most 50 ids.
+
+        Each batch is `openalex:W1|W2` intersected with the query, so one response answers for
+        up to 50 seeds. Ids are compared case-insensitively and returned in the form given.
+        """
+        self._require_known_kind(spec)
+        given = {i.strip().casefold(): i for i in ids}
+        found: set[str] = set()
+        for start in range(0, len(ids), _PROBE_BATCH):
+            batch = ids[start : start + _PROBE_BATCH]
+            clauses = [f"openalex:{'|'.join(batch)}"]
+            params: dict[str, str | int] = {"per-page": _PROBE_BATCH}
+            if spec.kind is QueryKind.KEYWORD:
+                params["search"] = spec.text
+                clauses.extend(f"{key}:{value}" for key, value in spec.filters.items())
+            else:
+                clauses.append(self._filter_expression(spec))
+            params["filter"] = ",".join(clauses)
+            _, results = self._probe_get(params, ordinal=start // _PROBE_BATCH, archive=archive)
+            for item in results:
+                key = (_strip_url(item.get("id"), "https://openalex.org/") or "").casefold()
+                if key in given:
+                    found.add(given[key])
+        return found
+
+    def _require_known_kind(self, spec: QuerySpec) -> None:
+        if spec.kind not in self.kinds:
+            raise ValueError(f"openalex does not take {spec.kind.value} queries")
+
+    def _probe_get(
+        self, params: dict[str, str | int], *, ordinal: int, archive: PageSink
+    ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        """One archived probe request: its `meta` and `results`.
+
+        The contact address is sent (polite pool) but never archived: the archived URL is
+        redacted, as for a run. Transport failures become `SourceError`.
+        """
+        if self._mailto:
+            params = {**params, "mailto": self._mailto}
+        try:
+            response = self._http.get(_ENDPOINT, params)
+        except httpx.HTTPError as exc:
+            raise SourceError(redact(f"{type(exc).__name__}: {exc}", self._mailto)) from exc
+        archive(
+            RawPage(
+                ordinal=ordinal,
+                body=response.text,
+                url=redact(str(response.url), self._mailto),
+                fetched_at=self._clock.now(),
+            )
+        )
+        payload = _payload(response)
+        meta = payload.get("meta") or {}
+        results = payload.get("results") or []
+        return meta, results
 
     @staticmethod
     def _filter_expression(spec: QuerySpec) -> str:

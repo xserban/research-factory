@@ -8,7 +8,7 @@ record rather than absorbed silently.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol, runtime_checkable
@@ -16,6 +16,7 @@ from typing import Protocol, runtime_checkable
 from factory.errors import FactoryError
 from factory.model.search import QueryKind, QuerySpec, RunStatus
 from factory.model.work import Work
+from factory.model.work_ids import arxiv_id_from_doi, normalize_arxiv
 
 _RESULT_STATUSES = frozenset({RunStatus.COMPLETE, RunStatus.PARTIAL, RunStatus.FAILED})
 
@@ -121,4 +122,46 @@ class Source(Protocol):
         ...
 
 
-__all__ = ["PageSink", "RawPage", "SearchResult", "Source", "SourceError"]
+class Prober(Protocol):
+    """Measures a query at a source without retrieving its records.
+
+    A probe asks the source, not the corpus: `count` is the source's own total, and `matching`
+    reports which of the given source-native ids the query actually retrieves. Every response
+    goes to `archive` before it is parsed, exactly as in a run.
+    """
+
+    def count(self, spec: QuerySpec, *, archive: PageSink) -> int | None:
+        """The source's reported total for `spec`, or None if the source reports none."""
+        ...
+
+    def matching(self, ids: Sequence[str], spec: QuerySpec, *, archive: PageSink) -> set[str]:
+        """The members of `ids` that `spec` retrieves, returned in the form they were given."""
+        ...
+
+
+def probe_key(source: str, work: Work) -> str | None:
+    """The identity a probe matches a work by, in the source's own namespace.
+
+    For arXiv this is the normalised id, bridged from a DataCite DOI when the record carries only
+    that. For OpenAlex it is the work id. Other sources have no probe key, so None.
+    """
+    if source == "arxiv":
+        if work.identifiers.arxiv:
+            return normalize_arxiv(work.identifiers.arxiv)
+        if work.identifiers.doi:
+            return arxiv_id_from_doi(work.identifiers.doi)
+        return None
+    if source == "openalex":
+        return work.identifiers.openalex or None
+    return None
+
+
+__all__ = [
+    "PageSink",
+    "Prober",
+    "RawPage",
+    "SearchResult",
+    "Source",
+    "SourceError",
+    "probe_key",
+]

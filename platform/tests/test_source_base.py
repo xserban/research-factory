@@ -256,3 +256,41 @@ class _FakeSource:
 def test_a_conforming_adapter_satisfies_the_source_protocol() -> None:
     source: Source = _FakeSource()
     assert isinstance(source, Source)
+
+
+# --- probe_key: the identity a probe matches a work by -----------------------------------
+
+
+def test_probe_key_bridges_datacite_doi_to_arxiv(prov: Provenance) -> None:
+    from factory.model.work import Identifiers
+    from factory.sources.base import probe_key
+
+    bridged = Work.build(
+        title="Bridged",
+        provenance=[prov],
+        identifiers=Identifiers(doi="https://doi.org/10.48550/arXiv.2301.02033v2"),
+    )
+    direct = Work.build(
+        title="Direct",
+        provenance=[prov],
+        identifiers=Identifiers(arxiv="http://arxiv.org/abs/2301.02033v3"),
+    )
+    nothing = Work.build(
+        title="Nothing", provenance=[prov], identifiers=Identifiers(doi="10.1016/j.x.2023.1")
+    )
+
+    assert probe_key("arxiv", bridged) == "2301.02033"
+    assert probe_key("arxiv", direct) == "2301.02033"
+    assert probe_key("arxiv", nothing) is None
+    assert probe_key("pubmed", direct) is None
+
+
+def test_probe_key_for_openalex_is_the_work_id(prov: Provenance) -> None:
+    from factory.model.work import Identifiers
+    from factory.sources.base import probe_key
+
+    work = Work.build(
+        title="Works", provenance=[prov], identifiers=Identifiers(openalex="W4298183756")
+    )
+    assert probe_key("openalex", work) == "W4298183756"
+    assert probe_key("openalex", Work.build(title="None", provenance=[prov])) is None

@@ -19,7 +19,7 @@ from factory.config import Settings
 from factory.model.search import QueryKind, QuerySpec, RunStatus
 from factory.model.work import ProvenanceMethod, WorkType
 from factory.sources.arxiv import ArxivSource
-from factory.sources.base import RawPage, SearchResult
+from factory.sources.base import RawPage, SearchResult, SourceError
 from factory.sources.http import PoliteClient, default_http
 from tests.helpers import SESSION, T0
 
@@ -324,30 +324,6 @@ class TestExhaustiveness:
         assert result.status is RunStatus.COMPLETE
         assert result.note is None
 
-    def test_matching_intersects_ids_with_query(self) -> None:
-        seen: list[httpx.Request] = []
-        archived: list[RawPage] = []
-
-        def handler(request: httpx.Request) -> httpx.Response:
-            seen.append(request)
-            return httpx.Response(200, text=MATCH_ONE)
-
-        def archive(page_: RawPage) -> str:
-            archived.append(page_)
-            return blob_for(page_.ordinal)
-
-        found = make_source(handler).matching(
-            ["2301.02033", "2209.14566"],
-            "all:test",
-            run_id=RUN_ID,
-            query_id=QUERY_ID,
-            archive=archive,
-        )
-        assert found == {"2301.02033"}
-        assert seen[0].url.params["search_query"] == "all:test"
-        assert seen[0].url.params["id_list"] == "2301.02033,2209.14566"
-        assert [p.body for p in archived] == [MATCH_ONE]
-
 
 class TestFailure:
     def test_http_error_yields_failed_status_not_an_empty_success(self) -> None:
@@ -462,3 +438,101 @@ def test_live_id_lookup() -> None:
         http._http.close()  # PoliteClient has no close(); release the socket pool
     assert result.retrieved_count == 1
     assert "Attention" in result.works[0].title
+
+
+COUNT_ONLY = """<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom"
+      xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/">
+  <opensearch:totalResults>42</opensearch:totalResults>
+</feed>
+"""
+
+
+class TestProbes:
+    def test_count_reads_total_results_without_records(self) -> None:
+        seen: list[httpx.Request] = []
+        archived: list[RawPage] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append(request)
+            return httpx.Response(200, text=COUNT_ONLY)
+
+        def archive(page_: RawPage) -> str:
+            archived.append(page_)
+            return blob_for(page_.ordinal)
+
+        total = make_source(handler).count(keyword("all:test"), archive=archive)
+        assert total == 42
+        assert len(seen) == 1
+        assert seen[0].url.params["max_results"] == "0"
+        assert seen[0].url.params["search_query"] == "all:test"
+        assert [p.body for p in archived] == [COUNT_ONLY]
+
+    def test_count_rejects_id_list_queries(self) -> None:
+        spec = QuerySpec(source="arxiv", kind=QueryKind.ID_LIST, text="2301.00001")
+        with pytest.raises(ValueError):
+            make_source(serve(COUNT_ONLY)).count(spec, archive=_archive)
+
+    def test_matching_intersects_ids_with_query(self) -> None:
+        seen: list[httpx.Request] = []
+        archived: list[RawPage] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append(request)
+            return httpx.Response(200, text=MATCH_ONE)
+
+        def archive(page_: RawPage) -> str:
+            archived.append(page_)
+            return blob_for(page_.ordinal)
+
+        found = make_source(handler).matching(
+            ["2301.02033", "2209.14566"], keyword("all:test"), archive=archive
+        )
+        assert found == {"2301.02033"}
+        assert seen[0].url.params["search_query"] == "all:test"
+        assert seen[0].url.params["id_list"] == "2301.02033,2209.14566"
+        assert [p.body for p in archived] == [MATCH_ONE]
+
+    def test_matching_batches_ids_one_page_at_a_time(self) -> None:
+        seen: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append(request)
+            return httpx.Response(200, text=EMPTY)
+
+        ids = [f"2301.{n:05d}" for n in range(150)]
+        found = make_source(handler, page_size=100).matching(
+            ids, keyword("all:test"), archive=_archive
+        )
+        assert found == set()
+        assert [len(r.url.params["id_list"].split(",")) for r in seen] == [100, 50]
+
+    def test_matching_returns_ids_in_the_form_given(self) -> None:
+        found = make_source(serve(MATCH_ONE)).matching(
+            ["2301.02033v1"], keyword("all:test"), archive=_archive
+        )
+        assert found == {"2301.02033v1"}
+
+    def test_matching_rejects_id_list_queries(self) -> None:
+        spec = QuerySpec(source="arxiv", kind=QueryKind.ID_LIST, text="2301.00001")
+        with pytest.raises(ValueError):
+            make_source(serve(MATCH_ONE)).matching(["2301.02033"], spec, archive=_archive)
+
+    def test_transport_failure_raises_source_error(self) -> None:
+        with pytest.raises(SourceError):
+            make_source(serve(EMPTY, status=503)).count(keyword(), archive=_archive)
+
+    def test_probe_requests_never_sort_by_relevance(self) -> None:
+        seen: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append(request)
+            return httpx.Response(200, text=COUNT_ONLY)
+
+        source = make_source(handler)
+        source.count(keyword(), archive=_archive)
+        source.matching(["2301.02033"], keyword(), archive=_archive)
+        assert seen
+        for request in seen:
+            assert "sortBy" not in request.url.params
+            assert "relevance" not in str(request.url).lower()

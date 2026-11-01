@@ -12,7 +12,7 @@ from factory.clock import FixedClock, SystemClock
 from factory.config import Settings
 from factory.model.search import QueryKind, QueryPurpose, QuerySpec, RunStatus
 from factory.model.work import ProvenanceMethod, Work, WorkType
-from factory.sources.base import RawPage, SearchResult
+from factory.sources.base import RawPage, SearchResult, SourceError
 from factory.sources.http import PoliteClient, default_http
 from factory.sources.openalex import OpenAlexSource, reconstruct_abstract
 from tests.helpers import SESSION, T0
@@ -423,3 +423,99 @@ def test_live_small_query() -> None:
     assert result.retrieved_count == 5
     assert result.reported_count is not None
     assert result.reported_count > 5
+
+
+class TestProbes:
+    def test_count_reads_meta_count_with_one_record_per_page(self) -> None:
+        seen: list[httpx.Request] = []
+        archived: list[RawPage] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append(request)
+            return httpx.Response(200, text=page([], 317, None))
+
+        def archive(page_: RawPage) -> str:
+            archived.append(page_)
+            return _archive(page_)
+
+        total = make_source(handler).count(keyword("vessel"), archive=archive)
+        assert total == 317
+        assert len(seen) == 1
+        assert seen[0].url.params["per-page"] == "1"
+        assert seen[0].url.params["filter"] == "title_and_abstract.search:vessel"
+        assert len(archived) == 1
+
+    def test_matching_batches_ids_and_keeps_the_query(self) -> None:
+        seen: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append(request)
+            return httpx.Response(200, text=page([{"id": "https://openalex.org/W1"}], 1, None))
+
+        ids = [f"W{n}" for n in range(1, 121)]
+        found = make_source(handler).matching(ids, keyword("vessel"), archive=_archive)
+        assert found == {"W1"}
+        assert len(seen) == 3
+        assert [len(r.url.params["filter"].split("|")) for r in seen] == [50, 50, 20]
+        for request in seen:
+            assert request.url.params["filter"].startswith("openalex:W")
+            assert request.url.params["search"] == "vessel"
+            assert request.url.params["per-page"] == "50"
+
+    def test_matching_for_filter_queries_keeps_the_filter(self) -> None:
+        seen: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append(request)
+            return httpx.Response(200, text=page([], 0, None))
+
+        spec = QuerySpec(source="openalex", kind=QueryKind.FILTER, text="cites:W9")
+        make_source(handler).matching(["W1"], spec, archive=_archive)
+        assert seen[0].url.params["filter"] == "openalex:W1,cites:W9"
+        assert "search" not in seen[0].url.params
+
+    def test_matching_normalises_ids_on_both_sides(self) -> None:
+        def handler(_: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, text=page([{"id": "https://openalex.org/W42"}], 1, None))
+
+        found = make_source(handler).matching(["w42", "W43"], keyword(), archive=_archive)
+        assert found == {"w42"}
+
+    def test_probe_archives_the_response_without_the_contact_address(self) -> None:
+        seen: list[httpx.Request] = []
+        archived: list[RawPage] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append(request)
+            return httpx.Response(200, text=page([], 5, None))
+
+        def archive(page_: RawPage) -> str:
+            archived.append(page_)
+            return _archive(page_)
+
+        make_source(handler, mailto="ops@example.org").count(keyword(), archive=archive)
+        assert seen[0].url.params["mailto"] == "ops@example.org"
+        assert "ops@example.org" not in archived[0].url
+        assert "mailto" not in archived[0].url
+
+    def test_transport_failure_raises_source_error(self) -> None:
+        def handler(_: httpx.Request) -> httpx.Response:
+            return httpx.Response(503, text="down")
+
+        with pytest.raises(SourceError):
+            make_source(handler).count(keyword(), archive=_archive)
+
+    def test_probe_requests_never_sort_by_relevance(self) -> None:
+        seen: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append(request)
+            return httpx.Response(200, text=page([], 1, None))
+
+        source = make_source(handler)
+        source.count(keyword(), archive=_archive)
+        source.matching(["W1"], keyword(), archive=_archive)
+        assert len(seen) == 2
+        for request in seen:
+            assert "sort" not in request.url.params
+            assert "relevance" not in str(request.url).lower()

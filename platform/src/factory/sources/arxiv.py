@@ -11,6 +11,7 @@ handling and the retries live in `PoliteClient`, not here.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime
 from xml.etree import ElementTree
 
@@ -92,6 +93,15 @@ def _id_list_note(requested: list[tuple[str, str]], works: list[Work], skipped: 
     if skipped:
         note += f"; {skipped} {_SKIPPED}"
     return note
+
+
+def _entry_arxiv_key(entry: ElementTree.Element) -> str | None:
+    """The normalised arXiv id of an entry that could be screened, or None if it is untitled."""
+    title = _text(entry.find("atom:title", _NS))
+    raw_id = _text(entry.find("atom:id", _NS))
+    if not title or not raw_id:
+        return None
+    return normalize_arxiv(raw_id)
 
 
 def _feed(body: str) -> tuple[int | None, list[ElementTree.Element]]:
@@ -290,15 +300,21 @@ class ArxivSource:
             return start + self._page_size >= len(ids)
         return entries < self._page_size
 
-    def matching(
-        self,
-        ids: list[str],
-        text: str,
-        *,
-        run_id: str,
-        query_id: str,
-        archive: PageSink,
-    ) -> set[str]:
+    def count(self, spec: QuerySpec, *, archive: PageSink) -> int | None:
+        """arXiv's own total for a keyword query, from one request that carries no records.
+
+        `max_results=0` asks only for the total, so probing a query that matches 69,000 records
+        costs one small response rather than a page of them.
+        """
+        self._require_keyword(spec)
+        _, reported, _ = self._probe_get(
+            {"search_query": spec.text, "max_results": 0, "start": 0},
+            ordinal=0,
+            archive=archive,
+        )
+        return reported
+
+    def matching(self, ids: Sequence[str], spec: QuerySpec, *, archive: PageSink) -> set[str]:
         """Which of `ids` the query actually retrieves — measured, not sampled.
 
         arXiv intersects `id_list` with `search_query`, so seed recall can be established
@@ -307,44 +323,58 @@ class ArxivSource:
         records, sampled 900 deep, will report 0% recall for a perfectly good strategy purely
         because the seeds were not in the slice — which is a property of the sampling, not of
         the query.
+
+        Ids are compared by their normalised form (a version pin and a bare id are the same
+        paper) and returned in the form they were given.
         """
+        self._require_keyword(spec)
+        given = {normalize_arxiv(i): i for i in ids}
         found: set[str] = set()
         for start in range(0, len(ids), self._page_size):
             batch = ids[start : start + self._page_size]
-            response = self._http.get(
-                _ENDPOINT,
+            _, _, entries = self._probe_get(
                 {
                     "id_list": ",".join(batch),
-                    "search_query": text,
+                    "search_query": spec.text,
                     "max_results": len(batch),
                     "start": 0,
                 },
+                ordinal=start // self._page_size,
+                archive=archive,
             )
-            now = self._clock.now()
-            raw_blob = archive(
-                RawPage(
-                    ordinal=start // self._page_size,
-                    body=response.text,
-                    url=redact(str(response.url), self._mailto),
-                    fetched_at=now,
-                )
-            )
-            _, entries = _feed(response.text)
-            works = (
-                self._to_work(
-                    entry,
-                    run_id=run_id,
-                    query_id=query_id,
-                    raw_blob=raw_blob,
-                    at=now,
-                    method=ProvenanceMethod.DATABASE,
-                )
-                for entry in entries
-            )
-            found.update(
-                normalize_arxiv(w.identifiers.arxiv) for w in works if w and w.identifiers.arxiv
-            )
+            for entry in entries:
+                key = _entry_arxiv_key(entry)
+                if key is not None and key in given:
+                    found.add(given[key])
         return found
+
+    @staticmethod
+    def _require_keyword(spec: QuerySpec) -> None:
+        if spec.kind is not QueryKind.KEYWORD:
+            raise ValueError(f"arxiv probes take keyword queries, not {spec.kind.value}")
+
+    def _probe_get(
+        self, params: dict[str, str | int], *, ordinal: int, archive: PageSink
+    ) -> tuple[str, int | None, list[ElementTree.Element]]:
+        """One archived probe request: the blob ref, the reported total and the entries.
+
+        Transport failures become `SourceError`, with the contact address redacted. The response
+        is archived before it is parsed, as in a run.
+        """
+        try:
+            response = self._http.get(_ENDPOINT, params)
+        except httpx.HTTPError as exc:
+            raise SourceError(redact(f"{type(exc).__name__}: {exc}", self._mailto)) from exc
+        raw_blob = archive(
+            RawPage(
+                ordinal=ordinal,
+                body=response.text,
+                url=redact(str(response.url), self._mailto),
+                fetched_at=self._clock.now(),
+            )
+        )
+        reported, entries = _feed(response.text)
+        return raw_blob, reported, entries
 
     def _to_work(
         self,
