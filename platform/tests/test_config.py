@@ -30,3 +30,21 @@ def test_invalid_user_is_rejected(tmp_path: Path) -> None:
     with pytest.raises(FactoryValidationError) as err:
         Settings.load(root=tmp_path, user="Not A User")
     assert [issue.field for issue in err.value.issues] == ["user"]
+
+
+def test_mailto_defaults_to_none(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.delenv("FACTORY_MAILTO", raising=False)
+    assert Settings.load(root=tmp_path, user="obd").mailto is None
+
+
+def test_settings_reads_mailto_from_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("FACTORY_MAILTO", "someone@example.org")
+    assert Settings.load(root=tmp_path, user="obd").mailto == "someone@example.org"
+    assert Settings.load(root=tmp_path, user="obd", mailto="other@example.org").mailto == (
+        "other@example.org"
+    )
+
+
+def test_empty_mailto_env_means_none(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("FACTORY_MAILTO", "")
+    assert Settings.load(root=tmp_path, user="obd").mailto is None

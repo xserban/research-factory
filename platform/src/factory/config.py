@@ -14,9 +14,15 @@ class Settings(StrictModel):
 
     root: Path
     user: str
+    mailto: str | None = None
 
     @classmethod
-    def load(cls, root: Path | None = None, user: str | None = None) -> Self:
+    def load(
+        cls,
+        root: Path | None = None,
+        user: str | None = None,
+        mailto: str | None = None,
+    ) -> Self:
         if root is None:
             env_root = os.environ.get("FACTORY_ROOT")
             root = Path(env_root) if env_root else Path.cwd()
@@ -26,4 +32,6 @@ class Settings(StrictModel):
             raise FactoryValidationError(
                 [ValidationIssue("user", f"must match {ACTOR_ID_RE}, got {user!r}")]
             )
-        return cls(root=root, user=user)
+        if mailto is None:
+            mailto = os.environ.get("FACTORY_MAILTO")
+        return cls(root=root, user=user, mailto=mailto or None)
