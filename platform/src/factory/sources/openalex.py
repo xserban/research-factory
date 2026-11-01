@@ -269,22 +269,21 @@ class OpenAlexSource:
     def matching(self, ids: Sequence[str], spec: QuerySpec, *, archive: PageSink) -> set[str]:
         """Which of `ids` `spec` retrieves, measured in batches of at most 50 ids.
 
-        Each batch is `openalex:W1|W2` intersected with the query, so one response answers for
-        up to 50 seeds. Ids are compared case-insensitively and returned in the form given.
+        Each batch is `openalex:W1|W2` intersected with the query's own filter expression, so one
+        response answers for up to 50 seeds. Ids are compared case-insensitively and returned
+        in the form given.
         """
         self._require_known_kind(spec)
         given = {i.strip().casefold(): i for i in ids}
         found: set[str] = set()
         for start in range(0, len(ids), _PROBE_BATCH):
             batch = ids[start : start + _PROBE_BATCH]
-            clauses = [f"openalex:{'|'.join(batch)}"]
-            params: dict[str, str | int] = {"per-page": _PROBE_BATCH}
-            if spec.kind is QueryKind.KEYWORD:
-                params["search"] = spec.text
-                clauses.extend(f"{key}:{value}" for key, value in spec.filters.items())
-            else:
-                clauses.append(self._filter_expression(spec))
-            params["filter"] = ",".join(clauses)
+            # The same expression the count and the run send, so recall is measured against
+            # the query that will actually be searched.
+            params: dict[str, str | int] = {
+                "filter": f"openalex:{'|'.join(batch)},{self._filter_expression(spec)}",
+                "per-page": _PROBE_BATCH,
+            }
             _, results = self._probe_get(params, ordinal=start // _PROBE_BATCH, archive=archive)
             for item in results:
                 key = (_strip_url(item.get("id"), "https://openalex.org/") or "").casefold()

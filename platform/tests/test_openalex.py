@@ -457,9 +457,13 @@ class TestProbes:
         assert found == {"W1"}
         assert len(seen) == 3
         assert [len(r.url.params["filter"].split("|")) for r in seen] == [50, 50, 20]
+        count_seen: list[httpx.Request] = []
+        make_source(capture(count_seen)).count(keyword("vessel"), archive=_archive)
+        expression = count_seen[0].url.params["filter"]
         for request in seen:
             assert request.url.params["filter"].startswith("openalex:W")
-            assert request.url.params["search"] == "vessel"
+            assert request.url.params["filter"].endswith("," + expression)
+            assert "search" not in request.url.params
             assert request.url.params["per-page"] == "50"
 
     def test_matching_for_filter_queries_keeps_the_filter(self) -> None:
