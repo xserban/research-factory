@@ -58,14 +58,17 @@ class Index:
         """Rebuild the projection from the event log and return its state hash."""
         with self._locked():
             self._build()
-            return self.state_hash()
+            return self._state_hash()
 
     @contextmanager
-    def _locked(self) -> Iterator[None]:
-        """Hold the exclusive cross-process lock, with an engine on the current DB file."""
+    def _locked(self, *, shared: bool = False) -> Iterator[None]:
+        """Hold the cross-process lock, with an engine on the current DB file.
+
+        Writers take it exclusively; readers share it so they wait for any rebuild in progress.
+        """
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         with (self._db_path.parent / "lock").open("a") as handle:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            fcntl.flock(handle.fileno(), fcntl.LOCK_SH if shared else fcntl.LOCK_EX)
             try:
                 self._refresh_engine()
                 yield
@@ -118,7 +121,11 @@ class Index:
         return SyncResult(applied=len(new), rebuilt=False)
 
     def state_hash(self) -> str:
-        self._refresh_engine()
+        with self._locked(shared=True):
+            return self._state_hash()
+
+    def _state_hash(self) -> str:
+        """The projection's hash. Callers hold the lock (shared or exclusive) already."""
         digest = hashlib.sha256()
         tables = sorted(
             (
@@ -139,9 +146,11 @@ class Index:
 
     @contextmanager
     def connect(self) -> Iterator[Connection]:
-        """A connection for read access; services must not write through it."""
-        self._refresh_engine()
-        with self._engine.connect() as conn:
+        """A connection for read access; services must not write through it.
+
+        The shared lock is held until the context exits, so a rebuild cannot swap the file under it.
+        """
+        with self._locked(shared=True), self._engine.connect() as conn:
             yield conn
 
     def _rebuilt(self) -> SyncResult:

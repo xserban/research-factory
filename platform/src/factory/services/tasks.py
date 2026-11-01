@@ -122,6 +122,7 @@ def complete_task(
 
 def release_task(project: Project, actor: Actor, task_id: str, reason: str) -> None:
     task = _require_holder(project, actor, task_id)
+    lease_until = task.lease_until
     project.record(
         [
             project.events.make(
@@ -133,7 +134,18 @@ def release_task(project: Project, actor: Actor, task_id: str, reason: str) -> N
             )
         ]
     )
-    _require_outcome(project, task_id, TaskStatus.OPEN)
+    # Ignored only if this session still holds the same claim: a release applied and then
+    # reclaimed by another session is a success.
+    current = get_task(project, task_id)
+    if (
+        current is not None
+        and current.status == TaskStatus.CLAIMED
+        and current.claim_session == actor.session
+        and current.lease_until == lease_until
+    ):
+        raise FactoryValidationError(
+            [ValidationIssue("task_id", "lease expired before the event was recorded")]
+        )
 
 
 def get_task(project: Project, task_id: str) -> Task | None:

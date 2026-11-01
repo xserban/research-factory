@@ -9,11 +9,13 @@ from factory.errors import FactoryValidationError
 from factory.events.envelope import Actor
 from factory.model.task import (
     TASK_LEASE,
+    Task,
     TaskClaimed,
     TaskCompleted,
     TaskCreated,
     TaskStatus,
 )
+from factory.services import tasks as tasks_service
 from factory.services.context import Project
 from factory.services.project import project_status
 from factory.services.tasks import (
@@ -332,7 +334,7 @@ def test_complete_raises_when_the_lease_lapses_before_the_event_is_recorded(
     assert get_task(project, task_id).status == TaskStatus.CLAIMED  # type: ignore[union-attr]
 
 
-def test_release_raises_when_the_lease_lapses_before_the_event_is_recorded(
+def test_release_ignored_by_projector_still_raises(
     project: Project, agent: Actor, clock: FixedClock
 ) -> None:
     task_id, _ = _claim_with_generator_ahead(project, agent, clock)
@@ -340,3 +342,35 @@ def test_release_raises_when_the_lease_lapses_before_the_event_is_recorded(
         release_task(project, agent, task_id, "gave up")
     assert "lease expired" in err.value.issues[0].reason
     assert get_task(project, task_id).status == TaskStatus.CLAIMED  # type: ignore[union-attr]
+
+
+def test_release_is_not_reported_as_failed_when_another_session_reclaims_immediately(
+    project: Project,
+    project_other_session: Project,
+    agent: Actor,
+    agent_other: Actor,
+    clock: FixedClock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    create_tasks(project, project.system_actor(), [TaskSpec("demo", 1)])
+    t = claim_next(project, agent, "demo")
+    assert t is not None
+    real_get_task = tasks_service.get_task
+    raced: list[bool] = []
+
+    def get_task_with_rival(p: Project, task_id: str) -> Task | None:
+        current = real_get_task(p, task_id)
+        # The first re-read after the release was applied: another session claims right away.
+        if not raced and current is not None and current.status == TaskStatus.OPEN:
+            raced.append(True)
+            clock.advance(ONE_MS)
+            rival = claim_next(project_other_session, agent_other, "demo")
+            assert rival is not None
+        return real_get_task(p, task_id)
+
+    monkeypatch.setattr(tasks_service, "get_task", get_task_with_rival)
+    release_task(project, agent, t.task_id, "handing back")  # must not raise
+    assert raced == [True]
+    held = real_get_task(project, t.task_id)
+    assert held is not None
+    assert (held.status, held.claim_session) == (TaskStatus.CLAIMED, S2)
