@@ -269,6 +269,32 @@ def final_outcomes(project: Project) -> dict[str, Outcome]:
     return outcomes
 
 
+class PassProgress(StrictModel):
+    """One pass's ordinary queue: works queued, those with a live non-stale decision, and those
+    remaining. All three are None when the pass is not open."""
+
+    queued: int | None
+    decided: int
+    remaining: int | None
+
+
+def pass_progress(project: Project) -> dict[str, PassProgress]:
+    """Each pass's progress over its ordinary queue; calibration works are counted by the gate."""
+    project.index.sync()
+    screen = _load(project)
+    progress: dict[str, PassProgress] = {}
+    for label in PassLabel:
+        queue = None if screen is None else screen.queues[label]
+        if screen is None or queue is None:
+            progress[label.value] = PassProgress(queued=None, decided=0, remaining=None)
+            continue
+        decided = sum(1 for work in queue if work in screen.decided[label])
+        progress[label.value] = PassProgress(
+            queued=len(queue), decided=decided, remaining=len(queue) - decided
+        )
+    return progress
+
+
 # --- Reading the screening state ---
 
 

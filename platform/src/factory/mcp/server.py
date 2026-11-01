@@ -1,5 +1,6 @@
 """The MCP server: one session per process. Tools parse input, call a service and format output."""
 
+import re
 from collections.abc import Callable, Iterable, Mapping
 from typing import Annotated
 
@@ -23,17 +24,23 @@ from factory.model.base import StrictModel
 from factory.model.identity import IdGenerator
 from factory.model.protocol import CriterionEffect, PressFinding, ProtocolSpec
 from factory.model.question import QuestionSpec
+from factory.model.screening import Channel, PassLabel, ScreeningItem
 from factory.model.search import QueryKind, QueryPurpose, QuerySpec
 from factory.model.seed import SeedSpec
+from factory.services import agreement as agreement_service
+from factory.services import audit as audit_service
+from factory.services import calibration as calibration_service
 from factory.services import dedup as dedup_service
 from factory.services import probe as probe_service
 from factory.services import project as project_service
 from factory.services import protocol as protocol_service
 from factory.services import question as question_service
+from factory.services import screening as screening_service
 from factory.services import search as search_service
 from factory.services import seeds as seeds_service
 from factory.services.context import Project, open_project
 from factory.services.results import BatchResult, ItemError
+from factory.services.search import list_works
 from factory.services.seeds import SeedOutcome, SeedRole
 from factory.sources.registry import SourceFactory, default_sources
 
@@ -63,11 +70,14 @@ def build_server(
         project_slug: str,
         fn: Callable[[], JsonValue],
         rename: Callable[[str], str] = str,
+        *,
+        include_work_ids: bool = True,
     ) -> dict[str, JsonValue]:
         """`guarded`, with every agent-facing response scrubbed of held-out identifiers (R-20).
 
         A success is scrubbed by its tool (`_withheld`), and a refusal here, as defence in depth:
-        the services never name a held-out seed."""
+        the services never name a held-out seed. Screening tools pass `include_work_ids=False`,
+        since a screener records its verdicts against a held-out work's own id."""
         result = guarded(fn, rename)
         if result["ok"] is True:
             return result
@@ -75,7 +85,7 @@ def build_server(
             opened = open_project(settings, project_slug, session=session, clock=clock)
         except ProjectNotFoundError:
             return result
-        scrubbed = withhold(result, _held_out_tokens(opened))
+        scrubbed = withhold(result, _held_out_tokens(opened, include_work_ids))
         return scrubbed if isinstance(scrubbed, dict) else result
 
     @server.tool()
@@ -315,6 +325,158 @@ def build_server(
         return _reply(project, amend, rename=spec_path)
 
     @server.tool()
+    def screen_next(
+        project: str, pass_label: str, role: str, model: str, skill: str
+    ) -> dict[str, JsonValue]:
+        """Serve the next screening batch of pass A or B to this session, or say why none is
+        served. The records are the text to screen; `blocked` says why ordinary work waits."""
+
+        def screen() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            actor = make_agent_actor(settings, session, role, model, skill)
+            result = screening_service.screen_next(opened, actor, _pass_label(pass_label))
+            return _withheld(opened, result.model_dump(mode="json"), include_work_ids=False)
+
+        return _reply(project, screen, include_work_ids=False)
+
+    @server.tool()
+    def screen_record(
+        project: str,
+        task_id: str,
+        items: list[dict[str, JsonValue]],
+        role: str,
+        model: str,
+        skill: str,
+    ) -> dict[str, JsonValue]:
+        """Record verdicts for a held batch. Each item is {work_id, verdict, criterion, quote,
+        rationale}; an invalid item is reported by index and the valid ones are written."""
+
+        def record() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            actor = make_agent_actor(settings, session, role, model, skill)
+            accepted, rejected = _parse_items(items)
+            result = screening_service.screen_record(
+                opened, actor, task_id, [item for _, item in accepted]
+            )
+            for error in result.rejected:
+                original = accepted[error.index][0]
+                rejected.append(
+                    ItemError(
+                        index=original,
+                        issues=[
+                            ValidationIssue(_items_path(issue.field, original), issue.reason)
+                            for issue in error.issues
+                        ],
+                    )
+                )
+            batch = BatchResult[str](
+                written=result.written, rejected=sorted(rejected, key=lambda item: item.index)
+            )
+            return _withheld(opened, batch.model_dump(mode="json"), include_work_ids=False)
+
+        return _reply(project, record, include_work_ids=False)
+
+    @server.tool()
+    def screen_agreement(
+        project: str,
+        role: str | None = None,
+        model: str | None = None,
+        skill: str | None = None,
+    ) -> dict[str, JsonValue]:
+        """The agreement of the two passes: κ, per-criterion κ, disagreements and cannot-assess
+        rates. Read-only. The actor is an agent when role, model or skill is given, else human."""
+
+        def agreement() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            if role is None and model is None and skill is None:
+                actor = opened.human_actor()
+            else:
+                actor = make_agent_actor(settings, session, role or "", model or "", skill or "")
+            result = agreement_service.screen_agreement(opened, actor)
+            return _withheld(opened, result.model_dump(mode="json"), include_work_ids=False)
+
+        return _reply(project, agreement, include_work_ids=False)
+
+    @server.tool()
+    def calibration_label(
+        project: str,
+        work_id: str | None = None,
+        verdict: str | None = None,
+        criterion: str | None = None,
+    ) -> dict[str, JsonValue]:
+        """With no `work_id`: the next unlabelled calibration record and the counts. With one: the
+        human's label on it. The first call draws the calibration set. Labels are human acts."""
+
+        def label() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            human = opened.human_actor()
+            calibration_service.draw_calibration(opened, human)
+            if work_id is None:
+                if verdict is not None or criterion is not None:
+                    raise FactoryValidationError(
+                        [ValidationIssue("work_id", "is required to record a label")]
+                    )
+                return _withheld(opened, _next_calibration(opened))
+            if verdict is None:
+                raise FactoryValidationError(
+                    [ValidationIssue("verdict", "is required with a work_id")]
+                )
+            event_id = calibration_service.label_calibration(
+                opened, human, work_id, verdict, criterion, Channel.MCP
+            )
+            return {"event_id": event_id}
+
+        return _reply(project, label)
+
+    @server.tool()
+    def audit_sample(project: str) -> dict[str, JsonValue]:
+        """Draw the audit sample of the agreed works, for the human to label: each work's id,
+        title and agreed verdict, with the population and the counts."""
+
+        def sample() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            drawn = audit_service.audit_sample(opened, opened.human_actor())
+            titles = {work.id: work.title for work in list_works(opened)}
+            agreed = agreement_service.agreed_works(opened)
+            data: dict[str, JsonValue] = {
+                "audit_id": drawn.audit_id,
+                "items": [
+                    {
+                        "work_id": work_id,
+                        "title": titles[work_id],
+                        "agreed_verdict": agreed[work_id].verdict,
+                    }
+                    for work_id in drawn.work_ids
+                ],
+                "population": drawn.population,
+                "exclusions": drawn.exclusions,
+                "inclusions": drawn.inclusions,
+            }
+            return _withheld(opened, data)
+
+        return _reply(project, sample)
+
+    @server.tool()
+    def audit_record(
+        project: str,
+        audit_id: str,
+        work_id: str,
+        verdict: str,
+        criterion: str | None = None,
+    ) -> dict[str, JsonValue]:
+        """The human's label on one sampled work. `criterion` names an EX criterion for an
+        exclusion, and is qualified against the current protocol."""
+
+        def record() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            event_id = audit_service.audit_record(
+                opened, opened.human_actor(), audit_id, work_id, verdict, criterion, Channel.MCP
+            )
+            return {"event_id": event_id}
+
+        return _reply(project, record)
+
+    @server.tool()
     def protocol_deviation(
         project: str,
         description: str,
@@ -340,13 +502,16 @@ def build_server(
     return server
 
 
-def _withheld(project: Project, value: JsonValue) -> JsonValue:
+def _withheld(project: Project, value: JsonValue, include_work_ids: bool = True) -> JsonValue:
     """Strip every held-out seed's identifiers from an agent-facing response (R-20)."""
-    return withhold(value, _held_out_tokens(project))
+    return withhold(value, _held_out_tokens(project, include_work_ids))
 
 
-def _held_out_tokens(project: Project) -> set[str]:
-    """The id, and every identifier as stated or normalised, of each held-out seed."""
+def _held_out_tokens(project: Project, include_work_ids: bool = True) -> set[str]:
+    """The id, and every identifier as stated or normalised, of each held-out seed.
+
+    `include_work_ids` adds the held-out seed's work id. Screening tools leave it out: a screener
+    must see and record against a held-out work, whose id is not a seed's identity."""
     tokens: set[str] = set()
     for seed in seeds_service.all_seeds(project):
         if seed.role is not SeedRole.HELD_OUT:
@@ -360,10 +525,49 @@ def _held_out_tokens(project: Project) -> set[str]:
         )
         tokens.add(seed.seed_id)
         tokens.update(stated.identity_keys().values())
-        tokens.update(
-            value for value in (seed.doi, seed.arxiv, seed.openalex, seed.work_id) if value
-        )
+        tokens.update(value for value in (seed.doi, seed.arxiv, seed.openalex) if value)
+        if include_work_ids and seed.work_id:
+            tokens.add(seed.work_id)
     return tokens
+
+
+def _pass_label(value: str) -> PassLabel:
+    try:
+        return PassLabel(value)
+    except ValueError:
+        raise FactoryValidationError([ValidationIssue("pass_label", "must be A or B")]) from None
+
+
+def _parse_items(
+    items: list[dict[str, JsonValue]],
+) -> tuple[list[tuple[int, ScreeningItem]], list[ItemError]]:
+    """Each item that is a valid ScreeningItem, with its index, and each rejection by index."""
+    accepted: list[tuple[int, ScreeningItem]] = []
+    rejected: list[ItemError] = []
+    for index, item in enumerate(items):
+        try:
+            accepted.append((index, parse_input(ScreeningItem, item, f"items.{index}")))
+        except FactoryValidationError as exc:
+            rejected.append(ItemError(index=index, issues=exc.issues))
+    return accepted, rejected
+
+
+def _items_path(field: str, original: int) -> str:
+    """A service's `items.<n>...` path, renumbered to the item's position in the call."""
+    return re.sub(r"^items\.\d+", f"items.{original}", field)
+
+
+def _next_calibration(project: Project) -> JsonValue:
+    """The first calibration work without a human label, with the counts. Counts only otherwise."""
+    items = calibration_service.calibration_items(project)
+    labels = calibration_service.calibration_labels(project)
+    corpus = {work.id: work for work in list_works(project)}
+    pending = [item for item in items if item not in labels]
+    record: JsonValue = None
+    if pending:
+        work = corpus[pending[0]]
+        record = {"work_id": work.id, "title": work.title, "abstract": work.abstract}
+    return {"record": record, "drawn": len(items), "labelled": len(items) - len(pending)}
 
 
 def _probe_spec(item: dict[str, JsonValue], index: int) -> QuerySpec:

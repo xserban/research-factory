@@ -4,7 +4,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated, NoReturn
+from typing import Annotated, Literal, NoReturn
 
 import typer
 
@@ -13,11 +13,17 @@ from factory.config import Settings
 from factory.errors import FactoryValidationError, ProjectNotFoundError, ValidationIssue
 from factory.mcp.server import run
 from factory.model.identity import IdGenerator
+from factory.model.screening import Channel
 from factory.model.work import ProvenanceMethod
+from factory.services import agreement as agreement_service
+from factory.services import audit as audit_service
+from factory.services import calibration as calibration_service
 from factory.services import project as project_service
 from factory.services import protocol as protocol_service
 from factory.services import seeds as seeds_service
 from factory.services.context import Project, list_projects, open_project
+from factory.services.project import ScreeningStatus
+from factory.services.search import list_works
 
 app = typer.Typer(
     name="factory",
@@ -32,8 +38,22 @@ seeds_app = typer.Typer(
     no_args_is_help=False,
 )
 protocol_app = typer.Typer(name="protocol", help="Confirm PRESS reviews.", no_args_is_help=True)
+calibrate_app = typer.Typer(
+    name="calibrate", help="Draw the calibration set and label it.", no_args_is_help=True
+)
+screen_app = typer.Typer(
+    name="screen",
+    help="Disagreements between the passes, and their resolution.",
+    no_args_is_help=True,
+)
+audit_app = typer.Typer(
+    name="audit", help="Sample, label and report the audit.", no_args_is_help=True
+)
 app.add_typer(seeds_app)
 app.add_typer(protocol_app)
+app.add_typer(calibrate_app)
+app.add_typer(screen_app)
+app.add_typer(audit_app)
 
 
 @dataclass
@@ -169,6 +189,8 @@ def status(
         f"tasks: open {tasks.open} / claimed {tasks.claimed} / "
         f"expired {tasks.expired} / completed {tasks.completed}"
     )
+    for line in _screening_lines(report.screening):
+        typer.echo(line)
     typer.echo(f"works: {report.works} (records {report.records}, merges {report.merges_active})")
     search = report.search
     typer.echo(
@@ -180,6 +202,54 @@ def status(
             f"shortfall: {short.run_id} {short.source} "
             f"{short.retrieved_count}/{short.reported_count} \u2014 {short.note or 'no note'}"
         )
+
+
+def _screening_lines(screening: ScreeningStatus) -> list[str]:
+    """The screening lines of `status`: counts and rates, never a work or a label."""
+    cal = screening.calibration
+    gate = "required" if cal.required else "not required"
+    passed = ", ".join(f"{label} {'yes' if ok else 'no'}" for label, ok in cal.passed.items())
+    lines = [
+        f"calibration: drawn {cal.drawn}, labelled {cal.labelled}; gate {gate}; passed {passed}"
+    ]
+    for label, progress in screening.passes.items():
+        if progress.queued is None:
+            lines.append(f"pass {label}: not opened")
+            continue
+        sensitivity = _rate(cal.per_pass[label].sensitivity)
+        lines.append(
+            f"pass {label}: queued {progress.queued}, decided {progress.decided}, "
+            f"remaining {progress.remaining}; calibration sensitivity {sensitivity}"
+        )
+    if screening.kappa is None and screening.unresolved_disagreements is None:
+        lines.append("agreement: not available until both passes finish")
+    else:
+        disagreements = screening.unresolved_disagreements
+        lines.append(
+            f"agreement: kappa {_rate(screening.kappa)}, unresolved disagreements {disagreements}"
+        )
+    lines.append(f"stale decisions: {screening.stale_decisions}")
+    if screening.audit_sample is None:
+        lines.append("audit: none sampled")
+    else:
+        lines.append(
+            f"audit: sample {screening.audit_sample}, labelled {screening.audit_labelled}, "
+            f"false-exclusion rate {_rate(screening.false_exclusion_rate)}"
+        )
+    return lines
+
+
+def _rate(value: float | None) -> str:
+    return "n/a" if value is None else f"{value:.3f}"
+
+
+def _binary(verdict: str) -> Literal["include", "exclude"]:
+    """A human's verdict on a disagreement or a label: include or exclude, else refused."""
+    if verdict == "include":
+        return "include"
+    if verdict == "exclude":
+        return "exclude"
+    raise FactoryValidationError([ValidationIssue("verdict", "must be include or exclude")])
 
 
 @seeds_app.callback()
@@ -275,3 +345,134 @@ def protocol_confirm_press(
 def serve(ctx: typer.Context) -> None:
     """Run the MCP server on stdio."""
     run(_state(ctx).settings)
+
+
+@calibrate_app.command("draw")
+def calibrate_draw(ctx: typer.Context) -> None:
+    """Draw the calibration set once; a later draw returns the same set."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        items = calibration_service.draw_calibration(project, project.human_actor())
+    typer.echo(f"calibration set: {len(items)} works")
+
+
+@calibrate_app.command("label")
+def calibrate_label(
+    ctx: typer.Context,
+    work: Annotated[str, typer.Argument(help="A work of the calibration set.")],
+    verdict: Annotated[str, typer.Argument(help="include or exclude.")],
+    criterion: Annotated[
+        str | None, typer.Option("--criterion", help="The EX criterion of an exclusion.")
+    ] = None,
+) -> None:
+    """A human's label on one work of the calibration set."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        calibration_service.label_calibration(
+            project, project.human_actor(), work, verdict, criterion, Channel.CLI
+        )
+    typer.echo(f"labelled {work} ({verdict})")
+
+
+@screen_app.command("disagreements")
+def screen_disagreements(ctx: typer.Context) -> None:
+    """List the works the two passes disagree on, each pass's decision and quote."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        agreement = agreement_service.screen_agreement(project, project.human_actor())
+    if not agreement.disagreements:
+        typer.echo("no unresolved disagreements")
+        return
+    for disagreement in agreement.disagreements:
+        typer.echo(f"{disagreement.work_id}  reason {disagreement.reason}")
+        for label, view in (("A", disagreement.a), ("B", disagreement.b)):
+            cited = view.criterion or "-"
+            typer.echo(
+                f"  {label}: {view.verdict.value} {cited}  quote: {view.quote}  "
+                f"rationale: {view.rationale}"
+            )
+
+
+@screen_app.command("resolve")
+def screen_resolve(
+    ctx: typer.Context,
+    work: Annotated[str, typer.Argument(help="A disputed work.")],
+    verdict: Annotated[str, typer.Argument(help="include or exclude.")],
+    reason: Annotated[str, typer.Option("--reason", help="Why the human decided.")],
+    criterion: Annotated[
+        str | None, typer.Option("--criterion", help="The EX criterion of an exclusion.")
+    ] = None,
+) -> None:
+    """The human's verdict on a disagreement, or on an unsure single-pass work."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        agreement_service.resolve_disagreement(
+            project,
+            project.human_actor(),
+            work,
+            _binary(verdict),
+            criterion,
+            reason,
+            Channel.CLI,
+        )
+    typer.echo(f"resolved {work} ({verdict})")
+
+
+@audit_app.command("sample")
+def audit_sample_cmd(ctx: typer.Context) -> None:
+    """Draw the audit sample of the agreed works; each work with its agreed verdict and title."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        drawn = audit_service.audit_sample(project, project.human_actor())
+        titles = {work.id: work.title for work in list_works(project)}
+        agreed = agreement_service.agreed_works(project)
+    typer.echo(
+        f"audit {drawn.audit_id}: {len(drawn.work_ids)} of {drawn.population} agreed works "
+        f"({drawn.exclusions} exclusions, {drawn.inclusions} inclusions)"
+    )
+    for work_id in drawn.work_ids:
+        typer.echo(f"{work_id}  agreed {agreed[work_id].verdict}  {titles[work_id]}")
+
+
+@audit_app.command("label")
+def audit_label(
+    ctx: typer.Context,
+    audit_id: Annotated[str, typer.Argument(help="The audit being labelled.")],
+    work: Annotated[str, typer.Argument(help="A work of the audit sample.")],
+    verdict: Annotated[str, typer.Argument(help="include or exclude.")],
+    criterion: Annotated[
+        str | None, typer.Option("--criterion", help="The EX criterion of an exclusion.")
+    ] = None,
+) -> None:
+    """A human's label on one sampled work."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        audit_service.audit_record(
+            project, project.human_actor(), audit_id, work, verdict, criterion, Channel.CLI
+        )
+    typer.echo(f"labelled {work} in {audit_id} ({verdict})")
+
+
+@audit_app.command("report")
+def audit_report_cmd(ctx: typer.Context) -> None:
+    """The latest audit's labelled count, false-exclusion rate and implicated criteria."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        report = audit_service.audit_report(project)
+    if report is None:
+        typer.echo("no audit sampled")
+        return
+    above = "yes" if report.above_ceiling else "no"
+    typer.echo(f"audit {report.audit_id}: sample {report.sample_size}, labelled {report.labelled}")
+    typer.echo(
+        f"false-exclusion rate {_rate(report.rates.false_exclusion)} "
+        f"(ceiling {report.ceiling:.2f}, above ceiling: {above})"
+    )
+    typer.echo(f"criteria implicated: {', '.join(report.criteria_implicated) or 'none'}")

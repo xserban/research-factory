@@ -11,23 +11,29 @@ from factory.clock import FixedClock
 from factory.config import Settings
 from factory.events.envelope import Actor
 from factory.model.protocol import PressElement, PressFinding
+from factory.model.screening import Channel, PassLabel, ScreeningItem, ScreeningPhase, Verdict
 from factory.model.search import QueryKind, QuerySpec
 from factory.model.seed import SeedKind, SeedSpec
+from factory.services.agreement import screen_agreement
+from factory.services.calibration import calibration_items, label_calibration
 from factory.services.context import Project
 from factory.services.project import init_project
 from factory.services.protocol import current_protocol, press_review
 from factory.services.question import current_question
+from factory.services.screening import screen_next, screen_record
 from factory.services.search import register_query, run_query
 from factory.services.seeds import add_seeds, split_seeds
 from factory.sources.registry import SourceFactory
 from tests.helpers import (
     FAKE_PAGES,
+    S2,
     SESSION,
     FakeSource,
     openalex_item,
     ready_protocol,
     record_pilot_question,
 )
+from tests.test_screening_next import _of_type, _setup
 
 runner = CliRunner()
 
@@ -122,6 +128,12 @@ def test_status_human_output(tmp_path: Path) -> None:
         "protocol: none\n"
         "seeds: 0 positive (not split), 0 negative, 0 unresolved\n"
         "tasks: open 0 / claimed 0 / expired 0 / completed 0\n"
+        "calibration: drawn 0, labelled 0; gate required; passed A no, B no\n"
+        "pass A: not opened\n"
+        "pass B: not opened\n"
+        "agreement: not available until both passes finish\n"
+        "stale decisions: 0\n"
+        "audit: none sampled\n"
         "works: 0 (records 0, merges 0)\n"
         "searches: 0 runs (complete 0 / partial 0 / failed 0 / interrupted 0)\n"
     )
@@ -262,3 +274,107 @@ def test_status_shows_question_protocol_and_seeds(
     assert f"question: {question.question_id}" in lines
     assert f"protocol: {protocol_id} (ready, PRESS confirmed)" in lines
     assert "seeds: 3 positive (split drawn), 0 negative, 0 unresolved" in lines
+
+
+def _screen_passes(project: Project, pass_a: Actor, pass_b: Actor) -> None:
+    """Both passes screen to the end. A includes every work; B excludes the random works numbered
+    in multiples of four under EX01, outside the calibration set, so the passes disagree on them."""
+    for label, actor in ((PassLabel.A, pass_a), (PassLabel.B, pass_b)):
+        while True:
+            result = screen_next(project, actor, label)
+            if result.batch is None:
+                break
+            items = [_verdict(label, result.batch.phase, record) for record in result.batch.records]
+            screen_record(project, actor, result.batch.task_id, items)
+        assert result.remaining == 0
+
+
+def _verdict(label: PassLabel, phase: ScreeningPhase, record: dict[str, object]) -> ScreeningItem:
+    work_id, title = str(record["work_id"]), str(record["title"])
+    parts = title.split()
+    if (
+        label is PassLabel.B
+        and phase is ScreeningPhase.SCREENING
+        and parts[0] == "Random"
+        and int(parts[1]) % 4 == 0
+    ):
+        return ScreeningItem(
+            work_id=work_id,
+            verdict=Verdict.EXCLUDE,
+            criterion="EX01",
+            quote=title,
+            rationale="off topic",
+        )
+    return ScreeningItem(
+        work_id=work_id, verdict=Verdict.INCLUDE, criterion=None, quote=title, rationale="fits"
+    )
+
+
+def test_cli_resolve_and_audit_label(
+    tmp_path: Path,
+    settings: Settings,
+    project: Project,
+    clock: FixedClock,
+    agent: Actor,
+    human: Actor,
+    mock_sources: Any,
+) -> None:
+    _setup(project, agent, human, mock_sources, dual_sample=1.0)
+    pass_b = Actor(
+        kind="agent",
+        id="screener-b",
+        user="obd",
+        session=S2,
+        model="claude-haiku-5-5",
+        skill=agent.skill,
+    )
+    env = _env(tmp_path)
+
+    drawn = runner.invoke(app, ["calibrate", "draw"], env=env)
+    assert drawn.exit_code == 0, drawn.stderr
+    items = calibration_items(project)
+    assert drawn.stdout == f"calibration set: {len(items)} works\n"
+    labelled = runner.invoke(
+        app, ["calibrate", "label", items[0], "exclude", "--criterion", "EX01"], env=env
+    )
+    assert labelled.exit_code == 0, labelled.stderr
+    for item in items[1:]:
+        label_calibration(project, human, item, "include", None, Channel.CLI)
+    _screen_passes(project, agent, pass_b)
+
+    listing = runner.invoke(app, ["screen", "disagreements"], env=env)
+    assert listing.exit_code == 0, listing.stderr
+    disagreements = screen_agreement(project, human).disagreements
+    assert disagreements, "the fixture must leave a disagreement"
+    target = disagreements[0].work_id
+    assert target in listing.stdout
+
+    resolved = runner.invoke(
+        app,
+        ["screen", "resolve", target, "include", "--reason", "the abstract fits the question"],
+        env=env,
+    )
+    assert resolved.exit_code == 0, resolved.stderr
+    assert target not in runner.invoke(app, ["screen", "disagreements"], env=env).stdout
+    bad = runner.invoke(app, ["screen", "resolve", target, "maybe", "--reason", "unclear"], env=env)
+    assert bad.exit_code == 1 and "verdict:" in bad.stderr
+
+    sampled = runner.invoke(app, ["audit", "sample"], env=env)
+    assert sampled.exit_code == 0, sampled.stderr
+    audit_id = re.search(r"aud_\w+", sampled.stdout)
+    assert audit_id is not None
+    [event] = _of_type(project, "audit.sampled")
+    first_work = event.payload["work_ids"][0]
+    labelled_audit = runner.invoke(
+        app, ["audit", "label", audit_id.group(0), first_work, "include"], env=env
+    )
+    assert labelled_audit.exit_code == 0, labelled_audit.stderr
+    unsampled = runner.invoke(
+        app, ["audit", "label", audit_id.group(0), "W-not-sampled", "include"], env=env
+    )
+    assert unsampled.exit_code == 1 and "work_id:" in unsampled.stderr
+
+    report = runner.invoke(app, ["audit", "report"], env=env)
+    assert report.exit_code == 0, report.stderr
+    assert f"audit {audit_id.group(0)}: sample" in report.stdout
+    assert "labelled 1" in report.stdout

@@ -12,9 +12,13 @@ from factory.model.dedup import MergeStatus
 from factory.model.project import ProjectCreated, RigorMode
 from factory.model.protocol import ProtocolStatus
 from factory.model.seed import SeedKind
+from factory.services.agreement import Agreement, PassProgress, pass_progress, screen_agreement
+from factory.services.audit import audit_report
+from factory.services.calibration import CalibrationStatus, calibration_status
 from factory.services.context import Project, ProjectPaths, build_project, slug_issues
 from factory.services.protocol import current_protocol
 from factory.services.question import current_question
+from factory.services.screening import stale_screening_decisions
 from factory.services.search import SearchCounts, corpus_size, search_counts
 from factory.services.seeds import all_seeds, split_is_drawn
 from factory.services.tasks import TaskCounts, task_counts
@@ -35,6 +39,20 @@ class SeedCounts(StrictModel):
     split_drawn: bool
 
 
+class ScreeningStatus(StrictModel):
+    """Screening counts and rates only: no work, seed or label identifier. `kappa` and
+    `unresolved_disagreements` are None until the passes have finished (see screen_agreement)."""
+
+    calibration: CalibrationStatus
+    passes: dict[str, PassProgress]
+    kappa: float | None
+    unresolved_disagreements: int | None
+    stale_decisions: int
+    audit_sample: int | None
+    audit_labelled: int
+    false_exclusion_rate: float | None
+
+
 class ProjectStatus(StrictModel):
     slug: str
     rigor_mode: RigorMode
@@ -50,6 +68,7 @@ class ProjectStatus(StrictModel):
     question: str | None
     protocol: ProtocolSummary | None
     seeds: SeedCounts
+    screening: ScreeningStatus
 
 
 def init_project(
@@ -135,4 +154,28 @@ def project_status(project: Project) -> ProjectStatus:
             unresolved=sum(1 for seed in seeds if seed.work_id is None),
             split_drawn=split_is_drawn(project),
         ),
+        screening=_screening_status(project),
     )
+
+
+def _screening_status(project: Project) -> ScreeningStatus:
+    agreement = _agreement_or_none(project)
+    report = audit_report(project)
+    return ScreeningStatus(
+        calibration=calibration_status(project),
+        passes=pass_progress(project),
+        kappa=None if agreement is None else agreement.kappa,
+        unresolved_disagreements=None if agreement is None else len(agreement.disagreements),
+        stale_decisions=len(stale_screening_decisions(project)),
+        audit_sample=None if report is None else report.sample_size,
+        audit_labelled=0 if report is None else report.labelled,
+        false_exclusion_rate=None if report is None else report.rates.false_exclusion,
+    )
+
+
+def _agreement_or_none(project: Project) -> Agreement | None:
+    """The agreement once both passes have finished; None while it is refused."""
+    try:
+        return screen_agreement(project, project.human_actor())
+    except FactoryValidationError:
+        return None
