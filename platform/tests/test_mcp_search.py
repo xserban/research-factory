@@ -166,7 +166,7 @@ async def test_search_run_refuses_to_resume_a_complete_run(
                 {
                     "project": "demo",
                     "source": "openalex",
-                    "query": "ignored when resuming",
+                    "query": "linear attention",
                     "resume_run": first.run_id,
                     **AGENT,
                 },
@@ -179,6 +179,74 @@ async def test_search_run_refuses_to_resume_a_complete_run(
         if e.type == "query.registered"
     ]
     assert len(registered) == 1
+
+
+async def _resume(
+    settings: Settings, clock: FixedClock, sources: dict[str, SourceFactory], **args: Any
+) -> dict[str, Any]:
+    server = build_server(settings, clock=clock, sources=sources)
+    async with Client(server) as client:
+        return _body(await client.call_tool("search_run", {"project": "demo", **args, **AGENT}))
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "changed",
+    [{"source": "other"}, {"query": "something else"}, {"kind": "filter"}],
+    ids=["source", "query", "kind"],
+)
+async def test_search_run_refuses_a_resume_that_restates_the_query_differently(
+    settings: Settings,
+    project: Project,
+    clock: FixedClock,
+    fake_sources: Any,
+    changed: dict[str, str],
+) -> None:
+    spec = QuerySpec(source="fake", kind=QueryKind.KEYWORD, text="linear attention")
+    seeded = fake_sources(fail_after=1)
+    query_id = register_query(project, project.human_actor(), spec, sources=seeded)
+    partial = run_query(project, query_id, sources=seeded)
+    clock.advance(timedelta(milliseconds=1))
+
+    args = {"source": "fake", "query": "linear attention", "resume_run": partial.run_id}
+    body = await _resume(
+        settings, clock, {**fake_sources(), "other": fake_sources()["fake"]}, **{**args, **changed}
+    )
+
+    assert body["ok"] is False
+    assert [e["field"] for e in body["errors"]] == ["resume_run"]
+    events = read_all(project.paths.events_dir, project.catalog)
+    assert [e.type for e in events].count("search.run_started") == 1  # nothing was written
+
+
+@pytest.mark.anyio
+async def test_search_run_resumes_a_partial_run_through_the_tool(
+    settings: Settings, project: Project, clock: FixedClock, fake_sources: Any
+) -> None:
+    spec = QuerySpec(source="fake", kind=QueryKind.KEYWORD, text="linear attention")
+    seeded = fake_sources(fail_after=1)
+    query_id = register_query(project, project.human_actor(), spec, sources=seeded)
+    partial = run_query(project, query_id, sources=seeded)
+    assert partial.status == "partial"
+    clock.advance(timedelta(milliseconds=1))
+
+    body = await _resume(
+        settings,
+        clock,
+        fake_sources(),
+        source="fake",
+        query="linear attention",
+        resume_run=partial.run_id,
+    )
+
+    assert body["ok"] is True
+    assert body["data"]["status"] == "complete" and body["data"]["query_id"] == query_id
+    registered = [
+        e
+        for e in read_all(project.paths.events_dir, project.catalog)
+        if e.type == "query.registered"
+    ]
+    assert len(registered) == 1  # resuming reuses the query
 
 
 @pytest.mark.anyio

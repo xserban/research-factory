@@ -251,6 +251,34 @@ def run_query_id(project: Project, run_id: str) -> str | None:
     return None if row is None else str(row[0])
 
 
+def resume_query_id(project: Project, resume_run: str, spec: QuerySpec) -> str:
+    """The query behind `resume_run`, provided `spec` restates it.
+
+    A resume continues the registered query, so a caller that names a different source, query
+    text or kind has misunderstood what will run; that is refused under `resume_run` rather than
+    silently ignored. Purpose and limit are not compared: they do not change what is fetched.
+    """
+    query_id = run_query_id(project, resume_run)
+    if query_id is None:
+        raise FactoryValidationError([ValidationIssue("resume_run", "unknown run")])
+    registered = _query_spec(project, query_id)
+    if registered is not None and (registered.source, registered.text, registered.kind) != (
+        spec.source,
+        spec.text,
+        spec.kind,
+    ):
+        raise FactoryValidationError(
+            [
+                ValidationIssue(
+                    "resume_run",
+                    "source, query and kind must match the run being resumed "
+                    f"({registered.source} {registered.kind.value} {registered.text!r})",
+                )
+            ]
+        )
+    return query_id
+
+
 def get_work(project: Project, work_id: str) -> Work | None:
     """One work, with every provenance row that names it."""
     works = _load_works(project, work_id)

@@ -53,17 +53,19 @@ def build_server(
         limit: int | None = None,
         resume_run: str | None = None,
     ) -> dict[str, JsonValue]:
-        """Run a literature query against OpenAlex or arXiv exhaustively; every raw page is archived and counts are recorded."""  # noqa: E501
+        """Run a literature query against OpenAlex or arXiv exhaustively; every raw page is archived and counts are recorded.
+
+        Set `resume_run` to a partial or failed run of the same query to continue it from where
+        it stopped; `source`, `query` and `kind` must then restate that run's query.
+        """  # noqa: E501
 
         def search() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
             actor = make_agent_actor(settings, session, role, model, skill)
+            spec = _spec(source, query, kind, purpose, limit)
             if resume_run is not None:
-                query_id = search_service.run_query_id(opened, resume_run)
-                if query_id is None:
-                    raise FactoryValidationError([ValidationIssue("resume_run", "unknown run")])
+                query_id = search_service.resume_query_id(opened, resume_run, spec)
             else:
-                spec = _spec(source, query, kind, purpose, limit)
                 query_id = search_service.register_query(opened, actor, spec, sources=adapters)
             summary = search_service.run_query(
                 opened, query_id, sources=adapters, resume_run=resume_run
