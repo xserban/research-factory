@@ -1,0 +1,68 @@
+{
+  "meta": {"count": 3, "next_cursor": null, "page": 1, "per_page": 200},
+  "results": [
+    {
+      "id": "https://openalex.org/W2741809801",
+      "doi": "https://doi.org/10.1000/rfx.2019.0042",
+      "display_name": "Linear Attention with Kernel Feature Maps",
+      "type": "article",
+      "language": "en",
+      "publication_date": "2019-09-03",
+      "cited_by_count": 118,
+      "is_retracted": false,
+      "abstract_inverted_index": {"Attention": [0], "scales": [1], "quadratically": [2], "we": [3], "replace": [4], "softmax": [5], "with": [6], "kernels.": [7]},
+      "ids": {"pmid": null, "pmcid": null},
+      "authorships": [
+        {
+          "author": {"display_name": "Ada Example", "orcid": "https://orcid.org/0000-0001-2345-6789"},
+          "institutions": [{"display_name": "Example Institute"}]
+        },
+        {"author": {"display_name": "Ben Sample", "orcid": null}, "institutions": []}
+      ],
+      "primary_location": {
+        "source": {"display_name": "Proceedings of Examples", "host_organization_name": "Example Press"},
+        "landing_page_url": "https://example.org/papers/linear-attention"
+      },
+      "biblio": {"volume": "12", "issue": null, "first_page": "101", "last_page": "113"},
+      "topics": [{"display_name": "Efficient Transformers"}]
+    },
+    {
+      "id": "https://openalex.org/W3015773350",
+      "doi": "https://doi.org/10.48550/arxiv.2401.00001",
+      "display_name": "Linear Attention Without Softmax",
+      "type": "preprint",
+      "language": null,
+      "publication_date": "2024-01-02",
+      "cited_by_count": 4,
+      "is_retracted": false,
+      "abstract_inverted_index": null,
+      "ids": {},
+      "authorships": [
+        {"author": {"display_name": "Cy Placeholder", "orcid": null}, "institutions": []}
+      ],
+      "primary_location": {
+        "source": null,
+        "landing_page_url": "https://example.org/preprints/2401.00001"
+      },
+      "biblio": {},
+      "topics": []
+    },
+    {
+      "id": "https://openalex.org/W9999900001",
+      "doi": null,
+      "display_name": null,
+      "title": null,
+      "type": "other",
+      "language": null,
+      "publication_date": null,
+      "cited_by_count": 0,
+      "is_retracted": false,
+      "abstract_inverted_index": null,
+      "ids": {},
+      "authorships": [],
+      "primary_location": null,
+      "biblio": {},
+      "topics": []
+    }
+  ]
+}
