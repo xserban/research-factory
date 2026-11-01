@@ -1,0 +1,234 @@
+from __future__ import annotations
+
+from datetime import UTC, datetime
+
+import pytest
+from pydantic import ValidationError
+
+from factory.errors import FactoryError
+from factory.model.search import QueryKind, QueryPurpose, QuerySpec, RunStatus
+from factory.model.work import Provenance, Work
+from factory.sources.base import PageSink, RawPage, SearchResult, Source, SourceError
+
+
+def _works(prov: Provenance, n: int) -> list[Work]:
+    return [Work.build(title=f"Paper {i}", provenance=[prov]) for i in range(n)]
+
+
+# --- SearchResult: the shortfall rule (R-23 / slice-1 acceptance 14) ----------------------
+
+
+def test_complete_run_with_unexplained_shortfall_is_invalid(prov: Provenance) -> None:
+    with pytest.raises(ValueError):
+        SearchResult(
+            source="openalex",
+            query_sent="q",
+            reported_count=10,
+            works=[],
+            pages=1,
+            status=RunStatus.COMPLETE,
+        )
+
+
+def test_explained_shortfall_is_allowed(prov: Provenance) -> None:
+    result = SearchResult(
+        source="openalex",
+        query_sent="q",
+        reported_count=10,
+        works=_works(prov, 7),
+        pages=1,
+        status=RunStatus.COMPLETE,
+        note="3 untitled records skipped",
+    )
+    assert result.has_shortfall is True
+    assert result.retrieved_count == 7
+    assert result.reported_count == 10
+
+
+def test_complete_run_without_shortfall_needs_no_note(prov: Provenance) -> None:
+    result = SearchResult(
+        source="arxiv",
+        query_sent="q",
+        reported_count=2,
+        works=_works(prov, 2),
+        pages=1,
+        status=RunStatus.COMPLETE,
+    )
+    assert result.has_shortfall is False
+
+
+def test_unknown_reported_count_is_never_a_shortfall(prov: Provenance) -> None:
+    result = SearchResult(
+        source="arxiv",
+        query_sent="q",
+        reported_count=None,
+        works=_works(prov, 3),
+        pages=1,
+        status=RunStatus.COMPLETE,
+    )
+    assert result.has_shortfall is False
+
+
+@pytest.mark.parametrize("status", [RunStatus.PARTIAL, RunStatus.FAILED])
+def test_partial_and_failed_runs_require_a_note(status: RunStatus, prov: Provenance) -> None:
+    with pytest.raises(ValueError):
+        SearchResult(
+            source="openalex",
+            query_sent="q",
+            reported_count=None,
+            works=_works(prov, 1),
+            pages=1,
+            status=status,
+        )
+
+
+@pytest.mark.parametrize("status", [RunStatus.PARTIAL, RunStatus.FAILED])
+def test_partial_and_failed_runs_with_note_are_allowed(status: RunStatus, prov: Provenance) -> None:
+    result = SearchResult(
+        source="openalex",
+        query_sent="q",
+        reported_count=None,
+        works=_works(prov, 1),
+        pages=1,
+        status=status,
+        note="network error on page 3",
+        resume_token="cursor-abc",
+    )
+    assert result.status is status
+    assert result.resume_token == "cursor-abc"
+
+
+@pytest.mark.parametrize("status", [RunStatus.RUNNING, RunStatus.INTERRUPTED])
+def test_result_status_must_be_terminal_for_a_source_run(
+    status: RunStatus, prov: Provenance
+) -> None:
+    with pytest.raises(ValueError):
+        SearchResult(
+            source="openalex",
+            query_sent="q",
+            reported_count=None,
+            works=[],
+            pages=0,
+            status=status,
+            note="x",
+        )
+
+
+def test_search_result_is_frozen(prov: Provenance) -> None:
+    result = SearchResult(
+        source="arxiv",
+        query_sent="q",
+        reported_count=0,
+        works=[],
+        pages=0,
+        status=RunStatus.COMPLETE,
+    )
+    with pytest.raises(AttributeError):
+        result.pages = 5  # type: ignore[misc]
+
+
+def test_skipped_defaults_to_zero(prov: Provenance) -> None:
+    result = SearchResult(
+        source="arxiv",
+        query_sent="q",
+        reported_count=0,
+        works=[],
+        pages=0,
+        status=RunStatus.COMPLETE,
+    )
+    assert result.skipped == 0
+    assert result.note is None
+    assert result.resume_token is None
+
+
+# --- QuerySpec ----------------------------------------------------------------------------
+
+
+def test_query_spec_validation() -> None:
+    with pytest.raises(ValidationError):
+        QuerySpec(source="openalex", kind=QueryKind.KEYWORD, text="")
+    with pytest.raises(ValidationError):
+        QuerySpec(source="openalex", kind=QueryKind.KEYWORD, text="   ")
+    with pytest.raises(ValidationError):
+        QuerySpec(source="openalex", kind=QueryKind.KEYWORD, text="q", limit=0)
+
+
+def test_query_spec_strips_text_and_defaults() -> None:
+    spec = QuerySpec(source="openalex", kind=QueryKind.KEYWORD, text="  linear attention \n")
+    assert spec.text == "linear attention"
+    assert spec.purpose is QueryPurpose.SEARCH
+    assert spec.filters == {}
+    assert spec.limit is None
+
+
+def test_query_spec_accepts_a_positive_limit() -> None:
+    spec = QuerySpec(source="arxiv", kind=QueryKind.FILTER, text="cat:cs.LG", limit=50)
+    assert spec.limit == 50
+
+
+def test_query_spec_is_frozen() -> None:
+    spec = QuerySpec(source="arxiv", kind=QueryKind.ID_LIST, text="2301.01234")
+    with pytest.raises(ValidationError):
+        spec.text = "other"  # type: ignore[misc]
+
+
+# --- Enum values --------------------------------------------------------------------------
+
+
+def test_enum_values_are_lowercase_strings() -> None:
+    assert QueryKind.KEYWORD.value == "keyword"
+    assert QueryKind.FILTER.value == "filter"
+    assert QueryKind.ID_LIST.value == "id_list"
+    assert {p.value for p in QueryPurpose} == {"probe", "search", "chase", "seed"}
+    assert {s.value for s in RunStatus} == {
+        "running",
+        "complete",
+        "partial",
+        "failed",
+        "interrupted",
+    }
+
+
+# --- RawPage, errors, Source protocol -----------------------------------------------------
+
+
+def test_raw_page_fields_and_frozen() -> None:
+    at = datetime(2026, 11, 1, tzinfo=UTC)
+    page = RawPage(ordinal=1, body="{}", url="https://api.openalex.org/works", fetched_at=at)
+    assert page.ordinal == 1
+    assert page.fetched_at == at
+    with pytest.raises(AttributeError):
+        page.body = "x"  # type: ignore[misc]
+
+
+def test_source_error_is_a_factory_error() -> None:
+    assert issubclass(SourceError, FactoryError)
+
+
+class _FakeSource:
+    name = "fake"
+    kinds = frozenset({QueryKind.KEYWORD})
+
+    def run(
+        self,
+        spec: QuerySpec,
+        *,
+        run_id: str,
+        query_id: str,
+        archive: PageSink,
+        resume_from: str | None = None,
+    ) -> SearchResult:
+        archive(RawPage(ordinal=1, body="", url="u", fetched_at=datetime.now(UTC)))
+        return SearchResult(
+            source=self.name,
+            query_sent=spec.text,
+            reported_count=0,
+            works=[],
+            pages=1,
+            status=RunStatus.COMPLETE,
+        )
+
+
+def test_a_conforming_adapter_satisfies_the_source_protocol() -> None:
+    source: Source = _FakeSource()
+    assert isinstance(source, Source)

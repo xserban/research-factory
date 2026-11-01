@@ -1,0 +1,123 @@
+"""The contract every source adapter implements.
+
+Adapters fetch and parse. They never filter, rank, score, or truncate — that is the Stage 03
+prohibition, and it is enforced here by the shape of the return value: an adapter reports what
+the source *said* it had alongside what it actually delivered, so a shortfall is visible in the
+record rather than absorbed silently.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Protocol, runtime_checkable
+
+from factory.errors import FactoryError
+from factory.model.search import QueryKind, QuerySpec, RunStatus
+from factory.model.work import Work
+
+_RESULT_STATUSES = frozenset({RunStatus.COMPLETE, RunStatus.PARTIAL, RunStatus.FAILED})
+
+
+class SourceError(FactoryError):
+    """An adapter could not complete a request."""
+
+
+@dataclass(frozen=True, slots=True)
+class RawPage:
+    """One verbatim response, archived before parsing."""
+
+    ordinal: int
+    body: str
+    url: str
+    fetched_at: datetime
+
+
+PageSink = Callable[[RawPage], str]
+"""Archives one raw response and returns its blob ref.
+
+Called as each response arrives, before its records are parsed, so a long search that dies on
+page 26 has already stored the 25 pages it paid for. Adapters put the returned ref into each
+parsed record's `Provenance.raw_blob`.
+"""
+
+
+@dataclass(frozen=True, slots=True)
+class SearchResult:
+    """The outcome of one source's part of one run.
+
+    `reported_count` and `retrieved_count` are kept apart on purpose. A source claiming 1,840
+    results and yielding 1,832 is routine; recording only the number delivered is how a corpus
+    becomes unreproducible in a way nobody can see.
+
+    Note rule: `note` is required whenever `status != COMPLETE`, and for `COMPLETE` whenever
+    `has_shortfall`. A run that delivered fewer records than its source reported must say why,
+    or it cannot be recorded (R-23, slice-1 acceptance 14). `status` is limited to the terminal
+    outcomes an adapter can report: COMPLETE, PARTIAL or FAILED.
+    """
+
+    source: str
+    query_sent: str
+    reported_count: int | None
+    works: list[Work]
+    pages: int
+    status: RunStatus
+    skipped: int = 0
+    note: str | None = None
+    resume_token: str | None = None
+    """Where a partial run stopped, in whatever form the source resumes from.
+
+    A token rather than an integer because sources paginate differently: arXiv resumes from a
+    numeric offset, OpenAlex from an opaque cursor. Forcing them into one shape would make the
+    field meaningless for one of them.
+    """
+
+    def __post_init__(self) -> None:
+        if self.status not in _RESULT_STATUSES:
+            raise ValueError(
+                f"a source run reports complete, partial or failed, not {self.status.value!r}"
+            )
+        if self.note is None and (self.status is not RunStatus.COMPLETE or self.has_shortfall):
+            reason = (
+                f"status is {self.status.value!r}"
+                if self.status is not RunStatus.COMPLETE
+                else f"{self.retrieved_count} of {self.reported_count} records delivered"
+            )
+            raise ValueError(f"a run that is not fully explained needs a note ({reason})")
+
+    @property
+    def retrieved_count(self) -> int:
+        return len(self.works)
+
+    @property
+    def has_shortfall(self) -> bool:
+        return self.reported_count is not None and self.retrieved_count < self.reported_count
+
+
+@runtime_checkable
+class Source(Protocol):
+    """What every adapter must provide."""
+
+    name: str
+    kinds: frozenset[QueryKind]
+
+    def run(
+        self,
+        spec: QuerySpec,
+        *,
+        run_id: str,
+        query_id: str,
+        archive: PageSink,
+        resume_from: str | None = None,
+    ) -> SearchResult:
+        """Exhaustively retrieve everything `spec` matches, in the source's native syntax.
+
+        Each raw response goes to `archive` as it arrives, before parsing; durability cannot
+        wait for the run to finish. `resume_from` is a `SearchResult.resume_token` from an
+        earlier partial run of the same query.
+        """
+        ...
+
+
+__all__ = ["PageSink", "RawPage", "SearchResult", "Source", "SourceError"]
