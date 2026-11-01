@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 import pytest
 from pydantic import ValidationError
 
@@ -44,6 +46,10 @@ def test_exclude_item_needs_criterion_and_rationale() -> None:
         ScreeningItem(
             work_id="rf:1", verdict=Verdict.EXCLUDE, criterion="EX03", quote="q", rationale=""
         )
+    with pytest.raises(ValidationError):
+        ScreeningItem(
+            work_id="rf:1", verdict=Verdict.EXCLUDE, criterion="EX03", quote="q", rationale="  "
+        )
     item = ScreeningItem(
         work_id="rf:1", verdict=Verdict.EXCLUDE, criterion="EX03", quote="q", rationale="r"
     )
@@ -60,8 +66,15 @@ def test_cannot_assess_needs_criterion() -> None:
 def test_unsure_needs_rationale() -> None:
     with pytest.raises(ValidationError):
         ScreeningItem(work_id="rf:1", verdict=Verdict.UNSURE, quote="q", rationale="")
+    with pytest.raises(ValidationError):
+        ScreeningItem(work_id="rf:1", verdict=Verdict.UNSURE, quote="q", rationale="  \t ")
     item = ScreeningItem(work_id="rf:1", verdict=Verdict.UNSURE, quote="q", rationale="ambiguous")
     assert item.rationale == "ambiguous"
+
+
+def test_blank_quote_is_rejected() -> None:
+    with pytest.raises(ValidationError):
+        ScreeningItem(work_id="rf:1", verdict=Verdict.INCLUDE, quote="   ")
 
 
 def test_include_cannot_carry_exclusion_criterion() -> None:
@@ -71,29 +84,85 @@ def test_include_cannot_carry_exclusion_criterion() -> None:
     assert item.criterion == "IN02"
 
 
-def test_decision_criterion_is_version_qualified() -> None:
-    base = {
+def _decision(**overrides: object) -> dict[str, object]:
+    base: dict[str, object] = {
         "decision_id": DECISION,
         "work_id": "rf:1",
         "pass_label": PassLabel.A,
         "phase": ScreeningPhase.SCREENING,
         "stage": ScreeningStage.TITLE_ABSTRACT,
         "verdict": Verdict.EXCLUDE,
+        "criterion": "P@1a2b3c4d:EX03",
         "quote": "q",
         "rationale": "r",
         "protocol_id": "P@1a2b3c4d",
         "task_id": "tsk_01HZX3K4M5N6P7Q8R9S0TVWXYZ",
         "supersedes": None,
     }
+    base.update(overrides)
+    return base
+
+
+def test_decision_criterion_is_version_qualified() -> None:
     with pytest.raises(ValidationError):
-        DecisionRecorded(**base, criterion="EX03")
-    event = DecisionRecorded(**base, criterion="P@1a2b3c4d:EX03")
+        DecisionRecorded(**_decision(criterion="EX03"))
+    event = DecisionRecorded(**_decision())
     assert event.criterion == "P@1a2b3c4d:EX03"
 
 
-def test_decision_id_patterns() -> None:
-    import re
+def test_decision_exclude_needs_criterion() -> None:
+    with pytest.raises(ValidationError):
+        DecisionRecorded(**_decision(criterion=None))
 
+
+def test_calibration_label_rejects_unnamed_exclusion_and_exclusion_include() -> None:
+    with pytest.raises(ValidationError):
+        CalibrationLabelled(work_id="rf:1", verdict="exclude", criterion=None, channel=Channel.CLI)
+    with pytest.raises(ValidationError):
+        CalibrationLabelled(
+            work_id="rf:1", verdict="include", criterion="P@1a2b3c4d:EX01", channel=Channel.CLI
+        )
+
+
+def test_disagreement_resolution_rejects_unnamed_exclusion_and_exclusion_include() -> None:
+    with pytest.raises(ValidationError):
+        DisagreementResolved(
+            work_id="rf:1", verdict="exclude", criterion=None, reason="r", channel=Channel.MCP
+        )
+    with pytest.raises(ValidationError):
+        DisagreementResolved(
+            work_id="rf:1",
+            verdict="include",
+            criterion="P@1a2b3c4d:EX01",
+            reason="r",
+            channel=Channel.MCP,
+        )
+    with pytest.raises(ValidationError):
+        DisagreementResolved(
+            work_id="rf:1",
+            verdict="exclude",
+            criterion="P@1a2b3c4d:EX01",
+            reason="  ",
+            channel=Channel.MCP,
+        )
+
+
+def test_audit_label_rejects_unnamed_exclusion_and_exclusion_include() -> None:
+    with pytest.raises(ValidationError):
+        AuditLabelled(
+            audit_id=AUDIT, work_id="rf:1", verdict="exclude", criterion=None, channel=Channel.CLI
+        )
+    with pytest.raises(ValidationError):
+        AuditLabelled(
+            audit_id=AUDIT,
+            work_id="rf:1",
+            verdict="include",
+            criterion="P@1a2b3c4d:EX01",
+            channel=Channel.CLI,
+        )
+
+
+def test_decision_id_patterns() -> None:
     assert re.fullmatch(DECISION_ID_RE, DECISION)
     assert not re.fullmatch(DECISION_ID_RE, AUDIT)
     assert re.fullmatch(AUDIT_ID_RE, AUDIT)
@@ -117,7 +186,9 @@ def test_payloads_construct() -> None:
     )
     PassJoined(pass_label=PassLabel.A, session="sess-1", model="model-a")
     CalibrationDrawn(protocol_id=None, work_ids=("rf:1",), random_seed=7)
-    CalibrationLabelled(work_id="rf:1", verdict="include", criterion=None, channel=Channel.CLI)
+    CalibrationLabelled(
+        work_id="rf:1", verdict="exclude", criterion="P@1a2b3c4d:EX01", channel=Channel.CLI
+    )
     DisagreementResolved(
         work_id="rf:1",
         verdict="exclude",
@@ -144,15 +215,19 @@ def test_payloads_reject_unknown_fields() -> None:
 
 
 def test_payloads_registered() -> None:
-    names = set(default_catalog().names())
+    from factory.model import screening
+
     expected = {
-        "screening.pass_opened",
-        "screening.pass_joined",
-        "screening.decision_recorded",
-        "calibration.drawn",
-        "calibration.labelled",
-        "screening.disagreement_resolved",
-        "audit.sampled",
-        "audit.labelled",
+        "screening.pass_opened": screening.PassOpened,
+        "screening.pass_joined": screening.PassJoined,
+        "screening.decision_recorded": screening.DecisionRecorded,
+        "calibration.drawn": screening.CalibrationDrawn,
+        "calibration.labelled": screening.CalibrationLabelled,
+        "screening.disagreement_resolved": screening.DisagreementResolved,
+        "audit.sampled": screening.AuditSampled,
+        "audit.labelled": screening.AuditLabelled,
     }
-    assert expected <= names
+    catalog = default_catalog()
+    for name, payload in expected.items():
+        assert name in catalog
+        assert catalog.get(name).payload is payload

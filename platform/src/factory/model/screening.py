@@ -2,8 +2,9 @@
 
 Invariants enforced here (validated at the boundary, before any event is written):
 - `include` and `cannot-assess` promote; `exclude` and `unsure` do not.
-- `exclude` needs a criterion and a rationale; `cannot-assess` needs a criterion;
-  `unsure` needs a rationale; `include` cannot cite an exclusion criterion.
+- Every exclusion names an EX criterion, human labels included (R-30); an inclusion never
+  cites an EX criterion. `exclude` needs a rationale; `cannot-assess` needs a criterion;
+  `unsure` needs a rationale. Text fields must not be blank after stripping.
 - A decision's criterion is version-qualified (`P@<hash>:EX03`), so a decision stays
   interpretable after a protocol amendment.
 
@@ -13,9 +14,9 @@ This module is pure. Services in `factory.services` decide when these events are
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Literal, Self
+from typing import Annotated, Literal, Self
 
-from pydantic import Field, model_validator
+from pydantic import AfterValidator, Field, model_validator
 
 from factory.model.base import StrictModel
 from factory.model.identity import ULID_RE
@@ -59,17 +60,36 @@ class Channel(StrEnum):
     MCP = "mcp"
 
 
+def _non_blank(value: str) -> str:
+    if not value.strip():
+        raise ValueError("must not be blank")
+    return value
+
+
+NonBlank = Annotated[str, AfterValidator(_non_blank)]
+
+
+def _check_criterion(verdict: str, criterion: str | None) -> None:
+    """Every exclusion names an EX criterion (R-30); an inclusion never cites one.
+
+    Accepts bare (`EX03`) and version-qualified (`P@1a2b3c4d:EX03`) criteria alike.
+    """
+    bare = None if criterion is None else criterion.rsplit(":", 1)[-1]
+    if verdict == "exclude" and criterion is None:
+        raise ValueError("an exclusion names its EX criterion")
+    if verdict == "include" and bare is not None and bare.startswith("EX"):
+        raise ValueError("an inclusion cannot cite an exclusion criterion")
+
+
 def _check_verdict_fields(verdict: Verdict, criterion: str | None, rationale: str) -> None:
     """Raise ValueError when a verdict lacks the fields it requires or cites a wrong criterion."""
-    bare = criterion.rsplit(":", 1)[-1] if criterion is not None else None
-    if verdict is Verdict.EXCLUDE and (criterion is None or not rationale):
-        raise ValueError("an exclusion needs a criterion and a rationale")
+    _check_criterion(verdict, criterion)
+    if verdict is Verdict.EXCLUDE and not rationale.strip():
+        raise ValueError("an exclusion needs a rationale")
     if verdict is Verdict.CANNOT_ASSESS and criterion is None:
         raise ValueError("cannot-assess needs the criterion that could not be assessed")
-    if verdict is Verdict.UNSURE and not rationale:
+    if verdict is Verdict.UNSURE and not rationale.strip():
         raise ValueError("unsure needs a rationale")
-    if verdict is Verdict.INCLUDE and bare is not None and bare.startswith("EX"):
-        raise ValueError("an inclusion cannot cite an exclusion criterion")
 
 
 class ScreeningItem(StrictModel):
@@ -78,7 +98,7 @@ class ScreeningItem(StrictModel):
     work_id: str = Field(min_length=1)
     verdict: Verdict
     criterion: str | None = Field(default=None, pattern=CRITERION_ID_RE)
-    quote: str = Field(min_length=1)
+    quote: NonBlank
     rationale: str = ""
 
     @model_validator(mode="after")
@@ -109,7 +129,7 @@ class DecisionRecorded(StrictModel):
     stage: ScreeningStage
     verdict: Verdict
     criterion: str | None = Field(pattern=QUALIFIED_CRITERION_RE)
-    quote: str = Field(min_length=1)
+    quote: NonBlank
     rationale: str
     protocol_id: str = Field(pattern=PROTOCOL_ID_RE)
     task_id: str = Field(min_length=1)
@@ -133,13 +153,23 @@ class CalibrationLabelled(StrictModel):
     criterion: str | None = Field(default=None, pattern=QUALIFIED_CRITERION_RE)
     channel: Channel
 
+    @model_validator(mode="after")
+    def _criterion_fits_verdict(self) -> Self:
+        _check_criterion(self.verdict, self.criterion)
+        return self
+
 
 class DisagreementResolved(StrictModel):
     work_id: str = Field(min_length=1)
     verdict: Literal["include", "exclude"]
     criterion: str | None = Field(default=None, pattern=QUALIFIED_CRITERION_RE)
-    reason: str = Field(min_length=1)
+    reason: NonBlank
     channel: Channel
+
+    @model_validator(mode="after")
+    def _criterion_fits_verdict(self) -> Self:
+        _check_criterion(self.verdict, self.criterion)
+        return self
 
 
 class AuditSampled(StrictModel):
@@ -157,3 +187,8 @@ class AuditLabelled(StrictModel):
     verdict: Literal["include", "exclude"]
     criterion: str | None = Field(default=None, pattern=QUALIFIED_CRITERION_RE)
     channel: Channel
+
+    @model_validator(mode="after")
+    def _criterion_fits_verdict(self) -> Self:
+        _check_criterion(self.verdict, self.criterion)
+        return self
