@@ -421,10 +421,17 @@ def build_server(
                 raise FactoryValidationError(
                     [ValidationIssue("verdict", "is required with a work_id")]
                 )
-            # The label's own fields are checked before anything is written: the set is drawn
-            # on first use, but only by a well-formed call.
+            # Only the no-argument call draws the set. A labelled call is refused, and writes
+            # nothing, while the set is undrawn; its own fields are checked first.
             _check_label(work_id, verdict, criterion)
-            calibration_service.draw_calibration(opened, human)
+            if not calibration_service.calibration_drawn(opened):
+                raise FactoryValidationError(
+                    [
+                        ValidationIssue(
+                            "work_id", "calibration set not drawn; call without arguments first"
+                        )
+                    ]
+                )
             event_id = calibration_service.label_calibration(
                 opened, human, work_id, verdict, criterion, Channel.MCP
             )

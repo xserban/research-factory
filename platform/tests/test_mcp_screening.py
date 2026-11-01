@@ -285,3 +285,51 @@ async def test_malformed_calibration_call_writes_nothing(
             assert body["ok"] is False, (args, body)
     assert len(read_all(project.paths.events_dir, project.catalog)) == before
     assert _of_type(project, "calibration.drawn") == []
+
+
+@pytest.mark.anyio
+async def test_labelled_call_never_draws_the_set(
+    settings: Settings,
+    project: Project,
+    clock: FixedClock,
+    mock_sources: Any,
+    agent: Any,
+    human: Any,
+) -> None:
+    """A labelled call on an undrawn set is refused and writes nothing; the set is drawn only by
+    the no-argument call."""
+    _setup(project, agent, human, mock_sources)
+    before = len(read_all(project.paths.events_dir, project.catalog))
+    async with open_session(settings, clock) as reviewer:
+        body = await reviewer.call(
+            "calibration_label", project="demo", work_id="W-x", verdict="include"
+        )
+    assert _fields(body) == ["work_id"]
+    assert len(read_all(project.paths.events_dir, project.catalog)) == before
+    assert _of_type(project, "calibration.drawn") == []
+
+
+@pytest.mark.anyio
+async def test_labelled_call_with_unknown_criterion_writes_nothing(
+    settings: Settings,
+    project: Project,
+    clock: FixedClock,
+    mock_sources: Any,
+    agent: Any,
+    human: Any,
+) -> None:
+    _setup(project, agent, human, mock_sources)
+    async with open_session(settings, clock) as reviewer:
+        first = await reviewer.call("calibration_label", project="demo")
+        work_id = first["data"]["record"]["work_id"]
+        before = len(read_all(project.paths.events_dir, project.catalog))
+        body = await reviewer.call(
+            "calibration_label",
+            project="demo",
+            work_id=work_id,
+            verdict="exclude",
+            criterion="EX09",
+        )
+    assert _fields(body) == ["criterion"]
+    assert len(read_all(project.paths.events_dir, project.catalog)) == before
+    assert _of_type(project, "calibration.labelled") == []
