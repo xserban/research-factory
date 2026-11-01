@@ -30,6 +30,7 @@ from factory.model.search import (
 from factory.model.work import Provenance, ProvenanceMethod, Work
 from factory.services.context import Project
 from factory.sources.base import RawPage, SourceError
+from factory.sources.http import redact
 from factory.sources.registry import INTERFACES, SourceFactory
 
 _PROVENANCE_COLUMNS = "work_id, run_id, query_id, source, method, raw_blob, raw_ref, at"
@@ -177,7 +178,7 @@ def run_query(
     except Exception as exc:
         # The pages already archived stay recorded; nothing from them is parsed here.
         status = RunStatus.PARTIAL if archived else RunStatus.FAILED
-        error_note = f"{type(exc).__name__}: {exc}"
+        error_note = redact(f"{type(exc).__name__}: {exc}", project.settings.mailto)
         project.record(
             [
                 project.events.make(

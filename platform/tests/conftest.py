@@ -197,7 +197,7 @@ def mock_sources(http_log: list[httpx.Request]) -> Callable[..., dict[str, Sourc
             "openalex": lambda s, c: OpenAlexSource(
                 polite(openalex_handler), clock=c, mailto=s.mailto
             ),
-            "arxiv": lambda _s, c: ArxivSource(polite(arxiv_handler), clock=c),
+            "arxiv": lambda s, c: ArxivSource(polite(arxiv_handler), clock=c, mailto=s.mailto),
         }
 
     return make

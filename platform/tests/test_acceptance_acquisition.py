@@ -7,6 +7,8 @@ nothing here touches the network. Each test states the acceptance criterion it p
 import shutil
 from collections.abc import Callable, Mapping
 from datetime import timedelta
+from pathlib import Path
+from urllib.parse import quote
 
 import httpx
 from typer.testing import CliRunner
@@ -18,6 +20,7 @@ from factory.events.envelope import Actor
 from factory.model.search import QueryKind, QuerySpec, RunStatus
 from factory.services.context import Project
 from factory.services.dedup import active_merges, canonical_works, dedup_run, revert_merge
+from factory.services.project import init_project
 from factory.services.search import (
     RunSummary,
     list_works,
@@ -25,8 +28,11 @@ from factory.services.search import (
     run_query,
     search_counts,
 )
+from factory.sources.arxiv import ArxivSource
+from factory.sources.http import PoliteClient
+from factory.sources.openalex import OpenAlexSource
 from factory.sources.registry import SourceFactory
-from tests.helpers import arxiv_atom, openalex_item
+from tests.helpers import SESSION, arxiv_atom, openalex_item
 
 MockSources = Callable[..., Mapping[str, SourceFactory]]
 DOI_ARXIV = "10.48550/arXiv.2301.01234"  # DataCite DOI that arXiv mints for 2301.01234
@@ -226,3 +232,60 @@ def test_acquisition_rebuild_is_deterministic(
     )
     assert out.exit_code == 0, out.stderr
     assert out.stdout.strip() == f"state {before}"
+
+
+def test_contact_address_never_reaches_the_event_log(tmp_path: Path, clock: FixedClock) -> None:
+    # The mailto address is sent to OpenAlex but must not be persisted: not in an archived page
+    # URL, not in an HTTP-failure note, and so not anywhere under events/ or blobs/.
+    mailto = "team@example.org"
+    settings = Settings(root=tmp_path, user="obd", mailto=mailto)
+    project = init_project(settings, "demo", "pilot", session=SESSION, clock=clock)
+    failing = {"on": False}
+    sent: list[httpx.Request] = []
+
+    def respond(request: httpx.Request, body: httpx.Response) -> httpx.Response:
+        if failing["on"]:
+            return httpx.Response(503, text="unavailable", request=request)
+        return body
+
+    def polite(handler: Callable[[httpx.Request], httpx.Response]) -> PoliteClient:
+        client = httpx.Client(transport=httpx.MockTransport(handler))
+        return PoliteClient(client, retries=0, sleep=lambda _s: None)
+
+    def openalex(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        page = {
+            "meta": {"count": 1, "next_cursor": None},
+            "results": [
+                openalex_item(
+                    title="Vessels", author="Ada Zhou", published="2023-01-05", openalex_id="W1"
+                )
+            ],
+        }
+        return respond(request, httpx.Response(200, json=page))
+
+    def arxiv(request: httpx.Request) -> httpx.Response:
+        return respond(request, httpx.Response(200, text=arxiv_atom()))
+
+    sources: Mapping[str, SourceFactory] = {
+        "openalex": lambda s, c: OpenAlexSource(polite(openalex), clock=c, mailto=s.mailto),
+        "arxiv": lambda s, c: ArxivSource(polite(arxiv), clock=c, mailto=s.mailto),
+    }
+
+    ok = _search(project, sources, "openalex", "vessel")
+    assert ok.status == RunStatus.COMPLETE
+    _search(project, sources, "arxiv", "vessel")
+    failing["on"] = True
+    for name in ("openalex", "arxiv"):
+        failed = _search(project, sources, name, "vessel")
+        assert failed.status == RunStatus.FAILED
+        assert failed.note is not None and mailto not in failed.note
+
+    for path in project.paths.events_dir.rglob("*"):
+        if path.is_file():
+            text = path.read_text(encoding="utf-8")
+            # The URL form is percent-encoded, so check that and the parameter name as well.
+            assert mailto not in text and quote(mailto, safe="") not in text
+            assert "mailto=" not in text
+    # Redaction is not vacuous: the address really was sent to OpenAlex.
+    assert any(r.url.params.get("mailto") == mailto for r in sent)

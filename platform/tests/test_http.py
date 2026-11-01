@@ -6,7 +6,7 @@ import httpx
 import pytest
 
 from factory.config import Settings
-from factory.sources.http import HOST_INTERVALS, PoliteClient, default_http, user_agent
+from factory.sources.http import HOST_INTERVALS, PoliteClient, default_http, redact, user_agent
 
 ARXIV = "https://export.arxiv.org/api/query"
 OPENALEX = "https://api.openalex.org/works"
@@ -156,3 +156,23 @@ def test_default_http_sets_timeout_redirects_and_user_agent(tmp_path: Path) -> N
     assert http.timeout.read == 60.0
     assert http.follow_redirects is True
     assert http.headers["User-Agent"] == "research-factory/0.2 (mailto:someone@example.org)"
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("https://x.org/w?mailto=team%40example.org", "https://x.org/w"),
+        ("https://x.org/w?mailto=team%40example.org&per-page=5", "https://x.org/w?per-page=5"),
+        ("https://x.org/w?a=1&mailto=team%40example.org&b=2", "https://x.org/w?a=1&b=2"),
+        ("https://x.org/w?mailto=team@example.org#top", "https://x.org/w#top"),
+        ("HTTPError for team@example.org", "HTTPError for <mailto>"),
+        ("see team%40example.org", "see <mailto>"),
+        ("nothing to hide", "nothing to hide"),
+    ],
+)
+def test_redact_removes_the_contact_address(text: str, expected: str) -> None:
+    assert redact(text, "team@example.org") == expected
+
+
+def test_redact_without_a_secret_still_drops_the_mailto_parameter() -> None:
+    assert redact("https://x.org/w?mailto=a%40b.org&k=1", None) == "https://x.org/w?k=1"

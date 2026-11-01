@@ -25,5 +25,5 @@ INTERFACES: dict[str, str] = {
 def default_sources() -> dict[str, SourceFactory]:
     return {
         "openalex": lambda s, c: OpenAlexSource(default_http(s), clock=c, mailto=s.mailto),
-        "arxiv": lambda s, c: ArxivSource(default_http(s), clock=c),
+        "arxiv": lambda s, c: ArxivSource(default_http(s), clock=c, mailto=s.mailto),
     }

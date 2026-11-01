@@ -5,9 +5,11 @@ for a polite pace and a contact address (`mailto`) in the User-Agent.
 """
 
 import math
+import re
 import threading
 import time
 from collections.abc import Callable, Mapping
+from urllib.parse import quote, quote_plus
 
 import httpx
 
@@ -21,6 +23,25 @@ VERSION = "0.2"
 def user_agent(mailto: str | None) -> str:
     base = f"research-factory/{VERSION}"
     return f"{base} (mailto:{mailto})" if mailto else base
+
+
+_MAILTO_FIRST = re.compile(r"\?mailto=[^&#\s'\"]*&")
+_MAILTO_PARAM = re.compile(r"[?&]mailto=[^&#\s'\"]*")
+
+
+def redact(url_or_text: str, secret: str | None) -> str:
+    """Remove the contact address from a URL or a message built from one.
+
+    The `mailto` query parameter is dropped from any URL in the text, then every remaining
+    occurrence of `secret` (literal or percent-encoded) becomes `<mailto>`. The address is sent
+    to OpenAlex but must never reach the event log, which is committed and shared.
+    """
+    text = _MAILTO_FIRST.sub("?", url_or_text)
+    text = _MAILTO_PARAM.sub("", text)
+    if secret:
+        for form in {secret, quote(secret), quote(secret, safe=""), quote_plus(secret)}:
+            text = text.replace(form, "<mailto>")
+    return text
 
 
 class PoliteClient:

@@ -30,7 +30,7 @@ from factory.model.work import (
 )
 from factory.model.work_ids import normalize_arxiv
 from factory.sources.base import PageSink, RawPage, SearchResult, SourceError
-from factory.sources.http import PoliteClient
+from factory.sources.http import PoliteClient, redact
 
 _ENDPOINT = "https://export.arxiv.org/api/query"
 _NS = {
@@ -114,9 +114,19 @@ class ArxivSource:
     name: str = "arxiv"
     kinds: frozenset[QueryKind] = frozenset({QueryKind.KEYWORD, QueryKind.ID_LIST})
 
-    def __init__(self, http: PoliteClient, *, clock: Clock, page_size: int = _PAGE_SIZE) -> None:
+    def __init__(
+        self,
+        http: PoliteClient,
+        *,
+        clock: Clock,
+        mailto: str | None = None,
+        page_size: int = _PAGE_SIZE,
+    ) -> None:
+        # arXiv is never sent the address, but it travels in the User-Agent, so anything built
+        # from a request or an exception is redacted before it is archived or noted.
         self._http = http
         self._clock = clock
+        self._mailto = mailto
         self._page_size = page_size
 
     def run(
@@ -176,7 +186,7 @@ class ArxivSource:
                     pages=pages,
                     status=RunStatus.PARTIAL if works else RunStatus.FAILED,
                     skipped=skipped,
-                    note=f"{type(exc).__name__}: {exc}",
+                    note=redact(f"{type(exc).__name__}: {exc}", self._mailto),
                     resume_token=str(start),
                 )
 
@@ -187,7 +197,7 @@ class ArxivSource:
                 RawPage(
                     ordinal=start // self._page_size,
                     body=response.text,
-                    url=str(response.url),
+                    url=redact(str(response.url), self._mailto),
                     fetched_at=now,
                 )
             )
@@ -205,7 +215,7 @@ class ArxivSource:
                     pages=pages,
                     status=RunStatus.PARTIAL if works else RunStatus.FAILED,
                     skipped=skipped,
-                    note=f"SourceError: {exc}",
+                    note=redact(f"SourceError: {exc}", self._mailto),
                     resume_token=str(start),
                 )
             if not is_ids and reported is None:
@@ -315,7 +325,7 @@ class ArxivSource:
                 RawPage(
                     ordinal=start // self._page_size,
                     body=response.text,
-                    url=str(response.url),
+                    url=redact(str(response.url), self._mailto),
                     fetched_at=now,
                 )
             )

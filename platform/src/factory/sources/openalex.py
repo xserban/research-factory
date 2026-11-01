@@ -31,7 +31,7 @@ from factory.model.work import (
     WorkType,
 )
 from factory.sources.base import PageSink, RawPage, SearchResult, SourceError
-from factory.sources.http import PoliteClient
+from factory.sources.http import PoliteClient, redact
 
 _ENDPOINT = "https://api.openalex.org/works"
 _PAGE_SIZE = 200  # the documented maximum
@@ -172,7 +172,7 @@ class OpenAlexSource:
                     pages=archived,
                     status=RunStatus.PARTIAL if works else RunStatus.FAILED,
                     skipped=skipped,
-                    note=f"{type(exc).__name__}: {exc}",
+                    note=redact(f"{type(exc).__name__}: {exc}", self._mailto),
                     resume_token=cursor,
                 )
 
@@ -182,7 +182,7 @@ class OpenAlexSource:
                 RawPage(
                     ordinal=archived,
                     body=response.text,
-                    url=str(response.url),
+                    url=redact(str(response.url), self._mailto),
                     fetched_at=now,
                 )
             )
@@ -200,7 +200,7 @@ class OpenAlexSource:
                     pages=archived,
                     status=RunStatus.PARTIAL if works else RunStatus.FAILED,
                     skipped=skipped,
-                    note=f"SourceError: {exc}",
+                    note=redact(f"SourceError: {exc}", self._mailto),
                     resume_token=cursor,
                 )
             meta = payload.get("meta") or {}
