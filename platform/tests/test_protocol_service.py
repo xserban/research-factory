@@ -441,13 +441,20 @@ def _flaky_openalex() -> dict[str, SourceFactory]:
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.params.get("cursor") == "*":
-            page = {"meta": {"count": 2, "next_cursor": "c2"}, "results": [openalex_item(
-                title="Paper 9", author="Ada Zhou", published="2020-01-01", openalex_id="W9"
-            )]}
+            page = {
+                "meta": {"count": 2, "next_cursor": "c2"},
+                "results": [
+                    openalex_item(
+                        title="Paper 9", author="Ada Zhou", published="2020-01-01", openalex_id="W9"
+                    )
+                ],
+            }
             return httpx.Response(200, json=page)
         return httpx.Response(200, text="<html>not json</html>")
 
-    polite = PoliteClient(httpx.Client(transport=httpx.MockTransport(handler)), sleep=lambda _s: None)
+    polite = PoliteClient(
+        httpx.Client(transport=httpx.MockTransport(handler)), sleep=lambda _s: None
+    )
     return {
         "openalex": SourceFactory(
             OpenAlexSource.kinds,
@@ -467,7 +474,9 @@ def test_registered_query_is_refused_at_run_and_resume_once_the_question_is_supe
     assert partial.status is RunStatus.PARTIAL and partial.resume_token == "c2"
 
     record_question(
-        project, human, pilot_question_spec("Does linear attention match softmax on speech?"),
+        project,
+        human,
+        pilot_question_spec("Does linear attention match softmax on speech?"),
         reason="scope changed",
     )
     starts = len(_events(project, "search.run_started"))

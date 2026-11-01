@@ -463,9 +463,7 @@ def test_source_error_in_the_count_request_is_reported_without_recall(
     project = _exploratory(settings, clock)
     _question(project, agent)
     _positives(project, agent, mock_sources, 3)
-    sources = _broken_sources(
-        mock_sources(openalex=[_item(1), _item(2)]), "broken", at="count"
-    )
+    sources = _broken_sources(mock_sources(openalex=[_item(1), _item(2)]), "broken", at="count")
 
     report = run_probe(
         project, agent, [_probe_spec("broken"), _probe_spec("attention")], sources=sources

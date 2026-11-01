@@ -34,7 +34,7 @@ from factory.services.protocol import (
 )
 from factory.services.question import current_question
 from factory.services.seeds import SeedRole, all_seeds
-from factory.sources.base import Source, SearchResult, SourceError
+from factory.sources.base import SearchResult, Source, SourceError
 from factory.sources.registry import SourceFactory
 from tests.helpers import (
     openalex_item,
@@ -413,19 +413,25 @@ async def test_agent_tools_never_reveal_held_out_seeds(
         clock,
         {},
         "search_run",
-        {"project": "demo", "source": "openalex", "query": "attention", "purpose": "chase", **AGENT},
+        {
+            "project": "demo",
+            "source": "openalex",
+            "query": "attention",
+            "purpose": "chase",
+            **AGENT,
+        },
     )
     assert refused_chase["ok"] is False
     assert _leaks(json.dumps(refused_chase), tokens) == []
 
-    assert all(response["ok"] is True for response in responses), [r for r in responses if r["ok"] is not True]
+    assert all(response["ok"] is True for response in responses), responses
     for response in responses:
         assert _leaks(json.dumps(response), tokens) == []
 
     # Raw probe pages are human-only: no agent response carries a page's blob reference or the
     # keys of a raw OpenAlex record (final review, finding 2).
-    archived = [
-        event.payload["raw_blob"]
+    archived: list[str] = [
+        str(event.payload["raw_blob"])
         for event in read_all(project.paths.events_dir, project.catalog)
         if event.type == "probe.page_archived"
     ]
@@ -682,8 +688,8 @@ async def test_search_run_and_dedup_run_outputs_are_scrubbed_of_held_out_identif
     leaking = SimpleNamespace(model_dump=lambda mode: {"note": f"touched {held.doi}"})
     monkeypatch.setattr(dedup_service, "dedup_run", lambda _project: leaking)
     monkeypatch.setattr(project_service, "project_status", lambda _project: leaking)
-    for name, args in (("dedup_run", {}), ("project_status", {})):
-        body = await _call(settings, clock, {}, name, {"project": "demo", **AGENT, **args})
+    for name in ("dedup_run", "project_status"):
+        body = await _call(settings, clock, {}, name, {"project": "demo", **AGENT})
         assert body["ok"] is True, body
         assert held.doi not in json.dumps(body)
         assert "[withheld]" in body["data"]["note"]
