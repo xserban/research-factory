@@ -156,11 +156,27 @@ def label_calibration(
     return event.id
 
 
+def calibration_items(project: Project) -> list[str]:
+    """The work ids of the drawn calibration set, sorted; empty before the draw."""
+    project.index.sync()
+    return _drawn_items(project)
+
+
+def calibration_drawn(project: Project) -> bool:
+    """Whether the calibration set has been drawn, even when the draw yielded no items."""
+    project.index.sync()
+    return _was_drawn(project)
+
+
+def sensitivity_threshold(project: Project) -> float | None:
+    """The minimum sensitivity a pass must reach on the set; `None` when there is no gate."""
+    return CALIBRATION_SENSITIVITY[_rigor_mode(project)]
+
+
 def calibration_status(project: Project) -> CalibrationStatus:
     """The calibration set's progress and each pass's rates and gate under the current protocol."""
     project.index.sync()
-    mode = _rigor_mode(project)
-    threshold = CALIBRATION_SENSITIVITY[mode]
+    threshold = sensitivity_threshold(project)
     items = _drawn_items(project)
     labels = _labels(project)
     protocol = current_protocol(project)

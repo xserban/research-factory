@@ -1,0 +1,437 @@
+"""Passes bound to sessions, and screen_next with the calibration gate (R-16, R-20, R-35)."""
+
+import math
+import secrets
+from collections.abc import Callable, Mapping
+from typing import Any
+
+import pytest
+
+from factory.clock import FixedClock
+from factory.config import Settings
+from factory.errors import FactoryValidationError
+from factory.events.envelope import Actor, Event
+from factory.events.reader import read_all
+from factory.model.protocol import PressElement, PressFinding, ScreeningStage
+from factory.model.screening import (
+    Channel,
+    DecisionRecorded,
+    Framing,
+    PassLabel,
+    ScreeningPhase,
+    Verdict,
+)
+from factory.model.search import QueryKind, QuerySpec
+from factory.model.seed import SeedKind, SeedSpec
+from factory.services.calibration import calibration_items, draw_calibration, label_calibration
+from factory.services.context import Project
+from factory.services.probe import run_probe
+from factory.services.project import init_project
+from factory.services.protocol import confirm_press, press_review, record_protocol
+from factory.services.screening import (
+    SCREEN_BATCH,
+    join_pass,
+    live_decisions,
+    open_pass,
+    screen_next,
+)
+from factory.services.search import list_works, register_query, run_query
+from factory.services.seeds import SeedRole, add_seeds, all_seeds
+from factory.services.tasks import complete_task, task_counts
+from factory.sources.registry import SourceFactory
+from tests.helpers import (
+    SESSION,
+    _seed_item,
+    openalex_item,
+    pilot_protocol_spec,
+    record_pilot_question,
+)
+
+SourcesFor = Callable[..., Mapping[str, SourceFactory]]
+
+POSITIVES = 6
+NEGATIVES = 3
+RANDOM_WORKS = 40
+
+
+def _positive_item(n: int) -> dict[str, Any]:
+    return _work(n, doi=f"10.1000/p{n}", title=f"Paper {n}")
+
+
+def _negative_item(k: int) -> dict[str, Any]:
+    return _work(100 + k, doi=f"10.1000/n{k}", title=f"Negative {k}")
+
+
+def _random_item(k: int) -> dict[str, Any]:
+    return _work(200 + k, doi=f"10.1000/r{k}", title=f"Random {k}")
+
+
+def _work(n: int, *, doi: str, title: str) -> dict[str, Any]:
+    return openalex_item(
+        title=title, author="Ada Zhou", published="2020-01-01", openalex_id=f"W{n}", doi=doi
+    )
+
+
+def _protocol(
+    project: Project,
+    agent: Actor,
+    human: Actor,
+    mock_sources: SourcesFor,
+    *,
+    ready: bool = True,
+    dual_sample: float = 0.5,
+) -> str:
+    """Three positive seeds, a probe, and the pilot protocol with the given dual sample."""
+    question_id = record_pilot_question(project, agent)
+    for n in (1, 2, 3):
+        seed = SeedSpec(kind=SeedKind.POSITIVE, cite=f"Paper {n}", doi=f"10.1000/p{n}")
+        add_seeds(project, agent, [seed], sources=mock_sources(openalex=[_seed_item(n)]))
+    probe = QuerySpec(source="openalex", kind=QueryKind.KEYWORD, text="attention")
+    report = run_probe(project, agent, [probe], sources=mock_sources(openalex=[_seed_item(1)]))
+    spec = pilot_protocol_spec(question_id, report.probe_id, reviewer=human.id)
+    screening = spec.screening.model_copy(update={"dual_sample": dual_sample})
+    spec = spec.model_copy(update={"screening": screening})
+    protocol_id = record_protocol(project, agent, spec, ready=ready).protocol_id
+    if ready:
+        finding = PressFinding(
+            element=PressElement.TEXT_WORDS, finding="Add a synonym.", severity="minor"
+        )
+        review_id = press_review(project, agent, protocol_id, (finding,))
+        confirm_press(project, human, review_id, ("Accepted.",))
+    return protocol_id
+
+
+def _setup(
+    project: Project,
+    agent: Actor,
+    human: Actor,
+    mock_sources: SourcesFor,
+    *,
+    dual_sample: float = 0.5,
+    random_works: int = RANDOM_WORKS,
+) -> str:
+    """A protocol, the seeds, and a corpus of every seed work plus random works."""
+    protocol_id = _protocol(project, agent, human, mock_sources, dual_sample=dual_sample)
+    for n in range(4, POSITIVES + 1):
+        spec = SeedSpec(kind=SeedKind.POSITIVE, cite=f"Paper {n}", doi=f"10.1000/p{n}")
+        add_seeds(project, agent, [spec], sources=mock_sources(openalex=[_positive_item(n)]))
+    for k in range(1, NEGATIVES + 1):
+        spec = SeedSpec(kind=SeedKind.NEGATIVE, cite=f"Negative {k}", doi=f"10.1000/n{k}")
+        add_seeds(project, agent, [spec], sources=mock_sources(openalex=[_negative_item(k)]))
+    items = [_positive_item(n) for n in range(1, POSITIVES + 1)]
+    items += [_negative_item(k) for k in range(1, NEGATIVES + 1)]
+    items += [_random_item(k) for k in range(1, random_works + 1)]
+    query = QuerySpec(source="openalex", kind=QueryKind.KEYWORD, text="attention")
+    sources = mock_sources(openalex=items)
+    query_id = register_query(project, human, query, sources=sources)
+    run_query(project, query_id, sources=sources)
+    return protocol_id
+
+
+def _draw(project: Project) -> list[str]:
+    return draw_calibration(project, project.system_actor(), random_seed=11)
+
+
+def _events(project: Project) -> list[Event]:
+    return read_all(project.paths.events_dir, project.catalog)
+
+
+def _of_type(project: Project, type_: str) -> list[Event]:
+    return [e for e in _events(project) if e.type == type_]
+
+
+def _decide(
+    project: Project,
+    agent: Actor,
+    work_id: str,
+    pass_label: str,
+    phase: str,
+    verdict: str,
+    criterion: str | None,
+    protocol_id: str,
+) -> str:
+    """Write one decision event directly (screen_record arrives in a later task)."""
+    decision_id = f"dec_{project.ids.ulid()}"
+    payload = DecisionRecorded(
+        decision_id=decision_id,
+        work_id=work_id,
+        pass_label=PassLabel(pass_label),
+        phase=ScreeningPhase(phase),
+        stage=ScreeningStage.TITLE_ABSTRACT,
+        verdict=Verdict(verdict),
+        criterion=None if criterion is None else f"{protocol_id}:{criterion}",
+        quote="Paper",
+        rationale="rationale",
+        protocol_id=protocol_id,
+        task_id="tsk_test",
+        supersedes=None,
+    )
+    blob = project.blobs.put_json({"work_id": work_id, "verdict": verdict})
+    project.record(
+        [
+            project.events.make(
+                "screening.decision_recorded", payload, agent, refs=(decision_id,), input_blob=blob
+            )
+        ]
+    )
+    return decision_id
+
+
+def _serve_calibration(project: Project, agent: Actor, count: int) -> list[Any]:
+    """Claim and complete `count` calibration batches, as a screener would."""
+    batches = []
+    for _ in range(count):
+        result = screen_next(project, agent, PassLabel.A)
+        assert result.batch is not None
+        assert result.batch.phase is ScreeningPhase.CALIBRATION
+        complete_task(project, agent, result.batch.task_id)
+        batches.append(result.batch)
+    return batches
+
+
+# --- Protocol and pass gates (R-16, ruling 1) ---
+
+
+def test_screen_next_refused_until_protocol_ready(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    before = len(_events(project))
+    result = screen_next(project, agent, PassLabel.A)
+    assert result.batch is None
+    assert result.blocked and "ready" in result.blocked[0]
+    assert len(_events(project)) == before
+
+    _protocol(project, agent, human, mock_sources, ready=False)
+    draft = screen_next(project, agent, PassLabel.A)
+    assert draft.batch is None
+    assert draft.blocked and "ready" in draft.blocked[0]
+    assert _of_type(project, "screening.pass_opened") == []
+
+
+def test_session_cannot_join_both_passes(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    _setup(project, agent, human, mock_sources)
+    join_pass(project, agent, PassLabel.A)
+    join_pass(project, agent, PassLabel.A)
+    with pytest.raises(FactoryValidationError):
+        join_pass(project, agent, PassLabel.B)
+
+    joined = _of_type(project, "screening.pass_joined")
+    assert [e.payload["pass_label"] for e in joined] == ["A"]
+
+
+def test_label_session_cannot_join_pass(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    _setup(project, agent, human, mock_sources)
+    item = _draw(project)[0]
+    label_calibration(project, human, item, "include", None, Channel.MCP)
+
+    with pytest.raises(FactoryValidationError):
+        join_pass(project, agent, PassLabel.A)
+    assert _of_type(project, "screening.pass_joined") == []
+
+
+# --- Passes: framing, criterion order, sample ---
+
+
+def test_pass_b_reverses_criterion_order_and_uses_exclusion_framing(
+    project: Project,
+    agent: Actor,
+    agent_other: Actor,
+    human: Actor,
+    mock_sources: SourcesFor,
+) -> None:
+    _setup(project, agent, human, mock_sources)
+    _draw(project)
+
+    batch_a = screen_next(project, agent_other, PassLabel.A).batch
+    batch_b = screen_next(project, agent, PassLabel.B).batch
+    assert batch_a is not None and batch_b is not None
+    assert batch_a.framing is Framing.INCLUSION
+    assert batch_b.framing is Framing.EXCLUSION
+    assert [c["id"] for c in batch_a.criteria] == ["IN01", "EX01", "EX02", "EX03"]
+    assert [c["id"] for c in batch_b.criteria] == ["EX03", "EX02", "EX01", "IN01"]
+    assert batch_b.instructions.startswith("For each record look for a reason to exclude")
+    assert "Quote the title or abstract span" in batch_b.instructions
+
+    [opened_b] = [
+        e for e in _of_type(project, "screening.pass_opened") if e.payload["pass_label"] == "B"
+    ]
+    assert opened_b.payload["criterion_order"] == "reversed"
+    assert opened_b.payload["framing"] == "exclusion"
+
+
+def test_pass_b_sample_respects_dual_sample(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    _setup(project, agent, human, mock_sources, dual_sample=0.2, random_works=41)
+    items = _draw(project)
+    corpus = [w.id for w in list_works(project)]
+
+    open_pass(project, agent, PassLabel.B)
+    [opened] = _of_type(project, "screening.pass_opened")
+    sample = opened.payload["sample"]
+    assert isinstance(sample, list)
+    assert len(sample) == math.ceil(0.2 * len(corpus)) + len(items)
+    assert set(items) <= set(sample)
+    assert set(sample) <= set(corpus)
+
+
+def test_pass_a_covers_the_whole_corpus(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    _setup(project, agent, human, mock_sources)
+    open_pass(project, agent, PassLabel.A)
+    open_pass(project, agent, PassLabel.A)
+    opened = _of_type(project, "screening.pass_opened")
+    assert len(opened) == 1
+    assert opened[0].payload["sample"] is None
+
+
+# --- Calibration gate (R-20, R-31, R-35) ---
+
+
+def test_calibration_not_drawn_blocks_screening(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    _setup(project, agent, human, mock_sources)
+    result = screen_next(project, agent, PassLabel.A)
+    assert result.batch is None
+    assert result.blocked and "drawn" in result.blocked[0] and "labelled" in result.blocked[0]
+    assert _of_type(project, "screening.pass_opened") == []
+    assert _of_type(project, "task.created") == []
+
+
+def test_calibration_batches_served_first_and_block_ordinary_batches(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    _setup(project, agent, human, mock_sources)
+    items = set(_draw(project))
+
+    results = [screen_next(project, agent, PassLabel.A) for _ in range(3)]
+    assert sum(len(r.batch.records) for r in results if r.batch) == len(items)
+    for result in results:
+        assert result.batch is not None
+        assert result.batch.phase is ScreeningPhase.CALIBRATION
+        assert {r["work_id"] for r in result.batch.records} <= items
+        assert result.blocked and "labelled" in result.blocked[0]
+
+    blocked = screen_next(project, agent, PassLabel.A)
+    assert blocked.batch is None
+    assert blocked.blocked and "labelled" in blocked.blocked[0]
+    assert task_counts(project).open > 0
+
+
+def test_ordinary_batches_follow_a_passed_calibration(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    protocol_id = _setup(project, agent, human, mock_sources)
+    items = _draw(project)
+    _serve_calibration(project, agent, math.ceil(len(items) / SCREEN_BATCH))
+    for item in items:
+        label_calibration(project, human, item, "include", None, Channel.CLI)
+        _decide(project, agent, item, "A", "calibration", "include", None, protocol_id)
+
+    result = screen_next(project, agent, PassLabel.A)
+    assert result.batch is not None
+    assert result.batch.phase is ScreeningPhase.SCREENING
+    assert not {r["work_id"] for r in result.batch.records} & set(items)
+    assert result.blocked == []
+
+
+def test_worked_examples_are_development_seeds_without_ids(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    _setup(project, agent, human, mock_sources)
+    _draw(project)
+    batch = screen_next(project, agent, PassLabel.A).batch
+    assert batch is not None
+
+    held_ids = {s.work_id for s in all_seeds(project) if s.role is SeedRole.HELD_OUT}
+    held_titles = {w.title for w in list_works(project) if w.id in held_ids}
+    expected = [e["expected"] for e in batch.worked_examples]
+    assert expected == ["include", "include", "exclude", "exclude"]
+    dev = [s for s in all_seeds(project) if s.role is not SeedRole.HELD_OUT and s.work_id]
+    by_id = {w.id: w.title for w in list_works(project)}
+    first_positives = sorted(
+        (s for s in dev if s.kind is SeedKind.POSITIVE), key=lambda s: s.seed_id
+    )[:2]
+    first_negatives = sorted(
+        (s for s in dev if s.kind is SeedKind.NEGATIVE), key=lambda s: s.seed_id
+    )[:2]
+    titles = {e["title"] for e in batch.worked_examples}
+    assert titles == {by_id[s.work_id or ""] for s in [*first_positives, *first_negatives]}
+    assert not titles & held_titles
+    dumped = batch.model_dump_json()
+    assert "SEED" not in dumped and "NEG" not in dumped
+
+
+def test_batch_order_is_randomised_and_reproducible(
+    project: Project,
+    agent: Actor,
+    human: Actor,
+    mock_sources: SourcesFor,
+    settings: Settings,
+    clock: FixedClock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(secrets, "randbits", lambda bits: 7)
+    _setup(project, agent, human, mock_sources)
+    _draw(project)
+    first = screen_next(project, agent, PassLabel.A).batch
+    assert first is not None
+
+    twin = init_project(settings, "twin", "pilot", session=SESSION, clock=clock)
+    _setup(twin, agent, human, mock_sources)
+    _draw(twin)
+    second = screen_next(twin, agent, PassLabel.A).batch
+    assert second is not None
+
+    ids = [r["work_id"] for r in first.records]
+    assert ids == [r["work_id"] for r in second.records]
+    assert ids != sorted(ids)
+
+
+def test_task_content_is_input_blob(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    _setup(project, agent, human, mock_sources)
+    _draw(project)
+    batch = screen_next(project, agent, PassLabel.A).batch
+    assert batch is not None
+
+    [claimed] = [e for e in _of_type(project, "task.claimed") if e.refs == (batch.task_id,)]
+    assert claimed.input_blob is not None
+    assert project.blobs.get_json(claimed.input_blob) == batch.model_dump(
+        mode="json", exclude={"task_id"}
+    )
+
+
+def test_no_decision_of_other_pass_in_batch(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    protocol_id = _setup(project, agent, human, mock_sources)
+    items = _draw(project)
+    decided = [
+        _decide(project, agent, item, "A", "calibration", "exclude", "EX01", protocol_id)
+        for item in items
+    ]
+    batch = screen_next(project, agent, PassLabel.B).batch
+    assert batch is not None
+
+    dumped = batch.model_dump_json()
+    assert not any(decision_id in dumped for decision_id in decided)
+    assert "verdict" not in dumped and "rationale" not in dumped
+    assert len(live_decisions(project, PassLabel.A)) == len(items)
+    assert live_decisions(project, PassLabel.B) == []
+
+
+def test_calibration_items_are_public(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    _setup(project, agent, human, mock_sources)
+    assert calibration_items(project) == []
+    items = _draw(project)
+    assert calibration_items(project) == items
