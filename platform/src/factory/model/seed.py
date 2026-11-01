@@ -14,10 +14,12 @@ from typing import Self
 from pydantic import Field, model_validator
 
 from factory.model.base import StrictModel
-from factory.model.work import RUN_ID_RE
+from factory.model.work import RUN_ID_RE, ProvenanceMethod
 from factory.model.work_ids import WORK_ID_RE, arxiv_id_from_doi, normalize_arxiv, normalize_doi
 
 SEED_ID_RE = r"^(SEED|NEG)\d{2,}$"
+POSITIVE_SEED_ID_RE = r"^SEED\d{2,}$"
+SPLIT_PROCEDURE = "year-stratified-thirds-v1"
 _OPENALEX_PREFIX = "https://openalex.org/"
 
 
@@ -87,3 +89,29 @@ class SeedUnresolved(StrictModel):
     seed_id: str = Field(pattern=SEED_ID_RE)
     run_id: str | None = Field(default=None, pattern=RUN_ID_RE)
     reason: str = Field(min_length=1)
+
+
+class SeedSplitDrawn(StrictModel):
+    """The hold-out split of the positive seeds, with the seed it was drawn from.
+
+    `development` and `held_out` partition the positives present when the split was drawn.
+    """
+
+    random_seed: int = Field(ge=0, lt=2**32)
+    procedure: str = Field(min_length=1)
+    development: tuple[str, ...]
+    held_out: tuple[str, ...]
+
+
+class SeedMissExplained(StrictModel):
+    """Why a positive seed was not retrieved, and the admission route planned for it."""
+
+    seed_id: str = Field(pattern=POSITIVE_SEED_ID_RE)
+    reason: str = Field(min_length=1)
+    route: ProvenanceMethod
+
+    @model_validator(mode="after")
+    def _route_is_not_the_database(self) -> Self:
+        if self.route is ProvenanceMethod.DATABASE:
+            raise ValueError("a miss is not explained by the database search itself")
+        return self
