@@ -78,7 +78,8 @@ class SearchResult:
             raise ValueError(
                 f"a source run reports complete, partial or failed, not {self.status.value!r}"
             )
-        if self.note is None and (self.status is not RunStatus.COMPLETE or self.has_shortfall):
+        has_note = self.note is not None and bool(self.note.strip())
+        if not has_note and (self.status is not RunStatus.COMPLETE or self.has_shortfall):
             reason = (
                 f"status is {self.status.value!r}"
                 if self.status is not RunStatus.COMPLETE

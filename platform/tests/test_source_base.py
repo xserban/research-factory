@@ -98,6 +98,30 @@ def test_partial_and_failed_runs_with_note_are_allowed(status: RunStatus, prov: 
     assert result.resume_token == "cursor-abc"
 
 
+@pytest.mark.parametrize("note", ["", "   "])
+@pytest.mark.parametrize(
+    ("status", "reported", "delivered"),
+    [
+        (RunStatus.COMPLETE, 10, 7),  # (a) complete with an unexplained shortfall
+        (RunStatus.PARTIAL, None, 1),  # (b)
+        (RunStatus.FAILED, None, 1),  # (c)
+    ],
+)
+def test_blank_note_does_not_explain_a_shortfall(
+    note: str, status: RunStatus, reported: int | None, delivered: int, prov: Provenance
+) -> None:
+    with pytest.raises(ValueError):
+        SearchResult(
+            source="openalex",
+            query_sent="q",
+            reported_count=reported,
+            works=_works(prov, delivered),
+            pages=1,
+            status=status,
+            note=note,
+        )
+
+
 @pytest.mark.parametrize("status", [RunStatus.RUNNING, RunStatus.INTERRUPTED])
 def test_result_status_must_be_terminal_for_a_source_run(
     status: RunStatus, prov: Provenance
