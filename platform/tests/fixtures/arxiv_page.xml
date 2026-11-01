@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom"
+      xmlns:arxiv="http://arxiv.org/schemas/atom"
+      xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/">
+  <opensearch:totalResults>2</opensearch:totalResults>
+  <entry>
+    <id>http://arxiv.org/abs/2301.02033v3</id>
+    <published>2023-01-05T12:00:00Z</published>
+    <updated>2023-03-01T12:00:00Z</updated>
+    <title>Physics-informed self-supervised
+      reconstruction</title>
+    <summary>We propose a method.</summary>
+    <author><name>Ana Gonzalez</name></author>
+    <author><name>Bo Liu</name></author>
+    <arxiv:doi>10.1007/978-3-030-88552-6_9</arxiv:doi>
+    <arxiv:journal_ref>MICCAI 2023</arxiv:journal_ref>
+    <category term="eess.IV"/>
+    <category term="cs.LG"/>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/2209.14566v1</id>
+    <published>2022-09-29T12:00:00Z</published>
+    <title>Diffusion Adversarial Representation Learning</title>
+    <summary>Another method.</summary>
+    <author><name>Chae Kim</name></author>
+    <category term="cs.CV"/>
+  </entry>
+</feed>
