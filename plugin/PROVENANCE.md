@@ -3,7 +3,7 @@
 The skills in this plugin adapt the research-factory-old stage documents. Commit of the source:
 `7a0b682efe514273892bd9db3501337bd34b041c` (`git -C ~/Projects/research-factory-old rev-parse HEAD`).
 
-| Skill | Source documents (in research-factory-old) |
+| Skill | Source documents (vendored copies under `docs/reference/research-factory-old-spec/`, taken from research-factory-old at the SHA above) |
 | --- | --- |
 | `rf-frame` | `docs/reference/research-factory-old-spec/stages/00-frame.md`, `01-scope.md` (sections on slots and non-goals), `RIGOR-MODES.md` |
 | `rf-probe` | `docs/reference/research-factory-old-spec/stages/01-scope.md` (seeds, probe, recall, routing) |

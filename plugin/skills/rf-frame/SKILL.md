@@ -29,12 +29,12 @@ Turns a stated goal into a recorded question. Source: research-factory-old `stag
 7. Write the rationale and objectives in two or three sentences each (PRISMA-P items 1 to 4).
 8. Propose a rigor mode with its reasoning: `exploratory` (landscape scan, single pass),
    `pilot` (dual screening on a sample, advisory kappa) or `systematic` (full PRISMA, dual
-   screening, enforced kappa). State that the choice is reversible by promotion and offer the
-   override. Record it in the question spec.
-9. Pass the bare skill name `rf-frame` as `skill` on every mutating call. The platform computes
-   the skill hash; do not compute or send one.
+   screening, enforced kappa). Read the project's current mode with `project_status`. The rigor
+   mode is a project setting, not a field of the question spec, so the human sets it. Put your
+   reasoning in `rationale` or `scheme_rationale`, and say the choice is reversible by promotion.
+9. Every mutating tool also takes `project` (the project slug), `role`, and `model` (your own model id), alongside `skill`, which is the bare skill name. The platform computes the skill hash; do not send one. Pass the bare skill name `rf-frame` as `skill`.
 
 ## Done when
 
 The question is recorded with its `raw_goal`, the researcher has confirmed the quoted goal, and
-the rigor mode is recorded with its rationale. Hand over to `rf-probe`.
+the proposed rigor mode and its reasoning are stated, and the human has confirmed the project's mode. Hand over to `rf-probe`.

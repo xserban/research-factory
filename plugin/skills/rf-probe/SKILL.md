@@ -16,7 +16,7 @@ Checks that the question is searchable, using known papers as targets. Source: r
    needs a `cite` and an identifier (`doi`, `arxiv` or `openalex`). Sources when memory is thin:
    the reference list of the newest review in the area, the researcher's own citations, or the
    "cited by" list of one well-known paper.
-2. Add seeds with `seed_add`, passing the bare skill name `rf-probe` as `skill`. Read the
+2. Add seeds with `seed_add`. Read the
    accepted and rejected items it returns; fix and re-add the rejected ones. Read the current
    list with `seed_list` when needed.
 3. Never ask which seeds are held out, and never try to see them. The platform draws the
@@ -25,9 +25,11 @@ Checks that the question is searchable, using known papers as targets. Source: r
 4. Draft two candidate queries per source: one narrow and one broad, so the yield curve between
    them is visible. Each query is term blocks joined by AND, each block a set of synonyms joined
    by OR, and each block traceable to a slot of the question.
-5. Run `probe_run` with `queries` set to a list of `{source, query, kind, filters}` items, where
-   `kind` is `narrow` or `broad`. The probe is metadata only: counts and seed matching, with no
-   full text and no records retrieved for reading. Pass `rf-probe` as `skill`.
+5. Run `probe_run` with `queries` set to a list of `{source, query, kind, filters}` items. `kind`
+   is the query kind: `keyword` for term queries (or omit it), `filter` for a source-native filter,
+   or `id_list` for explicit IDs. Breadth is a property of the query text, so state a narrow and a
+   broad query as separate items. The probe is metadata only: counts and seed matching, with no
+   full text and no records retrieved for reading.
 6. Read the result. For each source and pooled, seed recall is retrieved positive seeds over total
    positive seeds. Negative seed hits are expected; they become exclusion candidates, not query
    changes.
@@ -41,6 +43,10 @@ Checks that the question is searchable, using known papers as targets. Source: r
      `rf-frame` and record a new question version with its reason;
    - **reframe** when no query reaches the threshold: the question is not answerable by topic
      search, so consider citation chasing or a narrative review.
+
+## Tool arguments
+
+Every mutating tool also takes `project` (the project slug), `role`, and `model` (your own model id), alongside `skill`, which is the bare skill name. The platform computes the skill hash; do not send one. Pass `rf-probe` as `skill`.
 
 ## Human steps
 

@@ -35,16 +35,27 @@ research-factory-old `stages/02-protocol.md` and `RIGOR-MODES.md`.
    replaced freely. Set `ready` only when the researcher has agreed the protocol.
 7. PRESS review. Run the review in a separate subagent that receives the protocol and the search
    strategy only, with no authoring context. It checks the six PRESS 2015 elements. Record its
-   findings with `protocol_press_review`, passing `rf-protocol` as `skill`. Then tell the
-   researcher to run `factory protocol confirm-press`. Do not confirm it yourself.
-8. Amend or record a deviation. A ready protocol changes only through `protocol_amend`, which
-   takes a `reason`, a `semantic` flag and `effects` per changed criterion. Set `semantic` to
-   `false` only when the wording changes and the rule does not; a changed `rule` marked
-   `semantic: false` needs a justification. Effects are `loosened`, `tightened` or `clarified`,
-   and the platform computes the stale decisions. Use `protocol_deviation` for a protocol that
-   was not followed. Deviations are kept separate from amendments and need a reason.
-9. Search runs name the protocol they executed. Call `search_run` with the `deviation_id` only
-   when a deviation justifies running a search that differs from the protocol.
+   findings with `protocol_press_review`. Then tell the researcher to confirm each finding with
+   `factory protocol confirm-press <review_id> --response "..."`, giving one `--response` per
+   finding in order. Do not confirm it yourself.
+8. Amend a ready protocol with `protocol_amend`, which takes `spec`, `reason`, `semantic`, and
+   `effects`. The platform refuses the call and writes nothing when a check fails.
+   - `effects` maps each changed criterion id to `loosened`, `tightened` or `clarified`. It must
+     name exactly the changed criteria: no missing ids and no unchanged ids.
+   - `semantic` is `false` only when no criterion is added or removed, no other hashed field
+     changes, and every effect is `clarified`. Otherwise it is `true`. There is no justification
+     mechanism; the platform checks this rule.
+   - The platform computes the stale decisions from the effects.
+   Use `protocol_deviation` for a protocol that was not followed. Deviations are kept separate from
+   amendments and need a `reason`.
+9. Search. `search_run` takes no protocol argument; the current ready protocol is implicit. In
+   `pilot` or `systematic` mode, a query the protocol does not plan needs `protocol_deviation`
+   first. Then pass the returned `deviation_id` to `search_run`. In `exploratory` mode no
+   deviation is needed.
+
+## Tool arguments
+
+Every mutating tool also takes `project` (the project slug), `role`, and `model` (your own model id), alongside `skill`, which is the bare skill name. The platform computes the skill hash; do not send one. Pass `rf-protocol` as `skill`.
 
 ## Rules
 
