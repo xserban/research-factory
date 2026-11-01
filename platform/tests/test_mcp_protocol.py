@@ -422,3 +422,97 @@ async def test_refusal_payloads_are_scrubbed_of_held_out_identifiers(
     assert body["ok"] is False
     assert held not in json.dumps(body)
     assert "[withheld]" in body["errors"][0]["reason"]
+
+
+@pytest.mark.anyio
+async def test_search_run_admits_an_unplanned_query_only_under_a_current_deviation(
+    settings: Settings,
+    project: Project,
+    clock: FixedClock,
+    mock_sources: Any,
+    agent: Actor,
+    human: Actor,
+) -> None:
+    # Final review, finding 5: a deviation admits one unplanned search; a foreign id, or one
+    # recorded against a superseded protocol version, is refused by its field path.
+    ready_protocol(project, agent, human, mock_sources)
+    sources = dict(mock_sources(openalex=[_item(9)]))
+    recorded = await _call(
+        settings,
+        clock,
+        {},
+        "protocol_deviation",
+        {
+            "project": "demo",
+            "description": "Search transformers as well.",
+            "reason": "The planned query missed a known paper.",
+            **AGENT,
+        },
+    )
+    assert recorded["ok"] is True, recorded
+    deviation_id = recorded["data"]["deviation_id"]
+
+    admitted = await _call(
+        settings,
+        clock,
+        sources,
+        "search_run",
+        {
+            "project": "demo",
+            "source": "openalex",
+            "query": "transformers",
+            "deviation_id": deviation_id,
+            **AGENT,
+        },
+    )
+    assert admitted["ok"] is True, admitted
+
+    foreign = await _call(
+        settings,
+        clock,
+        sources,
+        "search_run",
+        {
+            "project": "demo",
+            "source": "openalex",
+            "query": "transformers",
+            "deviation_id": "dev_01JZ9Q3K5M7N8P0R2S4T6V8W0Z",
+            **AGENT,
+        },
+    )
+    assert _fields(foreign) == ["deviation_id"]
+
+    current = current_protocol(project)
+    assert current is not None
+    spec = current.spec.model_dump(mode="json")
+    spec["criteria"][1]["rule"] = "exclude topic 1 only in full-text studies"
+    amended = await _call(
+        settings,
+        clock,
+        {},
+        "protocol_amend",
+        {
+            "project": "demo",
+            "spec": spec,
+            "reason": "Narrow the exclusion",
+            "semantic": True,
+            "effects": {"EX01": "loosened"},
+            **AGENT,
+        },
+    )
+    assert amended["ok"] is True, amended
+
+    stale = await _call(
+        settings,
+        clock,
+        sources,
+        "search_run",
+        {
+            "project": "demo",
+            "source": "openalex",
+            "query": "transformers",
+            "deviation_id": deviation_id,
+            **AGENT,
+        },
+    )
+    assert _fields(stale) == ["deviation_id"]
