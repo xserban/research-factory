@@ -114,7 +114,9 @@ def test_status_shows_works_searches_and_shortfalls(tmp_path: Path) -> None:
     clock = FixedClock(datetime(2026, 10, 31, 12, 0, tzinfo=UTC))
     project = init_project(settings, "demo", "pilot", session=SESSION, clock=clock)
     # The fake source reports 5 records and delivers 3: the shortfall must be shown.
-    sources: dict[str, SourceFactory] = {"fake": lambda _s, _c: FakeSource(FAKE_PAGES, reported=5)}
+    sources: dict[str, SourceFactory] = {
+        "fake": SourceFactory(FakeSource.kinds, lambda _s, _c: FakeSource(FAKE_PAGES, reported=5))
+    }
     spec = QuerySpec(source="fake", kind=QueryKind.KEYWORD, text="attention")
     query_id = register_query(project, project.human_actor(), spec, sources=sources)
     summary = run_query(project, query_id, sources=sources)

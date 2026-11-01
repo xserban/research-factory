@@ -48,11 +48,21 @@ class Index:
         self._projection = projection
         self._engine = _make_engine(db_path)
         self._identity = _file_identity(db_path)
+        self._holding = False
 
     def sync(self) -> SyncResult:
         """Apply new events incrementally, or rebuild when the index can't be trusted."""
         with self._locked():
             return self._sync()
+
+    @contextmanager
+    def exclusive(self) -> Iterator[None]:
+        """Hold the write lock across several reads and writes, so none can interleave.
+
+        Re-entrant: the sync and reads made inside the block do not wait on the lock they hold.
+        """
+        with self._locked():
+            yield
 
     def rebuild(self) -> str:
         """Rebuild the projection from the event log and return its state hash."""
@@ -66,13 +76,18 @@ class Index:
 
         Writers take it exclusively; readers share it so they wait for any rebuild in progress.
         """
+        if self._holding:
+            yield
+            return
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         with (self._db_path.parent / "lock").open("a") as handle:
             fcntl.flock(handle.fileno(), fcntl.LOCK_SH if shared else fcntl.LOCK_EX)
+            self._holding = True
             try:
                 self._refresh_engine()
                 yield
             finally:
+                self._holding = False
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
     def _refresh_engine(self) -> None:

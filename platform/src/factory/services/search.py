@@ -13,7 +13,7 @@ from typing import Any
 from sqlalchemy import text
 
 from factory.clock import parse_ts
-from factory.errors import FactoryValidationError, ValidationIssue
+from factory.errors import FactoryError, FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor, Event
 from factory.model.base import StrictModel
 from factory.model.search import (
@@ -112,8 +112,12 @@ def run_query(
     *,
     sources: Mapping[str, SourceFactory],
     resume_run: str | None = None,
+    actor: Actor | None = None,
 ) -> RunSummary:
     """Run one registered query against its source and record everything it returns.
+
+    `actor` is the triggering actor, recorded on `search.run_started`; without one the run is
+    recorded as the system's. An agent's run keeps its input (`query_id`, `resume_run`) verbatim.
 
     Raw pages are archived as they arrive. Records are recorded once the adapter returns, one
     `search.records_parsed` per page. A `SourceError` is an outcome, recorded and returned; any
@@ -130,8 +134,14 @@ def run_query(
     adapter = factory(project.settings, project.clock)
 
     system = project.system_actor()
+    started_by = actor or system
     known = _known_work_ids(project)
     run_id = project.ids.new("run")
+    input_blob = (
+        project.blobs.put_json({"query_id": query_id, "resume_run": resume_run})
+        if started_by.kind == "agent"
+        else None
+    )
     project.record(
         [
             project.events.make(
@@ -142,8 +152,9 @@ def run_query(
                     resume_of=resume_run,
                     resume_from=resume_token,
                 ),
-                system,
+                started_by,
                 refs=(run_id,),
+                input_blob=input_blob,
             )
         ]
     )
@@ -262,7 +273,10 @@ def resume_query_id(project: Project, resume_run: str, spec: QuerySpec) -> str:
     if query_id is None:
         raise FactoryValidationError([ValidationIssue("resume_run", "unknown run")])
     registered = _query_spec(project, query_id)
-    if registered is not None and (registered.source, registered.text, registered.kind) != (
+    if registered is None:
+        # The projector creates a run only alongside its query, so this is an index fault.
+        raise FactoryError(f"run {resume_run} names query {query_id}, not in the index")
+    if (registered.source, registered.text, registered.kind) != (
         spec.source,
         spec.text,
         spec.kind,
@@ -340,13 +354,20 @@ def _spec_issues(
     if factory is None:
         return [ValidationIssue("source", f"unknown source {spec.source!r}")]
     issues: list[ValidationIssue] = []
-    source = factory(project.settings, project.clock)
-    if spec.kind not in source.kinds:
+    if spec.kind not in factory.kinds:
         issues.append(
             ValidationIssue("kind", f"{spec.source} does not take {spec.kind.value} queries")
         )
     if spec.filters and spec.source != "openalex":
         issues.append(ValidationIssue("filters", f"{spec.source} does not take filters"))
+    if spec.source == "openalex" and any(
+        sep in part for part in (*spec.filters, *spec.filters.values()) for sep in (",", ":")
+    ):
+        # The adapter writes `,key:value` clauses, so a separator inside a key or value would
+        # split or re-open the expression.
+        issues.append(
+            ValidationIssue("filters", "OpenAlex filter keys and values cannot contain ',' or ':'")
+        )
     if spec.source == "openalex" and spec.kind is QueryKind.KEYWORD and "," in spec.text:
         # The adapter joins filter clauses with commas, so a comma in the text would start a
         # bogus clause rather than search for it.
@@ -406,6 +427,16 @@ def _resume_token(project: Project, query_id: str, resume_run: str) -> str:
                     "must name a partial or failed run of this query with a resume token",
                 )
             ]
+        )
+    with project.index.connect() as conn:
+        resumer = conn.execute(
+            text("SELECT run_id FROM runs WHERE resume_of = :run ORDER BY run_id LIMIT 1"),
+            {"run": resume_run},
+        ).one_or_none()
+    if resumer is not None:
+        # A run continues at most once; a second continuation would fetch the same records twice.
+        raise FactoryValidationError(
+            [ValidationIssue("resume_run", f"already resumed by {resumer[0]}")]
         )
     return str(row["resume_token"])
 

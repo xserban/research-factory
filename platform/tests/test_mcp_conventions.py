@@ -44,7 +44,7 @@ def test_paginate_rejects_bad_cursor(cursor: str) -> None:
 
 def test_make_agent_actor_builds_agent(settings: Settings) -> None:
     actor = make_agent_actor(
-        settings, SESSION, "screener-a", model="claude-opus-5-5", skill="rf-screen@1a2b3c4d"
+        settings, SESSION, "screener-a", model="claude-opus-5-5", skill="rf-screen"
     )
     assert actor.kind == "agent"
     assert actor.id == "screener-a"
@@ -54,15 +54,13 @@ def test_make_agent_actor_builds_agent(settings: Settings) -> None:
 
 def test_make_agent_actor_reports_fields(settings: Settings) -> None:
     with pytest.raises(FactoryValidationError) as err:
-        make_agent_actor(settings, SESSION, "screener-a", model="", skill="rf-screen@1a2b3c4d")
+        make_agent_actor(settings, SESSION, "screener-a", model="", skill="rf-screen")
     assert err.value.issues[0].field == "model"
 
 
 def test_make_agent_actor_reports_role_and_skill(settings: Settings) -> None:
     with pytest.raises(FactoryValidationError) as role_err:
-        make_agent_actor(
-            settings, SESSION, "Bad Role", model="claude-opus-5-5", skill="rf-screen@1a2b3c4d"
-        )
+        make_agent_actor(settings, SESSION, "Bad Role", model="claude-opus-5-5", skill="rf-screen")
     assert role_err.value.issues[0].field == "role"
     with pytest.raises(FactoryValidationError) as skill_err:
         make_agent_actor(settings, SESSION, "screener-a", model="claude-opus-5-5", skill="nope")

@@ -20,7 +20,16 @@ from factory.sources.arxiv import ArxivSource
 from factory.sources.http import PoliteClient
 from factory.sources.openalex import OpenAlexSource
 from factory.sources.registry import SourceFactory
-from tests.helpers import FAKE_PAGES, S2, SESSION, T0, Demo, FakeSource, arxiv_atom
+from tests.helpers import (
+    FAKE_PAGES,
+    S2,
+    SESSION,
+    T0,
+    Demo,
+    FakeSource,
+    arxiv_atom,
+    install_skill,
+)
 
 
 @pytest.fixture
@@ -112,7 +121,9 @@ def agent_other() -> Actor:
 
 @pytest.fixture
 def settings(tmp_path: Path) -> Settings:
-    return Settings(root=tmp_path, user="obd")
+    settings = Settings(root=tmp_path, user="obd")
+    install_skill(settings, "rf-screen")
+    return settings
 
 
 @pytest.fixture
@@ -150,7 +161,7 @@ def fake_sources() -> Callable[..., dict[str, SourceFactory]]:
             raise_at=raise_at,
             raise_error=raise_error,
         )
-        return {"fake": lambda _settings, _clock: source}
+        return {"fake": SourceFactory(FakeSource.kinds, lambda _settings, _clock: source)}
 
     return make
 
@@ -194,10 +205,14 @@ def mock_sources(http_log: list[httpx.Request]) -> Callable[..., dict[str, Sourc
             return PoliteClient(httpx.Client(transport=transport), sleep=lambda _seconds: None)
 
         return {
-            "openalex": lambda s, c: OpenAlexSource(
-                polite(openalex_handler), clock=c, mailto=s.mailto
+            "openalex": SourceFactory(
+                OpenAlexSource.kinds,
+                lambda s, c: OpenAlexSource(polite(openalex_handler), clock=c, mailto=s.mailto),
             ),
-            "arxiv": lambda s, c: ArxivSource(polite(arxiv_handler), clock=c, mailto=s.mailto),
+            "arxiv": SourceFactory(
+                ArxivSource.kinds,
+                lambda s, c: ArxivSource(polite(arxiv_handler), clock=c, mailto=s.mailto),
+            ),
         }
 
     return make

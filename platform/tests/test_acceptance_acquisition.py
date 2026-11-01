@@ -268,8 +268,13 @@ def test_contact_address_never_reaches_the_event_log(tmp_path: Path, clock: Fixe
         return respond(request, httpx.Response(200, text=arxiv_atom()))
 
     sources: Mapping[str, SourceFactory] = {
-        "openalex": lambda s, c: OpenAlexSource(polite(openalex), clock=c, mailto=s.mailto),
-        "arxiv": lambda s, c: ArxivSource(polite(arxiv), clock=c, mailto=s.mailto),
+        "openalex": SourceFactory(
+            OpenAlexSource.kinds,
+            lambda s, c: OpenAlexSource(polite(openalex), clock=c, mailto=s.mailto),
+        ),
+        "arxiv": SourceFactory(
+            ArxivSource.kinds, lambda s, c: ArxivSource(polite(arxiv), clock=c, mailto=s.mailto)
+        ),
     }
 
     ok = _search(project, sources, "openalex", "vessel")

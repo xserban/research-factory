@@ -32,7 +32,16 @@ class DedupSummary(StrictModel):
 
 
 def dedup_run(project: Project) -> DedupSummary:
-    """Reconcile the cascade's merges with the recorded ones, writing only what changed."""
+    """Reconcile the cascade's merges with the recorded ones, writing only what changed.
+
+    The index's write lock is held from the read to the last write, so two concurrent runs cannot
+    both record the same merge.
+    """
+    with project.index.exclusive():
+        return _reconcile(project)
+
+
+def _reconcile(project: Project) -> DedupSummary:
     works = list_works(project)
     result = dedup(works, blocked=_blocked_pairs(project))
     # Identity collapses (several records sharing one id) absorb nothing: they are not merges.

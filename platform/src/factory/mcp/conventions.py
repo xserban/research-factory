@@ -10,6 +10,7 @@ from pydantic import JsonValue, ValidationError
 from factory.config import Settings
 from factory.errors import FactoryValidationError, ProjectNotFoundError, ValidationIssue
 from factory.events.envelope import Actor
+from factory.services.skills import skill_ref
 
 PAGE_LIMIT = 50
 
@@ -47,8 +48,10 @@ def paginate(items: Sequence[T], cursor: str | None, limit: int = PAGE_LIMIT) ->
 
 
 def make_agent_actor(settings: Settings, session: str, role: str, model: str, skill: str) -> Actor:
+    """An agent's actor, with its skill resolved to the reference of the installed file."""
     if not model:
         raise FactoryValidationError([ValidationIssue("model", "must not be empty")])
+    ref = skill_ref(settings, skill)
     try:
         return Actor(
             kind="agent",
@@ -56,7 +59,7 @@ def make_agent_actor(settings: Settings, session: str, role: str, model: str, sk
             user=settings.user,
             session=session,
             model=model,
-            skill=skill,
+            skill=ref,
         )
     except ValidationError as exc:
         issues = [

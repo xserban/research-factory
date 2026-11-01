@@ -1,8 +1,10 @@
+import hashlib
 import json
 from collections.abc import Sequence
 from datetime import UTC, date, datetime
 from typing import Any
 
+from factory.config import Settings
 from factory.model.base import StrictModel
 from factory.model.search import QueryKind, QuerySpec, RunStatus
 from factory.model.work import Author, Dates, Identifiers, Provenance, Work, WorkType
@@ -209,3 +211,12 @@ def arxiv_atom(entries: Sequence[tuple[str, str, int, str]] = ()) -> str:
         'xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/">'
         f"<opensearch:totalResults>{len(entries)}</opensearch:totalResults>{body}</feed>"
     )
+
+
+def install_skill(settings: Settings, name: str, text: str = "test skill") -> str:
+    """Write a skill file under the settings' plugin dir and return its `name@hash` reference."""
+    data = text.encode("utf-8")
+    path = settings.plugin_dir / "skills" / name / "SKILL.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
+    return f"{name}@{hashlib.sha256(data).hexdigest()[:8]}"

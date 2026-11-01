@@ -68,7 +68,7 @@ def build_server(
             else:
                 query_id = search_service.register_query(opened, actor, spec, sources=adapters)
             summary = search_service.run_query(
-                opened, query_id, sources=adapters, resume_run=resume_run
+                opened, query_id, sources=adapters, resume_run=resume_run, actor=actor
             )
             return summary.model_dump(mode="json")
 

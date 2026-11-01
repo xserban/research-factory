@@ -5,7 +5,7 @@ import pydantic
 import pytest
 from sqlalchemy import text
 
-from factory.errors import FactoryValidationError
+from factory.errors import FactoryError, FactoryValidationError
 from factory.events.envelope import Actor, Event
 from factory.events.reader import read_all
 from factory.model.search import (
@@ -25,8 +25,10 @@ from factory.services.search import (
     get_work,
     list_works,
     register_query,
+    resume_query_id,
     run_query,
 )
+from factory.sources.base import Source
 from factory.sources.registry import SourceFactory, default_sources
 from tests.helpers import SESSION, T0
 
@@ -512,3 +514,77 @@ def test_run_summary_carries_the_recorded_outcome(
     assert summary.source == "fake" and summary.query_id == qid
     assert summary.reported_count is None and summary.skipped == 0 and summary.note is None
     assert summary.run_id.startswith("run_") and summary.resume_token is None
+
+
+def test_validation_builds_no_adapter(project: Project) -> None:
+    def build(_settings: object, _clock: object) -> Source:
+        raise AssertionError("validation must not build an adapter")
+
+    sources = {"fake": SourceFactory(kinds=frozenset({QueryKind.KEYWORD}), build=build)}
+    human = project.human_actor()
+    with pytest.raises(FactoryValidationError) as wrong:
+        register_query(
+            project,
+            human,
+            QuerySpec(source="fake", kind=QueryKind.FILTER, text="doi:1"),
+            sources=sources,
+        )
+    assert [i.field for i in wrong.value.issues] == ["kind"]
+    assert _register(project, sources) != ""
+
+
+def test_openalex_filter_value_with_comma_rejected(project: Project) -> None:
+    # A comma or colon in a filter key or value would corrupt the OpenAlex filter expression.
+    before = project_status(project).events_total
+    human = project.human_actor()
+    for filters in (
+        {"publication_year": "2019,2020"},
+        {"publication_year": ">2019:x"},
+        {"a:b": "1"},
+    ):
+        spec = QuerySpec(
+            source="openalex", kind=QueryKind.FILTER, text="doi:10.1/a", filters=filters
+        )
+        with pytest.raises(FactoryValidationError) as bad:
+            register_query(project, human, spec, sources=default_sources())
+        assert [i.field for i in bad.value.issues] == ["filters"]
+    assert project_status(project).events_total == before
+
+
+def test_run_started_records_the_triggering_agent(
+    project: Project, agent: Actor, fake_sources: SourcesFor
+) -> None:
+    sources = fake_sources()
+    qid = _register(project, sources)
+    run_query(project, qid, sources=sources, actor=agent)
+    [started] = _of_type(project, "search.run_started")
+    assert started.actor == agent
+    assert started.input_blob is not None
+    blob = project.blobs.get_json(started.input_blob)
+    assert blob == {"query_id": qid, "resume_run": None}
+
+
+def test_run_cannot_be_resumed_twice(project: Project, fake_sources: SourcesFor) -> None:
+    seeded = fake_sources(fail_after=1)
+    qid = _register(project, seeded)
+    partial = run_query(project, qid, sources=seeded)
+    first = run_query(project, qid, sources=fake_sources(), resume_run=partial.run_id)
+    with pytest.raises(FactoryValidationError) as again:
+        run_query(project, qid, sources=fake_sources(), resume_run=partial.run_id)
+    assert [(i.field, i.reason) for i in again.value.issues] == [
+        ("resume_run", f"already resumed by {first.run_id}")
+    ]
+    assert len(_of_type(project, "search.run_started")) == 2
+
+
+def test_resume_lookup_raises_when_the_run_query_row_is_missing(
+    project: Project, fake_sources: SourcesFor, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The projector never creates a run without its query, so the missing row is simulated.
+    seeded = fake_sources(fail_after=1)
+    qid = _register(project, seeded)
+    partial = run_query(project, qid, sources=seeded)
+    monkeypatch.setattr("factory.services.search._query_spec", lambda *_: None)
+    spec = QuerySpec(source="fake", kind=QueryKind.KEYWORD, text="x")
+    with pytest.raises(FactoryError):
+        resume_query_id(project, partial.run_id, spec)

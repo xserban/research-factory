@@ -1,3 +1,4 @@
+import threading
 from collections.abc import Callable, Mapping
 from typing import Any
 
@@ -5,12 +6,14 @@ import pydantic
 import pytest
 from sqlalchemy import text
 
+from factory.clock import SystemClock
+from factory.config import Settings
 from factory.errors import FactoryValidationError
 from factory.events.envelope import Actor, Event
 from factory.events.reader import read_all
 from factory.model.dedup import DedupMerged, DedupReverted
 from factory.model.search import QueryKind, QuerySpec
-from factory.services.context import Project
+from factory.services.context import Project, open_project
 from factory.services.dedup import (
     active_merges,
     canonical_works,
@@ -305,3 +308,27 @@ def test_merge_payloads_are_validated() -> None:
         DedupMerged.model_validate({**merge, "absorbed": ["rf:a-00000000"]})
     with pytest.raises(pydantic.ValidationError):
         DedupReverted(merge_id=f"mrg_{SESSION}", reason="  ", manual=True)
+
+
+def test_concurrent_dedup_runs_record_one_merge(
+    project: Project, fake_sources: SourcesFor, settings: Settings
+) -> None:
+    _ingest(project, fake_sources, [[PUBLISHED, PREPRINT]])
+    barrier = threading.Barrier(2)
+    created: list[list[str]] = []
+    lock = threading.Lock()
+
+    def run() -> None:
+        opened = open_project(settings, "demo", session=SESSION, clock=SystemClock())
+        barrier.wait()
+        summary = dedup_run(opened)
+        with lock:
+            created.append(summary.created)
+
+    threads = [threading.Thread(target=run) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert sorted(len(ids) for ids in created) == [0, 1]
+    assert len(_of_type(project, "dedup.merged")) == 1

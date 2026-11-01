@@ -19,7 +19,7 @@ from factory.services.search import register_query, run_query
 from factory.sources.registry import SourceFactory
 from tests.helpers import arxiv_atom, openalex_item
 
-AGENT = {"role": "screener-a", "model": "claude-opus-5-5", "skill": "rf-screen@1a2b3c4d"}
+AGENT = {"role": "screener-a", "model": "claude-opus-5-5", "skill": "rf-screen"}
 
 
 def _body(res: CallToolResult) -> dict[str, Any]:
@@ -301,7 +301,7 @@ async def test_dedup_run_requires_a_valid_agent(
                     "project": "demo",
                     "role": "screener-a",
                     "model": "",
-                    "skill": "rf-screen@1a2b3c4d",
+                    "skill": "rf-screen",
                 },
             )
         )
