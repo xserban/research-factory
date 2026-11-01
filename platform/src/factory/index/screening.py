@@ -124,6 +124,8 @@ def screening_tables(metadata: MetaData) -> ScreeningTables:
         Column("exclusions", Integer, nullable=False),
         Column("inclusions", Integer, nullable=False),
         Column("population_digest", String, nullable=False),
+        Column("pop_exclusions", Integer, nullable=False),
+        Column("pop_inclusions", Integer, nullable=False),
     )
     audit_items = Table(
         "audit_items",
@@ -131,6 +133,7 @@ def screening_tables(metadata: MetaData) -> ScreeningTables:
         Column("audit_id", String, primary_key=True),
         Column("work_id", String, primary_key=True),
         Column("agreed_verdict", String),
+        Column("agreed_criteria", String),
         Column("human_verdict", String),
         Column("criterion", String),
     )
@@ -293,6 +296,7 @@ def _audit_sampled(t: ScreeningTables) -> Handler:
     def audit_sampled(conn: Connection, event: Event) -> None:
         payload = AuditSampled.model_validate(event.payload)
         agreed = _agreed_by_work(conn, t, _current_protocol_id(conn))
+        verdicts = [(work, verdict) for work, (verdict, _) in agreed.items()]
         conn.execute(
             sqlite_insert(t.audits)
             .values(
@@ -301,17 +305,21 @@ def _audit_sampled(t: ScreeningTables) -> Handler:
                 population=payload.population,
                 exclusions=payload.exclusions,
                 inclusions=payload.inclusions,
-                population_digest=population_digest(agreed.items()),
+                population_digest=population_digest(verdicts),
+                pop_exclusions=sum(1 for _, v in verdicts if v == "exclude"),
+                pop_inclusions=sum(1 for _, v in verdicts if v == "include"),
             )
             .on_conflict_do_nothing(index_elements=["audit_id"])
         )
         for work_id in payload.work_ids:
+            agreed_verdict, agreed_criteria = agreed.get(work_id, (None, None))
             conn.execute(
                 sqlite_insert(t.audit_items)
                 .values(
                     audit_id=payload.audit_id,
                     work_id=work_id,
-                    agreed_verdict=agreed.get(work_id),
+                    agreed_verdict=agreed_verdict,
+                    agreed_criteria=agreed_criteria,
                     human_verdict=None,
                     criterion=None,
                 )
@@ -357,28 +365,40 @@ def _current_protocol_id(conn: Connection) -> str | None:
 
 def _agreed_by_work(
     conn: Connection, t: ScreeningTables, protocol_id: str | None
-) -> dict[str, str]:
-    """The agreed outcome of every work both passes screened under `protocol_id`: `include` when
-    both live screening decisions promote, `exclude` when neither does. A work with an `unsure`
-    verdict, or whose passes disagree, is not agreed and is absent."""
+) -> dict[str, tuple[str, str | None]]:
+    """The agreed set under `protocol_id`: for each work both passes screened, its agreed outcome
+    (`include` when both live screening decisions promote, `exclude` when neither does) and, for an
+    exclusion, the bare criteria either pass cited, sorted and comma-joined. A work with an `unsure`
+    verdict, or whose passes disagree, is not agreed and is absent. Matches
+    `agreement.agreed_works`."""
     if protocol_id is None:
         return {}
     rows = conn.execute(
-        select(t.decisions.c.pass_label, t.decisions.c.work_id, t.decisions.c.verdict)
+        select(
+            t.decisions.c.pass_label,
+            t.decisions.c.work_id,
+            t.decisions.c.verdict,
+            t.decisions.c.criterion,
+        )
         .where(t.decisions.c.phase == "screening")
         .where(t.decisions.c.protocol_id == protocol_id)
         .where(t.decisions.c.superseded_by.is_(None))
         .order_by(t.decisions.c.event_id)
     ).all()
-    verdicts: dict[str, dict[str, Verdict]] = {}
-    for pass_label, work_id, verdict in rows:
-        verdicts.setdefault(str(work_id), {})[str(pass_label)] = Verdict(str(verdict))
-    agreed: dict[str, str] = {}
-    for work_id, by_pass in verdicts.items():
+    decided: dict[str, dict[str, tuple[Verdict, str | None]]] = {}
+    for pass_label, work_id, verdict, criterion in rows:
+        bare = None if criterion is None else str(criterion).rsplit(":", 1)[-1]
+        decided.setdefault(str(work_id), {})[str(pass_label)] = (Verdict(str(verdict)), bare)
+    agreed: dict[str, tuple[str, str | None]] = {}
+    for work_id, by_pass in decided.items():
         if set(by_pass) != {"A", "B"}:
             continue
-        a, b = by_pass["A"], by_pass["B"]
+        (a, a_criterion), (b, b_criterion) = by_pass["A"], by_pass["B"]
         if Verdict.UNSURE in (a, b) or a.promotes != b.promotes:
             continue
-        agreed[work_id] = "include" if a.promotes else "exclude"
+        if a.promotes:
+            agreed[work_id] = ("include", None)
+            continue
+        cited = sorted({c for c in (a_criterion, b_criterion) if c is not None})
+        agreed[work_id] = ("exclude", ",".join(cited))
     return agreed

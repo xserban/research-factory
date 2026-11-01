@@ -122,7 +122,9 @@ def audit_record(
         issues: list[ValidationIssue] = []
         if actor.kind != "human":
             issues.append(ValidationIssue("actor", "audit labels are human acts"))
-        if not _sampled(project, audit_id, work_id):
+        if not _audit_exists(project, audit_id):
+            issues.append(ValidationIssue("audit_id", "unknown audit"))
+        elif not _sampled(project, audit_id, work_id):
             issues.append(ValidationIssue("work_id", "not in this audit sample"))
         protocol = current_protocol(project)
         qualified: str | None = None
@@ -157,36 +159,36 @@ def audit_report(project: Project) -> AuditReport | None:
     project.index.sync()
     with project.index.connect() as conn:
         latest = conn.execute(
-            text("SELECT audit_id, population_digest FROM audits ORDER BY audit_id DESC LIMIT 1")
+            text(
+                "SELECT audit_id, pop_exclusions, pop_inclusions FROM audits "
+                "ORDER BY audit_id DESC LIMIT 1"
+            )
         ).one_or_none()
         if latest is None:
             return None
         items = conn.execute(
             text(
-                "SELECT work_id, agreed_verdict, human_verdict FROM audit_items "
+                "SELECT work_id, agreed_verdict, agreed_criteria, human_verdict FROM audit_items "
                 "WHERE audit_id = :a ORDER BY work_id"
             ),
             {"a": str(latest[0])},
         ).all()
-    agreed = agreed_works(project)
-    current = population_digest((w, item.verdict) for w, item in agreed.items())
-    if current == str(latest[1]):
-        pop_exclusions = sum(1 for item in agreed.values() if item.verdict == "exclude")
-        pop_inclusions = sum(1 for item in agreed.values() if item.verdict == "include")
-    else:
-        pop_exclusions = pop_inclusions = 0
+    # The population and the cited criteria were fixed when the sample was drawn, so later changes
+    # to the agreed set leave the report as it was.
     labelled = [
-        (str(agreed_v) == "include", str(human_v) == "include")
-        for _, agreed_v, human_v in items
+        (agreed_v == "include", human_v == "include")
+        for _, agreed_v, _, human_v in items
         if human_v is not None
     ]
-    rates = audit_error_rates(labelled, pop_exclusions, pop_inclusions)
-    overturned = {
-        str(work)
-        for work, agreed_v, human_v in items
-        if agreed_v == "exclude" and human_v == "include"
-    }
-    implicated = sorted({c for work in overturned if work in agreed for c in agreed[work].criteria})
+    rates = audit_error_rates(labelled, int(latest[1]), int(latest[2]))
+    implicated = sorted(
+        {
+            c
+            for _, agreed_v, criteria, human_v in items
+            if agreed_v == "exclude" and human_v == "include" and criteria
+            for c in str(criteria).split(",")
+        }
+    )
     rate = rates.false_exclusion
     return AuditReport(
         audit_id=str(latest[0]),
@@ -209,6 +211,14 @@ def _last_population_digest(project: Project) -> str | None:
             text("SELECT population_digest FROM audits ORDER BY audit_id DESC LIMIT 1")
         ).one_or_none()
     return None if row is None else str(row[0])
+
+
+def _audit_exists(project: Project, audit_id: str) -> bool:
+    with project.index.connect() as conn:
+        row = conn.execute(
+            text("SELECT 1 FROM audits WHERE audit_id = :a"), {"a": audit_id}
+        ).one_or_none()
+    return row is not None
 
 
 def _sampled(project: Project, audit_id: str, work_id: str) -> bool:

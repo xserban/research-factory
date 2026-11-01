@@ -10,10 +10,11 @@ from collections.abc import Callable, Mapping
 import pytest
 from sqlalchemy import text
 
+from factory.canonical import population_digest
 from factory.errors import FactoryValidationError
 from factory.events.envelope import Actor
 from factory.model.screening import Channel, PassJoined, PassLabel
-from factory.services.agreement import agreed_works
+from factory.services.agreement import AgreedWork, agreed_works
 from factory.services.audit import audit_record, audit_report, audit_sample
 from factory.services.calibration import calibration_items
 from factory.services.context import Project
@@ -350,4 +351,132 @@ def test_audit_record_rejects_unknown_criterion_and_invalid_verdict(
 
     assert _fields(unknown) == ["criterion"]
     assert _fields(invalid) == ["verdict"]
+    assert len(_events(project)) == before
+
+
+def _live_decision(project: Project, work_id: str, pass_label: str) -> str:
+    with project.index.connect() as conn:
+        return str(
+            conn.execute(
+                text(
+                    "SELECT decision_id FROM decisions WHERE work_id = :w AND pass_label = :p "
+                    "AND superseded_by IS NULL"
+                ),
+                {"w": work_id, "p": pass_label},
+            ).one()[0]
+        )
+
+
+def test_report_is_fixed_at_sample_time(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    protocol_id, ordinary = _population(project, agent, human, mock_sources)
+    _agree(project, agent, ordinary[:2], protocol_id, exclude=True)
+    _agree(project, agent, ordinary[2:], protocol_id, exclude=False)
+    sampled = audit_sample(project, human, random_seed=7)
+    kept = ordinary[1]
+    for work in sampled.work_ids:
+        if work == kept:
+            audit_record(project, human, sampled.audit_id, work, "exclude", "EX01", Channel.CLI)
+        else:
+            audit_record(project, human, sampled.audit_id, work, "include", None, Channel.CLI)
+    before = audit_report(project)
+    assert before is not None
+    assert before.rates.weighted == pytest.approx(1 / len(ordinary))
+    assert before.criteria_implicated == ["EX01"]
+
+    # Pass B now excludes an agreed include: the live agreed set drifts from the audit's population.
+    drifted = ordinary[2]
+    _decide(
+        project,
+        agent,
+        drifted,
+        "B",
+        "screening",
+        "exclude",
+        "EX01",
+        protocol_id,
+        supersedes=_live_decision(project, drifted, "B"),
+    )
+    assert drifted not in agreed_works(project)
+
+    after = audit_report(project)
+
+    assert after is not None
+    assert after.rates.weighted == before.rates.weighted
+    assert after.criteria_implicated == before.criteria_implicated
+
+
+def test_projection_agrees_with_agreed_works_in_mixed_case(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    protocol_id, ordinary = _population(project, agent, human, mock_sources)
+    unsure, split, superseded, both_exclude, *rest = ordinary
+    _decide(project, agent, unsure, "A", "screening", "unsure", None, protocol_id)
+    _decide(project, agent, unsure, "B", "screening", "include", None, protocol_id)
+    _decide(project, agent, split, "A", "screening", "include", None, protocol_id)
+    _decide(project, agent, split, "B", "screening", "exclude", "EX02", protocol_id)
+    first = _decide(project, agent, superseded, "A", "screening", "exclude", "EX01", protocol_id)
+    _decide(
+        project,
+        agent,
+        superseded,
+        "A",
+        "screening",
+        "include",
+        None,
+        protocol_id,
+        supersedes=first,
+    )
+    _decide(project, agent, superseded, "B", "screening", "include", None, protocol_id)
+    _decide(project, agent, both_exclude, "A", "screening", "exclude", "EX01", protocol_id)
+    _decide(project, agent, both_exclude, "B", "screening", "exclude", "EX03", protocol_id)
+    for work in rest:
+        _decide(project, agent, work, "A", "screening", "include", None, protocol_id)
+        _decide(project, agent, work, "B", "screening", "include", None, protocol_id)
+
+    agreed = agreed_works(project)
+    sampled = audit_sample(project, human, random_seed=7)
+
+    assert set(agreed) == set(ordinary) - {unsure, split}
+    assert agreed[superseded].verdict == "include"
+    assert agreed[both_exclude] == AgreedWork(verdict="exclude", criteria=["EX01", "EX03"])
+    with project.index.connect() as conn:
+        digest, pop_ex, pop_in = conn.execute(
+            text(
+                "SELECT population_digest, pop_exclusions, pop_inclusions FROM audits "
+                "WHERE audit_id = :a"
+            ),
+            {"a": sampled.audit_id},
+        ).one()
+        items = {
+            str(w): (av, ac)
+            for w, av, ac in conn.execute(
+                text(
+                    "SELECT work_id, agreed_verdict, agreed_criteria FROM audit_items "
+                    "WHERE audit_id = :a"
+                ),
+                {"a": sampled.audit_id},
+            ).all()
+        }
+    verdicts = [(w, a.verdict) for w, a in agreed.items()]
+    assert str(digest) == population_digest(verdicts)
+    assert int(pop_ex) == sum(1 for _, v in verdicts if v == "exclude") == 1
+    assert int(pop_in) == sum(1 for _, v in verdicts if v == "include")
+    assert items[both_exclude] == ("exclude", "EX01,EX03")
+    assert items[superseded] == ("include", None)
+
+
+def test_unknown_audit_is_reported_on_audit_id(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    protocol_id, ordinary = _population(project, agent, human, mock_sources)
+    _agree(project, agent, ordinary, protocol_id, exclude=False)
+    audit_sample(project, human, random_seed=7)
+    before = len(_events(project))
+
+    with pytest.raises(FactoryValidationError) as exc:
+        audit_record(project, human, "aud_unknown", ordinary[0], "include", None, Channel.CLI)
+
+    assert _fields(exc) == ["audit_id"]
     assert len(_events(project)) == before
