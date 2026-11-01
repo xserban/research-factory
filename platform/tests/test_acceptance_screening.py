@@ -27,12 +27,14 @@ from factory.services.search import list_works
 from factory.services.seeds import SeedRole, add_seeds, all_seeds
 from factory.sources.registry import SourceFactory
 from tests.helpers import (
+    Session,
+    _leaks,
     _seed_item,
+    open_session,
     openalex_item,
     pilot_protocol_spec,
     record_pilot_question,
 )
-from tests.test_mcp_screening import Session, _leaks, open_session
 
 PASS_A = {"role": "screener-a", "model": "claude-sonnet-5-5", "skill": "rf-screen"}
 PASS_B = {"role": "screener-b", "model": "claude-haiku-5-5", "skill": "rf-screen"}

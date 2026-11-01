@@ -15,8 +15,6 @@ from factory.events.reader import read_all
 from factory.model.protocol import (
     Criterion,
     CriterionEffect,
-    PressElement,
-    PressFinding,
     ScreeningStage,
     protocol_version,
 )
@@ -28,18 +26,13 @@ from factory.model.screening import (
     ScreeningPhase,
     Verdict,
 )
-from factory.model.search import QueryKind, QuerySpec
-from factory.model.seed import SeedKind, SeedSpec
+from factory.model.seed import SeedKind
 from factory.services.calibration import calibration_items, draw_calibration, label_calibration
 from factory.services.context import Project
-from factory.services.probe import run_probe
 from factory.services.project import init_project
 from factory.services.protocol import (
     amend_protocol,
-    confirm_press,
     current_protocol,
-    press_review,
-    record_protocol,
 )
 from factory.services.screening import (
     SCREEN_BATCH,
@@ -49,97 +42,18 @@ from factory.services.screening import (
     open_pass,
     screen_next,
 )
-from factory.services.search import list_works, register_query, run_query
-from factory.services.seeds import SeedRole, add_seeds, all_seeds
+from factory.services.search import list_works
+from factory.services.seeds import SeedRole, all_seeds
 from factory.services.tasks import complete_task, task_counts
 from factory.sources.registry import SourceFactory
 from tests.helpers import (
     SESSION,
-    _seed_item,
-    openalex_item,
-    pilot_protocol_spec,
-    record_pilot_question,
+    _of_type,
+    _protocol,
+    _setup,
 )
 
 SourcesFor = Callable[..., Mapping[str, SourceFactory]]
-
-POSITIVES = 6
-NEGATIVES = 3
-RANDOM_WORKS = 40
-
-
-def _positive_item(n: int) -> dict[str, Any]:
-    return _work(n, doi=f"10.1000/p{n}", title=f"Paper {n}")
-
-
-def _negative_item(k: int) -> dict[str, Any]:
-    return _work(100 + k, doi=f"10.1000/n{k}", title=f"Negative {k}")
-
-
-def _random_item(k: int) -> dict[str, Any]:
-    return _work(200 + k, doi=f"10.1000/r{k}", title=f"Random {k}")
-
-
-def _work(n: int, *, doi: str, title: str) -> dict[str, Any]:
-    return openalex_item(
-        title=title, author="Ada Zhou", published="2020-01-01", openalex_id=f"W{n}", doi=doi
-    )
-
-
-def _protocol(
-    project: Project,
-    agent: Actor,
-    human: Actor,
-    mock_sources: SourcesFor,
-    *,
-    ready: bool = True,
-    dual_sample: float = 0.5,
-) -> str:
-    """Three positive seeds, a probe, and the pilot protocol with the given dual sample."""
-    question_id = record_pilot_question(project, agent)
-    for n in (1, 2, 3):
-        seed = SeedSpec(kind=SeedKind.POSITIVE, cite=f"Paper {n}", doi=f"10.1000/p{n}")
-        add_seeds(project, agent, [seed], sources=mock_sources(openalex=[_seed_item(n)]))
-    probe = QuerySpec(source="openalex", kind=QueryKind.KEYWORD, text="attention")
-    report = run_probe(project, agent, [probe], sources=mock_sources(openalex=[_seed_item(1)]))
-    spec = pilot_protocol_spec(question_id, report.probe_id, reviewer=human.id)
-    screening = spec.screening.model_copy(update={"dual_sample": dual_sample})
-    spec = spec.model_copy(update={"screening": screening})
-    protocol_id = record_protocol(project, agent, spec, ready=ready).protocol_id
-    if ready:
-        finding = PressFinding(
-            element=PressElement.TEXT_WORDS, finding="Add a synonym.", severity="minor"
-        )
-        review_id = press_review(project, agent, protocol_id, (finding,))
-        confirm_press(project, human, review_id, ("Accepted.",))
-    return protocol_id
-
-
-def _setup(
-    project: Project,
-    agent: Actor,
-    human: Actor,
-    mock_sources: SourcesFor,
-    *,
-    dual_sample: float = 0.5,
-    random_works: int = RANDOM_WORKS,
-) -> str:
-    """A protocol, the seeds, and a corpus of every seed work plus random works."""
-    protocol_id = _protocol(project, agent, human, mock_sources, dual_sample=dual_sample)
-    for n in range(4, POSITIVES + 1):
-        spec = SeedSpec(kind=SeedKind.POSITIVE, cite=f"Paper {n}", doi=f"10.1000/p{n}")
-        add_seeds(project, agent, [spec], sources=mock_sources(openalex=[_positive_item(n)]))
-    for k in range(1, NEGATIVES + 1):
-        spec = SeedSpec(kind=SeedKind.NEGATIVE, cite=f"Negative {k}", doi=f"10.1000/n{k}")
-        add_seeds(project, agent, [spec], sources=mock_sources(openalex=[_negative_item(k)]))
-    items = [_positive_item(n) for n in range(1, POSITIVES + 1)]
-    items += [_negative_item(k) for k in range(1, NEGATIVES + 1)]
-    items += [_random_item(k) for k in range(1, random_works + 1)]
-    query = QuerySpec(source="openalex", kind=QueryKind.KEYWORD, text="attention")
-    sources = mock_sources(openalex=items)
-    query_id = register_query(project, human, query, sources=sources)
-    run_query(project, query_id, sources=sources)
-    return protocol_id
 
 
 def _draw(project: Project) -> list[str]:
@@ -148,10 +62,6 @@ def _draw(project: Project) -> list[str]:
 
 def _events(project: Project) -> list[Event]:
     return read_all(project.paths.events_dir, project.catalog)
-
-
-def _of_type(project: Project, type_: str) -> list[Event]:
-    return [e for e in _events(project) if e.type == type_]
 
 
 def _decide(

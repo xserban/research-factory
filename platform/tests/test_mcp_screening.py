@@ -5,53 +5,21 @@ Code session does. Screening tools withhold held-out seed identifiers but not he
 """
 
 import json
-import re
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
-from datetime import timedelta
 from typing import Any
 
 import pytest
-from mcp import Client
-from mcp.types import TextContent
 
 from factory.clock import FixedClock
 from factory.config import Settings
 from factory.events.reader import read_all
-from factory.mcp.server import build_server
 from factory.model.screening import Channel
 from factory.services.calibration import calibration_items, calibration_labels, label_calibration
 from factory.services.context import Project
 from factory.services.seeds import SeedRole, all_seeds
-from factory.sources.registry import SourceFactory
-from tests.test_screening_next import _draw, _of_type, _setup
+from tests.helpers import _leaks, _of_type, _setup, open_session
+from tests.test_screening_next import _draw
 
 AGENT = {"role": "screener-a", "model": "claude-sonnet-5-5", "skill": "rf-screen"}
-
-
-class Session:
-    """One MCP server and its client: one session. Every call advances the clock one millisecond."""
-
-    def __init__(self, client: Client, clock: FixedClock) -> None:
-        self._client = client
-        self._clock = clock
-
-    async def call(self, name: str, **args: Any) -> dict[str, Any]:
-        self._clock.advance(timedelta(milliseconds=1))
-        result = await self._client.call_tool(name, args)
-        block = result.content[0]
-        assert isinstance(block, TextContent)
-        body: dict[str, Any] = json.loads(block.text)
-        return body
-
-
-@asynccontextmanager
-async def open_session(
-    settings: Settings, clock: FixedClock, sources: dict[str, SourceFactory] | None = None
-) -> AsyncIterator[Session]:
-    server = build_server(settings, clock=clock, sources={} if sources is None else sources)
-    async with Client(server) as client:
-        yield Session(client, clock)
 
 
 def _fields(body: dict[str, Any]) -> list[str]:
@@ -67,15 +35,6 @@ def _include(record: dict[str, Any]) -> dict[str, Any]:
         "quote": record["title"],
         "rationale": "fits",
     }
-
-
-def _leaks(text: str, tokens: set[str]) -> list[str]:
-    """Tokens that occur in `text` as whole identifiers, case-insensitively."""
-    return sorted(
-        token
-        for token in tokens
-        if re.search(rf"(?<![0-9A-Za-z]){re.escape(token)}(?![0-9A-Za-z])", text, re.IGNORECASE)
-    )
 
 
 @pytest.mark.anyio
@@ -295,7 +254,34 @@ async def test_held_out_work_ids_stay_visible_to_screeners(
                 **AGENT,
             )
     assert held_works <= seen
-    assert all(isinstance(w, str) for w in held_works)
+    assert held_works and all(held_works), "held-out work ids must be non-empty strings"
     assert [e.type for e in read_all(project.paths.events_dir, project.catalog)].count(
         "screening.decision_recorded"
     ) == len(seen)
+
+
+@pytest.mark.anyio
+async def test_malformed_calibration_call_writes_nothing(
+    settings: Settings,
+    project: Project,
+    clock: FixedClock,
+    mock_sources: Any,
+    agent: Any,
+    human: Any,
+) -> None:
+    """A refused calibration_label call writes nothing, even before the set is first drawn."""
+    _setup(project, agent, human, mock_sources)
+    before = len(read_all(project.paths.events_dir, project.catalog))
+    malformed = [
+        {"verdict": "include"},
+        {"criterion": "EX01"},
+        {"work_id": "W-x"},
+        {"work_id": "W-x", "verdict": "maybe"},
+        {"work_id": "W-x", "verdict": "exclude"},
+    ]
+    async with open_session(settings, clock) as reviewer:
+        for args in malformed:
+            body = await reviewer.call("calibration_label", project="demo", **args)
+            assert body["ok"] is False, (args, body)
+    assert len(read_all(project.paths.events_dir, project.catalog)) == before
+    assert _of_type(project, "calibration.drawn") == []

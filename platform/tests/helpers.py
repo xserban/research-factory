@@ -1,11 +1,19 @@
 import hashlib
 import json
-from collections.abc import Callable, Mapping, Sequence
-from datetime import UTC, date, datetime
+import re
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from contextlib import asynccontextmanager
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
+from mcp import Client
+from mcp.types import TextContent
+
+from factory.clock import FixedClock
 from factory.config import Settings
-from factory.events.envelope import Actor
+from factory.events.envelope import Actor, Event
+from factory.events.reader import read_all
+from factory.mcp.server import build_server
 from factory.model.base import StrictModel
 from factory.model.protocol import (
     Criterion,
@@ -28,6 +36,7 @@ from factory.services.context import Project
 from factory.services.probe import run_probe
 from factory.services.protocol import confirm_press, press_review, record_protocol
 from factory.services.question import record_question, state_goal
+from factory.services.search import register_query, run_query
 from factory.services.seeds import add_seeds
 from factory.sources.base import PageSink, RawPage, SearchResult, SourceError
 from factory.sources.registry import SourceFactory
@@ -356,3 +365,120 @@ def ready_protocol(
         review_id = press_review(project, agent, protocol_id, (finding,))
         confirm_press(project, human, review_id, ("Accepted; the synonym is in the next version.",))
     return protocol_id
+
+
+POSITIVES = 6
+NEGATIVES = 3
+RANDOM_WORKS = 40
+
+
+def _positive_item(n: int) -> dict[str, Any]:
+    return _screen_work(n, doi=f"10.1000/p{n}", title=f"Paper {n}")
+
+
+def _negative_item(k: int) -> dict[str, Any]:
+    return _screen_work(100 + k, doi=f"10.1000/n{k}", title=f"Negative {k}")
+
+
+def _random_item(k: int) -> dict[str, Any]:
+    return _screen_work(200 + k, doi=f"10.1000/r{k}", title=f"Random {k}")
+
+
+def _screen_work(n: int, *, doi: str, title: str) -> dict[str, Any]:
+    return openalex_item(
+        title=title, author="Ada Zhou", published="2020-01-01", openalex_id=f"W{n}", doi=doi
+    )
+
+
+def _protocol(
+    project: Project,
+    agent: Actor,
+    human: Actor,
+    mock_sources: SourcesFor,
+    *,
+    ready: bool = True,
+    dual_sample: float = 0.5,
+) -> str:
+    """Three positive seeds, a probe, and the pilot protocol with the given dual sample."""
+    question_id = record_pilot_question(project, agent)
+    for n in (1, 2, 3):
+        seed = SeedSpec(kind=SeedKind.POSITIVE, cite=f"Paper {n}", doi=f"10.1000/p{n}")
+        add_seeds(project, agent, [seed], sources=mock_sources(openalex=[_seed_item(n)]))
+    probe = QuerySpec(source="openalex", kind=QueryKind.KEYWORD, text="attention")
+    report = run_probe(project, agent, [probe], sources=mock_sources(openalex=[_seed_item(1)]))
+    spec = pilot_protocol_spec(question_id, report.probe_id, reviewer=human.id)
+    screening = spec.screening.model_copy(update={"dual_sample": dual_sample})
+    spec = spec.model_copy(update={"screening": screening})
+    protocol_id = record_protocol(project, agent, spec, ready=ready).protocol_id
+    if ready:
+        finding = PressFinding(
+            element=PressElement.TEXT_WORDS, finding="Add a synonym.", severity="minor"
+        )
+        review_id = press_review(project, agent, protocol_id, (finding,))
+        confirm_press(project, human, review_id, ("Accepted.",))
+    return protocol_id
+
+
+def _setup(
+    project: Project,
+    agent: Actor,
+    human: Actor,
+    mock_sources: SourcesFor,
+    *,
+    dual_sample: float = 0.5,
+    random_works: int = RANDOM_WORKS,
+) -> str:
+    """A protocol, the seeds, and a corpus of every seed work plus random works."""
+    protocol_id = _protocol(project, agent, human, mock_sources, dual_sample=dual_sample)
+    for n in range(4, POSITIVES + 1):
+        spec = SeedSpec(kind=SeedKind.POSITIVE, cite=f"Paper {n}", doi=f"10.1000/p{n}")
+        add_seeds(project, agent, [spec], sources=mock_sources(openalex=[_positive_item(n)]))
+    for k in range(1, NEGATIVES + 1):
+        spec = SeedSpec(kind=SeedKind.NEGATIVE, cite=f"Negative {k}", doi=f"10.1000/n{k}")
+        add_seeds(project, agent, [spec], sources=mock_sources(openalex=[_negative_item(k)]))
+    items = [_positive_item(n) for n in range(1, POSITIVES + 1)]
+    items += [_negative_item(k) for k in range(1, NEGATIVES + 1)]
+    items += [_random_item(k) for k in range(1, random_works + 1)]
+    query = QuerySpec(source="openalex", kind=QueryKind.KEYWORD, text="attention")
+    sources = mock_sources(openalex=items)
+    query_id = register_query(project, human, query, sources=sources)
+    run_query(project, query_id, sources=sources)
+    return protocol_id
+
+
+def _of_type(project: Project, type_: str) -> list[Event]:
+    return [e for e in read_all(project.paths.events_dir, project.catalog) if e.type == type_]
+
+
+class Session:
+    """One MCP server and its client: one session. Every call advances the clock one millisecond."""
+
+    def __init__(self, client: Client, clock: FixedClock) -> None:
+        self._client = client
+        self._clock = clock
+
+    async def call(self, name: str, **args: Any) -> dict[str, Any]:
+        self._clock.advance(timedelta(milliseconds=1))
+        result = await self._client.call_tool(name, args)
+        block = result.content[0]
+        assert isinstance(block, TextContent)
+        body: dict[str, Any] = json.loads(block.text)
+        return body
+
+
+@asynccontextmanager
+async def open_session(
+    settings: Settings, clock: FixedClock, sources: dict[str, SourceFactory] | None = None
+) -> AsyncIterator[Session]:
+    server = build_server(settings, clock=clock, sources={} if sources is None else sources)
+    async with Client(server) as client:
+        yield Session(client, clock)
+
+
+def _leaks(text: str, tokens: set[str]) -> list[str]:
+    """Tokens that occur in `text` as whole identifiers, case-insensitively."""
+    return sorted(
+        token
+        for token in tokens
+        if re.search(rf"(?<![0-9A-Za-z]){re.escape(token)}(?![0-9A-Za-z])", text, re.IGNORECASE)
+    )

@@ -24,7 +24,7 @@ from factory.model.base import StrictModel
 from factory.model.identity import IdGenerator
 from factory.model.protocol import CriterionEffect, PressFinding, ProtocolSpec
 from factory.model.question import QuestionSpec
-from factory.model.screening import Channel, PassLabel, ScreeningItem
+from factory.model.screening import CalibrationLabelled, Channel, PassLabel, ScreeningItem
 from factory.model.search import QueryKind, QueryPurpose, QuerySpec
 from factory.model.seed import SeedSpec
 from factory.services import agreement as agreement_service
@@ -410,17 +410,21 @@ def build_server(
         def label() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
             human = opened.human_actor()
-            calibration_service.draw_calibration(opened, human)
             if work_id is None:
                 if verdict is not None or criterion is not None:
                     raise FactoryValidationError(
                         [ValidationIssue("work_id", "is required to record a label")]
                     )
+                calibration_service.draw_calibration(opened, human)
                 return _withheld(opened, _next_calibration(opened), include_work_ids=False)
             if verdict is None:
                 raise FactoryValidationError(
                     [ValidationIssue("verdict", "is required with a work_id")]
                 )
+            # The label's own fields are checked before anything is written: the set is drawn
+            # on first use, but only by a well-formed call.
+            _check_label(work_id, verdict, criterion)
+            calibration_service.draw_calibration(opened, human)
             event_id = calibration_service.label_calibration(
                 opened, human, work_id, verdict, criterion, Channel.MCP
             )
@@ -529,6 +533,26 @@ def _held_out_tokens(project: Project, include_work_ids: bool = True) -> set[str
         if include_work_ids and seed.work_id:
             tokens.add(seed.work_id)
     return tokens
+
+
+def _check_label(work_id: str, verdict: str, criterion: str | None) -> None:
+    """The label's own fields, checked by the model. A criterion is given bare, so it is qualified
+    with a placeholder version only for this check; the service qualifies it for real."""
+    qualified = None if criterion is None else f"P@00000000:{criterion}"
+    fields: dict[str, JsonValue] = {
+        "work_id": work_id,
+        "verdict": verdict,
+        "criterion": qualified,
+        "channel": Channel.MCP.value,
+    }
+    try:
+        parse_input(CalibrationLabelled, fields, "label")
+    except FactoryValidationError as exc:
+        issues = [
+            ValidationIssue(issue.field.removeprefix("label.") or "label", issue.reason)
+            for issue in exc.issues
+        ]
+        raise FactoryValidationError(issues) from exc
 
 
 def _pass_label(value: str) -> PassLabel:
