@@ -6,17 +6,18 @@ from factory.index.project import project_created_handler, project_table
 from factory.index.projection import Handler, Projection, core_tables
 from factory.index.protocol import protocol_handlers, protocol_tables
 from factory.index.question import question_handlers, question_tables
+from factory.index.screening import screening_handlers, screening_tables
 from factory.index.search import search_handlers, search_tables
 from factory.index.seeds import seed_handlers, seed_tables
 from factory.index.tasks import task_handlers, tasks_table
 
 # Bump on any change to the tables or handlers below; the index is then rebuilt.
-PROJECTION_VERSION = "12"
+PROJECTION_VERSION = "13"
 
 
 def default_projection() -> Projection:
     """A fresh projection: core tables plus the project, task, search, dedup, question, seed,
-    probe and protocol tables."""
+    probe, protocol and screening tables."""
     metadata = MetaData()
     core_tables(metadata)
     project = project_table(metadata)
@@ -27,6 +28,7 @@ def default_projection() -> Projection:
     seeds = seed_tables(metadata)
     probes = probe_tables(metadata)
     protocol = protocol_tables(metadata)
+    screening = screening_tables(metadata)
     handlers: dict[str, Handler] = {
         "project.created": project_created_handler(project),
         **task_handlers(tasks),
@@ -36,5 +38,6 @@ def default_projection() -> Projection:
         **seed_handlers(seeds),
         **probe_handlers(probes),
         **protocol_handlers(protocol),
+        **screening_handlers(screening),
     }
     return Projection(version=PROJECTION_VERSION, metadata=metadata, handlers=handlers)

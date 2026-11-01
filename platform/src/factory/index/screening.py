@@ -1,0 +1,374 @@
+"""Projection of screening and calibration: passes, sessions, decisions, human labels and audits.
+
+`passes` keeps each opened pass (its framing, criterion order, recorded seed and sample; the sample
+is canonical JSON, or NULL). `pass_sessions` keeps the session that joined each pass, once.
+`decisions` keeps every recorded verdict; a decision that a later one supersedes gets
+`superseded_by` set, so a live decision is one with `superseded_by` NULL.
+
+`calibration_items` holds the drawn calibration set (one draw per project). `calibration_labels`
+and `resolutions` and `audit_items.human_verdict` keep the latest human label per key. `audits`
+and `audit_items` hold each audit sample; `agreed_verdict` is computed when the sample is written
+from the live screening decisions of the two passes under the protocol then current: `include`
+when both promote, `exclude` when both do not, NULL otherwise. `label_sessions` keeps every session
+that relayed a human label over MCP; a pass may not be joined from one of them.
+
+Handlers are total: an event naming an unknown work or pass is stored, not refused. A second
+pass, join or sample with the same key changes nothing (first write wins); a second label or
+resolution replaces the earlier one (last write wins).
+"""
+
+from dataclasses import dataclass
+
+from sqlalchemy import Column, Integer, MetaData, String, Table, select, text, update
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.engine import Connection
+
+from factory.canonical import canonical_json
+from factory.events.envelope import Event
+from factory.index.projection import Handler
+from factory.model.screening import (
+    AuditLabelled,
+    AuditSampled,
+    CalibrationDrawn,
+    CalibrationLabelled,
+    Channel,
+    DecisionRecorded,
+    DisagreementResolved,
+    PassJoined,
+    PassOpened,
+    Verdict,
+)
+
+
+@dataclass(frozen=True)
+class ScreeningTables:
+    passes: Table
+    pass_sessions: Table
+    decisions: Table
+    calibration_items: Table
+    calibration_labels: Table
+    resolutions: Table
+    audits: Table
+    audit_items: Table
+    label_sessions: Table
+
+
+def screening_tables(metadata: MetaData) -> ScreeningTables:
+    passes = Table(
+        "passes",
+        metadata,
+        Column("pass_label", String, primary_key=True),
+        Column("framing", String, nullable=False),
+        Column("criterion_order", String, nullable=False),
+        Column("random_seed", Integer, nullable=False),
+        Column("sample", String),
+    )
+    pass_sessions = Table(
+        "pass_sessions",
+        metadata,
+        Column("session", String, primary_key=True),
+        Column("pass_label", String, nullable=False),
+        Column("model", String, nullable=False),
+    )
+    decisions = Table(
+        "decisions",
+        metadata,
+        Column("decision_id", String, primary_key=True),
+        Column("work_id", String, nullable=False),
+        Column("pass_label", String, nullable=False),
+        Column("phase", String, nullable=False),
+        Column("stage", String, nullable=False),
+        Column("verdict", String, nullable=False),
+        Column("criterion", String),
+        Column("quote", String, nullable=False),
+        Column("rationale", String, nullable=False),
+        Column("protocol_id", String, nullable=False),
+        Column("task_id", String, nullable=False),
+        Column("supersedes", String),
+        Column("superseded_by", String),
+        Column("event_id", String, nullable=False),
+    )
+    calibration_items = Table(
+        "calibration_items",
+        metadata,
+        Column("work_id", String, primary_key=True),
+        Column("protocol_id_drawn", String),
+    )
+    calibration_labels = Table(
+        "calibration_labels",
+        metadata,
+        Column("work_id", String, primary_key=True),
+        Column("verdict", String, nullable=False),
+        Column("criterion", String),
+        Column("channel", String, nullable=False),
+        Column("event_id", String, nullable=False),
+    )
+    resolutions = Table(
+        "resolutions",
+        metadata,
+        Column("work_id", String, primary_key=True),
+        Column("verdict", String, nullable=False),
+        Column("criterion", String),
+        Column("reason", String, nullable=False),
+        Column("channel", String, nullable=False),
+        Column("event_id", String, nullable=False),
+    )
+    audits = Table(
+        "audits",
+        metadata,
+        Column("audit_id", String, primary_key=True),
+        Column("random_seed", Integer, nullable=False),
+        Column("population", Integer, nullable=False),
+        Column("exclusions", Integer, nullable=False),
+        Column("inclusions", Integer, nullable=False),
+    )
+    audit_items = Table(
+        "audit_items",
+        metadata,
+        Column("audit_id", String, primary_key=True),
+        Column("work_id", String, primary_key=True),
+        Column("agreed_verdict", String),
+        Column("human_verdict", String),
+        Column("criterion", String),
+    )
+    label_sessions = Table(
+        "label_sessions",
+        metadata,
+        Column("session", String, primary_key=True),
+    )
+    return ScreeningTables(
+        passes=passes,
+        pass_sessions=pass_sessions,
+        decisions=decisions,
+        calibration_items=calibration_items,
+        calibration_labels=calibration_labels,
+        resolutions=resolutions,
+        audits=audits,
+        audit_items=audit_items,
+        label_sessions=label_sessions,
+    )
+
+
+def screening_handlers(t: ScreeningTables) -> dict[str, Handler]:
+    return {
+        "screening.pass_opened": _pass_opened(t),
+        "screening.pass_joined": _pass_joined(t),
+        "screening.decision_recorded": _decision(t),
+        "screening.disagreement_resolved": _resolution(t),
+        "calibration.drawn": _calibration_drawn(t),
+        "calibration.labelled": _calibration_labelled(t),
+        "audit.sampled": _audit_sampled(t),
+        "audit.labelled": _audit_labelled(t),
+    }
+
+
+def _pass_opened(t: ScreeningTables) -> Handler:
+    def pass_opened(conn: Connection, event: Event) -> None:
+        payload = PassOpened.model_validate(event.payload)
+        sample = None
+        if payload.sample is not None:
+            sample = canonical_json(list(payload.sample)).decode()
+        conn.execute(
+            sqlite_insert(t.passes)
+            .values(
+                pass_label=payload.pass_label.value,
+                framing=payload.framing.value,
+                criterion_order=payload.criterion_order,
+                random_seed=payload.random_seed,
+                sample=sample,
+            )
+            .on_conflict_do_nothing(index_elements=["pass_label"])
+        )
+
+    return pass_opened
+
+
+def _pass_joined(t: ScreeningTables) -> Handler:
+    def pass_joined(conn: Connection, event: Event) -> None:
+        payload = PassJoined.model_validate(event.payload)
+        conn.execute(
+            sqlite_insert(t.pass_sessions)
+            .values(
+                session=payload.session,
+                pass_label=payload.pass_label.value,
+                model=payload.model,
+            )
+            .on_conflict_do_nothing(index_elements=["session"])
+        )
+
+    return pass_joined
+
+
+def _decision(t: ScreeningTables) -> Handler:
+    def decision(conn: Connection, event: Event) -> None:
+        payload = DecisionRecorded.model_validate(event.payload)
+        conn.execute(
+            sqlite_insert(t.decisions)
+            .values(
+                decision_id=payload.decision_id,
+                work_id=payload.work_id,
+                pass_label=payload.pass_label.value,
+                phase=payload.phase.value,
+                stage=payload.stage.value,
+                verdict=payload.verdict.value,
+                criterion=payload.criterion,
+                quote=payload.quote,
+                rationale=payload.rationale,
+                protocol_id=payload.protocol_id,
+                task_id=payload.task_id,
+                supersedes=payload.supersedes,
+                superseded_by=None,
+                event_id=event.id,
+            )
+            .on_conflict_do_nothing(index_elements=["decision_id"])
+        )
+        if payload.supersedes is not None:
+            conn.execute(
+                update(t.decisions)
+                .where(t.decisions.c.decision_id == payload.supersedes)
+                .where(t.decisions.c.superseded_by.is_(None))
+                .values(superseded_by=payload.decision_id)
+            )
+
+    return decision
+
+
+def _resolution(t: ScreeningTables) -> Handler:
+    def resolution(conn: Connection, event: Event) -> None:
+        payload = DisagreementResolved.model_validate(event.payload)
+        values = {
+            "work_id": payload.work_id,
+            "verdict": payload.verdict,
+            "criterion": payload.criterion,
+            "reason": payload.reason,
+            "channel": payload.channel.value,
+            "event_id": event.id,
+        }
+        conn.execute(
+            sqlite_insert(t.resolutions)
+            .values(**values)
+            .on_conflict_do_update(index_elements=["work_id"], set_=values)
+        )
+
+    return resolution
+
+
+def _calibration_drawn(t: ScreeningTables) -> Handler:
+    def calibration_drawn(conn: Connection, event: Event) -> None:
+        payload = CalibrationDrawn.model_validate(event.payload)
+        for work_id in payload.work_ids:
+            conn.execute(
+                sqlite_insert(t.calibration_items)
+                .values(work_id=work_id, protocol_id_drawn=payload.protocol_id)
+                .on_conflict_do_nothing(index_elements=["work_id"])
+            )
+
+    return calibration_drawn
+
+
+def _calibration_labelled(t: ScreeningTables) -> Handler:
+    def calibration_labelled(conn: Connection, event: Event) -> None:
+        payload = CalibrationLabelled.model_validate(event.payload)
+        values = {
+            "work_id": payload.work_id,
+            "verdict": payload.verdict,
+            "criterion": payload.criterion,
+            "channel": payload.channel.value,
+            "event_id": event.id,
+        }
+        conn.execute(
+            sqlite_insert(t.calibration_labels)
+            .values(**values)
+            .on_conflict_do_update(index_elements=["work_id"], set_=values)
+        )
+        _note_label_session(conn, t, event, payload.channel)
+
+    return calibration_labelled
+
+
+def _audit_sampled(t: ScreeningTables) -> Handler:
+    def audit_sampled(conn: Connection, event: Event) -> None:
+        payload = AuditSampled.model_validate(event.payload)
+        conn.execute(
+            sqlite_insert(t.audits)
+            .values(
+                audit_id=payload.audit_id,
+                random_seed=payload.random_seed,
+                population=payload.population,
+                exclusions=payload.exclusions,
+                inclusions=payload.inclusions,
+            )
+            .on_conflict_do_nothing(index_elements=["audit_id"])
+        )
+        current = _current_protocol_id(conn)
+        for work_id in payload.work_ids:
+            conn.execute(
+                sqlite_insert(t.audit_items)
+                .values(
+                    audit_id=payload.audit_id,
+                    work_id=work_id,
+                    agreed_verdict=_agreed_outcome(conn, t, work_id, current),
+                    human_verdict=None,
+                    criterion=None,
+                )
+                .on_conflict_do_nothing(index_elements=["audit_id", "work_id"])
+            )
+
+    return audit_sampled
+
+
+def _audit_labelled(t: ScreeningTables) -> Handler:
+    def audit_labelled(conn: Connection, event: Event) -> None:
+        payload = AuditLabelled.model_validate(event.payload)
+        conn.execute(
+            update(t.audit_items)
+            .where(t.audit_items.c.audit_id == payload.audit_id)
+            .where(t.audit_items.c.work_id == payload.work_id)
+            .values(human_verdict=payload.verdict, criterion=payload.criterion)
+        )
+        _note_label_session(conn, t, event, payload.channel)
+
+    return audit_labelled
+
+
+def _note_label_session(
+    conn: Connection, t: ScreeningTables, event: Event, channel: Channel
+) -> None:
+    """Record the session of an MCP-relayed human label, so that session cannot join a pass."""
+    if channel is not Channel.MCP:
+        return
+    conn.execute(
+        sqlite_insert(t.label_sessions)
+        .values(session=event.actor.session)
+        .on_conflict_do_nothing(index_elements=["session"])
+    )
+
+
+def _current_protocol_id(conn: Connection) -> str | None:
+    row = conn.execute(
+        text("SELECT protocol_id FROM protocols ORDER BY event_id DESC LIMIT 1")
+    ).one_or_none()
+    return None if row is None else str(row[0])
+
+
+def _agreed_outcome(
+    conn: Connection, t: ScreeningTables, work_id: str, protocol_id: str | None
+) -> str | None:
+    """`include` when both passes' live screening decisions under `protocol_id` promote the work,
+    `exclude` when neither does, NULL when the passes disagree or one has no live decision."""
+    if protocol_id is None:
+        return None
+    rows = conn.execute(
+        select(t.decisions.c.pass_label, t.decisions.c.verdict)
+        .where(t.decisions.c.work_id == work_id)
+        .where(t.decisions.c.phase == "screening")
+        .where(t.decisions.c.protocol_id == protocol_id)
+        .where(t.decisions.c.superseded_by.is_(None))
+        .order_by(t.decisions.c.event_id)
+    ).all()
+    promotes: dict[str, bool] = {}
+    for pass_label, verdict in rows:
+        promotes[str(pass_label)] = Verdict(str(verdict)).promotes
+    if set(promotes) != {"A", "B"} or promotes["A"] != promotes["B"]:
+        return None
+    return "include" if promotes["A"] else "exclude"
