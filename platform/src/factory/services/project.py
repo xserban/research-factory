@@ -1,5 +1,6 @@
 import shutil
 from datetime import datetime
+from typing import Literal
 
 from sqlalchemy import text
 
@@ -9,9 +10,29 @@ from factory.errors import FactoryValidationError, ProjectNotFoundError, Validat
 from factory.model.base import StrictModel
 from factory.model.dedup import MergeStatus
 from factory.model.project import ProjectCreated, RigorMode
+from factory.model.protocol import ProtocolStatus
+from factory.model.seed import SeedKind
 from factory.services.context import Project, ProjectPaths, build_project, slug_issues
+from factory.services.protocol import current_protocol
+from factory.services.question import current_question
 from factory.services.search import SearchCounts, corpus_size, search_counts
+from factory.services.seeds import all_seeds, split_is_drawn
 from factory.services.tasks import TaskCounts, task_counts
+
+
+class ProtocolSummary(StrictModel):
+    protocol_id: str
+    status: ProtocolStatus
+    press: Literal["none", "reviewed", "confirmed"]
+
+
+class SeedCounts(StrictModel):
+    """Counts only: no seed identifier, so the status is safe for every agent to read."""
+
+    positive: int
+    negative: int
+    unresolved: int
+    split_drawn: bool
 
 
 class ProjectStatus(StrictModel):
@@ -26,6 +47,9 @@ class ProjectStatus(StrictModel):
     merges_active: int
     works: int
     records: int
+    question: str | None
+    protocol: ProtocolSummary | None
+    seeds: SeedCounts
 
 
 def init_project(
@@ -81,6 +105,9 @@ def project_status(project: Project) -> ProjectStatus:
     if row is None:
         raise ProjectNotFoundError(f"project {slug!r} has no project.created event")
     works, records = corpus_size(project)
+    question = current_question(project)
+    protocol = current_protocol(project)
+    seeds = all_seeds(project)
     by_type = {str(name): int(count) for name, count in counts}
     return ProjectStatus(
         slug=slug,
@@ -94,4 +121,18 @@ def project_status(project: Project) -> ProjectStatus:
         merges_active=int(merges),
         works=works,
         records=records,
+        question=None if question is None else question.question_id,
+        protocol=(
+            None
+            if protocol is None
+            else ProtocolSummary(
+                protocol_id=protocol.protocol_id, status=protocol.status, press=protocol.press
+            )
+        ),
+        seeds=SeedCounts(
+            positive=sum(1 for seed in seeds if seed.kind is SeedKind.POSITIVE),
+            negative=sum(1 for seed in seeds if seed.kind is SeedKind.NEGATIVE),
+            unresolved=sum(1 for seed in seeds if seed.work_id is None),
+            split_drawn=split_is_drawn(project),
+        ),
     )

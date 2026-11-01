@@ -283,6 +283,48 @@ def _seed_item(n: int) -> dict[str, Any]:
     )
 
 
+def pilot_protocol_spec(
+    question_id: str,
+    probe_id: str | None,
+    *,
+    queries: tuple[PlannedQuery, ...] | None = None,
+    reviewer: str = "obd",
+) -> ProtocolSpec:
+    """A pilot protocol that passes every readiness rule: one inclusion, three exclusions."""
+    criteria = (
+        Criterion(
+            id="IN01",
+            parent="slot:population",
+            statement="vision transformer studies",
+            rule="include studies of vision transformers",
+            applies_at=ScreeningStage.TITLE_ABSTRACT,
+        ),
+        *(
+            Criterion(
+                id=f"EX{n:02d}",
+                parent=f"NG{n:02d}",
+                statement=f"not topic {n}",
+                rule=f"exclude topic {n}",
+                applies_at=ScreeningStage.TITLE_ABSTRACT,
+                priority=n,
+            )
+            for n in (1, 2, 3)
+        ),
+    )
+    human_reviewer = Reviewer(role=ReviewerRole.REVIEWER_OF_RECORD, actor=reviewer, kind="human")
+    return ProtocolSpec(
+        question_id=question_id,
+        method_profile=MethodProfile.SCOPING_REVIEW,
+        criteria=criteria,
+        sources=(SourcePlan(name="openalex", included=True, probe_id=probe_id),),
+        queries=queries
+        or (PlannedQuery(source="openalex", kind=QueryKind.KEYWORD, text="attention"),),
+        screening=ScreeningPlan(
+            passes=2, dual_sample=0.5, kappa_floor=0.7, reviewers=(human_reviewer,)
+        ),
+    )
+
+
 def ready_protocol(
     project: Project,
     agent: Actor,
@@ -305,36 +347,7 @@ def ready_protocol(
     probe = QuerySpec(source="openalex", kind=QueryKind.KEYWORD, text="attention")
     report = run_probe(project, agent, [probe], sources=mock_sources(openalex=[_seed_item(1)]))
 
-    criteria = (
-        Criterion(
-            id="IN01",
-            parent="slot:population",
-            statement="vision transformer studies",
-            rule="include studies of vision transformers",
-            applies_at=ScreeningStage.TITLE_ABSTRACT,
-        ),
-        *(
-            Criterion(
-                id=f"EX{n:02d}",
-                parent=f"NG{n:02d}",
-                statement=f"not topic {n}",
-                rule=f"exclude topic {n}",
-                applies_at=ScreeningStage.TITLE_ABSTRACT,
-                priority=n,
-            )
-            for n in (1, 2, 3)
-        ),
-    )
-    reviewer = Reviewer(role=ReviewerRole.REVIEWER_OF_RECORD, actor=human.id, kind="human")
-    spec = ProtocolSpec(
-        question_id=question_id,
-        method_profile=MethodProfile.SCOPING_REVIEW,
-        criteria=criteria,
-        sources=(SourcePlan(name="openalex", included=True, probe_id=report.probe_id),),
-        queries=queries
-        or (PlannedQuery(source="openalex", kind=QueryKind.KEYWORD, text="attention"),),
-        screening=ScreeningPlan(passes=2, dual_sample=0.5, kappa_floor=0.7, reviewers=(reviewer,)),
-    )
+    spec = pilot_protocol_spec(question_id, report.probe_id, queries=queries, reviewer=human.id)
     protocol_id = record_protocol(project, agent, spec, ready=True).protocol_id
     if press:
         finding = PressFinding(
