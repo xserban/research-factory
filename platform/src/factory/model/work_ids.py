@@ -16,6 +16,9 @@ _PUNCT = re.compile(r"[^\w\s]", re.UNICODE)
 _WS = re.compile(r"\s+")
 _DOI_PREFIX = re.compile(r"^(?:https?://(?:dx\.)?doi\.org/|doi:)", re.IGNORECASE)
 _ARXIV_VERSION = re.compile(r"v\d+$")
+_ARXIV_URL = re.compile(r"^https?://(?:export\.)?arxiv\.org/(?:abs|pdf)/", re.IGNORECASE)
+_ARXIV_SCHEME = re.compile(r"^arxiv:", re.IGNORECASE)
+_PDF_SUFFIX = re.compile(r"\.pdf$", re.IGNORECASE)
 # DataCite mints a DOI for every arXiv preprint. OpenAlex returns that DOI where the arXiv
 # adapter returns the bare id, so without this the same preprint arrives as two works.
 _ARXIV_DOI = re.compile(r"^10\.48550/arxiv\.(?P<id>.+)$", re.IGNORECASE)
@@ -62,13 +65,17 @@ def normalize_doi(doi: str) -> str:
 
 
 def normalize_arxiv(arxiv_id: str) -> str:
-    """Strip the URL form and any version suffix.
+    """Strip the URL form, the `arXiv:` scheme, a `.pdf` suffix and any version suffix.
 
     `2301.01234v3` and `2301.01234` are the same work; keeping the version in the identity
-    would mint a new work every time a preprint is revised.
+    would mint a new work every time a preprint is revised. Only those known wrappers are
+    removed: an old-style id such as `hep-th/9901001` keeps its archive prefix, because
+    `hep-th/9901001` and `cond-mat/9901001` are different papers that share a number.
     """
-    ident = arxiv_id.strip().rsplit("/", 1)[-1]
-    ident = ident.removeprefix("arXiv:").removeprefix("arxiv:")
+    ident = arxiv_id.strip()
+    ident = _ARXIV_URL.sub("", ident, count=1)
+    ident = _ARXIV_SCHEME.sub("", ident, count=1)
+    ident = _PDF_SUFFIX.sub("", ident)
     return _ARXIV_VERSION.sub("", ident).casefold()
 
 

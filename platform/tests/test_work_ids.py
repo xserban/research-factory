@@ -29,6 +29,20 @@ class TestNormalization:
     def test_arxiv_versions_are_the_same_work(self, raw: str) -> None:
         assert normalize_arxiv(raw) == "2301.01234"
 
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            ("hep-th/9901001v2", "hep-th/9901001"),
+            ("http://arxiv.org/abs/hep-th/9901001v1", "hep-th/9901001"),
+            ("https://arxiv.org/abs/2301.01234v3", "2301.01234"),
+            ("https://arxiv.org/pdf/2301.01234v3.pdf", "2301.01234"),
+            ("arXiv:2301.01234", "2301.01234"),
+        ],
+    )
+    def test_only_known_wrappers_are_stripped(self, raw: str, expected: str) -> None:
+        """An old-style archive prefix is part of the id, not a URL path to discard."""
+        assert normalize_arxiv(raw) == expected
+
 
 class TestWorkId:
     def test_is_deterministic(self) -> None:
@@ -50,6 +64,11 @@ class TestWorkId:
         a = work_id(title="A Study", authors=["Ada Zhou"], year=2023, arxiv="2301.01234")
         b = work_id(title="A Study", authors=["Ada Zhou"], year=2023, arxiv="2301.01234v4")
         assert a == b
+
+    def test_old_style_ids_in_different_archives_are_different_works(self) -> None:
+        a = work_id(title="A Study", authors=["Ada Zhou"], year=1999, arxiv="hep-th/9901001")
+        b = work_id(title="A Study", authors=["Ada Zhou"], year=1999, arxiv="cond-mat/9901001")
+        assert a != b
 
     def test_distinct_works_get_distinct_ids(self) -> None:
         a = work_id(title="A Study of Cats", authors=["Ada Zhou"], year=2023)

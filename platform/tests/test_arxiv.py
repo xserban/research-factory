@@ -277,6 +277,34 @@ class TestExhaustiveness:
         assert result.reported_count == 1
         assert result.query_sent == "2301.00001"
 
+    def test_old_style_ids_are_sent_with_their_archive(self) -> None:
+        seen: list[httpx.Request] = []
+        spec = QuerySpec(source="arxiv", kind=QueryKind.ID_LIST, text="hep-th/9901001")
+        search(make_source(capture(seen)), spec)
+        assert seen[0].url.params["id_list"] == "hep-th/9901001"
+
+    def test_distinct_old_style_ids_are_not_collapsed(self) -> None:
+        spec = QuerySpec(
+            source="arxiv", kind=QueryKind.ID_LIST, text="hep-th/9901001,cond-mat/9901001"
+        )
+        result = search(source_returning(EMPTY), spec)
+        assert result.reported_count == 2
+
+    def test_version_pin_is_sent_as_requested(self) -> None:
+        seen: list[httpx.Request] = []
+        returned = ONE_ENTRY_2301_00001.replace("2301.00001v1", "2301.00001v2")
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append(request)
+            return httpx.Response(200, text=returned)
+
+        spec = QuerySpec(source="arxiv", kind=QueryKind.ID_LIST, text="2301.00001v2")
+        result = search(make_source(handler), spec)
+        assert seen[0].url.params["id_list"] == "2301.00001v2"
+        assert (result.reported_count, result.retrieved_count) == (1, 1)
+        assert result.status is RunStatus.COMPLETE
+        assert result.note is None
+
     def test_matching_intersects_ids_with_query(self) -> None:
         seen: list[httpx.Request] = []
         archived: list[RawPage] = []

@@ -63,20 +63,27 @@ def _parse_date(value: str | None) -> datetime | None:
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
-def _requested_ids(text: str) -> list[str]:
-    """The distinct arXiv ids named in an id_list query, normalised, in the order given.
+def _requested_ids(text: str) -> list[tuple[str, str]]:
+    """The distinct arXiv ids named in an id_list query, in the order given, as (raw, key).
 
-    A version suffix or a repeated id is the same request, so it is collapsed here, before
-    anything is counted: `reported_count` for an id_list is the number of distinct ids asked for.
+    `raw` is the id as the caller wrote it (stripped, first occurrence) and is what gets sent to
+    arXiv: an old-style id such as `hep-th/9901001` must keep its archive prefix on the wire.
+    `key` is `normalize_arxiv(raw)`, used only to decide whether two requests are the same id,
+    so a version pin and a bare id collapse, and `hep-th/9901001` stays distinct from
+    `cond-mat/9901001`. `reported_count` for an id_list is the number of distinct keys.
     """
-    normalised = [normalize_arxiv(raw) for raw in text.split(",") if raw.strip()]
-    return list(dict.fromkeys(normalised))
+    first: dict[str, str] = {}
+    for part in text.split(","):
+        raw = part.strip()
+        if raw:
+            first.setdefault(normalize_arxiv(raw), raw)
+    return [(raw, key) for key, raw in first.items()]
 
 
-def _id_list_note(requested: list[str], works: list[Work], skipped: int) -> str | None:
+def _id_list_note(requested: list[tuple[str, str]], works: list[Work], skipped: int) -> str | None:
     """Name the requested ids that did not come back, so an unresolved id is never silent."""
-    returned = {w.identifiers.arxiv for w in works}
-    missing = [arxiv_id for arxiv_id in requested if arxiv_id not in returned]
+    returned = {normalize_arxiv(w.identifiers.arxiv) for w in works if w.identifiers.arxiv}
+    missing = [raw for raw, key in requested if key not in returned]
     if not missing:
         return None
     note = f"{len(missing)} requested id(s) not returned: {', '.join(missing[:10])}"
@@ -141,7 +148,8 @@ class ArxivSource:
         if spec.kind not in self.kinds:
             raise ValueError(f"arxiv does not take {spec.kind.value} queries")
         is_ids = spec.kind is QueryKind.ID_LIST
-        ids = _requested_ids(spec.text) if is_ids else []
+        requested = _requested_ids(spec.text) if is_ids else []
+        ids = [raw for raw, _ in requested]
         if is_ids and not ids:
             raise ValueError("an id_list query must name at least one arXiv id")
 
@@ -221,7 +229,7 @@ class ArxivSource:
         else:
             status, note = RunStatus.COMPLETE, None
             if is_ids:
-                note = _id_list_note(ids, works, skipped)
+                note = _id_list_note(requested, works, skipped)
             elif reported is not None and len(works) < reported:
                 note = f"{skipped} {_SKIPPED}"
                 if len(works) + skipped != reported:
