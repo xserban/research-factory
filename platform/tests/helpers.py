@@ -34,7 +34,11 @@ class FakeSource:
 
     - `fail_after=n`: page `n` fails with a soft error, reported as a PARTIAL/FAILED result
       with a resume token (what the HTTP adapters do on a transport error).
+    - `parse_fail_at=n`: page `n` is archived, then fails to parse. As the fixed adapters do
+      (R9), that is a PARTIAL/FAILED result with a `SourceError` note and the page's resume token;
+      the records of earlier pages are kept.
     - `raise_at=n`: page `n` raises `raise_error` (default `SourceError`) before it is archived.
+      Adapters do not raise this way any more; it exercises the service's safety net.
     - `reported`: the count the source claims; a smaller delivery is explained in the note.
     - Duplicate records within the run are skipped, as the real adapters skip them.
     - `resume_from` is the page index to start from, as a resume token would be.
@@ -49,12 +53,14 @@ class FakeSource:
         *,
         reported: int | None = None,
         fail_after: int | None = None,
+        parse_fail_at: int | None = None,
         raise_at: int | None = None,
         raise_error: Exception | None = None,
     ) -> None:
         self._pages = pages
         self._reported = reported
         self._fail_after = fail_after
+        self._parse_fail_at = parse_fail_at
         self._raise_at = raise_at
         self._raise_error = raise_error or SourceError("fake page unreadable")
 
@@ -91,6 +97,14 @@ class FakeSource:
                 )
             )
             archived += 1
+            if ordinal == self._parse_fail_at:
+                return self._result(
+                    works,
+                    archived,
+                    skipped,
+                    note="SourceError: fake page unreadable",
+                    resume_token=str(ordinal),
+                )
             for record in self._pages[ordinal]:
                 work = _work(record, run_id=run_id, query_id=query_id, raw_blob=ref)
                 if work.id in seen:

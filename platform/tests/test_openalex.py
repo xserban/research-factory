@@ -12,7 +12,7 @@ from factory.clock import FixedClock, SystemClock
 from factory.config import Settings
 from factory.model.search import QueryKind, QueryPurpose, QuerySpec, RunStatus
 from factory.model.work import ProvenanceMethod, Work, WorkType
-from factory.sources.base import RawPage, SearchResult, SourceError
+from factory.sources.base import RawPage, SearchResult
 from factory.sources.http import PoliteClient, default_http
 from factory.sources.openalex import OpenAlexSource, reconstruct_abstract
 from tests.helpers import SESSION, T0
@@ -181,13 +181,43 @@ class TestParsing:
         assert provenance.raw_ref == "W4298183756"
         assert provenance.method is ProvenanceMethod.DATABASE
 
-    def test_unparseable_json_raises(self) -> None:
-        with pytest.raises(SourceError):
-            search(source_returning("not json"))
+    def test_unparseable_json_is_a_failed_run_not_an_empty_success(self) -> None:
+        archived: list[RawPage] = []
 
-    def test_non_object_payload_raises(self) -> None:
-        with pytest.raises(SourceError):
-            search(source_returning("[1, 2, 3]"))
+        def archive(page_: RawPage) -> str:
+            archived.append(page_)
+            return blob_for(page_.ordinal)
+
+        result = make_source(serve("not json")).run(
+            keyword(), run_id=RUN_ID, query_id=QUERY_ID, archive=archive
+        )
+        assert result.status is RunStatus.FAILED
+        assert result.works == [] and result.resume_token == "*"
+        assert result.note is not None and result.note.startswith("SourceError: ")
+        assert len(archived) == 1, "the unparseable page is archived before it fails"
+
+    def test_non_object_payload_is_a_failed_run(self) -> None:
+        result = search(source_returning("[1, 2, 3]"))
+        assert result.status is RunStatus.FAILED
+        assert result.note is not None and result.note.startswith("SourceError: ")
+        assert result.resume_token == "*"
+
+    def test_parse_failure_mid_run_keeps_earlier_records(self) -> None:
+        archived: list[RawPage] = []
+
+        def archive(page_: RawPage) -> str:
+            archived.append(page_)
+            return blob_for(page_.ordinal)
+
+        result = make_source(serve(page([ITEM], 2, "c2"), "not json")).run(
+            keyword(), run_id=RUN_ID, query_id=QUERY_ID, archive=archive
+        )
+        assert result.status is RunStatus.PARTIAL
+        assert result.retrieved_count == 1
+        assert result.resume_token == "c2"
+        assert result.note is not None and result.note.startswith("SourceError: ")
+        assert len(archived) == 2
+        assert result.works[0].provenance[0].raw_blob == blob_for(0)
 
     def test_fixture_preprint_has_a_datacite_doi_and_preprint_type(self) -> None:
         works = search(source_returning(FIXTURE.read_text(encoding="utf-8"))).works

@@ -19,7 +19,7 @@ from factory.config import Settings
 from factory.model.search import QueryKind, QuerySpec, RunStatus
 from factory.model.work import ProvenanceMethod, WorkType
 from factory.sources.arxiv import ArxivSource
-from factory.sources.base import RawPage, SearchResult, SourceError
+from factory.sources.base import RawPage, SearchResult
 from factory.sources.http import PoliteClient, default_http
 from tests.helpers import SESSION, T0
 
@@ -170,16 +170,35 @@ class TestParsing:
             assert work.provenance[0].method is ProvenanceMethod.DATABASE
         assert result.works[0].provenance[0].raw_ref == "http://arxiv.org/abs/2301.02033v3"
 
-    def test_malformed_xml_raises_rather_than_returning_nothing(self) -> None:
+    def test_malformed_xml_is_a_failed_run_never_an_empty_success(self) -> None:
         archived: list[int] = []
 
         def archive(page_: RawPage) -> str:
             archived.append(page_.ordinal)
             return blob_for(page_.ordinal)
 
-        with pytest.raises(SourceError):
-            search(source_returning("<not-xml", EMPTY), archive=archive)
+        result = search(source_returning("<not-xml", EMPTY), archive=archive)
+        assert result.status is RunStatus.FAILED
+        assert result.works == [] and result.resume_token == "0"
+        assert result.note is not None and result.note.startswith("SourceError: ")
         assert archived == [0], "the page must be archived before it fails to parse"
+
+    def test_parse_failure_mid_run_keeps_earlier_records(self) -> None:
+        archived: list[int] = []
+
+        def archive(page_: RawPage) -> str:
+            archived.append(page_.ordinal)
+            return blob_for(page_.ordinal)
+
+        # page_size 1: the one-entry first page is full, so paging continues to offset 1.
+        source = source_returning(MATCH_ONE, "<not-xml", page_size=1)
+        result = search(source, archive=archive)
+        assert result.status is RunStatus.PARTIAL
+        assert result.retrieved_count == 1
+        assert result.resume_token == "1"
+        assert result.note is not None and result.note.startswith("SourceError: ")
+        assert archived == [0, 1]
+        assert result.works[0].provenance[0].raw_blob == blob_for(0)
 
     def test_untitled_entry_is_an_explained_shortfall(self) -> None:
         result = search(source_returning(UNTITLED))

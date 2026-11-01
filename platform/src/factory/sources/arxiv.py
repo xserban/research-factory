@@ -193,7 +193,21 @@ class ArxivSource:
             )
             pages += 1
 
-            page_total, entries = _feed(response.text)
+            try:
+                page_total, entries = _feed(response.text)
+            except SourceError as exc:
+                # The page is archived above, so the failure is explained and resumable (R9).
+                return SearchResult(
+                    source=self.name,
+                    query_sent=query_sent,
+                    reported_count=reported,
+                    works=works,
+                    pages=pages,
+                    status=RunStatus.PARTIAL if works else RunStatus.FAILED,
+                    skipped=skipped,
+                    note=f"SourceError: {exc}",
+                    resume_token=str(start),
+                )
             if not is_ids and reported is None:
                 reported = page_total
 

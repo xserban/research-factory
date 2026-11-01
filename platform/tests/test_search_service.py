@@ -264,16 +264,37 @@ def test_search_projection_rebuild_equals_incremental(
     assert (st.works, st.records) == (3, 5)  # the partial run re-delivers page 0's works
 
 
-def test_source_error_is_recorded_and_returned(project: Project, fake_sources: SourcesFor) -> None:
+def test_parse_failure_mid_run_is_resumable(project: Project, fake_sources: SourcesFor) -> None:
+    sources = fake_sources(parse_fail_at=1)
+    qid = _register(project, sources)
+    summary = run_query(project, qid, sources=sources)
+    assert summary.status == RunStatus.PARTIAL
+    assert summary.retrieved_count == 2 and summary.new_works == 2
+    assert summary.note is not None and summary.note.startswith("SourceError: ")
+    assert summary.resume_token == "1"
+    archived = _pages_of(project, summary.run_id)
+    parsed = [str(e.payload["raw_blob"]) for e in _of_type(project, "search.records_parsed")]
+    # Every archived page but the failing one (page 1) has its records recorded.
+    assert len(archived) == 2 and parsed == [archived[0]]
+    assert project_status(project).works == 2
+
+    resumed = run_query(project, qid, sources=fake_sources(), resume_run=summary.run_id)
+    assert resumed.status == RunStatus.COMPLETE
+    assert resumed.retrieved_count == 1 and resumed.new_works == 1
+    assert project_status(project).works == 3
+
+
+def test_source_error_raised_by_an_adapter_is_still_recorded(
+    project: Project, fake_sources: SourcesFor
+) -> None:
+    """Safety net: an adapter that raises instead of returning is recorded, not lost."""
     sources = fake_sources(raise_at=1)
     summary = run_query(project, _register(project, sources), sources=sources)
     assert summary.status == RunStatus.PARTIAL
     assert summary.note == "SourceError: fake page unreadable"
     assert summary.resume_token is None and summary.retrieved_count == 0
-    assert summary.new_works == 0
     assert len(_pages_of(project, summary.run_id)) == 1
     assert _of_type(project, "search.records_parsed") == []
-    assert project_status(project).works == 0
 
 
 def test_unexpected_error_is_recorded_then_reraised(

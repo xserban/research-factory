@@ -188,7 +188,21 @@ class OpenAlexSource:
             )
             archived += 1
 
-            payload = _payload(response)
+            try:
+                payload = _payload(response)
+            except SourceError as exc:
+                # The page is archived above, so the failure is explained and resumable (R9).
+                return SearchResult(
+                    source=self.name,
+                    query_sent=query_sent,
+                    reported_count=reported,
+                    works=works,
+                    pages=archived,
+                    status=RunStatus.PARTIAL if works else RunStatus.FAILED,
+                    skipped=skipped,
+                    note=f"SourceError: {exc}",
+                    resume_token=cursor,
+                )
             meta = payload.get("meta") or {}
             if reported is None and isinstance(meta.get("count"), int):
                 reported = meta["count"]

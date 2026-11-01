@@ -134,6 +134,7 @@ def fake_sources() -> Callable[..., dict[str, SourceFactory]]:
         *,
         reported: int | None = None,
         fail_after: int | None = None,
+        parse_fail_at: int | None = None,
         raise_at: int | None = None,
         raise_error: Exception | None = None,
     ) -> dict[str, SourceFactory]:
@@ -141,6 +142,7 @@ def fake_sources() -> Callable[..., dict[str, SourceFactory]]:
             pages if pages is not None else FAKE_PAGES,
             reported=reported,
             fail_after=fail_after,
+            parse_fail_at=parse_fail_at,
             raise_at=raise_at,
             raise_error=raise_error,
         )
