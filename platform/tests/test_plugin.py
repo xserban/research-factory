@@ -8,7 +8,7 @@ from factory.config import Settings
 from factory.services.skills import skill_ref
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SKILLS = ("rf-frame", "rf-probe", "rf-protocol")
+SKILLS = ("rf-frame", "rf-probe", "rf-protocol", "rf-screen")
 
 
 def _frontmatter(name: str) -> dict[str, str]:
