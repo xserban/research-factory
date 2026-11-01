@@ -15,8 +15,11 @@ WORK_ID_RE = r"^rf:\S+-[0-9a-f]{8}$"
 _PUNCT = re.compile(r"[^\w\s]", re.UNICODE)
 _WS = re.compile(r"\s+")
 _DOI_PREFIX = re.compile(r"^(?:https?://(?:dx\.)?doi\.org/|doi:)", re.IGNORECASE)
-_ARXIV_VERSION = re.compile(r"v\d+$")
-_ARXIV_URL = re.compile(r"^https?://(?:export\.)?arxiv\.org/(?:abs|pdf)/", re.IGNORECASE)
+_ARXIV_VERSION = re.compile(r"v\d+$", re.IGNORECASE)
+_ARXIV_URL = re.compile(
+    r"^(?:https?://)?(?:(?:www|export)\.)?arxiv\.org/(?:abs|pdf)/", re.IGNORECASE
+)
+_QUERY_OR_FRAGMENT = re.compile(r"[?#].*$")
 _ARXIV_SCHEME = re.compile(r"^arxiv:", re.IGNORECASE)
 _PDF_SUFFIX = re.compile(r"\.pdf$", re.IGNORECASE)
 # DataCite mints a DOI for every arXiv preprint. OpenAlex returns that DOI where the arXiv
@@ -67,12 +70,15 @@ def normalize_doi(doi: str) -> str:
 def normalize_arxiv(arxiv_id: str) -> str:
     """Strip the URL form, the `arXiv:` scheme, a `.pdf` suffix and any version suffix.
 
+    The URL form may omit the scheme and may use the `www.` or `export.` host; any `?query` or
+    `#fragment` is dropped, and the `v<N>` suffix is matched case-insensitively.
+
     `2301.01234v3` and `2301.01234` are the same work; keeping the version in the identity
     would mint a new work every time a preprint is revised. Only those known wrappers are
     removed: an old-style id such as `hep-th/9901001` keeps its archive prefix, because
     `hep-th/9901001` and `cond-mat/9901001` are different papers that share a number.
     """
-    ident = arxiv_id.strip()
+    ident = _QUERY_OR_FRAGMENT.sub("", arxiv_id.strip())
     ident = _ARXIV_URL.sub("", ident, count=1)
     ident = _ARXIV_SCHEME.sub("", ident, count=1)
     ident = _PDF_SUFFIX.sub("", ident)

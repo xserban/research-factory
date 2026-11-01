@@ -43,6 +43,35 @@ class TestNormalization:
         """An old-style archive prefix is part of the id, not a URL path to discard."""
         assert normalize_arxiv(raw) == expected
 
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            ("2301.01234", "2301.01234"),
+            ("2301.01234v2", "2301.01234"),
+            ("2301.01234V2", "2301.01234"),
+            ("arXiv:2301.01234V2", "2301.01234"),
+            ("https://arxiv.org/abs/2301.01234", "2301.01234"),
+            ("arxiv.org/abs/2301.01234v2", "2301.01234"),
+            ("https://www.arxiv.org/abs/2301.01234v2", "2301.01234"),
+            ("http://export.arxiv.org/abs/2301.01234V2", "2301.01234"),
+            ("https://arxiv.org/pdf/2301.01234v2.pdf", "2301.01234"),
+            ("https://arxiv.org/pdf/2301.01234.PDF", "2301.01234"),
+            ("https://arxiv.org/abs/2301.01234?context=cs#sec1", "2301.01234"),
+            ("https://arxiv.org/abs/2301.01234v2#top", "2301.01234"),
+            ("hep-th/9901001V2", "hep-th/9901001"),
+            ("arxiv.org/abs/hep-th/9901001v1?x=1", "hep-th/9901001"),
+        ],
+    )
+    def test_normalize_arxiv_forms(self, raw: str, expected: str) -> None:
+        assert normalize_arxiv(raw) == expected
+
+    def test_datacite_doi_and_bare_arxiv_id_share_identity(self) -> None:
+        a = work_id(
+            title="A Study", authors=["Ada Zhou"], year=2023, doi="10.48550/arXiv.2301.01234"
+        )
+        b = work_id(title="A Study", authors=["Ada Zhou"], year=2023, arxiv="2301.01234V2")
+        assert a == b
+
 
 class TestWorkId:
     def test_is_deterministic(self) -> None:
