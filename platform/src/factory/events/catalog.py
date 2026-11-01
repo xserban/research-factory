@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from factory.model.base import StrictModel
 from factory.model.dedup import DedupMerged, DedupReverted
 from factory.model.project import ProjectCreated
+from factory.model.question import GoalStated, QuestionRecorded
 from factory.model.search import (
     QueryRegistered,
     SearchPageArchived,
@@ -61,4 +62,6 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("search.run_finished", SearchRunFinished, 1))
     catalog.register(EventType("dedup.merged", DedupMerged, 1))
     catalog.register(EventType("dedup.reverted", DedupReverted, 1))
+    catalog.register(EventType("question.goal_stated", GoalStated, 1))
+    catalog.register(EventType("question.recorded", QuestionRecorded, 1))
     return catalog
