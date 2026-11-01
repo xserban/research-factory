@@ -75,7 +75,7 @@ def _check_criterion(verdict: str, criterion: str | None) -> None:
     Accepts bare (`EX03`) and version-qualified (`P@1a2b3c4d:EX03`) criteria alike.
     """
     bare = None if criterion is None else criterion.rsplit(":", 1)[-1]
-    if verdict == "exclude" and criterion is None:
+    if verdict == "exclude" and (bare is None or not bare.startswith("EX")):
         raise ValueError("an exclusion names its EX criterion")
     if verdict == "include" and bare is not None and bare.startswith("EX"):
         raise ValueError("an inclusion cannot cite an exclusion criterion")

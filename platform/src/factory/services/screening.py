@@ -14,6 +14,10 @@ batch's content is its task's input blob: the text the agent saw, without the ta
 queued once per phase: calibration works in calibration batches, the others in screening batches.
 A work with a live, non-stale decision in the pass is not queued again.
 
+`screen_record` writes the verdicts of a held batch. Invalid items are reported and not written; a
+new decision supersedes the live one for the same work and pass, and the task completes once each
+of its records has a live decision of its own.
+
 Invariants:
 - No batch carries a decision, a worked example's seed id, or a held-out work.
 - Within a batch, records are shuffled with a generator seeded by the pass seed and the task's
@@ -24,9 +28,10 @@ import json
 import math
 import random
 import secrets
+from collections.abc import Sequence
 from typing import Literal
 
-from pydantic import JsonValue
+from pydantic import JsonValue, ValidationError
 from sqlalchemy import text
 
 from factory.errors import FactoryValidationError, ValidationIssue
@@ -39,6 +44,7 @@ from factory.model.screening import (
     PassJoined,
     PassLabel,
     PassOpened,
+    ScreeningItem,
     ScreeningPhase,
 )
 from factory.model.seed import SeedKind
@@ -60,8 +66,17 @@ from factory.services.protocol import (
     protocol_lineage,
 )
 from factory.services.protocol_rules import DecisionRef, stale_decisions
+from factory.services.results import BatchResult, ItemError
+from factory.services.screening_stats import quote_in
 from factory.services.search import list_works
-from factory.services.tasks import TaskSpec, claim_next, create_tasks, task_content
+from factory.services.tasks import (
+    TaskSpec,
+    claim_next,
+    complete_task,
+    create_tasks,
+    require_holder,
+    task_content,
+)
 
 TASK_KIND = {PassLabel.A: "screen_a", PassLabel.B: "screen_b"}
 SCREEN_BATCH = 10
@@ -290,6 +305,156 @@ def stale_screening_decisions(project: Project) -> set[str]:
         for decision in live_decisions(project)
     ]
     return set(stale_decisions(list_amendments(project), protocol_lineage(project), refs))
+
+
+# --- Recording ---
+
+
+def screen_record(
+    project: Project, actor: Actor, task_id: str, items: Sequence[ScreeningItem]
+) -> BatchResult[str]:
+    """Record the verdicts of a held batch, and return the decision IDs written (R-16, R-30).
+
+    Refused with nothing written when the actor is not an agent, the task is unknown or not held
+    by this session, this session does not screen the task's pass, or the task's protocol version
+    is no longer current. Otherwise each item is checked on its own: an invalid item is reported
+    as an ItemError and not written, and the valid items are appended in one write.
+
+    A decision supersedes the live decision for the same work in the same pass, if any. When every
+    record of the task has a live decision of the task, the task completes with those decisions as
+    its results. The decision events carry the validated input as their input blob.
+    """
+    with project.index.exclusive():
+        project.index.sync()
+        if actor.kind != "agent":
+            raise FactoryValidationError(
+                [ValidationIssue("actor", "only an agent screener records a decision")]
+            )
+        task = require_holder(project, actor, task_id)
+        batch = _batch_of(project, task)
+        if _joined_pass(project, actor.session) is not batch.pass_label:
+            raise FactoryValidationError(
+                [ValidationIssue("pass", f"this session does not screen pass {batch.pass_label}")]
+            )
+        protocol = _require_protocol(project)
+        if batch.protocol_id != protocol.protocol_id:
+            raise FactoryValidationError(
+                [ValidationIssue("task_id", "the task's protocol version is no longer current")]
+            )
+
+        records = {str(record["work_id"]): record for record in batch.records}
+        criteria = {str(criterion["id"]) for criterion in batch.criteria}
+        rejected: list[ItemError] = []
+        accepted: list[ScreeningItem] = []
+        answered: set[str] = set()
+        for index, item in enumerate(items):
+            duplicate = item.work_id in answered
+            answered.add(item.work_id)
+            issues = _item_issues(index, item, records, criteria, duplicate)
+            if issues:
+                rejected.append(ItemError(index=index, issues=issues))
+            else:
+                accepted.append(item)
+        if not accepted:
+            return BatchResult[str](written=[], rejected=rejected)
+
+        blob = project.blobs.put_json(
+            {"task_id": task_id, "items": [item.model_dump(mode="json") for item in items]}
+        )
+        live = {
+            decision.work_id: decision for decision in live_decisions(project, batch.pass_label)
+        }
+        decision_ids: list[str] = []
+        events = []
+        for item in accepted:
+            decision_id = project.ids.new("dec")
+            prior = live.get(item.work_id)
+            payload = DecisionRecorded(
+                decision_id=decision_id,
+                work_id=item.work_id,
+                pass_label=batch.pass_label,
+                phase=batch.phase,
+                stage=ScreeningStage.TITLE_ABSTRACT,
+                verdict=item.verdict,
+                criterion=None
+                if item.criterion is None
+                else f"{batch.protocol_id}:{item.criterion}",
+                quote=item.quote,
+                rationale=item.rationale,
+                protocol_id=batch.protocol_id,
+                task_id=task_id,
+                supersedes=None if prior is None else prior.decision_id,
+            )
+            events.append(
+                project.events.make(
+                    "screening.decision_recorded",
+                    payload,
+                    actor,
+                    refs=(decision_id,),
+                    input_blob=blob,
+                )
+            )
+            decision_ids.append(decision_id)
+        project.record(events)
+
+        decided = {
+            decision.work_id: decision.decision_id
+            for decision in live_decisions(project, batch.pass_label)
+            if decision.task_id == task_id
+        }
+        results = [decided.get(str(record["work_id"])) for record in batch.records]
+        if all(result is not None for result in results):
+            complete_task(project, actor, task_id, [str(result) for result in results])
+        return BatchResult[str](written=decision_ids, rejected=rejected)
+
+
+def _batch_of(project: Project, task: Task) -> ScreenBatchContent:
+    """The screening batch a task holds. Raises FactoryValidationError for any other task."""
+    refusal = FactoryValidationError([ValidationIssue("task_id", "is not a screening batch")])
+    try:
+        batch = ScreenBatchContent.model_validate(task_content(project, task))
+    except ValidationError as exc:
+        raise refusal from exc
+    if task.kind != TASK_KIND[batch.pass_label]:
+        raise refusal
+    return batch
+
+
+def _item_issues(
+    index: int,
+    item: ScreeningItem,
+    records: dict[str, dict[str, str | None]],
+    criteria: set[str],
+    duplicate: bool,
+) -> list[ValidationIssue]:
+    """Why one item may not be written, located as `items.<index>.<field>`; empty when valid.
+
+    The item's own rules (Task 1) are re-checked here, so an item built without validation is
+    still refused. The record and criterion checks depend on the batch the task holds."""
+    field = f"items.{index}"
+    record = records.get(item.work_id)
+    if record is None:
+        return [ValidationIssue(f"{field}.work_id", "is not a record of this task")]
+    if duplicate:
+        return [ValidationIssue(f"{field}.work_id", "is answered twice in one call")]
+    try:
+        ScreeningItem.model_validate(item.model_dump(mode="python"))
+    except ValidationError as exc:
+        return [
+            ValidationIssue(".".join([field, *map(str, err["loc"])]), str(err["msg"]))
+            for err in exc.errors()
+        ]
+    if item.criterion is not None and item.criterion not in criteria:
+        return [
+            ValidationIssue(
+                f"{field}.criterion",
+                "is not a criterion of this batch: not in its protocol version, or not "
+                "applicable at title and abstract",
+            )
+        ]
+    if not quote_in(item.quote, str(record.get("title") or ""), record.get("abstract")):
+        return [ValidationIssue(f"{field}.quote", "is not in the record's title or abstract")]
+    return []
 
 
 # --- Enqueueing ---

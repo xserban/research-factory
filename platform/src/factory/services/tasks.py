@@ -115,7 +115,7 @@ def complete_task(
     refs = tuple(result_refs)
     if any(not ref for ref in refs):
         raise FactoryValidationError([ValidationIssue("result_refs", "must be non-empty strings")])
-    task = _require_holder(project, actor, task_id)
+    task = require_holder(project, actor, task_id)
     project.record(
         [
             project.events.make(
@@ -131,7 +131,7 @@ def complete_task(
 
 
 def release_task(project: Project, actor: Actor, task_id: str, reason: str) -> None:
-    task = _require_holder(project, actor, task_id)
+    task = require_holder(project, actor, task_id)
     lease_until = task.lease_until
     project.record(
         [
@@ -248,7 +248,7 @@ def _claimable(project: Project, kind: str, now: datetime) -> list[tuple[str, st
     return [(str(task_id), str(blob)) for task_id, blob in rows]
 
 
-def _require_holder(project: Project, actor: Actor, task_id: str) -> Task:
+def require_holder(project: Project, actor: Actor, task_id: str) -> Task:
     """The task, if this session holds a live claim on it; otherwise a validation error."""
     task = get_task(project, task_id)
     if task is None:
