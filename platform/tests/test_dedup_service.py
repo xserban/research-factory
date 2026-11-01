@@ -136,6 +136,23 @@ def test_manual_revert_is_not_reapplied(
     assert project_status(project).merges_active == 0
 
 
+def test_manual_revert_of_a_three_way_merge_keeps_every_pair_apart(
+    project: Project, human: Actor, fake_sources: SourcesFor
+) -> None:
+    _ingest(project, fake_sources, [[PUBLISHED, PREPRINT, OPENALEX_COPY]])
+    [mid] = dedup_run(project).created
+    [merge] = active_merges(project)
+    assert len(merge.absorbed) == 2
+
+    revert_merge(project, human, mid, "three different papers")
+    again = dedup_run(project)
+
+    assert again.created == [] and active_merges(project) == []
+    assert len(canonical_works(project)) == 3
+    _, blocked = _dedup_rows(project)
+    assert len(blocked) == 3  # every pair among the three members, not just primary-absorbed
+
+
 def test_revert_validation(project: Project, human: Actor, fake_sources: SourcesFor) -> None:
     _ingest(project, fake_sources, [[PUBLISHED, PREPRINT]])
     mid = dedup_run(project).created[0]
@@ -272,7 +289,7 @@ def test_projection_ignores_reverts_of_unknown_or_reverted_merges(
 
     revert_merge(project, human, mid, "different papers")
     after = _dedup_rows(project)
-    assert len(after[1]) == 1  # the manual revert blocked the one absorbed record
+    assert len(after[1]) == 1  # the manual revert blocked the one pair
     repeat = DedupReverted(merge_id=mid, reason="again", manual=True)
     project.record(
         [project.events.make("dedup.reverted", repeat, project.system_actor(), refs=(mid,))]

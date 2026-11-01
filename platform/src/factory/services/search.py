@@ -347,6 +347,12 @@ def _spec_issues(
         )
     if spec.filters and spec.source != "openalex":
         issues.append(ValidationIssue("filters", f"{spec.source} does not take filters"))
+    if spec.source == "openalex" and spec.kind is QueryKind.KEYWORD and "," in spec.text:
+        # The adapter joins filter clauses with commas, so a comma in the text would start a
+        # bogus clause rather than search for it.
+        issues.append(
+            ValidationIssue("text", "OpenAlex keyword queries cannot contain ','; use FILTER kind")
+        )
     return issues
 
 

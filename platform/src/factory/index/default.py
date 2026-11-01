@@ -7,7 +7,7 @@ from factory.index.search import search_handlers, search_tables
 from factory.index.tasks import task_handlers, tasks_table
 
 # Bump on any change to the tables or handlers below; the index is then rebuilt.
-PROJECTION_VERSION = "5"
+PROJECTION_VERSION = "6"
 
 
 def default_projection() -> Projection:

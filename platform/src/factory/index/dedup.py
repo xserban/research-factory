@@ -1,12 +1,13 @@
 """Projection of merges and the pairs a human has ruled apart.
 
 Handlers are total: a revert of an unknown or already reverted merge changes nothing. A manual
-revert blocks each absorbed record from its primary (stored with `a < b`), so the cascade does
-not rebuild a merge a person has undone.
+revert blocks every pair among the merge's members (stored with `a < b`), so the cascade does
+not rebuild any part of a merge a person has undone.
 """
 
 import json
 from dataclasses import dataclass
+from itertools import combinations
 
 from sqlalchemy import Boolean, Column, Integer, MetaData, String, Table, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
@@ -93,8 +94,8 @@ def _reverted(t: DedupTables) -> Handler:
         )
         if not payload.manual:
             return
-        for absorbed_id in json.loads(str(row.absorbed)):
-            first, second = sorted((str(row.primary), str(absorbed_id)))
+        members = sorted({str(row.primary), *(str(m) for m in json.loads(str(row.absorbed)))})
+        for first, second in combinations(members, 2):
             conn.execute(
                 sqlite_insert(t.blocked)
                 .values(a=first, b=second)

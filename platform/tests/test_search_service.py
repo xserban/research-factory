@@ -210,6 +210,28 @@ def test_unknown_source_or_kind_is_rejected_and_writes_nothing(
     assert project_status(project).events_total == before
 
 
+def test_openalex_keyword_text_with_a_comma_is_rejected_and_writes_nothing(
+    project: Project,
+) -> None:
+    # A comma would start a second, bogus filter clause in the OpenAlex expression.
+    before = project_status(project).events_total
+    spec = QuerySpec(source="openalex", kind=QueryKind.KEYWORD, text="vessels, segmentation")
+    with pytest.raises(FactoryValidationError) as bad:
+        register_query(project, project.human_actor(), spec, sources=default_sources())
+    assert [i.field for i in bad.value.issues] == ["text"]
+    assert "FILTER" in bad.value.issues[0].reason
+    assert project_status(project).events_total == before
+
+
+def test_comma_is_fine_in_a_filter_query_and_in_arxiv_keywords(project: Project) -> None:
+    human = project.human_actor()
+    sources = default_sources()
+    flt = QuerySpec(source="openalex", kind=QueryKind.FILTER, text="doi:10.1/a|10.1/b")
+    arxiv = QuerySpec(source="arxiv", kind=QueryKind.KEYWORD, text="all:vessel, segmentation")
+    register_query(project, human, flt, sources=sources)
+    register_query(project, human, arxiv, sources=sources)
+
+
 def test_filters_are_accepted_for_openalex(project: Project) -> None:
     spec = QuerySpec(
         source="openalex",
