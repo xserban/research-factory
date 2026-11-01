@@ -11,7 +11,7 @@ from sqlalchemy import text
 from factory.canonical import canonical_json
 from factory.clock import format_ts, parse_ts
 from factory.errors import FactoryValidationError, ValidationIssue
-from factory.events.envelope import Actor
+from factory.events.envelope import Actor, Event
 from factory.model.base import StrictModel
 from factory.model.task import (
     TASK_KIND_RE,
@@ -49,6 +49,17 @@ class TaskCounts(StrictModel):
 
 def create_tasks(project: Project, actor: Actor, specs: Sequence[TaskSpec]) -> BatchResult[str]:
     """Write every valid spec in one append. Returns the new task IDs in input order."""
+    events, result = build_task_events(project, actor, specs)
+    if events:
+        project.record(events)
+    return result
+
+
+def build_task_events(
+    project: Project, actor: Actor, specs: Sequence[TaskSpec]
+) -> tuple[list[Event], BatchResult[str]]:
+    """The `task.created` events of the valid specs, not yet recorded, with the outcome that
+    recording them yields. A caller that must write other events with them records both at once."""
     rejected: list[ItemError] = []
     events = []
     task_ids: list[str] = []
@@ -69,9 +80,7 @@ def create_tasks(project: Project, actor: Actor, specs: Sequence[TaskSpec]) -> B
             )
         )
         task_ids.append(task_id)
-    if events:
-        project.record(events)
-    return BatchResult[str](written=task_ids, rejected=rejected)
+    return events, BatchResult[str](written=task_ids, rejected=rejected)
 
 
 def claim_next(

@@ -270,6 +270,7 @@ def test_record_refused_for_task_of_other_pass_or_session(
     project: Project, agent: Actor, agent_other: Actor, human: Actor, mock_sources: SourcesFor
 ) -> None:
     _batch(project, agent, human, mock_sources)
+    agent_other = agent_other.model_copy(update={"model": "claude-sonnet-5-0"})
 
     # agent_other claims a pass B batch. This session may not record on it: not its claim.
     other_b = screen_next(project, agent_other, PassLabel.B).batch

@@ -1,6 +1,7 @@
 """Passes bound to sessions, and screen_next with the calibration gate (R-16, R-20, R-35)."""
 
 import math
+import re
 import secrets
 from collections.abc import Callable, Mapping
 from typing import Any
@@ -9,7 +10,7 @@ import pytest
 
 from factory.clock import FixedClock
 from factory.config import Settings
-from factory.errors import FactoryValidationError
+from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor, Event
 from factory.events.reader import read_all
 from factory.model.protocol import (
@@ -170,6 +171,7 @@ def test_pass_b_reverses_criterion_order_and_uses_exclusion_framing(
 ) -> None:
     _setup(project, agent, human, mock_sources)
     _draw(project)
+    agent_other = agent_other.model_copy(update={"model": "claude-sonnet-5-0"})
 
     batch_a = screen_next(project, agent_other, PassLabel.A).batch
     batch_b = screen_next(project, agent, PassLabel.B).batch
@@ -428,9 +430,8 @@ def test_sensitivity_below_threshold_is_named_in_blocked(
 
     result = screen_next(project, agent, PassLabel.A)
     assert result.batch is None
-    assert any(
-        "sensitivity 0.33 is below the 0.90 threshold" in reason for reason in result.blocked
-    )
+    assert any("sensitivity" in reason and "threshold" in reason for reason in result.blocked)
+    assert not any(re.search(r"\d\.\d", reason) for reason in result.blocked), result.blocked
 
 
 def test_amendment_requeues_open_tasks_under_the_new_version(
@@ -503,5 +504,39 @@ def test_refused_label_session_writes_no_pass_opened(
 
     with pytest.raises(FactoryValidationError):
         screen_next(project, agent, PassLabel.A)
+    assert _of_type(project, "screening.pass_opened") == []
+    assert _of_type(project, "screening.pass_joined") == []
+
+
+def test_model_of_the_other_pass_cannot_join(
+    project: Project, agent: Actor, agent_other: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    _setup(project, agent, human, mock_sources)
+    join_pass(project, agent, PassLabel.A)
+    assert agent_other.model == agent.model
+
+    with pytest.raises(FactoryValidationError) as raised:
+        join_pass(project, agent_other, PassLabel.B)
+    assert [issue.field for issue in raised.value.issues] == ["model"]
+    assert [e.payload["pass_label"] for e in _of_type(project, "screening.pass_joined")] == ["A"]
+
+
+def test_failed_batch_build_writes_no_pass_or_join(
+    project: Project,
+    agent: Actor,
+    human: Actor,
+    mock_sources: SourcesFor,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _setup(project, agent, human, mock_sources)
+    _draw(project)
+    monkeypatch.setattr(
+        "factory.services.tasks._spec_issues",
+        lambda spec: [ValidationIssue("content", "refused")],
+    )
+    before = len(_events(project))
+    with pytest.raises(FactoryValidationError):
+        screen_next(project, agent, PassLabel.A)
+    assert len(_events(project)) == before
     assert _of_type(project, "screening.pass_opened") == []
     assert _of_type(project, "screening.pass_joined") == []

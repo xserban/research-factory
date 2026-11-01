@@ -35,7 +35,7 @@ from pydantic import JsonValue, ValidationError
 from sqlalchemy import text
 
 from factory.errors import FactoryValidationError, ValidationIssue
-from factory.events.envelope import Actor
+from factory.events.envelope import Actor, Event
 from factory.model.base import StrictModel
 from factory.model.protocol import ProtocolStatus, ScreeningStage
 from factory.model.screening import (
@@ -73,7 +73,7 @@ from factory.services.tasks import (
     TaskSpec,
     claim_next,
     complete_task,
-    create_tasks,
+    build_task_events,
     require_holder,
     task_content,
 )
@@ -135,41 +135,47 @@ def open_pass(project: Project, actor: Actor, label: PassLabel) -> None:
         project.index.sync()
         if _pass_row(project, label) is not None:
             return
-        protocol = _require_protocol(project)
-        plan = protocol.spec.screening
-        if label is PassLabel.B and plan.passes == 1:
-            raise FactoryValidationError(
-                [ValidationIssue("pass", "the protocol plans one screening pass")]
-            )
-        seed = secrets.randbits(32)
-        sample = _sample(project, label, plan.dual_sample, seed)
-        payload = PassOpened(
-            pass_label=label,
-            framing=_FRAMING[label],
-            criterion_order=_CRITERION_ORDER[label],
-            random_seed=seed,
-            sample=sample,
+        event, _ = _opened_event(project, actor, label, _require_protocol(project))
+        project.record([event])
+
+
+def _opened_event(
+    project: Project, actor: Actor, label: PassLabel, protocol: ProtocolVersion
+) -> tuple[Event, tuple[int, tuple[str, ...] | None]]:
+    """The `screening.pass_opened` event for a pass not yet opened, not yet recorded, with the
+    seed and sample it carries. Raises FactoryValidationError for pass B under a one-pass plan."""
+    plan = protocol.spec.screening
+    if label is PassLabel.B and plan.passes == 1:
+        raise FactoryValidationError(
+            [ValidationIssue("pass", "the protocol plans one screening pass")]
         )
-        project.record(
-            [
-                project.events.make(
-                    "screening.pass_opened",
-                    payload,
-                    actor,
-                    input_blob=_input(project, actor, {"pass_label": label.value}),
-                )
-            ]
-        )
+    seed = secrets.randbits(32)
+    sample = _sample(project, label, plan.dual_sample, seed)
+    payload = PassOpened(
+        pass_label=label,
+        framing=_FRAMING[label],
+        criterion_order=_CRITERION_ORDER[label],
+        random_seed=seed,
+        sample=sample,
+    )
+    event = project.events.make(
+        "screening.pass_opened",
+        payload,
+        actor,
+        input_blob=_input(project, actor, {"pass_label": label.value}),
+    )
+    return event, (seed, sample)
 
 
 def join_pass(project: Project, actor: Actor, label: PassLabel) -> None:
     """Bind the session to pass `label`, once. Refused, with nothing written, when the actor is
     not an agent, when the session relayed a human label, or when it already screens the other
-    pass. Joining the same pass again writes nothing."""
+    pass or its model already screens the other pass. Joining the same pass again writes
+    nothing."""
     with project.index.exclusive():
         project.index.sync()
         if _check_join(project, actor, label):
-            _record_join(project, actor, label)
+            project.record([_join_event(project, actor, label)])
 
 
 def _check_join(project: Project, actor: Actor, label: PassLabel) -> bool:
@@ -186,6 +192,10 @@ def _check_join(project: Project, actor: Actor, label: PassLabel) -> bool:
         )
     joined = _joined_pass(project, actor.session)
     if joined is None:
+        if actor.model in _pass_models(project, _other(label)):
+            raise FactoryValidationError(
+                [ValidationIssue("model", f"pass {_other(label).value} already uses this model")]
+            )
         return True
     if joined is label:
         return False
@@ -194,22 +204,19 @@ def _check_join(project: Project, actor: Actor, label: PassLabel) -> bool:
     )
 
 
-def _record_join(project: Project, actor: Actor, label: PassLabel) -> None:
+def _join_event(project: Project, actor: Actor, label: PassLabel) -> Event:
+    """The `screening.pass_joined` event for a join `_check_join` allowed, not yet recorded."""
     model = actor.model
     if model is None:
         raise FactoryValidationError(
             [ValidationIssue("actor", "only an agent screener joins a pass")]
         )
     payload = PassJoined(pass_label=label, session=actor.session, model=model)
-    project.record(
-        [
-            project.events.make(
-                "screening.pass_joined",
-                payload,
-                actor,
-                input_blob=_input(project, actor, {"pass_label": label.value}),
-            )
-        ]
+    return project.events.make(
+        "screening.pass_joined",
+        payload,
+        actor,
+        input_blob=_input(project, actor, {"pass_label": label.value}),
     )
 
 
@@ -245,11 +252,18 @@ def screen_next(project: Project, actor: Actor, label: PassLabel) -> ScreenNext:
                 remaining=0,
             )
         needs_join = _check_join(project, actor, label)
-        open_pass(project, actor, label)
+        # The pass, the join and the queued batches are built first and written in one append,
+        # so a failure while building them writes nothing.
+        events: list[Event] = []
+        row = _pass_row(project, label)
+        if row is None:
+            opened, row = _opened_event(project, actor, label, protocol)
+            events.append(opened)
         if needs_join:
-            _record_join(project, actor, label)
+            events.append(_join_event(project, actor, label))
+        queued, remaining = _enqueue(project, actor, label, protocol, row)
+        project.record([*events, *queued])
         gate_closed = status.required and not status.passed[label.value]
-        remaining = _enqueue(project, actor, label, protocol)
         task = claim_next(
             project,
             actor,
@@ -460,12 +474,16 @@ def _item_issues(
 # --- Enqueueing ---
 
 
-def _enqueue(project: Project, actor: Actor, label: PassLabel, protocol: ProtocolVersion) -> int:
-    """Create batches for the pending works of the pass, calibration first. Returns how many works
-    of the pass's queue still lack a live, non-stale decision for their phase."""
-    row = _pass_row(project, label)
-    if row is None:
-        raise FactoryValidationError([ValidationIssue("pass", "not opened")])
+def _enqueue(
+    project: Project,
+    actor: Actor,
+    label: PassLabel,
+    protocol: ProtocolVersion,
+    row: tuple[int, tuple[str, ...] | None],
+) -> tuple[list[Event], int]:
+    """The `task.created` events of the batches for the pending works of the pass (calibration
+    first), not yet recorded, and how many works of the pass's queue still lack a live,
+    non-stale decision for their phase. `row` is the pass's seed and sample."""
     seed, sample = row
     corpus = {work.id: work for work in list_works(project)}
     calibration = calibration_items(project)
@@ -515,13 +533,10 @@ def _enqueue(project: Project, actor: Actor, label: PassLabel, protocol: Protoco
             )
             specs.append(TaskSpec(kind=kind, content=content.model_dump(mode="json")))
             index += 1
-    if specs:
-        result = create_tasks(project, actor, specs)
-        if result.rejected:
-            raise FactoryValidationError(
-                [issue for item in result.rejected for issue in item.issues]
-            )
-    return remaining
+    events, result = build_task_events(project, actor, specs)
+    if result.rejected:
+        raise FactoryValidationError([issue for item in result.rejected for issue in item.issues])
+    return events, remaining
 
 
 def _sample(
@@ -616,7 +631,8 @@ def _claimed_batch(project: Project, task: Task) -> ScreenBatch:
 
 
 def _gate_reasons(project: Project, status: CalibrationStatus, label: PassLabel) -> list[str]:
-    """Why ordinary batches wait for this pass. Counts and rates only, never a label."""
+    """Why ordinary batches wait for this pass. Counts only, never a label or a rate: the screener
+    must not learn the answer key or how close it is to the threshold (R-20)."""
     reasons: list[str] = []
     unlabelled = status.drawn - status.labelled
     if unlabelled:
@@ -633,8 +649,8 @@ def _gate_reasons(project: Project, status: CalibrationStatus, label: PassLabel)
         )
     elif threshold is not None and rates.sensitivity < threshold:
         reasons.append(
-            f"calibration: pass {label.value} sensitivity {rates.sensitivity:.2f} is below "
-            f"the {threshold:.2f} threshold"
+            f"calibration: pass {label.value} sensitivity is below the required threshold; "
+            "the researcher must amend the protocol"
         )
     if not reasons:
         reasons.append(
@@ -675,6 +691,19 @@ def _joined_pass(project: Project, session: str) -> PassLabel | None:
             {"session": session},
         ).one_or_none()
     return None if row is None else PassLabel(str(row[0]))
+
+
+def _other(label: PassLabel) -> PassLabel:
+    return PassLabel.B if label is PassLabel.A else PassLabel.A
+
+
+def _pass_models(project: Project, label: PassLabel) -> set[str]:
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text("SELECT model FROM pass_sessions WHERE pass_label = :label"),
+            {"label": label.value},
+        ).all()
+    return {str(row[0]) for row in rows}
 
 
 def _is_label_session(project: Project, session: str) -> bool:

@@ -156,7 +156,14 @@ def test_agreement_refused_when_passes_share_model(
     protocol_id = _ready(project, agent, human, mock_sources)
     _decide_four(project, agent, protocol_id)
     join_pass(project, agent, PassLabel.A)
-    join_pass(project, agent_other, PassLabel.B)  # a different session, the same model
+    # A different session, the same model. join_pass refuses it, so the join exists only in the log.
+    joined = PassJoined(
+        pass_label=PassLabel.B, session=agent_other.session, model=agent.model or ""
+    )
+    blob = project.blobs.put_json({"pass_label": "B"})
+    project.record(
+        [project.events.make("screening.pass_joined", joined, agent_other, input_blob=blob)]
+    )
 
     with pytest.raises(FactoryValidationError) as exc:
         screen_agreement(project, agent)

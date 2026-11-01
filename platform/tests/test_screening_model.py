@@ -177,26 +177,26 @@ def test_pass_and_channel_values() -> None:
 
 
 def test_payloads_construct() -> None:
-    PassOpened(
+    opened = PassOpened(
         pass_label=PassLabel.B,
         framing=Framing.EXCLUSION,
         criterion_order="reversed",
         random_seed=7,
         sample=None,
     )
-    PassJoined(pass_label=PassLabel.A, session="sess-1", model="model-a")
-    CalibrationDrawn(protocol_id=None, work_ids=("rf:1",), random_seed=7)
-    CalibrationLabelled(
+    joined = PassJoined(pass_label=PassLabel.A, session="sess-1", model="model-a")
+    drawn = CalibrationDrawn(protocol_id=None, work_ids=("rf:1",), random_seed=7)
+    labelled = CalibrationLabelled(
         work_id="rf:1", verdict="exclude", criterion="P@1a2b3c4d:EX01", channel=Channel.CLI
     )
-    DisagreementResolved(
+    resolved = DisagreementResolved(
         work_id="rf:1",
         verdict="exclude",
         criterion="P@1a2b3c4d:EX01",
         reason="off-topic",
         channel=Channel.MCP,
     )
-    AuditSampled(
+    sampled = AuditSampled(
         audit_id=AUDIT,
         work_ids=("rf:1",),
         random_seed=7,
@@ -204,9 +204,16 @@ def test_payloads_construct() -> None:
         exclusions=4,
         inclusions=6,
     )
-    AuditLabelled(
+    audit_labelled = AuditLabelled(
         audit_id=AUDIT, work_id="rf:1", verdict="include", criterion=None, channel=Channel.CLI
     )
+    assert (opened.pass_label, opened.criterion_order) == (PassLabel.B, "reversed")
+    assert (joined.session, joined.model) == ("sess-1", "model-a")
+    assert drawn.work_ids == ("rf:1",) and drawn.protocol_id is None
+    assert (labelled.verdict, labelled.channel) == ("exclude", Channel.CLI)
+    assert (resolved.reason, resolved.channel) == ("off-topic", Channel.MCP)
+    assert (sampled.population, sampled.exclusions + sampled.inclusions) == (10, 10)
+    assert (audit_labelled.verdict, audit_labelled.criterion) == ("include", None)
 
 
 def test_payloads_reject_unknown_fields() -> None:
