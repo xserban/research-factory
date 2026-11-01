@@ -8,8 +8,8 @@ from pydantic import JsonValue
 
 from factory.canonical import canonical_json
 from factory.errors import FactoryError
+from factory.model.identity import BLOB_REF_RE as BLOB_REF_RE  # re-exported for envelope
 
-BLOB_REF_RE = r"^sha256:[0-9a-f]{64}$"
 _BLOB_REF = re.compile(BLOB_REF_RE)
 _PREFIX = "sha256:"
 

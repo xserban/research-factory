@@ -10,6 +10,7 @@ from factory.events.envelope import Actor
 from factory.events.factory import EventFactory
 from factory.events.writer import EventWriter
 from factory.model.identity import IdGenerator
+from factory.model.work import Provenance
 from factory.services.context import Project, open_project
 from factory.services.project import init_project
 from tests.helpers import S2, SESSION, T0, Demo
@@ -55,6 +56,17 @@ def writer(events_dir: Path, cat: EventCatalog, blobs: BlobStore) -> EventWriter
 @pytest.fixture
 def factory(clock: FixedClock, cat: EventCatalog) -> EventFactory:
     return EventFactory("demo", cat, IdGenerator(clock))
+
+
+@pytest.fixture
+def prov() -> Provenance:
+    return Provenance(
+        source="openalex",
+        run_id=f"run_{SESSION}",
+        query_id=f"qry_{SESSION}",
+        at=T0,
+        raw_blob="sha256:" + "a" * 64,
+    )
 
 
 @pytest.fixture
