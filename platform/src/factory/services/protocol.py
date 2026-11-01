@@ -1,9 +1,13 @@
 """The protocol as recorded: its versions, PRESS reviews, deviations and the search gate.
 
 `record_protocol` validates a spec with `protocol_rules.protocol_issues`. Errors always refuse
-the write. Gaps refuse a `ready` declaration and are returned with a draft. A ready protocol on
-the current question cannot be replaced; a stale one (built on an earlier question) is amended
-by recording a new version on the current question. An identical spec and status writes nothing.
+the write. Gaps refuse a `ready` declaration and are returned with a draft. Once the current
+protocol is ready it cannot be replaced by `record_protocol`, stale or not: `amend_protocol` is
+the only path to a new version. An identical spec and status writes nothing.
+
+`amend_protocol` records a `protocol.amended` event. It names each criterion's effect, computes
+the criterion changes and the stale rules they create, and checks that the `semantic` flag
+matches the changes. A prose-only amendment keeps the version; the event is still recorded.
 
 `search_authorization` is the gate `services.search.register_query` applies to searches in pilot
 and systematic projects: the current protocol must be ready and built on the current question, a
@@ -12,7 +16,7 @@ a deviation of the current protocol. Probe and exploratory searches are not gate
 """
 
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Literal
 
@@ -24,19 +28,29 @@ from factory.events.envelope import Actor
 from factory.model.base import StrictModel
 from factory.model.project import RigorMode
 from factory.model.protocol import (
+    ChangeKind,
+    CriterionChange,
+    CriterionEffect,
     DeviationRecorded,
     PressConfirmed,
     PressFinding,
     PressReviewed,
+    ProtocolAmended,
     ProtocolRecorded,
     ProtocolSpec,
     ProtocolStatus,
+    StaleRule,
     protocol_version,
     search_strategy_hash,
 )
 from factory.model.search import QueryPurpose, QuerySpec
 from factory.services.context import Project
-from factory.services.protocol_rules import protocol_issues
+from factory.services.protocol_rules import (
+    criterion_changes,
+    other_changes,
+    protocol_issues,
+    stale_rules,
+)
 from factory.services.question import current_question, get_question
 from factory.services.seeds import all_seeds
 from factory.sources.registry import default_sources
@@ -97,11 +111,7 @@ def record_protocol(
             return ProtocolResult(
                 protocol_id=protocol_id, status=status, created=False, gaps=check.gaps
             )
-        if (
-            current is not None
-            and current.status is ProtocolStatus.READY
-            and current.spec.question_id == question.question_id
-        ):
+        if current is not None and current.status is ProtocolStatus.READY:
             raise FactoryValidationError(
                 [ValidationIssue("protocol", "protocol is ready; change it with protocol_amend")]
             )
@@ -141,7 +151,12 @@ def current_protocol(project: Project) -> ProtocolVersion | None:
             return None
         protocol_id = str(row[0])
         reviews = conn.execute(
-            text("SELECT responses FROM press_reviews WHERE protocol_id = :protocol"),
+            text(
+                "SELECT r.responses FROM press_reviews r JOIN protocols p "
+                "ON p.protocol_id = r.protocol_id WHERE p.search_hash = "
+                "(SELECT search_hash FROM protocols WHERE protocol_id = :protocol "
+                "ORDER BY event_id DESC LIMIT 1)"
+            ),
             {"protocol": protocol_id},
         ).all()
     if any(responses is not None for (responses,) in reviews):
@@ -157,6 +172,188 @@ def current_protocol(project: Project) -> ProtocolVersion | None:
         recorded_at=parse_ts(str(row[3])),
         press=press,
     )
+
+
+class AmendResult(StrictModel):
+    """`from_version == to_version` and `prose_only` for a change that keeps the version."""
+
+    amendment_id: str
+    from_version: str
+    to_version: str
+    stale_rules: list[StaleRule]
+    prose_only: bool
+
+
+def amend_protocol(
+    project: Project,
+    actor: Actor,
+    spec: ProtocolSpec,
+    *,
+    reason: str,
+    semantic: bool,
+    effects: Mapping[str, CriterionEffect],
+) -> AmendResult:
+    """Record the current ready protocol as amended to `spec`, or refuse and write nothing.
+
+    `effects` must name exactly the changed criteria. `semantic` must be false if and only if
+    nothing but clarifications and prose changed. The amended protocol must stay ready, so
+    errors and gaps both refuse it. `spec.question_id` must be the current question."""
+    issues: list[ValidationIssue] = []
+    if not reason.strip():
+        issues.append(ValidationIssue("reason", "must not be empty"))
+    with project.index.exclusive():
+        project.index.sync()
+        current = current_protocol(project)
+        question = current_question(project)
+        if current is None or current.status is not ProtocolStatus.READY:
+            issues.append(ValidationIssue("protocol", "only a ready protocol can be amended"))
+        if question is None:
+            issues.append(ValidationIssue("question", "record a question before amending"))
+        if issues or current is None or question is None:
+            raise FactoryValidationError(issues)
+
+        spec_question = get_question(project, spec.question_id)
+        if spec_question is None:
+            issues.append(ValidationIssue("question_id", "unknown question"))
+            raise FactoryValidationError(issues)
+        check = protocol_issues(
+            spec,
+            question=spec_question,
+            current_question_id=question.question_id,
+            mode=_rigor_mode(project),
+            seeds=all_seeds(project),
+            probes=_measured_probes(project),
+            known_sources=set(default_sources()),
+        )
+        if check.errors or check.gaps:
+            raise FactoryValidationError([*check.errors, *check.gaps])
+
+        changes = criterion_changes(current.spec, spec)
+        changed = {cid for cid, kind in changes if kind is ChangeKind.CHANGED}
+        missing = sorted(changed - effects.keys())
+        unexpected = sorted(effects.keys() - changed)
+        if missing or unexpected:
+            detail = []
+            if missing:
+                detail.append(f"missing: {', '.join(missing)}")
+            if unexpected:
+                detail.append(f"unexpected: {', '.join(unexpected)}")
+            issues.append(
+                ValidationIssue(
+                    "effects", "must name exactly the changed criteria; " + "; ".join(detail)
+                )
+            )
+
+        others = other_changes(current.spec, spec)
+        # A changed criterion without a declared effect counts as semantic until it is declared.
+        expected_semantic = bool(
+            others
+            or any(kind is not ChangeKind.CHANGED for _, kind in changes)
+            or any(effects.get(cid) is not CriterionEffect.CLARIFIED for cid in changed)
+        )
+        if semantic != expected_semantic:
+            issues.append(
+                ValidationIssue(
+                    "semantic",
+                    "must be true when criteria are added or removed, another field changed, "
+                    "or an effect is not clarified; otherwise false",
+                )
+            )
+        if issues:
+            raise FactoryValidationError(issues)
+
+        change_records = tuple(
+            CriterionChange(
+                cid=cid,
+                change=kind,
+                effect=effects[cid] if kind is ChangeKind.CHANGED else None,
+            )
+            for cid, kind in changes
+        )
+        rules = stale_rules(change_records, current.spec, spec)
+        amendment_id = project.ids.new("amd")
+        to_version = protocol_version(spec)
+        payload = ProtocolAmended(
+            amendment_id=amendment_id,
+            from_version=current.protocol_id,
+            to_version=to_version,
+            spec=spec,
+            reason=reason.strip(),
+            semantic=semantic,
+            changes=change_records,
+            stale_rules=tuple(rules),
+            other_changes=tuple(others),
+        )
+        input_blob = (
+            project.blobs.put_json(
+                {
+                    "spec": spec.model_dump(mode="json"),
+                    "reason": reason.strip(),
+                    "semantic": semantic,
+                }
+            )
+            if actor.kind == "agent"
+            else None
+        )
+        project.record(
+            [
+                project.events.make(
+                    "protocol.amended",
+                    payload,
+                    actor,
+                    refs=(amendment_id,),
+                    input_blob=input_blob,
+                )
+            ]
+        )
+    return AmendResult(
+        amendment_id=amendment_id,
+        from_version=current.protocol_id,
+        to_version=to_version,
+        stale_rules=rules,
+        prose_only=to_version == current.protocol_id,
+    )
+
+
+def protocol_lineage(project: Project) -> list[str]:
+    """Every protocol version in recording order, each once, at its first recording."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        rows = conn.execute(text("SELECT protocol_id FROM protocols ORDER BY event_id")).all()
+    seen: dict[str, None] = {}
+    for (protocol_id,) in rows:
+        seen.setdefault(str(protocol_id), None)
+    return list(seen)
+
+
+def list_amendments(project: Project) -> list[ProtocolAmended]:
+    """Every recorded amendment, in recording order."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        rows = conn.execute(text("SELECT payload FROM amendments ORDER BY event_id")).all()
+    return [ProtocolAmended.model_validate_json(str(payload)) for (payload,) in rows]
+
+
+def list_deviations(project: Project) -> list[DeviationRecorded]:
+    """Every recorded deviation, in recording order."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT deviation_id, protocol_id, description, reason, affects "
+                "FROM deviations ORDER BY event_id"
+            )
+        ).all()
+    return [
+        DeviationRecorded(
+            deviation_id=str(deviation),
+            protocol_id=str(protocol_id),
+            description=str(description),
+            reason=str(reason),
+            affects=tuple(str(item) for item in _json_list(affects)),
+        )
+        for deviation, protocol_id, description, reason, affects in rows
+    ]
 
 
 def press_review(

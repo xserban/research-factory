@@ -3,7 +3,9 @@
 `protocols` keeps every `protocol.recorded` row, with its search-strategy hash; the current
 protocol is the row with the greatest `event_id`. `press_reviews` keeps each review; its
 `responses` are set by the first `protocol.press_confirmed` for it. `deviations` keeps each
-recorded deviation. Handlers are total: a second row for the same key is ignored, and a
+recorded deviation. `protocol.amended` adds a `protocols` row (with the amended spec, under its
+version, which may equal the previous one for a prose-only change) and an `amendments` row
+holding the whole payload. Handlers are total: a second row for the same key is ignored, and a
 confirmation for an unknown or already confirmed review changes nothing.
 """
 
@@ -21,6 +23,7 @@ from factory.model.protocol import (
     DeviationRecorded,
     PressConfirmed,
     PressReviewed,
+    ProtocolAmended,
     ProtocolRecorded,
     search_strategy_hash,
 )
@@ -31,6 +34,7 @@ class ProtocolTables:
     protocols: Table
     reviews: Table
     deviations: Table
+    amendments: Table
 
 
 def protocol_tables(metadata: MetaData) -> ProtocolTables:
@@ -63,7 +67,14 @@ def protocol_tables(metadata: MetaData) -> ProtocolTables:
         Column("affects", String, nullable=False),
         Column("event_id", String, nullable=False),
     )
-    return ProtocolTables(protocols, reviews, deviations)
+    amendments = Table(
+        "amendments",
+        metadata,
+        Column("amendment_id", String, primary_key=True),
+        Column("event_id", String, nullable=False),
+        Column("payload", String, nullable=False),
+    )
+    return ProtocolTables(protocols, reviews, deviations, amendments)
 
 
 def protocol_handlers(t: ProtocolTables) -> dict[str, Handler]:
@@ -72,6 +83,7 @@ def protocol_handlers(t: ProtocolTables) -> dict[str, Handler]:
         "protocol.press_reviewed": _reviewed(t),
         "protocol.press_confirmed": _confirmed(t),
         "protocol.deviation_recorded": _deviation(t),
+        "protocol.amended": _amended(t),
     }
 
 
@@ -144,3 +156,31 @@ def _deviation(t: ProtocolTables) -> Handler:
         )
 
     return deviation
+
+
+def _amended(t: ProtocolTables) -> Handler:
+    def amended(conn: Connection, event: Event) -> None:
+        payload = ProtocolAmended.model_validate(event.payload)
+        conn.execute(
+            sqlite_insert(t.protocols)
+            .values(
+                event_id=event.id,
+                protocol_id=payload.to_version,
+                status="ready",
+                search_hash=search_strategy_hash(payload.spec),
+                spec=canonical_json(payload.spec.model_dump(mode="json")).decode(),
+                at=format_ts(event.ts),
+            )
+            .on_conflict_do_nothing(index_elements=["event_id"])
+        )
+        conn.execute(
+            sqlite_insert(t.amendments)
+            .values(
+                amendment_id=payload.amendment_id,
+                event_id=event.id,
+                payload=canonical_json(payload.model_dump(mode="json")).decode(),
+            )
+            .on_conflict_do_nothing(index_elements=["amendment_id"])
+        )
+
+    return amended

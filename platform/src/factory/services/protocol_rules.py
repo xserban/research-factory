@@ -15,15 +15,158 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from factory.errors import ValidationIssue
+from factory.model.base import StrictModel
 from factory.model.project import RigorMode
 from factory.model.protocol import (
+    AMENDABLE_FIELDS,
+    ChangeKind,
+    Criterion,
+    CriterionChange,
+    CriterionEffect,
     CriterionKind,
+    ProtocolAmended,
     ProtocolSpec,
     ReviewerRole,
+    ScreeningStage,
     SourcePlan,
+    StaleRule,
+    section_digest,
+    strip_prose,
 )
 from factory.services.question import QuestionVersion
 from factory.services.seeds import SeedRecord, SeedRole
+
+# --- Amendments: what changed, and which earlier decisions it makes doubtful. ---
+
+
+class DecisionRef(StrictModel):
+    """A screening decision as the stale rules see it. `criterion` is version-qualified
+    (`P@1a2b3c4d:EX03`); `protocol_id` is the version the decision was recorded under."""
+
+    decision_id: str
+    verdict: str
+    criterion: str | None
+    protocol_id: str
+    stage: ScreeningStage
+
+
+def criterion_changes(old: ProtocolSpec, new: ProtocolSpec) -> list[tuple[str, ChangeKind]]:
+    """Criteria compared by id. A criterion is changed when its prose-stripped dump differs.
+
+    A renamed criterion (a new id with similar text) is a removal plus an addition: its id
+    is the identity that decisions cite."""
+    old_by_id = {c.id: c for c in old.criteria}
+    new_by_id = {c.id: c for c in new.criteria}
+    changes: list[tuple[str, ChangeKind]] = []
+    for cid in sorted(old_by_id.keys() | new_by_id.keys()):
+        if cid not in new_by_id:
+            changes.append((cid, ChangeKind.REMOVED))
+        elif cid not in old_by_id:
+            changes.append((cid, ChangeKind.ADDED))
+        elif _criterion_dump(old_by_id[cid]) != _criterion_dump(new_by_id[cid]):
+            changes.append((cid, ChangeKind.CHANGED))
+    return changes
+
+
+def other_changes(old: ProtocolSpec, new: ProtocolSpec) -> list[str]:
+    """The hashed top-level fields other than criteria that differ."""
+    return [key for key in AMENDABLE_FIELDS if section_digest(old, key) != section_digest(new, key)]
+
+
+def stale_rules(
+    changes: Sequence[CriterionChange], old: ProtocolSpec, new: ProtocolSpec
+) -> list[StaleRule]:
+    """The rules an amendment's changes create. Clarification creates none.
+
+    added -> untested at the new criterion's stage; removed -> exclusions citing it, at the old
+    stage; loosened -> exclusions citing it; tightened -> inclusions."""
+    old_by_id = {c.id: c for c in old.criteria}
+    new_by_id = {c.id: c for c in new.criteria}
+    rules: list[StaleRule] = []
+    for change in changes:
+        if change.change is ChangeKind.ADDED:
+            rules.append(
+                StaleRule(
+                    criterion=change.cid,
+                    stales="untested",
+                    stage=new_by_id[change.cid].applies_at,
+                )
+            )
+        elif change.change is ChangeKind.REMOVED:
+            rules.append(
+                StaleRule(
+                    criterion=change.cid,
+                    stales="exclusions-citing",
+                    stage=old_by_id[change.cid].applies_at,
+                )
+            )
+        elif change.effect is CriterionEffect.LOOSENED:
+            rules.append(
+                StaleRule(
+                    criterion=change.cid,
+                    stales="exclusions-citing",
+                    stage=new_by_id[change.cid].applies_at,
+                )
+            )
+        elif change.effect is CriterionEffect.TIGHTENED:
+            rules.append(
+                StaleRule(
+                    criterion=change.cid,
+                    stales="inclusions",
+                    stage=new_by_id[change.cid].applies_at,
+                )
+            )
+    return rules
+
+
+def stale_decisions(
+    amendments: Sequence[ProtocolAmended],
+    lineage: Sequence[str],
+    decisions: Sequence[DecisionRef],
+) -> list[str]:
+    """The ids of decisions an amendment's stale rules make doubtful, sorted and unique.
+
+    A decision is in scope of amendment A only when its version comes before `A.to_version` in
+    `lineage` (the versions in recording order, first occurrence). Stages match when they are
+    equal or either side is `either`."""
+    position: dict[str, int] = {}
+    for index, version in enumerate(lineage):
+        position.setdefault(version, index)
+
+    stale: set[str] = set()
+    for amendment in amendments:
+        target = position.get(amendment.to_version)
+        if target is None:
+            continue
+        for decision in decisions:
+            origin = position.get(decision.protocol_id)
+            if origin is None or origin >= target:
+                continue
+            if any(_stales(rule, decision) for rule in amendment.stale_rules):
+                stale.add(decision.decision_id)
+    return sorted(stale)
+
+
+def _stales(rule: StaleRule, decision: DecisionRef) -> bool:
+    if rule.stage is not ScreeningStage.EITHER and decision.stage not in (
+        rule.stage,
+        ScreeningStage.EITHER,
+    ):
+        return False
+    if rule.stales == "untested":
+        return True
+    if rule.stales == "inclusions":
+        return decision.verdict == "include"
+    return decision.verdict == "exclude" and _cid(decision.criterion) == rule.criterion
+
+
+def _cid(criterion: str | None) -> str | None:
+    return None if criterion is None else criterion.rsplit(":", 1)[-1]
+
+
+def _criterion_dump(criterion: Criterion) -> object:
+    return strip_prose(criterion.model_dump(mode="json"))
+
 
 PARENT_MISSING = "every criterion names its parent question element or non-goal (R-11)"
 UNKNOWN_SEED = "unknown seed"

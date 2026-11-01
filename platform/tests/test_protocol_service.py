@@ -25,6 +25,7 @@ from factory.model.search import QueryKind, QueryPurpose, QuerySpec
 from factory.services.context import Project
 from factory.services.project import init_project
 from factory.services.protocol import (
+    amend_protocol,
     confirm_press,
     current_protocol,
     press_review,
@@ -157,6 +158,31 @@ def test_draft_can_be_replaced_ready_cannot(
     assert issue.reason == "protocol is ready; change it with protocol_amend"
     current = current_protocol(project)
     assert current is not None and current.protocol_id == protocol_id
+
+
+def test_record_refused_for_stale_ready_protocol(
+    project: Project, agent: Actor, mock_sources: SourcesFor
+) -> None:
+    human = project.human_actor()
+    ready_protocol(project, agent, human, mock_sources, press=False)
+    old = current_protocol(project)
+    assert old is not None
+    record_question(
+        project, human, pilot_question_spec("Does linear attention match softmax?"), reason="reword"
+    )
+    question = current_question(project)
+    assert question is not None
+
+    stale_rebuild = old.spec.model_copy(update={"question_id": question.question_id})
+    with pytest.raises(FactoryValidationError) as raised:
+        record_protocol(project, agent, stale_rebuild, ready=True)
+
+    [issue] = raised.value.issues
+    assert issue.field == "protocol"
+    assert issue.reason == "protocol is ready; change it with protocol_amend"
+    assert len(_events(project, "protocol.recorded")) == 1
+    current = current_protocol(project)
+    assert current is not None and current.protocol_id == old.protocol_id
 
 
 def test_identical_resubmission_writes_nothing(project: Project, agent: Actor) -> None:
@@ -341,7 +367,10 @@ def test_amended_protocol_restores_search(
     new_qid = question.question_id
 
     amended = old.spec.model_copy(update={"question_id": new_qid})
-    record_protocol(project, agent, amended, ready=True)
+    result = amend_protocol(
+        project, agent, amended, reason="question reworded", semantic=True, effects={}
+    )
+    assert result.from_version == old.protocol_id
     register_query(project, agent, SEARCH, sources=mock_sources(openalex=[]))
     assert len(_searches(project)) == 1
 

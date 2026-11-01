@@ -11,7 +11,7 @@ from factory.index.seeds import seed_handlers, seed_tables
 from factory.index.tasks import task_handlers, tasks_table
 
 # Bump on any change to the tables or handlers below; the index is then rebuilt.
-PROJECTION_VERSION = "11"
+PROJECTION_VERSION = "12"
 
 
 def default_projection() -> Projection:

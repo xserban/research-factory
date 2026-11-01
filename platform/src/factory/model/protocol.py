@@ -29,6 +29,7 @@ PARENT_RE = r"^(slot:.+|NG\d{2})$"
 PROTOCOL_ID_RE = r"^P@[0-9a-f]{8}$"
 REVIEW_ID_RE = rf"^prs_{ULID_RE}$"
 DEVIATION_ID_RE = rf"^dev_{ULID_RE}$"
+AMENDMENT_ID_RE = rf"^amd_{ULID_RE}$"
 
 PROSE_KEYS = frozenset(
     {
@@ -210,6 +211,15 @@ def protocol_version(spec: ProtocolSpec) -> str:
     return "P@" + _digest(dump, dump.keys())
 
 
+AMENDABLE_FIELDS = ("question_id", "method_profile", "sources", "queries", "limits", "screening")
+"""Top-level hashed fields other than criteria, which an amendment reports as `other_changes`."""
+
+
+def section_digest(spec: ProtocolSpec, key: str) -> str:
+    """The digest of one hashed top-level field, prose stripped and lists sorted."""
+    return _digest(spec.model_dump(mode="json"), (key,))
+
+
 def search_strategy_hash(spec: ProtocolSpec) -> str:
     """`S@` plus the digest over sources, queries and limits only. Criteria do not affect it."""
     return "S@" + _digest(spec.model_dump(mode="json"), _SEARCH_STRATEGY_KEYS)
@@ -272,9 +282,62 @@ class PressConfirmed(StrictModel):
     responses: tuple[str, ...]
 
 
+class ChangeKind(StrEnum):
+    ADDED = "added"
+    REMOVED = "removed"
+    CHANGED = "changed"
+
+
+class CriterionEffect(StrEnum):
+    """What a changed criterion does to decisions made under it. `clarified` changes nothing."""
+
+    LOOSENED = "loosened"
+    TIGHTENED = "tightened"
+    CLARIFIED = "clarified"
+
+
+class CriterionChange(StrictModel):
+    cid: str = Field(pattern=CRITERION_ID_RE)
+    change: ChangeKind
+    effect: CriterionEffect | None = None
+
+
+class StaleRule(StrictModel):
+    """Decisions a change makes doubtful: those citing `criterion` (`exclusions-citing`), all
+    inclusions (`inclusions`) or all decisions not yet tested against it (`untested`)."""
+
+    criterion: str = Field(pattern=CRITERION_ID_RE)
+    stales: Literal["exclusions-citing", "inclusions", "untested"]
+    stage: ScreeningStage
+
+
 class DeviationRecorded(StrictModel):
     deviation_id: str = Field(pattern=DEVIATION_ID_RE)
     protocol_id: str = Field(pattern=PROTOCOL_ID_RE)
     description: str = Field(min_length=1)
     reason: str = Field(min_length=1)
     affects: tuple[str, ...] = ()
+
+
+class ProtocolAmended(StrictModel):
+    """A new version of the current protocol, or a prose-only change when the versions are equal.
+
+    `spec` is the amended protocol; `to_version` must be its version hash. `changes` lists the
+    criteria that were added, removed or changed; `other_changes` lists the other hashed fields
+    (`AMENDABLE_FIELDS`) that differ. `semantic` is false only for a clarification or prose."""
+
+    amendment_id: str = Field(pattern=AMENDMENT_ID_RE)
+    from_version: str = Field(pattern=PROTOCOL_ID_RE)
+    to_version: str = Field(pattern=PROTOCOL_ID_RE)
+    spec: ProtocolSpec
+    reason: str = Field(min_length=1)
+    semantic: bool
+    changes: tuple[CriterionChange, ...] = ()
+    stale_rules: tuple[StaleRule, ...] = ()
+    other_changes: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def _to_version_matches_spec(self) -> Self:
+        if self.to_version != protocol_version(self.spec):
+            raise ValueError("to_version must be the version hash of spec")
+        return self

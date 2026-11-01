@@ -9,6 +9,7 @@ from factory.model.protocol import (
     DeviationRecorded,
     PressConfirmed,
     PressReviewed,
+    ProtocolAmended,
     ProtocolRecorded,
 )
 from factory.model.question import GoalStated, QuestionRecorded
@@ -90,4 +91,5 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("protocol.press_reviewed", PressReviewed, 1))
     catalog.register(EventType("protocol.press_confirmed", PressConfirmed, 1))
     catalog.register(EventType("protocol.deviation_recorded", DeviationRecorded, 1))
+    catalog.register(EventType("protocol.amended", ProtocolAmended, 1))
     return catalog
