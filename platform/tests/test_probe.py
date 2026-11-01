@@ -389,29 +389,35 @@ def test_probe_pages_archived_before_measurement(
     assert report.queries[0].status == "measured"
 
 
-class _BrokenMatch:
-    """Wraps a real adapter: the count of `broken` is archived, then its matching fails."""
+class _Broken:
+    """Wraps a real adapter so that the query `broken` fails: at its count request, before any
+    page is archived, or, by default, at matching, after its count page is archived."""
 
-    def __init__(self, inner: Prober, broken: str) -> None:
+    def __init__(self, inner: Prober, broken: str, *, at: str) -> None:
         self._inner = inner
         self._broken = broken
+        self._at = at
 
     def count(self, spec: QuerySpec, *, archive: PageSink) -> int | None:
+        if self._at == "count" and spec.text == self._broken:
+            raise SourceError("boom: connection reset")
         return self._inner.count(spec, archive=archive)
 
     def matching(self, ids: Sequence[str], spec: QuerySpec, *, archive: PageSink) -> set[str]:
-        if spec.text == self._broken:
+        if self._at == "match" and spec.text == self._broken:
             raise SourceError("boom: connection reset")
         return self._inner.matching(ids, spec, archive=archive)
 
 
-def _broken_sources(base: Mapping[str, SourceFactory], broken: str) -> dict[str, SourceFactory]:
-    """The OpenAlex adapter of `base`, wrapped so that `broken` fails at matching."""
+def _broken_sources(
+    base: Mapping[str, SourceFactory], broken: str, *, at: str = "match"
+) -> dict[str, SourceFactory]:
+    """The OpenAlex adapter of `base`, wrapped so that `broken` fails at `at` (count or match)."""
     inner = base["openalex"]
 
     def build(settings: Settings, clock: Clock) -> Source:
         # The wrapped adapter is a Source; the wrapper is only a Prober, which is all probes use.
-        return cast(Source, _BrokenMatch(cast(Prober, inner(settings, clock)), broken))
+        return cast(Source, _Broken(cast(Prober, inner(settings, clock)), broken, at=at))
 
     return {"openalex": SourceFactory(inner.kinds, build)}
 
@@ -447,6 +453,38 @@ def test_source_error_during_probe_is_reported(
         if e.type == "probe.page_archived" and e.payload["query_id"] == broken.query_id
     ]
     assert archived_for_broken
+
+
+def test_source_error_in_the_count_request_is_reported_without_recall(
+    settings: Any, clock: Any, agent: Actor, mock_sources: SourcesFor
+) -> None:
+    # Final review, finding 4: a failed count request is reported with its reason, claims no
+    # recall, archives no page, and leaves the other queries measured.
+    project = _exploratory(settings, clock)
+    _question(project, agent)
+    _positives(project, agent, mock_sources, 3)
+    sources = _broken_sources(
+        mock_sources(openalex=[_item(1), _item(2)]), "broken", at="count"
+    )
+
+    report = run_probe(
+        project, agent, [_probe_spec("broken"), _probe_spec("attention")], sources=sources
+    )
+
+    broken, good = report.queries
+    assert broken.status == "failed"
+    assert broken.recall is None and broken.reported_count is None
+    assert broken.reason is not None and "boom" in broken.reason
+    assert good.status == "measured" and good.recall == pytest.approx(2 / 3)
+    assert report.per_source_recall == {"openalex": pytest.approx(2 / 3)}
+    [failed] = [e for e in _events(project) if e.type == "probe.failed"]
+    assert failed.payload["query_id"] == broken.query_id
+    assert "boom" in failed.payload["reason"]
+    assert not [
+        e
+        for e in _events(project)
+        if e.type == "probe.page_archived" and e.payload["query_id"] == broken.query_id
+    ]
 
 
 # --- Thresholds (acceptance 7) ---
