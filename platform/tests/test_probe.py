@@ -1,5 +1,6 @@
 """The probe: recall per query, source and pool, negative hits, and held-out seeds (R-20, R-24)."""
 
+import json
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any, cast
 from urllib.parse import unquote
@@ -17,7 +18,7 @@ from factory.model.question import NonGoal, QuestionSpec, Slot
 from factory.model.search import QueryKind, QueryPurpose, QuerySpec
 from factory.model.seed import SeedKind, SeedSpec
 from factory.services.context import Project
-from factory.services.probe import THRESHOLDS, run_probe
+from factory.services.probe import THRESHOLDS, ProbeReport, run_probe
 from factory.services.project import init_project
 from factory.services.question import record_question, state_goal
 from factory.services.search import get_work, list_works
@@ -175,9 +176,53 @@ def test_probe_reports_negative_hits(
 # --- Held-out seeds (acceptance 22) ---
 
 
+def _arxiv_seed(project: Project, actor: Actor, mock_sources: SourcesFor, n: int) -> None:
+    arxiv_id = f"2301.{n:05d}"
+    spec = SeedSpec(kind=SeedKind.POSITIVE, cite=f"Paper {n}", arxiv=arxiv_id)
+    sources = mock_sources(arxiv=arxiv_atom([(f"{arxiv_id}v1", f"Paper {n}", 2020, "Ada")]))
+    [outcome] = add_seeds(project, actor, [spec], sources=sources).written
+    assert outcome.work_id is not None
+
+
+def _assert_probe_writes_clean(
+    project: Project,
+    before: int,
+    report: ProbeReport,
+    http_log: list[httpx.Request],
+    needles: set[str],
+) -> None:
+    """No held-out identifier in what the probe returns, writes or sends.
+
+    Checked: the report, every payload and input blob the probe wrote, and every request URL.
+    Documented exception (controller ruling on R-20): a raw page blob (`probe.page_archived`) is
+    archived verbatim and is human-only, so it may hold a record the source returned on its own.
+    The scenario makes sure that happens, to prove the exception is exercised, not avoided.
+
+    Outside the scan: `seed.split_drawn` (the recorded split, which must name the held-out seeds)
+    and the seed lookups of `add_seeds` (probe-purpose queries that precede the split).
+    """
+    probe_events = [e for e in _events(project)[before:] if e.type in PROBE_EVENTS]
+    assert any(e.type == "probe.page_archived" for e in probe_events)
+    assert http_log, "the probe must have sent requests to be checked"
+
+    texts: list[str] = [report.model_dump_json()]
+    raw_pages: list[str] = []
+    for event in probe_events:
+        texts.append(json.dumps(event.payload, sort_keys=True))
+        if event.input_blob is not None:
+            texts.append(project.blobs.get(event.input_blob).decode("utf-8"))
+        if event.type == "probe.page_archived":
+            raw_pages.append(project.blobs.get(event.payload["raw_blob"]).decode("utf-8"))
+    texts.extend(unquote(str(request.url)) for request in http_log)
+
+    for text in texts:
+        for needle in needles:
+            assert needle not in text, f"held-out identifier {needle!r} leaked"
+    # The exception is real: the source's own answer carried a held-out record into a raw page.
+    assert any(needle in page for page in raw_pages for needle in needles)
+
+
 def test_probe_never_mentions_held_out_seeds(
-    settings: Any,
-    clock: Any,
     project: Project,
     agent: Actor,
     mock_sources: SourcesFor,
@@ -189,7 +234,8 @@ def test_probe_never_mentions_held_out_seeds(
     assert split.held_out
     needles = _held_out_needles(project)
     development = [n for n in range(1, 7) if f"SEED{n:02d}" in split.development]
-    sources = mock_sources(openalex=[_item(n) for n in development])
+    # The source answers with every work, held-out ones included, as a real count can.
+    sources = mock_sources(openalex=[_item(n) for n in range(1, 7)])
     http_log.clear()
     before = len(_events(project))
 
@@ -197,21 +243,8 @@ def test_probe_never_mentions_held_out_seeds(
         project, agent, [_probe_spec(), _probe_spec("transformers")], sources=sources
     )
 
-    # What the probe wrote: its query registrations, its raw pages and its measurements.
-    probe_events = [e for e in _events(project)[before:] if e.type in PROBE_EVENTS]
-    assert any(e.type == "probe.page_archived" for e in probe_events)
-    texts: list[str] = [report.model_dump_json()]
-    for event in probe_events:
-        texts.append(event.model_dump_json())
-        if event.input_blob is not None:
-            texts.append(project.blobs.get(event.input_blob).decode("utf-8"))
-        if event.type == "probe.page_archived":
-            texts.append(project.blobs.get(event.payload["raw_blob"]).decode("utf-8"))
-    texts.extend(unquote(str(request.url)) for request in http_log)
-    assert http_log, "the probe must have sent requests to be checked"
-    for text in texts:
-        for needle in needles:
-            assert needle not in text, f"held-out identifier {needle!r} leaked"
+    assert report.queries[0].retrieved == tuple(f"SEED{n:02d}" for n in development)
+    _assert_probe_writes_clean(project, before, report, http_log, needles)
 
     # Validation messages, too: a refused probe names fields, never seeds.
     with pytest.raises(FactoryValidationError) as refused:
@@ -224,6 +257,39 @@ def test_probe_never_mentions_held_out_seeds(
     for issue in refused.value.issues:
         for needle in needles:
             assert needle not in issue.reason and needle not in issue.field
+
+
+def test_probe_never_sends_held_out_arxiv_ids(
+    project: Project,
+    agent: Actor,
+    mock_sources: SourcesFor,
+    http_log: list[httpx.Request],
+) -> None:
+    _question(project, agent)
+    for n in range(1, 7):
+        _arxiv_seed(project, agent, mock_sources, n)
+    split = split_seeds(project, random_seed=7)
+    assert split.held_out
+    needles = _held_out_needles(project)
+    assert any(needle.startswith("2301.") for needle in needles)
+    sources = mock_sources(
+        arxiv=arxiv_atom([(f"2301.{n:05d}v1", f"Paper {n}", 2020, "Ada") for n in range(1, 7)])
+    )
+    http_log.clear()
+    before = len(_events(project))
+
+    report = run_probe(
+        project,
+        agent,
+        [QuerySpec(source="arxiv", kind=QueryKind.KEYWORD, text="linear attention")],
+        sources=sources,
+    )
+
+    urls = [unquote(str(request.url)) for request in http_log]
+    assert any("id_list=" in url for url in urls), "the id-list match must have been sent"
+    assert any("search_query=" in url for url in urls)
+    assert len(report.queries[0].retrieved) == len(split.development)
+    _assert_probe_writes_clean(project, before, report, http_log, needles)
 
 
 def test_probe_draws_the_split_in_pilot(
