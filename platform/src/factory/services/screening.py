@@ -153,33 +153,49 @@ def join_pass(project: Project, actor: Actor, label: PassLabel) -> None:
     pass. Joining the same pass again writes nothing."""
     with project.index.exclusive():
         project.index.sync()
-        model = actor.model
-        if actor.kind != "agent" or model is None:
-            raise FactoryValidationError(
-                [ValidationIssue("actor", "only an agent screener joins a pass")]
-            )
-        if _is_label_session(project, actor.session):
-            raise FactoryValidationError(
-                [ValidationIssue("session", "this session relayed a human label and cannot screen")]
-            )
-        joined = _joined_pass(project, actor.session)
-        if joined is not None:
-            if joined is label:
-                return
-            raise FactoryValidationError(
-                [ValidationIssue("pass", f"this session already screens pass {joined.value}")]
-            )
-        payload = PassJoined(pass_label=label, session=actor.session, model=model)
-        project.record(
-            [
-                project.events.make(
-                    "screening.pass_joined",
-                    payload,
-                    actor,
-                    input_blob=_input(project, actor, {"pass_label": label.value}),
-                )
-            ]
+        if _check_join(project, actor, label):
+            _record_join(project, actor, label)
+
+
+def _check_join(project: Project, actor: Actor, label: PassLabel) -> bool:
+    """Whether the session may join `label` and has not yet: True when a join must be written.
+
+    Raises FactoryValidationError on a refusal; writes nothing."""
+    if actor.kind != "agent" or actor.model is None:
+        raise FactoryValidationError(
+            [ValidationIssue("actor", "only an agent screener joins a pass")]
         )
+    if _is_label_session(project, actor.session):
+        raise FactoryValidationError(
+            [ValidationIssue("session", "this session relayed a human label and cannot screen")]
+        )
+    joined = _joined_pass(project, actor.session)
+    if joined is None:
+        return True
+    if joined is label:
+        return False
+    raise FactoryValidationError(
+        [ValidationIssue("pass", f"this session already screens pass {joined.value}")]
+    )
+
+
+def _record_join(project: Project, actor: Actor, label: PassLabel) -> None:
+    model = actor.model
+    if model is None:
+        raise FactoryValidationError(
+            [ValidationIssue("actor", "only an agent screener joins a pass")]
+        )
+    payload = PassJoined(pass_label=label, session=actor.session, model=model)
+    project.record(
+        [
+            project.events.make(
+                "screening.pass_joined",
+                payload,
+                actor,
+                input_blob=_input(project, actor, {"pass_label": label.value}),
+            )
+        ]
+    )
 
 
 def screen_next(project: Project, actor: Actor, label: PassLabel) -> ScreenNext:
@@ -213,8 +229,10 @@ def screen_next(project: Project, actor: Actor, label: PassLabel) -> ScreenNext:
                 ],
                 remaining=0,
             )
+        needs_join = _check_join(project, actor, label)
         open_pass(project, actor, label)
-        join_pass(project, actor, label)
+        if needs_join:
+            _record_join(project, actor, label)
         gate_closed = status.required and not status.passed[label.value]
         remaining = _enqueue(project, actor, label, protocol)
         task = claim_next(

@@ -233,6 +233,7 @@ def test_session_cannot_join_both_passes(
 
     joined = _of_type(project, "screening.pass_joined")
     assert [e.payload["pass_label"] for e in joined] == ["A"]
+    assert _of_type(project, "screening.pass_opened") == []
 
 
 def test_label_session_cannot_join_pass(
@@ -565,3 +566,32 @@ def test_stale_decision_is_queued_again_and_counted_in_remaining(
     after = screen_next(project, agent, PassLabel.A)
     assert after.remaining == len(ordinary)
     assert work in _queued(project, new_id)
+
+
+def test_refused_screen_writes_nothing_for_the_refused_pass(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    _setup(project, agent, human, mock_sources)
+    _draw(project)
+    screen_next(project, agent, PassLabel.A)
+    opened_before = len(_of_type(project, "screening.pass_opened"))
+    joined_before = len(_of_type(project, "screening.pass_joined"))
+
+    with pytest.raises(FactoryValidationError):
+        screen_next(project, agent, PassLabel.B)
+    assert len(_of_type(project, "screening.pass_opened")) == opened_before
+    assert len(_of_type(project, "screening.pass_joined")) == joined_before
+    assert [e.payload["pass_label"] for e in _of_type(project, "screening.pass_opened")] == ["A"]
+
+
+def test_refused_label_session_writes_no_pass_opened(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    _setup(project, agent, human, mock_sources)
+    item = _draw(project)[0]
+    label_calibration(project, human, item, "include", None, Channel.MCP)
+
+    with pytest.raises(FactoryValidationError):
+        screen_next(project, agent, PassLabel.A)
+    assert _of_type(project, "screening.pass_opened") == []
+    assert _of_type(project, "screening.pass_joined") == []
