@@ -16,7 +16,7 @@ a deviation of the current protocol. Probe and exploratory searches are not gate
 """
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from datetime import datetime
 from typing import Literal
 
@@ -25,6 +25,7 @@ from sqlalchemy import text
 from factory.clock import parse_ts
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
+from factory.index.chase import round_texts
 from factory.model.base import StrictModel
 from factory.model.project import RigorMode
 from factory.model.protocol import (
@@ -479,7 +480,11 @@ def record_deviation(
 
 
 def search_authorization(
-    project: Project, spec: QuerySpec, *, deviation_id: str | None
+    project: Project,
+    spec: QuerySpec,
+    *,
+    deviation_id: str | None,
+    pending_round_texts: Collection[str] = (),
 ) -> list[ValidationIssue]:
     """Why a query may not run under the protocol. Empty when it may, or when it is not gated.
 
@@ -489,6 +494,9 @@ def search_authorization(
 
     A `deviation_id`, when given, must name a deviation of the current protocol, whether or not
     the query is planned: a stale or foreign id is refused rather than recorded in the events.
+
+    A chase query is planned by its round: its text is waived when a recorded round registered
+    it, or when it is in `pending_round_texts`, the texts of a round about to be written.
     """
     if spec.purpose is QueryPurpose.PROBE or _rigor_mode(project) not in _RIGOR_MODES_GATED:
         return []
@@ -517,7 +525,11 @@ def search_authorization(
             ValidationIssue("deviation_id", "must name a deviation of the current protocol")
         )
     planned = any(query.matches(spec) for query in current.spec.queries)
-    if not planned and deviation_id is None:
+    if (
+        not planned
+        and deviation_id is None
+        and not _chase_round_waives(project, spec, pending_round_texts)
+    ):
         issues.append(
             ValidationIssue("query", "not planned by the current protocol; record a deviation")
         )
@@ -604,6 +616,16 @@ def _is_deviation_of(project: Project, deviation_id: str, protocol_id: str) -> b
             {"deviation": deviation_id, "protocol": protocol_id},
         ).one_or_none()
     return row is not None
+
+
+def _chase_round_waives(project: Project, spec: QuerySpec, pending: Collection[str]) -> bool:
+    """Whether a chase spec's text is one a round registered, recorded or about to be."""
+    if spec.purpose is not QueryPurpose.CHASE:
+        return False
+    if spec.text in pending:
+        return True
+    with project.index.connect() as conn:
+        return spec.text in round_texts(conn)
 
 
 def _measured_probes(project: Project) -> dict[str, set[str]]:
