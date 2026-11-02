@@ -269,6 +269,50 @@ def final_outcomes(project: Project) -> dict[str, Outcome]:
     return outcomes
 
 
+def exclusion_criteria(project: Project) -> dict[str, str | None]:
+    """The criterion each excluded work is excluded under (bare), for every work `final_outcomes`
+    marks EXCLUDED. The same precedence applies: a calibration label's criterion, else a
+    resolution's, else the first sorted criterion cited by the live, non-stale screening exclusions
+    of the current protocol. None when the deciding label, resolution or decision names none.
+    Works with any other outcome are absent."""
+    project.index.sync()
+    outcomes = final_outcomes(project)
+    calibration = set(calibration_items(project))
+    with project.index.connect() as conn:
+        labels = {
+            str(work): _bare(criterion)
+            for work, criterion in conn.execute(
+                text("SELECT work_id, criterion FROM calibration_labels")
+            ).all()
+        }
+        resolved = {
+            str(work): _bare(criterion)
+            for work, criterion in conn.execute(
+                text("SELECT work_id, criterion FROM resolutions")
+            ).all()
+        }
+    screen = _load(project)
+    cited: dict[str, set[str]] = {}
+    if screen is not None:
+        for label in PassLabel:
+            for work, decision in screen.decided[label].items():
+                criterion = _exclusion(decision)
+                if criterion is not None:
+                    cited.setdefault(work, set()).add(criterion)
+
+    result: dict[str, str | None] = {}
+    for work, outcome in outcomes.items():
+        if outcome is not Outcome.EXCLUDED:
+            continue
+        if work in calibration:
+            result[work] = labels.get(work)
+        elif work in resolved:
+            result[work] = resolved[work]
+        else:
+            result[work] = min(cited[work]) if work in cited else None
+    return result
+
+
 class PassProgress(StrictModel):
     """One pass's ordinary queue: works queued, those with a live non-stale decision, and those
     remaining. All three are None when the pass is not open."""

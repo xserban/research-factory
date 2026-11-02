@@ -23,7 +23,6 @@ Invariants, enforced by `PrismaFlow`:
 
 import json
 from collections.abc import Mapping
-from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Literal
 
@@ -34,15 +33,12 @@ from factory.clock import parse_ts
 from factory.errors import FactoryError
 from factory.model.base import StrictModel
 from factory.model.protocol import Limit, ProtocolSpec, search_strategy_hash
-from factory.model.screening import ScreeningPhase, Verdict
 from factory.model.search import QueryKind, QueryPurpose, RunStatus
 from factory.model.work import ProvenanceMethod, Work
-from factory.services.agreement import Outcome, final_outcomes
-from factory.services.calibration import calibration_items
+from factory.services.agreement import Outcome, exclusion_criteria, final_outcomes
 from factory.services.context import Project
 from factory.services.dedup import canonical_works
 from factory.services.protocol import current_protocol, registered_deviation
-from factory.services.screening import live_decisions, stale_screening_decisions
 from factory.services.search import RunSummary
 
 FULL_TEXT_NOT_ASSESSED: Literal["not assessed in this review stage"] = (
@@ -116,7 +112,7 @@ def prisma_flow(project: Project) -> PrismaFlow:
     project.index.sync()
     canonical = canonical_works(project)
     outcomes = final_outcomes(project)
-    criteria = _cited_criteria(project)
+    criteria = exclusion_criteria(project)
 
     databases = _database_records(project)
     other = {method.value: 0 for method in OTHER_METHODS}
@@ -135,7 +131,7 @@ def prisma_flow(project: Project) -> PrismaFlow:
         elif outcome is Outcome.PENDING:
             pending += 1
         else:
-            criterion = _criterion(criteria, work.id)
+            criterion = criteria.get(work.id) or UNSPECIFIED
             excluded[criterion] = excluded.get(criterion, 0) + 1
 
     protocol = current_protocol(project)
@@ -230,81 +226,6 @@ def _other_method(work: Work) -> ProvenanceMethod:
         if method in methods:
             return method
     raise FactoryError(f"work {work.id} has no provenance outside the database method")
-
-
-# --- Exclusion criteria ---
-
-
-@dataclass(frozen=True)
-class _Cited:
-    """The criteria each decision path cites, bare (without the protocol version).
-
-    `calibration` is the drawn set; `labels` and `resolved` hold a human's criterion per work,
-    None when the label or resolution names none; `screened` holds the criterion of the live,
-    non-stale exclusions of the current protocol, one per work (the first in sorted order)."""
-
-    calibration: frozenset[str]
-    labels: dict[str, str | None]
-    resolved: dict[str, str | None]
-    screened: dict[str, str]
-
-
-def _cited_criteria(project: Project) -> _Cited:
-    project.index.sync()
-    with project.index.connect() as conn:
-        labels = {
-            str(work): _bare(criterion)
-            for work, criterion in conn.execute(
-                text("SELECT work_id, criterion FROM calibration_labels")
-            ).all()
-        }
-        resolved = {
-            str(work): _bare(criterion)
-            for work, criterion in conn.execute(
-                text("SELECT work_id, criterion FROM resolutions")
-            ).all()
-        }
-    return _Cited(
-        calibration=frozenset(calibration_items(project)),
-        labels=labels,
-        resolved=resolved,
-        screened=_screened_exclusions(project),
-    )
-
-
-def _screened_exclusions(project: Project) -> dict[str, str]:
-    """Per work, the first sorted criterion cited by its live, non-stale screening exclusions
-    under the current protocol."""
-    protocol = current_protocol(project)
-    if protocol is None:
-        return {}
-    stale = stale_screening_decisions(project)
-    cited: dict[str, set[str]] = {}
-    for decision in live_decisions(project):
-        criterion = _bare(decision.criterion)
-        if (
-            criterion is not None
-            and decision.phase is ScreeningPhase.SCREENING
-            and decision.protocol_id == protocol.protocol_id
-            and decision.decision_id not in stale
-            and decision.verdict is Verdict.EXCLUDE
-        ):
-            cited.setdefault(decision.work_id, set()).add(criterion)
-    return {work: sorted(criteria)[0] for work, criteria in cited.items()}
-
-
-def _criterion(cited: _Cited, work_id: str) -> str:
-    """The criterion an excluded work is excluded under, by the same precedence as the outcome:
-    calibration label, then resolution, then the screening decisions."""
-    if work_id in cited.calibration:
-        return cited.labels.get(work_id) or UNSPECIFIED
-    if work_id in cited.resolved:
-        return cited.resolved[work_id] or UNSPECIFIED
-    return cited.screened.get(work_id, UNSPECIFIED)
-
-
-def _bare(criterion: str | None) -> str | None:
-    return None if criterion is None else criterion.rsplit(":", 1)[-1]
 
 
 # --- Search report ---

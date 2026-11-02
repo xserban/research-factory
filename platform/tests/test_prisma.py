@@ -4,8 +4,9 @@ Every count comes from the corpus, the provenance rows and the live decisions; n
 number. Both identities are asserted on every flow the tests read (plan ruling 2).
 """
 
+import json
 from collections.abc import Callable, Mapping
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 import pytest
@@ -15,16 +16,25 @@ from factory.events.envelope import Actor
 from factory.model.chase import ChaseDirection
 from factory.model.protocol import CriterionEffect, PressElement, PressFinding, ProtocolSpec
 from factory.model.search import QueryKind, QueryPurpose, QuerySpec, RunStatus
+from factory.model.seed import SeedKind, SeedSpec
+from factory.model.work import Author, Dates, Identifiers, Provenance, ProvenanceMethod, Work
 from factory.services.calibration import calibration_items
 from factory.services.chase import search_chase
 from factory.services.context import Project
 from factory.services.dedup import active_merges, dedup_run, revert_merge
 from factory.services.prisma import PrismaFlow, prisma_flow, search_report
 from factory.services.probe import run_probe
-from factory.services.protocol import amend_protocol, current_protocol, press_review
+from factory.services.protocol import (
+    amend_protocol,
+    current_protocol,
+    press_review,
+    record_deviation,
+)
 from factory.services.search import list_works, register_query, run_query
+from factory.services.seeds import add_seeds, admit_seed, explain_seed_miss
+from factory.sources.base import RawPage, SearchResult
 from factory.sources.registry import INTERFACES, SourceFactory
-from tests.helpers import _positive_item, _protocol, _seed_item, openalex_item
+from tests.helpers import T0, _positive_item, _protocol, _seed_item, openalex_item
 from tests.test_chase_service import _citing, _corpus, _ordinary, _settle
 from tests.test_screening_next import _decide
 
@@ -198,7 +208,14 @@ def test_full_text_not_reported_as_zero(
     flow = prisma_flow(project)
 
     assert flow.full_text == FULL_TEXT
-    assert flow.model_dump(mode="json")["full_text"] == FULL_TEXT
+    # The serialised value is the exact string, never a number or an empty field.
+    assert flow.model_dump(mode="json")["full_text"] == "not assessed in this review stage"
+    assert '"full_text":"not assessed in this review stage"' in flow.model_dump_json()
+    # The Literal is enforced: any other value, a number included, is refused.
+    base = flow.model_dump()
+    for other in ("0", "", "not assessed", 0):
+        with pytest.raises(ValidationError):
+            PrismaFlow(**{**base, "full_text": other})
 
 
 def test_probe_runs_never_counted(
@@ -315,3 +332,148 @@ def test_unconfirmed_press_review_is_reported_as_unconfirmed(
     report = search_report(project)
 
     assert (report.press_review_id, report.press_confirmed) == (review_id, False)
+
+
+HAND_TITLE = "A manually retrieved report"
+SEED_DOI = "10.1000/p7"
+
+
+class _HandSearch:
+    """A hand-search source: one manually retrieved record, with `hand-search` provenance.
+
+    No service writes hand-search provenance yet (the method exists so that check can list it),
+    so this adapter stands in for one: it archives its page and returns a record whose provenance
+    row carries `hand-search`, which is what the projector stores for a parsed record."""
+
+    name = "hand"
+    kinds = frozenset({QueryKind.KEYWORD})
+
+    def run(
+        self,
+        spec: QuerySpec,
+        *,
+        run_id: str,
+        query_id: str,
+        archive: Callable[[RawPage], str],
+        resume_from: str | None = None,
+    ) -> SearchResult:
+        ref = archive(
+            RawPage(
+                ordinal=0,
+                body=json.dumps({"title": HAND_TITLE}),
+                url="hand://manual",
+                fetched_at=T0,
+            )
+        )
+        work = Work.build(
+            title=HAND_TITLE,
+            authors=[Author(name="Ben Li")],
+            dates=Dates(published=date(2019, 1, 1)),
+            identifiers=Identifiers(doi="10.1000/hand"),
+            provenance=[
+                Provenance(
+                    source="hand",
+                    run_id=run_id,
+                    query_id=query_id,
+                    at=T0,
+                    raw_blob=ref,
+                    method=ProvenanceMethod.HAND_SEARCH,
+                )
+            ],
+        )
+        return SearchResult(
+            source="hand",
+            query_sent=spec.text,
+            reported_count=1,
+            works=[work],
+            pages=1,
+            status=RunStatus.COMPLETE,
+        )
+
+
+def _admit_seed_seven(project: Project, human: Actor, mock_sources: SourcesFor) -> None:
+    """Admit the positive seed `Paper 7` (DOI 10.1000/p7), missing from the corpus, by lookup."""
+    spec = SeedSpec(kind=SeedKind.POSITIVE, cite="Paper 7", doi=SEED_DOI)
+    [outcome] = add_seeds(project, human, [spec], sources=mock_sources()).written
+    explain_seed_miss(
+        project, human, outcome.seed_id, "not indexed", ProvenanceMethod.SEED_ADMISSION
+    )
+    deviation = record_deviation(project, human, description="Seed lookup", reason="Admission.")
+    found = openalex_item(
+        title="Paper 7", author="Ada Zhou", published="2020-01-01", openalex_id="W7", doi=SEED_DOI
+    )
+    admit_seed(
+        project,
+        human,
+        outcome.seed_id,
+        sources=mock_sources(openalex=[found]),
+        deviation_id=deviation,
+    )
+
+
+def test_seed_admission_counts_under_its_method(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    protocol_id = _corpus(project, agent, human, mock_sources)
+    _admit_seed_seven(project, human, mock_sources)
+    _settle(project, agent, human, protocol_id)
+
+    flow = prisma_flow(project)
+
+    _assert_identities(flow)
+    assert flow.identified_other == {"citation-chase": 0, "seed-admission": 1, "hand-search": 0}
+    assert flow.identified_databases == {"openalex": 9}
+    assert (flow.duplicates_removed, flow.screened, flow.included) == (0, 10, 10)
+
+
+def test_hand_search_counts_under_its_method(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    protocol_id = _corpus(project, agent, human, mock_sources)
+    sources = {"hand": SourceFactory(_HandSearch.kinds, lambda _s, _c: _HandSearch())}
+    deviation = record_deviation(
+        project, human, description="Manual entry", reason="Hand-searched journal."
+    )
+    query = QuerySpec(source="hand", kind=QueryKind.KEYWORD, text="manual entry")
+    query_id = register_query(project, human, query, sources=sources, deviation_id=deviation)
+    run_query(project, query_id, sources=sources)
+    _settle(project, agent, human, protocol_id)
+
+    flow = prisma_flow(project)
+
+    _assert_identities(flow)
+    assert flow.identified_other == {"citation-chase": 0, "seed-admission": 0, "hand-search": 1}
+    assert flow.identified_databases == {"openalex": 9}
+    assert (flow.duplicates_removed, flow.screened, flow.included) == (0, 10, 10)
+
+
+def test_chase_outranks_seed_admission(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    protocol_id = _corpus(project, agent, human, mock_sources)
+    _admit_seed_seven(project, human, mock_sources)
+    _settle(project, agent, human, protocol_id)
+    # The chase finds the admitted work again (same DOI), so it carries both methods.
+    duplicate = openalex_item(
+        title="Paper 7",
+        author="Ada Zhou",
+        published="2020-01-01",
+        openalex_id="W9998",
+        doi=SEED_DOI,
+    )
+    search_chase(
+        project,
+        human,
+        [ChaseDirection.BACKWARD],
+        sources=mock_sources(openalex=[duplicate, _citing(910)]),
+    )
+    dedup_run(project)
+
+    flow = prisma_flow(project)
+
+    _assert_identities(flow)
+    # The admitted work counts once, under citation-chase (precedence over seed-admission); the
+    # newly cited work is the other chase entry.
+    assert flow.identified_other == {"citation-chase": 2, "seed-admission": 0, "hand-search": 0}
+    assert (flow.duplicates_removed, flow.screened) == (0, 11)
+    assert (flow.pending, flow.included) == (1, 10)
