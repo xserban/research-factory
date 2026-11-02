@@ -21,6 +21,7 @@ from factory.mcp.conventions import (
     withhold,
 )
 from factory.model.base import StrictModel
+from factory.model.chase import ChaseDirection
 from factory.model.identity import IdGenerator
 from factory.model.protocol import CriterionEffect, PressFinding, ProtocolSpec
 from factory.model.question import QuestionSpec
@@ -30,6 +31,7 @@ from factory.model.seed import SeedSpec
 from factory.services import agreement as agreement_service
 from factory.services import audit as audit_service
 from factory.services import calibration as calibration_service
+from factory.services import chase as chase_service
 from factory.services import dedup as dedup_service
 from factory.services import probe as probe_service
 from factory.services import project as project_service
@@ -137,6 +139,25 @@ def build_server(
             return _withheld(opened, summary.model_dump(mode="json"))
 
         return _reply(project, search)
+
+    @server.tool()
+    def search_chase(
+        project: str, directions: list[str], role: str, model: str, skill: str
+    ) -> dict[str, JsonValue]:
+        """Chase citations from the included works: the platform builds the queries.
+
+        `directions` is `backward` (works the included works cite), `forward` (works citing
+        them) or both. Refused while any work is pending a final outcome, and when no included
+        work has an OpenAlex id. Never write chase queries by hand; follow with `dedup_run`."""
+
+        def chase() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            actor = make_agent_actor(settings, session, role, model, skill)
+            parsed = _directions(directions)
+            summary = chase_service.search_chase(opened, actor, parsed, sources=adapters)
+            return _withheld(opened, summary.model_dump(mode="json"), include_work_ids=False)
+
+        return _reply(project, chase, include_work_ids=False)
 
     @server.tool()
     def dedup_run(project: str, role: str, model: str, skill: str) -> dict[str, JsonValue]:
@@ -586,6 +607,21 @@ def _check_label(work_id: str, verdict: str, criterion: str | None) -> None:
             for issue in exc.issues
         ]
         raise FactoryValidationError(issues) from exc
+
+
+def _directions(values: list[str]) -> list[ChaseDirection]:
+    """Parse chase directions; an unknown one is refused with the field path of its entry."""
+    choices = ", ".join(d.value for d in ChaseDirection)
+    issues: list[ValidationIssue] = []
+    parsed: list[ChaseDirection] = []
+    for index, value in enumerate(values):
+        try:
+            parsed.append(ChaseDirection(value))
+        except ValueError:
+            issues.append(ValidationIssue(f"directions[{index}]", f"must be one of: {choices}"))
+    if issues:
+        raise FactoryValidationError(issues)
+    return parsed
 
 
 def _pass_label(value: str) -> PassLabel:

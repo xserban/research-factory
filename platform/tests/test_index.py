@@ -276,3 +276,64 @@ def test_handler_failure_mid_batch_leaves_the_index_unchanged(
     with pytest.raises(RuntimeError):
         index.sync()
     assert snapshot() == before
+
+
+def test_chase_tables_rebuild_reproduces_live_fold(tmp_path: Path, clock: FixedClock) -> None:
+    """Chase rounds, sample extensions and admissions fold the same way after a full rebuild."""
+    from factory.events.catalog import default_catalog
+    from factory.index.chase import considered_works, extended_works, round_texts
+    from factory.index.default import default_projection
+    from factory.model.chase import ChaseDirection, ChaseRoundStarted, SampleExtended, SeedAdmitted
+    from factory.model.identity import IdGenerator
+    from factory.model.screening import PassLabel
+    from tests.helpers import SESSION
+
+    w1 = "rf:jones2021-sparse-1e2f3a4b"
+    w2 = "rf:smith2020-attention-0a1b2c3d"
+    project = tmp_path / "project"
+    catalog = default_catalog()
+    writer = EventWriter(
+        project / "events", project="demo", catalog=catalog, blobs=BlobStore(project / "blobs")
+    )
+    factory = EventFactory("demo", catalog, IdGenerator(clock))
+    obd = Actor(kind="human", id="obd", user="obd", session=SESSION)
+    index = Index(
+        project / ".index" / "factory.sqlite", project / "events", catalog, default_projection()
+    )
+    writer.append(
+        [
+            factory.make(
+                "chase.round_started",
+                ChaseRoundStarted(
+                    round_id="chs_01HZX3K4M5N6P7Q8R9S0TVWXYZ",
+                    directions=(ChaseDirection.BACKWARD, ChaseDirection.FORWARD),
+                    from_works=(w1, w2),
+                    unchasable=(),
+                    queries=("cited_by:W1|W2", "cites:W1|W2"),
+                ),
+                obd,
+            ),
+            factory.make(
+                "screening.sample_extended",
+                SampleExtended(
+                    pass_label=PassLabel.B, random_seed=7, considered=(w1, w2), added=(w2,)
+                ),
+                obd,
+            ),
+            factory.make(
+                "seed.admitted",
+                SeedAdmitted(seed_id="SEED01", run_id="run_01HZX3K4M5N6P7Q8R9S0TVWXYZ", work_id=w1),
+                obd,
+            ),
+        ]
+    )
+
+    def fold() -> tuple[set[str], set[str], set[str]]:
+        with index.connect() as conn:
+            return round_texts(conn), extended_works(conn), considered_works(conn)
+
+    index.sync()
+    live = fold()
+    assert live == ({"cited_by:W1|W2", "cites:W1|W2"}, {w2}, {w1, w2})
+    index.rebuild()
+    assert fold() == live

@@ -6,14 +6,17 @@ import httpx
 import pytest
 from pydantic import ValidationError
 
+from factory.errors import FactoryValidationError
 from factory.events.envelope import Actor
 from factory.events.reader import read_all
+from factory.model.search import QueryKind, QuerySpec
 from factory.model.seed import SeedKind, SeedSpec
+from factory.model.work import ProvenanceMethod
 from factory.services.context import Project
 from factory.services.dedup import dedup_run
 from factory.services.project import project_status
-from factory.services.search import get_work, list_works
-from factory.services.seeds import add_seeds
+from factory.services.search import get_work, list_works, register_query, run_query
+from factory.services.seeds import add_seeds, admit_seed, explain_seed_miss, seed_check
 from factory.sources.registry import SourceFactory
 from tests.helpers import arxiv_atom, openalex_item
 
@@ -188,3 +191,121 @@ def test_seed_rebuild_equals_incremental(
     )
     before = project.index.state_hash()
     assert project.index.rebuild() == before
+
+
+# --- Seed admission: an explained miss looked up by its identifier (plan 5a, task 4) ---
+
+
+def _admission_seed(project: Project, human: Actor, mock_sources: SourcesFor, n: int) -> str:
+    """A positive seed whose DOI no search finds, explained as a seed-admission miss."""
+    spec = SeedSpec(kind=SeedKind.POSITIVE, cite=f"Paper {n}", doi=f"10.1000/p{n}")
+    [outcome] = add_seeds(project, human, [spec], sources=mock_sources()).written
+    explain_seed_miss(
+        project, human, outcome.seed_id, "not indexed", ProvenanceMethod.SEED_ADMISSION
+    )
+    return outcome.seed_id
+
+
+def _events_of(project: Project, event_type: str) -> list[Any]:
+    events = read_all(project.paths.events_dir, project.catalog)
+    return [event for event in events if event.type == event_type]
+
+
+def _admitted_events(project: Project) -> list[Any]:
+    return _events_of(project, "seed.admitted")
+
+
+def _openalex_for(n: int) -> dict[str, Any]:
+    return openalex_item(
+        title=f"Paper {n}",
+        author="Ada Zhou",
+        published="2020-01-01",
+        openalex_id=f"W{n}",
+        doi=f"10.1000/p{n}",
+    )
+
+
+def test_admission_requires_seed_admission_route(
+    explore_project: Project, human: Actor, mock_sources: SourcesFor
+) -> None:
+    spec = SeedSpec(kind=SeedKind.POSITIVE, cite="Paper 9", doi="10.1000/p9")
+    [outcome] = add_seeds(explore_project, human, [spec], sources=mock_sources()).written
+    explain_seed_miss(explore_project, human, outcome.seed_id, "why", ProvenanceMethod.HAND_SEARCH)
+    sources = mock_sources(openalex=[_openalex_for(9)])
+    with pytest.raises(FactoryValidationError) as caught:
+        admit_seed(explore_project, human, outcome.seed_id, sources=sources)
+    assert [issue.field for issue in caught.value.issues] == ["seed_id"]
+    assert outcome.seed_id not in str(caught.value)
+    assert _admitted_events(explore_project) == []
+
+
+def test_admission_refuses_agent_actor(
+    explore_project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    seed_id = _admission_seed(explore_project, human, mock_sources, 9)
+    with pytest.raises(FactoryValidationError) as caught:
+        admit_seed(explore_project, agent, seed_id, sources=mock_sources())
+    [issue] = caught.value.issues
+    assert (issue.field, issue.reason) == ("actor", "seed admission is a human act")
+    assert _admitted_events(explore_project) == []
+
+
+def test_admitted_work_has_seed_admission_provenance_and_checks_retrieved(
+    explore_project: Project, human: Actor, mock_sources: SourcesFor
+) -> None:
+    seed_id = _admission_seed(explore_project, human, mock_sources, 9)
+    admitted = admit_seed(
+        explore_project, human, seed_id, sources=mock_sources(openalex=[_openalex_for(9)])
+    )
+    assert admitted.work_id is not None
+    [check] = seed_check(explore_project)
+    assert (check.seed_id, check.status, check.matched_work) == (
+        seed_id,
+        "retrieved",
+        admitted.work_id,
+    )
+    [work] = list_works(explore_project)
+    assert work.id == admitted.work_id
+    assert [prov.method for prov in work.provenance] == [ProvenanceMethod.SEED_ADMISSION]
+
+
+def test_admission_not_found_is_recorded(
+    explore_project: Project, human: Actor, mock_sources: SourcesFor
+) -> None:
+    seed_id = _admission_seed(explore_project, human, mock_sources, 9)
+    admitted = admit_seed(explore_project, human, seed_id, sources=mock_sources())
+    assert admitted.work_id is None
+    [check] = seed_check(explore_project)
+    assert (check.seed_id, check.status) == (seed_id, "explained")
+    [event] = _admitted_events(explore_project)
+    assert event.actor.kind == "human"
+    assert event.payload["work_id"] is None
+
+
+def test_admission_twice_refused(
+    explore_project: Project, human: Actor, mock_sources: SourcesFor
+) -> None:
+    seed_id = _admission_seed(explore_project, human, mock_sources, 9)
+    admit_seed(explore_project, human, seed_id, sources=mock_sources())
+    queries_before = _events_of(explore_project, "query.registered")
+    with pytest.raises(FactoryValidationError) as caught:
+        admit_seed(explore_project, human, seed_id, sources=mock_sources())
+    assert seed_id not in str(caught.value)
+    assert len(_admitted_events(explore_project)) == 1
+    queries_after = _events_of(explore_project, "query.registered")
+    assert len(queries_after) == len(queries_before)
+
+
+def test_admission_refused_when_seed_already_retrieved(
+    explore_project: Project, human: Actor, mock_sources: SourcesFor
+) -> None:
+    seed_id = _admission_seed(explore_project, human, mock_sources, 9)
+    corpus = QuerySpec(source="openalex", kind=QueryKind.KEYWORD, text="attention")
+    sources = mock_sources(openalex=[_openalex_for(9)])
+    query_id = register_query(explore_project, human, corpus, sources=sources)
+    run_query(explore_project, query_id, sources=sources)
+    with pytest.raises(FactoryValidationError) as caught:
+        admit_seed(explore_project, human, seed_id, sources=sources)
+    assert [issue.field for issue in caught.value.issues] == ["seed_id"]
+    assert seed_id not in str(caught.value)
+    assert _admitted_events(explore_project) == []

@@ -21,8 +21,10 @@ from factory.services.context import Project
 from factory.services.screening import (
     INSTRUCTIONS,
     ScreenBatchContent,
+    _extend_sample,
     join_pass,
     open_pass,
+    pass_b_sample,
 )
 from factory.services.screening_stats import cohen_kappa
 from factory.services.search import list_works
@@ -32,6 +34,7 @@ from tests.test_screening_next import (
     _decide,
     _draw,
     _events,
+    _late,
     _of_type,
     _setup,
 )
@@ -433,3 +436,32 @@ def test_agreement_refused_before_pass_b_is_opened(
     assert _fields(exc) == ["passes"]
     assert "pass B has not been opened" in _reasons(exc)
     assert final_outcomes(project)[_ordinary(project)[0]] is Outcome.PENDING
+
+
+def test_agreement_counts_extended_works_as_dual_coded(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    """An extended work both passes decide is dual-coded; a considered, undrawn work is not."""
+    protocol_id = _ready(project, agent, human, mock_sources)
+    _late(project, human, mock_sources, 1000, 40)
+    project.index.sync()
+    drawn = _extend_sample(project, agent, random_seed=3)
+    assert drawn is not None
+    event, added = drawn
+    project.record([event])
+    assert added
+    considered = set(event.payload["considered"])
+    assert considered - set(added)
+    added_work = sorted(added)[0]
+    single_work = sorted(considered - set(added))[0]
+    queue = pass_b_sample(project)
+    assert queue is not None
+    for work in _ordinary(project):
+        _decide(project, agent, work, "A", "screening", "include", None, protocol_id)
+        if work in queue:
+            _decide(project, agent, work, "B", "screening", "include", None, protocol_id)
+
+    agreement = screen_agreement(project, agent)
+
+    assert added_work not in agreement.single_pass
+    assert single_work in agreement.single_pass

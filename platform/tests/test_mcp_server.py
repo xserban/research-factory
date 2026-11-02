@@ -26,6 +26,7 @@ async def test_project_status_tool(settings: Settings, project: Project, clock: 
         assert names == [
             "project_status",
             "search_run",
+            "search_chase",
             "dedup_run",
             "question_record",
             "seed_add",

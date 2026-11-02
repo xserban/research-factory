@@ -14,6 +14,7 @@ from factory.model.protocol import PressElement, PressFinding
 from factory.model.screening import Channel, PassLabel, ScreeningItem, ScreeningPhase, Verdict
 from factory.model.search import QueryKind, QuerySpec
 from factory.model.seed import SeedKind, SeedSpec
+from factory.model.work import ProvenanceMethod
 from factory.services.agreement import screen_agreement
 from factory.services.calibration import calibration_items, label_calibration
 from factory.services.context import Project
@@ -22,7 +23,7 @@ from factory.services.protocol import current_protocol, press_review
 from factory.services.question import current_question
 from factory.services.screening import screen_next, screen_record
 from factory.services.search import register_query, run_query
-from factory.services.seeds import add_seeds, split_seeds
+from factory.services.seeds import add_seeds, explain_seed_miss, split_seeds
 from factory.sources.registry import SourceFactory
 from tests.helpers import (
     FAKE_PAGES,
@@ -134,6 +135,8 @@ def test_status_human_output(tmp_path: Path) -> None:
         "agreement: not available until both passes finish\n"
         "stale decisions: 0\n"
         "audit: none sampled\n"
+        "chase rounds: 0\n"
+        "admitted seeds: 0\n"
         "works: 0 (records 0, merges 0)\n"
         "searches: 0 runs (complete 0 / partial 0 / failed 0 / interrupted 0)\n"
     )
@@ -378,3 +381,28 @@ def test_cli_resolve_and_audit_label(
     assert report.exit_code == 0, report.stderr
     assert f"audit {audit_id.group(0)}: sample" in report.stdout
     assert "labelled 1" in report.stdout
+
+
+def test_cli_seed_admit_requires_deviation_in_pilot(
+    project: Project,
+    agent: Actor,
+    human: Actor,
+    mock_sources: Any,
+    settings: Settings,
+    monkeypatch: Any,
+) -> None:
+    ready_protocol(project, agent, human, mock_sources)
+    spec = SeedSpec(kind=SeedKind.POSITIVE, cite="Paper 7", doi="10.1000/p7")
+    [outcome] = add_seeds(project, human, [spec], sources=mock_sources()).written
+    explain_seed_miss(
+        project, human, outcome.seed_id, "not indexed", ProvenanceMethod.SEED_ADMISSION
+    )
+    monkeypatch.setattr("factory.cli.main.default_sources", lambda: mock_sources())
+    before = len(_of_type(project, "query.registered"))
+
+    result = runner.invoke(app, ["seeds", "admit", outcome.seed_id], env=_cli_env(settings.root))
+
+    assert result.exit_code == 1
+    assert "deviation" in result.stderr
+    assert len(_of_type(project, "query.registered")) == before
+    assert _of_type(project, "seed.admitted") == []

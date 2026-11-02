@@ -13,6 +13,7 @@ from factory.config import Settings
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor, Event
 from factory.events.reader import read_all
+from factory.index.chase import extended_works
 from factory.model.protocol import (
     Criterion,
     CriterionEffect,
@@ -27,6 +28,7 @@ from factory.model.screening import (
     ScreeningPhase,
     Verdict,
 )
+from factory.model.search import QueryKind, QuerySpec
 from factory.model.seed import SeedKind
 from factory.services.calibration import calibration_items, draw_calibration, label_calibration
 from factory.services.context import Project
@@ -37,13 +39,15 @@ from factory.services.protocol import (
 )
 from factory.services.screening import (
     SCREEN_BATCH,
+    _extend_sample,
     join_pass,
     live_decisions,
     obsolete_tasks,
     open_pass,
+    pass_b_sample,
     screen_next,
 )
-from factory.services.search import list_works
+from factory.services.search import list_works, register_query, run_query
 from factory.services.seeds import SeedRole, all_seeds
 from factory.services.tasks import complete_task, task_counts
 from factory.sources.registry import SourceFactory
@@ -51,6 +55,7 @@ from tests.helpers import (
     SESSION,
     _of_type,
     _protocol,
+    _random_item,
     _setup,
 )
 
@@ -112,6 +117,69 @@ def _serve_calibration(project: Project, agent: Actor, count: int) -> list[Any]:
         complete_task(project, agent, result.batch.task_id)
         batches.append(result.batch)
     return batches
+
+
+def _late(project: Project, human: Actor, mock_sources: SourcesFor, first: int, count: int) -> None:
+    """Add `count` works to the corpus after the passes are open, through a new query."""
+    sources = mock_sources(openalex=[_random_item(k) for k in range(first, first + count)])
+    query = QuerySpec(source="openalex", kind=QueryKind.KEYWORD, text="attention")
+    run_query(project, register_query(project, human, query, sources=sources), sources=sources)
+
+
+def test_open_does_not_redraw_unsampled_works(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    _setup(project, agent, human, mock_sources, dual_sample=0.5)
+    _draw(project)
+    open_pass(project, agent, PassLabel.B)
+    assert len(_of_type(project, "screening.sample_extended")) == 1
+    screen_next(project, agent, PassLabel.B)
+    assert len(_of_type(project, "screening.sample_extended")) == 1
+    with project.index.connect() as conn:
+        assert extended_works(conn) == set()
+
+
+def test_new_work_after_open_is_considered_once(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    _setup(project, agent, human, mock_sources, dual_sample=0.5)
+    _draw(project)
+    open_pass(project, agent, PassLabel.B)
+    _late(project, human, mock_sources, 1000, 20)
+    screen_next(project, agent, PassLabel.B)
+    screen_next(project, agent, PassLabel.B)
+    # One record at open, one draw over the late works, and no third.
+    assert len(_of_type(project, "screening.sample_extended")) == 2
+
+
+def test_extension_respects_fraction(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    _setup(project, agent, human, mock_sources, dual_sample=0.5, random_works=0)
+    _draw(project)
+    open_pass(project, agent, PassLabel.B)
+    _late(project, human, mock_sources, 1000, 200)
+    project.index.sync()
+    drawn = _extend_sample(project, agent, random_seed=7)
+    assert drawn is not None
+    event, added = drawn
+    assert len(event.payload["considered"]) == 200  # the late works only, not the open remainder
+    assert 70 <= len(added) <= 130
+    replay = _extend_sample(project, agent, random_seed=7)
+    assert replay is not None and replay[1] == added
+
+
+def test_full_dual_coding_writes_no_extension(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    # The pilot protocol requires a dual sample; 1.0 is the full-coverage case (no sample).
+    _setup(project, agent, human, mock_sources, dual_sample=1.0)
+    _draw(project)
+    open_pass(project, agent, PassLabel.B)
+    _late(project, human, mock_sources, 1000, 20)
+    screen_next(project, agent, PassLabel.B)
+    assert _of_type(project, "screening.sample_extended") == []
+    assert pass_b_sample(project) is None
 
 
 # --- Protocol and pass gates (R-16, ruling 1) ---

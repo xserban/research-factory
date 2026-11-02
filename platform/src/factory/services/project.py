@@ -15,12 +15,13 @@ from factory.model.seed import SeedKind
 from factory.services.agreement import Agreement, PassProgress, pass_progress, screen_agreement
 from factory.services.audit import audit_report
 from factory.services.calibration import CalibrationStatus, calibration_status
+from factory.services.chase import chase_rounds
 from factory.services.context import Project, ProjectPaths, build_project, slug_issues
 from factory.services.protocol import current_protocol
 from factory.services.question import current_question
 from factory.services.screening import stale_screening_decisions
 from factory.services.search import SearchCounts, corpus_size, search_counts
-from factory.services.seeds import all_seeds, split_is_drawn
+from factory.services.seeds import admitted_seed_count, all_seeds, split_is_drawn
 from factory.services.tasks import TaskCounts, task_counts
 
 
@@ -69,6 +70,8 @@ class ProjectStatus(StrictModel):
     protocol: ProtocolSummary | None
     seeds: SeedCounts
     screening: ScreeningStatus
+    chase_rounds: int
+    admitted_seeds: int
 
 
 def init_project(
@@ -155,6 +158,8 @@ def project_status(project: Project) -> ProjectStatus:
             split_drawn=split_is_drawn(project),
         ),
         screening=_screening_status(project),
+        chase_rounds=len(chase_rounds(project)),
+        admitted_seeds=admitted_seed_count(project),
     )
 
 

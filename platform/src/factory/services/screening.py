@@ -36,7 +36,9 @@ from sqlalchemy import text
 
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor, Event
+from factory.index.chase import considered_works, extended_works
 from factory.model.base import StrictModel
+from factory.model.chase import SampleExtended
 from factory.model.protocol import ProtocolStatus, ScreeningStage
 from factory.model.screening import (
     DecisionRecorded,
@@ -135,15 +137,18 @@ def open_pass(project: Project, actor: Actor, label: PassLabel) -> None:
         project.index.sync()
         if _pass_row(project, label) is not None:
             return
-        event, _ = _opened_event(project, actor, label, _require_protocol(project))
-        project.record([event])
+        events, _ = _opened_event(project, actor, label, _require_protocol(project))
+        project.record(events)
 
 
 def _opened_event(
     project: Project, actor: Actor, label: PassLabel, protocol: ProtocolVersion
-) -> tuple[Event, tuple[int, tuple[str, ...] | None]]:
+) -> tuple[list[Event], tuple[int, tuple[str, ...] | None]]:
     """The `screening.pass_opened` event for a pass not yet opened, not yet recorded, with the
-    seed and sample it carries. Raises FactoryValidationError for pass B under a one-pass plan."""
+    seed and sample it carries. For pass B under a partial sample, also the open-time draw record:
+    the corpus outside the sample is written as considered with nothing added, so that later
+    extension draws see only works that arrived after the open. Raises FactoryValidationError for
+    pass B under a one-pass plan."""
     plan = protocol.spec.screening
     if label is PassLabel.B and plan.passes == 1:
         raise FactoryValidationError(
@@ -164,7 +169,22 @@ def _opened_event(
         actor,
         input_blob=_input(project, actor, {"pass_label": label.value}),
     )
-    return event, (seed, sample)
+    events = [event]
+    if label is PassLabel.B and sample is not None:
+        corpus = {work.id for work in list_works(project)}
+        unsampled = tuple(sorted(corpus - set(sample) - set(calibration_items(project))))
+        extension = SampleExtended(
+            pass_label=PassLabel.B, random_seed=seed, considered=unsampled, added=()
+        )
+        events.append(
+            project.events.make(
+                "screening.sample_extended",
+                extension,
+                actor,
+                input_blob=_input(project, actor, {"pass_label": label.value}),
+            )
+        )
+    return events, (seed, sample)
 
 
 def join_pass(project: Project, actor: Actor, label: PassLabel) -> None:
@@ -258,9 +278,15 @@ def screen_next(project: Project, actor: Actor, label: PassLabel) -> ScreenNext:
         row = _pass_row(project, label)
         if row is None:
             opened, row = _opened_event(project, actor, label, protocol)
-            events.append(opened)
+            events.extend(opened)
         if needs_join:
             events.append(_join_event(project, actor, label))
+        if label is PassLabel.B:
+            drawn = _extend_sample(project, actor)
+            if drawn is not None:
+                extension, added = drawn
+                events.append(extension)
+                row = (row[0], tuple(sorted(set(row[1] or ()) | set(added))))
         queued, remaining = _enqueue(project, actor, label, protocol, row)
         project.record([*events, *queued])
         gate_closed = status.required and not status.passed[label.value]
@@ -539,6 +565,61 @@ def _enqueue(
     return events, remaining
 
 
+def _extend_sample(
+    project: Project, actor: Actor, *, random_seed: int | None = None
+) -> tuple[Event, tuple[str, ...]] | None:
+    """Draw pass B's extension over the works that arrived after pass B opened, and return the
+    `screening.sample_extended` event (not yet recorded) and the works it added.
+
+    None, with nothing to record, when pass B covers the whole corpus (no fractional sample) or
+    when every corpus work outside the sample has been considered. Otherwise each candidate
+    (corpus less sample, less considered works, less calibration items) is kept with probability
+    dual_sample, and the event records the candidates and the draw even when none is added."""
+    sample = pass_b_sample(project)
+    dual_sample = _require_protocol(project).spec.screening.dual_sample
+    if sample is None or dual_sample is None:
+        return None
+    with project.index.connect() as conn:
+        considered = considered_works(conn)
+    corpus = {work.id for work in list_works(project)}
+    candidates = sorted(corpus - set(sample) - considered - set(calibration_items(project)))
+    if not candidates:
+        return None
+    seed = secrets.randbits(32) if random_seed is None else random_seed
+    rng = random.Random(seed)
+    added = tuple(work for work in candidates if rng.random() < dual_sample)
+    payload = SampleExtended(
+        pass_label=PassLabel.B,
+        random_seed=seed,
+        considered=tuple(candidates),
+        added=added,
+    )
+    event = project.events.make(
+        "screening.sample_extended",
+        payload,
+        actor,
+        input_blob=_input(project, actor, {"pass_label": PassLabel.B.value}),
+    )
+    return event, added
+
+
+def pass_b_sample(project: Project) -> tuple[str, ...] | None:
+    """Pass B's effective sample, sorted: the sample recorded at open, plus every work a sample
+    extension drew into it. None when pass B is not opened or covers the whole corpus.
+
+    The single reader of pass B's sample: screen_next, pass progress and agreement all use it."""
+    with project.index.connect() as conn:
+        row = conn.execute(
+            text("SELECT sample FROM passes WHERE pass_label = :label"),
+            {"label": PassLabel.B.value},
+        ).one_or_none()
+        if row is None or row[0] is None:
+            return None
+        base = set(json.loads(str(row[0])))
+        extended = extended_works(conn)
+    return tuple(sorted(base | extended))
+
+
 def _sample(
     project: Project, label: PassLabel, dual_sample: float | None, seed: int
 ) -> tuple[str, ...] | None:
@@ -679,6 +760,8 @@ def _pass_row(project: Project, label: PassLabel) -> tuple[int, tuple[str, ...] 
     if row is None:
         return None
     seed, sample = row
+    if label is PassLabel.B:
+        return int(seed), pass_b_sample(project)
     if sample is None:
         return int(seed), None
     return int(seed), tuple(str(work) for work in json.loads(str(sample)))
