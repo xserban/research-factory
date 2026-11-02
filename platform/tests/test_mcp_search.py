@@ -18,7 +18,8 @@ from factory.services.context import Project
 from factory.services.dedup import dedup_run
 from factory.services.search import register_query, run_query
 from factory.sources.registry import SourceFactory
-from tests.helpers import arxiv_atom, openalex_item, ready_protocol
+from tests.helpers import arxiv_atom, install_skill, open_session, openalex_item, ready_protocol
+from tests.test_chase_service import _citing, _corpus, _settle
 
 AGENT = {"role": "screener-a", "model": "claude-opus-5-5", "skill": "rf-screen"}
 
@@ -343,3 +344,67 @@ async def test_search_run_refuses_every_purpose_but_search_and_writes_nothing(
     assert body["ok"] is False
     assert [error["field"] for error in body["errors"]] == ["purpose"]
     assert len(read_all(project.paths.events_dir, project.catalog)) == before
+
+
+# --- search_chase (plan 5a) ---
+
+CHASER = {"role": "searcher", "model": "claude-opus-5-5", "skill": "rf-search"}
+
+
+def _chase_events(project: Project) -> list[str]:
+    return [e.type for e in read_all(project.paths.events_dir, project.catalog)]
+
+
+@pytest.mark.anyio
+async def test_mcp_search_chase_returns_round(
+    settings: Settings,
+    project: Project,
+    agent: Actor,
+    human: Actor,
+    clock: FixedClock,
+    mock_sources: Any,
+) -> None:
+    install_skill(settings, "rf-search")
+    protocol_id = _corpus(project, agent, human, mock_sources)
+    _settle(project, agent, human, protocol_id)
+    sources = dict(mock_sources(openalex=[_citing(900)]))
+    async with open_session(settings, clock, sources) as session:
+        body = await session.call(
+            "search_chase", project="demo", directions=["backward", "forward"], **CHASER
+        )
+
+    assert body["ok"] is True
+    data = body["data"]
+    assert data["round_id"].startswith("chs_")
+    assert data["directions"] == ["backward", "forward"]
+    assert len(data["runs"]) == 2 and data["new_works"] == 1
+    [started] = [
+        e
+        for e in read_all(project.paths.events_dir, project.catalog)
+        if e.type == "chase.round_started"
+    ]
+    assert started.actor.kind == "agent" and started.input_blob is not None
+    assert started.actor.skill is not None and started.actor.skill.startswith("rf-search@")
+
+
+@pytest.mark.anyio
+async def test_mcp_search_chase_rejects_unknown_direction(
+    settings: Settings,
+    project: Project,
+    agent: Actor,
+    human: Actor,
+    clock: FixedClock,
+    mock_sources: Any,
+) -> None:
+    install_skill(settings, "rf-search")
+    protocol_id = _corpus(project, agent, human, mock_sources)
+    _settle(project, agent, human, protocol_id)
+    before = _chase_events(project)
+    async with open_session(settings, clock, dict(mock_sources(openalex=[]))) as session:
+        body = await session.call(
+            "search_chase", project="demo", directions=["backward", "sideways"], **CHASER
+        )
+
+    assert body["ok"] is False
+    assert body["errors"][0]["field"] == "directions[1]"
+    assert _chase_events(project) == before

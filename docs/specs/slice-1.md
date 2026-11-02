@@ -19,7 +19,7 @@ Pilot idea for acceptance: **best linear attention mechanism for vision models**
 7. **Deduplication:** cascade merge; every merge recorded and reversible.
 8. **Screening (title/abstract):** two independent passes (A: inclusion framing, B: exclusion framing, reversed criterion order, different Claude models, separate sessions) through `screen_next` / `screen_record`; fresh context and randomised order per batch; seeds pinned as worked examples; every rationale quotes a verified title/abstract span; four verdicts; Cohen's κ per criterion; disagreements and `unsure` routed to the human.
 9. **Audit:** the human labels a calibration set (~30 records, incl. seeds) before screening, resolves disagreements and `unsure` records, and audits a random sample of agreed decisions (R-35–R-37).
-10. **Supplementary search:** backward and forward citation chasing from included works; seed admission for explained misses (R-24, R-25).
+10. **Supplementary search:** backward and forward citation chasing from included works; seed admission for explained misses (R-24, R-25). *Implemented in plan 5a:* `search_chase` (MCP) and `factory search chase` build and run the chase queries as recorded rounds; `factory seeds admit` looks up an explained miss by identifier; `status` shows `chase rounds` and `admitted seeds`.
 11. **Reports:** PRISMA 2020 flow and PRISMA-S search report derived from events; methods statement disclosing automation; `trace` from any decision back to the question; `check` lists broken links and promotion gaps.
 
 ## In scope

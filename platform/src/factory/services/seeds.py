@@ -509,6 +509,11 @@ def _admitted(project: Project) -> dict[str, str | None]:
         return admitted_works(conn)
 
 
+def admitted_seed_count(project: Project) -> int:
+    """How many seeds have a recorded admission (found or not)."""
+    return len(_admitted(project))
+
+
 def agent_seeds(project: Project) -> list[SeedView]:
     """The seeds an agent may use: every seed before the split, then negatives and development
     and late positives. Held-out seeds are never returned."""

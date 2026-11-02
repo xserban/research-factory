@@ -12,18 +12,21 @@ from factory.clock import Clock, SystemClock
 from factory.config import Settings
 from factory.errors import FactoryValidationError, ProjectNotFoundError, ValidationIssue
 from factory.mcp.server import run
+from factory.model.chase import ChaseDirection
 from factory.model.identity import IdGenerator
 from factory.model.screening import Channel
 from factory.model.work import ProvenanceMethod
 from factory.services import agreement as agreement_service
 from factory.services import audit as audit_service
 from factory.services import calibration as calibration_service
+from factory.services import chase as chase_service
 from factory.services import project as project_service
 from factory.services import protocol as protocol_service
 from factory.services import seeds as seeds_service
 from factory.services.context import Project, list_projects, open_project
 from factory.services.project import ScreeningStatus
 from factory.services.search import list_works
+from factory.sources.registry import default_sources
 
 app = typer.Typer(
     name="factory",
@@ -46,6 +49,9 @@ screen_app = typer.Typer(
     help="Disagreements between the passes, and their resolution.",
     no_args_is_help=True,
 )
+search_app = typer.Typer(
+    name="search", help="Citation chasing from the included works.", no_args_is_help=True
+)
 audit_app = typer.Typer(
     name="audit", help="Sample, label and report the audit.", no_args_is_help=True
 )
@@ -54,6 +60,7 @@ app.add_typer(protocol_app)
 app.add_typer(calibrate_app)
 app.add_typer(screen_app)
 app.add_typer(audit_app)
+app.add_typer(search_app)
 
 
 @dataclass
@@ -191,6 +198,8 @@ def status(
     )
     for line in _screening_lines(report.screening):
         typer.echo(line)
+    typer.echo(f"chase rounds: {report.chase_rounds}")
+    typer.echo(f"admitted seeds: {report.admitted_seeds}")
     typer.echo(f"works: {report.works} (records {report.records}, merges {report.merges_active})")
     search = report.search
     typer.echo(
@@ -320,6 +329,66 @@ def seeds_explain(
             ) from None
         seeds_service.explain_seed_miss(project, project.human_actor(), seed_id, reason, method)
     typer.echo(f"explained {seed_id} ({route})")
+
+
+@seeds_app.command("admit")
+def seeds_admit(
+    ctx: typer.Context,
+    seed_id: Annotated[
+        str, typer.Argument(help="A positive seed explained as a seed-admission miss.")
+    ],
+    deviation: Annotated[
+        str | None,
+        typer.Option("--deviation", help="A recorded deviation that authorises the lookup."),
+    ] = None,
+) -> None:
+    """Look up an explained seed-admission miss by its identifier and admit what is found.
+
+    The lookup is a query like any other: in a pilot or systematic project the protocol must
+    plan it, or a recorded deviation (`--deviation`) must authorise it."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        admitted = seeds_service.admit_seed(
+            project,
+            project.human_actor(),
+            seed_id,
+            sources=dict(default_sources()),
+            deviation_id=deviation,
+        )
+    found = "found a work" if admitted.work_id else "found no work"
+    typer.echo(f"admitted {seed_id} ({found})")
+
+
+@search_app.command("chase")
+def search_chase_cmd(
+    ctx: typer.Context,
+    backward: Annotated[
+        bool, typer.Option("--backward", help="Works the included works cite.")
+    ] = False,
+    forward: Annotated[
+        bool, typer.Option("--forward", help="Works that cite the included works.")
+    ] = False,
+) -> None:
+    """Chase citations from the included works; with neither flag, in both directions."""
+    state = _state(ctx)
+    directions = [
+        direction
+        for direction, wanted in (
+            (ChaseDirection.BACKWARD, backward or not forward),
+            (ChaseDirection.FORWARD, forward or not backward),
+        )
+        if wanted
+    ]
+    with _reporting_errors():
+        project = _resolve_project(state)
+        summary = chase_service.search_chase(
+            project, project.human_actor(), directions, sources=dict(default_sources())
+        )
+    typer.echo(
+        f"chase round {summary.round_id}: {len(summary.runs)} queries, "
+        f"{summary.new_works} new works, {len(summary.unchasable)} unchasable"
+    )
 
 
 @protocol_app.command("confirm-press")
