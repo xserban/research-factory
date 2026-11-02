@@ -117,9 +117,35 @@ Status: new · Added: 2026-11-01 · Slice: 5 · Depends on: IDEA-03, IDEA-10
 
 ## Plan 4 review carry-over (added 2026-11-01)
 
-### IDEA-15 — Screening, calibration and audit: deferred review minors
+### IDEA-18 — Screening, calibration and audit: deferred review minors
 Status: new · Added: 2026-11-01 · Slice: — · Depends on: slice 1 plan 4
 **What:** minor findings of the plan 4 final review, not fixed in slice 1: count validators on `AuditSampled` and `CalibrationDrawn`; negative-input guards in `draw_audit` and `audit_size`; the private `_rigor_mode` has a third copy; audit labels for unsampled pairs are dropped silently; the batch-order test may pass by chance and the shuffle seed depends on the task count; `screen_record` marks the answered set after an invalid first item; untested paths (task kind mismatch, lease expiry, re-record after an amendment); direct tests for the obsolete-task and stale-decision agreement rulings; `cannot_assess_rate` typed `float | None`; `project_status` recomputes agreement and audit on every call; a pass that fails the sensitivity gate has no in-pass recovery (it needs an amendment).
 **Why:** each is a small gap in evidence or robustness that does not change a result today.
 **Rigour notes:** none changes an event or a verdict; the validators and the silent drop touch the audit record and should come first.
 **Open questions:** whether the `project_status` cost matters before slice 3.
+
+---
+
+## Lessons from EvoScientist (added 2026-11-01; see references.md #20)
+
+### IDEA-15 — Learning from experience through reviewed amendments
+Status: new · Added: 2026-11-01 · Slice: 5/6 · Depends on: calibration, audit, protocol amendments, plugin skill versioning
+**What:** a curator agent role reads audit errors, disagreements, `cannot-assess` spikes and failed runs, and drafts **proposed** changes: protocol amendments, new worked examples, or skill revisions. A human approves; the change is versioned.
+**Why:** the factory should improve with use, as EvoScientist's AutoSkills does, without silent drift.
+**Rigour notes:** learning enters only as amendments or worked examples (R-34), never as retrieved memory; a new skill version starts a new performance record (IDEA-10) and must pass the calibration sets before use; the proposer never approves its own change (R-51).
+**Open questions:** whether lessons can be shared across projects (via domain packs) and who approves them.
+
+### IDEA-16 — Registry of failed directions and null results
+Status: new · Added: 2026-11-01 · Slice: 6 · Depends on: hypothesis registry
+**What:** a first-class record of what was tried and did not work — idea, test, evidence, reason (no runnable code within budget, below baseline, refuted, infeasible) — linked to the works and runs involved, searchable before proposing new ideas.
+**Why:** avoids repeating dead ends across students and projects; supports R-52.
+**Rigour notes:** a failure is recorded with its conditions (budget, data, model), so "failed here" is not read as "impossible"; never deleted, only superseded.
+
+### IDEA-17 — Experiment discipline for hypothesis testing
+Status: new · Added: 2026-11-01 · Slice: 6 · Depends on: IDEA-16, R-50
+**What:** experiment runs follow fixed rules: reproduce baselines first; change one variable at a time; sandboxed execution with time and output limits; acceptance criteria and analysis plan registered before running; ablations planned, not post hoc.
+**Why:** turns agent-run experiments into evidence a reviewer can trust.
+**Rigour notes:** deviations from the registered plan are recorded as deviations (R-14); results that beat baselines only under changed conditions are flagged.
+**Open questions:** where experiments run (own servers vs. cloud sessions); link to an existing experiment tracker (decision #21).
+
+**Not adopted (deliberate):** memory retrieved by embedding similarity into prompts (non-reproducible; conflicts with R-34 and decision #9 unless the retrieved content is recorded in `input_blob`); self-evolution without versioning; LLM-judge evaluation as primary evidence.
