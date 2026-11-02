@@ -129,5 +129,13 @@ Status: new · Added: 2026-11-01 · Slice: — · Depends on: slice 1 plan 4
 ### IDEA-16 — Withhold the resolved OpenAlex ID of a held-out seed
 Status: new · Added: 2026-11-02 · Slice: — · Depends on: slice 1 plan 5a
 **What:** `_held_out_tokens` in `mcp/server.py` withholds only the stated `seed.openalex`, so the OpenAlex ID that a DOI-only held-out seed resolved to is not withheld from MCP output (for example, from a source error note in a run summary).
-**Why:** R-20 and acceptance 22 name the seed ID, DOI and arXiv ID only, so nothing in slice 1 is violated, but the resolved ID identifies the seed as well as its DOI does.
+**Why:** R-20 and acceptance 22 require held-out seeds to stay invisible to agent-facing tools, but the specs name no identifier set; the plan's constraint lists the seed ID, DOI and arXiv ID. A seed's resolved OpenAlex ID is outside the current token set, and it identifies the seed as well as its DOI does. Owner suggestion: plan 5b.
 **Rigour notes:** adding it changes the token set only; no event or verdict changes.
+**Open questions:** should any identifier that resolves to a held-out seed be withheld, and should R-20 / acceptance 22 name the set?
+
+### IDEA-17 — Pass-B extension before dedup is current
+Status: new · Added: 2026-11-02 · Slice: — · Depends on: slice 1 plan 5a, `dedup_run`
+**What:** the pass-B sample extension (`screen_next` for pass B) can run before `dedup_run` is current, so two records of one work could be drawn independently. A later merge would leave the canonical work considered-not-added while its twin was sampled.
+**Why:** the pass-B sample should draw each work once, and the PRISMA counts should match the deduplicated corpus; a sample drawn before the merge does not.
+**Rigour notes:** options: (a) record the condition only, with no change to behaviour; (b) make the extension a no-op until `dedup_run` is current.
+**Open questions:** does option (b) block a legitimate extension while dedup is stale?

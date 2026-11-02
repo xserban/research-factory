@@ -50,7 +50,11 @@ class ChaseSummary(StrictModel):
 
 
 def chase_sources(project: Project) -> tuple[list[str], list[str]]:
-    """The included works, split into those with an OpenAlex id and those without, each sorted."""
+    """The included works, split into those with an OpenAlex id and those without, each sorted.
+
+    Calibration works labelled include are chased too: they are includes in `final_outcomes`,
+    although `_pending_issues` leaves calibration works out of its pending count.
+    """
     outcomes = final_outcomes(project)
     included = {work for work, outcome in outcomes.items() if outcome is Outcome.INCLUDED}
     chasable: list[str] = []
@@ -69,8 +73,8 @@ def chase_queries(directions: Sequence[ChaseDirection], openalex_ids: Sequence[s
     """The OpenAlex filter texts that chase the given works, one run of chunks per direction.
 
     Directions are taken in `BACKWARD`, `FORWARD` order whatever order they are given in. Each
-    text holds at most `CHASE_CHUNK` sorted ids joined by `|`. Backward chases name the works
-    that cite the sources (`cited_by:`); forward chases name the works they cite (`cites:`).
+    text holds at most `CHASE_CHUNK` sorted ids joined by `|`. Backward: works the sources cite
+    (`cited_by:`); forward: works citing the sources (`cites:`).
     """
     ids = sorted(openalex_ids)
     texts: list[str] = []
@@ -120,6 +124,9 @@ def search_chase(
     Writes nothing if the round does not fit: the pending count must be zero, at least one work
     must be chasable, the directions must be distinct and non-empty, every query must fit its
     source, and the protocol must authorise the first query with the round's texts waived.
+
+    The round is recorded before any query runs (R-24): a failure in a run leaves a round
+    without its runs, and a retry is a new round.
     """
     if not directions or len(set(directions)) != len(directions):
         raise FactoryValidationError(
@@ -146,6 +153,8 @@ def search_chase(
             for text in texts
         ]
         issues = [issue for spec in specs for issue in query_issues(project, spec, sources)]
+        # Authorisation is checked for the first spec only: every gate except the planned-query
+        # waiver is text-independent, and the waiver holds for every text since all are pending.
         issues += search_authorization(
             project, specs[0], deviation_id=None, pending_round_texts=texts
         )

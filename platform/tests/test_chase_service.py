@@ -149,6 +149,18 @@ def test_chase_queries_follow_direction_order_and_skip_absent_directions() -> No
     assert chase_queries((ChaseDirection.BACKWARD,), []) == []
 
 
+def test_chase_queries_map_direction_to_citation_relation() -> None:
+    """BACKWARD names the works the sources cite (`cited_by:`); FORWARD names the works citing
+    them (`cites:`). Each direction yields only its own prefix."""
+    ids = ["W2", "W1"]
+    backward = chase_queries((ChaseDirection.BACKWARD,), ids)
+    forward = chase_queries((ChaseDirection.FORWARD,), ids)
+    assert backward == ["cited_by:W1|W2"]
+    assert forward == ["cites:W1|W2"]
+    assert all(text.startswith("cited_by:") for text in backward)
+    assert all(text.startswith("cites:") for text in forward)
+
+
 # --- Refusals write nothing ---
 
 
