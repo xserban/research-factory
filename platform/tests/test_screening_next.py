@@ -39,10 +39,12 @@ from factory.services.protocol import (
 )
 from factory.services.screening import (
     SCREEN_BATCH,
+    _extend_sample,
     join_pass,
     live_decisions,
     obsolete_tasks,
     open_pass,
+    pass_b_sample,
     screen_next,
 )
 from factory.services.search import list_works, register_query, run_query
@@ -148,6 +150,36 @@ def test_new_work_after_open_is_considered_once(
     screen_next(project, agent, PassLabel.B)
     # One record at open, one draw over the late works, and no third.
     assert len(_of_type(project, "screening.sample_extended")) == 2
+
+
+def test_extension_respects_fraction(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    _setup(project, agent, human, mock_sources, dual_sample=0.5, random_works=0)
+    _draw(project)
+    open_pass(project, agent, PassLabel.B)
+    _late(project, human, mock_sources, 1000, 200)
+    project.index.sync()
+    drawn = _extend_sample(project, agent, random_seed=7)
+    assert drawn is not None
+    event, added = drawn
+    assert len(event.payload["considered"]) == 200  # the late works only, not the open remainder
+    assert 70 <= len(added) <= 130
+    replay = _extend_sample(project, agent, random_seed=7)
+    assert replay is not None and replay[1] == added
+
+
+def test_full_dual_coding_writes_no_extension(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    # The pilot protocol requires a dual sample; 1.0 is the full-coverage case (no sample).
+    _setup(project, agent, human, mock_sources, dual_sample=1.0)
+    _draw(project)
+    open_pass(project, agent, PassLabel.B)
+    _late(project, human, mock_sources, 1000, 20)
+    screen_next(project, agent, PassLabel.B)
+    assert _of_type(project, "screening.sample_extended") == []
+    assert pass_b_sample(project) is None
 
 
 # --- Protocol and pass gates (R-16, ruling 1) ---

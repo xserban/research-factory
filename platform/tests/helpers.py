@@ -397,7 +397,7 @@ def _protocol(
     mock_sources: SourcesFor,
     *,
     ready: bool = True,
-    dual_sample: float = 0.5,
+    dual_sample: float | None = 0.5,
 ) -> str:
     """Three positive seeds, a probe, and the pilot protocol with the given dual sample."""
     question_id = record_pilot_question(project, agent)
@@ -425,7 +425,7 @@ def _setup(
     human: Actor,
     mock_sources: SourcesFor,
     *,
-    dual_sample: float = 0.5,
+    dual_sample: float | None = 0.5,
     random_works: int = RANDOM_WORKS,
 ) -> str:
     """A protocol, the seeds, and a corpus of every seed work plus random works."""
