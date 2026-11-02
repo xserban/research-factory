@@ -17,6 +17,7 @@ from factory.config import Settings
 from factory.events.envelope import Actor
 from factory.model.chase import ChaseDirection
 from factory.model.screening import PassLabel
+from factory.model.search import QueryKind, QuerySpec
 from factory.model.seed import SeedKind, SeedSpec
 from factory.model.work import ProvenanceMethod
 from factory.services.agreement import Outcome, final_outcomes, screen_agreement
@@ -25,8 +26,8 @@ from factory.services.chase import chase_rounds, search_chase
 from factory.services.context import Project
 from factory.services.dedup import dedup_run
 from factory.services.protocol import record_deviation
-from factory.services.screening import pass_b_sample, screen_next
-from factory.services.search import list_works
+from factory.services.screening import open_pass, pass_b_sample, screen_next
+from factory.services.search import get_work, list_works, register_query, run_query
 from factory.services.seeds import (
     SeedRole,
     add_seeds,
@@ -35,12 +36,25 @@ from factory.services.seeds import (
     seed_check,
 )
 from factory.services.tasks import complete_task
+from factory.sources.base import SourceError
 from factory.sources.registry import SourceFactory
-from tests.helpers import _leaks, install_skill, open_session, openalex_item
+from tests.helpers import (
+    FakeSource,
+    _leaks,
+    _negative_item,
+    _positive_item,
+    _protocol,
+    _random_item,
+    _seed_item,
+    install_skill,
+    open_session,
+    openalex_item,
+)
 from tests.test_chase_service import _citing, _corpus, _of_type, _ordinary, _settle
 from tests.test_cli import _cli_env, runner
-from tests.test_screening_next import _decide
+from tests.test_screening_next import _decide, _draw
 
+ARGS = {"role": "searcher", "model": "claude-opus-5-5", "skill": "rf-search"}
 SourcesFor = Callable[..., Mapping[str, SourceFactory]]
 
 
@@ -140,17 +154,55 @@ def test_chased_duplicate_is_merged_not_rescreened(
 
     assert summary.works == before + 1  # one record collapsed into its corpus work
     assert summary.records == summary.works + 1
+    # The duplicate has no work of its own: its identifier now belongs to the corpus work, which
+    # gained a citation-chase provenance row.
+    holders = [w.id for w in list_works(project) if w.identifiers.openalex == "W9999"]
+    assert holders in ([], [first.id])
+    first_after = get_work(project, first.id)
+    assert first_after is not None
+    assert ProvenanceMethod.CITATION_CHASE in {p.method for p in first_after.provenance}
+    chased = [p for p in first_after.provenance if p.method is ProvenanceMethod.CITATION_CHASE]
+    assert chased and {p.raw_ref for p in chased} == {"W9999"}
+    assert not any(p.method is ProvenanceMethod.CITATION_CHASE for p in first.provenance)
     served = _screen_new(project, agent, PassLabel.A, protocol_id)
-    assert len(served) == 1  # the new work only; the duplicate is merged away
+    assert len(served) == 1  # the new work only
     assert first.id not in served
 
 
 def _held_out_tokens(project: Project) -> set[str]:
+    """The seed id and every stated or normalised identifier of each held-out seed."""
     tokens: set[str] = set()
     for seed in all_seeds(project):
-        if seed.role is SeedRole.HELD_OUT:
-            tokens.update(v for v in (seed.seed_id, seed.doi, seed.arxiv, seed.work_id) if v)
+        if seed.role is not SeedRole.HELD_OUT:
+            continue
+        stated = SeedSpec(kind=seed.kind, cite=seed.cite, doi=seed.doi, arxiv=seed.arxiv)
+        tokens.add(seed.seed_id)
+        tokens.update(stated.identity_keys().values())
+        tokens.update(v for v in (seed.doi, seed.arxiv, seed.openalex) if v)
     return tokens
+
+
+def _corpus_missing_held_out(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> tuple[str, str, int]:
+    """A pilot corpus whose base search lacks one held-out positive seed, resolved by lookup.
+
+    Returns the protocol id, the held-out seed's id and its paper number. The seed's work is
+    stored by the seed lookup only (a probe), so it is not in the corpus: `seed_check` says
+    `missing` until something else retrieves it."""
+    protocol_id = _protocol(project, agent, human, mock_sources, dual_sample=0.5)
+    [held] = [s for s in all_seeds(project) if s.role is SeedRole.HELD_OUT]
+    number = int(held.cite.split()[-1])
+    items = [_positive_item(n) for n in (1, 2, 3) if n != number]
+    items += [_negative_item(k) for k in range(1, 4)]
+    items += [_random_item(k) for k in range(1, 5)]
+    query = QuerySpec(source="openalex", kind=QueryKind.KEYWORD, text="attention")
+    sources = mock_sources(openalex=items)
+    run_query(project, register_query(project, human, query, sources=sources), sources=sources)
+    _draw(project)
+    open_pass(project, agent, PassLabel.A)
+    open_pass(project, agent, PassLabel.B)
+    return protocol_id, held.seed_id, number
 
 
 @pytest.mark.anyio
@@ -163,29 +215,45 @@ async def test_held_out_seed_found_by_chase_is_not_named(
     mock_sources: SourcesFor,
 ) -> None:
     install_skill(settings, "rf-search")
-    protocol_id = _corpus(project, agent, human, mock_sources)
+    protocol_id, held, number = _corpus_missing_held_out(project, agent, human, mock_sources)
     _settle(project, agent, human, protocol_id)
     tokens = _held_out_tokens(project)
-    assert tokens
+    assert {held, f"10.1000/p{number}"} <= tokens
+    assert {c.seed_id: c.status for c in seed_check(project)}[held] == "missing"
 
-    # The chase returns the held-out seeds' own works again, with the new citing work.
-    again = [_citing(900)]
-    async with open_session(settings, clock, dict(mock_sources(openalex=again))) as session:
+    # A first chase fails at the source, and the source's error text names the held-out seed.
+    leaky = SourceError(f"HTTP 404 for doi:10.1000/p{number} W{number} {held}")
+    failing = FakeSource([[]], raise_at=0, raise_error=leaky)
+    broken = {"openalex": SourceFactory(frozenset({QueryKind.FILTER}), lambda _s, _c: failing)}
+    async with open_session(settings, clock, broken) as session:
+        failed = await session.call("search_chase", project="demo", directions=["backward"], **ARGS)
+    assert failed["ok"] is True
+    raw_notes = " ".join(str(run["note"]) for run in failed["data"]["runs"])
+    assert "HTTP 404" in raw_notes  # the note is passed on; only the identifiers are withheld
+    assert _leaks(json.dumps(failed), tokens) == []
+    assert _leaks(
+        " ".join(e.payload.get("note") or "" for e in _of_type(project, "search.run_finished")),
+        tokens,
+    )
+
+    # The second chase returns the held-out seed's own record, with its DOI and OpenAlex id.
+    page = [_seed_item(number), _citing(900)]
+    async with open_session(settings, clock, dict(mock_sources(openalex=page))) as session:
         body = await session.call(
-            "search_chase",
-            project="demo",
-            directions=["backward", "forward"],
-            role="searcher",
-            model="claude-opus-5-5",
-            skill="rf-search",
+            "search_chase", project="demo", directions=["backward", "forward"], **ARGS
         )
 
     assert body["ok"] is True
+    assert body["data"]["new_works"] == 2
     assert _leaks(json.dumps(body), tokens) == []
-    # The human view still shows every positive seed as retrieved.
-    assert {check.status for check in seed_check(project)} == {"retrieved"}
-    held = [c for c in seed_check(project) if c.role is SeedRole.HELD_OUT]
-    assert held
+    # Screening-style scrub: work ids stay visible, so a screener can record against them.
+    assert body["data"]["from_works"]
+    # The human view: the seed is now retrieved, by a chase-provenance work.
+    checks = {c.seed_id: c for c in seed_check(project)}
+    assert checks[held].status == "retrieved" and checks[held].matched_work is not None
+    work = get_work(project, str(checks[held].matched_work))
+    assert work is not None
+    assert ProvenanceMethod.CITATION_CHASE in {p.method for p in work.provenance}
 
 
 def test_seed_check_passes_after_admission(

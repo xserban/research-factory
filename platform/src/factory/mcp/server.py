@@ -155,9 +155,9 @@ def build_server(
             actor = make_agent_actor(settings, session, role, model, skill)
             parsed = _directions(directions)
             summary = chase_service.search_chase(opened, actor, parsed, sources=adapters)
-            return _withheld(opened, summary.model_dump(mode="json"))
+            return _withheld(opened, summary.model_dump(mode="json"), include_work_ids=False)
 
-        return _reply(project, chase)
+        return _reply(project, chase, include_work_ids=False)
 
     @server.tool()
     def dedup_run(project: str, role: str, model: str, skill: str) -> dict[str, JsonValue]:
