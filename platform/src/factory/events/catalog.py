@@ -2,6 +2,7 @@ import re
 from dataclasses import dataclass
 
 from factory.model.base import StrictModel
+from factory.model.chase import ChaseRoundStarted, SampleExtended, SeedAdmitted
 from factory.model.dedup import DedupMerged, DedupReverted
 from factory.model.probe import ProbeFailed, ProbeMeasured, ProbePageArchived
 from factory.model.project import ProjectCreated
@@ -94,6 +95,8 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("seed.unresolved", SeedUnresolved, 1))
     catalog.register(EventType("seed.split_drawn", SeedSplitDrawn, 1))
     catalog.register(EventType("seed.miss_explained", SeedMissExplained, 1))
+    catalog.register(EventType("seed.admitted", SeedAdmitted, 1))
+    catalog.register(EventType("chase.round_started", ChaseRoundStarted, 1))
     catalog.register(EventType("probe.page_archived", ProbePageArchived, 1))
     catalog.register(EventType("probe.measured", ProbeMeasured, 1))
     catalog.register(EventType("probe.failed", ProbeFailed, 1))
@@ -104,6 +107,7 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("protocol.amended", ProtocolAmended, 1))
     catalog.register(EventType("screening.pass_opened", PassOpened, 1))
     catalog.register(EventType("screening.pass_joined", PassJoined, 1))
+    catalog.register(EventType("screening.sample_extended", SampleExtended, 1))
     catalog.register(EventType("screening.decision_recorded", DecisionRecorded, 1))
     catalog.register(EventType("screening.disagreement_resolved", DisagreementResolved, 1))
     catalog.register(EventType("calibration.drawn", CalibrationDrawn, 1))
