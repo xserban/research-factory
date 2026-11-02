@@ -123,3 +123,11 @@ Status: new · Added: 2026-11-01 · Slice: — · Depends on: slice 1 plan 4
 **Why:** each is a small gap in evidence or robustness that does not change a result today.
 **Rigour notes:** none changes an event or a verdict; the validators and the silent drop touch the audit record and should come first.
 **Open questions:** whether the `project_status` cost matters before slice 3.
+
+## Plan 5a review carry-over (added 2026-11-02)
+
+### IDEA-16 — Withhold the resolved OpenAlex ID of a held-out seed
+Status: new · Added: 2026-11-02 · Slice: — · Depends on: slice 1 plan 5a
+**What:** `_held_out_tokens` in `mcp/server.py` withholds only the stated `seed.openalex`, so the OpenAlex ID that a DOI-only held-out seed resolved to is not withheld from MCP output (for example, from a source error note in a run summary).
+**Why:** R-20 and acceptance 22 name the seed ID, DOI and arXiv ID only, so nothing in slice 1 is violated, but the resolved ID identifies the seed as well as its DOI does.
+**Rigour notes:** adding it changes the token set only; no event or verdict changes.

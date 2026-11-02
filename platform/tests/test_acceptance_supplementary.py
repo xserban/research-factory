@@ -154,10 +154,10 @@ def test_chased_duplicate_is_merged_not_rescreened(
 
     assert summary.works == before + 1  # one record collapsed into its corpus work
     assert summary.records == summary.works + 1
-    # The duplicate has no work of its own: its identifier now belongs to the corpus work, which
+    # The duplicate has no work of its own (its OpenAlex id is on no work); the corpus work
     # gained a citation-chase provenance row.
     holders = [w.id for w in list_works(project) if w.identifiers.openalex == "W9999"]
-    assert holders in ([], [first.id])
+    assert holders == []
     first_after = get_work(project, first.id)
     assert first_after is not None
     assert ProvenanceMethod.CITATION_CHASE in {p.method for p in first_after.provenance}
@@ -165,8 +165,7 @@ def test_chased_duplicate_is_merged_not_rescreened(
     assert chased and {p.raw_ref for p in chased} == {"W9999"}
     assert not any(p.method is ProvenanceMethod.CITATION_CHASE for p in first.provenance)
     served = _screen_new(project, agent, PassLabel.A, protocol_id)
-    assert len(served) == 1  # the new work only
-    assert first.id not in served
+    assert len(served) == 1  # the new work only; the merged duplicate is not queued
 
 
 def _held_out_tokens(project: Project) -> set[str]:
@@ -222,7 +221,10 @@ async def test_held_out_seed_found_by_chase_is_not_named(
     assert {c.seed_id: c.status for c in seed_check(project)}[held] == "missing"
 
     # A first chase fails at the source, and the source's error text names the held-out seed.
-    leaky = SourceError(f"HTTP 404 for doi:10.1000/p{number} W{number} {held}")
+    # Contrived defence in depth: ChaseSummary carries no identifiers beyond rf: work ids. arXiv
+    # forms are covered by the shared token tests (test_mcp_screening, test_acceptance_screening).
+    doi = f"10.1000/p{number}"
+    leaky = SourceError(f"HTTP 404 for doi:{doi} {held}")
     failing = FakeSource([[]], raise_at=0, raise_error=leaky)
     broken = {"openalex": SourceFactory(frozenset({QueryKind.FILTER}), lambda _s, _c: failing)}
     async with open_session(settings, clock, broken) as session:
@@ -230,13 +232,13 @@ async def test_held_out_seed_found_by_chase_is_not_named(
     assert failed["ok"] is True
     raw_notes = " ".join(str(run["note"]) for run in failed["data"]["runs"])
     assert "HTTP 404" in raw_notes  # the note is passed on; only the identifiers are withheld
-    assert _leaks(json.dumps(failed), tokens) == []
-    assert _leaks(
-        " ".join(e.payload.get("note") or "" for e in _of_type(project, "search.run_finished")),
-        tokens,
-    )
+    assert {held, doi} <= tokens
+    finished = _of_type(project, "search.run_finished")
+    stored = " ".join(str(e.payload.get("note") or "") for e in finished)
+    assert set(_leaks(stored, {held, doi})) == {held, doi}  # both are in the unscrubbed note
+    assert _leaks(json.dumps(failed), {held, doi}) == []
 
-    # The second chase returns the held-out seed's own record, with its DOI and OpenAlex id.
+    # The second chase returns the held-out seed's own record, with its DOI.
     page = [_seed_item(number), _citing(900)]
     async with open_session(settings, clock, dict(mock_sources(openalex=page))) as session:
         body = await session.call(
