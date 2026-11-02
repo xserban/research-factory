@@ -313,6 +313,23 @@ def exclusion_criteria(project: Project) -> dict[str, str | None]:
     return result
 
 
+def agreement_summary(project: Project) -> Agreement | None:
+    """The agreement of the two passes as the events stand, for reports (plan 5b).
+
+    Refuses nothing: `screen_agreement` keeps the refusals, and any surface that exposes this to a
+    pass session must apply them. None while the passes cannot be compared: no protocol, a
+    one-pass plan, a pass not opened, or a dual-coded work lacking a live decision in either pass.
+    """
+    project.index.sync()
+    screen = _load(project)
+    if screen is None or not screen.known or screen.protocol.spec.screening.passes == 1:
+        return None
+    for work in screen.dual:
+        if work not in screen.decided[PassLabel.A] or work not in screen.decided[PassLabel.B]:
+            return None
+    return _agreement(project, screen)
+
+
 class PassProgress(StrictModel):
     """One pass's ordinary queue: works queued, those with a live non-stale decision, and those
     remaining. All three are None when the pass is not open."""
