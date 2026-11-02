@@ -11,8 +11,10 @@ import pytest
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor, Event
 from factory.events.reader import read_all
-from factory.model.chase import ChaseDirection
+from factory.model.chase import ChaseDirection, ChaseRoundStarted
+from factory.model.dedup import DedupMerged
 from factory.model.screening import Channel
+from factory.model.search import QueryKind, QueryPurpose, QueryRegistered, QuerySpec
 from factory.model.seed import SeedKind
 from factory.model.work import ProvenanceMethod
 from factory.services.agreement import resolve_disagreement
@@ -23,7 +25,7 @@ from factory.services.dedup import dedup_run, revert_merge
 from factory.services.protocol import current_protocol
 from factory.services.search import get_work, list_works
 from factory.services.seeds import all_seeds
-from factory.services.trace import TraceNode, trace
+from factory.services.trace import TraceNode, _event_index, _lookup_key, trace
 from factory.sources.registry import SourceFactory
 from tests.helpers import _setup
 from tests.test_chase_service import _citing, _corpus, _ordinary, _settle
@@ -56,6 +58,15 @@ def _events_of(project: Project, name: str) -> list[Event]:
     return [e for e in read_all(project.paths.events_dir, project.catalog) if e.type == name]
 
 
+def _event_where(
+    project: Project, name: str, match: Callable[[Mapping[str, object]], bool]
+) -> Event:
+    """The first event of a type whose payload satisfies `match` (the log is in id order)."""
+    matches = [e for e in _events_of(project, name) if match(e.payload)]
+    assert matches, f"no {name} event matches"
+    return matches[0]
+
+
 def test_trace_decision_reaches_question(
     project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
 ) -> None:
@@ -67,23 +78,48 @@ def test_trace_decision_reaches_question(
     decision_id = _decide(project, agent, work_id, "A", "screening", "exclude", "EX01", protocol_id)
     work = get_work(project, work_id)
     assert work is not None
-    blob = work.provenance[0].raw_blob
 
     root = trace(project, decision_id)
 
     assert root.kind == "decision" and root.id == decision_id
-    # The run's archived raw page, reached through the work's record.
-    page = _path_to(root, "page", blob)
-    assert page is not None
-    assert _kinds(page) == ["decision", "work", "record", "page"]
+    # The whole branch, every link checked: decision -> work -> record -> page -> run -> query ->
+    # protocol -> question.
+    branch = _path_to(root, "question", question_id)
+    assert branch is not None
+    assert _kinds(branch) == [
+        "decision",
+        "work",
+        "record",
+        "page",
+        "run",
+        "query",
+        "protocol",
+        "question",
+    ]
+    assert branch[1].id == work_id
+    # The page, run and query of the branch are those of one provenance row of this work.
+    page_blob = branch[3].id
+    row = next(p for p in work.provenance if p.raw_blob == page_blob)
+    assert branch[2].id == f"{row.run_id}/{work_id}"
+    assert branch[4].id == row.run_id
+    assert branch[5].id == row.query_id
+    assert branch[6].id == protocol_id
+    assert branch[7].id == question_id
+    # Each node names the event that created it: the archived page and the parsed records.
+    assert (
+        branch[3].event_id
+        == _event_where(project, "search.page_archived", lambda p: p["raw_blob"] == page_blob).id
+    )
+    assert (
+        branch[2].event_id
+        == _event_where(project, "search.records_parsed", lambda p: p["raw_blob"] == page_blob).id
+    )
+    # The cited criterion and its parent element (the non-goal NG01), up to the question.
     # The cited criterion and its parent element (the non-goal NG01), up to the question.
     element = _path_to(root, "element", f"{question_id}/NG01")
     assert element is not None
     assert _kinds(element) == ["decision", "criterion", "element"]
     assert element[1].id == f"{protocol_id}:EX01"
-    question = _path_to(root, "question", question_id)
-    assert question is not None
-    assert {"run", "query", "protocol"} <= set(_kinds(question))
 
 
 def test_trace_forward_from_criterion_lists_decisions_citing_it(
@@ -167,6 +203,7 @@ def test_trace_shows_reverted_merge(
     assert _kinds(path) == ["work", "merge"]
     assert "reverted" in path[-1].label
     assert "different papers" in path[-1].label
+    assert path[-1].event_id == merged.id
     assert {c.id for c in path[-1].children} == absorbed
 
 
@@ -208,7 +245,14 @@ def test_trace_audited_work_links_sample_and_label(
     }
     item = _path_to(sample, "audit", f"{sampled.audit_id}/{labelled}")
     assert item is not None and item[-1].label == "sampled; human verdict include"
-    assert item[-1].event_id.startswith("ev_")
+    assert (
+        item[-1].event_id
+        == _event_where(project, "audit.labelled", lambda p: p["work_id"] == labelled).id
+    )
+    assert (
+        sample.event_id
+        == _event_where(project, "audit.sampled", lambda p: p["audit_id"] == sampled.audit_id).id
+    )
     back = trace(project, f"{sampled.audit_id}/{labelled}")
     assert {child.kind for child in back.children} == {"audit", "work"}
     assert _path_to(back, "work", labelled) is not None
@@ -288,3 +332,73 @@ def test_trace_forward_from_absorbed_work_shows_the_reverted_merge(
     assert _kinds(path) == ["work", "merge"]
     assert "reverted" in path[-1].label
     assert [child.id for child in path[-1].children] == [primary]
+
+
+def test_lookup_reads_only_the_named_id_field(project: Project, human: Actor) -> None:
+    """Another event's string field equal to an id is never matched: a merge whose `rule` names
+    another merge's id is found under its own `merge_id` only."""
+    named = project.ids.new("mrg")
+    rule_value = project.ids.new("mrg")
+    primary = "rf:alpha-2020-one-00000000"
+    absorbed = ("rf:beta-2020-two-11111111",)
+    first = project.events.make(
+        "dedup.merged",
+        DedupMerged(merge_id=named, primary=primary, absorbed=absorbed, rule=rule_value, records=2),
+        human,
+        refs=(primary, *absorbed),
+    )
+    second = project.events.make(
+        "dedup.merged",
+        DedupMerged(
+            merge_id=rule_value,
+            primary=primary,
+            absorbed=absorbed,
+            rule="title+author:100",
+            records=2,
+        ),
+        human,
+        refs=(primary, *absorbed),
+    )
+
+    assert _lookup_key(first) == named
+    assert _lookup_key(second) == rule_value
+    index = _event_index([first, second])
+    assert index[("dedup.merged", named)] == first.id
+    assert index[("dedup.merged", rule_value)] == second.id
+    assert ("dedup.merged", "title+author:100") not in index
+
+
+def test_trace_identical_chase_texts_link_each_query_to_its_own_round(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    _setup(project, agent, human, mock_sources, random_works=0)
+    source = sorted(w.id for w in list_works(project))[0]
+    text = "cited_by:W1|W2"
+    pairs: list[tuple[str, str]] = []
+    for _ in range(2):
+        round_id = project.ids.new("chs")
+        round_payload = ChaseRoundStarted(
+            round_id=round_id,
+            directions=(ChaseDirection.BACKWARD,),
+            from_works=(source,),
+            unchasable=(),
+            queries=(text,),
+        )
+        project.record(
+            [project.events.make("chase.round_started", round_payload, human, refs=(round_id,))]
+        )
+        query_id = project.ids.new("qry")
+        spec = QuerySpec(
+            source="openalex", kind=QueryKind.FILTER, text=text, purpose=QueryPurpose.CHASE
+        )
+        query_payload = QueryRegistered(query_id=query_id, spec=spec, interface="openalex")
+        project.record(
+            [project.events.make("query.registered", query_payload, human, refs=(query_id,))]
+        )
+        pairs.append((round_id, query_id))
+
+    for round_id, query_id in pairs:
+        back = trace(project, query_id)
+        assert [c.id for c in back.children if c.kind == "chase_round"] == [round_id]
+        forward = trace(project, round_id, direction="forward")
+        assert [c.id for c in forward.children] == [query_id]

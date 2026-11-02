@@ -20,7 +20,7 @@ Invariants:
 
 import json
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -28,6 +28,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from factory.errors import FactoryValidationError, ValidationIssue
+from factory.events.envelope import Event
 from factory.events.reader import read_all
 from factory.model.base import StrictModel
 from factory.model.chase import CHASE_ROUND_ID_RE
@@ -129,6 +130,11 @@ def trace(
     `back` follows the nodes `ref` was derived from, `forward` the nodes derived from it. The kind
     of `ref` is given by its prefix. Raises `FactoryValidationError` for an identifier that names
     no row.
+
+    Each node is shown once, under the first branch that reaches it (a visited set). So a back
+    trace from a decision claims the protocol and the question under the work branch (through the
+    query), and the criterion branch may then end at the element. Criteria lead upward to their
+    protocol and element, never to queries: queries are downstream of protocols.
     """
     if direction not in ("back", "forward"):
         raise ValueError(f"direction must be 'back' or 'forward', not {direction!r}")
@@ -140,6 +146,32 @@ def trace(
         if key is None or described is None:
             raise FactoryValidationError([ValidationIssue("ref", "unknown id")])
         return _build(walk, key, described, direction, {key})
+
+
+def _lookup_key(event: Event) -> str | None:
+    """The identifier that finds an event, read from the one named field of its type, or None when
+    the type is not looked up by payload. Other string fields are never matched."""
+    payload = event.payload
+    if event.type in ("search.page_archived", "search.records_parsed"):
+        return str(payload["raw_blob"])
+    if event.type == "dedup.merged":
+        return str(payload["merge_id"])
+    if event.type == "audit.sampled":
+        return str(payload["audit_id"])
+    if event.type == "audit.labelled":
+        return f"{payload['audit_id']}/{payload['work_id']}"
+    return None
+
+
+def _event_index(events: Iterable[Event]) -> dict[tuple[str, str], str]:
+    """(event type, named id) to the first event id with that id, for the scanned types. The
+    events are taken in id order, so the first is the earliest."""
+    index: dict[tuple[str, str], str] = {}
+    for event in events:
+        key = _lookup_key(event)
+        if key is not None:
+            index.setdefault((event.type, key), event.id)
+    return index
 
 
 def _parse(ref: str) -> Key | None:
@@ -250,17 +282,13 @@ class _Walk:
         return found[0] if found else _NO_EVENT
 
     def _event_for(self, event_type: str, key: str) -> str:
-        """The first event of a type whose payload carries `key` as a string value. Used where
-        the table keeps no event id; the event log is the only source of those."""
+        """The first event of a type whose named id field is `key`. Used where the table keeps no
+        event id. The event log is read once per walk, on the first such lookup; the cost is
+        linear in the log, which is acceptable for a human view."""
         if self._scanned is None:
-            scanned: dict[tuple[str, str], str] = {}
-            for event in read_all(self._project.paths.events_dir, self._project.catalog):
-                keys = [value for value in event.payload.values() if isinstance(value, str)]
-                if event.type == "audit.labelled":
-                    keys.append(f"{event.payload['audit_id']}/{event.payload['work_id']}")
-                for item in keys:
-                    scanned.setdefault((event.type, item), event.id)
-            self._scanned = scanned
+            self._scanned = _event_index(
+                read_all(self._project.paths.events_dir, self._project.catalog)
+            )
         return self._scanned.get((event_type, key), _NO_EVENT)
 
     def _chase_assignment(self) -> tuple[dict[str, str], dict[str, list[str]]]:
@@ -268,6 +296,10 @@ class _Walk:
 
         A query belongs to the latest round, recorded before the query, whose text it ran. Both
         identifiers are time-ordered ULIDs, so the comparison is on their ULID parts.
+
+        Assumption: `chase.round_started` is recorded before the round's queries are registered
+        (`services.chase.search_chase` does this). Two rounds with identical texts are then told
+        apart by order: each query links to the latest earlier round, never to a later one.
         """
         if self._chase is None:
             rounds: dict[str, list[str]] = {}
