@@ -441,7 +441,7 @@ def test_agreement_refused_before_pass_b_is_opened(
 def test_agreement_counts_extended_works_as_dual_coded(
     project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
 ) -> None:
-    """An extended work that both passes decide is dual-coded; a considered work not drawn is not."""
+    """An extended work both passes decide is dual-coded; a considered, undrawn work is not."""
     protocol_id = _ready(project, agent, human, mock_sources)
     _late(project, human, mock_sources, 1000, 40)
     project.index.sync()
