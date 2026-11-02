@@ -202,6 +202,20 @@ def audit_report(project: Project) -> AuditReport | None:
     )
 
 
+def audit_outstanding(project: Project) -> bool:
+    """Whether the agreed set is non-empty and no audit has sampled its current population.
+
+    The population is the agreed set's work ids and verdicts (`audit_sample`'s digest). A set that
+    changed since the last audit is outstanding again. False when there is nothing to audit.
+    """
+    project.index.sync()
+    agreed = agreed_works(project)
+    if not agreed:
+        return False
+    digest = population_digest((work, item.verdict) for work, item in agreed.items())
+    return _last_population_digest(project) != digest
+
+
 # --- Reading the audit tables ---
 
 

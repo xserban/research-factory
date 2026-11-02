@@ -330,6 +330,28 @@ def agreement_summary(project: Project) -> Agreement | None:
     return _agreement(project, screen)
 
 
+def single_pass_works(project: Project) -> list[str]:
+    """The ordinary works whose final outcome rests on pass A alone, sorted (R-33).
+
+    In a two-pass plan these are the works outside pass B's queue; in a one-pass plan, every
+    ordinary work. A work counts when `final_outcomes` gives it an outcome (include or exclude)
+    from a live decision, not from a human resolution. Empty before a protocol is recorded or
+    while pass B is not opened.
+    """
+    project.index.sync()
+    screen = _load(project)
+    if screen is None or not screen.known:
+        return []
+    single = screen.ordinary if screen.protocol.spec.screening.passes == 1 else screen.single
+    outcomes = final_outcomes(project)
+    return sorted(
+        work
+        for work in single
+        if work not in screen.resolutions
+        and outcomes.get(work) in (Outcome.INCLUDED, Outcome.EXCLUDED)
+    )
+
+
 class PassProgress(StrictModel):
     """One pass's ordinary queue: works queued, those with a live non-stale decision, and those
     remaining. All three are None when the pass is not open."""

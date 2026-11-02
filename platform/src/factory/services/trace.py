@@ -148,6 +148,23 @@ def trace(
         return _build(walk, key, described, direction, {key})
 
 
+def dangling_refs(project: Project, refs: Iterable[str]) -> list[str]:
+    """The identifiers among `refs` of a kind the walk describes that no row defines, sorted.
+
+    Read-only, one walk for all of them. An identifier of a kind the walk does not describe is
+    not judged: it is neither reported nor an error here.
+    """
+    project.index.sync()
+    with project.index.connect() as conn:
+        walk = _Walk(project, conn)
+        dangling: set[str] = set()
+        for ref in refs:
+            key = _parse(ref)
+            if key is not None and walk.describe(key) is None:
+                dangling.add(ref)
+    return sorted(dangling)
+
+
 def _lookup_key(event: Event) -> str | None:
     """The identifier that finds an event, read from the one named field of its type, or None when
     the type is not looked up by payload. Other string fields are never matched."""
