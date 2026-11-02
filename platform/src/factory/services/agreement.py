@@ -26,7 +26,6 @@ Invariants:
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Literal
@@ -57,6 +56,7 @@ from factory.services.screening import (
     TASK_KIND,
     live_decisions,
     obsolete_tasks,
+    pass_b_sample,
     stale_screening_decisions,
 )
 from factory.services.screening_stats import cohen_kappa, kappa_by_criterion
@@ -340,13 +340,13 @@ def _queue(
     """The ordinary works pass `label` screens: its recorded sample, or the corpus when the pass
     has none, less the calibration works. None when the pass has not been opened."""
     with project.index.connect() as conn:
-        row = conn.execute(
-            text("SELECT sample FROM passes WHERE pass_label = :label"), {"label": label.value}
+        opened = conn.execute(
+            text("SELECT 1 FROM passes WHERE pass_label = :label"), {"label": label.value}
         ).one_or_none()
-    if row is None:
+    if opened is None:
         return None
-    sample = row[0]
-    base = corpus if sample is None else set(json.loads(str(sample)))
+    sample = pass_b_sample(project) if label is PassLabel.B else None
+    base = corpus if sample is None else set(sample)
     return frozenset(base - calibration)
 
 
