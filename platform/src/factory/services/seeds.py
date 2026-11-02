@@ -4,6 +4,10 @@ After the lookups, `split_seeds` draws the recorded hold-out split of the positi
 negatives and development positives only (`agent_seeds`); `all_seeds` is the human view, and
 `seed_check` and `seed_recall` report retrieval of the positives after search.
 
+`admit_seed` is the human act that looks up an explained positive miss whose planned route is
+`seed-admission`, by its identifier, as a seed-purpose query. It records `seed.admitted` whether or
+not a work was found (see `factory.index.chase.admitted_works`).
+
 `add_seeds` checks each spec on its own. A valid spec gets its next id for its kind (`SEED01`,
 `NEG01`) and a `seed.added` event, then one probe-purpose lookup, whose outcome is recorded as
 `seed.resolved` or `seed.unresolved`. A spec that is invalid, or duplicates an earlier seed in
@@ -22,7 +26,9 @@ from sqlalchemy import text
 
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
+from factory.index.chase import admitted_works
 from factory.model.base import StrictModel
+from factory.model.chase import SeedAdmitted
 from factory.model.project import RigorMode
 from factory.model.search import QueryKind, QueryPurpose, QuerySpec, RunStatus
 from factory.model.seed import (
@@ -39,7 +45,14 @@ from factory.model.work import ProvenanceMethod, Work
 from factory.model.work_ids import arxiv_id_from_doi
 from factory.services.context import Project
 from factory.services.results import BatchResult, ItemError
-from factory.services.search import RunSummary, get_work, list_works, register_query, run_query
+from factory.services.search import (
+    RunSummary,
+    get_work,
+    list_works,
+    query_issues,
+    register_query,
+    run_query,
+)
 from factory.sources.registry import SourceFactory
 
 
@@ -157,28 +170,32 @@ def _unresolved(
     return SeedOutcome(seed_id=seed_id, work_id=None, reason=reason)
 
 
-def _lookup_query(spec: SeedSpec) -> QuerySpec:
-    """The probe that finds a seed: arXiv by id where one is known, else OpenAlex by DOI or id."""
+def _lookup_query(spec: SeedSpec, purpose: QueryPurpose = QueryPurpose.PROBE) -> QuerySpec:
+    """The query that finds a seed: arXiv by id where one is known, else OpenAlex by DOI or id.
+
+    `purpose` is PROBE for the add-time lookup and SEED for an admission. The source adapters map
+    SEED to the `seed-admission` provenance method.
+    """
     keys = spec.identity_keys()
     if "arxiv" in keys:
         return QuerySpec(
             source="arxiv",
             kind=QueryKind.ID_LIST,
             text=keys["arxiv"],
-            purpose=QueryPurpose.PROBE,
+            purpose=purpose,
         )
     if "doi" in keys:
         return QuerySpec(
             source="openalex",
             kind=QueryKind.FILTER,
             text=f"doi:{keys['doi']}",
-            purpose=QueryPurpose.PROBE,
+            purpose=purpose,
         )
     return QuerySpec(
         source="openalex",
         kind=QueryKind.FILTER,
         text=f"openalex:{keys['openalex']}",
-        purpose=QueryPurpose.PROBE,
+        purpose=purpose,
     )
 
 
@@ -405,6 +422,93 @@ def explain_seed_miss(
         )
 
 
+def admit_seed(
+    project: Project,
+    actor: Actor,
+    seed_id: str,
+    *,
+    sources: Mapping[str, SourceFactory],
+    deviation_id: str | None = None,
+) -> SeedAdmitted:
+    """Look up an explained seed-admission miss by its identifier, and record the outcome.
+
+    A human act. The seed must be a positive whose miss was explained with route
+    `seed-admission`, and must be neither retrieved nor already admitted. The lookup is a
+    seed-purpose query, gated like any other: `deviation_id` names a recorded deviation when the
+    protocol does not plan it. `seed.admitted` is written whether or not a work was found;
+    `work_id` is the run's first work, or None. A lookup that failed without finding a work
+    records nothing, so the seed can be retried.
+
+    Validation happens before anything is written. Messages name the field, never the seed.
+    """
+    # Imported here: the protocol service reads seeds, which read this module.
+    from factory.services import protocol as protocol_service
+
+    if actor.kind != "human":
+        raise FactoryValidationError([ValidationIssue("actor", "seed admission is a human act")])
+    with project.index.exclusive():
+        project.index.sync()
+        seed = next((s for s in _load_seeds(project) if s.seed_id == seed_id), None)
+        if seed is None or seed.spec.kind is not SeedKind.POSITIVE:
+            raise FactoryValidationError([ValidationIssue("seed_id", "not a positive seed")])
+        issues = _admission_state_issues(project, seed)
+        query = _lookup_query(seed.spec, QueryPurpose.SEED)
+        issues += query_issues(project, query, sources)
+        issues += protocol_service.search_authorization(project, query, deviation_id=deviation_id)
+        if issues:
+            raise FactoryValidationError(issues)
+
+    query_id = register_query(project, actor, query, sources=sources, deviation_id=deviation_id)
+    run = run_query(project, query_id, sources=sources, actor=actor)
+    works = _run_works(project, run.run_id)
+    if not works and run.status is not RunStatus.COMPLETE:
+        raise FactoryValidationError(
+            [ValidationIssue("lookup", f"lookup {run.status.value}; no admission recorded")]
+        )
+    admitted = SeedAdmitted(
+        seed_id=seed_id,
+        run_id=run.run_id,
+        work_id=works[0] if works else None,
+    )
+    with project.index.exclusive():
+        project.index.sync()
+        if seed_id in _admitted(project):
+            raise FactoryValidationError([ValidationIssue("seed_id", "already admitted")])
+        project.record([project.events.make("seed.admitted", admitted, actor, refs=(seed_id,))])
+    return admitted
+
+
+def _admission_state_issues(project: Project, seed: _Seed) -> list[ValidationIssue]:
+    """Why a positive seed may not be admitted now: unexplained, retrieved or already admitted."""
+    issues: list[ValidationIssue] = []
+    if _explained_route(project, seed.seed_id) is not ProvenanceMethod.SEED_ADMISSION:
+        issues.append(ValidationIssue("seed_id", "not explained as a seed-admission miss"))
+    if seed.seed_id in _admitted(project):
+        issues.append(ValidationIssue("seed_id", "already admitted"))
+    if _status_of(seed_check(project), seed.seed_id) == "retrieved":
+        issues.append(ValidationIssue("seed_id", "already retrieved"))
+    return issues
+
+
+def _status_of(checks: list[SeedCheck], seed_id: str) -> str | None:
+    return next((check.status for check in checks if check.seed_id == seed_id), None)
+
+
+def _explained_route(project: Project, seed_id: str) -> ProvenanceMethod | None:
+    with project.index.connect() as conn:
+        row = conn.execute(
+            text("SELECT route FROM seed_explanations WHERE seed_id = :seed"),
+            {"seed": seed_id},
+        ).one_or_none()
+    return None if row is None else ProvenanceMethod(str(row[0]))
+
+
+def _admitted(project: Project) -> dict[str, str | None]:
+    """Every admitted seed with the work its lookup found (None when it found none)."""
+    with project.index.connect() as conn:
+        return admitted_works(conn)
+
+
 def agent_seeds(project: Project) -> list[SeedView]:
     """The seeds an agent may use: every seed before the split, then negatives and development
     and late positives. Held-out seeds are never returned."""
@@ -447,17 +551,20 @@ def all_seeds(project: Project) -> list[SeedRecord]:
 
 def seed_check(project: Project) -> list[SeedCheck]:
     """Each positive seed against the corpus: retrieved, explained (a miss with a recorded
-    reason), or missing. A seed is retrieved when a corpus work shares its work id, its DOI, or
-    its arXiv id (a DataCite arXiv DOI counts as its arXiv id on either side)."""
+    reason, admitted or not), or missing. A seed is retrieved when a corpus work shares its work
+    id, the work its admission found, its DOI, or its arXiv id (a DataCite arXiv DOI counts as its
+    arXiv id on either side)."""
     seeds = _load_seeds(project)
     roles = _roles(seeds, _split(project))
     corpus = list_works(project)
     explained = _explained_ids(project)
+    admitted = _admitted(project)
     checks: list[SeedCheck] = []
     for seed in seeds:
         if seed.spec.kind is not SeedKind.POSITIVE:
             continue
-        matched = _matching_work(seed, corpus)
+        found = seed.work_id if seed.work_id is not None else admitted.get(seed.seed_id)
+        matched = _matching_work(seed, corpus, found)
         if matched is not None:
             status: Literal["retrieved", "explained", "missing"] = "retrieved"
         elif seed.seed_id in explained:
@@ -506,10 +613,12 @@ def _roles(seeds: list[_Seed], split: _Split | None) -> dict[str, SeedRole]:
     return roles
 
 
-def _matching_work(seed: _Seed, corpus: list[Work]) -> str | None:
+def _matching_work(seed: _Seed, corpus: list[Work], found: str | None) -> str | None:
+    """The corpus work that is the seed: the one `found` names, else one sharing its DOI or arXiv
+    id. `found` is the work the seed's lookup or admission resolved to, if any."""
     keys = seed.spec.identity_keys()
     for work in corpus:
-        if seed.work_id is not None and work.id == seed.work_id:
+        if found is not None and work.id == found:
             return work.id
         if "doi" in keys and work.identifiers.doi == keys["doi"]:
             return work.id

@@ -170,3 +170,9 @@ def considered_works(conn: Connection) -> set[str]:
     """Every work any sample extension has considered, drawn or not."""
     rows = conn.execute(text("SELECT work_id FROM sample_considered")).all()
     return {str(row[0]) for row in rows}
+
+
+def admitted_works(conn: Connection) -> dict[str, str | None]:
+    """Every admitted seed, keyed by seed id, with the work its lookup found (None if none)."""
+    rows = conn.execute(text("SELECT seed_id, work_id FROM seed_admissions")).all()
+    return {str(seed_id): None if work_id is None else str(work_id) for seed_id, work_id in rows}
