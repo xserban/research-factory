@@ -1,4 +1,5 @@
-# Converter bake-off corpus (proposal; not approved). Add approved = "<name> <date>" after review.
+# Converter bake-off corpus. Approved by the researcher on 2026-11-03 (provisional tags: see below).
+approved = "obd 2026-11-03"
 # Tags assigned from abstract/venue and HTML structure counts; custom-macros and two-column-pdf
 # are provisional until the e-prints and PDFs are fetched.
 
