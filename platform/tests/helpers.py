@@ -427,8 +427,9 @@ def _setup(
     *,
     dual_sample: float | None = 0.5,
     random_works: int = RANDOM_WORKS,
+    extra_items: Sequence[dict[str, Any]] = (),
 ) -> str:
-    """A protocol, the seeds, and a corpus of every seed work plus random works."""
+    """A protocol, the seeds, and a corpus of the seed works, random works and `extra_items`."""
     protocol_id = _protocol(project, agent, human, mock_sources, dual_sample=dual_sample)
     for n in range(4, POSITIVES + 1):
         spec = SeedSpec(kind=SeedKind.POSITIVE, cite=f"Paper {n}", doi=f"10.1000/p{n}")
@@ -439,6 +440,7 @@ def _setup(
     items = [_positive_item(n) for n in range(1, POSITIVES + 1)]
     items += [_negative_item(k) for k in range(1, NEGATIVES + 1)]
     items += [_random_item(k) for k in range(1, random_works + 1)]
+    items += list(extra_items)
     query = QuerySpec(source="openalex", kind=QueryKind.KEYWORD, text="attention")
     sources = mock_sources(openalex=items)
     query_id = register_query(project, human, query, sources=sources)

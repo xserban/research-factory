@@ -25,6 +25,7 @@ Invariants:
 
 from __future__ import annotations
 
+import hashlib
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -611,6 +612,66 @@ def _restore_events(
         )
     )
     return events, "source-changed"
+
+
+# --- Researcher-supplied documents (ruling 7) ---
+
+
+def record_supplied_document(
+    project: Project,
+    work_id: str,
+    *,
+    content: bytes,
+    source_version: str,
+    media_type: str,
+    actor: Actor,
+) -> str | None:
+    """Record a researcher-supplied PDF: its library entry, one attempt and one document.
+
+    Returns the new document's id, or None if the bytes already back a document of this work, in
+    which case nothing is written (the library is not touched either). The caller holds the write
+    lock with a synced index and has already checked that the work is promoted.
+    """
+    raw_hash = f"sha256:{hashlib.sha256(content).hexdigest()}"
+    docs = _documents(project, work_id)
+    if any(doc.raw_hash == raw_hash for doc in docs):
+        return None
+    project.library.put(content)
+    attempt_id = project.ids.new("att")
+    document_id = project.ids.new("doc")
+    item = _Fetched(
+        route=Route.RESEARCHER,
+        outcome=AttemptOutcome.RETRIEVED,
+        reason=None,
+        url=None,
+        http_status=None,
+        source_version=source_version,
+        media_type=media_type,
+        licence=None,
+        metadata_blob=None,
+        content=_Content(raw_hash=raw_hash, source_version=source_version, media_type=media_type),
+    )
+    attempt = _attempted(project, None, work_id, attempt_id, item, document_id, actor=actor)
+    added = DocumentAdded(
+        document_id=document_id,
+        work_id=work_id,
+        route=Route.RESEARCHER,
+        quality=QUALITY[Route.RESEARCHER],
+        source_version=source_version,
+        raw_hash=raw_hash,
+        media_type=media_type,
+        attempt_id=attempt_id,
+        provenance="researcher-supplied",
+        supersedes=_live(docs, Route.RESEARCHER),
+    )
+    document = project.events.make(
+        "fulltext.document_added",
+        added,
+        actor,
+        refs=(document_id, work_id, attempt_id),
+    )
+    project.record([attempt, document])
+    return document_id
 
 
 # --- Projection reads (the projection, never the library) ---
