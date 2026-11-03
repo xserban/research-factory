@@ -47,6 +47,7 @@ default); the walk is in document order; no state outside the call.
 
 import re
 from dataclasses import dataclass, field
+from typing import NamedTuple
 
 import lxml
 from lxml import etree
@@ -110,7 +111,8 @@ _BLOCK_MARKERS = "#>+-*=_"
 _SECTION_TAG = re.compile(r"[A-Za-z0-9]+(\.[0-9]+)*\.?")
 _LABEL = re.compile(r"[A-Za-z0-9().]+")
 _BARE_DOLLAR = re.compile(r"(?<!\\)\$")
-_MAX_COLUMNS = 1000
+_MAX_WIDTH = 64
+_SLOT_BUDGET = 200_000
 _NO_CLASSES: frozenset[str] = frozenset()
 _TAG_ONLY = frozenset({"ltx_tag"})
 
@@ -224,29 +226,42 @@ def _rows(table: etree._Element) -> list[etree._Element]:
     return rows
 
 
-def _grid(
-    rows: list[list[tuple[int, int, str]]],
-) -> tuple[list[list[str]], bool, bool]:
-    """Place `(colspan, rowspan, text)` cells on a grid and return it rectangular.
+class _Placed(NamedTuple):
+    """A placed table: rectangular `grid`, whether rows were padded or spans clamped, and the
+    texts of cells that fell beyond the column limit (`overflow`, in document order)."""
 
-    A cell takes the first free slot of its row. Its text is in the top-left slot; the other
-    slots of its span are empty. A row span is clamped to the rows that remain and a column span
-    (and any cell past the column limit) to `_MAX_COLUMNS`. Returns the grid (one list per row, all
-    of one width), whether any row had to be padded, and whether any span was clamped.
+    grid: list[list[str]]
+    padded: bool
+    clamped: bool
+    overflow: list[str]
+
+
+def _grid(rows: list[list[tuple[int, int, str]]]) -> _Placed:
+    """Place `(colspan, rowspan, text)` cells on a grid of at most `_MAX_WIDTH` columns.
+
+    The width is the widest row's span sum, capped at `_MAX_WIDTH` and at
+    `_SLOT_BUDGET // rows`, so the grid never holds more than `_SLOT_BUDGET` slots. A cell takes
+    the first free slot of its row; its text is in the top-left slot and the other slots of its
+    span are empty. A column span is clipped to the width and a row span to the rows that remain
+    (both count as clamped). A cell that starts past the width keeps its text in `overflow`.
     """
+    height = len(rows)
+    declared = max((sum(colspan for colspan, _, _ in row) for row in rows), default=0)
+    width = max(1, min(declared, _MAX_WIDTH, _SLOT_BUDGET // max(height, 1)))
     slots: dict[tuple[int, int], str] = {}
     clamped = False
-    height = len(rows)
+    overflow: list[str] = []
     for row_index, row in enumerate(rows):
         column = 0
         for colspan, rowspan, text in row:
             while (row_index, column) in slots:
                 column += 1
-            if column >= _MAX_COLUMNS:
-                clamped = True
+            if column >= width:
+                if text:
+                    overflow.append(text)
                 continue
-            if colspan > _MAX_COLUMNS - column:
-                colspan = _MAX_COLUMNS - column
+            if colspan > width - column:
+                colspan = width - column
                 clamped = True
             if rowspan > height - row_index:
                 rowspan = height - row_index
@@ -255,17 +270,44 @@ def _grid(
                 for dc in range(colspan):
                     slots.setdefault((row_index + dr, column + dc), text if dr == dc == 0 else "")
             column += colspan
+    if not slots:
+        return _Placed([], False, clamped, overflow)
     reach = [0] * height  # per row: one past the last filled slot
     for row_index, column in slots:
         reach[row_index] = max(reach[row_index], column + 1)
-    width = max(reach, default=0)
-    if width == 0:
-        return [], False, clamped
+    grid_width = max(reach)
     grid = [
-        [slots.get((row_index, column), "") for column in range(width)]
+        [slots.get((row_index, column), "") for column in range(grid_width)]
         for row_index in range(height)
     ]
-    return grid, any(length < width for length in reach), clamped
+    return _Placed(grid, any(length < grid_width for length in reach), clamped, overflow)
+
+
+def _is_inline_like(child: etree._Element) -> bool:
+    """True if `child` sits within running text (so it joins a paragraph, not a block)."""
+    return (
+        child.tag in _INLINE_TAGS
+        or child.tag in {"math", "br"}
+        or "ltx_note" in _classes(child)
+        or _skipped(child, _NO_CLASSES)
+    )
+
+
+def _skipped(el: etree._Element, exclude: frozenset[str]) -> bool:
+    return el.tag in _SKIP_TAGS or bool(_classes(el) & (_SKIP_CLASSES | exclude))
+
+
+def _loose_text(el: etree._Element) -> str:
+    """The raw text of `el` outside its math children and skipped elements."""
+    parts: list[str] = []
+    if el.text:
+        parts.append(el.text)
+    for child in el:
+        if isinstance(child.tag, str) and child.tag != "math" and not _skipped(child, _NO_CLASSES):
+            parts.append(_loose_text(child))
+        if child.tail:
+            parts.append(child.tail)
+    return "".join(parts)
 
 
 @dataclass
@@ -304,6 +346,7 @@ class _Walker:
         if classes & {"ltx_equation", "ltx_equationgroup"}:
             for math in el.iter("math"):
                 self._equation(math)
+            self._tail_para(_loose_text(el))
             return
         if el.tag == "table":
             self._table(el)
@@ -323,32 +366,55 @@ class _Walker:
             self._para(self._inline(el))
             return
         if el.tag == "dl":
-            for item in _children(el):
-                if item.tag in {"dt", "dd"}:
-                    self._para(self._inline(item))
-                else:
-                    self.block(item)
+            self._items(el, {"dt", "dd"})
             return
         if el.tag in {"ul", "ol"}:
-            for item in _children(el):
-                if item.tag == "li":
-                    self._para(self._inline(item))
-                else:
-                    self.block(item)
+            self._items(el, {"li"})
             return
         if el.tag in _INLINE_TAGS:
             self._para(self._inline(el))
             return
         self._container(el)
 
-    def _container(self, el: etree._Element) -> None:
-        """Keep the text of an unrecognised container: its text, then each child and its tail."""
-        if el.text and el.text.strip():
-            self._para(_esc(_collapse(el.text)))
+    def _container(self, el: etree._Element, skip: etree._Element | None = None) -> None:
+        """Keep every piece of text in `el`, grouping running text into paragraphs.
+
+        Text, inline elements and inline math between block children form one paragraph; a
+        block child ends the paragraph. `skip` is a child that the caller has already emitted.
+        """
+        run: list[str] = []
+        if el.text:
+            run.append(_esc(el.text))
         for child in _children(el):
-            self.block(child)
-            if child.tail and child.tail.strip():
-                self._para(_esc(_collapse(child.tail)))
+            if child is not skip:
+                if _is_inline_like(child):
+                    self._gather_child(child, run, _NO_CLASSES)
+                else:
+                    self._flush(run)
+                    self.block(child)
+            if child.tail:
+                run.append(_esc(child.tail))
+        self._flush(run)
+
+    def _flush(self, run: list[str]) -> None:
+        text = _collapse("".join(run))
+        run.clear()
+        self._para(text)
+
+    def _items(self, el: etree._Element, item_tags: set[str]) -> None:
+        """A list or definition list: one paragraph per item; other children are blocks."""
+        self._tail_para(el.text)
+        for child in _children(el):
+            if child.tag in item_tags:
+                self._para(self._inline(child))
+            else:
+                self.block(child)
+            self._tail_para(child.tail)
+
+    def _tail_para(self, text: str | None) -> None:
+        """Keep loose text (raw, unescaped) as a paragraph of its own."""
+        if text and text.strip():
+            self._para(_esc(_collapse(text)))
 
     def _heading(self, level: int, el: etree._Element, tag: str = "") -> None:
         text = self._inline(el, _TAG_ONLY)
@@ -366,9 +432,7 @@ class _Walker:
                 number += "."
             self._heading(level, title, number)
         self._scopes.append([])
-        for child in _children(el):
-            if child is not title:
-                self.block(child)
+        self._container(el, skip=title)
         self.out.extend(self._scopes.pop())
 
     def _para(self, text: str) -> None:
@@ -391,8 +455,7 @@ class _Walker:
         caption = _own_caption(el)
         if caption is not None:
             self._para(self._caption(caption, kind))
-        for child in _children(el):
-            self.block(child)
+        self._container(el)
 
     def _caption(self, caption: etree._Element, kind: str) -> str:
         count = self._captions.get(kind, 0) + 1
@@ -430,20 +493,28 @@ class _Walker:
         if el.text:
             parts.append(_esc(el.text))
         for child in el:
-            if isinstance(child.tag, str) and not _skipped(child, exclude):
-                classes = _classes(child)
-                if "ltx_note" in classes:
-                    parts.append(self._footnote(child))
-                elif child.tag == "math":
-                    alttext = _collapse(child.get("alttext") or _text(child))
-                    if alttext:
-                        parts.append(f"${_math_text(alttext)}$")
-                elif child.tag == "br":
-                    parts.append(" ")
-                else:
-                    self._gather(child, parts, exclude)
+            if isinstance(child.tag, str):
+                self._gather_child(child, parts, exclude)
             if child.tail:
                 parts.append(_esc(child.tail))
+
+    def _gather_child(
+        self, child: etree._Element, parts: list[str], exclude: frozenset[str]
+    ) -> None:
+        """Append one child's inline text to `parts`; its tail is the caller's job."""
+        if _skipped(child, exclude):
+            return
+        classes = _classes(child)
+        if "ltx_note" in classes:
+            parts.append(self._footnote(child))
+        elif child.tag == "math":
+            alttext = _collapse(child.get("alttext") or _text(child))
+            if alttext:
+                parts.append(f"${_math_text(alttext)}$")
+        elif child.tag == "br":
+            parts.append(" ")
+        else:
+            self._gather(child, parts, exclude)
 
     def _table(self, table: etree._Element) -> None:
         self._tables += 1
@@ -456,24 +527,31 @@ class _Walker:
             ]
             for row in _rows(table)
         ]
-        grid, padded, clamped = _grid(rows)
-        if not grid:
+        placed = _grid(rows)
+        caption = next(
+            (child for child in _children(table) if "ltx_caption" in _classes(child)), None
+        )
+        if caption is not None and not _inside_float(table):
+            self._para(self._caption(caption, "Table"))
+        if not placed.grid:
             self.warnings.append(f"table {number}: no cells, skipped")
-            return
-        if clamped:
+        else:
+            self._emit_table(number, placed)
+        if placed.overflow:
+            self.warnings.append(f"table {number}: cells beyond column limit moved to text")
+            self._para(_esc(_collapse(" ".join(placed.overflow))))
+
+    def _emit_table(self, number: int, placed: _Placed) -> None:
+        if placed.clamped:
             self.warnings.append(f"table {number}: span clamped")
-        if padded:
+        if placed.padded:
             self.warnings.append(f"table {number}: ragged rows padded")
-        width = len(grid[0])
-        lines = ["| " + " | ".join(escape_cell(cell) for cell in grid[0]) + " |"]
+        width = len(placed.grid[0])
+        lines = ["| " + " | ".join(escape_cell(cell) for cell in placed.grid[0]) + " |"]
         lines.append("| " + " | ".join(["---"] * width) + " |")
-        for row in grid[1:]:
+        for row in placed.grid[1:]:
             lines.append("| " + " | ".join(escape_cell(cell) for cell in row) + " |")
         self.out.append("\n".join(lines))
-
-
-def _skipped(el: etree._Element, exclude: frozenset[str]) -> bool:
-    return el.tag in _SKIP_TAGS or bool(_classes(el) & (_SKIP_CLASSES | exclude))
 
 
 class LatexmlHtmlConverter:

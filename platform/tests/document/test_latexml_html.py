@@ -168,3 +168,43 @@ def test_section_tag_with_markup_is_not_emitted() -> None:
     assert "## Lorem title" in markdown
     assert "<" not in markdown
     assert "&lt;b" not in markdown
+
+
+def test_tails_and_bare_text_are_kept_in_every_container() -> None:
+    markdown = _markdown(_fixture("latexml_tails.html"))
+    for marker in (
+        "SECTWORD",
+        "SECTTAIL",
+        "FLOATWORD",
+        "FLOATTAIL",
+        "DLWORD",
+        "DLTAIL",
+        "ULWORD",
+        "EQWORD",
+        "EMPHWORD",
+    ):
+        assert marker in markdown, marker
+
+
+def test_inline_content_in_a_container_is_one_paragraph() -> None:
+    markdown = _markdown(_fixture("latexml_tails.html"))
+    assert "Lorem text EMPHWORD and inline $a+b$ tail words" in markdown
+
+
+def test_table_caption_outside_float_is_emitted_above_table() -> None:
+    markdown = _markdown(_fixture("latexml_tails.html"))
+    caption = markdown.index("Table 4: TABCAP caption")
+    assert caption < markdown.index("| Lorem | ipsum |")
+
+
+def test_wide_table_stays_within_budget_and_overflow_is_kept() -> None:
+    _, warnings = LatexmlHtmlConverter().to_markdown(
+        _fixture("latexml_wide_table.html"), "text/html"
+    )
+    assert "table 1: span clamped" in warnings
+    assert "table 1: cells beyond column limit moved to text" in warnings
+    markdown = _markdown(_fixture("latexml_wide_table.html"))
+    assert "OVERWORD" in markdown
+    table_rows = [line for line in markdown.splitlines() if line.startswith("|")]
+    assert len(table_rows) >= 300
+    assert max(line.count("|") - 1 for line in table_rows) <= 64
