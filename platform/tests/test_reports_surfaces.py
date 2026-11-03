@@ -155,12 +155,18 @@ async def test_mcp_report_methods_refused_to_pass_session_mid_screening(
     assert _fields(gaps) == ["session"]
     assert "report" not in json.dumps(refused["errors"]) or refused.get("data") is None
     assert len(read_all(project.paths.events_dir, project.catalog)) == mid > before
-    assert flow["ok"] is True  # counts only, as in `project_status`
+    # The flow's included, pending and per-criterion exclusion counts derive from the final
+    # outcomes (human labels and both passes), which a pass session must not difference.
+    assert _fields(flow) == ["session"]
 
     async with open_session(settings, clock) as reviewer:  # a session outside the passes
         allowed = await reviewer.call("report_methods", project="demo")
     assert allowed["ok"] is True
     assert set(allowed["data"]) == {"report", "text"}
+    async with open_session(settings, clock) as reviewer:
+        numbers = await reviewer.call("report_prisma", project="demo")
+    assert numbers["ok"] is True
+    assert json.loads(prisma_flow(project).model_dump_json()) == numbers["data"]["flow"]
 
 
 @pytest.mark.anyio

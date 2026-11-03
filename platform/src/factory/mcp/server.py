@@ -544,10 +544,13 @@ def build_server(
 
     @server.tool()
     def report_prisma(project: str) -> dict[str, JsonValue]:
-        """The PRISMA 2020 flow and the PRISMA-S search report, computed from the events."""
+        """The PRISMA 2020 flow and the PRISMA-S search report, computed from the events.
+        Refused to a session that has joined a pass: the flow's included, pending and per-criterion
+        exclusion counts derive from the final outcomes (human labels and both passes)."""
 
         def report() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
             data: dict[str, JsonValue] = {
                 "flow": prisma_service.prisma_flow(opened).model_dump(mode="json"),
                 "search": prisma_service.search_report(opened).model_dump(mode="json"),
@@ -558,8 +561,10 @@ def build_server(
 
     @server.tool()
     def report_methods(project: str) -> dict[str, JsonValue]:
-        """The methods statement: its figures and the rendered text. Refused to a session that
-        has joined a pass, since it reports agreement, calibration and audit figures."""
+        """The methods statement: its figures and the rendered text. Refused to any session that
+        has joined a pass, since it reports agreement, calibration and audit figures. Kappa is
+        reported only once every dual-coded work is decided in both passes, so a session outside
+        the passes never reads a partial figure."""
 
         def methods() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)

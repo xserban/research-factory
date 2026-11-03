@@ -309,8 +309,11 @@ async def test_ac13_parentage(tmp_path: Path, clock: FixedClock, agent: Actor) -
 def test_ac14_no_truncation(
     tmp_path: Path,
     clock: FixedClock,
+    agent: Actor,
+    human: Actor,
     mock_sources: SourcesFor,
     http_log: list[httpx.Request],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """No truncation: source adapters never request relevance-sorted subsets; a test fails if
     retrieved < reported without a recorded reason."""
@@ -323,6 +326,16 @@ def test_ac14_no_truncation(
     # The reason is what makes a shortfall acceptable: without one, `check` fails.
     assert [f.code for f in check(counts).findings if f.severity == "error"] == []
     assert search_report(counts).rows[0].shortfall_reason is not None
+
+    # Negative case. The event model refuses a finished run short of its reported count without a
+    # note (R-23), so no event can write an unexplained shortfall; the rule is therefore exercised
+    # on the report row it reads, patched to carry no reason (as tests/test_check.py does).
+    _, bare = _fresh(tmp_path, "bare", clock)
+    checks._shortfall_query(bare, agent, human, mock_sources, note="2 records skipped")
+    query_id = checks._clear_shortfall_reason(bare, monkeypatch)
+    report = check(bare)
+    [gap] = [f for f in report.findings if f.code == "shortfall-unexplained"]
+    assert gap.severity == "error" and gap.refs == [query_id] and not report.ok
 
 
 def test_ac15_seed_check(
