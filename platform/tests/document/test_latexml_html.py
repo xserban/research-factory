@@ -115,3 +115,56 @@ def test_appendix_letter_heading_anchors_to_s101() -> None:
     assert anchor is not None
     assert anchor.kind == AnchorKind.SECTION
     assert anchor.text == "## A. Proofs"
+
+
+def _fixture(name: str) -> bytes:
+    return (FIXTURES / name).read_bytes()
+
+
+def test_no_text_is_lost_in_unrecognised_containers() -> None:
+    markdown = _markdown(_fixture("latexml_blocks.html"))
+    for marker in (
+        "PREWORD",
+        "DTWORD",
+        "DDWORD",
+        "LISTWORD",
+        "BAREWORD",
+        "SPANWORD",
+        "TAILWORD",
+        "ALGCAP",
+        "ALGLINE",
+        "LISTCAP",
+        "LISTFLOAT",
+    ):
+        assert marker in markdown, marker
+    assert "Algorithm 1: ALGCAP caption text" in markdown
+    assert "Float 1: LISTCAP untagged listing" in markdown
+    assert "```" not in markdown
+    assert "EQNUM" not in markdown  # equation numbers carry no content and are dropped
+
+
+def test_nested_float_caption_emitted_once() -> None:
+    markdown = _markdown(_fixture("latexml_nested.html"))
+    assert markdown.count("Lorem outer caption.") == 1
+    assert markdown.count("Lorem sub alpha.") == 1
+    assert markdown.count("Lorem sub beta.") == 1
+    assert "Figure 2: Lorem outer caption." in markdown
+    assert "Figure (a): Lorem sub alpha." in markdown
+
+
+def test_dollar_in_alttext_is_escaped() -> None:
+    markdown = _markdown(_fixture("latexml_blocks.html"))
+    assert "$x\\$y$" in markdown
+    assert "$$u\\$v$$" in markdown
+
+
+def test_hostile_spans_are_clamped() -> None:
+    _, warnings = LatexmlHtmlConverter().to_markdown(_fixture("latexml_span_cap.html"), "text/html")
+    assert "table 1: span clamped" in warnings
+
+
+def test_section_tag_with_markup_is_not_emitted() -> None:
+    markdown = _markdown(_fixture("latexml_bad_tag.html"))
+    assert "## Lorem title" in markdown
+    assert "<" not in markdown
+    assert "&lt;b" not in markdown

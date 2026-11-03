@@ -3,30 +3,39 @@
 Mapping (LaTeXML class to Markdown):
 - `ltx_title_document` is a `#` heading with no number.
 - `ltx_section`, `ltx_appendix` are `##`; `ltx_subsection` `###`; `ltx_subsubsection` `####`. The
-  heading keeps the `ltx_tag` number as text: `## 3 Method`, `### 3.2 Setup`. A single-letter tag
-  (other than the roman-numeral letters I, V, X) gets a full stop: `## A. Proofs`, because the
-  anchoriser reads a bare `A Proofs` as unnumbered. Roman-numeral tags are left as they are.
+  heading keeps the `ltx_tag` number as text: `## 3 Method`, `### 3.2 Setup`. The tag is used only
+  if it matches `[A-Za-z0-9]+(\\.[0-9]+)*\\.?`; any other tag is dropped and the heading is
+  unnumbered. A single-letter tag (other than the roman-numeral letters I, V, X) gets a full stop:
+  `## A. Proofs`, because the anchoriser reads a bare `A Proofs` as unnumbered.
 - `ltx_p` (and `p`) is a paragraph; `ltx_para` is a container. A paragraph whose text starts a
   CommonMark list, quote, heading, rule or ordered item has that marker escaped, so it stays a
   paragraph.
 - Inline `math` becomes `$alttext$`; `ltx_equation` and `ltx_equationgroup` (and a block-level
-  `math`) become `$$alttext$$`, one line per equation.
+  `math`) become `$$alttext$$`, one line per equation. A bare `$` in alttext is written `\\$`, so
+  the delimiters stay balanced.
+- `pre` and `ltx_verbatim` are a paragraph of their collapsed text (no code fence). `dl` gives one
+  paragraph per `dt` and `dd`. `ltx_listingline` gives one paragraph per line.
 - A table (`table`) becomes a GFM table. Spans are rectangular: the text sits in the top-left
-  cell of a span and the other cells of the span are empty. The first row of the grid is the
-  Markdown header. This is the first row of the first `thead` if there is one, else the first row
-  of the table. Remaining `thead` rows become ordinary body rows. Ragged rows are padded with
-  empty cells and yield the warning `table <n>: ragged rows padded` (once per table). A table
-  with no cells is skipped with the warning `table <n>: no cells, skipped`.
-- A float (`ltx_table`, `ltx_figure`, or a `figure`) gives its caption as the paragraph
-  `Table <n>: text` or `Figure <n>: text`, placed directly above its content. The number comes
-  from the caption's `ltx_tag` when it has a digit, else from a running count of captions of that
-  kind. Images (`img`, `picture`, `svg`, `ltx_graphics`) are dropped.
+  cell of a span and the other cells of the span are empty. Row spans are clamped to the rows that
+  remain and column spans to 1000 columns; a clamp yields the warning `table <n>: span clamped`.
+  The first row of the grid is the Markdown header. This is the first row of the first `thead` if
+  there is one, else the first row of the table. Remaining `thead` rows become ordinary body rows.
+  Ragged rows are padded with empty cells and yield the warning `table <n>: ragged rows padded`
+  (once per table). A table with no cells is skipped with the warning
+  `table <n>: no cells, skipped`.
+- A float (`ltx_table`, `ltx_figure`, `figure`, `ltx_float_algorithm`, other `ltx_float`) gives
+  its caption as the paragraph `Table <n>: text`, `Figure <n>: text`, `Algorithm <n>: text` or
+  `Float <n>: text`, placed directly above its content. Only the float's own caption is used: a
+  caption inside a nested float belongs to that float. The label is the caption's `ltx_tag`
+  digits; else the tag itself when it is a plain word such as `(a)`; else a running count of
+  captions of that kind. Images (`img`, `picture`, `svg`, `ltx_graphics`) are dropped.
 - `ltx_bibliography` gives `## References` and one paragraph per `ltx_bibitem`.
 - A footnote (`ltx_note`) becomes `[^n]` in the text and a paragraph `[^n] text` at the end of the
   enclosing section. The number is the note's `ltx_tag`, else a running count.
-- Other elements: their text, with no markup. An element whose tag is a phrase-level tag (span,
-  em, a, ...) outside any block becomes a paragraph of its text. Lists become one paragraph per
-  item.
+- Equation numbers (`ltx_tag_equation`) carry no content and are dropped.
+- Other elements: their text is kept as a paragraph, with no markup. A container's own text and
+  the tails of its children are kept too. Lists become one paragraph per item. Page furniture
+  (`ltx_toc`, `ltx_page_header`, `ltx_page_footer`, `nav`) is dropped.
 
 Text escaping: `&`, `<` and `>` in text, math alttext and captions are written as entities, so the
 output contains no `<` (anchor lines are added later by the anchoriser). Cell text additionally goes
@@ -63,8 +72,16 @@ _SKIP_TAGS = frozenset(
     }
 )
 _SKIP_CLASSES = frozenset(
-    {"ltx_caption", "ltx_toc", "ltx_page_header", "ltx_page_footer", "ltx_graphics"}
+    {
+        "ltx_toc",
+        "ltx_page_header",
+        "ltx_page_footer",
+        "ltx_graphics",
+        # Equation numbers carry no content; the equation itself is emitted from its math.
+        "ltx_tag_equation",
+    }
 )
+_FLOAT_CLASSES = frozenset({"ltx_table", "ltx_figure", "ltx_float"})
 _INLINE_TAGS = frozenset(
     {
         "span",
@@ -90,6 +107,10 @@ _META_CHARSET = re.compile(
 )
 _ORDERED_MARKER = re.compile(r"(\d{1,9})([.)])(?=\s|$)")
 _BLOCK_MARKERS = "#>+-*=_"
+_SECTION_TAG = re.compile(r"[A-Za-z0-9]+(\.[0-9]+)*\.?")
+_LABEL = re.compile(r"[A-Za-z0-9().]+")
+_BARE_DOLLAR = re.compile(r"(?<!\\)\$")
+_MAX_COLUMNS = 1000
 _NO_CLASSES: frozenset[str] = frozenset()
 _TAG_ONLY = frozenset({"ltx_tag"})
 
@@ -125,6 +146,38 @@ def _first(el: etree._Element, name: str) -> etree._Element | None:
     return None
 
 
+def _own_caption(el: etree._Element) -> etree._Element | None:
+    """The caption owned by float `el`: the first one reached without entering a nested float."""
+    for child in _children(el):
+        if "ltx_caption" in _classes(child):
+            return child
+        if _is_float(child):
+            continue
+        found = _own_caption(child)
+        if found is not None:
+            return found
+    return None
+
+
+def _is_float(el: etree._Element) -> bool:
+    return bool(_classes(el) & _FLOAT_CLASSES) or el.tag == "figure"
+
+
+def _float_kind(el: etree._Element) -> str:
+    classes = _classes(el)
+    if "ltx_table" in classes:
+        return "Table"
+    if "ltx_float_algorithm" in classes:
+        return "Algorithm"
+    if "ltx_float" in classes:
+        return "Float"
+    return "Figure"
+
+
+def _inside_float(el: etree._Element) -> bool:
+    return any(_is_float(ancestor) for ancestor in el.iterancestors())
+
+
 def _text(el: etree._Element) -> str:
     return "".join(el.itertext())
 
@@ -135,6 +188,11 @@ def _collapse(text: str) -> str:
 
 def _esc(text: str) -> str:
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _math_text(text: str) -> str:
+    """Escaped math alttext in which every bare `$` is written `\\$`."""
+    return _BARE_DOLLAR.sub(r"\\$", _esc(text))
 
 
 def _safe_start(text: str) -> str:
@@ -166,35 +224,48 @@ def _rows(table: etree._Element) -> list[etree._Element]:
     return rows
 
 
-def _grid(rows: list[list[tuple[int, int, str]]]) -> tuple[list[list[str]], bool]:
+def _grid(
+    rows: list[list[tuple[int, int, str]]],
+) -> tuple[list[list[str]], bool, bool]:
     """Place `(colspan, rowspan, text)` cells on a grid and return it rectangular.
 
     A cell takes the first free slot of its row. Its text is in the top-left slot; the other
-    slots of its span are empty. Returns the grid (one list per row, all of one width) and whether
-    any row had to be padded. Slots of a span that reach past the last row are dropped.
+    slots of its span are empty. A row span is clamped to the rows that remain and a column span
+    (and any cell past the column limit) to `_MAX_COLUMNS`. Returns the grid (one list per row, all
+    of one width), whether any row had to be padded, and whether any span was clamped.
     """
     slots: dict[tuple[int, int], str] = {}
+    clamped = False
+    height = len(rows)
     for row_index, row in enumerate(rows):
         column = 0
         for colspan, rowspan, text in row:
             while (row_index, column) in slots:
                 column += 1
+            if column >= _MAX_COLUMNS:
+                clamped = True
+                continue
+            if colspan > _MAX_COLUMNS - column:
+                colspan = _MAX_COLUMNS - column
+                clamped = True
+            if rowspan > height - row_index:
+                rowspan = height - row_index
+                clamped = True
             for dr in range(rowspan):
                 for dc in range(colspan):
                     slots.setdefault((row_index + dr, column + dc), text if dr == dc == 0 else "")
             column += colspan
-    reach = [0] * len(rows)  # per row: one past the last filled slot
+    reach = [0] * height  # per row: one past the last filled slot
     for row_index, column in slots:
-        if row_index < len(rows):
-            reach[row_index] = max(reach[row_index], column + 1)
+        reach[row_index] = max(reach[row_index], column + 1)
     width = max(reach, default=0)
     if width == 0:
-        return [], False
+        return [], False, clamped
     grid = [
         [slots.get((row_index, column), "") for column in range(width)]
-        for row_index in range(len(rows))
+        for row_index in range(height)
     ]
-    return grid, any(length < width for length in reach)
+    return grid, any(length < width for length in reach), clamped
 
 
 @dataclass
@@ -204,7 +275,7 @@ class _Walker:
     out: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     _scopes: list[list[str]] = field(default_factory=lambda: [[]])
-    _captions: dict[str, int] = field(default_factory=lambda: {"Table": 0, "Figure": 0})
+    _captions: dict[str, int] = field(default_factory=dict)
     _notes: int = 0
     _tables: int = 0
 
@@ -227,8 +298,8 @@ class _Walker:
         if "ltx_bibliography" in classes:
             self._bibliography(el)
             return
-        if classes & {"ltx_table", "ltx_figure"} or el.tag == "figure":
-            self._float(el, "Table" if "ltx_table" in classes else "Figure")
+        if _is_float(el):
+            self._float(el)
             return
         if classes & {"ltx_equation", "ltx_equationgroup"}:
             for math in el.iter("math"):
@@ -240,19 +311,44 @@ class _Walker:
         if el.tag == "math":
             self._equation(el)
             return
-        if "ltx_title" in classes or el.tag == "p" or "ltx_p" in classes:
+        if "ltx_caption" in classes:
+            # A caption is emitted by its float; only a stray one is kept as a paragraph.
+            if not _inside_float(el):
+                self._para(self._inline(el))
+            return
+        if classes & {"ltx_title", "ltx_p", "ltx_listingline", "ltx_verbatim"} or el.tag in {
+            "p",
+            "pre",
+        }:
             self._para(self._inline(el))
+            return
+        if el.tag == "dl":
+            for item in _children(el):
+                if item.tag in {"dt", "dd"}:
+                    self._para(self._inline(item))
+                else:
+                    self.block(item)
             return
         if el.tag in {"ul", "ol"}:
             for item in _children(el):
                 if item.tag == "li":
                     self._para(self._inline(item))
+                else:
+                    self.block(item)
             return
         if el.tag in _INLINE_TAGS:
             self._para(self._inline(el))
             return
+        self._container(el)
+
+    def _container(self, el: etree._Element) -> None:
+        """Keep the text of an unrecognised container: its text, then each child and its tail."""
+        if el.text and el.text.strip():
+            self._para(_esc(_collapse(el.text)))
         for child in _children(el):
             self.block(child)
+            if child.tail and child.tail.strip():
+                self._para(_esc(_collapse(child.tail)))
 
     def _heading(self, level: int, el: etree._Element, tag: str = "") -> None:
         text = self._inline(el, _TAG_ONLY)
@@ -264,6 +360,8 @@ class _Walker:
         if title is not None:
             tag = _first(title, "ltx_tag")
             number = _collapse(_text(tag)) if tag is not None else ""
+            if not _SECTION_TAG.fullmatch(number):
+                number = ""
             if re.fullmatch(r"[A-Z]", number) and number not in _ROMAN_LETTERS:
                 number += "."
             self._heading(level, title, number)
@@ -280,7 +378,7 @@ class _Walker:
     def _equation(self, math: etree._Element) -> None:
         alttext = _collapse(math.get("alttext") or _text(math))
         if alttext:
-            self.out.append(f"$${_esc(alttext)}$$")
+            self.out.append(f"$${_math_text(alttext)}$$")
 
     def _bibliography(self, el: etree._Element) -> None:
         self.out.append("## References")
@@ -288,20 +386,28 @@ class _Walker:
             if isinstance(node.tag, str) and "ltx_bibitem" in _classes(node):
                 self._para(self._inline(node))
 
-    def _float(self, el: etree._Element, kind: str) -> None:
-        caption = _first(el, "ltx_caption")
+    def _float(self, el: etree._Element) -> None:
+        kind = _float_kind(el)
+        caption = _own_caption(el)
         if caption is not None:
             self._para(self._caption(caption, kind))
         for child in _children(el):
             self.block(child)
 
     def _caption(self, caption: etree._Element, kind: str) -> str:
-        self._captions[kind] += 1
+        count = self._captions.get(kind, 0) + 1
+        self._captions[kind] = count
         tag = _first(caption, "ltx_tag")
-        digits = re.search(r"\d+", _text(tag)) if tag is not None else None
-        number = digits.group(0) if digits is not None else str(self._captions[kind])
+        tag_text = _collapse(_text(tag)) if tag is not None else ""
+        digits = re.search(r"\d+", tag_text)
+        if digits is not None:
+            label = digits.group(0)
+        elif _LABEL.fullmatch(tag_text):
+            label = tag_text
+        else:
+            label = str(count)
         text = self._inline(caption, _TAG_ONLY)
-        return f"{kind} {number}: {text}" if text else f"{kind} {number}:"
+        return f"{kind} {label}: {text}" if text else f"{kind} {label}:"
 
     def _footnote(self, note: etree._Element) -> str:
         content = _first(note, "ltx_note_content")
@@ -324,16 +430,14 @@ class _Walker:
         if el.text:
             parts.append(_esc(el.text))
         for child in el:
-            if isinstance(child.tag, str):
+            if isinstance(child.tag, str) and not _skipped(child, exclude):
                 classes = _classes(child)
-                if child.tag in _SKIP_TAGS or classes & (_SKIP_CLASSES | exclude):
-                    pass
-                elif "ltx_note" in classes:
+                if "ltx_note" in classes:
                     parts.append(self._footnote(child))
                 elif child.tag == "math":
                     alttext = _collapse(child.get("alttext") or _text(child))
                     if alttext:
-                        parts.append(f"${_esc(alttext)}$")
+                        parts.append(f"${_math_text(alttext)}$")
                 elif child.tag == "br":
                     parts.append(" ")
                 else:
@@ -352,10 +456,12 @@ class _Walker:
             ]
             for row in _rows(table)
         ]
-        grid, padded = _grid(rows)
+        grid, padded, clamped = _grid(rows)
         if not grid:
             self.warnings.append(f"table {number}: no cells, skipped")
             return
+        if clamped:
+            self.warnings.append(f"table {number}: span clamped")
         if padded:
             self.warnings.append(f"table {number}: ragged rows padded")
         width = len(grid[0])
@@ -364,6 +470,10 @@ class _Walker:
         for row in grid[1:]:
             lines.append("| " + " | ".join(escape_cell(cell) for cell in row) + " |")
         self.out.append("\n".join(lines))
+
+
+def _skipped(el: etree._Element, exclude: frozenset[str]) -> bool:
+    return el.tag in _SKIP_TAGS or bool(_classes(el) & (_SKIP_CLASSES | exclude))
 
 
 class LatexmlHtmlConverter:
