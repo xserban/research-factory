@@ -2,6 +2,7 @@ from sqlalchemy import MetaData
 
 from factory.index.chase import chase_handlers, chase_tables
 from factory.index.dedup import dedup_handlers, dedup_tables
+from factory.index.fulltext import fulltext_handlers, fulltext_tables
 from factory.index.probe import probe_handlers, probe_tables
 from factory.index.project import project_created_handler, project_table
 from factory.index.projection import Handler, Projection, core_tables
@@ -13,12 +14,12 @@ from factory.index.seeds import seed_handlers, seed_tables
 from factory.index.tasks import task_handlers, tasks_table
 
 # Bump on any change to the tables or handlers below; the index is then rebuilt.
-PROJECTION_VERSION = "15"
+PROJECTION_VERSION = "16"
 
 
 def default_projection() -> Projection:
     """A fresh projection: core tables plus the project, task, search, dedup, question, seed,
-    probe, protocol, screening and chase tables."""
+    probe, protocol, screening, chase and full-text tables."""
     metadata = MetaData()
     core_tables(metadata)
     project = project_table(metadata)
@@ -31,6 +32,7 @@ def default_projection() -> Projection:
     protocol = protocol_tables(metadata)
     screening = screening_tables(metadata)
     chase = chase_tables(metadata)
+    fulltext = fulltext_tables(metadata)
     handlers: dict[str, Handler] = {
         "project.created": project_created_handler(project),
         **task_handlers(tasks),
@@ -42,5 +44,6 @@ def default_projection() -> Projection:
         **protocol_handlers(protocol),
         **screening_handlers(screening),
         **chase_handlers(chase),
+        **fulltext_handlers(fulltext),
     }
     return Projection(version=PROJECTION_VERSION, metadata=metadata, handlers=handlers)
