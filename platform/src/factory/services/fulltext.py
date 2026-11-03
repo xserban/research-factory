@@ -19,6 +19,8 @@ Invariants:
   A different hash records `fulltext.source_changed` and keeps the new bytes. A new version on a
   route with a live document is a new document that supersedes it.
 - "Latest" means latest in event order (the event id), never by timestamp text.
+- A restore never adds a document. A hash match restores the library entry; a hash mismatch keeps
+  the new bytes and records `fulltext.source_changed` against the existing document.
 """
 
 from __future__ import annotations
@@ -30,6 +32,7 @@ from typing import Literal
 
 from pydantic import JsonValue
 from sqlalchemy import text
+from sqlalchemy.engine import RowMapping
 
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor, Event
@@ -49,7 +52,7 @@ from factory.model.identity import BLOB_REF_RE
 from factory.model.work import Work
 from factory.services.agreement import Outcome, final_outcomes
 from factory.services.context import Project
-from factory.services.search import list_works
+from factory.services.search import get_work, list_works
 from factory.sources.fulltext.base import FullTextRoute, RouteResult
 from factory.sources.http import redact
 
@@ -59,6 +62,7 @@ _NOT_RETRIEVED = (AttemptOutcome.NOT_AVAILABLE, AttemptOutcome.FAILED)
 _UNSPECIFIED = "unspecified"
 
 Status = Literal["retrieved", "not-retrieved", "already-retrieved", "source-changed"]
+RestoreStatus = Literal["present", "restored", "source-changed", "unavailable"]
 
 
 class WorkFetch(StrictModel):
@@ -83,6 +87,7 @@ class _Document:
     """A document as the projection holds it, in event order."""
 
     document_id: str
+    work_id: str
     route: str
     source_version: str
     raw_hash: str
@@ -447,12 +452,18 @@ def _work_events(
 
 def _attempted(
     project: Project,
-    fetch_id: str,
+    fetch_id: str | None,
     work_id: str,
     attempt_id: str,
     item: _Fetched,
     document_id: str | None,
+    *,
+    outcome: AttemptOutcome | None = None,
+    actor: Actor | None = None,
+    input_blob: str | None = None,
 ) -> Event:
+    """One `fulltext.attempted`. `outcome` overrides the route's outcome (a restore records
+    `restored`); `actor` and `input_blob` default to the system and to no input."""
     payload = Attempted(
         attempt_id=attempt_id,
         fetch_id=fetch_id,
@@ -460,7 +471,7 @@ def _attempted(
         route=item.route,
         url=item.url,
         http_status=item.http_status,
-        outcome=item.outcome,
+        outcome=item.outcome if outcome is None else outcome,
         reason=item.reason,
         retrieved_at=project.clock.now(),
         source_version=item.source_version,
@@ -474,7 +485,11 @@ def _attempted(
         document_id=document_id,
     )
     return project.events.make(
-        "fulltext.attempted", payload, project.system_actor(), refs=(attempt_id, work_id)
+        "fulltext.attempted",
+        payload,
+        actor or project.system_actor(),
+        refs=(attempt_id, work_id),
+        input_blob=input_blob,
     )
 
 
@@ -489,7 +504,119 @@ def _status(dispositions: Sequence[str | None]) -> Status:
     return "not-retrieved"
 
 
+# --- Restore (ruling 9) ---
+
+
+def restore_document(
+    project: Project,
+    document_id: str,
+    *,
+    routes: Mapping[Route, FullTextRoute],
+    actor: Actor | None = None,
+) -> RestoreStatus:
+    """Restore a document's library entry by re-requesting it from its recorded route.
+
+    Returns `present` with no event if the library already holds the document's hash. Otherwise
+    the document's route is asked for its recorded version and one attempt is recorded:
+    - `restored`: the hash matches the document; the attempt names the document and its hash.
+    - `source-changed`: the hash differs; the attempt names the existing document and the new
+      hash, `fulltext.source_changed` records both hashes, and the new bytes stay in the library.
+    - `unavailable`: the route did not retrieve; the attempt records its reason and no document
+      changes.
+
+    Raises `FactoryValidationError` with nothing written if the document is unknown, is
+    researcher-supplied (re-import it instead), or its route is not supplied.
+    """
+    trigger = actor or project.system_actor()
+    with project.index.exclusive():
+        project.index.sync()
+        doc = _document(project, document_id)
+        if doc is None:
+            raise FactoryValidationError([ValidationIssue("document_id", "unknown document")])
+        issues = _restore_issues(doc, routes)
+        if issues:
+            raise FactoryValidationError(issues)
+        if project.library.exists(doc.raw_hash):
+            return "present"
+        work = get_work(project, doc.work_id)
+        if work is None:
+            raise FactoryValidationError([ValidationIssue("document_id", "work not found")])
+
+    route = Route(doc.route)
+    item = _check(project, route, routes[route].fetch(work, version=doc.source_version))
+
+    with project.index.exclusive():
+        project.index.sync()
+        events, status = _restore_events(project, doc, item, trigger)
+        project.record(events)
+    return status
+
+
+def _restore_issues(doc: _Document, routes: Mapping[Route, FullTextRoute]) -> list[ValidationIssue]:
+    """Why a document cannot be restored by a route. Empty if it can."""
+    if doc.route == Route.RESEARCHER:
+        return [ValidationIssue("document_id", "researcher-supplied: re-import the file")]
+    route = Route(doc.route)
+    if route not in routes:
+        return [ValidationIssue("routes", f"no route supplied for {route.value}")]
+    return []
+
+
+def _restore_events(
+    project: Project, doc: _Document, item: _Fetched, trigger: Actor
+) -> tuple[list[Event], RestoreStatus]:
+    """The attempt, and any source change, a restore produces, with its status."""
+    attempt_id = project.ids.new("att")
+    blob = _trigger_blob(project, trigger, {"document_id": doc.document_id})
+    if item.content is None:
+        attempt = _attempted(
+            project,
+            None,
+            doc.work_id,
+            attempt_id,
+            item,
+            None,
+            actor=trigger,
+            input_blob=blob,
+        )
+        return [attempt], "unavailable"
+    same = item.content.raw_hash == doc.raw_hash
+    attempt = _attempted(
+        project,
+        None,
+        doc.work_id,
+        attempt_id,
+        item,
+        doc.document_id,
+        outcome=AttemptOutcome.RESTORED,
+        actor=trigger,
+        input_blob=blob,
+    )
+    events = [attempt]
+    if same:
+        return events, "restored"
+    change = SourceChanged(
+        document_id=doc.document_id,
+        attempt_id=attempt_id,
+        expected_hash=doc.raw_hash,
+        observed_hash=item.content.raw_hash,
+    )
+    events.append(
+        project.events.make(
+            "fulltext.source_changed",
+            change,
+            trigger,
+            refs=(doc.document_id, attempt_id),
+            input_blob=blob,
+        )
+    )
+    return events, "source-changed"
+
+
 # --- Projection reads (the projection, never the library) ---
+
+
+_DOCUMENT_COLUMNS = "document_id, work_id, route, source_version, raw_hash, superseded_by"
 
 
 def _documents(project: Project, work_id: str) -> list[_Document]:
@@ -498,24 +625,42 @@ def _documents(project: Project, work_id: str) -> list[_Document]:
         rows = (
             conn.execute(
                 text(
-                    "SELECT document_id, route, source_version, raw_hash, superseded_by "
-                    "FROM fulltext_documents WHERE work_id = :work ORDER BY event_id"
+                    f"SELECT {_DOCUMENT_COLUMNS} FROM fulltext_documents "
+                    "WHERE work_id = :work ORDER BY event_id"
                 ),
                 {"work": work_id},
             )
             .mappings()
             .all()
         )
-    return [
-        _Document(
-            document_id=str(row["document_id"]),
-            route=str(row["route"]),
-            source_version=str(row["source_version"]),
-            raw_hash=str(row["raw_hash"]),
-            superseded=row["superseded_by"] is not None,
+    return [_to_document(row) for row in rows]
+
+
+def _document(project: Project, document_id: str) -> _Document | None:
+    """One document by id, or None if the projection holds no such document."""
+    with project.index.connect() as conn:
+        row = (
+            conn.execute(
+                text(
+                    f"SELECT {_DOCUMENT_COLUMNS} FROM fulltext_documents WHERE document_id = :doc"
+                ),
+                {"doc": document_id},
+            )
+            .mappings()
+            .first()
         )
-        for row in rows
-    ]
+    return None if row is None else _to_document(row)
+
+
+def _to_document(row: RowMapping) -> _Document:
+    return _Document(
+        document_id=str(row["document_id"]),
+        work_id=str(row["work_id"]),
+        route=str(row["route"]),
+        source_version=str(row["source_version"]),
+        raw_hash=str(row["raw_hash"]),
+        superseded=row["superseded_by"] is not None,
+    )
 
 
 def _documented_works(project: Project) -> set[str]:
