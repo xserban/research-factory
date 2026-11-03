@@ -1,6 +1,6 @@
 # Slice 2 — Full text, extraction and evidence
 
-Status: **draft for review** · 2026-11-03 (rulings of 2026-11-02 and 2026-11-03 applied) · Builds on [00-system.md](00-system.md) and slice 1; must satisfy [01-rigour.md](01-rigour.md) R-01–R-05, R-13–R-16, R-30–R-39 at the full-text stage, and R-40, R-42–R-47 (R-41 appraisal deferred, see below). To be finalised after slice-1 plan 5b and the first end-to-end pilot run (retrospective).
+Status: **approved for planning** · 2026-11-03 · Builds on [00-system.md](00-system.md) and slice 1; must satisfy [01-rigour.md](01-rigour.md) R-01–R-05, R-13–R-16, R-30–R-39 at the full-text stage, and R-40, R-42–R-47 (R-41 appraisal deferred). The converter choice is settled inside plan B by a bake-off; findings from the slice-1 pilot run that change this spec are recorded as decisions and edited in, not handled ad hoc.
 
 ## Goal
 Take the works promoted at title/abstract screening to a **full-text-screened corpus with verified, schema-driven extractions**, and answer a comparative question as an **evidence table** — every number traceable to a verified span in a specific version of a specific paper.
@@ -36,7 +36,7 @@ Legal routes only. Each attempt records route, URL, HTTP status, retrieved_at, l
 - **Everything is converted to Markdown** (decided 2026-11-03): HTML, LaTeX, JATS and PDF all end as one canonical Markdown document per document version. Agents read only this Markdown (via `document_read`); raw sources are kept for re-conversion and audit.
 - **Stable anchors** are embedded in the Markdown: `#s3.2` (section), `#s3.2.p4` (paragraph), `#t2` (table), `#t2.r5.c3` (table cell), `#f4.cap` (figure caption), `#e7` (equation), `#p6` (PDF page, when only page mapping exists).
 - Tables are Markdown tables; cell addresses (`#t2.r5.c3`) are derived deterministically from the table's row/column position, and the platform indexes cells for verification — the benchmark table depends on cell-level anchors.
-- Conversion is **deterministic and offline**, with pinned converter name and version recorded; the same raw blob and converter version always give the same document hash. Converters may be rule-based or use fixed non-generative layout models; **no LLM is used in conversion** (platform never calls a model). Which converter per input format is chosen by a bake-off on the pilot's included works.
+- Conversion is **deterministic and offline**, with pinned converter name and version recorded; the same raw blob and converter version always give the same document hash. Converters may be rule-based or use fixed non-generative layout models; **no LLM is used in conversion** (platform never calls a model). Which converter per input format is chosen by a bake-off on a fixed off-topic ML test set (decision 47) and re-checked on the pilot's included works in the end-to-end run (AC 16).
 - Re-conversion with a new converter version creates a new document version; old anchors remain resolvable through their version.
 
 ### Storage and licensing
@@ -113,7 +113,7 @@ Appraisal (deferred, IDEA-21); PubMed search and PMC route (first biomedical pro
 13. **PRISMA:** full-text boxes (sought, not retrieved, assessed, excluded with reasons) are derived from events.
 14. **Trace:** `trace` from a table cell returns cell → extraction → document version → retrieval attempt → work → screening decisions → protocol → question.
 15. **Local library:** a test fails if any raw source or canonical document is written to a git-tracked path; deleting a library entry makes `check` report it, and re-fetching restores the same hash (or records a changed source).
-16. **Pilot end-to-end:** the linear-attention pilot reaches an evidence report with at least the ImageNet-1K classification group populated, reproducible from committed events plus the local library.
+16. **Pilot end-to-end:** the linear-attention pilot reaches an evidence report with at least the ImageNet-1K classification group populated, reproducible from committed events plus the local library. The run also reports conversion quality on the pilot's included works against the bake-off result (decision 47).
 17. **Quality:** `mypy --strict` and ruff pass; coverage ≥ 90% for `services/` and `model/`.
 
 ## Proposed sub-plans
@@ -126,6 +126,6 @@ Appraisal (deferred, IDEA-21); PubMed search and PMC route (first biomedical pro
 | E | Evidence report, trace extensions, `ml-benchmark` pack |
 
 ## Open questions
-1. **Converters:** which tool per input format (LaTeXML HTML, LaTeX source, PDF: deterministic parser such as PyMuPDF vs. layout-model tools such as Docling or GROBID) to reach Markdown. Criteria: determinism, table fidelity, offline, licence. Decided by a bake-off on the pilot's included works (plan B).
+1. **Converters:** which tool per input format (LaTeXML HTML, LaTeX source, PDF: deterministic parser such as PyMuPDF vs. layout-model tools such as Docling or GROBID) to reach Markdown. Criteria: determinism, table fidelity, offline, licence. Decided by a bake-off on a fixed off-topic ML test set (plan B, decision 47); re-checked on the pilot's included works in the end-to-end run.
 
 Settled: version rule (latest available version), throughput (within-paper ratios only), storage (local library, no literature in git), appraisal (deferred), PubMed/PMC (moved to the first biomedical project), copied-result consistency check (later). See decisions 39–42, 44.

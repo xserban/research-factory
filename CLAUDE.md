@@ -8,7 +8,7 @@ A deterministic platform that lets Claude run rigorous, traceable research (lite
 ## Binding documents (read before planning or coding)
 1. `docs/specs/00-system.md` — system contracts (layout, IDs, events, index, MCP conventions, quality bars).
 2. `docs/specs/01-rigour.md` — rigour requirements R-xx. Every slice must satisfy the ones in its scope.
-3. `docs/specs/slice-N.md` — the slice being built (currently `slice-1.md`).
+3. `docs/specs/slice-N.md` — the slice being built (currently `slice-2.md`; `slice-1.md` is implemented and still binding for what it built).
 4. `docs/decisions.md` — decision log. Do not contradict a *Decided* entry; propose a new entry instead.
 
 Background only (not binding): `docs/00-…09-*.md`, `docs/reference/research-factory-old-spec/`.

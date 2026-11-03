@@ -17,6 +17,7 @@
 14. ReviewPilot: multi-agent screening and extraction for systematic reviews. arXiv:2610.21042, 2026.
 15. MedSR-Copilot: PRISMA-aligned agentic framework for medical systematic reviews. medRxiv, 2026.
 16. Schmidt L, et al. LLM data extraction in systematic reviews: a rapid feasibility study. arXiv:2405.14445, 2024.
+20. EvoScientist: Towards Multi-Agent Evolving AI Scientists for End-to-End Scientific Discovery. arXiv:2603.08127, 2026. https://arxiv.org/html/2603.08127v1 · project: https://evoscientist.ai/ (Apache 2.0; EvoSkills skill library). Researcher / engineer / evolution-manager agents; ideation and experimentation memories retrieved by embedding similarity; Elo idea tournaments. Evaluation: LLM judge plus 3 human annotators on 30 queries; 6 papers in the ICAIS 2025 AI-scientist track; leaderboard positions self-reported at submission time. Contrast: autonomous breadth vs. this project's auditable depth (reviewer of record, measured agreement, traceability).
 
 ## Neurodegeneration case
 17. Ciampi A, et al. The use of machine learning methods in neurodegenerative disease research: a scoping review. medRxiv, 2023. https://medrxiv.org/content/10.1101/2023.07.31.23293414.full.pdf
