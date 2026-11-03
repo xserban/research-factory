@@ -1,0 +1,112 @@
+# Converter bake-off corpus (proposal; not approved). Add approved = "<name> <date>" after review.
+# Tags assigned from abstract/venue and HTML structure counts; custom-macros and two-column-pdf
+# are provisional until the e-prints and PDFs are fetched.
+
+[[paper]]
+id = "2407.13755"
+title = "Random Latent Exploration for Deep Reinforcement Learning"
+area = "rl"
+tags = ["appendix", "two-column-pdf"]
+
+[[paper]]
+id = "2407.20230"
+title = "SAPG: Split and Aggregate Policy Gradients"
+area = "rl"
+tags = ["two-column-pdf"]
+
+[[paper]]
+id = "2408.01972"
+title = "RVI-SAC: Average Reward Off-Policy Deep Reinforcement Learning"
+area = "rl"
+tags = ["heavy-math", "dense-tables", "two-column-pdf"]
+
+[[paper]]
+id = "2411.00610"
+title = "Provably and Practically Efficient Adversarial Imitation Learning with General Function Approximation"
+area = "rl"
+tags = ["heavy-math", "appendix", "custom-macros"]
+
+[[paper]]
+id = "2410.20255"
+title = "Equivariant Blurring Diffusion for Hierarchical Molecular Conformer Generation"
+area = "generative"
+tags = ["dense-tables", "appendix"]
+
+[[paper]]
+id = "2506.15385"
+title = "Provable Maximum Entropy Manifold Exploration via Diffusion Models"
+area = "generative"
+tags = ["heavy-math", "appendix", "two-column-pdf"]
+
+[[paper]]
+id = "2412.01019"
+title = "Energy-Based Modelling for Discrete and Mixed Data via Heat Equations on Structured Spaces"
+area = "generative"
+tags = ["heavy-math", "custom-macros"]
+
+[[paper]]
+id = "2506.04126"
+title = "Incremental Gradient Descent with Small Epoch Counts is Surprisingly Slow on Ill-Conditioned Problems"
+area = "optimisation"
+tags = ["heavy-math", "appendix", "custom-macros"]
+
+[[paper]]
+id = "2407.17823"
+title = "Optimal Hessian/Jacobian-Free Nonconvex-PL Bilevel Optimization"
+area = "optimisation"
+tags = ["heavy-math", "two-column-pdf"]
+
+[[paper]]
+id = "2506.00961"
+title = "Enhancing Parallelism in Decentralized Stochastic Convex Optimization"
+area = "optimisation"
+tags = ["heavy-math", "appendix", "custom-macros", "two-column-pdf"]
+
+[[paper]]
+id = "2410.23686"
+title = "Towards Dynamic Message Passing on Graphs"
+area = "graph"
+tags = ["dense-tables", "appendix"]
+
+[[paper]]
+id = "2410.10341"
+title = "Replay-and-Forget-Free Graph Class-Incremental Learning: A Task Profiling and Prompting Approach"
+area = "graph"
+tags = ["dense-tables", "appendix"]
+
+[[paper]]
+id = "2409.15799"
+title = "WeSep: A Scalable and Flexible Toolkit Towards Generalizable Target Speaker Extraction"
+area = "speech"
+tags = ["dense-tables", "two-column-pdf"]
+
+[[paper]]
+id = "2409.20313"
+title = "Boosting Hybrid Autoregressive Transducer-based ASR with Internal Acoustic Model Training and Dual Blank Thresholding"
+area = "speech"
+tags = ["dense-tables", "two-column-pdf"]
+
+[[paper]]
+id = "2412.16534"
+title = "DOFEN: Deep Oblivious Forest ENsemble"
+area = "tabular"
+tags = ["dense-tables", "appendix"]
+
+[[paper]]
+id = "2411.10634"
+title = "Drift-Resilient TabPFN: In-Context Learning Temporal Distribution Shifts on Tabular Data"
+area = "tabular"
+tags = ["dense-tables"]
+
+[[paper]]
+id = "2408.13831"
+title = "Guardians of the Machine Translation Meta-Evaluation: Sentinel Metrics Fall In!"
+area = "nlp-evaluation"
+tags = ["dense-tables", "appendix", "two-column-pdf"]
+
+[[paper]]
+id = "2410.07137"
+title = "Cheating Automatic LLM Benchmarks: Null Models Achieve High Win Rates"
+area = "nlp-evaluation"
+tags = ["dense-tables"]
+
