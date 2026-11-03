@@ -630,11 +630,25 @@ def fulltext_fetch_cmd(
         typer.Option("--route", help="Try only this route, all of them; repeat for several."),
     ] = None,
     refresh: Annotated[
-        bool, typer.Option("--refresh", help="Revisit works that already have a document.")
+        bool,
+        typer.Option(
+            "--refresh",
+            help="Revisit every promoted work, even those with a document or attempt.",
+        ),
     ] = False,
-    limit: Annotated[int, typer.Option("--limit", help="At most this many works (1 to 200).")] = 20,
+    limit: Annotated[
+        int,
+        typer.Option(
+            "--limit",
+            help="At most this many works (1 to 200). More --work ids than this are refused.",
+        ),
+    ] = 20,
 ) -> None:
-    """Fetch full text for promoted works, as the researcher."""
+    """Fetch full text for promoted works, as the researcher.
+
+    Without --work, selects promoted works with no document and no attempt yet; works whose
+    routes all failed are retried with --refresh or by naming them with --work.
+    """
     state = _state(ctx)
     with _reporting_errors():
         project = _resolve_project(state)

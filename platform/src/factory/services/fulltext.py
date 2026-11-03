@@ -134,14 +134,17 @@ def fetch_fulltext(
 ) -> FetchSummary:
     """Fetch full text for promoted works and record every attempt.
 
-    `work_ids=None` selects promoted works without a document, sorted by id. With `refresh` or
-    `only`, every promoted work is selected. An explicit work that already has a document is
-    `already-retrieved` with no attempt, unless `refresh` or `only` is given. At most `limit` works
-    are processed; `remaining` counts the promoted works still without a document afterwards.
+    `work_ids=None` selects promoted works that have neither a document nor any attempt, sorted by
+    id, so a work whose routes all failed is retried only by `refresh`, `only` or an explicit id.
+    With `refresh` or `only`, every promoted work is selected. An explicit work that already has a
+    document is `already-retrieved` with no attempt, unless `refresh` or `only` is given. At most
+    `limit` works are processed; explicit `work_ids` beyond `limit` are refused, not truncated.
+    `remaining` counts the promoted works still without a document afterwards.
 
     Raises `FactoryValidationError` with nothing written if a work is not promoted, `only` names
-    `researcher-supplied` or a route not supplied, `limit` is outside 1..200, or `input_blob` is not
-    a stored blob. A route's failure is an attempt outcome, never an exception.
+    `researcher-supplied` or a route not supplied, `limit` is outside 1..200, the distinct explicit
+    `work_ids` exceed `limit`, or `input_blob` is not a stored blob. A route's failure is an
+    attempt outcome, never an exception.
     """
     trigger = actor or project.system_actor()
     revisit = refresh or only is not None
@@ -233,6 +236,9 @@ def _request_issues(
                 issues.append(
                     ValidationIssue("work_ids", f"{work_id}: not promoted at title/abstract")
                 )
+        distinct = len(set(work_ids))
+        if distinct > limit:
+            issues.append(ValidationIssue("limit", f"{distinct} work_ids exceed limit {limit}"))
     if input_blob is not None:
         if not re.fullmatch(BLOB_REF_RE, input_blob):
             issues.append(ValidationIssue("input_blob", "not a blob reference"))
@@ -248,12 +254,15 @@ def _targets(
     revisit: bool,
     limit: int,
 ) -> list[str]:
-    """The works this call processes, sorted by id and capped at `limit`."""
+    """The works this call processes, sorted by id. Explicit ids are validated against `limit`
+    beforehand; the default selection is capped at `limit`."""
     if work_ids is not None:
-        chosen = sorted(set(work_ids))
+        return sorted(set(work_ids))
+    if revisit:
+        chosen = sorted(promoted)
     else:
-        documented = _documented_works(project)
-        chosen = sorted(w for w in promoted if revisit or w not in documented)
+        excluded = _documented_works(project) | _attempted_works(project)
+        chosen = sorted(w for w in promoted if w not in excluded)
     return chosen[:limit]
 
 
@@ -746,6 +755,13 @@ def _documented_works(project: Project) -> set[str]:
     """The works that have at least one document. Requires a synced index."""
     with project.index.connect() as conn:
         rows = conn.execute(text("SELECT DISTINCT work_id FROM fulltext_documents")).all()
+    return {str(row[0]) for row in rows}
+
+
+def _attempted_works(project: Project) -> set[str]:
+    """The works with at least one attempt of any outcome. Requires a synced index."""
+    with project.index.connect() as conn:
+        rows = conn.execute(text("SELECT DISTINCT work_id FROM fulltext_attempts")).all()
     return {str(row[0]) for row in rows}
 
 

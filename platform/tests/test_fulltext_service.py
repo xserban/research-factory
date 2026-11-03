@@ -458,6 +458,38 @@ def test_selection_skips_documented_works(project: Project, screened: Any) -> No
     assert summary.remaining == 0
 
 
+def test_failed_works_are_not_reselected_by_default(project: Project, screened: Any) -> None:
+    screened()
+    promoted = _promoted(project)
+    assert len(promoted) >= 3
+    stubs = routes_for()
+
+    first = fetch_fulltext(project, routes=stubs, limit=2)
+    second = fetch_fulltext(project, routes=stubs, limit=2)
+
+    assert [w.work_id for w in first.works] == promoted[:2]
+    assert [w.work_id for w in second.works] == promoted[2:4]
+    assert stubs[Route.ARXIV_HTML].calls == promoted[:4]
+    assert second.remaining == len(promoted)
+
+
+def test_explicit_work_ids_beyond_limit_refused_and_nothing_written(
+    project: Project, screened: Any
+) -> None:
+    screened()
+    promoted = _promoted(project)
+    assert len(promoted) >= 3
+    stubs = routes_for(arxiv_html=always(retrieved(Route.ARXIV_HTML, b"x")))
+    before = len(_events(project))
+
+    with pytest.raises(FactoryValidationError) as raised:
+        fetch_fulltext(project, routes=stubs, work_ids=promoted[:3], limit=2)
+
+    assert raised.value.issues == [ValidationIssue("limit", "3 work_ids exceed limit 2")]
+    assert len(_events(project)) == before
+    assert stubs[Route.ARXIV_HTML].calls == []
+
+
 def test_each_work_is_one_record_call(
     project: Project, screened: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
