@@ -1,6 +1,8 @@
 """Tests for the anchoriser: numbering, captions, equations, pages and idempotence."""
 
-from factory.document.anchorise import anchorise
+import string
+
+from factory.document.anchorise import _APPENDIX_LETTER, _APPENDIX_SUB, anchorise
 from factory.document.anchors import AnchorKind, parse_manifest
 
 TITLE_DOC = "# Paper Title\n\nAbstract text.\n\n## 1 Intro\n\nBody.\n"
@@ -86,10 +88,28 @@ def test_roman_numeral_headings_are_unnumbered() -> None:
     # headings take ordinals under s1 rather than s101.
     md = (
         "# 1 Main\n\n## I. INTRODUCTION\n\nText.\n\n"
-        "## II. METHODS\n\nMore.\n\n## V. RESULTS\n\nEnd.\n"
+        "## II. METHODS\n\nMore.\n\n## V. RESULTS\n\nEnd.\n\n## X. RESULTS\n\nLast.\n"
     )
-    assert _ids(md) == ["s1", "s1.1", "s1.1.p1", "s1.2", "s1.2.p1", "s1.3", "s1.3.p1"]
+    assert _ids(md) == [
+        "s1",
+        "s1.1",
+        "s1.1.p1",
+        "s1.2",
+        "s1.2.p1",
+        "s1.3",
+        "s1.3.p1",
+        "s1.4",
+        "s1.4.p1",
+    ]
     assert "s101" not in anchorise(md)
+
+
+def test_appendix_letter_classes_exclude_exactly_i_v_x() -> None:
+    # Ruling G: the appendix letter classes match every capital except the roman numerals I, V, X.
+    for letter in string.ascii_uppercase:
+        expected = letter not in "IVX"
+        assert (_APPENDIX_LETTER.match(f"{letter}.") is not None) is expected, letter
+        assert (_APPENDIX_SUB.match(f"{letter}.1") is not None) is expected, letter
 
 
 def test_appendix_letter_at_level_two_is_s101() -> None:
