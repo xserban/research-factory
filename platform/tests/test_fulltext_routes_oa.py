@@ -178,13 +178,22 @@ def test_lookup_transport_error_is_failed_not_raised() -> None:
     assert r.reason == "transport"
 
 
-def test_pdf_server_error_is_failed_with_status() -> None:
+def test_pdf_not_found_is_not_available_with_status() -> None:
     client, _ = scripted(pdf=httpx.Response(404, content=b"gone"))
     r = OaPdfRoute(client, MAILTO).fetch(work_with(doi=DOI))
-    assert r.outcome is AttemptOutcome.FAILED
+    assert r.outcome is AttemptOutcome.NOT_AVAILABLE
     assert r.reason == "http-404"
     assert r.url == PDF_URL
     assert r.http_status == 404
+    assert r.content is None
+
+
+def test_pdf_server_error_is_failed_with_status() -> None:
+    client, _ = scripted(pdf=httpx.Response(403, content=b"forbidden"))
+    r = OaPdfRoute(client, MAILTO).fetch(work_with(doi=DOI))
+    assert r.outcome is AttemptOutcome.FAILED
+    assert r.reason == "http-403"
+    assert r.http_status == 403
 
 
 def test_pdf_transport_error_is_failed_not_raised() -> None:
@@ -194,6 +203,39 @@ def test_pdf_transport_error_is_failed_not_raised() -> None:
         raise httpx.ReadError("reset", request=request)
 
     r = OaPdfRoute(polite(handler), MAILTO).fetch(work_with(doi=DOI))
+    assert r.outcome is AttemptOutcome.FAILED
+    assert r.reason == "transport"
+    assert r.url == PDF_URL
+
+
+def _looping(host: str, path_prefix: str = "") -> PoliteClient:
+    """A client that redirects every request for `host` back to itself (a redirect loop).
+
+    The client follows redirects, as `default_http` does, so the loop raises
+    `httpx.TooManyRedirects` rather than returning a 3xx.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == host and str(request.url.path).startswith(path_prefix):
+            return httpx.Response(302, headers={"Location": str(request.url)})
+        if request.url.host == "api.openalex.org":
+            return httpx.Response(200, content=OA_WORK)
+        return httpx.Response(200, content=PDF)
+
+    transport = httpx.MockTransport(handler)
+    client = httpx.Client(transport=transport, follow_redirects=True)
+    return PoliteClient(client, sleep=lambda _seconds: None)
+
+
+def test_lookup_redirect_loop_is_failed_transport_not_raised() -> None:
+    r = OaPdfRoute(_looping("api.openalex.org"), MAILTO).fetch(work_with(doi=DOI))
+    assert r.outcome is AttemptOutcome.FAILED
+    assert r.reason == "transport"
+    assert r.url is None
+
+
+def test_pdf_redirect_loop_is_failed_transport_not_raised() -> None:
+    r = OaPdfRoute(_looping("example.org"), MAILTO).fetch(work_with(doi=DOI))
     assert r.outcome is AttemptOutcome.FAILED
     assert r.reason == "transport"
     assert r.url == PDF_URL

@@ -57,6 +57,17 @@ def not_retrieved(
     )
 
 
+def transport_failure(
+    route: Route, *, url: str | None = None, metadata: bytes | None = None
+) -> RouteResult:
+    """The failed attempt for a request that raised before any response (any `httpx.RequestError`).
+
+    This covers transport errors and redirect errors such as `httpx.TooManyRedirects`, which are
+    not transport errors but must not escape a route.
+    """
+    return not_retrieved(route, AttemptOutcome.FAILED, "transport", url=url, metadata=metadata)
+
+
 class FullTextRoute(Protocol):
     """A source of full text. `version` pins the exact version to fetch, for restore."""
 

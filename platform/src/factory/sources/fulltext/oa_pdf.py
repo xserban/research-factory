@@ -17,7 +17,7 @@ import httpx
 from factory.model.fulltext import AttemptOutcome, Route
 from factory.model.work import Work
 from factory.model.work_ids import normalize_arxiv
-from factory.sources.fulltext.base import RouteResult, not_retrieved
+from factory.sources.fulltext.base import RouteResult, not_retrieved, transport_failure
 from factory.sources.http import PoliteClient, redact
 
 _WORKS = "https://api.openalex.org/works/doi:{doi}"
@@ -76,8 +76,8 @@ class OaPdfRoute:
         params = {"mailto": self._mailto} if self._mailto else None
         try:
             lookup = self._http.fetch(_WORKS.format(doi=quote(doi, safe="/")), params)
-        except httpx.TransportError:
-            return not_retrieved(self.route, AttemptOutcome.FAILED, "transport")
+        except httpx.RequestError:
+            return transport_failure(self.route)
         status = lookup.status_code
         archived = self._archive(lookup.content)
         if status == 404:
@@ -113,11 +113,18 @@ class OaPdfRoute:
         shown = redact(pdf_url, self._mailto)
         try:
             pdf = self._http.fetch(pdf_url)
-        except httpx.TransportError:
-            return not_retrieved(
-                self.route, AttemptOutcome.FAILED, "transport", url=shown, metadata=archived
-            )
+        except httpx.RequestError:
+            return transport_failure(self.route, url=shown, metadata=archived)
         pdf_status = pdf.status_code
+        if pdf_status == 404:
+            return not_retrieved(
+                self.route,
+                AttemptOutcome.NOT_AVAILABLE,
+                "http-404",
+                url=shown,
+                http_status=pdf_status,
+                metadata=archived,
+            )
         if pdf_status >= 400:
             return not_retrieved(
                 self.route,

@@ -356,3 +356,42 @@ def test_transport_error_is_not_cached() -> None:
         lookup.get("2301.01234")
     assert lookup.get("2301.01234").versioned == "2301.01234v3"
     assert calls == ["2301.01234", "2301.01234"]
+
+
+def looping_client(host: str) -> PoliteClient:
+    """A client that redirects every request to `host` back to itself, following redirects.
+
+    The redirect loop raises `httpx.TooManyRedirects`, which is a `RequestError` but not a
+    `TransportError`; a route must still report it as a failed attempt rather than raise.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == host:
+            return httpx.Response(302, headers={"Location": str(request.url)})
+        if request.url.host == "export.arxiv.org":
+            return httpx.Response(200, content=META)
+        return httpx.Response(200, content=LTX)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), follow_redirects=True)
+    return PoliteClient(client, sleep=lambda _seconds: None)
+
+
+def test_lookup_redirect_loop_is_failed_transport_not_raised() -> None:
+    r = ArxivHtmlRoute(looping_client("export.arxiv.org")).fetch(work_with_arxiv("2301.01234"))
+    assert r.outcome is AttemptOutcome.FAILED
+    assert r.reason == "transport"
+    assert r.url is None
+
+
+def test_html_redirect_loop_is_failed_transport_not_raised() -> None:
+    r = ArxivHtmlRoute(looping_client("arxiv.org")).fetch(work_with_arxiv("2301.01234"))
+    assert r.outcome is AttemptOutcome.FAILED
+    assert r.reason == "transport"
+    assert r.url == "https://arxiv.org/html/2301.01234v3"
+
+
+def test_eprint_redirect_loop_is_failed_transport_not_raised() -> None:
+    r = ArxivSourceRoute(looping_client("arxiv.org")).fetch(work_with_arxiv("2301.01234"))
+    assert r.outcome is AttemptOutcome.FAILED
+    assert r.reason == "transport"
+    assert r.url == "https://arxiv.org/e-print/2301.01234v3"

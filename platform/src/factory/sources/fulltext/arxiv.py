@@ -27,6 +27,7 @@ from factory.sources.fulltext.base import (
     RouteResult,
     VersionAnswer,
     not_retrieved,
+    transport_failure,
 )
 from factory.sources.http import PoliteClient
 
@@ -124,8 +125,8 @@ class _ArxivRoute:
             return not_retrieved(self.route, AttemptOutcome.NOT_AVAILABLE, "arxiv-version-unknown")
         try:
             answer = self._lookup.get(base) if self._lookup else _answer(self._http, base)
-        except httpx.TransportError:
-            return not_retrieved(self.route, AttemptOutcome.FAILED, "transport")
+        except httpx.RequestError:
+            return transport_failure(self.route)
         if answer.status >= 400:
             return not_retrieved(
                 self.route,
@@ -158,8 +159,8 @@ class ArxivHtmlRoute(_ArxivRoute):
         url = _HTML_URL.format(versioned=versioned)
         try:
             response = self._http.fetch(url)
-        except httpx.TransportError:
-            return not_retrieved(self.route, AttemptOutcome.FAILED, "transport", url=url)
+        except httpx.RequestError:
+            return transport_failure(self.route, url=url)
         status = response.status_code
         if status == 404 or (status < 400 and not _LTX_DOCUMENT.search(response.content)):
             return not_retrieved(
@@ -229,8 +230,8 @@ class ArxivSourceRoute(_ArxivRoute):
         url = _SOURCE_URL.format(versioned=versioned)
         try:
             response = self._http.fetch(url)
-        except httpx.TransportError:
-            return not_retrieved(self.route, AttemptOutcome.FAILED, "transport", url=url)
+        except httpx.RequestError:
+            return transport_failure(self.route, url=url)
         status = response.status_code
         if status == 404:
             return not_retrieved(
