@@ -211,14 +211,14 @@ Status: new · Added: 2026-11-03 · Slice: — · Depends on: decision 46 item 8
 
 ### IDEA-26 — First-page identifier misattribution in researcher import
 Status: new · Added: 2026-11-03 · Slice: — · Depends on: decision 46 item 7
-**What:** the researcher import takes the first identifier on page one. A DOI cited on that page (a reference, a related paper) can attach the PDF to the wrong promoted work.
+**What:** the researcher import collects every identifier on page one. When the paper's own identifier is absent there, a single cited DOI or arXiv ID (a reference, a related paper) is taken as its identity and can attach the PDF to the wrong promoted work.
 **Why:** a mis-attached document is silent provenance corruption for the work it lands on.
 **Rigour notes:** an attachment must be checkable by the researcher before it becomes a document; ambiguous identifiers are reported, not guessed.
 **Open questions:** label proximity ("DOI:", "arXiv:") versus requiring the first identifier only; a title match against the work as a check.
 
 ### IDEA-27 — `restore --missing` is not idempotent and stops at the first error
 Status: new · Added: 2026-11-03 · Slice: — · Depends on: decision 48 item 4
-**What:** after a source change or an `unavailable` result, a repeated `restore --missing` re-requests the same documents, and one route error aborts the whole run.
+**What:** after a source change or an `unavailable` result, a repeated `restore --missing` re-requests the same documents, and `restore --missing` builds all results before printing, so one unexpected exception prints nothing.
 **Why:** a researcher cannot finish a restore of a library with a few unreachable sources.
 **Rigour notes:** each document gets its own outcome in the report; an unavailable or changed result changes no document and is reported as such.
 **Open questions:** whether to skip documents with an unresolved `source-changed` (depends on IDEA-25).
