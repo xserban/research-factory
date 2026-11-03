@@ -198,3 +198,41 @@ Status: triaged · Added: 2026-11-03 · Slice: after slice 2 (outline: [specs/ou
 **Rigour notes:** declared in the protocol before searching; snapshots with hash and timestamp; web-search cut-offs declared and reported (explicit exception to R-21); grey evidence labelled and shown with and without it; later publications linked, not merged away.
 **Open questions:** first sources (ML vs. biomedical); status of agent web search; capture limits; monitoring by the literature watch (IDEA-02).
 
+---
+
+## Plan A review carry-over (added 2026-11-03)
+
+### IDEA-25 — Source-changed warning never clears
+Status: new · Added: 2026-11-03 · Slice: — · Depends on: decision 46 item 8; decision 48
+**What:** a `fulltext.source_changed` finding (in `check` and the `source-changed` status) stays forever; no event resolves it.
+**Why:** a corpus with one changed source never reads as clean, so the warning stops carrying information.
+**Rigour notes:** resolution must be a recorded human decision that names the document and the hash it accepts or rejects; the original bytes stay referenced; no silent overwrite.
+**Open questions:** whether acceptance supersedes the document or marks the existing one; who may resolve.
+
+### IDEA-26 — First-page identifier misattribution in researcher import
+Status: new · Added: 2026-11-03 · Slice: — · Depends on: decision 46 item 7
+**What:** the researcher import takes the first identifier on page one. A DOI cited on that page (a reference, a related paper) can attach the PDF to the wrong promoted work.
+**Why:** a mis-attached document is silent provenance corruption for the work it lands on.
+**Rigour notes:** an attachment must be checkable by the researcher before it becomes a document; ambiguous identifiers are reported, not guessed.
+**Open questions:** label proximity ("DOI:", "arXiv:") versus requiring the first identifier only; a title match against the work as a check.
+
+### IDEA-27 — `restore --missing` is not idempotent and stops at the first error
+Status: new · Added: 2026-11-03 · Slice: — · Depends on: decision 48 item 4
+**What:** after a source change or an `unavailable` result, a repeated `restore --missing` re-requests the same documents, and one route error aborts the whole run.
+**Why:** a researcher cannot finish a restore of a library with a few unreachable sources.
+**Rigour notes:** each document gets its own outcome in the report; an unavailable or changed result changes no document and is reported as such.
+**Open questions:** whether to skip documents with an unresolved `source-changed` (depends on IDEA-25).
+
+### IDEA-28 — `refresh` cannot page through the corpus when `limit` is below the promoted count
+Status: new · Added: 2026-11-03 · Slice: — · Depends on: decision 48 item 5
+**What:** `refresh` selects every promoted work sorted by id and takes the first `limit`, so works after that prefix are never reached by `refresh`. Explicit `work_ids` beyond `limit` are now refused, so the caller cannot split the work by hand either.
+**Why:** a large corpus cannot be revisited in full with a small `limit`.
+**Rigour notes:** the choice of works in each call stays deterministic and recorded in `fulltext.fetch_started`.
+**Open questions:** a cursor on the tool, or a rotation by time of last attempt.
+
+### IDEA-29 — Same hash with a different `source_version` restores silently
+Status: new · Added: 2026-11-03 · Slice: — · Depends on: decision 46 item 9
+**What:** `restore_document` compares only the raw hash. If the route serves identical bytes under another version string, the attempt is recorded `restored` and the document's recorded version is not updated or flagged.
+**Why:** the version of record can differ from what the source now reports, with no event saying so.
+**Rigour notes:** a version mismatch with identical bytes is recorded or refused, never silent.
+**Open questions:** whether this is a `source-changed` variant or a separate attempt reason.
