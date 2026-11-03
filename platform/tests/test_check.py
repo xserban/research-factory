@@ -5,30 +5,49 @@ emits over the same events. Each assertion names the code, the severity and the 
 """
 
 from collections.abc import Callable, Mapping
+from typing import Any
 
 import pytest
+from pydantic import ValidationError
 
 from factory.events.envelope import Actor
+from factory.model.chase import ChaseDirection
 from factory.model.dedup import DedupReverted
 from factory.model.project import RigorMode
 from factory.model.protocol import PressElement, PressFinding
 from factory.model.screening import Channel, PassLabel
+from factory.model.search import (
+    QueryKind,
+    QuerySpec,
+    RunStatus,
+    SearchRunFinished,
+    SearchRunStarted,
+)
 from factory.model.seed import SeedKind, SeedSpec
 from factory.model.work import ProvenanceMethod
 from factory.services import check as check_module
+from factory.services.agreement import Outcome, final_outcomes
 from factory.services.audit import audit_record, audit_sample
 from factory.services.calibration import calibration_items, label_calibration
+from factory.services.chase import search_chase
 from factory.services.check import Finding, _findings_as, check
 from factory.services.context import Project
 from factory.services.dedup import active_merges, dedup_run
-from factory.services.prisma import SearchReport, search_report
+from factory.services.prisma import search_report
 from factory.services.protocol import press_review
 from factory.services.screening import open_pass, pass_b_sample
-from factory.services.search import list_works
-from factory.services.seeds import add_seeds, explain_seed_miss
+from factory.services.search import list_works, register_query, run_query
+from factory.services.seeds import (
+    SeedRole,
+    add_seeds,
+    all_seeds,
+    explain_seed_miss,
+    split_is_drawn,
+)
 from factory.sources.registry import SourceFactory
-from tests.helpers import _protocol, _setup
-from tests.test_chase_service import _corpus, _ordinary, _settle
+from tests import helpers
+from tests.helpers import _protocol, _seed_item, _setup
+from tests.test_chase_service import _citing, _corpus, _ordinary, _settle
 from tests.test_prisma import _merge_items
 from tests.test_screening_next import _decide, _draw
 
@@ -144,26 +163,120 @@ def _dangling_merge_event(project: Project, human: Actor) -> str:
     return merge_id
 
 
-def _short_search_without_reason(project: Project, monkeypatch: pytest.MonkeyPatch) -> str:
-    """Make the one search report retrieved fewer than it reported, with no reason.
+def _planned_query(project: Project, human: Actor, mock_sources: SourcesFor) -> str:
+    """Register the protocol's planned search ("attention") and return its query id."""
+    spec = QuerySpec(source="openalex", kind=QueryKind.KEYWORD, text="attention")
+    return register_query(project, human, spec, sources=mock_sources(openalex=[]))
 
-    The adapters always explain a shortfall in their run note, so the unexplained case is built
-    from the real report: the row keeps its query and its counts, and loses its reason."""
+
+def _record_run(
+    project: Project, query_id: str, *, reported: int, retrieved: int, note: str | None
+) -> None:
+    """Record one finished search run as the search service writes it: a started event, then
+    its finish. The note is written as given, None included: the event model does not require
+    one, and an adapter that gives none is the case under test."""
+    run_id = project.ids.new("run")
+    system = project.system_actor()
+    project.record(
+        [
+            project.events.make(
+                "search.run_started",
+                SearchRunStarted(run_id=run_id, query_id=query_id),
+                system,
+                refs=(run_id,),
+            )
+        ]
+    )
+    project.record(
+        [
+            project.events.make(
+                "search.run_finished",
+                SearchRunFinished(
+                    run_id=run_id,
+                    status=RunStatus.COMPLETE,
+                    reported_count=reported,
+                    retrieved_count=retrieved,
+                    note=note,
+                ),
+                system,
+                refs=(run_id,),
+            )
+        ]
+    )
+
+
+def _shortfall_query(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor, *, note: str
+) -> str:
+    """A ready protocol, and one search that retrieved 3 of the 5 it reported, with `note`."""
+    _protocol(project, agent, human, mock_sources)
+    query_id = _planned_query(project, human, mock_sources)
+    _record_run(project, query_id, reported=5, retrieved=3, note=note)
+    return query_id
+
+
+def _clear_shortfall_reason(project: Project, monkeypatch: pytest.MonkeyPatch) -> str:
+    """Patch the search report so its one row carries no shortfall reason; returns its query id.
+
+    The event model refuses an unexplained shortfall (R-23: a run that is not fully explained
+    needs a note; see `test_run_without_note_is_refused_by_the_event_model`), so no event can
+    produce this row. The rule is therefore tested on the report row it would read."""
     real = search_report(project)
     [row] = real.rows
-    short = row.model_copy(update={"reported": row.retrieved + 2, "shortfall_reason": None})
-    patched: SearchReport = real.model_copy(update={"rows": [short]})
+    patched = real.model_copy(update={"rows": [row.model_copy(update={"shortfall_reason": None})]})
     monkeypatch.setattr(check_module, "search_report", lambda _project: patched)
     return row.query_id
 
 
+def _enforce_kappa(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make the κ floor of protocols recorded from now on enforced. `_protocol` builds its spec
+    with `helpers.pilot_protocol_spec`, which is wrapped here; nothing else changes."""
+    original = helpers.pilot_protocol_spec
+
+    def enforced(*args: Any, **kwargs: Any) -> Any:
+        spec = original(*args, **kwargs)
+        plan = spec.screening.model_copy(update={"kappa_enforced": True})
+        return spec.model_copy(update={"screening": plan})
+
+    monkeypatch.setattr(helpers, "pilot_protocol_spec", enforced)
+
+
+def _seed_role_corpus(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> dict[SeedRole, str]:
+    """A ready pilot protocol whose probe draws the split over the three positives, then a corpus
+    that omits the works of one held-out and one development positive. Returns those two seed
+    ids by role. The roles are read from `all_seeds`, not assumed."""
+    _protocol(project, agent, human, mock_sources)
+    positives = {s.seed_id: s.role for s in all_seeds(project) if s.kind is SeedKind.POSITIVE}
+    omitted = {
+        SeedRole.HELD_OUT: next(s for s, r in positives.items() if r is SeedRole.HELD_OUT),
+        SeedRole.DEVELOPMENT: next(s for s, r in positives.items() if r is SeedRole.DEVELOPMENT),
+    }
+    kept = [int(seed_id[-2:]) for seed_id in positives if seed_id not in omitted.values()]
+    items = [_seed_item(n) for n in kept]
+    spec = QuerySpec(source="openalex", kind=QueryKind.KEYWORD, text="attention")
+    query_id = register_query(project, human, spec, sources=mock_sources(openalex=items))
+    run_query(project, query_id, sources=mock_sources(openalex=items))
+    return omitted
+
+
 def _decide_outcomes(
-    project: Project, agent: Actor, human: Actor, protocol_id: str, excluded: set[str]
+    project: Project,
+    agent: Actor,
+    human: Actor,
+    protocol_id: str,
+    excluded: set[str],
+    *,
+    skip: frozenset[str] = frozenset(),
 ) -> None:
     """Decide the corpus in both passes: works in `excluded` exclude (EX01), the rest include.
-    Calibration works take the human label instead, as in the real flow."""
+    Calibration works take the human label instead, as in the real flow. Works in `skip` are
+    left undecided."""
     calibration = set(calibration_items(project))
     for work in sorted(w.id for w in list_works(project)):
+        if work in skip:
+            continue
         verdict = "exclude" if work in excluded else "include"
         criterion = "EX01" if verdict == "exclude" else None
         if work in calibration:
@@ -201,9 +314,10 @@ def test_missing_provenance(
     mode: RigorMode,
     expected: str,
 ) -> None:
+    """Tested through a patched `_provenance_rows`. Not through the log: `Event` refuses to be
+    built without provenance, and the reader raises `EventLogCorruptError` on a hand-edited line
+    that lacks it, so no event file can carry such a gap."""
     _corpus(project, agent, human, mock_sources)
-    # An agent event whose skill and input blob are absent. The event model refuses to write one,
-    # so the projection row is supplied directly to the rule.
     gap = ("ev_01JZ9Q3K5M7N8P0R2S4T6V8W0X", "agent", "claude-opus-5-5", None, None)
     monkeypatch.setattr(check_module, "_provenance_rows", lambda _project: [gap])
 
@@ -220,8 +334,8 @@ def test_shortfall_unexplained(
     mode: RigorMode,
     expected: str,
 ) -> None:
-    _corpus(project, agent, human, mock_sources)
-    query_id = _short_search_without_reason(project, monkeypatch)
+    _shortfall_query(project, agent, human, mock_sources, note="2 records skipped by the source")
+    query_id = _clear_shortfall_reason(project, monkeypatch)
 
     _assert_row(project, "shortfall-unexplained", mode, expected, refs=[query_id])
 
@@ -461,11 +575,35 @@ def test_unexplained_shortfall_is_error(
     mock_sources: SourcesFor,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _corpus(project, agent, human, mock_sources)
-    query_id = _short_search_without_reason(project, monkeypatch)
+    _shortfall_query(project, agent, human, mock_sources, note="2 records skipped by the source")
+    query_id = _clear_shortfall_reason(project, monkeypatch)
 
     for mode in MODES:
         _assert_row(project, "shortfall-unexplained", mode, "error", refs=[query_id])
+
+
+def test_run_without_note_is_refused_by_the_event_model(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    """R-23 at the event level: a finished run short of its reported count needs a note."""
+    with pytest.raises(ValidationError):
+        SearchRunFinished(
+            run_id=f"run_{project.ids.ulid()}",
+            status=RunStatus.COMPLETE,
+            reported_count=5,
+            retrieved_count=3,
+            note=None,
+        )
+
+
+def test_explained_shortfall_gives_no_finding(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    note = "2 records skipped by the source"
+    _shortfall_query(project, agent, human, mock_sources, note=note)
+
+    for mode in MODES:
+        _assert_row(project, "shortfall-unexplained", mode, None)
 
 
 def test_seed_admission_pending_includes_hand_search(
@@ -558,3 +696,125 @@ def test_clean_project_is_ok(
         "chase-missing",
         "profile-checklist",
     }
+
+
+# --- The enforced κ floor (R-36: advisory in pilot, enforced in systematic) ---
+
+
+def test_kappa_enforced_below_floor_is_error_in_every_mode(
+    project: Project,
+    agent: Actor,
+    human: Actor,
+    mock_sources: SourcesFor,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _enforce_kappa(monkeypatch)
+    protocol_id = _partial_corpus(project, agent, human, mock_sources)
+    _screen_ordinary(project, agent, protocol_id, pass_b="exclude", b_sample_only=True)
+
+    for mode in MODES:
+        _assert_row(project, "kappa-below-floor", mode, "error", refs=[])
+
+
+def test_kappa_enforced_gap_is_not_repeated_on_promotion(
+    project: Project,
+    agent: Actor,
+    human: Actor,
+    mock_sources: SourcesFor,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _enforce_kappa(monkeypatch)
+    protocol_id = _partial_corpus(project, agent, human, mock_sources)
+    _screen_ordinary(project, agent, protocol_id, pass_b="exclude", b_sample_only=True)
+    assert "kappa-below-floor" in _errors(check(project).findings)
+
+    promoted = check(project, promote_to=RigorMode.SYSTEMATIC)
+
+    assert "kappa-below-floor" not in {f.code for f in promoted.findings}
+
+
+# --- Seed roles (controller Ruling G) ---
+
+
+def _seed_missing_by_role(project: Project, mode: RigorMode) -> dict[str | None, Finding]:
+    return {f.role: f for f in _findings_as(project, mode) if f.code == "seed-missing"}
+
+
+def test_missing_held_out_positive_has_role_held_out(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    omitted = _seed_role_corpus(project, agent, human, mock_sources)
+
+    found = _seed_missing_by_role(project, RigorMode.PILOT)
+
+    assert found["held-out"].refs == [omitted[SeedRole.HELD_OUT]]
+    assert found["held-out"].severity == "error"
+
+
+def test_missing_development_positive_has_role_development(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    omitted = _seed_role_corpus(project, agent, human, mock_sources)
+
+    found = _seed_missing_by_role(project, RigorMode.PILOT)
+
+    assert found["development"].refs == [omitted[SeedRole.DEVELOPMENT]]
+    assert found["development"].severity == "error"
+
+
+def test_missing_unsplit_positive_has_role_unsplit(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    """Before the split is drawn a positive is `unsplit`: it may still become held-out."""
+    seed_id = _unfound_seed(project, agent, mock_sources)
+    assert not split_is_drawn(project)
+    assert {r.seed_id: r.role for r in all_seeds(project)}[seed_id] is SeedRole.UNSPLIT
+
+    _assert_row(project, "seed-missing", RigorMode.PILOT, "error", refs=[seed_id], role="unsplit")
+
+
+def test_late_positive_folds_into_development(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    """A positive added after the split is `late`, and counts as development (recall, role)."""
+    _corpus(project, agent, human, mock_sources)
+    seed_id = _unfound_seed(project, agent, mock_sources)
+    assert {r.seed_id: r.role for r in all_seeds(project)}[seed_id] is SeedRole.LATE
+
+    _assert_row(
+        project, "seed-missing", RigorMode.PILOT, "error", refs=[seed_id], role="development"
+    )
+
+
+# --- Chase and merges: the proxies and their edges ---
+
+
+def test_chase_round_after_decisions_clears_chase_missing(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    protocol_id = _corpus(project, agent, human, mock_sources)
+    _settle(project, agent, human, protocol_id)
+    dedup_run(project)
+    assert [f for f in _findings_as(project, RigorMode.PILOT) if f.code == "chase-missing"]
+
+    citing = [_citing(n) for n in range(900, 910)]
+    search_chase(project, human, [ChaseDirection.BACKWARD], sources=mock_sources(openalex=citing))
+
+    assert [f for f in _findings_as(project, RigorMode.PILOT) if f.code == "chase-missing"] == []
+
+
+def test_pending_record_in_a_merge_is_not_a_conflict(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    protocol_id = _corpus(project, agent, human, mock_sources, extra=_merge_items())
+    dedup_run(project)
+    [merge] = active_merges(project)
+    absorbed = frozenset(merge.absorbed)
+    _decide_outcomes(project, agent, human, protocol_id, excluded=set(), skip=absorbed)
+
+    outcomes = final_outcomes(project)
+    assert all(outcomes[work] is Outcome.PENDING for work in absorbed)
+    assert outcomes[merge.primary] is Outcome.INCLUDED
+    assert [
+        f for f in _findings_as(project, RigorMode.PILOT) if f.code == "merge-verdict-conflict"
+    ] == []

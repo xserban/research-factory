@@ -81,6 +81,11 @@ _ROLE_KEYS: dict[SeedRole, str] = {
 
 
 class Finding(StrictModel):
+    """One gap. `role` is set on seed findings only: `held-out`, `development` (development and
+    late positives), or `unsplit`, a positive seed before the split is drawn. An unsplit positive
+    may still become held-out, so an aggregate must count it as held-out-possible, never as
+    development (controller Ruling G)."""
+
     code: str
     severity: Literal["error", "warning"]
     refs: list[str]
@@ -138,20 +143,27 @@ def check(project: Project, *, promote_to: RigorMode | None = None) -> CheckRepo
     """The gaps of the project under its own rigour mode, or, with `promote_to`, the errors a
     promotion to that mode would add. Read-only."""
     current = _rigor_mode(project)
-    hits = _hits(project)
     if promote_to is None:
-        findings = [_finding(h, s) for h in hits if (s := _severity(h, current)) is not None]
-        return CheckReport(mode=current, evaluated_as=current, findings=findings)
-    findings = []
-    for hit in hits:
-        target = _severity(hit, promote_to)
-        if target == "error" and _severity(hit, current) != "error":
-            findings.append(_finding(hit, target))
-    return CheckReport(mode=current, evaluated_as=promote_to, findings=findings)
+        return CheckReport(
+            mode=current, evaluated_as=current, findings=_findings_as(project, current)
+        )
+    own_errors = {_gap_key(f) for f in _findings_as(project, current) if f.severity == "error"}
+    gaps = [
+        f
+        for f in _findings_as(project, promote_to)
+        if f.severity == "error" and _gap_key(f) not in own_errors
+    ]
+    return CheckReport(mode=current, evaluated_as=promote_to, findings=gaps)
+
+
+def _gap_key(finding: Finding) -> tuple[str, tuple[str, ...], str | None]:
+    """What makes two findings the same gap: code, refs and role (not the message)."""
+    return (finding.code, tuple(finding.refs), finding.role)
 
 
 def _findings_as(project: Project, mode: RigorMode) -> list[Finding]:
-    """Every finding the project's data gives under `mode`, errors and warnings alike."""
+    """The one evaluation path: every finding the project's data gives under `mode`, errors and
+    warnings alike. `check` and the tests both read findings through here."""
     findings: list[Finding] = []
     for hit in _hits(project):
         severity = _severity(hit, mode)
@@ -430,7 +442,10 @@ def _last_decision_ulid(project: Project) -> str | None:
 def _chase(project: Project, outcomes: dict[str, Outcome]) -> list[_Hit]:
     """Promoted works exist and no citation chase round follows the last screening decision.
 
-    Round and event identifiers are time-ordered ULIDs, so the comparison is on their ULID parts.
+    The proxy is "no chase round after the last `screening.decision_recorded` event", compared by
+    ULID order. It is stricter than "after the last agreement", which is not an event in the log:
+    any decision recorded after the latest round brings the finding back, even one that changes
+    no agreed outcome.
     """
     if not any(outcome is Outcome.INCLUDED for outcome in outcomes.values()):
         return []
