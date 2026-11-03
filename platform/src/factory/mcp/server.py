@@ -17,11 +17,13 @@ from factory.mcp.conventions import (
     make_agent_actor,
     paginate,
     parse_input,
+    parse_routes,
     spec_path,
     withhold,
 )
 from factory.model.base import StrictModel
 from factory.model.chase import ChaseDirection
+from factory.model.fulltext import Route
 from factory.model.identity import IdGenerator
 from factory.model.project import RigorMode
 from factory.model.protocol import CriterionEffect, PressFinding, ProtocolSpec
@@ -35,6 +37,8 @@ from factory.services import calibration as calibration_service
 from factory.services import chase as chase_service
 from factory.services import check as check_service
 from factory.services import dedup as dedup_service
+from factory.services import fulltext as fulltext_service
+from factory.services import fulltext_status as fulltext_status_service
 from factory.services import methods as methods_service
 from factory.services import prisma as prisma_service
 from factory.services import probe as probe_service
@@ -49,6 +53,8 @@ from factory.services.context import Project, open_project
 from factory.services.results import BatchResult, ItemError
 from factory.services.search import list_works
 from factory.services.seeds import SeedOutcome, SeedRole
+from factory.sources.fulltext.base import FullTextRoute
+from factory.sources.fulltext.registry import default_routes
 from factory.sources.registry import SourceFactory, default_sources
 
 _SYSTEM_CLOCK = SystemClock()
@@ -68,10 +74,20 @@ def build_server(
     settings: Settings,
     clock: Clock = _SYSTEM_CLOCK,
     sources: Mapping[str, SourceFactory] | None = None,
+    fulltext_routes: Callable[[], Mapping[Route, FullTextRoute]] | None = None,
 ) -> MCPServer:
+    """The factory's MCP server for one session.
+
+    `fulltext_routes`, when given, is called once per `fulltext_fetch` call to build that call's
+    routes; tests use it to supply stubs. By default each call builds `default_routes(settings)`,
+    so no arXiv version answer outlives the call that asked for it.
+    """
     session = IdGenerator(clock).ulid()
     adapters = dict(default_sources() if sources is None else sources)
     server = MCPServer("factory")
+
+    def _fetch_routes() -> Mapping[Route, FullTextRoute]:
+        return default_routes(settings) if fulltext_routes is None else fulltext_routes()
 
     def _reply(
         project_slug: str,
@@ -617,6 +633,56 @@ def build_server(
             return _withheld(opened, data, include_work_ids=False)
 
         return _reply(project, gaps, include_work_ids=False)
+
+    @server.tool()
+    def fulltext_fetch(
+        project: str,
+        role: str,
+        model: str,
+        skill: str,
+        work_ids: list[str] | None = None,
+        routes: list[str] | None = None,
+        refresh: bool = False,
+        limit: int = 20,
+    ) -> dict[str, JsonValue]:
+        """Fetch full text for promoted works. Routes are tried in order (arxiv-html, arxiv-source,
+        oa-pdf) and each work stops at its first retrieved attempt. `routes` names routes to try
+        instead, all of them, without stopping. `work_ids` defaults to every promoted work without
+        a document; `refresh` revisits those that have one. Returns each work's attempts and
+        documents, and `remaining`, the promoted works still without a document. A researcher's
+        PDF is imported by the researcher, never fetched. Refused to a session that has joined a
+        pass."""
+
+        def fetch() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            actor = make_agent_actor(settings, session, role, model, skill)
+            summary = fulltext_service.fetch_fulltext(
+                opened,
+                routes=_fetch_routes(),
+                work_ids=work_ids,
+                only=parse_routes(routes, "routes"),
+                refresh=refresh,
+                limit=limit,
+                actor=actor,
+            )
+            return _withheld(opened, summary.model_dump(mode="json"))
+
+        return _reply(project, fetch)
+
+    @server.tool()
+    def fulltext_status(project: str, work_ids: list[str] | None = None) -> dict[str, JsonValue]:
+        """The full-text state of each promoted work, or of the named ones: retrieved, not
+        retrieved (with the latest reason from each route) or unsought, and the live documents
+        per route. Read-only. Refused to a session that has joined a pass."""
+
+        def status() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            report = fulltext_status_service.fulltext_status(opened, work_ids=work_ids)
+            return _withheld(opened, report.model_dump(mode="json"))
+
+        return _reply(project, status)
 
     return server
 

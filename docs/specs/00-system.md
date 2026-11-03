@@ -112,7 +112,7 @@ Tasks are events (`task.created`, `task.claimed`, `task.completed`, `task.releas
 
 ## 9. Commands (thin CLI)
 
-`factory init <slug>` · `factory rebuild` · `factory status` · `factory trace <id> [--forward]` · `factory check [--promote-to <mode>]` · `factory report prisma` · `factory serve` (MCP over stdio).
+`factory init <slug>` · `factory rebuild` · `factory status` · `factory trace <id> [--forward]` · `factory check [--promote-to <mode>]` · `factory report prisma` · `factory fulltext import <folder>` · `factory fulltext fetch [--work ID]… [--route R]… [--refresh] [--limit N]` · `factory fulltext status` · `factory fulltext restore <doc_id>|--missing` · `factory serve` (MCP over stdio).
 
 ## 10. Quality and tooling
 

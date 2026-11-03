@@ -680,6 +680,24 @@ def record_supplied_document(
 _DOCUMENT_COLUMNS = "document_id, work_id, route, source_version, raw_hash, superseded_by"
 
 
+def library_missing(project: Project) -> list[tuple[str, Route]]:
+    """(document id, route) of every document whose library entry is missing, in event order.
+
+    Superseded documents are included, as `check` includes them. The index is synced first; the
+    library is read only to test each hash's presence, and nothing is written.
+    """
+    project.index.sync()
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text("SELECT document_id, route, raw_hash FROM fulltext_documents ORDER BY event_id")
+        ).all()
+    return [
+        (str(document), Route(str(route)))
+        for document, route, raw_hash in rows
+        if not project.library.exists(str(raw_hash))
+    ]
+
+
 def _documents(project: Project, work_id: str) -> list[_Document]:
     """Every document of one work, in event order. Requires a synced index."""
     with project.index.connect() as conn:

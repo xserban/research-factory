@@ -12,8 +12,10 @@ from factory.cli import render
 from factory.clock import Clock, SystemClock
 from factory.config import Settings
 from factory.errors import FactoryValidationError, ProjectNotFoundError, ValidationIssue
+from factory.mcp.conventions import parse_routes
 from factory.mcp.server import run
 from factory.model.chase import ChaseDirection
+from factory.model.fulltext import Route
 from factory.model.identity import IdGenerator
 from factory.model.project import RigorMode
 from factory.model.screening import Channel
@@ -23,6 +25,9 @@ from factory.services import audit as audit_service
 from factory.services import calibration as calibration_service
 from factory.services import chase as chase_service
 from factory.services import check as check_service
+from factory.services import fulltext as fulltext_service
+from factory.services import fulltext_import as fulltext_import_service
+from factory.services import fulltext_status as fulltext_status_service
 from factory.services import methods as methods_service
 from factory.services import prisma as prisma_service
 from factory.services import project as project_service
@@ -32,6 +37,7 @@ from factory.services import trace as trace_service
 from factory.services.context import Project, list_projects, open_project
 from factory.services.project import ScreeningStatus
 from factory.services.search import list_works
+from factory.sources.fulltext.registry import default_routes
 from factory.sources.registry import default_sources
 
 app = typer.Typer(
@@ -61,6 +67,11 @@ search_app = typer.Typer(
 audit_app = typer.Typer(
     name="audit", help="Sample, label and report the audit.", no_args_is_help=True
 )
+fulltext_app = typer.Typer(
+    name="fulltext",
+    help="Full text: fetch, status, restore, and import the researcher's PDFs.",
+    no_args_is_help=True,
+)
 report_app = typer.Typer(
     name="report", help="PRISMA flow, search report and methods statement.", no_args_is_help=True
 )
@@ -71,6 +82,7 @@ app.add_typer(calibrate_app)
 app.add_typer(screen_app)
 app.add_typer(audit_app)
 app.add_typer(search_app)
+app.add_typer(fulltext_app)
 
 
 @dataclass
@@ -591,6 +603,106 @@ def report_methods(ctx: typer.Context, as_json: _JSON = False) -> None:
         report.model_dump_json() if as_json else methods_service.render_methods(report),
         nl=as_json,
     )
+
+
+@fulltext_app.command("import")
+def fulltext_import_cmd(
+    ctx: typer.Context,
+    folder: Annotated[Path, typer.Argument(help="A folder of PDFs, matched to promoted works.")],
+) -> None:
+    """Import the researcher's PDFs from FOLDER by the identifiers they carry; prints every list."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        report = fulltext_import_service.import_folder(project, folder)
+    for line in render.import_lines(report):
+        typer.echo(line)
+
+
+@fulltext_app.command("fetch")
+def fulltext_fetch_cmd(
+    ctx: typer.Context,
+    work: Annotated[
+        list[str] | None, typer.Option("--work", help="A promoted work; repeat for several.")
+    ] = None,
+    route: Annotated[
+        list[str] | None,
+        typer.Option("--route", help="Try only this route, all of them; repeat for several."),
+    ] = None,
+    refresh: Annotated[
+        bool, typer.Option("--refresh", help="Revisit works that already have a document.")
+    ] = False,
+    limit: Annotated[int, typer.Option("--limit", help="At most this many works (1 to 200).")] = 20,
+) -> None:
+    """Fetch full text for promoted works, as the researcher."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        only = parse_routes(route or None, "route")
+        summary = fulltext_service.fetch_fulltext(
+            project,
+            routes=default_routes(state.settings),
+            work_ids=work or None,
+            only=only,
+            refresh=refresh,
+            limit=limit,
+            actor=project.human_actor(),
+        )
+    for line in render.fetch_lines(summary):
+        typer.echo(line)
+
+
+@fulltext_app.command("status")
+def fulltext_status_cmd(ctx: typer.Context) -> None:
+    """Each promoted work's full-text state, with the reason from each route it missed."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        status = fulltext_status_service.fulltext_status(project)
+    for line in render.fulltext_status_lines(status):
+        typer.echo(line)
+
+
+@fulltext_app.command("restore")
+def fulltext_restore_cmd(
+    ctx: typer.Context,
+    document: Annotated[str | None, typer.Argument(help="The document to restore.")] = None,
+    missing: Annotated[
+        bool, typer.Option("--missing", help="Restore every document whose library entry is gone.")
+    ] = False,
+) -> None:
+    """Restore a library entry from its recorded route, checking its hash.
+
+    A researcher-supplied document is never fetched: it is listed, to be imported again. Exit 1
+    when a route did not retrieve a document, naming it.
+    """
+    state = _state(ctx)
+    if (document is None) == (not missing):
+        _fail("give one document id, or --missing", 2)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        routes = default_routes(state.settings)
+        human = project.human_actor()
+        supplied: list[str] = []
+        targets = [document] if document is not None else []
+        if missing:
+            absent = fulltext_service.library_missing(project)
+            if not absent:
+                typer.echo("no library entry is missing")
+                return
+            supplied = [d for d, route in absent if route is Route.RESEARCHER]
+            targets = [d for d, route in absent if route is not Route.RESEARCHER]
+        results = [
+            (d, fulltext_service.restore_document(project, d, routes=routes, actor=human))
+            for d in targets
+        ]
+    for d in supplied:
+        typer.echo(f"{d}  needs re-import (researcher-supplied)")
+    for d, outcome in results:
+        typer.echo(f"{d}  {outcome}")
+    unavailable = [d for d, outcome in results if outcome == "unavailable"]
+    if unavailable:
+        _fail(f"unavailable: {' '.join(unavailable)}", 1)
 
 
 @app.command()

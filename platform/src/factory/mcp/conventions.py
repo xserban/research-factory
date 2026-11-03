@@ -10,6 +10,7 @@ from pydantic import BaseModel, JsonValue, ValidationError
 from factory.config import Settings
 from factory.errors import FactoryValidationError, ProjectNotFoundError, ValidationIssue
 from factory.events.envelope import Actor
+from factory.model.fulltext import ROUTE_ORDER, Route
 from factory.model.protocol import ProtocolSpec
 from factory.model.question import QuestionSpec
 from factory.services.skills import skill_ref
@@ -137,6 +138,37 @@ def _scrub(value: JsonValue, pattern: re.Pattern[str]) -> JsonValue:
     if isinstance(value, list):
         return [_scrub(item, pattern) for item in value]
     return value
+
+
+def parse_routes(values: Sequence[str] | None, field: str) -> list[Route] | None:
+    """Route names as a fetch names them, or None when none were given.
+
+    Each name must be one of the automatic routes (`ROUTE_ORDER`). `researcher-supplied` is refused
+    with its own reason, since it is imported, not fetched. Every bad name is reported by its
+    position, as `<field>.<index>`.
+    """
+    if values is None:
+        return None
+    choices = ", ".join(route.value for route in ROUTE_ORDER)
+    parsed: list[Route] = []
+    issues: list[ValidationIssue] = []
+    for index, value in enumerate(values):
+        if value == Route.RESEARCHER.value:
+            issues.append(
+                ValidationIssue(
+                    f"{field}.{index}", "a researcher-supplied route is imported, not fetched"
+                )
+            )
+            continue
+        try:
+            route = Route(value)
+        except ValueError:
+            issues.append(ValidationIssue(f"{field}.{index}", f"must be one of: {choices}"))
+            continue
+        parsed.append(route)
+    if issues:
+        raise FactoryValidationError(issues)
+    return parsed
 
 
 def guarded(

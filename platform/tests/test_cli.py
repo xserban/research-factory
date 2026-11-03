@@ -4,12 +4,15 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import pytest
 from typer.testing import CliRunner
 
 from factory.cli.main import app
 from factory.clock import FixedClock
 from factory.config import Settings
 from factory.events.envelope import Actor
+from factory.events.reader import read_all
+from factory.model.fulltext import Route
 from factory.model.protocol import PressElement, PressFinding
 from factory.model.screening import Channel, PassLabel, ScreeningItem, ScreeningPhase, Verdict
 from factory.model.search import QueryKind, QuerySpec
@@ -18,11 +21,13 @@ from factory.model.work import ProvenanceMethod
 from factory.services.agreement import screen_agreement
 from factory.services.calibration import calibration_items, label_calibration
 from factory.services.context import Project
+from factory.services.fulltext import fetch_fulltext
+from factory.services.fulltext_import import import_folder
 from factory.services.project import init_project
 from factory.services.protocol import current_protocol, press_review
 from factory.services.question import current_question
 from factory.services.screening import screen_next, screen_record
-from factory.services.search import register_query, run_query
+from factory.services.search import list_works, register_query, run_query
 from factory.services.seeds import add_seeds, explain_seed_miss, split_seeds
 from factory.sources.registry import SourceFactory
 from tests.helpers import (
@@ -34,6 +39,8 @@ from tests.helpers import (
     ready_protocol,
     record_pilot_question,
 )
+from tests.test_acceptance_fulltext import _build, _promoted, _routes
+from tests.test_fulltext_import import _pdf
 from tests.test_screening_next import _of_type, _setup
 
 runner = CliRunner()
@@ -406,3 +413,168 @@ def test_cli_seed_admit_requires_deviation_in_pilot(
     assert "deviation" in result.stderr
     assert len(_of_type(project, "query.registered")) == before
     assert _of_type(project, "seed.admitted") == []
+
+
+# --- Full text (plan 2A, task 12): `factory fulltext …` ---
+
+
+def _doi_of(project: Project, work_id: str) -> str:
+    [work] = [w for w in list_works(project) if w.id == work_id]
+    return work.identifiers.doi or ""
+
+
+def _library_hash(project: Project, document_id: str) -> str:
+    [added] = [
+        e
+        for e in read_all(project.paths.events_dir, project.catalog)
+        if e.type == "fulltext.document_added" and e.refs[0] == document_id
+    ]
+    return str(added.payload["raw_hash"])
+
+
+def test_cli_import_prints_report(
+    project: Project,
+    agent: Actor,
+    human: Actor,
+    mock_sources: Any,
+    settings: Settings,
+    tmp_path: Path,
+) -> None:
+    _build(project, agent, human, mock_sources)
+    work = _promoted(project)[0]
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    _pdf(inbox / f"{_doi_of(project, work).replace('/', '_')}.pdf", "Body text")
+    _pdf(inbox / "unknown.pdf", "Nothing identifiable here")
+    (inbox / "scan.pdf").write_bytes(b"not a pdf")
+
+    result = runner.invoke(app, ["fulltext", "import", str(inbox)], env=_cli_env(settings.root))
+
+    assert result.exit_code == 0, result.stderr
+    lines = result.stdout.splitlines()
+    for label, count in (
+        ("imported", 1),
+        ("already imported", 0),
+        ("unmatched", 1),
+        ("ambiguous", 0),
+        ("not promoted", 0),
+        ("not pdf", 1),
+    ):
+        assert f"{label}: {count}" in lines, result.stdout
+    assert any(line.strip().startswith("unknown.pdf") for line in lines)
+    assert any(line.strip().startswith("scan.pdf") for line in lines)
+
+
+def test_cli_fetch_is_a_human_act(
+    project: Project,
+    agent: Actor,
+    human: Actor,
+    mock_sources: Any,
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _build(project, agent, human, mock_sources)
+    work = _promoted(project)[0]
+    stubs = _routes(html={work})
+    monkeypatch.setattr("factory.cli.main.default_routes", lambda _settings: stubs)
+
+    result = runner.invoke(
+        app,
+        ["fulltext", "fetch", "--work", work, "--route", "arxiv-html"],
+        env=_cli_env(settings.root),
+    )
+
+    assert result.exit_code == 0, result.stderr
+    assert result.stdout.startswith("fetch fch_")
+    assert stubs[Route.ARXIV_HTML].calls == [work]
+    [started] = _of_type(project, "fulltext.fetch_started")
+    assert started.actor.kind == "human"
+    assert started.input_blob is None
+
+
+def test_cli_fetch_rejects_researcher_route(
+    project: Project,
+    agent: Actor,
+    human: Actor,
+    mock_sources: Any,
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _build(project, agent, human, mock_sources)
+    monkeypatch.setattr("factory.cli.main.default_routes", lambda _settings: _routes())
+
+    result = runner.invoke(
+        app,
+        ["fulltext", "fetch", "--route", "researcher-supplied"],
+        env=_cli_env(settings.root),
+    )
+
+    assert result.exit_code == 1
+    assert "route.0: a researcher-supplied route is imported, not fetched" in result.stderr
+
+
+def test_cli_status_prints_counts(
+    project: Project, agent: Actor, human: Actor, mock_sources: Any, settings: Settings
+) -> None:
+    _build(project, agent, human, mock_sources)
+    promoted = _promoted(project)
+    fetch_fulltext(project, routes=_routes(html={promoted[0]}), work_ids=[promoted[0]])
+
+    result = runner.invoke(app, ["fulltext", "status"], env=_cli_env(settings.root))
+
+    assert result.exit_code == 0, result.stderr
+    lines = result.stdout.splitlines()
+    assert lines[0] == f"promoted: {len(promoted)}"
+    assert "retrieved: 1" in lines and "not retrieved: 0" in lines
+
+
+def test_cli_restore_missing(
+    project: Project,
+    agent: Actor,
+    human: Actor,
+    mock_sources: Any,
+    settings: Settings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _build(project, agent, human, mock_sources)
+    work, other = _promoted(project)[0], _promoted(project)[1]
+    fetched = fetch_fulltext(project, routes=_routes(html={work}), work_ids=[work])
+    [document] = fetched.works[0].documents
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    _pdf(inbox / f"{_doi_of(project, other).replace('/', '_')}.pdf", "Body text")
+    [(_, _, supplied)] = import_folder(project, inbox).imported
+    project.library.path(_library_hash(project, document)).unlink()
+    project.library.path(_library_hash(project, supplied)).unlink()
+    monkeypatch.setattr("factory.cli.main.default_routes", lambda _settings: _routes(html={work}))
+
+    result = runner.invoke(app, ["fulltext", "restore", "--missing"], env=_cli_env(settings.root))
+
+    assert result.exit_code == 0, result.stderr
+    assert f"{document}  restored" in result.stdout.splitlines()
+    assert f"{supplied}  needs re-import (researcher-supplied)" in result.stdout.splitlines()
+    assert project.library.exists(_library_hash(project, document))
+    assert not project.library.exists(_library_hash(project, supplied))
+
+
+def test_cli_restore_unavailable_exits_nonzero(
+    project: Project,
+    agent: Actor,
+    human: Actor,
+    mock_sources: Any,
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _build(project, agent, human, mock_sources)
+    work = _promoted(project)[0]
+    fetched = fetch_fulltext(project, routes=_routes(html={work}), work_ids=[work])
+    [document] = fetched.works[0].documents
+    project.library.path(_library_hash(project, document)).unlink()
+    monkeypatch.setattr("factory.cli.main.default_routes", lambda _settings: _routes())
+
+    result = runner.invoke(app, ["fulltext", "restore", document], env=_cli_env(settings.root))
+
+    assert result.exit_code == 1
+    assert result.stdout.splitlines() == [f"{document}  unavailable"]
+    assert f"unavailable: {document}" in result.stderr

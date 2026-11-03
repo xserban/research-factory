@@ -2,6 +2,9 @@
 is read from the model, so the CLI and the MCP tools cannot differ (R-05)."""
 
 from factory.services.check import CheckReport
+from factory.services.fulltext import FetchSummary
+from factory.services.fulltext_import import ImportReport
+from factory.services.fulltext_status import FulltextStatus
 from factory.services.prisma import PrismaFlow, SearchReport
 from factory.services.trace import TraceNode
 
@@ -67,4 +70,47 @@ def check_lines(report: CheckReport) -> list[str]:
     for finding in report.findings:
         refs = f"  [{', '.join(finding.refs)}]" if finding.refs else ""
         lines.append(f"{finding.severity}  {finding.code}  {finding.message}{refs}")
+    return lines
+
+
+def import_lines(report: ImportReport) -> list[str]:
+    """Every list of an import, with its count: imported (file, work, document), then the rest."""
+    lines = [f"imported: {len(report.imported)}"]
+    lines += [f"  {name}  {work}  {document}" for name, work, document in report.imported]
+    for label, names in (
+        ("already imported", report.already_imported),
+        ("unmatched", report.unmatched),
+        ("ambiguous", report.ambiguous),
+        ("not promoted", report.not_promoted),
+        ("not pdf", report.not_pdf),
+    ):
+        lines.append(f"{label}: {len(names)}")
+        lines += [f"  {name}" for name in names]
+    return lines
+
+
+def fetch_lines(summary: FetchSummary) -> list[str]:
+    """The fetch's head line, then each work's status with its attempt and document counts."""
+    lines = [f"fetch {summary.fetch_id}: {len(summary.works)} works, {summary.remaining} remaining"]
+    for work in summary.works:
+        lines.append(
+            f"{work.work_id}  {work.status}  documents {len(work.documents)}"
+            f"  attempts {len(work.attempts)}"
+        )
+    return lines
+
+
+def fulltext_status_lines(status: FulltextStatus) -> list[str]:
+    """The counts and the live documents per route, then each work, with its reasons if missed."""
+    by_route = ", ".join(f"{route.value} {count}" for route, count in status.by_route.items())
+    lines = [
+        f"promoted: {status.promoted}",
+        f"unsought: {status.unsought}",
+        f"retrieved: {status.retrieved}",
+        f"not retrieved: {status.not_retrieved}",
+        f"by route: {by_route}",
+    ]
+    for work in status.works:
+        reasons = "; ".join(f"{route.value} {reason}" for route, reason in work.reasons.items())
+        lines.append(f"{work.work_id}  {work.state}" + (f"  ({reasons})" if reasons else ""))
     return lines

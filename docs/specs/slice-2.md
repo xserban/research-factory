@@ -93,6 +93,8 @@ Plus **atomic claims** (R-40): statement, type (finding / mechanism / limitation
 ### MCP tools (slice 2)
 `fulltext_fetch` · `fulltext_status` · `document_read` (paginated, anchored segments) · `screen_next` / `screen_record` (stage-aware) · `extract_next` · `extract_record` · `extract_agreement` · `extract_audit_sample` · `extract_audit_record` · `report_evidence` · `report_prisma` (full) · `trace` (to cells and claims). CLI: `factory fulltext import <folder>` for researcher-supplied PDFs.
 
+*Implemented in plan 2A:* `fulltext_fetch` (an agent act, with `routes` as the route filter) and `fulltext_status` (MCP); `factory fulltext import|fetch|status|restore` (CLI; `fetch` and `restore` are the researcher's acts). The MCP tools refuse a session that has joined a pass, as `check` and `report` do.
+
 ## Out of scope
 Appraisal (deferred, IDEA-21); PubMed search and PMC route (first biomedical project, IDEA-22); consistency check of copied results against the cited paper (IDEA-23); graph, regions and labels (slice 3); living updates (slice 4); shared blob store and teams (slice 5); hypotheses and reproduction experiments (slice 6); prose synthesis and related-work writing (slice 7); OCR of scanned PDFs; figures as data (plots digitised).
 
