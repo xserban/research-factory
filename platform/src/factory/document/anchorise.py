@@ -35,9 +35,9 @@ _STRAY_ANCHOR = re.compile(r"<(?=a\s+id=)")
 _FENCE_OPEN = re.compile(r"^\s{0,3}(`{3,}|~{3,})")
 _FENCE_CLOSE = re.compile(r"^\s{0,3}(`{3,}|~{3,})\s*$")
 _DIGITS = re.compile(r"(\d+(?:\.\d+)*)\.?(?=\s|$)")
-_DIGITS = re.compile(r"(\d+(?:\.\d+)*)\.?(?=\s|$)")
-_APPENDIX_SUB = re.compile(r"([A-Z])\.(\d+(?:\.\d+)*)(?=\s|$)")
-_APPENDIX_LETTER = re.compile(r"([A-Z])(?=[.:)](?:\s|$)|$)")
+# Roman numerals are not recognised, so I, V and X are excluded from the appendix letters.
+_APPENDIX_SUB = re.compile(r"([A-HJ-UW-Z])\.(\d+(?:\.\d+)*)(?=\s|$)")
+_APPENDIX_LETTER = re.compile(r"([A-HJ-UW-Z])(?=[.:)](?:\s|$)|$)")
 _FIGURE = re.compile(r"(?:Figure|Fig\.)\s+(\d+)\b", re.IGNORECASE)
 _TABLE_CAPTION = re.compile(r"Table\s+\d+", re.IGNORECASE)
 _PROBE = '<a id="x"></a>'

@@ -81,6 +81,22 @@ def test_appendix_forms_per_ruling_f() -> None:
     assert _ids("# 1 Main\n\n# C) Notes\n") == ["s1", "s103"]
 
 
+def test_roman_numeral_headings_are_unnumbered() -> None:
+    # Roman numerals are not recognised (Ruling G): I, V and X are not appendix letters, so these
+    # headings take ordinals under s1 rather than s101.
+    md = (
+        "# 1 Main\n\n## I. INTRODUCTION\n\nText.\n\n"
+        "## II. METHODS\n\nMore.\n\n## V. RESULTS\n\nEnd.\n"
+    )
+    assert _ids(md) == ["s1", "s1.1", "s1.1.p1", "s1.2", "s1.2.p1", "s1.3", "s1.3.p1"]
+    assert "s101" not in anchorise(md)
+
+
+def test_appendix_letter_at_level_two_is_s101() -> None:
+    md = "# 1 Main\n\n## A. Proofs\n\nText.\n"
+    assert _ids(md) == ["s1", "s101", "s101.p1"]
+
+
 def test_bare_capital_word_is_not_an_appendix() -> None:
     # "A Note on X" is an unnumbered heading: it takes the next ordinal under s1, never s101.
     md = "# 1 Intro\n\n## A Note on X\n\nText.\n"
