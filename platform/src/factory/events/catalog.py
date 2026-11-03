@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from factory.model.base import StrictModel
 from factory.model.chase import ChaseRoundStarted, SampleExtended, SeedAdmitted
 from factory.model.dedup import DedupMerged, DedupReverted
+from factory.model.fulltext import Attempted, DocumentAdded, FetchStarted, SourceChanged
 from factory.model.probe import ProbeFailed, ProbeMeasured, ProbePageArchived
 from factory.model.project import ProjectCreated
 from factory.model.protocol import (
@@ -114,4 +115,8 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("calibration.labelled", CalibrationLabelled, 1))
     catalog.register(EventType("audit.sampled", AuditSampled, 1))
     catalog.register(EventType("audit.labelled", AuditLabelled, 1))
+    catalog.register(EventType("fulltext.fetch_started", FetchStarted, 1))
+    catalog.register(EventType("fulltext.attempted", Attempted, 1))
+    catalog.register(EventType("fulltext.document_added", DocumentAdded, 1))
+    catalog.register(EventType("fulltext.source_changed", SourceChanged, 1))
     return catalog
