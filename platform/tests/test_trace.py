@@ -13,16 +13,19 @@ from factory.events.envelope import Actor, Event
 from factory.events.reader import read_all
 from factory.model.chase import ChaseDirection, ChaseRoundStarted
 from factory.model.dedup import DedupMerged
-from factory.model.screening import Channel
+from factory.model.fulltext import Route
+from factory.model.screening import Channel, PassLabel
 from factory.model.search import QueryKind, QueryPurpose, QueryRegistered, QuerySpec
 from factory.model.seed import SeedKind
 from factory.model.work import ProvenanceMethod
-from factory.services.agreement import resolve_disagreement
+from factory.services.agreement import Outcome, final_outcomes, resolve_disagreement
 from factory.services.audit import audit_record, audit_sample
 from factory.services.chase import search_chase
 from factory.services.context import Project
 from factory.services.dedup import dedup_run, revert_merge
+from factory.services.fulltext import fetch_fulltext
 from factory.services.protocol import current_protocol
+from factory.services.screening import open_pass
 from factory.services.search import get_work, list_works
 from factory.services.seeds import all_seeds
 from factory.services.trace import TraceNode, _event_index, _lookup_key, trace
@@ -30,7 +33,8 @@ from factory.sources.registry import SourceFactory
 from tests.helpers import _setup
 from tests.test_chase_service import _citing, _corpus, _ordinary, _settle
 from tests.test_dedup_service import PREPRINT, PUBLISHED, _ingest
-from tests.test_screening_next import _decide
+from tests.test_fulltext_service import _include_all, always, retrieved, routes_for
+from tests.test_screening_next import _decide, _draw
 
 SourcesFor = Callable[..., Mapping[str, SourceFactory]]
 
@@ -423,3 +427,72 @@ def test_without_seeds_lifts_a_seeds_children_and_keeps_the_rest() -> None:
     assert [n.id for n in _all_nodes(stripped)] == ["run_1", "rf:a", "rf:b"]
     assert [n.kind for n in _all_nodes(stripped)] == ["run", "work", "work"]
     assert [n.id for n in _all_nodes(tree)].count("SEED01") == 1  # the input is not mutated
+
+
+def test_trace_document_back_to_question(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    """AC 14, the acquisition part: document -> attempt -> work -> ... -> protocol -> question."""
+    protocol_id = _setup(project, agent, human, mock_sources, dual_sample=0.5, random_works=0)
+    _draw(project)
+    open_pass(project, agent, PassLabel.A)
+    open_pass(project, agent, PassLabel.B)
+    _include_all(project, agent, human, protocol_id)
+    current = current_protocol(project)
+    assert current is not None
+    question_id = current.spec.question_id
+    work_id = sorted(w for w, o in final_outcomes(project).items() if o is Outcome.INCLUDED)[0]
+    summary = fetch_fulltext(
+        project,
+        routes=routes_for(arxiv_html=always(retrieved(Route.ARXIV_HTML, b"full text"))),
+        work_ids=[work_id],
+    )
+    document = summary.works[0].documents[0]
+    attempt = _event_where(
+        project, "fulltext.attempted", lambda p: p["document_id"] == document
+    ).payload["attempt_id"]
+    work = get_work(project, work_id)
+    assert work is not None
+
+    root = trace(project, document)
+
+    branch = _path_to(root, "question", question_id)
+    assert branch is not None
+    assert _kinds(branch) == [
+        "document",
+        "attempt",
+        "work",
+        "record",
+        "page",
+        "run",
+        "query",
+        "protocol",
+        "question",
+    ]
+    assert (
+        branch[0].event_id
+        == _event_where(
+            project, "fulltext.document_added", lambda p: p["document_id"] == document
+        ).id
+    )
+    assert branch[1].id == attempt
+    assert (
+        branch[1].event_id
+        == _event_where(project, "fulltext.attempted", lambda p: p["document_id"] == document).id
+    )
+    assert branch[2].id == work_id
+    # The record, page, run and query of the branch are those of one provenance row of the work.
+    page_blob = branch[4].id
+    row = next(p for p in work.provenance if p.raw_blob == page_blob)
+    assert branch[3].id == f"{row.run_id}/{work_id}"
+    assert branch[5].id == row.run_id
+    assert branch[6].id == row.query_id
+    assert branch[7].id == protocol_id
+    assert branch[8].id == question_id
+
+    forward = trace(project, work_id, direction="forward")
+    assert _kinds(_path_to(forward, "document", document) or []) == [
+        "work",
+        "attempt",
+        "document",
+    ]

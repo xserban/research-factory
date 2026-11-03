@@ -11,8 +11,10 @@ import pytest
 from pydantic import ValidationError
 
 from factory.events.envelope import Actor
+from factory.events.reader import read_all
 from factory.model.chase import ChaseDirection
 from factory.model.dedup import DedupReverted
+from factory.model.fulltext import Route
 from factory.model.project import RigorMode
 from factory.model.protocol import PressElement, PressFinding
 from factory.model.screening import (
@@ -38,6 +40,7 @@ from factory.services.chase import search_chase
 from factory.services.check import Finding, _findings_as, check
 from factory.services.context import Project
 from factory.services.dedup import active_merges, dedup_run
+from factory.services.fulltext import fetch_fulltext, restore_document
 from factory.services.prisma import search_report
 from factory.services.protocol import press_review
 from factory.services.screening import open_pass, pass_b_sample
@@ -53,6 +56,7 @@ from factory.sources.registry import SourceFactory
 from tests import helpers
 from tests.helpers import _protocol, _seed_item, _setup
 from tests.test_chase_service import _citing, _corpus, _ordinary, _settle
+from tests.test_fulltext_service import _include_all, always, retrieved, routes_for
 from tests.test_prisma import _merge_items
 from tests.test_screening_next import _decide, _draw
 
@@ -783,6 +787,7 @@ def test_clean_project_is_ok(
         "audit-missing",
         "chase-missing",
         "profile-checklist",
+        "fulltext-unsought",
     }
 
 
@@ -942,3 +947,128 @@ def test_agent_view_counts_seeds_by_role_and_names_none() -> None:
     assert broken.refs == ["rf:a"]
     assert not any("SEED0" in f.model_dump_json() for f in view.findings)
     assert view.mode is report.mode and view.evaluated_as is report.evaluated_as
+
+
+# --- Full text (plan 2A, task 11): library findings and unsought promoted works ---
+
+
+def _fetched_corpus(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> list[str]:
+    """A corpus with every ordinary work included, and its promoted works sorted by id."""
+    protocol_id = _setup(project, agent, human, mock_sources, dual_sample=0.5, random_works=0)
+    _draw(project)
+    open_pass(project, agent, PassLabel.A)
+    open_pass(project, agent, PassLabel.B)
+    _include_all(project, agent, human, protocol_id)
+    return sorted(w for w, o in final_outcomes(project).items() if o is Outcome.INCLUDED)
+
+
+def _fetch_first(project: Project, promoted: list[str], content: bytes) -> tuple[str, str, str]:
+    """Fetch the first promoted work from arXiv HTML. Returns (work, document, raw_hash)."""
+    work = promoted[0]
+    summary = fetch_fulltext(
+        project,
+        routes=routes_for(arxiv_html=always(retrieved(Route.ARXIV_HTML, content))),
+        work_ids=[work],
+    )
+    document = summary.works[0].documents[0]
+    [added] = [
+        e
+        for e in read_all(project.paths.events_dir, project.catalog)
+        if e.type == "fulltext.document_added" and e.payload["document_id"] == document
+    ]
+    return work, document, str(added.payload["raw_hash"])
+
+
+@_rows(("warning", "warning", "warning"))
+def test_check_reports_missing_library_entry(
+    project: Project,
+    agent: Actor,
+    human: Actor,
+    mock_sources: SourcesFor,
+    mode: RigorMode,
+    expected: str,
+) -> None:
+    promoted = _fetched_corpus(project, agent, human, mock_sources)
+    work, document, raw_hash = _fetch_first(project, promoted, b"full text")
+    project.library.path(raw_hash).unlink()
+
+    _assert_row(project, "library-missing", mode, expected, refs=[document, work])
+    _assert_row(project, "library-corrupt", mode, None)
+
+
+def test_check_clean_after_restore(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    promoted = _fetched_corpus(project, agent, human, mock_sources)
+    _, document, raw_hash = _fetch_first(project, promoted, b"full text")
+    project.library.path(raw_hash).unlink()
+    stub = routes_for(arxiv_html=always(retrieved(Route.ARXIV_HTML, b"full text")))
+    assert restore_document(project, document, routes=stub) == "restored"
+
+    for mode in MODES:
+        _assert_row(project, "library-missing", mode, None)
+
+
+@_rows(("error", "error", "error"))
+def test_check_corrupt_entry_is_error(
+    project: Project,
+    agent: Actor,
+    human: Actor,
+    mock_sources: SourcesFor,
+    mode: RigorMode,
+    expected: str,
+) -> None:
+    promoted = _fetched_corpus(project, agent, human, mock_sources)
+    work, document, raw_hash = _fetch_first(project, promoted, b"full text")
+    project.library.path(raw_hash).write_bytes(b"tampered")
+
+    _assert_row(project, "library-corrupt", mode, expected, refs=[document, work])
+    _assert_row(project, "library-missing", mode, None)
+    assert not check(project).ok
+
+
+@_rows(("warning", "warning", "warning"))
+def test_check_source_changed_is_warning(
+    project: Project,
+    agent: Actor,
+    human: Actor,
+    mock_sources: SourcesFor,
+    mode: RigorMode,
+    expected: str,
+) -> None:
+    promoted = _fetched_corpus(project, agent, human, mock_sources)
+    work, document, _ = _fetch_first(project, promoted, b"first bytes")
+    fetch_fulltext(
+        project,
+        routes=routes_for(arxiv_html=always(retrieved(Route.ARXIV_HTML, b"second bytes"))),
+        work_ids=[work],
+        refresh=True,
+    )
+
+    _assert_row(project, "source-changed", mode, expected, refs=[document, work])
+
+
+@_rows(("warning", "warning", "warning"))
+def test_check_unsought_promoted_work(
+    project: Project,
+    agent: Actor,
+    human: Actor,
+    mock_sources: SourcesFor,
+    mode: RigorMode,
+    expected: str,
+) -> None:
+    promoted = _fetched_corpus(project, agent, human, mock_sources)
+    _fetch_first(project, promoted, b"full text")
+
+    _assert_row(project, "fulltext-unsought", mode, expected, refs=promoted[1:])
+
+
+def test_clean_project_without_fulltext_is_unsought_only(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    promoted = _fetched_corpus(project, agent, human, mock_sources)
+
+    for mode in MODES:
+        _assert_row(project, "fulltext-unsought", mode, "warning", refs=promoted)

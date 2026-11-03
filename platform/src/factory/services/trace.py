@@ -33,6 +33,7 @@ from factory.events.reader import read_all
 from factory.model.base import StrictModel
 from factory.model.chase import CHASE_ROUND_ID_RE
 from factory.model.dedup import MERGE_ID_RE
+from factory.model.fulltext import ATTEMPT_ID_RE, DOCUMENT_ID_RE
 from factory.model.identity import BLOB_REF_RE, ULID_RE
 from factory.model.protocol import PROTOCOL_ID_RE, ProtocolSpec
 from factory.model.question import QUESTION_ID_RE, QuestionSpec
@@ -53,6 +54,8 @@ KINDS: tuple[str, ...] = (
     "record",
     "merge",
     "work",
+    "attempt",
+    "document",
     "decision",
     "resolution",
     "audit",
@@ -85,6 +88,8 @@ _PATTERNS: tuple[tuple[str, str], ...] = (
     (SEED_ID_RE, "seed"),
     (BLOB_REF_RE, "page"),
     (WORK_ID_RE, "work"),
+    (ATTEMPT_ID_RE, "attempt"),
+    (DOCUMENT_ID_RE, "document"),
     (_RECORD_RE, "record"),
     (_RESOLUTION_RE, "resolution"),
 )
@@ -323,6 +328,8 @@ class _Walk:
             "record": self._record,
             "merge": self._merge,
             "work": self._work,
+            "attempt": self._attempt,
+            "document": self._document,
             "decision": self._decision,
             "resolution": self._resolution,
             "audit": self._audit,
@@ -534,6 +541,33 @@ class _Walk:
             return None
         title = json.loads(str(rows[0][0]))["title"]
         return _Described(str(title), str(rows[0][1]))
+
+    def _attempt(self, ident: str) -> _Described | None:
+        rows = self._all(
+            "SELECT route, outcome, reason, event_id FROM fulltext_attempts WHERE attempt_id = :a",
+            a=ident,
+        )
+        if not rows:
+            return None
+        route, outcome, reason, event_id = rows[0]
+        label = f"{route}: {outcome}"
+        if reason is not None:
+            label += f" ({reason})"
+        return _Described(label, str(event_id))
+
+    def _document(self, ident: str) -> _Described | None:
+        rows = self._all(
+            "SELECT route, quality, superseded_by, event_id FROM fulltext_documents "
+            "WHERE document_id = :d",
+            d=ident,
+        )
+        if not rows:
+            return None
+        route, quality, superseded_by, event_id = rows[0]
+        label = f"{route}, {quality}"
+        if superseded_by is not None:
+            label += " (superseded)"
+        return _Described(label, str(event_id))
 
     def _decision(self, ident: str) -> _Described | None:
         rows = self._all(
@@ -845,6 +879,18 @@ class _Walk:
             )
         ]
         down += [
+            ("attempt", a)
+            for a in self._column(
+                "SELECT attempt_id FROM fulltext_attempts WHERE work_id = :w", w=ident
+            )
+        ]
+        down += [
+            ("document", d)
+            for d in self._column(
+                "SELECT document_id FROM fulltext_documents WHERE work_id = :w", w=ident
+            )
+        ]
+        down += [
             ("decision", d)
             for d in self._column("SELECT decision_id FROM decisions WHERE work_id = :w", w=ident)
         ]
@@ -865,6 +911,28 @@ class _Walk:
             )
         ]
         return up, down
+
+    def _edges_attempt(self, ident: str) -> tuple[list[Key], list[Key]]:
+        rows = self._all(
+            "SELECT work_id, document_id FROM fulltext_attempts WHERE attempt_id = :a", a=ident
+        )
+        up: list[Key] = []
+        down: list[Key] = []
+        if rows:
+            work_id, document_id = rows[0]
+            up.append(("work", str(work_id)))
+            if document_id is not None:
+                down.append(("document", str(document_id)))
+        return up, down
+
+    def _edges_document(self, ident: str) -> tuple[list[Key], list[Key]]:
+        up: list[Key] = [
+            ("attempt", a)
+            for a in self._column(
+                "SELECT attempt_id FROM fulltext_documents WHERE document_id = :d", d=ident
+            )
+        ]
+        return up, []
 
     def _edges_decision(self, ident: str) -> tuple[list[Key], list[Key]]:
         rows = self._all(
@@ -977,6 +1045,8 @@ _EDGES: dict[str, Callable[[_Walk, str], tuple[list[Key], list[Key]]]] = {
     "record": _Walk._edges_record,
     "merge": _Walk._edges_merge,
     "work": _Walk._edges_work,
+    "attempt": _Walk._edges_attempt,
+    "document": _Walk._edges_document,
     "decision": _Walk._edges_decision,
     "resolution": _Walk._edges_resolution,
     "audit": _Walk._edges_audit,

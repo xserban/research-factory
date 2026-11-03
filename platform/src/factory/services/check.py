@@ -26,6 +26,7 @@ from typing import Literal
 
 from sqlalchemy import text
 
+from factory.events.blobs import BlobIntegrityError
 from factory.events.reader import read_all
 from factory.index.chase import admitted_works
 from factory.model.base import StrictModel
@@ -39,6 +40,7 @@ from factory.services.calibration import calibration_status
 from factory.services.chase import chase_rounds
 from factory.services.context import Project
 from factory.services.dedup import active_merges
+from factory.services.fulltext_status import fulltext_status
 from factory.services.methods import MethodsReport, methods_report
 from factory.services.prisma import search_report
 from factory.services.protocol import current_protocol
@@ -65,6 +67,10 @@ LEVELS: dict[str, tuple[Severity | None, Severity | None, Severity | None]] = {
     "chase-missing": (None, "warning", "error"),
     "profile-checklist": ("warning", "warning", "warning"),
     "merge-verdict-conflict": ("warning", "warning", "warning"),
+    "library-missing": ("warning", "warning", "warning"),
+    "library-corrupt": ("error", "error", "error"),
+    "source-changed": ("warning", "warning", "warning"),
+    "fulltext-unsought": ("warning", "warning", "warning"),
 }
 
 _MODE_ORDER: tuple[RigorMode, ...] = (
@@ -262,6 +268,7 @@ def _hits(project: Project) -> list[_Hit]:
     hits += _chase(project, outcomes)
     hits += _checklist(project)
     hits += _merge_conflicts(project, outcomes)
+    hits += _fulltext(project)
     return hits
 
 
@@ -580,3 +587,86 @@ def _merge_conflicts(project: Project, outcomes: dict[str, Outcome]) -> list[_Hi
                 )
             )
     return hits
+
+
+# --- Full text (plan 2A, task 11) ---
+
+
+def _fulltext(project: Project) -> list[_Hit]:
+    """Library entries that are missing or corrupt, changed sources, and promoted works never
+    sought. A document's findings name its document and its work. A missing entry is a warning,
+    since the library is not in git; a corrupt one is an error, since its bytes are not the
+    document's."""
+    hits: list[_Hit] = []
+    for document_id, work_id, raw_hash in _stored_documents(project):
+        state = _library_state(project, raw_hash)
+        if state == "missing":
+            hits.append(
+                _Hit(
+                    "library-missing",
+                    (document_id, work_id),
+                    "a document has no library entry; restore it",
+                )
+            )
+        elif state == "corrupt":
+            hits.append(
+                _Hit(
+                    "library-corrupt",
+                    (document_id, work_id),
+                    "a library entry does not hash to its document",
+                )
+            )
+    for document_id, work_id in _changed_sources(project):
+        hits.append(
+            _Hit(
+                "source-changed",
+                (document_id, work_id),
+                "a re-fetch hashed differently from its document; a decision is needed",
+            )
+        )
+    unsought = [
+        entry.work_id for entry in fulltext_status(project).works if entry.state == "unsought"
+    ]
+    if unsought:
+        hits.append(
+            _Hit(
+                "fulltext-unsought",
+                tuple(unsought),
+                f"{len(unsought)} promoted work(s) have no full-text attempt",
+            )
+        )
+    return hits
+
+
+def _stored_documents(project: Project) -> list[tuple[str, str, str]]:
+    """(document id, work id, library hash) of every document, superseded ones included."""
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text("SELECT document_id, work_id, raw_hash FROM fulltext_documents ORDER BY event_id")
+        ).all()
+    return [(str(d), str(w), str(h)) for d, w, h in rows]
+
+
+def _changed_sources(project: Project) -> list[tuple[str, str]]:
+    """(document id, work id) of every recorded source change, in event order."""
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT c.document_id, d.work_id FROM fulltext_source_changes c "
+                "JOIN fulltext_documents d ON d.document_id = c.document_id "
+                "ORDER BY c.event_id"
+            )
+        ).all()
+    return [(str(d), str(w)) for d, w in rows]
+
+
+def _library_state(project: Project, raw_hash: str) -> Literal["ok", "missing", "corrupt"]:
+    """Whether the library holds the hash's bytes. Only `corrupt` reads the file: `BlobStore.get`
+    raises when the stored bytes no longer hash to the reference."""
+    if not project.library.exists(raw_hash):
+        return "missing"
+    try:
+        project.library.get(raw_hash)
+    except BlobIntegrityError:
+        return "corrupt"
+    return "ok"
