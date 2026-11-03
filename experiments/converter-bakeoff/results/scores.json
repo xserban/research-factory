@@ -1,0 +1,71 @@
+{
+  "docling/pdf": {
+    "determinism": 1.0,
+    "empty_outputs": 0,
+    "failures": 0,
+    "fidelity": 0.8115,
+    "fidelity_ok": 0.8115,
+    "n_ok": 18,
+    "n_papers": 18,
+    "n_reference_tables": 119,
+    "sec_per_page_median": 1.25,
+    "sec_per_page_p90": 3.068,
+    "sections_ratio": 1.22,
+    "tables_equal_share": 0.333,
+    "tables_ratio": 1.32
+  },
+  "latexml-html/html": {
+    "determinism": 1.0,
+    "empty_outputs": 0,
+    "failures": 0,
+    "n_ok": 18,
+    "n_papers": 18,
+    "sec_per_page_median": 0.009,
+    "sec_per_page_p90": 0.014
+  },
+  "pandoc/html": {
+    "determinism": 1.0,
+    "empty_outputs": 0,
+    "failures": 0,
+    "fidelity": 0.0076,
+    "fidelity_ok": 0.0076,
+    "n_ok": 18,
+    "n_papers": 18,
+    "n_reference_tables": 119,
+    "sec_per_page_median": 0.039,
+    "sec_per_page_p90": 0.079,
+    "sections_ratio": 0.624,
+    "tables_equal_share": 0.056,
+    "tables_ratio": 2.664
+  },
+  "pandoc/latex": {
+    "determinism": 1.0,
+    "empty_outputs": 0,
+    "failures": 2,
+    "fidelity": 0.4793,
+    "fidelity_ok": 0.4875,
+    "n_ok": 16,
+    "n_papers": 18,
+    "n_reference_tables": 119,
+    "sec_per_page_median": 0.022,
+    "sec_per_page_p90": 0.051,
+    "sections_ratio": 0.944,
+    "tables_equal_share": 0.375,
+    "tables_ratio": 0.5
+  },
+  "pymupdf4llm/pdf": {
+    "determinism": 1.0,
+    "empty_outputs": 0,
+    "failures": 0,
+    "fidelity": 0.6446,
+    "fidelity_ok": 0.6446,
+    "n_ok": 18,
+    "n_papers": 18,
+    "n_reference_tables": 119,
+    "sec_per_page_median": 0.869,
+    "sec_per_page_p90": 2.174,
+    "sections_ratio": 1.072,
+    "tables_equal_share": 0.278,
+    "tables_ratio": 1.287
+  }
+}
