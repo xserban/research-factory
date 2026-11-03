@@ -73,6 +73,25 @@ def test_arxiv_org_interval_is_three_seconds() -> None:
     assert time.sleeps == pytest.approx([3.0])
 
 
+def test_arxiv_hosts_share_one_throttle() -> None:
+    """arXiv limits per IP across both hosts, so they share one clock."""
+    time = FakeTime()
+    client = make_client(ok, time)
+    client.get(ARXIV, params={})
+    client.get("https://arxiv.org/pdf/2101.00001", params={})
+    client.get(ARXIV, params={})
+    assert time.sleeps == pytest.approx([3.0, 3.0])
+
+
+def test_throttle_sharing_leaves_other_hosts_alone() -> None:
+    time = FakeTime()
+    client = make_client(ok, time)
+    client.get(ARXIV, params={})
+    client.get(OPENALEX, params={})
+    client.get("https://arxiv.org/pdf/2101.00001", params={})
+    assert time.sleeps == pytest.approx([3.0])
+
+
 def test_unknown_host_waits_default_interval() -> None:
     time = FakeTime()
     client = make_client(ok, time)

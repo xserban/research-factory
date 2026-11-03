@@ -21,6 +21,10 @@ HOST_INTERVALS: Mapping[str, float] = {
     "api.openalex.org": 0.1,
 }
 
+# arXiv's limit is per IP across both hosts, so they share one throttle clock. Each key maps to
+# the clock it is throttled on; hosts not listed keep their own.
+THROTTLE_GROUPS: Mapping[str, str] = {"export.arxiv.org": "arxiv.org"}
+
 VERSION = "0.2"
 
 
@@ -107,16 +111,17 @@ class PoliteClient:
         raise AssertionError("unreachable: the final attempt always returns or raises")
 
     def _wait_turn(self, host: str) -> None:
-        """Block until `host` may be called again, then stamp the call time."""
+        """Block until `host`'s throttle clock allows a call, then stamp the call time."""
+        clock = THROTTLE_GROUPS.get(host, host)
         with self._lock:
-            last = self._last.get(host)
+            last = self._last.get(clock)
             if last is not None:
                 delay = self._intervals.get(host, self._default_interval) - (
                     self._monotonic() - last
                 )
                 if delay > 0:
                     self._sleep(delay)
-            self._last[host] = self._monotonic()
+            self._last[clock] = self._monotonic()
 
     def _exponential(self, attempt: int) -> float:
         return min(self._backoff[1], self._backoff[0] * 2.0**attempt)
