@@ -31,7 +31,7 @@ from factory.model.identity import BLOB_REF_RE, ULID_RE
 from factory.model.screening import NonBlank
 from factory.model.work_ids import WORK_ID_RE
 
-FETCH_ID_RE = rf"^fch_{ULID_RE}$"
+FETCH_ID_RE = rf"^fft_{ULID_RE}$"
 ATTEMPT_ID_RE = rf"^att_{ULID_RE}$"
 DOCUMENT_ID_RE = rf"^doc_{ULID_RE}$"
 

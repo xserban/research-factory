@@ -154,7 +154,7 @@ def fetch_fulltext(
         if issues:
             raise FactoryValidationError(issues)
         targets = _targets(project, promoted, work_ids, revisit, limit)
-        fetch_id = project.ids.new("fch")
+        fetch_id = project.ids.new("fft")
         request = _request(work_ids, only, refresh, limit)
         blob = input_blob if input_blob is not None else _trigger_blob(project, trigger, request)
         started = FetchStarted(

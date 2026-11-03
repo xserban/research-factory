@@ -485,7 +485,7 @@ def test_cli_fetch_is_a_human_act(
     )
 
     assert result.exit_code == 0, result.stderr
-    assert result.stdout.startswith("fetch fch_")
+    assert result.stdout.startswith("fetch fft_")
     assert stubs[Route.ARXIV_HTML].calls == [work]
     [started] = _of_type(project, "fulltext.fetch_started")
     assert started.actor.kind == "human"
