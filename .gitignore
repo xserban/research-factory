@@ -11,8 +11,9 @@ dist/
 build/
 *.egg-info/
 
-# Factory: rebuildable index and large binaries (decision pending for PDFs)
+# Factory: rebuildable index; project-local literature library (decision 39)
 projects/*/.index/
+projects/*/library/
 projects/*/blobs/**/*.pdf
 
 # Editors / OS

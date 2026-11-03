@@ -76,7 +76,8 @@ IDs are never reused and never change. A changed entity is a new version or a su
 
 ### 4.3 Blobs
 - Content-addressed files under `projects/<slug>/blobs/sha256/<2>/<62>`: raw source responses, task payloads, generated reports.
-- Text blobs are committed to git. PDFs and other large binaries are not committed (open question: Git LFS or a shared blob store; decided in the full-text slice).
+- Text blobs (raw search responses, task payloads, generated reports) are committed to git.
+- **Literature is never in git** (decision 39): raw full-text sources and canonical Markdown live in the project-local, git-ignored library `projects/<slug>/library/sha256/<2>/<62>`; events reference them by hash.
 
 ### 4.4 Index (projection)
 - SQLite at `projects/<slug>/.index/factory.sqlite` (git-ignored), built only from events and blobs.
@@ -119,6 +120,6 @@ Tasks are events (`task.created`, `task.claimed`, `task.completed`, `task.releas
 - Development process: obra/superpowers (decision #30); plans in `docs/plans/`.
 
 ## 11. Open questions (not blocking slice 1)
-- Large binaries (PDFs): Git LFS vs. shared blob store.
+- Sharing the local library between machines and people (slice 5).
 - Identity of humans when several people share a project (slice: teams).
 - Event schema evolution policy (upcasting old payload versions vs. versioned projectors).

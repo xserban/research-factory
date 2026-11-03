@@ -2,6 +2,8 @@
 
 Ideas not yet in any spec. A backlog item is **not** a commitment: nothing here is built until a slice spec takes it in (`docs/specs/`). Decisions go to `decisions.md`; requirements go to the specs.
 
+**Numbering:** take the next free number (check the whole file first; several sessions add entries).
+
 **Statuses:** `new` (captured) → `triaged` (sized, linked to a slice) → `accepted` (named in a slice spec; link it) · or `parked` / `rejected` (with a one-line reason). Never delete an entry; change its status.
 
 **Template**
@@ -60,7 +62,7 @@ Status: new · Added: 2026-11-01 · Slice: 6 · Depends on: IDEA-02, hypothesis 
 ## Knowledge from the corpus (added 2026-11-01)
 
 ### IDEA-06 — Living benchmark table
-Status: new · Added: 2026-11-01 · Slice: 2 (claims) · Depends on: claim extraction with verified spans
+Status: accepted ([slice-2](specs/slice-2.md)) · Added: 2026-11-01 · Slice: 2 (claims) · Depends on: claim extraction with verified spans
 **What:** reported results as rows: method × dataset × task × metric × value × compute (params, FLOPs, throughput, resolution, hardware), each cell citing a verified source span. Views: Pareto frontier (accuracy vs. cost), coverage matrix.
 **Why:** for questions like "best linear attention for vision" the answer is a frontier, not prose.
 **Rigour notes:** comparability conditions are explicit columns; reported vs. reproduced marked; incomparable cells are never merged; derived rankings state the conditions they hold under.
@@ -167,3 +169,32 @@ Status: new · Added: 2026-11-02 · Slice: — · Depends on: slice 1 plan 5a, `
 **Rigour notes:** options: (a) record the condition only, with no change to behaviour; (b) make the extension a no-op until `dedup_run` is current.
 **Open questions:** does option (b) block a legitimate extension while dedup is stale?
 **Plan 5b note:** the PRISMA flow reads only the canonical primary's final outcome after a merge, so a conflicting verdict on an absorbed record is not counted; `check` reports it as `merge-verdict-conflict`, which is the interim signal until the conflict is resolved by a rule.
+
+---
+
+## Deferred from slice 2 (added 2026-11-03; decision 44)
+
+### IDEA-21 — Per-paper appraisal
+Status: triaged · Added: 2026-11-03 · Slice: when a project needs it (required in `systematic`, R-41) · Depends on: slice 2 documents and anchors
+**What:** item-level appraisal with a project-declared instrument; items typed `platform` (deterministic), `agent-span` (agent with verified quote, dual on a sample, audited), `judgement` (agent proposes, human decides); no overall score (decision 42).
+**Open questions:** first instruments (ML evidence checklist from NeurIPS M14; RoB 2 / PROBAST for biomedical projects).
+
+### IDEA-22 — PubMed search and PMC full-text route
+Status: triaged · Added: 2026-11-03 · Slice: first biomedical project (TAVI, ND)
+**What:** PubMed source adapter (PRISMA-S fields, no truncation) and PMC OA JATS route to Markdown.
+
+### IDEA-23 — Consistency check of copied results
+Status: new · Added: 2026-11-03 · Slice: after slice 2 · Depends on: copied-result flag
+**What:** when a paper reports a baseline number copied from another paper in the corpus, compare it with that paper's own extracted value and flag mismatches (including version mismatches).
+
+---
+
+## Evidence beyond databases (added 2026-11-03)
+
+### IDEA-24 — Grey literature in the review stages
+Status: triaged · Added: 2026-11-03 · Slice: after slice 2 (outline: [specs/outlines/grey-literature.md](specs/outlines/grey-literature.md)) · Depends on: slice-2 Markdown conversion and local library; IDEA-21 for grey appraisal
+**What:** planned grey-literature searching (registries, repositories, model hubs, targeted websites, web search with declared stopping rules, expert contact), page capture into the local library, and grey items flowing through the same dedup, screening, full-text and extraction stages with their own provenance.
+**Why:** reviews limited to indexed literature miss technical reports, code results, registries and regulatory evidence, and are biased towards published positive results.
+**Rigour notes:** declared in the protocol before searching; snapshots with hash and timestamp; web-search cut-offs declared and reported (explicit exception to R-21); grey evidence labelled and shown with and without it; later publications linked, not merged away.
+**Open questions:** first sources (ML vs. biomedical); status of agent web search; capture limits; monitoring by the literature watch (IDEA-02).
+

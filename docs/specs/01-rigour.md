@@ -63,6 +63,11 @@ Source: consolidated from research-factory-old (`spec/TRACEABILITY.md`, `RIGOR-M
 | R-40 | Claims are atomic, carry a locator and a verified source span, an evidence type and strength; corrections supersede, never edit | — | P, S |
 | R-41 | Appraisal stores **item-level answers** of the declared instrument (RoB 2, ROBINS-I, PROBAST, QUADAS-2, GRADE domains; AACODS for grey literature; ASME V&V 40 for computational models), never only a summary grade | Cochrane, GRADE | S (P: grey only) |
 | R-42 | Every synthesis sentence cites claim IDs; disagreement between claims is surfaced, not averaged away; answers may say "the corpus does not support an answer" | PRISMA 2020 20–22 | all |
+| R-43 | Full text: every retrieval attempt is recorded (route, URL, version, licence, raw hash); conversion is deterministic with a pinned converter; extraction applies to one recorded document version | PRISMA 2020 | all |
+| R-44 | **Number check:** every extracted numeric value must occur in its verified quote or anchored table cell (declared normalisation); values copied from cited papers are flagged and not counted as independent results | — (agentic) | P, S |
+| R-45 | Extraction schema, appraisal instrument and comparability keys are declared in the protocol before extraction (cf. R-13); evidence is grouped only by identical comparability keys and never ranked across groups | Cochrane Handbook ch. 5, 9 (verify) | all |
+| R-46 | Dual extraction (all in S, recorded sample in P) with field-level agreement; disagreements to the human; human audit sample of agreed values with error rate | MECIR data-collection items (verify numbers) | P, S |
+| R-47 | Literature (raw sources, full text) is stored in the project-local library, never in a git-tracked path; events carry hashes and the verified quotes used as evidence | — | all |
 
 ## F. Hypotheses and testing (detailed in later slices)
 | ID | Requirement | Modes |
