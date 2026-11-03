@@ -4,8 +4,9 @@ Converters emit plain Markdown; this module alone writes anchors, so one scheme 
 formats. The output satisfies `parse_manifest` and is a fixed point of `anchorise`.
 
 Numbering:
-- A numbered heading (`3`, `3.2`, appendix `A` or `A.1`) gives section `s3`, `s3.2`, `s101` or
-  `s101.1` (appendix letter index plus 100). An unnumbered heading that is the only heading at the
+- A numbered heading (`3`, `3.2`, or an appendix per Ruling F: `A.`, `A:`, `A)`, `A` alone, `A.1`)
+  gives section `s3`, `s3.2`, `s101` or `s101.1` (appendix letter index plus 100). `_numbering`
+  implements this grammar. An unnumbered heading that is the only heading at the
   minimum depth and has deeper headings is the document title and gets `s0`. Any other unnumbered
   heading takes the next ordinal under its parent heading. A repeated id takes `.k` (k >= 2).
 - Paragraphs before the first heading belong to `s0`. Paragraphs are numbered per section from 1.
@@ -23,7 +24,7 @@ from dataclasses import dataclass, field
 
 from markdown_it.token import Token
 
-from factory.document.anchors import _MARKDOWN, _split_row
+from factory.document.anchors import MARKDOWN, split_row
 from factory.document.normalise import normalise
 
 _PAGE = "\x00page\x00"
@@ -33,7 +34,10 @@ _PAGE_ANCHOR = re.compile(r'<a id="p\d+"></a>')
 _STRAY_ANCHOR = re.compile(r"<(?=a\s+id=)")
 _FENCE_OPEN = re.compile(r"^\s{0,3}(`{3,}|~{3,})")
 _FENCE_CLOSE = re.compile(r"^\s{0,3}(`{3,}|~{3,})\s*$")
-_NUMBERED = re.compile(r"(?:(\d+(?:\.\d+)*)|([A-Z])((?:\.\d+)*))\.?(?=\s|$)")
+_DIGITS = re.compile(r"(\d+(?:\.\d+)*)\.?(?=\s|$)")
+_DIGITS = re.compile(r"(\d+(?:\.\d+)*)\.?(?=\s|$)")
+_APPENDIX_SUB = re.compile(r"([A-Z])\.(\d+(?:\.\d+)*)(?=\s|$)")
+_APPENDIX_LETTER = re.compile(r"([A-Z])(?=[.:)](?:\s|$)|$)")
 _FIGURE = re.compile(r"(?:Figure|Fig\.)\s+(\d+)\b", re.IGNORECASE)
 _TABLE_CAPTION = re.compile(r"Table\s+\d+", re.IGNORECASE)
 _PROBE = '<a id="x"></a>'
@@ -61,6 +65,31 @@ def anchorise(markdown: str) -> str:
     for index, block in enumerate(blocks):
         out.extend(numbering.emit(block, title=index == title))
     return "\n\n".join(out) + "\n" if out else ""
+
+
+def _numbering(text: str) -> str | None:
+    """The section path of a heading's text, or None if the heading is unnumbered.
+
+    Digit numbering gives `3` or `3.2`. Ruling F appendix numbering gives `A.1` and `A.1.2` (as
+    `101.1` and `101.1.2`), and `A.`, `A:`, `A)` or `A` alone (as `101`). In the letter forms the
+    letter must be followed by punctuation and whitespace, or end the heading. A bare `A Title` is
+    unnumbered.
+    """
+    stripped = text.strip()
+    digits = _DIGITS.match(stripped)
+    if digits is not None:
+        return digits.group(1)
+    sub = _APPENDIX_SUB.match(stripped)
+    if sub is not None:
+        return f"{_appendix_index(sub.group(1))}.{sub.group(2)}"
+    letter = _APPENDIX_LETTER.match(stripped)
+    if letter is not None:
+        return str(_appendix_index(letter.group(1)))
+    return None
+
+
+def _appendix_index(letter: str) -> int:
+    return 100 + ord(letter) - ord("A") + 1
 
 
 def _mark_pages(markdown: str) -> str:
@@ -141,7 +170,7 @@ def _math_end(lines: list[str], start: int) -> int | None:
 
 def _blocks(lines: list[str], regions: list[list[str]]) -> list[_Block]:
     """The top-level blocks of the masked source, in document order."""
-    tokens = _MARKDOWN.parse("\n".join(lines))
+    tokens = MARKDOWN.parse("\n".join(lines))
     blocks: list[_Block] = []
     for index, token in enumerate(tokens):
         if not _is_top_level_open(token):
@@ -225,7 +254,7 @@ def _title_index(blocks: list[_Block]) -> int | None:
     if len(top) != 1 or len(headings) == len(top):
         return None
     index, block = top[0]
-    return None if _NUMBERED.match(block.text.strip()) else index
+    return index if _numbering(block.text) is None else None
 
 
 def _spans(tokens: list[Token]) -> list[tuple[str, int, int]]:
@@ -245,7 +274,7 @@ def _anchors_ok(kind: str, lines: list[str]) -> bool:
     line after an anchor-only paragraph.
     """
     count = len(lines)
-    spans = _spans(_MARKDOWN.parse("\n".join([_PROBE, *lines])))
+    spans = _spans(MARKDOWN.parse("\n".join([_PROBE, *lines])))
     if kind == "paragraph" and spans == [("paragraph", 0, count + 1)]:
         return True
     return spans == [("paragraph", 0, 1), (kind, 1, count + 1)]
@@ -295,15 +324,12 @@ class _Numbering:
 
     def _heading(self, block: _Block, *, title: bool) -> str:
         parent = self._parent(block.level)
-        numbered = None if title else _NUMBERED.match(block.text.strip())
+        numbered = None if title else _numbering(block.text)
         key = (parent, block.level)
         if title:
             base, last = "s0", None
         elif numbered is not None:
-            path = numbered.group(1) or str(100 + ord(numbered.group(2)) - ord("A") + 1) + (
-                numbered.group(3) or ""
-            )
-            base, last = f"s{path}", int(path.rsplit(".", 1)[-1])
+            base, last = f"s{numbered}", int(numbered.rsplit(".", 1)[-1])
         else:
             ordinal = self.ordinals.get(key, 0) + 1
             base = f"s{ordinal}" if parent is None else f"{parent}.{ordinal}"
@@ -353,7 +379,7 @@ class _Numbering:
 
     def _table(self, block: _Block) -> list[str]:
         rows = [block.lines[0], *block.lines[2:]]
-        rectangular = len({len(_split_row(row)) for row in rows}) == 1
+        rectangular = len({len(split_row(row)) for row in rows}) == 1
         text = "\n".join(block.lines)
         if rectangular and _anchors_ok("table", block.lines):
             self.tables += 1

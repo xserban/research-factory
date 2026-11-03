@@ -34,7 +34,7 @@ _TABLE_ID_RE = re.compile(r"t\d+")
 _CAPTION_ID_RE = re.compile(r"f\d+\.cap")
 _EQUATION_ID_RE = re.compile(r"e\d+")
 
-_MARKDOWN = MarkdownIt("commonmark").enable("table").disable(["html_block", "html_inline"])
+MARKDOWN = MarkdownIt("commonmark").enable("table").disable(["html_block", "html_inline"])
 
 
 class ManifestError(FactoryError):
@@ -191,7 +191,7 @@ def _require(element: _Element, kind: str, anchor_id: str, line: int) -> None:
 
 def _units(src: str, lines: list[str]) -> Iterator[_Unit]:
     """Anchor lines and top-level block elements, in document order."""
-    for token in _MARKDOWN.parse(src):
+    for token in MARKDOWN.parse(src):
         if token.level != 0 or token.nesting == -1 or token.map is None:
             continue
         start, end = token.map
@@ -220,7 +220,7 @@ def _check_anchor_occurrences(src: str, units: list[_Unit]) -> None:
         raise ManifestError("an anchor must be on its own line at the start of a block")
 
 
-def _split_row(line: str) -> list[str]:
+def split_row(line: str) -> list[str]:
     """The raw cells of one GFM table row; `\\|` does not split a cell."""
     body = line.strip()
     if body.startswith("|"):
@@ -248,8 +248,8 @@ def _split_row(line: str) -> list[str]:
 
 def _cells(table_id: str, table: _Element) -> list[Anchor]:
     """Cell anchors `t<n>.r<r>.c<c>` (1-based, header row r1) of a rectangular table."""
-    rows = [_split_row(line) for line in table.lines[2:]]
-    header = _split_row(table.lines[0])
+    rows = [split_row(line) for line in table.lines[2:]]
+    header = split_row(table.lines[0])
     width = len(header)
     grid = [header, *rows]
     for r, row in enumerate(grid, start=1):

@@ -13,7 +13,7 @@ SAMPLES = [
     "# 1 Intro\n\nText here.\n\n## 1.2 Detail\n\nMore.\n",
     "# 1 Intro\n\n## Background\n\n## Scope\n\n## 1.2 Odd\n\n# 2 A\n\n# Notes\n\n# 2 B\n",
     TITLE_DOC,
-    "# 1 Main\n\n# A Proofs\n\n## A.1 Lemma\n\nText.\n\n# B Data\n\nMore.\n",
+    "# 1 Main\n\n# A. Proofs\n\n## A.1 Lemma\n\nText.\n\n# B) Data\n\nMore.\n",
     "# 1\n\nOne.\n\nTwo.\n\n## 1.1\n\nThree.\n\n# 2\n\nFour.\n",
     "Preamble one.\n\nPreamble two.\n\n# 1 Intro\n\nBody.\n",
     CAPTION_DOC,
@@ -68,10 +68,31 @@ def test_title_heading_is_s0() -> None:
 
 
 def test_appendix_letters() -> None:
-    md = "# 1 Main\n\n# A Proofs\n\n## A.1 Lemma\n\nText.\n\n# B Data\n\nMore.\n"
+    md = "# 1 Main\n\n# A. Proofs\n\n## A.1 Lemma\n\nText.\n\n# B: Data\n\nMore.\n"
     assert _ids(md) == ["s1", "s101", "s101.1", "s101.1.p1", "s102", "s102.p1"]
     lemma = parse_manifest(anchorise(md)).get("s101.1")
     assert lemma is not None and lemma.parent == "s101"
+
+
+def test_appendix_forms_per_ruling_f() -> None:
+    # Letter then "." ":" or ")" then whitespace, letter.digits, or the letter alone.
+    assert _ids("# 1 Main\n\n# A\n") == ["s1", "s101"]
+    assert _ids("# 1 Main\n\n# A.1.2 Setup\n") == ["s1", "s101.1.2"]
+    assert _ids("# 1 Main\n\n# C) Notes\n") == ["s1", "s103"]
+
+
+def test_bare_capital_word_is_not_an_appendix() -> None:
+    # "A Note on X" is an unnumbered heading: it takes the next ordinal under s1, never s101.
+    md = "# 1 Intro\n\n## A Note on X\n\nText.\n"
+    assert _ids(md) == ["s1", "s1.1", "s1.1.p1"]
+    assert "s101" not in anchorise(md)
+
+
+def test_sole_appendix_looking_title_is_s0() -> None:
+    # "A Survey of Methods" is a title (the only minimum-depth heading, unnumbered), not appendix A.
+    md = "# A Survey of Methods\n\nAbstract.\n\n## 1 Intro\n\nBody.\n"
+    assert _ids(md) == ["s0", "s0.p1", "s1", "s1.p1"]
+    assert "s101" not in anchorise(md)
 
 
 def test_paragraphs_numbered_per_section() -> None:

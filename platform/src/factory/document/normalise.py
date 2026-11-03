@@ -9,7 +9,7 @@ as applying it once.
 
 import unicodedata
 
-from factory.document.anchors import _MARKDOWN
+from factory.document.anchors import MARKDOWN
 
 
 def normalise(markdown: str) -> str:
@@ -40,7 +40,7 @@ def _line_sets(text: str) -> tuple[set[int], set[int]]:
     """0-based line indexes of table rows, and of fenced or indented code (kept verbatim)."""
     tables: set[int] = set()
     verbatim: set[int] = set()
-    for token in _MARKDOWN.parse(text):
+    for token in MARKDOWN.parse(text):
         if token.map is None:
             continue
         start, end = token.map
