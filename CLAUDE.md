@@ -3,7 +3,7 @@
 ## What this project is
 A deterministic platform that lets Claude run rigorous, traceable research (literature search, screening, extraction, hypothesis testing). Read `README.md` for the document index.
 
-**Status:** slice 1: sub-plans 1–4 and 5a (platform core; works and acquisition; question, seeds, probe, protocol; screening, calibration, audit; supplementary search) implemented; 5b (reports, trace, check) remains — see docs/plans/.
+**Status:** slice 1: sub-plans 1–5 (platform core; works and acquisition; question, seeds, probe, protocol; screening, calibration, audit; supplementary search; reports, trace, check) implemented — see docs/plans/.
 
 ## Binding documents (read before planning or coding)
 1. `docs/specs/00-system.md` — system contracts (layout, IDs, events, index, MCP conventions, quality bars).

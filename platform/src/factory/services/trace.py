@@ -148,6 +148,23 @@ def trace(
         return _build(walk, key, described, direction, {key})
 
 
+def without_seeds(node: TraceNode) -> TraceNode:
+    """`node` with every seed node below it removed, for a surface that must not reveal which
+    works the seeds are (R-20). A seed's own children move up to its parent, so what the seed led
+    to stays in the tree and nothing but the seed link is lost. The root is kept as given."""
+    return node.model_copy(update={"children": _lifted(node.children)})
+
+
+def _lifted(nodes: list[TraceNode]) -> list[TraceNode]:
+    kept: list[TraceNode] = []
+    for child in nodes:
+        if child.kind == "seed":
+            kept.extend(_lifted(child.children))
+        else:
+            kept.append(child.model_copy(update={"children": _lifted(child.children)}))
+    return kept
+
+
 def dangling_refs(project: Project, refs: Iterable[str]) -> list[str]:
     """The identifiers among `refs` of a kind the walk describes that no row defines, sorted.
 

@@ -19,6 +19,7 @@ Invariants:
 """
 
 import json
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal
@@ -30,6 +31,7 @@ from factory.index.chase import admitted_works
 from factory.model.base import StrictModel
 from factory.model.project import RigorMode
 from factory.model.protocol import ProtocolStatus
+from factory.model.seed import SEED_ID_RE
 from factory.model.work import ProvenanceMethod
 from factory.services.agreement import Outcome, agreement_summary, final_outcomes, single_pass_works
 from factory.services.audit import audit_outstanding, audit_report
@@ -102,6 +104,49 @@ class CheckReport(StrictModel):
     def ok(self) -> bool:
         """True when no finding is an error."""
         return not any(finding.severity == "error" for finding in self.findings)
+
+
+_HELD_OUT_POSSIBLE = "held-out-possible"
+_SEED_PHRASES = {
+    "seed-missing": "positive seed(s) missing",
+    "seed-admission-pending": "positive seed(s) explained, admission pending",
+}
+
+
+def agent_view(report: CheckReport) -> CheckReport:
+    """The report as an agent may read it: seed findings by role and count only (R-20).
+
+    A seed finding becomes one finding per code, severity and role, with no refs, so a held-out
+    seed is never named. A positive still `unsplit` may become held-out, so it is counted as
+    `held-out-possible` and never as development. Any other ref that is a seed id is dropped.
+    """
+    counts: dict[tuple[str, Severity, str], int] = {}
+    others: list[Finding] = []
+    order: list[tuple[str, Severity, str] | int] = []
+    for finding in report.findings:
+        if finding.role is None:
+            refs = [r for r in finding.refs if not re.fullmatch(SEED_ID_RE, r)]
+            others.append(finding.model_copy(update={"refs": refs}))
+            order.append(len(others) - 1)
+            continue
+        bucket = _HELD_OUT_POSSIBLE if finding.role == "unsplit" else finding.role
+        key = (finding.code, finding.severity, bucket)
+        if key not in counts:
+            order.append(key)
+        counts[key] = counts.get(key, 0) + len(finding.refs)
+    findings = [
+        others[item]
+        if isinstance(item, int)
+        else Finding(
+            code=item[0],
+            severity=item[1],
+            refs=[],
+            role=item[2],
+            message=f"{counts[item]} {item[2]} {_SEED_PHRASES.get(item[0], 'seed finding(s)')}",
+        )
+        for item in order
+    ]
+    return report.model_copy(update={"findings": findings})
 
 
 @dataclass(frozen=True)

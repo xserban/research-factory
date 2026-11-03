@@ -42,6 +42,10 @@ async def test_project_status_tool(settings: Settings, project: Project, clock: 
             "audit_sample",
             "audit_record",
             "protocol_deviation",
+            "report_prisma",
+            "report_methods",
+            "trace",
+            "check",
         ]
         res = await client.call_tool("project_status", {"project": "demo"})
         body = _body(res)

@@ -818,3 +818,39 @@ def test_pending_record_in_a_merge_is_not_a_conflict(
     assert [
         f for f in _findings_as(project, RigorMode.PILOT) if f.code == "merge-verdict-conflict"
     ] == []
+
+
+# --- The agent view: seed findings by role and count (R-20) ---
+
+
+def _seed_finding(code: str, role: str, *refs: str) -> Finding:
+    return Finding(code=code, severity="error", refs=list(refs), message="m", role=role)
+
+
+def test_agent_view_counts_seeds_by_role_and_names_none() -> None:
+    report = check_module.CheckReport(
+        mode=RigorMode.PILOT,
+        evaluated_as=RigorMode.PILOT,
+        findings=[
+            _seed_finding("seed-missing", "held-out", "SEED01", "SEED02"),
+            _seed_finding("seed-missing", "development", "SEED03"),
+            _seed_finding("seed-missing", "unsplit", "SEED04"),
+            _seed_finding("seed-admission-pending", "held-out", "SEED05"),
+            Finding(code="broken-link", severity="error", refs=["SEED09", "rf:a"], message="x"),
+        ],
+    )
+
+    view = check_module.agent_view(report)
+
+    by_key = {(f.code, f.role): f for f in view.findings}
+    assert by_key[("seed-missing", "held-out")].message == "2 held-out positive seed(s) missing"
+    assert by_key[("seed-missing", "development")].message.startswith("1 development ")
+    # An unsplit positive may still become held-out: it is never counted as development.
+    assert ("seed-missing", "unsplit") not in by_key
+    assert by_key[("seed-missing", "held-out-possible")].message.startswith("1 held-out-possible")
+    assert by_key[("seed-admission-pending", "held-out")].message.startswith("1 held-out ")
+    assert [f.refs for f in view.findings if f.role is not None] == [[], [], [], []]
+    [broken] = [f for f in view.findings if f.code == "broken-link"]
+    assert broken.refs == ["rf:a"]
+    assert not any("SEED0" in f.model_dump_json() for f in view.findings)
+    assert view.mode is report.mode and view.evaluated_as is report.evaluated_as

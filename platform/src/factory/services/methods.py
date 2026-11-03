@@ -172,13 +172,19 @@ def _screening(report: MethodsReport) -> str:
 def _agreement_and_audit(report: MethodsReport) -> str:
     per_criterion = ", ".join(f"{c} {_fmt(k)}" for c, k in report.kappa_by_criterion.items())
     sensitivity = ", ".join(f"{p} {_fmt(s)}" for p, s in report.calibration_sensitivity.items())
+    passes = NOT_COMPUTED if report.passes == 0 else str(report.passes)
+    rate = _fmt(report.audit_false_exclusion_rate)
+    audit = (
+        f"Audit false-exclusion rate: {rate} over {report.audit_n} labelled works."
+        if report.audit_n
+        else f"Audit false-exclusion rate: {NOT_COMPUTED} (no audit labels)."
+    )
     return (
-        f"Agreement and audit. Screening passes: {report.passes}; planned dual-coded share: "
+        f"Agreement and audit. Screening passes: {passes}; planned dual-coded share: "
         f"{_fmt(report.dual_sample)}. Agreement between passes (Cohen's kappa): "
         f"{_fmt(report.kappa)}; per-criterion kappa: {per_criterion or NOT_COMPUTED}. "
         f"Calibration sensitivity per pass: {sensitivity or NOT_COMPUTED}. "
-        f"Audit false-exclusion rate: {_fmt(report.audit_false_exclusion_rate)} over "
-        f"{report.audit_n} labelled works."
+        f"{audit}"
     )
 
 

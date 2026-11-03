@@ -31,6 +31,9 @@ round and routes the new works back into screening.
    follow the `rf-screen` procedure, in their own sessions.
 5. After agreement and every resolution on the new works, repeat from step 1. Stop when a round
    adds no new works. Each repeat is a new round; the platform records them all.
+6. When the last round has been screened, call `check` and report every finding to the researcher
+   as returned, with its code and severity. Do not act on a finding or alter the project to
+   clear it.
 
 ## Never
 

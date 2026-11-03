@@ -2,7 +2,7 @@
 
 import re
 from collections.abc import Callable, Iterable, Mapping
-from typing import Annotated
+from typing import Annotated, Literal
 
 from mcp.server.mcpserver import MCPServer
 from pydantic import Field, JsonValue, StringConstraints, ValidationError
@@ -23,6 +23,7 @@ from factory.mcp.conventions import (
 from factory.model.base import StrictModel
 from factory.model.chase import ChaseDirection
 from factory.model.identity import IdGenerator
+from factory.model.project import RigorMode
 from factory.model.protocol import CriterionEffect, PressFinding, ProtocolSpec
 from factory.model.question import QuestionSpec
 from factory.model.screening import CalibrationLabelled, Channel, PassLabel, ScreeningItem
@@ -32,7 +33,10 @@ from factory.services import agreement as agreement_service
 from factory.services import audit as audit_service
 from factory.services import calibration as calibration_service
 from factory.services import chase as chase_service
+from factory.services import check as check_service
 from factory.services import dedup as dedup_service
+from factory.services import methods as methods_service
+from factory.services import prisma as prisma_service
 from factory.services import probe as probe_service
 from factory.services import project as project_service
 from factory.services import protocol as protocol_service
@@ -40,6 +44,7 @@ from factory.services import question as question_service
 from factory.services import screening as screening_service
 from factory.services import search as search_service
 from factory.services import seeds as seeds_service
+from factory.services import trace as trace_service
 from factory.services.context import Project, open_project
 from factory.services.results import BatchResult, ItemError
 from factory.services.search import list_works
@@ -537,6 +542,73 @@ def build_server(
 
         return _reply(project, deviate)
 
+    @server.tool()
+    def report_prisma(project: str) -> dict[str, JsonValue]:
+        """The PRISMA 2020 flow and the PRISMA-S search report, computed from the events."""
+
+        def report() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            data: dict[str, JsonValue] = {
+                "flow": prisma_service.prisma_flow(opened).model_dump(mode="json"),
+                "search": prisma_service.search_report(opened).model_dump(mode="json"),
+            }
+            return _withheld(opened, data, include_work_ids=False)
+
+        return _reply(project, report, include_work_ids=False)
+
+    @server.tool()
+    def report_methods(project: str) -> dict[str, JsonValue]:
+        """The methods statement: its figures and the rendered text. Refused to a session that
+        has joined a pass, since it reports agreement, calibration and audit figures."""
+
+        def methods() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            report = methods_service.methods_report(opened)
+            data: dict[str, JsonValue] = {
+                "report": report.model_dump(mode="json"),
+                "text": methods_service.render_methods(report),
+            }
+            return _withheld(opened, data, include_work_ids=False)
+
+        return _reply(project, methods, include_work_ids=False)
+
+    @server.tool()
+    def trace(project: str, ref: str, direction: str = "back") -> dict[str, JsonValue]:
+        """The chain from any identifier: `back` to what it was derived from, `forward` to what
+        was derived from it. Seeds are not shown, and a seed id is not accepted."""
+
+        def walk() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            way = _direction(direction)
+            withheld = {t.lower() for t in _held_out_tokens(opened, include_work_ids=False)}
+            if ref.strip().lower() in withheld:
+                raise FactoryValidationError([ValidationIssue("ref", "unknown id")])
+            tree = trace_service.without_seeds(trace_service.trace(opened, ref, direction=way))
+            return _withheld(opened, tree.model_dump(mode="json"), include_work_ids=False)
+
+        return _reply(project, walk, include_work_ids=False)
+
+    @server.tool()
+    def check(project: str, promote_to: str | None = None) -> dict[str, JsonValue]:
+        """Gaps of the project: broken links, missing provenance, unexplained shortfalls, seed,
+        protocol, screening, audit and chase gaps. With `promote_to`, the errors a promotion to
+        that rigour mode would add. Seed gaps are counted by role, never named. Refused to a
+        session that has joined a pass."""
+
+        def gaps() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            mode = _rigor_mode(promote_to)
+            report = check_service.agent_view(check_service.check(opened, promote_to=mode))
+            data: dict[str, JsonValue] = {
+                **report.model_dump(mode="json"),
+                "ok": report.ok,
+            }
+            return _withheld(opened, data, include_work_ids=False)
+
+        return _reply(project, gaps, include_work_ids=False)
+
     return server
 
 
@@ -622,6 +694,26 @@ def _directions(values: list[str]) -> list[ChaseDirection]:
     if issues:
         raise FactoryValidationError(issues)
     return parsed
+
+
+def _direction(value: str) -> Literal["back", "forward"]:
+    if value == "back":
+        return "back"
+    if value == "forward":
+        return "forward"
+    raise FactoryValidationError([ValidationIssue("direction", "must be one of: back, forward")])
+
+
+def _rigor_mode(value: str | None) -> RigorMode | None:
+    if value is None:
+        return None
+    try:
+        return RigorMode(value)
+    except ValueError:
+        choices = ", ".join(mode.value for mode in RigorMode)
+        raise FactoryValidationError(
+            [ValidationIssue("promote_to", f"must be one of: {choices}")]
+        ) from None
 
 
 def _pass_label(value: str) -> PassLabel:

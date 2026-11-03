@@ -8,21 +8,27 @@ from typing import Annotated, Literal, NoReturn
 
 import typer
 
+from factory.cli import render
 from factory.clock import Clock, SystemClock
 from factory.config import Settings
 from factory.errors import FactoryValidationError, ProjectNotFoundError, ValidationIssue
 from factory.mcp.server import run
 from factory.model.chase import ChaseDirection
 from factory.model.identity import IdGenerator
+from factory.model.project import RigorMode
 from factory.model.screening import Channel
 from factory.model.work import ProvenanceMethod
 from factory.services import agreement as agreement_service
 from factory.services import audit as audit_service
 from factory.services import calibration as calibration_service
 from factory.services import chase as chase_service
+from factory.services import check as check_service
+from factory.services import methods as methods_service
+from factory.services import prisma as prisma_service
 from factory.services import project as project_service
 from factory.services import protocol as protocol_service
 from factory.services import seeds as seeds_service
+from factory.services import trace as trace_service
 from factory.services.context import Project, list_projects, open_project
 from factory.services.project import ScreeningStatus
 from factory.services.search import list_works
@@ -55,7 +61,11 @@ search_app = typer.Typer(
 audit_app = typer.Typer(
     name="audit", help="Sample, label and report the audit.", no_args_is_help=True
 )
+report_app = typer.Typer(
+    name="report", help="PRISMA flow, search report and methods statement.", no_args_is_help=True
+)
 app.add_typer(seeds_app)
+app.add_typer(report_app)
 app.add_typer(protocol_app)
 app.add_typer(calibrate_app)
 app.add_typer(screen_app)
@@ -545,3 +555,86 @@ def audit_report_cmd(ctx: typer.Context) -> None:
         f"(ceiling {report.ceiling:.2f}, above ceiling: {above})"
     )
     typer.echo(f"criteria implicated: {', '.join(report.criteria_implicated) or 'none'}")
+
+
+_JSON = Annotated[bool, typer.Option("--json", help="Print the report model as JSON.")]
+
+
+@report_app.command("prisma")
+def report_prisma(ctx: typer.Context, as_json: _JSON = False) -> None:
+    """The PRISMA 2020 flow, computed from the events."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        flow = prisma_service.prisma_flow(project)
+    typer.echo(flow.model_dump_json() if as_json else render.prisma_markdown(flow), nl=as_json)
+
+
+@report_app.command("search")
+def report_search(ctx: typer.Context, as_json: _JSON = False) -> None:
+    """The PRISMA-S search report: each registered query and what it retrieved."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        report = prisma_service.search_report(project)
+    typer.echo(report.model_dump_json() if as_json else render.search_markdown(report), nl=as_json)
+
+
+@report_app.command("methods")
+def report_methods(ctx: typer.Context, as_json: _JSON = False) -> None:
+    """The methods statement, generated from the events."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        report = methods_service.methods_report(project)
+    typer.echo(
+        report.model_dump_json() if as_json else methods_service.render_methods(report),
+        nl=as_json,
+    )
+
+
+@app.command()
+def trace(
+    ctx: typer.Context,
+    ref: Annotated[str, typer.Argument(help="Any identifier: decision, work, query, seed, Q@...")],
+    forward: Annotated[
+        bool, typer.Option("--forward", help="What was derived from REF, not what it came from.")
+    ] = False,
+) -> None:
+    """The chain from REF as an indented tree, seeds included (the human view)."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        tree = trace_service.trace(project, ref, direction="forward" if forward else "back")
+    for line in render.trace_lines(tree):
+        typer.echo(line)
+
+
+@app.command()
+def check(
+    ctx: typer.Context,
+    promote_to: Annotated[
+        str | None, typer.Option("--promote-to", help="Evaluate as this rigour mode.")
+    ] = None,
+) -> None:
+    """List the project's gaps, with ids; exit 1 when any is an error (the human view)."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        report = check_service.check(project, promote_to=_mode(promote_to))
+    for line in render.check_lines(report):
+        typer.echo(line)
+    if not report.ok:
+        raise typer.Exit(1)
+
+
+def _mode(value: str | None) -> RigorMode | None:
+    if value is None:
+        return None
+    try:
+        return RigorMode(value)
+    except ValueError:
+        choices = ", ".join(mode.value for mode in RigorMode)
+        raise FactoryValidationError(
+            [ValidationIssue("promote-to", f"must be one of: {choices}")]
+        ) from None

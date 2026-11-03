@@ -402,3 +402,24 @@ def test_trace_identical_chase_texts_link_each_query_to_its_own_round(
         assert [c.id for c in back.children if c.kind == "chase_round"] == [round_id]
         forward = trace(project, round_id, direction="forward")
         assert [c.id for c in forward.children] == [query_id]
+
+
+def _node(kind: str, ident: str, *children: TraceNode) -> TraceNode:
+    return TraceNode(id=ident, kind=kind, label=ident, event_id="e", children=list(children))
+
+
+def test_without_seeds_lifts_a_seeds_children_and_keeps_the_rest() -> None:
+    from factory.services.trace import without_seeds
+
+    tree = _node(
+        "run",
+        "run_1",
+        _node("work", "rf:a"),
+        _node("seed", "SEED01", _node("work", "rf:b", _node("seed", "SEED02"))),
+    )
+
+    stripped = without_seeds(tree)
+
+    assert [n.id for n in _all_nodes(stripped)] == ["run_1", "rf:a", "rf:b"]
+    assert [n.kind for n in _all_nodes(stripped)] == ["run", "work", "work"]
+    assert [n.id for n in _all_nodes(tree)].count("SEED01") == 1  # the input is not mutated

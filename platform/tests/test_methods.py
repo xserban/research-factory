@@ -193,3 +193,14 @@ def test_agreement_summary_matches_screen_agreement(
     _settle(project, agent, human, protocol_id)
 
     assert agreement_summary(project) == screen_agreement(project, human)
+
+
+def test_methods_zero_passes_and_zero_audit_render_not_computed() -> None:
+    """No protocol or no audit gives passes 0 and audit_n 0 in the model; the text says so."""
+    text = render_methods(_report(passes=0, audit_false_exclusion_rate=None, audit_n=0))
+
+    assert "Screening passes: not computed;" in text
+    assert "Audit false-exclusion rate: not computed (no audit labels)." in text
+    assert "passes: 0" not in text and "over 0 labelled" not in text
+    computed = render_methods(_report())
+    assert "Screening passes: 2;" in computed and "over 50 labelled works" in computed
