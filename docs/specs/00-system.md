@@ -44,6 +44,9 @@ Rule: business logic lives in `services/`. `mcp/` and `cli/` only parse input, c
 | Criterion | `P@<sha8>:<CID>` | `CID` like `IN01`, `EX03`; always version-qualified when referenced |
 | Seed | `SEED<nn>` / `NEG<nn>` | Positive / negative known items per project |
 | Other entities (query, search run, merge, decision, task) | `<prefix>_<ULID>` | e.g. `qry_`, `run_`, `mrg_`, `dec_`, `tsk_` |
+| Full-text fetch (slice 2) | `fft_<ULID>` | One acquisition attempt chain for a work; references library blobs by hash |
+| Full-text attempt (slice 2) | `att_<ULID>` | One access attempt (route, outcome) within a fetch |
+| Library document (slice 2) | `doc_<ULID>` | A stored full-text document (raw source or canonical Markdown) in the project library |
 
 IDs are never reused and never change. A changed entity is a new version or a superseding record.
 

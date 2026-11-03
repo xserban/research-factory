@@ -36,6 +36,11 @@ class ProjectPaths:
         return self.dir / "blobs"
 
     @property
+    def library_dir(self) -> Path:
+        """Project-local, git-ignored literature library (decision 39)."""
+        return self.dir / "library"
+
+    @property
     def index_path(self) -> Path:
         return self.dir / ".index" / "factory.sqlite"
 
@@ -51,6 +56,7 @@ class Project:
     ids: IdGenerator
     catalog: EventCatalog
     blobs: BlobStore
+    library: BlobStore
     events: EventFactory
     writer: EventWriter
     index: Index
@@ -90,6 +96,7 @@ def build_project(settings: Settings, slug: str, *, session: str, clock: Clock) 
         ids=ids,
         catalog=catalog,
         blobs=blobs,
+        library=BlobStore(paths.library_dir),
         events=EventFactory(slug, catalog, ids),
         writer=EventWriter(paths.events_dir, project=slug, catalog=catalog, blobs=blobs),
         index=Index(paths.index_path, paths.events_dir, catalog, default_projection()),
