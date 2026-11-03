@@ -30,8 +30,13 @@ from factory.services.project import init_project
 from factory.services.screening import open_pass
 from factory.services.search import list_works
 from factory.services.trace import trace
+from factory.sources.fulltext.arxiv import (
+    ArxivHtmlRoute,
+    ArxivSourceRoute,
+    arxiv_version_lookup,
+)
 from factory.sources.fulltext.base import RouteResult, not_retrieved
-from factory.sources.fulltext.registry import default_routes
+from factory.sources.http import default_http
 from factory.sources.registry import SourceFactory
 from tests.helpers import SESSION, T0, _setup, install_skill
 from tests.test_fulltext_import import _pdf
@@ -124,8 +129,10 @@ def test_ac1_every_promoted_work_has_attempt_and_record(
         payload = attempt.payload
         assert payload["route"] == added.payload["route"]
         assert payload["url"]
+        assert payload["source_version"]
         assert payload["source_version"] == added.payload["source_version"]
-        assert payload["licence_status"] in ("reported", "not-reported")
+        # The stub retrieves with no licence, so the licence status is not-reported.
+        assert payload["licence_status"] == "not-reported"
         assert payload["retrieved_at"]
         assert payload["raw_hash"] == added.payload["raw_hash"]
 
@@ -210,18 +217,18 @@ def test_ac15_no_literature_in_tracked_paths(
     ignored_lines = _git(repo, "status", "--porcelain", "--ignored").splitlines()
     assert "!! projects/demo/library/" in ignored_lines
 
-    # No untracked file that git would show (not ignored) holds a library file's bytes.
-    untracked = [
-        repo / line[3:]
-        for line in _git(repo, "status", "--porcelain", "--untracked-files=all").splitlines()
-        if line.startswith("?? ")
-    ]
-    assert untracked, "the event log is untracked and not ignored"
-    for file in untracked:
-        data = file.read_bytes()
-        for path in library_files:
-            assert path.read_bytes() not in data, f"{file.name} holds a library file's bytes"
-        assert CONTENT not in data, f"{file.name} holds the literature content"
+    # Stage what git would track (`.gitignore` applies), then check every tracked file.
+    _git(repo, "add", "-A")
+    tracked = [repo / rel for rel in _git(repo, "ls-files").splitlines()]
+    events_dir = ("projects", "demo", "events")
+    assert any(path.relative_to(repo).parts[:3] == events_dir for path in tracked)
+    library_root = (repo / "projects" / "demo" / "library").resolve()
+    for path in tracked:
+        assert library_root not in path.resolve().parents, f"{path.name} is a tracked library file"
+        data = path.read_bytes()
+        assert CONTENT not in data, f"{path.name} holds the literature content"
+        for library_file in library_files:
+            assert library_file.read_bytes() not in data, f"{path.name} holds a library file"
 
 
 def test_ac15_delete_check_restore(project: Project, corpus: list[str]) -> None:
@@ -258,8 +265,7 @@ def test_ac15_delete_check_restore(project: Project, corpus: list[str]) -> None:
 
 @pytest.mark.network
 def test_live_arxiv_html_and_source(tmp_path: Path) -> None:
-    settings = Settings(root=tmp_path, user="obd")
-    routes = default_routes(settings)
+    http = default_http(Settings(root=tmp_path, user="obd"))
     work = Work.build(
         title="Attention Is All You Need",
         identifiers=Identifiers(arxiv=ARXIV_LIVE),
@@ -273,9 +279,12 @@ def test_live_arxiv_html_and_source(tmp_path: Path) -> None:
             )
         ],
     )
-
-    html = routes[Route.ARXIV_HTML].fetch(work)
-    source = routes[Route.ARXIV_SOURCE].fetch(work)
+    try:
+        lookup = arxiv_version_lookup(http)
+        html = ArxivHtmlRoute(http, lookup=lookup).fetch(work)
+        source = ArxivSourceRoute(http, lookup=lookup).fetch(work)
+    finally:
+        http._http.close()  # PoliteClient has no close(); release the socket pool
 
     assert html.outcome is AttemptOutcome.RETRIEVED
     assert source.outcome is AttemptOutcome.RETRIEVED

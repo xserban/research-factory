@@ -13,45 +13,22 @@ from mcp.types import CallToolResult, TextContent
 
 from factory.clock import FixedClock
 from factory.config import Settings
-from factory.events.envelope import Event
-from factory.events.reader import read_all
 from factory.mcp.server import build_server
 from factory.model.fulltext import AttemptOutcome, Route
-from factory.model.screening import PassLabel
-from factory.services.agreement import Outcome, final_outcomes
 from factory.services.context import Project
-from factory.services.screening import open_pass
 from factory.sources.fulltext.base import RouteResult, not_retrieved
-from tests.helpers import _setup
-from tests.test_fulltext_service import StubRoute, _include_all, always, retrieved
-from tests.test_screening_next import _draw
+
+# The `corpus` fixture (promoted works) is registered by importing its module's fixture.
+from tests.test_acceptance_fulltext import (
+    _events,
+    _of_type,
+    _promoted,
+    corpus,  # noqa: F401
+)
+from tests.test_fulltext_service import StubRoute, always, retrieved
 
 AGENT = {"role": "screener-a", "model": "claude-opus-5-5", "skill": "rf-screen"}
 ROUTE_NAMES = ["arxiv-html", "arxiv-source", "oa-pdf", "researcher-supplied"]
-
-
-@pytest.fixture
-def corpus(project: Project, agent: Any, human: Any, mock_sources: Any) -> None:
-    """Both passes opened and every ordinary work included, so several works are promoted."""
-    protocol_id = _setup(project, agent, human, mock_sources, dual_sample=0.5, random_works=0)
-    _draw(project)
-    open_pass(project, agent, PassLabel.A)
-    open_pass(project, agent, PassLabel.B)
-    _include_all(project, agent, human, protocol_id)
-
-
-def _promoted(project: Project) -> list[str]:
-    return sorted(
-        w for w, outcome in final_outcomes(project).items() if outcome is Outcome.INCLUDED
-    )
-
-
-def _events(project: Project) -> list[Event]:
-    return read_all(project.paths.events_dir, project.catalog)
-
-
-def _of_type(project: Project, type_: str) -> list[Event]:
-    return [event for event in _events(project) if event.type == type_]
 
 
 def _stubs(retrieve: str) -> dict[Route, StubRoute]:
@@ -101,9 +78,10 @@ def _fetch_args(**extra: Any) -> dict[str, Any]:
     return {"project": "demo", **AGENT, **extra}
 
 
+@pytest.mark.usefixtures("corpus")
 @pytest.mark.anyio
 async def test_mcp_fetch_is_an_agent_act_with_an_input_blob(
-    settings: Settings, project: Project, clock: FixedClock, corpus: None
+    settings: Settings, project: Project, clock: FixedClock
 ) -> None:
     work = _promoted(project)[0]
     routes = _stubs(work)
@@ -130,9 +108,10 @@ async def test_mcp_fetch_is_an_agent_act_with_an_input_blob(
     assert started.payload["routes"] == ["arxiv-html"]
 
 
+@pytest.mark.usefixtures("corpus")
 @pytest.mark.anyio
 async def test_mcp_fetch_validation_errors_write_nothing(
-    settings: Settings, project: Project, clock: FixedClock, corpus: None
+    settings: Settings, project: Project, clock: FixedClock
 ) -> None:
     unpromoted = "rf:nope-00000000"
     bad_calls: list[tuple[dict[str, Any], str]] = [
@@ -156,9 +135,10 @@ async def test_mcp_fetch_validation_errors_write_nothing(
     assert all(stub.calls == [] for stub in routes.values())
 
 
+@pytest.mark.usefixtures("corpus")
 @pytest.mark.anyio
 async def test_mcp_unknown_route_rejected(
-    settings: Settings, project: Project, clock: FixedClock, corpus: None
+    settings: Settings, project: Project, clock: FixedClock
 ) -> None:
     before = len(_events(project))
     routes = _stubs(_promoted(project)[0])
@@ -192,10 +172,9 @@ async def test_mcp_unknown_route_rejected(
     assert len(_events(project)) == before
 
 
+@pytest.mark.usefixtures("corpus")
 @pytest.mark.anyio
-async def test_mcp_status_shape(
-    settings: Settings, project: Project, clock: FixedClock, corpus: None
-) -> None:
+async def test_mcp_status_shape(settings: Settings, project: Project, clock: FixedClock) -> None:
     promoted = _promoted(project)
     retrieved_work = promoted[0]
     routes = _stubs(retrieved_work)
@@ -227,9 +206,10 @@ async def test_mcp_status_shape(
     assert [entry["work_id"] for entry in named["data"]["works"]] == [promoted[1]]
 
 
+@pytest.mark.usefixtures("corpus")
 @pytest.mark.anyio
 async def test_mcp_status_refuses_an_unpromoted_work(
-    settings: Settings, project: Project, clock: FixedClock, corpus: None
+    settings: Settings, project: Project, clock: FixedClock
 ) -> None:
     [body] = await _calls(
         settings,
