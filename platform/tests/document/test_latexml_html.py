@@ -208,3 +208,30 @@ def test_wide_table_stays_within_budget_and_overflow_is_kept() -> None:
     table_rows = [line for line in markdown.splitlines() if line.startswith("|")]
     assert len(table_rows) >= 300
     assert max(line.count("|") - 1 for line in table_rows) <= 64
+
+
+def test_overflow_cell_is_escaped_once() -> None:
+    markdown = _markdown(_fixture("latexml_overflow.html"))
+    assert "A &amp; B &lt;x&gt;" in markdown
+    assert markdown.count("A &amp; B &lt;x&gt;") == 1
+    assert "&amp;amp;" not in markdown
+    assert "&lt;&lt;" not in markdown
+
+
+def test_display_math_in_container_is_a_block() -> None:
+    markdown = _markdown(_fixture("latexml_tails.html"))
+    assert "Lorem before\n\n$$p+q$$\n\nafter block" in markdown
+    assert "Lorem before $p+q$ after block" not in markdown
+    assert "$a+b$" in markdown  # inline math without display stays inline
+
+
+def test_every_caption_of_a_float_is_emitted() -> None:
+    markdown = _markdown(_fixture("latexml_two_captions.html"))
+    assert "Figure 1: Lorem first CAPONE." in markdown
+    assert "Figure 2: Lorem second CAPTWO." in markdown
+
+
+def test_equation_text_keeps_source_order() -> None:
+    markdown = _markdown(_fixture("latexml_tails.html"))
+    eqword = markdown.index("EQWORD")
+    assert eqword < markdown.index("$$E=mc$$") < markdown.index("EQPOST")

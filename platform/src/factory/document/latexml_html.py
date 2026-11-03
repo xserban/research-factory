@@ -148,17 +148,15 @@ def _first(el: etree._Element, name: str) -> etree._Element | None:
     return None
 
 
-def _own_caption(el: etree._Element) -> etree._Element | None:
-    """The caption owned by float `el`: the first one reached without entering a nested float."""
+def _own_captions(el: etree._Element) -> list[etree._Element]:
+    """The captions owned by float `el`, in document order, not entering nested floats."""
+    found: list[etree._Element] = []
     for child in _children(el):
         if "ltx_caption" in _classes(child):
-            return child
-        if _is_float(child):
-            continue
-        found = _own_caption(child)
-        if found is not None:
-            return found
-    return None
+            found.append(child)
+        elif not _is_float(child):
+            found.extend(_own_captions(child))
+    return found
 
 
 def _is_float(el: etree._Element) -> bool:
@@ -284,7 +282,15 @@ def _grid(rows: list[list[tuple[int, int, str]]]) -> _Placed:
 
 
 def _is_inline_like(child: etree._Element) -> bool:
-    """True if `child` sits within running text (so it joins a paragraph, not a block)."""
+    """True if `child` sits within running text (so it joins a paragraph, not a block).
+
+    Display math and equation containers are blocks; inline math is not.
+    """
+    classes = _classes(child)
+    if classes & {"ltx_equation", "ltx_equationgroup"}:
+        return False
+    if child.tag == "math" and child.get("display") == "block":
+        return False
     return (
         child.tag in _INLINE_TAGS
         or child.tag in {"math", "br"}
@@ -295,19 +301,6 @@ def _is_inline_like(child: etree._Element) -> bool:
 
 def _skipped(el: etree._Element, exclude: frozenset[str]) -> bool:
     return el.tag in _SKIP_TAGS or bool(_classes(el) & (_SKIP_CLASSES | exclude))
-
-
-def _loose_text(el: etree._Element) -> str:
-    """The raw text of `el` outside its math children and skipped elements."""
-    parts: list[str] = []
-    if el.text:
-        parts.append(el.text)
-    for child in el:
-        if isinstance(child.tag, str) and child.tag != "math" and not _skipped(child, _NO_CLASSES):
-            parts.append(_loose_text(child))
-        if child.tail:
-            parts.append(child.tail)
-    return "".join(parts)
 
 
 @dataclass
@@ -344,9 +337,7 @@ class _Walker:
             self._float(el)
             return
         if classes & {"ltx_equation", "ltx_equationgroup"}:
-            for math in el.iter("math"):
-                self._equation(math)
-            self._tail_para(_loose_text(el))
+            self._equation_pieces(el)
             return
         if el.tag == "table":
             self._table(el)
@@ -411,6 +402,24 @@ class _Walker:
                 self.block(child)
             self._tail_para(child.tail)
 
+    def _equation_pieces(self, el: etree._Element) -> None:
+        """An equation or equation group: each math is a `$$` line; loose text keeps its place."""
+        run: list[str] = []
+        if el.text:
+            run.append(el.text)
+        for child in _children(el):
+            if child.tag == "math":
+                self._tail_para("".join(run))
+                run.clear()
+                self._equation(child)
+            elif not _skipped(child, _NO_CLASSES):
+                self._tail_para("".join(run))
+                run.clear()
+                self._equation_pieces(child)
+            if child.tail:
+                run.append(child.tail)
+        self._tail_para("".join(run))
+
     def _tail_para(self, text: str | None) -> None:
         """Keep loose text (raw, unescaped) as a paragraph of its own."""
         if text and text.strip():
@@ -452,8 +461,7 @@ class _Walker:
 
     def _float(self, el: etree._Element) -> None:
         kind = _float_kind(el)
-        caption = _own_caption(el)
-        if caption is not None:
+        for caption in _own_captions(el):
             self._para(self._caption(caption, kind))
         self._container(el)
 
@@ -539,7 +547,7 @@ class _Walker:
             self._emit_table(number, placed)
         if placed.overflow:
             self.warnings.append(f"table {number}: cells beyond column limit moved to text")
-            self._para(_esc(_collapse(" ".join(placed.overflow))))
+            self._para(_collapse(" ".join(placed.overflow)))
 
     def _emit_table(self, number: int, placed: _Placed) -> None:
         if placed.clamped:
