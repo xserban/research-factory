@@ -58,7 +58,60 @@ def test_hosts_are_throttled_independently() -> None:
 
 
 def test_default_intervals_match_the_brief() -> None:
-    assert HOST_INTERVALS == {"export.arxiv.org": 3.0, "api.openalex.org": 0.1}
+    assert HOST_INTERVALS == {
+        "export.arxiv.org": 3.0,
+        "arxiv.org": 3.0,
+        "api.openalex.org": 0.1,
+    }
+
+
+def test_arxiv_org_interval_is_three_seconds() -> None:
+    time = FakeTime()
+    client = make_client(ok, time)
+    client.get("https://arxiv.org/pdf/2101.00001", params={})
+    client.get("https://arxiv.org/pdf/2101.00002", params={})
+    assert time.sleeps == pytest.approx([3.0])
+
+
+def test_unknown_host_waits_default_interval() -> None:
+    time = FakeTime()
+    client = make_client(ok, time)
+    client.get(OTHER, params={})
+    client.get(OTHER, params={})
+    assert time.sleeps == pytest.approx([1.0])
+
+
+def test_fetch_returns_404_without_raising() -> None:
+    time = FakeTime()
+    client = make_client(lambda _: httpx.Response(404, text="gone"), time)
+    response = client.fetch(OTHER, params={"q": "x"})
+    assert response.status_code == 404
+    assert time.sleeps == []
+
+
+def test_fetch_retries_503_then_returns_it() -> None:
+    calls: list[httpx.Request] = []
+
+    def always_503(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(503)
+
+    time = FakeTime()
+    client = make_client(always_503, time, retries=4)
+    response = client.fetch(OTHER, params={})
+    assert response.status_code == 503
+    assert len(calls) == 5
+    assert time.sleeps == [2.0, 4.0, 8.0, 16.0]
+
+
+def test_fetch_still_raises_transport_errors() -> None:
+    def down(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("boom")
+
+    time = FakeTime()
+    client = make_client(down, time, retries=1)
+    with pytest.raises(httpx.ConnectError):
+        client.fetch(OTHER, params={})
 
 
 def test_retry_after_header_is_honoured_and_capped() -> None:

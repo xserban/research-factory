@@ -15,7 +15,11 @@ import httpx
 
 from factory.config import Settings
 
-HOST_INTERVALS: Mapping[str, float] = {"export.arxiv.org": 3.0, "api.openalex.org": 0.1}
+HOST_INTERVALS: Mapping[str, float] = {
+    "export.arxiv.org": 3.0,
+    "arxiv.org": 3.0,
+    "api.openalex.org": 0.1,
+}
 
 VERSION = "0.2"
 
@@ -52,6 +56,7 @@ class PoliteClient:
         client: httpx.Client,
         *,
         intervals: Mapping[str, float] = HOST_INTERVALS,
+        default_interval: float = 1.0,
         retries: int = 4,
         backoff: tuple[float, float] = (2.0, 60.0),
         max_retry_after: float = 300.0,
@@ -60,6 +65,7 @@ class PoliteClient:
     ) -> None:
         self._http = client
         self._intervals = intervals
+        self._default_interval = default_interval
         self._retries = retries
         self._backoff = backoff
         self._max_retry_after = max_retry_after
@@ -68,7 +74,19 @@ class PoliteClient:
         self._lock = threading.Lock()
         self._last: dict[str, float] = {}
 
-    def get(self, url: str, params: Mapping[str, str | int]) -> httpx.Response:
+    def get(self, url: str, params: Mapping[str, str | int] | None = None) -> httpx.Response:
+        """Fetch `url`, raising `httpx.HTTPStatusError` on any status of 400 or above."""
+        response = self.fetch(url, params)
+        response.raise_for_status()
+        return response
+
+    def fetch(self, url: str, params: Mapping[str, str | int] | None = None) -> httpx.Response:
+        """Fetch `url` with throttle and retries; return the final response whatever its status.
+
+        Retries 429 (honouring Retry-After), 5xx and transport errors up to `retries` times.
+        After the last retry a status of 400 or above is returned, not raised; a transport
+        error on the last attempt is still raised.
+        """
         host = httpx.URL(url).host
         for attempt in range(self._retries + 1):
             self._wait_turn(host)
@@ -85,7 +103,6 @@ class PoliteClient:
             if response.status_code >= 500 and attempt < self._retries:
                 self._sleep(self._exponential(attempt))
                 continue
-            response.raise_for_status()
             return response
         raise AssertionError("unreachable: the final attempt always returns or raises")
 
@@ -94,7 +111,9 @@ class PoliteClient:
         with self._lock:
             last = self._last.get(host)
             if last is not None:
-                delay = self._intervals.get(host, 0.0) - (self._monotonic() - last)
+                delay = self._intervals.get(host, self._default_interval) - (
+                    self._monotonic() - last
+                )
                 if delay > 0:
                     self._sleep(delay)
             self._last[host] = self._monotonic()
