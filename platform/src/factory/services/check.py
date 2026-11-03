@@ -113,8 +113,17 @@ _SEED_PHRASES = {
 }
 
 
+_RATE_CODES = {
+    "audit-error-high": "the audit's false-exclusion rate is above the declared ceiling "
+    "(figures withheld from the agent view)",
+}
+"""Findings whose message carries a label-derived rate or threshold, and the message an agent
+reads instead (decision 37.14). The finding itself, its code and severity are unchanged."""
+
+
 def agent_view(report: CheckReport) -> CheckReport:
-    """The report as an agent may read it: seed findings by role and count only (R-20).
+    """The report as an agent may read it: seed findings by role and count only (R-20), and no
+    label-derived rate.
 
     A seed finding becomes one finding per code, severity and role, with no refs, so a held-out
     seed is never named. A positive still `unsplit` may become held-out, so it is counted as
@@ -126,7 +135,10 @@ def agent_view(report: CheckReport) -> CheckReport:
     for finding in report.findings:
         if finding.role is None:
             refs = [r for r in finding.refs if not re.fullmatch(SEED_ID_RE, r)]
-            others.append(finding.model_copy(update={"refs": refs}))
+            update: dict[str, object] = {"refs": refs}
+            if finding.code in _RATE_CODES:
+                update["message"] = _RATE_CODES[finding.code]
+            others.append(finding.model_copy(update=update))
             order.append(len(others) - 1)
             continue
         bucket = _HELD_OUT_POSSIBLE if finding.role == "unsplit" else finding.role
@@ -170,18 +182,19 @@ class _ChecklistItem:
 
 
 _PRISMA_CHECKLIST: tuple[_ChecklistItem, ...] = (
+    _ChecklistItem("6", "information sources", lambda report: bool(report.sources)),
     _ChecklistItem(
-        "6",
-        "methods used to decide whether a study met the inclusion criteria",
-        lambda report: report.passes > 0,
+        "7",
+        "search strategy",
+        lambda report: bool(report.sources) and report.protocol_id is not None,
     ),
-    _ChecklistItem("7", "methods used to collect data from reports", None),
-    _ChecklistItem("8", "processes used to obtain or confirm information from investigators", None),
-    _ChecklistItem("9", "methods used to assess risk of bias", None),
-    _ChecklistItem("13a", "methods used to tabulate or display results", None),
+    _ChecklistItem("8", "selection process", lambda report: report.passes > 0),
+    _ChecklistItem("9", "data collection process", None),
+    _ChecklistItem("13a", "synthesis eligibility", None),
 )
-"""PRISMA 2020 items 6-9 and 13a (R-60). Item 6 is derived from the screening passes; the others
-have no stage in this platform that derives them, so each is reported until one does."""
+"""PRISMA 2020 items 6-9 and 13a (R-60). Items 6 and 7 are derived from the search report (the
+databases searched, under a protocol) and item 8 from the screening passes. Items 9 and 13a have
+no stage in this platform in slice 1 that derives them, so each is reported until one does."""
 
 
 def check(project: Project, *, promote_to: RigorMode | None = None) -> CheckReport:
@@ -266,10 +279,25 @@ def _broken_links(project: Project) -> list[_Hit]:
         work = event.payload.get("work_id")
         if isinstance(work, str):
             candidates.add(work)
+    candidates.update(_cited_criteria(project))
     dangling = dangling_refs(project, candidates)
     if not dangling:
         return []
     return [_Hit("broken-link", tuple(dangling), f"{len(dangling)} identifier(s) name no row")]
+
+
+_CRITERION_COLUMNS = (
+    "SELECT criterion FROM decisions UNION SELECT criterion FROM resolutions "
+    "UNION SELECT criterion FROM calibration_labels UNION SELECT criterion FROM audit_items"
+)
+
+
+def _cited_criteria(project: Project) -> set[str]:
+    """Every qualified criterion (`P@xxxx:EX01`) that a decision, resolution, calibration label
+    or audit label cites. `dangling_refs` reports one that no protocol version defines."""
+    with project.index.connect() as conn:
+        rows = conn.execute(text(_CRITERION_COLUMNS)).scalars().all()
+    return {str(criterion) for criterion in rows if criterion is not None}
 
 
 def _provenance_rows(project: Project) -> list[tuple[str, str, str | None, str | None, str | None]]:

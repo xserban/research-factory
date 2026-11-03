@@ -69,12 +69,17 @@ class PrismaFlow(StrictModel):
     provisional: bool
     protocol_id: str | None
 
+    @property
+    def excluded_total(self) -> int:
+        """Works excluded under any criterion, computed once for every surface (R-05)."""
+        return sum(self.excluded.values())
+
     @model_validator(mode="after")
     def _identities_hold(self) -> "PrismaFlow":
         identified = sum(self.identified_databases.values()) + sum(self.identified_other.values())
         if identified - self.duplicates_removed != self.screened:
             raise ValueError("identified less duplicates must equal screened")
-        if sum(self.excluded.values()) + self.pending + self.included != self.screened:
+        if self.excluded_total + self.pending + self.included != self.screened:
             raise ValueError("excluded, pending and included must sum to screened")
         if self.provisional != (self.pending > 0):
             raise ValueError("a flow is provisional exactly while works are pending")

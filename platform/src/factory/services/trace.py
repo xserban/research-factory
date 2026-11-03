@@ -148,6 +148,65 @@ def trace(
         return _build(walk, key, described, direction, {key})
 
 
+_HIDDEN_PURPOSES = ("seed", "probe")
+_GENERIC_METHODS = ("seed-admission", "hand-search")
+
+
+def agent_trace(
+    project: Project, ref: str, *, direction: Literal["back", "forward"] = "back"
+) -> TraceNode:
+    """`trace` as an agent may read it: nothing that marks a work as a seed (R-20).
+
+    Seed nodes are removed (their children lifted). Queries and runs of seed or probe purpose are
+    removed with everything below them, and so are the records and pages reachable only through
+    them, so a seed's work reads as any corpus work does. A record found by seed admission or hand
+    search is labelled `supplementary`, not by its route. Provenance of probe queries is not in
+    any view (the corpus does not count it either).
+    """
+    tree = without_seeds(trace(project, ref, direction=direction))
+    project.index.sync()
+    with project.index.connect() as conn:
+        hidden_queries = {
+            str(q)
+            for (q,) in conn.execute(
+                text("SELECT query_id FROM queries WHERE purpose IN ('seed', 'probe')")
+            ).all()
+        }
+        hidden_runs = {
+            str(r)
+            for (r, q) in conn.execute(text("SELECT run_id, query_id FROM runs")).all()
+            if str(q) in hidden_queries
+        }
+    if _hidden(tree, hidden_queries, hidden_runs):
+        raise FactoryValidationError([ValidationIssue("ref", "unknown id")])
+    return _pruned(tree, hidden_queries, hidden_runs)
+
+
+def _pruned(node: TraceNode, queries: set[str], runs: set[str]) -> TraceNode:
+    kept: list[TraceNode] = []
+    for child in node.children:
+        if _hidden(child, queries, runs):
+            continue
+        below = _pruned(child, queries, runs)
+        if child.kind == "page" and child.children and not below.children:
+            continue  # reachable only through a hidden run
+        kept.append(below)
+    label = node.label
+    if node.kind == "record" and any(label.startswith(f"{m} ") for m in _GENERIC_METHODS):
+        label = "supplementary " + label.split(" ", 1)[1]
+    return node.model_copy(update={"children": kept, "label": label})
+
+
+def _hidden(node: TraceNode, queries: set[str], runs: set[str]) -> bool:
+    if node.kind == "query":
+        return node.id in queries
+    if node.kind == "run":
+        return node.id in runs
+    if node.kind == "record":
+        return node.id.split("/", 1)[0] in runs
+    return False
+
+
 def without_seeds(node: TraceNode) -> TraceNode:
     """`node` with every seed node below it removed, for a surface that must not reveal which
     works the seeds are (R-20). A seed's own children move up to its parent, so what the seed led
@@ -724,7 +783,9 @@ class _Walk:
         down: list[Key] = [
             ("record", f"{r}/{w}")
             for r, w in self._all(
-                "SELECT run_id, work_id FROM provenance WHERE raw_blob = :b", b=ident
+                "SELECT run_id, work_id FROM provenance WHERE raw_blob = :b AND query_id NOT IN "
+                "(SELECT query_id FROM queries WHERE purpose = 'probe')",
+                b=ident,
             )
         ]
         return up, down
@@ -758,7 +819,11 @@ class _Walk:
     def _edges_work(self, ident: str) -> tuple[list[Key], list[Key]]:
         up: list[Key] = [
             ("record", f"{r}/{ident}")
-            for r in self._column("SELECT run_id FROM provenance WHERE work_id = :w", w=ident)
+            for r in self._column(
+                "SELECT run_id FROM provenance WHERE work_id = :w AND query_id NOT IN "
+                "(SELECT query_id FROM queries WHERE purpose = 'probe')",
+                w=ident,
+            )
         ]
         up += [
             ("merge", m)

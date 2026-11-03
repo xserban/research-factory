@@ -106,16 +106,49 @@ def _agent_values(project: Project, statement: TextClause) -> list[str]:
         return [str(row[0]) for row in conn.execute(statement).all()]
 
 
-def render_methods(report: MethodsReport) -> str:
+WITHHELD_RATES = "withheld from the agent view"
+WITHHELD_RECALL = "not computed (withheld until screening has started)"
+_RATE_FIELDS = frozenset({"calibration_sensitivity", "audit_false_exclusion_rate"})
+
+
+def agent_methods(project: Project, report: MethodsReport) -> tuple[MethodsReport, frozenset[str]]:
+    """The report as an agent outside the passes may read it, and the fields it withholds.
+
+    Label-derived rates (calibration sensitivity, the audit false-exclusion rate) are never given
+    to an agent (decision 37.14). Held-out recall is withheld until a pass has been opened:
+    before then, a per-search recall is a differential oracle for the held-out seeds. Kappa and
+    development recall are unchanged. The services stay unrestricted; this is the agent view.
+    """
+    withheld = set(_RATE_FIELDS)
+    update: dict[str, object] = {
+        "calibration_sensitivity": {label: None for label in report.calibration_sensitivity},
+        "audit_false_exclusion_rate": None,
+    }
+    if not _screening_started(project):
+        withheld.add("recall_held_out")
+        update["recall_held_out"] = None
+    return report.model_copy(update=update), frozenset(withheld)
+
+
+def _screening_started(project: Project) -> bool:
+    """Whether any screening pass has been opened."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        return conn.execute(text("SELECT 1 FROM passes LIMIT 1")).first() is not None
+
+
+def render_methods(report: MethodsReport, *, withheld: frozenset[str] = frozenset()) -> str:
     """The methods statement as Markdown paragraphs, separated by blank lines, in the order:
     search, deduplication, screening and automation, agreement and audit, seed recall, deviations.
+
+    `withheld` names the fields an agent view hides; each is rendered as withheld, not as zero.
     """
     paragraphs = [
         _search(report),
         _deduplication(report),
         _screening(report),
-        _agreement_and_audit(report),
-        _seed_recall(report),
+        _agreement_and_audit(report, withheld),
+        _seed_recall(report, withheld),
         _deviations(report),
     ]
     return "\n\n".join(paragraphs) + "\n"
@@ -156,12 +189,12 @@ def _deduplication(report: MethodsReport) -> str:
 
 def _screening(report: MethodsReport) -> str:
     flow = report.prisma
-    excluded = sum(flow.excluded.values())
     breakdown = ", ".join(f"{criterion} ({n})" for criterion, n in flow.excluded.items())
     provisional = " The flow is provisional." if flow.provisional else ""
     return (
-        f"Screening of {flow.screened} works: {flow.included} included, {excluded} excluded, "
-        f"{flow.pending} pending.{provisional} Exclusions by criterion: "
+        f"Screening of {flow.screened} works: {flow.included} included, "
+        f"{flow.excluded_total} excluded, {flow.pending} pending.{provisional} "
+        "Exclusions by criterion: "
         f"{breakdown or NONE_RECORDED}. "
         "Screening decisions were made by Claude models (as reported by the agent: "
         f"{_list(report.models)}) following the skills {_list(report.skills)}; "
@@ -169,13 +202,17 @@ def _screening(report: MethodsReport) -> str:
     )
 
 
-def _agreement_and_audit(report: MethodsReport) -> str:
+def _agreement_and_audit(report: MethodsReport, withheld: frozenset[str]) -> str:
     per_criterion = ", ".join(f"{c} {_fmt(k)}" for c, k in report.kappa_by_criterion.items())
     sensitivity = ", ".join(f"{p} {_fmt(s)}" for p, s in report.calibration_sensitivity.items())
+    if "calibration_sensitivity" in withheld:
+        sensitivity = WITHHELD_RATES
     passes = NOT_COMPUTED if report.passes == 0 else str(report.passes)
     rate = _fmt(report.audit_false_exclusion_rate)
     audit = (
-        f"Audit false-exclusion rate: {rate} over {report.audit_n} labelled works."
+        f"Audit false-exclusion rate: {WITHHELD_RATES}."
+        if "audit_false_exclusion_rate" in withheld
+        else f"Audit false-exclusion rate: {rate} over {report.audit_n} labelled works."
         if report.audit_n
         else f"Audit false-exclusion rate: {NOT_COMPUTED} (no audit labels)."
     )
@@ -188,9 +225,10 @@ def _agreement_and_audit(report: MethodsReport) -> str:
     )
 
 
-def _seed_recall(report: MethodsReport) -> str:
+def _seed_recall(report: MethodsReport, withheld: frozenset[str]) -> str:
+    held_out = WITHHELD_RECALL if "recall_held_out" in withheld else _fmt(report.recall_held_out)
     return (
-        f"Seed recall. Held-out seed recall: {_fmt(report.recall_held_out)}. "
+        f"Seed recall. Held-out seed recall: {held_out}. "
         f"Development seed recall: {_fmt(report.recall_development)} (optimistic: the development "
         "seeds informed the protocol and the screening instructions). "
         f"Seeds admitted by lookup: {report.admitted_seeds}."

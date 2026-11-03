@@ -569,10 +569,11 @@ def build_server(
         def methods() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
             _refuse_pass_session(opened)
-            report = methods_service.methods_report(opened)
+            full = methods_service.methods_report(opened)
+            report, withheld = methods_service.agent_methods(opened, full)
             data: dict[str, JsonValue] = {
                 "report": report.model_dump(mode="json"),
-                "text": methods_service.render_methods(report),
+                "text": methods_service.render_methods(report, withheld=withheld),
             }
             return _withheld(opened, data, include_work_ids=False)
 
@@ -581,15 +582,18 @@ def build_server(
     @server.tool()
     def trace(project: str, ref: str, direction: str = "back") -> dict[str, JsonValue]:
         """The chain from any identifier: `back` to what it was derived from, `forward` to what
-        was derived from it. Seeds are not shown, and a seed id is not accepted."""
+        was derived from it. Held-out seed ids are refused as unknown; seed nodes, and the seed
+        and probe lookups that found a work, are not shown. Refused to a session that has joined
+        a pass, since the chain leads to the other pass's decisions, resolutions and audit."""
 
         def walk() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
             way = _direction(direction)
             withheld = {t.lower() for t in _held_out_tokens(opened, include_work_ids=False)}
             if ref.strip().lower() in withheld:
                 raise FactoryValidationError([ValidationIssue("ref", "unknown id")])
-            tree = trace_service.without_seeds(trace_service.trace(opened, ref, direction=way))
+            tree = trace_service.agent_trace(opened, ref, direction=way)
             return _withheld(opened, tree.model_dump(mode="json"), include_work_ids=False)
 
         return _reply(project, walk, include_work_ids=False)

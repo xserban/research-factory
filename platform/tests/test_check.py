@@ -15,7 +15,12 @@ from factory.model.chase import ChaseDirection
 from factory.model.dedup import DedupReverted
 from factory.model.project import RigorMode
 from factory.model.protocol import PressElement, PressFinding
-from factory.model.screening import Channel, PassLabel
+from factory.model.screening import (
+    CalibrationLabelled,
+    Channel,
+    DisagreementResolved,
+    PassLabel,
+)
 from factory.model.search import (
     QueryKind,
     QuerySpec,
@@ -531,9 +536,37 @@ def test_profile_checklist(
 ) -> None:
     _corpus(project, agent, human, mock_sources)
 
-    # Item 6 has a derived source (the screening passes); items 7, 8, 9 and 13a have none.
-    uncovered = ["prisma-2020:7", "prisma-2020:8", "prisma-2020:9", "prisma-2020:13a"]
+    # Items 6 (information sources), 7 (search strategy) and 8 (selection process) have a derived
+    # source; 9 (data collection process) and 13a (synthesis eligibility) have none in slice 1.
+    uncovered = ["prisma-2020:9", "prisma-2020:13a"]
     _assert_row(project, "profile-checklist", mode, expected, refs=uncovered)
+
+
+def test_profile_checklist_lists_unsearched_items_and_uses_prisma_2020_wording(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    """Before any search, items 6 and 7 are uncovered too; the wording is PRISMA 2020's."""
+    _protocol(project, agent, human, mock_sources)
+
+    [finding] = [f for f in check(project).findings if f.code == "profile-checklist"]
+
+    assert finding.refs == [
+        "prisma-2020:6",
+        "prisma-2020:7",
+        "prisma-2020:9",
+        "prisma-2020:13a",
+    ]
+    assert "6 (information sources)" in finding.message
+    assert "7 (search strategy)" in finding.message
+    assert "9 (data collection process)" in finding.message
+    assert "13a (synthesis eligibility)" in finding.message
+    assert [(i.number, i.text) for i in check_module._PRISMA_CHECKLIST] == [
+        ("6", "information sources"),
+        ("7", "search strategy"),
+        ("8", "selection process"),
+        ("9", "data collection process"),
+        ("13a", "synthesis eligibility"),
+    ]
 
 
 @_rows(("warning", "warning", "warning"))
@@ -556,6 +589,61 @@ def test_merge_verdict_conflict(
 
 
 # --- Named tests ---
+
+
+def _inject(project: Project, human: Actor, name: str, payload: Any) -> None:
+    """Record an event the services would refuse, as `_dangling_merge_event` does."""
+    project.record([project.events.make(name, payload, human)])
+
+
+def test_calibration_label_citing_an_undefined_criterion_is_a_broken_link(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    """A criterion cited by a label but defined by no protocol version is a broken link."""
+    protocol_id = _corpus(project, agent, human, mock_sources)
+    work = calibration_items(project)[0]
+    cited = f"{protocol_id}:EX99"
+    assert [f for f in check(project).findings if f.code == "broken-link"] == []
+    _inject(
+        project,
+        human,
+        "calibration.labelled",
+        CalibrationLabelled(work_id=work, verdict="exclude", criterion=cited, channel=Channel.CLI),
+    )
+
+    [finding] = [f for f in check(project).findings if f.code == "broken-link"]
+
+    assert finding.severity == "error" and finding.refs == [cited]
+
+
+def test_resolution_citing_an_unknown_protocol_version_is_a_broken_link(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    protocol_id = _corpus(project, agent, human, mock_sources)
+    work = _ordinary(project)[0]
+    cited = "P@00000000:EX01"
+    assert cited.split(":")[0] != protocol_id
+    _inject(
+        project,
+        human,
+        "screening.disagreement_resolved",
+        DisagreementResolved(
+            work_id=work, verdict="exclude", criterion=cited, reason="r", channel=Channel.CLI
+        ),
+    )
+
+    [finding] = [f for f in check(project).findings if f.code == "broken-link"]
+
+    assert finding.refs == [cited]
+
+
+def test_defined_criteria_cited_by_decisions_and_labels_are_not_broken(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    protocol_id = _corpus(project, agent, human, mock_sources)
+    _settle(project, agent, human, protocol_id, verdict="exclude")
+
+    assert [f for f in check(project).findings if f.code == "broken-link"] == []
 
 
 def test_broken_ref_reported(

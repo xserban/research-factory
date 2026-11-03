@@ -477,3 +477,22 @@ def test_chase_outranks_seed_admission(
     assert flow.identified_other == {"citation-chase": 2, "seed-admission": 0, "hand-search": 0}
     assert (flow.duplicates_removed, flow.screened) == (0, 11)
     assert (flow.pending, flow.included) == (1, 10)
+
+
+def test_excluded_total_is_the_sum_of_the_breakdown_and_not_serialised() -> None:
+    flow = PrismaFlow.model_validate(
+        {
+            "identified_databases": {"openalex": 5},
+            "identified_other": {},
+            "duplicates_removed": 0,
+            "screened": 5,
+            "excluded": {"EX01": 2, "EX02": 1},
+            "pending": 0,
+            "included": 2,
+            "provisional": False,
+            "protocol_id": "P@00000000",
+        }
+    )
+
+    assert flow.excluded_total == 3
+    assert "excluded_total" not in flow.model_dump()

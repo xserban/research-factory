@@ -284,8 +284,8 @@ def test_trace_forward_from_run_lists_pages_and_their_records(
     project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
 ) -> None:
     _setup(project, agent, human, mock_sources, random_works=0)
-    work = get_work(project, sorted(w.id for w in list_works(project))[0])
-    assert work is not None
+    # The corpus's own provenance: the seed lookup that first stored the work is a probe.
+    work = sorted(list_works(project), key=lambda w: w.id)[0]
     provenance = work.provenance[0]
 
     root = trace(project, provenance.run_id, direction="forward")
