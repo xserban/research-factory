@@ -250,7 +250,7 @@ def test_import_writes_library_only(project: Project, corpus: None, tmp_path: Pa
     assert _blob_files(project) == blobs_before
     [(_, _, document)] = report.imported
     [added] = [e for e in _of_type(project, "fulltext.document_added") if e.refs[0] == document]
-    assert project.library.exists(added.payload["raw_hash"])
+    assert project.library.exists(str(added.payload["raw_hash"]))
 
 
 def test_attempt_and_document_recorded_for_researcher(

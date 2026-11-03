@@ -57,7 +57,7 @@ def _fetched_document(project: Project, content: bytes) -> tuple[str, str, str]:
         work_ids=[work],
     )
     document = summary.works[0].documents[0]
-    raw_hash = _of_type(project, "fulltext.document_added")[0].payload["raw_hash"]
+    raw_hash = str(_of_type(project, "fulltext.document_added")[0].payload["raw_hash"])
     return work, document, raw_hash
 
 
@@ -97,7 +97,7 @@ def test_restore_changed_source_records_event(project: Project, corpus: None) ->
     assert status == "source-changed"
     change = _of_type(project, "fulltext.source_changed")
     assert len(change) == 1
-    observed = change[0].payload["observed_hash"]
+    observed = str(change[0].payload["observed_hash"])
     assert change[0].payload["document_id"] == document
     assert change[0].payload["expected_hash"] == original
     assert observed != original

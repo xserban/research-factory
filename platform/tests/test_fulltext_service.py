@@ -310,7 +310,9 @@ def test_only_routes_fetches_all_named(project: Project, screened: Any) -> None:
     assert stubs[Route.OA_PDF].calls == []
     started = _of_type(project, "fulltext.fetch_started")[-1]
     assert started.payload["routes"] == ["arxiv-html", "arxiv-source"]
-    qualities = sorted(e.payload["quality"] for e in _of_type(project, "fulltext.document_added"))
+    qualities = sorted(
+        str(e.payload["quality"]) for e in _of_type(project, "fulltext.document_added")
+    )
     assert qualities == ["latex", "structured-html"]
 
 
@@ -378,7 +380,7 @@ def test_same_version_new_hash_records_source_changed(project: Project, screened
         work_ids=[work],
     )
     doc = first.works[0].documents[0]
-    original_hash = _of_type(project, "fulltext.document_added")[0].payload["raw_hash"]
+    original_hash = str(_of_type(project, "fulltext.document_added")[0].payload["raw_hash"])
 
     second = fetch_fulltext(
         project,
@@ -394,7 +396,7 @@ def test_same_version_new_hash_records_source_changed(project: Project, screened
     assert change["expected_hash"] == original_hash
     assert change["observed_hash"] != original_hash
     assert project.library.exists(original_hash)
-    assert project.library.exists(change["observed_hash"])
+    assert project.library.exists(str(change["observed_hash"]))
     attempt = _of_type(project, "fulltext.attempted")[-1].payload
     assert attempt["outcome"] == "retrieved"
     assert attempt["document_id"] == doc
@@ -678,8 +680,8 @@ def test_metadata_is_archived_and_failed_routes_keep_theirs(
     fetch_fulltext(project, routes=stubs, work_ids=[work])
 
     first, second = (e.payload for e in _of_type(project, "fulltext.attempted"))
-    assert project.blobs.get(first["metadata_blob"]) == b'{"lookup": 1}'
-    assert project.blobs.get(second["metadata_blob"]) == b"<feed/>"
+    assert project.blobs.get(str(first["metadata_blob"])) == b'{"lookup": 1}'
+    assert project.blobs.get(str(second["metadata_blob"])) == b"<feed/>"
 
 
 def test_no_document_bytes_under_blobs(project: Project, screened: Any) -> None:
@@ -694,5 +696,5 @@ def test_no_document_bytes_under_blobs(project: Project, screened: Any) -> None:
 
     stored = [path.read_bytes() for path in _files(project.paths.blobs_dir)]
     assert content not in stored
-    library_hash = _of_type(project, "fulltext.document_added")[0].payload["raw_hash"]
+    library_hash = str(_of_type(project, "fulltext.document_added")[0].payload["raw_hash"])
     assert project.library.get(library_hash) == content

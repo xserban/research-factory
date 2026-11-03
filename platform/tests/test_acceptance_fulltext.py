@@ -115,8 +115,9 @@ def test_ac1_every_promoted_work_has_attempt_and_record(
     pass_one = fetch_fulltext(project, routes=_routes(html={first}), limit=200)
     assert pass_one.remaining == len(corpus) - 1
 
-    # Pass 2: arXiv HTML now retrieves every remaining work, until no promoted work is missing.
-    pass_two = fetch_fulltext(project, routes=_routes(html=set(corpus)), limit=200)
+    # Pass 2: arXiv HTML now retrieves every remaining work. Works that failed in pass 1 are retried
+    # only by `refresh`, since the default selection skips any work that has an attempt.
+    pass_two = fetch_fulltext(project, routes=_routes(html=set(corpus)), refresh=True, limit=200)
     assert pass_two.remaining == 0
 
     attempts = _of_type(project, "fulltext.attempted")
@@ -236,7 +237,7 @@ def test_ac15_delete_check_restore(project: Project, corpus: list[str]) -> None:
     summary = fetch_fulltext(project, routes=_routes(html={work}), work_ids=[work])
     [document] = summary.works[0].documents
     [added] = _of_type(project, "fulltext.document_added")
-    raw_hash = added.payload["raw_hash"]
+    raw_hash = str(added.payload["raw_hash"])
     status_before = fulltext_status(project).model_dump(mode="json")
 
     project.library.path(raw_hash).unlink()  # the library is not in git, so it can be lost
