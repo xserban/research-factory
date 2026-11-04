@@ -25,17 +25,33 @@ Invariants:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
 
 from sqlalchemy import text
 
-from factory.document.anchors import Anchor, AnchorKind, Manifest, ManifestError
+from factory.document.anchors import Anchor, AnchorKind, Manifest
 from factory.errors import FactoryValidationError, ValidationIssue
-from factory.events.blobs import BlobIntegrityError, BlobNotFoundError
 from factory.model.base import StrictModel
 from factory.model.fulltext import ROUTE_ORDER, Quality, Route
 from factory.services.agreement import Outcome, final_outcomes
 from factory.services.context import Project
+from factory.services.conversions import (
+    Conversion,
+    _anchor_or_refuse,
+    _find,
+    _load,
+    _query,
+    conversion_manifest,
+    resolve_anchor,
+)
+
+__all__ = [
+    "DocumentPage",
+    "Segment",
+    "conversion_manifest",
+    "default_conversion",
+    "document_read",
+    "resolve_anchor",
+]
 
 PAGE_SEGMENT_MAX_CHARS = 8000
 ANCHOR_MAX_CHARS = 40000
@@ -45,7 +61,6 @@ DEFAULT_LIMIT = 50
 DEFAULT_MAX_CHARS = 20000
 
 _CONVERT_HINT = "run `factory document convert` first"
-_RESTORE_HINT = "run `factory document convert --restore` to regenerate it"
 
 
 class Segment(StrictModel):
@@ -74,33 +89,6 @@ class DocumentPage(StrictModel):
     segments: list[Segment]
     next_after: str | None
     total_segments: int
-
-
-@dataclass(frozen=True)
-class _Conversion:
-    """A conversion joined to its document, as the projection holds them."""
-
-    conversion_id: str
-    document_id: str
-    work_id: str
-    route: Route
-    quality: Quality
-    source_version: str
-    converter: str
-    converter_version: str
-    markdown_hash: str
-    manifest_hash: str
-    live: bool
-    document_event_id: str
-    conversion_event_id: str
-
-
-_SELECT = (
-    "SELECT c.conversion_id, c.document_id, d.work_id, d.route, d.quality, d.source_version, "
-    "c.converter, c.converter_version, c.markdown_hash, c.manifest_hash, "
-    "d.superseded_by, d.event_id AS document_event_id, c.event_id AS conversion_event_id "
-    "FROM document_conversions c JOIN fulltext_documents d ON d.document_id = c.document_id"
-)
 
 
 def document_read(
@@ -156,38 +144,6 @@ def document_read(
     )
 
 
-def conversion_manifest(project: Project, conversion_id: str) -> Manifest:
-    """The manifest of one conversion, read from the library and verified by hash.
-
-    Both the Markdown and the manifest blob must be present and hash correctly, as in
-    `document_read`. Raises `FactoryValidationError` on field `conversion_id` if the conversion is
-    unknown or either blob is missing or damaged (naming `factory document convert --restore`).
-
-    No INCLUDED gate and no work scoping apply: the conversion is found by id alone. Do not expose
-    this through a tool without the gate of `document_read`.
-    """
-    project.index.sync()
-    conversion = _find(project, "c.conversion_id = :cid", {"cid": conversion_id})
-    if conversion is None:
-        raise FactoryValidationError(
-            [ValidationIssue("conversion_id", f"{conversion_id}: unknown conversion")]
-        )
-    return _load(project, conversion)
-
-
-def resolve_anchor(project: Project, conversion_id: str, anchor_id: str) -> Anchor:
-    """The anchor `anchor_id` of one conversion, exactly as its manifest holds it.
-
-    Verifies the blobs as `conversion_manifest` does. Raises `FactoryValidationError` on field
-    `conversion_id` if the conversion is unknown or damaged, and on field `anchor` if the conversion
-    has no such anchor.
-
-    No INCLUDED gate and no work scoping apply. Do not expose this through a tool without the gate.
-    """
-    manifest = conversion_manifest(project, conversion_id)
-    return _anchor_or_refuse(manifest, anchor_id, conversion_id)
-
-
 # --- Arguments (validated before anything is read) ---
 
 
@@ -216,7 +172,7 @@ def _promoted(project: Project) -> frozenset[str]:
 
 def _select(
     project: Project, work_id: str, document_id: str | None, conversion_id: str | None
-) -> _Conversion:
+) -> Conversion:
     if conversion_id is not None:
         conversion = _find(project, "c.conversion_id = :cid", {"cid": conversion_id})
         if conversion is None:
@@ -266,7 +222,7 @@ def _select(
     return chosen
 
 
-def _default(project: Project, work_id: str) -> _Conversion | None:
+def _default(project: Project, work_id: str) -> Conversion | None:
     """The default conversion of a work: the first live document in route order (then document
     event order), at its latest conversion by event order; None when no live document of the work
     has a conversion."""
@@ -309,78 +265,7 @@ def _document_work(project: Project, document_id: str) -> str | None:
     return None if row is None else str(row[0])
 
 
-def _find(project: Project, where: str, params: dict[str, Any]) -> _Conversion | None:
-    rows = _query(project, where, params)
-    return rows[-1] if rows else None
-
-
-def _query(project: Project, where: str, params: dict[str, Any]) -> list[_Conversion]:
-    """Matching conversions, oldest first by conversion event id."""
-    with project.index.connect() as conn:
-        rows = (
-            conn.execute(
-                text(f"{_SELECT} WHERE {where} ORDER BY c.event_id"),
-                params,
-            )
-            .mappings()
-            .all()
-        )
-    return [
-        _Conversion(
-            conversion_id=str(row["conversion_id"]),
-            document_id=str(row["document_id"]),
-            work_id=str(row["work_id"]),
-            route=Route(str(row["route"])),
-            quality=Quality(str(row["quality"])),
-            source_version=str(row["source_version"]),
-            converter=str(row["converter"]),
-            converter_version=str(row["converter_version"]),
-            markdown_hash=str(row["markdown_hash"]),
-            manifest_hash=str(row["manifest_hash"]),
-            live=row["superseded_by"] is None,
-            document_event_id=str(row["document_event_id"]),
-            conversion_event_id=str(row["conversion_event_id"]),
-        )
-        for row in rows
-    ]
-
-
-# --- Blobs ---
-
-
-def _load(project: Project, conversion: _Conversion) -> Manifest:
-    """The conversion's manifest, after verifying that its Markdown and manifest blobs exist and
-    hash correctly. The one loading path for `document_read`, `conversion_manifest` and
-    `resolve_anchor`.
-
-    A missing, mismatching, unreadable or unparseable blob is refused on field `conversion_id`,
-    naming the restore command. The exception message is not carried, since it may name a path.
-    """
-    try:
-        project.library.get(conversion.markdown_hash)
-        return Manifest.from_json(project.library.get(conversion.manifest_hash))
-    except (BlobNotFoundError, BlobIntegrityError, ManifestError, OSError) as exc:
-        raise FactoryValidationError(
-            [
-                ValidationIssue(
-                    "conversion_id",
-                    f"{conversion.conversion_id}: stored Markdown or manifest is missing or "
-                    f"damaged; {_RESTORE_HINT}",
-                )
-            ]
-        ) from exc
-
-
 # --- Anchors and pages ---
-
-
-def _anchor_or_refuse(manifest: Manifest, anchor_id: str, conversion_id: str) -> Anchor:
-    found = manifest.get(anchor_id)
-    if found is None:
-        raise FactoryValidationError(
-            [ValidationIssue("anchor", f"{anchor_id}: not an anchor of {conversion_id}")]
-        )
-    return found
 
 
 def _segment(anchor: Anchor, cap: int) -> Segment:

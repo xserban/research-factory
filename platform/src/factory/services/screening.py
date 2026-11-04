@@ -70,6 +70,7 @@ from factory.services.calibration import (
     worked_examples,
 )
 from factory.services.context import Project
+from factory.services.conversions import resolve_anchor
 from factory.services.protocol import (
     ProtocolVersion,
     amendments_with_events,
@@ -623,15 +624,20 @@ def _anchored_quote_issues(
         return [ValidationIssue(f"{field}.anchor", "is required at full-text screening")]
     if conversion_id is None:
         return [ValidationIssue(f"{field}.work_id", "has no pinned conversion in this task")]
-    # Imported here: document_read depends on agreement, which depends on this module.
-    from factory.services.document_read import resolve_anchor
-
     try:
         anchor = resolve_anchor(project, conversion_id, item.anchor)
     except FactoryValidationError as exc:
-        if all(issue.field == "anchor" for issue in exc.issues):
-            return [ValidationIssue(f"{field}.anchor", issue.reason) for issue in exc.issues]
-        raise
+        # An unreadable pinned conversion costs this item only; resolve_anchor's reasons never
+        # carry document text.
+        return [
+            ValidationIssue(
+                f"{field}.anchor",
+                issue.reason
+                if issue.field == "anchor"
+                else f"pinned conversion unreadable: {issue.reason}",
+            )
+            for issue in exc.issues
+        ]
     if not quote_in_element(anchor.text, item.quote):
         return [ValidationIssue(f"{field}.quote", "is not in the cited anchor")]
     return []

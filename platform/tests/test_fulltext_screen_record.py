@@ -6,25 +6,35 @@ from typing import Any
 
 import pytest
 from pydantic import ValidationError
+from sqlalchemy import text
 
 from factory.events.envelope import Actor
 from factory.model.protocol import Criterion, ScreeningPlan, ScreeningStage
 from factory.model.screening import PassLabel, ScreeningItem, Verdict
-from factory.model.task import TaskStatus
+from factory.model.task import Task, TaskStatus
+from factory.services import screening
 from factory.services.calibration import draw_calibration
 from factory.services.context import Project
+from factory.services.conversions import conversion_manifest
 from factory.services.protocol import amend_protocol, current_protocol
 from factory.services.screening import (
     ScreenBatch,
+    ScreenBatchContent,
     live_decisions,
     screen_next,
     screen_record,
 )
 from factory.services.tasks import get_task
 from factory.sources.registry import SourceFactory
-from tests.document_helpers import promoted_works
+from tests.document_helpers import (
+    ARTICLE,
+    StubConverter,
+    fetched_document,
+    make_registry,
+    promoted_works,
+    run_convert,
+)
 from tests.helpers import _of_type, _setup
-from tests.test_fulltext_eligibility import _convert
 from tests.test_fulltext_service import _include_all
 from tests.test_screening_next import _decide, _draw
 from tests.test_screening_record import _batch as ta_batch
@@ -33,6 +43,15 @@ FT = ScreeningStage.FULL_TEXT
 TA = ScreeningStage.TITLE_ABSTRACT
 SourcesFor = Callable[..., Mapping[str, SourceFactory]]
 
+EXTRA = ("s1.p3", "Dolor footnote text.")  # s1.p3 exists only after the inserted paragraph
+INSERTED = "Zebra unique paragraph."
+WITH_EXTRA = ARTICLE.replace(
+    b'</div>\n</section>\n<section class="ltx_section" id="S2">',
+    b'</div>\n<div class="ltx_para"><p class="ltx_p">' + INSERTED.encode() + b"</p></div>\n"
+    b'</section>\n<section class="ltx_section" id="S2">',
+    1,
+)
+assert WITH_EXTRA != ARTICLE
 PARAGRAPH = ("s3.p1", "Lorem ipsum dolor sit amet.")
 OTHER = ("s1.p1", "Ut enim ad minim veniam")
 
@@ -83,7 +102,10 @@ def batch(project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
     open_pass(project, agent, PassLabel.A)
     open_pass(project, agent, PassLabel.B)
     _include_all(project, agent, human, amended.protocol_id)
-    _convert(project, promoted_works(project))
+    # Every second promoted work (sorted) has an extra paragraph, anchor s1.p3, in its conversion.
+    for position, work in enumerate(sorted(promoted_works(project))):
+        fetched_document(project, work, WITH_EXTRA if position % 2 else ARTICLE)
+    run_convert(project, make_registry(StubConverter()))
     draw_calibration(project, project.system_actor(), random_seed=3, stage=FT)
     served = screen_next(project, agent, PassLabel.A, stage=FT).batch
     assert served is not None and served.stage is FT and len(served.records) >= 3
@@ -287,3 +309,61 @@ def test_decision_event_has_no_document_text_beyond_quote(
     assert event.payload["quote"] == PARAGRAPH[1]
     dumped = json.dumps(event.payload)
     assert "Consectetur" not in dumped and "Synthetic Author" not in dumped
+
+
+def _has_extra(project: Project, record: Mapping[str, Any]) -> bool:
+    manifest = conversion_manifest(project, str(record["conversion_id"]))
+    return manifest.get(EXTRA[0]) is not None
+
+
+def test_damaged_conversion_is_per_item_error(
+    project: Project, agent: Actor, batch: ScreenBatch
+) -> None:
+    # Works with identical documents share one manifest blob; pick one of each kind.
+    r0 = next(r for r in batch.records if _has_extra(project, r))
+    r1 = next(r for r in batch.records if not _has_extra(project, r))
+    with project.index.connect() as conn:
+        manifest_hash = conn.execute(
+            text("SELECT manifest_hash FROM document_conversions WHERE conversion_id = :c"),
+            {"c": r0["conversion_id"]},
+        ).scalar_one()
+    project.library.path(str(manifest_hash)).unlink()
+    result = screen_record(project, agent, batch.task_id, [_item(r0), _item(r1)])
+    assert [e.index for e in result.rejected] == [0]
+    [issue] = result.rejected[0].issues
+    assert issue.field == "items.0.anchor"
+    assert issue.reason.startswith("pinned conversion unreadable: ")
+    assert "Lorem" not in issue.reason
+    assert len(result.written) == 1
+    assert [d.work_id for d in _ft_live(project)] == [r1["work_id"]]
+
+
+def test_foreign_conversion_anchor_rejected(
+    project: Project, agent: Actor, batch: ScreenBatch
+) -> None:
+    with_extra = [r for r in batch.records if _has_extra(project, r)]
+    without = [r for r in batch.records if not _has_extra(project, r)]
+    assert with_extra and without, "the batch must mix both kinds of conversion"
+    foreign = _item(without[0], anchor=EXTRA[0], quote=EXTRA[1])
+    own = _item(with_extra[0], anchor=EXTRA[0], quote=EXTRA[1])
+    result = screen_record(project, agent, batch.task_id, [foreign, own])
+    assert [(e.index, [i.field for i in e.issues]) for e in result.rejected] == [
+        (0, ["items.0.anchor"])
+    ]
+    assert len(result.written) == 1
+
+
+def test_record_without_pinned_conversion_rejected(
+    project: Project, agent: Actor, batch: ScreenBatch, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real = screening._batch_of
+
+    def stripped(proj: Project, task: Task) -> ScreenBatchContent:
+        content = real(proj, task)
+        records = [{**r, "conversion_id": None} for r in content.records]
+        return content.model_copy(update={"records": records})
+
+    monkeypatch.setattr(screening, "_batch_of", stripped)
+    result = screen_record(project, agent, batch.task_id, [_item(batch.records[0])])
+    assert result.written == []
+    assert [i.field for i in result.rejected[0].issues] == ["items.0.work_id"]
