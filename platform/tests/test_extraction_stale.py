@@ -26,6 +26,7 @@ from factory.services.extraction import (
     in_dual_sample,
     live_rows,
     pass_config,
+    stale_claims,
     stale_documents,
     stale_extractions,
     unit_pin,
@@ -38,7 +39,7 @@ from tests.document_helpers import ARTICLE, StubConverter, make_registry, run_co
 from tests.helpers import _setup
 from tests.test_acceptance_fulltext_screening import _screened_full_text_world
 from tests.test_extraction_next import FIELDS, SESSION_A, SESSION_B, _declare, _extractor
-from tests.test_extraction_record import _amend_schema, _events, _row
+from tests.test_extraction_record import _amend_schema, _claim, _events, _row
 from tests.test_fulltext_service import StubRoute, always, retrieved
 
 FT = ScreeningStage.FULL_TEXT
@@ -278,7 +279,74 @@ def test_stale_rows_excluded_from_final_rows(
     assert current == set(res.rows.written) and not current & old
 
 
+def test_unit_completed_without_a_closing_uses_its_completion_position(
+    project: Project, agent: Actor, ext_a: Actor, world: list[str]
+) -> None:
+    work = world[0]
+    _amend_schema(project, agent, fields=(*FIELDS, "hardware"))  # before the task
+    first = _serve_work(project, ext_a, PassLabel.A, work)
+    complete_task(project, ext_a, first.task_id)
+    assert _state(project, work).state == "current"
+    # Serving again creates no new task for the work: the unit stays current.
+    while (batch := extract_next(project, ext_a, PassLabel.A).batch) is not None:
+        assert _work(batch) != work
+        complete_task(project, ext_a, batch.task_id)
+    assert _state(project, work).state == "current"
+    _amend_schema(project, agent, fields=(*FIELDS, "hardware", "memory"))  # after it
+    state = _state(project, work)
+    assert (state.state, state.reason) == ("stale", "schema")
+    again = _serve_work(project, ext_a, PassLabel.A, work)
+    complete_task(project, ext_a, again.task_id)
+    assert _state(project, work).state == "current"
+
+
+def test_rows_already_stale_do_not_stale_the_unit(
+    project: Project, agent: Actor, ext_a: Actor, task_a: ExtractBatch
+) -> None:
+    work = _work(task_a)
+    _closed_unit(project, ext_a, task_a)  # on the first document; one row carries latency
+    _new_document_version(project, work)
+    fresh = _serve_work(project, ext_a, PassLabel.A, work)
+    extract_record(project, ext_a, fresh.task_id, [], finish=True, reason="nothing reported")
+    assert _state(project, work).state == "current"
+    # Only the old, document-stale row carries latency: removing it stales nothing current.
+    _amend_schema(project, agent, fields=tuple(f for f in FIELDS if f != "latency"))
+    assert _state(project, work).state == "current"
+
+
+def test_schema_amendments_never_stale_claims(
+    project: Project, agent: Actor, ext_a: Actor, task_a: ExtractBatch
+) -> None:
+    extract_record(project, ext_a, task_a.task_id, [_row()], [_claim()], finish=True)
+    _amend_schema(project, agent, fields=(*FIELDS, "hardware"))
+    assert stale_claims(project) == set()
+
+
 # --- Document versions ---
+
+
+def test_claims_of_a_replaced_document_are_stale_and_not_counted(
+    project: Project, ext_a: Actor, task_a: ExtractBatch
+) -> None:
+    work = _work(task_a)
+    res = extract_record(project, ext_a, task_a.task_id, [], [_claim()], finish=True)
+    assert res.completed
+    (old_claim,) = res.claims.written
+    assert stale_claims(project) == set()
+    _new_document_version(project, work)
+    assert stale_claims(project) == {old_claim}
+    fresh = _serve_work(project, ext_a, PassLabel.A, work)
+    with pytest.raises(FactoryValidationError) as e:
+        extract_record(project, ext_a, fresh.task_id, [], finish=True)
+    assert e.value.issues[0].field == "reason"
+    done = extract_record(project, ext_a, fresh.task_id, [_row()], finish=True)
+    assert done.completed
+    (closed,) = [
+        ev
+        for ev in _events(project)
+        if ev.type == "extraction.closed" and ev.payload["task_id"] == fresh.task_id
+    ]
+    assert (closed.payload["rows"], closed.payload["claims"]) == (1, 0)
 
 
 def test_new_document_version_requeues_work_and_marks_rows_stale(

@@ -203,6 +203,8 @@ def task_content(project: Project, task: Task) -> JsonValue:
 
 
 def task_counts(project: Project) -> TaskCounts:
+    """Counts of every task by status. Open counts include stale extraction tasks that a newer
+    task of their unit replaced: they stay open in the log and are never served again."""
     project.index.sync()
     now = _now(project)
     with project.index.connect() as conn:

@@ -115,6 +115,7 @@ __all__ = [
     "live_rows",
     "pass_config",
     "require_schema",
+    "stale_claims",
     "stale_documents",
     "stale_extractions",
     "unit_pin",
@@ -615,6 +616,7 @@ class ClaimRow(StrictModel):
     statement: str
     anchor: str
     quote: str
+    document_id: str
     conversion_id: str
     event_id: str
 
@@ -686,8 +688,8 @@ def extract_record(
     `finish` closes the unit only when no item of the call is rejected: `extraction.closed`, with
     counts computed as the live items minus the superseded targets plus the accepted items, and
     `task.completed`, with those row ids then claim ids (each sorted) as results. Stale rows
-    (`stale_extractions`) are neither duplicates, nor targets, nor counted: a re-served unit
-    starts afresh. The rows,
+    (`stale_extractions`) and stale claims (`stale_claims`) are neither duplicates, nor targets,
+    nor counted, nor enough to close without a reason: a re-served unit starts afresh. The rows,
     claims, closure and completion are appended in one write; each extraction event carries the
     whole call's input as its input blob, stored only when something is appended.
     """
@@ -740,7 +742,12 @@ def extract_record(
             accepted_keys.add(verified[1])
             accepted_rows.append(_Row(index, *verified))
 
-        live_c = {c.claim_id for c in live_claims(project, unit.label, work_id=unit.work_id)}
+        stale_c = ledger.stale_claims()
+        live_c = {
+            c.claim_id
+            for c in ledger.claims.get((unit.work_id, unit.label), [])
+            if c.claim_id not in stale_c
+        }
         used_c: set[str] = set()
         claim_errors: list[ItemError] = []
         accepted_claims: list[tuple[int, ClaimInput]] = []
@@ -1087,6 +1094,7 @@ class _Ledger:
     rows: dict[tuple[str, PassLabel], list[ExtractionRow]]
     amendments: list[tuple[str, ProtocolAmended]]
     orders: dict[PassLabel, str]
+    claims: dict[tuple[str, PassLabel], list["ClaimRow"]]
     documents: dict[str, ConversionRef | None] = field(default_factory=dict)
 
     def current(self, work_id: str) -> ConversionRef | None:
@@ -1120,8 +1128,9 @@ class _Ledger:
         """Why `task` of the unit is stale, or None. `document-version`: it pins a document
         other than the work's current one. `schema`: for a task not completed, the current
         schema's reference or fields differ from what it served; for a completed one, an
-        amendment recorded after its closing stales all rows or a live row of the unit (a task
-        completed without a closing has no position, so every such amendment counts)."""
+        amendment recorded after its closing position (`closed_at`) stales all rows or a live
+        row of the unit that was not already stale at that position (pinned to a replaced
+        document, or staled by an amendment recorded between the row and the closing)."""
         current = self.current(work_id)
         if current is not None and task.pin[0] != current.document_id:
             return "document-version"
@@ -1131,7 +1140,12 @@ class _Ledger:
                 return "schema"
             return None
         closed = self.closed_at.get(task.task_id, "")
-        carried = [tuple(row.fields) for row in self.rows.get((work_id, label), [])]
+        carried = [
+            tuple(row.fields)
+            for row in self.rows.get((work_id, label), [])
+            if (current is None or row.document_id == current.document_id)
+            and not self._stale_by(row, closed)
+        ]
         for when, amendment in self.amendments:
             rule = amendment.extraction_stale
             if rule is None or when <= closed:
@@ -1139,6 +1153,26 @@ class _Ledger:
             if rule.all_records or any(touches(rule, fields) for fields in carried):
                 return "schema"
         return None
+
+    def _stale_by(self, row: ExtractionRow, position: str) -> bool:
+        """Whether an amendment recorded after `row` and no later than `position` stales it."""
+        return any(
+            amendment.extraction_stale is not None
+            and row.event_id < when <= position
+            and touches(amendment.extraction_stale, tuple(row.fields))
+            for when, amendment in self.amendments
+        )
+
+    def stale_claims(self) -> set[str]:
+        """The live claims pinned to a document other than the work's current one. Schema
+        amendments never stale a claim."""
+        stale: set[str] = set()
+        for claims in self.claims.values():
+            for claim in claims:
+                current = self.current(claim.work_id)
+                if current is not None and claim.document_id != current.document_id:
+                    stale.add(claim.claim_id)
+        return stale
 
     def state(
         self, work_id: str, label: PassLabel, schema: ExtractionSchema, pack: Pack
@@ -1187,23 +1221,62 @@ def _ledger(project: Project) -> _Ledger:
                 text("SELECT task_id, event_id FROM extraction_closures")
             )
         }
+    unclosed = {
+        t.task_id
+        for unit in tasks.values()
+        for t in unit
+        if t.status == TaskStatus.COMPLETED.value and t.task_id not in closed_at
+    }
+    closed_at.update(_completion_positions(project, unclosed))
     rows: dict[tuple[str, PassLabel], list[ExtractionRow]] = {}
     for row in live_rows(project):
         rows.setdefault((row.work_id, row.pass_label), []).append(row)
+    claims: dict[tuple[str, PassLabel], list[ClaimRow]] = {}
+    for claim in live_claims(project):
+        claims.setdefault((claim.work_id, claim.pass_label), []).append(claim)
     orders: dict[PassLabel, str] = {}
     for label in PassLabel:
         config = pass_config(project, label)
         default = "schema" if label is PassLabel.A else "reversed"
         orders[label] = default if config is None else config.field_order
-    return _Ledger(project, tasks, closed_at, rows, amendments_with_events(project), orders)
+    return _Ledger(project, tasks, closed_at, rows, amendments_with_events(project), orders, claims)
+
+
+def _completion_positions(project: Project, task_ids: set[str]) -> dict[str, str]:
+    """The closing position of completed tasks without `extraction.closed`: the event ID of the
+    first `task.completed` naming the task, else of its `task.created`. Read from the log (the
+    projection keeps neither), and only when such a task exists."""
+    if not task_ids:
+        return {}
+    completed: dict[str, str] = {}
+    created: dict[str, str] = {}
+    for event in read_all(project.paths.events_dir, project.catalog):
+        task_id = event.payload.get("task_id")
+        if task_id not in task_ids:
+            continue
+        if event.type == "task.completed":
+            completed.setdefault(str(task_id), event.id)
+        elif event.type == "task.created":
+            created.setdefault(str(task_id), event.id)
+    return {t: completed.get(t, created.get(t, "")) for t in task_ids}
 
 
 def stale_extractions(project: Project) -> set[str]:
     """The live rows that are stale: made stale by an amendment recorded after the row (ruling
     12, compared by event ID as `model.staleness` does, so a reverted amendment keeps recording
-    order), or pinned to a document that is no longer the work's current one. Read-only."""
+    order), or pinned to a document that is no longer the work's current one. It ignores the
+    population: rows of works full-text screening no longer includes are filtered downstream.
+    Read-only."""
     project.index.sync()
     return _ledger(project).stale_rows()
+
+
+def stale_claims(project: Project) -> set[str]:
+    """The live claims pinned to a document that is no longer the work's current one. Schema
+    amendments never stale a claim. Like `stale_extractions`, it ignores the population: claims
+    of works no longer included are filtered downstream. Read-only."""
+    project.index.sync()
+    return _ledger(project).stale_claims()
 
 
 def stale_documents(project: Project) -> list[str]:
@@ -1319,7 +1392,8 @@ def live_claims(
             conn.execute(
                 text(
                     "SELECT claim_id, work_id, pass_label, claim_type, evidence_type, strength, "
-                    "statement, anchor, quote, conversion_id, event_id FROM extraction_claims "
+                    "statement, anchor, quote, document_id, conversion_id, event_id "
+                    "FROM extraction_claims "
                     f"WHERE superseded_by IS NULL{where} ORDER BY claim_id"
                 ),
                 params,

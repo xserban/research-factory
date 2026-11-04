@@ -462,9 +462,11 @@ def test_live_claims_returns_claim_rows(
         "statement",
         "anchor",
         "quote",
+        "document_id",
         "conversion_id",
         "event_id",
     }
+    assert c.document_id == task_a.records[0]["document_id"]
     # a superseded claim is absent from live_claims
     (second,) = extract_record(
         project,
