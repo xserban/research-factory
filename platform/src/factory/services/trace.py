@@ -80,7 +80,7 @@ _RECORD_RE = rf"^(run_{ULID_RE})/(rf:.+)$"
 _AUDIT_ITEM_RE = rf"^(aud_{ULID_RE})/(rf:.+)$"
 _ANCHOR_RE = rf"^(cnv_{ULID_RE})/([^/\s]+)$"
 _RESOLUTION_RE = r"^res:(?:full-text:)?(rf:.+)$"
-_CELL_RE = r"^rk_[0-9a-f]{12}(?:/[a-z][a-z_]*)?$"
+_CELL_RE = r"^rk_[0-9a-f]{12}(?:/(?!\*$)\S+)?$"
 _PATTERNS: tuple[tuple[str, str], ...] = (
     (QUESTION_ID_RE, "question"),
     (PROTOCOL_ID_RE, "protocol"),
@@ -1186,7 +1186,7 @@ class _Walk:
             for e in self._column(
                 "SELECT r.extraction_id FROM extraction_rows r "
                 "JOIN extraction_fields f ON f.extraction_id = r.extraction_id "
-                "WHERE r.row_key = :k AND f.field = :f",
+                "WHERE r.row_key = :k AND f.field = :f ORDER BY r.event_id",
                 k=row_key,
                 f=field,
             )

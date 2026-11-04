@@ -222,6 +222,7 @@ async def test_audit_sample_returns_evidence_and_label_is_a_human_mcp_event(
     [
         ("check", {}),
         ("trace", {"ref": "anything"}),
+        ("trace", {"ref": "rk_0123456789ab/value"}),
         ("report_prisma", {}),
         ("report_methods", {}),
     ],

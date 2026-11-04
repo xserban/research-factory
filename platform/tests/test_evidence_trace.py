@@ -4,6 +4,7 @@ Identifiers are those the report prints: `<row_key>/<field>` for a cell (a bare 
 `value` cell) and `clm_...` for a claim. Values are invented; no literature text.
 """
 
+import re
 from collections.abc import Callable, Mapping
 
 import pytest
@@ -15,7 +16,7 @@ from factory.model.screening import PassLabel
 from factory.services.context import Project
 from factory.services.evidence_report import EvidenceReport, EvidenceRow, evidence_report
 from factory.services.extraction import live_rows
-from factory.services.trace import TraceNode, agent_trace, dangling_refs, trace
+from factory.services.trace import _CELL_RE, TraceNode, agent_trace, dangling_refs, trace
 from factory.sources.registry import SourceFactory
 from tests.evidence_helpers import claim_input, run_pass
 from tests.test_acceptance_fulltext_screening import _screened_full_text_world
@@ -166,3 +167,16 @@ def test_every_report_trace_id_resolves(world: EvidenceReport, project: Project)
     assert dangling_refs(project, sorted(ids)) == []
     for ref in sorted(ids):
         trace(project, ref)
+
+
+@pytest.mark.parametrize(
+    "ref",
+    ["rk_0123456789ab", "rk_0123456789ab/value", "rk_0123456789ab/p2_flops", "rk_0123456789ab/a-b"],
+)
+def test_cell_pattern_matches_any_field_name(ref: str) -> None:
+    assert re.fullmatch(_CELL_RE, ref)
+
+
+@pytest.mark.parametrize("ref", ["rk_0123456789ab/*", "rk_0123456789ab/", "rk_xyz/value"])
+def test_cell_pattern_rejects_the_whole_row_marker_and_bad_keys(ref: str) -> None:
+    assert not re.fullmatch(_CELL_RE, ref)
