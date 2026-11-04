@@ -34,7 +34,7 @@ _SURNAME = (
     r"(?:(?:van|von|de|der|den|di|da|del|du|la|le|ter)\s+)*"
     rf"[{_UP}](?:[^\W\d_]|['\u2019-])*"
 )
-_AUTHORS = rf"{_SURNAME}(?:(?:,\s*(?:(?:and|&)\s+)?|\s+(?:and|&)\s+){_SURNAME})*"
+_AUTHORS = rf"{_SURNAME}(?:(?:,\s*(?:(?:and|&)\s+)?|\s+(?:and|&)\s+){_SURNAME}){{0,4}}"
 _ENTRY = rf"{_AUTHORS}(?:\s+et al\.?)?,?\s+\d{{4}}[a-z]?"
 CITATION_PATTERNS = (
     r"\[\s*\d+(?:\s*[,;\u2013\u2014-]\s*\d+)*\s*\]",

@@ -1,6 +1,7 @@
 # ruff: noqa: RUF001
 """Tests for number tokens, canonical values, normalisers and citation markers."""
 
+import time
 from decimal import Decimal
 
 import pytest
@@ -202,3 +203,14 @@ def test_citation_accepted_false_positives() -> None:
     assert citation_markers("[0, 1]", p) == ["[0, 1]"]
     assert citation_markers("[2021]", p) == ["[2021]"]
     assert citation_markers("(June 2021)", p) == ["(June 2021)"]
+
+
+@pytest.mark.parametrize(
+    ("unit", "reps"),
+    [("A, ", 20000), ("Smith, ", 5000), ("Smith and ", 5000), ("Smith, Li, and ", 3000)],
+)
+def test_citation_markers_linear_on_capitalised_chains(unit: str, reps: int) -> None:
+    text = unit * reps + "x"
+    t0 = time.perf_counter()
+    citation_markers(text, ML_BENCHMARK_V1.citation_patterns)
+    assert time.perf_counter() - t0 < 0.5
