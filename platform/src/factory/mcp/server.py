@@ -703,11 +703,11 @@ def build_server(
         page. `anchor` reads one anchor, cells included. Agents read documents only through this
         tool. Conversion is the researcher's act (`factory document convert`); there is no MCP
         convert tool. Only works promoted at title/abstract are read. Read-only. Refused to a
-        session that has joined a pass."""
+        title/abstract pass session; a full-text screener reads only the works of its own batches,
+        at the conversion each pins."""
 
         def read() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
-            _refuse_pass_session(opened)
             page = document_read_service.document_read(
                 opened,
                 work_id=work_id,
@@ -717,6 +717,7 @@ def build_server(
                 anchor=anchor,
                 limit=limit,
                 max_chars=max_chars,
+                session=opened.session,
             )
             return _withheld(opened, page.model_dump(mode="json"))
 

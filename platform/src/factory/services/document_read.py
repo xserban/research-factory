@@ -11,6 +11,14 @@ Choosing the conversion (ruling 5): an explicit `conversion_id` wins; else an ex
 order. An explicit document or conversion may be superseded, so old quotes stay readable.
 
 Invariants:
+- Pass independence (decision 37): when `session` is given, a session joined to a title/abstract
+  pass and to no full-text pass is refused (field `session`). A session joined to a full-text pass
+  reads only the works of the full-text batches of its own pass that it holds or has completed,
+  and only the conversion such a batch pins; this rule applies whether or not the session also
+  joined a title/abstract pass, so a title/abstract membership never widens the access. Any
+  other work, document or conversion is refused on its own field. A session in neither stage, and
+  a call without `session` (the researcher's CLI), are not gated. The tool returns only document
+  segments, never a verdict or label of either pass.
 - Read-only: nothing is written, and the index is only synced, never written.
 - Only works promoted at title/abstract (`Outcome.INCLUDED`) are read.
 - Every returned page is non-empty when more segments remain, and `next_after` is None exactly
@@ -32,7 +40,10 @@ from factory.document.anchors import Anchor, AnchorKind, Manifest
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.model.base import StrictModel
 from factory.model.fulltext import ROUTE_ORDER, Quality, Route
+from factory.model.protocol import ScreeningStage
+from factory.model.screening import PassLabel
 from factory.services.agreement import Outcome, final_outcomes
+from factory.services.calibration import is_pass_session
 from factory.services.context import Project
 from factory.services.conversions import (
     Conversion,
@@ -43,6 +54,7 @@ from factory.services.conversions import (
     conversion_manifest,
     resolve_anchor,
 )
+from factory.services.stages import task_kind
 
 __all__ = [
     "DocumentPage",
@@ -101,6 +113,7 @@ def document_read(
     anchor: str | None = None,
     limit: int = DEFAULT_LIMIT,
     max_chars: int = DEFAULT_MAX_CHARS,
+    session: str | None = None,
 ) -> DocumentPage:
     """One page of a promoted work's conversion, or the single anchor `anchor`.
 
@@ -109,9 +122,14 @@ def document_read(
     document or conversion does not match; if the work has no conversion (naming
     `factory document convert`); or if the conversion's blobs are missing or damaged (naming
     `factory document convert --restore`). An unknown `after` or `anchor` is refused on its field.
+
+    `session` is the caller's session when it is an agent's (see the module invariants); a
+    full-text screener that names no document or conversion reads the one its batch pins.
     """
     _check_arguments(limit, max_chars, after, anchor)
     project.index.sync()
+    if session is not None:
+        document_id, conversion_id = _gate(project, session, work_id, document_id, conversion_id)
     if work_id not in _promoted(project):
         raise FactoryValidationError(
             [ValidationIssue("work_id", f"{work_id}: not promoted at title/abstract")]
@@ -159,6 +177,85 @@ def _check_arguments(limit: int, max_chars: int, after: str | None, anchor: str 
         issues.append(ValidationIssue("after", "cannot be combined with anchor"))
     if issues:
         raise FactoryValidationError(issues)
+
+
+# --- The pass-independence gate (decision 37) ---
+
+
+def _gate(
+    project: Project,
+    session: str,
+    work_id: str,
+    document_id: str | None,
+    conversion_id: str | None,
+) -> tuple[str | None, str | None]:
+    """The (document, conversion) to read for `session`, or a refusal. See the module invariants."""
+    label = _full_text_pass(project, session)
+    if label is None:
+        if is_pass_session(project, session, stage=ScreeningStage.TITLE_ABSTRACT):
+            raise FactoryValidationError(
+                [
+                    ValidationIssue(
+                        "session", "this session has joined a pass and cannot use this tool"
+                    )
+                ]
+            )
+        return document_id, conversion_id
+    pins = _held_pins(project, session, label, work_id)
+    if not pins:
+        raise FactoryValidationError(
+            [ValidationIssue("work_id", f"{work_id}: not a record of a batch this session holds")]
+        )
+    pinned = pins[-1]
+    if conversion_id is not None:
+        match = next((p for p in pins if p[1] == conversion_id), None)
+        if match is None:
+            raise FactoryValidationError(
+                [ValidationIssue("conversion_id", f"{conversion_id}: not the conversion pinned")]
+            )
+        pinned = match
+    if document_id is not None and document_id != pinned[0]:
+        raise FactoryValidationError(
+            [ValidationIssue("document_id", f"{document_id}: not the document pinned")]
+        )
+    return pinned
+
+
+def _full_text_pass(project: Project, session: str) -> PassLabel | None:
+    with project.index.connect() as conn:
+        row = conn.execute(
+            text("SELECT pass_label FROM pass_sessions WHERE session = :s AND stage = :stage"),
+            {"s": session, "stage": ScreeningStage.FULL_TEXT.value},
+        ).first()
+    return None if row is None else PassLabel(str(row[0]))
+
+
+def _held_pins(
+    project: Project, session: str, label: PassLabel, work_id: str
+) -> list[tuple[str, str]]:
+    """(document, conversion) pinned for `work_id` by full-text batches of pass `label` that
+    `session` holds or has completed, in task-ID order."""
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT content_blob FROM tasks WHERE kind = :kind AND claim_session = :s "
+                "AND status IN ('claimed', 'completed') ORDER BY task_id"
+            ),
+            {"kind": task_kind(ScreeningStage.FULL_TEXT, label), "s": session},
+        ).all()
+    pins: list[tuple[str, str]] = []
+    for (blob,) in rows:
+        content = project.blobs.get_json(str(blob))
+        records = content.get("records") if isinstance(content, dict) else None
+        for record in records if isinstance(records, list) else []:
+            if (
+                isinstance(record, dict)
+                and record.get("work_id") == work_id
+                and isinstance(record.get("document_id"), str)
+                and isinstance(record.get("conversion_id"), str)
+            ):
+                pins.append((str(record["document_id"]), str(record["conversion_id"])))
+    return pins
 
 
 # --- Choosing the conversion ---
