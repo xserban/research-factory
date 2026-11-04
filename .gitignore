@@ -28,3 +28,4 @@ projects/*/blobs/**/*.pdf
 # Experiments: raw literature and outputs never enter git (decision 39)
 experiments/*/data/
 experiments/*/tools/
+.claude/worktrees/

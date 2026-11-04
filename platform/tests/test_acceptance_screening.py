@@ -124,8 +124,8 @@ def _ready_pilot(
     works."""
     question_id = record_pilot_question(project, agent)
     for n in (1, 2, 3):
-        spec = SeedSpec(kind=SeedKind.POSITIVE, cite=f"Paper {n}", doi=f"10.1000/p{n}")
-        add_seeds(project, agent, [spec], sources=mock_sources(openalex=[_seed_item(n)]))
+        seed = SeedSpec(kind=SeedKind.POSITIVE, cite=f"Paper {n}", doi=f"10.1000/p{n}")
+        add_seeds(project, agent, [seed], sources=mock_sources(openalex=[_seed_item(n)]))
     probe = QuerySpec(source="openalex", kind=QueryKind.KEYWORD, text="attention")
     report = run_probe(project, agent, [probe], sources=mock_sources(openalex=[_seed_item(1)]))
     spec = pilot_protocol_spec(question_id, report.probe_id, reviewer=human.id)

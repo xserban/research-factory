@@ -5,6 +5,7 @@ node exists. The fixtures are the ones the other services' tests use.
 """
 
 from collections.abc import Callable, Mapping
+from typing import cast
 
 import pytest
 
@@ -197,7 +198,7 @@ def test_trace_shows_reverted_merge(
     [merge_id] = dedup_run(explore_project).created
     [merged] = _events_of(explore_project, "dedup.merged")
     primary = str(merged.payload["primary"])
-    absorbed = {str(work) for work in merged.payload["absorbed"]}
+    absorbed = {str(work) for work in cast(list[str], merged.payload["absorbed"])}
     revert_merge(explore_project, human, merge_id, "different papers")
 
     root = trace(explore_project, primary)

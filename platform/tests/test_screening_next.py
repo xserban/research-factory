@@ -4,7 +4,7 @@ import math
 import re
 import secrets
 from collections.abc import Callable, Mapping
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -163,7 +163,8 @@ def test_extension_respects_fraction(
     drawn = _extend_sample(project, agent, random_seed=7)
     assert drawn is not None
     event, added = drawn
-    assert len(event.payload["considered"]) == 200  # the late works only, not the open remainder
+    considered = cast(list[str], event.payload["considered"])
+    assert len(considered) == 200  # the late works only, not the open remainder
     assert 70 <= len(added) <= 130
     replay = _extend_sample(project, agent, random_seed=7)
     assert replay is not None and replay[1] == added
@@ -384,7 +385,7 @@ def test_batch_order_is_randomised_and_reproducible(
     second = screen_next(twin, agent, PassLabel.A).batch
     assert second is not None
 
-    ids = [r["work_id"] for r in first.records]
+    ids = [str(r["work_id"]) for r in first.records]
     assert ids == [r["work_id"] for r in second.records]
     assert ids != sorted(ids)
 

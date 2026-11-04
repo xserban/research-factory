@@ -5,6 +5,8 @@ ordinary works vary between runs. Every test therefore assigns the first four or
 designed roles and lets any further ordinary works agree as include.
 """
 
+from typing import cast
+
 import pytest
 
 from factory.errors import FactoryValidationError
@@ -29,14 +31,13 @@ from factory.services.screening import (
 from factory.services.screening_stats import cohen_kappa
 from factory.services.search import list_works
 from factory.services.tasks import TaskSpec, create_tasks
+from tests.helpers import _of_type, _setup
 from tests.test_screening_next import (
     SourcesFor,
     _decide,
     _draw,
     _events,
     _late,
-    _of_type,
-    _setup,
 )
 
 
@@ -73,7 +74,9 @@ def _b_queue(project: Project) -> set[str]:
     ]
     sample = opened.payload["sample"]
     ordinary = set(_ordinary(project))
-    return ordinary if sample is None else ordinary & set(sample)
+    if sample is None:
+        return ordinary
+    return ordinary & set(cast(list[str], sample))
 
 
 def _decide_four(project: Project, agent: Actor, protocol_id: str) -> tuple[str, str, str, str]:
@@ -254,7 +257,8 @@ def test_below_floor_flagged_advisory_in_pilot(
     agreement = screen_agreement(project, agent)
 
     assert agreement.kappa_floor == pytest.approx(0.7)
-    assert agreement.kappa is not None and agreement.kappa < agreement.kappa_floor
+    assert agreement.kappa is not None and agreement.kappa_floor is not None
+    assert agreement.kappa < agreement.kappa_floor
     assert agreement.below_floor is True
     assert agreement.enforced is False
 
@@ -450,7 +454,7 @@ def test_agreement_counts_extended_works_as_dual_coded(
     event, added = drawn
     project.record([event])
     assert added
-    considered = set(event.payload["considered"])
+    considered = set(cast(list[str], event.payload["considered"]))
     assert considered - set(added)
     added_work = sorted(added)[0]
     single_work = sorted(considered - set(added))[0]

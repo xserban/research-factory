@@ -2,7 +2,7 @@ import json
 import re
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from typer.testing import CliRunner
@@ -35,13 +35,14 @@ from tests.helpers import (
     S2,
     SESSION,
     FakeSource,
+    _of_type,
+    _setup,
     openalex_item,
     ready_protocol,
     record_pilot_question,
 )
 from tests.test_acceptance_fulltext import _build, _promoted, _routes
 from tests.test_fulltext_import import _pdf
-from tests.test_screening_next import _of_type, _setup
 
 runner = CliRunner()
 
@@ -299,7 +300,7 @@ def _screen_passes(project: Project, pass_a: Actor, pass_b: Actor) -> None:
         assert result.remaining == 0
 
 
-def _verdict(label: PassLabel, phase: ScreeningPhase, record: dict[str, object]) -> ScreeningItem:
+def _verdict(label: PassLabel, phase: ScreeningPhase, record: dict[str, Any]) -> ScreeningItem:
     work_id, title = str(record["work_id"]), str(record["title"])
     parts = title.split()
     if (
@@ -374,7 +375,7 @@ def test_cli_resolve_and_audit_label(
     audit_id = re.search(r"aud_\w+", sampled.stdout)
     assert audit_id is not None
     [event] = _of_type(project, "audit.sampled")
-    first_work = event.payload["work_ids"][0]
+    first_work = cast(list[str], event.payload["work_ids"])[0]
     labelled_audit = runner.invoke(
         app, ["audit", "label", audit_id.group(0), first_work, "include"], env=env
     )
