@@ -30,6 +30,10 @@ Mapping (LaTeXML class to Markdown):
   digits; else the tag itself when it is a plain word such as `(a)`; else a running count of
   captions of that kind. Images (`img`, `picture`, `svg`, `ltx_graphics`) are dropped.
 - `ltx_bibliography` gives `## References` and one paragraph per `ltx_bibitem`.
+- An `a.ltx_ref` inside an `ltx_cite` whose `href` is `#<id>` of an `ltx_bibitem` becomes
+  `[text](#b<k>)`, where `k` is the 1-based ordinal of that bibitem among all `ltx_bibitem`s in
+  document order (the anchoriser's `b<k>`). `\\`, `[` and `]` in the text are backslash-escaped.
+  Brackets and separators around the links stay text. A cite link to an unknown target is text.
 - A footnote (`ltx_note`) becomes `[^n]` in the text and a paragraph `[^n] text` at the end of the
   enclosing section. The number is the note's `ltx_tag`, else a running count.
 - Equation numbers (`ltx_tag_equation`) carry no content and are dropped.
@@ -54,7 +58,7 @@ from lxml import etree
 
 from factory.document.normalise import escape_cell
 
-CONVERTER_VERSION = "1.0"
+CONVERTER_VERSION = "1.1"
 
 _SECTION_LEVELS = {"ltx_section": 2, "ltx_appendix": 2, "ltx_subsection": 3, "ltx_subsubsection": 4}
 _SKIP_TAGS = frozenset(
@@ -313,6 +317,7 @@ class _Walker:
     _captions: dict[str, int] = field(default_factory=dict)
     _notes: int = 0
     _tables: int = 0
+    _bib_ordinals: dict[str, int] = field(default_factory=dict)
 
     def finish(self) -> str:
         """The document's Markdown, with the footnotes of the top level appended."""
@@ -521,8 +526,24 @@ class _Walker:
                 parts.append(f"${_math_text(alttext)}$")
         elif child.tag == "br":
             parts.append(" ")
+        elif self._cite_target(child) is not None:
+            text = _collapse(_text(child)).replace("\\", "\\\\")
+            text = text.replace("[", "\\[").replace("]", "\\]")
+            parts.append(f"[{_esc(text)}](#b{self._cite_target(child)})")
         else:
             self._gather(child, parts, exclude)
+
+    def _cite_target(self, link: etree._Element) -> int | None:
+        """The bibliography ordinal that citation link `link` points to, else None."""
+        href = link.get("href") or ""
+        if (
+            link.tag != "a"
+            or "ltx_ref" not in _classes(link)
+            or not href.startswith("#")
+            or not any("ltx_cite" in _classes(a) for a in link.iterancestors())
+        ):
+            return None
+        return self._bib_ordinals.get(href[1:])
 
     def _table(self, table: etree._Element) -> None:
         self._tables += 1
@@ -577,6 +598,16 @@ class LatexmlHtmlConverter:
         if root is None:
             return "", ("document: not parseable as HTML",)
         walker = _Walker()
+        bibitems = (
+            node
+            for node in root.iter()
+            if isinstance(node.tag, str)
+            and "ltx_bibitem" in _classes(node)
+            and _collapse(_text(node))  # an empty bibitem yields no paragraph, so no anchor
+        )
+        for ordinal, item in enumerate(bibitems, start=1):
+            if item.get("id"):
+                walker._bib_ordinals.setdefault(str(item.get("id")), ordinal)
         walker.block(root)
         markdown = walker.finish()
         return markdown, tuple(walker.warnings)
