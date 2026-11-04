@@ -11,7 +11,9 @@ session that relayed a human label over MCP, since such a session could read the
 Every function takes a keyword `stage` (default title/abstract); `either` is refused on field
 `stage`. At full text the plan is `full_text_screening`, refused on field `full_text_screening`
 until declared (R-13). Task kinds are `screen_a`/`screen_b` and `screen_ft_a`/`screen_ft_b`. The
-full-text pass B has no sample extension yet: its sample is the one recorded at open.
+full-text pass B draws its sample from the eligible works at open and extends it as more works
+become eligible, as at title/abstract. A full-text batch pins, in each record, the conversion that
+was the work's default when the task was created.
 
 `screen_next` serves the next batch of a pass. While calibration is required and the pass has not
 passed it, only calibration batches are served, and `blocked` says why ordinary batches wait. A
@@ -107,6 +109,19 @@ INSTRUCTIONS: dict[Framing, str] = {
 }
 
 
+_FT_QUOTE_RULE = (
+    " Read each record's pinned conversion with document_read (its document_id and "
+    "conversion_id), cite one anchor of that conversion, and quote verbatim from that anchor; "
+    "do not use knowledge of the paper beyond that text."
+)
+FULLTEXT_INSTRUCTIONS: dict[Framing, str] = {
+    Framing.INCLUSION: "For each record decide whether the full text meets every inclusion "
+    "criterion. When in doubt, include." + _FT_QUOTE_RULE,
+    Framing.EXCLUSION: "For each record look in the full text for a reason to exclude it under "
+    "the exclusion criteria. When in doubt, include." + _FT_QUOTE_RULE,
+}
+
+
 class ScreenBatchContent(StrictModel):
     """What one batch asks of an agent. This is the task's content, and its input blob."""
 
@@ -118,6 +133,7 @@ class ScreenBatchContent(StrictModel):
     worked_examples: list[dict[str, str]]
     records: list[dict[str, str | None]]
     phase: ScreeningPhase
+    stage: ScreeningStage = TA
 
 
 class ScreenBatch(ScreenBatchContent):
@@ -197,9 +213,11 @@ def _opened_event(
         input_blob=_pass_input(project, actor, label, stage),
     )
     events = [event]
-    if label is PassLabel.B and sample is not None and stage is TA:
-        corpus = {work.id for work in list_works(project)}
-        unsampled = tuple(sorted(corpus - set(sample) - set(calibration_items(project))))
+    if label is PassLabel.B and sample is not None:
+        population = stage_population(project, stage)
+        unsampled = tuple(
+            sorted(population - set(sample) - set(calibration_items(project, stage=stage)))
+        )
         extension = SampleExtended(
             pass_label=PassLabel.B, random_seed=seed, considered=unsampled, added=(), stage=stage
         )
@@ -320,8 +338,8 @@ def screen_next(
             events.extend(opened)
         if needs_join:
             events.append(_join_event(project, actor, label, stage))
-        if label is PassLabel.B and stage is TA:
-            drawn = _extend_sample(project, actor)
+        if label is PassLabel.B:
+            drawn = _extend_sample(project, actor, stage=stage)
             if drawn is not None:
                 extension, added = drawn
                 events.append(extension)
@@ -577,6 +595,16 @@ def _enqueue(
     corpus = {work.id: work for work in list_works(project)}
     calibration = calibration_items(project, stage=stage)
     base = sorted(stage_population(project, stage)) if sample is None else list(sample)
+    pinned: dict[str, tuple[str, str]] = {}
+    if stage is not TA:
+        from factory.services.fulltext_screening import fulltext_queue  # circular at import time
+
+        pinned = {
+            entry.work_id: (entry.document_id, entry.conversion_id)
+            for entry in fulltext_queue(project).eligible
+        }
+        calibration = [w for w in calibration if w in pinned]
+        base = [w for w in base if w in pinned]
     ordinary = sorted(set(base) - set(calibration))
 
     kind = task_kind(stage, label)
@@ -606,19 +634,21 @@ def _enqueue(
     for phase, works in pending:
         for start in range(0, len(works), SCREEN_BATCH):
             records = [
-                {"work_id": w, "title": corpus[w].title, "abstract": corpus[w].abstract}
-                for w in works[start : start + SCREEN_BATCH]
+                _record(corpus[w], pinned.get(w)) for w in works[start : start + SCREEN_BATCH]
             ]
             random.Random(f"{seed}:{index}").shuffle(records)
             content = ScreenBatchContent(
                 pass_label=label,
                 framing=_FRAMING[label],
-                instructions=INSTRUCTIONS[_FRAMING[label]],
+                instructions=(INSTRUCTIONS if stage is TA else FULLTEXT_INSTRUCTIONS)[
+                    _FRAMING[label]
+                ],
                 protocol_id=protocol.protocol_id,
                 criteria=criteria,
                 worked_examples=examples,
                 records=records,
                 phase=phase,
+                stage=stage,
             )
             specs.append(TaskSpec(kind=kind, content=content.model_dump(mode="json")))
             index += 1
@@ -628,24 +658,45 @@ def _enqueue(
     return events, remaining
 
 
+def _record(work: Work, pinned: tuple[str, str] | None) -> dict[str, str | None]:
+    """One batch record: title and abstract at title/abstract; at full text the title and the
+    conversion pinned now (the screener reads the document through `document_read`)."""
+    if pinned is None:
+        return {"work_id": work.id, "title": work.title, "abstract": work.abstract}
+    document_id, conversion_id = pinned
+    return {
+        "work_id": work.id,
+        "title": work.title,
+        "document_id": document_id,
+        "conversion_id": conversion_id,
+    }
+
+
 def _extend_sample(
-    project: Project, actor: Actor, *, random_seed: int | None = None
+    project: Project,
+    actor: Actor,
+    *,
+    random_seed: int | None = None,
+    stage: ScreeningStage = TA,
 ) -> tuple[Event, tuple[str, ...]] | None:
-    """Draw pass B's extension over the works that arrived after pass B opened, and return the
+    """Draw pass B's extension at `stage` over the works that arrived (or, at full text, became
+    eligible) after pass B opened, and return the
     `screening.sample_extended` event (not yet recorded) and the works it added.
 
     None, with nothing to record, when pass B covers the whole corpus (no fractional sample) or
     when every corpus work outside the sample has been considered. Otherwise each candidate
     (corpus less sample, less considered works, less calibration items) is kept with probability
     dual_sample, and the event records the candidates and the draw even when none is added."""
-    sample = pass_b_sample(project)
-    dual_sample = _require_protocol(project).spec.screening.dual_sample
+    sample = pass_b_sample(project, stage=stage)
+    dual_sample = screening_plan(_require_protocol(project), stage).dual_sample
     if sample is None or dual_sample is None:
         return None
     with project.index.connect() as conn:
-        considered = considered_works(conn)
-    corpus = {work.id for work in list_works(project)}
-    candidates = sorted(corpus - set(sample) - considered - set(calibration_items(project)))
+        considered = considered_works(conn, stage)
+    population = stage_population(project, stage)
+    candidates = sorted(
+        population - set(sample) - considered - set(calibration_items(project, stage=stage))
+    )
     if not candidates:
         return None
     seed = secrets.randbits(32) if random_seed is None else random_seed
@@ -656,20 +707,20 @@ def _extend_sample(
         random_seed=seed,
         considered=tuple(candidates),
         added=added,
-        stage=TA,
+        stage=stage,
     )
     event = project.events.make(
         "screening.sample_extended",
         payload,
         actor,
-        input_blob=_pass_input(project, actor, PassLabel.B, TA),
+        input_blob=_pass_input(project, actor, PassLabel.B, stage),
     )
     return event, added
 
 
 def pass_b_sample(project: Project, *, stage: ScreeningStage = TA) -> tuple[str, ...] | None:
     """Pass B's effective sample at `stage`, sorted: the sample recorded at open, plus every work
-    a sample extension drew into it (title/abstract only). None when pass B is not opened or
+    a sample extension at `stage` drew into it. None when pass B is not opened or
     covers the whole population.
 
     The single reader of pass B's sample: screen_next, pass progress and agreement all use it."""
@@ -682,7 +733,7 @@ def pass_b_sample(project: Project, *, stage: ScreeningStage = TA) -> tuple[str,
         if row is None or row[0] is None:
             return None
         base = set(json.loads(str(row[0])))
-        extended = extended_works(conn) if stage is TA else set()
+        extended = extended_works(conn, stage)
     return tuple(sorted(base | extended))
 
 

@@ -258,16 +258,41 @@ def _select(
             )
         return versions[-1]
 
-    live = [c for c in _query(project, "d.work_id = :work", {"work": work_id}) if c.live]
-    if not live:
+    chosen = _default(project, work_id)
+    if chosen is None:
         raise FactoryValidationError(
             [ValidationIssue("work_id", f"{work_id}: has no conversion; {_CONVERT_HINT}")]
         )
+    return chosen
+
+
+def _default(project: Project, work_id: str) -> _Conversion | None:
+    """The default conversion of a work: the first live document in route order (then document
+    event order), at its latest conversion by event order; None when no live document of the work
+    has a conversion."""
+    live = [c for c in _query(project, "d.work_id = :work", {"work": work_id}) if c.live]
+    if not live:
+        return None
     first = min(live, key=lambda c: (_route_rank(c.route), c.document_event_id))
     return max(
         (c for c in live if c.document_id == first.document_id),
         key=lambda c: c.conversion_event_id,
     )
+
+
+@dataclass(frozen=True)
+class ConversionRef:
+    """A conversion named by its document and its own id."""
+
+    document_id: str
+    conversion_id: str
+
+
+def default_conversion(project: Project, work_id: str) -> ConversionRef | None:
+    """The conversion `document_read` serves for `work_id` when no document or conversion is named
+    (plan 2B2 ruling 5), or None when the work has none. Read-only; the caller syncs the index."""
+    chosen = _default(project, work_id)
+    return None if chosen is None else ConversionRef(chosen.document_id, chosen.conversion_id)
 
 
 def _route_rank(route: Route) -> int:

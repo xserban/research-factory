@@ -4,9 +4,10 @@
 `chase_queries` its query texts in registration order. `round_texts` returns those texts, the ones
 the authorisation gate may waive for a chase spec.
 
-`sample_extensions` keeps each pass-B extension draw. `sample_considered` keeps every work any
-extension considered, once, with `added` set when pass B took it; `extended_works` and
-`considered_works` read it.
+`sample_extensions` keeps each pass-B extension draw, with its `stage`. `sample_considered` keeps
+every work any extension considered, once per stage, with `added` set when pass B took it;
+`extended_works` and `considered_works` read it for one stage (title/abstract by default). Slice-1
+rows have stage `title-abstract`.
 
 `seed_admissions` keeps the first admission per seed.
 
@@ -26,6 +27,9 @@ from factory.canonical import canonical_json
 from factory.events.envelope import Event
 from factory.index.projection import Handler
 from factory.model.chase import ChaseRoundStarted, SampleExtended, SeedAdmitted
+from factory.model.protocol import ScreeningStage
+
+TITLE_ABSTRACT = ScreeningStage.TITLE_ABSTRACT.value
 
 
 @dataclass(frozen=True)
@@ -59,10 +63,12 @@ def chase_tables(metadata: MetaData) -> ChaseTables:
         metadata,
         Column("event_id", String, primary_key=True),
         Column("random_seed", Integer, nullable=False),
+        Column("stage", String, nullable=False, server_default=TITLE_ABSTRACT),
     )
     considered = Table(
         "sample_considered",
         metadata,
+        Column("stage", String, primary_key=True, server_default=TITLE_ABSTRACT),
         Column("work_id", String, primary_key=True),
         Column("event_id", String, nullable=False),
         Column("added", Integer, nullable=False),
@@ -117,7 +123,7 @@ def _sample_extended(t: ChaseTables) -> Handler:
         payload = SampleExtended.model_validate(event.payload)
         inserted = conn.execute(
             sqlite_insert(t.extensions)
-            .values(event_id=event.id, random_seed=payload.random_seed)
+            .values(event_id=event.id, random_seed=payload.random_seed, stage=payload.stage.value)
             .on_conflict_do_nothing(index_elements=["event_id"])
         )
         if inserted.rowcount == 0:
@@ -127,11 +133,12 @@ def _sample_extended(t: ChaseTables) -> Handler:
             conn.execute(
                 sqlite_insert(t.considered)
                 .values(
+                    stage=payload.stage.value,
                     work_id=work_id,
                     event_id=event.id,
                     added=1 if work_id in added else 0,
                 )
-                .on_conflict_do_nothing(index_elements=["work_id"])
+                .on_conflict_do_nothing(index_elements=["stage", "work_id"])
             )
 
     return sample_extended
@@ -160,15 +167,25 @@ def round_texts(conn: Connection) -> set[str]:
     return {str(row[0]) for row in rows}
 
 
-def extended_works(conn: Connection) -> set[str]:
-    """The works pass B's sample was extended with: considered and drawn into the sample."""
-    rows = conn.execute(text("SELECT work_id FROM sample_considered WHERE added = 1")).all()
+def extended_works(
+    conn: Connection, stage: ScreeningStage = ScreeningStage.TITLE_ABSTRACT
+) -> set[str]:
+    """The works pass B's sample at `stage` was extended with: considered and drawn into it."""
+    rows = conn.execute(
+        text("SELECT work_id FROM sample_considered WHERE added = 1 AND stage = :stage"),
+        {"stage": stage.value},
+    ).all()
     return {str(row[0]) for row in rows}
 
 
-def considered_works(conn: Connection) -> set[str]:
-    """Every work any sample extension has considered, drawn or not."""
-    rows = conn.execute(text("SELECT work_id FROM sample_considered")).all()
+def considered_works(
+    conn: Connection, stage: ScreeningStage = ScreeningStage.TITLE_ABSTRACT
+) -> set[str]:
+    """Every work any sample extension at `stage` has considered, drawn or not."""
+    rows = conn.execute(
+        text("SELECT work_id FROM sample_considered WHERE stage = :stage"),
+        {"stage": stage.value},
+    ).all()
     return {str(row[0]) for row in rows}
 
 

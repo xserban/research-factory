@@ -66,6 +66,7 @@ from factory.services.screening import (
 )
 from factory.services.search import list_works
 from factory.services.stages import stage_of_kind, task_kind
+from tests.document_helpers import ARTICLE, fetched_document, make_registry, run_convert
 from tests.helpers import SESSION, _of_type, _setup
 from tests.test_screening_next import SourcesFor, _decide, _draw, _events
 
@@ -219,6 +220,11 @@ def _world(project: Project, agent: Actor, human: Actor, mock_sources: SourcesFo
     for work in rest:
         _both(project, agent, TA, work, ("include", None), ("include", None), pid)
     resolve_disagreement(project, human, dis, "include", None, "adjudicated", Channel.CLI)
+
+    # Full text screens promoted works that have a converted document (plan 2C task 4).
+    for work in sorted(w for w, o in final_outcomes(project).items() if o.value == "included"):
+        fetched_document(project, work, ARTICLE)
+    run_convert(project, make_registry())
 
     ft_items = draw_calibration(project, project.system_actor(), random_seed=5, stage=FT)
     for item in ft_items:

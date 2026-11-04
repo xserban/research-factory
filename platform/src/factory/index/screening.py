@@ -11,7 +11,8 @@ is canonical JSON, or NULL). `pass_sessions` keeps the session that joined each 
 decision (NULL at title/abstract); a decision that a later one supersedes gets `superseded_by`
 set, so a live decision is one with `superseded_by` NULL.
 
-`calibration_items` holds the drawn calibration set (one draw per project and stage).
+`calibration_items` holds the drawn calibration set (one draw per project and stage);
+`calibration_draws` holds one row per stage that has had a draw, even an empty one.
 `calibration_labels` and `resolutions` and `audit_items.human_verdict` keep the latest human label
 per key. `audits` and `audit_items` hold each audit sample; `agreed_verdict` is computed when the
 sample is written from the live screening decisions of the audit's stage, of the two passes under
@@ -56,6 +57,7 @@ class ScreeningTables:
     pass_sessions: Table
     decisions: Table
     calibration_items: Table
+    calibration_draws: Table
     calibration_labels: Table
     resolutions: Table
     audits: Table
@@ -117,6 +119,11 @@ def screening_tables(metadata: MetaData) -> ScreeningTables:
         Column("work_id", String, primary_key=True),
         Column("protocol_id_drawn", String),
     )
+    calibration_draws = Table(
+        "calibration_draws",
+        metadata,
+        _stage(key=True),
+    )
     calibration_labels = Table(
         "calibration_labels",
         metadata,
@@ -171,6 +178,7 @@ def screening_tables(metadata: MetaData) -> ScreeningTables:
         pass_sessions=pass_sessions,
         decisions=decisions,
         calibration_items=calibration_items,
+        calibration_draws=calibration_draws,
         calibration_labels=calibration_labels,
         resolutions=resolutions,
         audits=audits,
@@ -291,6 +299,11 @@ def _resolution(t: ScreeningTables) -> Handler:
 def _calibration_drawn(t: ScreeningTables) -> Handler:
     def calibration_drawn(conn: Connection, event: Event) -> None:
         payload = CalibrationDrawn.model_validate(event.payload)
+        conn.execute(
+            sqlite_insert(t.calibration_draws)
+            .values(stage=payload.stage.value)
+            .on_conflict_do_nothing(index_elements=["stage"])
+        )
         for work_id in payload.work_ids:
             conn.execute(
                 sqlite_insert(t.calibration_items)

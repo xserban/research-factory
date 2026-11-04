@@ -28,7 +28,6 @@ from sqlalchemy import text
 
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
-from factory.events.reader import read_all
 from factory.model.base import StrictModel
 from factory.model.protocol import ScreeningPlan, ScreeningStage
 from factory.model.screening import (
@@ -246,15 +245,14 @@ def calibration_status(
 
 def _calibration_population(project: Project, stage: ScreeningStage) -> set[str]:
     """The works a calibration set of `stage` is drawn from: the corpus at title/abstract; at full
-    text, the works whose title/abstract final outcome is INCLUDED (plan 2C task 4 also requires a
-    converted document)."""
+    text, the works whose title/abstract final outcome is INCLUDED and that have a converted live
+    document (the eligible works of `fulltext_queue`)."""
     corpus = _corpus_ids(project)
     if stage is ScreeningStage.TITLE_ABSTRACT:
         return corpus
-    from factory.services.agreement import Outcome, final_outcomes  # circular at import time
+    from factory.services.fulltext_screening import fulltext_queue  # circular at import time
 
-    outcomes = final_outcomes(project)
-    return {work for work in corpus if outcomes.get(work) is Outcome.INCLUDED}
+    return {entry.work_id for entry in fulltext_queue(project).eligible} & corpus
 
 
 def stage_population(project: Project, stage: ScreeningStage) -> set[str]:
@@ -301,22 +299,14 @@ def _number(seed_id: str) -> int:
 
 
 def _was_drawn(project: Project, stage: ScreeningStage) -> bool:
-    """Whether a `calibration.drawn` event of `stage` exists, even an empty draw. The projection
-    answers when the set has items; otherwise the log is read (a slice-1 event without `stage` is
-    a title/abstract draw)."""
-    if _drawn_items(project, stage):
-        return True
+    """Whether a `calibration.drawn` event of `stage` exists, even an empty draw. Read from the
+    `calibration_draws` flag of the projection (a slice-1 event without `stage` is a
+    title/abstract draw)."""
     with project.index.connect() as conn:
         row = conn.execute(
-            text("SELECT 1 FROM events WHERE type = 'calibration.drawn' LIMIT 1")
+            text("SELECT 1 FROM calibration_draws WHERE stage = :stage"), {"stage": stage.value}
         ).one_or_none()
-    if row is None:
-        return False
-    return any(
-        CalibrationDrawn.model_validate(event.payload).stage is stage
-        for event in read_all(project.paths.events_dir, project.catalog)
-        if event.type == "calibration.drawn"
-    )
+    return row is not None
 
 
 def _drawn_items(project: Project, stage: ScreeningStage) -> list[str]:
