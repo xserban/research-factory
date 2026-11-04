@@ -35,6 +35,7 @@ from factory.model.protocol import (
     CriterionKind,
     ExtractionSchema,
     ExtractionStale,
+    PlannedQuery,
     ProtocolSpec,
     ReviewerRole,
     ScreeningPlan,
@@ -43,6 +44,7 @@ from factory.model.protocol import (
     section_digest,
     strip_prose,
 )
+from factory.model.search import QuerySpec
 from factory.model.staleness import DecisionRef as DecisionRef
 from factory.model.staleness import stale_decisions as stale_decisions
 from factory.packs import NON_COMPARABLE_KEYS, get_pack
@@ -214,12 +216,25 @@ def _errors(
         if any(roles.get(seed_id) in (None, SeedRole.HELD_OUT) for seed_id in examples):
             issues.append(ValidationIssue(f"criteria[{i}].examples", UNKNOWN_SEED))
 
+    source_names: set[str] = set()
     for i, source in enumerate(spec.sources):
         if source.name not in known_sources:
             issues.append(ValidationIssue(f"sources[{i}].name", "unknown source"))
+        if source.name in source_names:
+            issues.append(ValidationIssue(f"sources[{i}].name", "duplicate source"))
+        source_names.add(source.name)
 
     included = {source.name for source in spec.sources if source.included}
+    earlier: list[tuple[PlannedQuery, QuerySpec]] = []
     for i, query in enumerate(spec.queries):
+        as_spec = QuerySpec(
+            source=query.source, kind=query.kind, text=query.text, filters=query.filters
+        )
+        if any(
+            query.matches(prior_spec) and prior.matches(as_spec) for prior, prior_spec in earlier
+        ):
+            issues.append(ValidationIssue(f"queries[{i}]", "duplicate planned query"))
+        earlier.append((query, as_spec))
         if query.source not in included:
             issues.append(
                 ValidationIssue(

@@ -14,6 +14,7 @@ from factory.model.protocol import (
     PlannedQuery,
     PressElement,
     PressFinding,
+    ProtocolRecorded,
     ProtocolSpec,
     ProtocolStatus,
     Reviewer,
@@ -21,6 +22,7 @@ from factory.model.protocol import (
     ScreeningPlan,
     ScreeningStage,
     SourcePlan,
+    protocol_version,
 )
 from factory.model.search import QueryKind, QueryPurpose, QuerySpec, RunStatus
 from factory.services.context import Project
@@ -414,6 +416,28 @@ def test_protocol_rebuild_equals_incremental(
     current = current_protocol(project)
 
     assert project.index.rebuild() == before
+    assert current_protocol(project) == current
+
+
+def test_duplicate_planned_query_is_refused_at_record_but_replays_from_the_log(
+    project: Project, agent: Actor
+) -> None:
+    qid = _question_id(project, agent)
+    twice = PlannedQuery(source="openalex", kind=QueryKind.KEYWORD, text="attention")
+    spec = _spec(qid, queries=(twice, twice))
+    with pytest.raises(FactoryValidationError) as caught:
+        record_protocol(project, agent, spec, ready=False)
+    assert [i.field for i in caught.value.issues] == ["queries[1]"]
+    assert _events(project, "protocol.recorded") == []
+
+    # A log written before the rule held such a protocol; replay does not re-validate it.
+    payload = ProtocolRecorded(
+        protocol_id=protocol_version(spec), status=ProtocolStatus.DRAFT, spec=spec
+    )
+    project.record([project.events.make("protocol.recorded", payload, project.human_actor())])
+    current = current_protocol(project)
+    assert current is not None and current.spec == spec
+    project.index.rebuild()
     assert current_protocol(project) == current
 
 

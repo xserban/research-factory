@@ -14,11 +14,12 @@ from factory.model.protocol import (
     ScreeningPlan,
     ScreeningStage,
     SourcePlan,
+    search_strategy_hash,
 )
 from factory.model.question import NonGoal, QuestionSpec, Slot, question_version
 from factory.model.search import QueryKind
 from factory.model.seed import SeedKind
-from factory.services.protocol_rules import ProtocolCheck, protocol_issues
+from factory.services.protocol_rules import ProtocolCheck, other_changes, protocol_issues
 from factory.services.question import QuestionVersion
 from factory.services.seeds import SeedRecord, SeedRole
 
@@ -196,6 +197,38 @@ def test_duplicate_criterion_id_and_unknown_source_are_errors() -> None:
     assert "sources[0].name" in _fields(unknown.errors)
 
 
+def test_duplicate_source_is_an_error_naming_its_index() -> None:
+    spec = _spec(
+        sources=(
+            SourcePlan(name="openalex", included=True, probe_id="prb_1"),
+            SourcePlan(name="arxiv", included=False),
+            SourcePlan(name="openalex", included=False),
+        )
+    )
+    check = _check(spec, RigorMode.EXPLORATORY)
+    [issue] = [i for i in check.errors if i.field == "sources[2].name"]
+    assert issue.reason == "duplicate source"
+    assert "sources[1].name" not in _fields(check.errors)
+
+
+def test_duplicate_planned_query_is_an_error_naming_its_index() -> None:
+    query = PlannedQuery(source="openalex", kind=QueryKind.KEYWORD, text="remote focus")
+    padded = PlannedQuery(source="openalex", kind=QueryKind.KEYWORD, text="  remote focus ")
+    other = PlannedQuery(source="openalex", kind=QueryKind.KEYWORD, text="other")
+    check = _check(_spec(queries=(query, other, padded)), RigorMode.EXPLORATORY)
+    [issue] = [i for i in check.errors if i.field.startswith("queries[")]
+    assert (issue.field, issue.reason) == ("queries[2]", "duplicate planned query")
+
+
+def test_queries_differing_only_in_filters_are_not_duplicates() -> None:
+    plain = PlannedQuery(source="openalex", kind=QueryKind.KEYWORD, text="remote focus")
+    filtered = PlannedQuery(
+        source="openalex", kind=QueryKind.KEYWORD, text="remote focus", filters={"year": "2020"}
+    )
+    check = _check(_spec(queries=(plain, filtered)), RigorMode.EXPLORATORY)
+    assert not [i for i in check.errors if i.field.startswith("queries[")]
+
+
 def test_query_must_use_an_included_source() -> None:
     spec = _spec(
         sources=(
@@ -310,3 +343,11 @@ def test_exploratory_allows_small_audit() -> None:
     fields = _fields(_check(small, RigorMode.EXPLORATORY).gaps)
     assert "screening.audit_minimum" not in fields
     assert "screening.audit_fraction" not in fields
+
+
+def test_removing_full_text_screening_is_an_other_change_not_a_search_change() -> None:
+    with_plan = _spec(full_text_screening=_screening())
+    without = _spec()
+    assert other_changes(with_plan, without) == ["full_text_screening"]
+    assert other_changes(without, with_plan) == ["full_text_screening"]
+    assert search_strategy_hash(with_plan) == search_strategy_hash(without)
