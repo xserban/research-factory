@@ -32,7 +32,7 @@ from typing import Literal
 from pydantic import Field
 
 from factory.errors import FactoryValidationError
-from factory.evidence.pareto import Point, pareto
+from factory.evidence.pareto import Point, pareto, speed_ratio
 from factory.extraction.numbers import canonical, normalise_for, normalise_text, parse_printed
 from factory.model.base import StrictModel
 from factory.model.extraction import ClaimType, EvidenceType, ReportedIn, Strength
@@ -251,6 +251,26 @@ class Quality(StrictModel):
     """Dual row keys held by one pass only (or twice by one pass); outside the agreement."""
 
 
+class WithinPaperRatio(StrictModel):
+    """How many times faster a proposed row is than a baseline row of the same paper (ruling 7).
+
+    Both speed cells are effectively own, share unit, hardware, batch size and precision; the
+    ratio is a two-place string. `hardware` is the normalised text."""
+
+    work_id: str
+    document_id: str
+    field: Literal["throughput", "latency"]
+    method: str
+    baseline_method: str
+    ratio: str
+    unit: str | None
+    hardware: str
+    batch_size: str | None
+    precision: str | None
+    proposed: Provenance
+    baseline: Provenance
+
+
 class EvidenceReport(StrictModel):
     project_protocol_id: str | None
     pack: str | None
@@ -265,6 +285,10 @@ class EvidenceReport(StrictModel):
     expectations: list[ExpectationResult]
     quality: Quality
     limits: list[Limit]
+    speed_ratios: list[WithinPaperRatio] = Field(default_factory=list)
+    """Sorted by (work, field, method, baseline); never inside a group table (ruling 7)."""
+    speed_unpaired: dict[str, int] = Field(default_factory=dict)
+    """Reason -> count of proposed/baseline speed pairs that were not formed."""
 
 
 # --- Inputs ---
@@ -443,6 +467,8 @@ def assemble_report(
         or not (groups or ungrouped)
     )
     limits = _limits(inputs, groups, ungrouped, excluded, expectations, quality, finals)
+    every = [r for members in inputs.grouped.groups.values() for r in members]
+    ratios, unpaired = _speed(every + list(inputs.grouped.ungrouped), spec)
     return EvidenceReport(
         project_protocol_id=inputs.protocol_id,
         pack=pack.name,
@@ -457,6 +483,8 @@ def assemble_report(
         expectations=expectations,
         quality=quality,
         limits=limits,
+        speed_ratios=ratios,
+        speed_unpaired=unpaired,
     )
 
 
@@ -687,6 +715,112 @@ def _cost_decimal(f: FinalField, family: UnitFamily) -> Decimal | None:
     except (ValueError, InvalidOperation):
         return None
     return d if d.is_finite() else None
+
+
+# --- Speed ---
+
+
+def _own(f: FinalField) -> bool:
+    return f.reported_in is ReportedIn.OWN and not f.copy_marker
+
+
+def _context(row: FinalRow, name: str) -> str | None:
+    f = row.fields.get(name)
+    return None if f is None else normalise_text(str(f.value))
+
+
+def _speed(
+    rows: Sequence[FinalRow], spec: ReportSpec
+) -> tuple[list[WithinPaperRatio], dict[str, int]]:
+    """Proposed/baseline speed ratios inside one work and document (ruling 7).
+
+    Only effectively own speed cells with equal unit, hardware (present), batch size and
+    precision are paired; every other proposed/baseline pair is counted under its reason.
+    A proposed speed cell with no baseline speed cell in its paper counts once as
+    `no-baseline`. Results are deduplicated on the ruling's key."""
+    unpaired: dict[str, int] = {}
+    found: dict[tuple[str, ...], WithinPaperRatio] = {}
+
+    def skip(reason: str) -> None:
+        unpaired[reason] = unpaired.get(reason, 0) + 1
+
+    papers: dict[tuple[str, str], list[FinalRow]] = {}
+    for row in sorted(rows, key=lambda r: r.row_key):
+        papers.setdefault((row.work_id, row.document_id), []).append(row)
+    for (work, document), members in sorted(papers.items()):
+        proposed = [r for r in members if _as_bool(r.fields.get(spec.proposed_field)) is True]
+        baselines = [r for r in members if _as_bool(r.fields.get(spec.proposed_field)) is False]
+        for name, higher in sorted(spec.speed_fields.items()):
+            family = UnitFamily.OTHER
+            bases = [b for b in baselines if name in b.fields]
+            for p in (r for r in proposed if name in r.fields):
+                if not bases:
+                    skip("no-baseline")
+                    continue
+                for b in bases:
+                    pf, bf = p.fields[name], b.fields[name]
+                    if not (_own(pf) and _own(bf)):
+                        skip("not-own")
+                        continue
+                    if normalise_text(pf.unit or "") != normalise_text(bf.unit or ""):
+                        skip("unit-differs")
+                        continue
+                    hw_p, hw_b = _context(p, "hardware"), _context(b, "hardware")
+                    if not hw_p or not hw_b:
+                        skip("hardware-missing")
+                        continue
+                    if hw_p != hw_b:
+                        skip("hardware-differs")
+                        continue
+                    batch_p, batch_b = _context(p, "batch_size"), _context(b, "batch_size")
+                    prec_p, prec_b = _context(p, "precision"), _context(b, "precision")
+                    if (batch_p, prec_p) != (batch_b, prec_b):
+                        skip("context-differs")
+                        continue
+                    num_p, num_b = _cost_decimal(pf, family), _cost_decimal(bf, family)
+                    value = (
+                        speed_ratio(num_p, num_b, higher_is_faster=higher)
+                        if num_p is not None and num_b is not None
+                        else None
+                    )
+                    if value is None:
+                        skip("value-not-positive")
+                        continue
+                    method = _text(p.fields.get("method_name")) or ""
+                    base_method = _text(b.fields.get("method_name")) or ""
+                    ident = (
+                        work,
+                        name,
+                        normalise_text(method),
+                        normalise_text(_text(p.fields.get("variant")) or ""),
+                        normalise_text(base_method),
+                        normalise_text(_text(b.fields.get("variant")) or ""),
+                        hw_p,
+                        batch_p or "",
+                        prec_p or "",
+                    )
+                    if ident in found:
+                        continue
+                    assert name in ("throughput", "latency")
+                    found[ident] = WithinPaperRatio(
+                        work_id=work,
+                        document_id=document,
+                        field=name,
+                        method=method,
+                        baseline_method=base_method,
+                        ratio=format(value, "f"),
+                        unit=pf.unit,
+                        hardware=hw_p,
+                        batch_size=None if batch_p is None else str(p.fields["batch_size"].value),
+                        precision=None if prec_p is None else str(p.fields["precision"].value),
+                        proposed=_provenance(p.row_key, name, pf),
+                        baseline=_provenance(b.row_key, name, bf),
+                    )
+    ordered = sorted(
+        found.items(),
+        key=lambda kv: (kv[0][0], kv[0][1], kv[0][2], kv[0][4], kv[0][3], kv[0][5], kv[0][6:]),
+    )
+    return [v for _, v in ordered], dict(sorted(unpaired.items()))
 
 
 def _plain(d: Decimal) -> str:
