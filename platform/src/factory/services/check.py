@@ -43,6 +43,7 @@ from factory.services.chase import chase_rounds
 from factory.services.context import Project
 from factory.services.dedup import active_merges
 from factory.services.document_read import default_conversion
+from factory.services.evidence_report import evidence_report
 from factory.services.extraction import (
     extraction_population,
     in_dual_sample,
@@ -96,6 +97,9 @@ LEVELS: dict[str, tuple[Severity | None, Severity | None, Severity | None]] = {
     "extraction-library-missing": ("warning", "warning", "warning"),
     "extraction-document-stale": ("warning", "warning", "warning"),
     "extraction-copy-flag": ("warning", "warning", "warning"),
+    "evidence-excluded-rows": ("warning", "warning", "warning"),
+    "evidence-ungrouped": ("warning", "warning", "warning"),
+    "evidence-direction": ("warning", "warning", "warning"),
 }
 
 _MODE_ORDER: tuple[RigorMode, ...] = (
@@ -297,6 +301,7 @@ def _hits(project: Project) -> list[_Hit]:
     hits += _merge_conflicts(project, outcomes)
     hits += _fulltext(project)
     hits += _extraction(project)
+    hits += _evidence(project)
     return hits
 
 
@@ -890,3 +895,49 @@ def _extraction_library(project: Project, pinned: set[str]) -> list[_Hit]:
             f"{len(missing)} conversion(s) pinned by extraction rows have a missing library entry",
         )
     ]
+
+
+# --- Evidence report (plan E, task 7) ---
+
+_DIRECTION_PROBLEMS = frozenset({"conflict", "unparseable", "unknown"})
+
+
+def _evidence(project: Project) -> list[_Hit]:
+    """Findings of the evidence report, from one `evidence_report` call. Messages give counts and
+    identifiers only; none names a value, a method or a quote. No finding without a schema."""
+    report = evidence_report(project)
+    if report.pack is None:
+        return []
+    hits: list[_Hit] = []
+    omitted = [e for e in report.excluded if e.reason in ("unresolved", "stale")]
+    if omitted:
+        works = sorted({w for e in omitted for w in e.works})
+        counts = ", ".join(f"{e.count} {e.reason}" for e in omitted)
+        hits.append(
+            _Hit(
+                "evidence-excluded-rows",
+                tuple(works),
+                f"the evidence report omits rows ({counts}) of {len(works)} work(s)",
+            )
+        )
+    if report.ungrouped:
+        works = sorted({r.work_id for r in report.ungrouped})
+        hits.append(
+            _Hit(
+                "evidence-ungrouped",
+                tuple(works),
+                f"{len(report.ungrouped)} row(s) of {len(works)} work(s) lack a comparability key "
+                "and belong to no group",
+            )
+        )
+    bad = sorted(g.group_id for g in report.groups if g.direction_status in _DIRECTION_PROBLEMS)
+    if bad:
+        hits.append(
+            _Hit(
+                "evidence-direction",
+                tuple(bad),
+                f"{len(bad)} group(s) have a metric direction that is conflicting, unparseable "
+                "or unknown; no frontier is computed",
+            )
+        )
+    return hits

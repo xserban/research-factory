@@ -21,6 +21,7 @@ from factory.services.audit import audit_report
 from factory.services.calibration import calibration_status
 from factory.services.chase import chase_rounds
 from factory.services.context import Project
+from factory.services.evidence_report import evidence_report
 from factory.services.extraction_agreement import agreement_overall
 from factory.services.extraction_audit import extraction_audit_report
 from factory.services.prisma import (
@@ -80,6 +81,16 @@ class MethodsReport(StrictModel):
     """Overall agreement of the passes; None while units are open or nothing is compared."""
     extraction_audit_n: int = 0
     extraction_error_rate: float | None = None
+    evidence_groups: int = 0
+    """Evidence-report counts, all 0 (and the lists empty) when no extraction schema is declared."""
+    evidence_multi_source_groups: int = 0
+    """Groups reported by more than one independent work."""
+    evidence_rows: int = 0
+    evidence_independent: int = 0
+    evidence_copied: int = 0
+    evidence_comparability_keys: list[str] = Field(default_factory=list)
+    evidence_frontier_costs: list[str] = Field(default_factory=list)
+    """Cost axes on which at least one group has a frontier."""
 
 
 def methods_report(project: Project) -> MethodsReport:
@@ -104,6 +115,8 @@ def methods_report(project: Project) -> MethodsReport:
     schema = None if protocol is None else protocol.spec.extraction_schema
     ex_sessions = [] if schema is None else _extraction_sessions(project)
     ex_audit = None if schema is None else extraction_audit_report(project)
+    evidence = None if schema is None else evidence_report(project)
+    groups = [] if evidence is None else evidence.groups
     return MethodsReport(
         rigor_mode=_rigor_mode(project).value,
         method_profile=None if protocol is None else protocol.spec.method_profile.value,
@@ -145,6 +158,13 @@ def methods_report(project: Project) -> MethodsReport:
         extraction_agreement=None if schema is None else agreement_overall(project).overall,
         extraction_audit_n=0 if ex_audit is None else ex_audit.labelled,
         extraction_error_rate=None if ex_audit is None else ex_audit.error_rate,
+        evidence_groups=len(groups),
+        evidence_multi_source_groups=sum(1 for g in groups if g.counts.independent_works > 1),
+        evidence_rows=sum(len(g.rows) for g in groups),
+        evidence_independent=sum(g.counts.independent for g in groups),
+        evidence_copied=sum(g.counts.copied for g in groups),
+        evidence_comparability_keys=[] if evidence is None else list(evidence.comparability_keys),
+        evidence_frontier_costs=sorted({a.axis for g in groups for a in g.frontiers}),
     )
 
 
@@ -236,6 +256,7 @@ def render_methods(report: MethodsReport, *, withheld: frozenset[str] = frozense
         _agreement_and_audit(report, withheld),
         _full_text(report),
         *([] if report.extraction_pack is None else [_extraction(report, withheld)]),
+        *([] if report.extraction_pack is None else [_evidence(report)]),
         _seed_recall(report, withheld),
         _deviations(report),
     ]
@@ -373,6 +394,20 @@ def _extraction(report: MethodsReport, withheld: frozenset[str]) -> str:
         'without "et al" is not detected as a copy marker; a value inside a cell such as '
         "`79.8 ± 0.2` lets `0.2` match, which agreement and audit catch; `reproduced` is "
         "recorded and not checked. The platform extracted nothing itself."
+    )
+
+
+def _evidence(report: MethodsReport) -> str:
+    return (
+        f"Evidence. Extracted results form {report.evidence_groups} group(s) by the declared "
+        f"comparability keys ({_list(report.evidence_comparability_keys)}); "
+        f"{report.evidence_multi_source_groups} group(s) hold results of more than one "
+        "independent work. Results are grouped only by these keys and are never ranked across "
+        f"groups. The groups hold {report.evidence_rows} row(s): {report.evidence_independent} "
+        f"independent and {report.evidence_copied} copied; copied results are flagged and not "
+        "counted as independent. Frontiers use params, FLOPs and MACs only "
+        f"(computed for: {_list(report.evidence_frontier_costs)}); throughput and latency "
+        "appear only as within-paper ratios. Counts are computed from the extraction events."
     )
 
 

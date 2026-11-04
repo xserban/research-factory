@@ -86,6 +86,7 @@ __all__ = [
     "Provenance",
     "Quality",
     "ReportInputs",
+    "agent_evidence",
     "assemble_report",
     "evidence_report",
     "group_id",
@@ -383,6 +384,26 @@ def evidence_report(
     if inputs is None:
         return _empty(expect)
     return assemble_report(inputs, expect=expect)
+
+
+def agent_evidence(report: EvidenceReport) -> EvidenceReport:
+    """The report as an agent outside the passes may read it: no label-derived audit rate or
+    ceiling flag (decision 37.14), and the `audit-above-ceiling` limit replaced by a fixed
+    sentence. Counts (`audit_n`) are unchanged; the researcher's view keeps the rate."""
+    limits = [
+        Limit(
+            code="audit-reported-to-researcher",
+            text="The audit result is reported to the researcher and withheld from the agent view.",
+            subject=lim.subject,
+        )
+        if lim.code == "audit-above-ceiling"
+        else lim
+        for lim in report.limits
+    ]
+    quality = report.quality.model_copy(
+        update={"audit_error_rate": None, "audit_above_ceiling": None}
+    )
+    return report.model_copy(update={"quality": quality, "limits": limits})
 
 
 # --- Assembly (pure) ---
