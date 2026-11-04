@@ -18,7 +18,7 @@ from factory.model.search import RunStatus
 from factory.model.watch import CycleStatus, WatchCycleFinished
 from factory.services.agreement import Outcome, final_outcomes
 from factory.services.context import Project, open_project
-from factory.services.dedup import active_merges
+from factory.services.dedup import active_merges, dedup_run
 from factory.services.search import list_works
 from factory.services.watch import CycleSummary, cycles, watch_run, watch_status
 from tests.helpers import SESSION, SourcesFor
@@ -318,3 +318,69 @@ def test_rebuild_identical_watch_tables(ready: Project, clock: FixedClock) -> No
     )  # type: ignore[dict-item]
     assert ready.index.state_hash() == ready.index.rebuild()
     assert RunStatus.COMPLETE
+
+
+# --- dedup covers every returned work and carries forward unreconciled cycles ---
+
+DOI_A = record("Sparse routing for experts", author="Ana Li", year=2024, doi="10.1/a")
+OPENALEX_B = {"title": "A different paper", "authors": ["Bo Chen"], "year": 2020, "openalex": "W9"}
+
+
+def test_identifier_added_to_known_work_is_deduplicated(ready: Project, clock: FixedClock) -> None:
+    first = _run(ready, ScriptedSource(by_text({"attention": [[DOI_A, OPENALEX_B]]})))
+    assert first is not None and active_merges(ready) == []
+    clock.advance(timedelta(days=8))
+    again = {**DOI_A, "openalex": "W9"}
+    second = _run(ready, ScriptedSource(by_text({"attention": [[again]]})))
+    assert second is not None and second.new_work_ids == ()
+    assert len(active_merges(ready)) == 1
+    before = _count(ready)
+    assert dedup_run(ready).created == []
+    assert _count(ready) == before
+
+
+def test_failed_dedup_is_carried_to_the_next_cycle(
+    ready: Project, clock: FixedClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def broken(*_a: object, **_k: object) -> None:
+        raise RuntimeError("dedup died")
+
+    dup = {**record("Sparse routing, revisited", author="Cy Dee", year=2023), "doi": "10.1/a"}
+    with monkeypatch.context() as patch:
+        patch.setattr("factory.services.watch.dedup_new", broken)
+        one = _run(ready, ScriptedSource(by_text({"attention": [[DOI_A, dup]]})))
+    assert one is not None and one.status is CycleStatus.PARTIAL
+    assert active_merges(ready) == []
+    clock.advance(timedelta(days=8))
+    two = _run(ready, ScriptedSource(by_text({"attention": [[OPENALEX_B]]})))
+    assert two is not None and two.status is CycleStatus.COMPLETE
+    assert len(active_merges(ready)) == 1  # the earlier cycle's works were reconciled
+    payloads = [e.payload for e in _events(ready, "watch.cycle_finished")]
+    finished = [WatchCycleFinished.model_validate(p) for p in payloads]
+    assert [f.dedup_complete for f in finished] == [False, True]
+    assert finished[1].reconciled == (one.cycle_id,)
+    clock.advance(timedelta(days=8))
+    assert _run(ready, ScriptedSource(by_text({"attention": [[OPENALEX_B]]}))) is not None
+    last = WatchCycleFinished.model_validate(_events(ready, "watch.cycle_finished")[-1].payload)
+    assert last.reconciled == ()  # nothing left to carry
+
+
+def test_abandoned_cycle_works_are_reconciled_by_the_next(
+    ready: Project, clock: FixedClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def killed(*_a: object, **_k: object) -> None:
+        raise KeyboardInterrupt
+
+    dup = {**record("Sparse routing, revisited", author="Cy Dee", year=2023), "doi": "10.1/a"}
+    with monkeypatch.context() as patch:
+        patch.setattr("factory.services.watch.dedup_new", killed)
+        with pytest.raises(KeyboardInterrupt):
+            _run(ready, ScriptedSource(by_text({"attention": [[DOI_A, dup]]})))
+    clock.advance(timedelta(hours=25))
+    two = _run(ready, ScriptedSource(by_text({"attention": [[OPENALEX_B]]})))
+    assert two is not None
+    assert len(active_merges(ready)) == 1
+    old = cycles(ready)[0]
+    assert old.status is CycleStatus.PARTIAL
+    last = WatchCycleFinished.model_validate(_events(ready, "watch.cycle_finished")[-1].payload)
+    assert last.reconciled == (old.cycle_id,)

@@ -449,4 +449,4 @@ def _search_query(spec: QuerySpec) -> str:
     if since is None:
         return spec.text
     stamp = date.fromisoformat(since).strftime("%Y%m%d")
-    return f"{spec.text} AND submittedDate:[{stamp}0000 TO 999912312359]"
+    return f"({spec.text}) AND submittedDate:[{stamp}0000 TO 999912312359]"

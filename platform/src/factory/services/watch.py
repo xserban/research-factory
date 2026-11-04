@@ -17,6 +17,7 @@ service; its events do not change when it moves behind the contract.
 from __future__ import annotations
 
 import fcntl
+import json
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta
@@ -27,7 +28,7 @@ from factory.canonical import canonical_json
 from factory.clock import parse_ts
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
-from factory.living.counts import cycle_run_ids, new_work_ids, source_counts
+from factory.living.counts import cycle_run_ids, cycle_work_ids, new_work_ids, source_counts
 from factory.living.due import CycleView, consecutive_failures, due_sources, next_due
 from factory.living.window import is_full_replay, window_spec, window_start
 from factory.model.base import StrictModel
@@ -200,9 +201,16 @@ def watch_run(
             for query in (q for q in planned if q.source == member.source):
                 _run_planned(project, cycle_id, member, query, sources, actor, notes)
         fresh = new_work_ids(project, cycle_id)
+        # Every work a run returned is deduplicated, not only the new ones (a later record can
+        # give a known work an identifier), together with the works of earlier cycles whose
+        # deduplication did not finish.
+        carried = _unreconciled(project, cycle_id)
+        to_dedup = {w for c in (cycle_id, *carried) for w in cycle_work_ids(project, c)}
+        dedup_ok = True
         try:
-            dedup_new(project, fresh)
+            dedup_new(project, sorted(to_dedup))
         except Exception as exc:
+            dedup_ok = False
             notes.append(f"dedup: {type(exc).__name__}: {exc}")
         status_runs: list[str] = []
         for hook in after_runs:
@@ -211,7 +219,15 @@ def watch_run(
             except Exception as exc:
                 name = getattr(hook, "__name__", type(hook).__name__)
                 notes.append(f"{name}: {type(exc).__name__}: {exc}")
-        return _finish(project, cycle_id, tuple(status_runs), notes, fresh)
+        return _finish(
+            project,
+            cycle_id,
+            tuple(status_runs),
+            notes,
+            fresh,
+            dedup_ok,
+            carried if dedup_ok else (),
+        )
 
 
 @contextmanager
@@ -460,12 +476,29 @@ def _completed_in_cycle(project: Project, cycle_id: str, query_id: str) -> bool:
     return row is not None
 
 
+def _unreconciled(project: Project, current: str) -> tuple[str, ...]:
+    """Finished cycles whose deduplication did not complete and that no later cycle reconciled."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT cycle_id, dedup_complete, reconciled FROM watch_cycles "
+                "WHERE status != 'open' AND cycle_id != :current ORDER BY started_at, cycle_id"
+            ),
+            {"current": current},
+        ).all()
+    done = {c for _, ok, rec in rows if ok for c in json.loads(str(rec or "[]"))}
+    return tuple(str(cid) for cid, ok, _ in rows if not ok and str(cid) not in done)
+
+
 def _finish(
     project: Project,
     cycle_id: str,
     status_runs: tuple[str, ...],
     notes: list[str],
     fresh: tuple[str, ...],
+    dedup_ok: bool,
+    reconciled: tuple[str, ...],
 ) -> CycleSummary:
     with project.index.exclusive():
         counts = source_counts(project, cycle_id)
@@ -476,7 +509,15 @@ def _finish(
             status = CycleStatus.PARTIAL
         else:
             status = CycleStatus.FAILED
-        _write_finished(project, cycle_id, status, status_runs, "; ".join(notes) or None)
+        _write_finished(
+            project,
+            cycle_id,
+            status,
+            status_runs,
+            "; ".join(notes) or None,
+            dedup_complete=dedup_ok,
+            reconciled=reconciled,
+        )
         runs = cycle_run_ids(project, cycle_id)
     return CycleSummary(
         cycle_id=cycle_id, status=status, counts=counts, run_ids=runs, new_work_ids=fresh
@@ -489,6 +530,9 @@ def _write_finished(
     status: CycleStatus,
     status_runs: tuple[str, ...],
     note: str | None,
+    *,
+    dedup_complete: bool = False,
+    reconciled: tuple[str, ...] = (),
 ) -> None:
     """Close the cycle: counts and run ids are read back from the index, never passed in."""
     finished = WatchCycleFinished(
@@ -498,6 +542,8 @@ def _write_finished(
         status_run_ids=status_runs,
         counts=source_counts(project, cycle_id),
         note=note,
+        dedup_complete=dedup_complete,
+        reconciled=reconciled,
     )
     project.record(
         [

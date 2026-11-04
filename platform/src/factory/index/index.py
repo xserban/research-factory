@@ -20,7 +20,21 @@ from factory.events.envelope import Event
 from factory.events.reader import event_files, read_file, relative_name
 from factory.index.projection import Projection
 
-NON_STATE_TABLES: frozenset[str] = frozenset({"meta", "sync_state"})
+NON_STATE_TABLES: frozenset[str] = frozenset(
+    {
+        "meta",
+        "sync_state",
+        # Lookup tables derived from works and merges, which the hash already covers.
+        "work_keys",
+        "work_title_buckets",
+        "merge_members",
+    }
+)
+OMITTED_WHEN_EMPTY: frozenset[str] = frozenset(
+    {"watch_cycles", "watch_cycle_sources", "watch_cycle_runs"}
+)
+"""Tables added after slice 3: while empty they leave no trace in the hash, so a log without
+their events keeps the state hash it had before they existed."""
 
 _PROJECTION_VERSION = "projection_version"
 _LAST_EVENT_ID = "last_event_id"
@@ -161,9 +175,12 @@ class Index:
         )
         with self._engine.connect() as conn:
             for table in tables:
-                digest.update(f"{table.name}\n".encode())
                 query = select(table).order_by(*table.primary_key.columns)
-                for row in conn.execute(query):
+                rows = conn.execute(query).all()
+                if not rows and table.name in OMITTED_WHEN_EMPTY:
+                    continue
+                digest.update(f"{table.name}\n".encode())
+                for row in rows:
                     row_data: dict[str, Any] = dict(row._mapping)
                     digest.update(canonical_json(row_data) + b"\n")
         return f"sha256:{digest.hexdigest()}"

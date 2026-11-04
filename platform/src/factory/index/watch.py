@@ -18,6 +18,7 @@ from sqlalchemy import Column, Integer, MetaData, String, Table, func, select, u
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Connection
 
+from factory.canonical import canonical_json
 from factory.clock import format_ts
 from factory.events.envelope import Event
 from factory.index.projection import Handler
@@ -48,6 +49,8 @@ def watch_tables(metadata: MetaData, search_runs: Table) -> WatchTables:
         Column("protocol_id", String, nullable=False),
         Column("trigger", String, nullable=False),
         Column("note", String),
+        Column("dedup_complete", Integer),
+        Column("reconciled", String),
     )
     sources = Table(
         "watch_cycle_sources",
@@ -162,7 +165,13 @@ def _finished(t: WatchTables) -> Handler:
         conn.execute(
             update(t.cycles)
             .where(t.cycles.c.cycle_id == payload.cycle_id)
-            .values(status=payload.status.value, finished_at=format_ts(event.ts), note=payload.note)
+            .values(
+                status=payload.status.value,
+                finished_at=format_ts(event.ts),
+                note=payload.note,
+                dedup_complete=int(payload.dedup_complete),
+                reconciled=canonical_json(list(payload.reconciled)).decode(),
+            )
         )
         for counts in payload.counts:
             conn.execute(

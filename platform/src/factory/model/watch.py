@@ -128,6 +128,11 @@ class WatchCycleFinished(StrictModel):
     status_run_ids: tuple[str, ...] = ()
     counts: tuple[SourceCounts, ...] = ()
     note: str | None = None
+    dedup_complete: bool = True
+    """False when incremental deduplication of the cycle's works did not finish (the cycle was
+    abandoned, or `dedup_new` raised). A later cycle then deduplicates those works too."""
+    reconciled: tuple[str, ...] = ()
+    """Earlier cycles with `dedup_complete` false whose works this cycle's deduplication covered."""
 
     @model_validator(mode="after")
     def _terminal(self) -> Self:

@@ -92,6 +92,13 @@ def new_work_ids(project: Project, cycle_id: str) -> tuple[str, ...]:
     return tuple(sorted(w for w in works if w not in before))
 
 
+def cycle_work_ids(project: Project, cycle_id: str) -> tuple[str, ...]:
+    """Every work the cycle's runs returned, new to the corpus or already known, sorted."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        return tuple(sorted(_cycle_works(conn, cycle_id)))
+
+
 def cycle_run_ids(project: Project, cycle_id: str) -> tuple[str, ...]:
     """Every run the cycle grouped, in the order they started."""
     project.index.sync()

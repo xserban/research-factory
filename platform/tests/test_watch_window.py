@@ -248,8 +248,11 @@ def test_arxiv_maps_listed_since(
     )
     result = adapter.run(spec, run_id=f"run_{SESSION}", query_id=f"qry_{SESSION}", archive=_archive)
     sent = http_log[-1].url.params["search_query"]
-    assert sent == "all:attention AND submittedDate:[202603010000 TO 999912312359]"
+    assert sent == "(all:attention) AND submittedDate:[202603010000 TO 999912312359]"
     assert result.query_sent == sent
+    ored = spec.model_copy(update={"text": "all:a OR all:b"})
+    adapter.run(ored, run_id=f"run_{SESSION}", query_id=f"qry_{SESSION}", archive=_archive)
+    assert http_log[-1].url.params["search_query"].startswith("(all:a OR all:b) AND submittedDate")
     plain = spec.model_copy(update={"filters": {}})
     adapter.run(plain, run_id=f"run_{SESSION}", query_id=f"qry_{SESSION}", archive=_archive)
     assert http_log[-1].url.params["search_query"] == "all:attention"

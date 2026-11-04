@@ -15,6 +15,7 @@ from factory.services.dedup import active_merges, dedup_run, revert_merge
 from factory.services.dedup_incremental import DEDUP_BATCH, considered_works, dedup_new
 from factory.services.search import list_works
 from factory.sources.registry import SourceFactory
+from tests.helpers import SESSION, _work
 from tests.test_dedup_service import OPENALEX_COPY, PREPRINT, PUBLISHED, _ingest, _of_type
 
 SourcesFor = Callable[..., Mapping[str, SourceFactory]]
@@ -176,15 +177,51 @@ def _record(rng: random.Random) -> dict[str, Any]:
     return record
 
 
-@pytest.mark.parametrize("seed", range(30))
+def _batch_ids(records: list[dict[str, Any]]) -> list[str]:
+    """The ids of every work a run returned for these records, new or already known."""
+    return [
+        _work(
+            r, run_id=f"run_{SESSION}", query_id=f"qry_{SESSION}", raw_blob="sha256:" + "a" * 64
+        ).id
+        for r in records
+    ]
+
+
+def test_identifier_added_to_an_existing_work_merges(
+    explore_project: Project, fake_sources: SourcesFor
+) -> None:
+    """A later record gives an existing work a second identifier; no work is new, and the full
+    cascade now merges it with another work. The returned ids must reach `dedup_new`."""
+    a = {
+        "title": "Sparse routing for experts",
+        "authors": ["Ana Li"],
+        "year": 2024,
+        "doi": "10.1/a",
+    }
+    b = {"title": "A different paper", "authors": ["Bo Chen"], "year": 2020, "openalex": "W9"}
+    for records in ([a], [b]):
+        dedup_new(explore_project, _ingest_new(explore_project, fake_sources, records))
+    a_again = {**a, "openalex": "W9"}
+    assert _ingest_new(explore_project, fake_sources, [a_again]) == []
+    summary = dedup_new(explore_project, _batch_ids([a_again]))
+    assert len(summary.created) == 1
+    assert dedup_run(explore_project).created == []
+
+
+@pytest.mark.parametrize("seed", range(60))
 def test_incremental_then_full_writes_nothing(
     seed: int, explore_project: Project, fake_sources: SourcesFor
 ) -> None:
     rng = random.Random(seed)
-    for _ in range(3):  # three arrival batches
+    carried: list[str] = []
+    for _ in range(4):  # four arrival batches; a batch may be abandoned before its dedup
         batch = [_record(rng) for _ in range(rng.randrange(1, 9))]
-        ids = _ingest_new(explore_project, fake_sources, batch)
-        dedup_new(explore_project, ids)
+        _ingest_new(explore_project, fake_sources, batch)
+        carried += _batch_ids(batch)  # every returned work, new or known
+        if rng.random() < 0.7:
+            dedup_new(explore_project, carried)
+            carried = []
+    dedup_new(explore_project, carried)
     before = _event_count(explore_project)
     full = dedup_run(explore_project)
     assert full.created == [] and full.reverted == []
