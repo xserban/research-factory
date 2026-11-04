@@ -10,6 +10,10 @@ resolution as recorded, and `state`, `work_id` and `confidence` fold the latest 
 never changes the state. `reference_decisions` keeps the latest decision per entry and kind, so a
 decision recorded before its link is folded when the link arrives.
 
+`reason` is the recorded resolution's reason and is not folded: an unresolved link made so by a
+`reject` keeps the reason of its base resolution, which is NULL when the base was not unresolved.
+Readers derive "rejected" from `decision = 'reject'`, never from `reason`.
+
 `citation_contexts` keeps each marker occurrence in recorded order; `reference_context_sets` marks
 the extraction whose contexts are recorded. `snowball_rounds`, `snowball_queries` and
 `snowball_candidates` keep each round, its query texts in order and its candidates, with

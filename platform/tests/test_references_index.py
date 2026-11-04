@@ -314,3 +314,33 @@ def test_rebuild_determinism_with_reference_events(project: Project) -> None:
     before = project.index.state_hash()
     assert project.index.rebuild() == before
     assert project.index.rebuild() == before
+
+
+def test_round_texts_waives_snowball_only_text(project: Project) -> None:
+    payload = round_payload(queries=["doi:10.9999/only.in.snowball"])
+    _record(project, "snowball.round_started", SnowballRoundStarted.model_validate(payload))
+    assert _rows(project, "SELECT * FROM chase_queries") == []
+    with project.index.connect() as conn:
+        texts = round_texts(conn)
+    assert "doi:10.9999/only.in.snowball" in texts
+    assert "doi:10.9999/unrelated" not in texts
+
+
+def test_decision_on_unknown_extraction_folds_in_later(project: Project) -> None:
+    _decide(project, "confirm", OTHER, "human")  # no extraction and no link yet
+    assert _rows(project, "SELECT * FROM reference_extractions") == []
+    assert _rows(project, "SELECT * FROM reference_links") == []
+    assert len(_rows(project, "SELECT * FROM reference_decisions")) == 1
+    _extract(project)
+    _resolve(project, [resolution(1), FUZZY])
+    assert _link2(project)[:5] == ("resolved", OTHER, "confirmed", "confirm", "human")
+
+
+def test_proposal_after_binding_decision_leaves_state(project: Project) -> None:
+    _extract(project)
+    _resolve(project, [resolution(1), FUZZY])
+    _decide(project, "reject", None, "human")
+    before = _link2(project)[:5]
+    assert before == ("unresolved", None, None, "reject", "human")
+    _decide(project, "propose-confirm", OTHER, None)
+    assert _link2(project) == (*before, "propose-confirm")

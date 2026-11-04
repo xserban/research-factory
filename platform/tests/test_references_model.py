@@ -395,3 +395,34 @@ def test_round_candidate_keys_and_citers() -> None:
         SnowballRoundStarted.model_validate(
             round_payload(unextracted=[{"work_id": CITED, "reason": " "}])
         )
+
+
+def test_every_event_string_is_bounded() -> None:
+    extracted(parser="p" * 80, parser_version="v" * 80)
+    for field in ("parser", "parser_version"):
+        with pytest.raises(ValidationError):
+            extracted(**{field: "x" * 81})
+    resolved([resolution(1)], matcher_version="m" * 80)
+    with pytest.raises(ValidationError):
+        resolved([resolution(1)], matcher_version="m" * 81)
+    SnowballRoundStarted.model_validate(
+        round_payload(queries=["q" * 400], unextracted=[{"work_id": CITED, "reason": "r" * 300}])
+    )
+    with pytest.raises(ValidationError):
+        SnowballRoundStarted.model_validate(round_payload(queries=["q" * 401]))
+    with pytest.raises(ValidationError):
+        SnowballRoundStarted.model_validate(
+            round_payload(unextracted=[{"work_id": CITED, "reason": "r" * 301}])
+        )
+
+
+def test_citing_extraction_is_one_of_the_rounds() -> None:
+    p = round_payload()
+    other = "rex_01HZX3K4M5N6P7Q8R9S0TVWXZ0"
+    citer = {"work_id": WORK, "extraction_id": other, "ordinal": 1, "anchors": []}
+    foreign = [{**p["candidates"][0], "cited_by": [citer]}]
+    with pytest.raises(ValidationError):
+        SnowballRoundStarted.model_validate(round_payload(candidates=foreign))
+    SnowballRoundStarted.model_validate(
+        round_payload(candidates=foreign, extraction_ids=[REX, other])
+    )

@@ -5,6 +5,9 @@ Invariants enforced here (validated at the boundary, before any event is written
   label, the parsed fields (bounded: title <= 300, venue <= 200, first-author surname <= 100) and
   `entry_sha256`, the SHA-256 of the whitespace-normalised raw text; extra fields are refused, so
   a `text` field cannot be written. The raw text is re-derived from the pinned conversion.
+- Every free string in an event is bounded, so none can carry an entry's raw text: parser and
+  matcher names and versions <= 80, an unextracted reason <= 300, a round query <= 400, a
+  decision rationale <= 2000 and a verified quote <= 1000.
 - Entry ordinals run 1, 2, ... without gaps; anchors are unique and of the declared form (`b<n>`,
   or a paragraph anchor for `entry_anchors = paragraph`).
 - A marker token is at most `MAX_MARKER` characters (ruling 9); a matched context names its entry,
@@ -16,7 +19,8 @@ Invariants enforced here (validated at the boundary, before any event is written
 - A binding decision (`confirm`, `reject`) names who confirmed; a proposal never does and quotes
   both the entry and the candidate. A confirmation names its work.
 - A backward round goes via the document reference list and has no chase round; a forward round
-  goes via source metadata and names the delegated chase round. Counts are never fields: the
+  goes via source metadata and names the delegated chase round. A candidate's citers are among
+  the round's source works and cite it through the round's extractions. Counts are never fields: the
   number of included works citing a candidate is derived from `cited_by`.
 
 This module is pure. Services in `factory.services` decide when these events are written.
@@ -59,6 +63,9 @@ MAX_ARXIV = 40
 MAX_QUOTE = 1000
 MAX_RATIONALE = 2000
 MAX_CANDIDATES = 3
+MAX_VERSION = 80
+MAX_REASON = 300
+MAX_QUERY = 400
 
 Flag = Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9-]*$", max_length=64)]
 Anchor = Annotated[str, StringConstraints(pattern=ANCHOR_RE.pattern)]
@@ -66,6 +73,9 @@ ExtractionId = Annotated[str, StringConstraints(pattern=REX_ID_RE)]
 Ordinal = Annotated[int, Field(ge=1)]
 Score = Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)]
 Method = Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9-]*$", max_length=40)]
+VersionLabel = Annotated[NonBlank, Field(max_length=MAX_VERSION)]
+"""A parser or matcher name or version: a short label, never document text."""
+Query = Annotated[NonBlank, Field(max_length=MAX_QUERY)]
 
 
 class LinkState(StrEnum):
@@ -232,7 +242,7 @@ class SnowballCandidate(StrictModel):
 
 class Unextracted(StrictModel):
     work_id: WorkId
-    reason: NonBlank
+    reason: Annotated[NonBlank, Field(max_length=MAX_REASON)]
 
 
 # --- Event payloads (schema 1). Written by `factory.services.references`,
@@ -245,8 +255,8 @@ class ReferenceExtracted(StrictModel):
     work_id: WorkId
     document_id: str = Field(pattern=DOCUMENT_ID_RE)
     conversion_id: str = Field(pattern=CONVERSION_ID_RE)
-    parser: NonBlank
-    parser_version: NonBlank
+    parser: VersionLabel
+    parser_version: VersionLabel
     entry_anchors: EntryAnchors
     source_quality: Quality
     entries: tuple[ReferenceEntry, ...]
@@ -279,7 +289,7 @@ class CitationContextsRecorded(StrictModel):
 class ReferenceResolved(StrictModel):
     extraction_id: ExtractionId
     resolutions: tuple[Resolution, ...]
-    matcher_version: NonBlank
+    matcher_version: VersionLabel
     lookup_runs: tuple[Annotated[str, StringConstraints(pattern=RUN_ID_RE)], ...] = ()
 
     @model_validator(mode="after")
@@ -327,7 +337,7 @@ class SnowballRoundStarted(StrictModel):
     sources: tuple[WorkId, ...]
     extraction_ids: tuple[ExtractionId, ...]
     candidates: tuple[SnowballCandidate, ...]
-    queries: tuple[NonBlank, ...]
+    queries: tuple[Query, ...]
     chase_round_id: str | None = Field(default=None, pattern=CHASE_ROUND_ID_RE)
     rule: SnowballPlan | Literal["none"]
     unextracted: tuple[Unextracted, ...] = ()
@@ -344,7 +354,10 @@ class SnowballRoundStarted(StrictModel):
         _unique(tuple(c.work_key for c in self.candidates), "candidate work keys")
         _unique(tuple(u.work_id for u in self.unextracted), "unextracted")
         sources = set(self.sources)
+        extractions = set(self.extraction_ids)
         for candidate in self.candidates:
             if any(c.work_id not in sources for c in candidate.cited_by):
                 raise ValueError("a candidate is cited only by the round's source works")
+            if any(c.extraction_id not in extractions for c in candidate.cited_by):
+                raise ValueError("a candidate is cited only through the round's extractions")
         return self
