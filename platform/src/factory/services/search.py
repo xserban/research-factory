@@ -17,6 +17,7 @@ from factory.clock import parse_ts
 from factory.errors import FactoryError, FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor, Event
 from factory.model.base import StrictModel
+from factory.model.protocol import SubmitterKind
 from factory.model.search import (
     QueryKind,
     QueryPurpose,
@@ -81,6 +82,7 @@ def register_query(
     deviation_id: str | None = None,
     round_id: str | None = None,
     cycle_id: str | None = None,
+    inbox_item: str | None = None,
 ) -> str:
     """Record a query as the caller stated it. Writes nothing if the spec does not fit.
 
@@ -88,8 +90,10 @@ def register_query(
     (`protocol.search_authorization`); `deviation_id` names a recorded deviation that allows a
     query the protocol does not plan. `round_id` names the recorded snowball (`snw_`) or chase
     (`chs_`) round that planned the query, so its runs are linked to the round by reference; a
-    snowball round's texts are waived only for a query that names it. The event refers to the
-    protocol, the deviation and the round (last).
+    snowball round's texts are waived only for a query that names it. `inbox_item` names the
+    open inbox item a `supplied` lookup resolves: the gate is then told the kind of actor that
+    captured it (`supplied_by`, slice 4a ruling 7), here and again at run time. The event
+    refers to the protocol, the deviation, the inbox item and the round (last).
 
     `cycle_id` names the open watch cycle (`wcy_`) that plans a window query (slice 4b, ruling 3);
     it takes the last ref as `round_id` does, and a query names a round or a cycle, not both.
@@ -106,8 +110,20 @@ def register_query(
             issues.append(ValidationIssue("cycle_id", "a query names a round or a cycle, not both"))
         elif cycle_id is not None and not protocol_service.is_watch_cycle(project, cycle_id):
             issues.append(ValidationIssue("cycle_id", "not a recorded watch cycle"))
+        supplied_by = None
+        if inbox_item is not None:
+            supplied_by = _item_submitter(project, inbox_item, open_only=True)
+            if supplied_by is None or spec.purpose is not QueryPurpose.SUPPLIED:
+                issues.append(
+                    ValidationIssue("inbox_item", "must be an open item and a supplied lookup")
+                )
         issues += protocol_service.search_authorization(
-            project, spec, deviation_id=deviation_id, round_id=round_id, cycle_id=cycle_id
+            project,
+            spec,
+            deviation_id=deviation_id,
+            round_id=round_id,
+            cycle_id=cycle_id,
+            supplied_by=supplied_by,
         )
         if issues:
             raise FactoryValidationError(issues)
@@ -122,6 +138,7 @@ def register_query(
             interface=INTERFACES.get(spec.source, spec.source),
         )
         refs = protocol_service.search_refs(project, spec, deviation_id)
+        refs += () if inbox_item is None else (inbox_item,)
         refs += () if round_id is None else (round_id,)
         refs += () if cycle_id is None else (cycle_id,)
         project.record(
@@ -188,6 +205,7 @@ def run_query(
             deviation_id=protocol_service.registered_deviation(project, query_id),
             round_id=protocol_service.registered_round(project, query_id),
             cycle_id=protocol_service.registered_cycle(project, query_id),
+            supplied_by=_registered_submitter(project, query_id),
         )
         if gate:
             raise FactoryValidationError(gate)
@@ -524,6 +542,30 @@ def _resume_token(project: Project, query_id: str, resume_run: str) -> str:
             [ValidationIssue("resume_run", f"already resumed by {resumer[0]}")]
         )
     return str(row["resume_token"])
+
+
+def _item_submitter(project: Project, item_id: str, *, open_only: bool) -> SubmitterKind | None:
+    """The actor kind that captured inbox item `item_id` (only if open, when `open_only`)."""
+    sql = "SELECT actor_kind FROM inbox_items WHERE item_id = :item"
+    sql += " AND status = 'open'" if open_only else ""
+    with project.index.connect() as conn:
+        row = conn.execute(text(sql), {"item": item_id}).one_or_none()
+    kind = None if row is None else str(row[0])
+    return "human" if kind == "human" else "agent" if kind == "agent" else None
+
+
+def _registered_submitter(project: Project, query_id: str) -> SubmitterKind | None:
+    """The capturing actor kind of the inbox item a registered query names in its refs."""
+    with project.index.connect() as conn:
+        events = conn.execute(
+            text("SELECT refs FROM events WHERE type = 'query.registered' AND refs LIKE :pattern"),
+            {"pattern": f'%"{query_id}"%'},
+        ).all()
+    for (refs,) in events:
+        for ref in json.loads(str(refs)):
+            if str(ref).startswith("inb_"):
+                return _item_submitter(project, str(ref), open_only=False)
+    return None
 
 
 def _known_work_ids(project: Project) -> set[str]:

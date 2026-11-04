@@ -280,6 +280,10 @@ def _check_join(
                 )
             ]
         )
+    if _is_inbox_session(project, actor.session):
+        raise FactoryValidationError(
+            [ValidationIssue("session", "this session supplied a link and cannot screen")]
+        )
     joined = _joined_pass(project, actor.session, stage)
     if joined is None:
         if actor.model in _pass_models(project, _other(label), stage):
@@ -1042,6 +1046,16 @@ def relayed_extraction_label(project: Project, session: str) -> bool:
         ):
             return True
     return False
+
+
+def _is_inbox_session(project: Project, session: str) -> bool:
+    """Whether the session captured an inbox link (slice 4a ruling 4: proposer is not screener)."""
+    with project.index.connect() as conn:
+        row = conn.execute(
+            text("SELECT 1 FROM inbox_items WHERE session = :session LIMIT 1"),
+            {"session": session},
+        ).first()
+    return row is not None
 
 
 def _is_extraction_session(project: Project, session: str) -> bool:
