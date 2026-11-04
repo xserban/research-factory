@@ -2,7 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> **Status: draft — rulings recommended; awaiting the researcher's review before any build.**
+> **Status: Accepted 2026-11-04 (researcher's instruction: build everything, MVP v1; recommended rulings adopted).**
+
+> **Reconciled 2026-11-04 (cross-spec reconciliation, decision 75; v1 cut, decision 74).** Task 2 bumps `PROJECTION_VERSION` by one from the value it finds. Task 7's acceptance uses the pilot-shaped synthetic fixture of `tests/miner_helpers.py`, not pilot data; it stays in v1.
 
 > **Dependencies.** Plans M-A, M-B and M-C merged (consumes `register_miner`, `registered_miner`, `require_listed`, `mine_next`, `mine_record`, `MineBatchContent.calibration_id`, `population`, `compile_miner`, `kind_checks`, `MinerUse`, `require_gate`, `effective_policy`, `audit_core.*`, `passes.memberships`, `quality.stats.draw_uniform`). Plan M-E consumes the lifecycle state and calibration reports.
 
@@ -12,7 +14,7 @@
 
 **Tech Stack:** as M-A; no new dependencies.
 
-**Spec:** `docs/specs/slice-M-modules.md` rulings 15–17; gate `miner.calibration_label`, `mine.resolve`; events `miner.calibration_drawn`, `miner.calibration_labelled`, `miner.retired`; check findings `miner-*`; acceptance 11, 12. R-51, R-52; proposed R-xx(b), R-xx(c).
+**Spec:** `docs/specs/slice-M-modules.md` rulings 15–17; gate `miner.calibration_label`, `mine.resolve`; events `miner.calibration_drawn`, `miner.calibration_labelled`, `miner.retired`; check findings `miner-*`; acceptance 11, 12. R-51, R-52; R-141, R-142.
 
 ## Rulings made in this plan
 
@@ -132,3 +134,7 @@
 - **Spec coverage.** Ruling 15 (M-C Task 6, here Task 6 for evidence), 16 (Tasks 1–5), 17 (Task 6); acceptance 11 (M-C), 12 (Tasks 4–7).
 - **Types used later.** `MinerState`, `miner_state`, `proposer`, `MinerCalibrationReport`, `miner_calibration_report`, `CalibrationScore`, `BuilderReads`.
 - **Tiers.** Tasks 1–6 critical; Task 7 standard with Opus review.
+
+## Later (not v1)
+
+None: every task of this plan is in v1.

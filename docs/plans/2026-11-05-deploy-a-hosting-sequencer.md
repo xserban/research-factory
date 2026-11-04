@@ -2,7 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> **Status: draft — rulings recommended; awaiting the researcher's review before any build.**
+> **Status: Accepted 2026-11-04 (researcher's instruction: build everything, MVP v1; recommended rulings adopted).**
+
+> **Reconciled 2026-11-04 (cross-spec reconciliation, decision 75; v1 cut, decision 74).** Slice 5 is built last (build order), after slice M. Bumps `PROJECTION_VERSION` by one from the value it finds.
 
 > **Dependencies.** None within slice 5; this is its first plan. Slices 1–2 merged. Sub-plans teams-A, deploy-B and deploy-C consume this plan's Interfaces blocks exactly. Ends with every earlier test passing unchanged except the `PROJECTION_VERSION` pin.
 
@@ -137,3 +139,7 @@ def test_concurrent_claims_never_rebuild(hosted_project_with_tasks):   # 8 threa
 - [ ] **Step 1: Tests.** `test_commit_adds_only_events_and_text_blobs`, `test_commit_refuses_library_paths` (remove `.gitignore`, create a library file: refused, nothing committed), `test_commit_is_noop_without_changes`, `test_commit_author_is_factory_server`.
 - [ ] **Step 2–4:** Fail, implement, pass.
 - [ ] **Step 5:** Verification `uv run pytest -m "not network and not slow" -q && uv run mypy --strict src && uv run ruff check .`; commit `feat(hosting): server commit job`.
+
+## Later (not v1)
+
+None: every task of this plan is in v1.

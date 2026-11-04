@@ -2,7 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> **Status: draft — rulings recommended; awaiting the researcher's review before any build.**
+> **Status: Accepted 2026-11-04 (researcher's instruction: build everything, MVP v1; recommended rulings adopted).**
+
+> **Reconciled 2026-11-04 (cross-spec reconciliation, decision 75; v1 cut, decision 74).** If Task 6 adds a `miners` table it bumps `PROJECTION_VERSION` by one from the value it finds (the spec named only M-B, M-D and M-E; the rule of the build-order plan governs).
 
 > **Dependencies.** Plan M-A merged; plan M-B merged (Task 7 calls `require_gate` for `mine.resolve`); plan G1 merged (`current_extraction`, link states); plan G2-A merged (consumes `Scope`, `scope_of_pack`, `scope_of_schema_ref`, `next_unit`, `record_unit`, `ExtraCheck`, `ExtraVerdict`, `UnitPin`, `CloseCheck`, `pack_row_key`, `FieldDef.allowed`, `Conditional`, `Pack.row_key_fields/row_anchor_fields/compared_fields`, and the `scope=` keyword on plan-D reads). Plan M-D consumes this plan's registration and `mine_*` interfaces.
 
@@ -141,3 +143,7 @@
 - **Spec coverage.** Ruling 2 (Tasks 5, 7), 11 (Tasks 1, 2), 12 (Task 3), 13 (Task 4), 14 (Tasks 2, 5), 15 (Task 6); acceptance 9 (Task 2), 10 (Task 3), 11 (Tasks 1, 6, 7), 13 (Task 7).
 - **Types used later.** `MinerSpec`, `MinerRegime`, `Selector`, `compile_miner`, `miner_digest`, `kind_checks`, `MinerScope`, `ScopeKey`, `MinerRegistered`, `MinerUse`, `register_miner`, `registered_miner`, `require_listed`, `mine_next`, `mine_record`, `MineBatchContent.calibration_id`, `population`.
 - **Tiers.** Tasks 1–3, 5–7 critical; Task 4 standard.
+
+## Later (not v1)
+
+None: every task of this plan is in v1.

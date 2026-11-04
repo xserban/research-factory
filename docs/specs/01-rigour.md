@@ -15,7 +15,7 @@ Source: consolidated from research-factory-old (`spec/TRACEABILITY.md`, `RIGOR-M
 | ID | Requirement | Standard | Modes | Verified by |
 | --- | --- | --- | --- | --- |
 | R-01 | Unbroken chain: question → protocol → criterion / query → search run → raw payload → record → merge → work → decision → (full text → claim → synthesis sentence). `trace` works backwards and forwards | PRISMA 2020 | all | `check` fails on any broken link |
-| R-02 | A work cannot exist without provenance (source, run, query, raw reference, method: database / citation-chase / seed-admission / hand-search) | PRISMA 2020, PRISMA-S | all | model invariant test |
+| R-02 | A work cannot exist without provenance (source, run, query, raw reference, method: database / citation-chase / seed-admission / hand-search / supplied / library-import; the last two added 2026-11-04 with slices 4a and 3d) | PRISMA 2020, PRISMA-S | all | model invariant test |
 | R-03 | Raw source responses are archived verbatim before parsing | PRISMA-S | all | test: every run has raw blobs |
 | R-04 | Every agent action records model version, skill/prompt version (hash of the skill text) and the exact input it saw (`input_blob`) | — (agentic) | all | event validation |
 | R-05 | Every number in a report (PRISMA counts, κ, error rates) is derived from events; none is typed by a human or an agent | PRISMA 2020 | all | report generator test |
@@ -110,3 +110,59 @@ Before any output leaves the factory (review, hypothesis set, paper), it is defe
 | R-72 | **Viva:** examiner agents question each conclusion; each answer must be supported by `trace`; unanswerable points go to the limitations, not away | S |
 | R-73 | **Sign-off** by the reviewer of record; optional prior registration of the protocol (PROSPERO for reviews with health outcomes; OSF otherwise) | S |
 
+## Requirements added with the slices accepted on 2026-11-04
+
+Numbering continues by blocks of ten per slice so that no two drafts' provisional letters collide. Source specs give the full text; each requirement is binding from the slice that introduces it.
+
+**Reserved for slices 3a–3c** (rulings adopted 2026-11-04; rows added by plans G1 Task 10, G2-E Task 5 and G3-C Task 6 when built): R-80 reference completeness (3a R-xx(a)), R-81 link provenance (3a (b)), R-82 snowball discipline (3a (c)), R-83 citation-context minimality (3a (d)), R-84 stated versus inferred relations (3b (e)), R-85 edge basis (3b (f)), R-86 graph as projection (3b (g)), R-87 interpretation is not evidence (3c (h)), R-88 reviewable interpretation (3c (i)), R-89 concept sources (3c (j)).
+
+### K. Organisation and imported libraries ([slice 3d](slice-3d-regions-import.md))
+| ID | Requirement | Modes |
+| --- | --- | --- |
+| R-90 | **Regions are versioned selections.** A region is cited only by a pinned, hashed version whose member set is derived from declared rules and recorded decisions; drift is reported, never applied silently; a region asserts nothing and changes no evidence value | all |
+| R-91 | **Consolidation before selection.** Free labels are never evidence and never select; only promoted terms with stated or human-confirmed applications may appear in a region rule; merges and promotions are recorded, reversible and human-decided | all |
+| R-92 | **Imported libraries.** An imported record carries provenance to the archived export; it enters the corpus only as a candidate for screening; the coverage of a library by the systematic search is derived per declared bucket and reported on a held-out part when the library preceded the search | P, S (E: reported, not gated) |
+
+### L. Discovery and living corpus ([slice 4a](slice-4a-inbox-discovery.md), [slice 4b](slice-4b-living-corpus.md))
+| ID | Requirement | Modes |
+| --- | --- | --- |
+| R-100 | **Discovery is derived.** Every discovery figure is computed from events; route, surfacer and first-surfaced are never typed | all |
+| R-101 | **Route-blind screening.** Screening and extraction tasks never carry how a work was discovered | P, S |
+| R-102 | **Watch runs are search runs.** A living update identifies records only through recorded search runs of planned queries, grouped in cycles; window partitions are declared and their misses measured | P, S |
+| R-103 | **Update flow.** A living review reports, per update, a PRISMA flow over the records first identified in it, besides the cumulative flow; both computed | P, S |
+| R-104 | **Notice propagation.** Retractions, withdrawals, corrections and expressions of concern of dependent works are recorded with source and date; their effects reach only the affected work's dependents, are computed, and require a human assessment; nothing is deleted | all |
+| R-105 | **Conclusion change is computed.** A conclusion's change is a difference in computed facts or in its basis state since a recorded snapshot; no agent judges it | all |
+| R-106 | **Declared cadence and end.** A living review declares its cadence per source and when it stops being living | P, S |
+
+### M. Teams ([slice 5](slice-5-teams-deployment.md))
+| ID | Requirement | Modes |
+| --- | --- | --- |
+| R-110 | **Human screeners.** A human pass is independent of the other pass by session, user and the user's agents; it is served the agent view; exclusions carry a verified quote in `systematic` | P, S |
+| R-111 | **Attributed acts.** On a hosted project every event names an authenticated user (directly or as the agent's principal); acts on a human-act permission are refused to agents; relayed human acts are counted and reported | all |
+| R-112 | **Derived credit.** Contribution and AI-assistance statements are derived from events with a versioned map and confirmed by each named person; none is typed | all |
+
+### N. Hypotheses and testing, continued ([slice 6](slice-6-hypotheses.md))
+| ID | Requirement | Modes |
+| --- | --- | --- |
+| R-120 | **Hypotheses cite triggers.** A lead or hypothesis without at least one resolvable trigger cannot be written (P, S: a lead is required for a hypothesis) | all |
+| R-121 | **Computed outcome.** The outcome of a registered hypothesis is computed from recorded results by its registered decision rule; no actor sets it | all |
+| R-122 | **Reproduce before confirm.** Confirmatory runs need every declared baseline resolved; a non-reproduced baseline accepted by a human flags every dependent outcome | P, S |
+| R-123 | **Recorded order.** Confirmatory results carry the unlock nonce issued after registration and freeze; results without it are refused | P, S |
+| R-124 | **Failure conditions.** Every registry row states the conditions of failure (design, data, budget, model, code); a registry row is never removed | all |
+| R-125 | **Own results apart.** Own and reproduced results are never merged with reported results in groups, frontiers or counts | all |
+
+### O. Writing, views and exports ([slice 7b](slice-7b-views-writing.md))
+| ID | Requirement | Modes |
+| --- | --- | --- |
+| R-130 | **Supported sentences.** A claim-bearing sentence in any factory-produced text cites supports that resolve to verified spans or computed figures; unsupported, unchecked or stale sentences are marked in every rendering and cannot be released under `systematic` | all (marking), S (gate) |
+| R-131 | **Independent sentence verification.** Semantic support is judged by a verifier that did not write the sentence and sees only the sentence and its spans; a human audits a sample of positive verdicts and the error rate is reported | P, S |
+| R-132 | **Derived exports.** Exports and views are deterministic builders that name their scope and log position, contain no library text, and are byte-identical for the same log | all |
+| R-133 | **Recorded agent context.** Context given to an agent outside a task (briefings) is stored and linked to the session that received it | all |
+
+### P. Modules, gates and miners ([slice M](slice-M-modules.md))
+| ID | Requirement | Modes |
+| --- | --- | --- |
+| R-140 | **Declared autonomy.** Every decision gate has a declared policy (explicit or preset) recorded with the protocol; every output's autonomy is computable from events; methods state the policy and per-level counts | all |
+| R-141 | **Verifiable miners.** A registered miner uses only verifiable field kinds; every record carries at least one verified quote; free text is refused | all |
+| R-142 | **Calibrated before evidence.** A registered miner's records count as evidence only after a human-labelled calibration in the same project passed declared thresholds above platform floors; the proposer neither runs the calibration pass nor labels it | all |
+| R-143 | **Reuse is recorded and re-verified.** An imported record names its source and is re-verified against the importing project's own conversion; it never counts as an independent pass it did not have | all |

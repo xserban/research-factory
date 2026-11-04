@@ -2,9 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> Status: draft — rulings recommended; awaiting the researcher's review before any build.
+> **Status: Accepted 2026-11-04 (researcher's instruction: build everything, MVP v1; recommended rulings adopted).**
 
-> **Dependencies.** X-A merged (`assign_keys`, `export_bibliography`, `export_prisma_svg`, `select_works`). W-B merged (`draft.released`, `draft_render`), because released drafts are crate members; without W-B the crate omits drafts (the task guards on the table's existence only through the service, not by feature flags). Plans 2E (`evidence_markdown`, `rows_csv`, `points_csv`), 5b (`methods_report`, `render_methods`, `search_report`), G2-D (`graph_export`) merged. Resolves Open decision 22 as proposed in the spec (D-7b-3).
+> **Reconciled 2026-11-04 (cross-spec reconciliation, decision 75; v1 cut, decision 74).** The whole plan is Later (spec v1 scope). Decision 22 is resolved by decision 72 (draft D-7b-3).
+
+> **Dependencies.** X-A merged (`assign_keys`, `export_bibliography`, `export_prisma_svg`, `select_works`). W-B merged (`draft.released`, `draft_render`), because released drafts are crate members; without W-B the crate omits drafts (the task guards on the table's existence only through the service, not by feature flags). Plans 2E (`evidence_markdown`, `rows_csv`, `points_csv`), 5b (`methods_report`, `render_methods`, `search_report`), G2-D (`graph_export`) merged. Implements the export side of decision 72, which resolves decision 22.
 
 **Goal:** Package a project as an RO-Crate 1.1 that a reader can audit without the factory (events, text blobs, reports, bibliography, a manifest of library documents without their content), and export claims and stated lineage edges as unsigned nanopublications in TriG.
 
@@ -12,7 +14,7 @@
 
 **Tech Stack:** stdlib `json`, `zipfile`, `hashlib`; test-only `rdflib>=7` (dev group) to parse TriG and JSON-LD; no runtime dependency.
 
-**Spec:** `docs/specs/slice-7b-views-writing.md` rulings 20, 21, 22; acceptance 13 (crate and nanopub parts). R-04, R-05, R-47; decisions 22 (Open → D-7b-3), 39.
+**Spec:** `docs/specs/slice-7b-views-writing.md` rulings 20, 21, 22; acceptance 13 (crate and nanopub parts). R-04, R-05, R-47; decisions 22 (resolved by decision 72), 39.
 
 ## Rulings made in this plan
 1. **Crate layout [confirm].** `ro-crate-metadata.json`; `events/` (copy of `projects/<slug>/events/`); `blobs/` (copy of the text blobs referenced by events); `protocol/protocol.json` (current `ProtocolSpec` and amendment list); `reports/prisma.md`, `reports/prisma.svg`, `reports/search.md`, `reports/methods.md`, `reports/evidence.md`, `reports/evidence-rows.csv`, `reports/evidence-points.csv`, `reports/lineage.json` (G2-D default view, when the graph exists), `reports/drafts/<drf_…>.md` (released drafts in clean form, rendered from the current log, with the release record beside it as `<drf_…>.release.json`); `bibliography/included.bib`, `bibliography/included.csl.json`; `library-manifest.json`. Nothing from `library/`, `.index/`, or any path outside the project.
@@ -39,7 +41,15 @@
 - Modify `services/exports.py`, `cli/main.py`.
 - Tests: `tests/test_export_rdf.py`, `tests/test_export_nanopub.py`, `tests/test_export_crate_entities.py`, `tests/test_export_crate.py`.
 
-### Task 1: TriG writer
+## Self-review notes
+- Released drafts are rendered from the current log; if a released draft has since become stale, the crate includes its release record and the current status counts so the difference is visible.
+- Decision 22 is resolved by decision 72; this plan implements only the export direction.
+
+## Later (not v1)
+
+Moved here by the v1 cut of 2026-11-04 (decision 74); built after the v1 plans of the build order (`2026-11-05-build-order.md`), in the order listed. Task text is unchanged; references to "Task N" inside a moved task use the plan's original numbering.
+
+### Later L1 (was Task 1): TriG writer
 
 *Tier: standard.*
 
@@ -51,7 +61,7 @@
 - [ ] **Step 1: Tests.** `test_escape_cases`; `test_sorted_output`; `test_iri_validation` (spaces or `<>` rejected); `test_rdflib_round_trip` (parse; same triples).
 - [ ] **Step 2–4.** **Step 5:** Commit `feat(exports): deterministic TriG writer`.
 
-### Task 2: Nanopublications
+### Later L2 (was Task 2): Nanopublications
 
 *Tier: standard.*
 
@@ -65,7 +75,7 @@
 - [ ] **Step 1: Tests.** `test_trig_parses_four_graphs` (Review Focus 3); `test_head_links_graphs`; `test_no_quotes_by_default` and `test_with_quotes_adds_literal` (Review Focus 2); `test_agent_strength_labelled_as_agent`; `test_only_included_live_pass_a_claims`; `test_inferred_edges_excluded`; `test_skipped_counted`; `test_byte_identical_across_rebuilds`.
 - [ ] **Step 2–4.** **Step 5:** Commit `feat(exports): nanopublications of claims and stated edges`.
 
-### Task 3: Crate entities and library manifest (pure)
+### Later L3 (was Task 3): Crate entities and library manifest (pure)
 
 *Tier: standard.*
 
@@ -77,7 +87,7 @@
 - [ ] **Step 1: Tests.** `test_descriptor_and_root_present` (`ro-crate-metadata.json` entity `about` `./`, `conformsTo` 1.1); `test_has_part_complete` (Review Focus 4); `test_create_action_per_report`; `test_agents_aggregated`; `test_jsonld_parses_with_rdflib`; `test_deterministic`.
 - [ ] **Step 2–4.** **Step 5:** Commit `feat(exports): RO-Crate entities and library manifest`.
 
-### Task 4: Crate assembly service and CLI
+### Later L4 (was Task 4): Crate assembly service and CLI
 
 *Tier: standard.*
 
@@ -90,7 +100,3 @@
 
 - [ ] **Step 1: Tests.** `test_no_library_content` (Review Focus 1: walk output, hash every file, none equals a library hash); `test_manifest_lists_every_document`; `test_reports_equal_service_output`; `test_zip_byte_identical`; `test_out_inside_project_refused`; `test_released_drafts_included_unreleased_not`; `test_crate_without_graph_or_drafts` (fields omitted, no error).
 - [ ] **Step 2–4.** **Step 5:** Commit `feat(exports): RO-Crate export and export commands`.
-
-## Self-review notes
-- Released drafts are rendered from the current log; if a released draft has since become stale, the crate includes its release record and the current status counts so the difference is visible.
-- Decision 22 is proposed for resolution in the spec (D-7b-3); this plan implements only the export direction.

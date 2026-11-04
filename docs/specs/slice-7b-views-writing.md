@@ -1,10 +1,27 @@
 # Slice 7b — Views, writing from verified claims, and exports
 
-Status: draft — rulings recommended; awaiting the researcher's review before any build.
+Status: Accepted 2026-11-04 (researcher's instruction: build everything, MVP v1; recommended rulings adopted). Decisions 70–73; requirements R-130–R-133.
+
+## Cross-spec reconciliation 2026-11-04
+
+1. **Gate names.** The release gate is slice M's `writing.release` (draft name `draft-released`), floor `agent`; presets: exploratory `agent`, pilot `agent` once the verdict audit is labelled, systematic `human` (reviewer of record). The audit labels are `writing.audit_label` and `manuscript.audit_label` (floor `human`); fuzzy manuscript citations are `manuscript.citation_confirm` (presets as `reference.link_confirm`). Slice M is built before this slice, so W-B declares these gates instead of testing `RigorMode` inline.
+2. **Module kinds.** Views, exports and briefings are `builder`s; writing and manuscript verification (the "authoring module") are `proposal` modules whose quality regime is one independent verifier pass plus a gate-sample audit (`max(ceil(0.1·N), 20)`, the same rule as slice M's `agent_audit` preset). `briefing.served` is a builder-owned system event (slice-M reconciliation item 3).
+3. **Plan abbreviations.** X-A and X-B are this slice's export plans; slice 6's experiment plans are XP-A and XP-B.
+4. **PRISMA SVG (X-A).** The "other methods" column lists the keys of `identified_other` in the platform order `citation-chase`, `seed-admission`, `hand-search`, `supplied`, `library-import`, skipping zeros; a living review's update flow (slice 4b) is a second SVG built from the same template (Later).
+5. **Regions overlay (ruling 2)** and horizon views that stay current read slice 3d snapshots and slice 4b watch dates when those exist; both slices are built before this one, so the overlay is filled in v1 when reviewed focus regions exist, and is empty with a stated notice otherwise.
+6. **Epistemic classes.** Sentences carry their class (`claim`/`synthesis` cite `evidence` supports; `interpretive` sentences cite `interpretation` items); `organisation` items (regions, labels, terms) and `test` items (slice 6 outcomes) are not supports in v1 (Later: own-result supports labelled `test`).
+7. **Decision placeholders** D-7b-1 to D-7b-4 are decisions 70–73; decision 22 is resolved by decision 72.
+8. **Requirements** R-xx(w1)–(w4) are R-130–R-133 in [01-rigour.md](01-rigour.md).
+9. **Projection version.** Each plan that adds an event type or table bumps `PROJECTION_VERSION` by one from the value it finds; X-A, V-A, V-B write no event and do not bump.
+
+## v1 scope
+
+- **v1:** BibTeX, CSL-JSON and PRISMA SVG exports (X-A); view contract, depth and onion (V-A); coverage map, timelines, horizon (V-B); outline, drafts, supports and write-time checks (W-A); verification, audit, status, rendering, release gate, trace, check and the automated acceptance (W-B).
+- **Later:** RO-Crate and nanopublications (X-B), briefings and context packs (V-C), external manuscript verification (W-C), the pilot related-work section written for real (acceptance 18), PDF manuscripts (after decision 49), update-flow SVG.
 
 Builds on [00-system.md](00-system.md), slices 1, 2, 3a, 3b, 3c; must satisfy [01-rigour.md](01-rigour.md) R-01, R-02, R-04, R-05, R-39, R-40, R-42, R-44, R-45, R-47, R-51, plus the proposed requirements below. Implements the slice-7 outline of [README.md](README.md) except the portfolio dashboard (IDEA-01), which is [slice-7a-portfolio.md](slice-7a-portfolio.md) (parallel draft). Covers production lines 4 (evidence map, views), 11 (claim verification), 14 (writing from the repository) and 15 (horizon scanning) of [docs/02-production-lines.md](../02-production-lines.md), and backlog IDEA-09 (onboarding briefings).
 
-**Depends on:** slices 1–2 and plans G1–G3 built (trace, PRISMA, evidence report, lineage graph and export, layer view); [slice-7a-portfolio.md](slice-7a-portfolio.md) for the presentation surface (this slice produces view documents, 7a decides how a page shows them); the slice-3 regions specification (parallel draft) for the region overlay of the onion view; slice 4 (living corpus) for horizon views that stay current; [slice-M-modules.md](slice-M-modules.md) (parallel draft) for the stage-module contract and gate policies. Every part is designed to be built first as hand-written services and to move behind the module contract when slice M lands: views and exports are *builders*, drafting is an *authoring module*, sentence verification is a *quality regime* with a *gate* (`draft-released`).
+**Depends on:** slices 1–2 and plans G1–G3 built (trace, PRISMA, evidence report, lineage graph and export, layer view); [slice-7a-portfolio.md](slice-7a-portfolio.md) for the presentation surface (this slice produces view documents, 7a decides how a page shows them); the slice-3 regions specification (parallel draft) for the region overlay of the onion view; slice 4 (living corpus) for horizon views that stay current; [slice-M-modules.md](slice-M-modules.md) (parallel draft) for the stage-module contract and gate policies. Every part is designed to be built first as hand-written services and to move behind the module contract when slice M lands: views and exports are *builders*, drafting is an *authoring module*, sentence verification is a *quality regime* with a *gate* (`writing.release`).
 
 ## Goal
 Turn the verified repository into things a researcher reads, writes and hands over, without letting any of them introduce an unverified statement. Four products:
@@ -150,17 +167,17 @@ Existing, in scope:
 - **R-47, decision 39:** no library or manuscript text in events, blobs or exports.
 - **R-51:** the writer never verifies; the verifier sees artefacts only.
 
-Proposed (letters assigned on acceptance; parallel drafts also continue the R-xx series):
-- **R-xx(w1) (proposed) Supported sentences.** A claim-bearing sentence in any factory-produced text cites supports that resolve to verified spans or computed figures; unsupported, unchecked or stale sentences are marked in every rendering and cannot be released under `systematic`. All modes (marking), S (gate).
-- **R-xx(w2) (proposed) Independent sentence verification.** Semantic support is judged by a verifier that did not write the sentence and sees only the sentence and its spans; a human audits a sample of positive verdicts and the error rate is reported. P, S.
-- **R-xx(w3) (proposed) Derived exports.** Exports and views are deterministic builders that name their scope and log position, contain no library text, and are byte-identical for the same log. All modes.
-- **R-xx(w4) (proposed) Recorded agent context.** Context given to an agent outside a task (briefings) is stored and linked to the session that received it. All modes.
+Added on acceptance (numbers in [01-rigour.md](01-rigour.md)):
+- **R-130 Supported sentences.** A claim-bearing sentence in any factory-produced text cites supports that resolve to verified spans or computed figures; unsupported, unchecked or stale sentences are marked in every rendering and cannot be released under `systematic`. All modes (marking), S (gate).
+- **R-131 Independent sentence verification.** Semantic support is judged by a verifier that did not write the sentence and sees only the sentence and its spans; a human audits a sample of positive verdicts and the error rate is reported. P, S.
+- **R-132 Derived exports.** Exports and views are deterministic builders that name their scope and log position, contain no library text, and are byte-identical for the same log. All modes.
+- **R-133 Recorded agent context.** Context given to an agent outside a task (briefings) is stored and linked to the session that received it. All modes.
 
-## Proposed decisions (numbers assigned on acceptance)
-- **D-7b-1 Draft verification model.** Rulings 9–14: sentence classes, typed supports, deterministic write-time checks, one independent verifier with verified substrings, audit with `DRAFT_VERIFY_ERROR_CEILING = 0.05`, computed status, release gate by mode.
-- **D-7b-2 Draft and manuscript storage.** Ruling 8: authored sentences in events; manuscripts in the library; agents read manuscripts through a tool; renderings outside the project tree.
-- **D-7b-3 Decision 22 resolved.** Ruling 21: own claim schema; nanopublications as a one-way, unsigned TriG export.
-- **D-7b-4 Views are builders.** Rulings 1, 5, 7: typed read models with `as_of`, no stored views, no cross-group values, no emergence labels by the platform.
+## Decisions (recorded 2026-11-04)
+- **70 Draft verification model.** Rulings 9–14: sentence classes, typed supports, deterministic write-time checks, one independent verifier with verified substrings, audit with `DRAFT_VERIFY_ERROR_CEILING = 0.05`, computed status, release gate by mode.
+- **71 Draft and manuscript storage.** Ruling 8: authored sentences in events; manuscripts in the library; agents read manuscripts through a tool; renderings outside the project tree.
+- **72 Decision 22 resolved.** Ruling 21: own claim schema; nanopublications as a one-way, unsigned TriG export.
+- **73 Views are builders.** Rulings 1, 5, 7: typed read models with `as_of`, no stored views, no cross-group values, no emergence labels by the platform.
 
 ## In scope
 View contract; onion, coverage, horizon and timeline views with renderers; outline builder; drafts, sentences, checks, verification, audit, status, rendering, release gate; manuscript verification; BibTeX, CSL-JSON, PRISMA SVG, RO-Crate, nanopublication exports; briefings and context packs; tools, CLI, check, trace; skills `rf-write`, `rf-verify`.

@@ -1,8 +1,10 @@
-# Experiment Designs, Runs, Result Ingestion and Baseline Reproduction Implementation Plan (slice 6, sub-plan X-A)
+# Experiment Designs, Runs, Result Ingestion and Baseline Reproduction Implementation Plan (slice 6, sub-plan XP-A)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> Status: draft — rulings recommended; awaiting the researcher's review before any build.
+> **Status: Accepted 2026-11-04 (researcher's instruction: build everything, MVP v1; recommended rulings adopted).**
+
+> **Reconciled 2026-11-04 (cross-spec reconciliation, decision 75; v1 cut, decision 74).** This plan is XP-A (draft XP-A; slice 7b uses XP-A for exports). `may_pass` takes slice-M gate ids: `experiments.freeze_unlock` (freeze and unlock), `experiments.accept_baseline` (draft `baseline-acceptance`). The design budget's names are `compute-budget-*`. Bumps `PROJECTION_VERSION` by one from the value it finds.
 
 > **Dependencies.** H-C merged (Interfaces consumed exactly: `HypothesisSpec`, `hypothesis_view`, `may_pass`, `effective_plan`, `has_confirmatory_evidence` provider hook, `GateName`); plan 2E merged (`final_rows`, `EvidenceRow`, `group_id`). The platform executes nothing in this plan: runs are executed by the researcher or a runner outside, and their output enters through the CLI. When slice M lands, `design-freeze`, `confirmatory-unlock` and `baseline-acceptance` are declared as module gates; when slice 5 adds GPU runners, they are `system` actors that call the same ingestion service.
 
@@ -12,7 +14,7 @@
 
 **Tech Stack:** as plan D; no new dependencies. Results files are JSON validated by a pydantic model.
 
-**Spec:** `docs/specs/slice-6-hypotheses.md` rulings 1, 18–24, 26 (declaration part); Design "Experiment designs", "Runs and results", "Evaluation, reproduction and ledger" (reproduction part); events `experiment.*`, `xrun.*`, `baseline.evaluated`; MCP `experiment_design`, `experiment_view`, `xrun_register`, `xrun_list`; CLI `experiments`, `runs`; acceptance 13–17. `01-rigour.md` R-14, R-50, R-54; proposed R-xx(j), R-xx(k).
+**Spec:** `docs/specs/slice-6-hypotheses.md` rulings 1, 18–24, 26 (declaration part); Design "Experiment designs", "Runs and results", "Evaluation, reproduction and ledger" (reproduction part); events `experiment.*`, `xrun.*`, `baseline.evaluated`; MCP `experiment_design`, `experiment_view`, `xrun_register`, `xrun_list`; CLI `experiments`, `runs`; acceptance 13–17. `01-rigour.md` R-14, R-50, R-54; R-122, R-123.
 
 ## Rulings made in this plan (recommended; [confirm])
 
@@ -146,6 +148,10 @@
 
 ## Self-review notes
 
-- **Spec coverage.** Rulings 1, 18–24 and 26 (declaration and unlock check); acceptance 13 (Tasks 1–2), 14 (Task 5), 15 (Task 4; pairing is X-B), 16 (Tasks 3, 5), 17 (Task 6). Statistics, evaluation, multiverse summaries, control outcomes, ledger and registry are X-B.
+- **Spec coverage.** Rulings 1, 18–24 and 26 (declaration and unlock check); acceptance 13 (Tasks 1–2), 14 (Task 5), 15 (Task 4; pairing is XP-B), 16 (Tasks 3, 5), 17 (Task 6). Statistics, evaluation, multiverse summaries, control outcomes, ledger and registry are XP-B.
 - **Types used later.** `ExperimentDesign`, `Cell`, `cell_hash`, `primary_cells`, `universes`, `run_config`, `ExperimentView`, `experiment_view`, `XrunView`, `xrun_list`, `access_counts`, `budget_view`, `baseline_verdicts`, tables `experiments`, `xruns`, `baseline_evaluations`, `experiment_deviations`.
 - **Tiers.** Tasks 1–6 critical; 7 Haiku (skill Sonnet).
+
+## Later (not v1)
+
+None: every task of this plan is in v1.

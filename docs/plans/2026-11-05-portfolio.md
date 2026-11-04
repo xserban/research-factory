@@ -2,7 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> **Status: draft for the researcher's review — not to be built until accepted.** It implements option A of `docs/specs/slice-7a-portfolio.md`. Tasks 1–3 (human queue, stage rule, builder and JSON) are needed by options B and C as well; only Task 4 (Markdown and HTML renderers) is specific to option A. If the researcher chooses B or C, Tasks 1–3 stand and Task 4 is replaced.
+> **Status: Accepted 2026-11-04 (researcher's instruction: build everything, MVP v1; recommended rulings adopted).**
+
+> **Reconciled 2026-11-04 (cross-spec reconciliation, decision 75; v1 cut, decision 74).** Option A is the accepted option (decision 69). Task 5 records no new decision (69 is recorded) and only updates the spec's "Implemented" note and 00-system §1 and §9. If slice M is on the base, Task 1's `human_queue` names gates by their slice-M ids. It implements option A of `docs/specs/slice-7a-portfolio.md`. Tasks 1–3 (human queue, stage rule, builder and JSON) are needed by options B and C as well; only Task 4 (Markdown and HTML renderers) is specific to option A. If the researcher chooses B or C, Tasks 1–3 stand and Task 4 is replaced.
 
 > **Dependencies.** Plans 2C, 2D and 2E merged (screening stages, extraction, audits). G1 and slice 4a are optional: their gate kinds are added when their services exist on the base (spec ruling 5). Paths are relative to `platform/` unless they start with `docs/`.
 
@@ -90,3 +92,7 @@
 **Files:** Modify `docs/specs/slice-7a-portfolio.md` (status, "Implemented" note), `docs/specs/00-system.md` (§1 scope sentence on generated read-only reports; §9 adds `factory portfolio`), `docs/decisions.md` (the spec's proposed entry, numbered at the next free number), `docs/backlog.md` (IDEA-01 → `accepted`, linked), `CLAUDE.md` status line.
 
 - [ ] **Step 1:** Edit docs. **Step 2:** Run the whole suite once. **Step 3:** Commit `docs(portfolio): spec status, system scope, decision`.
+
+## Later (not v1)
+
+None: every task of this plan is in v1.

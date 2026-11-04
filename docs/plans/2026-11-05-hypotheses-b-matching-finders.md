@@ -2,7 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> Status: draft — rulings recommended; awaiting the researcher's review before any build.
+> **Status: Accepted 2026-11-04 (researcher's instruction: build everything, MVP v1; recommended rulings adopted).**
+
+> **Reconciled 2026-11-04 (cross-spec reconciliation, decision 75; v1 cut, decision 74).** Regions (slice 3d) are merged, but the region branch of the transfer test is Later (spec v1 scope); v1 uses the project as boundary. `hypotheses.contradiction_confirm` is a slice-M gate (floor `human`). Bumps `PROJECTION_VERSION` by one from the value it finds.
 
 > **Dependencies.** H-A merged (Interfaces consumed exactly: `resolve_property`, `effective_card_props`, `card_view`, `CardPropRow`, `vocabulary_version`); plan 2E merged (`evidence_report`, `EvidenceReport`, `GroupReport.method_conflicts`, `EvidenceRow.regime`, `group_id`, `final_rows`); plan 2D (`live_claims`). May run in parallel with H-C. When slice 3d lands, the transfer test of Task 2 gains a region branch; the function signature already takes a `scope` argument. When slice M lands, the three builders declare their inputs through its builder contract without changing outputs.
 
@@ -143,3 +145,7 @@ def test_problem_card_required(project): ...                # a method card id -
 - **Spec coverage.** Rulings 6, 7, 9, 10; acceptance 5 (Task 2), 6 (Tasks 3–4), 7 (Task 5). The skill text for using these tools is part of `rf-ideate` (H-C).
 - **Types used later.** `MatchPage`, `MatchRow`, `match`, `ConflictPair`, `find_conflicts`, `ContradictionView`, `list_contradictions`, `GapReport`, `find_gaps`, `CONTRADICTION_ID_RE`, keys `match_key`, `row_key`, `gap_key` (lead triggers in H-C).
 - **Tiers.** Task 2, 4 critical; 1, 3, 5 standard; 6 Haiku.
+
+## Later (not v1)
+
+None: every task of this plan is in v1.

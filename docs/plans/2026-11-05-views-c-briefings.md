@@ -2,7 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> Status: draft — rulings recommended; awaiting the researcher's review before any build.
+> **Status: Accepted 2026-11-04 (researcher's instruction: build everything, MVP v1; recommended rulings adopted).**
+
+> **Reconciled 2026-11-04 (cross-spec reconciliation, decision 75; v1 cut, decision 74).** The whole plan is Later (spec v1 scope). `briefing.served` is a builder-owned system event (slice-M reconciliation item 3).
 
 > **Dependencies.** V-A, V-B merged (`ViewMeta`, `Index.head`, `group_index`); W-B merged (released drafts, draft status counts). Slice 1 services (`question`, protocol and amendment reads, `prisma_flow`, `check`, `agent_view`, `methods_report`, `agent_methods`), 2E (`agent_evidence`), G2-D (`path`, confirmed ideas). Implements backlog IDEA-09; the human briefing may later be one panel of the slice-7a dashboard.
 
@@ -12,7 +14,7 @@
 
 **Tech Stack:** as V-A; no new dependency.
 
-**Spec:** `docs/specs/slice-7b-views-writing.md` rulings 23, 24, 25; acceptance 14; proposed R-xx(w4). Decisions 36, 37.14, 43, 48, 52 (withholding rules).
+**Spec:** `docs/specs/slice-7b-views-writing.md` rulings 23, 24, 25; acceptance 14; R-133. Decisions 36, 37.14, 43, 48, 52 (withholding rules).
 
 ## Rulings made in this plan
 1. **Sections [confirm].** (1) Question: raw goal, elements, non-goals, `Q@`. (2) Protocol: current `P@`, rigor mode, method profile, amendments (id, date, reason, semantic flag) newest first, deviations. (3) Gates: PRESS confirmation, calibration results per pass (human view only), agreement and audits (human view only), with dates. (4) Corpus: PRISMA counts, last search date per source. (5) Reading path: confirmed ideas in lineage order (W-A outline order rule), each with origin work (title, year, key) and up to 5 members, followed by the shortest `path` from the earliest origin to each most recent member (G2-D `path`, default filter). (6) Evidence: comparability groups with work counts (no values). (7) Open issues: `check` findings by code and count. (8) Pending human decisions: screening disagreements, `unsure`, unlabelled audits, inferred relations and ideas awaiting confirmation, unreviewed interpretations, unresolved manuscript citations (counts and ids). (9) Drafts: released drafts with status counts.
@@ -35,7 +37,15 @@
 - Create `services/briefing.py`, `views/briefing_render.py`, `index/briefings.py`; Modify `model/views.py`, event catalog, `index/default.py`, `services/check.py`, `services/trace.py`, `mcp/server.py`, `cli/main.py`.
 - Tests: `tests/test_briefing.py`, `tests/test_briefing_agent.py`, `tests/test_briefing_served.py`, `tests/test_briefing_cli_mcp.py`.
 
-### Task 1: Briefing builder (human view)
+## Self-review notes
+- A briefing names no person's performance; supervision metrics are IDEA-10 (slice 5).
+- `briefing-stale` is advisory; acting on it (re-serving a pack) is the session's choice.
+
+## Later (not v1)
+
+Moved here by the v1 cut of 2026-11-04 (decision 74); built after the v1 plans of the build order (`2026-11-05-build-order.md`), in the order listed. Task text is unchanged; references to "Task N" inside a moved task use the plan's original numbering.
+
+### Later L1 (was Task 1): Briefing builder (human view)
 
 *Tier: standard.*
 
@@ -48,7 +58,7 @@
 - [ ] **Step 1: Tests.** `test_sections_from_fixture` (each section against hand values); `test_amendments_newest_first`; `test_reading_path_in_lineage_order`; `test_no_values_in_evidence_section`; `test_deterministic_across_rebuilds`; `test_empty_project_briefing` (no protocol yet: sections present, empty, notices).
 - [ ] **Step 2–4.** **Step 5:** Commit `feat(briefing): project briefing builder`.
 
-### Task 2: Agent view and bound
+### Later L2 (was Task 2): Agent view and bound
 
 *Tier: critical (held-out discipline).*
 
@@ -61,7 +71,7 @@
 - [ ] **Step 1: Tests.** `test_agent_pack_withholds` (Review Focus 1); `test_gates_reduced_to_passed`; `test_truncation_order` (Review Focus 3); `test_pack_within_bound`; `test_pack_deterministic`.
 - [ ] **Step 2–4.** **Step 5:** Commit `feat(briefing): agent context pack with withholding`.
 
-### Task 3: Recording served packs; check and trace
+### Later L3 (was Task 3): Recording served packs; check and trace
 
 *Tier: standard.*
 
@@ -73,7 +83,7 @@
 - [ ] **Step 1: Tests.** `test_served_records_session_and_as_of`; `test_served_idempotent` (Review Focus 2); `test_briefing_stale_after_amendment`; `test_trace_briefing_lists_sessions`; `test_rebuild_identical`.
 - [ ] **Step 2–4.** **Step 5:** Commit `feat(briefing): record served context packs`.
 
-### Task 4: Rendering, MCP tool, CLI
+### Later L4 (was Task 4): Rendering, MCP tool, CLI
 
 *Tier: standard.*
 
@@ -86,7 +96,3 @@
 
 - [ ] **Step 1: Tests.** Tool list pinned; pass session refused; CLI Markdown contains each section heading; `--agent` output equals `agent_pack`; CLI writes no event.
 - [ ] **Step 2–4.** **Step 5:** Commit `feat(briefing): briefing tool and command`.
-
-## Self-review notes
-- A briefing names no person's performance; supervision metrics are IDEA-10 (slice 5).
-- `briefing-stale` is advisory; acting on it (re-serving a pack) is the session's choice.

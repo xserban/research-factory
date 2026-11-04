@@ -2,7 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> Status: draft — rulings recommended; awaiting the researcher's review before any build.
+> **Status: Accepted 2026-11-04 (researcher's instruction: build everything, MVP v1; recommended rulings adopted).**
+
+> **Reconciled 2026-11-04 (cross-spec reconciliation, decision 75; v1 cut, decision 74).** Slice 3d is merged first: the regions overlay reads reviewed focus-region snapshots (`regions_of`), empty with a stated notice when none exist. No projection change.
 
 > **Dependencies.** G2-D merged (`graph_nodes`, `graph_edges` with indexes on `(source, edge_type)`, `(target, edge_type)`; `GraphFilter`; overlays in `services/lineage.py`); G3-C merged (layer stays out of this view); G1 `included_works`. X-A is independent. The regions overlay is a stub until the slice-3 regions plan lands (it fills `OnionNode.regions`); a 7a presenter may consume the JSON. When slice M lands, `view_*` builders register as builder modules without signature change.
 
@@ -140,3 +142,7 @@ def test_onion_scale(synthetic): ...                     # 1e5 works, 1e6 cites 
 ## Self-review notes
 - Regions: `OnionNode.regions` is always empty until the regions plan adds a provider; Markdown prints "regions: not defined in this project" as a notice, so the empty column is explained.
 - `Index.head()` is the only change to the index module; no table, no projection version change.
+
+## Later (not v1)
+
+None: every task of this plan is in v1.

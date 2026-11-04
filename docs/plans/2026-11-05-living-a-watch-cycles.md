@@ -2,7 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> **Status: draft — rulings recommended; awaiting the researcher's review before any build.**
+> **Status: Accepted 2026-11-04 (researcher's instruction: build everything, MVP v1; recommended rulings adopted).**
+
+> **Reconciled 2026-11-04 (cross-spec reconciliation, decision 75; v1 cut, decision 74).** v1 cut: Task 7 (scale test) moved to Later. Task 4 bumps `PROJECTION_VERSION` by one from the value it finds; the watch module (kind `retrieval`) is declared for slice M there. Task 5's `network` test of the window filters stays in v1.
 
 > **Dependencies.** Slice 1, slice 2 plans A–E and slice 3a (G1, for the snowball round authorisation pattern) merged. Slice M (module contract) is not required: the cycle is a hand-written service and moves behind the contract later without changing events. Sub-plans living-B, -C and -D consume this plan's Interfaces blocks exactly.
 
@@ -183,16 +185,6 @@ def test_reads_bounded_by_batch(monkeypatch): ...       # spy on list_works: nev
 - [ ] **Step 2–4:** fail, implement, `uv run pytest tests/test_cli_watch.py tests/test_mcp*.py -q`.
 - [ ] **Step 5: Commit** `feat(living): factory watch command and MCP watch tools`.
 
-### Task 7: Scale test
-
-*Tier: standard.*
-
-**Files:** Test `tests/test_watch_scale.py` (`@pytest.mark.slow`).
-
-- [ ] **Step 1:** Build a synthetic project with 2·10^5 works (generated records ingested through `search.records_parsed` events in pages of 1,000) and a fake source returning 10^4 records of which 5 % duplicate existing works by DOI and 2 % by title. Run one cycle. Assert: the merges equal a `dedup_run` on a copy; `tracemalloc` peak below a bound proportional to `DEDUP_BATCH` (not to corpus size; the bound is calibrated once and pinned in the test with a comment); wall time recorded, not asserted.
-- [ ] **Step 2:** `uv run pytest -m slow tests/test_watch_scale.py -q`.
-- [ ] **Step 3: Commit** `test(living): watch cycle scale test`.
-
 ## Verification
 
 `uv run pytest -m "not network and not slow" -q && uv run mypy --strict src && uv run ruff check src tests` from `platform/`.
@@ -202,3 +194,17 @@ def test_reads_bounded_by_batch(monkeypatch): ...       # spy on list_works: nev
 - Every count in `watch.cycle_finished` is recomputed in a test from the run events.
 - No new code path writes the index; `index/watch.py` is a projector module.
 - `full` queries reuse their registered query ids, so the PRISMA-S report shows one query row with many dated runs; `window` queries are separate rows tied to their cycle.
+
+## Later (not v1)
+
+Moved here by the v1 cut of 2026-11-04 (decision 74); built after the v1 plans of the build order (`2026-11-05-build-order.md`), in the order listed. Task text is unchanged; references to "Task N" inside a moved task use the plan's original numbering.
+
+### Later L1 (was Task 7): Scale test
+
+*Tier: standard.*
+
+**Files:** Test `tests/test_watch_scale.py` (`@pytest.mark.slow`).
+
+- [ ] **Step 1:** Build a synthetic project with 2·10^5 works (generated records ingested through `search.records_parsed` events in pages of 1,000) and a fake source returning 10^4 records of which 5 % duplicate existing works by DOI and 2 % by title. Run one cycle. Assert: the merges equal a `dedup_run` on a copy; `tracemalloc` peak below a bound proportional to `DEDUP_BATCH` (not to corpus size; the bound is calibrated once and pinned in the test with a comment); wall time recorded, not asserted.
+- [ ] **Step 2:** `uv run pytest -m slow tests/test_watch_scale.py -q`.
+- [ ] **Step 3: Commit** `test(living): watch cycle scale test`.

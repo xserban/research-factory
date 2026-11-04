@@ -2,7 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> **Status: draft — rulings recommended; awaiting the researcher's review before any build.**
+> **Status: Accepted 2026-11-04 (researcher's instruction: build everything, MVP v1; recommended rulings adopted).**
+
+> **Reconciled 2026-11-04 (cross-spec reconciliation, decision 75; v1 cut, decision 74).** v1 cut: Task 6 keeps Step 1 (fixture acceptance 1–14) and its verification; the scale test (Step 2, `tests/test_living_notice_scale.py`) and the manual pilot (Step 3) moved to Later. `conclusion.registered` is the gate `living.conclusion_register` (floor `human`); the conclusions/digest builder owns its system events (slice-M reconciliation item 3). Bumps `PROJECTION_VERSION` by one from the value it finds.
 
 > **Dependencies.** Plans living-A, living-B and living-C merged (cycles, snapshots and `SnapshotBlob`, `prisma_update`, `work_states`, version findings). Plan 2E (evidence report) merged. Slice 3b optional: the `path-exists` predicate is registered only when `services/lineage.py` exists.
 
@@ -134,17 +136,15 @@
 - [ ] **Step 2–4:** fail, implement, `uv run pytest tests/test_cli_living.py tests/test_mcp*.py tests/test_skills*.py -q`.
 - [ ] **Step 5: Commit** `feat(living): digest and conclusion commands, MCP views, rf-living skill`.
 
-### Task 6: Slice acceptance and scale
+### Task 6: Slice acceptance
 
 *Tier: standard.*
 
-**Files:** Test `tests/test_acceptance_living.py`, `tests/test_living_notice_scale.py`; Modify `docs/runbook-living.md` (pilot steps).
+**Files:** Test `tests/test_acceptance_living.py`; Modify `docs/runbook-living.md` (operator steps for an external scheduler; pilot steps are Later L2).
 
 - [ ] **Step 1: Acceptance (fixtures, offline).** One test per spec acceptance criterion 1–14, on a pilot-mode living-review project built with `watch_helpers` and `evidence_helpers`: two cycles (arXiv window, OpenAlex full), new works screened by two scripted passes in separate sessions, one extracted better row, one Crossref retraction on an included work, one correction assessed `affects`, one version-of-record link, one registered conclusion, two snapshots, a recorded digest; then `factory rebuild` and state-hash equality. Names `test_ac01_hash_stability` … `test_ac14_rebuild`.
-- [ ] **Step 2: Scale (`slow`).** 10^4 dependent works, `notice_budget = 500`: coverage complete after 20 cycles, each cycle's peak memory bounded by the budget (`tracemalloc`), `work_states` read by indexed queries only (spy: no `list_works`).
-- [ ] **Step 3: Pilot (manual, recorded in `docs/pilot/log.md` by the researcher, not by the build).** The runbook lists: declare `watch_plan` by amendment, run two weekly cycles, register one conclusion on a linear-attention group, record a snapshot and a digest. The build does not run the pilot.
-- [ ] **Step 4:** `uv run pytest -m "not network and not slow" -q && uv run pytest -m slow tests/test_acceptance_living.py tests/test_living_notice_scale.py -q`.
-- [ ] **Step 5: Commit** `test(living): slice 4b acceptance and scale`.
+- [ ] **Step 2:** `uv run pytest -m "not network and not slow" -q && uv run pytest -m slow tests/test_acceptance_living.py -q`.
+- [ ] **Step 3: Commit** `test(living): slice 4b acceptance`.
 
 ## Verification
 
@@ -154,4 +154,12 @@
 
 - No digest field is typed by a person or an agent; `open_decisions` counts come from the existing status services (`screen_agreement` disagreement count read through the CLI-side service, `audit_outstanding`, `notice_state`, slice-3a/3b status where present).
 - Conclusion statements stay in human events and the CLI; the agent never sees them through this slice's tools.
-- The slice's *Proposed* decision entry (spec, "Proposed decisions") is drafted in `docs/decisions.md` only when the researcher accepts the rulings, not by this plan.
+- The slice's decisions are recorded as decisions 62 and 63 (accepted 2026-11-04); this plan adds none.
+
+## Later (not v1)
+
+Moved here by the v1 cut of 2026-11-04 (decision 74); built after the v1 plans of the build order (`2026-11-05-build-order.md`), in the order listed. Task text is unchanged; references to "Task N" inside a moved task use the plan's original numbering.
+
+### Later L1: Notice scale test (was Task 6 Step 2, `slow`): 10^4 dependent works, `notice_budget = 500`: coverage complete after 20 cycles, each cycle's peak memory bounded by the budget (`tracemalloc`), `work_states` read by indexed queries only (spy: no `list_works`). File `tests/test_living_notice_scale.py`.
+
+### Later L2: Pilot (was Task 6 Step 3; manual, recorded in `docs/pilot/log.md` by the researcher, not by the build): declare `watch_plan` by amendment, run two weekly cycles, register one conclusion on a linear-attention group, record a snapshot and a digest.

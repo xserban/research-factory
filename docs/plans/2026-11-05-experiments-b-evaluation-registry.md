@@ -1,10 +1,12 @@
-# Evaluation, Multiverse, Ledger, Failed-Directions Registry and Slice-6 Acceptance Implementation Plan (slice 6, sub-plan X-B)
+# Evaluation, Multiverse, Ledger, Failed-Directions Registry and Slice-6 Acceptance Implementation Plan (slice 6, sub-plan XP-B)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> Status: draft — rulings recommended; awaiting the researcher's review before any build.
+> **Status: Accepted 2026-11-04 (researcher's instruction: build everything, MVP v1; recommended rulings adopted).**
 
-> **Dependencies.** X-A merged (Interfaces consumed exactly: `ExperimentDesign`, `Cell`, `primary_cells`, `universes`, `experiment_view`, `xrun_list`, `access_counts`, `baseline_verdicts`, tables `xruns`, `baseline_evaluations`, `experiment_deviations`); H-A–H-C merged (`HypothesisSpec`, `DecisionRule`, `hypothesis_view`, `cutoff_flags`, `PRIOR_SOURCES`, `list_leads`, `card_view`, `resolve_idea`); plan 2E (`evidence_report`, `EvidenceRow`, `GroupReport`, `group_id`); `services/methods.py`, `services/check.py`, `services/trace.py`. When slice M lands, `evaluate`, `ledger` and the registry declare their inputs as builders; their outputs do not change.
+> **Reconciled 2026-11-04 (cross-spec reconciliation, decision 75; v1 cut, decision 74).** This plan is XP-B. The ledger of Task 5 is the benchmark ledger: `services/benchmark_ledger.py`, `tests/test_benchmark_ledger.py`, MCP `benchmark_ledger_view`, CLI `factory benchmark-ledger` (slice 5 owns `ledger`). `DirectionReason.BUDGET_EXHAUSTED` has the value `compute-budget-exhausted`. Task 8's "Proposed decision" is decisions 67–68, already recorded. Task 8's acceptance uses constructed runs and stays in v1; the pilot with real runs is Later (spec v1 scope). Bumps `PROJECTION_VERSION` by one from the value it finds.
+
+> **Dependencies.** XP-A merged (Interfaces consumed exactly: `ExperimentDesign`, `Cell`, `primary_cells`, `universes`, `experiment_view`, `xrun_list`, `access_counts`, `baseline_verdicts`, tables `xruns`, `baseline_evaluations`, `experiment_deviations`); H-A–H-C merged (`HypothesisSpec`, `DecisionRule`, `hypothesis_view`, `cutoff_flags`, `PRIOR_SOURCES`, `list_leads`, `card_view`, `resolve_idea`); plan 2E (`evidence_report`, `EvidenceRow`, `GroupReport`, `group_id`); `services/methods.py`, `services/check.py`, `services/trace.py`. When slice M lands, `evaluate`, `ledger` and the registry declare their inputs as builders; their outputs do not change.
 
 **Goal:** Compute the outcome of every registered hypothesis from recorded results by its registered rule, with the flags that qualify it; summarise multiverse, ablations and controls; show reported against reproduced results in a ledger that never alters the evidence report; keep every refuted, inconclusive or abandoned direction searchable with its conditions; and make all of it visible in `check`, `trace` and the methods report.
 
@@ -12,7 +14,7 @@
 
 **Tech Stack:** as plan D; no new dependencies (no numpy, no scipy: decimals and an embedded quantile table).
 
-**Spec:** `docs/specs/slice-6-hypotheses.md` rulings 16, 17, 22, 23, 25, 26, 27; Design "Evaluation, reproduction and ledger", "Failed-directions registry"; events `hypothesis.evaluated`, `direction.closed`; MCP `registry_query`, `ledger_view`; CLI `hypotheses evaluate|conclude`, `ledger`, `registry`, `directions close`; check findings; acceptance 15, 18–25. `01-rigour.md` R-01, R-05, R-50–R-54; proposed R-xx(i), R-xx(l), R-xx(m).
+**Spec:** `docs/specs/slice-6-hypotheses.md` rulings 16, 17, 22, 23, 25, 26, 27; Design "Evaluation, reproduction and ledger", "Failed-directions registry"; events `hypothesis.evaluated`, `direction.closed`; MCP `registry_query`, `ledger_view`; CLI `hypotheses evaluate|conclude`, `ledger`, `registry`, `directions close`; check findings; acceptance 15, 18–25. `01-rigour.md` R-01, R-05, R-50–R-54; R-121, R-124, R-125.
 
 ## Rulings made in this plan (recommended; [confirm])
 
@@ -47,7 +49,7 @@
 
 - Create `factory/hypotheses/tquantiles.py`, `factory/hypotheses/stats.py`, `factory/hypotheses/pairing.py`, `factory/hypotheses/rules.py`, `services/evaluation.py`, `services/multiverse.py`, `services/ledger.py`, `services/directions.py`, `model/directions.py`, `index/directions.py`.
 - Modify `model/hypotheses.py` (`HypothesisEvaluated`), `index/hypotheses.py`, `services/hypotheses.py` (conclude), `services/xruns.py` (auto-evaluate hook), `services/check.py`, `services/trace.py`, `services/methods.py`, `events/catalog.py`, `index/default.py`, `mcp/server.py`, `cli/main.py`, `cli/render.py`.
-- Tests: `test_tquantiles.py`, `test_stats.py`, `test_pairing_rules.py`, `test_evaluation.py`, `test_multiverse.py`, `test_ledger.py`, `test_directions.py`, `test_slice6_check_trace_methods.py`, `test_slice6_acceptance.py` (slow); helper `tests/evaluation_helpers.py` (X-A fixtures plus `report_runs(experiment, {(arm, seed): value, ...})` that registers and ingests runs from a table).
+- Tests: `test_tquantiles.py`, `test_stats.py`, `test_pairing_rules.py`, `test_evaluation.py`, `test_multiverse.py`, `test_benchmark_ledger.py`, `test_directions.py`, `test_slice6_check_trace_methods.py`, `test_slice6_acceptance.py` (slow); helper `tests/evaluation_helpers.py` (XP-A fixtures plus `report_runs(experiment, {(arm, seed): value, ...})` that registers and ingests runs from a table).
 
 ---
 
@@ -107,7 +109,7 @@
 
 *Tier: standard.*
 
-**Files:** Create `services/ledger.py`; Test `tests/test_ledger.py`.
+**Files:** Create `services/benchmark_ledger.py`; Test `tests/test_benchmark_ledger.py`.
 
 **Interfaces:**
 - Consumes: `evidence_report`, `GroupReport`, `EvidenceRow`, `baseline_evaluations`, `hypothesis_evaluations`, `experiment_view`.
@@ -149,8 +151,8 @@
 **Files:** Modify `mcp/server.py`, `cli/main.py`, `cli/render.py`, `tests/test_plugin.py`; Test `tests/test_slice6_acceptance.py` (marked `slow`).
 
 **Interfaces:**
-- MCP: `registry_query(project, keys=[], reasons=None, limit=50, after=None)`; `ledger_view(project, group_id=None)`; `hypothesis_view` extended with the latest evaluation, the specification curve and controls. Refused to pass sessions.
-- CLI: `factory hypotheses evaluate HYP [--incomplete]|conclude HYP --text T`; `factory ledger [--group G]`; `factory registry [--key K]… [--reason R]…`; `factory directions close --text T --reason R --key K… [--condition K=V]…`.
+- MCP: `registry_query(project, keys=[], reasons=None, limit=50, after=None)`; `benchmark_ledger_view(project, group_id=None)`; `hypothesis_view` extended with the latest evaluation, the specification curve and controls. Refused to pass sessions.
+- CLI: `factory hypotheses evaluate HYP [--incomplete]|conclude HYP --text T`; `factory benchmark-ledger [--group G]`; `factory registry [--key K]… [--reason R]…`; `factory directions close --text T --reason R --key K… [--condition K=V]…`.
 
 - [ ] **Step 1: Tests.** Surfaces: tool list pinned; no tool writes an evaluation. Acceptance (`slow`): one fixture project runs the spec's pilot flow with constructed runs — vocabulary, two method cards (one imported), a problem description, `match_query` with one transfer row, a conflict and a gap, a lead citing the match row, a draft, an independent critic review, human registration, a design with one baseline and a two-axis multiverse, freeze, reproduction runs, unlock, primary runs, evaluation (refuted), registry row, lead `prior` of a second lead lists it; then `factory rebuild` gives the same state hash; the differential test (evidence report, `final_rows`, `live_claims`, PRISMA counts byte-identical with and without slice-6 events) passes (acceptance 20, 24, 25 in fixture form).
 - [ ] **Step 2:** `uv run pytest -m "slow" tests/test_slice6_acceptance.py` and the dev suite — FAIL. **Step 3:** Implement surfaces; fix any integration gap found. **Step 4:** Full suite including `slow`; mypy; ruff; coverage. **Step 5:** Commit `test(slice6): end-to-end acceptance and surfaces`.
@@ -158,5 +160,9 @@
 ## Self-review notes
 
 - **Spec coverage.** Rulings 16, 17, 22, 23, 25, 26, 27; acceptance 15 (Task 2), 18 (Tasks 1–3), 19 (Task 4), 20 (Tasks 5, 8), 21 (Task 6), 22–23 (Task 7), 24–25 (Task 8; the real-run pilot is a researcher activity after build).
-- **Rulings record.** When built, Task 8's commit adds one *Proposed* decision collecting the slice-6 spec rulings and the plan rulings of H-A–X-B, as earlier slices did.
+- **Rulings record.** When built, Task 8's commit adds one *Proposed* decision collecting the slice-6 spec rulings and the plan rulings of H-A–XP-B, as earlier slices did.
 - **Tiers.** Tasks 1–3 and 6 critical; 4, 5, 7 standard (trace reviewed as critical); 8 Haiku/Sonnet.
+
+## Later (not v1)
+
+None: every task of this plan is in v1.

@@ -2,7 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> Status: draft — rulings recommended; awaiting the researcher's review before any build.
+> **Status: Accepted 2026-11-04 (researcher's instruction: build everything, MVP v1; recommended rulings adopted).**
+
+> **Reconciled 2026-11-04 (cross-spec reconciliation, decision 75; v1 cut, decision 74).** Label applications are `lbl_<ULID>` (draft `lab_`). Gates `labels.application_confirm`, `consolidation.decide`, `terms.promote` are slice-M decision gates (floor `human`). Task 6's acceptance covers adoption only when Regions-B's Later adoption task is built; its researcher-run pilot step moved to Later. Bumps `PROJECTION_VERSION` by one from the value it finds.
 
 > **Dependencies.** Regions-A merged (Regions-B recommended first, for the acceptance task); slice 3b G2-C (`idea.merged`/`idea.unmerged`) and slice 3c G3-B (`concept.merged`/`concept.unmerged`) merged. Import-B optional: Zotero tags arrive as labels only if imports exist (Task 1).
 
@@ -52,7 +54,7 @@
 
 **Interfaces:**
 - Consumes: `quote_in_element`, pinned conversions, target existence (works, live ideas, live concepts).
-- Produces: `class LabelApplied(StrictModel)`: `application_id` (`lab_<ULID>`), `target_type: MemberType`, `target`, `text`, `key`, `quote: QuoteBasis | None`, `status: Literal["confirmed", "stated", "inferred"]` (computed by the platform), `origin: Literal["agent", "human", "import-tag"]`, `import_ref: str | None` (record key); `LabelWithdrawn(application_id, reason)`; `LabelApplicationDecided(application_id, decision: Literal["confirm", "reject"])` (human); `apply_labels(project, actor, items: Sequence[LabelInput]) -> BatchResult` (partial acceptance; agent quotes verified); `withdraw_label(...)`; `decide_application(...)` (human only); `labels_of(project, target_type, target) -> list[LabelView]`. Import-B records: `import_tags_as_labels(project, import_id) -> int` (human actor, origin `import-tag`, status `confirmed`) run by `factory import admit` and `factory import resolve` for resolved records.
+- Produces: `class LabelApplied(StrictModel)`: `application_id` (`lbl_<ULID>`), `target_type: MemberType`, `target`, `text`, `key`, `quote: QuoteBasis | None`, `status: Literal["confirmed", "stated", "inferred"]` (computed by the platform), `origin: Literal["agent", "human", "import-tag"]`, `import_ref: str | None` (record key); `LabelWithdrawn(application_id, reason)`; `LabelApplicationDecided(application_id, decision: Literal["confirm", "reject"])` (human); `apply_labels(project, actor, items: Sequence[LabelInput]) -> BatchResult` (partial acceptance; agent quotes verified); `withdraw_label(...)`; `decide_application(...)` (human only); `labels_of(project, target_type, target) -> list[LabelView]`. Import-B records: `import_tags_as_labels(project, import_id) -> int` (human actor, origin `import-tag`, status `confirmed`) run by `factory import admit` and `factory import resolve` for resolved records.
 - Projection `labels(application_id, target_type, target, key, live_key, status, origin, withdrawn)`, indexes `(key)`, `(target)`.
 
 - [ ] **Step 1: Tests.** `test_human_application_confirmed`, `test_agent_quote_with_key_stated`, `test_agent_without_quote_inferred`, `test_non_verbatim_quote_rejected_batch_partial`, `test_key_normalisation`, `test_withdraw_supersedes`, `test_import_tags_become_confirmed_labels`, `test_labels_not_in_graph_tables`.
@@ -106,20 +108,25 @@
 - Produces MCP: `label_apply(items)`, `consolidation_next()`, `consolidation_propose(task_id, action, into, members, reason, quotes)`, `term_list(offset, limit)`; refused to pass sessions.
 - Produces CLI: `factory labels list|apply|withdraw|merge|unmerge|confirm|reject`, `factory terms promote|revise|retire|list|suggest`, `factory consolidation status|start|list|decide|complete`, `factory graph export --with-labels` (labels and terms with `class = organisation` on every row; default export unchanged).
 - Produces findings: `consolidation-due`, `label-application-unconfirmed`, `term-unused`, `organisation-leak` (error, all modes: any evidence output — `final_rows`, groups, frontiers, `live_claims`, PRISMA, `search_report`, `report_methods` counts — containing a `reg_`, `R@`, `lab_` or `trm_` id).
-- Produces trace: `lab_`, `trm_`, `cns_`, `cnp_` ids → actor, provenance, quote, merges and decisions.
+- Produces trace: `lbl_`, `trm_`, `cns_`, `cnp_` ids → actor, provenance, quote, merges and decisions.
 - Separation tests: AST architecture test (no module among `services/extraction*.py`, `services/evidence*.py`, `services/prisma.py`, `services/methods.py`, `services/screening*.py`, `evidence/` imports `factory.regions`, `factory.consolidation`, `services.regions`, `services.labels`, `services.consolidation` or `services.coverage`); differential test (fixture built twice, with and without regions, labels and terms; evidence outputs byte-identical).
 
 - [ ] **Step 1: Tests.** `test_architecture_no_organisation_imports`, `test_differential_evidence_identical`, `test_organisation_leak_fires_on_constructed_leak`, `test_default_export_unchanged`, `test_with_labels_rows_carry_class`, one per finding, `test_tools_refuse_pass_sessions`, `test_skill_hash_recorded`.
 - [ ] **Step 2–5:** Run, FAIL; implement; tests, mypy, ruff; commit `feat(labels): tools, separation tests, check and trace`.
 
-### Task 6: Slice-3d regions acceptance and pilot
+### Task 6: Slice-3d regions acceptance
 
 *Tier: standard.*
 
-**Files:** Create `tests/test_acceptance_regions.py`; pilot notes in `docs/pilot/log.md` only if the pilot is run (never open `docs/pilot/heldout-seeds.md`).
+**Files:** Create `tests/test_acceptance_regions.py`; pilot notes belong to Later L1.
 
 - [ ] **Step 1: Tests**, one per spec acceptance criterion 1–10 and 17 (region part), on the region helper project: rule determinism and order independence; bounds refusal and the `slow` scale test; version hash sensitivity and the `slow` replay-to-`as_of` test (events up to `as_of` replayed into a fresh index; same member hash); review and proposals; foci; adoption; labels; consolidation; promotion; separation; rebuild and trace.
-- [ ] **Step 2:** Pilot (researcher-run, recorded in the pilot log): two foci on the pilot question's slots, one lineage region from a base attention formulation, one consolidation pass with at least one label merge and one promoted term; report counts (members by type, drift, unreviewed, pending proposals, applications by status).
-- [ ] **Step 3:** `uv run pytest -m "not network"` including `slow`; mypy; ruff. **Step 4:** Commit `test(regions): slice-3d regions acceptance`.
+- [ ] **Step 2:** `uv run pytest -m "not network"` including `slow`; mypy; ruff. **Step 3:** Commit `test(regions): slice-3d regions acceptance`.
 
 **Verification for the plan:** `cd platform && uv run pytest -m "not network" && uv run mypy --strict src && uv run ruff check`.
+
+## Later (not v1)
+
+Moved here by the v1 cut of 2026-11-04 (decision 74); built after the v1 plans of the build order (`2026-11-05-build-order.md`), in the order listed. Task text is unchanged; references to "Task N" inside a moved task use the plan's original numbering.
+
+### Later L1: Pilot run (was Task 6 Step 2). Researcher-run, recorded in the pilot log: two foci on the pilot question's slots, one lineage region from a base attention formulation, one consolidation pass with at least one label merge and one promoted term; report counts (members by type, drift, unreviewed, pending proposals, applications by status). Never open `docs/pilot/heldout-seeds.md`.

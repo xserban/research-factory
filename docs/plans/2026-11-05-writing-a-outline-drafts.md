@@ -2,7 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> Status: draft — rulings recommended; awaiting the researcher's review before any build.
+> **Status: Accepted 2026-11-04 (researcher's instruction: build everything, MVP v1; recommended rulings adopted).**
+
+> **Reconciled 2026-11-04 (cross-spec reconciliation, decision 75; v1 cut, decision 74).** Writing is a `proposal` module for slice M. Supports of class `organisation` or `test` are not eligible in v1. Bumps `PROJECTION_VERSION` by one from the value it finds.
 
 > **Dependencies.** V-B merged (`group_index`, `rows_of_group`, `view_meta`, `Index.head`). Plans D and 2E (`live_claims`, `final_rows`, `group_id`, `numbers_in`, `CITATION_PATTERNS`), G1 (`surname_key`), G2-A–E (contribution rows, relations, ideas, `RelationView.effective`, `no_stated_base`, trace kinds), G3-A–C (interpretation and concept review states, the separation architecture test) merged. W-B consumes this plan's Interfaces exactly. When slice M lands, drafting becomes an authoring module whose quality regime is W-B's verifier; no event changes.
 
@@ -147,3 +149,7 @@ def test_no_text_in_issues(): ...                                  # issue messa
 ## Self-review notes
 - Status (`supported`, `flagged`, `stale`) is W-B's; this plan computes and stores only refusals and flags.
 - `group_conflicts` and `group_direction` (V-B) are promotions of 2E internals with behaviour-preserving tests; the evidence report output is unchanged (2E snapshot test).
+
+## Later (not v1)
+
+None: every task of this plan is in v1.

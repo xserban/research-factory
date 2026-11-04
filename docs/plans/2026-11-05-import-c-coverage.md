@@ -2,7 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> Status: draft — rulings recommended; awaiting the researcher's review before any build.
+> **Status: Accepted 2026-11-04 (researcher's instruction: build everything, MVP v1; recommended rulings adopted).**
+
+> **Reconciled 2026-11-04 (cross-spec reconciliation, decision 75; v1 cut, decision 74).** Coverage bucket `found-supplementary` counts `citation-chase`, `seed-admission` and `hand-search` only; a work whose only non-import provenance is `supplied` is not found (spec reconciliation item 2); add `test_supplied_only_is_not_found` to Task 1. Regions-A is merged first in the build order, so Task 5's `import` region rule is added in Regions-A, not here.
 
 > **Dependencies.** Import-A and Import-B merged. If Regions-A is merged first, Task 5 adds the `import` region rule there instead of here (spec, Proposed sub-plans).
 
@@ -103,3 +105,7 @@
 - [ ] **Step 2:** Run; fix only defects found (each fix its own commit with a test). **Step 3:** `uv run pytest -m "not network"` including `slow`; mypy; ruff. **Step 4:** Commit `test(imports): slice-3d import acceptance`.
 
 **Verification for the plan:** `cd platform && uv run pytest -m "not network" && uv run mypy --strict src && uv run ruff check`.
+
+## Later (not v1)
+
+None: every task of this plan is in v1.

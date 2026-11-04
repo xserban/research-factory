@@ -2,7 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> **Status: draft — rulings recommended; awaiting the researcher's review before any build.**
+> **Status: Accepted 2026-11-04 (researcher's instruction: build everything, MVP v1; recommended rulings adopted).**
+
+> **Reconciled 2026-11-04 (cross-spec reconciliation, decision 75; v1 cut, decision 74).** v1 cut: Task 7 (OAuth resource server and the manual client-session test) moved to Later; personal access tokens are the v1 credential. The residual risk of spec open question 1 (a client splitting one conversation into several transport sessions) is accepted for v1 and tested when the Later task runs; deploy-C does not wait for it.
 
 > **Dependencies.** deploy-A and teams-A merged (`Principal`, `verify_token`, `authorize`, `TOOL_PERMISSIONS`, `AccessLog`, `Project.writing()`). May run in parallel with teams-B, teams-C and teams-D; each of those adds tools whose `TOOL_PERMISSIONS` rows this plan's enforcement picks up without change.
 
@@ -132,7 +134,11 @@ async def test_events_carry_credential(app, token_a): ...  # actor.credential ==
 - [ ] **Step 2–4:** Fail, implement, pass.
 - [ ] **Step 5:** Commit `feat(cli): serve over HTTP`.
 
-### Task 7: OAuth resource server (OIDC tokens) and client session test
+## Later (not v1)
+
+Moved here by the v1 cut of 2026-11-04 (decision 74); built after the v1 plans of the build order (`2026-11-05-build-order.md`), in the order listed. Task text is unchanged; references to "Task N" inside a moved task use the plan's original numbering.
+
+### Later L1 (was Task 7): OAuth resource server (OIDC tokens) and client session test
 
 *Tier: standard.*
 

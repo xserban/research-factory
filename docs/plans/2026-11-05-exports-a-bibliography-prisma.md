@@ -2,7 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> Status: draft — rulings recommended; awaiting the researcher's review before any build.
+> **Status: Accepted 2026-11-04 (researcher's instruction: build everything, MVP v1; recommended rulings adopted).**
+
+> **Reconciled 2026-11-04 (cross-spec reconciliation, decision 75; v1 cut, decision 74).** Task 3's SVG lists the "other methods" keys in the platform order `citation-chase`, `seed-admission`, `hand-search`, `supplied`, `library-import` (slices 4a and 3d are merged first), skipping zeros. No projection change.
 
 > **Dependencies.** Slices 1 and 2 merged (works, dedup, `prisma_flow`, `full_text_boxes`, final outcomes). No dependency on G1–G3; the `draft:` scope is added by W-B (Task 4 there). First plan of slice 7b.
 
@@ -158,3 +160,7 @@ def test_bibliography_scale(synthetic_100k): ...             # < 5 s; peak RSS g
 ## Self-review notes
 - Spec ruling 18's `draft:` scope is deferred to W-B Task 4, which extends `select_works`; this plan's signature leaves room (`ids`).
 - No event is written; no projection change; `PROJECTION_VERSION` untouched.
+
+## Later (not v1)
+
+None: every task of this plan is in v1.

@@ -2,7 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> **Status: draft — rulings recommended; awaiting the researcher's review before any build.**
+> **Status: Accepted 2026-11-04 (researcher's instruction: build everything, MVP v1; recommended rulings adopted).**
+
+> **Reconciled 2026-11-04 (cross-spec reconciliation, decision 75; v1 cut, decision 74).** `CREDIT_MAP_V1` also maps the families of slices 3d, 4a, 4b, 6 and 7b (slice-5 reconciliation item 4) and lists unmapped families. Names: `services/ledger.py`, `ledger_view` and `factory ledger` belong to this plan; slice 6 uses `benchmark_ledger`; `budget-exhausted` is this plan's (slice 6 uses `compute-budget-*`). Bumps `PROJECTION_VERSION` by one from the value it finds.
 
 > **Dependencies.** teams-A merged (`Principal`, `ProjectRole`, `authorize`, `Permission.PROJECT_GOVERN`). Independent of teams-B and teams-C; if teams-C is merged, the ledger counts human screening decisions under Investigation through the same map. deploy-B's per-tool wrapper picks up the new tools' `TOOL_PERMISSIONS` rows.
 
@@ -12,7 +14,7 @@
 
 **Tech Stack:** as slice 2.
 
-**Spec:** `docs/specs/slice-5-teams-deployment.md` rulings 16, 17; Design "Ledger", "Budgets"; proposed R-xx(j); check findings `ledger-unconfirmed`, `budget-exhausted`; acceptance 10, 11.
+**Spec:** `docs/specs/slice-5-teams-deployment.md` rulings 16, 17; Design "Ledger", "Budgets"; R-112; check findings `ledger-unconfirmed`, `budget-exhausted`; acceptance 10, 11.
 
 ## Rulings made in this plan
 
@@ -96,3 +98,7 @@
 - [ ] **Step 1: Tests.** `test_user_budget_refuses_next`, `test_project_budget_refuses_everyone`, `test_refusal_writes_nothing`, `test_search_budget_partial_run` (resumable after the budget is raised), `test_reported_usage_never_enforced`, `test_budget_status_counts`.
 - [ ] **Step 2–4:** Fail, implement, pass.
 - [ ] **Step 5:** Verification `uv run pytest -m "not network and not slow" -q && uv run mypy --strict src && uv run ruff check .`; commit `feat(budgets): enforcement at task issuance and source requests`.
+
+## Later (not v1)
+
+None: every task of this plan is in v1.

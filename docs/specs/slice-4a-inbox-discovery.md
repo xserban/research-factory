@@ -1,6 +1,21 @@
 # Slice 4a — Link inbox and discovery provenance
 
-Status: **draft for the researcher's review — not to be built until accepted** · 2026-11-05 · Outline slice: **4 (living corpus)** of [README.md](README.md). Builds on [00-system.md](00-system.md), slices 1, 2 and 3a (G1 snowball rounds); must satisfy [01-rigour.md](01-rigour.md) R-01–R-05, R-13–R-16, R-21–R-26, R-30–R-39, R-47, R-51. Takes in backlog IDEA-34 (link inbox) and IDEA-35 (discovery record). Rulings marked **[confirm]** are recommendations awaiting the researcher; on acceptance the plan records them as one decision (text proposed at the end).
+Status: Accepted 2026-11-04 (researcher's instruction: build everything, MVP v1; recommended rulings adopted). Decision 61; requirements R-100, R-101. Drafted 2026-11-05 · Outline slice: **4 (living corpus)** of [README.md](README.md). Builds on [00-system.md](00-system.md), slices 1, 2 and 3a (G1 snowball rounds); must satisfy [01-rigour.md](01-rigour.md) R-01–R-05, R-13–R-16, R-21–R-26, R-30–R-39, R-47, R-51. Takes in backlog IDEA-34 (link inbox) and IDEA-35 (discovery record). Rulings marked **[confirm]** are recommendations awaiting the researcher; on acceptance the plan records them as one decision (text proposed at the end).
+
+## Cross-spec reconciliation 2026-11-04
+
+1. **Where inbox and watch records enter the corpus (with slice 4b ruling 6).** One rule for both slices: a record enters the corpus as a pending work when the recorded run that retrieves it finishes, never later and never through a human pre-selection. For a link that run is the `supplied` lookup of `inbox_resolve`; for a watch it is the cycle's search run. A captured but unresolved link (`inbox_items`, status `open`) is intent, not a corpus record, and PRISMA does not count it. The "candidate inbox" of slice 4b is therefore two things: the `inbox_items` table of this slice (links only; `route` stays `link`, watches write no items, which narrows ruling 14) and a computed view of pending works by discovery route.
+2. **Where PRISMA counts them.** `supplied` is fourth in the "other methods" precedence, before slice 3d's `library-import`: `citation-chase`, `seed-admission`, `hand-search`, `supplied`, `library-import`. Any `database` provenance wins (decision 38 item 6). Watch runs are database runs; in the discovery record their route is `database:<source>`, with the watch cycle named as an attribute of the surfacing run, not as a separate route.
+3. **Priority hints.** Slice 4b's `inbox.prioritised` is not defined here; an order imposed on screening would depart from R-34 (randomised order) and is Later, behind a new decision.
+4. **Seed recall (ruling 9).** Decision 54 (held-out recall counts search finds only, recorded concurrently) settles the open point; this slice's `supplied` status follows it.
+5. **Gate.** `inbox.withdraw` is a decision gate with floor `human` (slice M table); the resolve authorisation through `supplied_links` is a computed gate. Modules: `inbox` (`retrieval`), `discovery` (`builder`).
+6. **Requirements** R-xx(a), (b) are R-100, R-101 in [01-rigour.md](01-rigour.md); R-02's method list gains `supplied` there.
+7. **Projection version.** The plan bumps `PROJECTION_VERSION` by one from the value it finds.
+
+## v1 scope
+
+- **v1:** the whole plan `2026-11-05-inbox-discovery.md`: capture, resolve under `supplied_links`, blind screening, seed recall rule, discovery builder, PRISMA, methods, trace, check, tools, synthetic-fixture acceptance.
+- **Later:** publisher-page resolution (`citation_doi`), the pilot run on real links, priority hints (item 3).
 
 ## Goal
 Let the researcher (and, under declared rules, an agent) hand the factory a paper by link, so that it enters the corpus as a **candidate** with its own provenance and is screened under the protocol like any other record; and compute, for every work, **how it was discovered**: which routes found it, whether a human or an agent surfaced it first, and when. Report both in PRISMA, in the methods statement and in a discovery report.
@@ -75,9 +90,9 @@ CLI: `factory inbox add|list|resolve|withdraw`, `factory report discovery [--jso
 ## Rigour requirements
 Existing, in scope: R-01 (chain extended by `inb_` → query → run → record), R-02 (new method value), R-03 (lookup responses archived), R-04 (agent captures carry model, skill, `input_blob`), R-05 (all discovery counts derived), R-13–R-15 (`supplied_links` declared and amended like any section), R-21 (a lookup returning several records is `ambiguous`, never truncated to one), R-22–R-23 (lookups are ordinary query and run records), R-24 (ruling 9), R-25 (supplied works are new-after-dedup "other methods" records), R-26 (dedup unchanged; discovery folds absorbed works), R-30–R-38 (screened as any record; ruling 8), R-39 (methods disclose supplied and agent-suggested works), R-47 (no literature in events; notes are short researcher text, no PDFs), R-51 (ruling 4).
 
-Proposed:
-- **R-xx(a) Discovery is derived.** Every discovery figure is computed from events; route, surfacer and first-surfaced are never typed. All modes.
-- **R-xx(b) Route-blind screening.** Screening and extraction tasks never carry how a work was discovered. P, S.
+Added on acceptance (numbers in [01-rigour.md](01-rigour.md)):
+- **R-100 Discovery is derived.** Every discovery figure is computed from events; route, surfacer and first-surfaced are never typed. All modes.
+- **R-101 Route-blind screening.** Screening and extraction tasks never carry how a work was discovered. P, S.
 
 ## Acceptance criteria
 1. **Capture validation:** a batch with one valid arXiv URL, one DOI URL and one unsupported URL writes two `inbox.link_added` events and returns the third with `unsupported-link`; an agent capture without `basis` writes nothing.
@@ -102,7 +117,7 @@ Scheduled watches and their inbox feed (IDEA-02); digests (IDEA-03); a shared cr
 1. Should `basis = knowledge` agent captures be allowed in `systematic` at all, or only `basis = document`? Recommendation: allowed, declared through `accept_from`, and reported as their own row; the researcher may decline by omitting `agent`. **[confirm]**
 2. Should an item captured after full-text screening finished reopen PRISMA as `provisional`? Recommendation: yes, through the existing rule (a new work is `pending` until screened); no new mechanism. **[confirm]**
 
-## Proposed decision text (for `decisions.md` on acceptance; next free number)
+## Decision text (recorded in `decisions.md` as decision 61, 2026-11-04)
 | # | Topic | Status | Decision |
 | --- | --- | --- | --- |
-| next | Link inbox and discovery provenance (slice 4a) | Proposed | 1) Researcher- or agent-supplied links are captured offline as `inb_` items and resolved by a recorded `supplied`-purpose lookup gated by the protocol section `supplied_links` (or a deviation; ungated in `exploratory`); supplied works enter the corpus with provenance method `supplied` and are screened like any record, by screeners who never see the route. 2) PRISMA counts `supplied` last among "other methods", so decision 38 item 6 is unchanged. 3) For R-24 a seed found only through a supplied link is not retrieved. 4) A session that captured a link cannot join a screening pass. 5) Each work's discovery record (routes, first-surfaced route and actor kind by event order) is computed on read and reported in PRISMA, methods and a discovery report; it never weights screening or evidence. 6) Agent views refuse pass sessions and report seed admission as `other` (extends decision 43) |
+| 61 | Link inbox and discovery provenance (slice 4a) | Decided | 1) Researcher- or agent-supplied links are captured offline as `inb_` items and resolved by a recorded `supplied`-purpose lookup gated by the protocol section `supplied_links` (or a deviation; ungated in `exploratory`); supplied works enter the corpus with provenance method `supplied` and are screened like any record, by screeners who never see the route. 2) PRISMA counts `supplied` last among "other methods", so decision 38 item 6 is unchanged. 3) For R-24 a seed found only through a supplied link is not retrieved. 4) A session that captured a link cannot join a screening pass. 5) Each work's discovery record (routes, first-surfaced route and actor kind by event order) is computed on read and reported in PRISMA, methods and a discovery report; it never weights screening or evidence. 6) Agent views refuse pass sessions and report seed admission as `other` (extends decision 43) |

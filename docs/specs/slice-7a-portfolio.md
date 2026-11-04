@@ -1,6 +1,18 @@
 # Slice 7a — Portfolio view across projects
 
-Status: **draft for the researcher's review — not to be built until accepted** · 2026-11-05 · Outline slice: **7 (views and writing)** of [README.md](README.md). Builds on [00-system.md](00-system.md) and slices 1–2 (`project_status`, screening, extraction, check); must satisfy [01-rigour.md](01-rigour.md) R-01, R-05, R-39 and decision 43. Takes in backlog IDEA-01 (portfolio dashboard). Rulings marked **[confirm]** await the researcher.
+Status: Accepted 2026-11-04 (researcher's instruction: build everything, MVP v1; recommended rulings adopted). Decision 69; no new requirement. Drafted 2026-11-05 · Outline slice: **7 (views and writing)** of [README.md](README.md). Builds on [00-system.md](00-system.md) and slices 1–2 (`project_status`, screening, extraction, check); must satisfy [01-rigour.md](01-rigour.md) R-01, R-05, R-39 and decision 43. Takes in backlog IDEA-01 (portfolio dashboard). Rulings marked **[confirm]** await the researcher.
+
+## Cross-spec reconciliation 2026-11-04
+
+1. **Pending human decisions (ruling 5).** v1 keeps the hand-written list of gate kinds whose services exist on the base, extended with the human gates of the slices built before the portfolio lands. When slice M's gate registry is on the base, `human_queue` enumerates the declared decision gates whose effective policy is `human` (slice-M reconciliation item 4: regions, inbox, notices, hypotheses, drafts), each module supplying its pending count; the gate names in `HumanItem.gate` are slice M's gate ids. Until then the names are the same strings.
+2. **Presentation of slice 7b.** Slice 7b's view documents keep their own `ViewMeta` envelope; the portfolio does not render them in v1 (Later: a portfolio page linking each project's views).
+3. **Stage rule (ruling 4).** Projects with a `watch_plan` (slice 4b) that are otherwise in `reporting` show `living` as their stage; projects with registered hypotheses awaiting runs show `testing` (slice 6). Both rows are added after `snowballing` and only when those modules exist on the base.
+4. **Module kind:** `builder` across projects; it owns no event.
+
+## v1 scope
+
+- **v1:** human queue, stage rule, builder and JSON, Markdown and HTML renderers, CLI (option A; plan Tasks 1–5).
+- **Later:** option C (artifact page from the JSON, a skill-level step), option B (local web UI), the gate-registry-driven human queue of item 1 if slice M lands after the portfolio, the portfolio page of item 2.
 
 ## Goal
 One read-only view of every project under the factory root: rigor mode, stage, open agent work, **pending human decisions** (where a human is blocking), last search, corpus and inclusion counts. Every number is derived from each project's events (R-05); the view writes no event and edits nothing.
@@ -66,7 +78,7 @@ R-05 (every count derived; tested by recomputing from `project_status`); R-01 (e
 ## Out of scope
 Live server (option B); publishing artifacts from the platform (option C is a skill-level step); cross-project suggestions (IDEA-04); literature watches and digests (IDEA-02, IDEA-03); any write action from the view.
 
-## Proposed decision text (for `decisions.md` on acceptance; next free number)
+## Decision text (recorded in `decisions.md` as decision 69, 2026-11-04)
 | # | Topic | Status | Decision |
 | --- | --- | --- | --- |
-| next | Portfolio view (slice 7a) | Proposed | The portfolio is a read-only builder across projects rendered by `factory portfolio` as Markdown, self-contained HTML and JSON (schema 1); no server and no MCP tool. It shows counts, a derived stage and pending human decisions per gate kind, never label-derived rates, seed data or titles, so its JSON may be handed to any Claude session (e.g. an artifact page). Amends 00-system §1 only for generated, read-only reports |
+| 69 | Portfolio view (slice 7a) | Decided | The portfolio is a read-only builder across projects rendered by `factory portfolio` as Markdown, self-contained HTML and JSON (schema 1); no server and no MCP tool. It shows counts, a derived stage and pending human decisions per gate kind, never label-derived rates, seed data or titles, so its JSON may be handed to any Claude session (e.g. an artifact page). Amends 00-system §1 only for generated, read-only reports |

@@ -2,7 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> **Status: draft — rulings recommended; awaiting the researcher's review before any build.**
+> **Status: Accepted 2026-11-04 (researcher's instruction: build everything, MVP v1; recommended rulings adopted).**
+
+> **Reconciled 2026-11-04 (cross-spec reconciliation, decision 75; v1 cut, decision 74).** The whole plan is Later (slice-M v1 scope: single-project). The mining import id is `mim_<ULID>` (draft `imp_`, which slice 3d uses); the store root is `<root>/.mining/`, which slice 5 adopts.
 
 > **Dependencies.** Plans M-A to M-D merged (consumes `MinerRegistered`, `MinerUse.imports`, `registered_miner`, `register_miner`, `miner_digest`, `compile_miner`, `kind_checks`, `MinerScope`, plan-D `verify_row_in`, `final_rows(..., scope=…)`, `independence_counts`, `audit_core.*`). Built-in miners (`ml-benchmark@1`, `contribution@1`) are importable as well: their digest is `miner_digest(BUILT_IN_MINERS[...])`.
 
@@ -12,7 +14,7 @@
 
 **Tech Stack:** as M-A; SQLite via SQLAlchemy (decision 3); no new dependencies.
 
-**Spec:** `docs/specs/slice-M-modules.md` rulings 14, 18–20; event `mine.imported`; check findings `mine-source-superseded`, `mine-import-unverified`; acceptance 14, 15; proposed R-xx(d). Backlog IDEA-36 rigour notes.
+**Spec:** `docs/specs/slice-M-modules.md` rulings 14, 18–20; event `mine.imported`; check findings `mine-source-superseded`, `mine-import-unverified`; acceptance 14, 15; R-143. Backlog IDEA-36 rigour notes.
 
 ## Rulings made in this plan
 
@@ -43,7 +45,17 @@
 
 ---
 
-### Task 1: Shared projection and incremental sync
+## Self-review notes
+
+- **Spec coverage.** Ruling 18 (Tasks 1, 2), 19 (Tasks 3, 4), 20 (Task 5; calibration non-transfer is M-D Task 6); acceptance 14 (Tasks 3, 5, 6), 15 (Task 6).
+- **Open risk.** Ruling 3 calls each source project's services during shared sync; a source on a newer projection version than the running platform cannot be read. The skip-and-report path covers it; a versioned read contract may be needed in slice 5.
+- **Tiers.** Tasks 1, 3, 4 critical; 2, 5, 6 standard.
+
+## Later (not v1)
+
+Moved here by the v1 cut of 2026-11-04 (decision 74); built after the v1 plans of the build order (`2026-11-05-build-order.md`), in the order listed. Task text is unchanged; references to "Task N" inside a moved task use the plan's original numbering.
+
+### Later L1 (was Task 1): Shared projection and incremental sync
 
 *Tier: critical (projection discipline across projects).*
 
@@ -55,7 +67,7 @@
 - [ ] **Step 1: Tests.** `test_sync_folds_two_projects`; `test_second_sync_applies_only_new_files`; `test_rebuild_determinism` (two rebuilds, same `state_hash`); `test_opt_out_project_skipped_and_reported`; `test_shared_store_has_no_text_columns` (schema scan: no column named `value`, `quote`, `text`, `anchor_text`); `test_unsyncable_source_is_skipped`.
 - [ ] **Step 2:** FAIL. **Step 3:** Implement (ruling 3: status via each source's services, read-only). **Step 4:** mypy; ruff. **Step 5:** Commit `feat(shared): cross-project mining projection with incremental sync`.
 
-### Task 2: Lookup
+### Later L2 (was Task 2): Lookup
 
 *Tier: standard (implementer sonnet, review sonnet).*
 
@@ -67,7 +79,7 @@
 - [ ] **Step 1: Tests.** `test_lookup_filters_by_digest`; `test_lookup_requires_importer_conversion`; `test_lookup_excludes_superseded_and_stale`; `test_lookup_pages`.
 - [ ] **Step 2:** FAIL. **Step 3:** Implement. **Step 4:** mypy; ruff. **Step 5:** Commit `feat(shared): lookup of importable units`.
 
-### Task 3: `mine.imported` with re-verification
+### Later L3 (was Task 3): `mine.imported` with re-verification
 
 *Tier: critical (events, verification, replay independence).*
 
@@ -75,12 +87,12 @@
 
 **Interfaces:**
 - Consumes: `registered_miner`, `register_miner` (`imported_from`), `compile_miner`, `kind_checks`, `verify_row_in`, the importer's `library`.
-- Produces: `MineImported(import_id: str (imp_<ULID>), source_project, miner, version, digest, units: tuple[ImportedUnit, ...])`, `ImportedUnit(work_id, conversion_id, source_status, source_passes: tuple[ImportedPass, ...], rows: tuple[ImportedRow, ...])`, `ImportedRow(source_extraction_ids: tuple[str, ...], row_key, fields: Mapping[str, StoredField])`; `mine_import(project, actor, source: str, miner: str, version: int, units: Sequence[tuple[str, str]] | None = None) -> BatchResult[str]` (preconditions of spec ruling 19 and plan ruling 4; per-unit partial success; each row re-verified against the importer's conversion; a unit with any failing row is refused with `mine-import-unverified` reasons; `MinerUse.imports == "deny"` refuses on field `miners`); projection writes imported rows into the extraction tables with `origin = "imported"` under the miner's scope; `PROJECTION_VERSION` bump.
+- Produces: `MineImported(import_id: str (mim_<ULID>), source_project, miner, version, digest, units: tuple[ImportedUnit, ...])`, `ImportedUnit(work_id, conversion_id, source_status, source_passes: tuple[ImportedPass, ...], rows: tuple[ImportedRow, ...])`, `ImportedRow(source_extraction_ids: tuple[str, ...], row_key, fields: Mapping[str, StoredField])`; `mine_import(project, actor, source: str, miner: str, version: int, units: Sequence[tuple[str, str]] | None = None) -> BatchResult[str]` (preconditions of spec ruling 19 and plan ruling 4; per-unit partial success; each row re-verified against the importer's conversion; a unit with any failing row is refused with `mine-import-unverified` reasons; `MinerUse.imports == "deny"` refuses on field `miners`); projection writes imported rows into the extraction tables with `origin = "imported"` under the miner's scope; `PROJECTION_VERSION` bump.
 
 - [ ] **Step 1: Tests.** `test_import_refused_without_same_digest`; `test_import_refused_without_conversion`; `test_import_reverifies_against_own_conversion` (a source row whose quote was altered in the source log fails re-verification in the importer); `test_import_denied_by_protocol`; `test_partial_success_per_unit`; `test_importer_rebuild_without_source_project` (delete the source project directory; importer rebuild gives the same state hash); `test_import_event_carries_provenance` (source project, extraction ids, pass identities).
 - [ ] **Step 2:** FAIL. **Step 3:** Implement. **Step 4:** Full suite; mypy; ruff. **Step 5:** Commit `feat(shared): import of mined units with re-verification`.
 
-### Task 4: Accounting of imported records
+### Later L4 (was Task 4): Accounting of imported records
 
 *Tier: critical (independence counts, R-05).*
 
@@ -92,7 +104,7 @@
 - [ ] **Step 1: Tests.** `test_single_pass_source_counts_single`; `test_dual_source_counts_imported_dual_not_local_dual`; `test_audit_mode_includes_imported_values`; `test_methods_states_imports`; `test_methods_unchanged_without_imports` (golden).
 - [ ] **Step 2:** FAIL. **Step 3:** Implement. **Step 4:** Plan-D/E suites unedited; mypy; ruff. **Step 5:** Commit `feat(shared): separate accounting of imported records`.
 
-### Task 5: `source-superseded` propagation
+### Later L5 (was Task 5): `source-superseded` propagation
 
 *Tier: standard (implementer sonnet, review opus).*
 
@@ -104,7 +116,7 @@
 - [ ] **Step 1: Tests.** `test_source_correction_flags_importer_after_sync`; `test_no_store_gives_unavailable_warning_not_error`; `test_reimport_clears_flag`.
 - [ ] **Step 2:** FAIL. **Step 3:** Implement. **Step 4:** mypy; ruff. **Step 5:** Commit `feat(shared): flag imports whose source was corrected`.
 
-### Task 6: Scale and acceptance (slow)
+### Later L6 (was Task 6): Scale and acceptance (slow)
 
 *Tier: standard (implementer sonnet, review opus).*
 
@@ -112,9 +124,3 @@
 
 - [ ] **Step 1: Tests.** `test_sync_scales_incrementally` (20 synthetic projects, 10^5 `extraction.recorded` events generated without documents through a fixture writer; first sync within a stated bound on the developer machine recorded in the test docstring, second sync after one new file touches one file only; peak RSS below 500 MB via `resource.getrusage`); `test_lookup_uses_index` (`EXPLAIN QUERY PLAN` contains `ix_shared_lookup`); `test_acceptance_import_into_second_project` (M-D acceptance project as source; second project with the same conversions; registers the same miner digest; imports; re-verifies; counts; source corrects a row; `check` flags it).
 - [ ] **Step 2:** Run `uv run pytest -m slow tests/test_shared_scale.py tests/test_acceptance_miners.py`; FAIL until Tasks 1–5. **Step 3:** Fix with unit tests. **Step 4:** Full suite incl. `slow`; mypy; ruff; coverage. **Step 5:** Commit `test(shared): scale and import acceptance`.
-
-## Self-review notes
-
-- **Spec coverage.** Ruling 18 (Tasks 1, 2), 19 (Tasks 3, 4), 20 (Task 5; calibration non-transfer is M-D Task 6); acceptance 14 (Tasks 3, 5, 6), 15 (Task 6).
-- **Open risk.** Ruling 3 calls each source project's services during shared sync; a source on a newer projection version than the running platform cannot be read. The skip-and-report path covers it; a versioned read contract may be needed in slice 5.
-- **Tiers.** Tasks 1, 3, 4 critical; 2, 5, 6 standard.

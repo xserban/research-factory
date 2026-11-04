@@ -2,7 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> **Status: draft — rulings recommended; awaiting the researcher's review before any build.**
+> **Status: Accepted 2026-11-04 (researcher's instruction: build everything, MVP v1; recommended rulings adopted).**
+
+> **Reconciled 2026-11-04 (cross-spec reconciliation, decision 75; v1 cut, decision 74).** deploy-B's Later OAuth task is not needed: Tasks 4–5 use personal tokens. v1 cut: Task 5 keeps the automated `slow` acceptance; its manual pilot on a real lab server (Step 3) moved to Later. Bumps `PROJECTION_VERSION` by one from the value it finds.
 
 > **Dependencies.** deploy-A, teams-A and teams-B merged (`project.hosted`, `Principal`, `roles_of`, `visibility`, `authorize`); deploy-B merged for Task 4 (authenticated push endpoint) and Task 5 (acceptance over HTTP); teams-C and teams-D merged for Task 5. Slice 2 plan A (`fulltext.*`, `Route`, restore) merged. Slice M ([slice-M-modules.md](../specs/slice-M-modules.md)) is not required: this plan stores and shares documents only; slice M's shared mining store uses the root `<root>/mining/` and the visibility rule of `services/lab_library.py::may_read_project` defined here.
 
@@ -106,5 +108,10 @@
 
 - [ ] **Step 1: Test** (`slow`, ASGI client, offline sources): admin initialises the lab and registers `pi`, `ana`, `ben`; issues tokens; hosts a project with owner `pi`, grants `ana` contributor and screener, `ben` contributor and screener, sets a weekly `tasks:screen_b` budget; `ana` (HTTP, agent) files a protocol amendment request, `pi` approves, `pi` amends with the request id; `ben` joins TA pass A in person by CLI; `ana`'s agent joins TA pass B over HTTP; `ben`'s agent joining pass B is refused; both passes finish; `pi` resolves disagreements (elicited); κ per pair type is reported; a second project adopts one included work's document; the ledger lists `pi`, `ana`, `ben` and the agent roles; each confirms; `check` is clean except advisory findings; rebuilding both indexes reproduces their state hashes; the access log has one line per call. Assertions mirror spec acceptance 1–15.
 - [ ] **Step 2:** Run `uv run pytest tests/test_acceptance_slice5.py -m slow -q`; fix defects test-first.
-- [ ] **Step 3 (manual, `network`):** the pilot of spec acceptance 16 on a real lab server with Claude Code and claude.ai; record outcomes in the plan's completion notes.
-- [ ] **Step 4:** Verification `uv run pytest -m "not network" -q && uv run mypy --strict src && uv run ruff check .`; commit `test(slice5): acceptance`.
+- [ ] **Step 3:** Verification `uv run pytest -m "not network" -q && uv run mypy --strict src && uv run ruff check .`; commit `test(slice5): acceptance`.
+
+## Later (not v1)
+
+Moved here by the v1 cut of 2026-11-04 (decision 74); built after the v1 plans of the build order (`2026-11-05-build-order.md`), in the order listed. Task text is unchanged; references to "Task N" inside a moved task use the plan's original numbering.
+
+### Later L1: Pilot on a real lab server (was Task 5 Step 3; manual, `network`): the pilot of spec acceptance 16 with Claude Code and claude.ai; outcomes recorded in the plan's completion notes.

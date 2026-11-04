@@ -2,7 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> **Status: draft — rulings recommended; awaiting the researcher's review before any build.**
+> **Status: Accepted 2026-11-04 (researcher's instruction: build everything, MVP v1; recommended rulings adopted).**
+
+> **Reconciled 2026-11-04 (cross-spec reconciliation, decision 75; v1 cut, decision 74).** Build position: after G2 (A–E) and G3 (A–C) are merged (build-order constraint), so the conditional clauses on G2-A resolve to "present": Task 5 registers `contrib_a`/`contrib_b`, and Task 6 also declares `contributions` (`miner`), `lineage` and `intuition` (`proposal`) with their gates (`lineage.relation_confirm`, `lineage.idea_confirm`, `intuition.review`, `intuition.source_approve`, `intuition.uses_confirm`), folding slice-M migration step 6 into this plan; it also declares every other module present on its base. Module kinds are the closed list of slice-M ruling 5 (reconciliation item 2). No projection change.
 
 > **Dependencies.** Branch from `main` after plans 2C, 2D, 2E and the clean-ups plan (`2026-11-05-cleanups.md`) are merged; Task 7 of the clean-ups touches `services/audit.py` and must land first. G1 and G2-A may be merged or not: Tasks 2, 3 and 5 name the G2-A symbols (`Scope`, `contrib_a`/`contrib_b`) conditionally, and Task 6 declares the contribution kinds only when `contrib_a` exists in the code. Plans M-B to M-E consume this plan's Interfaces blocks exactly.
 
@@ -176,3 +178,7 @@ def test_gate_ids_unique_and_act_events_registered(): ...
 - **Spec coverage.** Ruling 21 (Tasks 1–3, 5), rulings 1, 3, 4, 5 (Tasks 4, 6), migration steps 0–3 (Tasks 1–7), acceptance 1 (Task 6), 2 (Tasks 2, 3, 5), 3 (no projection change), 4 (Task 7; methods unchanged because no module returns a section yet).
 - **Types used later.** `ModuleSpec`, `GateSpec`, `GatePolicy`, `PolicyKind`, `Autonomy`, `AutonomyAct`, `CheckHit`, `MethodsSection`, `ModuleRegistry`, `TaskKindRegistry`, `default_modules`, `default_task_kinds`, `passes.memberships`, `passes.is_pass_session`, `passes.shared_refusal`, `audit_core.*`, `quality.stats.draw_uniform`.
 - **Tiers.** Tasks 2, 3, 4, 6 critical (subagent-driven, Opus implementer, Sonnet review); 5, 7 standard; 1 mechanical.
+
+## Later (not v1)
+
+None: every task of this plan is in v1.

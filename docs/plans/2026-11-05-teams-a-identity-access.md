@@ -2,7 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> **Status: draft — rulings recommended; awaiting the researcher's review before any build.**
+> **Status: Accepted 2026-11-04 (researcher's instruction: build everything, MVP v1; recommended rulings adopted).**
+
+> **Reconciled 2026-11-04 (cross-spec reconciliation, decision 75; v1 cut, decision 74).** `TOOL_PERMISSIONS` covers every tool of every slice built before it (3d, 4a, 4b, 6, 7a, 7b, M), not only slices 1–3. Bumps `PROJECTION_VERSION` by one from the value it finds; the lab index has its own version.
 
 > **Dependencies.** deploy-A merged (`Project.writing()`, `project.hosted`, `Settings.host_id`). deploy-B, teams-B, teams-C, teams-D and deploy-C consume this plan's Interfaces blocks exactly. Ends with every earlier test passing unchanged except the `PROJECTION_VERSION` pin.
 
@@ -138,3 +140,7 @@ def test_role_table_matches_spec(...): ...   # literal copy of the spec table ro
 - [ ] **Step 1: Tests.** `test_entry_has_no_argument_values`, `test_refusal_logged`, `test_prune_keeps_recent`, `test_cli_token_issue_prints_once` (second `list` shows id and expiry, never the token).
 - [ ] **Step 2–4:** Fail, implement, pass.
 - [ ] **Step 5:** Verification `uv run pytest -m "not network and not slow" -q && uv run mypy --strict src && uv run ruff check .`; commit `feat(access): access log and admin commands`.
+
+## Later (not v1)
+
+None: every task of this plan is in v1.

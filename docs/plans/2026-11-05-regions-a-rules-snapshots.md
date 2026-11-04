@@ -2,7 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> Status: draft — rulings recommended; awaiting the researcher's review before any build.
+> **Status: Accepted 2026-11-04 (researcher's instruction: build everything, MVP v1; recommended rulings adopted).**
+
+> **Reconciled 2026-11-04 (cross-spec reconciliation, decision 75; v1 cut, decision 74).** Import-A is merged first in the build order, so Task 2 adds the `import` rule kind. Gates `regions.review` and `regions.member_decide` are declared as slice-M decision gates (floor `human`) in `services/modules/regions.py` (kind `proposal`). Bumps `PROJECTION_VERSION` by one from the value it finds; Task 6's scale test stays in this task.
 
 > **Dependencies.** Slice 3b plans G2-C and G2-D merged (ideas, relations, `graph_edges`, `lineage/paths.py` neighbour-lookup helpers, `GraphFilter`); slice 3c plan G3-B merged (concepts, `concept_uses`). Import-A optional (the `import` rule kind, Task 2, is added only if `import_records` exists; else Import-C adds it). Regions-B and Regions-C consume this plan's Interfaces. Every earlier test passes unchanged except the `PROJECTION_VERSION` pin.
 
@@ -140,3 +142,7 @@ def test_no_seed_tables_read(region_project, sql_capture): ...  # Review Focus 4
 - [ ] **Step 2–5:** Run, FAIL; implement; tests, mypy, ruff; commit `feat(cli): factory regions`.
 
 **Verification for the plan:** `cd platform && uv run pytest -m "not network and not slow" && uv run pytest -m slow tests/test_region_scale.py && uv run mypy --strict src && uv run ruff check`.
+
+## Later (not v1)
+
+None: every task of this plan is in v1.

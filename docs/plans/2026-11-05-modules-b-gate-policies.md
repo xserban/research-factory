@@ -2,7 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> **Status: draft — rulings recommended; awaiting the researcher's review before any build.**
+> **Status: Accepted 2026-11-04 (researcher's instruction: build everything, MVP v1; recommended rulings adopted).**
+
+> **Reconciled 2026-11-04 (cross-spec reconciliation, decision 75; v1 cut, decision 74).** G2-C and G3 are merged before M-A, so their gates are declared and their services call `require_gate` here. The gates of slices 3d, 4a, 4b, 6 and 7b (slice-M reconciliation table) are declared by those slices' plans when built, each adding its rows to `PRESETS` and floors in the same task. Task 5 bumps `PROJECTION_VERSION` by one from the value it finds.
 
 > **Dependencies.** Plan M-A merged (consumes `GateSpec`, `GatePolicy`, `PolicyKind`, `Autonomy`, `AutonomyAct`, `default_modules`, `passes.is_pass_session`, `audit_core.*`). Plan G1 merged (the `reference.link_confirm` gate and `reference_resolve._confirmer`). G2-C and G3 gates are added to the preset table here as declarations only if their code exists; otherwise the G2/G3 plans call `require_gate` when they land.
 
@@ -132,3 +134,7 @@
 - **Spec coverage.** Ruling 6 (Tasks 1, 2), 7 (Tasks 1, 4), 8 (Tasks 1, 2), 9 (Tasks 2, 5), 10 (Tasks 3, 6); acceptance 4 (Task 6), 5 (Tasks 1, 2), 6 (Task 4), 7 (Task 5), 8 (Tasks 3, 6).
 - **Types used later.** `require_gate`, `effective_policy`, `GateAct`, `autonomy_of`, `autonomy_counts`, `gate_audit_*`, `presets.preset`, `presets.enforcement`, `GatePolicies`.
 - **Tiers.** Tasks 1–5 critical; Task 6 standard.
+
+## Later (not v1)
+
+None: every task of this plan is in v1.

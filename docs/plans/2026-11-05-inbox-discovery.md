@@ -2,7 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> **Status: draft for the researcher's review — not to be built until accepted.** The spec `docs/specs/slice-4a-inbox-discovery.md` is itself a draft; every ruling it marks **[confirm]** must be confirmed (or changed, and this plan with it) before Task 1 starts.
+> **Status: Accepted 2026-11-04 (researcher's instruction: build everything, MVP v1; recommended rulings adopted).**
+
+> **Reconciled 2026-11-04 (cross-spec reconciliation, decision 75; v1 cut, decision 74).** Decision 61 records this slice's rulings and 01-rigour R-02 already lists `supplied` (both done at acceptance), so Task 10 only checks them and updates the spec's "Implemented" note. Records enter the corpus when the `supplied` run finishes; the candidate view of slice 4b reads pending works by route; `inbox.prioritised` is not part of this plan. Held-out recall follows decision 54. Task 3 bumps `PROJECTION_VERSION` by one from the value it finds; the inbox and discovery modules are declared for slice M in the tasks that add their events and checks. Task 1 (link parser) was started on branch `inbox` (`7d94887`).
 
 > **Dependencies.** Plan `2026-11-05-cleanups-2.md` Tasks 1 and 2 merged first: Task 1 adds the projected `event_refs` table this plan reads; Task 2 links chase queries to their round by ref, which the discovery record needs to tell `chase` from `snowball` runs without text matching. G1 (`2026-11-04-references-snowballing.md`) Tasks 1–6 are merged on the base (`snowball_rounds`, `round_runs`). Paths are relative to `platform/` unless they start with `docs/` or `plugin/`.
 
@@ -192,3 +194,7 @@ def test_amend_adds_section_without_staling_decisions(): ...   # other_changes l
 **Files:** Create `tests/test_acceptance_inbox.py`; Modify `docs/specs/01-rigour.md` (R-02 list adds `supplied`), `docs/specs/slice-4a-inbox-discovery.md` (status line, "Implemented" note), `docs/specs/00-system.md` (§3 id table: `inb_`; §9 commands), `docs/decisions.md` (the spec's proposed entry, numbered at the next free number, status as the researcher rules), `CLAUDE.md` status line, `docs/backlog.md` (IDEA-34, IDEA-35 → `accepted`, linked).
 
 - [ ] **Step 1:** Acceptance tests 1–13 on the synthetic pilot-shaped fixture (three links: new, in-corpus via search, also snowballed), each named `test_ac<n>_...`. **Step 2:** Run whole suite. **Step 3:** Docs. **Step 4:** Commit `test(inbox): acceptance; docs and decision`.
+
+## Later (not v1)
+
+None: every task of this plan is in v1.

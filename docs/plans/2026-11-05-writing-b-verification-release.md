@@ -2,9 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> Status: draft — rulings recommended; awaiting the researcher's review before any build.
+> **Status: Accepted 2026-11-04 (researcher's instruction: build everything, MVP v1; recommended rulings adopted).**
 
-> **Dependencies.** W-A merged (Interfaces consumed exactly: `SupportRef`, `resolve_supports`, `live_sentences`, `verifier_sessions`, tables `draft_sentences`, `sentence_supports`). X-A merged (`assign_keys`, `bibtex`, `select_works`). Plan 5b `trace`/`check` and their 2E/G2-E/G3-C extensions merged. When slice M lands, the release gate's policy moves from `RigorMode` to the declared gate policy `draft-released`; events are unchanged.
+> **Reconciled 2026-11-04 (cross-spec reconciliation, decision 75; v1 cut, decision 74).** Slice M is merged first: the release gate is the slice-M gate `writing.release` (draft `draft-released`; floor `agent`; presets exploratory `agent`, pilot `agent` once the audit is labelled, systematic `human`), declared here and checked with `require_gate`; the verdict audit label is `writing.audit_label` (floor `human`). Task 7's acceptance uses a pilot-shaped fixture and stays in v1. Bumps `PROJECTION_VERSION` by one from the value it finds.
+
+> **Dependencies.** W-A merged (Interfaces consumed exactly: `SupportRef`, `resolve_supports`, `live_sentences`, `verifier_sessions`, tables `draft_sentences`, `sentence_supports`). X-A merged (`assign_keys`, `bibtex`, `select_works`). Plan 5b `trace`/`check` and their 2E/G2-E/G3-C extensions merged. When slice M lands, the release gate's policy moves from `RigorMode` to the declared gate policy `writing.release`; events are unchanged.
 
 **Goal:** Judge every claim-bearing sentence by an independent verifier session that sees only the sentence and its spans, audit a sample of positive verdicts, compute each sentence's status on read, render drafts with visible markers for anything not supported, and release a draft only through a mode-dependent gate; extend `trace` and `check`.
 
@@ -150,3 +152,7 @@ def test_no_text_in_errors(draft): ...
 ## Self-review notes
 - The verifier's independence is engineered as for screening (sessions, models) but with one pass; spec ruling 12 leaves dual verification as a later option if the audit rate exceeds the ceiling.
 - Status is computed per call with batched support resolution; a 200-sentence draft resolves at most 1,200 supports in 7 queries.
+
+## Later (not v1)
+
+None: every task of this plan is in v1.

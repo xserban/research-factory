@@ -2,7 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> **Status: draft — rulings recommended; awaiting the researcher's review before any build.**
+> **Status: Accepted 2026-11-04 (researcher's instruction: build everything, MVP v1; recommended rulings adopted).**
+
+> **Reconciled 2026-11-04 (cross-spec reconciliation, decision 75; v1 cut, decision 74).** Slice M is merged: Task 2 does not write a `TEAM_GATES` table; it adds `required_role` to slice M's `GateSpec` (default `maintainer` for human decision gates, `owner` for membership, visibility and budgets) and computes `TEAM_GATES` from `default_modules()`, covering the gates of every slice (slice-M reconciliation table). Bumps `PROJECTION_VERSION` by one from the value it finds.
 
 > **Dependencies.** teams-A merged (`ProjectRole`, `roles_of`, `Permission`, `authorize`, `Principal`). May run in parallel with deploy-B, teams-C and teams-D. When slice M ([slice-M-modules.md](../specs/slice-M-modules.md)) lands, `TEAM_GATES` moves into each module's gate policy as its role dimension; the review mechanism here is unchanged by that move.
 
@@ -96,3 +98,7 @@
 - [ ] **Step 1: Tests.** `test_screener_cli_gets_agent_view` (byte-equal to the MCP payload for `report_prisma` and `report_methods`), `test_owner_cli_gets_full_view`, `test_unhosted_cli_unchanged` (implicit owner), `test_member_missing_reviewer_of_record`, `test_review_findings`.
 - [ ] **Step 2–4:** Fail, implement, pass.
 - [ ] **Step 5:** Verification `uv run pytest -m "not network and not slow" -q && uv run mypy --strict src && uv run ruff check .`; commit `feat(reviews): tools, held-out view by role and check findings`.
+
+## Later (not v1)
+
+None: every task of this plan is in v1.

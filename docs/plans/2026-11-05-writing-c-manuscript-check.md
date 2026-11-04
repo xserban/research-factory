@@ -2,7 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> Status: draft — rulings recommended; awaiting the researcher's review before any build.
+> **Status: Accepted 2026-11-04 (researcher's instruction: build everything, MVP v1; recommended rulings adopted).**
+
+> **Reconciled 2026-11-04 (cross-spec reconciliation, decision 75; v1 cut, decision 74).** The whole plan is Later (spec v1 scope). Its gates are `manuscript.citation_confirm` (presets as `reference.link_confirm`) and `manuscript.audit_label` (floor `human`).
 
 > **Dependencies.** W-B merged (verdict vocabulary `Verdict`, audit rule and ceiling, independence pattern). G1 merged (`references/markers.py`, `references/parse.py`, `references/match.py`, resolution thresholds and the human confirmation rule of slice-3a ruling 3). Plans B/C (`document_read`, pinned conversions, `quote_in_element`). PDF manuscripts wait for decision 49; this plan accepts Markdown, LaTeX and plain text.
 
@@ -40,7 +42,15 @@
 - Modify `index/default.py`, event catalog, `services/trace.py`, `services/check.py`, `mcp/server.py`, `cli/main.py`, `plugin/skills/rf-verify/SKILL.md` (manuscript section).
 - Tests: `tests/test_segment.py`, `tests/test_bibfile.py`, `tests/test_cites.py`, `tests/test_manuscripts_add.py`, `tests/test_manuscripts_resolve.py`, `tests/test_manuscripts_verify.py`, `tests/test_manuscripts_report.py`.
 
-### Task 1: Segmenter, bibliography reader, citation finder (pure)
+## Self-review notes
+- PDF manuscripts: add `fmt = "pdf"` after decision 49 by converting with the chosen converter into canonical Markdown (stored in the library) and segmenting that; no change to events beyond a `conversion` reference.
+- `uncited-claim` flags are advisory and never enter counts of verdicts.
+
+## Later (not v1)
+
+Moved here by the v1 cut of 2026-11-04 (decision 74); built after the v1 plans of the build order (`2026-11-05-build-order.md`), in the order listed. Task text is unchanged; references to "Task N" inside a moved task use the plan's original numbering.
+
+### Later L1 (was Task 1): Segmenter, bibliography reader, citation finder (pure)
 
 *Tier: standard.*
 
@@ -52,7 +62,7 @@
 - [ ] **Step 1: Tests.** `test_segmenter_cases` (et al., e.g., decimals `85.2`, `Fig. 3`, LaTeX `\cite{a,b}.` at end, masked equation with a period, paragraph break; Review Focus 3); `test_offsets_cover_text_in_order`; `test_sha256_of_slice`; `test_read_bib_nested_braces_and_strings`; `test_read_csl_minimal`; `test_cite_keys_latex_pandoc_numeric`.
 - [ ] **Step 2–4.** **Step 5:** Commit `feat(manuscripts): segmenter, bibliography reader, citation finder`.
 
-### Task 2: Adding a manuscript
+### Later L2 (was Task 2): Adding a manuscript
 
 *Tier: standard.*
 
@@ -64,7 +74,7 @@
 - [ ] **Step 1: Tests.** `test_add_stores_in_library_not_blobs`; `test_events_carry_no_text` (no sentence substring of length ≥ 20 appears in either payload); `test_label_is_free_text_but_bounded` (≤ 80 chars; documented as the researcher's own label); `test_rebuild_identical`; `test_agent_actor_refused`.
 - [ ] **Step 2–4.** **Step 5:** Commit `feat(manuscripts): add and segment external manuscripts`.
 
-### Task 3: Citation resolution
+### Later L3 (was Task 3): Citation resolution
 
 *Tier: standard.*
 
@@ -77,7 +87,7 @@
 - [ ] **Step 1: Tests.** `test_identifier_and_title_exact_resolve`; `test_fuzzy_waits_for_human` (Review Focus 4); `test_unresolved_closes_unit`; `test_no_full_text_closes_unit`; `test_outside_corpus_closes_unit`; `test_numeric_markers_map_to_reference_section`.
 - [ ] **Step 2–4.** **Step 5:** Commit `feat(manuscripts): resolve citations to corpus works`.
 
-### Task 4: Verification units and verdicts
+### Later L4 (was Task 4): Verification units and verdicts
 
 *Tier: critical (quote verification, provenance).*
 
@@ -90,7 +100,7 @@
 - [ ] **Step 1: Tests.** `test_quote_must_be_in_cited_conversion` (Review Focus 2); `test_span_offsets_inside_sentence`; `test_unit_content_ids_only`; `test_verdict_provenance`; `test_audit_sample_for_manuscript`; `test_no_text_in_errors`.
 - [ ] **Step 2–4.** **Step 5:** Commit `feat(manuscripts): verification units and anchored verdicts`.
 
-### Task 5: Report, trace, check, tools, CLI
+### Later L5 (was Task 5): Report, trace, check, tools, CLI
 
 *Tier: standard.*
 
@@ -104,7 +114,3 @@
 
 - [ ] **Step 1: Tests.** `test_report_counts_derived`; `test_cli_report_reads_library_text`; `test_mcp_report_has_no_text`; `test_trace_unit_to_document`; findings in constructed cases; `test_no_manuscript_text_outside_library` (Review Focus 1: walk `events/` and `blobs/` after an end-to-end fixture).
 - [ ] **Step 2–4.** **Step 5:** Commit `feat(manuscripts): report, trace, check, tools and commands`.
-
-## Self-review notes
-- PDF manuscripts: add `fmt = "pdf"` after decision 49 by converting with the chosen converter into canonical Markdown (stored in the library) and segmenting that; no change to events beyond a `conversion` reference.
-- `uncited-claim` flags are advisory and never enter counts of verdicts.

@@ -2,7 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> **Status: draft — rulings recommended; awaiting the researcher's review before any build.**
+> **Status: Accepted 2026-11-04 (researcher's instruction: build everything, MVP v1; recommended rulings adopted).**
+
+> **Reconciled 2026-11-04 (cross-spec reconciliation, decision 75; v1 cut, decision 74).** teams-B is merged first, so Task 3 reuses its `full_view_allowed`. Slice M's `passes.memberships` and `refuse_shared` exist: the per-user rule is added there, as the pair-type dimension of screening's quality regime. Bumps `PROJECTION_VERSION` by one from the value it finds.
 
 > **Dependencies.** teams-A merged (`Principal`, `ProjectRole`, `roles_of`, `Permission.PASS_JOIN_HUMAN`, `authorize`). Slice 1 plan 4 and slice 2 plan C (screening at both stages) merged. Independent of deploy-B (human passes are CLI-only in this plan); teams-B's held-out view by role is reused if merged, otherwise Task 3 adds `full_view_allowed` itself. When slice M lands, screening's quality regime gains the pair-type dimension defined here.
 
@@ -12,14 +14,14 @@
 
 **Tech Stack:** as slice 2.
 
-**Spec:** `docs/specs/slice-5-teams-deployment.md` ruling 15, Design "Human screening passes", proposed R-xx(h), check finding `pass-same-user`; acceptance 8. Decision 37 items 1, 2, 6, 9; decision 43; R-32, R-33, R-36, R-37, R-51.
+**Spec:** `docs/specs/slice-5-teams-deployment.md` ruling 15, Design "Human screening passes", R-110, check finding `pass-same-user`; acceptance 8. Decision 37 items 1, 2, 6, 9; decision 43; R-32, R-33, R-36, R-37, R-51.
 
 ## Rulings made in this plan
 
 1. **User rule.** Let U(P) be the set of users of pass P: for a human join, the human; for an agent join, `actor.user` (the principal). A join to pass X is refused when U(other pass) contains the joining user. So the same person cannot screen both passes, in person or through agents, and two agent passes run by one person are refused too. [confirm] *Consequence:* a single researcher can no longer run both agent passes in a **hosted** project; for unhosted projects (stage 0, one person) the rule is not applied, preserving slice-1 behaviour. Alternative: apply the user rule only to human joins. Recommended as stated, because a person who configures both agent passes controls both framings.
 2. **Outside both passes.** Calibration labels, disagreement resolutions and audit labels are refused to a user in U(A) ∪ U(B) of that stage, in hosted projects. [confirm]
 3. **Human calibration.** `ScreeningPlan.calibrate_humans: bool = False`, omitted from the protocol hash while false; when true, a human pass passes the same calibration gate as an agent pass. [confirm]
-4. **Human quotes.** Human exclusions need a verified quote in `systematic`; quotes are optional otherwise and verified when given (R-32 as proposed R-xx(h)). [confirm]
+4. **Human quotes.** Human exclusions need a verified quote in `systematic`; quotes are optional otherwise and verified when given (R-32 as R-110). [confirm]
 5. **Pair type** is computed from the two passes' `actor_kind`: `agent-agent`, `human-agent`, `human-human`. A stage with mixed joins within one pass (a human and an agent both in pass A) is refused at join: a pass is all-human or all-agent. [confirm]
 
 ## Global Constraints
@@ -117,3 +119,7 @@ def test_screener_role_required(hosted): ...                    # observer refus
 - [ ] **Step 1: Tests.** `test_pair_type_computed`, `test_methods_names_pair_type`, `test_pass_same_user_finding`; acceptance (`slow`): on a constructed hosted project, a human–agent TA pair and an agent–agent FT pair complete; a third person resolves; κ per pair type equals hand-computed values; PRISMA unchanged by pair composition.
 - [ ] **Step 2–4:** Fail, implement, pass.
 - [ ] **Step 5:** Verification `uv run pytest -m "not network" -q && uv run mypy --strict src && uv run ruff check .`; commit `feat(screening): agreement per pair type`.
+
+## Later (not v1)
+
+None: every task of this plan is in v1.

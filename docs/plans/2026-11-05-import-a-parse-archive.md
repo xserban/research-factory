@@ -2,7 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> Status: draft — rulings recommended; awaiting the researcher's review before any build.
+> **Status: Accepted 2026-11-04 (researcher's instruction: build everything, MVP v1; recommended rulings adopted).**
+
+> **Reconciled 2026-11-04 (cross-spec reconciliation, decision 75; v1 cut, decision 74).** Task 5 bumps `PROJECTION_VERSION` by one from the value it finds. Slice M is merged before this plan: the import module (kind `retrieval`) is declared in `services/modules/imports.py` in the task that adds its events (Task 3).
 
 > **Dependencies.** Slice-1 plans (search, dedup, seeds) and plan 2A (library, `sniff_identifiers`) merged. Independent of slices 3a–3c. Import-B and Import-C consume this plan's Interfaces blocks exactly. Every existing test passes unchanged except the `PROJECTION_VERSION` pin.
 
@@ -152,3 +154,7 @@ def test_collection_length_validated(project, bib_path): ...
 - [ ] **Step 2–5:** Run, FAIL; implement; tests, mypy, ruff; commit `feat(cli): factory import`.
 
 **Verification for the plan:** `cd platform && uv run pytest -m "not network and not slow" && uv run mypy --strict src && uv run ruff check`.
+
+## Later (not v1)
+
+None: every task of this plan is in v1.

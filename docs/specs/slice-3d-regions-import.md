@@ -1,6 +1,23 @@
 # Slice 3d — Regions, labels and consolidation; importing an existing corpus
 
-Status: draft — rulings recommended; awaiting the researcher's review before any build.
+Status: Accepted 2026-11-04 (researcher's instruction: build everything, MVP v1; recommended rulings adopted). Decisions 59 and 60; requirements R-90–R-92.
+
+## Cross-spec reconciliation 2026-11-04
+
+1. **Provenance and PRISMA order.** `ProvenanceMethod` gains `library-import` after slice 4a's `supplied`; PRISMA's "other methods" precedence is `citation-chase`, `seed-admission`, `hand-search`, `supplied`, `library-import` (decision 38 item 6 unchanged: any `database` provenance wins). Ruling 22 is read with this order.
+2. **Coverage buckets (ruling 25).** `found-supplementary` counts only works in the corpus through `citation-chase`, `seed-admission` or `hand-search`. A work whose only non-import provenance is `supplied` (slice 4a) was not found by any search and falls into one of the not-found buckets, as slice 4a ruling 9 treats a supplied seed. Watch runs (slice 4b) are search-purpose database runs and count as `found-database`.
+3. **Query purposes.** `import` (here), `supplied` (4a) and `status` (4b) are three distinct new `QueryPurpose` values; only `import` and `supplied` runs create corpus works.
+4. **Epistemic class.** `organisation` is the third class beside slice 3c's `evidence` and `interpretation`; slice 6's property vocabulary is also `organisation`, and slice 6 adds `test` (closed set, slice-M reconciliation item 7).
+5. **Identifiers.** Label applications are `lbl_<ULID>` (draft `lab_`, renamed so as not to read as slice 5's lab registry). The import id stays `imp_`; slice M's mining import uses `mim_`.
+6. **Gates (ruling 26).** Slice M is built before this slice (build order), so the gates are declared directly: `regions.review`, `regions.member_decide`, `labels.application_confirm`, `consolidation.decide`, `terms.promote` (floor and presets `human`) and `import.resolution_confirm` (presets as `reference.link_confirm`). The modules are `import` (`retrieval`), `regions` (`proposal`, with rule evaluation as its builder hook), `labels` (`proposal`).
+7. **Requirements** R-xx(k), (l), (m) are R-90, R-91, R-92 in [01-rigour.md](01-rigour.md).
+8. **Projection version.** Each plan of this slice that adds a table bumps `PROJECTION_VERSION` by one from the value it finds.
+9. **Consumers.** Slice 4b's per-region digests, slice 6's region-scoped vocabulary and transfer flag, and slice 7b's onion overlay read reviewed `R@` snapshots through the Regions-B read interface; each of these is Later in its own slice.
+
+## v1 scope
+
+- **v1:** BibTeX, CSL JSON and PDF-folder import with archive, split, resolution, confirmation, admission under `library_sources`, attachments and coverage (Import-A, -B, -C); regions and foci with rules, snapshots, drift and review (Regions-A); member proposals, links, overlap and the MCP tools (Regions-B without adoption); labels, consolidation, terms and the `term` rule with the separation tests (Regions-C, automated acceptance).
+- **Later:** cross-project adoption of region snapshots (ruling 10; Regions-B adoption task); the researcher-run pilot (acceptance 18); open question 3 (draft region per Zotero collection).
 
 Builds on [00-system.md](00-system.md), slices 1, 2, 3a, 3b and 3c; must satisfy [01-rigour.md](01-rigour.md) R-01–R-05, R-20, R-22–R-26, R-43, R-47, R-51, plus the proposed requirements below. Covers the remainder of outline slice 3 ("Graph and regions", [README.md](README.md)) that slices 3a–3c leave open: regions and project foci; consolidation (synonym merging, label promotion); importing an existing corpus (Zotero export, BibTeX, a PDF folder) with an audit of its coverage by the systematic search (production line 3, [docs/02-production-lines.md](../02-production-lines.md)). Vocabulary: [docs/10-abstractions.md](../10-abstractions.md).
 
@@ -88,7 +105,7 @@ Each ruling lists options; the recommended option is marked **[confirm]**.
     | Bucket | Rule |
     | --- | --- |
     | `found-database` | its work is in the corpus with `database` provenance from a search-purpose query |
-    | `found-supplementary` | in the corpus only through `citation-chase`, `seed-admission` or `hand-search` (never through `library-import` itself) |
+    | `found-supplementary` | in the corpus only through `citation-chase`, `seed-admission` or `hand-search` (never through `library-import` itself, nor through slice 4a's `supplied`) |
     | `outside-limits` | not found; its metadata violates a declared protocol limit (years, language, type) |
     | `not-in-sources` | not found; within limits; the resolution lookups found it in no declared source |
     | `source-unchecked` | not found; within limits; a declared source was not looked up for it |
@@ -122,7 +139,7 @@ Each ruling lists options; the recommended option is marked **[confirm]**.
 Every agent-written event carries model, skill version and `input_blob` (R-04).
 
 ## Identifiers
-`reg_<ULID>` (region), `R@<sha8>` (region version), `rmp_<ULID>` (member proposal), `lab_<ULID>` (label application), `trm_<ULID>` (term), `cns_<ULID>` (consolidation pass), `cnp_<ULID>` (consolidation proposal), `imp_<ULID>` (import), record key `imp_<ULID>:<ordinal>`. Additions to the id table of 00-system §3 are recorded with the decision.
+`reg_<ULID>` (region), `R@<sha8>` (region version), `rmp_<ULID>` (member proposal), `lbl_<ULID>` (label application), `trm_<ULID>` (term), `cns_<ULID>` (consolidation pass), `cnp_<ULID>` (consolidation proposal), `imp_<ULID>` (import), record key `imp_<ULID>:<ordinal>`. Additions to the id table of 00-system §3 are recorded with the decision.
 
 ## Events (schema 1)
 | Event | Payload (summary) |
@@ -165,14 +182,14 @@ Import: `import-unresolved` (count), `import-unconfirmed`, `import-attachment-mi
 ## Rigour requirements
 Existing, in scope: **R-01, R-02** (imported works carry provenance to file hash, record and query; region members trace to their basis); **R-03** (the export is archived verbatim before parsing); **R-04**; **R-05** (coverage, drift, overlap and all counts derived); **R-20, R-24** (the held-out part of an import is handled as held-out seeds are); **R-22, R-23, R-25** (import admission runs are recorded searches reported under other methods); **R-26** (dedup of imported works; label, idea and concept merges recorded and reversible); **R-43, R-47** (attachments are recorded attempts; literature and personal notes stay in the library); **R-51** (agents propose regions, members, labels and merges; humans decide).
 
-Proposed (letters provisional; parallel slice specs may use the same letters, renumbered on acceptance):
-- **R-xx(k) (proposed) Regions are versioned selections.** A region is cited only by a pinned, hashed version whose member set is derived from declared rules and recorded decisions; drift is reported, never applied silently; a region asserts nothing and changes no evidence value. All modes.
-- **R-xx(l) (proposed) Consolidation before selection.** Free labels are never evidence and never select; only promoted terms with stated or human-confirmed applications may appear in a region rule; merges and promotions are recorded, reversible and human-decided. All modes.
-- **R-xx(m) (proposed) Imported libraries.** An imported record carries provenance to the archived export; it enters the corpus only as a candidate for screening; the coverage of a library by the systematic search is derived per declared bucket and reported on a held-out part when the library preceded the search. P, S (exploratory: reported, not gated).
+Added on acceptance (numbers in [01-rigour.md](01-rigour.md)):
+- **R-90 Regions are versioned selections.** A region is cited only by a pinned, hashed version whose member set is derived from declared rules and recorded decisions; drift is reported, never applied silently; a region asserts nothing and changes no evidence value. All modes.
+- **R-91 Consolidation before selection.** Free labels are never evidence and never select; only promoted terms with stated or human-confirmed applications may appear in a region rule; merges and promotions are recorded, reversible and human-decided. All modes.
+- **R-92 Imported libraries.** An imported record carries provenance to the archived export; it enters the corpus only as a candidate for screening; the coverage of a library by the systematic search is derived per declared bucket and reported on a held-out part when the library preceded the search. P, S (exploratory: reported, not gated).
 
-## Proposed decisions (number assigned on acceptance)
-1. *Regions, foci, labels and terms.* Rulings 1–16 and 26; reconciles decision 5 (free labels, consolidation, promotion) with slice 3b (typed graph, no free labels in graph tables) by placing labels in organisation-class tables and admitting only promoted terms to selectors.
-2. *Importing an existing corpus.* Rulings 17–25; adds `library-import` to `ProvenanceMethod` and `import` to `QueryPurpose`; adds the protocol section `library_sources`; extends decision 46 item 7 with export-named attachments and a title cross-check for PDF-folder imports; adds `bibtexparser` as a dependency.
+## Decisions (recorded 2026-11-04)
+1. *Decision 59: Regions, foci, labels and terms.* Rulings 1–16 and 26; reconciles decision 5 (free labels, consolidation, promotion) with slice 3b (typed graph, no free labels in graph tables) by placing labels in organisation-class tables and admitting only promoted terms to selectors.
+2. *Decision 60: Importing an existing corpus.* Rulings 17–25; adds `library-import` to `ProvenanceMethod` (after `supplied`) and `import` to `QueryPurpose`; adds the protocol section `library_sources`; extends decision 46 item 7 with export-named attachments and a title cross-check for PDF-folder imports; adds `bibtexparser` as a dependency.
 
 ## In scope
 Region model, rules, evaluation, snapshots, review, member proposals, links, adoption; foci; labels, consolidation passes and proposals, merges, promotion to terms; BibTeX, CSL JSON and PDF-folder import; resolution, split, admission, attachments, coverage audit; PRISMA and PRISMA-S additions; tools, CLI, check, trace; skills `rf-regions`, `rf-consolidate`.

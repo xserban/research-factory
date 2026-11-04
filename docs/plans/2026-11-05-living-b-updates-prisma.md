@@ -2,7 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> **Status: draft — rulings recommended; awaiting the researcher's review before any build.**
+> **Status: Accepted 2026-11-04 (researcher's instruction: build everything, MVP v1; recommended rulings adopted).**
+
+> **Reconciled 2026-11-04 (cross-spec reconciliation, decision 75; v1 cut, decision 74).** Slice 4a is merged first: Task 1 takes the 4a branch only and builds the computed candidate view `inbox_entries` ordered by `surfaced_at`, with `priority` always `None`; `prioritise` and `inbox.prioritised` are not built (they would order screening against R-34) and are listed under Later. Task 5 uses decision 38 item 6 precedence in the update flow (spec reconciliation item 2): a work counts once, under databases if any provenance up to the cut-off is `database`, else by the order `citation-chase`, `seed-admission`, `hand-search`, `supplied`, `library-import`; add `test_update_flow_database_precedence`. Bumps `PROJECTION_VERSION` by one from the value it finds.
 
 > **Dependencies.** Plan living-A merged (cycles, `CycleHook`, `cycles`, `watch_status`). Slice 4a (candidate inbox, discovery record, `inbox.prioritised`) merged **or not**: Task 1 has two branches, chosen at build time; both produce the same Interfaces. Living-C may run in parallel with this plan; living-D consumes `snapshot`, `SnapshotBlob` and `prisma_update`.
 
@@ -52,15 +54,13 @@
 
 *Tier: standard.*
 
-**Files (4a branch):** modify 4a's inbox service to accept route `watch` whose reference is the `wcy_` id of the cycle in which the work's first record was parsed. **Files (fallback branch):** Create `model/inbox.py`, `services/inbox_watch.py`; Modify `events/catalog.py`, `index/living.py`. Test `tests/test_inbox_watch.py`.
+**Files (4a branch, the only v1 branch):** Create `services/inbox_watch.py` (computed candidate view over pending works; no event type); the route of a watch work is `database:<source>` with its `wcy_` cycle as `route_ref` (slice-4a reconciliation item 2). Test `tests/test_inbox_watch.py`. The fallback branch and the priority hint are not built (Later L1).
 
-**Interfaces (both branches):**
-- `class InboxEntry(StrictModel): work_id: str; route: str; route_ref: str; surfaced_at: str (event id); priority: int | None`.
-- `def inbox_entries(project: Project, *, route: str | None = None, limit: int = 100, after: str | None = None) -> list[InboxEntry]` — pending works at title/abstract (`final_outcomes`), ordered by priority (desc, `None` last) then `surfaced_at`; paginated.
-- `def prioritise(project: Project, actor: Actor, work_id: str, priority: int, rationale: str) -> str` — human only; writes `inbox.prioritised` (event id returned); refused for a non-pending work.
-- `screen_next` serves pending works by the same order within a batch draw; the draw stays randomised within equal priority (R-34 randomised order holds within a priority level).
+**Interfaces:**
+- `class InboxEntry(StrictModel): work_id: str; route: str; route_ref: str; surfaced_at: str (event id)`.
+- `def inbox_entries(project: Project, *, route: str | None = None, limit: int = 100, after: str | None = None) -> list[InboxEntry]` — pending works at title/abstract (`final_outcomes`), ordered by `surfaced_at`; paginated. `screen_next` order is unchanged (randomised, R-34).
 
-- [ ] **Step 1: Tests.** `test_watch_work_listed_with_cycle_ref`, `test_included_work_leaves_inbox`, `test_priority_orders_entries`, `test_agent_cannot_prioritise` (agent actor refused, nothing written), `test_priority_does_not_change_outcome`, `test_order_random_within_priority` (two seeds give different orders inside a level).
+- [ ] **Step 1: Tests.** `test_watch_work_listed_with_cycle_ref`, `test_included_work_leaves_inbox`, `test_link_and_watch_routes_listed_together` (a supplied work and a watch work, both pending), `test_screen_order_unchanged_by_view`.
 - [ ] **Step 2–4:** fail, implement, `uv run pytest tests/test_inbox_watch.py tests/test_screening*.py -q`.
 - [ ] **Step 5: Commit** `feat(living): watch route in the candidate inbox`.
 
@@ -143,3 +143,9 @@
 
 - The 4a branch and the fallback branch expose the same `inbox_entries`/`prioritise` signatures; the fallback's `inbox.prioritised` event type is the one 4a is asked to adopt (stated in the slice spec, open question 5).
 - `AuditSampled.top_up_of` defaults to `None`, so existing audit events validate and project unchanged.
+
+## Later (not v1)
+
+Moved here by the v1 cut of 2026-11-04 (decision 74); built after the v1 plans of the build order (`2026-11-05-build-order.md`), in the order listed. Task text is unchanged; references to "Task N" inside a moved task use the plan's original numbering.
+
+### Later L1: Priority hints (`inbox.prioritised`, `prioritise`, `factory inbox prioritise`) from Task 1 as drafted. Needs a new decision reconciling a human-set screening order with R-34 (randomised order) before it is built.

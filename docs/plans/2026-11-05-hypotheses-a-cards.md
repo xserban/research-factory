@@ -2,7 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> Status: draft — rulings recommended; awaiting the researcher's review before any build.
+> **Status: Accepted 2026-11-04 (researcher's instruction: build everything, MVP v1; recommended rulings adopted).**
+
+> **Reconciled 2026-11-04 (cross-spec reconciliation, decision 75; v1 cut, decision 74).** v1 cut: cross-project card import moved to Later; the former Task 5 is Later L1, the former Task 6 is now Task 5, and Review Focus item 4 applies only when the Later task is built. Task 1 still defines the `card.imported` event type (unused in v1). Cards are a `miner` module and the vocabulary a `proposal` module for slice M; `hypotheses.property_approve` and `hypotheses.assertion_confirm` are slice-M gates (floor `human`). Vocabulary scope is the project in v1. Bumps `PROJECTION_VERSION` by one from the value it finds.
 
 > **Dependencies.** Plans 2D and 2E merged (verifiers, `final_rows`, `evidence_report`); slice 3b plans G2-A–G2-C merged (`IdeaView`, `resolve_idea`, `list_ideas`). Slice 3d (regions) is *not* required: the vocabulary scope is the project until 3d lands (spec ruling 4); Task 1 keeps a `scope` field so a region scope can be added without a new event type. This plan ends with every earlier test passing unchanged except the projection-version pin.
 
@@ -37,7 +39,7 @@
 1. An assertion recorded under `V@a` on a property that is later changed (new definition) is `stale` and leaves `card_props`-based views; re-asserting restores it (Task 4, `test_definition_change_stales_assertion`).
 2. A `card.assertion_decided` event with an agent actor written by hand does not change the projection (Task 3, `test_projector_ignores_agent_decisions`).
 3. A `row` assertion whose evidence row is later re-resolved to another value becomes stale, not silently updated (Task 4, `test_row_basis_follows_final_row`).
-4. An imported assertion is stated only when the same conversion is present and the quote re-verifies (Task 5, `test_import_reverifies_or_labels`).
+4. An imported assertion is stated only when the same conversion is present and the quote re-verifies (Task L1 (Later), `test_import_reverifies_or_labels`).
 
 ## File Structure
 
@@ -118,20 +120,7 @@ def test_event_provenance(project): ...                     # model, skill, inpu
 ```
 - [ ] **Step 2:** Run; FAIL. **Step 3:** Implement. **Step 4:** Pass, including the unedited plan-D audit suite; mypy; ruff. **Step 5:** Commit `feat(cards): verified property assertions, human confirmation, staleness`.
 
-### Task 5: Cross-project card import
-
-*Tier: standard (provenance).*
-
-**Files:** Create `services/card_import.py`; Test `tests/test_card_import.py`.
-
-**Interfaces:**
-- Consumes: the source `Project` from `services/context.py::open_project(settings, slug, session=..., clock=...)` (used for reading only), `card_view`, `conversion_document`, `quote_in_element`, Task 4 checks.
-- Produces: `ImportResult(card_id, stated: int, unverified: int, skipped: list[tuple[str, str]])`; `import_card(target: Project, actor, source: Project, source_card_id: str) -> ImportResult` (human only; the source card must have stated or confirmed assertions; properties are mapped by key through the target vocabulary: a key unknown or of a different kind in the target is skipped with reason `property-unknown` / `kind-differs`; each copied assertion is written as `card.asserted` with `basis_kind = imported`, `imported_from = "<slug>/<pas_id>"`, and `status = stated` when the conversion id exists in the target and the quote re-verifies, else `imported-unverified`; `inferred` source assertions are never imported; one `card.imported` event lists the source event ids). The source project is read through its index only; nothing is written to it.
-
-- [ ] **Step 1: Tests.** `test_import_reverifies_or_labels` (Review Focus 4; acceptance 4), `test_import_skips_unknown_property`, `test_import_never_copies_inferred`, `test_source_project_unchanged` (state hash before and after), `test_import_is_human_only`, `test_import_records_source_events`.
-- [ ] **Step 2:** Run; FAIL. **Step 3:** Implement. **Step 4:** Pass; mypy; ruff. **Step 5:** Commit `feat(cards): recorded cross-project card import`.
-
-### Task 6: MCP tools, CLI and the `rf-cards` skill
+### Task 5: MCP tools, CLI and the `rf-cards` skill
 
 *Tier: Haiku implement and review (surfaces); the skill by Sonnet.*
 
@@ -147,6 +136,23 @@ def test_event_provenance(project): ...                     # model, skill, inpu
 
 ## Self-review notes
 
-- **Spec coverage.** Rulings 4, 5, 8; acceptance 1–4 (Tasks 2, 4, 5). Matching and its `card_props` reads are H-B.
+- **Spec coverage.** Rulings 4, 5, 8; acceptance 1–3 (Tasks 2, 4) and 4 (Later L1). Matching and its `card_props` reads are H-B.
 - **Types used later.** `PropertyDef`, `PropertyKind`, `MatchRule`, `CARD_ID_RE`, `ASSERTION_ID_RE`, `vocabulary_version`, `resolve_property`, `card_view`, `list_cards`, `effective_card_props`, `CardPropRow(card_id, card_kind, subject, property_key, value_norm, number_canonical, effective)`, tables `cards`, `card_props`.
-- **Tiers.** Tasks 1, 2, 4 critical; 3, 5 standard; 6 Haiku.
+- **Tiers.** Tasks 1, 2, 4 critical; 3 standard; 5 Haiku; Later L1 standard.
+
+## Later (not v1)
+
+Moved here by the v1 cut of 2026-11-04 (decision 74); built after the v1 plans of the build order (`2026-11-05-build-order.md`), in the order listed. Task text is unchanged; references to "Task N" inside a moved task use the plan's original numbering.
+
+### Later L1 (was Task 5): Cross-project card import
+
+*Tier: standard (provenance).*
+
+**Files:** Create `services/card_import.py`; Test `tests/test_card_import.py`.
+
+**Interfaces:**
+- Consumes: the source `Project` from `services/context.py::open_project(settings, slug, session=..., clock=...)` (used for reading only), `card_view`, `conversion_document`, `quote_in_element`, Task 4 checks.
+- Produces: `ImportResult(card_id, stated: int, unverified: int, skipped: list[tuple[str, str]])`; `import_card(target: Project, actor, source: Project, source_card_id: str) -> ImportResult` (human only; the source card must have stated or confirmed assertions; properties are mapped by key through the target vocabulary: a key unknown or of a different kind in the target is skipped with reason `property-unknown` / `kind-differs`; each copied assertion is written as `card.asserted` with `basis_kind = imported`, `imported_from = "<slug>/<pas_id>"`, and `status = stated` when the conversion id exists in the target and the quote re-verifies, else `imported-unverified`; `inferred` source assertions are never imported; one `card.imported` event lists the source event ids). The source project is read through its index only; nothing is written to it.
+
+- [ ] **Step 1: Tests.** `test_import_reverifies_or_labels` (Review Focus 4; acceptance 4), `test_import_skips_unknown_property`, `test_import_never_copies_inferred`, `test_source_project_unchanged` (state hash before and after), `test_import_is_human_only`, `test_import_records_source_events`.
+- [ ] **Step 2:** Run; FAIL. **Step 3:** Implement. **Step 4:** Pass; mypy; ruff. **Step 5:** Commit `feat(cards): recorded cross-project card import`.

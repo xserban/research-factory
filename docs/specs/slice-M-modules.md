@@ -1,6 +1,41 @@
 # Slice M — Stage modules, gate policies and miners
 
-Status: draft — rulings recommended; awaiting the researcher's review before any build.
+Status: Accepted 2026-11-04 (researcher's instruction: build everything, MVP v1; recommended rulings adopted). Decisions 55–58; requirements R-140–R-143.
+
+## Cross-spec reconciliation 2026-11-04
+
+Read with the other slice specs accepted the same day (3d, 4a, 4b, 5, 6, 7a, 7b) and [docs/plans/2026-11-05-build-order.md](../plans/2026-11-05-build-order.md). What changed here:
+
+1. **Build position.** M-A starts after G2 and G3 are merged (build order). Migration step 6 is therefore folded into M-A Task 6: the contribution module and the G2/G3 proposal modules (`lineage`, `intuition`) are declared there, with their gates in the preset table. Every plan built after M-A that adds an event type, task kind, protocol section, check code or decision gate declares it in its own `services/modules/<name>.py` in the same task (the ownership test of acceptance 1 enforces it); "hand-written first, behind the contract later" in the other specs reads as "declared when built".
+2. **Module kinds are closed.** The kinds of ruling 5 stay the only kinds. Other specs map onto them: 3d import → `retrieval`, regions and labels/consolidation → `proposal` (rule evaluation is the regions module's builder hook); 4a inbox → `retrieval`, discovery → `builder`; 4b watch cycles and notice/version tracking (4b's "status module") → `retrieval`, conclusions, snapshots and digest → `builder`; 6 vocabulary, contradictions, leads, hypotheses and experiment designs → `proposal`, cards → `miner`, matching, finders, evaluation and the benchmark ledger → `builder`; 7a portfolio → `builder`; 7b views, exports and briefings → `builder`, writing and manuscript verification (7b's "authoring module") → `proposal`.
+3. **Builders and events (ruling 5 refined).** A builder declares no gate and owns no agent-written event type. It may own system-actor events that record its computed outputs (`living.snapshot_recorded`, `digest.generated`, `hypothesis.evaluated`, `baseline.evaluated`, `briefing.served`) and human events that register its inputs (`conclusion.registered`, `model.cutoff_declared`).
+4. **Gate ids.** Every decision gate of every slice is named `<module>.<act>` and declared in this slice's preset table. The gates of the later slices, with floors and presets (exploratory / pilot / systematic):
+
+| Gate | Floor | E | P | S | Spec |
+|---|---|---|---|---|---|
+| `import.resolution_confirm` | agent_audit | human | agent_audit(0.1, 20) | human | 3d ruling 21 (as `reference.link_confirm`) |
+| `regions.review`, `regions.member_decide`, `labels.application_confirm`, `consolidation.decide`, `terms.promote` | human | human | human | human | 3d ruling 26 |
+| `inbox.withdraw` | human | human | human | human | 4a ruling 13 |
+| `living.notice_assess`, `living.document_prefer`, `living.conclusion_register` | human | human | human | human | 4b rulings 12, 15, 16 |
+| `hypotheses.lead_decide` | agent | agent (non-author) | human | human | 6 ruling 11 |
+| `hypotheses.register` | agent | agent (non-drafter) | human | human | 6 ruling 14 |
+| `experiments.freeze_unlock` | agent | agent (non-drafter) | human | human | 6 ruling 14 |
+| `experiments.accept_baseline`, `hypotheses.property_approve`, `hypotheses.assertion_confirm`, `hypotheses.contradiction_confirm`, `hypotheses.close` (conclude, abandon, close a direction) | human | human | human | human | 6 rulings 4, 5, 9, 14, 17, 24, 27 |
+| `writing.release` | agent | agent | agent, after the audit is labelled | human (reviewer of record) | 7b ruling 13 (its draft name `draft-released`) |
+| `writing.audit_label`, `manuscript.audit_label` | human | human | human | human | 7b rulings 12, 17 |
+| `manuscript.citation_confirm` | agent_audit | human | agent_audit(0.1, 20) | human | 7b ruling 17 (as `reference.link_confirm`) |
+
+   Slice 6's critic review is a quality regime (independent agent session), not a gate. Slice 6 sets its gate policies through `gate_policies`, not through a `hypothesis_plan.gate_policy` field (see slice-6 reconciliation). Slice 5 adds a role dimension to `GateSpec` (`required_role`: `maintainer` for every human decision gate above and for protocol change and PRESS confirmation, `owner` for membership and budgets); `TEAM_GATES` is computed from the registry, not a hand-written table.
+5. **Identifiers.** The mining import id is `mim_<ULID>` (it was `imp_`, which slice 3d uses for library imports).
+6. **Shared mining store root.** `<root>/.mining/` (git-ignored), holding `shared.sqlite`; slice 5 adopts this root (it had `<root>/mining/`) and adds its visibility rule.
+7. **Epistemic classes** (closed set across the slices): `evidence` and `interpretation` (slice 3c), `organisation` (slice 3d: regions, labels, terms; slice 6 property vocabulary), `test` (slice 6: hypotheses, designs, runs, own results, registry rows). Autonomy (ruling 10) stays orthogonal to class; slice 6's `autonomy: agent` label is this slice's `Autonomy.AGENT`.
+8. **Requirements** R-xx(a)–(d) are R-140–R-143 in [01-rigour.md](01-rigour.md).
+9. **Projection version.** Plans M-B, M-D and M-E each bump `PROJECTION_VERSION` by one from the value they find (the rule of the build-order plan); no plan pins an absolute number.
+
+## v1 scope
+
+- **v1:** M-A (quality dedup, contract, registry, declarations including G2/G3 modules, composed `check`), M-B (gate policies, presets, `require_gate`, gate audit, `below-policy`, autonomy), M-C (miner spec, built-in miners, generic `mine_*` path), M-D (agent-authored miners, calibration, evidence admission; its automated end-to-end acceptance).
+- **Later:** M-E (shared mining store, `mine import`, `source-superseded`), because v1 is single-project; the scale acceptance 15.
 
 Builds on [00-system.md](00-system.md), slices 1, 2, 3a, 3b and 3c; must satisfy [01-rigour.md](01-rigour.md) R-01–R-05, R-13–R-16, R-33–R-37, R-40, R-44–R-47, R-51, R-52, plus the requirements proposed below. Implements backlog IDEA-38 (stage modules and gate policies), IDEA-37 (miners with verifiable field kinds) and IDEA-36 (reuse of mined records across projects, folded into IDEA-37 as its shared mining layer). Vocabulary: [docs/10-abstractions.md](../10-abstractions.md) (artifact, event family, stage module, gate, gate policy, miner, field kind, verifier, quality regime, builder); its section 5 lists the misfits this slice resolves and its section 6 the questions it answers. Every ruling is marked **[confirm]** with a recommended option, so that the researcher can accept them in bulk.
 
@@ -282,7 +317,7 @@ New types only; no existing type changes.
 | `miner.calibration_drawn` | `calibration_id` (`mcl_<ULID>`), `name`, `version`, `units: tuple[(work_id, conversion_id)]`, `random_seed`, `population_digest` | human |
 | `miner.calibration_labelled` | `calibration_id`, `work_id`, `gold_rows` (verified as records are), `channel` | human |
 | `miner.retired` | `name`, `version`, `reason` | human or agent |
-| `mine.imported` | `import_id` (`imp_<ULID>`), `source_project`, `miner`, `digest`, `items`: per record the source extraction ids, `work_id`, `conversion_id`, `row_key`, the verified stored fields (values, anchors, quotes, as `extraction.recorded` stores them), the source status (`agreed`, `resolved`, `single`) and `source_passes` | human or system |
+| `mine.imported` | `import_id` (`mim_<ULID>`), `source_project`, `miner`, `digest`, `items`: per record the source extraction ids, `work_id`, `conversion_id`, `row_key`, the verified stored fields (values, anchors, quotes, as `extraction.recorded` stores them), the source status (`agreed`, `resolved`, `single`) and `source_passes` | human or system |
 
 `mine.imported` is self-contained: replaying the importing project never reads another project's log, so its rows are in the event itself (quotes only, as on `extraction.recorded`; I9 holds).
 | `gate.audit_sampled` | `audit_id` (`gau_<ULID>`), `gate_id`, `act_event_ids`, `random_seed`, `population`, `population_digest`, `protocol_id` | human |
@@ -304,11 +339,11 @@ MCP: `mine_next`, `mine_record`, `mine_status` (counts per miner and status; pas
 
 ## Rigour requirements
 
-Proposed additions (numbers assigned on acceptance):
-- **R-xx(a) Declared autonomy.** Every decision gate has a declared policy (explicit or preset) recorded with the protocol; every output's autonomy is computable from events; methods state the policy and per-level counts.
-- **R-xx(b) Verifiable miners.** A registered miner uses only verifiable field kinds; every record carries at least one verified quote; free text is refused.
-- **R-xx(c) Calibrated before evidence.** A registered miner's records count as evidence only after a human-labelled calibration in the same project passed declared thresholds above platform floors; the proposer neither runs the calibration pass nor labels it.
-- **R-xx(d) Reuse is recorded and re-verified.** An imported record names its source and is re-verified against the importing project's own conversion; it never counts as an independent pass it did not have.
+Added on acceptance (numbers in [01-rigour.md](01-rigour.md)):
+- **R-140 Declared autonomy.** Every decision gate has a declared policy (explicit or preset) recorded with the protocol; every output's autonomy is computable from events; methods state the policy and per-level counts.
+- **R-141 Verifiable miners.** A registered miner uses only verifiable field kinds; every record carries at least one verified quote; free text is refused.
+- **R-142 Calibrated before evidence.** A registered miner's records count as evidence only after a human-labelled calibration in the same project passed declared thresholds above platform floors; the proposer neither runs the calibration pass nor labels it.
+- **R-143 Reuse is recorded and re-verified.** An imported record names its source and is re-verified against the importing project's own conversion; it never counts as an independent pass it did not have.
 
 Existing: R-04 (miner registration and imports carry provenance; agent-authored specs record the proposing session), R-05 (calibration scores, autonomy counts and import counts computed), R-13/R-45 (miners listed in the protocol before tasks), R-14/R-15 (policy and miner amendments with blast radius), R-33/R-51 (independence derived from memberships; proposer ≠ evaluator), R-44 (number kind), R-47 (no text in the shared store), R-52 (failed and retired miners reported).
 
@@ -346,12 +381,12 @@ Ordered so that each step ships working software and replays every existing log 
 14. **Import.** Import into a project lacking the conversion, or with a different digest, is refused; a quote altered in the source log fails re-verification; a superseded source record becomes `source-superseded` in the importer after `factory shared rebuild`.
 15. **Scale (slow).** The shared projector folds 10^5 records from 20 projects incrementally (second sync applies only new files) and answers an import lookup by `(miner, version, digest, conversion_id)` through an index without a full scan; services never load all records into memory (iterators over SQL).
 
-## Proposed decisions (numbers assigned on acceptance)
+## Decisions (recorded 2026-11-04)
 
-- **Stage-module contract** — rulings 1–5 and 21.
-- **Gate policies and autonomy** — rulings 6–10, with the preset table as the record of today's behaviour.
-- **Miners** — rulings 11–17.
-- **Shared mining layer** — rulings 18–20.
+- **55 Stage-module contract** — rulings 1–5 and 21.
+- **56 Gate policies and autonomy** — rulings 6–10, with the preset table as the record of today's behaviour.
+- **57 Miners** — rulings 11–17.
+- **58 Shared mining layer** — rulings 18–20.
 
 ## Proposed sub-plans
 

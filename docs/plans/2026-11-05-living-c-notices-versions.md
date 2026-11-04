@@ -2,7 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> **Status: draft — rulings recommended; awaiting the researcher's review before any build.**
+> **Status: Accepted 2026-11-04 (researcher's instruction: build everything, MVP v1; recommended rulings adopted).**
+
+> **Reconciled 2026-11-04 (cross-spec reconciliation, decision 75; v1 cut, decision 74).** Slice 3b is merged, so Task 6's lineage step is built. Gates `living.notice_assess` and `living.document_prefer` are slice-M decision gates (floor `human`). Bumps `PROJECTION_VERSION` by one from the value it finds; the Crossref and OpenAlex `network` tests stay in v1.
 
 > **Dependencies.** Plan living-A merged (cycles, `CycleHook`, `dedup_new`, `work_keys`). Plans 2A–2E merged (routes, refresh, `default_conversion`, plan-D row staleness, evidence report). Slice 3b (lineage) optional: Task 6's lineage step is built only if `services/lineage.py` exists, otherwise it is recorded as a follow-up in the plan's completion notes. May run in parallel with living-B.
 
@@ -157,3 +159,7 @@
 
 - The only change to an existing gate is the cycle waiver for STATUS queries; it mirrors living-A's window waiver and is tested for foreign and finished cycles.
 - Status checks run after the cycle's search runs and incremental dedup, so a version-of-record record found by the same cycle's database query is already merged before the alias is written; `test_link_after_same_cycle_merge_is_not_conflict` covers it (Task 4).
+
+## Later (not v1)
+
+None: every task of this plan is in v1.

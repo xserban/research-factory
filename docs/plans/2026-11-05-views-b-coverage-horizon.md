@@ -2,7 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> Status: draft — rulings recommended; awaiting the researcher's review before any build.
+> **Status: Accepted 2026-11-04 (researcher's instruction: build everything, MVP v1; recommended rulings adopted).**
+
+> **Reconciled 2026-11-04 (cross-spec reconciliation, decision 75; v1 cut, decision 74).** Slice 4b is merged first: the horizon states the latest search or watch date per source. No projection change.
 
 > **Dependencies.** V-A merged (`ViewMeta`, `view_meta`, `to_json`, `views/render.py`). Plan 2E (`group_id`, `evidence/pareto.py`, `ReportSpec`, evidence-report rulings 2, 5, 6) and plan D (`final_rows`, `grouped_rows`, `FinalRow`) merged. G2-D/G2-C (confirmed ideas, idea members, lineage edges) merged. Slice 4 is not required: without watches the horizon is the last search date, which the views state.
 
@@ -134,3 +136,7 @@ def test_trace_ids_resolve(project): ...                         # each trace id
 ## Self-review notes
 - Promoting `_direction` to `group_direction` is a rename with a behaviour-preserving test; the evidence report imports the public name.
 - Slice 4 adds watch runs to the horizon notice; nothing else changes.
+
+## Later (not v1)
+
+None: every task of this plan is in v1.

@@ -2,7 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> Status: draft — rulings recommended; awaiting the researcher's review before any build.
+> **Status: Accepted 2026-11-04 (researcher's instruction: build everything, MVP v1; recommended rulings adopted).**
+
+> **Reconciled 2026-11-04 (cross-spec reconciliation, decision 75; v1 cut, decision 74).** `LIBRARY_IMPORT` is appended after slice 4a's `SUPPLIED` (built first): `OTHER_METHODS = (CITATION_CHASE, SEED_ADMISSION, HAND_SEARCH, SUPPLIED, LIBRARY_IMPORT)`; any `database` provenance still wins. Fuzzy-match confirmation is the slice-M gate `import.resolution_confirm` (presets as `reference.link_confirm`), checked through `require_gate`. Bumps `PROJECTION_VERSION` by one from the value it finds.
 
 > **Dependencies.** Import-A merged; slice 3a (G1: `services/reference_resolve.py`, `references/match.py`, `sources/reflist.py`, `decide_reference` and its confirmation policy) merged. Import-C consumes this plan's Interfaces. Every slice-1, slice-2 and G1 test passes unchanged except the `PROJECTION_VERSION` pin; PRISMA and search-report output of a project without imports is byte-identical.
 
@@ -136,3 +138,7 @@ def test_failed_admission_can_be_retried(...): ...
 - [ ] **Step 2–5:** Run, FAIL; implement; tests, mypy, ruff; commit `feat(cli): import resolve, confirm, admit, attach`.
 
 **Verification for the plan:** `cd platform && uv run pytest -m "not network and not slow" && uv run mypy --strict src && uv run ruff check`.
+
+## Later (not v1)
+
+None: every task of this plan is in v1.
