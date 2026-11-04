@@ -8,7 +8,7 @@ This file fixes the cross-cutting contracts that are expensive to change later. 
 
 The platform is a deterministic Python service that stores, validates, schedules and logs research work. It **never calls a model**. All judgement is made by Claude (Claude Code or claude.ai, on subscriptions) through MCP tools.
 
-Not in scope until a later slice says otherwise: user interface, embeddings, multi-user authentication, server deployment.
+Not in scope until a later slice says otherwise: user interface, embeddings, multi-user authentication, server deployment. Slice 7a admits one exception: generated, read-only reports (Markdown, a self-contained HTML file, JSON), such as `factory portfolio`; they add no server and no interactive editing.
 
 ## 2. Repository layout
 
@@ -114,7 +114,7 @@ Tasks are events (`task.created`, `task.claimed`, `task.completed`, `task.releas
 
 ## 9. Commands (thin CLI)
 
-`factory init <slug>` · `factory rebuild` · `factory status` · `factory trace <id> [--forward]` · `factory check [--promote-to <mode>]` · `factory report prisma` · `factory fulltext import <folder>` · `factory fulltext fetch [--work ID]… [--route R]… [--refresh] [--limit N]` · `factory fulltext status` · `factory fulltext restore <doc_id>|--missing` · `factory serve` (MCP over stdio).
+`factory init <slug>` · `factory rebuild` · `factory status` · `factory trace <id> [--forward]` · `factory check [--promote-to <mode>]` · `factory report prisma` · `factory fulltext import <folder>` · `factory fulltext fetch [--work ID]… [--route R]… [--refresh] [--limit N]` · `factory fulltext status` · `factory fulltext restore <doc_id>|--missing` · `factory portfolio [--json] [--html PATH] [--as-of ISO]` · `factory serve` (MCP over stdio).
 
 ## 10. Quality and tooling
 

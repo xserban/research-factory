@@ -1,6 +1,6 @@
 # Slice 7a — Portfolio view across projects
 
-Status: Accepted 2026-11-04 (researcher's instruction: build everything, MVP v1; recommended rulings adopted). Decision 69; no new requirement. Drafted 2026-11-05 · Outline slice: **7 (views and writing)** of [README.md](README.md). Builds on [00-system.md](00-system.md) and slices 1–2 (`project_status`, screening, extraction, check); must satisfy [01-rigour.md](01-rigour.md) R-01, R-05, R-39 and decision 43. Takes in backlog IDEA-01 (portfolio dashboard). Rulings marked **[confirm]** await the researcher.
+Status: Accepted 2026-11-04 (researcher's instruction: build everything, MVP v1; recommended rulings adopted); implemented in plan 7a. Decision 69; no new requirement. Drafted 2026-11-05 · Outline slice: **7 (views and writing)** of [README.md](README.md). Builds on [00-system.md](00-system.md) and slices 1–2 (`project_status`, screening, extraction, check); must satisfy [01-rigour.md](01-rigour.md) R-01, R-05, R-39 and decision 43. Takes in backlog IDEA-01 (portfolio dashboard). Rulings marked **[confirm]** await the researcher.
 
 ## Cross-spec reconciliation 2026-11-04
 
@@ -74,6 +74,15 @@ R-05 (every count derived; tested by recomputing from `project_status`); R-01 (e
 5. JSON, Markdown and HTML are byte-identical across two runs with the same `--as-of` and across an index rebuild.
 6. The JSON contains no κ, rate, seed id, held-out figure or title (a test scans keys and values against the fixtures' titles and seed ids).
 7. `mypy --strict` and ruff pass; coverage ≥ 90% for `services/` and `model/`.
+
+## Implemented
+Plan [2026-11-05-portfolio](../plans/2026-11-05-portfolio.md): `services/human_queue.py`, `services/portfolio.py`, `cli/portfolio_render.py`, `factory portfolio [--json] [--html PATH] [--as-of ISO]`, and the human list in `factory status`. Deviations from the text above, all forced by the code as built:
+- The JSON field is `schema_version` (1): `schema` would shadow a pydantic attribute.
+- `HumanItem.command` is a fixed template using the global option (`factory --project <slug> screen disagreements --stage title-abstract`), because `--project` precedes the subcommand in the CLI. Audit labelling has no `--stage` option; its audit id carries the stage.
+- The reference-confirmation (G1) and inbox (slice 4a) gates are omitted: no CLI or MCP surface lets a human act on them yet (ruling 5, omitted rather than zero).
+- `press-confirmation` counts 1 only when a PRESS review is recorded and unconfirmed; a protocol that still needs an agent's review shows no human item.
+- Exit codes: 0; 1 when every project failed to read, or `--html` names a directory or an unwritable path; 2 for an empty root or an unparsable `--as-of`.
+- The `full-text` stage row matches while any promoted work has no converted document (including a work whose fetch attempts all failed), as the rule is written.
 
 ## Out of scope
 Live server (option B); publishing artifacts from the platform (option C is a skill-level step); cross-project suggestions (IDEA-04); literature watches and digests (IDEA-02, IDEA-03); any write action from the view.

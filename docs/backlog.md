@@ -23,7 +23,7 @@ Status: new · Added: YYYY-MM-DD · Slice: <n or —> · Depends on: <IDEA-/slic
 The overall idea: once all research projects live in the factory, a single view across them, with the living-literature machinery suggesting new work per project and a daily digest. IDEA-01–05 split it into separable pieces.
 
 ### IDEA-01 — Portfolio dashboard
-Status: new · Added: 2026-11-01 · Slice: 7 (views) · Depends on: slice 1 `status`, slice 3 (graph)
+Status: accepted ([slice-7a](specs/slice-7a-portfolio.md)) · Added: 2026-11-01 · Slice: 7 (views) · Depends on: slice 1 `status`, slice 3 (graph)
 **What:** one page listing every project with its rigor mode, stage, open tasks, pending human decisions (disagreements, `unsure`, audits), last search date and new-candidate counts.
 **Why:** see the whole research programme at once and know where a human decision is blocking.
 **Rigour notes:** read-only projection of events; every number derived (R-05), never edited in the dashboard.
