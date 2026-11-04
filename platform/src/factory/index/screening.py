@@ -1,18 +1,25 @@
 """Projection of screening and calibration: passes, sessions, decisions, human labels and audits.
 
+Every run of a screening stage carries a `stage` (`title-abstract` or `full-text`). `passes`,
+`pass_sessions`, `calibration_items`, `calibration_labels`, `resolutions` are keyed by stage as
+well as by their own key, so the two stages never share a row; `audits` keeps the stage of its
+sample. Slice-1 rows have stage `title-abstract`.
+
 `passes` keeps each opened pass (its framing, criterion order, recorded seed and sample; the sample
 is canonical JSON, or NULL). `pass_sessions` keeps the session that joined each pass, once.
-`decisions` keeps every recorded verdict; a decision that a later one supersedes gets
-`superseded_by` set, so a live decision is one with `superseded_by` NULL.
+`decisions` keeps every recorded verdict, with the `anchor` and `conversion_id` of a full-text
+decision (NULL at title/abstract); a decision that a later one supersedes gets `superseded_by`
+set, so a live decision is one with `superseded_by` NULL.
 
-`calibration_items` holds the drawn calibration set (one draw per project). `calibration_labels`
-and `resolutions` and `audit_items.human_verdict` keep the latest human label per key. `audits`
-and `audit_items` hold each audit sample; `agreed_verdict` is computed when the sample is written
-from the live screening decisions of the two passes under the protocol then current: `include`
-when both promote, `exclude` when both do not and neither is `unsure`, NULL otherwise. Each sample
-also keeps `population_digest`, the digest of the whole agreed set at that time, which the audit
-service compares to refuse a second open audit. `label_sessions` keeps every session
-that relayed a human label over MCP; a pass may not be joined from one of them.
+`calibration_items` holds the drawn calibration set (one draw per project and stage).
+`calibration_labels` and `resolutions` and `audit_items.human_verdict` keep the latest human label
+per key. `audits` and `audit_items` hold each audit sample; `agreed_verdict` is computed when the
+sample is written from the live screening decisions of the audit's stage, of the two passes under
+the protocol then current: `include` when both promote, `exclude` when both do not and neither is
+`unsure`, NULL otherwise. Each sample also keeps `population_digest`, the digest of the whole agreed
+set of its stage at that time, which the audit service compares to refuse a second open audit.
+`label_sessions` keeps every session that relayed a human label over MCP, at either stage; a pass
+at either stage may not be joined from one of them.
 
 Handlers are total: an event naming an unknown work or pass is stored, not refused. A second
 pass, join or sample with the same key changes nothing (first write wins); a second label or
@@ -28,6 +35,7 @@ from sqlalchemy.engine import Connection
 from factory.canonical import canonical_json, population_digest
 from factory.events.envelope import Event
 from factory.index.projection import Handler
+from factory.model.protocol import ScreeningStage
 from factory.model.screening import (
     AuditLabelled,
     AuditSampled,
@@ -55,10 +63,19 @@ class ScreeningTables:
     label_sessions: Table
 
 
+TITLE_ABSTRACT = ScreeningStage.TITLE_ABSTRACT.value
+
+
+def _stage(*, key: bool) -> Column[str]:
+    """The `stage` column of a stage-bearing table; a primary-key part when `key`."""
+    return Column("stage", String, primary_key=key, nullable=False, server_default=TITLE_ABSTRACT)
+
+
 def screening_tables(metadata: MetaData) -> ScreeningTables:
     passes = Table(
         "passes",
         metadata,
+        _stage(key=True),
         Column("pass_label", String, primary_key=True),
         Column("framing", String, nullable=False),
         Column("criterion_order", String, nullable=False),
@@ -68,6 +85,7 @@ def screening_tables(metadata: MetaData) -> ScreeningTables:
     pass_sessions = Table(
         "pass_sessions",
         metadata,
+        _stage(key=True),
         Column("session", String, primary_key=True),
         Column("pass_label", String, nullable=False),
         Column("model", String, nullable=False),
@@ -88,17 +106,21 @@ def screening_tables(metadata: MetaData) -> ScreeningTables:
         Column("task_id", String, nullable=False),
         Column("supersedes", String),
         Column("superseded_by", String),
+        Column("anchor", String),
+        Column("conversion_id", String),
         Column("event_id", String, nullable=False),
     )
     calibration_items = Table(
         "calibration_items",
         metadata,
+        _stage(key=True),
         Column("work_id", String, primary_key=True),
         Column("protocol_id_drawn", String),
     )
     calibration_labels = Table(
         "calibration_labels",
         metadata,
+        _stage(key=True),
         Column("work_id", String, primary_key=True),
         Column("verdict", String, nullable=False),
         Column("criterion", String),
@@ -108,6 +130,7 @@ def screening_tables(metadata: MetaData) -> ScreeningTables:
     resolutions = Table(
         "resolutions",
         metadata,
+        _stage(key=True),
         Column("work_id", String, primary_key=True),
         Column("verdict", String, nullable=False),
         Column("criterion", String),
@@ -119,6 +142,7 @@ def screening_tables(metadata: MetaData) -> ScreeningTables:
         "audits",
         metadata,
         Column("audit_id", String, primary_key=True),
+        _stage(key=False),
         Column("random_seed", Integer, nullable=False),
         Column("population", Integer, nullable=False),
         Column("exclusions", Integer, nullable=False),
@@ -182,8 +206,9 @@ def _pass_opened(t: ScreeningTables) -> Handler:
                 criterion_order=payload.criterion_order,
                 random_seed=payload.random_seed,
                 sample=sample,
+                stage=payload.stage.value,
             )
-            .on_conflict_do_nothing(index_elements=["pass_label"])
+            .on_conflict_do_nothing(index_elements=["stage", "pass_label"])
         )
 
     return pass_opened
@@ -198,8 +223,9 @@ def _pass_joined(t: ScreeningTables) -> Handler:
                 session=payload.session,
                 pass_label=payload.pass_label.value,
                 model=payload.model,
+                stage=payload.stage.value,
             )
-            .on_conflict_do_nothing(index_elements=["session"])
+            .on_conflict_do_nothing(index_elements=["stage", "session"])
         )
 
     return pass_joined
@@ -224,6 +250,8 @@ def _decision(t: ScreeningTables) -> Handler:
                 task_id=payload.task_id,
                 supersedes=payload.supersedes,
                 superseded_by=None,
+                anchor=payload.anchor,
+                conversion_id=payload.conversion_id,
                 event_id=event.id,
             )
             .on_conflict_do_nothing(index_elements=["decision_id"])
@@ -243,6 +271,7 @@ def _resolution(t: ScreeningTables) -> Handler:
     def resolution(conn: Connection, event: Event) -> None:
         payload = DisagreementResolved.model_validate(event.payload)
         values = {
+            "stage": payload.stage.value,
             "work_id": payload.work_id,
             "verdict": payload.verdict,
             "criterion": payload.criterion,
@@ -253,7 +282,7 @@ def _resolution(t: ScreeningTables) -> Handler:
         conn.execute(
             sqlite_insert(t.resolutions)
             .values(**values)
-            .on_conflict_do_update(index_elements=["work_id"], set_=values)
+            .on_conflict_do_update(index_elements=["stage", "work_id"], set_=values)
         )
 
     return resolution
@@ -265,8 +294,12 @@ def _calibration_drawn(t: ScreeningTables) -> Handler:
         for work_id in payload.work_ids:
             conn.execute(
                 sqlite_insert(t.calibration_items)
-                .values(work_id=work_id, protocol_id_drawn=payload.protocol_id)
-                .on_conflict_do_nothing(index_elements=["work_id"])
+                .values(
+                    stage=payload.stage.value,
+                    work_id=work_id,
+                    protocol_id_drawn=payload.protocol_id,
+                )
+                .on_conflict_do_nothing(index_elements=["stage", "work_id"])
             )
 
     return calibration_drawn
@@ -276,6 +309,7 @@ def _calibration_labelled(t: ScreeningTables) -> Handler:
     def calibration_labelled(conn: Connection, event: Event) -> None:
         payload = CalibrationLabelled.model_validate(event.payload)
         values = {
+            "stage": payload.stage.value,
             "work_id": payload.work_id,
             "verdict": payload.verdict,
             "criterion": payload.criterion,
@@ -285,7 +319,7 @@ def _calibration_labelled(t: ScreeningTables) -> Handler:
         conn.execute(
             sqlite_insert(t.calibration_labels)
             .values(**values)
-            .on_conflict_do_update(index_elements=["work_id"], set_=values)
+            .on_conflict_do_update(index_elements=["stage", "work_id"], set_=values)
         )
         _note_label_session(conn, t, event, payload.channel)
 
@@ -295,12 +329,13 @@ def _calibration_labelled(t: ScreeningTables) -> Handler:
 def _audit_sampled(t: ScreeningTables) -> Handler:
     def audit_sampled(conn: Connection, event: Event) -> None:
         payload = AuditSampled.model_validate(event.payload)
-        agreed = _agreed_by_work(conn, t, _current_protocol_id(conn))
+        agreed = _agreed_by_work(conn, t, _current_protocol_id(conn), payload.stage.value)
         verdicts = [(work, verdict) for work, (verdict, _) in agreed.items()]
         conn.execute(
             sqlite_insert(t.audits)
             .values(
                 audit_id=payload.audit_id,
+                stage=payload.stage.value,
                 random_seed=payload.random_seed,
                 population=payload.population,
                 exclusions=payload.exclusions,
@@ -364,13 +399,13 @@ def _current_protocol_id(conn: Connection) -> str | None:
 
 
 def _agreed_by_work(
-    conn: Connection, t: ScreeningTables, protocol_id: str | None
+    conn: Connection, t: ScreeningTables, protocol_id: str | None, stage: str
 ) -> dict[str, tuple[str, str | None]]:
-    """The agreed set under `protocol_id`: for each work both passes screened, its agreed outcome
-    (`include` when both live screening decisions promote, `exclude` when neither does) and, for an
-    exclusion, the bare criteria either pass cited, sorted and comma-joined. A work with an `unsure`
-    verdict, or whose passes disagree, is not agreed and is absent. Matches
-    `agreement.agreed_works`."""
+    """The agreed set of `stage` under `protocol_id`: for each work both passes screened, its
+    agreed outcome (`include` when both live screening decisions promote, `exclude` when neither
+    does) and, for an exclusion, the bare criteria either pass cited, sorted and comma-joined. A
+    work with an `unsure` verdict, or whose passes disagree, is not agreed and is absent. Matches
+    `agreement.agreed_works` for the same stage."""
     if protocol_id is None:
         return {}
     rows = conn.execute(
@@ -381,6 +416,7 @@ def _agreed_by_work(
             t.decisions.c.criterion,
         )
         .where(t.decisions.c.phase == "screening")
+        .where(t.decisions.c.stage == stage)
         .where(t.decisions.c.protocol_id == protocol_id)
         .where(t.decisions.c.superseded_by.is_(None))
         .order_by(t.decisions.c.event_id)
