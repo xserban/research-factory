@@ -53,7 +53,7 @@ _SORT_KEYS: dict[str, tuple[str, ...]] = {
     "limits": ("field", "value"),
 }
 _SEARCH_STRATEGY_KEYS = ("sources", "queries", "limits")
-_OMITTED_WHEN_NONE = frozenset({"full_text_screening"})
+_OMITTED_WHEN_NONE = frozenset({"full_text_screening", "extraction_schema"})
 """Optional sections left out of every hash while unset, so protocols that predate them keep
 their versions. Other `None` values stay in the hash."""
 
@@ -170,6 +170,30 @@ class ScreeningPlan(StrictModel):
     reviewers: tuple[Reviewer, ...]
 
 
+class ExtractionSchema(StrictModel):
+    """What is extracted: a versioned domain pack, the declared subset of its fields, the keys
+    that make rows comparable (a subset of `fields`) and the dual-extraction and audit settings.
+
+    `dual_extract_sample` is the fraction of works extracted twice (None = every work)."""
+
+    pack: str = Field(min_length=1)
+    pack_version: int = Field(ge=1)
+    fields: tuple[str, ...] = Field(min_length=1)
+    comparability_keys: tuple[str, ...] = ()
+    dual_extract_sample: float | None = Field(default=None, gt=0, le=1)
+    audit_fraction: float = Field(default=0.02, ge=0, le=1)
+    audit_minimum: int = Field(default=50, ge=0)
+    claims: bool = True
+
+    @model_validator(mode="after")
+    def _unique(self) -> Self:
+        if len(set(self.fields)) != len(self.fields):
+            raise ValueError("fields must be unique")
+        if len(set(self.comparability_keys)) != len(self.comparability_keys):
+            raise ValueError("comparability_keys must be unique")
+        return self
+
+
 class ProtocolSpec(StrictModel):
     """The protocol as an agent or a human states it. Keys are unique within each list."""
 
@@ -182,6 +206,8 @@ class ProtocolSpec(StrictModel):
     screening: ScreeningPlan
     full_text_screening: ScreeningPlan | None = None
     """The full-text plan. Absent (None) until the protocol declares full-text screening."""
+    extraction_schema: ExtractionSchema | None = None
+    """What is extracted. Absent (None) until the protocol declares it; left out of the hash."""
     rationale: str = ""
 
 
@@ -226,6 +252,7 @@ AMENDABLE_FIELDS = (
     "limits",
     "screening",
     "full_text_screening",
+    "extraction_schema",
 )
 """Top-level hashed fields other than criteria, which an amendment reports as `other_changes`."""
 
@@ -334,6 +361,13 @@ class DeviationRecorded(StrictModel):
     affects: tuple[str, ...] = ()
 
 
+class ExtractionStale(StrictModel):
+    """Extraction rows an amendment makes stale: all of them, or those carrying `fields`."""
+
+    all_records: bool
+    fields: tuple[str, ...] = ()
+
+
 class ProtocolAmended(StrictModel):
     """A new version of the current protocol, or a prose-only change when the versions are equal.
 
@@ -350,6 +384,7 @@ class ProtocolAmended(StrictModel):
     changes: tuple[CriterionChange, ...] = ()
     stale_rules: tuple[StaleRule, ...] = ()
     other_changes: tuple[str, ...] = ()
+    extraction_stale: ExtractionStale | None = None
 
     @model_validator(mode="after")
     def _to_version_matches_spec(self) -> Self:

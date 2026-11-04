@@ -23,6 +23,8 @@ from factory.model.protocol import (
     CriterionChange,
     CriterionEffect,
     CriterionKind,
+    ExtractionSchema,
+    ExtractionStale,
     ProtocolSpec,
     ReviewerRole,
     ScreeningPlan,
@@ -33,6 +35,7 @@ from factory.model.protocol import (
 )
 from factory.model.staleness import DecisionRef as DecisionRef
 from factory.model.staleness import stale_decisions as stale_decisions
+from factory.packs import get_pack
 from factory.services.question import QuestionVersion
 from factory.services.seeds import SeedRecord, SeedRole
 
@@ -60,6 +63,24 @@ def criterion_changes(old: ProtocolSpec, new: ProtocolSpec) -> list[tuple[str, C
 def other_changes(old: ProtocolSpec, new: ProtocolSpec) -> list[str]:
     """The hashed top-level fields other than criteria that differ."""
     return [key for key in AMENDABLE_FIELDS if section_digest(old, key) != section_digest(new, key)]
+
+
+def extraction_stale(
+    old: ExtractionSchema | None, new: ExtractionSchema | None
+) -> ExtractionStale | None:
+    """The extraction rows an amendment stales (ruling 12), or None.
+
+    Nothing was declared before -> None. Schema removed, pack or pack version changed, or a
+    field added -> every row. Fields only removed -> rows carrying them. Keys, sampling, audit
+    settings and `claims` stale nothing."""
+    if old is None:
+        return None
+    if new is None or (old.pack, old.pack_version) != (new.pack, new.pack_version):
+        return ExtractionStale(all_records=True)
+    if set(new.fields) - set(old.fields):
+        return ExtractionStale(all_records=True)
+    removed = tuple(f for f in old.fields if f not in new.fields)
+    return ExtractionStale(all_records=False, fields=removed) if removed else None
 
 
 def stale_rules(
@@ -194,6 +215,44 @@ def _errors(
                     f"queries[{i}].source", "a query must use a source the protocol includes"
                 )
             )
+    issues.extend(_extraction_errors(spec.extraction_schema))
+    return issues
+
+
+def _extraction_errors(schema: ExtractionSchema | None) -> list[ValidationIssue]:
+    if schema is None:
+        return []
+    pack = get_pack(schema.pack, schema.pack_version)
+    if pack is None:
+        return [
+            ValidationIssue(
+                "extraction_schema.pack",
+                f"unknown pack {schema.pack} version {schema.pack_version}",
+            )
+        ]
+    issues: list[ValidationIssue] = []
+    known = {f.name for f in pack.fields}
+    for i, name in enumerate(schema.fields):
+        if name not in known:
+            issues.append(
+                ValidationIssue(
+                    f"extraction_schema.fields[{i}]", f"not a field of the pack: {name}"
+                )
+            )
+    missing = [name for name in pack.required if name not in schema.fields]
+    if missing:
+        issues.append(
+            ValidationIssue(
+                "extraction_schema.fields", f"required by the pack: {', '.join(missing)}"
+            )
+        )
+    for i, key in enumerate(schema.comparability_keys):
+        if key not in schema.fields:
+            issues.append(
+                ValidationIssue(
+                    f"extraction_schema.comparability_keys[{i}]", "must be a declared field"
+                )
+            )
     return issues
 
 
@@ -226,6 +285,46 @@ def _gaps(
         gaps.extend(_systematic_screening_gaps(spec))
 
     gaps.extend(_reviewer_gaps(spec))
+    if mode in (RigorMode.PILOT, RigorMode.SYSTEMATIC):
+        gaps.extend(_extraction_gaps(spec.extraction_schema, mode))
+    return gaps
+
+
+def _extraction_gaps(schema: ExtractionSchema | None, mode: RigorMode) -> list[ValidationIssue]:
+    """Ruling 9: pilot needs a dual-extraction fraction, systematic needs every work; both need
+    the audit floors."""
+    if schema is None:
+        return []
+    gaps: list[ValidationIssue] = []
+    sample = schema.dual_extract_sample
+    if mode is RigorMode.PILOT and sample is None:
+        gaps.append(
+            ValidationIssue(
+                "extraction_schema.dual_extract_sample",
+                "pilot extraction needs a dual-extracted fraction",
+            )
+        )
+    if mode is RigorMode.SYSTEMATIC and sample not in (None, 1.0):
+        gaps.append(
+            ValidationIssue(
+                "extraction_schema.dual_extract_sample",
+                "systematic extraction covers every work twice or none",
+            )
+        )
+    if schema.audit_fraction < AUDIT_FRACTION_MIN:
+        gaps.append(
+            ValidationIssue(
+                "extraction_schema.audit_fraction",
+                f"the audit samples at least {AUDIT_FRACTION_MIN:.0%} of agreed values",
+            )
+        )
+    if schema.audit_minimum < AUDIT_MINIMUM_MIN:
+        gaps.append(
+            ValidationIssue(
+                "extraction_schema.audit_minimum",
+                f"the audit draws at least {AUDIT_MINIMUM_MIN} values",
+            )
+        )
     return gaps
 
 

@@ -49,6 +49,7 @@ from factory.model.search import QueryPurpose, QuerySpec
 from factory.services.context import Project
 from factory.services.protocol_rules import (
     criterion_changes,
+    extraction_stale,
     other_changes,
     protocol_issues,
     stale_rules,
@@ -285,6 +286,9 @@ def amend_protocol(
             changes=change_records,
             stale_rules=tuple(rules),
             other_changes=tuple(others),
+            extraction_stale=extraction_stale(
+                current.spec.extraction_schema, spec.extraction_schema
+            ),
         )
         input_blob = (
             project.blobs.put_json(
