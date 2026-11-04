@@ -21,6 +21,9 @@ _KINDS: dict[tuple[ScreeningStage, PassLabel], str] = {
     (ScreeningStage.FULL_TEXT, PassLabel.B): "screen_ft_b",
 }
 
+EXTRACT_KINDS: dict[PassLabel, str] = {PassLabel.A: "extract_a", PassLabel.B: "extract_b"}
+"""The task kind of each extraction pass; one task per work per pass."""
+
 
 def require_pass_stage(stage: ScreeningStage) -> ScreeningStage:
     """`stage` itself when a pass can run at it; raises on field `stage` for `either`."""

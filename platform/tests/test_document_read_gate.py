@@ -21,9 +21,12 @@ from factory.mcp import server as mcp_server
 from factory.mcp.server import build_server
 from factory.model.protocol import ScreeningStage
 from factory.model.screening import Channel, PassLabel, ScreeningItem, Verdict
+from factory.services import extraction
+from factory.services.agreement import Outcome, final_outcomes
 from factory.services.calibration import calibration_items, draw_calibration, label_calibration
 from factory.services.context import Project
 from factory.services.document_read import DocumentPage, document_read
+from factory.services.extraction import extract_next
 from factory.services.fulltext_screening import fulltext_queue
 from factory.services.screening import ScreenBatch, pass_b_sample, screen_next, screen_record
 from factory.services.tasks import release_task
@@ -35,6 +38,8 @@ from tests.document_helpers import (
     run_convert,
 )
 from tests.helpers import SESSION
+from tests.test_acceptance_fulltext_screening import _screened_full_text_world
+from tests.test_extraction_next import SESSION_A, SESSION_B, _declare, _extractor
 from tests.test_fulltext_eligibility import _convert, _world
 
 FT = ScreeningStage.FULL_TEXT
@@ -279,3 +284,84 @@ def test_pass_b_cannot_read_a_batch_held_by_pass_a(
     assert document_read(project, work_id=mine, session=STRANGER).work_id == mine
     release_task(project, agent, ordinary.batch.task_id, "test")
     assert _fields(project, work_id=mine, session=SESSION) == ["work_id"]
+
+
+# --- Extraction sessions (plan D, task 5) ---
+
+
+@pytest.fixture
+def extraction_world(
+    project: Project, agent: Actor, agent_other: Actor, human: Actor, mock_sources: SourcesFor
+) -> list[str]:
+    """Full text screened to the end and an extraction schema declared; the included works."""
+    _screened_full_text_world(project, agent, agent_other, human, mock_sources)
+    _declare(project, agent, 1.0)
+    return sorted(w for w, o in final_outcomes(project, stage=FT).items() if o is Outcome.INCLUDED)
+
+
+def test_extraction_session_reads_own_queue_pinned_conversion(
+    project: Project, extraction_world: list[str]
+) -> None:
+    batch = extract_next(project, _extractor(SESSION_A, "claude-opus-5-5"), PassLabel.A).batch
+    assert batch is not None
+    record = batch.records[0]
+    page = document_read(project, work_id=record["work_id"], session=SESSION_A)
+    assert (page.document_id, page.conversion_id) == (
+        record["document_id"],
+        record["conversion_id"],
+    )
+    named = document_read(
+        project,
+        work_id=record["work_id"],
+        session=SESSION_A,
+        document_id=record["document_id"],
+        conversion_id=record["conversion_id"],
+    )
+    assert named.segments == page.segments
+
+
+def test_extraction_session_refused_other_work(
+    project: Project, extraction_world: list[str]
+) -> None:
+    batch = extract_next(project, _extractor(SESSION_A, "claude-opus-5-5"), PassLabel.A).batch
+    assert batch is not None
+    other = next(w for w in extraction_world if w != batch.records[0]["work_id"])
+    assert _fields(project, work_id=other, session=SESSION_A) == ["work_id"]
+    assert isinstance(document_read(project, work_id=other), DocumentPage)
+
+
+def test_extraction_session_refused_other_conversion(
+    project: Project, extraction_world: list[str]
+) -> None:
+    batch = extract_next(project, _extractor(SESSION_A, "claude-opus-5-5"), PassLabel.A).batch
+    assert batch is not None
+    work = batch.records[0]["work_id"]
+    pinned = batch.records[0]["conversion_id"]
+    run_convert(project, make_registry(StubConverter(version="9.9+later")))
+    newer = next(e for e in fulltext_queue(project).eligible if e.work_id == work)
+    assert newer.conversion_id != pinned
+    assert document_read(project, work_id=work).conversion_id == newer.conversion_id
+    assert document_read(project, work_id=work, session=SESSION_A).conversion_id == pinned
+    assert _fields(project, work_id=work, session=SESSION_A, conversion_id=newer.conversion_id) == [
+        "conversion_id"
+    ]
+
+
+def test_pass_b_session_cannot_read_a_only_work(
+    project: Project, extraction_world: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    a_only = extraction_world[-1]
+    real = extraction.in_dual_sample
+    monkeypatch.setattr(
+        extraction,
+        "in_dual_sample",
+        lambda seed, work, fraction: work != a_only and real(seed, work, fraction),
+    )
+    ext_a = _extractor(SESSION_A, "claude-opus-5-5")
+    ext_b = _extractor(SESSION_B, "claude-sonnet-5-5")
+    assert extract_next(project, ext_a, PassLabel.A).batch is not None
+    batch_b = extract_next(project, ext_b, PassLabel.B).batch
+    assert batch_b is not None and batch_b.records[0]["work_id"] != a_only
+    assert _fields(project, work_id=a_only, session=SESSION_B) == ["work_id"]
+    own = batch_b.records[0]["work_id"]
+    assert document_read(project, work_id=own, session=SESSION_B).work_id == own

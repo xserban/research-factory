@@ -14,7 +14,8 @@ Invariants:
 - Pass independence (decision 37): when `session` is given, a session joined to a title/abstract
   pass and to no full-text pass is refused (field `session`). A session joined to a full-text pass
   reads only the works of the full-text batches of its own pass that it holds or has completed,
-  and only the conversion such a batch pins; this rule applies whether or not the session also
+  and only the conversion such a batch pins; a session joined to an extraction pass is gated the
+  same way on the tasks of its own pass; this rule applies whether or not the session also
   joined a title/abstract pass, so a title/abstract membership never widens the access. Any
   other work, document or conversion is refused on its own field. A session in neither stage, and
   a call without `session` (the researcher's CLI), are not gated. The tool returns only document
@@ -54,7 +55,7 @@ from factory.services.conversions import (
     conversion_manifest,
     resolve_anchor,
 )
-from factory.services.stages import task_kind
+from factory.services.stages import EXTRACT_KINDS, task_kind
 
 __all__ = [
     "DocumentPage",
@@ -194,7 +195,11 @@ def _gate(
     When a work is in several of the session's batches with different pins, the pin of the last
     task by task ID is the default (deterministic)."""
     label = _full_text_pass(project, session)
+    kind = None if label is None else task_kind(ScreeningStage.FULL_TEXT, label)
     if label is None:
+        extracting = _extraction_pass(project, session)
+        kind = None if extracting is None else EXTRACT_KINDS[extracting]
+    if kind is None:
         if is_pass_session(project, session, stage=ScreeningStage.TITLE_ABSTRACT):
             raise FactoryValidationError(
                 [
@@ -204,7 +209,7 @@ def _gate(
                 ]
             )
         return document_id, conversion_id
-    pins = _held_pins(project, session, label, work_id)
+    pins = _held_pins(project, session, kind, work_id)
     if not pins:
         raise FactoryValidationError(
             [ValidationIssue("work_id", f"{work_id}: not a record of a batch this session holds")]
@@ -233,18 +238,24 @@ def _full_text_pass(project: Project, session: str) -> PassLabel | None:
     return None if row is None else PassLabel(str(row[0]))
 
 
-def _held_pins(
-    project: Project, session: str, label: PassLabel, work_id: str
-) -> list[tuple[str, str]]:
-    """(document, conversion) pinned for `work_id` by full-text batches of pass `label` that
-    `session` holds or has completed, in task-ID order."""
+def _extraction_pass(project: Project, session: str) -> PassLabel | None:
+    with project.index.connect() as conn:
+        row = conn.execute(
+            text("SELECT pass_label FROM extraction_sessions WHERE session = :s"), {"s": session}
+        ).first()
+    return None if row is None else PassLabel(str(row[0]))
+
+
+def _held_pins(project: Project, session: str, kind: str, work_id: str) -> list[tuple[str, str]]:
+    """(document, conversion) pinned for `work_id` by tasks of `kind` (a full-text screening or an
+    extraction pass) that `session` holds or has completed, in task-ID order."""
     with project.index.connect() as conn:
         rows = conn.execute(
             text(
                 "SELECT content_blob FROM tasks WHERE kind = :kind AND claim_session = :s "
                 "AND status IN ('claimed', 'completed') ORDER BY task_id"
             ),
-            {"kind": task_kind(ScreeningStage.FULL_TEXT, label), "s": session},
+            {"kind": kind, "s": session},
         ).all()
     pins: list[tuple[str, str]] = []
     for (blob,) in rows:
