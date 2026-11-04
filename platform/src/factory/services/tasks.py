@@ -39,12 +39,15 @@ class TaskSpec:
 
 
 class TaskCounts(StrictModel):
-    """Open tasks; claims whose lease is live or has lapsed; completed tasks."""
+    """Open tasks; claims whose lease is live or has lapsed; completed tasks; and abandoned
+    tasks (open or claimed extraction tasks a newer task of their unit replaced), counted in
+    none of the other open/claimed/expired figures."""
 
     open: int
     claimed: int
     expired: int
     completed: int
+    abandoned: int = 0
 
 
 def create_tasks(project: Project, actor: Actor, specs: Sequence[TaskSpec]) -> BatchResult[str]:
@@ -203,15 +206,21 @@ def task_content(project: Project, task: Task) -> JsonValue:
 
 
 def task_counts(project: Project) -> TaskCounts:
-    """Counts of every task by status. Open counts include stale extraction tasks that a newer
-    task of their unit replaced: they stay open in the log and are never served again."""
+    """Counts of every task by status. Extraction tasks that a newer task of their unit
+    replaced stay open in the log but are never served again: they are counted as `abandoned`,
+    not as open, claimed or expired."""
+    from factory.services.extraction import abandoned_task_ids  # extraction imports this module
+
     project.index.sync()
     now = _now(project)
+    abandoned = abandoned_task_ids(project)
     with project.index.connect() as conn:
-        rows = conn.execute(text("SELECT status, lease_until FROM tasks")).all()
-    counts = {"open": 0, "claimed": 0, "expired": 0, "completed": 0}
-    for status, lease_until in rows:
-        if status == TaskStatus.OPEN.value:
+        rows = conn.execute(text("SELECT task_id, status, lease_until FROM tasks")).all()
+    counts = {"open": 0, "claimed": 0, "expired": 0, "completed": 0, "abandoned": 0}
+    for task_id, status, lease_until in rows:
+        if task_id in abandoned:
+            counts["abandoned"] += 1
+        elif status == TaskStatus.OPEN.value:
             counts["open"] += 1
         elif status == TaskStatus.COMPLETED.value:
             counts["completed"] += 1

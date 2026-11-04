@@ -271,6 +271,7 @@ def status(
     typer.echo(
         f"tasks: open {tasks.open} / claimed {tasks.claimed} / "
         f"expired {tasks.expired} / completed {tasks.completed}"
+        + (f" / abandoned {tasks.abandoned}" if tasks.abandoned else "")
     )
     for line in [*_screening_lines(report.screening), *_full_text_lines(report.screening)]:
         typer.echo(line)

@@ -1273,6 +1273,19 @@ def stale_extractions(project: Project) -> set[str]:
     return _ledger(project).stale_rows()
 
 
+def abandoned_task_ids(project: Project) -> set[str]:
+    """The extraction tasks that are open or claimed (lease live or lapsed) and replaced by a
+    newer task of their (work, pass) unit. The ledger serves only a unit's latest task, so an
+    abandoned task is never served again, though it stays open in the log. Read-only."""
+    project.index.sync()
+    return {
+        task.task_id
+        for unit in _ledger(project).tasks.values()
+        for task in unit[:-1]
+        if task.status != TaskStatus.COMPLETED.value
+    }
+
+
 def stale_claims(project: Project) -> set[str]:
     """The live claims pinned to a document that is no longer the work's current one. Schema
     amendments never stale a claim. Like `stale_extractions`, it ignores the population: claims

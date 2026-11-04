@@ -21,6 +21,7 @@ from factory.services.document_read import default_conversion
 from factory.services.extraction import (
     ExtractBatch,
     UnitState,
+    abandoned_task_ids,
     extract_next,
     extract_record,
     in_dual_sample,
@@ -33,6 +34,7 @@ from factory.services.extraction import (
     unit_states,
 )
 from factory.services.fulltext import fetch_fulltext
+from factory.services.project import project_status
 from factory.services.tasks import complete_task, get_task, release_task
 from factory.sources.registry import SourceFactory
 from tests.document_helpers import ARTICLE, StubConverter, make_registry, run_convert
@@ -467,3 +469,35 @@ def test_unit_states_empty_without_full_text_plan(
     _setup(project, agent, human, mock_sources, dual_sample=0.5, random_works=0)
     _declare(project, agent, 1.0)
     assert unit_states(project) == []
+
+
+# --- Abandoned tasks in project status ---
+
+
+def test_replaced_task_is_abandoned_not_open(
+    project: Project, ext_a: Actor, task_a: ExtractBatch
+) -> None:
+    work = _work(task_a)
+    assert project_status(project).tasks.abandoned == 0
+    assert abandoned_task_ids(project) == set()
+    _new_document_version(project, work)
+    fresh = _serve_work(project, ext_a, PassLabel.A, work)
+    assert fresh.task_id != task_a.task_id
+    assert abandoned_task_ids(project) == {task_a.task_id}
+    tasks = project_status(project).tasks
+    assert tasks.abandoned == 1
+    old = get_task(project, task_a.task_id)
+    assert old is not None and old.status.value == "claimed"
+    assert tasks.claimed == 1 and tasks.expired == 0
+
+
+def test_completing_the_new_task_keeps_abandoned_at_one(
+    project: Project, ext_a: Actor, task_a: ExtractBatch
+) -> None:
+    work = _work(task_a)
+    _new_document_version(project, work)
+    fresh = _serve_work(project, ext_a, PassLabel.A, work)
+    res = extract_record(project, ext_a, fresh.task_id, [_row()], finish=True)
+    assert res.completed
+    assert project_status(project).tasks.abandoned == 1
+    assert abandoned_task_ids(project) == {task_a.task_id}
