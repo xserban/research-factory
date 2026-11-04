@@ -858,7 +858,10 @@ def report_evidence(
     ctx: typer.Context,
     expect: Annotated[
         list[str] | None,
-        typer.Option("--expect", help="An expected partial key, key=value,key=value (repeatable)."),
+        typer.Option(
+            "--expect",
+            help="Expected partial key, key=value,key=value (repeatable); no comma in a value.",
+        ),
     ] = None,
     fmt: Annotated[
         EvidenceFormat, typer.Option("--format", help="Output format.")
@@ -882,7 +885,10 @@ def report_evidence(
     else:
         text = evidence_render.evidence_markdown(report, show_audit=True)
     if output is not None:
-        output.write_text(text, encoding="utf-8")
+        try:
+            output.write_text(text, encoding="utf-8")
+        except OSError as exc:
+            _fail(f"cannot write {output}: {exc.strerror or exc}", 1)
         return
     typer.echo(text, nl=not text.endswith("\n"))
 

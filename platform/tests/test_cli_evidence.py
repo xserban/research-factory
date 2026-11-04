@@ -80,3 +80,12 @@ def test_bad_expect_is_refused(settings: Settings, project: Project, bad: str) -
     code, _out, err = _run(settings.root, "--expect", bad)
     assert code == 2
     assert "bad --expect" in err
+
+
+def test_output_into_missing_directory_fails_cleanly(
+    settings: Settings, project: Project, report: EvidenceReport, tmp_path: Path
+) -> None:
+    target = tmp_path / "missing" / "out.md"
+    code, _out, err = _run(settings.root, "--output", str(target))
+    assert code == 1
+    assert str(target) in err

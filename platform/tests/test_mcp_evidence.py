@@ -108,6 +108,8 @@ async def test_held_out_identifiers_are_withheld(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(evidence_report_service, "evidence_report", lambda _p, expect=(): _full())
+    # A held-out seed's DOI or identifier can reach the report only through a work title (work ids
+    # stay visible by design, as in screening), so the scrub is exercised on a title token.
     monkeypatch.setattr(mcp_server, "_held_out_tokens", lambda _p, _w=True: {"Title 1"})
     async with open_session(settings, clock) as client:
         out = await client.call("report_evidence", project="demo")
@@ -124,4 +126,16 @@ async def test_malformed_expect_is_a_structured_error_and_writes_nothing(
     async with open_session(settings, clock) as client:
         out = await client.call("report_evidence", project="demo", expect=[{"dataset": 3}])
     assert out["ok"] is False
+    assert out["errors"][0]["field"] == "expect.0"
     assert _count(project) == before
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("bad", [{}, {"dataset": ""}, {"dataset": "  "}])
+async def test_empty_map_and_blank_value_are_refused(
+    settings: Settings, project: Project, clock: FixedClock, bad: dict[str, str]
+) -> None:
+    async with open_session(settings, clock) as client:
+        out = await client.call("report_evidence", project="demo", expect=[bad])
+    assert out["ok"] is False
+    assert out["errors"][0]["field"] == "expect.0"
