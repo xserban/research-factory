@@ -411,10 +411,23 @@ def _current_protocol_id(conn: Connection) -> str | None:
     return None if row is None else str(row[0])
 
 
+def _lineage_through(conn: Connection, protocol_id: str) -> list[str]:
+    """The protocol versions in recording order (first occurrence) up to and including
+    `protocol_id`; the projector's twin of `protocol.lineage_through`."""
+    seen: dict[str, None] = {}
+    for (version,) in conn.execute(text("SELECT protocol_id FROM protocols ORDER BY event_id")):
+        seen.setdefault(str(version), None)
+    versions = list(seen)
+    if protocol_id not in seen:
+        return []
+    return versions[: versions.index(protocol_id) + 1]
+
+
 def _agreed_by_work(
     conn: Connection, t: ScreeningTables, protocol_id: str | None, stage: str
 ) -> dict[str, tuple[str, str | None]]:
-    """The agreed set of `stage` under `protocol_id`: for each work both passes screened, its
+    """The agreed set of `stage` under `protocol_id` (decision 50: decisions of every protocol
+    version recorded up to and including it count): for each work both passes screened, its
     agreed outcome (`include` when both live screening decisions promote, `exclude` when neither
     does) and, for an exclusion, the bare criteria either pass cited, sorted and comma-joined. A
     work with an `unsure` verdict, or whose passes disagree, is not agreed and is absent. Matches
@@ -430,7 +443,7 @@ def _agreed_by_work(
         )
         .where(t.decisions.c.phase == "screening")
         .where(t.decisions.c.stage == stage)
-        .where(t.decisions.c.protocol_id == protocol_id)
+        .where(t.decisions.c.protocol_id.in_(_lineage_through(conn, protocol_id)))
         .where(t.decisions.c.superseded_by.is_(None))
         .order_by(t.decisions.c.event_id)
     ).all()

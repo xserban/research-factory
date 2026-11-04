@@ -40,7 +40,13 @@ from factory.model.screening import (
 )
 from factory.model.seed import SeedKind
 from factory.services.context import Project
-from factory.services.protocol import current_protocol
+from factory.services.protocol import (
+    current_protocol,
+    lineage_through,
+    list_amendments,
+    protocol_lineage,
+)
+from factory.services.protocol_rules import DecisionRef, stale_decisions
 from factory.services.screening_stats import CALIBRATION_SENSITIVITY, Rates, sensitivity_specificity
 from factory.services.search import list_works
 from factory.services.seeds import (
@@ -330,29 +336,58 @@ def _labels(project: Project, stage: ScreeningStage) -> dict[str, str]:
 def _live_decisions(
     project: Project, protocol_id: str | None, stage: ScreeningStage
 ) -> dict[str, dict[str, bool]]:
-    """Promotion of the live calibration decision per pass and work of `stage`, under one protocol
-    version.
+    """Promotion of the live, non-stale calibration decision per pass and work of `stage`, made
+    under `protocol_id` or an earlier version of its lineage (decision 50).
 
     A decision superseded by a later one is not live; the latest live decision per work wins.
     """
     if protocol_id is None:
         return {}
+    versions = lineage_through(project, protocol_id)
     with project.index.connect() as conn:
         rows = conn.execute(
             text(
-                "SELECT pass_label, work_id, verdict FROM decisions "
-                "WHERE phase = :phase AND protocol_id = :protocol AND stage = :stage "
+                "SELECT decision_id, pass_label, work_id, verdict, criterion, protocol_id "
+                "FROM decisions WHERE phase = :phase AND stage = :stage "
                 "AND superseded_by IS NULL ORDER BY event_id"
             ),
-            {
-                "phase": ScreeningPhase.CALIBRATION.value,
-                "protocol": protocol_id,
-                "stage": stage.value,
-            },
+            {"phase": ScreeningPhase.CALIBRATION.value, "stage": stage.value},
         ).all()
+    lineage = protocol_lineage(project)
+    position = {version: index for index, version in enumerate(lineage)}
+    # Calibration measures the passes against the criteria (R-26): an amendment that changed a
+    # criterion requires the gate to be passed again, so decisions made before it do not count.
+    recalibrated = max(
+        (
+            position[amendment.to_version]
+            for amendment in list_amendments(project)
+            if amendment.changes and amendment.to_version in position
+        ),
+        default=-1,
+    )
+    kept = [
+        row for row in rows if str(row[5]) in versions and position[str(row[5])] >= recalibrated
+    ]
+    stale = set(
+        stale_decisions(
+            list_amendments(project),
+            lineage,
+            [
+                DecisionRef(
+                    decision_id=str(decision_id),
+                    verdict=str(verdict),
+                    criterion=None if criterion is None else str(criterion),
+                    protocol_id=str(version),
+                    stage=stage,
+                )
+                for decision_id, _, _, verdict, criterion, version in kept
+            ],
+        )
+    )
     decided: dict[str, dict[str, bool]] = {}
-    for pass_label, work_id, verdict in rows:
-        decided.setdefault(str(pass_label), {})[str(work_id)] = Verdict(str(verdict)).promotes
+    for decision_id, pass_label, work_id, verdict, _, _ in kept:
+        if str(decision_id) not in stale:
+            decided.setdefault(str(pass_label), {})[str(work_id)] = Verdict(str(verdict)).promotes
     return decided
 
 

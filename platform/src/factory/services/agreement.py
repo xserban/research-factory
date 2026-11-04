@@ -58,7 +58,7 @@ from factory.model.screening import (
 from factory.model.task import TaskStatus
 from factory.services.calibration import calibration_items, calibration_labels, stage_population
 from factory.services.context import Project
-from factory.services.protocol import ProtocolVersion, current_protocol
+from factory.services.protocol import ProtocolVersion, current_protocol, lineage_through
 from factory.services.screening import (
     live_decisions,
     obsolete_tasks,
@@ -478,13 +478,16 @@ def _queue(
 def _decided(
     project: Project, protocol_id: str, stage: ScreeningStage = TA
 ) -> dict[PassLabel, dict[str, DecisionRecorded]]:
-    """Each pass's live, non-stale screening decisions at `stage` under the protocol, by work."""
+    """Each pass's live, non-stale screening decisions at `stage` made under the protocol or an
+    earlier version of its lineage, by work (decision 50: only the stale rules of R-15 discard a
+    decision after an amendment)."""
     stale = stale_screening_decisions(project, stage=stage)
+    versions = lineage_through(project, protocol_id)
     decided: dict[PassLabel, dict[str, DecisionRecorded]] = {label: {} for label in PassLabel}
     for decision in live_decisions(project, stage=stage):
         if (
             decision.phase is ScreeningPhase.SCREENING
-            and decision.protocol_id == protocol_id
+            and decision.protocol_id in versions
             and decision.decision_id not in stale
         ):
             decided[decision.pass_label][decision.work_id] = decision

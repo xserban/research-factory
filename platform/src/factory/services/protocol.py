@@ -327,6 +327,16 @@ def protocol_lineage(project: Project) -> list[str]:
     return list(seen)
 
 
+def lineage_through(project: Project, protocol_id: str) -> frozenset[str]:
+    """The protocol versions recorded up to and including `protocol_id` (decision 50): the
+    versions whose decisions still count under `protocol_id` unless a stale rule says otherwise.
+    Empty when `protocol_id` was never recorded."""
+    lineage = protocol_lineage(project)
+    if protocol_id not in lineage:
+        return frozenset()
+    return frozenset(lineage[: lineage.index(protocol_id) + 1])
+
+
 def list_amendments(project: Project) -> list[ProtocolAmended]:
     """Every recorded amendment, in recording order."""
     project.index.sync()
