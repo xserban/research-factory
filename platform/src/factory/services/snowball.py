@@ -375,8 +375,52 @@ def round_yield(project: Project, round_id: str) -> RoundYield:
     runs = round_runs(project, round_id)
     if not runs:
         return RoundYield(retrieved=0, new_after_dedup=0, included=None)
-    primary = _primaries(project)
     rows = _retrieved(project, runs)
+    new = _new_after_dedup(project, runs, rows)
+    return RoundYield(
+        retrieved=len(rows), new_after_dedup=len(new), included=_settled_included(project, new)
+    )
+
+
+def query_yields(project: Project, round_id: str) -> dict[str, RoundYield]:
+    """The yield of a recorded round per query (the PRISMA-S rows of the round), keyed by query
+    id. Each work new after dedup counts once, under the query whose run retrieved it first (by
+    run id), so the queries' `new_after_dedup` and settled `included` sum to `round_yield`'s.
+    A query whose works are all settled has `included` set even while other queries' are not."""
+    project.index.sync()
+    _recorded(project, round_id)
+    rows = _round_run_rows(project, round_id)
+    if not rows:
+        return {}
+    runs = [r.run_id for r in rows]
+    new = _new_after_dedup(project, runs, _retrieved(project, runs))
+    primary = _primaries(project)
+    retrieved: dict[str, int] = {}
+    attributed: dict[str, set[str]] = {}
+    seen: set[str] = set()
+    for row in rows:
+        works = _retrieved(project, [row.run_id])
+        retrieved[row.query_id] = retrieved.get(row.query_id, 0) + len(works)
+        mine = attributed.setdefault(row.query_id, set())
+        for work in works:
+            key = primary.get(work, work)
+            if key in new and key not in seen:
+                seen.add(key)
+                mine.add(key)
+    return {
+        query: RoundYield(
+            retrieved=retrieved[query],
+            new_after_dedup=len(works),
+            included=_settled_included(project, works),
+        )
+        for query, works in attributed.items()
+    }
+
+
+def _new_after_dedup(project: Project, runs: Sequence[str], rows: Sequence[str]) -> set[str]:
+    """The dedup primaries of `rows` (works retrieved by `runs`) that had no corpus record from a
+    run started earlier in the event log than the first of `runs`."""
+    primary = _primaries(project)
     with project.index.connect() as conn:
         first = conn.execute(
             text(
@@ -398,10 +442,7 @@ def round_yield(project: Project, round_id: str) -> RoundYield:
                 {"first": first, "probe": QueryPurpose.PROBE.value},
             ).all()
         }
-    new = {primary.get(w, w) for w in rows} - earlier
-    return RoundYield(
-        retrieved=len(rows), new_after_dedup=len(new), included=_settled_included(project, new)
-    )
+    return {primary.get(w, w) for w in rows} - earlier
 
 
 def snowball_compare(project: Project, round_id: str) -> Comparison:

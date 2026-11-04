@@ -33,6 +33,7 @@ from factory.index.chase import admitted_works
 from factory.model.base import StrictModel
 from factory.model.project import RigorMode
 from factory.model.protocol import ProtocolStatus, ScreeningStage
+from factory.model.references import Direction, LinkState
 from factory.model.screening import PassLabel
 from factory.model.seed import SEED_ID_RE
 from factory.model.work import ProvenanceMethod
@@ -60,7 +61,10 @@ from factory.services.fulltext_status import fulltext_status
 from factory.services.methods import MethodsReport, methods_report
 from factory.services.prisma import search_report
 from factory.services.protocol import current_protocol
+from factory.services.protocol_rules import snowball_plan_gaps
+from factory.services.references import current_extraction, included_works
 from factory.services.seeds import SeedRole, _rigor_mode, seed_check
+from factory.services.snowball import recorded_rounds, round_runs
 from factory.services.trace import dangling_refs
 
 Severity = Literal["error", "warning"]
@@ -100,7 +104,22 @@ LEVELS: dict[str, tuple[Severity | None, Severity | None, Severity | None]] = {
     "evidence-excluded-rows": ("warning", "warning", "warning"),
     "evidence-ungrouped": ("warning", "warning", "warning"),
     "evidence-direction": ("warning", "warning", "warning"),
+    "references-missing-extraction": (None, "warning", "error"),
+    "references-stale-extraction": ("warning", "warning", "warning"),
+    "references-parse-incomplete": ("warning", "warning", "warning"),
+    "references-unresolved-ceiling": ("warning", "warning", "warning"),
+    "references-library-missing": ("warning", "warning", "warning"),
+    "snowball-plan-missing": (None, "warning", "error"),
+    "snowball-over-plan": ("warning", "warning", "warning"),
+    "snowball-unscreened": ("error", "error", "error"),
 }
+
+REFERENCE_UNRESOLVED_CEILING = 0.30
+"""The share of a live extraction's entries left unresolved or ambiguous above which `check`
+reports it (slice 3a ruling 17; provisional, to be set against the pilot)."""
+_INCOMPLETE_FLAGS = frozenset(
+    {"parse-incomplete", "marker-gap", "no-bibliography", "bibliography-without-entries"}
+)
 
 _MODE_ORDER: tuple[RigorMode, ...] = (
     RigorMode.EXPLORATORY,
@@ -329,6 +348,8 @@ def _hits(project: Project) -> list[_Hit]:
     hits += _fulltext(project)
     hits += _extraction(project)
     hits += _evidence(project)
+    hits += _references(project)
+    hits += _snowball(project, outcomes)
     return hits
 
 
@@ -974,3 +995,197 @@ def _evidence(project: Project) -> list[_Hit]:
             )
         )
     return hits
+
+
+# --- References and snowballing (slice 3a, plan G1 task 8) ---
+
+
+@dataclass(frozen=True)
+class _LiveExtraction:
+    extraction_id: str
+    work_id: str
+    conversion_id: str
+    flags: tuple[str, ...]
+    bbl_status: str
+    bbl_archive: str | None
+
+
+def _live_extractions(project: Project) -> list[_LiveExtraction]:
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT extraction_id, work_id, conversion_id, flags, bbl_status, bbl_archive "
+                "FROM reference_extractions WHERE live = 1 ORDER BY extraction_id"
+            )
+        ).all()
+    return [
+        _LiveExtraction(
+            str(x), str(w), str(c), tuple(str(f) for f in json.loads(str(flags))), str(b), a
+        )
+        for x, w, c, flags, b, a in rows
+    ]
+
+
+def _references(project: Project) -> list[_Hit]:
+    """Findings of reference extraction. Each names works or extractions by identifier and gives
+    counts; none carries an entry's text or a parsed field."""
+    live = _live_extractions(project)
+    extracted = {row.work_id for row in live}
+    hits: list[_Hit] = []
+    missing = [
+        w
+        for w in included_works(project)
+        if w not in extracted and default_conversion(project, w) is not None
+    ]
+    if missing:
+        hits.append(
+            _Hit(
+                "references-missing-extraction",
+                tuple(missing),
+                f"{len(missing)} included work(s) have a converted document and no reference "
+                "extraction",
+            )
+        )
+    stale = [row.extraction_id for row in live if current_extraction(project, row.work_id) is None]
+    if stale:
+        hits.append(
+            _Hit(
+                "references-stale-extraction",
+                tuple(stale),
+                f"{len(stale)} reference extraction(s) are pinned to a conversion or parser "
+                "version that is no longer current",
+            )
+        )
+    incomplete = [
+        row.extraction_id
+        for row in live
+        if _INCOMPLETE_FLAGS & set(row.flags) or row.bbl_status == "count-mismatch"
+    ]
+    if incomplete:
+        hits.append(
+            _Hit(
+                "references-parse-incomplete",
+                tuple(incomplete),
+                f"{len(incomplete)} reference extraction(s) are flagged incomplete (parse, "
+                "marker gap, no bibliography or bbl count mismatch)",
+            )
+        )
+    above = _above_ceiling(project)
+    if above:
+        hits.append(
+            _Hit(
+                "references-unresolved-ceiling",
+                tuple(above),
+                f"{len(above)} reference extraction(s) leave more than "
+                f"{REFERENCE_UNRESOLVED_CEILING:.0%} of their entries unresolved or ambiguous",
+            )
+        )
+    blobs = {c: (markdown, manifest) for c, _d, _w, markdown, manifest in _conversions(project)}
+    absent = [
+        row.extraction_id
+        for row in live
+        if any(
+            not project.library.exists(h)
+            for h in (*blobs.get(row.conversion_id, ()), *filter(None, [row.bbl_archive]))
+        )
+    ]
+    if absent:
+        hits.append(
+            _Hit(
+                "references-library-missing",
+                tuple(absent),
+                f"{len(absent)} reference extraction(s) have a conversion or bbl archive missing "
+                "from the library",
+            )
+        )
+    return hits
+
+
+def _above_ceiling(project: Project) -> list[str]:
+    """Live extractions whose unresolved and ambiguous links exceed the ceiling (ruling 17)."""
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT x.extraction_id, COUNT(n.ordinal), "
+                "(SELECT COUNT(*) FROM reference_links l WHERE l.extraction_id = x.extraction_id "
+                "AND l.state IN (:unresolved, :ambiguous)) "
+                "FROM reference_extractions x LEFT JOIN reference_entries n "
+                "ON n.extraction_id = x.extraction_id WHERE x.live = 1 "
+                "GROUP BY x.extraction_id ORDER BY x.extraction_id"
+            ),
+            {"unresolved": LinkState.UNRESOLVED.value, "ambiguous": LinkState.AMBIGUOUS.value},
+        ).all()
+    return [
+        str(x)
+        for x, entries, open_ in rows
+        if int(entries) and int(open_) / int(entries) > REFERENCE_UNRESOLVED_CEILING
+    ]
+
+
+def _snowball(project: Project, outcomes: dict[str, Outcome]) -> list[_Hit]:
+    """Findings of the snowball rounds: a missing stopping rule (a promotion gap, ruling 19),
+    rounds beyond the declared plan, and snowballed works included without a screening decision
+    (a broken chain)."""
+    hits: list[_Hit] = []
+    protocol = current_protocol(project)
+    if protocol is not None and snowball_plan_gaps(protocol.spec, RigorMode.SYSTEMATIC):
+        hits.append(
+            _Hit(
+                "snowball-plan-missing",
+                (protocol.protocol_id,),
+                "the protocol declares no snowball stopping rule (snowball_plan)",
+            )
+        )
+    rounds = recorded_rounds(project)
+    plan = None if protocol is None else protocol.spec.snowball_plan
+    if plan is not None:
+        limits = {
+            Direction.BACKWARD: plan.max_backward_rounds,
+            Direction.FORWARD: plan.max_forward_rounds,
+        }
+        over = [r.round_id for r in rounds if r.round_no > limits[r.direction]]
+        if over:
+            hits.append(
+                _Hit(
+                    "snowball-over-plan",
+                    tuple(over),
+                    f"{len(over)} snowball round(s) exceed the declared maximum of their direction",
+                )
+            )
+    unscreened = _unscreened(project, outcomes, [r.round_id for r in rounds])
+    if unscreened:
+        hits.append(
+            _Hit(
+                "snowball-unscreened",
+                tuple(unscreened),
+                f"{len(unscreened)} snowballed work(s) are included without a screening decision",
+            )
+        )
+    return hits
+
+
+def _unscreened(project: Project, outcomes: dict[str, Outcome], rounds: list[str]) -> list[str]:
+    """Works retrieved by a snowball round's runs (as dedup primaries) whose final outcome is
+    INCLUDED with no screening decision and no calibration label behind it."""
+    if not rounds:
+        return []
+    primary = {a: m.primary for m in active_merges(project) for a in m.absorbed}
+    runs = [run for round_id in rounds for run in round_runs(project, round_id)]
+    with project.index.connect() as conn:
+        found = {
+            primary.get(str(w), str(w))
+            for (w,) in conn.execute(
+                text(
+                    "SELECT DISTINCT work_id FROM provenance "
+                    "WHERE run_id IN (SELECT value FROM json_each(:runs))"
+                ),
+                {"runs": json.dumps(runs)},
+            ).all()
+        }
+        decided = {
+            str(w)
+            for (w,) in conn.execute(
+                text("SELECT work_id FROM decisions UNION SELECT work_id FROM calibration_labels")
+            ).all()
+        }
+    return sorted(w for w in found if outcomes.get(w) is Outcome.INCLUDED and w not in decided)

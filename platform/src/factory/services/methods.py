@@ -11,11 +11,16 @@ number of its own. Invariants:
 - No seed is named: no seed ID, DOI, arXiv ID or title appears in the render.
 """
 
+from typing import Any
+
 from pydantic import Field
 from sqlalchemy import TextClause, text
 
 from factory.model.base import StrictModel
-from factory.model.protocol import ScreeningStage
+from factory.model.protocol import ScreeningStage, SnowballPlan
+from factory.model.references import Direction
+from factory.references.match import MATCHER_VERSION
+from factory.references.parse import PARSER, PARSER_VERSION
 from factory.services.agreement import agreement_summary
 from factory.services.audit import audit_report
 from factory.services.calibration import calibration_status
@@ -32,7 +37,9 @@ from factory.services.prisma import (
     search_report,
 )
 from factory.services.protocol import current_protocol, list_amendments, list_deviations
+from factory.services.references import reference_counts
 from factory.services.seeds import _rigor_mode, admitted_seed_count, seed_recall
+from factory.services.snowball import recorded_rounds
 
 NOT_COMPUTED = "not computed"
 NONE_RECORDED = "none recorded"
@@ -93,6 +100,20 @@ class MethodsReport(StrictModel):
     evidence_comparability_keys: list[str] = Field(default_factory=list)
     evidence_frontier_costs: list[str] = Field(default_factory=list)
     """Cost axes on which at least one group has a frontier."""
+    reference_extractions: int = 0
+    """Live reference-list extractions (slice 3a); 0, and the fields below empty, when the
+    project has neither an extraction nor a snowball round."""
+    reference_entries: int = 0
+    reference_resolved: int = 0
+    reference_unresolved: int = 0
+    reference_parser: str | None = None
+    """`<parser> <version>` of the reference parser."""
+    reference_matcher: str | None = None
+    """The reference matcher version."""
+    snowball_rounds: dict[str, int] = Field(default_factory=dict)
+    """Recorded snowball rounds per direction (`backward`, `forward`)."""
+    snowball_rule: str | None = None
+    """The declared stopping rule, stated in words; None while no plan is declared."""
 
 
 def methods_report(project: Project) -> MethodsReport:
@@ -119,6 +140,7 @@ def methods_report(project: Project) -> MethodsReport:
     ex_audit = None if schema is None else extraction_audit_report(project)
     evidence = None if schema is None else evidence_report(project)
     groups = [] if evidence is None else evidence.groups
+    references = _references(project, None if protocol is None else protocol.spec.snowball_plan)
     return MethodsReport(
         rigor_mode=_rigor_mode(project).value,
         method_profile=None if protocol is None else protocol.spec.method_profile.value,
@@ -169,6 +191,40 @@ def methods_report(project: Project) -> MethodsReport:
         evidence_copied=sum(g.counts.copied for g in groups),
         evidence_comparability_keys=[] if evidence is None else list(evidence.comparability_keys),
         evidence_frontier_costs=sorted({a.axis for g in groups for a in g.frontiers}),
+        **references,
+    )
+
+
+def _references(project: Project, plan: SnowballPlan | None) -> dict[str, Any]:
+    """The reference and snowballing fields of the report; none while neither stage has run."""
+    counts = reference_counts(project)
+    rounds = recorded_rounds(project)
+    if not counts.extractions and not rounds:
+        return {}
+    return {
+        "reference_extractions": counts.extractions,
+        "reference_entries": counts.entries,
+        "reference_resolved": counts.resolved,
+        "reference_unresolved": counts.unresolved,
+        "reference_parser": f"{PARSER} {PARSER_VERSION}",
+        "reference_matcher": MATCHER_VERSION,
+        "snowball_rounds": {
+            d.value: sum(1 for r in rounds if r.direction is d)
+            for d in (Direction.BACKWARD, Direction.FORWARD)
+        },
+        "snowball_rule": None if plan is None else _rule(plan),
+    }
+
+
+def _rule(plan: SnowballPlan) -> str:
+    stop = (
+        "stop when a round yields no newly included work"
+        if plan.stop_when_no_new_included
+        else "no stop on an empty round"
+    )
+    return (
+        f"at most {plan.max_backward_rounds} backward and {plan.max_forward_rounds} forward "
+        f"round(s); {stop}"
     )
 
 
@@ -250,7 +306,8 @@ def _screening_started(project: Project) -> bool:
 def render_methods(report: MethodsReport, *, withheld: frozenset[str] = frozenset()) -> str:
     """The methods statement as Markdown paragraphs, separated by blank lines, in the order:
     search, deduplication, screening and automation, agreement and audit, full-text screening,
-    seed recall, deviations.
+    extraction and evidence (when declared), reference lists and snowballing (when run), seed
+    recall, deviations.
 
     `withheld` names the fields an agent view hides; each is rendered as withheld, not as zero.
     """
@@ -262,6 +319,7 @@ def render_methods(report: MethodsReport, *, withheld: frozenset[str] = frozense
         _full_text(report),
         *([] if report.extraction_pack is None else [_extraction(report, withheld)]),
         *([] if report.extraction_pack is None else [_evidence(report)]),
+        *([] if report.reference_parser is None else [_references_paragraph(report)]),
         _seed_recall(report, withheld),
         _deviations(report),
     ]
@@ -290,6 +348,21 @@ def _search(report: MethodsReport) -> str:
         f"Records identified from databases: {_counts(flow.identified_databases)}. "
         f"Records identified by other methods: {_counts(flow.identified_other)}. "
         f"Citation-chase rounds: {report.chase_rounds}."
+    )
+
+
+def _references_paragraph(report: MethodsReport) -> str:
+    flow = report.prisma
+    rounds = report.snowball_rounds
+    return (
+        f"Reference lists and snowballing. Reference lists were parsed from "
+        f"{report.reference_extractions} included work(s) ({report.reference_parser}, matcher "
+        f"version {report.reference_matcher}): {report.reference_entries} entries, "
+        f"{report.reference_resolved} resolved, {report.reference_unresolved} unresolved. "
+        f"Snowball rounds: backward {rounds.get('backward', 0)} (from the documents' reference "
+        f"lists), forward {rounds.get('forward', 0)} (from source metadata, as citation "
+        f"chasing); stopping rule: {report.snowball_rule or NONE_RECORDED}. Records by "
+        f"mechanism: {_counts(flow.identified_other_detail)}."
     )
 
 

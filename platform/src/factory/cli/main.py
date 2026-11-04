@@ -434,14 +434,20 @@ def _binary(verdict: str) -> Literal["include", "exclude"]:
 
 @seeds_app.callback()
 def seeds(ctx: typer.Context) -> None:
-    """Print every seed with its hold-out role. Held-out roles are shown to humans only."""
+    """Print every seed with its hold-out role and, for a retrieved positive, the route that found
+    it. Held-out roles and seed routes are shown to humans only."""
     if ctx.invoked_subcommand is not None:
         return
     state = _state(ctx)
     with _reporting_errors():
         project = _resolve_project(state)
         records = seeds_service.all_seeds(project)
-        checks = {check.seed_id: check.status for check in seeds_service.seed_check(project)}
+        checks = {
+            check.seed_id: check.status
+            if check.found_by is None
+            else f"{check.status} ({check.found_by})"
+            for check in seeds_service.seed_check(project)
+        }
     header = ["id", "kind", "role", "resolution", "check"]
     rows = [
         [

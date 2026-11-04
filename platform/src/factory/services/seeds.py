@@ -293,12 +293,23 @@ class SeedRecord(StrictModel):
     role: SeedRole
 
 
+FoundBy = Literal["search", "chase", "snowball", "admission"]
+
+
 class SeedCheck(StrictModel):
+    """One positive seed against the corpus. `found_by` is the route of `matched_work` (slice
+    3a, decision 54), read from the provenance of the work and of its active merge group:
+    `admission` only when every entry is `seed-admission`; otherwise `search` when a database or
+    hand-search entry exists, else the mechanism of the earliest citation-chase run (`snowball`
+    for a snowball round's run, forward rounds included; `chase` otherwise). The CLI shows it; the
+    agent views never carry it (decision 43)."""
+
     seed_id: str
     role: SeedRole
     status: Literal["retrieved", "explained", "missing"]
     matched_work: str | None
     found_by_search: bool = False
+    found_by: FoundBy | None = None
 
 
 class SeedRecall(StrictModel):
@@ -576,6 +587,7 @@ def seed_check(project: Project) -> list[SeedCheck]:
     by_id = {work.id: work for work in list_works(project)}
     groups = _merge_groups(project)
     explained = _explained_ids(project)
+    snowball_runs = _snowball_runs(project)
     checks: list[SeedCheck] = []
     for seed, role, matched in _positive_matches(project):
         if matched is not None:
@@ -595,6 +607,12 @@ def seed_check(project: Project) -> list[SeedCheck]:
                     _searched(by_id[wid].provenance)
                     for wid in groups.get(matched, (matched,))
                     if wid in by_id
+                ),
+                found_by=_found_by(
+                    [by_id[wid] for wid in groups.get(matched or "", (matched,)) if wid in by_id]
+                    if matched is not None
+                    else [],
+                    snowball_runs,
                 ),
             )
         )
@@ -660,6 +678,41 @@ def _merge_groups(project: Project) -> dict[str, tuple[str, ...]]:
         for member in members:
             groups[member] = members
     return groups
+
+
+def _snowball_runs(project: Project) -> set[str]:
+    """Runs of snowball rounds: their queries' `query.registered` refs name a `snw_` round, or
+    the chase round a forward snowball round delegated to."""
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT r.run_id FROM runs r JOIN events e ON e.type = 'query.registered' "
+                "AND json_extract(e.refs, '$[0]') = r.query_id "
+                "WHERE EXISTS (SELECT 1 FROM json_each(e.refs) j "
+                "WHERE substr(j.value, 1, 4) = 'snw_' OR j.value IN "
+                "(SELECT chase_round_id FROM snowball_rounds WHERE chase_round_id IS NOT NULL))"
+            )
+        ).all()
+    return {str(run) for (run,) in rows}
+
+
+def _found_by(works: Sequence[Work], snowball_runs: set[str]) -> FoundBy | None:
+    """The route of a matched work, read from the provenance of `works` (the work and its active
+    merge group; decision 54). `admission` only when every entry is `seed-admission`; else
+    `search` for any database or hand-search entry, then `chase` or `snowball` by the earliest
+    citation-chase run. None for no work."""
+    entries = [entry for work in works for entry in work.provenance]
+    if not entries:
+        return None
+    methods = {entry.method for entry in entries}
+    if methods <= {ProvenanceMethod.SEED_ADMISSION}:
+        return "admission"
+    if methods & {ProvenanceMethod.DATABASE, ProvenanceMethod.HAND_SEARCH}:
+        return "search"
+    chased = sorted(e.run_id for e in entries if e.method is ProvenanceMethod.CITATION_CHASE)
+    if chased:
+        return "snowball" if chased[0] in snowball_runs else "chase"
+    return "search"
 
 
 def seed_recall(project: Project) -> SeedRecall:

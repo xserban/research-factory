@@ -8,6 +8,13 @@ services; no caller can set one. Counts follow plan 5b ruling 2 and decision #38
 - `identified_other`: canonical works with no `database` provenance, each counted once, keyed by
   the highest-precedence method among their provenance (citation-chase, seed-admission,
   hand-search).
+- `identified_other_detail`: the `citation-chase` works of `identified_other` by mechanism (slice
+  3a, R-25): `chase-backward`, `chase-forward` (a forward snowball round is a `search_chase` round
+  and counts here) and `snowball-backward`. A work counts once, under its earliest
+  `citation-chase` run (by run id). A run is told apart by its query's `query.registered` refs: a
+  `snw_` ref is a backward snowball round; otherwise (a `chs_` ref, or a chase recorded before
+  queries named their round) the query text's `cites:` prefix is forward, any other backward.
+  Empty while no work counts under `citation-chase`, so a slice-1 flow is unchanged.
 - `duplicates_removed`: database records less the canonical works that have database provenance.
 - `screened`: canonical works. The live canonical set comes from `dedup.canonical_works`, so a
   reverted merge is reflected at once.
@@ -19,6 +26,7 @@ services; no caller can set one. Counts follow plan 5b ruling 2 and decision #38
 Invariants, enforced by `PrismaFlow`:
 - sum(identified_databases) + sum(identified_other) - duplicates_removed == screened
 - sum(excluded) + pending + included == screened
+- sum(identified_other_detail) == identified_other["citation-chase"] whenever the detail is set
 """
 
 import json
@@ -33,6 +41,7 @@ from factory.clock import parse_ts
 from factory.errors import FactoryError
 from factory.model.base import StrictModel
 from factory.model.protocol import Limit, ProtocolSpec, ScreeningStage, search_strategy_hash
+from factory.model.references import Direction, Via
 from factory.model.screening import ScreeningPhase
 from factory.model.search import QueryKind, QueryPurpose, RunStatus
 from factory.model.work import ProvenanceMethod, Work
@@ -43,6 +52,7 @@ from factory.services.fulltext_screening import fulltext_queue
 from factory.services.fulltext_status import fulltext_status
 from factory.services.protocol import current_protocol, registered_deviation
 from factory.services.search import RunSummary
+from factory.services.snowball import query_yields, recorded_rounds
 
 UNSOUGHT = "unsought"
 UNCONVERTED = "unconverted"
@@ -56,6 +66,12 @@ OTHER_METHODS: tuple[ProvenanceMethod, ...] = (
     ProvenanceMethod.SUPPLIED,
 )
 """Non-database methods in precedence order: a work counts under the first one it carries."""
+
+CHASE_BACKWARD = "chase-backward"
+CHASE_FORWARD = "chase-forward"
+SNOWBALL_BACKWARD = "snowball-backward"
+OTHER_DETAIL_KEYS: tuple[str, ...] = (CHASE_BACKWARD, CHASE_FORWARD, SNOWBALL_BACKWARD)
+"""The mechanisms of `identified_other_detail` (slice 3a)."""
 
 
 class FullTextBoxes(StrictModel):
@@ -135,6 +151,7 @@ class PrismaFlow(StrictModel):
 
     identified_databases: dict[str, int]
     identified_other: dict[str, int]
+    identified_other_detail: dict[str, int] = Field(default_factory=dict)
     duplicates_removed: int
     screened: int
     excluded: dict[str, int]
@@ -159,6 +176,9 @@ class PrismaFlow(StrictModel):
             raise ValueError("excluded, pending and included must sum to screened")
         if self.provisional != (self.pending > 0):
             raise ValueError("a flow is provisional exactly while works are pending")
+        chased = self.identified_other.get(ProvenanceMethod.CITATION_CHASE.value, 0)
+        if self.identified_other_detail and sum(self.identified_other_detail.values()) != chased:
+            raise ValueError("the other-methods detail must sum to the citation-chase count")
         return self
 
 
@@ -179,6 +199,16 @@ class SearchReportRow(StrictModel):
     retrieved: int
     shortfall_reason: str | None
     deviation_id: str | None
+    round_id: str | None = None
+    """The snowball round whose query this is (slice 3a); None for any other query."""
+    direction: Direction | None = None
+    via: Via | None = None
+    round_no: int | None = None
+    new_after_dedup: int | None = None
+    """For a round's query: the works new after dedup that its runs retrieved first."""
+    included: int | None = None
+    """For a round's query: how many of those are included at the last declared stage; None
+    while any of them is pending there."""
 
 
 class SearchReport(StrictModel):
@@ -197,6 +227,8 @@ def prisma_flow(project: Project) -> PrismaFlow:
 
     databases = _database_records(project)
     other = {method.value: 0 for method in OTHER_METHODS}
+    mechanisms = _chase_mechanisms(project)
+    detail = dict.fromkeys(OTHER_DETAIL_KEYS, 0)
     canonical_with_database = 0
     excluded: dict[str, int] = {}
     included = pending = 0
@@ -205,7 +237,13 @@ def prisma_flow(project: Project) -> PrismaFlow:
         if ProvenanceMethod.DATABASE in methods:
             canonical_with_database += 1
         else:
-            other[_other_method(work).value] += 1
+            method = _other_method(work)
+            other[method.value] += 1
+            if method is ProvenanceMethod.CITATION_CHASE:
+                first = min(
+                    e.run_id for e in work.provenance if e.method is ProvenanceMethod.CITATION_CHASE
+                )
+                detail[mechanisms.get(first, CHASE_BACKWARD)] += 1
         outcome = outcomes[work.id]
         if outcome is Outcome.INCLUDED:
             included += 1
@@ -220,6 +258,7 @@ def prisma_flow(project: Project) -> PrismaFlow:
     return PrismaFlow(
         identified_databases=databases,
         identified_other=other,
+        identified_other_detail=detail if other[ProvenanceMethod.CITATION_CHASE.value] else {},
         duplicates_removed=sum(databases.values()) - canonical_with_database,
         screened=len(canonical),
         excluded=dict(sorted(excluded.items())),
@@ -366,6 +405,7 @@ def search_report(project: Project) -> SearchReport:
     rows = [
         _row(project, dict(query), by_query.get(str(query["query_id"]), [])) for query in queries
     ]
+    rows = _with_rounds(project, rows)
     press_id, confirmed = _press(project, None if protocol is None else protocol.spec)
     return SearchReport(
         rows=rows,
@@ -391,6 +431,30 @@ def _database_records(project: Project) -> dict[str, int]:
             {"search": QueryPurpose.SEARCH.value, "database": ProvenanceMethod.DATABASE.value},
         ).all()
     return {str(source): int(count) for source, count in rows}
+
+
+def _chase_mechanisms(project: Project) -> dict[str, str]:
+    """The `identified_other_detail` key of every run of a chase-purpose query, by run id."""
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT r.run_id, q.text, EXISTS (SELECT 1 FROM json_each(e.refs) j "
+                "WHERE substr(j.value, 1, 4) = 'snw_') FROM runs r "
+                "JOIN queries q ON q.query_id = r.query_id "
+                "JOIN events e ON e.type = 'query.registered' "
+                "AND json_extract(e.refs, '$[0]') = q.query_id WHERE q.purpose = :chase"
+            ),
+            {"chase": QueryPurpose.CHASE.value},
+        ).all()
+    out: dict[str, str] = {}
+    for run_id, query_text, snowball in rows:
+        if snowball:
+            out[str(run_id)] = SNOWBALL_BACKWARD
+        elif str(query_text).startswith("cites:"):
+            out[str(run_id)] = CHASE_FORWARD
+        else:
+            out[str(run_id)] = CHASE_BACKWARD
+    return out
 
 
 def _other_method(work: Work) -> ProvenanceMethod:
@@ -448,6 +512,31 @@ def _row(project: Project, query: Mapping[str, Any], runs: list[RunSummary]) -> 
         shortfall_reason="; ".join(shortfall) or None,
         deviation_id=registered_deviation(project, query_id),
     )
+
+
+def _with_rounds(project: Project, rows: list[SearchReportRow]) -> list[SearchReportRow]:
+    """`rows` with each snowball round's queries labelled by round and given their yield (R-23,
+    R-25). A forward round's queries are those of its delegated chase round."""
+    labels: dict[str, dict[str, object]] = {}
+    for recorded in recorded_rounds(project):
+        via = (
+            Via.DOCUMENT_REFERENCE_LIST
+            if recorded.direction is Direction.BACKWARD
+            else Via.SOURCE_METADATA
+        )
+        for query_id, yielded in query_yields(project, recorded.round_id).items():
+            labels[query_id] = {
+                "round_id": recorded.round_id,
+                "direction": recorded.direction,
+                "via": via,
+                "round_no": recorded.round_no,
+                "new_after_dedup": yielded.new_after_dedup,
+                "included": yielded.included,
+            }
+    return [
+        row.model_copy(update=labels[row.query_id]) if row.query_id in labels else row
+        for row in rows
+    ]
 
 
 def _press(project: Project, spec: ProtocolSpec | None) -> tuple[str | None, bool]:

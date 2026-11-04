@@ -790,6 +790,7 @@ def test_clean_project_is_ok(
         "chase-missing",
         "profile-checklist",
         "fulltext-unsought",
+        "snowball-plan-missing",  # a pilot warning (slice 3a ruling 19): no snowball_plan
     }
 
 

@@ -12,6 +12,11 @@ Invariants:
 - A merge is shown whatever its status; a reverted merge's label says it was reverted and why.
 - A work reached through a citation chase is linked to its `chase_round`: the round whose query
   text is the text the work's run ran (the round recorded before the query was registered).
+- A reference extraction (`rex_…`; an entry key `rex_…:<n>` names its extraction) leads from the
+  citing work's conversion and screening decisions to the bibliography anchors of its resolved
+  entries, and each anchor to the work its link names, so a snowball candidate traces back to the
+  citing anchor. A snowball round (`snw_…`) is derived from its source works and extractions; its
+  queries are those whose `query.registered` refs name it, or, forward, its chase round.
 - A reference that names no row is shown as a node with an empty `event_id`, so a broken link is
   visible rather than hidden.
 - An identifier that names no row raises `FactoryValidationError([ValidationIssue("ref",
@@ -38,6 +43,7 @@ from factory.model.fulltext import ATTEMPT_ID_RE, DOCUMENT_ID_RE
 from factory.model.identity import BLOB_REF_RE, CONVERSION_ID_RE, ULID_RE
 from factory.model.protocol import PROTOCOL_ID_RE, ProtocolSpec
 from factory.model.question import QUESTION_ID_RE, QuestionSpec
+from factory.model.references import ENTRY_KEY_RE, REX_ID_RE, SNW_ID_RE
 from factory.model.screening import AUDIT_ID_RE, DECISION_ID_RE, QUALIFIED_CRITERION_RE
 from factory.model.seed import SEED_ID_RE
 from factory.model.work import QUERY_ID_RE, RUN_ID_RE
@@ -67,6 +73,8 @@ KINDS: tuple[str, ...] = (
     "audit",
     "seed",
     "chase_round",
+    "reference_extraction",
+    "snowball_round",
 )
 """Node kinds in chain order. Sibling nodes are listed in this order (reversed for back traces, so
 the work branch of a decision comes before its cited criterion)."""
@@ -96,6 +104,8 @@ _PATTERNS: tuple[tuple[str, str], ...] = (
     (AUDIT_ID_RE, "audit"),
     (_AUDIT_ITEM_RE, "audit"),
     (CHASE_ROUND_ID_RE, "chase_round"),
+    (REX_ID_RE, "reference_extraction"),
+    (SNW_ID_RE, "snowball_round"),
     (SEED_ID_RE, "seed"),
     (BLOB_REF_RE, "page"),
     (WORK_ID_RE, "work"),
@@ -310,6 +320,8 @@ def _split_cell(ident: str) -> tuple[str, str]:
 
 
 def _parse(ref: str) -> Key | None:
+    if re.fullmatch(ENTRY_KEY_RE, ref):
+        return ("reference_extraction", ref.rsplit(":", 1)[0])
     for pattern, kind in _PATTERNS:
         if re.fullmatch(pattern, ref):
             return (kind, ref)
@@ -377,6 +389,8 @@ class _Walk:
             "audit": self._audit,
             "seed": self._seed,
             "chase_round": self._chase_round,
+            "reference_extraction": self._reference_extraction,
+            "snowball_round": self._snowball_round,
         }
 
     # --- Rows and events ---
@@ -770,6 +784,34 @@ class _Walk:
         label = f"{names} chase from {works} works, {len(queries)} queries"
         return _Described(label, str(event_id))
 
+    def _reference_extraction(self, ident: str) -> _Described | None:
+        """A reference extraction. The label gives its parser and entry count, never an entry."""
+        rows = self._all(
+            "SELECT parser, parser_version, live, event_id, "
+            "(SELECT COUNT(*) FROM reference_entries n WHERE n.extraction_id = x.extraction_id) "
+            "FROM reference_extractions x WHERE extraction_id = :x",
+            x=ident,
+        )
+        if not rows:
+            return None
+        parser, version, live, event_id, entries = rows[0]
+        label = f"{parser} {version}, {entries} entries"
+        if not live:
+            label += " (superseded)"
+        return _Described(label, str(event_id))
+
+    def _snowball_round(self, ident: str) -> _Described | None:
+        rows = self._all(
+            "SELECT direction, round_no, via, sources, event_id FROM snowball_rounds "
+            "WHERE round_id = :r",
+            r=ident,
+        )
+        if not rows:
+            return None
+        direction, round_no, via, sources, event_id = rows[0]
+        works = len(json.loads(str(sources)))
+        return _Described(f"{direction} round {round_no} via {via}, {works} sources", str(event_id))
+
     # --- Neighbours: upstream (derived from) and downstream (derived into) ---
 
     def edges(self, key: Key) -> tuple[list[Key], list[Key]]:
@@ -898,6 +940,15 @@ class _Walk:
         round_id = self._chase_assignment()[0].get(ident)
         if round_id is not None:
             up.append(("chase_round", round_id))
+        up += [
+            ("snowball_round", r)
+            for r in self._column(
+                "SELECT j.value FROM events e, json_each(e.refs) j "
+                "WHERE e.type = 'query.registered' AND json_extract(e.refs, '$[0]') = :q "
+                "AND substr(j.value, 1, 4) = 'snw_'",
+                q=ident,
+            )
+        ]
         down: list[Key] = [
             ("run", r) for r in self._column("SELECT run_id FROM runs WHERE query_id = :q", q=ident)
         ]
@@ -984,6 +1035,16 @@ class _Walk:
                 w=ident,
             )
         ]
+        up += [
+            ("anchor", f"{c}/{a}")
+            for c, a in self._all(
+                "SELECT x.conversion_id, n.anchor FROM reference_links l "
+                "JOIN reference_extractions x ON x.extraction_id = l.extraction_id AND x.live = 1 "
+                "JOIN reference_entries n ON n.extraction_id = l.extraction_id "
+                "AND n.ordinal = l.ordinal WHERE l.work_id = :w AND l.state = 'resolved'",
+                w=ident,
+            )
+        ]
         down: list[Key] = [
             ("merge", m)
             for m in self._column(
@@ -1031,6 +1092,20 @@ class _Walk:
             ("chase_round", c)
             for c in self._column(
                 "SELECT r.round_id FROM chase_rounds r, json_each(r.from_works) j "
+                "WHERE j.value = :w",
+                w=ident,
+            )
+        ]
+        down += [
+            ("reference_extraction", x)
+            for x in self._column(
+                "SELECT extraction_id FROM reference_extractions WHERE work_id = :w", w=ident
+            )
+        ]
+        down += [
+            ("snowball_round", r)
+            for r in self._column(
+                "SELECT r.round_id FROM snowball_rounds r, json_each(r.sources) j "
                 "WHERE j.value = :w",
                 w=ident,
             )
@@ -1124,7 +1199,28 @@ class _Walk:
                 a=anchor,
             )
         ]
-        return [("conversion", conversion_id)], down
+        extractions = self._column(
+            "SELECT DISTINCT x.extraction_id FROM reference_extractions x "
+            "JOIN reference_entries n ON n.extraction_id = x.extraction_id "
+            "WHERE x.conversion_id = :c AND n.anchor = :a",
+            c=conversion_id,
+            a=anchor,
+        )
+        down += [
+            ("work", w)
+            for w in self._column(
+                "SELECT DISTINCT l.work_id FROM reference_links l "
+                "JOIN reference_extractions x ON x.extraction_id = l.extraction_id AND x.live = 1 "
+                "JOIN reference_entries n ON n.extraction_id = l.extraction_id "
+                "AND n.ordinal = l.ordinal WHERE x.conversion_id = :c AND n.anchor = :a "
+                "AND l.state = 'resolved' AND l.work_id IS NOT NULL",
+                c=conversion_id,
+                a=anchor,
+            )
+        ]
+        up: list[Key] = [("conversion", conversion_id)]
+        up += [("reference_extraction", x) for x in extractions]
+        return up, down
 
     def _full_text_decisions(self, work_id: str) -> list[Key]:
         return [
@@ -1301,7 +1397,73 @@ class _Walk:
                 c=ident,
             )
         ]
+        up += [
+            ("snowball_round", r)
+            for r in self._column(
+                "SELECT round_id FROM snowball_rounds WHERE chase_round_id = :c", c=ident
+            )
+        ]
         down: list[Key] = [("query", q) for q in self._chase_assignment()[1].get(ident, [])]
+        return up, down
+
+    def _edges_reference_extraction(self, ident: str) -> tuple[list[Key], list[Key]]:
+        rows = self._all(
+            "SELECT work_id, conversion_id FROM reference_extractions WHERE extraction_id = :x",
+            x=ident,
+        )
+        up: list[Key] = []
+        down: list[Key] = []
+        if rows:
+            work_id, conversion_id = (str(v) for v in rows[0])
+            up += [("conversion", conversion_id), ("work", work_id)]
+            up += [
+                ("decision", d)
+                for d in self._column(
+                    "SELECT decision_id FROM decisions WHERE work_id = :w", w=work_id
+                )
+            ]
+            down += [
+                ("anchor", f"{conversion_id}/{a}")
+                for a in self._column(
+                    "SELECT n.anchor FROM reference_entries n JOIN reference_links l "
+                    "ON l.extraction_id = n.extraction_id AND l.ordinal = n.ordinal "
+                    "WHERE n.extraction_id = :x AND l.state = 'resolved' ORDER BY n.ordinal",
+                    x=ident,
+                )
+            ]
+        down += [
+            ("snowball_round", r)
+            for r in self._column(
+                "SELECT r.round_id FROM snowball_rounds r, json_each(r.extraction_ids) j "
+                "WHERE j.value = :x",
+                x=ident,
+            )
+        ]
+        return up, down
+
+    def _edges_snowball_round(self, ident: str) -> tuple[list[Key], list[Key]]:
+        rows = self._all(
+            "SELECT sources, extraction_ids, chase_round_id FROM snowball_rounds "
+            "WHERE round_id = :r",
+            r=ident,
+        )
+        up: list[Key] = []
+        down: list[Key] = []
+        if rows:
+            sources, extractions, chase = rows[0]
+            up += [("work", str(w)) for w in json.loads(str(sources))]
+            up += [("reference_extraction", str(x)) for x in json.loads(str(extractions))]
+            if chase is not None:
+                down.append(("chase_round", str(chase)))
+        down += [
+            ("query", q)
+            for q in self._column(
+                "SELECT json_extract(e.refs, '$[0]') FROM events e "
+                "WHERE e.type = 'query.registered' "
+                "AND EXISTS (SELECT 1 FROM json_each(e.refs) j WHERE j.value = :r)",
+                r=ident,
+            )
+        ]
         return up, down
 
 
@@ -1328,4 +1490,6 @@ _EDGES: dict[str, Callable[[_Walk, str], tuple[list[Key], list[Key]]]] = {
     "audit": _Walk._edges_audit,
     "seed": _Walk._edges_seed,
     "chase_round": _Walk._edges_chase_round,
+    "reference_extraction": _Walk._edges_reference_extraction,
+    "snowball_round": _Walk._edges_snowball_round,
 }
