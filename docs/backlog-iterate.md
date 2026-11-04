@@ -14,3 +14,4 @@ Minor review findings parked during the v1 build, to address when iterating from
 - exports-a: 100k export 24 s vs plan target 5 s (work validation + JSON parse dominate); test bound 60 s.
 - perf (testspeed report): Index.sync on every read (~2.5 ms, thousands of calls) — fast path on unchanged file sizes + db identity; check() recomputes final_outcomes ~50x per call (~8 s on extraction world); default_projection() rebuilds metadata per open (~55 ms).
 - living-A: CLI watch dry-run computes due from status.due, not _open_or_resume (logic in CLI, misses resumed cycles); registered_cycle LIKE scan over query.registered per run_query; incremental union order vs dedup_run with blocked pairs.
+- G1 T8: prisma mechanisms.get(first, CHASE_BACKWARD) silently defaults when a chase run has no registered query; snowball-unscreened check only tested via monkeypatch.
