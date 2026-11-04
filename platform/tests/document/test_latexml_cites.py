@@ -66,3 +66,41 @@ def test_end_to_end_manifest_has_b_anchors() -> None:
     manifest = parse_manifest(md)
     assert {"b1", "b2"} <= {a.id for a in manifest.anchors}
     assert "(#b2)" in md.split("References")[0]
+
+
+def _md_bib(items: list[str], body: str, loose: str = "") -> str:
+    lis = "".join(
+        f'<li class="ltx_bibitem" id="bib.bib{i}">{x}</li>' for i, x in enumerate(items, 1)
+    )
+    page = (
+        f"<html><body><div>{loose}<p class='ltx_p'>{body}</p>"
+        f'<section class="ltx_bibliography"><h2 class="ltx_title">References</h2><ul>{lis}</ul>'
+        "</section></div></body></html>"
+    )
+    return LatexmlHtmlConverter().to_markdown(page.encode(), "text/html")[0]
+
+
+def _ordinal_for_third(middle: str) -> None:
+    cite = '<cite class="ltx_cite"><a class="ltx_ref" href="#bib.bib3">g</a></cite>'
+    md = _md_bib(["Alpha", middle, "Gamma"], cite)
+    b2 = next(a for a in parse_manifest(anchorise(md)).anchors if a.id == "b2")
+    assert b2.text == "Gamma"
+    assert "[g](#b2)" in md
+
+
+def test_script_only_bibitem_gets_no_ordinal() -> None:
+    _ordinal_for_third("<script>x()</script>")
+
+
+def test_image_only_bibitem_gets_no_ordinal() -> None:
+    _ordinal_for_third('<img src="x.png"/>')
+
+
+def test_empty_bibitem_before_linked_one() -> None:
+    _ordinal_for_third("")
+
+
+def test_loose_bibitem_outside_bibliography_not_counted() -> None:
+    loose = '<ul><li class="ltx_bibitem" id="bib.loose">Loose</li></ul>'
+    cite = '<cite class="ltx_cite"><a class="ltx_ref" href="#bib.loose">l</a></cite>'
+    assert "(#b" not in _md_bib(["Alpha"], cite, loose)

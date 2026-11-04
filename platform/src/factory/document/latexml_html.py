@@ -598,16 +598,19 @@ class LatexmlHtmlConverter:
         if root is None:
             return "", ("document: not parseable as HTML",)
         walker = _Walker()
-        bibitems = (
-            node
-            for node in root.iter()
-            if isinstance(node.tag, str)
-            and "ltx_bibitem" in _classes(node)
-            and _collapse(_text(node))  # an empty bibitem yields no paragraph, so no anchor
-        )
-        for ordinal, item in enumerate(bibitems, start=1):
-            if item.get("id"):
-                walker._bib_ordinals.setdefault(str(item.get("id")), ordinal)
+        # Ordinals follow the paragraphs `_bibliography` emits: same scope, same emptiness test
+        # (the emitter's own `_inline` on a scratch walker).
+        scratch = _Walker()
+        ordinal = 0
+        for biblio in root.iter():
+            if not isinstance(biblio.tag, str) or "ltx_bibliography" not in _classes(biblio):
+                continue
+            for item in biblio.iterdescendants():
+                is_item = isinstance(item.tag, str) and "ltx_bibitem" in _classes(item)
+                if is_item and scratch._inline(item):
+                    ordinal += 1
+                    if item.get("id"):
+                        walker._bib_ordinals.setdefault(str(item.get("id")), ordinal)
         walker.block(root)
         markdown = walker.finish()
         return markdown, tuple(walker.warnings)
