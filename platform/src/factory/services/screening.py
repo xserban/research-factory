@@ -44,11 +44,13 @@ from sqlalchemy import text
 from factory.document.quotes import quote_in_element
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor, Event
+from factory.events.reader import read_all
 from factory.index.chase import considered_works, extended_works
 from factory.model.base import StrictModel
 from factory.model.chase import SampleExtended
 from factory.model.protocol import ProtocolStatus, ScreeningStage
 from factory.model.screening import (
+    Channel,
     DecisionRecorded,
     Framing,
     PassJoined,
@@ -240,9 +242,10 @@ def join_pass(
     project: Project, actor: Actor, label: PassLabel, *, stage: ScreeningStage = TA
 ) -> None:
     """Bind the session to pass `label` of `stage`, once per stage. Refused, with nothing written,
-    when the actor is not an agent, when the session relayed a human label, or when it already
-    screens the other pass of the stage or its model already screens the other pass of the stage.
-    Joining the same pass again writes nothing."""
+    when the actor is not an agent, when the session relayed a human label (screening or
+    extraction) or joined an extraction pass, or when it already screens the other pass of the
+    stage or its model already screens the other pass of the stage. Joining the same pass again
+    writes nothing."""
     require_pass_stage(stage)
     with project.index.exclusive():
         project.index.sync()
@@ -268,6 +271,14 @@ def _check_join(
     if _is_extraction_session(project, actor.session):
         raise FactoryValidationError(
             [ValidationIssue("session", "this session joined an extraction pass and cannot screen")]
+        )
+    if relayed_extraction_label(project, actor.session):
+        raise FactoryValidationError(
+            [
+                ValidationIssue(
+                    "session", "this session relayed an extraction label and cannot screen"
+                )
+            ]
         )
     joined = _joined_pass(project, actor.session, stage)
     if joined is None:
@@ -1014,6 +1025,23 @@ def _is_label_session(project: Project, session: str) -> bool:
             text("SELECT 1 FROM label_sessions WHERE session = :session"), {"session": session}
         ).one_or_none()
     return row is not None
+
+
+def relayed_extraction_label(project: Project, session: str) -> bool:
+    """Whether `session` relayed an extraction resolution or audit label over MCP, or drew an
+    extraction audit sample (decision 51). Read from the log, as the projection keeps no session
+    for these events."""
+    for event in read_all(project.paths.events_dir, project.catalog):
+        if event.actor.session != session:
+            continue
+        if event.type == "extraction.audit_sampled":
+            return True
+        if (
+            event.type in ("extraction.resolved", "extraction.audit_labelled")
+            and event.payload.get("channel") == Channel.MCP.value
+        ):
+            return True
+    return False
 
 
 def _is_extraction_session(project: Project, session: str) -> bool:

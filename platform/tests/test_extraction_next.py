@@ -8,7 +8,7 @@ from sqlalchemy import text
 from factory.errors import FactoryValidationError
 from factory.events.envelope import Actor
 from factory.events.reader import read_all
-from factory.model.extraction import ExtractionResolved
+from factory.model.extraction import ExtractionAuditSampled, ExtractionResolved
 from factory.model.protocol import ExtractionSchema, ScreeningStage
 from factory.model.screening import Channel, PassLabel
 from factory.services import extraction
@@ -417,4 +417,48 @@ def test_extraction_session_cannot_join_a_screening_pass(
     with pytest.raises(FactoryValidationError) as e2:
         screen_next(project, ext_a, PassLabel.A, stage=FT)
     assert _fields_of(e2) == ["session"]
+    assert _event_count(project) == before
+
+
+def test_audit_sampling_session_cannot_extract(
+    project: Project, ext_a: Actor, world: list[str]
+) -> None:
+    protocol = current_protocol(project)
+    assert protocol is not None
+    relay = ext_a.model_copy(update={"kind": "human", "model": None, "skill": None})
+    sampled = ExtractionAuditSampled(
+        audit_id="xau_01JZ9Q3K5M7N8P0R2S4T6V8W1C",
+        items=(),
+        random_seed=1,
+        population=0,
+        population_digest="sha256:0",
+        protocol_id=protocol.protocol_id,
+    )
+    project.record([project.events.make("extraction.audit_sampled", sampled, relay)])
+    with pytest.raises(FactoryValidationError) as e:
+        extract_next(project, ext_a, PassLabel.A)
+    assert _fields_of(e) == ["session"]
+
+
+def test_extraction_relay_session_cannot_join_a_screening_pass(
+    project: Project, agent: Actor, world: list[str]
+) -> None:
+    protocol = current_protocol(project)
+    assert protocol is not None
+    fresh = agent.model_copy(update={"session": "01JZ9Q3K5M7N8P0R2S4T6V8W1D"})
+    relay = fresh.model_copy(update={"kind": "human", "model": None, "skill": None})
+    resolved = ExtractionResolved(
+        work_id=world[0],
+        row_key="rk_0123456789ab",
+        field=None,
+        choice="a",
+        reason="x",
+        channel=Channel.MCP,
+        protocol_id=protocol.protocol_id,
+    )
+    project.record([project.events.make("extraction.resolved", resolved, relay)])
+    before = _event_count(project)
+    with pytest.raises(FactoryValidationError) as e:
+        join_pass(project, fresh, PassLabel.A, stage=FT)
+    assert _fields_of(e) == ["session"]
     assert _event_count(project) == before

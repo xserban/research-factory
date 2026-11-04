@@ -73,7 +73,7 @@ from factory.model.extraction import (
     UnitReferences,
 )
 from factory.model.protocol import ExtractionSchema, ProtocolAmended, ProtocolStatus, ScreeningStage
-from factory.model.screening import Channel, PassLabel
+from factory.model.screening import PassLabel
 from factory.model.staleness import RowRef, stale_rows, touches
 from factory.model.task import Task, TaskCompleted, TaskStatus
 from factory.packs import FieldKind, Pack, get_pack
@@ -84,7 +84,7 @@ from factory.services.document_read import ConversionRef, default_conversion
 from factory.services.extraction_verify import VALUE_FIELD, verify_row_in
 from factory.services.protocol import ProtocolVersion, amendments_with_events, current_protocol
 from factory.services.results import BatchResult, ItemError
-from factory.services.screening import _is_label_session
+from factory.services.screening import _is_label_session, relayed_extraction_label
 from factory.services.search import list_works
 from factory.services.stages import EXTRACT_KINDS, screening_plan
 from factory.services.tasks import (
@@ -320,18 +320,6 @@ def screening_session(project: Project, session: str) -> bool:
     return row is not None
 
 
-def _relayed_extraction_label(project: Project, session: str) -> bool:
-    """Whether `session` relayed an extraction resolution or audit label over MCP. Read from the
-    log, as the projection keeps no session for these events."""
-    kinds = {"extraction.resolved", "extraction.audit_labelled"}
-    return any(
-        event.type in kinds
-        and event.actor.session == session
-        and event.payload.get("channel") == Channel.MCP.value
-        for event in read_all(project.paths.events_dir, project.catalog)
-    )
-
-
 def _other(label: PassLabel) -> PassLabel:
     return PassLabel.B if label is PassLabel.A else PassLabel.A
 
@@ -358,7 +346,7 @@ def _check_join(project: Project, actor: Actor, label: PassLabel) -> bool:
     joined = _joined_pass(project, actor.session)
     if joined is label:
         return False
-    if _is_label_session(project, actor.session) or _relayed_extraction_label(
+    if _is_label_session(project, actor.session) or relayed_extraction_label(
         project, actor.session
     ):
         raise FactoryValidationError(
