@@ -4,9 +4,14 @@ Pass A tests every work against the inclusion criteria in protocol order. Pass B
 plan, tests a sample of works against the exclusion criteria in reverse order. Each pass is opened
 once, with a seed that orders its batches and, for B, its sample.
 
-A session joins one pass. It is refused from the other pass, and from any session that relayed a
-human label over MCP, since such a session could read the answer key (ruling 1). A refusal raises
-FactoryValidationError and writes nothing.
+A session joins one pass per stage. It is refused from the other pass of that stage, and from any
+session that relayed a human label over MCP, since such a session could read the answer key
+(ruling 1). A refusal raises FactoryValidationError and writes nothing.
+
+Every function takes a keyword `stage` (default title/abstract); `either` is refused on field
+`stage`. At full text the plan is `full_text_screening`, refused on field `full_text_screening`
+until declared (R-13). Task kinds are `screen_a`/`screen_b` and `screen_ft_a`/`screen_ft_b`. The
+full-text pass B has no sample extension yet: its sample is the one recorded at open.
 
 `screen_next` serves the next batch of a pass. While calibration is required and the pass has not
 passed it, only calibration batches are served, and `blocked` says why ordinary batches wait. A
@@ -58,6 +63,7 @@ from factory.services.calibration import (
     calibration_items,
     calibration_status,
     sensitivity_threshold,
+    stage_population,
     worked_examples,
 )
 from factory.services.context import Project
@@ -71,6 +77,7 @@ from factory.services.protocol_rules import DecisionRef, stale_decisions
 from factory.services.results import BatchResult, ItemError
 from factory.services.screening_stats import quote_in
 from factory.services.search import list_works
+from factory.services.stages import require_pass_stage, screening_plan, stage_of_kind, task_kind
 from factory.services.tasks import (
     TaskSpec,
     build_task_events,
@@ -80,8 +87,8 @@ from factory.services.tasks import (
     task_content,
 )
 
-TASK_KIND = {PassLabel.A: "screen_a", PassLabel.B: "screen_b"}
 SCREEN_BATCH = 10
+TA = ScreeningStage.TITLE_ABSTRACT
 
 _FRAMING = {PassLabel.A: Framing.INCLUSION, PassLabel.B: Framing.EXCLUSION}
 _CRITERION_ORDER: dict[PassLabel, Literal["protocol", "reversed"]] = {
@@ -128,78 +135,104 @@ class ScreenNext(StrictModel):
     remaining: int
 
 
-def open_pass(project: Project, actor: Actor, label: PassLabel) -> None:
-    """Open pass `label` once: its framing, criterion order, a fresh seed and, for B under a
-    fractional dual sample, its sample. A second call writes nothing.
+def open_pass(
+    project: Project, actor: Actor, label: PassLabel, *, stage: ScreeningStage = TA
+) -> None:
+    """Open pass `label` of `stage` once: its framing, criterion order, a fresh seed and, for B
+    under a fractional dual sample, its sample. A second call writes nothing.
 
-    Refused when no protocol is recorded, or for pass B under a one-pass plan."""
+    Refused when no protocol is recorded, for pass B under a one-pass plan, or at full text
+    without a declared plan."""
+    require_pass_stage(stage)
     with project.index.exclusive():
         project.index.sync()
-        if _pass_row(project, label) is not None:
+        if _pass_row(project, label, stage) is not None:
             return
-        events, _ = _opened_event(project, actor, label, _require_protocol(project))
+        events, _ = _opened_event(project, actor, label, _require_protocol(project), stage)
         project.record(events)
 
 
+def _pass_input(
+    project: Project, actor: Actor, label: PassLabel, stage: ScreeningStage
+) -> str | None:
+    """The input blob of a pass event: the label, and the stage when it is not title/abstract
+    (so a slice-1 blob keeps its hash)."""
+    value: dict[str, JsonValue] = {"pass_label": label.value}
+    if stage is not TA:
+        value["stage"] = stage.value
+    return _input(project, actor, value)
+
+
 def _opened_event(
-    project: Project, actor: Actor, label: PassLabel, protocol: ProtocolVersion
+    project: Project,
+    actor: Actor,
+    label: PassLabel,
+    protocol: ProtocolVersion,
+    stage: ScreeningStage = TA,
 ) -> tuple[list[Event], tuple[int, tuple[str, ...] | None]]:
     """The `screening.pass_opened` event for a pass not yet opened, not yet recorded, with the
     seed and sample it carries. For pass B under a partial sample, also the open-time draw record:
     the corpus outside the sample is written as considered with nothing added, so that later
     extension draws see only works that arrived after the open. Raises FactoryValidationError for
     pass B under a one-pass plan."""
-    plan = protocol.spec.screening
+    plan = screening_plan(protocol, stage)
     if label is PassLabel.B and plan.passes == 1:
         raise FactoryValidationError(
             [ValidationIssue("pass", "the protocol plans one screening pass")]
         )
     seed = secrets.randbits(32)
-    sample = _sample(project, label, plan.dual_sample, seed)
+    sample = _sample(project, label, plan.dual_sample, seed, stage)
     payload = PassOpened(
         pass_label=label,
         framing=_FRAMING[label],
         criterion_order=_CRITERION_ORDER[label],
         random_seed=seed,
         sample=sample,
+        stage=stage,
     )
     event = project.events.make(
         "screening.pass_opened",
         payload,
         actor,
-        input_blob=_input(project, actor, {"pass_label": label.value}),
+        input_blob=_pass_input(project, actor, label, stage),
     )
     events = [event]
-    if label is PassLabel.B and sample is not None:
+    if label is PassLabel.B and sample is not None and stage is TA:
         corpus = {work.id for work in list_works(project)}
         unsampled = tuple(sorted(corpus - set(sample) - set(calibration_items(project))))
         extension = SampleExtended(
-            pass_label=PassLabel.B, random_seed=seed, considered=unsampled, added=()
+            pass_label=PassLabel.B, random_seed=seed, considered=unsampled, added=(), stage=stage
         )
         events.append(
             project.events.make(
                 "screening.sample_extended",
                 extension,
                 actor,
-                input_blob=_input(project, actor, {"pass_label": label.value}),
+                input_blob=_pass_input(project, actor, label, stage),
             )
         )
     return events, (seed, sample)
 
 
-def join_pass(project: Project, actor: Actor, label: PassLabel) -> None:
-    """Bind the session to pass `label`, once. Refused, with nothing written, when the actor is
-    not an agent, when the session relayed a human label, or when it already screens the other
-    pass or its model already screens the other pass. Joining the same pass again writes
-    nothing."""
+def join_pass(
+    project: Project, actor: Actor, label: PassLabel, *, stage: ScreeningStage = TA
+) -> None:
+    """Bind the session to pass `label` of `stage`, once per stage. Refused, with nothing written,
+    when the actor is not an agent, when the session relayed a human label, or when it already
+    screens the other pass of the stage or its model already screens the other pass of the stage.
+    Joining the same pass again writes nothing."""
+    require_pass_stage(stage)
     with project.index.exclusive():
         project.index.sync()
-        if _check_join(project, actor, label):
-            project.record([_join_event(project, actor, label)])
+        if _check_join(project, actor, label, stage):
+            project.record([_join_event(project, actor, label, stage)])
 
 
-def _check_join(project: Project, actor: Actor, label: PassLabel) -> bool:
-    """Whether the session may join `label` and has not yet: True when a join must be written.
+def _check_join(
+    project: Project, actor: Actor, label: PassLabel, stage: ScreeningStage = TA
+) -> bool:
+    """Whether the session may join `label` of `stage` and has not yet: True when a join must be
+    written.
 
     Raises FactoryValidationError on a refusal; writes nothing."""
     if actor.kind != "agent" or actor.model is None:
@@ -210,9 +243,9 @@ def _check_join(project: Project, actor: Actor, label: PassLabel) -> bool:
         raise FactoryValidationError(
             [ValidationIssue("session", "this session relayed a human label and cannot screen")]
         )
-    joined = _joined_pass(project, actor.session)
+    joined = _joined_pass(project, actor.session, stage)
     if joined is None:
-        if actor.model in _pass_models(project, _other(label)):
+        if actor.model in _pass_models(project, _other(label), stage):
             raise FactoryValidationError(
                 [ValidationIssue("model", f"pass {_other(label).value} already uses this model")]
             )
@@ -224,30 +257,35 @@ def _check_join(project: Project, actor: Actor, label: PassLabel) -> bool:
     )
 
 
-def _join_event(project: Project, actor: Actor, label: PassLabel) -> Event:
+def _join_event(
+    project: Project, actor: Actor, label: PassLabel, stage: ScreeningStage = TA
+) -> Event:
     """The `screening.pass_joined` event for a join `_check_join` allowed, not yet recorded."""
     model = actor.model
     if model is None:
         raise FactoryValidationError(
             [ValidationIssue("actor", "only an agent screener joins a pass")]
         )
-    payload = PassJoined(pass_label=label, session=actor.session, model=model)
+    payload = PassJoined(pass_label=label, session=actor.session, model=model, stage=stage)
     return project.events.make(
         "screening.pass_joined",
         payload,
         actor,
-        input_blob=_input(project, actor, {"pass_label": label.value}),
+        input_blob=_pass_input(project, actor, label, stage),
     )
 
 
-def screen_next(project: Project, actor: Actor, label: PassLabel) -> ScreenNext:
-    """Serve the next batch of pass `label` to the session, or say why none is served.
+def screen_next(
+    project: Project, actor: Actor, label: PassLabel, *, stage: ScreeningStage = TA
+) -> ScreenNext:
+    """Serve the next batch of pass `label` of `stage` to the session, or say why none is served.
 
     Nothing is written while the protocol is not ready, while the calibration set is required and
     not yet drawn (the human draws and labels it; an agent does not), or while pass B has no
     second pass to run. Otherwise the session joins the pass, the pass opens, the pending works are
     queued, and the next claimable batch is claimed.
     """
+    require_pass_stage(stage)
     with project.index.exclusive():
         project.index.sync()
         protocol = current_protocol(project)
@@ -257,12 +295,13 @@ def screen_next(project: Project, actor: Actor, label: PassLabel) -> ScreenNext:
                 blocked=["the protocol is not ready; record it ready before screening (R-16)"],
                 remaining=0,
             )
-        if label is PassLabel.B and protocol.spec.screening.passes == 1:
+        plan = screening_plan(protocol, stage)
+        if label is PassLabel.B and plan.passes == 1:
             return ScreenNext(
                 batch=None, blocked=["the protocol plans one screening pass"], remaining=0
             )
-        status = calibration_status(project)
-        if status.required and not calibration_drawn(project):
+        status = calibration_status(project, stage=stage)
+        if status.required and not calibration_drawn(project, stage=stage):
             return ScreenNext(
                 batch=None,
                 blocked=[
@@ -271,29 +310,29 @@ def screen_next(project: Project, actor: Actor, label: PassLabel) -> ScreenNext:
                 ],
                 remaining=0,
             )
-        needs_join = _check_join(project, actor, label)
+        needs_join = _check_join(project, actor, label, stage)
         # The pass, the join and the queued batches are built first and written in one append,
         # so a failure while building them writes nothing.
         events: list[Event] = []
-        row = _pass_row(project, label)
+        row = _pass_row(project, label, stage)
         if row is None:
-            opened, row = _opened_event(project, actor, label, protocol)
+            opened, row = _opened_event(project, actor, label, protocol, stage)
             events.extend(opened)
         if needs_join:
-            events.append(_join_event(project, actor, label))
-        if label is PassLabel.B:
+            events.append(_join_event(project, actor, label, stage))
+        if label is PassLabel.B and stage is TA:
             drawn = _extend_sample(project, actor)
             if drawn is not None:
                 extension, added = drawn
                 events.append(extension)
                 row = (row[0], tuple(sorted(set(row[1] or ()) | set(added))))
-        queued, remaining = _enqueue(project, actor, label, protocol, row)
+        queued, remaining = _enqueue(project, actor, label, protocol, row, stage)
         project.record([*events, *queued])
         gate_closed = status.required and not status.passed[label.value]
         task = claim_next(
             project,
             actor,
-            TASK_KIND[label],
+            task_kind(stage, label),
             accept=lambda content: _servable(content, gate_closed, protocol.protocol_id),
         )
         blocked = _gate_reasons(project, status, label) if gate_closed else []
@@ -301,7 +340,7 @@ def screen_next(project: Project, actor: Actor, label: PassLabel) -> ScreenNext:
         return ScreenNext(batch=batch, blocked=blocked, remaining=remaining)
 
 
-def obsolete_tasks(project: Project, label: PassLabel) -> list[str]:
+def obsolete_tasks(project: Project, label: PassLabel, *, stage: ScreeningStage = TA) -> list[str]:
     """Open or claimed tasks of the pass whose protocol version is no longer current, sorted.
 
     Such a task is never served, and its works are queued again under the current version. A
@@ -311,19 +350,26 @@ def obsolete_tasks(project: Project, label: PassLabel) -> list[str]:
         return []
     return [
         task_id
-        for task_id, status, content in _kind_tasks(project, TASK_KIND[label])
+        for task_id, status, content in _kind_tasks(project, task_kind(stage, label))
         if status != TaskStatus.COMPLETED.value and content.protocol_id != protocol.protocol_id
     ]
 
 
-def live_decisions(project: Project, label: PassLabel | None = None) -> list[DecisionRecorded]:
-    """The decisions no later decision supersedes, in recording order, of one pass or of both."""
+def live_decisions(
+    project: Project, label: PassLabel | None = None, *, stage: ScreeningStage | None = TA
+) -> list[DecisionRecorded]:
+    """The decisions no later decision supersedes, in recording order, of one pass or of both, at
+    `stage` (title/abstract by default; every stage when None)."""
     project.index.sync()
     sql = (
         "SELECT decision_id, work_id, pass_label, phase, stage, verdict, criterion, quote, "
-        "rationale, protocol_id, task_id, supersedes FROM decisions WHERE superseded_by IS NULL"
+        "rationale, protocol_id, task_id, supersedes, anchor, conversion_id "
+        "FROM decisions WHERE superseded_by IS NULL"
     )
     params: dict[str, str] = {}
+    if stage is not None:
+        sql += " AND stage = :stage"
+        params["stage"] = require_pass_stage(stage).value
     if label is not None:
         sql += " AND pass_label = :label"
         params["label"] = label.value
@@ -332,8 +378,9 @@ def live_decisions(project: Project, label: PassLabel | None = None) -> list[Dec
     return [DecisionRecorded.model_validate(dict(row)) for row in rows]
 
 
-def stale_screening_decisions(project: Project) -> set[str]:
-    """The live decisions that a protocol amendment's stale rules make doubtful (R-30)."""
+def stale_screening_decisions(project: Project, *, stage: ScreeningStage | None = None) -> set[str]:
+    """The live decisions that a protocol amendment's stale rules make doubtful (R-30), of
+    `stage`, or of every stage when None. Each rule matches a decision's own stage."""
     refs = [
         DecisionRef(
             decision_id=decision.decision_id,
@@ -342,7 +389,7 @@ def stale_screening_decisions(project: Project) -> set[str]:
             protocol_id=decision.protocol_id,
             stage=decision.stage,
         )
-        for decision in live_decisions(project)
+        for decision in live_decisions(project, stage=stage)
     ]
     return set(stale_decisions(list_amendments(project), protocol_lineage(project), refs))
 
@@ -372,7 +419,12 @@ def screen_record(
             )
         task = require_holder(project, actor, task_id)
         batch = _batch_of(project, task)
-        if _joined_pass(project, actor.session) is not batch.pass_label:
+        stage = _stage_of_task(task)
+        if stage is not TA:
+            raise FactoryValidationError(
+                [ValidationIssue("task_id", "recording full-text verdicts is not available yet")]
+            )
+        if _joined_pass(project, actor.session, stage) is not batch.pass_label:
             raise FactoryValidationError(
                 [ValidationIssue("pass", f"this session does not screen pass {batch.pass_label}")]
             )
@@ -402,7 +454,8 @@ def screen_record(
             {"task_id": task_id, "items": [item.model_dump(mode="json") for item in items]}
         )
         live = {
-            decision.work_id: decision for decision in live_decisions(project, batch.pass_label)
+            decision.work_id: decision
+            for decision in live_decisions(project, batch.pass_label, stage=stage)
         }
         decision_ids: list[str] = []
         events = []
@@ -414,7 +467,7 @@ def screen_record(
                 work_id=item.work_id,
                 pass_label=batch.pass_label,
                 phase=batch.phase,
-                stage=ScreeningStage.TITLE_ABSTRACT,
+                stage=stage,
                 verdict=item.verdict,
                 criterion=None
                 if item.criterion is None
@@ -439,7 +492,7 @@ def screen_record(
 
         decided = {
             decision.work_id: decision.decision_id
-            for decision in live_decisions(project, batch.pass_label)
+            for decision in live_decisions(project, batch.pass_label, stage=stage)
             if decision.task_id == task_id
         }
         results = [decided.get(str(record["work_id"])) for record in batch.records]
@@ -455,9 +508,18 @@ def _batch_of(project: Project, task: Task) -> ScreenBatchContent:
         batch = ScreenBatchContent.model_validate(task_content(project, task))
     except ValidationError as exc:
         raise refusal from exc
-    if task.kind != TASK_KIND[batch.pass_label]:
+    stage = stage_of_kind(task.kind)
+    if stage is None or task.kind != task_kind(stage, batch.pass_label):
         raise refusal
     return batch
+
+
+def _stage_of_task(task: Task) -> ScreeningStage:
+    """The stage a screening task belongs to, from its kind (`_batch_of` has checked it)."""
+    stage = stage_of_kind(task.kind)
+    if stage is None:
+        raise FactoryValidationError([ValidationIssue("task_id", "is not a screening batch")])
+    return stage
 
 
 def _item_issues(
@@ -506,19 +568,20 @@ def _enqueue(
     label: PassLabel,
     protocol: ProtocolVersion,
     row: tuple[int, tuple[str, ...] | None],
+    stage: ScreeningStage = TA,
 ) -> tuple[list[Event], int]:
     """The `task.created` events of the batches for the pending works of the pass (calibration
     first), not yet recorded, and how many works of the pass's queue still lack a live,
     non-stale decision for their phase. `row` is the pass's seed and sample."""
     seed, sample = row
     corpus = {work.id: work for work in list_works(project)}
-    calibration = calibration_items(project)
-    base = sorted(corpus) if sample is None else list(sample)
+    calibration = calibration_items(project, stage=stage)
+    base = sorted(stage_population(project, stage)) if sample is None else list(sample)
     ordinary = sorted(set(base) - set(calibration))
 
-    kind = TASK_KIND[label]
+    kind = task_kind(stage, label)
     tasks = _kind_tasks(project, kind)
-    done = _done_keys(project, label)
+    done = _done_keys(project, label, stage)
     open_keys = {
         (str(record["work_id"]), content.phase.value)
         for _, status, content in tasks
@@ -537,7 +600,7 @@ def _enqueue(
     ]
 
     examples = _examples(project, corpus)
-    criteria = _criteria(protocol, label)
+    criteria = _criteria(protocol, label, stage)
     specs: list[TaskSpec] = []
     index = len(tasks)
     for phase, works in pending:
@@ -593,43 +656,50 @@ def _extend_sample(
         random_seed=seed,
         considered=tuple(candidates),
         added=added,
+        stage=TA,
     )
     event = project.events.make(
         "screening.sample_extended",
         payload,
         actor,
-        input_blob=_input(project, actor, {"pass_label": PassLabel.B.value}),
+        input_blob=_pass_input(project, actor, PassLabel.B, TA),
     )
     return event, added
 
 
-def pass_b_sample(project: Project) -> tuple[str, ...] | None:
-    """Pass B's effective sample, sorted: the sample recorded at open, plus every work a sample
-    extension drew into it. None when pass B is not opened or covers the whole corpus.
+def pass_b_sample(project: Project, *, stage: ScreeningStage = TA) -> tuple[str, ...] | None:
+    """Pass B's effective sample at `stage`, sorted: the sample recorded at open, plus every work
+    a sample extension drew into it (title/abstract only). None when pass B is not opened or
+    covers the whole population.
 
     The single reader of pass B's sample: screen_next, pass progress and agreement all use it."""
+    require_pass_stage(stage)
     with project.index.connect() as conn:
         row = conn.execute(
-            text("SELECT sample FROM passes WHERE pass_label = :label"),
-            {"label": PassLabel.B.value},
+            text("SELECT sample FROM passes WHERE pass_label = :label AND stage = :stage"),
+            {"label": PassLabel.B.value, "stage": stage.value},
         ).one_or_none()
         if row is None or row[0] is None:
             return None
         base = set(json.loads(str(row[0])))
-        extended = extended_works(conn)
+        extended = extended_works(conn) if stage is TA else set()
     return tuple(sorted(base | extended))
 
 
 def _sample(
-    project: Project, label: PassLabel, dual_sample: float | None, seed: int
+    project: Project,
+    label: PassLabel,
+    dual_sample: float | None,
+    seed: int,
+    stage: ScreeningStage = TA,
 ) -> tuple[str, ...] | None:
-    """Pass B's sample: `ceil(dual_sample * corpus)` works drawn from the corpus outside the
-    calibration set, plus the calibration set itself. Pass A, and B when no fraction below one is
-    planned, cover the whole corpus (None)."""
+    """Pass B's sample: `ceil(dual_sample * population)` works drawn from the stage's population
+    outside the calibration set, plus the calibration set itself. Pass A, and B when no fraction
+    below one is planned, cover the whole population (None)."""
     if label is PassLabel.A or dual_sample is None or dual_sample >= 1:
         return None
-    calibration = set(calibration_items(project))
-    corpus = {work.id for work in list_works(project)}
+    calibration = set(calibration_items(project, stage=stage))
+    corpus = stage_population(project, stage)
     pool = sorted(corpus - calibration)
     size = math.ceil(round(dual_sample * len(corpus), 9))
     drawn = random.Random(seed).sample(pool, min(size, len(pool)))
@@ -650,12 +720,15 @@ def _examples(project: Project, corpus: dict[str, Work]) -> list[dict[str, str]]
     return examples
 
 
-def _criteria(protocol: ProtocolVersion, label: PassLabel) -> list[dict[str, str]]:
-    """The title-and-abstract criteria in the pass's order: protocol order for A, reversed for B."""
+def _criteria(
+    protocol: ProtocolVersion, label: PassLabel, stage: ScreeningStage = TA
+) -> list[dict[str, str]]:
+    """The criteria that apply at `stage` (its own or `either`) in the pass's order: protocol
+    order for A, reversed for B."""
     applicable = [
         c
         for c in protocol.spec.criteria
-        if c.applies_at in (ScreeningStage.TITLE_ABSTRACT, ScreeningStage.EITHER)
+        if c.applies_at in (require_pass_stage(stage), ScreeningStage.EITHER)
     ]
     ordered = applicable if label is PassLabel.A else list(reversed(applicable))
     return [
@@ -664,12 +737,14 @@ def _criteria(protocol: ProtocolVersion, label: PassLabel) -> list[dict[str, str
     ]
 
 
-def _done_keys(project: Project, label: PassLabel) -> set[tuple[str, str]]:
-    """(work, phase) pairs with a live, non-stale decision in the pass."""
-    stale = stale_screening_decisions(project)
+def _done_keys(
+    project: Project, label: PassLabel, stage: ScreeningStage = TA
+) -> set[tuple[str, str]]:
+    """(work, phase) pairs with a live, non-stale decision in the pass at `stage`."""
+    stale = stale_screening_decisions(project, stage=stage)
     return {
         (decision.work_id, decision.phase.value)
-        for decision in live_decisions(project, label)
+        for decision in live_decisions(project, label, stage=stage)
         if decision.decision_id not in stale
     }
 
@@ -751,27 +826,34 @@ def _require_protocol(project: Project) -> ProtocolVersion:
     return protocol
 
 
-def _pass_row(project: Project, label: PassLabel) -> tuple[int, tuple[str, ...] | None] | None:
+def _pass_row(
+    project: Project, label: PassLabel, stage: ScreeningStage = TA
+) -> tuple[int, tuple[str, ...] | None] | None:
     with project.index.connect() as conn:
         row = conn.execute(
-            text("SELECT random_seed, sample FROM passes WHERE pass_label = :label"),
-            {"label": label.value},
+            text(
+                "SELECT random_seed, sample FROM passes WHERE pass_label = :label "
+                "AND stage = :stage"
+            ),
+            {"label": label.value, "stage": stage.value},
         ).one_or_none()
     if row is None:
         return None
     seed, sample = row
     if label is PassLabel.B:
-        return int(seed), pass_b_sample(project)
+        return int(seed), pass_b_sample(project, stage=stage)
     if sample is None:
         return int(seed), None
     return int(seed), tuple(str(work) for work in json.loads(str(sample)))
 
 
-def _joined_pass(project: Project, session: str) -> PassLabel | None:
+def _joined_pass(project: Project, session: str, stage: ScreeningStage = TA) -> PassLabel | None:
     with project.index.connect() as conn:
         row = conn.execute(
-            text("SELECT pass_label FROM pass_sessions WHERE session = :session"),
-            {"session": session},
+            text(
+                "SELECT pass_label FROM pass_sessions WHERE session = :session AND stage = :stage"
+            ),
+            {"session": session, "stage": stage.value},
         ).one_or_none()
     return None if row is None else PassLabel(str(row[0]))
 
@@ -780,11 +862,11 @@ def _other(label: PassLabel) -> PassLabel:
     return PassLabel.B if label is PassLabel.A else PassLabel.A
 
 
-def _pass_models(project: Project, label: PassLabel) -> set[str]:
+def _pass_models(project: Project, label: PassLabel, stage: ScreeningStage = TA) -> set[str]:
     with project.index.connect() as conn:
         rows = conn.execute(
-            text("SELECT model FROM pass_sessions WHERE pass_label = :label"),
-            {"label": label.value},
+            text("SELECT model FROM pass_sessions WHERE pass_label = :label AND stage = :stage"),
+            {"label": label.value, "stage": stage.value},
         ).all()
     return {str(row[0]) for row in rows}
 

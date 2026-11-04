@@ -13,6 +13,11 @@ session that has joined a pass, as for calibration.
 `audit_report` reads the latest audit: its error rates, the false-exclusion ceiling, and the
 agreed-exclusion criteria the human overturned. Counts are computed here, never supplied.
 
+`audit_sample`, `audit_report` and `audit_outstanding` take a keyword `stage` (default
+title/abstract; `either` is refused on field `stage`). An audit belongs to the stage of its sample:
+its agreed set, its open/closed state and its report are those of that stage. `audit_record` takes
+the stage of the audit it labels.
+
 Invariants:
 - Refusals raise FactoryValidationError and write nothing.
 - Population strata used to weight the error rates are the live agreed set; when that set is no
@@ -32,6 +37,7 @@ from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
 from factory.model.base import StrictModel
 from factory.model.project import RigorMode
+from factory.model.protocol import ScreeningStage
 from factory.model.screening import AuditLabelled, AuditSampled, Channel
 from factory.services.agreement import agreed_works, screen_agreement
 from factory.services.context import Project
@@ -44,6 +50,7 @@ from factory.services.screening_stats import (
     draw_audit,
 )
 from factory.services.seeds import _rigor_mode
+from factory.services.stages import require_pass_stage, screening_plan
 
 
 class AuditReport(StrictModel):
@@ -57,34 +64,43 @@ class AuditReport(StrictModel):
     criteria_implicated: list[str]
 
 
-def audit_sample(project: Project, actor: Actor, *, random_seed: int | None = None) -> AuditSampled:
-    """Draw and record an audit sample of the agreed works, and return the event payload.
+def audit_sample(
+    project: Project,
+    actor: Actor,
+    *,
+    random_seed: int | None = None,
+    stage: ScreeningStage = ScreeningStage.TITLE_ABSTRACT,
+) -> AuditSampled:
+    """Draw and record an audit sample of the agreed works of `stage`; return the event payload.
 
     Refused, with nothing written, when the actor is not human, the seed is out of range, the passes
     do not yet agree (see `screen_agreement`), there is no agreed work, or an audit of the current
     agreed set is already open.
     """
+    require_pass_stage(stage)
     seed = secrets.randbits(32) if random_seed is None else random_seed
     with project.index.exclusive():
         project.index.sync()
         issues: list[ValidationIssue] = []
+        protocol = current_protocol(project)
+        if protocol is not None:
+            screening_plan(protocol, stage)  # refuses full text without a declared plan
         if actor.kind != "human":
             issues.append(ValidationIssue("actor", "audit samples are drawn by a human"))
         if not 0 <= seed < 2**32:
             issues.append(ValidationIssue("random_seed", "must be an integer from 0 to 2**32 - 1"))
         if issues:
             raise FactoryValidationError(issues)
-        screen_agreement(project, actor)
-        agreed = agreed_works(project)
+        screen_agreement(project, actor, stage=stage)
+        agreed = agreed_works(project, stage=stage)
         if not agreed:
             raise _refuse("there are no agreed dual-coded works to audit")
         digest = population_digest((work, item.verdict) for work, item in agreed.items())
-        if _last_population_digest(project) == digest:
+        if _last_population_digest(project, stage) == digest:
             raise _refuse("an audit of this agreed set is open; a new one waits for a change to it")
-        protocol = current_protocol(project)
         if protocol is None:  # unreachable once screen_agreement has passed
             raise _refuse("record a protocol first")
-        plan = protocol.spec.screening
+        plan = screening_plan(protocol, stage)
         exclusions = sorted(w for w, item in agreed.items() if item.verdict == "exclude")
         inclusions = sorted(w for w, item in agreed.items() if item.verdict == "include")
         size = audit_size(len(agreed), plan.audit_fraction, plan.audit_minimum)
@@ -96,6 +112,7 @@ def audit_sample(project: Project, actor: Actor, *, random_seed: int | None = No
             population=len(agreed),
             exclusions=len(set(drawn) & set(exclusions)),
             inclusions=len(set(drawn) & set(inclusions)),
+            stage=stage,
         )
         project.record([project.events.make("audit.sampled", payload, actor)])
     return payload
@@ -122,7 +139,8 @@ def audit_record(
         issues: list[ValidationIssue] = []
         if actor.kind != "human":
             issues.append(ValidationIssue("actor", "audit labels are human acts"))
-        if not _audit_exists(project, audit_id):
+        stage = _audit_stage(project, audit_id)
+        if stage is None:
             issues.append(ValidationIssue("audit_id", "unknown audit"))
         elif not _sampled(project, audit_id, work_id):
             issues.append(ValidationIssue("work_id", "not in this audit sample"))
@@ -146,6 +164,7 @@ def audit_record(
                 verdict=verdict,
                 criterion=qualified,
                 channel=channel,
+                stage=stage or ScreeningStage.TITLE_ABSTRACT,
             )
         except ValidationError as exc:
             raise FactoryValidationError(_issues(exc)) from exc
@@ -154,15 +173,20 @@ def audit_record(
     return event.id
 
 
-def audit_report(project: Project) -> AuditReport | None:
-    """The latest audit's error rates and flags; None when no audit has been sampled."""
+def audit_report(
+    project: Project, *, stage: ScreeningStage = ScreeningStage.TITLE_ABSTRACT
+) -> AuditReport | None:
+    """The latest audit's error rates and flags at `stage`; None when no audit has been sampled
+    there."""
+    require_pass_stage(stage)
     project.index.sync()
     with project.index.connect() as conn:
         latest = conn.execute(
             text(
                 "SELECT audit_id, pop_exclusions, pop_inclusions FROM audits "
-                "ORDER BY audit_id DESC LIMIT 1"
-            )
+                "WHERE stage = :stage ORDER BY audit_id DESC LIMIT 1"
+            ),
+            {"stage": stage.value},
         ).one_or_none()
         if latest is None:
             return None
@@ -202,37 +226,46 @@ def audit_report(project: Project) -> AuditReport | None:
     )
 
 
-def audit_outstanding(project: Project) -> bool:
-    """Whether the agreed set is non-empty and no audit has sampled its current population.
+def audit_outstanding(
+    project: Project, *, stage: ScreeningStage = ScreeningStage.TITLE_ABSTRACT
+) -> bool:
+    """Whether the agreed set of `stage` is non-empty and no audit of the stage has sampled its
+    current population.
 
     The population is the agreed set's work ids and verdicts (`audit_sample`'s digest). A set that
     changed since the last audit is outstanding again. False when there is nothing to audit.
     """
+    require_pass_stage(stage)
     project.index.sync()
-    agreed = agreed_works(project)
+    agreed = agreed_works(project, stage=stage)
     if not agreed:
         return False
     digest = population_digest((work, item.verdict) for work, item in agreed.items())
-    return _last_population_digest(project) != digest
+    return _last_population_digest(project, stage) != digest
 
 
 # --- Reading the audit tables ---
 
 
-def _last_population_digest(project: Project) -> str | None:
+def _last_population_digest(project: Project, stage: ScreeningStage) -> str | None:
     with project.index.connect() as conn:
         row = conn.execute(
-            text("SELECT population_digest FROM audits ORDER BY audit_id DESC LIMIT 1")
+            text(
+                "SELECT population_digest FROM audits WHERE stage = :stage "
+                "ORDER BY audit_id DESC LIMIT 1"
+            ),
+            {"stage": stage.value},
         ).one_or_none()
     return None if row is None else str(row[0])
 
 
-def _audit_exists(project: Project, audit_id: str) -> bool:
+def _audit_stage(project: Project, audit_id: str) -> ScreeningStage | None:
+    """The stage of a sampled audit; None for an unknown audit."""
     with project.index.connect() as conn:
         row = conn.execute(
-            text("SELECT 1 FROM audits WHERE audit_id = :a"), {"a": audit_id}
+            text("SELECT stage FROM audits WHERE audit_id = :a"), {"a": audit_id}
         ).one_or_none()
-    return row is not None
+    return None if row is None else ScreeningStage(str(row[0]))
 
 
 def _sampled(project: Project, audit_id: str, work_id: str) -> bool:
@@ -245,6 +278,7 @@ def _sampled(project: Project, audit_id: str, work_id: str) -> bool:
 
 
 def _is_pass_session(project: Project, session: str) -> bool:
+    """Whether the session joined a pass at any stage (it must not relay an audit label)."""
     with project.index.connect() as conn:
         row = conn.execute(
             text("SELECT 1 FROM pass_sessions WHERE session = :session"), {"session": session}

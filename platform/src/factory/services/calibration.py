@@ -12,6 +12,10 @@ joined a pass, so a screener cannot read the answer key.
 `calibration_status` reports, per pass, the sensitivity and specificity of its live calibration
 decisions under the current protocol version, and whether the pass has passed: every item is
 labelled, the pass decided every item, and sensitivity reaches the mode's threshold (if any).
+
+Every function takes a keyword `stage` (default title/abstract). The calibration set is drawn once
+per stage; the full-text set is drawn from the full-text population (`_calibration_population`)
+under the full-text plan, which must be declared. `either` is refused on field `stage`.
 """
 
 import random
@@ -24,8 +28,9 @@ from sqlalchemy import text
 
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
+from factory.events.reader import read_all
 from factory.model.base import StrictModel
-from factory.model.protocol import ScreeningPlan
+from factory.model.protocol import ScreeningPlan, ScreeningStage
 from factory.model.screening import (
     CalibrationDrawn,
     CalibrationLabelled,
@@ -47,6 +52,7 @@ from factory.services.seeds import (
     all_seeds,
     split_is_drawn,
 )
+from factory.services.stages import require_pass_stage, screening_plan
 
 WORKED_EXAMPLES = 2
 """Development positives and negatives, each, shown to the screeners as worked examples."""
@@ -73,19 +79,27 @@ def worked_examples(project: Project) -> list[SeedView]:
 
 
 def draw_calibration(
-    project: Project, actor: Actor, *, random_seed: int | None = None
+    project: Project,
+    actor: Actor,
+    *,
+    random_seed: int | None = None,
+    stage: ScreeningStage = ScreeningStage.TITLE_ABSTRACT,
 ) -> list[str]:
-    """Draw the calibration set once and return its work ids, sorted.
+    """Draw the calibration set of `stage` once and return its work ids, sorted.
 
     A second call returns the existing set and writes nothing. The default seed is 32 random
     bits. Refused when the hold-out split has not been drawn, since the set must exclude
     held-out works. The protocol's `calibration_size` sets the size when the corpus allows.
     """
+    require_pass_stage(stage)
     seed = secrets.randbits(32) if random_seed is None else random_seed
     with project.index.exclusive():
         project.index.sync()
-        if _was_drawn(project):
-            return _drawn_items(project)
+        protocol = current_protocol(project)
+        if protocol is not None:
+            screening_plan(protocol, stage)  # refuses full text without a declared plan
+        if _was_drawn(project, stage):
+            return _drawn_items(project, stage)
         issues: list[ValidationIssue] = []
         if not 0 <= seed < 2**32:
             issues.append(ValidationIssue("random_seed", "must be an integer from 0 to 2**32 - 1"))
@@ -94,12 +108,12 @@ def draw_calibration(
         if issues:
             raise FactoryValidationError(issues)
 
-        items = _select(project, seed)
-        protocol = current_protocol(project)
+        items = _select(project, seed, stage)
         payload = CalibrationDrawn(
             protocol_id=None if protocol is None else protocol.protocol_id,
             work_ids=tuple(items),
             random_seed=seed,
+            stage=stage,
         )
         input_blob = None
         if actor.kind == "agent":
@@ -118,19 +132,22 @@ def label_calibration(
     verdict: str,
     criterion: str | None,
     channel: Channel,
+    *,
+    stage: ScreeningStage = ScreeningStage.TITLE_ABSTRACT,
 ) -> str:
-    """Record a human's label on one item of the calibration set and return the event id.
+    """Record a human's label on one item of the calibration set of `stage`; return the event id.
 
     Refused, with nothing written, when the actor is not human, the work is not in the set, the
     criterion is not in the current protocol, the verdict or criterion does not fit, or the
     label is relayed over MCP from a session that has joined a pass.
     """
+    require_pass_stage(stage)
     with project.index.exclusive():
         project.index.sync()
         issues: list[ValidationIssue] = []
         if actor.kind != "human":
             issues.append(ValidationIssue("actor", "calibration labels are human acts"))
-        if work_id not in _drawn_items(project):
+        if work_id not in _drawn_items(project, stage):
             issues.append(ValidationIssue("work_id", "not in the calibration set"))
         protocol = current_protocol(project)
         qualified: str | None = None
@@ -147,7 +164,7 @@ def label_calibration(
             raise FactoryValidationError(issues)
         try:
             payload = CalibrationLabelled(
-                work_id=work_id, verdict=verdict, criterion=qualified, channel=channel
+                work_id=work_id, verdict=verdict, criterion=qualified, channel=channel, stage=stage
             )
         except ValidationError as exc:
             raise FactoryValidationError(_issues(exc)) from exc
@@ -156,23 +173,32 @@ def label_calibration(
     return event.id
 
 
-def calibration_items(project: Project) -> list[str]:
-    """The work ids of the drawn calibration set, sorted; empty before the draw."""
+def calibration_items(
+    project: Project, *, stage: ScreeningStage = ScreeningStage.TITLE_ABSTRACT
+) -> list[str]:
+    """The work ids of the drawn calibration set of `stage`, sorted; empty before the draw."""
+    require_pass_stage(stage)
     project.index.sync()
-    return _drawn_items(project)
+    return _drawn_items(project, stage)
 
 
-def calibration_labels(project: Project) -> dict[str, str]:
-    """The live human label per labelled calibration work (`include` or `exclude`); empty when none
-    is labelled."""
+def calibration_labels(
+    project: Project, *, stage: ScreeningStage = ScreeningStage.TITLE_ABSTRACT
+) -> dict[str, str]:
+    """The live human label per labelled calibration work of `stage` (`include` or `exclude`);
+    empty when none is labelled."""
+    require_pass_stage(stage)
     project.index.sync()
-    return _labels(project)
+    return _labels(project, stage)
 
 
-def calibration_drawn(project: Project) -> bool:
-    """Whether the calibration set has been drawn, even when the draw yielded no items."""
+def calibration_drawn(
+    project: Project, *, stage: ScreeningStage = ScreeningStage.TITLE_ABSTRACT
+) -> bool:
+    """Whether the calibration set of `stage` has been drawn, even if the draw was empty."""
+    require_pass_stage(stage)
     project.index.sync()
-    return _was_drawn(project)
+    return _was_drawn(project, stage)
 
 
 def sensitivity_threshold(project: Project) -> float | None:
@@ -180,14 +206,18 @@ def sensitivity_threshold(project: Project) -> float | None:
     return CALIBRATION_SENSITIVITY[_rigor_mode(project)]
 
 
-def calibration_status(project: Project) -> CalibrationStatus:
-    """The calibration set's progress and each pass's rates and gate under the current protocol."""
+def calibration_status(
+    project: Project, *, stage: ScreeningStage = ScreeningStage.TITLE_ABSTRACT
+) -> CalibrationStatus:
+    """The calibration set's progress and each pass's rates and gate at `stage`, under the current
+    protocol. The gate's threshold is the mode's, at either stage."""
+    require_pass_stage(stage)
     project.index.sync()
     threshold = sensitivity_threshold(project)
-    items = _drawn_items(project)
-    labels = _labels(project)
+    items = _drawn_items(project, stage)
+    labels = _labels(project, stage)
     protocol = current_protocol(project)
-    decided = _live_decisions(project, None if protocol is None else protocol.protocol_id)
+    decided = _live_decisions(project, None if protocol is None else protocol.protocol_id, stage)
     per_pass: dict[str, Rates] = {}
     passed: dict[str, bool] = {}
     for label in (PassLabel.A, PassLabel.B):
@@ -214,9 +244,29 @@ def calibration_status(project: Project) -> CalibrationStatus:
     )
 
 
-def _select(project: Project, seed: int) -> list[str]:
-    """The calibration set for a seed: fixed seed works, then seeded random corpus works."""
+def _calibration_population(project: Project, stage: ScreeningStage) -> set[str]:
+    """The works a calibration set of `stage` is drawn from: the corpus at title/abstract; at full
+    text, the works whose title/abstract final outcome is INCLUDED (plan 2C task 4 also requires a
+    converted document)."""
     corpus = _corpus_ids(project)
+    if stage is ScreeningStage.TITLE_ABSTRACT:
+        return corpus
+    from factory.services.agreement import Outcome, final_outcomes  # circular at import time
+
+    outcomes = final_outcomes(project)
+    return {work for work in corpus if outcomes.get(work) is Outcome.INCLUDED}
+
+
+def stage_population(project: Project, stage: ScreeningStage) -> set[str]:
+    """The works that `stage` screens: the corpus at title/abstract, the promoted works at full
+    text. Calibration and the passes' queues are drawn from it."""
+    return _calibration_population(project, require_pass_stage(stage))
+
+
+def _select(project: Project, seed: int, stage: ScreeningStage) -> list[str]:
+    """The calibration set for a seed: fixed seed works, then seeded random works of the stage's
+    population."""
+    corpus = _calibration_population(project, stage)
     held_out = {s.work_id for s in all_seeds(project) if s.role is SeedRole.HELD_OUT and s.work_id}
     examples = {v.work_id for v in worked_examples(project) if v.work_id is not None}
     fixed = {
@@ -224,17 +274,17 @@ def _select(project: Project, seed: int) -> list[str]:
         for s in agent_seeds(project)
         if s.work_id is not None and s.work_id in corpus and s.work_id not in examples
     }
-    need = max(0, _calibration_size(project) - len(fixed))
+    need = max(0, _calibration_size(project, stage) - len(fixed))
     pool = sorted(corpus - held_out - examples - fixed)
     rng = random.Random(seed)
     return sorted(fixed | set(rng.sample(pool, min(need, len(pool)))))
 
 
-def _calibration_size(project: Project) -> int:
+def _calibration_size(project: Project, stage: ScreeningStage) -> int:
     protocol = current_protocol(project)
     if protocol is None:
         return _DEFAULT_CALIBRATION_SIZE
-    return protocol.spec.screening.calibration_size
+    return screening_plan(protocol, stage).calibration_size
 
 
 def _corpus_ids(project: Project) -> set[str]:
@@ -250,28 +300,48 @@ def _number(seed_id: str) -> int:
     return int(seed_id.lstrip(ascii_uppercase))
 
 
-def _was_drawn(project: Project) -> bool:
+def _was_drawn(project: Project, stage: ScreeningStage) -> bool:
+    """Whether a `calibration.drawn` event of `stage` exists, even an empty draw. The projection
+    answers when the set has items; otherwise the log is read (a slice-1 event without `stage` is
+    a title/abstract draw)."""
+    if _drawn_items(project, stage):
+        return True
     with project.index.connect() as conn:
         row = conn.execute(
             text("SELECT 1 FROM events WHERE type = 'calibration.drawn' LIMIT 1")
         ).one_or_none()
-    return row is not None
+    if row is None:
+        return False
+    return any(
+        CalibrationDrawn.model_validate(event.payload).stage is stage
+        for event in read_all(project.paths.events_dir, project.catalog)
+        if event.type == "calibration.drawn"
+    )
 
 
-def _drawn_items(project: Project) -> list[str]:
+def _drawn_items(project: Project, stage: ScreeningStage) -> list[str]:
     with project.index.connect() as conn:
-        rows = conn.execute(text("SELECT work_id FROM calibration_items ORDER BY work_id")).all()
+        rows = conn.execute(
+            text("SELECT work_id FROM calibration_items WHERE stage = :stage ORDER BY work_id"),
+            {"stage": stage.value},
+        ).all()
     return [str(row[0]) for row in rows]
 
 
-def _labels(project: Project) -> dict[str, str]:
+def _labels(project: Project, stage: ScreeningStage) -> dict[str, str]:
     with project.index.connect() as conn:
-        rows = conn.execute(text("SELECT work_id, verdict FROM calibration_labels")).all()
+        rows = conn.execute(
+            text("SELECT work_id, verdict FROM calibration_labels WHERE stage = :stage"),
+            {"stage": stage.value},
+        ).all()
     return {str(work_id): str(verdict) for work_id, verdict in rows}
 
 
-def _live_decisions(project: Project, protocol_id: str | None) -> dict[str, dict[str, bool]]:
-    """Promotion of the live calibration decision per pass and work, under one protocol version.
+def _live_decisions(
+    project: Project, protocol_id: str | None, stage: ScreeningStage
+) -> dict[str, dict[str, bool]]:
+    """Promotion of the live calibration decision per pass and work of `stage`, under one protocol
+    version.
 
     A decision superseded by a later one is not live; the latest live decision per work wins.
     """
@@ -281,10 +351,14 @@ def _live_decisions(project: Project, protocol_id: str | None) -> dict[str, dict
         rows = conn.execute(
             text(
                 "SELECT pass_label, work_id, verdict FROM decisions "
-                "WHERE phase = :phase AND protocol_id = :protocol "
+                "WHERE phase = :phase AND protocol_id = :protocol AND stage = :stage "
                 "AND superseded_by IS NULL ORDER BY event_id"
             ),
-            {"phase": ScreeningPhase.CALIBRATION.value, "protocol": protocol_id},
+            {
+                "phase": ScreeningPhase.CALIBRATION.value,
+                "protocol": protocol_id,
+                "stage": stage.value,
+            },
         ).all()
     decided: dict[str, dict[str, bool]] = {}
     for pass_label, work_id, verdict in rows:
@@ -292,13 +366,19 @@ def _live_decisions(project: Project, protocol_id: str | None) -> dict[str, dict
     return decided
 
 
-def is_pass_session(project: Project, session: str) -> bool:
-    """Whether the session has joined a screening pass."""
+def is_pass_session(project: Project, session: str, *, stage: ScreeningStage | None = None) -> bool:
+    """Whether the session has joined a screening pass at `stage`; at any stage when None.
+
+    Surfaces that keep a session away from the answer key (labels, resolutions, audits) ask for
+    any stage: a session that screened at either stage must not relay a human label."""
     project.index.sync()
+    sql = "SELECT 1 FROM pass_sessions WHERE session = :session"
+    params = {"session": session}
+    if stage is not None:
+        sql += " AND stage = :stage"
+        params["stage"] = require_pass_stage(stage).value
     with project.index.connect() as conn:
-        row = conn.execute(
-            text("SELECT 1 FROM pass_sessions WHERE session = :session"), {"session": session}
-        ).one_or_none()
+        row = conn.execute(text(sql), params).first()
     return row is not None
 
 

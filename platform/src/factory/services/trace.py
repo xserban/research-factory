@@ -72,7 +72,7 @@ _MISSING = "no such row"
 _ELEMENT_RE = r"^(Q@[0-9a-f]{8})/(slot:.+|NG\d{2})$"
 _RECORD_RE = rf"^(run_{ULID_RE})/(rf:.+)$"
 _AUDIT_ITEM_RE = rf"^(aud_{ULID_RE})/(rf:.+)$"
-_RESOLUTION_RE = r"^res:(rf:.+)$"
+_RESOLUTION_RE = r"^res:(?:full-text:)?(rf:.+)$"
 _PATTERNS: tuple[tuple[str, str], ...] = (
     (QUESTION_ID_RE, "question"),
     (PROTOCOL_ID_RE, "protocol"),
@@ -93,6 +93,24 @@ _PATTERNS: tuple[tuple[str, str], ...] = (
     (_RECORD_RE, "record"),
     (_RESOLUTION_RE, "resolution"),
 )
+
+_TA_STAGE = "title-abstract"
+
+
+def _res_key(stage: str, work_id: str) -> str:
+    """The trace key of a resolution: `res:<work_id>` at title/abstract (slice-1 keys are
+    unchanged), `res:<stage>:<work_id>` at any other stage."""
+    return f"res:{work_id}" if stage == _TA_STAGE else f"res:{stage}:{work_id}"
+
+
+def _split_res(ident: str) -> tuple[str, str]:
+    """The stage and work of a resolution key."""
+    body = ident[len("res:") :]
+    prefix = "full-text:"
+    if body.startswith(prefix):
+        return "full-text", body[len(prefix) :]
+    return _TA_STAGE, body
+
 
 Key = tuple[str, str]
 """A node: its kind and its identifier. Identifiers are unique within a kind."""
@@ -586,9 +604,12 @@ class _Walk:
         return _Described(label, str(event_id))
 
     def _resolution(self, ident: str) -> _Described | None:
-        work_id = ident[len("res:") :]
+        stage, work_id = _split_res(ident)
         rows = self._all(
-            "SELECT verdict, criterion, event_id FROM resolutions WHERE work_id = :w", w=work_id
+            "SELECT verdict, criterion, event_id FROM resolutions "
+            "WHERE work_id = :w AND stage = :s",
+            w=work_id,
+            s=stage,
         )
         if not rows:
             return None
@@ -719,8 +740,10 @@ class _Walk:
             for d in self._column("SELECT decision_id FROM decisions WHERE criterion = :c", c=ident)
         ]
         down += [
-            ("resolution", f"res:{w}")
-            for w in self._column("SELECT work_id FROM resolutions WHERE criterion = :c", c=ident)
+            ("resolution", _res_key(str(st), str(w)))
+            for st, w in self._all(
+                "SELECT stage, work_id FROM resolutions WHERE criterion = :c", c=ident
+            )
         ]
         down += [
             ("audit", f"{a}/{w}")
@@ -895,8 +918,8 @@ class _Walk:
             for d in self._column("SELECT decision_id FROM decisions WHERE work_id = :w", w=ident)
         ]
         down += [
-            ("resolution", f"res:{w}")
-            for w in self._column("SELECT work_id FROM resolutions WHERE work_id = :w", w=ident)
+            ("resolution", _res_key(str(st), ident))
+            for st in self._column("SELECT stage FROM resolutions WHERE work_id = :w", w=ident)
         ]
         down += [
             ("audit", f"{a}/{ident}")
@@ -956,28 +979,34 @@ class _Walk:
             )
         ]
         down += [
-            ("resolution", f"res:{w}")
-            for w in self._column(
-                "SELECT r.work_id FROM resolutions r JOIN decisions d ON d.work_id = r.work_id "
-                "WHERE d.decision_id = :d",
+            ("resolution", _res_key(str(st), str(w)))
+            for st, w in self._all(
+                "SELECT r.stage, r.work_id FROM resolutions r JOIN decisions d "
+                "ON d.work_id = r.work_id AND d.stage = r.stage WHERE d.decision_id = :d",
                 d=ident,
             )
         ]
         return up, down
 
     def _edges_resolution(self, ident: str) -> tuple[list[Key], list[Key]]:
-        work_id = ident[len("res:") :]
+        stage, work_id = _split_res(ident)
         up: list[Key] = [("work", work_id)]
         up += [
             ("criterion", c)
             for c in self._column(
-                "SELECT criterion FROM resolutions WHERE work_id = :w AND criterion IS NOT NULL",
+                "SELECT criterion FROM resolutions "
+                "WHERE work_id = :w AND stage = :s AND criterion IS NOT NULL",
                 w=work_id,
+                s=stage,
             )
         ]
         up += [
             ("decision", d)
-            for d in self._column("SELECT decision_id FROM decisions WHERE work_id = :w", w=work_id)
+            for d in self._column(
+                "SELECT decision_id FROM decisions WHERE work_id = :w AND stage = :s",
+                w=work_id,
+                s=stage,
+            )
         ]
         return up, []
 
