@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from pydantic import JsonValue
-from sqlalchemy import Engine, Table, create_engine, insert, inspect, select
+from sqlalchemy import Engine, Table, create_engine, insert, select
 from sqlalchemy import event as sa_event
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Connection
@@ -221,7 +221,11 @@ class Index:
 
     def _read_stored(self) -> tuple[dict[str, str], dict[str, int]] | None:
         with self._engine.connect() as conn:
-            if not inspect(conn).has_table("meta"):
+            # Cheaper than `inspect(conn).has_table("meta")`, which builds an inspector per sync.
+            has_meta = conn.exec_driver_sql(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'meta'"
+            ).first()
+            if has_meta is None:
                 return None
             meta = {
                 key: value

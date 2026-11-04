@@ -32,11 +32,18 @@ def relative_name(path: Path, events_dir: Path) -> str:
     Lexical, like `relative_to`, but without its per-call walk over every ancestor of
     `events_dir`, which dominated index syncs. Raises `ValueError` if `path` is not inside.
     """
-    base = events_dir.parts
-    parts = path.parts
-    if len(parts) <= len(base) or parts[: len(base)] != base:
+    text, base = str(path), str(events_dir)
+    prefix = base if base.endswith(os.sep) else base + os.sep
+    if text.startswith(prefix) and len(text) > len(prefix):  # fast path: plain string prefix
+        return text[len(prefix) :].replace(os.sep, "/")
+    inside, parts = events_dir.parts, path.parts  # e.g. events_dir == Path("."), parts ()
+    if (
+        path.is_absolute() != events_dir.is_absolute()
+        or len(parts) <= len(inside)
+        or parts[: len(inside)] != inside
+    ):
         raise ValueError(f"{path} is not inside {events_dir}")
-    return "/".join(parts[len(base) :])
+    return "/".join(parts[len(inside) :])
 
 
 def event_files(events_dir: Path) -> list[Path]:

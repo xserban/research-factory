@@ -148,6 +148,13 @@ def test_relative_name_rejects_paths_outside(tmp_path: Path) -> None:
     for outside in (tmp_path / "other" / "a.jsonl", tmp_path / "eventsx" / "a.jsonl", events_dir):
         with pytest.raises(ValueError):
             relative_name(outside, events_dir)
+    with pytest.raises(ValueError):
+        relative_name(tmp_path / "a.jsonl", Path())
+
+
+def test_relative_name_of_relative_dirs() -> None:
+    for path, base in ((Path("s/a.jsonl"), Path()), (Path("ev/s/a.jsonl"), Path("ev"))):
+        assert relative_name(path, base) == path.relative_to(base).as_posix()
 
 
 def test_event_files_order_by_relative_posix_path(tmp_path: Path) -> None:

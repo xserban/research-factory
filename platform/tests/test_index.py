@@ -234,6 +234,21 @@ def test_deleted_index_is_rebuilt_on_sync(
     assert index.state_hash() == before
 
 
+def test_index_without_tables_is_rebuilt_on_sync(
+    tmp_path: Path, writer: EventWriter, factory: EventFactory, human: Actor, index: Index
+) -> None:
+    writer.append([factory.make("demo.recorded", Demo(n=1), human)])
+    index.sync()
+    before = index.state_hash()
+    db = tmp_path / ".index" / "factory.sqlite"
+    for path in (db, db.with_name(db.name + "-wal"), db.with_name(db.name + "-shm")):
+        path.unlink(missing_ok=True)
+    db.write_bytes(b"")  # an empty file is a valid SQLite database with no `meta` table
+    result = index.sync()
+    assert result.rebuilt
+    assert index.state_hash() == before
+
+
 def test_handler_failure_mid_batch_leaves_the_index_unchanged(
     tmp_path: Path, clock: FixedClock
 ) -> None:
