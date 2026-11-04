@@ -12,7 +12,7 @@ from factory.model.identity import ulid_time
 from factory.services.context import Project
 from factory.services.project import init_project
 from factory.services.question import record_question
-from tests import world_cache
+from tests import helpers, world_cache
 from tests.helpers import SESSION, T0, install_skill, pilot_question_spec, record_pilot_question
 from tests.world_cache import snapshot_world
 
@@ -107,3 +107,29 @@ def test_unkeyable_argument_bypasses_the_cache(tmp_path: Path) -> None:
     with_list(_project(tmp_path / "c"), captures)
     with_list(_project(tmp_path / "d"), captures)
     assert calls == ["built", "built", "x", "x"]
+
+
+def test_monkeypatched_module_binding_builds_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A builder may depend on module globals a test patches (as test_check does)."""
+    before = _counts("_build").get("miss", 0)
+    _build(_project(tmp_path / "a"), "Primary five?")
+    original = helpers.pilot_question_spec
+    monkeypatch.setattr(helpers, "pilot_question_spec", lambda p: original(p + " (patched)"))
+    patched = _project(tmp_path / "b")
+    _build(patched, "Primary five?")
+    assert _counts("_build").get("miss", 0) == before + 2
+    events = read_all(patched.paths.events_dir, patched.catalog)
+    assert any("(patched)" in e.model_dump_json() for e in events)
+    monkeypatch.undo()
+    _build(_project(tmp_path / "c"), "Primary five?")  # the original binding is back: a hit
+    assert _counts("_build").get("miss", 0) == before + 2
+
+
+def test_environment_variable_builds_again(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    before = _counts("_build").get("miss", 0)
+    _build(_project(tmp_path / "a"), "Primary six?")
+    monkeypatch.setenv("FACTORY_SOMETHING", "1")
+    _build(_project(tmp_path / "b"), "Primary six?")
+    assert _counts("_build").get("miss", 0) == before + 2

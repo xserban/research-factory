@@ -10,7 +10,9 @@ private, independent copy (tests stay isolated and order-insensitive).
 The key is conservative. It covers the builder, every argument (models by value, the conftest
 `mock_sources` factory by kind, plain functions by code and by the immutable values they capture),
 and the state the builder starts from: the project's event log with event ids removed, the clock
-reading, the settings, and the bytes of every file under the root outside the project directory.
+reading, the settings, and the bytes of every file under the root outside the project directory;
+and what a monkeypatch could change (module bindings by identity, environment variables, the
+working directory: see `_environment_key`).
 Anything it cannot key safely (an unknown callable, a function capturing a mutable value, an object
 without a value form, a non-fixed clock, a world that stores absolute paths) bypasses the cache and
 builds as before. Set `FACTORY_TEST_NO_WORLD_CACHE=1` to disable the cache entirely.
@@ -26,6 +28,7 @@ import functools
 import hashlib
 import os
 import shutil
+import sys
 import tempfile
 from collections import Counter
 from collections.abc import Callable
@@ -33,7 +36,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from types import CodeType, FunctionType
+from types import CodeType, FunctionType, ModuleType
 from typing import Any, ParamSpec, TypeVar
 
 from pydantic import BaseModel
@@ -142,6 +145,58 @@ def _tree_digest(root: Path, skip: Path) -> str:
     return digest.hexdigest()
 
 
+def _kind_tag(value: Any) -> str:
+    return f"{type(value).__qualname__}:{getattr(value, '__qualname__', '')}"
+
+
+def _object_tag(value: Any) -> str:
+    return f"{id(value)}:{_kind_tag(value)}"
+
+
+def _namespace_items(namespace: Any) -> list[tuple[str, Any]]:
+    try:
+        return sorted(vars(namespace).items(), key=lambda kv: str(kv[0]))
+    except TypeError:
+        return []
+
+
+def _environment_key(project: Project) -> str:
+    """What a monkeypatch could change: every binding in the `factory` and `tests` modules, the
+    attributes of their classes, the bindings of modules they import (`secrets`, `os`, ...), the
+    project object's own attributes, the environment variables and the working directory.
+
+    Bindings are compared by identity, so a patch (or its undo) changes the key.
+    """
+    parts: list[str] = []
+    external: dict[str, ModuleType] = {}
+    for name, module in sorted(list(sys.modules.items())):
+        if not (name in ("factory", "tests") or name.startswith(("factory.", "tests."))):
+            continue
+        if not isinstance(module, ModuleType):
+            continue
+        for key, value in _namespace_items(module):
+            parts.append(f"{name}.{key}={_object_tag(value)}")
+            if isinstance(value, type) and value.__module__ == name:
+                parts.extend(
+                    f"{name}.{key}.{k}={_object_tag(v)}" for k, v in _namespace_items(value)
+                )
+            elif isinstance(value, ModuleType) and not value.__name__.startswith(
+                ("factory", "tests")
+            ):
+                external[value.__name__] = value
+    for name, module in sorted(external.items()):
+        parts.extend(f"{name}.{k}={_object_tag(v)}" for k, v in _namespace_items(module))
+    # The project is new in every test, so its parts are compared by kind, not identity: a patch
+    # on it (or on one of its stores) adds or replaces an attribute of another kind.
+    for key, value in _namespace_items(project):
+        parts.append(f"project.{key}={_kind_tag(value)}")
+        parts.extend(f"project.{key}.{k}={_kind_tag(v)}" for k, v in _namespace_items(value))
+    environ = {k: v for k, v in os.environ.items() if not k.startswith("PYTEST_")}
+    parts.append(repr(sorted(environ.items())))
+    parts.append(os.getcwd())
+    return hashlib.sha256("\n".join(parts).encode()).hexdigest()
+
+
 def _state_key(project: Project) -> str:
     """The project's starting state, without the random parts (event ids)."""
     if not isinstance(project.clock, FixedClock):
@@ -220,6 +275,7 @@ def snapshot_world(build: Callable[P, R]) -> Callable[P, R]:
                     _arg_key(list(args[1:])),
                     _arg_key(dict(sorted(kwargs.items()))),
                     _state_key(project),
+                    _environment_key(project),
                 ]
             )
         except _Unkeyable as exc:

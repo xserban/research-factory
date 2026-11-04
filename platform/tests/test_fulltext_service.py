@@ -102,7 +102,6 @@ def _of_type(project: Project, type_: str) -> list[Event]:
     return [event for event in _events(project) if event.type == type_]
 
 
-@snapshot_world
 def _include_all(
     project: Project, agent: Actor, human: Actor, protocol_id: str, *, leave: str | None = None
 ) -> None:
@@ -128,15 +127,33 @@ def screened(
     """
 
     def build(*, leave_one: bool = False) -> str:
-        protocol_id = _setup(project, agent, human, mock_sources, dual_sample=0.5, random_works=0)
-        _draw(project)
-        open_pass(project, agent, PassLabel.A)
-        open_pass(project, agent, PassLabel.B)
-        leave = _ordinary_pending(project) if leave_one else None
-        _include_all(project, agent, human, protocol_id, leave=leave)
+        protocol_id, _left = _promoted_corpus(
+            project, agent, human, mock_sources, leave_one=leave_one
+        )
         return protocol_id
 
     return build
+
+
+@snapshot_world
+def _promoted_corpus(
+    project: Project,
+    agent: Actor,
+    human: Actor,
+    mock_sources: SourcesFor,
+    *,
+    leave_one: bool = False,
+) -> tuple[str, str | None]:
+    """A corpus with both passes opened and every ordinary work included; with `leave_one`, the
+    first ordinary work is left undecided, so it is not promoted. Returns the protocol id and
+    the work left undecided."""
+    protocol_id = _setup(project, agent, human, mock_sources, dual_sample=0.5, random_works=0)
+    _draw(project)
+    open_pass(project, agent, PassLabel.A)
+    open_pass(project, agent, PassLabel.B)
+    leave = _ordinary_pending(project) if leave_one else None
+    _include_all(project, agent, human, protocol_id, leave=leave)
+    return protocol_id, leave
 
 
 def _promoted(project: Project) -> list[str]:

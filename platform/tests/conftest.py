@@ -15,14 +15,10 @@ from factory.events.envelope import Actor
 from factory.events.factory import EventFactory
 from factory.events.writer import EventWriter
 from factory.model.identity import IdGenerator
-from factory.model.screening import PassLabel
 from factory.model.search import QueryKind
 from factory.model.work import Provenance
-from factory.services.calibration import calibration_items
 from factory.services.context import Project, open_project
 from factory.services.project import init_project
-from factory.services.screening import open_pass
-from factory.services.search import list_works
 from factory.sources.arxiv import ArxivSource
 from factory.sources.http import PoliteClient
 from factory.sources.openalex import OpenAlexSource
@@ -35,12 +31,10 @@ from tests.helpers import (
     T0,
     Demo,
     FakeSource,
-    _setup,
     arxiv_atom,
     install_skill,
 )
-from tests.test_fulltext_service import _include_all
-from tests.test_screening_next import _draw
+from tests.test_fulltext_service import _promoted_corpus
 
 
 @pytest.fixture
@@ -239,23 +233,14 @@ def mock_sources(http_log: list[httpx.Request]) -> Callable[..., dict[str, Sourc
 @pytest.fixture
 def corpus(project: Project, agent: Actor, human: Actor, mock_sources: Any) -> None:
     """Both passes opened and every ordinary work included, so several works are promoted."""
-    protocol_id = _setup(project, agent, human, mock_sources, dual_sample=0.5, random_works=0)
-    _draw(project)
-    open_pass(project, agent, PassLabel.A)
-    open_pass(project, agent, PassLabel.B)
-    _include_all(project, agent, human, protocol_id)
+    _promoted_corpus(project, agent, human, mock_sources)
 
 
 @pytest.fixture
 def corpus_leaving(project: Project, agent: Actor, human: Actor, mock_sources: Any) -> str:
     """As `corpus`, but one ordinary work gets no decision, so it is not promoted. Returns it."""
-    protocol_id = _setup(project, agent, human, mock_sources, dual_sample=0.5, random_works=0)
-    _draw(project)
-    open_pass(project, agent, PassLabel.A)
-    open_pass(project, agent, PassLabel.B)
-    calibration = set(calibration_items(project))
-    leave = sorted(w.id for w in list_works(project) if w.id not in calibration)[0]
-    _include_all(project, agent, human, protocol_id, leave=leave)
+    _protocol_id, leave = _promoted_corpus(project, agent, human, mock_sources, leave_one=True)
+    assert leave is not None
     return leave
 
 
