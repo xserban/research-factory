@@ -195,7 +195,9 @@ def pilot_inputs(
         claims=tuple(claims),
         pass_b_open=pass_b_open,
         blocking=blocking,
-        agreement=AgreementOverall(overall=0.95, dual=4, single=2),
+        agreement=AgreementOverall(
+            overall=0.95, dual=4, single=2, rows_aligned=7, rows_unmatched=0
+        ),
         audit=None,
         audit_outstanding=True,
     )

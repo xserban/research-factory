@@ -28,7 +28,7 @@ from factory.services.evidence_report import (
     evidence_report,
 )
 from factory.services.extraction import live_rows
-from factory.services.extraction_agreement import final_rows
+from factory.services.extraction_agreement import AgreementOverall, FinalRow, final_rows
 from factory.services.extraction_audit import ExtractionAuditReport
 from factory.sources.registry import SourceFactory
 from tests.evidence_helpers import (
@@ -328,7 +328,65 @@ def test_quality_block_computed_not_typed() -> None:
     q = r.quality
     assert (q.dual_works, q.single_extraction_works, q.agreement_overall) == (4, 2, 0.95)
     assert (q.audit_n, q.audit_error_rate, q.audit_above_ceiling) == (0, None, None)
+    assert (q.agreement_rows_aligned, q.agreement_rows_unmatched) == (7, 0)
     assert {"single-extraction", "audit-missing"} <= codes(r.limits)
+    assert not {"agreement-rows-unmatched", "agreement-not-computed"} & codes(r.limits)
+
+
+def test_agreement_denominators_and_limits() -> None:
+    agreement = AgreementOverall(overall=None, dual=4, single=2, rows_aligned=5, rows_unmatched=3)
+    r = assemble_report(replace(pilot_inputs(), agreement=agreement))
+    q = r.quality
+    assert (q.agreement_overall, q.agreement_rows_aligned, q.agreement_rows_unmatched) == (
+        None,
+        5,
+        3,
+    )
+    (unmatched,) = [x for x in r.limits if x.code == "agreement-rows-unmatched"]
+    assert "3" in unmatched.text
+    assert "agreement-not-computed" in codes(r.limits)
+
+
+def test_empty_assembled_report_is_provisional() -> None:
+    r = _report(rows=[])
+    assert r.groups == [] and r.ungrouped == [] and r.provisional
+    assert "no-extraction" in codes(r.limits)
+
+
+def test_unparseable_direction_is_stated_never_defaulted() -> None:
+    odd = ff("maybe")
+    (g,) = assemble_report(
+        pilot_inputs(rows=[frow("rf:w1", "rk_000000000101", "a", "1", higher_is_better=odd)])
+    ).groups  # metric Top-1 Accuracy has a pack default; it must not be used
+    assert (g.direction, g.direction_status) == (None, "unparseable")
+    assert "direction-unparseable" in codes(g.statements)
+
+
+def test_expectation_on_a_numeric_key() -> None:
+    keys = (*pilot_inputs().keys, "training_epochs")
+    rows = [
+        frow("rf:w1", "rk_000000000101", "a", "1", training_epochs=ff("300", canon="300")),
+        frow("rf:w2", "rk_000000000201", "b", "2", training_epochs=ff("100", canon="100")),
+    ]
+    r = assemble_report(
+        pilot_inputs(rows=rows, keys=keys),
+        expect=[{"training_epochs": "300.0"}, {"training_epochs": "200"}],
+    )
+    (match,) = [g for g in r.groups if dict(g.key)["training_epochs"] == "300"]
+    assert r.expectations[0].group_ids == [match.group_id]
+    assert r.expectations[1].group_ids == []
+
+
+def test_method_conflict_compares_uncanonical_numbers_numerically() -> None:
+    def row(work: str, key: str, printed: str) -> FinalRow:
+        base = frow(work, key, "DeiT-S", printed)
+        value = base.fields["value"].model_copy(update={"canonical": None})
+        return base.model_copy(update={"fields": {**base.fields, "value": value}})
+
+    same = [row("rf:w1", "rk_000000000101", "79.8"), row("rf:w2", "rk_000000000201", "79.80")]
+    assert assemble_report(pilot_inputs(rows=same)).groups[0].method_conflicts == []
+    differ = [row("rf:w1", "rk_000000000101", "79.8"), row("rf:w2", "rk_000000000201", "80.1")]
+    assert len(assemble_report(pilot_inputs(rows=differ)).groups[0].method_conflicts) == 1
 
 
 def test_limits_contain_no_document_text() -> None:
@@ -376,7 +434,8 @@ def screened(
 def test_no_schema_returns_empty_report_with_limit(project: Project, screened: list[str]) -> None:
     r = evidence_report(project)
     assert (r.groups, r.ungrouped, r.excluded, r.pack) == ([], [], [], None)
-    assert codes(r.limits) == {"no-extraction"} and not r.provisional
+    assert codes(r.limits) == {"no-extraction"} and r.provisional
+    assert (r.quality.agreement_rows_aligned, r.quality.agreement_rows_unmatched) == (0, 0)
     assert r.report_version == REPORT_VERSION
 
 

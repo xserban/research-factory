@@ -85,6 +85,7 @@ __all__ = [
     "group_rows",
     "grouped_rows",
     "independence_counts",
+    "key_value",
     "resolve_extraction",
 ]
 
@@ -857,6 +858,12 @@ def final_rows(project: Project) -> list[FinalRow]:
     if state is None:
         return []
     return [p.final for p in state.pairs if p.final is not None]
+
+
+def key_value(definition: FieldDef | None, f: FinalField) -> str:
+    """The normalised value a final field contributes to a group key (as `group_rows` keys it):
+    a number's canonical value (with its unit unless a count), text by the pack's normaliser."""
+    return _key_value(definition, f)
 
 
 def _key_value(definition: FieldDef | None, f: FinalField) -> str:

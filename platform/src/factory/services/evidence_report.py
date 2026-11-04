@@ -29,7 +29,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from factory.errors import FactoryValidationError
-from factory.extraction.numbers import normalise_for, normalise_text
+from factory.extraction.numbers import canonical, normalise_for, normalise_text, parse_printed
 from factory.model.base import StrictModel
 from factory.model.extraction import ClaimType, EvidenceType, ReportedIn, Strength
 from factory.model.screening import PassLabel
@@ -56,6 +56,7 @@ from factory.services.extraction_agreement import (
     agreement_overall,
     grouped_rows,
     independence_counts,
+    key_value,
 )
 from factory.services.extraction_audit import (
     ExtractionAuditReport,
@@ -87,7 +88,7 @@ __all__ = [
 REPORT_VERSION = 1
 """Version of the derivation; recorded in every report with the pack and its version."""
 
-DirectionStatus = Literal["declared", "pack-default", "conflict", "unknown"]
+DirectionStatus = Literal["declared", "pack-default", "conflict", "unparseable", "unknown"]
 ExcludedReason = Literal["unresolved", "stale", "missing-value", "no-final-row"]
 
 
@@ -201,6 +202,10 @@ class Quality(StrictModel):
     """Labelled items of the latest audit."""
     audit_error_rate: float | None
     audit_above_ceiling: bool | None
+    agreement_rows_aligned: int
+    """Aligned dual rows over which `agreement_overall` is computed."""
+    agreement_rows_unmatched: int
+    """Dual row keys held by one pass only (or twice by one pass); outside the agreement."""
 
 
 class EvidenceReport(StrictModel):
@@ -329,7 +334,7 @@ def _empty(expect: Sequence[Mapping[str, str]]) -> EvidenceReport:
         pack_version=None,
         report_version=REPORT_VERSION,
         comparability_keys=[],
-        provisional=False,
+        provisional=True,
         groups=[],
         ungrouped=[],
         claims={},
@@ -342,6 +347,8 @@ def _empty(expect: Sequence[Mapping[str, str]]) -> EvidenceReport:
             audit_n=0,
             audit_error_rate=None,
             audit_above_ceiling=None,
+            agreement_rows_aligned=0,
+            agreement_rows_unmatched=0,
         ),
         limits=[_NO_EXTRACTION, *_expectation_limits(expectations)],
     )
@@ -380,7 +387,12 @@ def assemble_report(
     excluded = _excluded(inputs, missing_value, finals)
     expectations = [_expectation(e, groups, pack) for e in expect]
     quality = _quality(inputs)
-    provisional = not inputs.pass_b_open or inputs.blocking or bool(inputs.grouped.unresolved)
+    provisional = (
+        not inputs.pass_b_open
+        or inputs.blocking
+        or bool(inputs.grouped.unresolved)
+        or not (groups or ungrouped)
+    )
     limits = _limits(inputs, groups, ungrouped, excluded, expectations, quality, finals)
     return EvidenceReport(
         project_protocol_id=inputs.protocol_id,
@@ -557,6 +569,14 @@ def _group(
                 subject=gid,
             )
         )
+    elif status == "unparseable":
+        statements.append(
+            Limit(
+                code="direction-unparseable",
+                text="A declared metric direction is not a boolean; no frontier is computed.",
+                subject=gid,
+            )
+        )
     elif status == "unknown":
         statements.append(
             Limit(
@@ -583,10 +603,13 @@ def _direction(
     key: Sequence[tuple[str, str]], rows: Sequence[FinalRow], pack: Pack, spec: ReportSpec
 ) -> tuple[bool | None, DirectionStatus]:
     """Ruling 5: the rows' declared direction, else the pack default for the normalised metric,
-    else unknown; declared values that disagree with each other or the default conflict."""
-    declared = {
-        d for d in (_as_bool(r.fields.get(spec.direction_field)) for r in rows) if d is not None
-    }
+    else unknown; declared values that disagree with each other or the default conflict. A
+    declared value that is not a boolean is `unparseable`: never replaced by the default."""
+    present = [r.fields[spec.direction_field] for r in rows if spec.direction_field in r.fields]
+    parsed = [_as_bool(f) for f in present]
+    if any(d is None for d in parsed):
+        return None, "unparseable"
+    declared = {d for d in parsed if d is not None}
     metrics = dict(key).get("metric")
     if metrics is None:
         definition = pack.field("metric")
@@ -620,13 +643,7 @@ def _conflicts(rows: Sequence[EvidenceRow]) -> list[MethodConflict]:
         by_method.setdefault(ident, []).append(row)
     out: list[MethodConflict] = []
     for (method, variant), members in sorted(by_method.items()):
-        values = {
-            (
-                r.value.canonical or normalise_text(str(r.value.value)),
-                normalise_text(r.value.unit or ""),
-            )
-            for r in members
-        }
+        values = {(_number_identity(r.value), normalise_text(r.value.unit or "")) for r in members}
         if len(values) > 1:
             out.append(
                 MethodConflict(
@@ -678,11 +695,43 @@ def _excluded(
     return [Excluded(reason=r, count=n, works=w) for r, n, w in found if n]
 
 
+def _number_identity(p: Provenance) -> str:
+    """The canonical value, else the printed number compared numerically ("79.8" == "79.80"),
+    else the normalised text."""
+    if p.canonical is not None:
+        return p.canonical
+    printed = parse_printed(str(p.value)) if not isinstance(p.value, bool) else None
+    if printed is not None:
+        return "0" if printed == 0 else format(printed.normalize(), "f")
+    return normalise_text(str(p.value))
+
+
 def _normalise_key_value(pack: Pack, name: str, value: str) -> str:
+    """An expected value normalised as D's `key_value` keys a group (numbers by canonical value,
+    text by the pack's normaliser)."""
     definition = pack.field(name)
-    if definition is not None and definition.kind is FieldKind.TEXT:
-        return normalise_for(definition, value)
-    return normalise_text(value)
+    canon: str | None = None
+    if definition is not None and definition.kind in (FieldKind.NUMBER, FieldKind.INTEGER):
+        printed = parse_printed(value)
+        if printed is not None:
+            try:
+                canon = canonical(printed, None, definition.unit_family)
+            except ValueError:
+                canon = None
+    field = FinalField(
+        value=value,
+        unit=None,
+        canonical=canon,
+        anchor=None,
+        cell=None,
+        quote=None,
+        reported_in=ReportedIn.OWN,
+        copy_marker=False,
+        reproduced=False,
+        cited_work=None,
+        extraction_id="",
+    )
+    return key_value(definition, field)
 
 
 def _expectation(
@@ -718,6 +767,8 @@ def _quality(inputs: ReportInputs) -> Quality:
         audit_n=0 if audit is None else audit.labelled,
         audit_error_rate=None if audit is None else audit.error_rate,
         audit_above_ceiling=None if audit is None else audit.above_ceiling,
+        agreement_rows_aligned=inputs.agreement.rows_aligned,
+        agreement_rows_unmatched=inputs.agreement.rows_unmatched,
     )
 
 
@@ -767,6 +818,23 @@ def _limits(
     for e in excluded:
         code = "no-final-row" if e.reason == "no-final-row" else f"excluded-{e.reason}"
         out.append(Limit(code=code, text=texts[e.reason].format(n=e.count), subject=None))
+    if quality.agreement_overall is None:
+        out.append(
+            Limit(
+                code="agreement-not-computed",
+                text="Agreement between the passes is not computed yet.",
+                subject=None,
+            )
+        )
+    if quality.agreement_rows_unmatched:
+        out.append(
+            Limit(
+                code="agreement-rows-unmatched",
+                text=f"{quality.agreement_rows_unmatched} dual rows are held by one pass only and "
+                f"are outside the agreement ({quality.agreement_rows_aligned} rows aligned).",
+                subject=None,
+            )
+        )
     if quality.single_extraction_works:
         out.append(
             Limit(
