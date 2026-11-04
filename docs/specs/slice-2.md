@@ -95,6 +95,8 @@ Plus **atomic claims** (R-40): statement, type (finding / mechanism / limitation
 
 *Implemented in plan 2A:* `fulltext_fetch` (an agent act, with `routes` as the route filter) and `fulltext_status` (MCP); `factory fulltext import|fetch|status|restore` (CLI; `fetch` and `restore` are the researcher's acts). The MCP tools refuse a session that has joined a pass, as `check` and `report` do.
 
+*Implemented in plan 2B2:* `document_read` (MCP; read-only, refused to a session that has joined a pass); `factory document convert|status|read` (CLI; `convert` is the researcher's act); events `document.converted` and `document.conversion_failed`; one conversion per (document, converter, version). The LaTeXML-HTML converter is registered; the LaTeX and PDF converters are registered after decision 49.
+
 ## Out of scope
 Appraisal (deferred, IDEA-21); PubMed search and PMC route (first biomedical project, IDEA-22); consistency check of copied results against the cited paper (IDEA-23); graph, regions and labels (slice 3); living updates (slice 4); shared blob store and teams (slice 5); hypotheses and reproduction experiments (slice 6); prose synthesis and related-work writing (slice 7); OCR of scanned PDFs; figures as data (plots digitised).
 
