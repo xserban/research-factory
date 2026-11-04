@@ -30,11 +30,19 @@ QUERIES = (
 
 
 def record(
-    title: str, *, doi: str | None = None, year: int = 2024, author: str = "Ada Zhou"
+    title: str,
+    *,
+    doi: str | None = None,
+    year: int = 2024,
+    author: str = "Ada Zhou",
+    published: str | None = None,
 ) -> dict[str, Any]:
+    """A record dict for `FakeSource`; `published` (ISO date) is when the source listed it."""
     out: dict[str, Any] = {"title": title, "authors": [author], "year": year}
     if doi is not None:
         out["doi"] = doi
+    if published is not None:
+        out["published"] = published
     return out
 
 
@@ -104,3 +112,20 @@ def watch_ready(
     amended = current_protocol(project)
     assert amended is not None
     return amended.protocol_id
+
+
+def window_plan(
+    *, interval_days: int = 7, overlap_days: int = 2, replay_every: int = 2
+) -> WatchPlan:
+    """A watch plan that windows openalex, replaying in full every `replay_every` cycles."""
+    return WatchPlan(
+        sources=(
+            WatchSource(
+                source="openalex",
+                interval_days=interval_days,
+                mode="window",
+                overlap_days=overlap_days,
+                full_replay_every=replay_every,
+            ),
+        )
+    )

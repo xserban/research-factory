@@ -17,7 +17,7 @@ a deviation of the current protocol. Probe and exploratory searches are not gate
 
 import json
 from collections.abc import Collection, Mapping, Sequence
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal
 
 from sqlalchemy import text
@@ -26,6 +26,7 @@ from factory.clock import parse_ts
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
 from factory.index.chase import chase_round_texts, snowball_round_texts
+from factory.living.window import window_spec
 from factory.model.base import StrictModel
 from factory.model.project import RigorMode
 from factory.model.protocol import (
@@ -47,6 +48,7 @@ from factory.model.protocol import (
     search_strategy_hash,
 )
 from factory.model.search import QueryPurpose, QuerySpec
+from factory.model.watch import CycleStatus
 from factory.services.context import Project
 from factory.services.protocol_rules import (
     criterion_changes,
@@ -568,6 +570,7 @@ def search_authorization(
     pending_round_texts: Collection[str] = (),
     round_id: str | None = None,
     supplied_by: SubmitterKind | None = None,
+    cycle_id: str | None = None,
 ) -> list[ValidationIssue]:
     """Why a query may not run under the protocol. Empty when it may, or when it is not gated.
 
@@ -587,6 +590,10 @@ def search_authorization(
     is in the protocol's `supplied_links.accept_from` (slice 4a, ruling 7). Without the section,
     or with `supplied_by` unset, it needs a deviation. `supplied_by` waives nothing for any other
     purpose, and no waiver lifts the readiness, question or PRESS checks.
+
+    A window query of a watch (slice 4b, ruling 3) is planned by its cycle: it is waived when
+    `cycle_id` names an open cycle of the current protocol that runs `spec.source` as a window
+    and `spec` is a planned query plus that cycle's `listed_since` date, nothing more.
     """
     if spec.purpose is QueryPurpose.PROBE or _rigor_mode(project) not in _RIGOR_MODES_GATED:
         return []
@@ -620,11 +627,51 @@ def search_authorization(
         and deviation_id is None
         and not _chase_round_waives(project, spec, pending_round_texts, round_id)
         and not _supplied_waives(current.spec, spec, supplied_by)
+        and not _cycle_waives(project, current, spec, cycle_id)
     ):
         issues.append(
             ValidationIssue("query", "not planned by the current protocol; record a deviation")
         )
     return issues
+
+
+def _cycle_waives(
+    project: Project, current: ProtocolVersion, spec: QuerySpec, cycle_id: str | None
+) -> bool:
+    """Whether `cycle_id` is an open window cycle of the current protocol that plans `spec`."""
+    if cycle_id is None or spec.purpose is not QueryPurpose.SEARCH:
+        return False
+    with project.index.connect() as conn:
+        row = conn.execute(
+            text(
+                "SELECT c.status, c.protocol_id, s.mode, s.window_start, s.full_replay "
+                "FROM watch_cycles c JOIN watch_cycle_sources s ON s.cycle_id = c.cycle_id "
+                "WHERE c.cycle_id = :cycle AND s.source = :source"
+            ),
+            {"cycle": cycle_id, "source": spec.source},
+        ).one_or_none()
+    if row is None:
+        return False
+    status, protocol_id, mode, start, full_replay = row
+    if (
+        status != CycleStatus.OPEN.value
+        or protocol_id != current.protocol_id
+        or mode != "window"
+        or full_replay
+        or start is None
+    ):
+        return False
+    since = date.fromisoformat(str(start))
+    for planned in current.spec.queries:
+        wanted = window_spec(planned, since)
+        if (wanted.source, wanted.kind, wanted.text, wanted.filters) == (
+            spec.source,
+            spec.kind,
+            spec.text.strip(),
+            spec.filters,
+        ):
+            return True
+    return False
 
 
 def _supplied_waives(
@@ -755,6 +802,29 @@ def is_recorded_round(project: Project, round_id: str) -> bool:
             text("SELECT 1 FROM chase_rounds WHERE round_id = :r"), {"r": round_id}
         ).one_or_none()
     return row is not None
+
+
+def is_watch_cycle(project: Project, cycle_id: str) -> bool:
+    """Whether `cycle_id` names a recorded watch cycle."""
+    with project.index.connect() as conn:
+        row = conn.execute(
+            text("SELECT 1 FROM watch_cycles WHERE cycle_id = :c"), {"c": cycle_id}
+        ).one_or_none()
+    return row is not None
+
+
+def registered_cycle(project: Project, query_id: str) -> str | None:
+    """The watch cycle a registered query names in its `query.registered` refs, or None."""
+    with project.index.connect() as conn:
+        events = conn.execute(
+            text("SELECT refs FROM events WHERE type = 'query.registered' AND refs LIKE :pattern"),
+            {"pattern": f'%"{query_id}"%'},
+        ).all()
+    for (refs,) in events:
+        for ref in json.loads(str(refs)):
+            if str(ref).startswith("wcy_") and is_watch_cycle(project, str(ref)):
+                return str(ref)
+    return None
 
 
 def registered_round(project: Project, query_id: str) -> str | None:

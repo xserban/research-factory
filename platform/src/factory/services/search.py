@@ -80,6 +80,7 @@ def register_query(
     sources: Mapping[str, SourceFactory],
     deviation_id: str | None = None,
     round_id: str | None = None,
+    cycle_id: str | None = None,
 ) -> str:
     """Record a query as the caller stated it. Writes nothing if the spec does not fit.
 
@@ -89,6 +90,9 @@ def register_query(
     (`chs_`) round that planned the query, so its runs are linked to the round by reference; a
     snowball round's texts are waived only for a query that names it. The event refers to the
     protocol, the deviation and the round (last).
+
+    `cycle_id` names the open watch cycle (`wcy_`) that plans a window query (slice 4b, ruling 3);
+    it takes the last ref as `round_id` does, and a query names a round or a cycle, not both.
     """
     # Imported here: the protocol service reads seeds, which read this module.
     from factory.services import protocol as protocol_service
@@ -98,8 +102,12 @@ def register_query(
         issues = _spec_issues(project, spec, sources)
         if round_id is not None and not protocol_service.is_recorded_round(project, round_id):
             issues.append(ValidationIssue("round_id", "not a recorded snowball or chase round"))
+        if cycle_id is not None and round_id is not None:
+            issues.append(ValidationIssue("cycle_id", "a query names a round or a cycle, not both"))
+        elif cycle_id is not None and not protocol_service.is_watch_cycle(project, cycle_id):
+            issues.append(ValidationIssue("cycle_id", "not a recorded watch cycle"))
         issues += protocol_service.search_authorization(
-            project, spec, deviation_id=deviation_id, round_id=round_id
+            project, spec, deviation_id=deviation_id, round_id=round_id, cycle_id=cycle_id
         )
         if issues:
             raise FactoryValidationError(issues)
@@ -115,6 +123,7 @@ def register_query(
         )
         refs = protocol_service.search_refs(project, spec, deviation_id)
         refs += () if round_id is None else (round_id,)
+        refs += () if cycle_id is None else (cycle_id,)
         project.record(
             [
                 project.events.make(
@@ -178,6 +187,7 @@ def run_query(
             spec,
             deviation_id=protocol_service.registered_deviation(project, query_id),
             round_id=protocol_service.registered_round(project, query_id),
+            cycle_id=protocol_service.registered_cycle(project, query_id),
         )
         if gate:
             raise FactoryValidationError(gate)

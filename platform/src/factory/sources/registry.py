@@ -59,10 +59,12 @@ def default_sources() -> dict[str, SourceFactory]:
         "openalex": SourceFactory(
             OpenAlexSource.kinds,
             lambda s, c: OpenAlexSource(default_http(s), clock=c, mailto=s.mailto),
+            window_filter=OpenAlexSource.window_filter,
         ),
         "arxiv": SourceFactory(
             ArxivSource.kinds,
             lambda s, c: ArxivSource(default_http(s), clock=c, mailto=s.mailto),
+            window_filter=ArxivSource.window_filter,
             # Its id-list intersection is keyed to the query's own `search_query`.
             probe_kinds=frozenset({QueryKind.KEYWORD}),
         ),

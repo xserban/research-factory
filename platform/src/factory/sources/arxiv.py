@@ -12,7 +12,8 @@ handling and the retries live in `PoliteClient`, not here.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import date, datetime
+from typing import ClassVar
 from xml.etree import ElementTree
 
 import httpx
@@ -124,6 +125,9 @@ class ArxivSource:
 
     name: str = "arxiv"
     kinds: frozenset[QueryKind] = frozenset({QueryKind.KEYWORD, QueryKind.ID_LIST})
+    window_filter: ClassVar[bool] = True
+    """Honours `filters["listed_since"]` (YYYY-MM-DD): arXiv's `submittedDate` is when the record
+    was first listed, which is what a watch window needs (slice 4b, ruling 2)."""
 
     def __init__(
         self,
@@ -174,7 +178,7 @@ class ArxivSource:
         if is_ids and not ids:
             raise ValueError("an id_list query must name at least one arXiv id")
 
-        query_sent = ",".join(ids) if is_ids else spec.text
+        query_sent = ",".join(ids) if is_ids else _search_query(spec)
         method = _METHODS.get(spec.purpose, ProvenanceMethod.DATABASE)
         works: list[Work] = []
         seen: set[str] = set()
@@ -287,7 +291,7 @@ class ArxivSource:
             batch = ids[start : start + self._page_size]
             return {"id_list": ",".join(batch), "max_results": len(batch), "start": 0}
         return {
-            "search_query": spec.text,
+            "search_query": _search_query(spec),
             "start": start,
             # Always the full page, with any caller limit applied to the results afterwards.
             # Requesting a shrinking final page would break the offset-to-ordinal mapping.
@@ -437,3 +441,12 @@ class ArxivSource:
                 )
             ],
         )
+
+
+def _search_query(spec: QuerySpec) -> str:
+    """The query text as sent: with `listed_since`, an open-ended `submittedDate` clause."""
+    since = spec.filters.get("listed_since")
+    if since is None:
+        return spec.text
+    stamp = date.fromisoformat(since).strftime("%Y%m%d")
+    return f"{spec.text} AND submittedDate:[{stamp}0000 TO 999912312359]"

@@ -183,13 +183,19 @@ class FakeSource:
 
 def _work(record: dict[str, Any], *, run_id: str, query_id: str, raw_blob: str) -> Work:
     year = record.get("year")
+    # "published" (an ISO date) says when the source listed the record; "year" gives Jan 1.
+    published = (
+        date.fromisoformat(record["published"])
+        if "published" in record
+        else (date(year, 1, 1) if year else None)
+    )
     return Work.build(
         title=str(record["title"]),
         authors=[Author(name=name) for name in record.get("authors", [])],
         identifiers=Identifiers(
             doi=record.get("doi"), arxiv=record.get("arxiv"), openalex=record.get("openalex")
         ),
-        dates=Dates(published=date(year, 1, 1)) if year else Dates(),
+        dates=Dates(published=published) if published else Dates(),
         type=WorkType(record["type"]) if "type" in record else WorkType.OTHER,
         abstract=record.get("abstract"),
         provenance=[

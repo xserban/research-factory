@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from datetime import date, datetime
-from typing import Any
+from typing import Any, ClassVar
 
 import httpx
 
@@ -114,6 +114,10 @@ class OpenAlexSource:
 
     name: str = "openalex"
     kinds: frozenset[QueryKind] = frozenset({QueryKind.KEYWORD, QueryKind.FILTER})
+    window_filter: ClassVar[bool] = False
+    """`filters["listed_since"]` maps to `from_created_date`, but whether OpenAlex accepts that
+    filter without an API key is unverified (slice 4b, ruling 2; `test_watch_network.py`). It
+    stays False, so a watch cannot window OpenAlex, until that test passes."""
 
     def __init__(
         self,
@@ -330,7 +334,11 @@ class OpenAlexSource:
         else:
             # FILTER text is sent verbatim: `doi:a|b`, `openalex:W1|W2`, `cites:W1`.
             expression = spec.text
-        return expression + "".join(f",{key}:{value}" for key, value in spec.filters.items())
+        parts = (
+            ("from_created_date" if key == "listed_since" else key, value)
+            for key, value in spec.filters.items()
+        )
+        return expression + "".join(f",{key}:{value}" for key, value in parts)
 
     def to_work(
         self,

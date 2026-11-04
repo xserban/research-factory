@@ -29,7 +29,7 @@ from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
 from factory.living.counts import cycle_run_ids, new_work_ids, source_counts
 from factory.living.due import CycleView, consecutive_failures, due_sources, next_due
-from factory.living.window import is_full_replay, window_start
+from factory.living.window import is_full_replay, window_spec, window_start
 from factory.model.base import StrictModel
 from factory.model.protocol import PlannedQuery, ProtocolStatus
 from factory.model.search import QueryPurpose, QuerySpec
@@ -40,10 +40,15 @@ from factory.model.watch import (
     SourceCounts,
     WatchCycleFinished,
     WatchCycleStarted,
+    WatchSource,
 )
 from factory.services.context import Project
 from factory.services.dedup_incremental import dedup_new
-from factory.services.protocol import current_protocol, search_authorization
+from factory.services.protocol import (
+    current_protocol,
+    registered_cycle,
+    search_authorization,
+)
 from factory.services.search import register_query, run_query
 from factory.sources.registry import SourceFactory
 
@@ -191,9 +196,9 @@ def watch_run(
             return None
         cycle_id, members, planned = opened
         notes: list[str] = []
-        for source in members:
-            for query in (q for q in planned if q.source == source):
-                _run_planned(project, cycle_id, query, sources, actor, notes)
+        for member in members:
+            for query in (q for q in planned if q.source == member.source):
+                _run_planned(project, cycle_id, member, query, sources, actor, notes)
         fresh = new_work_ids(project, cycle_id)
         try:
             dedup_new(project, fresh)
@@ -228,7 +233,7 @@ def _open_or_resume(
     trigger: CycleTrigger,
     actor: Actor | None,
     force: bool,
-) -> tuple[str, tuple[str, ...], tuple[PlannedQuery, ...]] | None:
+) -> tuple[str, tuple[CycleSource, ...], tuple[PlannedQuery, ...]] | None:
     """Decide, and write `watch.cycle_started` when a new cycle opens, in one critical section."""
     with project.index.exclusive():
         project.index.sync()
@@ -244,37 +249,35 @@ def _open_or_resume(
         now = project.clock.now()
 
         views = cycles(project)
+        retry: set[str] = set()
         for view in views:
             if view.status is CycleStatus.OPEN:
                 reason = _abandon_reason(view, current.protocol_id, now)
                 if reason is not None:
                     _write_finished(project, view.cycle_id, CycleStatus.PARTIAL, (), reason)
+                    retry.update(view.sources)  # an abandoned cycle must not postpone its sources
         views = cycles(project)
         planned = current.spec.queries
 
         open_view = next((v for v in views if v.status is CycleStatus.OPEN), None)
         if open_view is not None:
-            members = open_view.sources
-            _require_runnable(project, members, planned, adapters)
+            members = _recorded_sources(project, open_view.cycle_id)
+            _require_runnable(project, tuple(m.source for m in members), planned, adapters)
             return open_view.cycle_id, members, planned
 
-        due = (
-            tuple(sorted(item.source for item in plan.sources))
-            if force
-            else due_sources(plan, views, now)
-        )
+        if force:
+            due = tuple(sorted(item.source for item in plan.sources))
+        else:
+            due = due_sources(plan, views, now)
+            if due or plan.until is None or plan.until >= now.date():
+                planned_names = {item.source for item in plan.sources}
+                due = tuple(sorted({*due, *(retry & planned_names)}))
         if not due:
             return None
         _require_runnable(project, due, planned, adapters)
 
         by_name = {item.source: item for item in plan.sources}
-        # Window queries arrive with their cycle-scoped authorisation (plan living-A task 5);
-        # until then every source replays in full.
-        chosen = tuple(
-            CycleSource(source=name, mode="full", window_start=None, full_replay=True)
-            for name in due
-            if name in by_name
-        )
+        chosen = tuple(_cycle_source(by_name[name], views) for name in due if name in by_name)
         cycle_id = project.ids.new("wcy")
         started = WatchCycleStarted(
             cycle_id=cycle_id,
@@ -300,7 +303,40 @@ def _open_or_resume(
                 )
             ]
         )
-        return cycle_id, due, planned
+        return cycle_id, chosen, planned
+
+
+def _cycle_source(item: WatchSource, views: Sequence[CycleView]) -> CycleSource:
+    """How the source runs this cycle: a full replay, or a window from its last complete cycle."""
+    if is_full_replay(item, views):
+        return CycleSource(source=item.source, mode=item.mode, window_start=None, full_replay=True)
+    return CycleSource(
+        source=item.source,
+        mode="window",
+        window_start=window_start(item, views),
+        full_replay=False,
+    )
+
+
+def _recorded_sources(project: Project, cycle_id: str) -> tuple[CycleSource, ...]:
+    """The sources an open cycle was started with, as recorded (never recomputed on resume)."""
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT source, mode, window_start, full_replay FROM watch_cycle_sources "
+                "WHERE cycle_id = :c ORDER BY source"
+            ),
+            {"c": cycle_id},
+        ).all()
+    return tuple(
+        CycleSource(
+            source=str(source),
+            mode="window" if mode == "window" else "full",
+            window_start=None if start is None else date.fromisoformat(str(start)),
+            full_replay=bool(full),
+        )
+        for source, mode, start, full in rows
+    )
 
 
 def _abandon_reason(view: CycleView, protocol_id: str, now: datetime) -> str | None:
@@ -317,7 +353,10 @@ def _require_runnable(
     planned: Sequence[PlannedQuery],
     adapters: Mapping[str, SourceFactory],
 ) -> None:
-    """Refuse, writing nothing, when a source has no adapter or the gate refuses a query."""
+    """Refuse, writing nothing, when a source has no adapter or the gate refuses a full query.
+
+    Window queries are checked when they are registered, against their own cycle.
+    """
     issues: list[ValidationIssue] = []
     for source in members:
         if source not in adapters:
@@ -339,23 +378,39 @@ def _require_runnable(
 def _run_planned(
     project: Project,
     cycle_id: str,
+    member: CycleSource,
     query: PlannedQuery,
     adapters: Mapping[str, SourceFactory],
     actor: Actor | None,
     notes: list[str],
 ) -> None:
-    """Run one planned query inside the cycle unless a run of it already completed there."""
-    spec = QuerySpec(
-        source=query.source,
-        kind=query.kind,
-        text=query.text,
-        purpose=QueryPurpose.SEARCH,
-        filters=query.filters,
-    )
-    try:
-        query_id = _registered_query(project, spec) or register_query(
-            project, actor or project.system_actor(), spec, sources=adapters
+    """Run one planned query inside the cycle unless a run of it already completed there.
+
+    A full query reuses the registered query with the planned spec (registering one only when
+    none exists); a window query is registered for this cycle, which authorises it.
+    """
+    windowed = member.mode == "window" and not member.full_replay and member.window_start
+    spec = (
+        window_spec(query, member.window_start)
+        if windowed and member.window_start is not None
+        else QuerySpec(
+            source=query.source,
+            kind=query.kind,
+            text=query.text,
+            purpose=QueryPurpose.SEARCH,
+            filters=query.filters,
         )
+    )
+    who = actor or project.system_actor()
+    try:
+        if windowed:
+            query_id = _registered_query(project, spec, cycle_id) or register_query(
+                project, who, spec, sources=adapters, cycle_id=cycle_id
+            )
+        else:
+            query_id = _registered_query(project, spec) or register_query(
+                project, who, spec, sources=adapters
+            )
         if _completed_in_cycle(project, cycle_id, query_id):
             return
         run_query(project, query_id, sources=adapters, actor=actor, cycle_id=cycle_id)
@@ -363,15 +418,18 @@ def _run_planned(
         notes.append(f"{query.source}: {type(exc).__name__}: {exc}")
 
 
-def _registered_query(project: Project, spec: QuerySpec) -> str | None:
-    """The earliest registered search query whose spec equals `spec`, if any."""
+def _registered_query(project: Project, spec: QuerySpec, cycle_id: str | None = None) -> str | None:
+    """The earliest registered search query whose spec equals `spec`, if any.
+
+    With `cycle_id`, only a query registered for that cycle (a window query is cycle-specific).
+    """
     project.index.sync()
     with project.index.connect() as conn:
-        row = conn.execute(
+        rows = conn.execute(
             text(
                 "SELECT query_id FROM queries WHERE purpose = :search AND source = :source "
                 "AND kind = :kind AND text = :text AND filters = :filters "
-                "ORDER BY registered_at, query_id LIMIT 1"
+                "ORDER BY registered_at, query_id"
             ),
             {
                 "search": QueryPurpose.SEARCH.value,
@@ -380,8 +438,13 @@ def _registered_query(project: Project, spec: QuerySpec) -> str | None:
                 "text": spec.text,
                 "filters": canonical_json(dict(spec.filters)).decode(),
             },
-        ).one_or_none()
-    return None if row is None else str(row[0])
+        ).all()
+        if cycle_id is None:
+            return str(rows[0][0]) if rows else None
+        for (query_id,) in rows:
+            if registered_cycle(project, str(query_id)) == cycle_id:
+                return str(query_id)
+    return None
 
 
 def _completed_in_cycle(project: Project, cycle_id: str, query_id: str) -> bool:

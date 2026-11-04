@@ -46,7 +46,7 @@ def source_counts(project: Project, cycle_id: str) -> tuple[SourceCounts, ...]:
         works = _cycle_works(conn, cycle_id)
         before = _known_before(conn, set(works), start)
         counts: list[SourceCounts] = []
-        for source, full_replay in sources:
+        for source, mode, full_replay in sources:
             latest = _latest_by_query([r for r in runs if r.source == source])
             complete = sum(1 for r in latest if r.status == RunStatus.COMPLETE.value)
             new = sum(1 for w, (first, _) in works.items() if w not in before and first == source)
@@ -58,6 +58,12 @@ def source_counts(project: Project, cycle_id: str) -> tuple[SourceCounts, ...]:
             disappeared = None
             if full_replay and latest and complete == len(latest):
                 disappeared = _disappeared(conn, {r.query_id for r in latest}, start, bound)
+            missed = None
+            if mode == "window" and full_replay:
+                fresh = [
+                    w for w, (first, _) in works.items() if w not in before and first == source
+                ]
+                missed = _window_missed(conn, source, start, fresh)
             counts.append(
                 SourceCounts(
                     source=source,
@@ -66,7 +72,7 @@ def source_counts(project: Project, cycle_id: str) -> tuple[SourceCounts, ...]:
                     retrieved=sum(r.retrieved for r in latest),
                     new_works=new,
                     duplicates_in_cycle=dup,
-                    window_missed=None,
+                    window_missed=missed,
                     disappeared=disappeared,
                 )
             )
@@ -99,7 +105,7 @@ def cycle_run_ids(project: Project, cycle_id: str) -> tuple[str, ...]:
 
 def _facts(
     conn: Connection, cycle_id: str
-) -> tuple[str, str, list[tuple[str, bool]], list[_CycleRun]] | None:
+) -> tuple[str, str, list[tuple[str, str, bool]], list[_CycleRun]] | None:
     cycle = conn.execute(
         text("SELECT started_at, finished_at FROM watch_cycles WHERE cycle_id = :c"),
         {"c": cycle_id},
@@ -107,10 +113,10 @@ def _facts(
     if cycle is None:
         return None
     sources = [
-        (str(s), bool(f))
-        for s, f in conn.execute(
+        (str(s), str(m), bool(f))
+        for s, m, f in conn.execute(
             text(
-                "SELECT source, full_replay FROM watch_cycle_sources "
+                "SELECT source, mode, full_replay FROM watch_cycle_sources "
                 "WHERE cycle_id = :c ORDER BY source"
             ),
             {"c": cycle_id},
@@ -196,3 +202,38 @@ def _disappeared(conn: Connection, queries: set[str], start: str, bound: str) ->
         },
     ).all()
     return len(rows)
+
+
+def _window_missed(conn: Connection, source: str, start: str, fresh: list[str]) -> int | None:
+    """Works a full replay of a window source found new although they were listed inside an
+    earlier window: between the last earlier full replay and the last earlier complete cycle.
+
+    The listing date is the work's `dates.published`, which for the sources that can be windowed
+    (arXiv) is the first submission date. None when no earlier full replay completed.
+    """
+    earlier = conn.execute(
+        text(
+            "SELECT c.started_at, s.full_replay FROM watch_cycles c "
+            "JOIN watch_cycle_sources s ON s.cycle_id = c.cycle_id "
+            "WHERE s.source = :source AND s.complete = 1 AND c.started_at < :start "
+            "ORDER BY c.started_at"
+        ),
+        {"source": source, "start": start},
+    ).all()
+    replays = [str(at) for at, full in earlier if full]
+    if not replays:
+        return None
+    low, high = replays[-1][:10], str(earlier[-1][0])[:10]
+    statement = text(
+        "SELECT COUNT(*) FROM works WHERE work_id IN :ids "
+        "AND json_extract(data, '$.dates.published') >= :low "
+        "AND json_extract(data, '$.dates.published') <= :high"
+    ).bindparams(bindparam("ids", expanding=True))
+    total = 0
+    for i in range(0, len(fresh), _CHUNK):
+        total += int(
+            conn.execute(
+                statement, {"ids": sorted(fresh)[i : i + _CHUNK], "low": low, "high": high}
+            ).scalar_one()
+        )
+    return total
