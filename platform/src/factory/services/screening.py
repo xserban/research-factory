@@ -551,6 +551,8 @@ def _batch_of(project: Project, task: Task) -> ScreenBatchContent:
     stage = stage_of_kind(task.kind)
     if stage is None or task.kind != task_kind(stage, batch.pass_label):
         raise refusal
+    if batch.stage != stage:
+        raise refusal
     return batch
 
 
@@ -861,7 +863,7 @@ def _done_keys(
     decision recorded before the latest criterion-changing amendment is not done: the gate is
     passed again (R-26; a clarification counts, slice-1 behaviour)."""
     stale = stale_screening_decisions(project, stage=stage)
-    cut = last_criterion_change(project)
+    cut = last_criterion_change(project, stage=stage)
     events = decision_events(project)
     return {
         (decision.work_id, decision.phase.value)

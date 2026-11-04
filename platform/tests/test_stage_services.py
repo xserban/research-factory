@@ -380,8 +380,6 @@ def test_agreement_refuses_shared_session_within_stage(
     _declare_full_text(project, agent)
     _draw(project)
     for stage in (TA, FT):
-        if stage is FT:
-            draw_calibration(project, project.system_actor(), random_seed=5, stage=FT)
         open_pass(project, agent, PassLabel.A, stage=stage)
         open_pass(project, agent, PassLabel.B, stage=stage)
 

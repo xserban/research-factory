@@ -220,8 +220,8 @@ def test_full_text_not_reported_as_zero(
     assert "assessed for eligibility" not in markdown and "included at full text" not in markdown
     methods = render_methods(methods_report(project))
     assert (
-        "full-text stage has not run" in methods
-        and "assessed" not in methods.split("Full-text screening.")[1].split("\n")[0]
+        "Full-text screening. The full-text stage has not run: the protocol declares no "
+        "full-text screening plan." in methods
     )
 
 

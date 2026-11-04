@@ -543,3 +543,33 @@ def test_amendment_after_title_abstract_keeps_outcomes(
         included
         and {w for w, o in final_outcomes(project).items() if o is Outcome.INCLUDED} == included
     )
+
+
+# --- A full-text calibration draw needs eligible works ---
+
+
+def test_full_text_draw_refused_while_nothing_is_converted(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    from factory.errors import FactoryValidationError
+    from factory.services.calibration import calibration_drawn
+
+    _declare_and_screen_title_abstract(project, agent, human, mock_sources)
+    assert _eligible_ids(project) == []
+    events_before = len(read_all(project.paths.events_dir, project.catalog))
+
+    with pytest.raises(FactoryValidationError) as caught:
+        draw_calibration(project, project.system_actor(), random_seed=3, stage=FT)
+
+    assert [(i.field, i.reason) for i in caught.value.issues] == [
+        (
+            "stage",
+            "no works are eligible at full text yet; fetch and convert documents first",
+        )
+    ]
+    assert len(read_all(project.paths.events_dir, project.catalog)) == events_before
+    assert calibration_drawn(project, stage=FT) is False
+
+    _prepare_documents(project)  # the draw can be redone once documents are converted
+    items = draw_calibration(project, project.system_actor(), random_seed=3, stage=FT)
+    assert items and set(items) <= set(_eligible_ids(project))

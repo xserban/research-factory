@@ -36,9 +36,10 @@ def stale_decisions(
 
     An amendment judges the decisions recorded before it. With `amended_at` (the event ID of
     each amendment, parallel to `amendments`) and `DecisionRef.at` that is a comparison of
-    recording order, so a reverted amendment (A to B, then B to A) judges a decision made under B
-    by the rules of B to A only. Without them a decision is in scope of amendment A only when its
-    version comes before `A.to_version` in `lineage` (first occurrence). Stages match when they
+    recording order, so in a reverted amendment (A to B, then B to A) a decision recorded before
+    A to B is judged by both A to B and B to A, and one recorded between them by B to A only.
+    Without them a decision is in scope of amendment A only when its version comes before
+    `A.to_version` in `lineage` (first occurrence). Stages match when they
     are equal or either side is `either`."""
     position: dict[str, int] = {}
     for index, version in enumerate(lineage):

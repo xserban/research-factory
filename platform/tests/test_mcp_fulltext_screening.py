@@ -13,10 +13,10 @@ from factory.events.reader import read_all
 from factory.mcp import server as mcp_server
 from factory.mcp.server import build_server
 from factory.model.protocol import ScreeningStage
-from factory.model.screening import PassLabel
-from factory.services.calibration import draw_calibration
+from factory.model.screening import PassLabel, ScreeningItem, Verdict
+from factory.services.calibration import calibration_items, draw_calibration
 from factory.services.context import Project
-from factory.services.screening import live_decisions
+from factory.services.screening import live_decisions, screen_next, screen_record
 from factory.sources.registry import SourceFactory
 from tests.document_helpers import promoted_works
 from tests.helpers import SESSION, _setup, open_session
@@ -192,10 +192,46 @@ async def test_calibration_record_shows_full_text_evidence(
         "abstract",
         "document_id",
         "conversion_id",
-        "decisions",
     }
     assert record["conversion_id"].startswith("cnv_") and record["document_id"].startswith("doc_")
-    assert record["decisions"] == {}
+
+
+@pytest.mark.anyio
+async def test_calibration_record_hides_the_passes_decisions(
+    settings: Settings,
+    project: Project,
+    clock: FixedClock,
+    agent: Actor,
+    human: Actor,
+    mock_sources: SourcesFor,
+) -> None:
+    _make(project, agent, human, mock_sources)
+    first = calibration_items(project, stage=FT)[0]
+    served = screen_next(project, agent, PassLabel.A, stage=FT).batch
+    assert served is not None
+    record = next(r for r in served.records if r["work_id"] == first)
+    screen_record(
+        project,
+        agent,
+        served.task_id,
+        [
+            ScreeningItem(
+                work_id=first,
+                verdict=Verdict.INCLUDE,
+                criterion=None,
+                quote="Lorem ipsum dolor sit amet.",
+                rationale="fits",
+                anchor="s3.p1",
+            )
+        ],
+    )
+    assert any(d.work_id == first for d in live_decisions(project, PassLabel.A, stage=FT))
+    async with open_session(settings, clock) as client:
+        ft = await client.call("calibration_label", project="demo", stage="full-text")
+    shown = ft["data"]["record"]
+    assert shown["work_id"] == first and "decisions" not in shown
+    assert shown["conversion_id"] == record["conversion_id"]
+    assert "Lorem ipsum" not in str(shown) and "fits" not in str(shown)
 
 
 def test_title_abstract_decision_views_carry_no_evidence(

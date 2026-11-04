@@ -493,7 +493,10 @@ def calibrate_draw(ctx: typer.Context, stage: StageOption = StageChoice.TITLE_AB
         items = calibration_service.draw_calibration(
             project, project.human_actor(), stage=run_stage
         )
-        found = {item: evidence_service.work_evidence(project, item, run_stage) for item in items}
+        found = {
+            item: evidence_service.work_evidence(project, item, run_stage, include_decisions=False)
+            for item in items
+        }
     typer.echo(f"calibration set: {len(items)} works")
     if run_stage is ScreeningStage.FULL_TEXT:
         for item in items:

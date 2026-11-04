@@ -33,6 +33,7 @@ from factory.clock import parse_ts
 from factory.errors import FactoryError
 from factory.model.base import StrictModel
 from factory.model.protocol import Limit, ProtocolSpec, ScreeningStage, search_strategy_hash
+from factory.model.screening import ScreeningPhase
 from factory.model.search import QueryKind, QueryPurpose, RunStatus
 from factory.model.work import ProvenanceMethod, Work
 from factory.services.agreement import Outcome, exclusion_criteria, final_outcomes
@@ -276,11 +277,15 @@ def full_text_boxes(project: Project) -> FullTextBoxes:
 
 
 def _has_full_text_decision(project: Project) -> bool:
+    """Whether a screening-phase full-text decision exists; calibration decisions do not count."""
     with project.index.connect() as conn:
         return (
             conn.execute(
-                text("SELECT 1 FROM decisions WHERE stage = :stage LIMIT 1"),
-                {"stage": ScreeningStage.FULL_TEXT.value},
+                text("SELECT 1 FROM decisions WHERE stage = :stage AND phase = :phase LIMIT 1"),
+                {
+                    "stage": ScreeningStage.FULL_TEXT.value,
+                    "phase": ScreeningPhase.SCREENING.value,
+                },
             ).first()
             is not None
         )

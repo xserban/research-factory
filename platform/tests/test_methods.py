@@ -1,7 +1,8 @@
 """The methods statement generated from events (plan 5b, task 2).
 
 The render takes its figures from `methods_report` alone; these tests check the wording, the
-order of the paragraphs, the agent-reported disclosure, and that no seed is named.
+order of the paragraphs (search, deduplication, screening, agreement and audit, full text, seed
+recall, deviations), the agent-reported disclosure, and that no seed is named.
 """
 
 import re

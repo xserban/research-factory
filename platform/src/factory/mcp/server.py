@@ -879,20 +879,27 @@ def _items_path(field: str, original: int) -> str:
     return re.sub(r"^items\.\d+", f"items.{original}", field)
 
 
-def _evidence_fields(project: Project, work_id: str, stage: ScreeningStage) -> dict[str, JsonValue]:
-    """A full-text item's document, pinned conversion and the passes' cited anchors and quotes;
-    nothing at title/abstract."""
+def _evidence_fields(
+    project: Project, work_id: str, stage: ScreeningStage, *, with_decisions: bool = True
+) -> dict[str, JsonValue]:
+    """A full-text item's document, pinned conversion and, unless `with_decisions` is false, the
+    passes' cited anchors and quotes; nothing at title/abstract. Calibration passes false: the
+    answer key is labelled blind to the passes' verdicts."""
     if stage is not ScreeningStage.FULL_TEXT:
         return {}
-    found = evidence_service.work_evidence(project, work_id, stage)
+    found = evidence_service.work_evidence(
+        project, work_id, stage, include_decisions=with_decisions
+    )
     decisions: JsonValue = {
         label: view.model_dump(mode="json") for label, view in found.decisions.items()
     }
-    return {
+    fields: dict[str, JsonValue] = {
         "document_id": found.document_id,
         "conversion_id": found.conversion_id,
-        "decisions": decisions,
     }
+    if with_decisions:
+        fields["decisions"] = decisions
+    return fields
 
 
 def _next_calibration(project: Project, stage: ScreeningStage) -> JsonValue:
@@ -908,7 +915,7 @@ def _next_calibration(project: Project, stage: ScreeningStage) -> JsonValue:
             "work_id": work.id,
             "title": work.title,
             "abstract": work.abstract,
-            **_evidence_fields(project, work.id, stage),
+            **_evidence_fields(project, work.id, stage, with_decisions=False),
         }
     return {"record": record, "drawn": len(items), "labelled": len(items) - len(pending)}
 

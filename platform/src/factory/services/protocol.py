@@ -40,6 +40,7 @@ from factory.model.protocol import (
     ProtocolRecorded,
     ProtocolSpec,
     ProtocolStatus,
+    ScreeningStage,
     StaleRule,
     protocol_version,
     search_strategy_hash,
@@ -356,11 +357,45 @@ def amendments_with_events(project: Project) -> list[tuple[str, ProtocolAmended]
     ]
 
 
-def last_criterion_change(project: Project) -> str | None:
+def last_criterion_change(project: Project, *, stage: ScreeningStage | None = None) -> str | None:
     """The event ID of the latest amendment that changed a criterion (a clarification included);
-    calibration decisions recorded before it no longer count (R-26)."""
-    changed = [event for event, amendment in amendments_with_events(project) if amendment.changes]
+    calibration decisions recorded before it no longer count (R-26).
+
+    With `stage`, only an amendment that changes a criterion applying at that stage or at `either`
+    (in the old or the new spec: added, removed or changed) counts, so a criterion that only
+    concerns the other stage does not move this stage's cut."""
+    amendments = amendments_with_events(project)
+    if stage is None:
+        changed = [event for event, amendment in amendments if amendment.changes]
+    else:
+        changed = [event for event, amendment in amendments if _touches(project, amendment, stage)]
     return changed[-1] if changed else None
+
+
+def _touches(project: Project, amendment: ProtocolAmended, stage: ScreeningStage) -> bool:
+    """Whether a change of `amendment` concerns a criterion that applies at `stage` or `either`."""
+    applies = (stage, ScreeningStage.EITHER)
+    new_at = {c.id: c.applies_at for c in amendment.spec.criteria}
+    old_spec = _spec_of(project, amendment.from_version)
+    old_at = {} if old_spec is None else {c.id: c.applies_at for c in old_spec.criteria}
+    return any(
+        new_at.get(change.cid) in applies or old_at.get(change.cid) in applies
+        for change in amendment.changes
+    )
+
+
+def _spec_of(project: Project, protocol_id: str) -> ProtocolSpec | None:
+    """The spec recorded for `protocol_id`, from the protocol or an amendment that reached it."""
+    with project.index.connect() as conn:
+        row = conn.execute(
+            text("SELECT spec FROM protocols WHERE protocol_id = :id LIMIT 1"), {"id": protocol_id}
+        ).one_or_none()
+    if row is not None:
+        return ProtocolSpec.model_validate_json(str(row[0]))
+    for _, amendment in amendments_with_events(project):
+        if amendment.to_version == protocol_id:
+            return amendment.spec
+    return None
 
 
 def list_amendments(project: Project) -> list[ProtocolAmended]:

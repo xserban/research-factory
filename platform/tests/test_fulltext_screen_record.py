@@ -367,3 +367,40 @@ def test_record_without_pinned_conversion_rejected(
     result = screen_record(project, agent, batch.task_id, [_item(batch.records[0])])
     assert result.written == []
     assert [i.field for i in result.rejected[0].issues] == ["items.0.work_id"]
+
+
+def test_task_whose_content_stage_differs_from_its_kind_is_refused(
+    project: Project, agent: Actor, batch: ScreenBatch
+) -> None:
+    from factory.errors import FactoryValidationError
+    from factory.services.stages import task_kind
+    from factory.services.tasks import TaskSpec, create_tasks, task_content
+
+    task = get_task(project, batch.task_id)
+    assert task is not None
+    content = task_content(project, task)
+    assert isinstance(content, dict)
+    forged = create_tasks(
+        project,
+        agent,
+        [TaskSpec(kind=task_kind(FT, PassLabel.A), content={**content, "stage": TA.value})],
+    ).written[0]
+    forged_task = get_task(project, forged)
+    assert forged_task is not None
+
+    with pytest.raises(FactoryValidationError) as caught:
+        screening._batch_of(project, forged_task)
+    assert [i.field for i in caught.value.issues] == ["task_id"]
+
+
+def test_calibration_only_full_text_decisions_leave_the_stage_not_run(
+    project: Project, agent: Actor, batch: ScreenBatch
+) -> None:
+    from factory.model.screening import ScreeningPhase
+    from factory.services.prisma import prisma_flow
+
+    assert batch.phase is ScreeningPhase.CALIBRATION
+    result = screen_record(project, agent, batch.task_id, [_item(batch.records[0])])
+    assert len(result.written) == 1 and _ft_live(project)
+
+    assert prisma_flow(project).full_text.stage_run is False

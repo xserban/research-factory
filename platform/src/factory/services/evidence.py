@@ -29,8 +29,14 @@ class WorkEvidence(StrictModel):
 NO_EVIDENCE = WorkEvidence(document_id=None, conversion_id=None, decisions={})
 
 
-def work_evidence(project: Project, work_id: str, stage: ScreeningStage) -> WorkEvidence:
-    """The document, pinned conversion and live decisions of `work_id` at `stage`."""
+def work_evidence(
+    project: Project, work_id: str, stage: ScreeningStage, *, include_decisions: bool = True
+) -> WorkEvidence:
+    """The document, pinned conversion and live decisions of `work_id` at `stage`.
+
+    With `include_decisions` false (calibration evidence) the passes' verdicts, quotes and
+    rationales are never returned: the answer key stays blind to them. The document and
+    conversion are still those the passes pinned."""
     if stage is not ScreeningStage.FULL_TEXT:
         return NO_EVIDENCE
     project.index.sync()
@@ -65,4 +71,6 @@ def work_evidence(project: Project, work_id: str, stage: ScreeningStage) -> Work
         )
         for label, d in decisions.items()
     }
-    return WorkEvidence(document_id=document_id, conversion_id=pinned, decisions=views)
+    return WorkEvidence(
+        document_id=document_id, conversion_id=pinned, decisions=views if include_decisions else {}
+    )

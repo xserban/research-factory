@@ -2,8 +2,9 @@
 
 `draw_calibration` picks the set from the resolved development seeds that are not worked examples,
 the resolved negative seeds that are not worked examples, and seeded random corpus works up to the
-protocol's `calibration_size`. Held-out seeds and their works are never chosen, not even as random
-fill, and neither are worked examples (an agent has seen them). The split must be drawn first.
+protocol's `calibration_size` (a floor: every such seed is included). Held-out seeds and their
+works are never chosen, not even as random fill, and neither are worked examples (an agent has
+seen them). The split must be drawn first.
 
 `label_calibration` records a human's label on an item of the set. The criterion is given bare and
 qualified against the current protocol. An MCP-relayed label is refused from a session that has
@@ -88,7 +89,10 @@ def draw_calibration(
 
     A second call returns the existing set and writes nothing. The default seed is 32 random
     bits. Refused when the hold-out split has not been drawn, since the set must exclude
-    held-out works. The protocol's `calibration_size` sets the size when the corpus allows.
+    held-out works. The protocol's `calibration_size` is a floor, not a cap: every development
+    seed in the population (but for the worked examples) is always included, and seeded random
+    works fill the set up to the size when the population allows. Refused, with nothing written,
+    at full text while no work is eligible yet, so the draw can be redone after conversion.
     """
     require_pass_stage(stage)
     seed = secrets.randbits(32) if random_seed is None else random_seed
@@ -104,6 +108,13 @@ def draw_calibration(
             issues.append(ValidationIssue("random_seed", "must be an integer from 0 to 2**32 - 1"))
         if not split_is_drawn(project):
             issues.append(ValidationIssue("split", "draw the seed split before the calibration"))
+        if stage is ScreeningStage.FULL_TEXT and not _calibration_population(project, stage):
+            issues.append(
+                ValidationIssue(
+                    "stage",
+                    "no works are eligible at full text yet; fetch and convert documents first",
+                )
+            )
         if issues:
             raise FactoryValidationError(issues)
 
@@ -342,7 +353,7 @@ def _live_decisions(
     if protocol_id is None:
         return {}
     versions = lineage_through(project, protocol_id)
-    cut = last_criterion_change(project)
+    cut = last_criterion_change(project, stage=stage)
     with project.index.connect() as conn:
         rows = conn.execute(
             text(

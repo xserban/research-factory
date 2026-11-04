@@ -34,8 +34,9 @@ from factory.services.audit import audit_outstanding, audit_sample
 from factory.services.calibration import calibration_items, calibration_status
 from factory.services.context import Project
 from factory.services.prisma import prisma_flow
-from factory.services.protocol import amend_protocol, current_protocol
+from factory.services.protocol import amend_protocol, current_protocol, last_criterion_change
 from factory.services.screening import (
+    _done_keys,
     live_decisions,
     screen_next,
     screen_record,
@@ -431,3 +432,76 @@ def test_clarification_forces_recalibration_but_limits_do_not(
     batch = screen_next(project, agent, PassLabel.A).batch
     assert batch is not None and batch.phase is ScreeningPhase.CALIBRATION
     assert items
+
+
+# --- The calibration cut is per stage ---
+
+
+def _declare_full_text_with(
+    project: Project, agent: Actor, applies_at: ScreeningStage, *, plan: bool = True
+) -> None:
+    current = current_protocol(project)
+    assert current is not None
+    criterion = Criterion(
+        id="EX04",
+        parent="NG03",
+        statement="The full text is outside the question.",
+        rule="exclude it",
+        applies_at=applies_at,
+        priority=4,
+    )
+    update: dict[str, Any] = {"criteria": (*current.spec.criteria, criterion)}
+    if plan:
+        update["full_text_screening"] = ScreeningPlan(
+            passes=2,
+            dual_sample=1.0,
+            kappa_floor=0.7,
+            calibration_size=3,
+            reviewers=current.spec.screening.reviewers,
+        )
+    amend_protocol(
+        project,
+        agent,
+        current.spec.model_copy(update=update),
+        reason="full text",
+        semantic=True,
+        effects={},
+    )
+
+
+def test_full_text_only_criterion_leaves_title_abstract_calibration_alone(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    _calibrated(project, agent, human, mock_sources)
+    done_before = _done_keys(project, PassLabel.A, TA)
+    assert last_criterion_change(project, stage=FT) is None
+
+    _declare_full_text_with(project, agent, FT)
+
+    assert calibration_status(project, stage=TA).passed["A"] is True
+    assert _done_keys(project, PassLabel.A, TA) == done_before
+    assert last_criterion_change(project, stage=TA) is None
+    assert last_criterion_change(project, stage=FT) is not None
+
+
+def test_either_criterion_moves_both_stages(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    _calibrated(project, agent, human, mock_sources)
+
+    _declare_full_text_with(project, agent, ScreeningStage.EITHER)
+
+    assert calibration_status(project, stage=TA).passed["A"] is False
+    assert last_criterion_change(project, stage=TA) is not None
+    assert last_criterion_change(project, stage=FT) == last_criterion_change(project, stage=TA)
+
+
+def test_title_abstract_criterion_change_does_not_move_the_full_text_cut(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    _calibrated(project, agent, human, mock_sources)
+
+    _loosen_ex01(project, agent)
+
+    assert last_criterion_change(project, stage=TA) is not None
+    assert last_criterion_change(project, stage=FT) is None
