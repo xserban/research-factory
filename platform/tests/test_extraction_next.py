@@ -35,6 +35,8 @@ from tests.helpers import SESSION, _setup
 from tests.test_acceptance_fulltext_screening import _screened_full_text_world
 from tests.world_cache import snapshot_world
 
+pytestmark = pytest.mark.slow  # over ~60 s per file: dev runs deselect with -m "not slow"
+
 FT = ScreeningStage.FULL_TEXT
 SourcesFor = Callable[..., Mapping[str, SourceFactory]]
 FIELDS = ("method_name", "task", "dataset", "split", "metric", "value", "latency")

@@ -66,6 +66,8 @@ from tests.test_extraction_schema import _schema, _with
 from tests.test_protocol_rules import _check
 from tests.world_cache import snapshot_world
 
+pytestmark = pytest.mark.slow  # over ~60 s per file: dev runs deselect with -m "not slow"
+
 FT = ScreeningStage.FULL_TEXT
 SourcesFor = Callable[..., Mapping[str, SourceFactory]]
 PACK = ML_BENCHMARK_V1

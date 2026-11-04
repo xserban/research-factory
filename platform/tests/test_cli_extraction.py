@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from factory.cli.main import app
@@ -19,6 +20,8 @@ from tests.test_extraction_agreement import (  # noqa: F401
     screened,
     world,
 )
+
+pytestmark = pytest.mark.slow  # over ~60 s per file: dev runs deselect with -m "not slow"
 
 runner = CliRunner()
 

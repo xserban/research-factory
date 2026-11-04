@@ -36,6 +36,8 @@ from tests.test_extraction_agreement import (  # noqa: F401
     world,
 )
 
+pytestmark = pytest.mark.slow  # over ~60 s per file: dev runs deselect with -m "not slow"
+
 CH = Channel.CLI
 MISSING = "xau_01HZZZZZZZZZZZZZZZZZZZZZZZ"
 

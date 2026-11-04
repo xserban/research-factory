@@ -60,6 +60,8 @@ from tests.test_fulltext_service import _include_all, always, retrieved, routes_
 from tests.test_prisma import _merge_items
 from tests.test_screening_next import _decide, _draw
 
+pytestmark = pytest.mark.slow  # over ~60 s per file: dev runs deselect with -m "not slow"
+
 SourcesFor = Callable[..., Mapping[str, SourceFactory]]
 MODES = (RigorMode.EXPLORATORY, RigorMode.PILOT, RigorMode.SYSTEMATIC)
 SEED_DOI = "10.1000/p7"

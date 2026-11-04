@@ -44,6 +44,8 @@ from tests.test_extraction_next import FIELDS, SESSION_A, SESSION_B, _declare, _
 from tests.test_extraction_record import _amend_schema, _claim, _events, _row
 from tests.test_fulltext_service import StubRoute, always, retrieved
 
+pytestmark = pytest.mark.slow  # over ~60 s per file: dev runs deselect with -m "not slow"
+
 FT = ScreeningStage.FULL_TEXT
 SourcesFor = Callable[..., Mapping[str, SourceFactory]]
 LATENCY = FieldInput(value="1", anchor="t1", cell="t1.r3.c2", quote="1")

@@ -50,6 +50,8 @@ from tests.test_extraction_agreement import _both, _declare, _r, _run, _same_row
 from tests.test_extraction_next import SESSION_A, SESSION_B, _extractor
 from tests.test_extraction_record import _amend_schema, _claim
 
+pytestmark = pytest.mark.slow  # over ~60 s per file: dev runs deselect with -m "not slow"
+
 FT = ScreeningStage.FULL_TEXT
 SourcesFor = Callable[..., Mapping[str, SourceFactory]]
 MODES = (RigorMode.EXPLORATORY, RigorMode.PILOT, RigorMode.SYSTEMATIC)
