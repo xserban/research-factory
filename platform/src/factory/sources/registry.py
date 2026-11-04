@@ -13,6 +13,8 @@ from factory.model.search import QueryKind
 from factory.sources.arxiv import ArxivSource
 from factory.sources.base import Source
 from factory.sources.http import default_http
+from factory.sources.importlist import NAME as IMPORTLIST
+from factory.sources.importlist import ImportlistReader, ImportlistSource
 from factory.sources.openalex import OpenAlexSource
 from factory.sources.reflist import NAME as REFLIST
 from factory.sources.reflist import EntryReader, ReflistSource
@@ -40,6 +42,7 @@ INTERFACES: dict[str, str] = {
     "openalex": "OpenAlex REST API (api.openalex.org/works)",
     "arxiv": "arXiv API (export.arxiv.org/api/query)",
     REFLIST: "Stored reference entries of the included documents (offline)",
+    IMPORTLIST: "Stored records of an imported library export (offline)",
 }
 
 
@@ -51,6 +54,17 @@ def reflist_factory(read: EntryReader) -> SourceFactory:
     """
     return SourceFactory(
         ReflistSource.kinds, lambda _settings, clock: ReflistSource(read, clock=clock)
+    )
+
+
+def importlist_factory(read: ImportlistReader) -> SourceFactory:
+    """The offline `importlist` source over one project's stored import records.
+
+    Like `reflist` it is not in `default_sources`: its reader is bound to a project, so the
+    admission service builds it for the import it runs (`services.import_admit`).
+    """
+    return SourceFactory(
+        ImportlistSource.kinds, lambda _settings, clock: ImportlistSource(read, clock=clock)
     )
 
 

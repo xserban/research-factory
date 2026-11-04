@@ -571,6 +571,7 @@ def search_authorization(
     round_id: str | None = None,
     supplied_by: SubmitterKind | None = None,
     cycle_id: str | None = None,
+    import_id: str | None = None,
 ) -> list[ValidationIssue]:
     """Why a query may not run under the protocol. Empty when it may, or when it is not gated.
 
@@ -594,9 +595,15 @@ def search_authorization(
     A window query of a watch (slice 4b, ruling 3) is planned by its cycle: it is waived when
     `cycle_id` names an open cycle of the current protocol that runs `spec.source` as a window
     and `spec` is a planned query plus that cycle's `listed_since` date, nothing more.
+
+    An `import` query (slice 3d, ruling 22) is authorised only through `import_id`, the import
+    whose recorded admission planned this source, kind and text, in every rigour mode. That plan
+    waives the planned-queries rule like a snowball round does; the readiness, question and PRESS
+    checks still hold.
     """
+    import_issues = _import_issues(project, spec, import_id)
     if spec.purpose is QueryPurpose.PROBE or _rigor_mode(project) not in _RIGOR_MODES_GATED:
-        return []
+        return import_issues
     current = current_protocol(project)
     if current is None:
         return [ValidationIssue("protocol", "record and ready a protocol before searching")]
@@ -628,11 +635,39 @@ def search_authorization(
         and not _chase_round_waives(project, spec, pending_round_texts, round_id)
         and not _supplied_waives(current.spec, spec, supplied_by)
         and not _cycle_waives(project, current, spec, cycle_id)
+        and not (spec.purpose is QueryPurpose.IMPORT and not import_issues)
     ):
         issues.append(
             ValidationIssue("query", "not planned by the current protocol; record a deviation")
         )
-    return issues
+    return issues + import_issues
+
+
+def _import_issues(
+    project: Project, spec: QuerySpec, import_id: str | None
+) -> list[ValidationIssue]:
+    """Why an `import` query is not planned by an admission; empty for any other purpose."""
+    if spec.purpose is not QueryPurpose.IMPORT:
+        return []
+    if import_id is None:
+        return [
+            ValidationIssue(
+                "import_id", "an import query names the import whose admission planned it"
+            )
+        ]
+    with project.index.connect() as conn:
+        planned = conn.execute(
+            text(
+                "SELECT 1 FROM import_admission_queries WHERE import_id = :i AND source = :s "
+                'AND kind = :k AND "text" = :t LIMIT 1'
+            ),
+            {"i": import_id, "s": spec.source, "k": spec.kind.value, "t": spec.text},
+        ).first()
+    if planned is None:
+        return [
+            ValidationIssue("import_id", f"{import_id}: no recorded admission plans this query")
+        ]
+    return []
 
 
 def _cycle_waives(
@@ -823,6 +858,11 @@ def _registered_ref(project: Project, query_id: str, table: str, column: str) ->
 def registered_cycle(project: Project, query_id: str) -> str | None:
     """The watch cycle a registered query names in its `query.registered` refs, or None."""
     return _registered_ref(project, query_id, "watch_cycles", "cycle_id")
+
+
+def registered_import(project: Project, query_id: str) -> str | None:
+    """The import a registered query names in its `query.registered` refs, or None."""
+    return _registered_ref(project, query_id, "imports", "import_id")
 
 
 def registered_round(project: Project, query_id: str) -> str | None:

@@ -63,6 +63,7 @@ class ProvenanceMethod(StrEnum):
     SEED_ADMISSION = "seed-admission"
     HAND_SEARCH = "hand-search"
     SUPPLIED = "supplied"
+    LIBRARY_IMPORT = "library-import"
 
 
 class Identifiers(_WorkModel):

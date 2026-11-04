@@ -35,6 +35,7 @@ from factory.imports.model import (
     ImportFormat,
     ImportFormatError,
     ImportRecord,
+    ImportRole,
     ParsedImport,
     ParseOutcome,
 )
@@ -43,7 +44,6 @@ from factory.model.base import StrictModel
 from factory.model.imports import (
     MAX_COLLECTION,
     ImportRecorded,
-    ImportRole,
     ImportSplitDrawn,
     SplitMode,
 )

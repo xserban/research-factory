@@ -84,6 +84,7 @@ def register_query(
     round_id: str | None = None,
     cycle_id: str | None = None,
     inbox_item: str | None = None,
+    import_id: str | None = None,
 ) -> str:
     """Record a query as the caller stated it. Writes nothing if the spec does not fit.
 
@@ -98,6 +99,9 @@ def register_query(
 
     `cycle_id` names the open watch cycle (`wcy_`) that plans a window query (slice 4b, ruling 3);
     it takes the last ref as `round_id` does, and a query names a round or a cycle, not both.
+
+    `import_id` names the import (`imp_`) whose recorded admission planned an `import`-purpose
+    query (slice 3d); it is the last ref, and only such a query may name it.
     """
     # Imported here: the protocol service reads seeds, which read this module.
     from factory.services import protocol as protocol_service
@@ -125,7 +129,12 @@ def register_query(
             round_id=round_id,
             cycle_id=cycle_id,
             supplied_by=supplied_by,
+            import_id=import_id,
         )
+        if import_id is not None and spec.purpose is not QueryPurpose.IMPORT:
+            issues.append(
+                ValidationIssue("import_id", "only an import-purpose query names an import")
+            )
         if issues:
             raise FactoryValidationError(issues)
         query_id = project.ids.new("qry")
@@ -142,6 +151,7 @@ def register_query(
         refs += () if inbox_item is None else (inbox_item,)
         refs += () if round_id is None else (round_id,)
         refs += () if cycle_id is None else (cycle_id,)
+        refs += () if import_id is None else (import_id,)
         project.record(
             [
                 project.events.make(
@@ -207,6 +217,7 @@ def run_query(
             round_id=protocol_service.registered_round(project, query_id),
             cycle_id=protocol_service.registered_cycle(project, query_id),
             supplied_by=_registered_submitter(project, query_id),
+            import_id=protocol_service.registered_import(project, query_id),
         )
         if gate:
             raise FactoryValidationError(gate)

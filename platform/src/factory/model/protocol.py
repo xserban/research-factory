@@ -19,6 +19,7 @@ from typing import Annotated, Any, Literal, Self
 from pydantic import Field, JsonValue, StringConstraints, field_validator, model_validator
 
 from factory.canonical import canonical_json
+from factory.imports.model import ImportFormat, ImportRole
 from factory.model.base import StrictModel
 from factory.model.identity import ULID_RE
 from factory.model.question import QUESTION_ID_RE
@@ -52,6 +53,7 @@ _SORT_KEYS: dict[str, tuple[str, ...]] = {
     "sources": ("name",),
     "queries": ("source", "kind", "text"),
     "limits": ("field", "value"),
+    "library_sources": ("name", "format", "role"),
 }
 _SEARCH_STRATEGY_KEYS = ("sources", "queries", "limits")
 _OMITTED_WHEN_NONE = frozenset(
@@ -62,6 +64,7 @@ _OMITTED_WHEN_NONE = frozenset(
         "contribution_schema",
         "supplied_links",
         "watch_plan",
+        "library_sources",
     }
 )
 """Optional sections left out of every hash while unset, so protocols that predate them keep
@@ -234,6 +237,16 @@ class SuppliedLinksPlan(StrictModel):
         return tuple(sorted(value))
 
 
+class LibrarySource(StrictModel):
+    """A library the protocol declares (slice 3d, ruling 20): the collection `name` (`default`
+    when the export names none), the export `format` and its `role`. An import is admitted as
+    corpus only when an entry with its collection and format has role `corpus`."""
+
+    name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=120)]
+    format: ImportFormat
+    role: ImportRole
+
+
 class ProtocolSpec(StrictModel):
     """The protocol as an agent or a human states it. Keys are unique within each list."""
 
@@ -258,7 +271,18 @@ class ProtocolSpec(StrictModel):
     watch_plan: WatchPlan | None = None
     """The living-corpus watch (slice 4b). Absent (None) until declared; left out of the hash
     while unset, and never part of `S@`."""
+    library_sources: tuple[LibrarySource, ...] | None = None
+    """The libraries imported as corpus or reference (slice 3d). Absent (None) until declared;
+    left out of the hash while unset, so protocols that predate it keep their versions."""
     rationale: str = ""
+
+    @model_validator(mode="after")
+    def _library_sources_unique(self) -> Self:
+        if self.library_sources is not None:
+            keys = [(s.name, s.format) for s in self.library_sources]
+            if len(set(keys)) != len(keys):
+                raise ValueError("library_sources must not repeat a (name, format)")
+        return self
 
 
 def strip_prose(value: JsonValue) -> JsonValue:
@@ -307,6 +331,7 @@ AMENDABLE_FIELDS = (
     "contribution_schema",
     "supplied_links",
     "watch_plan",
+    "library_sources",
 )
 """Top-level hashed fields other than criteria, which an amendment reports as `other_changes`."""
 

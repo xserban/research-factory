@@ -48,6 +48,7 @@ _METHODS: dict[QueryPurpose, ProvenanceMethod] = {
     QueryPurpose.CHASE: ProvenanceMethod.CITATION_CHASE,
     QueryPurpose.SEED: ProvenanceMethod.SEED_ADMISSION,
     QueryPurpose.SUPPLIED: ProvenanceMethod.SUPPLIED,
+    QueryPurpose.IMPORT: ProvenanceMethod.LIBRARY_IMPORT,
 }
 
 _SKIPPED = "records skipped (untitled or duplicate within run)"

@@ -25,6 +25,7 @@ from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 
 from factory.errors import ValidationIssue
+from factory.imports.model import ImportFormat, ImportRole
 from factory.model.project import RigorMode
 from factory.model.protocol import (
     AMENDABLE_FIELDS,
@@ -589,3 +590,31 @@ def _reviewer_gaps(spec: ProtocolSpec) -> list[ValidationIssue]:
     if records[0].kind != "human":
         return [ValidationIssue("screening.reviewers", "the reviewer-of-record must be human")]
     return []
+
+
+DEFAULT_LIBRARY = "default"
+LIBRARY_UNDECLARED = "library-undeclared"
+
+
+def library_source_gaps(
+    spec: ProtocolSpec, collection: str | None, format: ImportFormat
+) -> list[ValidationIssue]:
+    """`library-undeclared` unless `library_sources` has an entry with the import's collection
+    (`default` when it names none) and format whose role is `corpus` (slice 3d, ruling 20).
+
+    The caller decides what the gap means: a refusal in `pilot` and `systematic`, a reported
+    promotion gap in `exploratory`.
+    """
+    name = collection or DEFAULT_LIBRARY
+    declared = any(
+        s.name == name and s.format is format and s.role is ImportRole.CORPUS
+        for s in spec.library_sources or ()
+    )
+    if declared:
+        return []
+    return [
+        ValidationIssue(
+            "library_sources",
+            f"{LIBRARY_UNDECLARED}: no corpus entry for collection {name!r} in {format.value}",
+        )
+    ]

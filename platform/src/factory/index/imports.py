@@ -36,6 +36,7 @@ from factory.events.envelope import Event
 from factory.imports.model import ImportRecord
 from factory.index.projection import Handler
 from factory.model.imports import (
+    ImportAdmissionPlanned,
     ImportRecorded,
     ImportResolutionDecided,
     ImportResolved,
@@ -55,6 +56,7 @@ class ImportTables:
     imports: Table
     records: Table
     decisions: Table
+    admission_queries: Table
 
 
 def import_tables(metadata: MetaData) -> ImportTables:
@@ -122,7 +124,19 @@ def import_tables(metadata: MetaData) -> ImportTables:
     )
     Index("ix_import_records_doi", records.c.doi)
     Index("ix_import_records_arxiv", records.c.arxiv)
-    return ImportTables(imports, records, decisions)
+    admission_queries = Table(
+        "import_admission_queries",
+        metadata,
+        Column("event_id", String, primary_key=True),
+        Column("position", Integer, primary_key=True),
+        Column("import_id", String, nullable=False),
+        Column("source", String, nullable=False),
+        Column("kind", String, nullable=False),
+        Column("text", String, nullable=False),
+        Column("record_keys", String, nullable=False),
+        Index("ix_import_admission_queries_import", "import_id"),
+    )
+    return ImportTables(imports, records, decisions, admission_queries)
 
 
 def import_handlers(t: ImportTables, blobs: BlobStore | None) -> dict[str, Handler]:
@@ -131,6 +145,7 @@ def import_handlers(t: ImportTables, blobs: BlobStore | None) -> dict[str, Handl
         "import.split_drawn": _split_drawn(t, blobs),
         "import.resolved": _resolved(t),
         "import.resolution_decided": _decided(t),
+        "import.admission_planned": _admission_planned(t),
     }
 
 
@@ -226,6 +241,29 @@ def _resolved(t: ImportTables) -> Handler:
             )
 
     return resolved
+
+
+def _admission_planned(t: ImportTables) -> Handler:
+    """Each planned query of an admission, in order; the event id makes each admission distinct."""
+
+    def planned(conn: Connection, event: Event) -> None:
+        p = ImportAdmissionPlanned.model_validate(event.payload)
+        for position, q in enumerate(p.queries):
+            conn.execute(
+                sqlite_insert(t.admission_queries)
+                .values(
+                    event_id=event.id,
+                    position=position,
+                    import_id=p.import_id,
+                    source=q.source,
+                    kind=q.kind.value,
+                    text=q.text,
+                    record_keys=canonical_json(list(q.record_keys)).decode(),
+                )
+                .on_conflict_do_nothing(index_elements=["event_id", "position"])
+            )
+
+    return planned
 
 
 def _decided(t: ImportTables) -> Handler:

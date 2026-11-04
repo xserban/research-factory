@@ -45,6 +45,13 @@ class ImportFormat(StrEnum):
     PDFS = "pdfs"
 
 
+class ImportRole(StrEnum):
+    """What an import is for: `reference` stays outside the corpus, `corpus` is admitted."""
+
+    REFERENCE = "reference"
+    CORPUS = "corpus"
+
+
 class ParseOutcome(StrEnum):
     PARSED = "parsed"
     NO_TITLE_NO_IDENTIFIER = "no-title-no-identifier"

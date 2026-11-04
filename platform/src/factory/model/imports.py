@@ -10,12 +10,11 @@ Invariants:
 
 from __future__ import annotations
 
-from enum import StrEnum
 from typing import Annotated, Literal, Self
 
 from pydantic import Field, StringConstraints, model_validator
 
-from factory.imports.model import ImportFormat, ParseOutcome
+from factory.imports.model import ImportFormat, ImportRole, ParseOutcome
 from factory.model.base import StrictModel
 from factory.model.chase import WorkId
 from factory.model.identity import BLOB_REF_RE, ULID_RE
@@ -30,6 +29,7 @@ from factory.model.references import (
     VersionLabel,
 )
 from factory.model.screening import NonBlank
+from factory.model.search import QueryKind
 from factory.model.work import RUN_ID_RE
 
 IMPORT_ID_RE = rf"^imp_{ULID_RE}$"
@@ -37,11 +37,6 @@ RECORD_KEY_RE = rf"^imp_{ULID_RE}:[1-9][0-9]*$"
 MAX_COLLECTION = 120
 
 SplitMode = Literal["drawn", "post-search", "declined"]
-
-
-class ImportRole(StrEnum):
-    REFERENCE = "reference"
-    CORPUS = "corpus"
 
 
 class ImportRecorded(StrictModel):
@@ -135,3 +130,28 @@ class ImportResolutionDecided(StrictModel):
         if self.decision in (Decision.CONFIRM, Decision.PROPOSE_CONFIRM) and self.work_id is None:
             raise ValueError("a confirmation names its work")
         return self
+
+
+RecordKey = Annotated[str, StringConstraints(pattern=RECORD_KEY_RE)]
+MAX_PLANNED_TEXT = 2_000
+
+
+class PlannedImportQuery(StrictModel):
+    """One query an admission plans: the source, kind and text as they will be registered, and
+    the record keys it names (for the search report and the trace)."""
+
+    source: Annotated[str, StringConstraints(min_length=1, max_length=40)]
+    kind: QueryKind
+    text: Annotated[str, StringConstraints(min_length=1, max_length=MAX_PLANNED_TEXT)]
+    record_keys: tuple[RecordKey, ...] = ()
+
+
+class ImportAdmissionPlanned(StrictModel):
+    """The queries that admit an import's records, written before any of them is registered.
+
+    A query is authorised as an `import`-purpose query only when it appears here, for the import
+    that names it (`register_query(..., import_id=...)`).
+    """
+
+    import_id: str = Field(pattern=IMPORT_ID_RE)
+    queries: tuple[PlannedImportQuery, ...] = Field(min_length=1)

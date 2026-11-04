@@ -16,13 +16,12 @@ from factory.clock import Clock, SystemClock
 from factory.config import Settings
 from factory.document.registry import default_converters
 from factory.errors import FactoryValidationError, ProjectNotFoundError, ValidationIssue
-from factory.imports.model import ImportFormat
+from factory.imports.model import ImportFormat, ImportRole
 from factory.mcp.conventions import parse_routes
 from factory.mcp.server import run
 from factory.model.chase import ChaseDirection
 from factory.model.fulltext import Route
 from factory.model.identity import IdGenerator
-from factory.model.imports import ImportRole
 from factory.model.project import RigorMode
 from factory.model.protocol import ScreeningStage
 from factory.model.references import Decision, Direction, LinkState

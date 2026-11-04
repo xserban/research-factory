@@ -25,13 +25,15 @@ class QueryKind(StrEnum):
 
 
 class QueryPurpose(StrEnum):
-    """Why a query is being run: a probe, a search, a citation chase, a seed or a supplied link."""
+    """Why a query is being run: a probe, a search, a citation chase, a seed, a supplied link
+    or an imported library."""
 
     PROBE = "probe"
     SEARCH = "search"
     CHASE = "chase"
     SEED = "seed"
     SUPPLIED = "supplied"
+    IMPORT = "import"
 
 
 class RunStatus(StrEnum):
