@@ -4,6 +4,8 @@
 
 > **Status: ready — rulings adopted 2026-11-04; depends on G1 (slice 3a) being built.** G1 ruling 14 is adopted as option (b): the local-library scan of Task 3 allows in events the parsed reference fields and `entry_sha256` (no raw entry text), plus verified quotes and marker tokens.
 
+> **Reconciled with the code 2026-11-04 (overnight).** Consumes G2-A–D per their reconciled plan texts and G1 Task 8 per the reconciled G1 plan (not yet built). Changes: the check severity table is `LEVELS` and the agent-view rate filter `_RATE_CODES` (`services/check.py`); the G1 trace kinds are named (`reference_extraction` for `rex_…`, `snowball_round` for `snw_…`, pinned in G1 Task 8); G2-D is read through `graph_node` / `iter_edges` (no whole-graph load); the acceptance module is marked `slow`.
+
 > **Dependencies.** G2-A to G2-D merged (Interfaces consumed exactly); G1 merged, including its `check` and `trace` extensions (`rex_`, `snw_` node kinds). Task 4 needs the linear-attention pilot project with G1 extraction run and the researcher available.
 
 **Goal:** Close slice 3b: `check` reports missing, stale and unconfirmed lineage items, `trace` resolves any edge to the question, the evidence table is proven untouched by contribution rows, the spec's acceptance criteria run as one test module, and the pilot reads a sourced lineage path.
@@ -20,7 +22,7 @@ Rulings marked **[adopted 2026-11-04]** were Adopted 2026-11-04 (researcher's st
 
 1. **Finding severities (exploratory, pilot, systematic). [adopted 2026-11-04]** `contribution-missing-extraction` (warning, warning, error); `contribution-stale` (warning ×3); `contribution-schema-missing` (none, warning, error; raised only when the project has a G1 extraction or any `relation.*`/`idea.*` event); `relation-stale` (warning ×3); `relation-unconfirmed` (warning ×3, advisory, one finding with the count); `relation-uncited-base` (warning ×3); `relation-without-basis` (error ×3); `idea-unconfirmed` (warning ×3); `graph-extraction-missing` (warning ×3); `contribution-error-ceiling` (none, warning, error; the agent view states no rate, as `extraction-error-high`).
 2. **Definitions.** `contribution-missing-extraction`: a population work whose pass-A contribution unit is not `current`. `contribution-stale`: works with live contribution rows in `stale_extractions(scope=CONTRIBUTION)`. `relation-stale`: live relations with effective `stale`. `relation-uncited-base`: live, not rejected relations flagged `uncited-base`. `relation-without-basis`: a live relation with proposal status `stated` or a `confirm` decision whose `basis_item` names no recorded contribution row, or whose (`reference_extraction_id`, `cited_entry`) has no `reference_links` row (a broken chain, only constructible by writing events outside the services). `idea-unconfirmed`: live ideas in state `proposed`. `graph-extraction-missing`: works with live contribution items and no current G1 extraction on the pinned conversion. `contribution-error-ceiling`: `contribution_audit_report(...).above_ceiling`. Refs are work, relation or idea ids; messages never carry document text.
-3. **Trace node kinds.** `relation` (`rel_…`), `idea` (`ida_…`), `cites` (`cit:<rex_id>:<ordinal>`), and `quote` (`<ext_id>/quote`, the verified quote of a contribution row as its label). Back from a relation: the decision (in the relation's label: proposal status, decision, effective status), the basis `extraction` node (plan D: anchor → conversion → document → retrieval attempt → work → screening decisions → protocol → question) with its `quote` child, the G1 extraction `rex_…` (G1 kind) for `cited_entry`, the source work and the target (work or idea). Forward from an `extraction` node: relations using it as basis and ideas using it as `name_item`. Back from an idea: its `name_item`, origin, members and merges. `trace` and `agent_trace` stay refused to pass sessions.
+3. **Trace node kinds.** `relation` (`rel_…`), `idea` (`ida_…`), `cites` (`cit:<rex_id>:<ordinal>`), and `quote` (`<ext_id>/quote`, the verified quote of a contribution row as its label). Back from a relation: the decision (in the relation's label: proposal status, decision, effective status), the basis `extraction` node (plan D: anchor → conversion → document → retrieval attempt → work → screening decisions → protocol → question) with its `quote` child, the G1 extraction `rex_…` (G1 kind `reference_extraction`) for `cited_entry`, the source work and the target (work or idea). Forward from an `extraction` node: relations using it as basis and ideas using it as `name_item`. Back from an idea: its `name_item`, origin, members and merges. `trace` and `agent_trace` stay refused to pass sessions.
 
 ## Global Constraints
 
@@ -28,7 +30,7 @@ Rulings marked **[adopted 2026-11-04]** were Adopted 2026-11-04 (researcher's st
 - No document text in any finding, trace label (except the `quote` node's verified quote, already in events) or pilot record.
 - The pilot record holds ids, statuses and computed counts only; no literature text enters any tracked file; `docs/pilot/heldout-seeds.md` is never opened.
 - Every earlier acceptance module (slice 1, plans A–E, G1) passes unedited.
-- TDD for Tasks 1–3; `mypy --strict`, ruff; coverage >= 90% for `services/` and `model/`.
+- TDD for Tasks 1–3; `mypy --strict`, ruff; coverage >= 90% for `services/` and `model/`; `-m "not network and not slow"` during tasks; `tests/test_acceptance_lineage.py` is marked `slow` and run with `-m "not network"` in Task 3 Step 3.
 
 ## Review Focus
 
@@ -53,8 +55,8 @@ Rulings marked **[adopted 2026-11-04]** were Adopted 2026-11-04 (researcher's st
 **Files:** Modify `services/check.py`; Test `tests/test_lineage_check.py`.
 
 **Interfaces:**
-- Consumes: G2-A `unit_states(..., scope=)`, `stale_extractions(..., scope=)`, `scope_population`; G2-B `contribution_status`, `contribution_audit_report`, `contribution_item`, `reference_view`; G2-C `list_relations`, `list_ideas`, `EdgeStatus`; G1 `current_extraction`; existing `Finding`, `_Hit`, severity table, agent view.
-- Produces: the ten codes of ruling 1 with ruling 2's definitions, added to the severity table and the agent-view filter.
+- Consumes: G2-A `unit_states(..., scope=)`, `stale_extractions(..., scope=)`, `scope_population`; G2-B `contribution_status`, `contribution_audit_report`, `contribution_item`, `reference_view`; G2-C `list_relations`, `list_ideas`, `EdgeStatus`; G1 `current_extraction`; existing `Finding`, `_Hit`, `LEVELS` (severity per mode), `_RATE_CODES` and `agent_view` (`services/check.py`).
+- Produces: the ten codes of ruling 1 with ruling 2's definitions, added to `LEVELS`; `contribution-error-ceiling` added to `_RATE_CODES` (agent view states no rate, as `extraction-error-high`).
 
 - [ ] **Step 1: Tests.** `@pytest.mark.parametrize("code", LINEAGE_CODES) test_each_finding_in_constructed_case` (acceptance 17; each case built through the services except `relation-without-basis`, built by appending a `relation.proposed` event with an unknown `basis_item`); `test_severity_by_mode` (table above); `test_findings_carry_no_document_text`; `test_relation_unconfirmed_is_one_finding_with_count`; `test_untouched_project_has_no_lineage_findings` (Review Focus 1); `test_stale_is_not_broken_chain` (Review Focus 2); `test_agent_view_and_pass_session` (Review Focus 4); `test_existing_check_suites_unchanged` (run unedited).
 - [ ] **Step 2:** Run; FAIL. **Step 3:** Implement. **Step 4:** Tests; mypy; ruff. **Step 5:** Commit `feat(lineage): check findings`.
@@ -66,7 +68,7 @@ Rulings marked **[adopted 2026-11-04]** were Adopted 2026-11-04 (researcher's st
 **Files:** Modify `services/trace.py`; Test `tests/test_lineage_trace.py`.
 
 **Interfaces:**
-- Consumes: `TraceNode(id, kind, label, event_id, children)`, `KINDS`, `_PATTERNS`; G2-B `contribution_item`; G2-C `relation_view`, `idea_view`, `REL_ID_RE`, `IDEA_ID_RE`; G2-D `graph_edges` (for `cit:` ids); G1 trace kinds.
+- Consumes: `TraceNode(id, kind, label, event_id, children)`, `KINDS`, `_PATTERNS`, `_Walk` (`services/trace.py`); G2-B `contribution_item`; G2-C `relation_view`, `idea_view`, `REL_ID_RE`, `IDEA_ID_RE`; G2-D `graph_edges` (one indexed read by `edge_id` for `cit:` ids); G1 Task 8 trace kinds `reference_extraction` (`rex_…`) and `snowball_round` (`snw_…`).
 - Produces: kinds `relation`, `idea`, `cites`, `quote` in `KINDS` after `claim`; patterns for `rel_`, `ida_`, `cit:`; edges per ruling 3.
 
 - [ ] **Step 1: Tests.**
@@ -88,7 +90,7 @@ def test_labels_carry_no_text_except_quote_nodes(project): ...
 
 *Tier: Haiku implement; Sonnet reviews the separation and library-scan tests.*
 
-**Files:** Test `tests/test_acceptance_lineage.py`.
+**Files:** Test `tests/test_acceptance_lineage.py` (module marked `pytest.mark.slow`).
 
 - [ ] **Step 1: Tests**, one project built from hand-written documents with `b<n>` references (no network), one flow:
   `test_schema_before_reading` (1: `contribution_next` refused, then allowed after the amendment; a log without the section replays to the pinned `P@`); `test_quote_verification_partial_acceptance` (2); `test_number_check` (3); `test_not_stated_rules_and_count` (4); `test_cited_entry_rejected_and_mismatch_flagged` (5); `test_dual_extraction_agreement_resolution_audit` (6); `test_separation_from_evidence_table` (7: with an evidence schema and final `ml-benchmark` rows, `final_rows`, `grouped_rows`, `independence_counts`, `live_claims` and the rendered evidence report are byte-equal before and after recording, agreeing, resolving and auditing contribution units); `test_stated_rule` (8); `test_confirmation_human_only_and_default_views` (9); `test_edges_carry_basis` (10); `test_staleness_by_version_item_g1_and_amendment` (11); `test_ideas_quote_unconfirmed_merge_reversal` (12, export bytes equal before the merge and after the unmerge); `test_queries_on_constructed_graph` (13); `test_exports_status_basis_dashed_and_stable` (14); `test_rebuild_identical_graph_and_state_hash` (15); `test_trace_edge_to_question` (16); `test_check_findings` (17); `test_no_literature_text_outside_quotes` (Review Focus 5 and R-47: scan every event, blob and both export formats; allowed text = verified quotes, marker tokens and the parsed reference fields and `entry_sha256` of G1 ruling 14 (b)); `test_earlier_acceptance_suites_unchanged`.
