@@ -5,6 +5,16 @@ from factory.model.base import StrictModel
 from factory.model.chase import ChaseRoundStarted, SampleExtended, SeedAdmitted
 from factory.model.dedup import DedupMerged, DedupReverted
 from factory.model.document import ConversionFailed, Converted
+from factory.model.extraction import (
+    ClaimRecorded,
+    ExtractionAuditLabelled,
+    ExtractionAuditSampled,
+    ExtractionClosed,
+    ExtractionPassJoined,
+    ExtractionPassOpened,
+    ExtractionRecorded,
+    ExtractionResolved,
+)
 from factory.model.fulltext import Attempted, DocumentAdded, FetchStarted, SourceChanged
 from factory.model.probe import ProbeFailed, ProbeMeasured, ProbePageArchived
 from factory.model.project import ProjectCreated
@@ -120,6 +130,14 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("fulltext.attempted", Attempted, 1))
     catalog.register(EventType("fulltext.document_added", DocumentAdded, 1))
     catalog.register(EventType("fulltext.source_changed", SourceChanged, 1))
+    catalog.register(EventType("extraction.pass_opened", ExtractionPassOpened, 1))
+    catalog.register(EventType("extraction.pass_joined", ExtractionPassJoined, 1))
+    catalog.register(EventType("extraction.recorded", ExtractionRecorded, 1))
+    catalog.register(EventType("extraction.claim_recorded", ClaimRecorded, 1))
+    catalog.register(EventType("extraction.closed", ExtractionClosed, 1))
+    catalog.register(EventType("extraction.resolved", ExtractionResolved, 1))
+    catalog.register(EventType("extraction.audit_sampled", ExtractionAuditSampled, 1))
+    catalog.register(EventType("extraction.audit_labelled", ExtractionAuditLabelled, 1))
     catalog.register(EventType("document.converted", Converted, 1))
     catalog.register(EventType("document.conversion_failed", ConversionFailed, 1))
     return catalog
