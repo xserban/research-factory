@@ -62,13 +62,13 @@ from factory.model.extraction import (
 )
 from factory.model.protocol import ExtractionSchema, ProtocolStatus, ScreeningStage
 from factory.model.screening import Channel, PassLabel
-from factory.model.task import Task, TaskStatus
+from factory.model.task import Task, TaskCompleted, TaskStatus
 from factory.packs import FieldKind, Pack, get_pack
 from factory.services.agreement import Outcome, final_outcomes
 from factory.services.context import Project
 from factory.services.conversions import conversion_manifest
 from factory.services.document_read import default_conversion
-from factory.services.extraction_verify import verify_row_in
+from factory.services.extraction_verify import VALUE_FIELD, verify_row_in
 from factory.services.protocol import ProtocolVersion, current_protocol
 from factory.services.results import BatchResult, ItemError
 from factory.services.screening import _is_label_session
@@ -78,7 +78,6 @@ from factory.services.tasks import (
     TaskSpec,
     build_task_events,
     claim_next,
-    complete_task,
     get_task,
     require_holder,
     task_content,
@@ -550,10 +549,17 @@ def _batch(project: Project, task: Task) -> ExtractBatch:
 
 # --- Recording ---
 
+DUPLICATE_ROW = "a row for this location is already recorded; supersede it"
+"""Why a row whose row_key a live row (or an earlier row of the call) of its unit holds is
+rejected. Duplicate claims are not refused: a claim has no location key."""
+
 
 class ExtractionRow(StrictModel):
-    """A live recorded row as the projection holds it. Field values are the stored text, with
-    booleans restored by the field's kind."""
+    """A live recorded row as the projection holds it.
+
+    Warning: field values are stored as text (booleans are restored by the field's kind), so the
+    original int or float of a value is lost. Compare `canonical` for number fields and the
+    pack's normaliser for text fields, never `.value`."""
 
     extraction_id: str
     work_id: str
@@ -629,23 +635,27 @@ def extract_record(
 
     Refused, with nothing written, when the actor is not an agent (`actor`); the task is unknown,
     not held by this session or not an extraction task (`task_id`); the session does not extract
-    the task's pass (`pass`); the protocol or its extraction schema is no longer the one the task
-    served (`task_id`); a key of `supersedes` or `claim_supersedes` is not an index of the call
-    (that name); or `finish` would close a unit with no live row and no live claim without a
-    non-blank `reason` (`reason`).
+    the task's pass (`pass`); the current schema's pack, version or declared fields differ from
+    what the task served (`task_id`, ruling 12; any other amendment is accepted and the events
+    carry the current protocol id); a key of `supersedes` or `claim_supersedes` is not an index
+    of the call (that name); or `finish` would close a unit with no live row and no live claim
+    without a non-blank `reason` (`reason`).
 
     Otherwise each row is verified alone against the task's pinned conversion and each claim's
     quote is verified in its anchor's element like a field quote; an invalid item is an
     `ItemError` (issues located within the item, its index locating it) and is not written.
     Claims are rejected (`claims`) unless the schema enables them and the task is of pass A.
     `supersedes` maps a row index to the id of a live row of the same work and pass that the row
-    corrects; any other target, or one target named twice, rejects that row (`supersedes`).
-    Claims likewise with `claim_supersedes`. The valid rows and claims are appended in one write,
-    each event carrying the whole call's input as its input blob.
+    corrects; any other target, or one target an accepted row already corrects, rejects that row
+    (`supersedes`). A row whose row_key a live row of the unit holds (other than its own target),
+    or an earlier accepted row of the call, is rejected (`fields.value`, `DUPLICATE_ROW`). Claims
+    are superseded likewise with `claim_supersedes`; duplicate claims are not refused.
 
-    `finish` closes the unit only when no item of the call is rejected: it writes
-    `extraction.closed` with the computed live row and claim counts and completes the task with
-    the live row ids then the live claim ids (each sorted) as its results.
+    `finish` closes the unit only when no item of the call is rejected: `extraction.closed`, with
+    counts computed as the live items minus the superseded targets plus the accepted items, and
+    `task.completed`, with those row ids then claim ids (each sorted) as results. The rows,
+    claims, closure and completion are appended in one write; each extraction event carries the
+    whole call's input as its input blob, stored only when something is appended.
     """
     with project.index.exclusive():
         project.index.sync()
@@ -660,57 +670,72 @@ def extract_record(
                 [ValidationIssue("pass", f"this session does not extract pass {unit.label}")]
             )
         protocol, schema, pack = require_schema(project)
-        if unit.content.protocol_id != protocol.protocol_id or unit.content.schema_ref != (
-            f"{schema.pack}@{schema.pack_version}"
-        ):
-            raise FactoryValidationError(
-                [ValidationIssue("task_id", "the task's protocol version is no longer current")]
-            )
+        _require_same_schema(project, unit, schema, pack)
         row_targets = _targets(supersedes, len(rows), "supersedes")
         claim_targets = _targets(claim_supersedes, len(claims), "claim_supersedes")
         manifest = conversion_manifest(project, unit.conversion_id)
         corpus = {work.id for work in list_works(project)}
 
-        live = {r.extraction_id for r in live_rows(project, unit.label, work_id=unit.work_id)}
+        live_keys = {
+            r.extraction_id: r.row_key for r in live_rows(project, unit.label, work_id=unit.work_id)
+        }
         used: set[str] = set()
+        accepted_keys: set[str] = set()
         row_errors: list[ItemError] = []
         accepted_rows: list[_Row] = []
         for index, row in enumerate(rows):
+            target = row_targets.get(index)
             issues, verified = _row_issues(pack, schema, row, unit, manifest, corpus)
-            issues += _target_issues("supersedes", row_targets.get(index), live, used, "row")
+            issues += _target_issues("supersedes", target, set(live_keys), used, "row")
+            if not issues and verified is not None:
+                occupied = accepted_keys | {
+                    key for ident, key in live_keys.items() if ident not in used and ident != target
+                }
+                if verified[1] in occupied:
+                    issues.append(ValidationIssue(f"fields.{VALUE_FIELD}", DUPLICATE_ROW))
             if issues or verified is None:
                 row_errors.append(ItemError(index=index, issues=issues))
-            else:
-                accepted_rows.append(_Row(index, *verified))
+                continue
+            if target is not None:
+                used.add(target)
+            accepted_keys.add(verified[1])
+            accepted_rows.append(_Row(index, *verified))
 
         live_c = {c.claim_id for c in live_claims(project, unit.label, work_id=unit.work_id)}
         used_c: set[str] = set()
         claim_errors: list[ItemError] = []
         accepted_claims: list[tuple[int, ClaimInput]] = []
         for index, claim in enumerate(claims):
+            target = claim_targets.get(index)
             issues = _claim_issues(schema, unit, claim, manifest)
             if not issues:
-                issues = _target_issues(
-                    "claim_supersedes", claim_targets.get(index), live_c, used_c, "claim"
-                )
+                issues = _target_issues("claim_supersedes", target, live_c, used_c, "claim")
             if issues:
                 claim_errors.append(ItemError(index=index, issues=issues))
-            else:
-                accepted_claims.append((index, claim))
+                continue
+            if target is not None:
+                used_c.add(target)
+            accepted_claims.append((index, claim))
 
         closing = finish and not row_errors and not claim_errors
         reason = reason.strip() if reason is not None and reason.strip() else None
-        if closing and reason is None:
-            new_rows = sum(1 for r in accepted_rows if r.index not in row_targets)
-            new_claims = sum(1 for index, _ in accepted_claims if index not in claim_targets)
-            if len(live) + new_rows == 0 and len(live_c) + new_claims == 0:
-                raise FactoryValidationError(
-                    [
-                        ValidationIssue(
-                            "reason", "closing a unit with no row or claim needs a reason"
-                        )
-                    ]
-                )
+        # Live after this call: live before, minus the targets superseded, plus the new items.
+        remaining_rows = sorted(set(live_keys) - used)
+        remaining_claims = sorted(live_c - used_c)
+        if (
+            closing
+            and reason is None
+            and not (remaining_rows or accepted_rows or remaining_claims or accepted_claims)
+        ):
+            raise FactoryValidationError(
+                [ValidationIssue("reason", "closing a unit with no row or claim needs a reason")]
+            )
+        if not (accepted_rows or accepted_claims or closing):
+            return ExtractResult(
+                rows=BatchResult[str](written=[], rejected=row_errors),
+                claims=BatchResult[str](written=[], rejected=claim_errors),
+                completed=False,
+            )
 
         blob = project.blobs.put_json(
             {
@@ -732,7 +757,7 @@ def extract_record(
                 work_id=unit.work_id,
                 pass_label=unit.label,
                 task_id=task_id,
-                protocol_id=unit.content.protocol_id,
+                protocol_id=protocol.protocol_id,
                 schema_ref=unit.content.schema_ref,
                 document_id=unit.document_id,
                 conversion_id=unit.conversion_id,
@@ -755,7 +780,7 @@ def extract_record(
                 work_id=unit.work_id,
                 pass_label=unit.label,
                 task_id=task_id,
-                protocol_id=unit.content.protocol_id,
+                protocol_id=protocol.protocol_id,
                 document_id=unit.document_id,
                 conversion_id=unit.conversion_id,
                 statement=claim.statement,
@@ -776,10 +801,24 @@ def extract_record(
                 )
             )
             claim_ids.append(claim_id)
-        if events:
-            project.record(events)
         if closing:
-            _close(project, actor, unit, reason, blob)
+            events += _closing_events(
+                project,
+                actor,
+                task,
+                unit,
+                reason,
+                blob,
+                sorted([*remaining_rows, *row_ids]),
+                sorted([*remaining_claims, *claim_ids]),
+            )
+        project.record(events)
+        if closing:
+            done = get_task(project, task_id)
+            if done is None or done.status is not TaskStatus.COMPLETED:
+                raise FactoryValidationError(
+                    [ValidationIssue("task_id", "lease expired before the event was recorded")]
+                )
         return ExtractResult(
             rows=BatchResult[str](written=row_ids, rejected=row_errors),
             claims=BatchResult[str](written=claim_ids, rejected=claim_errors),
@@ -824,12 +863,12 @@ def _target_issues(
     name: str, target: str | None, live: set[str], used: set[str], what: str
 ) -> list[ValidationIssue]:
     """Why a correction may not supersede `target`: it must be a live item of the same work and
-    pass, named once per call. Marks the target used."""
+    pass, not already corrected by an accepted item of this call. The caller marks a target used
+    only when its item is accepted."""
     if target is None:
         return []
     if target in used:
         return [ValidationIssue(name, f"this {what} is already corrected in this call")]
-    used.add(target)
     if target not in live:
         return [ValidationIssue(name, f"is not a live {what} of this work and pass")]
     return []
@@ -884,10 +923,18 @@ def _loc_issues(exc: ValidationError) -> list[ValidationIssue]:
     ]
 
 
-def _close(project: Project, actor: Actor, unit: _Unit, reason: str | None, blob: str) -> None:
-    """Write `extraction.closed` with the computed live counts and complete the task."""
-    row_ids = sorted(r.extraction_id for r in live_rows(project, unit.label, work_id=unit.work_id))
-    claim_ids = sorted(c.claim_id for c in live_claims(project, unit.label, work_id=unit.work_id))
+def _closing_events(
+    project: Project,
+    actor: Actor,
+    task: Task,
+    unit: _Unit,
+    reason: str | None,
+    blob: str,
+    row_ids: list[str],
+    claim_ids: list[str],
+) -> list[Event]:
+    """`extraction.closed` with the computed live counts, and the task's completion with the live
+    row ids then claim ids as its results (the payload and input blob `complete_task` writes)."""
     closed = ExtractionClosed(
         work_id=unit.work_id,
         pass_label=unit.label,
@@ -896,14 +943,41 @@ def _close(project: Project, actor: Actor, unit: _Unit, reason: str | None, blob
         claims=len(claim_ids),
         reason=reason,
     )
-    project.record(
-        [
-            project.events.make(
-                "extraction.closed", closed, actor, refs=(unit.task_id,), input_blob=blob
-            )
-        ]
-    )
-    complete_task(project, actor, unit.task_id, [*row_ids, *claim_ids])
+    completed = TaskCompleted(task_id=unit.task_id, result_refs=(*row_ids, *claim_ids))
+    return [
+        project.events.make(
+            "extraction.closed", closed, actor, refs=(unit.task_id,), input_blob=blob
+        ),
+        project.events.make(
+            "task.completed",
+            completed,
+            actor,
+            refs=(unit.task_id,),
+            input_blob=task.content_blob,
+        ),
+    ]
+
+
+def _require_same_schema(
+    project: Project, unit: _Unit, schema: ExtractionSchema, pack: Pack
+) -> None:
+    """Refuse a stale task (ruling 12): the current schema's pack, version or declared fields
+    differ from what the task served. Any other amendment leaves the task valid."""
+    config = pass_config(project, unit.label)
+    order = "reversed" if unit.label is PassLabel.B else "schema"
+    if config is not None:
+        order = config.field_order
+    same_ref = unit.content.schema_ref == f"{schema.pack}@{schema.pack_version}"
+    if not same_ref or _fields(pack, schema, order) != unit.content.fields:
+        raise FactoryValidationError(
+            [
+                ValidationIssue(
+                    "task_id",
+                    "the extraction schema changed since this task was served; release the "
+                    "task and call extract_next for a task under the current schema",
+                )
+            ]
+        )
 
 
 # --- Reading recorded rows and claims ---

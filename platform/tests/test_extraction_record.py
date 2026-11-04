@@ -3,10 +3,10 @@
 The pinned conversion is the synthetic LaTeXML fixture: table `t1` has the row `Lorem | 1 | 2`
 under the header `Low | High`, and paragraph `s3.p1` reads "Lorem ipsum dolor sit amet."."""
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 
 import pytest
-from pydantic import ValidationError
+from pydantic import JsonValue, ValidationError
 
 from factory.errors import FactoryValidationError
 from factory.events.envelope import Actor, Event
@@ -39,7 +39,7 @@ from factory.services.protocol import amend_protocol, current_protocol
 from factory.services.tasks import TaskSpec, claim_next, complete_task, create_tasks, get_task
 from factory.sources.registry import SourceFactory
 from tests.test_acceptance_fulltext_screening import _screened_full_text_world
-from tests.test_extraction_next import SESSION_A, SESSION_B, _declare, _extractor
+from tests.test_extraction_next import FIELDS, SESSION_A, SESSION_B, _declare, _extractor
 
 FT = ScreeningStage.FULL_TEXT
 SourcesFor = Callable[..., Mapping[str, SourceFactory]]
@@ -129,8 +129,78 @@ def test_valid_rows_written_invalid_reported(
     assert res.rows.rejected[0].issues[0].field == "fields.value.value"
     assert sorted(_ids(live_rows(project, PassLabel.A))) == sorted(res.rows.written)
     assert res.completed is False
-    # all valid rows were written in one append
-    assert len({_event(project, i).ts for i in res.rows.written}) == 1
+
+
+def test_rows_claims_close_and_completion_in_one_append(
+    project: Project, ext_a: Actor, task_a: ExtractBatch, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[list[str]] = []
+    record = project.record
+
+    def spy(events: Sequence[Event]) -> None:
+        calls.append([e.type for e in events])
+        record(events)
+
+    monkeypatch.setattr(project, "record", spy)
+    res = extract_record(
+        project, ext_a, task_a.task_id, [_row(), _row("2", "t1.r3.c3")], [_claim()], finish=True
+    )
+    assert res.completed
+    assert calls == [
+        [
+            "extraction.recorded",
+            "extraction.recorded",
+            "extraction.claim_recorded",
+            "extraction.closed",
+            "task.completed",
+        ]
+    ]
+    task = get_task(project, task_a.task_id)
+    assert task is not None and task.status is TaskStatus.COMPLETED
+
+
+def test_no_blob_stored_when_nothing_is_appended(
+    project: Project, ext_a: Actor, task_a: ExtractBatch, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stored: list[object] = []
+    put = project.blobs.put_json
+
+    def spy(value: JsonValue) -> str:
+        stored.append(value)
+        return put(value)
+
+    monkeypatch.setattr(project.blobs, "put_json", spy)
+    res = extract_record(project, ext_a, task_a.task_id, [_row("abc")])
+    assert res.rows.written == [] and stored == []
+
+
+# --- Duplicate row keys ---
+
+DUPLICATE = "a row for this location is already recorded; supersede it"
+
+
+def test_duplicate_row_in_one_call_rejected(
+    project: Project, ext_a: Actor, task_a: ExtractBatch
+) -> None:
+    res = extract_record(project, ext_a, task_a.task_id, [_row(), _row()])
+    assert len(res.rows.written) == 1
+    assert [e.index for e in res.rows.rejected] == [1]
+    assert [(i.field, i.reason) for i in res.rows.rejected[0].issues] == [
+        ("fields.value", DUPLICATE)
+    ]
+
+
+def test_later_identical_row_needs_supersedes(
+    project: Project, ext_a: Actor, task_a: ExtractBatch
+) -> None:
+    (old_id,) = extract_record(project, ext_a, task_a.task_id, [_row()]).rows.written
+    res = extract_record(project, ext_a, task_a.task_id, [_row()])
+    assert res.rows.written == []
+    assert res.rows.rejected[0].issues[0].field == "fields.value"
+    (new,) = extract_record(
+        project, ext_a, task_a.task_id, [_row()], supersedes={0: old_id}
+    ).rows.written
+    assert _ids(live_rows(project, PassLabel.A)) == [new]
 
 
 def test_undeclared_field_rejects_row_only(
@@ -232,6 +302,23 @@ def test_two_rows_cannot_supersede_one_target(
     )
     assert len(res.rows.written) == 1
     assert [e.index for e in res.rows.rejected] == [1]
+
+
+def test_invalid_correction_does_not_use_up_its_target(
+    project: Project, ext_a: Actor, task_a: ExtractBatch
+) -> None:
+    (old_id,) = extract_record(project, ext_a, task_a.task_id, [_row()]).rows.written
+    res = extract_record(
+        project,
+        ext_a,
+        task_a.task_id,
+        [_row("abc"), _row("2", "t1.r3.c3")],
+        supersedes={0: old_id, 1: old_id},
+    )
+    assert [e.index for e in res.rows.rejected] == [0]
+    (new,) = res.rows.written
+    assert _event(project, new).payload["supersedes"] == old_id
+    assert _ids(live_rows(project, PassLabel.A)) == [new]
 
 
 def test_supersedes_index_out_of_range_refused(
@@ -428,12 +515,44 @@ def test_nothing_written_on_refusal(
     with pytest.raises(FactoryValidationError) as e:
         extract_record(project, ext_a, other, [_row()])
     assert e.value.issues[0].field == "task_id"
-    after_setup = len(_events(project))
-    # a stale task: the protocol changed after the task was served
-    _declare(project, agent, 0.5)
-    amended = len(_events(project))
+    assert len(_events(project)) - before == 2  # the misc task and its claim
+
+
+def _amend_schema(project: Project, agent: Actor, **update: object) -> str:
+    current = current_protocol(project)
+    assert current is not None and current.spec.extraction_schema is not None
+    schema = current.spec.extraction_schema.model_copy(update=update)
+    amend_protocol(
+        project,
+        agent,
+        current.spec.model_copy(update={"extraction_schema": schema}),
+        reason="amend the extraction schema",
+        semantic=True,
+        effects={},
+    )
+    amended = current_protocol(project)
+    assert amended is not None
+    return amended.protocol_id
+
+
+def test_field_set_change_makes_a_task_stale(
+    project: Project, agent: Actor, ext_a: Actor, task_a: ExtractBatch
+) -> None:
+    _amend_schema(project, agent, fields=tuple(f for f in FIELDS if f != "latency"))
+    before = len(_events(project))
     with pytest.raises(FactoryValidationError) as e:
         extract_record(project, ext_a, task_a.task_id, [_row()], finish=True)
     assert e.value.issues[0].field == "task_id"
-    assert len(_events(project)) == amended
-    assert after_setup - before == 2  # the misc task and its claim
+    assert "release" in e.value.issues[0].reason
+    assert len(_events(project)) == before
+
+
+def test_amendment_outside_the_schema_fields_still_records(
+    project: Project, agent: Actor, ext_a: Actor, task_a: ExtractBatch
+) -> None:
+    current_id = _amend_schema(project, agent, audit_minimum=60)
+    assert current_id != task_a.protocol_id
+    res = extract_record(project, ext_a, task_a.task_id, [_row()], [_claim()], finish=True)
+    assert res.completed and len(res.rows.written) == 1
+    for ident in [*res.rows.written, *res.claims.written]:
+        assert _event(project, ident).payload["protocol_id"] == current_id
