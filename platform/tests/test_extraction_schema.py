@@ -9,6 +9,7 @@ from pydantic import ValidationError
 
 from factory.errors import FactoryValidationError
 from factory.events.envelope import Actor
+from factory.events.reader import read_all
 from factory.model.project import RigorMode
 from factory.model.protocol import (
     ExtractionSchema,
@@ -120,6 +121,15 @@ def test_pilot_needs_fraction_systematic_needs_all() -> None:
     assert not _gap_fields(RigorMode.SYSTEMATIC, dual_extract_sample=None)
 
 
+def test_pilot_and_systematic_need_comparability_keys() -> None:
+    for mode in (RigorMode.PILOT, RigorMode.SYSTEMATIC):
+        assert "extraction_schema.comparability_keys" in _gap_fields(
+            mode, comparability_keys=(), dual_extract_sample=1.0
+        )
+        assert not _gap_fields(mode, dual_extract_sample=1.0)
+    assert not _gap_fields(RigorMode.EXPLORATORY, comparability_keys=())
+
+
 def test_audit_floors_apply_in_pilot_and_systematic_only() -> None:
     for mode in (RigorMode.PILOT, RigorMode.SYSTEMATIC):
         gaps = _gap_fields(mode, dual_extract_sample=1.0, audit_fraction=0.01, audit_minimum=10)
@@ -195,9 +205,11 @@ def test_amend_refuses_a_schema_the_pack_does_not_support(
     old = current_protocol(project)
     assert old is not None
     bad = old.spec.model_copy(update={"extraction_schema": _schema(fields=("bogus",))})
+    before = len(read_all(project.paths.events_dir, project.catalog))
     with pytest.raises(FactoryValidationError) as raised:
         amend_protocol(project, agent, bad, reason="bad", semantic=True, effects={})
     assert "extraction_schema.fields[0]" in [i.field for i in raised.value.issues]
+    assert len(read_all(project.paths.events_dir, project.catalog)) == before  # nothing written
 
 
 def test_old_amendment_event_validates_without_extraction_stale() -> None:

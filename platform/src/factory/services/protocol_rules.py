@@ -297,6 +297,12 @@ def _extraction_gaps(schema: ExtractionSchema | None, mode: RigorMode) -> list[V
         return []
     gaps: list[ValidationIssue] = []
     sample = schema.dual_extract_sample
+    if not schema.comparability_keys:
+        gaps.append(
+            ValidationIssue(
+                "extraction_schema.comparability_keys", "declare the comparability keys (R-45)"
+            )
+        )
     if mode is RigorMode.PILOT and sample is None:
         gaps.append(
             ValidationIssue(
