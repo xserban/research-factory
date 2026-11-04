@@ -208,3 +208,32 @@ def test_axis_not_declared_by_the_schema_gives_no_axis() -> None:
     assert "params" not in {a.axis for a in only_group(r).frontiers}
     r2 = assemble_report(replace(inputs, declared_fields=(*declared, "params")))
     assert "params" in {a.axis for a in only_group(r2).frontiers}
+
+
+def test_cost_fallback_scales_by_unit() -> None:
+    rows = [
+        frow("rf:w1", "rk_000000000101", "A", "80", params=ff("25", unit="M")),
+        frow("rf:w2", "rk_000000000201", "B", "81", params=ff("7", unit="furlong")),
+    ]
+    ax = axis(r_of(rows), "params")
+    assert [p.cost for p in ax.partitions[0].points] == ["25000000"]
+    assert ax.missing == {"cost-missing": ["rk_000000000201"]}
+
+
+def test_statement_when_no_row_has_a_numeric_metric() -> None:
+    rows = [frow("rf:w1", "rk_000000000101", "A", "n/a", params=cost("10"))]
+    ax = axis(r_of(rows), "params")
+    assert ax.missing == {"value-not-numeric": ["rk_000000000101"]}
+    assert ax.statement == "No independent row has a numeric metric value; no frontier is computed."
+
+
+def test_row_without_resolution_is_reported_and_kept() -> None:
+    keys = ("task", "dataset", "split", "metric", "pretraining_data")
+    rows = [
+        frow("rf:w1", "rk_000000000101", "A", "80", params=cost("10")),
+        frow("rf:w2", "rk_000000000201", "B", "81", resolution="384", params=cost("20")),
+    ]
+    del rows[0].fields["input_resolution"]
+    ax = axis(r_of(rows, keys=keys), "params")
+    assert ax.missing == {"resolution-missing": ["rk_000000000101"]}
+    assert [(p.resolution, len(p.points)) for p in ax.partitions] == [(None, 1), ("384x384", 1)]

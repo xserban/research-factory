@@ -37,7 +37,7 @@ from factory.extraction.numbers import canonical, normalise_for, normalise_text,
 from factory.model.base import StrictModel
 from factory.model.extraction import ClaimType, EvidenceType, ReportedIn, Strength
 from factory.model.screening import PassLabel
-from factory.packs import FieldKind, Pack, ReportSpec
+from factory.packs import FieldKind, Pack, ReportSpec, UnitFamily
 from factory.services.context import Project
 from factory.services.document_read import default_conversion
 from factory.services.extraction import (
@@ -674,6 +674,21 @@ def _decimal(f: FinalField) -> Decimal | None:
     return d if d is not None and d.is_finite() else None
 
 
+def _cost_decimal(f: FinalField, family: UnitFamily) -> Decimal | None:
+    """A cost's canonical number; without one, the printed number scaled by its unit. None when
+    the unit is outside the family's vocabulary or the number is not finite."""
+    if f.canonical is not None or isinstance(f.value, bool):
+        return _decimal(f)
+    printed = parse_printed(str(f.value))
+    if printed is None:
+        return None
+    try:
+        d = Decimal(canonical(printed, f.unit, family))
+    except (ValueError, InvalidOperation):
+        return None
+    return d if d.is_finite() else None
+
+
 def _plain(d: Decimal) -> str:
     return "0" if d == 0 else format(d.normalize(), "f")
 
@@ -703,6 +718,9 @@ def _frontiers(
             or (declared is not None and name not in declared)
         ):
             continue
+        cost_def = pack.field(name)
+        assert cost_def is not None
+        cost_family = cost_def.unit_family
         missing: dict[str, list[str]] = {}
         buckets: dict[tuple[str, str], list[Point]] = {}
         units: dict[tuple[str, str], str | None] = {}
@@ -715,7 +733,7 @@ def _frontiers(
             if field is None:
                 missing.setdefault("cost-missing", []).append(row.row_key)
                 continue
-            amount = _decimal(field)
+            amount = _cost_decimal(field, cost_family)
             if amount is None:
                 missing.setdefault("cost-missing", []).append(row.row_key)
                 continue
@@ -724,6 +742,8 @@ def _frontiers(
                 continue
             unit = row.fields[spec.value_field].unit
             resolution: str | None = None
+            if by_resolution and "input_resolution" not in row.fields:
+                missing.setdefault("resolution-missing", []).append(row.row_key)
             if by_resolution and "input_resolution" in row.fields:
                 res = row.fields["input_resolution"]
                 resolution = (
@@ -742,11 +762,14 @@ def _frontiers(
             _partition(units[b], b[1] or None, points, names, higher_is_better=higher_is_better)
             for b, points in sorted(buckets.items())
         ]
-        statement = (
-            None
-            if buckets or "cost-not-positive" in missing
-            else f"No independent row reports {name}; no frontier is computed."
-        )
+        statement: str | None = None
+        if not buckets and "cost-not-positive" not in missing:
+            if len(missing.get("value-not-numeric", [])) == len(own):
+                statement = (
+                    "No independent row has a numeric metric value; no frontier is computed."
+                )
+            else:
+                statement = f"No independent row reports {name}; no frontier is computed."
         axes.append(
             FrontierAxis(axis=name, partitions=partitions, missing=missing, statement=statement)
         )
