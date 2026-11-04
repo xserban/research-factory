@@ -1,0 +1,15 @@
+% synthetic bibliography, invented entries
+\begin{thebibliography}{2}
+
+\bibitem[Marrow et~al.(2016)Marrow, Vale, and Quill]{marrow2016}
+K.~Marrow, S.~Vale, and Q.~Quill.
+\newblock Layered gradient folding.
+\newblock \emph{NEURA}, 2016.
+\newblock \doi{10.1234/neura.2016.90}.
+
+\bibitem[{Quillfeather(2020)}]{quill2020}
+A.~Quillfeather.
+\newblock A lattice is worth sixteen tokens.
+\newblock arXiv preprint arXiv:2010.99999, 2020.
+
+\end{thebibliography}

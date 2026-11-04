@@ -1,0 +1,33 @@
+[
+  {
+    "text": "[12] K. Marrow et al. Layered gradient folding. NEURA 2016. doi:10.1234/NEURA.2016.90.",
+    "doi": "10.1234/neura.2016.90", "arxiv": null, "url": null, "year": 2016,
+    "first_author": "Marrow", "title": "Layered gradient folding", "venue": "NEURA"
+  },
+  {
+    "text": "A. Quillfeather. A lattice is worth sixteen tokens. arXiv:2010.99999v2, 2020.",
+    "doi": null, "arxiv": "2010.99999", "url": null, "year": 2020,
+    "first_author": "Quillfeather", "title": "A lattice is worth sixteen tokens", "venue": null
+  },
+  {
+    "text": "Thornbury, R., and Vale, S. (2019). Sparse kernels for tidal data. Journal of Imaginary Methods, 4(2), 11-30. https://doi.org/10.5555/jim.2019.004.",
+    "doi": "10.5555/jim.2019.004", "arxiv": null, "url": null, "year": 2019,
+    "first_author": "Thornbury", "title": "Sparse kernels for tidal data",
+    "venue": "Journal of Imaginary Methods, 4(2), 11-30"
+  },
+  {
+    "text": "7. Ostrander P, Lin Q. Moss growth under filtered light. Bryology Today. 2008;12:101-9. Available at https://example.org/moss/1234.",
+    "doi": null, "arxiv": null, "url": "https://example.org/moss/1234", "year": 2008,
+    "first_author": "Ostrander", "title": "Moss growth under filtered light", "venue": "Bryology Today"
+  },
+  {
+    "text": "Zed Brightwater, Ines Calloway, and Tomas Reyes. \"Counting reeds by echo.\" Proc. Fictional Acoustics Symposium, 2011.",
+    "doi": null, "arxiv": null, "url": null, "year": 2011,
+    "first_author": "Brightwater", "title": "Counting reeds by echo", "venue": "Proc. Fictional Acoustics Symposium"
+  },
+  {
+    "text": "H. Pelham. Old note on legacy archives. arXiv:hep-th/9901001, 1999.",
+    "doi": null, "arxiv": "hep-th/9901001", "url": null, "year": 1999,
+    "first_author": "Pelham", "title": "Old note on legacy archives", "venue": null
+  }
+]
