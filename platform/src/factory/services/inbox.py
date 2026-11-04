@@ -68,7 +68,13 @@ class LinkInput:
 
 @dataclass(frozen=True)
 class ResolveOutcome:
-    """What one resolve attempt did. `issues` is non-empty exactly when nothing was written."""
+    """What one resolve attempt did.
+
+    `status` is set when an `inbox.link_resolved` was written. When `issues` is non-empty no
+    resolution was written: with `run_id` None nothing at all was written (the item was refused
+    before its lookup); with `run_id` set the lookup's `query.registered` and run events were
+    written, but the item was closed (withdrawn or resolved elsewhere) while the run ran, so the
+    run stands in the log without a resolution."""
 
     item_id: str
     status: ResolveStatus | None
@@ -327,8 +333,12 @@ def _resolve_one(
     with project.index.exclusive():
         project.index.sync()
         if _status(project, item.item_id) != "open":
-            issue = ValidationIssue("item_id", "the item was closed while it was being resolved")
-            return ResolveOutcome(item_id=item.item_id, status=None, issues=[issue])
+            issue = ValidationIssue(
+                "item_id", "closed while its lookup ran; the query and run are recorded"
+            )
+            return ResolveOutcome(
+                item_id=item.item_id, status=None, run_id=run.run_id, issues=[issue]
+            )
         input_blob = (
             project.blobs.put_json({"item_id": item.item_id, "deviation_id": deviation_id})
             if actor.kind == "agent"

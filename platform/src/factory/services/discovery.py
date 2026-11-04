@@ -72,7 +72,11 @@ class WorkDiscovery(StrictModel):
 
 class DiscoveryReport(StrictModel):
     """Counts per level (`levels`): by first-surfaced route, by first surfacer's actor kind,
-    and route overlaps (`a+b` keys, works with more than one route, identified level)."""
+    and route overlaps (`a+b` keys, works with more than one route, identified level).
+
+    A first-surfaced count is not an only-through count: a work first surfaced by a link and
+    later found by a search counts under its link here, but not in the methods statement's
+    supplied-only figure (`supplied_only_included`)."""
 
     levels: tuple[str, ...]
     by_first_route: dict[Route, dict[str, int]]
@@ -272,6 +276,34 @@ def discovery_report(project: Project) -> DiscoveryReport:
         overlaps=_overlaps(records),
         totals=totals,
     )
+
+
+_SUPPLIED_KINDS: dict[Route, str] = {
+    Route.SUPPLIED_HUMAN: "human",
+    Route.SUPPLIED_AGENT: "agent",
+    Route.SUPPLIED_AGENT_KNOWLEDGE: "agent",
+}
+_SEARCH_FREE = frozenset({*_SUPPLIED_KINDS, Route.SEED_ADMISSION})
+"""Routes that are not a search: a work whose routes all lie here came without any search."""
+
+
+def supplied_only_included(project: Project) -> dict[str, int]:
+    """Included works (at the last declared stage) that came only through supplied links, by
+    submitter kind (R-39). A work counts when every route is supplied or seed admission and at
+    least one is supplied; any database, chase, snowball or hand-search route excludes it. A
+    work supplied by both kinds counts under `human`."""
+    protocol = current_protocol(project)
+    full_text = protocol is not None and protocol.spec.full_text_screening is not None
+    stage = ScreeningStage.FULL_TEXT if full_text else ScreeningStage.TITLE_ABSTRACT
+    included = _included(final_outcomes(project, stage=stage))
+    counts = {"human": 0, "agent": 0}
+    for record in discovery(project):
+        routes = set(record.routes)
+        supplied = routes & set(_SUPPLIED_KINDS)
+        if record.work_id in included and supplied and routes <= _SEARCH_FREE:
+            kind = "human" if Route.SUPPLIED_HUMAN in supplied else "agent"
+            counts[kind] += 1
+    return counts
 
 
 def _bump(counts: dict[str, int], level: str) -> None:

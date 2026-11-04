@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 from sqlalchemy import text
 
@@ -11,6 +13,7 @@ from factory.events.reader import read_all
 from factory.model.inbox import Basis, ResolveStatus
 from factory.model.screening import Channel, PassLabel
 from factory.model.work import ProvenanceMethod
+from factory.services import inbox as inbox_service
 from factory.services.calibration import is_pass_session
 from factory.services.context import Project
 from factory.services.dedup import canonical_works, dedup_run
@@ -337,3 +340,26 @@ def test_list_items_pages_and_validates(explore_project: Project, human: Actor) 
         list_items(explore_project, status="closed")
     with pytest.raises(FactoryValidationError):
         list_items(explore_project, cursor="x")
+
+
+def test_item_closed_mid_resolve_reports_the_written_run(
+    explore_project: Project, human: Actor, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The query and run are written before the item is found closed: the outcome says so."""
+    project = explore_project
+    [item_id] = capture(project, human, DOI_URL)
+    real_run = inbox_service.run_query
+
+    def run_then_withdraw(*args: Any, **kwargs: Any) -> Any:
+        summary = real_run(*args, **kwargs)
+        withdraw_link(project, human, item_id, "withdrawn meanwhile")
+        return summary
+
+    monkeypatch.setattr(inbox_service, "run_query", run_then_withdraw)
+    [outcome] = resolve(project, human, _keyed())
+
+    assert outcome.status is None
+    assert outcome.run_id is not None
+    [run_started] = _events(project, "search.run_started")
+    assert run_started.payload["run_id"] == outcome.run_id
+    assert _events(project, "inbox.link_resolved") == []

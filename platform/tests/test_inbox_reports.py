@@ -5,7 +5,9 @@ from __future__ import annotations
 from sqlalchemy import text
 
 from factory.events.envelope import Actor
+from factory.model.chase import ChaseDirection
 from factory.model.inbox import ResolveStatus
+from factory.services.chase import search_chase
 from factory.services.check import check
 from factory.services.context import Project
 from factory.services.dedup import dedup_run
@@ -18,7 +20,7 @@ from factory.services.protocol import record_deviation
 from factory.services.trace import TraceNode, agent_trace, trace
 from tests.helpers import SourcesFor, ready_protocol
 from tests.inbox_helpers import Keyed, accept_supplied, capture, link_item, resolve
-from tests.test_chase_service import _corpus, _settle
+from tests.test_chase_service import _citing, _corpus, _settle
 
 
 def _codes(project: Project) -> set[str]:
@@ -90,13 +92,40 @@ def test_methods_paragraph_matches_discovery(
     assert links is not None
     assert links.captured == {"human": 2, "agent": 0}
     assert links.resolved == {"human": 2, "agent": 0}
-    discovery = discovery_report(project)
-    assert links.included["human"] == discovery.by_first_route[Route.SUPPLIED_HUMAN]["ta-included"]
     assert links.included["human"] == 1
     rendered = render_methods(report)
     assert "Supplied links. Links captured: human 2, agent 0." in rendered
     assert "screeners did not see how a work was found" in rendered
     assert "central" not in rendered
+
+
+def test_methods_counts_only_supplied_included_works(
+    project: Project,
+    agent: Actor,
+    human: Actor,
+    other_session_human: Actor,
+    mock_sources: SourcesFor,
+) -> None:
+    """R-39: a link captured before a search route also finds the work is first surfaced by the
+    link, but the work did not come only through supplied links, so it is not counted."""
+    protocol_id = _corpus(project, agent, human, mock_sources)
+    capture(project, other_session_human, "10.2000/s1", "10.1000/c901")
+    deviation = record_deviation(project, human, description="Supplied link", reason="Colleague.")
+    keyed = Keyed(openalex={"doi:10.2000/s1": [link_item(1)], "doi:10.1000/c901": [_citing(901)]})
+    resolve(project, other_session_human, keyed, deviation_id=deviation)
+    _settle(project, agent, human, protocol_id)
+    search_chase(
+        project, human, [ChaseDirection.BACKWARD], sources=mock_sources(openalex=[_citing(901)])
+    )
+    dedup_run(project)
+
+    links = methods_report(project).supplied_links
+    assert links is not None
+    assert discovery_report(project).by_first_route[Route.SUPPLIED_HUMAN]["ta-included"] == 2
+    assert links.included == {"human": 1, "agent": 0}
+    assert "Included works that came only through supplied links: human 1" in render_methods(
+        methods_report(project)
+    )
 
 
 def test_methods_paragraph_absent_without_inbox(explore_project: Project) -> None:

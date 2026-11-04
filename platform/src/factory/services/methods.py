@@ -26,7 +26,7 @@ from factory.services.audit import audit_report
 from factory.services.calibration import calibration_status
 from factory.services.chase import chase_rounds
 from factory.services.context import Project
-from factory.services.discovery import FT_INCLUDED, TA_INCLUDED, Route, discovery_report
+from factory.services.discovery import supplied_only_included
 from factory.services.evidence_report import evidence_report
 from factory.services.extraction_agreement import agreement_overall
 from factory.services.extraction_audit import extraction_audit_report
@@ -48,8 +48,9 @@ _SUPPLIERS = ("human", "agent")
 
 
 class SuppliedLinks(StrictModel):
-    """Supplied links by submitter kind (slice 4a): captured, resolved, and included works first
-    surfaced by a supplied link (the discovery report's figure at the last included level)."""
+    """Supplied links by submitter kind (slice 4a): captured, resolved, and included works (last
+    declared stage) that came only through supplied links, R-39. The discovery report's
+    first-surfaced view is a different figure and is not used here."""
 
     captured: dict[str, int]
     resolved: dict[str, int]
@@ -243,8 +244,8 @@ def _rule(plan: SnowballPlan) -> str:
 
 
 def _supplied_links(project: Project) -> SuppliedLinks | None:
-    """Captured and resolved items by submitter kind, and included works first surfaced by a
-    supplied link, as the discovery report counts them. None when no link was captured."""
+    """Captured and resolved items by submitter kind, and included works that came only through
+    supplied links (R-39; `discovery.supplied_only_included`). None when no link was captured."""
     with project.index.connect() as conn:
         rows = conn.execute(
             text("SELECT actor_kind, status, COUNT(*) FROM inbox_items GROUP BY 1, 2")
@@ -257,20 +258,8 @@ def _supplied_links(project: Project) -> SuppliedLinks | None:
         captured[str(kind)] += int(count)
         if status == "resolved":
             resolved[str(kind)] += int(count)
-    report = discovery_report(project)
-    level = FT_INCLUDED if FT_INCLUDED in report.levels else TA_INCLUDED
-    included = dict.fromkeys(_SUPPLIERS, 0)
-    for route, counts in report.by_first_route.items():
-        if route in _SUPPLIED_ROUTES:
-            included[_SUPPLIED_ROUTES[route]] += counts[level]
+    included = supplied_only_included(project)
     return SuppliedLinks(captured=captured, resolved=resolved, included=included)
-
-
-_SUPPLIED_ROUTES = {
-    Route.SUPPLIED_HUMAN: "human",
-    Route.SUPPLIED_AGENT: "agent",
-    Route.SUPPLIED_AGENT_KNOWLEDGE: "agent",
-}
 
 
 def _extraction_sessions(project: Project) -> list[tuple[str, str]]:
@@ -558,7 +547,7 @@ def _supplied(links: SuppliedLinks) -> str:
     return (
         f"Supplied links. Links captured: {_counts(links.captured)}. "
         f"Links resolved: {_counts(links.resolved)}. "
-        f"Included works first surfaced by a supplied link: {_counts(links.included)}. "
+        f"Included works that came only through supplied links: {_counts(links.included)}. "
         "Supplied works were screened under the same protocol, criteria and passes as every "
         "other record; screeners did not see how a work was found."
     )

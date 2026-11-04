@@ -122,7 +122,8 @@ def resolve_lines(outcomes: list[ResolveOutcome]) -> list[str]:
     for o in outcomes:
         if o.status is None:
             reasons = "; ".join(f"{i.field}: {i.reason}" for i in o.issues)
-            lines.append(f"{o.item_id}  refused  {reasons}")
+            state = "refused" if o.run_id is None else f"closed during lookup ({o.run_id})"
+            lines.append(f"{o.item_id}  {state}  {reasons}")
         else:
             work = f"  {o.work_id}" if o.work_id else ""
             lines.append(f"{o.item_id}  {o.status.value}{work}")
