@@ -36,6 +36,7 @@ from factory.services.extraction_agreement import (
     FinalRow,
     group_rows,
 )
+from tests.world_cache import snapshot_world
 
 PACK = ML_BENCHMARK_V1
 KEYS = ("task", "dataset", "split", "metric", "input_resolution", "pretraining_data")
@@ -220,6 +221,7 @@ def claim_input(claim_type: ClaimType = ClaimType.FINDING) -> ClaimInput:
     )
 
 
+@snapshot_world
 def run_pass(
     project: Project,
     actor: Actor,

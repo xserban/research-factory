@@ -40,6 +40,7 @@ from factory.services.search import register_query, run_query
 from factory.services.seeds import add_seeds
 from factory.sources.base import PageSink, RawPage, SearchResult, SourceError
 from factory.sources.registry import SourceFactory
+from tests.world_cache import snapshot_world
 
 T0 = datetime(2026, 10, 31, 12, 0, tzinfo=UTC)
 SESSION = "01JZ9Q3K5M7N8P0R2S4T6V8W0X"
@@ -419,6 +420,7 @@ def _protocol(
     return protocol_id
 
 
+@snapshot_world
 def _setup(
     project: Project,
     agent: Actor,

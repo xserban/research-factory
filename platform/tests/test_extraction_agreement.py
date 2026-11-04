@@ -64,6 +64,7 @@ from tests.test_extraction_next import SESSION_A, SESSION_B, _extractor
 from tests.test_extraction_record import _amend_schema
 from tests.test_extraction_schema import _schema, _with
 from tests.test_protocol_rules import _check
+from tests.world_cache import snapshot_world
 
 FT = ScreeningStage.FULL_TEXT
 SourcesFor = Callable[..., Mapping[str, SourceFactory]]
@@ -91,6 +92,7 @@ def screened(
     return sorted(w for w, o in final_outcomes(project, stage=FT).items() if o is Outcome.INCLUDED)
 
 
+@snapshot_world
 def _declare(
     project: Project,
     agent: Actor,
@@ -154,6 +156,7 @@ def _same_rows(work: str) -> list[ExtractedRowInput]:
     return [_r()]
 
 
+@snapshot_world
 def _run(project: Project, actor: Actor, label: PassLabel, rows_for: RowsFor) -> None:
     """Serve every task of the pass and record `rows_for(work)` in it, closing the unit."""
     for _ in range(100):

@@ -48,6 +48,9 @@ from tests.document_helpers import (
 from tests.helpers import SESSION, _setup, open_session
 from tests.test_fulltext_service import StubRoute, _include_all, always
 from tests.test_screening_next import _draw
+from tests.world_cache import snapshot_world
+
+pytestmark = pytest.mark.slow  # acceptance suite: dev runs deselect with -m "not slow"
 
 FT = ScreeningStage.FULL_TEXT
 TA = ScreeningStage.TITLE_ABSTRACT
@@ -63,6 +66,7 @@ PASS_B = {"role": "screener-b", "model": "claude-haiku-5-5", "skill": "rf-screen
 # --- Worlds ---
 
 
+@snapshot_world
 def _declare_and_screen_title_abstract(
     project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
 ) -> None:
@@ -120,6 +124,7 @@ def _prepare_documents(project: Project) -> str:
     return failed
 
 
+@snapshot_world
 def _ready_for_full_text(
     project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
 ) -> str:
@@ -233,6 +238,7 @@ def _service_screen_to_end(
         assert result.rejected == [], result.rejected
 
 
+@snapshot_world
 def _screened_full_text_world(
     project: Project,
     agent: Actor,

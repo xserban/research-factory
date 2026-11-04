@@ -1,3 +1,4 @@
+import os
 import shutil
 from collections.abc import Callable
 from pathlib import Path
@@ -26,6 +27,7 @@ from factory.sources.arxiv import ArxivSource
 from factory.sources.http import PoliteClient
 from factory.sources.openalex import OpenAlexSource
 from factory.sources.registry import SourceFactory
+from tests import world_cache
 from tests.helpers import (
     FAKE_PAGES,
     S2,
@@ -273,3 +275,11 @@ def portfolio_settings(portfolio_world_root: Path, tmp_path: Path) -> Settings:
     root = tmp_path / "factory"
     shutil.copytree(portfolio_world_root, root)
     return Settings(root=root, user="obd")
+
+
+def pytest_terminal_summary(terminalreporter: Any) -> None:
+    """With FACTORY_TEST_WORLD_CACHE_STATS=1, report how often world snapshots were reused."""
+    if not os.environ.get("FACTORY_TEST_WORLD_CACHE_STATS"):
+        return
+    for (builder, outcome), count in sorted(world_cache.STATS.items()):
+        terminalreporter.write_line(f"world cache: {builder} {outcome}: {count}")

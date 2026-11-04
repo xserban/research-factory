@@ -30,6 +30,7 @@ from factory.sources.fulltext.base import RouteResult, not_retrieved, transport_
 from factory.sources.registry import SourceFactory
 from tests.helpers import _setup
 from tests.test_screening_next import _decide, _draw
+from tests.world_cache import snapshot_world
 
 SourcesFor = Callable[..., Mapping[str, SourceFactory]]
 Answer = Callable[[Work], RouteResult]
@@ -101,6 +102,7 @@ def _of_type(project: Project, type_: str) -> list[Event]:
     return [event for event in _events(project) if event.type == type_]
 
 
+@snapshot_world
 def _include_all(
     project: Project, agent: Actor, human: Actor, protocol_id: str, *, leave: str | None = None
 ) -> None:

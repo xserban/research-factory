@@ -33,6 +33,7 @@ from factory.sources.registry import SourceFactory
 from tests.document_helpers import StubConverter, make_registry, run_convert
 from tests.helpers import SESSION, _setup
 from tests.test_acceptance_fulltext_screening import _screened_full_text_world
+from tests.world_cache import snapshot_world
 
 FT = ScreeningStage.FULL_TEXT
 SourcesFor = Callable[..., Mapping[str, SourceFactory]]
@@ -62,6 +63,7 @@ def ext_b() -> Actor:
     return _extractor(SESSION_B, "claude-sonnet-5-5")
 
 
+@snapshot_world
 def _declare(project: Project, agent: Actor, fraction: float | None) -> None:
     current = current_protocol(project)
     assert current is not None
