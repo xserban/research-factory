@@ -12,6 +12,7 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
+from factory.cli.render import prisma_markdown
 from factory.events.envelope import Actor
 from factory.model.chase import ChaseDirection
 from factory.model.protocol import CriterionEffect, PressElement, PressFinding, ProtocolSpec
@@ -22,6 +23,7 @@ from factory.services.calibration import calibration_items
 from factory.services.chase import search_chase
 from factory.services.context import Project
 from factory.services.dedup import active_merges, dedup_run, revert_merge
+from factory.services.methods import methods_report, render_methods
 from factory.services.prisma import PrismaFlow, prisma_flow, search_report
 from factory.services.probe import run_probe
 from factory.services.protocol import (
@@ -210,10 +212,17 @@ def test_full_text_not_reported_as_zero(
     # Plan 2C: the full-text box is derived. Before any full-text decision it is provisional and
     # carries no outcome, never a zero that reads as "assessed and nothing found".
     assert flow.full_text.stage_run is False
-    assert flow.full_text.provisional is True
     assert flow.full_text.assessed == 0 and flow.full_text.included == 0
     assert flow.included_in_review is None
     assert flow.model_dump(mode="json")["full_text"]["stage_run"] is False
+    markdown = prisma_markdown(flow)
+    assert "not assessed in this review stage" in markdown
+    assert "assessed for eligibility" not in markdown and "included at full text" not in markdown
+    methods = render_methods(methods_report(project))
+    assert (
+        "full-text stage has not run" in methods
+        and "assessed" not in methods.split("Full-text screening.")[1].split("\n")[0]
+    )
 
 
 def test_probe_runs_never_counted(

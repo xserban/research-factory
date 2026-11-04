@@ -133,11 +133,16 @@ def test_not_retrieved_has_route_reasons(
     _ta_world(project, agent, human, mock_sources)
     boxes = prisma_flow(project).full_text
     assert boxes.not_retrieved_reasons == {
+        "oa-pdf: paywalled": 1,  # the latest attempt of the one failed work
+        "unconverted": 1,
+        "unsought": 1,
+    }
+    assert sum(boxes.not_retrieved_reasons.values()) == boxes.not_retrieved
+    # Attempts, not works: the failed work has one latest reason per route.
+    assert boxes.failed_attempts_by_route == {
         "arxiv-html: no html": 1,
         "arxiv-source: no src": 1,
         "oa-pdf: paywalled": 1,
-        "unconverted": 1,
-        "unsought": 1,
     }
 
 
@@ -148,7 +153,9 @@ def test_slice1_flow_unchanged_before_full_text_runs(
     flow = prisma_flow(project)
     boxes = flow.full_text
     assert boxes.stage_run is False and boxes.provisional is True
-    assert boxes.assessed == boxes.pending == boxes.included == 0 and boxes.excluded == {}
+    assert boxes.assessed == boxes.included == 0 and boxes.excluded == {}
+    assert boxes.pending == boxes.eligible > 0
+    assert boxes.eligible == boxes.assessed + boxes.pending
     assert boxes.sought == flow.included
     assert flow.included_in_review is None
     # The title/abstract numbers are exactly those of a protocol with no full-text plan.
@@ -163,7 +170,7 @@ def test_no_full_text_plan_never_raises(
     assert flow.full_text.stage_run is False
     report = check(project)
     assert all(f.code != "fulltext-decision-stale-document" for f in report.findings)
-    assert "Full-text screening" not in render_methods(methods_report(project))
+    assert "full-text stage has not run" in render_methods(methods_report(project))
     status = project_status(project)
     assert status.screening.full_text_passes is None
 
@@ -275,7 +282,7 @@ def test_methods_mentions_full_text_plan(
     _ft_world(project, agent, human, mock_sources)
     report = methods_report(project)
     assert report.full_text_passes == 2
-    assert report.full_text_sessions == 0 or report.full_text_sessions >= 0
+    assert report.full_text_sessions == 0  # passes opened, no session has joined one
     body = render_methods(report)
     assert "Full-text screening." in body
     assert "kappa floor 0.700" in body

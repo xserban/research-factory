@@ -24,7 +24,7 @@ Invariants, enforced by `PrismaFlow`:
 import json
 from collections.abc import Mapping
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import Field, model_validator
 from sqlalchemy import text
@@ -43,10 +43,6 @@ from factory.services.fulltext_status import fulltext_status
 from factory.services.protocol import current_protocol, registered_deviation
 from factory.services.search import RunSummary
 
-FULL_TEXT_NOT_ASSESSED: Literal["not assessed in this review stage"] = (
-    "not assessed in this review stage"
-)
-"""Slice-1 wording, kept for callers that still name it; `PrismaFlow.full_text` is now boxes."""
 UNSOUGHT = "unsought"
 UNCONVERTED = "unconverted"
 UNSPECIFIED = "unspecified"
@@ -64,23 +60,24 @@ class FullTextBoxes(StrictModel):
     """The full-text boxes of the flow (spec acceptance 13), all derived from events.
 
     `sought` is the works promoted at title/abstract; `not_retrieved` those with no converted live
-    document (plan 2C ruling 3); `eligible` the rest. `not_retrieved_reasons` counts, over the
-    not-retrieved works, `"<route>: <reason>"` of each route's latest attempt (a work with several
-    failed routes counts once per route), `unsought` for a work with no attempt and `unconverted`
-    for a work with a live document that has no conversion.
+    document (plan 2C ruling 3); `eligible` the rest. `not_retrieved_reasons` counts each
+    not-retrieved work once, under the `"<route>: <reason>"` of its latest attempt (event order),
+    `unsought` (no attempt) or `unconverted` (a live document with no conversion: run
+    `factory document convert`), so its values sum to `not_retrieved`. `failed_attempts_by_route`
+    counts attempts, not works: the latest reason of every route that failed for those works.
 
-    `stage_run` is False while the protocol declares no full-text plan or no full-text decision
-    exists; then `assessed`, `pending`, `included` and `excluded` are zero and the boxes are
-    `provisional`. Once it has run, `assessed` is the eligible works with a full-text outcome other
-    than pending, and `pending` the rest.
+    `stage_run` is a display switch: False while the protocol declares no full-text plan or no
+    full-text decision exists, when `assessed`, `included` and `excluded` are 0 and every eligible
+    work is pending.
 
-    Invariants: sought == not_retrieved + eligible; when the stage has run, eligible == assessed +
-    pending and assessed == included + sum(excluded).
+    Invariants: sought == not_retrieved + eligible; eligible == assessed + pending; assessed ==
+    included + sum(excluded); provisional exactly while pending > 0.
     """
 
     sought: int
     not_retrieved: int
     not_retrieved_reasons: dict[str, int]
+    failed_attempts_by_route: dict[str, int] = Field(default_factory=dict)
     eligible: int
     assessed: int
     excluded: dict[str, int]
@@ -97,17 +94,16 @@ class FullTextBoxes(StrictModel):
     def _identities_hold(self) -> "FullTextBoxes":
         if self.sought != self.not_retrieved + self.eligible:
             raise ValueError("sought must equal not retrieved plus eligible")
-        if self.stage_run:
-            if self.eligible != self.assessed + self.pending:
-                raise ValueError("eligible must equal assessed plus pending")
-            if self.assessed != self.included + self.excluded_total:
-                raise ValueError("assessed must equal included plus excluded")
-            if self.provisional != (self.pending > 0):
-                raise ValueError("full-text boxes are provisional exactly while works are pending")
-        elif (
-            not self.provisional or self.assessed or self.pending or self.included or self.excluded
-        ):
-            raise ValueError("a full-text stage that has not run is provisional with no outcomes")
+        if sum(self.not_retrieved_reasons.values()) != self.not_retrieved:
+            raise ValueError("not-retrieved reasons must count each not-retrieved work once")
+        if self.eligible != self.assessed + self.pending:
+            raise ValueError("eligible must equal assessed plus pending")
+        if self.assessed != self.included + self.excluded_total:
+            raise ValueError("assessed must equal included plus excluded")
+        if self.provisional != (self.pending > 0):
+            raise ValueError("full-text boxes are provisional exactly while works are pending")
+        if not self.stage_run and self.assessed:
+            raise ValueError("a full-text stage that has not run has assessed nothing")
         return self
 
 
@@ -121,13 +117,19 @@ NOT_RUN_BOXES = FullTextBoxes(
     pending=0,
     included=0,
     stage_run=False,
-    provisional=True,
+    provisional=False,
 )
 """The boxes of a flow built without any: nothing sought, nothing assessed."""
 
 
 class PrismaFlow(StrictModel):
-    """The PRISMA 2020 identification, screening and inclusion counts, all computed."""
+    """The PRISMA 2020 identification, screening and inclusion counts, all computed.
+
+    `included` keeps its slice-1 meaning, the works included at title/abstract (and `provisional`
+    follows title/abstract pending), because sum(excluded) + pending + included == screened must
+    hold. The review's final inclusion is `included_in_review` (full-text included), set once the
+    full-text stage has run. `full_text.not_retrieved_reasons` names `unconverted` works, which
+    need `factory document convert` before they can be screened."""
 
     identified_databases: dict[str, int]
     identified_other: dict[str, int]
@@ -241,44 +243,34 @@ def full_text_boxes(project: Project) -> FullTextBoxes:
     queue = fulltext_queue(project)
     eligible = [entry.work_id for entry in queue.eligible]
     sought = len(eligible) + len(queue.not_retrieved)
-    reasons = _not_retrieved_reasons(project, set(queue.not_retrieved))
-    if not has_full_text_plan(project) or not _has_full_text_decision(project):
-        return FullTextBoxes(
-            sought=sought,
-            not_retrieved=len(queue.not_retrieved),
-            not_retrieved_reasons=reasons,
-            eligible=len(eligible),
-            assessed=0,
-            excluded={},
-            pending=0,
-            included=0,
-            stage_run=False,
-            provisional=True,
-        )
-    stage = ScreeningStage.FULL_TEXT
-    outcomes = final_outcomes(project, stage=stage)
-    criteria = exclusion_criteria(project, stage=stage)
+    reasons, attempts = _not_retrieved_reasons(project, set(queue.not_retrieved))
+    run = has_full_text_plan(project) and _has_full_text_decision(project)
     excluded: dict[str, int] = {}
-    included = pending = 0
-    for work in eligible:
-        outcome = outcomes[work]
-        if outcome is Outcome.INCLUDED:
-            included += 1
-        elif outcome is Outcome.PENDING:
-            pending += 1
-        else:
-            criterion = criteria.get(work) or UNSPECIFIED
-            excluded[criterion] = excluded.get(criterion, 0) + 1
+    included = 0
+    if run:
+        stage = ScreeningStage.FULL_TEXT
+        outcomes = final_outcomes(project, stage=stage)
+        criteria = exclusion_criteria(project, stage=stage)
+        for work in eligible:
+            outcome = outcomes[work]
+            if outcome is Outcome.INCLUDED:
+                included += 1
+            elif outcome is not Outcome.PENDING:
+                criterion = criteria.get(work) or UNSPECIFIED
+                excluded[criterion] = excluded.get(criterion, 0) + 1
+    assessed = included + sum(excluded.values())
+    pending = len(eligible) - assessed
     return FullTextBoxes(
         sought=sought,
         not_retrieved=len(queue.not_retrieved),
         not_retrieved_reasons=reasons,
+        failed_attempts_by_route=attempts,
         eligible=len(eligible),
-        assessed=included + sum(excluded.values()),
+        assessed=assessed,
         excluded=dict(sorted(excluded.items())),
         pending=pending,
         included=included,
-        stage_run=True,
+        stage_run=run,
         provisional=pending > 0,
     )
 
@@ -294,21 +286,34 @@ def _has_full_text_decision(project: Project) -> bool:
         )
 
 
-def _not_retrieved_reasons(project: Project, missing: set[str]) -> dict[str, int]:
-    """Counts of the latest-attempt reason per route over the not-retrieved works."""
-    counts: dict[str, int] = {}
+def _not_retrieved_reasons(
+    project: Project, missing: set[str]
+) -> tuple[dict[str, int], dict[str, int]]:
+    """(reasons, attempts) over the not-retrieved works: each work once under its latest attempt,
+    and the latest failed-attempt reason of every route."""
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text("SELECT work_id, route, outcome, reason FROM fulltext_attempts ORDER BY event_id")
+        ).all()
+    latest: dict[str, str] = {}
+    for work_id, route, outcome, reason in rows:
+        latest[str(work_id)] = f"{route}: {reason if reason is not None else outcome}"
+    reasons: dict[str, int] = {}
+    attempts: dict[str, int] = {}
     for entry in fulltext_status(project).works:
         if entry.work_id not in missing:
             continue
         if entry.state == "unsought":
-            keys = [UNSOUGHT]
+            key = UNSOUGHT
         elif entry.state == "retrieved":
-            keys = [UNCONVERTED]
+            key = UNCONVERTED
         else:
-            keys = [f"{route.value}: {reason}" for route, reason in sorted(entry.reasons.items())]
-        for key in keys:
-            counts[key] = counts.get(key, 0) + 1
-    return dict(sorted(counts.items()))
+            key = latest[entry.work_id]
+            for route, reason in entry.reasons.items():
+                label = f"{route.value}: {reason}"
+                attempts[label] = attempts.get(label, 0) + 1
+        reasons[key] = reasons.get(key, 0) + 1
+    return dict(sorted(reasons.items())), dict(sorted(attempts.items()))
 
 
 def search_report(project: Project) -> SearchReport:

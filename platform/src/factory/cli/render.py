@@ -7,7 +7,7 @@ from factory.services.document_read import DocumentPage
 from factory.services.fulltext import FetchSummary
 from factory.services.fulltext_import import ImportReport
 from factory.services.fulltext_status import FulltextStatus
-from factory.services.prisma import PrismaFlow, SearchReport
+from factory.services.prisma import UNCONVERTED, PrismaFlow, SearchReport
 from factory.services.trace import TraceNode
 
 
@@ -26,10 +26,12 @@ def prisma_markdown(flow: PrismaFlow) -> str:
     lines.append(f"- reports sought: {boxes.sought}")
     lines.append(f"- reports not retrieved: {boxes.not_retrieved}")
     lines += [f"  - {reason}: {n}" for reason, n in boxes.not_retrieved_reasons.items()]
+    if boxes.not_retrieved_reasons.get(UNCONVERTED):
+        lines.append("  - unconverted works need conversion: run `factory document convert`")
     if boxes.stage_run:
         lines.append(f"- reports assessed for eligibility: {boxes.assessed}")
         lines += [f"- excluded, {criterion}: {n}" for criterion, n in boxes.excluded.items()]
-        lines.append(f"- pending: {boxes.pending}")
+        lines.append(f"- pending at full text: {boxes.pending}")
         lines.append(f"- included at full text: {boxes.included}")
     else:
         lines.append("- not assessed in this review stage (no full-text decisions)")

@@ -21,7 +21,13 @@ from factory.services.audit import audit_report
 from factory.services.calibration import calibration_status
 from factory.services.chase import chase_rounds
 from factory.services.context import Project
-from factory.services.prisma import PrismaFlow, has_full_text_plan, prisma_flow, search_report
+from factory.services.prisma import (
+    UNCONVERTED,
+    PrismaFlow,
+    has_full_text_plan,
+    prisma_flow,
+    search_report,
+)
 from factory.services.protocol import current_protocol, list_amendments, list_deviations
 from factory.services.seeds import _rigor_mode, admitted_seed_count, seed_recall
 
@@ -183,7 +189,7 @@ def render_methods(report: MethodsReport, *, withheld: frozenset[str] = frozense
         _deduplication(report),
         _screening(report),
         _agreement_and_audit(report, withheld),
-        *([_full_text(report)] if report.full_text_passes else []),
+        _full_text(report),
         _seed_recall(report, withheld),
         _deviations(report),
     ]
@@ -262,10 +268,20 @@ def _agreement_and_audit(report: MethodsReport, withheld: frozenset[str]) -> str
 
 
 def _full_text(report: MethodsReport) -> str:
+    if not report.full_text_passes:
+        return (
+            "Full-text screening. The full-text stage has not run: the protocol declares no "
+            "full-text screening plan."
+        )
     boxes = report.prisma.full_text
     reasons = ", ".join(f"{reason} ({n})" for reason, n in boxes.not_retrieved_reasons.items())
     excluded = ", ".join(f"{criterion} ({n})" for criterion, n in boxes.excluded.items())
     fraction = _fmt(report.full_text_audit_fraction)
+    hint = (
+        " Unconverted works need `factory document convert`."
+        if boxes.not_retrieved_reasons.get(UNCONVERTED)
+        else ""
+    )
     state = (
         f"{boxes.assessed} assessed, {boxes.included} included, {boxes.excluded_total} excluded, "
         f"{boxes.pending} pending. Exclusions by criterion: {excluded or NONE_RECORDED}."
@@ -277,7 +293,7 @@ def _full_text(report: MethodsReport) -> str:
         f"share: {_fmt(report.full_text_dual_sample)}; kappa floor "
         f"{_fmt(report.full_text_kappa_floor)}; audit fraction {fraction} with a minimum of "
         f"{report.full_text_audit_minimum}. Of {boxes.sought} sought, {boxes.not_retrieved} not "
-        f"retrieved (reasons: {reasons or NONE_RECORDED}); {state} Agreement between passes "
+        f"retrieved (reasons: {reasons or NONE_RECORDED}).{hint} {state} Agreement between passes "
         f"(Cohen's kappa): {_fmt(report.full_text_kappa)}. Full-text sessions: "
         f"{report.full_text_sessions}; models (as reported by the agent): "
         f"{_list(report.full_text_models)}."

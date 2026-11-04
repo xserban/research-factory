@@ -31,7 +31,7 @@ from factory.events.reader import read_all
 from factory.index.chase import admitted_works
 from factory.model.base import StrictModel
 from factory.model.project import RigorMode
-from factory.model.protocol import ProtocolStatus
+from factory.model.protocol import ProtocolStatus, ScreeningStage
 from factory.model.seed import SEED_ID_RE
 from factory.model.work import ProvenanceMethod
 from factory.services.agreement import Outcome, agreement_summary, final_outcomes, single_pass_works
@@ -653,7 +653,7 @@ def _stale_document_decisions(project: Project) -> list[_Hit]:
                 "SELECT work_id, conversion_id FROM decisions WHERE stage = :stage "
                 "AND superseded_by IS NULL AND conversion_id IS NOT NULL ORDER BY work_id"
             ),
-            {"stage": "full-text"},
+            {"stage": ScreeningStage.FULL_TEXT.value},
         ).all()
     stale: set[str] = set()
     for work_id, conversion_id in rows:
