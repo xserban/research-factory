@@ -17,7 +17,12 @@ from factory.services.extraction_audit import AuditEvidence, ExtractionAuditRepo
 from factory.services.fulltext import FetchSummary
 from factory.services.fulltext_import import ImportReport
 from factory.services.fulltext_status import FulltextStatus
-from factory.services.imports import ImportListing, ImportSummary, RecordRow
+from factory.services.imports import (
+    DevelopmentView,
+    ImportListing,
+    ImportSummary,
+    RecordRow,
+)
 from factory.services.prisma import UNCONVERTED, PrismaFlow, SearchReport
 from factory.services.trace import TraceNode
 
@@ -348,5 +353,23 @@ def import_record_lines(records: list[RecordRow]) -> list[str]:
         year = str(r.year) if r.year is not None else "-"
         lines.append(
             f"{r.ordinal}  {r.part}  {r.outcome.value}  {year}  {identifier}  {r.title or '-'}"
+        )
+    return lines
+
+
+def development_view_lines(view: DevelopmentView) -> list[str]:
+    """The default view: counts, then one line per record keyed by its hash, in hash order.
+
+    No ordinal or row number is printed, so the output says nothing about which records are held
+    out beyond their count.
+    """
+    lines = [f"records shown: {len(view.records)}  held out: {view.held_out}"]
+    lines.append("record  outcome  year  identifier  title")
+    for r in view.records:
+        identifier = f"doi:{r.doi}" if r.doi else f"arxiv:{r.arxiv}" if r.arxiv else "-"
+        year = str(r.year) if r.year is not None else "-"
+        lines.append(
+            f"sha256:{r.record_sha256[:16]}  {r.outcome.value}  {year}  {identifier}"
+            f"  {r.title or '-'}"
         )
     return lines

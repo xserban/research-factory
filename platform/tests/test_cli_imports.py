@@ -10,14 +10,14 @@ from factory.config import Settings
 from factory.imports.model import ImportFormat
 from factory.model.imports import ImportRole
 from factory.services.context import Project
-from factory.services.imports import import_part, list_imports, record_import
+from factory.services.imports import import_part, import_records, list_imports, record_import
 from tests.helpers import _of_type
 from tests.test_cli import _cli_env, runner
 
 BIB = (
     "\n".join(
-        f"@article{{k{i}, title={{Made-Up Title {i}}}, year={{{2000 + i}}}, doi={{10.9999/m.{i}}}}}"
-        for i in range(1, 7)
+        f"@article{{k{w}, title={{Made-Up Title {w}}}, year={{{2000 + i}}}, doi={{10.9999/m.{w}}}}}"
+        for i, w in enumerate(["alder", "birch", "cedar", "hazel", "larch", "maple"], start=1)
     )
     + "\n@article{bad, title = {Unclosed\n"
 )
@@ -97,9 +97,8 @@ def test_cli_show_lists_parts(project: Project, settings: Settings, tmp_path: Pa
 
     default = _invoke(settings, "import", "show", s.import_id)
     assert default.exit_code == 0, default.stderr
-    shown = {int(line.split()[0]) for line in default.stdout.splitlines() if line[:1].isdigit()}
-    assert shown == set(range(1, 8)) - held_out
     assert "held-out" not in default.stdout
+    assert _row_keys(default.stdout) == _expected_keys(project, s.import_id)
 
     for part in ("held-out", "all"):
         refused = _invoke(settings, "import", "show", s.import_id, "--part", part)
@@ -119,6 +118,58 @@ def test_cli_show_lists_parts(project: Project, settings: Settings, tmp_path: Pa
         assert any(line.split()[:2] == [str(ordinal), part] for line in lines), everything.stdout
 
 
+def _rows(stdout: str) -> list[str]:
+    return [line for line in stdout.splitlines() if line.startswith("sha256:")]
+
+
+def _row_keys(stdout: str) -> list[str]:
+    return [line.split()[0] for line in _rows(stdout)]
+
+
+def _expected_keys(project: Project, import_id: str) -> list[str]:
+    """The default view as a function of the records that are not held out, and nothing else."""
+    return sorted(
+        f"sha256:{r.record_sha256[:16]}"
+        for r in import_records(project, import_id)
+        if import_part(project, import_id, r.ordinal) != "held-out"
+    )
+
+
+def test_cli_show_default_prints_no_ordinals(
+    project: Project, settings: Settings, tmp_path: Path
+) -> None:
+    """Two imports of one file whose held-out parts differ: each default view is determined by
+    its development records alone, carries no source ordinal, and counts the held-out part."""
+    path = _bib(tmp_path)
+    first = record_import(
+        project, path, format=ImportFormat.BIBTEX, role=ImportRole.REFERENCE, random_seed=1
+    )
+    held_first = {o for o in range(1, 8) if import_part(project, first.import_id, o) == "held-out"}
+    second = None
+    for seed in range(2, 50):
+        candidate = record_import(
+            project, path, format=ImportFormat.BIBTEX, role=ImportRole.REFERENCE, random_seed=seed
+        )
+        held = {
+            o for o in range(1, 8) if import_part(project, candidate.import_id, o) == "held-out"
+        }
+        if held != held_first:
+            second = candidate
+            break
+    assert second is not None
+    outputs = []
+    for imported in (first, second):
+        result = _invoke(settings, "import", "show", imported.import_id)
+        assert result.exit_code == 0 and result.stderr == ""
+        rows = _rows(result.stdout)
+        assert _row_keys(result.stdout) == _expected_keys(project, imported.import_id)
+        tokens = {token for row in rows for token in row.split()}
+        assert not tokens & {str(o) for o in range(1, 8)}
+        assert "held out: 2" in result.stdout
+        outputs.append(result.stdout)
+    assert outputs[0] != outputs[1]
+
+
 def test_cli_default_outputs_hide_held_out(
     project: Project, settings: Settings, tmp_path: Path
 ) -> None:
@@ -136,8 +187,7 @@ def test_cli_show_unsplit_import_lists_every_record(
         project, _bib(tmp_path), format=ImportFormat.BIBTEX, role=ImportRole.REFERENCE, split=False
     )
     result = _invoke(settings, "import", "show", s.import_id)
-    rows = [line for line in result.stdout.splitlines() if line[:1].isdigit()]
-    assert len(rows) == 7 and all(line.split()[1] == "unsplit" for line in rows)
+    assert len(_rows(result.stdout)) == 7 and "held out: 0" in result.stdout
     assert result.stderr == ""
 
 

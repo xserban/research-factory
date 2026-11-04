@@ -1313,7 +1313,8 @@ def import_show_cmd(
         typer.Option("--researcher", help="Confirm a researcher's view; needed for held-out/all."),
     ] = False,
 ) -> None:
-    """The records of an import. By default only records that are not held out are listed."""
+    """The records of an import. By default: records that are not held out, by hash, with no
+    ordinals, and the held-out count. `--researcher` lists ordinals and parts."""
     state = _state(ctx)
     if part is not PartChoice.DEVELOPMENT:
         if not researcher:
@@ -1325,6 +1326,11 @@ def import_show_cmd(
         )
     with _reporting_errors():
         project = _resolve_project(state)
-        records = imports_service.list_import_records(project, import_id, view=part.value)
-    for line in render.import_record_lines(records):
+        if researcher:
+            records = imports_service.list_import_records(project, import_id, view=part.value)
+            lines = render.import_record_lines(records)
+        else:
+            view = imports_service.development_view(project, import_id)
+            lines = render.development_view_lines(view)
+    for line in lines:
         typer.echo(line)

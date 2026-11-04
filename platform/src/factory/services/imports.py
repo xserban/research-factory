@@ -229,6 +229,46 @@ def list_imports(project: Project) -> list[ImportListing]:
     return [ImportListing(row=i, counts=counts[i.import_id]) for i in imports]
 
 
+class DevelopmentRecord(StrictModel):
+    """A record of the default view: no ordinal, so its place in the export is not shown."""
+
+    record_sha256: str
+    outcome: ParseOutcome
+    title: str | None
+    first_author: str | None
+    year: int | None
+    doi: str | None
+    arxiv: str | None
+
+
+class DevelopmentView(StrictModel):
+    """Every record that is not held out, ordered by `record_sha256` (unrelated to file order),
+    and the count of held-out records. Nothing here names a held-out record or an ordinal."""
+
+    records: list[DevelopmentRecord]
+    held_out: int
+
+
+def development_view(project: Project, import_id: str) -> DevelopmentView:
+    """The default, agent-safe view of an import's records."""
+    _import_row(project, import_id)
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT record_sha256, outcome, title, first_author, year, doi, arxiv"
+                " FROM import_records WHERE import_id = :i AND part != :held"
+                " ORDER BY record_sha256"
+            ),
+            {"i": import_id, "held": "held-out"},
+        ).mappings()
+        records = [DevelopmentRecord.model_validate(dict(r)) for r in rows]
+        held = conn.execute(
+            text("SELECT COUNT(*) FROM import_records WHERE import_id = :i AND part = :held"),
+            {"i": import_id, "held": "held-out"},
+        ).scalar_one()
+    return DevelopmentView(records=records, held_out=int(held))
+
+
 def list_import_records(
     project: Project, import_id: str, *, view: RecordView = "development"
 ) -> list[RecordRow]:
