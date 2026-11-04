@@ -91,7 +91,12 @@ def test_identified_other_unchanged_without_rounds(
     project: Project, agent: Actor, world: tuple[str, str]
 ) -> None:
     flow = prisma_flow(project)
-    assert flow.identified_other == {"citation-chase": 0, "seed-admission": 0, "hand-search": 0}
+    assert flow.identified_other == {
+        "citation-chase": 0,
+        "seed-admission": 0,
+        "hand-search": 0,
+        "supplied": 0,
+    }
     assert flow.identified_other_detail == {}
     # a plain chase keeps its slice-1 count; the detail names the mechanism
     search_chase(project, agent, [ChaseDirection.BACKWARD], sources=_chase_sources(cited=[CHASED]))
@@ -409,7 +414,7 @@ def test_admission_only_work_with_merged_database_work_is_found_by_search(
     merge = SimpleNamespace(primary=primary.id, absorbed=(absorbed.id,))
     monkeypatch.setattr(seeds_service, "active_merges", lambda _p: [merge])
     groups = seeds_service._merge_groups(project)
-    assert groups[primary.id] == groups[absorbed.id] == {primary.id, absorbed.id}
+    assert set(groups[primary.id]) == set(groups[absorbed.id]) == {primary.id, absorbed.id}
     group = [w for w in (primary, absorbed) if w.id in groups[primary.id]]
     assert seeds_service._found_by(group, set()) == "search"
 
