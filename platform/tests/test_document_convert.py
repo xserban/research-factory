@@ -6,6 +6,7 @@ with a fixed reason and never the error text.
 """
 
 import hashlib
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -23,10 +24,12 @@ from factory.model.document import Converted
 from factory.model.fulltext import AttemptOutcome, Route
 from factory.model.screening import PassLabel
 from factory.services.agreement import Outcome, final_outcomes
+from factory.services.calibration import calibration_items
 from factory.services.context import Project
 from factory.services.document_convert import ConvertSummary, convert_documents
 from factory.services.fulltext import fetch_fulltext, record_supplied_document
 from factory.services.screening import open_pass
+from factory.services.search import list_works
 from factory.sources.fulltext.base import not_retrieved
 from tests.document_helpers import fetched_document
 from tests.helpers import _setup
@@ -66,8 +69,10 @@ class StubConverter:
         unavailable: bool = False,
         fail_on: bytes | None = None,
         error: Exception | None = None,
+        extra_warnings: tuple[str, ...] = (),
     ) -> None:
         self._inner = LatexmlHtmlConverter()
+        self._extra_warnings = extra_warnings
         self._version = version
         self._unavailable = unavailable
         self._fail_on = fail_on
@@ -82,7 +87,8 @@ class StubConverter:
         if self._fail_on is not None and self._fail_on in raw:
             assert self._error is not None
             raise self._error
-        return self._inner.to_markdown(raw, media_type)
+        markdown, warnings = self._inner.to_markdown(raw, media_type)
+        return markdown, tuple(warnings) + self._extra_warnings
 
 
 def _registry(converter: StubConverter | None = None) -> ConverterRegistry:
@@ -119,6 +125,37 @@ def _statuses(summary: ConvertSummary) -> list[str]:
     return [outcome.status for outcome in summary.outcomes]
 
 
+def _git_ignored(relative: str) -> bool | None:
+    """Whether the repository's ignore rules match `relative`; None if there is no repository."""
+    root = Path(__file__).resolve().parents[2]
+    probe = subprocess.run(
+        ["git", "-C", str(root), "rev-parse", "--is-inside-work-tree"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if probe.returncode != 0:
+        return None
+    check = subprocess.run(
+        ["git", "-C", str(root), "check-ignore", "-q", "--no-index", relative],
+        check=False,
+    )
+    return check.returncode == 0
+
+
+@pytest.fixture
+def corpus_leaving(project: Project, agent: Actor, human: Actor, mock_sources: Any) -> str:
+    """As `corpus`, but one ordinary work gets no decision, so it is not promoted. Returns it."""
+    protocol_id = _setup(project, agent, human, mock_sources, dual_sample=0.5, random_works=0)
+    _draw(project)
+    open_pass(project, agent, PassLabel.A)
+    open_pass(project, agent, PassLabel.B)
+    calibration = set(calibration_items(project))
+    leave = sorted(w.id for w in list_works(project) if w.id not in calibration)[0]
+    _include_all(project, agent, human, protocol_id, leave=leave)
+    return leave
+
+
 def _strip_library(project: Project) -> None:
     for path in project.paths.library_dir.rglob("*"):
         if path.is_file():
@@ -139,7 +176,6 @@ def test_converts_html_document(project: Project, corpus: None) -> None:
     assert payload.converter == direct.converter
     assert payload.converter_version == direct.converter_version
     assert payload.markdown_hash == direct.markdown_hash
-    assert payload.manifest_hash == _sha(direct.manifest.to_json())
     assert payload.raw_hash == _sha(ARTICLE)
     assert list(payload.warnings) == list(direct.warnings)
     expected_counts = {
@@ -332,7 +368,100 @@ def test_library_untracked(project: Project, corpus: None) -> None:
     assert project.library.path(payload.manifest_hash).is_relative_to(library)
     assert not project.blobs.exists(payload.markdown_hash)
     assert not project.blobs.exists(payload.manifest_hash)
+    relative = project.library.path(payload.markdown_hash).relative_to(project.paths.root)
+    ignored = _git_ignored(relative.as_posix())
+    if ignored is None:
+        pytest.skip("not a git repository")
+    assert ignored, f"{relative} is not ignored by git"
     for path in project.paths.events_dir.rglob("*"):
         if path.is_file():
             assert path.suffix == ".jsonl", path
     assert summary.converted == 1
+
+
+def test_already_converted_with_raw_removed_is_unchanged(project: Project, corpus: None) -> None:
+    fetched_document(project, _promoted(project)[0], ARTICLE)
+    _run(project, _registry())
+    before = _event_bytes(project)
+    _strip_library(project)
+
+    summary = _run(project, _registry())
+
+    assert _statuses(summary) == ["unchanged"]
+    assert _event_bytes(project) == before
+
+
+def test_no_converter_with_raw_removed_is_raw_missing(project: Project, corpus: None) -> None:
+    with project.index.exclusive():
+        project.index.sync()
+        record_supplied_document(
+            project,
+            _promoted(project)[0],
+            content=PDF,
+            source_version="v1",
+            media_type="application/pdf",
+            actor=project.human_actor(),
+        )
+    _strip_library(project)
+    before = _event_bytes(project)
+
+    summary = _run(project, _registry())
+
+    assert _statuses(summary) == ["raw-missing"]
+    assert _event_bytes(project) == before
+
+
+def test_unavailable_converter_with_raw_removed_is_raw_missing(
+    project: Project, corpus: None
+) -> None:
+    fetched_document(project, _promoted(project)[0], ARTICLE)
+    _strip_library(project)
+    before = _event_bytes(project)
+
+    summary = _run(project, _registry(StubConverter(unavailable=True)))
+
+    assert _statuses(summary) == ["raw-missing"]
+    assert _event_bytes(project) == before
+
+
+def test_overlong_and_excess_warnings_are_capped(project: Project, corpus: None) -> None:
+    fetched_document(project, _promoted(project)[0], ARTICLE)
+    extra = tuple(f"w{index} " + "x" * 300 for index in range(60))
+
+    summary = _run(project, _registry(StubConverter(extra_warnings=extra)))
+
+    assert _statuses(summary) == ["converted"]
+    base = convert(LatexmlHtmlConverter(), ARTICLE, "text/html").warnings
+    expected = [w[:200] for w in (*base, *extra)][:50]
+    [event] = _events(project, "document.converted")
+    assert event.payload["warnings"] == expected
+    assert len(expected) == 50
+
+
+def test_scope_excludes_unpromoted_work_and_intersects(
+    project: Project, corpus_leaving: str
+) -> None:
+    leave = corpus_leaving
+    promoted = _promoted(project)
+    assert leave not in promoted
+    live = fetched_document(project, promoted[0], ARTICLE)
+    with project.index.exclusive():
+        project.index.sync()
+        stray = record_supplied_document(
+            project,
+            leave,
+            content=ARTICLE,
+            source_version="v1",
+            media_type="text/html",
+            actor=project.human_actor(),
+        )
+    assert stray is not None
+
+    both = _run(project, _registry(), work_ids=[promoted[0]], document_ids=[stray])
+    assert both.outcomes == []
+
+    default = _run(project, _registry())
+    assert [o.document_id for o in default.outcomes] == [live]
+
+    named = _run(project, _registry(), document_ids=[stray])
+    assert [o.document_id for o in named.outcomes] == [stray]

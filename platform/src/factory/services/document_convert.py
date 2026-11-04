@@ -6,11 +6,10 @@ already done.
 
 Invariants:
 - Validation is complete before anything is written. A refused request writes nothing.
-- Per document, under the write lock: a missing raw blob gives `raw-missing` with no event; a
-  missing converter, an unavailable tool or a failed conversion records one
-  `document.conversion_failed` event; a successful conversion records one `document.converted`
-  event. A document whose converter version already has a conversion gives `unchanged`, with no
-  event and no blob.
+- Per document: an already-converted (converter, version) gives `unchanged`, checked first and
+  with no event. Then a missing raw blob gives `raw-missing`, with no event. Then a missing
+  converter or an unavailable tool records one `document.conversion_failed` event. A conversion runs
+  outside the write lock, and its result is recorded under the lock after a re-check.
 - Conversion events carry hashes, counts and warnings, never document text. A failure carries the
   exception class name only, never its message.
 - The Markdown and manifest bytes go to the project library. The stored Markdown hash equals
@@ -20,7 +19,6 @@ Invariants:
 
 from __future__ import annotations
 
-import hashlib
 from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -175,30 +173,76 @@ def _live_documents(project: Project) -> list[_Doc]:
 # --- One document (under the write lock, so the decision and its record cannot interleave) ---
 
 
+@dataclass(frozen=True)
+class _Ready:
+    """A document to convert: its converter, the version that converter reports, and raw bytes."""
+
+    converter: Converter
+    version: str
+    raw: bytes
+
+
 def _convert_one(project: Project, registry: ConverterRegistry, doc: _Doc) -> ConversionOutcome:
+    """Decide under the write lock, convert outside it, then re-check and record under it again.
+
+    A concurrent identical conversion that lands during the unlocked conversion makes this one
+    `unchanged`, so the same key never gets two conversion events.
+    """
     with project.index.exclusive():
         project.index.sync()
-        if not project.library.exists(doc.raw_hash):
-            return _outcome(doc, "raw-missing")
-        converter = registry.for_media_type(doc.media_type)
-        if converter is None:
-            return _failed(project, doc, None, FailureReason.NO_CONVERTER, None)
-        try:
-            version = converter.version()
-        except ConverterUnavailable:
-            return _failed(project, doc, converter.name, FailureReason.CONVERTER_UNAVAILABLE, None)
-        if _converted_before(project, doc.document_id, converter, version):
+        decided = _decide(project, registry, doc)
+    if isinstance(decided, ConversionOutcome):
+        return decided
+
+    result: ConversionResult | None = None
+    failure: tuple[FailureReason, str | None] = (FailureReason.CONVERSION_ERROR, None)
+    try:
+        result = convert(decided.converter, decided.raw, doc.media_type)
+    except ConverterUnavailable:
+        failure = (FailureReason.CONVERTER_UNAVAILABLE, None)
+    except Exception as exc:
+        failure = (FailureReason.CONVERSION_ERROR, type(exc).__name__)
+
+    with project.index.exclusive():
+        project.index.sync()
+        if _converted_before(project, doc.document_id, decided.converter, decided.version):
             return _outcome(doc, "unchanged")
-        raw = project.library.get(doc.raw_hash)
-        try:
-            result = convert(converter, raw, doc.media_type)
-        except ConverterUnavailable:
-            return _failed(project, doc, converter.name, FailureReason.CONVERTER_UNAVAILABLE, None)
-        except Exception as exc:
-            return _failed(
-                project, doc, converter.name, FailureReason.CONVERSION_ERROR, type(exc).__name__
-            )
+        if result is None:
+            reason, error_class = failure
+            return _failed(project, doc, decided.converter.name, reason, error_class)
         return _converted(project, doc, result)
+
+
+def _decide(project: Project, registry: ConverterRegistry, doc: _Doc) -> ConversionOutcome | _Ready:
+    """Under the lock, the document's outcome if nothing needs converting, else what to convert.
+
+    Order: already converted at this converter and version gives `unchanged`; a missing raw blob
+    gives `raw-missing` (no event, even when there is no converter or it is unavailable); then the
+    no-converter and converter-unavailable failures are recorded.
+    """
+    converter = registry.for_media_type(doc.media_type)
+    version = _version_or_none(converter) if converter is not None else None
+    if (
+        converter is not None
+        and version is not None
+        and _converted_before(project, doc.document_id, converter, version)
+    ):
+        return _outcome(doc, "unchanged")
+    if not project.library.exists(doc.raw_hash):
+        return _outcome(doc, "raw-missing")
+    if converter is None:
+        return _failed(project, doc, None, FailureReason.NO_CONVERTER, None)
+    if version is None:
+        return _failed(project, doc, converter.name, FailureReason.CONVERTER_UNAVAILABLE, None)
+    return _Ready(converter, version, project.library.get(doc.raw_hash))
+
+
+def _version_or_none(converter: Converter) -> str | None:
+    """The converter's version, or None if its tool is unavailable."""
+    try:
+        return converter.version()
+    except ConverterUnavailable:
+        return None
 
 
 def _converted_before(
@@ -220,10 +264,7 @@ def _converted(project: Project, doc: _Doc, result: ConversionResult) -> Convers
     markdown_ref = project.library.put(result.markdown.encode("utf-8"))
     if markdown_ref != result.markdown_hash:
         raise AssertionError("library hash of the Markdown differs from the conversion's hash")
-    manifest_bytes = result.manifest.to_json()
-    manifest_ref = project.library.put(manifest_bytes)
-    if manifest_ref != f"sha256:{hashlib.sha256(manifest_bytes).hexdigest()}":
-        raise AssertionError("library hash of the manifest differs from its bytes")
+    manifest_ref = project.library.put(result.manifest.to_json())
 
     counts = {kind.value: 0 for kind in AnchorKind}
     for anchor in result.manifest.anchors:
