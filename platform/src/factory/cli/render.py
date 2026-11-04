@@ -1,6 +1,7 @@
 """Markdown and text renderings of the report models for the CLI. Formatting only: every figure
 is read from the model, so the CLI and the MCP tools cannot differ (R-05)."""
 
+from factory.services.agreement import DecisionView
 from factory.services.check import CheckReport
 from factory.services.document_convert import ConvertSummary, DocumentStatus
 from factory.services.document_read import DocumentPage
@@ -190,3 +191,24 @@ def document_page_lines(page: DocumentPage) -> list[str]:
     if page.next_after is not None:
         lines += ["", f"next_after: {page.next_after}"]
     return lines
+
+
+def evidence_lines(work_id: str, document_id: str | None, conversion_id: str | None) -> list[str]:
+    """The document and pinned conversion of a full-text item, and the command that reads it.
+    Empty when the item has no conversion (title/abstract)."""
+    if conversion_id is None:
+        return []
+    return [
+        f"  document {document_id or '-'}  conversion {conversion_id}",
+        f"  read: factory document read {work_id} --conversion {conversion_id}",
+    ]
+
+
+def decision_lines(label: str, view: DecisionView) -> list[str]:
+    """One pass's decision on a work: verdict, criterion, the cited anchor and the quote."""
+    cited = view.criterion or "-"
+    anchor = "" if view.anchor is None else f"  anchor {view.anchor}"
+    return [
+        f"  {label}: {view.verdict.value} {cited}{anchor}  quote: {view.quote}  "
+        f"rationale: {view.rationale}"
+    ]

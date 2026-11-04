@@ -58,6 +58,7 @@ from factory.model.screening import (
 from factory.model.task import TaskStatus
 from factory.services.calibration import calibration_items, calibration_labels, stage_population
 from factory.services.context import Project
+from factory.services.conversions import conversion_document
 from factory.services.protocol import ProtocolVersion, current_protocol, lineage_through
 from factory.services.screening import (
     live_decisions,
@@ -92,6 +93,10 @@ class DecisionView(StrictModel):
     criterion: str | None
     quote: str
     rationale: str
+    anchor: str | None = None
+    """Full text only: the anchor the quote was verified in (None at title/abstract)."""
+    conversion_id: str | None = None
+    document_id: str | None = None
 
 
 class Disagreement(StrictModel):
@@ -576,7 +581,9 @@ def _agreement(project: Project, screen: _Screen) -> Agreement:
         criterion_pairs.append((_exclusion(a), _exclusion(b)))
         reason = _disagreement(a.verdict, b.verdict)
         if reason is not None and work not in screen.resolutions:
-            disagreements.append(Disagreement(work_id=work, a=_view(a), b=_view(b), reason=reason))
+            disagreements.append(
+                Disagreement(work_id=work, a=_view(project, a), b=_view(project, b), reason=reason)
+            )
     criteria = screen.protocol.spec.criteria
     exclusion_ids = [
         c.id
@@ -644,8 +651,15 @@ def _bare(criterion: str | None) -> str | None:
     return None if criterion is None else criterion.rsplit(":", 1)[-1]
 
 
-def _view(decision: DecisionRecorded) -> DecisionView:
+def _view(project: Project, decision: DecisionRecorded) -> DecisionView:
     return DecisionView(
+        anchor=decision.anchor,
+        conversion_id=decision.conversion_id,
+        document_id=(
+            None
+            if decision.conversion_id is None
+            else conversion_document(project, decision.conversion_id)
+        ),
         verdict=decision.verdict,
         criterion=_bare(decision.criterion),
         quote=decision.quote,

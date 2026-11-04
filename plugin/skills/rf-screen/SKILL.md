@@ -53,15 +53,17 @@ one batch at a time. Each judgement is recorded with a verbatim quote so that it
 ## Full-text mode
 
 Run this mode only when the researcher asks for the full-text pass; call `screen_next` with
-`stage="full-text"` (the default, `title-abstract`, is the procedure above) and keep the same
-independence rules within that stage. A session may screen both stages, but never both passes
-of one stage. `screen_record` takes the stage from the batch.
+`stage="full-text"` (the default, `title-abstract`, is the procedure above). A full-text
+pass needs a fresh Claude Code session, as the Independence section requires: the platform
+permits reuse of a session across stages, but this skill does not recommend it, and the
+independence rules apply as stated. `screen_record` takes the stage from the batch.
 
 1. A full-text batch lists records that each name a work (`work_id`), its `document_id` and a
    pinned `conversion_id`. Judge the work only from that conversion; a later conversion of the
    document never replaces it.
 2. Read the document with the MCP tool `document_read(work_id=..., conversion_id=...)`, paging
-   with `next_after` until you have read the sections that the criteria need. The abstract is
+   with `after` set to the page's `next_after`, until you have read the sections that the
+   criteria need. The abstract is
    not a substitute for the text. Read only the works of your own batch; the platform refuses
    any other work, document or conversion.
 3. Cite exactly ONE `anchor` per record: the id of the segment you rely on, as served by

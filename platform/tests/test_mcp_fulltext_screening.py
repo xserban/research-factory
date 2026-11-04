@@ -19,7 +19,7 @@ from factory.services.context import Project
 from factory.services.screening import live_decisions
 from factory.sources.registry import SourceFactory
 from tests.document_helpers import promoted_works
-from tests.helpers import SESSION, open_session
+from tests.helpers import SESSION, _setup, open_session
 from tests.test_fulltext_eligibility import _convert, _world
 
 FT = ScreeningStage.FULL_TEXT
@@ -171,3 +171,54 @@ async def test_tool_list_is_unchanged(settings: Settings, clock: FixedClock) -> 
     async with Client(build_server(settings, clock=clock)) as client:
         names = [t.name for t in (await client.list_tools()).tools]
     assert names == TOOLS
+
+
+@pytest.mark.anyio
+async def test_calibration_record_shows_full_text_evidence(
+    settings: Settings,
+    project: Project,
+    clock: FixedClock,
+    agent: Actor,
+    human: Actor,
+    mock_sources: SourcesFor,
+) -> None:
+    _make(project, agent, human, mock_sources)
+    async with open_session(settings, clock) as client:
+        ft = await client.call("calibration_label", project="demo", stage="full-text")
+    record = ft["data"]["record"]
+    assert set(record) == {
+        "work_id",
+        "title",
+        "abstract",
+        "document_id",
+        "conversion_id",
+        "decisions",
+    }
+    assert record["conversion_id"].startswith("cnv_") and record["document_id"].startswith("doc_")
+    assert record["decisions"] == {}
+
+
+def test_title_abstract_decision_views_carry_no_evidence(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    from factory.services.evidence import work_evidence
+
+    _make(project, agent, human, mock_sources)
+    work = promoted_works(project)[0]
+    assert work_evidence(project, work, ScreeningStage.TITLE_ABSTRACT).conversion_id is None
+    assert work_evidence(project, work, FT).conversion_id is not None
+
+
+@pytest.mark.anyio
+async def test_title_abstract_calibration_record_is_unchanged(
+    settings: Settings,
+    project: Project,
+    clock: FixedClock,
+    agent: Actor,
+    human: Actor,
+    mock_sources: SourcesFor,
+) -> None:
+    _setup(project, agent, human, mock_sources)
+    async with open_session(settings, clock) as client:
+        body = await client.call("calibration_label", project="demo")
+    assert set(body["data"]["record"]) == {"work_id", "title", "abstract"}

@@ -30,6 +30,7 @@ from factory.services import chase as chase_service
 from factory.services import check as check_service
 from factory.services import document_convert as document_convert_service
 from factory.services import document_read as document_read_service
+from factory.services import evidence as evidence_service
 from factory.services import fulltext as fulltext_service
 from factory.services import fulltext_import as fulltext_import_service
 from factory.services import fulltext_status as fulltext_status_service
@@ -488,10 +489,19 @@ def calibrate_draw(ctx: typer.Context, stage: StageOption = StageChoice.TITLE_AB
     state = _state(ctx)
     with _reporting_errors():
         project = _resolve_project(state)
+        run_stage = _stage(stage)
         items = calibration_service.draw_calibration(
-            project, project.human_actor(), stage=_stage(stage)
+            project, project.human_actor(), stage=run_stage
         )
+        found = {item: evidence_service.work_evidence(project, item, run_stage) for item in items}
     typer.echo(f"calibration set: {len(items)} works")
+    if run_stage is ScreeningStage.FULL_TEXT:
+        for item in items:
+            typer.echo(item)
+            for line in render.evidence_lines(
+                item, found[item].document_id, found[item].conversion_id
+            ):
+                typer.echo(line)
 
 
 @calibrate_app.command("label")
@@ -536,12 +546,14 @@ def screen_disagreements(
         return
     for disagreement in agreement.disagreements:
         typer.echo(f"{disagreement.work_id}  reason {disagreement.reason}")
+        first = disagreement.a
+        for line in render.evidence_lines(
+            disagreement.work_id, first.document_id, first.conversion_id
+        ):
+            typer.echo(line)
         for label, view in (("A", disagreement.a), ("B", disagreement.b)):
-            cited = view.criterion or "-"
-            typer.echo(
-                f"  {label}: {view.verdict.value} {cited}  quote: {view.quote}  "
-                f"rationale: {view.rationale}"
-            )
+            for line in render.decision_lines(label, view):
+                typer.echo(line)
 
 
 @screen_app.command("resolve")
@@ -581,12 +593,22 @@ def audit_sample_cmd(ctx: typer.Context, stage: StageOption = StageChoice.TITLE_
         drawn = audit_service.audit_sample(project, project.human_actor(), stage=_stage(stage))
         titles = {work.id: work.title for work in list_works(project)}
         agreed = agreement_service.agreed_works(project, stage=_stage(stage))
+        found = {
+            work_id: evidence_service.work_evidence(project, work_id, _stage(stage))
+            for work_id in drawn.work_ids
+        }
     typer.echo(
         f"audit {drawn.audit_id}: {len(drawn.work_ids)} of {drawn.population} agreed works "
         f"({drawn.exclusions} exclusions, {drawn.inclusions} inclusions)"
     )
     for work_id in drawn.work_ids:
         typer.echo(f"{work_id}  agreed {agreed[work_id].verdict}  {titles[work_id]}")
+        item = found[work_id]
+        for line in render.evidence_lines(work_id, item.document_id, item.conversion_id):
+            typer.echo(line)
+        for label, view in item.decisions.items():
+            for line in render.decision_lines(label, view):
+                typer.echo(line)
 
 
 @audit_app.command("label")

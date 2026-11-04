@@ -39,6 +39,7 @@ from factory.services import chase as chase_service
 from factory.services import check as check_service
 from factory.services import dedup as dedup_service
 from factory.services import document_read as document_read_service
+from factory.services import evidence as evidence_service
 from factory.services import fulltext as fulltext_service
 from factory.services import fulltext_status as fulltext_status_service
 from factory.services import methods as methods_service
@@ -526,6 +527,7 @@ def build_server(
                         "work_id": work_id,
                         "title": titles[work_id],
                         "agreed_verdict": agreed[work_id].verdict,
+                        **_evidence_fields(opened, work_id, run_stage),
                     }
                     for work_id in drawn.work_ids
                 ],
@@ -877,6 +879,22 @@ def _items_path(field: str, original: int) -> str:
     return re.sub(r"^items\.\d+", f"items.{original}", field)
 
 
+def _evidence_fields(project: Project, work_id: str, stage: ScreeningStage) -> dict[str, JsonValue]:
+    """A full-text item's document, pinned conversion and the passes' cited anchors and quotes;
+    nothing at title/abstract."""
+    if stage is not ScreeningStage.FULL_TEXT:
+        return {}
+    found = evidence_service.work_evidence(project, work_id, stage)
+    decisions: JsonValue = {
+        label: view.model_dump(mode="json") for label, view in found.decisions.items()
+    }
+    return {
+        "document_id": found.document_id,
+        "conversion_id": found.conversion_id,
+        "decisions": decisions,
+    }
+
+
 def _next_calibration(project: Project, stage: ScreeningStage) -> JsonValue:
     """The first calibration work without a human label, with the counts. Counts only otherwise."""
     items = calibration_service.calibration_items(project, stage=stage)
@@ -886,7 +904,12 @@ def _next_calibration(project: Project, stage: ScreeningStage) -> JsonValue:
     record: JsonValue = None
     if pending:
         work = corpus[pending[0]]
-        record = {"work_id": work.id, "title": work.title, "abstract": work.abstract}
+        record = {
+            "work_id": work.id,
+            "title": work.title,
+            "abstract": work.abstract,
+            **_evidence_fields(project, work.id, stage),
+        }
     return {"record": record, "drawn": len(items), "labelled": len(items) - len(pending)}
 
 

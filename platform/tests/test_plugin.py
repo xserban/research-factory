@@ -40,6 +40,9 @@ def test_rf_screen_full_text_mode_section() -> None:
     assert "pinned" in section and "ONE `anchor`" in section
     assert "character for character" in section and "single paragraph or table cell" in section
     assert "outside knowledge" in section
+    assert "needs a fresh Claude Code session" in section
+    assert "may screen both stages" not in section
+    assert "`after` set to the page's `next_after`" in section
     assert "screen_agreement" in section  # named only to forbid it
     for kept in ("## Independence", "## Procedure", "## Tool arguments", "## Done when"):
         assert kept in text
