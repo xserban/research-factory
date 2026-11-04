@@ -89,7 +89,7 @@ from factory.model.extraction import (
     scope_of_schema_ref,
 )
 from factory.model.protocol import ExtractionSchema, ProtocolAmended, ProtocolStatus, ScreeningStage
-from factory.model.screening import Channel, PassLabel
+from factory.model.screening import PassLabel
 from factory.model.staleness import RowRef, scope_rule, stale_rows, touches
 from factory.model.task import Task, TaskCompleted, TaskStatus
 from factory.packs import FieldKind, Pack, get_pack
