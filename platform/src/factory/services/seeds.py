@@ -41,9 +41,10 @@ from factory.model.seed import (
     SeedSplitDrawn,
     SeedUnresolved,
 )
-from factory.model.work import ProvenanceMethod, Work
+from factory.model.work import Provenance, ProvenanceMethod, Work
 from factory.model.work_ids import arxiv_id_from_doi
 from factory.services.context import Project
+from factory.services.dedup import active_merges
 from factory.services.results import BatchResult, ItemError
 from factory.services.search import (
     RunSummary,
@@ -294,11 +295,17 @@ class SeedCheck(StrictModel):
     role: SeedRole
     status: Literal["retrieved", "explained", "missing"]
     matched_work: str | None
+    found_by_search: bool = False
 
 
 class SeedRecall(StrictModel):
+    """Recall counts only seeds a search found (decision 54); `*_admitted` counts retrieved seeds
+    that only a human admission put in the corpus."""
+
     development: float | None
     held_out: float | None
+    development_admitted: int = 0
+    held_out_admitted: int = 0
 
 
 class _Seed(StrictModel):
@@ -562,6 +569,8 @@ def seed_check(project: Project) -> list[SeedCheck]:
     seeds = _load_seeds(project)
     roles = _roles(seeds, _split(project))
     corpus = list_works(project)
+    by_id = {work.id: work for work in corpus}
+    groups = _merge_groups(project)
     explained = _explained_ids(project)
     admitted = _admitted(project)
     checks: list[SeedCheck] = []
@@ -582,26 +591,57 @@ def seed_check(project: Project) -> list[SeedCheck]:
                 role=roles[seed.seed_id],
                 status=status,
                 matched_work=matched,
+                found_by_search=matched is not None
+                and any(
+                    _searched(by_id[wid].provenance)
+                    for wid in groups.get(matched, (matched,))
+                    if wid in by_id
+                ),
             )
         )
     return checks
 
 
+def _searched(provenance: Sequence[Provenance]) -> bool:
+    """Whether a work was found by a search: any provenance other than a seed admission. The
+    corpus listing already drops probe-query provenance."""
+    return any(row.method is not ProvenanceMethod.SEED_ADMISSION for row in provenance)
+
+
+def _merge_groups(project: Project) -> dict[str, tuple[str, ...]]:
+    """Every member of an active dedup merge group, keyed by each member."""
+    groups: dict[str, tuple[str, ...]] = {}
+    for merge in active_merges(project):
+        members = (merge.primary, *merge.absorbed)
+        for member in members:
+            groups[member] = members
+    return groups
+
+
 def seed_recall(project: Project) -> SeedRecall:
-    """Retrieved over total, per role: development (late positives included) and held-out.
-    A figure is None when its role holds no positive seed."""
+    """Seeds found by search over total, per role: development (late positives included) and
+    held-out. A seed a human admitted after an explained miss is retrieved but is not a search
+    find, so it is excluded from the figure and counted in `*_admitted`. A figure is None when
+    its role holds no positive seed."""
     checks = seed_check(project)
+    development = [c for c in checks if c.role in _DEVELOPMENT_ROLES]
+    held_out = [c for c in checks if c.role is SeedRole.HELD_OUT]
     return SeedRecall(
-        development=_recall([c for c in checks if c.role in _DEVELOPMENT_ROLES]),
-        held_out=_recall([c for c in checks if c.role is SeedRole.HELD_OUT]),
+        development=_recall(development),
+        held_out=_recall(held_out),
+        development_admitted=_admitted_count(development),
+        held_out_admitted=_admitted_count(held_out),
     )
 
 
 def _recall(checks: list[SeedCheck]) -> float | None:
     if not checks:
         return None
-    retrieved = sum(1 for check in checks if check.status == "retrieved")
-    return retrieved / len(checks)
+    return sum(1 for check in checks if check.found_by_search) / len(checks)
+
+
+def _admitted_count(checks: list[SeedCheck]) -> int:
+    return sum(1 for c in checks if c.status == "retrieved" and not c.found_by_search)
 
 
 def _roles(seeds: list[_Seed], split: _Split | None) -> dict[str, SeedRole]:

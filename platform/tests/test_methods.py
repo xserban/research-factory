@@ -82,6 +82,7 @@ def test_methods_reports_held_out_before_development() -> None:
     held_out = text.index("Held-out seed recall: 0.500")
     development = text.index("Development seed recall: 1.000 (optimistic")
     assert held_out < development
+    assert "Held-out seeds admitted, not counted: 0." in text
 
 
 def test_methods_discloses_models_as_agent_reported(

@@ -284,6 +284,7 @@ def test_admitted_work_has_seed_admission_provenance_and_checks_retrieved(
         "retrieved",
         admitted.work_id,
     )
+    assert check.found_by_search is False
     [work] = list_works(explore_project)
     assert work.id == admitted.work_id
     assert [prov.method for prov in work.provenance] == [ProvenanceMethod.SEED_ADMISSION]

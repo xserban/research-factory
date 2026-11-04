@@ -12,6 +12,7 @@ from factory.events.reader import read_all
 from factory.model.chase import CHASE_CHUNK, ChaseDirection
 from factory.model.screening import Channel, PassLabel
 from factory.model.search import QueryKind, QueryPurpose, QuerySpec, RunStatus
+from factory.model.seed import SeedKind, SeedSpec
 from factory.model.work import ProvenanceMethod
 from factory.services.calibration import calibration_items, label_calibration
 from factory.services.chase import (
@@ -23,6 +24,7 @@ from factory.services.chase import (
 from factory.services.context import Project
 from factory.services.screening import open_pass
 from factory.services.search import get_work, list_works, register_query, run_query
+from factory.services.seeds import add_seeds, seed_check
 from factory.sources.http import PoliteClient
 from factory.sources.openalex import OpenAlexSource
 from factory.sources.registry import SourceFactory
@@ -375,3 +377,17 @@ def test_agent_round_carries_provenance(
     assert round_event.actor.skill == agent.skill
     assert round_event.input_blob is not None
     assert project.blobs.get_json(round_event.input_blob) == {"directions": ["backward"]}
+
+
+def test_chase_found_seed_counts_as_search_find(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    protocol_id = _corpus(project, agent, human, mock_sources)
+    _settle(project, agent, human, protocol_id)
+    spec = SeedSpec(kind=SeedKind.POSITIVE, cite="Citing 900", doi="10.1000/c900")
+    sources = mock_sources(openalex=[_citing(900)])
+    [outcome] = add_seeds(project, human, [spec], sources=sources).written
+    search_chase(project, human, [ChaseDirection.BACKWARD], sources=sources)
+
+    [check] = [c for c in seed_check(project) if c.seed_id == outcome.seed_id]
+    assert (check.status, check.found_by_search) == ("retrieved", True)

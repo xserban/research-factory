@@ -56,6 +56,8 @@ class MethodsReport(StrictModel):
     audit_n: int
     recall_held_out: float | None
     recall_development: float | None
+    recall_held_out_admitted: int = 0
+    recall_development_admitted: int = 0
     chase_rounds: int
     admitted_seeds: int
     prisma: PrismaFlow
@@ -138,6 +140,8 @@ def methods_report(project: Project) -> MethodsReport:
         audit_n=0 if audit is None else audit.labelled,
         recall_held_out=recall.held_out,
         recall_development=recall.development,
+        recall_held_out_admitted=recall.held_out_admitted,
+        recall_development_admitted=recall.development_admitted,
         chase_rounds=len(chase_rounds(project)),
         admitted_seeds=admitted_seed_count(project),
         prisma=flow,
@@ -232,6 +236,7 @@ def agent_methods(project: Project, report: MethodsReport) -> tuple[MethodsRepor
     if not _screening_started(project):
         withheld.add("recall_held_out")
         update["recall_held_out"] = None
+        update["recall_held_out_admitted"] = 0
     return report.model_copy(update=update), frozenset(withheld)
 
 
@@ -412,11 +417,20 @@ def _evidence(report: MethodsReport) -> str:
 
 
 def _seed_recall(report: MethodsReport, withheld: frozenset[str]) -> str:
-    held_out = WITHHELD_RECALL if "recall_held_out" in withheld else _fmt(report.recall_held_out)
+    """Recall counts seeds found by search only (decision 54); admitted seeds are listed beside."""
+    if "recall_held_out" in withheld:
+        held_out = WITHHELD_RECALL
+        held_admitted = ""
+    else:
+        held_out = _fmt(report.recall_held_out)
+        held_admitted = f" Held-out seeds admitted, not counted: {report.recall_held_out_admitted}."
     return (
         f"Seed recall. Held-out seed recall: {held_out}. "
         f"Development seed recall: {_fmt(report.recall_development)} (optimistic: the development "
         "seeds informed the protocol and the screening instructions). "
+        "Recall counts seeds found by search; a seed a human admitted after an explained miss is "
+        f"retrieved but not counted.{held_admitted} "
+        f"Development seeds admitted, not counted: {report.recall_development_admitted}. "
         f"Seeds admitted by lookup: {report.admitted_seeds}."
     )
 

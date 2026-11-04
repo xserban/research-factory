@@ -19,6 +19,7 @@ from factory.services.search import register_query, run_query
 from factory.services.seeds import (
     SeedRole,
     add_seeds,
+    admit_seed,
     agent_seeds,
     all_seeds,
     draw_split,
@@ -339,3 +340,35 @@ def test_split_projection_rebuild_equals_incremental(
 
 def _events(project: Project) -> list[Any]:
     return read_all(project.paths.events_dir, project.catalog)
+
+
+# --- Held-out recall counts search finds only (decision 54) ---
+
+
+def _held_out_ids(project: Project) -> list[str]:
+    return sorted(r.seed_id for r in all_seeds(project) if r.role is SeedRole.HELD_OUT)
+
+
+def test_admitted_held_out_seed_is_retrieved_but_not_recall(
+    explore_project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    for n in range(1, 7):
+        _resolved(explore_project, agent, mock_sources, n)
+    split_seeds(explore_project, random_seed=11)
+    missed, found = _held_out_ids(explore_project)
+    n_missed, n_found = int(missed[4:]), int(found[4:])
+    _corpus(explore_project, mock_sources, [_item(n_found, 2020)])
+    explain_seed_miss(
+        explore_project, human, missed, "not indexed", ProvenanceMethod.SEED_ADMISSION
+    )
+    admit_seed(
+        explore_project, human, missed, sources=mock_sources(openalex=[_item(n_missed, 2020)])
+    )
+
+    checks = {c.seed_id: c for c in seed_check(explore_project)}
+    assert (checks[missed].status, checks[missed].found_by_search) == ("retrieved", False)
+    assert (checks[found].status, checks[found].found_by_search) == ("retrieved", True)
+    recall = seed_recall(explore_project)
+    assert recall.held_out == 0.5
+    assert recall.held_out_admitted == 1
+    assert recall.development_admitted == 0
