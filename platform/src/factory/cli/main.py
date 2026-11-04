@@ -1,6 +1,6 @@
 """The `factory` command: parse arguments, call a service, format output. No business logic here."""
 
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -35,6 +35,7 @@ from factory.services import document_convert as document_convert_service
 from factory.services import document_read as document_read_service
 from factory.services import evidence as evidence_service
 from factory.services import evidence_report as evidence_report_service
+from factory.services import exports as exports_service
 from factory.services import extraction as extraction_service
 from factory.services import extraction_agreement as extraction_agreement_service
 from factory.services import extraction_audit as extraction_audit_service
@@ -140,8 +141,14 @@ report_app = typer.Typer(
     help="PRISMA flow, search report, methods statement and evidence report.",
     no_args_is_help=True,
 )
+export_app = typer.Typer(
+    name="export",
+    help="Bibliography (BibTeX, CSL-JSON) and the PRISMA diagram (SVG), from the events.",
+    no_args_is_help=True,
+)
 app.add_typer(seeds_app)
 app.add_typer(report_app)
+app.add_typer(export_app)
 app.add_typer(protocol_app)
 app.add_typer(calibrate_app)
 app.add_typer(screen_app)
@@ -861,14 +868,115 @@ def extract_audit_report_cmd(ctx: typer.Context) -> None:
 _JSON = Annotated[bool, typer.Option("--json", help="Print the report model as JSON.")]
 
 
+class PrismaFormat(StrEnum):
+    MD = "md"
+    SVG = "svg"
+
+
 @report_app.command("prisma")
-def report_prisma(ctx: typer.Context, as_json: _JSON = False) -> None:
+def report_prisma(
+    ctx: typer.Context,
+    as_json: _JSON = False,
+    fmt: Annotated[
+        PrismaFormat, typer.Option("--format", help="Markdown (default) or the SVG diagram.")
+    ] = PrismaFormat.MD,
+) -> None:
     """The PRISMA 2020 flow, computed from the events."""
+    state = _state(ctx)
+    if as_json and fmt is PrismaFormat.SVG:
+        _fail("--json and --format svg are exclusive", 2)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        if fmt is PrismaFormat.SVG:
+            svg = exports_service.export_prisma_svg(project)
+        else:
+            flow = prisma_service.prisma_flow(project)
+    if fmt is PrismaFormat.SVG:
+        typer.echo(svg, nl=False)
+        return
+    typer.echo(flow.model_dump_json() if as_json else render.prisma_markdown(flow), nl=as_json)
+
+
+def _emit(chunks: Iterable[str], out: Path | None) -> None:
+    """Stream `chunks` to `out` (overwriting it without asking) or to stdout."""
+    if out is None:
+        for chunk in chunks:
+            typer.echo(chunk, nl=False)
+        return
+    try:
+        with out.open("w", encoding="utf-8") as handle:
+            for chunk in chunks:
+                handle.write(chunk)
+    except OSError as exc:
+        _fail(f"cannot write {out}: {exc.strerror or exc}", 1)
+
+
+_SCOPE = Annotated[
+    str | None, typer.Option("--scope", help="included (default) or corpus; not with --id.")
+]
+_IDS = Annotated[list[str] | None, typer.Option("--id", help="A work id (repeatable).")]
+_OUT = Annotated[
+    Path | None, typer.Option("--out", help="Write here (overwritten) instead of printing.")
+]
+
+
+def _export_bibliography(
+    ctx: typer.Context,
+    fmt: Literal["bibtex", "csl"],
+    scope: str | None,
+    ids: list[str] | None,
+    ascii_only: bool,
+    out: Path | None,
+) -> None:
     state = _state(ctx)
     with _reporting_errors():
         project = _resolve_project(state)
-        flow = prisma_service.prisma_flow(project)
-    typer.echo(flow.model_dump_json() if as_json else render.prisma_markdown(flow), nl=as_json)
+        chunks = exports_service.export_bibliography(
+            project,
+            fmt,
+            scope=scope,
+            ids=ids or (),
+            ascii_only=ascii_only,
+        )
+        _emit(chunks, out)
+
+
+@export_app.command("bibtex")
+def export_bibtex(
+    ctx: typer.Context,
+    scope: _SCOPE = None,
+    ids: _IDS = None,
+    ascii_only: Annotated[
+        bool, typer.Option("--ascii", help="Escape non-ASCII characters as LaTeX.")
+    ] = False,
+    out: _OUT = None,
+) -> None:
+    """The bibliography as BibTeX."""
+    _export_bibliography(ctx, "bibtex", scope, ids, ascii_only, out)
+
+
+@export_app.command("csl")
+def export_csl(
+    ctx: typer.Context,
+    scope: _SCOPE = None,
+    ids: _IDS = None,
+    ascii_only: Annotated[
+        bool, typer.Option("--ascii", help="Accepted for symmetry; CSL-JSON is always UTF-8.")
+    ] = False,
+    out: _OUT = None,
+) -> None:
+    """The bibliography as CSL-JSON."""
+    _export_bibliography(ctx, "csl", scope, ids, ascii_only, out)
+
+
+@export_app.command("prisma")
+def export_prisma(ctx: typer.Context, out: _OUT = None) -> None:
+    """The PRISMA 2020 flow diagram as SVG."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        svg = exports_service.export_prisma_svg(project)
+        _emit([svg], out)
 
 
 @report_app.command("search")

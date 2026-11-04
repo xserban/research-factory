@@ -45,6 +45,7 @@ async def test_project_status_tool(settings: Settings, project: Project, clock: 
             "report_prisma",
             "report_methods",
             "report_evidence",
+            "export_bibliography",
             "trace",
             "check",
             "fulltext_fetch",

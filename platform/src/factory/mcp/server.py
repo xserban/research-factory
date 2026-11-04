@@ -42,6 +42,7 @@ from factory.services import dedup as dedup_service
 from factory.services import document_read as document_read_service
 from factory.services import evidence as evidence_service
 from factory.services import evidence_report as evidence_report_service
+from factory.services import exports as exports_service
 from factory.services import extraction as extraction_service
 from factory.services import extraction_agreement as extraction_agreement_service
 from factory.services import extraction_audit as extraction_audit_service
@@ -78,6 +79,10 @@ class _ProbeQuery(StrictModel):
     query: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
     kind: QueryKind = QueryKind.KEYWORD
     filters: dict[str, str] = Field(default_factory=dict)
+
+
+MCP_EXPORT_MAX_WORKS = 2000
+"""The most works one `export_bibliography` call returns; larger exports use the CLI."""
 
 
 def build_server(
@@ -645,6 +650,46 @@ def build_server(
             return _withheld(opened, report.model_dump(mode="json"), include_work_ids=False)
 
         return _reply(project, evidence, include_work_ids=False)
+
+    @server.tool()
+    def export_bibliography(
+        project: str,
+        format: str = "bibtex",
+        scope: str = "included",
+        ids: list[str] | None = None,
+    ) -> dict[str, JsonValue]:
+        """The bibliography of a scope of works as BibTeX or CSL-JSON text (`format` bibtex or
+        csl; `scope` included or corpus, or explicit work `ids`, which replace the scope). At
+        most MCP_EXPORT_MAX_WORKS works; use the CLI for more. Built from events only; refused to
+        any session that has joined a screening or extraction pass. Read-only."""
+
+        def export() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            chosen = exports_service.select_works(
+                opened,
+                None if ids else scope,
+                ids or (),
+            )
+            if len(chosen) > MCP_EXPORT_MAX_WORKS:
+                raise FactoryValidationError(
+                    [
+                        ValidationIssue(
+                            "scope",
+                            f"{len(chosen)} works exceed the {MCP_EXPORT_MAX_WORKS} limit "
+                            "of this tool; too large; use the CLI",
+                        )
+                    ]
+                )
+            body = "".join(exports_service.render_bibliography(opened, format, chosen))
+            data: dict[str, JsonValue] = {
+                "text": body,
+                "count": len(chosen),
+                "scope": "ids" if ids else scope,
+            }
+            return _withheld(opened, data)
+
+        return _reply(project, export)
 
     @server.tool()
     def trace(project: str, ref: str, direction: str = "back") -> dict[str, JsonValue]:
