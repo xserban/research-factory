@@ -2,7 +2,7 @@
 
 Findings carry identifiers, counts and fixed text only, never a field value or a quote. The audit
 findings (`extraction-audit-missing`, `extraction-error-high`) and the audit figures of the methods
-statement wait for the audit service (task 9) and are wired after it merges.
+statement are wired to the audit service (task 9).
 """
 
 from collections.abc import Callable, Mapping
@@ -11,7 +11,7 @@ import pytest
 from sqlalchemy import text
 
 from factory.events.envelope import Actor
-from factory.model.extraction import AuditItemRef
+from factory.model.extraction import AuditItemRef, ReportedIn
 from factory.model.project import RigorMode
 from factory.model.protocol import ScreeningStage
 from factory.model.screening import Channel, PassLabel
@@ -91,13 +91,17 @@ def _severities(project: Project, code: str) -> list[str | None]:
 
 
 def test_pending_present_then_absent(
-    project: Project, ext_a: Actor, ext_b: Actor, world: list[str]
+    project: Project, agent: Actor, ext_a: Actor, ext_b: Actor, world: list[str]
 ) -> None:
     found = _hit(project, "extraction-pending")
     assert found is not None and found.refs == world
     assert _severities(project, "extraction-pending") == ["warning"] * 3
     _both(project, ext_a, ext_b)
     assert _hit(project, "extraction-pending") is None
+    fields = ("method_name", "task", "dataset", "split", "metric", "value", "hardware")
+    _amend_schema(project, agent, fields=fields)
+    stale = _hit(project, "extraction-pending")
+    assert stale is not None and stale.refs == world  # stale units are pending again
 
 
 def test_no_extraction_findings_without_schema(
@@ -198,6 +202,43 @@ def test_copy_flag_when_a_marker_contradicts_own(
     assert found is not None and len(found.refs) == 1
     assert _severities(project, "extraction-copy-flag") == ["warning"] * 3
 
+    def cited(project: Project) -> list[ExtractionRow]:
+        out = real(project)
+        first = out[0]
+        fields = {
+            name: f.model_copy(update={"copy_marker": True, "reported_in": ReportedIn.CITED})
+            for name, f in first.fields.items()
+        }
+        return [first.model_copy(update={"fields": fields}), *out[1:]]
+
+    monkeypatch.setattr(check_module, "live_rows", cited)
+    assert _hit(project, "extraction-copy-flag") is None  # a declared citation is no contradiction
+
+
+def test_copy_flag_ignores_a_stale_row(
+    project: Project,
+    monkeypatch: pytest.MonkeyPatch,
+    agent: Actor,
+    ext_a: Actor,
+    ext_b: Actor,
+    world: list[str],
+) -> None:
+    _both(project, ext_a, ext_b)
+    fields = ("method_name", "task", "dataset", "split", "metric", "value", "hardware")
+    _amend_schema(project, agent, fields=fields)  # every row is now stale
+    real = live_rows
+
+    def marked(project: Project) -> list[ExtractionRow]:
+        out = real(project)
+        first = out[0]
+        marks = {
+            name: f.model_copy(update={"copy_marker": True}) for name, f in first.fields.items()
+        }
+        return [first.model_copy(update={"fields": marks}), *out[1:]]
+
+    monkeypatch.setattr(check_module, "live_rows", marked)
+    assert _hit(project, "extraction-copy-flag") is None
+
 
 def test_agent_view_hides_error_rate() -> None:
     finding = Finding(
@@ -270,6 +311,7 @@ def test_error_high_severity_and_agent_view(
     assert [f.severity for f in report.findings if f.code == "extraction-error-high"] == ["warning"]
     shown = [f for f in agent_view(report).findings if f.code == "extraction-error-high"]
     assert len(shown) == 1 and "0.075" not in shown[0].message
+    assert not any(ch.isdigit() for ch in found.message + shown[0].message)
     text = render_methods(methods_report(project))
     assert "0.075 over 40 labelled values" in text
     assert methods_report(project).extraction_audit_n == 40
