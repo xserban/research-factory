@@ -8,11 +8,24 @@ Sources and notice kinds are kept sorted so the order they are stated in never c
 from __future__ import annotations
 
 from datetime import date
+from enum import StrEnum
 from typing import Literal, Self
 
 from pydantic import Field, field_validator, model_validator
 
 from factory.model.base import StrictModel
+
+
+CycleTrigger = Literal["scheduler", "human", "agent"]
+
+
+class CycleStatus(StrEnum):
+    """`OPEN` is a cycle started and not finished; the other three are terminal."""
+
+    OPEN = "open"
+    COMPLETE = "complete"
+    PARTIAL = "partial"
+    FAILED = "failed"
 
 
 class WatchSource(StrictModel):
