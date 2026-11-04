@@ -12,3 +12,4 @@ Minor review findings parked during the v1 build, to address when iterating from
 - cleanups-2 T6: title-only seeds with a comma now refused (OpenAlex keyword grammar) — consider escaping instead; seed_check oracle test ignores `found` works earlier in corpus than DOI match.
 - D+E final fix: evidence-report and check neutral markers fire on different conditions (audit_n>0 vs labelled|outdated); speed rows without comparability keys never pair (key-missing) — may hide most within-paper ratios, note in decision 52 limits; direction still per group (two metrics, no direction -> direction-unknown).
 - exports-a: 100k export 24 s vs plan target 5 s (work validation + JSON parse dominate); test bound 60 s.
+- perf (testspeed report): Index.sync on every read (~2.5 ms, thousands of calls) — fast path on unchanged file sizes + db identity; check() recomputes final_outcomes ~50x per call (~8 s on extraction world); default_projection() rebuilds metadata per open (~55 ms).
