@@ -364,7 +364,7 @@ def test_rebuild_state_hash_stable(project: Project) -> None:
     assert project.index.rebuild() == before
 
 
-def test_slice1_and_2c_logs_unchanged(project: Project) -> None:
+def test_extraction_events_leave_screening_tables_unchanged(project: Project) -> None:
     _record(
         project,
         "screening.pass_opened",

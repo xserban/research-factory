@@ -76,7 +76,7 @@ RunStage = Literal[ScreeningStage.TITLE_ABSTRACT, ScreeningStage.FULL_TEXT]
 """The stage of a screening run, decision or event. `either` names a criterion's reach only."""
 
 
-def _anchor_form(value: str | None) -> str | None:
+def anchor_form(value: str | None) -> str | None:
     """Accept a document anchor (`ANCHOR_RE`) or a table cell anchor; the form only."""
     if value is None:
         return None
@@ -85,7 +85,7 @@ def _anchor_form(value: str | None) -> str | None:
     raise ValueError(f"{value!r} is not a document anchor")
 
 
-Anchor = Annotated[str | None, AfterValidator(_anchor_form)]
+Anchor = Annotated[str | None, AfterValidator(anchor_form)]
 
 
 def _check_criterion(verdict: str, criterion: str | None) -> None:

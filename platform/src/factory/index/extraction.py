@@ -21,6 +21,7 @@ from sqlalchemy.engine import Connection
 from factory.events.envelope import Event
 from factory.index.projection import Handler
 from factory.model.extraction import (
+    WHOLE_ROW_MARKER,
     ClaimRecorded,
     ExtractionAuditLabelled,
     ExtractionAuditSampled,
@@ -31,7 +32,7 @@ from factory.model.extraction import (
     ExtractionResolved,
 )
 
-WHOLE_ROW = "*"
+WHOLE_ROW = WHOLE_ROW_MARKER
 """The `field` stored for a resolution of a whole row."""
 
 
