@@ -1305,18 +1305,26 @@ def import_show_cmd(
     ctx: typer.Context,
     import_id: Annotated[str, typer.Argument(help="An import id (imp_...).")],
     part: Annotated[
-        PartChoice, typer.Option("--part", help="development, held-out or all.")
-    ] = PartChoice.ALL,
+        PartChoice,
+        typer.Option("--part", help="development (default), or held-out/all with --researcher."),
+    ] = PartChoice.DEVELOPMENT,
+    researcher: Annotated[
+        bool,
+        typer.Option("--researcher", help="Confirm a researcher's view; needed for held-out/all."),
+    ] = False,
 ) -> None:
-    """The records of an import with their parts (the researcher's view, held-out included)."""
+    """The records of an import. By default only records that are not held out are listed."""
     state = _state(ctx)
-    chosen: imports_service.Part | None = None
-    if part is PartChoice.DEVELOPMENT:
-        chosen = "development"
-    elif part is PartChoice.HELD_OUT:
-        chosen = "held-out"
+    if part is not PartChoice.DEVELOPMENT:
+        if not researcher:
+            _fail(f"--part {part.value} lists held-out records; pass --researcher", 1)
+        typer.echo(
+            "warning: researcher view with held-out records; this output must not be shown to "
+            "agents",
+            err=True,
+        )
     with _reporting_errors():
         project = _resolve_project(state)
-        records = imports_service.list_import_records(project, import_id, part=chosen)
+        records = imports_service.list_import_records(project, import_id, view=part.value)
     for line in render.import_record_lines(records):
         typer.echo(line)

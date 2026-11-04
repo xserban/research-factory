@@ -179,3 +179,17 @@ def test_split_drawn_shape() -> None:
             random_seed=3,
             parts_blob=None,
         )
+
+
+def test_default_seed_is_32_random_bits(
+    project: Project, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[int] = []
+
+    def randbits(k: int) -> int:
+        calls.append(k)
+        return 123456789
+
+    monkeypatch.setattr("factory.services.imports.secrets.randbits", randbits)
+    record_import(project, _bib(tmp_path, 3), format=ImportFormat.BIBTEX, role=ImportRole.REFERENCE)
+    assert calls == [32] and _split_event(project).random_seed == 123456789

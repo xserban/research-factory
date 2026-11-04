@@ -6,14 +6,16 @@ Invariants of `parse_pdf_folder`:
 - One record per `*.pdf` file under the folder (recursively), in sorted path order.
 - `record_sha256` is the file's bytes hash; the attachment is the file itself, known by the hash
   of its path relative to the folder and its content hash.
-- Fields: identifiers from `sniff_identifiers` (filename, else page 1), title from the PDF's
-  metadata when present. Page-1 text is read in memory and never returned.
+- Each file is read from disk once; the record hash, identifier sniffing (filename, else page 1)
+  and the metadata title all use those bytes. Page-1 text is read in memory and never returned.
 - A file without a PDF header is `malformed`, flagged `not-pdf`.
 """
 
 from __future__ import annotations
 
+import io
 import re
+from collections.abc import Callable
 from pathlib import Path
 from typing import Literal
 
@@ -61,11 +63,16 @@ def sniff_identifiers(path: Path) -> tuple[set[str], Source]:
     is returned as its `arxiv:` form. The filename is read first; page 1's text is read only if the
     filename yields nothing. A reader failure yields `(set(), "none")`.
     """
-    from_name = _identifiers_in(_FILE_ARXIV, _FILE_DOI, _file_stem(path.name), underscore=True)
+    return _sniff(path.name, lambda: PdfReader(path))
+
+
+def _sniff(name: str, reader: Callable[[], PdfReader]) -> tuple[set[str], Source]:
+    """`sniff_identifiers` over a file name and a reader of its bytes, opened only if needed."""
+    from_name = _identifiers_in(_FILE_ARXIV, _FILE_DOI, _file_stem(name), underscore=True)
     if from_name:
         return from_name, "filename"
     try:
-        text = PdfReader(path).pages[0].extract_text() or ""
+        text = reader().pages[0].extract_text() or ""
     # pypdf raises many exception types on damaged input, and none of them is fatal here.
     except Exception:
         return set(), "none"
@@ -100,7 +107,7 @@ def parse_pdf_folder(folder: Path) -> ParsedImport:
                 )
             )
             continue
-        records.append(_record(ordinal, path, folder, digest))
+        records.append(_record(ordinal, path, folder, data, digest))
         attachment_bytes[digest] = data
     return ParsedImport(
         format=ImportFormat.PDFS,
@@ -111,11 +118,12 @@ def parse_pdf_folder(folder: Path) -> ParsedImport:
     )
 
 
-def _record(ordinal: int, path: Path, folder: Path, digest: str) -> ImportRecord:
-    identifiers, _ = sniff_identifiers(path)
+def _record(ordinal: int, path: Path, folder: Path, data: bytes, digest: str) -> ImportRecord:
+    """One PDF's record, from the one read of its bytes (the file is not opened again)."""
+    identifiers, _ = _sniff(path.name, lambda: PdfReader(io.BytesIO(data)))
     arxiv = _first(identifiers, _ARXIV_KEY)
     fields, flags = bounded_fields(
-        title=_metadata_title(path),
+        title=_metadata_title(data),
         authors=[],
         year=None,
         doi=_first(identifiers, _DOI_KEY),
@@ -144,9 +152,9 @@ def _first(identifiers: set[str], prefix: str) -> str | None:
     return found[0] if found else None
 
 
-def _metadata_title(path: Path) -> str | None:
+def _metadata_title(data: bytes) -> str | None:
     try:
-        metadata = PdfReader(path).metadata
+        metadata = PdfReader(io.BytesIO(data)).metadata
         title = metadata.title if metadata is not None else None
     # A damaged PDF's metadata is advisory; any reader failure means no title.
     except Exception:

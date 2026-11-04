@@ -174,3 +174,58 @@ def test_collection_length_validated(project: Project, bib_path: Path) -> None:
 def test_unknown_import_has_no_records(project: Project) -> None:
     with pytest.raises(FactoryValidationError):
         import_records(project, "imp_01ARZ3NDEKTSV4RRFFQ69G5FAV")
+
+
+def test_export_read_once_archive_matches_parsed_bytes(
+    project: Project, bib_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The archived bytes are the parsed bytes, even if the file changes after the read."""
+    from factory.imports import registry
+
+    original = bib_path.read_bytes()
+    real = registry.parse_bytes
+
+    def mutate_then_parse(format: ImportFormat, data: bytes, base: Path | None):  # type: ignore[no-untyped-def]
+        bib_path.write_text("@article{other, title={Changed After Read}}\n")
+        return real(format, data, base)
+
+    monkeypatch.setattr("factory.services.imports.parse_bytes", mutate_then_parse)
+    s = record_import(project, bib_path, format=ImportFormat.BIBTEX, role=ImportRole.REFERENCE)
+    payload = ImportRecorded.model_validate(only_event(project, "import.recorded").payload)
+    assert project.library.get(payload.file_hash) == original
+    titles = [r.fields.title for r in import_records(project, s.import_id) if r.fields]
+    assert "Changed After Read" not in titles
+
+
+def test_pdf_folder_files_read_once(
+    project: Project, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every PDF is read from disk once; sniffing and metadata read the same bytes."""
+    import io
+
+    from factory.imports import pdfs
+
+    folder = tmp_path / "pdfs"
+    folder.mkdir()
+    (folder / "2101.00042.pdf").write_bytes(b"%PDF-1.4 tiny")
+    (folder / "plain.pdf").write_bytes(b"%PDF-1.4 other")
+    sources: list[object] = []
+    real_reader = pdfs.PdfReader
+
+    def reader(stream: object, *args: object, **kwargs: object):  # type: ignore[no-untyped-def]
+        sources.append(stream)
+        return real_reader(stream, *args, **kwargs)  # type: ignore[arg-type]
+
+    reads: list[Path] = []
+    real_read = Path.read_bytes
+
+    def read_bytes(self: Path) -> bytes:
+        reads.append(self)
+        return real_read(self)
+
+    monkeypatch.setattr(pdfs, "PdfReader", reader)
+    monkeypatch.setattr(Path, "read_bytes", read_bytes)
+    record_import(project, folder, format=ImportFormat.PDFS, role=ImportRole.REFERENCE)
+    pdf_reads = [p for p in reads if p.suffix == ".pdf"]
+    assert sorted(p.name for p in pdf_reads) == ["2101.00042.pdf", "plain.pdf"]
+    assert sources and all(isinstance(s, io.BytesIO) for s in sources)

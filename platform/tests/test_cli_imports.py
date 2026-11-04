@@ -91,18 +91,57 @@ def test_cli_show_lists_parts(project: Project, settings: Settings, tmp_path: Pa
         role=ImportRole.REFERENCE,
         random_seed=1,
     )
-    result = _invoke(settings, "import", "show", s.import_id)
-    assert result.exit_code == 0, result.stderr
-    lines = result.stdout.splitlines()
-    for ordinal in range(1, 8):
-        part = import_part(project, s.import_id, ordinal)
-        assert any(line.split()[:2] == [str(ordinal), part] for line in lines), result.stdout
-    held = _invoke(settings, "import", "show", s.import_id, "--part", "held-out")
+    parts = {o: import_part(project, s.import_id, o) for o in range(1, 8)}
+    held_out = {o for o, p in parts.items() if p == "held-out"}
+    assert held_out
+
+    default = _invoke(settings, "import", "show", s.import_id)
+    assert default.exit_code == 0, default.stderr
+    shown = {int(line.split()[0]) for line in default.stdout.splitlines() if line[:1].isdigit()}
+    assert shown == set(range(1, 8)) - held_out
+    assert "held-out" not in default.stdout
+
+    for part in ("held-out", "all"):
+        refused = _invoke(settings, "import", "show", s.import_id, "--part", part)
+        assert refused.exit_code == 1 and "--researcher" in refused.stderr
+        assert "held-out" not in refused.stdout
+
+    held = _invoke(settings, "import", "show", s.import_id, "--part", "held-out", "--researcher")
+    assert held.exit_code == 0, held.stderr
+    assert "must not be shown to agents" in held.stderr
     held_rows = [line for line in held.stdout.splitlines() if line[:1].isdigit()]
-    assert held_rows and all(line.split()[1] == "held-out" for line in held_rows)
-    dev = _invoke(settings, "import", "show", s.import_id, "--part", "development")
-    dev_rows = [line for line in dev.stdout.splitlines() if line[:1].isdigit()]
-    assert len(dev_rows) + len(held_rows) == 6
+    assert {int(line.split()[0]) for line in held_rows} == held_out
+    assert all(line.split()[1] == "held-out" for line in held_rows)
+
+    everything = _invoke(settings, "import", "show", s.import_id, "--part", "all", "--researcher")
+    lines = everything.stdout.splitlines()
+    for ordinal, part in parts.items():
+        assert any(line.split()[:2] == [str(ordinal), part] for line in lines), everything.stdout
+
+
+def test_cli_default_outputs_hide_held_out(
+    project: Project, settings: Settings, tmp_path: Path
+) -> None:
+    recorded = _invoke(settings, "import", "bib", str(_bib(tmp_path)), "--role", "reference")
+    assert recorded.exit_code == 0, recorded.stderr
+    listed = _invoke(settings, "import", "list")
+    for output in (recorded.stdout, listed.stdout):
+        assert "held-out" not in output and "held_out" not in output
+
+
+def test_cli_show_unsplit_import_lists_every_record(
+    project: Project, settings: Settings, tmp_path: Path
+) -> None:
+    s = record_import(
+        project, _bib(tmp_path), format=ImportFormat.BIBTEX, role=ImportRole.REFERENCE, split=False
+    )
+    result = _invoke(settings, "import", "show", s.import_id)
+    rows = [line for line in result.stdout.splitlines() if line[:1].isdigit()]
+    assert len(rows) == 7 and all(line.split()[1] == "unsplit" for line in rows)
+    assert result.stderr == ""
+
+
+def test_cli_show_unknown_import(project: Project, settings: Settings) -> None:
     missing = _invoke(settings, "import", "show", "imp_01ARZ3NDEKTSV4RRFFQ69G5FAV")
     assert missing.exit_code == 1 and "import_id" in missing.stderr
 

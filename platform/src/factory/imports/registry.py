@@ -32,6 +32,21 @@ PARSERS: Mapping[ImportFormat, Callable[[Path], ParsedImport]] = MappingProxyTyp
 )
 
 
+BYTE_PARSERS: Mapping[ImportFormat, Callable[[bytes, Path | None], ParsedImport]] = (
+    MappingProxyType({ImportFormat.BIBTEX: parse_bibtex, ImportFormat.CSL: parse_csl})
+)
+
+
 def parse(format: ImportFormat, path: Path) -> ParsedImport:
     """Parse `path` as `format`. Raises `ImportFormatError`, or `OSError` if unreadable."""
     return PARSERS[format](path)
+
+
+def parse_bytes(format: ImportFormat, data: bytes, base: Path | None) -> ParsedImport:
+    """Parse an export already read into memory, so the caller can archive the same bytes.
+
+    Only single-file formats have a byte form; a PDF folder raises `ValueError`.
+    """
+    if format not in BYTE_PARSERS:
+        raise ValueError(f"{format.value} has no single-file form")
+    return BYTE_PARSERS[format](data, base)

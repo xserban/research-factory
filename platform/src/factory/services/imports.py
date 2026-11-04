@@ -7,7 +7,7 @@ git-ignored library, the allow-listed records into `blobs/`, and writes `import.
 
 The split (plan Import-A ruling 5): when no search-purpose run has started yet, the records that
 are not malformed are split into development and held-out parts by `draw_split` over
-`(record key, year)`, from `random_seed` (default: the clock's microseconds), unless the
+`(record key, year)`, from `random_seed` (default: 32 random bits, recorded), unless the
 researcher declines (`split=False`). After the first search-purpose run there is no split
 (`post-search`). Probe, chase and seed runs do not count.
 
@@ -23,6 +23,7 @@ Invariants:
 
 from __future__ import annotations
 
+import secrets
 from pathlib import Path
 from typing import Literal
 
@@ -37,7 +38,7 @@ from factory.imports.model import (
     ParsedImport,
     ParseOutcome,
 )
-from factory.imports.registry import parse
+from factory.imports.registry import parse, parse_bytes
 from factory.model.base import StrictModel
 from factory.model.imports import (
     MAX_COLLECTION,
@@ -55,6 +56,7 @@ _SPLIT = "import.split_drawn"
 _SEED_LIMIT = 2**32
 
 Part = Literal["development", "held-out", "unsplit"]
+RecordView = Literal["development", "held-out", "all"]
 _PART: dict[str, Part] = {"development": "development", "held-out": "held-out"}
 
 
@@ -86,13 +88,14 @@ def record_import(
     issues = _collection_issues(collection)
     if random_seed is not None and not 0 <= random_seed < _SEED_LIMIT:
         issues.append(ValidationIssue("random_seed", "must be an integer from 0 to 2**32 - 1"))
-    parsed = _parse(format, path, issues)
-    if issues or parsed is None:
+    outcome = _parse(format, path, issues)
+    if issues or outcome is None:
         raise FactoryValidationError(issues)
+    parsed, data = outcome
 
     with project.index.exclusive():
         project.index.sync()
-        file_hash = _archive(project, path, parsed)
+        file_hash = _archive(project, parsed, data)
         for content in parsed.attachment_bytes.values():
             project.library.put(content)
         records: list[JsonValue] = [r.model_dump(mode="json") for r in parsed.records]
@@ -227,19 +230,25 @@ def list_imports(project: Project) -> list[ImportListing]:
 
 
 def list_import_records(
-    project: Project, import_id: str, *, part: Part | None = None
+    project: Project, import_id: str, *, view: RecordView = "development"
 ) -> list[RecordRow]:
-    """The records of one import in ordinal order, optionally of one part. The researcher's view:
-    held-out records are listed; no agent surface calls this."""
+    """The records of one import in ordinal order.
+
+    `development` (the default, safe for any reader) is every record that is not held out: the
+    development part and unsplit records. `held-out` and `all` reveal held-out membership and are
+    for the researcher only; no agent surface may pass them.
+    """
     _import_row(project, import_id)
     sql = (
         "SELECT ordinal, part, outcome, title, first_author, year, doi, arxiv"
         " FROM import_records WHERE import_id = :i"
     )
-    if part is not None:
-        sql += " AND part = :part"
+    if view == "development":
+        sql += " AND part != :held"
+    elif view == "held-out":
+        sql += " AND part = :held"
     with project.index.connect() as conn:
-        rows = conn.execute(text(f"{sql} ORDER BY ordinal"), {"i": import_id, "part": part})
+        rows = conn.execute(text(f"{sql} ORDER BY ordinal"), {"i": import_id, "held": "held-out"})
         return [RecordRow.model_validate(dict(r)) for r in rows.mappings()]
 
 
@@ -271,7 +280,7 @@ def _split(
         return ImportSplitDrawn(import_id=import_id, mode="post-search")
     if not split:
         return ImportSplitDrawn(import_id=import_id, mode="declined")
-    seed = project.clock.now().microsecond if random_seed is None else random_seed
+    seed = secrets.randbits(32) if random_seed is None else random_seed
     keyed = {record_key(import_id, r.ordinal): r for r in records if _splittable(r)}
     development, held_out = draw_split(
         [(key, r.fields.year if r.fields else None) for key, r in keyed.items()], seed
@@ -314,14 +323,21 @@ def _collection_issues(collection: str | None) -> list[ValidationIssue]:
     return []
 
 
-def _parse(format: ImportFormat, path: Path, issues: list[ValidationIssue]) -> ParsedImport | None:
+def _parse(
+    format: ImportFormat, path: Path, issues: list[ValidationIssue]
+) -> tuple[ParsedImport, bytes | None] | None:
+    """The parsed export and, for a single-file format, the one read of its bytes (R-03: the
+    bytes parsed are the bytes archived)."""
     exists = path.is_dir() if format is ImportFormat.PDFS else path.is_file()
     if not exists:
         kind = "a directory" if format is ImportFormat.PDFS else "a readable file"
         issues.append(ValidationIssue("path", f"not {kind}"))
         return None
     try:
-        return parse(format, path)
+        if format is ImportFormat.PDFS:
+            return parse(format, path), None
+        data = path.read_bytes()
+        return parse_bytes(format, data, path.parent), data
     except ImportFormatError as exc:
         issues.append(ValidationIssue("path", f"not {format.value}: {exc}"))
     except OSError as exc:
@@ -329,14 +345,15 @@ def _parse(format: ImportFormat, path: Path, issues: list[ValidationIssue]) -> P
     return None
 
 
-def _archive(project: Project, path: Path, parsed: ParsedImport) -> str:
-    """Put the export into the library verbatim; for a PDF folder, the manifest of its files.
+def _archive(project: Project, parsed: ParsedImport, data: bytes | None) -> str:
+    """Put the export's bytes (as parsed) into the library; for a PDF folder, the manifest.
 
     The manifest is the canonical JSON list of `[path_sha256, record_sha256]` per record, in
-    ordinal order (`path_sha256` is null for a file that is not a PDF).
+    ordinal order (`path_sha256` is null for a file that is not a PDF); each record hash is that of
+    the one read of the file's bytes.
     """
-    if parsed.format is not ImportFormat.PDFS:
-        return project.library.put(path.read_bytes())
+    if data is not None:
+        return project.library.put(data)
     manifest: list[JsonValue] = [
         [r.attachment.path_sha256 if r.attachment else None, r.record_sha256]
         for r in parsed.records
