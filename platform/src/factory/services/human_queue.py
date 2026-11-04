@@ -100,7 +100,7 @@ def human_queue(project: Project) -> HumanQueue:
     add(
         Gate.EXTRACTION_DISAGREEMENTS,
         None,
-        _extraction_disagreements(project),
+        extraction_disagreement_count(project),
         f"{base} extract agreement",
     )
     extraction = extraction_audit_report(project)
@@ -121,7 +121,7 @@ def _screening_disagreements(project: Project, stage: ScreeningStage) -> int:
         return 0
 
 
-def _extraction_disagreements(project: Project) -> int:
+def extraction_disagreement_count(project: Project) -> int:
     """Unresolved extraction disagreements; 0 while the agreement is refused."""
     try:
         return len(extraction_agreement(project, project.human_actor()).disagreements)
