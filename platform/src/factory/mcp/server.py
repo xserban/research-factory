@@ -69,6 +69,7 @@ from factory.services import trace as trace_service
 from factory.services import watch as watch_service
 from factory.services.context import Project, open_project
 from factory.services.extraction import ExtractResult
+from factory.services.living_hooks import DEFAULT_HOOKS
 from factory.services.results import BatchResult, ItemError
 from factory.services.search import list_works
 from factory.services.seeds import SeedOutcome, SeedRole
@@ -251,7 +252,12 @@ def build_server(
             _refuse_pass_session(opened)
             actor = make_agent_actor(settings, session, role, model, skill)
             summary = watch_service.watch_run(
-                opened, sources=adapters, trigger="agent", actor=actor, force=force
+                opened,
+                sources=adapters,
+                trigger="agent",
+                actor=actor,
+                force=force,
+                after_runs=DEFAULT_HOOKS,
             )
             if summary is None:
                 return {"cycle": None}

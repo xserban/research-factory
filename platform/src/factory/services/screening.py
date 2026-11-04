@@ -805,6 +805,30 @@ def _extend_sample(
     return event, added
 
 
+def extend_sample(
+    project: Project,
+    actor: Actor,
+    *,
+    stage: ScreeningStage = TA,
+    random_seed: int | None = None,
+) -> tuple[str, ...]:
+    """Record pass B's sample extension at `stage` and return the works it added.
+
+    Writes one `screening.sample_extended` event, even when it added no work, unless there is
+    nothing to draw (pass B not opened, covering the whole population, or every outside work
+    already considered); then it writes nothing and returns (). The draw is `_extend_sample`'s,
+    so `random_seed` makes it reproducible and the event records it."""
+    require_pass_stage(stage)
+    with project.index.exclusive():
+        project.index.sync()
+        drawn = _extend_sample(project, actor, random_seed=random_seed, stage=stage)
+        if drawn is None:
+            return ()
+        event, added = drawn
+        project.record([event])
+        return added
+
+
 def pass_b_sample(project: Project, *, stage: ScreeningStage = TA) -> tuple[str, ...] | None:
     """Pass B's effective sample at `stage`, sorted: the sample recorded at open, plus every work
     a sample extension at `stage` drew into it. None when pass B is not opened or

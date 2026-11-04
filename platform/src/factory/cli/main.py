@@ -63,6 +63,7 @@ from factory.services import trace as trace_service
 from factory.services import watch as watch_service
 from factory.services.context import Project, list_projects, open_project
 from factory.services.extraction_agreement import Choice
+from factory.services.living_hooks import DEFAULT_HOOKS
 from factory.services.project import ScreeningStatus
 from factory.services.search import list_works
 from factory.sources.fulltext.registry import default_routes
@@ -1599,6 +1600,7 @@ def _watch_one(
             trigger="human" if human else "scheduler",
             actor=project.human_actor() if human else None,
             force=force,
+            after_runs=DEFAULT_HOOKS,
         )
     except FactoryValidationError as exc:
         lines = [f"{slug}: {issue.field}: {issue.reason}" for issue in exc.issues]
