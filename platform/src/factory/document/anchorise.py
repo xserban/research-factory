@@ -9,6 +9,9 @@ Numbering:
   implements this grammar. An unnumbered heading that is the only heading at the
   minimum depth and has deeper headings is the document title and gets `s0`. Any other unnumbered
   heading takes the next ordinal under its parent heading. A repeated id takes `.k` (k >= 2).
+- Paragraphs directly under a heading named in `BIBLIOGRAPHY_HEADINGS` (number stripped, case
+  folded) are bibliography entries `b1`, `b2`, ... numbered document-wide; they consume no
+  section paragraph numbers. Lists in such a section stay unanchored.
 - Paragraphs before the first heading belong to `s0`. Paragraphs are numbered per section from 1.
 - Tables are `t<n>`, display equations `e<n>`, figure captions `f<n>.cap` (number from the text,
   then the next free number), and page breaks `p<n>` (the n-th form feed).
@@ -41,6 +44,9 @@ _APPENDIX_SUB = re.compile(r"([A-HJ-UWYZ])\.(\d+(?:\.\d+)*)(?=\s|$)")
 _APPENDIX_LETTER = re.compile(r"([A-HJ-UWYZ])(?=[.:)](?:\s|$)|$)")
 _FIGURE = re.compile(r"(?:Figure|Fig\.)\s+(\d+)\b", re.IGNORECASE)
 _TABLE_CAPTION = re.compile(r"Table\s+\d+", re.IGNORECASE)
+BIBLIOGRAPHY_HEADINGS = frozenset(
+    {"references", "bibliography", "literature cited", "works cited", "reference list"}
+)
 _PROBE = '<a id="x"></a>'
 _KINDS = {"paragraph_open": "paragraph", "heading_open": "heading", "table_open": "table"}
 
@@ -87,6 +93,17 @@ def _numbering(text: str) -> str | None:
     if letter is not None:
         return str(_appendix_index(letter.group(1)))
     return None
+
+
+def _is_bibliography_heading(text: str) -> bool:
+    """True if the heading text, minus any section number, names a bibliography."""
+    stripped = text.strip()
+    for pattern in (_DIGITS, _APPENDIX_SUB, _APPENDIX_LETTER):
+        match = pattern.match(stripped)
+        if match is not None:
+            stripped = stripped[match.end() :].lstrip(" .:)\t")
+            break
+    return " ".join(stripped.casefold().split()) in BIBLIOGRAPHY_HEADINGS
 
 
 def _appendix_index(letter: str) -> int:
@@ -301,6 +318,8 @@ class _Numbering:
     def __init__(self) -> None:
         self.used: set[str] = set()
         self.section = "s0"
+        self.in_bibliography = False
+        self.bibliography = 0
         self.paragraphs: dict[str, int] = {}
         self.ordinals: dict[tuple[str | None, int], int] = {}
         self.stack: list[tuple[int, str]] = []
@@ -340,6 +359,7 @@ class _Numbering:
             self.ordinals[key] = max(self.ordinals.get(key, 0), last)
         self.stack.append((block.level, sid))
         self.section = sid
+        self.in_bibliography = not title and _is_bibliography_heading(block.text)
         return _anchored(sid, [_atx(block.level, block.text)])
 
     def _parent(self, level: int) -> str | None:
@@ -365,6 +385,11 @@ class _Numbering:
                 return "\n".join(lines)
             self.used.add(f"f{number}.cap")
             return _anchored(f"f{number}.cap", lines)
+        if self.in_bibliography:
+            if not _anchors_ok("paragraph", lines):
+                return "\n".join(lines)
+            self.bibliography += 1
+            return _anchored(f"b{self.bibliography}", lines)
         ident = f"{self.section}.p{self.paragraphs.get(self.section, 0) + 1}"
         if not _anchors_ok("paragraph", lines):
             return "\n".join(lines)

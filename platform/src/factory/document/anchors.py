@@ -9,6 +9,7 @@ Invariants of a parsed `Manifest`:
 - every anchor id matches `ANCHOR_RE` and occurs once;
 - every non-page anchor is followed on the next line by an element of the matching kind;
 - every paragraph id `s<x>.p<k>` names section `s<x>` (`s0` is implicit);
+- bibliography entry anchors `b<n>` are numbered 1, 2, ... in document order, each on a paragraph;
 - every top-level table is rectangular, and each `t<n>` table yields one cell anchor per cell;
 - anchors are in document order, a table's cells directly after the table.
 """
@@ -25,7 +26,7 @@ from pydantic import JsonValue
 from factory.canonical import canonical_json
 from factory.errors import FactoryError
 
-ANCHOR_RE = re.compile(r"^(?:s\d+(?:\.\d+)*(?:\.p\d+)?|p\d+|t\d+|f\d+\.cap|e\d+)$")
+ANCHOR_RE = re.compile(r"^(?:s\d+(?:\.\d+)*(?:\.p\d+)?|p\d+|t\d+|f\d+\.cap|e\d+|b\d+)$")
 _ANCHOR_LINE_RE = re.compile(r'<a id="([^"]*)"></a>')
 _ANCHOR_OCCURRENCE_RE = re.compile(r"<a\s+id=")
 _PARAGRAPH_ID_RE = re.compile(r"s\d+(?:\.\d+)*\.p\d+")
@@ -34,6 +35,7 @@ _PAGE_ID_RE = re.compile(r"p\d+")
 _TABLE_ID_RE = re.compile(r"t\d+")
 _CAPTION_ID_RE = re.compile(r"f\d+\.cap")
 _EQUATION_ID_RE = re.compile(r"e\d+")
+_BIB_ID_RE = re.compile(r"b\d+")
 _CELL_ID_RE = re.compile(r"t\d+\.r\d+\.c\d+")
 _ENTRY_KEYS = frozenset({"id", "kind", "parent", "text"})
 
@@ -54,6 +56,7 @@ class AnchorKind(StrEnum):
     FIGURE_CAPTION = "figure_caption"
     EQUATION = "equation"
     PAGE = "page"
+    BIBLIOGRAPHY_ENTRY = "bibliography_entry"
 
 
 @dataclass(frozen=True)
@@ -142,6 +145,7 @@ def parse_manifest(markdown: str) -> Manifest:
     anchors: list[Anchor] = []
     seen: set[str] = set()
     enclosing: str | None = None
+    bibliography = 0
     i = 0
     while i < len(units):
         unit = units[i]
@@ -187,6 +191,17 @@ def parse_manifest(markdown: str) -> Manifest:
         elif _CAPTION_ID_RE.fullmatch(unit.id):
             _require(following, "paragraph", unit.id, unit.line)
             anchors.append(Anchor(unit.id, AnchorKind.FIGURE_CAPTION, enclosing, following.text))
+        elif _BIB_ID_RE.fullmatch(unit.id):
+            bibliography += 1
+            if unit.id != f"b{bibliography}":
+                raise ManifestError(
+                    f"line {unit.line + 1}: bibliography anchor {unit.id!r} is out of sequence; "
+                    f"expected 'b{bibliography}'"
+                )
+            _require(following, "paragraph", unit.id, unit.line)
+            anchors.append(
+                Anchor(unit.id, AnchorKind.BIBLIOGRAPHY_ENTRY, enclosing or "s0", following.text)
+            )
         else:
             _require(following, "paragraph", unit.id, unit.line)
             anchors.append(Anchor(unit.id, AnchorKind.EQUATION, enclosing, following.text))
@@ -203,6 +218,7 @@ _ID_FORMS: dict[AnchorKind, re.Pattern[str]] = {
     AnchorKind.CELL: _CELL_ID_RE,
     AnchorKind.FIGURE_CAPTION: _CAPTION_ID_RE,
     AnchorKind.EQUATION: _EQUATION_ID_RE,
+    AnchorKind.BIBLIOGRAPHY_ENTRY: _BIB_ID_RE,
 }
 
 

@@ -231,6 +231,7 @@ def test_manifest_round_trip_covers_every_kind() -> None:
         '<a id="p1"></a>\n\n<a id="s0.p1"></a>\nPreamble.\n\n'
         '<a id="s1"></a>\n# 1\n\n<a id="f1.cap"></a>\nFigure one.\n\n'
         '<a id="e1"></a>\n$x$\n\n<a id="t1"></a>\n| a |\n|---|\n| 1 |\n'
+        '\n<a id="b1"></a>\nSmith J. A title. 2020.\n'
     )
     m = parse_manifest(md)
     assert {a.kind for a in m.anchors} == set(AnchorKind)
