@@ -58,6 +58,11 @@ def _cell(text: object) -> str:
     return str(text).replace("|", "\\|").replace("\n", " ").replace("\r", " ")
 
 
+def _flat(text: object) -> str:
+    """Bullet text on one line, so it cannot open a heading, list or table."""
+    return " ".join(str(text).split())
+
+
 def _val(p: Provenance) -> str:
     if isinstance(p.value, bool):
         return "true" if p.value else "false"
@@ -82,7 +87,7 @@ def _row_table(rows: list[EvidenceRow]) -> list[str]:
         "variant",
         "value",
         "flags",
-        *cost_names,
+        *[_cell(n) for n in cost_names],
         "extraction",
         "trace",
     ]
@@ -106,15 +111,15 @@ def _row_table(rows: list[EvidenceRow]) -> list[str]:
 def _frontier(axis: FrontierAxis) -> list[str]:
     out = [f"#### Frontier: {axis.axis}", ""]
     if axis.statement:
-        out += [axis.statement, ""]
+        out += [_flat(axis.statement), ""]
     for part in axis.partitions:
         out.append(f"- unit {part.unit or 'none'}, resolution {part.resolution or 'none'}")
         if part.statement:
-            out.append(f"  - {part.statement}")
+            out.append(f"  - {_flat(part.statement)}")
         for pt in part.points:
             state = "on frontier" if pt.on_frontier else f"dominated by {pt.dominated_by}"
             out.append(
-                f"  - {pt.row_key} ({pt.work_id}, {pt.method_name or 'unnamed'}): "
+                f"  - {pt.row_key} ({pt.work_id}, {_flat(pt.method_name or 'unnamed')}): "
                 f"cost {pt.cost}, metric {pt.metric}, {state}"
             )
     for name, rows in sorted(axis.missing.items()):
@@ -123,7 +128,7 @@ def _frontier(axis: FrontierAxis) -> list[str]:
     return out
 
 
-def _group(g: GroupReport) -> list[str]:
+def _group(g: GroupReport, show_audit: bool = True) -> list[str]:
     key = ", ".join(f"{k}={v}" for k, v in g.key)
     c = g.counts
     direction = "" if g.direction is None else f" (higher is better: {str(g.direction).lower()})"
@@ -137,8 +142,9 @@ def _group(g: GroupReport) -> list[str]:
         f"Direction: {g.direction_status}{direction}",
         "",
     ]
-    out += [f"- {s.text}" for s in g.statements]
-    if g.statements:
+    statements = [s for s in g.statements if show_audit or not s.code.startswith("audit-")]
+    out += [f"- {_flat(s.text)}" for s in statements]
+    if statements:
         out.append("")
     out += _row_table(g.rows)
     out.append("")
@@ -147,7 +153,10 @@ def _group(g: GroupReport) -> list[str]:
     if g.method_conflicts:
         out += ["#### Method conflicts", ""]
         for m in g.method_conflicts:
-            out.append(f"- {m.method} ({m.variant or 'no variant'}): rows {', '.join(m.rows)}")
+            out.append(
+                f"- {_flat(m.method)} ({_flat(m.variant or 'no variant')}): "
+                f"rows {', '.join(m.rows)}"
+            )
         out.append("")
     return out
 
@@ -166,15 +175,16 @@ def evidence_markdown(report: EvidenceReport, *, show_audit: bool = True) -> str
         "## Limits",
         "",
     ]
-    out += [f"- {x.text}" for x in report.limits] or ["- none"]
+    limits = [x for x in report.limits if show_audit or not x.code.startswith("audit-")]
+    out += [f"- {_flat(x.text)}" for x in limits] or ["- none"]
     if report.expectations:
         out += ["", "## Expectations", ""]
         for e in report.expectations:
             want = ", ".join(f"{k}={v}" for k, v in sorted(e.expect.items()))
-            out.append(f"- {want}: groups {', '.join(e.group_ids) or 'none'}")
+            out.append(f"- {_flat(want)}: groups {', '.join(e.group_ids) or 'none'}")
     out += ["", "## Groups", ""]
     for g in report.groups:
-        out += _group(g)
+        out += _group(g, show_audit)
     if report.ungrouped:
         out += ["## Ungrouped rows", ""]
         out += _row_table(report.ungrouped)
@@ -188,13 +198,14 @@ def evidence_markdown(report: EvidenceReport, *, show_audit: bool = True) -> str
         for cl in entries:
             out.append(
                 f"- {cl.claim_id} ({cl.work_id}, {cl.evidence_type.value}, {cl.strength.value}): "
-                f'{cl.statement} [{cl.anchor}] "{cl.quote}" (trace {cl.trace_id})'
+                f'{_flat(cl.statement)} [{_flat(cl.anchor)}] "{_flat(cl.quote)}" '
+                f"(trace {cl.trace_id})"
             )
         if not entries:
             out.append("- none")
         out.append("")
     out += ["## Excluded", ""]
-    out += [f"- {e.reason}: {e.count} ({', '.join(e.works)})" for e in report.excluded] or [
+    out += [f"- {_flat(e.reason)}: {e.count} ({', '.join(e.works)})" for e in report.excluded] or [
         "- none"
     ]
     q = report.quality
@@ -229,7 +240,7 @@ def _csv(header: str, rows: list[list[object]]) -> str:
     w = csv.writer(buf, lineterminator="\n")
     w.writerow(header.split(","))
     for r in rows:
-        w.writerow(["" if c is None else c for c in r])
+        w.writerow(["" if c is None else str(c).lower() if isinstance(c, bool) else c for c in r])
     return buf.getvalue()
 
 
