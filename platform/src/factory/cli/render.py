@@ -3,6 +3,7 @@ is read from the model, so the CLI and the MCP tools cannot differ (R-05)."""
 
 from factory.model.screening import PassLabel
 from factory.services.agreement import DecisionView
+from factory.services.audit import AuditReport
 from factory.services.check import CheckReport
 from factory.services.document_convert import ConvertSummary, DocumentStatus
 from factory.services.document_read import DocumentPage
@@ -277,6 +278,17 @@ def agreement_lines(agreement: ExtractionAgreement) -> list[str]:
         lines.append("no unresolved disagreements")
     for item in agreement.disagreements:
         lines += disagreement_lines(item)
+    return lines
+
+
+def audit_item_lines(report: AuditReport) -> list[str]:
+    """One line per sampled work: `work_id  agreed -> human (criteria)`."""
+    lines = []
+    for item in report.items:
+        line = f"{item.work_id}  {item.agreed_verdict} -> {item.human_verdict or 'unlabelled'}"
+        if item.criteria:
+            line += f" ({', '.join(item.criteria)})"
+        lines.append(line)
     return lines
 
 

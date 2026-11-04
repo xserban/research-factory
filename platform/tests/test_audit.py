@@ -13,6 +13,7 @@ from sqlalchemy import text
 from factory.canonical import population_digest
 from factory.errors import FactoryValidationError
 from factory.events.envelope import Actor
+from factory.model.protocol import ScreeningStage
 from factory.model.screening import Channel, PassJoined, PassLabel
 from factory.services.agreement import AgreedWork, agreed_works
 from factory.services.audit import audit_record, audit_report, audit_sample
@@ -480,3 +481,70 @@ def test_unknown_audit_is_reported_on_audit_id(
 
     assert _fields(exc) == ["audit_id"]
     assert len(_events(project)) == before
+
+
+def _label_all(
+    project: Project, human: Actor, sampled_id: str, works: list[str], overturn: set[str]
+) -> None:
+    agreed = agreed_works(project)
+    for work in works:
+        if agreed[work].verdict == "include" or work in overturn:
+            audit_record(project, human, sampled_id, work, "include", None, Channel.CLI)
+        else:
+            audit_record(project, human, sampled_id, work, "exclude", "EX01", Channel.CLI)
+
+
+def test_report_lists_every_sampled_work_with_its_verdicts(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    protocol_id, ordinary = _population(
+        project, agent, human, mock_sources, random_works=ACCEPTANCE_RANDOM_WORKS
+    )
+    _split_160(project, agent, protocol_id, ordinary)
+    sampled = audit_sample(project, human, random_seed=7)
+    agreed = agreed_works(project)
+    excluded = [w for w in sampled.work_ids if agreed[w].verdict == "exclude"]
+    overturned = {excluded[0]}
+    _label_all(project, human, sampled.audit_id, list(sampled.work_ids), overturned)
+
+    report = audit_report(project)
+
+    assert report is not None
+    assert [i.work_id for i in report.items] == sorted(sampled.work_ids)
+    by_work = {i.work_id: i for i in report.items}
+    for work in sampled.work_ids:
+        assert by_work[work].agreed_verdict == agreed[work].verdict
+    assert by_work[excluded[0]].human_verdict == "include"
+    assert by_work[excluded[0]].criteria
+    assert by_work[excluded[1]].human_verdict == "exclude"
+
+
+def test_unlabelled_items_have_no_human_verdict_and_still_appear(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    protocol_id, ordinary = _population(
+        project, agent, human, mock_sources, random_works=ACCEPTANCE_RANDOM_WORKS
+    )
+    _split_160(project, agent, protocol_id, ordinary)
+    audit_sample(project, human, random_seed=7)
+
+    report = audit_report(project)
+
+    assert report is not None
+    assert len(report.items) == 50
+    assert all(i.human_verdict is None for i in report.items)
+
+
+def test_report_items_are_per_stage(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    protocol_id, ordinary = _population(
+        project, agent, human, mock_sources, random_works=ACCEPTANCE_RANDOM_WORKS
+    )
+    _split_160(project, agent, protocol_id, ordinary)
+    sampled = audit_sample(project, human, random_seed=7)
+
+    assert audit_report(project, stage=ScreeningStage.FULL_TEXT) is None
+    report = audit_report(project, stage=ScreeningStage.TITLE_ABSTRACT)
+    assert report is not None
+    assert {i.work_id for i in report.items} == set(sampled.work_ids)

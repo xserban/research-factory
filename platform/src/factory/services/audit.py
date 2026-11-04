@@ -28,8 +28,9 @@ from __future__ import annotations
 
 import random
 import secrets
+from typing import Literal
 
-from pydantic import ValidationError
+from pydantic import Field, ValidationError
 from sqlalchemy import text
 
 from factory.canonical import population_digest
@@ -53,6 +54,15 @@ from factory.services.seeds import _rigor_mode
 from factory.services.stages import require_pass_stage, screening_plan
 
 
+class AuditItemView(StrictModel):
+    """One sampled work: the agreed verdict, its cited criteria and the human's label, if any."""
+
+    work_id: str
+    agreed_verdict: Literal["include", "exclude"]
+    criteria: list[str]
+    human_verdict: Literal["include", "exclude"] | None
+
+
 class AuditReport(StrictModel):
     audit_id: str
     sample_size: int
@@ -62,6 +72,7 @@ class AuditReport(StrictModel):
     above_ceiling: bool
     enforced: bool
     criteria_implicated: list[str]
+    items: list[AuditItemView] = Field(default_factory=list)
 
 
 def audit_sample(
@@ -223,6 +234,17 @@ def audit_report(
         above_ceiling=rate is not None and rate > AUDIT_ERROR_CEILING,
         enforced=_rigor_mode(project) is RigorMode.SYSTEMATIC,
         criteria_implicated=implicated,
+        items=[
+            AuditItemView(
+                work_id=str(work_id),
+                agreed_verdict="include" if agreed_v == "include" else "exclude",
+                criteria=str(criteria).split(",") if criteria else [],
+                human_verdict=None
+                if human_v is None
+                else ("include" if human_v == "include" else "exclude"),
+            )
+            for work_id, agreed_v, criteria, human_v in items
+        ],
     )
 
 

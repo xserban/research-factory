@@ -676,6 +676,8 @@ def audit_report_cmd(ctx: typer.Context, stage: StageOption = StageChoice.TITLE_
         f"(ceiling {report.ceiling:.2f}, above ceiling: {above})"
     )
     typer.echo(f"criteria implicated: {', '.join(report.criteria_implicated) or 'none'}")
+    for line in render.audit_item_lines(report):
+        typer.echo(line)
 
 
 @extract_app.command("status")

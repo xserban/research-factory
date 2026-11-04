@@ -389,6 +389,10 @@ def test_cli_resolve_and_audit_label(
     assert report.exit_code == 0, report.stderr
     assert f"audit {audit_id.group(0)}: sample" in report.stdout
     assert "labelled 1" in report.stdout
+    item_lines = [ln for ln in report.stdout.splitlines() if " -> " in ln]
+    assert len(item_lines) == len(cast(list[str], event.payload["work_ids"]))
+    assert any(ln.startswith(f"{first_work}  ") and ln.endswith("-> include") for ln in item_lines)
+    assert any("-> unlabelled" in ln for ln in item_lines)
 
 
 def test_cli_seed_admit_requires_deviation_in_pilot(
