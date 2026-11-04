@@ -12,11 +12,12 @@ The platform builds the round's queries (chase purpose, ruling 20): OpenAlex `op
 `CHASE_CHUNK` ids and `MAX_QUERY` characters. A candidate no query can name is listed
 `unqueryable`, never dropped.
 
-A forward round (`via = source-metadata`) delegates to `search_chase` for `FORWARD` (ruling 10):
-its sources are the chase's `from_works` (included works with an OpenAlex id; those without are
-listed `unqueryable`), its queries the chase round's `cites:` texts. The stopping rule, pending and
-unextracted checks run first and write nothing on refusal; the delegated round is then recorded
-and run, and `snowball.round_started` names it (`chase_round_id`) once it returns.
+A forward round (`via = source-metadata`) delegates to `search_chase` for `FORWARD` (ruling 10)
+from the same sources as a backward round: the works INCLUDED at the last declared stage
+(ruling 15) that have an OpenAlex id (those without are listed `unqueryable`); its queries are
+the chase round's `cites:` texts. The stopping rule, pending and unextracted checks run first and
+write nothing on refusal; the chase round (`start_chase`) and the `snowball.round_started` naming
+it (`chase_round_id`) are then recorded together and its queries run (`run_chase`).
 
 A round's runs are linked by reference, never by text: the queries whose `query.registered` refs
 name the round (backward) or its chase round (forward). `round_yield` counts what they retrieved,
@@ -28,18 +29,21 @@ Invariants:
 - Validation precedes every write. A round is refused, writing nothing, when the protocol declares
   no `snowball_plan` in `pilot`/`systematic` (an `exploratory` round records `rule: none`), when
   the direction's maximum is reached, when the previous round of the direction yielded no included
-  work and the plan says to stop (skipped, with a note, when that round had a failed or partial
-  run, so its retry is possible; the maximum still holds), while any corpus work's outcome is
+  work and the plan says to stop (skipped, with a note, when that round is incomplete: a failed,
+  partial or interrupted run, or a recorded query that never ran, so its retry is possible; the
+  maximum still holds), while any corpus work's outcome is
   pending, while an included work has a document but no current extraction (ruling 18), when
   there is no candidate or no queryable candidate, when a query does not fit its source, or when
   the protocol gate refuses (always asked; the round's texts waived).
 - `snowball.round_started` is written before any query is registered; each query is then
   registered naming the round (`query.registered` refs end with the round id; only such a query
   has the round's texts waived and counts as the round's run) and run, and a failed run does not
-  stop the others. A retry is a new round. A forward round's ledger entry follows its chase round
-  and runs (the chase round is itself recorded before its queries, R-24).
+  stop the others. A retry is a new round. A forward round's chase round and its ledger entry
+  are recorded together, in one append under the lock that computed the plan, before any of its
+  queries (R-24), so no other round can be recorded in between and no chase round is left
+  without its ledger entry.
 - The no-yield stop reads `round_yield`: a previous round with `included == 0` stops the
-  direction; a new work counts once, as its dedup primary.
+  direction; a new work counts once, as its dedup primary; a round without runs is unsettled.
 - Candidates are never included: retrieved records enter the corpus as pending works.
 - Counts (`cited_by_included`, new works, round numbers) are computed, never supplied.
 """
@@ -48,12 +52,13 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
+from typing import Literal
 
 from pydantic import Field
 from sqlalchemy import text
 
 from factory.errors import FactoryValidationError, ValidationIssue
-from factory.events.envelope import Actor
+from factory.events.envelope import Actor, Event
 from factory.model.base import StrictModel
 from factory.model.chase import CHASE_CHUNK, ChaseDirection
 from factory.model.project import RigorMode
@@ -73,7 +78,7 @@ from factory.model.search import QueryKind, QueryPurpose, QuerySpec, RunStatus
 from factory.model.work_ids import arxiv_id_from_doi
 from factory.services.agreement import Outcome, final_outcomes
 from factory.services.calibration import calibration_items
-from factory.services.chase import chase_queries, chase_rounds, chase_sources, search_chase
+from factory.services.chase import ChaseStart, chase_queries, chase_rounds, run_chase, start_chase
 from factory.services.context import Project
 from factory.services.dedup import active_merges
 from factory.services.document_read import default_conversion
@@ -190,6 +195,11 @@ class Comparison(StrictModel):
     document_only: list[str]
     metadata_only: list[str]
     both: list[str]
+    extra_chase_sources: list[str] = Field(default_factory=list)
+    """Works the compared chase rounds started from that are not the round's sources: their
+    `cited_by:` finds cannot be told apart, so they may show as `metadata_only`."""
+    notes: list[str] = Field(default_factory=list)
+    """E.g. a chase round recorded before its queries named it, whose runs are not compared."""
 
 
 # --- Recorded rounds ---
@@ -240,26 +250,37 @@ def round_runs(project: Project, round_id: str) -> list[str]:
     """The runs of the queries registered for the round, sorted: queries whose
     `query.registered` refs name `round_id` (`register_query(..., round_id=...)`), or, for a
     forward round, name its delegated chase round."""
-    return [run for run, _ in _round_run_statuses(project, round_id)]
+    return [run.run_id for run in _round_run_rows(project, round_id)]
 
 
-def _round_run_statuses(project: Project, round_id: str) -> list[tuple[str, RunStatus]]:
-    project.index.sync()
+class _RunRow(StrictModel):
+    run_id: str
+    status: RunStatus
+    query_id: str
+
+
+def _link_ref(project: Project, round_id: str) -> str:
+    """The id a round's queries name in their refs: its chase round (forward) or itself."""
     with project.index.connect() as conn:
         chase = conn.execute(
             text("SELECT chase_round_id FROM snowball_rounds WHERE round_id = :r"),
             {"r": round_id},
         ).scalar_one_or_none()
-    return _ref_runs(project, round_id if chase is None else str(chase))
+    return round_id if chase is None else str(chase)
 
 
-def _ref_runs(project: Project, ref: str, *, text_prefix: str = "") -> list[tuple[str, RunStatus]]:
+def _round_run_rows(project: Project, round_id: str) -> list[_RunRow]:
+    project.index.sync()
+    return _ref_runs(project, _link_ref(project, round_id))
+
+
+def _ref_runs(project: Project, ref: str, *, text_prefix: str = "") -> list[_RunRow]:
     """The runs, sorted, of the queries whose `query.registered` refs name `ref` and whose text
     starts with `text_prefix`."""
     with project.index.connect() as conn:
         rows = conn.execute(
             text(
-                "SELECT r.run_id, r.status FROM runs r JOIN events e "
+                "SELECT r.run_id, r.status, r.query_id FROM runs r JOIN events e "
                 "ON e.type = 'query.registered' AND json_extract(e.refs, '$[0]') = r.query_id "
                 "JOIN queries q ON q.query_id = r.query_id "
                 "WHERE EXISTS (SELECT 1 FROM json_each(e.refs) WHERE json_each.value = :ref) "
@@ -267,7 +288,45 @@ def _ref_runs(project: Project, ref: str, *, text_prefix: str = "") -> list[tupl
             ),
             {"ref": ref, "n": len(text_prefix), "prefix": text_prefix},
         ).all()
-    return [(str(run), RunStatus(str(status))) for run, status in rows]
+    return [
+        _RunRow(run_id=str(run), status=RunStatus(str(status)), query_id=str(query))
+        for run, status, query in rows
+    ]
+
+
+def _named_queries(project: Project, ref: str) -> int:
+    """How many registered queries name `ref` in their `query.registered` refs."""
+    with project.index.connect() as conn:
+        count = conn.execute(
+            text(
+                "SELECT COUNT(*) FROM events e WHERE e.type = 'query.registered' "
+                "AND EXISTS (SELECT 1 FROM json_each(e.refs) WHERE json_each.value = :ref)"
+            ),
+            {"ref": ref},
+        ).scalar_one()
+    return int(count)
+
+
+_UNFINISHED = (RunStatus.FAILED, RunStatus.PARTIAL, RunStatus.RUNNING)
+
+
+def _incomplete(project: Project, recorded: RecordedRound) -> str | None:
+    """Why a recorded round is incomplete, or None: a failed, partial or interrupted run, or a
+    recorded query that never ran (the run step stopped)."""
+    rows = _round_run_rows(project, recorded.round_id)
+    unfinished = [r.run_id for r in rows if r.status in _UNFINISHED]
+    ran = len({r.query_id for r in rows})
+    facts: list[str] = []
+    if unfinished:
+        facts.append(f"{len(unfinished)} failed or partial (or interrupted) runs")
+    if ran < len(recorded.queries):
+        facts.append(f"only {ran} of {len(recorded.queries)} queries ran")
+    if not facts:
+        return None
+    return (
+        f"{recorded.round_id}: {'; '.join(facts)}; the no-yield stop does not apply to its retry "
+        "(the round maximum does)"
+    )
 
 
 def _primaries(project: Project) -> dict[str, str]:
@@ -308,23 +367,35 @@ def _settled_included(project: Project, works: set[str]) -> int | None:
 def round_yield(project: Project, round_id: str) -> RoundYield:
     """The yield of a recorded round, computed from its runs' provenance, the active merges and
     the final outcomes. A work is new after dedup when its primary had no corpus record from a
-    run earlier than the round's first run (run ids are time-ordered ULIDs)."""
+    run started earlier in the event log than the round's first run (by the position of the
+    `search.run_started` events). A round without runs has not been settled: `included` is None.
+    """
     project.index.sync()
     _recorded(project, round_id)
     runs = round_runs(project, round_id)
     if not runs:
-        return RoundYield(retrieved=0, new_after_dedup=0, included=0)
+        return RoundYield(retrieved=0, new_after_dedup=0, included=None)
     primary = _primaries(project)
     rows = _retrieved(project, runs)
     with project.index.connect() as conn:
+        first = conn.execute(
+            text(
+                "SELECT MIN(rowid) FROM events WHERE type = 'search.run_started' "
+                "AND json_extract(refs, '$[0]') IN (SELECT value FROM json_each(:runs))"
+            ),
+            {"runs": json.dumps(runs)},
+        ).scalar_one()
         earlier = {
             primary.get(str(w), str(w))
             for (w,) in conn.execute(
                 text(
-                    "SELECT DISTINCT p.work_id FROM provenance p JOIN queries q "
-                    "ON q.query_id = p.query_id WHERE p.run_id < :first AND q.purpose != :probe"
+                    "SELECT DISTINCT p.work_id FROM provenance p "
+                    "JOIN queries q ON q.query_id = p.query_id "
+                    "JOIN events e ON e.type = 'search.run_started' "
+                    "AND json_extract(e.refs, '$[0]') = p.run_id "
+                    "WHERE e.rowid < :first AND q.purpose != :probe"
                 ),
-                {"first": runs[0], "probe": QueryPurpose.PROBE.value},
+                {"first": first, "probe": QueryPurpose.PROBE.value},
             ).all()
         }
     new = {primary.get(w, w) for w in rows} - earlier
@@ -358,18 +429,27 @@ def snowball_compare(project: Project, round_id: str) -> Comparison:
         }
     sources = set(recorded.sources)
     chases = [
-        c.round_id
+        c
         for c in chase_rounds(project)
         if ChaseDirection.BACKWARD in c.directions and sources & set(c.from_works)
     ]
-    runs = [run for c in chases for run, _ in _ref_runs(project, c, text_prefix="cited_by:")]
+    notes = [
+        f"{c.round_id}: chase round predates run linking; not compared"
+        for c in chases
+        if c.queries and _named_queries(project, c.round_id) == 0
+    ]
+    runs = [
+        r.run_id for c in chases for r in _ref_runs(project, c.round_id, text_prefix="cited_by:")
+    ]
     metadata = {primary.get(w, w) for w in _retrieved(project, runs)}
     return Comparison(
         round_id=round_id,
-        chase_rounds=sorted(chases),
+        chase_rounds=sorted(c.round_id for c in chases),
         document_only=sorted(document - metadata),
         metadata_only=sorted(metadata - document),
         both=sorted(document & metadata),
+        extra_chase_sources=sorted({w for c in chases for w in c.from_works} - sources),
+        notes=sorted(notes),
     )
 
 
@@ -589,13 +669,18 @@ def _scope(
     return sources, extraction_ids, unextracted
 
 
+def _openalex_ids(project: Project) -> dict[str, str]:
+    """Corpus work -> its OpenAlex id, for the works that have one."""
+    return {w.id: w.identifiers.openalex for w in list_works(project) if w.identifiers.openalex}
+
+
 def _forward_queries(project: Project, chasable: Sequence[str]) -> list[QuerySpec]:
     """The forward chase specs `search_chase` builds for `chasable` (included works with an
     OpenAlex id)."""
-    openalex = {w.id: w.identifiers.openalex for w in list_works(project)}
+    openalex = _openalex_ids(project)
     return [
         QuerySpec(source="openalex", kind=QueryKind.FILTER, text=t, purpose=QueryPurpose.CHASE)
-        for t in chase_queries([ChaseDirection.FORWARD], [str(openalex[w]) for w in chasable])
+        for t in chase_queries([ChaseDirection.FORWARD], [openalex[w] for w in chasable])
     ]
 
 
@@ -635,16 +720,9 @@ def plan_round(project: Project, direction: Direction) -> RoundPlan:
             )
         if rule.stop_when_no_new_included and previous:
             last = previous[-1]
-            incomplete = [
-                run
-                for run, status in _round_run_statuses(project, last.round_id)
-                if status in (RunStatus.FAILED, RunStatus.PARTIAL)
-            ]
-            if incomplete:
-                notes.append(
-                    f"{last.round_id} had {len(incomplete)} failed or partial runs; the no-yield "
-                    "stop does not apply to its retry (the round maximum does)"
-                )
+            incomplete = _incomplete(project, last)
+            if incomplete is not None:
+                notes.append(incomplete)
             elif round_yield(project, last.round_id).included == 0:
                 refusals.append(
                     ValidationIssue(
@@ -677,7 +755,10 @@ def plan_round(project: Project, direction: Direction) -> RoundPlan:
             refusals.append(ValidationIssue("candidates", "no queryable candidate"))
     else:
         candidates = []
-        sources, unqueryable = chase_sources(project)
+        openalex = _openalex_ids(project)
+        included = included_works(project)
+        sources = [w for w in included if w in openalex]
+        unqueryable = [w for w in included if w not in openalex]
         extraction_ids = []
         queries = _forward_queries(project, sources)
         if not sources:
@@ -766,12 +847,14 @@ def snowball_round(
     """Plan a round (`dry_run`, the default, writes nothing), or record and run it.
 
     A recorded round is validated in full first (see the module invariants) and refused with
-    every issue at once. A backward round then writes `snowball.round_started` and registers and
-    runs each query in order. A forward round delegates to `search_chase` (`FORWARD`), which
-    records its chase round and runs its queries; `snowball.round_started` naming that round is
-    written once it returns.
+    every issue at once. Under the same lock as the plan, a backward round writes
+    `snowball.round_started`; a forward round starts its `search_chase` round (`start_chase`,
+    `FORWARD`, from the included works) and records it together with the `snowball.round_started`
+    naming it. The lock is then released and the queries are registered and run in order
+    (`run_chase` for a forward round).
     """
     adapters = round_sources(project, sources)
+    chase: ChaseStart | None = None
     with project.index.exclusive():
         plan = plan_round(project, direction)
         if dry_run:
@@ -788,107 +871,87 @@ def snowball_round(
         issues += search_authorization(project, probe, deviation_id=None, pending_round_texts=texts)
         if issues:
             raise FactoryValidationError(issues)
+        before, _ = corpus_size(project)
+        rule: SnowballPlan | Literal["none"] = (
+            "none" if plan.state.rule is None else plan.state.rule
+        )
         if direction is Direction.BACKWARD:
-            before, _ = corpus_size(project)
-            round_id = _record_round(
+            payload = SnowballRoundStarted(
+                round_id=project.ids.new("snw"),
+                direction=direction,
+                via=Via.DOCUMENT_REFERENCE_LIST,
+                round_no=plan.state.round_no,
+                sources=tuple(plan.sources),
+                extraction_ids=tuple(plan.extraction_ids),
+                candidates=tuple(
+                    SnowballCandidate(
+                        work_key=c.work_key,
+                        cited_by=c.cited_by,
+                        no_source_record=c.no_source_record,
+                    )
+                    for c in plan.candidates
+                ),
+                queries=tuple(spec.text for spec in specs),
+                rule=rule,
+                unextracted=_unextracted(plan),
+            )
+            project.record([_ledger_event(project, actor, payload)])
+        else:
+            # `start_chase` validates again (writing nothing on refusal); the chase round and
+            # the ledger entry naming it are recorded together, under the lock of the plan.
+            chase = start_chase(
                 project,
                 actor,
-                SnowballRoundStarted(
-                    round_id=project.ids.new("snw"),
-                    direction=direction,
-                    via=Via.DOCUMENT_REFERENCE_LIST,
-                    round_no=plan.state.round_no,
-                    sources=tuple(plan.sources),
-                    extraction_ids=tuple(plan.extraction_ids),
-                    candidates=tuple(
-                        SnowballCandidate(
-                            work_key=c.work_key,
-                            cited_by=c.cited_by,
-                            no_source_record=c.no_source_record,
-                        )
-                        for c in plan.candidates
-                    ),
-                    queries=tuple(spec.text for spec in specs),
-                    rule="none" if plan.state.rule is None else plan.state.rule,
-                    unextracted=_unextracted(plan),
-                ),
+                [ChaseDirection.FORWARD],
+                sources=sources,
+                from_works=included_works(project),
             )
-    if direction is Direction.FORWARD:
-        return _run_forward(project, actor, plan, sources)
-
-    query_ids = [
-        register_query(project, actor, spec, sources=adapters, round_id=round_id) for spec in specs
-    ]
-    runs = [run_query(project, query_id, sources=adapters, actor=actor) for query_id in query_ids]
-    after, _ = corpus_size(project)
-    return _result(plan, round_id, runs, after - before)
-
-
-def _run_forward(
-    project: Project, actor: Actor, plan: RoundPlan, sources: Mapping[str, SourceFactory]
-) -> RoundResult:
-    """Delegate to `search_chase` (which validates again and writes nothing on refusal), then
-    record the ledger entry naming the chase round. The round number is recounted under the lock
-    at write time."""
-    summary = search_chase(project, actor, [ChaseDirection.FORWARD], sources=sources)
-    with project.index.exclusive():
-        chase = next(c for c in chase_rounds(project) if c.round_id == summary.round_id)
-        round_no = 1 + sum(1 for r in recorded_rounds(project) if r.direction is Direction.FORWARD)
-        round_id = _record_round(
-            project,
-            actor,
-            SnowballRoundStarted(
+            payload = SnowballRoundStarted(
                 round_id=project.ids.new("snw"),
-                direction=Direction.FORWARD,
+                direction=direction,
                 via=Via.SOURCE_METADATA,
-                round_no=round_no,
-                sources=tuple(summary.from_works),
+                round_no=plan.state.round_no,
+                sources=chase.payload.from_works,
                 extraction_ids=(),
                 candidates=(),
-                queries=chase.queries,
-                chase_round_id=summary.round_id,
-                rule="none" if plan.state.rule is None else plan.state.rule,
+                queries=chase.payload.queries,
+                chase_round_id=chase.payload.round_id,
+                rule=rule,
                 unextracted=_unextracted(plan),
-            ),
-        )
-    queries = [
-        QuerySpec(source="openalex", kind=QueryKind.FILTER, text=t, purpose=QueryPurpose.CHASE)
-        for t in chase.queries
-    ]
-    result = _result(plan, round_id, summary.runs, summary.new_works)
-    return result.model_copy(
-        update={
-            "sources": list(summary.from_works),
-            "queries": queries,
-            "unqueryable": list(summary.unchasable),
-            "chase_round_id": summary.round_id,
-        }
-    )
+            )
+            project.record([chase.event, _ledger_event(project, actor, payload)])
+
+    if chase is not None:
+        runs = run_chase(project, actor, chase, sources=sources)
+    else:
+        query_ids = [
+            register_query(project, actor, spec, sources=adapters, round_id=payload.round_id)
+            for spec in specs
+        ]
+        runs = [
+            run_query(project, query_id, sources=adapters, actor=actor) for query_id in query_ids
+        ]
+    after, _ = corpus_size(project)
+    result = _result(plan, payload.round_id, runs, after - before)
+    if chase is None:
+        return result
+    return result.model_copy(update={"chase_round_id": chase.payload.round_id})
 
 
 def _unextracted(plan: RoundPlan) -> tuple[Unextracted, ...]:
     return tuple(Unextracted(work_id=w, reason=r) for w, r in plan.unextracted)
 
 
-def _record_round(project: Project, actor: Actor, payload: SnowballRoundStarted) -> str:
-    """Write `snowball.round_started`; an agent's request is kept as the input blob."""
+def _ledger_event(project: Project, actor: Actor, payload: SnowballRoundStarted) -> Event:
+    """The `snowball.round_started` event; an agent's request is kept as the input blob."""
     input_blob = (
         project.blobs.put_json({"direction": payload.direction.value, "dry_run": False})
         if actor.kind == "agent"
         else None
     )
-    project.record(
-        [
-            project.events.make(
-                "snowball.round_started",
-                payload,
-                actor,
-                refs=(payload.round_id,),
-                input_blob=input_blob,
-            )
-        ]
+    return project.events.make(
+        "snowball.round_started", payload, actor, refs=(payload.round_id,), input_blob=input_blob
     )
-    return payload.round_id
 
 
 def _result(

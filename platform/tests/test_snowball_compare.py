@@ -14,6 +14,7 @@ from factory.errors import FactoryValidationError
 from factory.events.envelope import Actor
 from factory.model.chase import ChaseDirection
 from factory.model.references import Direction, LinkState
+from factory.services import chase as chase_service
 from factory.services.agreement import Outcome, final_outcomes
 from factory.services.chase import search_chase
 from factory.services.context import Project
@@ -144,6 +145,31 @@ def test_compare_lists_one_mechanism_only(
     assert cmp.metadata_only == [chased]  # forward (`cites:`) runs are left out
     assert cmp.document_only == sorted(_document_set(project) - {reed})
     assert cmp.document_only == sorted(cmp.document_only)
+    # the chase also started from works that are not the round's sources
+    assert cmp.extra_chase_sources == sorted(set(chase.from_works) - set(result.sources))
+    assert cmp.extra_chase_sources and cmp.notes == []
+
+
+def test_compare_notes_a_chase_round_without_run_links(
+    project: Project, agent: Actor, planned: tuple[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A chase round recorded before queries named their round has no linked runs: reported in
+    a note, never matched by text."""
+    result, _ = _backward(project, agent)
+    assert result.round_id is not None
+    _screen(project, agent, dict.fromkeys(_pending(project), "include"))
+    real = chase_service.register_query
+
+    def unlinked(p: Project, a: Actor, spec: Any, *, sources: Any, round_id: Any = None) -> str:
+        return real(p, a, spec, sources=sources)
+
+    monkeypatch.setattr(chase_service, "register_query", unlinked)
+    chase = search_chase(
+        project, agent, [ChaseDirection.BACKWARD], sources=_chase_sources(cited=[REED, CHASED])
+    )
+    cmp = snowball_compare(project, result.round_id)
+    assert cmp.chase_rounds == [chase.round_id] and cmp.metadata_only == [] and cmp.both == []
+    assert cmp.notes == [f"{chase.round_id}: chase round predates run linking; not compared"]
 
 
 def test_compare_counts_match_tables(

@@ -430,6 +430,11 @@ def test_forward_round_queries_are_forward_chase_texts() -> None:
         f"cites:{ids}|W1",
         "cites:W1|free text",
         "cites:" + "W" * 41,
+        "cites:w123",  # OpenAlex work ids are stored as `W<digits>`
+        "cites:Wabc",
+        "cites:W1|reeds",
+        "cites:A123",
+        "cites:W" + "1" * 16,
     ):
         with pytest.raises(ValidationError):
             SnowballRoundStarted.model_validate({**fwd, "queries": [bad]})

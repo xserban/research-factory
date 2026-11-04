@@ -76,13 +76,14 @@ Method = Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9-]*$", max_leng
 VersionLabel = Annotated[NonBlank, Field(max_length=MAX_VERSION)]
 """A parser or matcher name or version: a short label, never document text."""
 Query = Annotated[NonBlank, Field(max_length=MAX_QUERY)]
-FORWARD_CHASE_RE = re.compile(
-    rf"^cites:[A-Za-z0-9]{{1,40}}(\|[A-Za-z0-9]{{1,40}}){{0,{CHASE_CHUNK - 1}}}$"
-)
-"""A forward chase text as `search_chase` builds it: `cites:` and up to `CHASE_CHUNK` OpenAlex
-ids. A forward round records these delegated texts; the grammar bounds them, so they may exceed
-`MAX_QUERY` but never carry free text."""
-RoundQuery = Annotated[NonBlank, Field(max_length=len("cites:") + CHASE_CHUNK * 41)]
+OPENALEX_WORK_RE = re.compile(r"^W\d{1,15}$")
+"""A bare OpenAlex work id, as the OpenAlex adapter stores it (the `https://openalex.org/` prefix
+stripped)."""
+FORWARD_CHASE_RE = re.compile(rf"^cites:W\d{{1,15}}(\|W\d{{1,15}}){{0,{CHASE_CHUNK - 1}}}$")
+"""A forward chase text as `search_chase` builds it: `cites:` and up to `CHASE_CHUNK` bare OpenAlex
+work ids. A forward round records these delegated texts; the grammar bounds them, so they may
+exceed `MAX_QUERY` but never carry free text."""
+RoundQuery = Annotated[NonBlank, Field(max_length=len("cites:") + CHASE_CHUNK * 17)]
 
 
 class LinkState(StrEnum):

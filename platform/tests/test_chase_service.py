@@ -305,6 +305,58 @@ def test_chase_records_round_then_runs(
     assert len(citing.provenance) == 2  # both directions returned it
 
 
+def test_chase_queries_name_their_round(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    protocol_id = _corpus(project, agent, human, mock_sources)
+    _settle(project, agent, human, protocol_id)
+    summary = search_chase(
+        project, human, [ChaseDirection.FORWARD], sources=mock_sources(openalex=[_citing(900)])
+    )
+    registered = _of_type(project, "query.registered")
+    chase = [e for e in registered if e.payload["spec"]["purpose"] == "chase"]  # type: ignore[index]
+    assert chase and all(e.refs[-1] == summary.round_id for e in chase)
+
+
+def test_chase_from_given_works(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    protocol_id = _corpus(project, agent, human, mock_sources)
+    _settle(project, agent, human, protocol_id)
+    chasable, _ = chase_sources(project)
+    summary = search_chase(
+        project,
+        human,
+        [ChaseDirection.FORWARD],
+        sources=mock_sources(openalex=[_citing(900)]),
+        from_works=chasable[:2],
+    )
+    assert summary.from_works == chasable[:2]
+    [round_] = chase_rounds(project)
+    assert list(round_.from_works) == chasable[:2]
+    assert len(round_.queries) == 1 and round_.queries[0].count("|") == 1
+
+
+def test_chase_refuses_works_outside_the_includes(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    protocol_id = _corpus(project, agent, human, mock_sources)
+    _settle(project, agent, human, protocol_id)
+    chasable, _ = chase_sources(project)
+    before = len(_events(project))
+    for given in ([*chasable[:1], "rf:z1999-nobody-00000000"], []):
+        with pytest.raises(FactoryValidationError) as exc:
+            search_chase(
+                project,
+                human,
+                [ChaseDirection.FORWARD],
+                sources=mock_sources(openalex=[_citing(900)]),
+                from_works=given,
+            )
+        assert "from_works" in [i.field for i in exc.value.issues]
+    assert len(_events(project)) == before
+
+
 def test_chase_round_is_queryable_as_recorded(
     project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
 ) -> None:

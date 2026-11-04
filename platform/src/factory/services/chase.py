@@ -5,7 +5,10 @@ carry an OpenAlex id). The platform builds the query texts (`chase_queries`) and
 `chase.round_started` before any query runs, so the round is the only authority for a chase text.
 Works with no OpenAlex id are reported as unchasable and named in no query.
 
-`search_chase` validates everything before it writes: pending works, the chasable works, the
+`search_chase` is `start_chase` (validate and build the round's event, writing nothing), the
+recording of that event, and `run_chase`; a forward snowball round uses the two steps to record
+the chase round together with its own ledger entry. `search_chase` validates everything before
+it writes: pending works, the chasable works, the
 directions, every query's source fit, and the protocol gate for the first query (with the round's
 own texts waived). A refusal writes nothing. Only then is the round recorded, each query
 registered naming the round (its `query.registered` refs end with the `chs_` id, which links the
@@ -14,11 +17,13 @@ runs to the round) and run; a source error in one run does not stop the others.
 
 import json
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 
+from pydantic import JsonValue
 from sqlalchemy import text
 
 from factory.errors import FactoryValidationError, ValidationIssue
-from factory.events.envelope import Actor
+from factory.events.envelope import Actor, Event
 from factory.model.base import StrictModel
 from factory.model.chase import CHASE_CHUNK, ChaseDirection, ChaseRoundStarted
 from factory.model.search import QueryKind, QueryPurpose, QuerySpec
@@ -113,95 +118,134 @@ def chase_rounds(project: Project) -> list[ChaseRoundStarted]:
     ]
 
 
+@dataclass(frozen=True)
+class ChaseStart:
+    """A validated chase round, not yet recorded: its payload, its specs (in query order) and
+    the `chase.round_started` event that records it."""
+
+    payload: ChaseRoundStarted
+    specs: list[QuerySpec]
+    event: Event
+
+
 def search_chase(
     project: Project,
     actor: Actor,
     directions: Sequence[ChaseDirection],
     *,
     sources: Mapping[str, SourceFactory],
+    from_works: Sequence[str] | None = None,
 ) -> ChaseSummary:
-    """Record a chase round from the included works and run its queries.
+    """Record a chase round from the included works (or `from_works`, see `start_chase`) and run
+    its queries.
 
-    Writes nothing if the round does not fit: the pending count must be zero, at least one work
-    must be chasable, the directions must be distinct and non-empty, every query must fit its
-    source, and the protocol must authorise the first query with the round's texts waived.
+    Writes nothing if the round does not fit (see `start_chase`). The round is recorded before
+    any query runs (R-24): a failure in a run leaves a round without its runs, and a retry is a
+    new round.
+    """
+    with project.index.exclusive():
+        start = start_chase(project, actor, directions, sources=sources, from_works=from_works)
+        before, _ = corpus_size(project)
+        project.record([start.event])
+    runs = run_chase(project, actor, start, sources=sources)
+    after, _ = corpus_size(project)
+    return ChaseSummary(
+        round_id=start.payload.round_id,
+        directions=list(start.payload.directions),
+        from_works=list(start.payload.from_works),
+        unchasable=list(start.payload.unchasable),
+        runs=runs,
+        new_works=after - before,
+    )
 
-    The round is recorded before any query runs (R-24): a failure in a run leaves a round
-    without its runs, and a retry is a new round.
+
+def start_chase(
+    project: Project,
+    actor: Actor,
+    directions: Sequence[ChaseDirection],
+    *,
+    sources: Mapping[str, SourceFactory],
+    from_works: Sequence[str] | None = None,
+) -> ChaseStart:
+    """Validate a chase round and build its event, writing nothing; the caller holds
+    `project.index.exclusive()` and records `event` (with any events of its own).
+
+    Refused when the directions are not one or two distinct ones, any ordinary work is pending,
+    no work is chasable, any query does not fit its source, or the protocol does not authorise
+    the first query with the round's texts waived. `from_works`, when given, names the included
+    works to chase from instead of all of them: it must be a non-empty subset of the
+    `chase_sources` works; those without an OpenAlex id are listed unchasable.
     """
     if not directions or len(set(directions)) != len(directions):
         raise FactoryValidationError(
             [ValidationIssue("directions", "name one or two distinct directions")]
         )
-    with project.index.exclusive():
-        project.index.sync()
-        issues = _pending_issues(project)
-        chasable, unchasable = chase_sources(project)
-        if not chasable:
-            issues.append(ValidationIssue("works", "no works to chase"))
-        if issues:
-            raise FactoryValidationError(issues)
-
-        openalex = {work.id: work.identifiers.openalex for work in list_works(project)}
-        texts = chase_queries(directions, [str(openalex[work]) for work in chasable])
-        specs = [
-            QuerySpec(
-                source=_CHASE_SOURCE,
-                kind=QueryKind.FILTER,
-                text=text,
-                purpose=QueryPurpose.CHASE,
-            )
-            for text in texts
-        ]
-        issues = [issue for spec in specs for issue in query_issues(project, spec, sources)]
-        # Authorisation is checked for the first spec only: every gate except the planned-query
-        # waiver is text-independent, and the waiver holds for every text since all are pending.
-        issues += search_authorization(
-            project, specs[0], deviation_id=None, pending_round_texts=texts
-        )
-        if issues:
-            raise FactoryValidationError(issues)
-
-        ordered = tuple(d for d in ChaseDirection if d in directions)
-        round_id = project.ids.new("chs")
-        payload = ChaseRoundStarted(
-            round_id=round_id,
-            directions=ordered,
-            from_works=tuple(chasable),
-            unchasable=tuple(unchasable),
-            queries=tuple(texts),
-        )
-        input_blob = (
-            project.blobs.put_json({"directions": [d.value for d in ordered]})
-            if actor.kind == "agent"
-            else None
-        )
-        before, _ = corpus_size(project)
-        project.record(
-            [
-                project.events.make(
-                    "chase.round_started",
-                    payload,
-                    actor,
-                    refs=(round_id,),
-                    input_blob=input_blob,
+    project.index.sync()
+    issues = _pending_issues(project)
+    chasable, unchasable = chase_sources(project)
+    if from_works is not None:
+        given = set(from_works)
+        outside = sorted(given - set(chasable) - set(unchasable))
+        if outside or not given:
+            issues.append(
+                ValidationIssue(
+                    "from_works",
+                    "name included works only"
+                    + (f"; not included: {', '.join(outside)}" if outside else ""),
                 )
-            ]
-        )
-
-    query_ids = [
-        register_query(project, actor, spec, sources=sources, round_id=round_id) for spec in specs
+            )
+        chasable = [w for w in chasable if w in given]
+        unchasable = [w for w in unchasable if w in given]
+    if not chasable:
+        issues.append(ValidationIssue("works", "no works to chase"))
+    if issues:
+        raise FactoryValidationError(issues)
+    openalex = {work.id: work.identifiers.openalex for work in list_works(project)}
+    texts = chase_queries(directions, [str(openalex[work]) for work in chasable])
+    specs = [
+        QuerySpec(source=_CHASE_SOURCE, kind=QueryKind.FILTER, text=t, purpose=QueryPurpose.CHASE)
+        for t in texts
     ]
-    runs = [run_query(project, query_id, sources=sources, actor=actor) for query_id in query_ids]
-    after, _ = corpus_size(project)
-    return ChaseSummary(
+    issues = [issue for spec in specs for issue in query_issues(project, spec, sources)]
+    # Authorisation is checked for the first spec only: every gate except the planned-query
+    # waiver is text-independent, and the waiver holds for every text since all are pending.
+    issues += search_authorization(project, specs[0], deviation_id=None, pending_round_texts=texts)
+    if issues:
+        raise FactoryValidationError(issues)
+
+    ordered = tuple(d for d in ChaseDirection if d in directions)
+    round_id = project.ids.new("chs")
+    payload = ChaseRoundStarted(
         round_id=round_id,
-        directions=list(ordered),
-        from_works=list(chasable),
-        unchasable=list(unchasable),
-        runs=runs,
-        new_works=after - before,
+        directions=ordered,
+        from_works=tuple(chasable),
+        unchasable=tuple(unchasable),
+        queries=tuple(texts),
     )
+    directions_value: list[JsonValue] = [d.value for d in ordered]
+    request: dict[str, JsonValue] = {"directions": directions_value}
+    if from_works is not None:
+        given_value: list[JsonValue] = [w for w in sorted(set(from_works))]
+        request["from_works"] = given_value
+    input_blob = project.blobs.put_json(request) if actor.kind == "agent" else None
+    event = project.events.make(
+        "chase.round_started", payload, actor, refs=(round_id,), input_blob=input_blob
+    )
+    return ChaseStart(payload=payload, specs=specs, event=event)
+
+
+def run_chase(
+    project: Project, actor: Actor, start: ChaseStart, *, sources: Mapping[str, SourceFactory]
+) -> list[RunSummary]:
+    """Register each query of a recorded chase round, naming the round (its `query.registered`
+    refs end with the `chs_` id, which links the runs to the round), then run them in order; a
+    source error in one run does not stop the others."""
+    round_id = start.payload.round_id
+    query_ids = [
+        register_query(project, actor, spec, sources=sources, round_id=round_id)
+        for spec in start.specs
+    ]
+    return [run_query(project, query_id, sources=sources, actor=actor) for query_id in query_ids]
 
 
 def _pending_issues(project: Project) -> list[ValidationIssue]:

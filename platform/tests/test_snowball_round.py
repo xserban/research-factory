@@ -21,12 +21,13 @@ from factory.model.screening import PassLabel
 from factory.model.search import QueryKind, QueryPurpose, QuerySpec, RunStatus
 from factory.model.work import ProvenanceMethod, WorkType
 from factory.model.work_ids import work_id
+from factory.services import chase as chase_service
 from factory.services import snowball
 from factory.services.agreement import Outcome, final_outcomes
 from factory.services.chase import chase_rounds
 from factory.services.context import Project
 from factory.services.protocol import amend_protocol, current_protocol
-from factory.services.references import extract_references, list_references
+from factory.services.references import extract_references, included_works, list_references
 from factory.services.screening import open_pass
 from factory.services.search import get_work, list_works, register_query, run_query
 from factory.services.seeds import split_seeds
@@ -49,6 +50,7 @@ from tests.document_helpers import (
 )
 from tests.helpers import SourcesFor, _setup
 from tests.references_service_helpers import Lookups, bib_html, oa_item
+from tests.test_acceptance_fulltext_screening import _screened_full_text_world
 from tests.test_fulltext_service import _include_all
 from tests.test_screening_next import _decide, _draw
 
@@ -637,7 +639,7 @@ def test_forward_refused_without_chasable_work_or_with_unfit_text(
     project: Project, planned: tuple[str, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     included = sorted(promoted_works(project))
-    monkeypatch.setattr(snowball, "chase_sources", lambda _p: ([], included))
+    monkeypatch.setattr(snowball, "_openalex_ids", lambda _p: {})
     plan = plan_round(project, Direction.FORWARD)
     assert [i.field for i in plan.state.refusals] == ["sources"]
     assert plan.queries == [] and plan.unqueryable == included
@@ -647,3 +649,99 @@ def test_forward_refused_without_chasable_work_or_with_unfit_text(
     )
     monkeypatch.setattr(snowball, "_forward_queries", lambda _p, _s: [bad])
     assert [i.field for i in plan_round(project, Direction.FORWARD).state.refusals] == ["queries"]
+
+
+def test_forward_sources_are_the_works_included_at_full_text(
+    project: Project, agent: Actor, agent_other: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    _, excluded = _screened_full_text_world(project, agent, agent_other, human, mock_sources)
+    title_abstract = {w for w, o in final_outcomes(project).items() if o is Outcome.INCLUDED}
+    assert excluded and excluded <= title_abstract
+    plan = plan_round(project, Direction.FORWARD)
+    assert plan.sources == included_works(project) and not excluded & set(plan.sources)
+    ids = {w.id: w.identifiers.openalex for w in list_works(project)}
+    named = {i for q in plan.queries for i in q.text.removeprefix("cites:").split("|")}
+    assert named == {ids[w] for w in plan.sources}
+
+
+def test_forward_plan_start_and_ledger_under_one_lock(
+    project: Project, agent: Actor, planned: tuple[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The plan (maximum, pending) is computed under the lock that records the chase round and
+    the ledger entry together, so no other round can be recorded in between."""
+    seen: list[tuple[str, bool]] = []
+    real_plan, real_record = snowball.plan_round, project.record
+
+    def plan(p: Project, d: Direction) -> Any:
+        seen.append(("plan", project.index._holding))
+        return real_plan(p, d)
+
+    def record(events: Any) -> None:
+        seen.append((",".join(e.type for e in events), project.index._holding))
+        real_record(events)
+
+    monkeypatch.setattr(snowball, "plan_round", plan)
+    monkeypatch.setattr(project, "record", record)
+    snowball_round(project, agent, Direction.FORWARD, sources=_forward_sources(), dry_run=False)
+    assert seen[:2] == [("plan", True), ("chase.round_started,snowball.round_started", True)]
+    [ledger] = events_of_type(project, "snowball.round_started")
+    registered = [
+        e
+        for e in events_of_type(project, "query.registered")
+        if e.payload["spec"]["purpose"] == "chase"  # type: ignore[index]
+    ]
+    assert registered and all(e.id > ledger.id for e in registered)
+
+
+def test_forward_ledger_survives_a_raising_run_step(
+    project: Project, agent: Actor, planned: tuple[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def down(*_a: Any, **_k: Any) -> Any:
+        raise RuntimeError("scripted crash")
+
+    monkeypatch.setattr(chase_service, "run_query", down)
+    with pytest.raises(RuntimeError):
+        snowball_round(project, agent, Direction.FORWARD, sources=_forward_sources(), dry_run=False)
+    [chase] = chase_rounds(project)
+    [ledger] = events_of_type(project, "snowball.round_started")
+    assert ledger.payload["chase_round_id"] == chase.round_id
+
+
+def _crash_on_call(monkeypatch: pytest.MonkeyPatch, n: int) -> None:
+    """`snowball.run_query` raises on its n-th call (from 1), before the run starts."""
+    calls = {"n": 0}
+
+    def maybe(*args: Any, **kwargs: Any) -> Any:
+        calls["n"] += 1
+        if calls["n"] >= n:
+            raise RuntimeError("scripted crash")
+        return run_query(*args, **kwargs)
+
+    monkeypatch.setattr(snowball, "run_query", maybe)
+
+
+def test_round_with_missing_runs_skips_the_no_yield_stop(
+    project: Project, agent: Actor, planned: tuple[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _crash_on_call(monkeypatch, 2)
+    with pytest.raises(RuntimeError):
+        snowball_round(project, agent, Direction.BACKWARD, sources=_sources(), dry_run=False)
+    monkeypatch.undo()
+    _screen_new(project, agent, "exclude")
+    state = plan_round(project, Direction.BACKWARD).state
+    assert "previous_round" not in [i.field for i in state.refusals]
+    assert any("1 of 3 queries" in note for note in state.notes)
+
+
+def test_yield_is_unsettled_without_runs(
+    project: Project, agent: Actor, planned: tuple[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _crash_on_call(monkeypatch, 1)
+    with pytest.raises(RuntimeError):
+        snowball_round(project, agent, Direction.BACKWARD, sources=_sources(), dry_run=False)
+    [ledger] = snowball.recorded_rounds(project)
+    assert snowball.round_yield(project, ledger.round_id) == snowball.RoundYield(
+        retrieved=0, new_after_dedup=0, included=None
+    )
+    state = plan_round(project, Direction.BACKWARD).state
+    assert "previous_round" not in [i.field for i in state.refusals]
