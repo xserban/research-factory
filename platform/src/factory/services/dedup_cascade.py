@@ -20,11 +20,14 @@ from dataclasses import dataclass, field
 
 from rapidfuzz import fuzz
 
+from factory.model.dedup_keys import first_surname, strong_keys, title_bucket_key
 from factory.model.work import Work, WorkType
-from factory.model.work_ids import arxiv_id_from_doi, normalize_title
+from factory.model.work_ids import normalize_title
 
 TITLE_SIMILARITY_THRESHOLD = 92.0
 YEAR_WINDOW = 1
+
+_strong_keys = strong_keys  # the private names before they were shared; kept as aliases
 
 
 @dataclass(slots=True)
@@ -108,33 +111,6 @@ class _Union:
         self.rules[pair] = rule
 
 
-def _strong_keys(work: Work) -> list[tuple[str, str]]:
-    """Exact-match keys, strongest first. A shared key is conclusive."""
-    ids = work.identifiers
-    keys: list[tuple[str, str]] = []
-
-    # An arXiv DOI and a bare arXiv id denote the same preprint; fold them into one key so
-    # the OpenAlex record and the arXiv record meet.
-    arxiv = ids.arxiv or (arxiv_id_from_doi(ids.doi) if ids.doi else None)
-    if ids.doi and not arxiv_id_from_doi(ids.doi):
-        keys.append(("doi", ids.doi))
-    if arxiv:
-        keys.append(("arxiv", arxiv))
-    if ids.pmid:
-        keys.append(("pmid", ids.pmid))
-    if ids.pmcid:
-        keys.append(("pmcid", ids.pmcid))
-    if ids.openalex:
-        keys.append(("openalex", ids.openalex))
-    return keys
-
-
-def _first_surname(work: Work) -> str:
-    if not work.authors:
-        return ""
-    return normalize_title(work.authors[0].name).split()[-1] if work.authors[0].name else ""
-
-
 def _rank(work: Work) -> tuple[int, int, int, str]:
     """Sort key choosing the primary record of a merge group.
 
@@ -212,7 +188,7 @@ def dedup(works: list[Work], *, blocked: frozenset[frozenset[str]] = frozenset()
     # Stage 1-2: exact identifier matches.
     by_key: dict[tuple[str, str], list[str]] = defaultdict(list)
     for work in works:
-        for key in _strong_keys(work):
+        for key in strong_keys(work):
             by_key[key].append(work.id)
     for (kind, _), ids in by_key.items():
         for other in ids[1:]:
@@ -238,7 +214,7 @@ def dedup(works: list[Work], *, blocked: frozenset[frozenset[str]] = frozenset()
                     continue
                 # Title alone is not enough: distinct papers share titles, and a false merge
                 # is the unrecoverable error. Require the first author to agree too.
-                if _first_surname(left) and _first_surname(left) == _first_surname(right):
+                if first_surname(left) and first_surname(left) == first_surname(right):
                     union.union(left.id, right.id, f"title+author:{score:.0f}")
 
     groups: dict[str, list[Work]] = defaultdict(list)
@@ -270,3 +246,31 @@ def dedup(works: list[Work], *, blocked: frozenset[frozenset[str]] = frozenset()
     survivors.sort(key=lambda w: w.id)
     merges.sort(key=lambda m: m.primary)
     return DedupResult(works=survivors, merges=merges, input_count=len(works))
+
+
+def cascade_match(
+    new: Work, candidates: list[Work], blocked: frozenset[frozenset[str]] = frozenset()
+) -> CascadeMerge | None:
+    """The merge `new` joins when the cascade runs over `new` and `candidates`, or None.
+
+    The group is the one containing `new`; it is reported only when it absorbs another work.
+    """
+    result = dedup([new, *[c for c in candidates if c.id != new.id]], blocked=blocked)
+    for merge in result.merges:
+        if merge.absorbed and new.id in (merge.primary, *merge.absorbed):
+            return merge
+    return None
+
+
+__all__ = [
+    "TITLE_SIMILARITY_THRESHOLD",
+    "YEAR_WINDOW",
+    "CascadeMerge",
+    "DedupResult",
+    "cascade_match",
+    "dedup",
+    "merge_works",
+    "normalize_title",
+    "strong_keys",
+    "title_bucket_key",
+]

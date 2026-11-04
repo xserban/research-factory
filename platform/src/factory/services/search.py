@@ -10,7 +10,8 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
+from sqlalchemy.sql.elements import TextClause
 
 from factory.clock import parse_ts
 from factory.errors import FactoryError, FactoryValidationError, ValidationIssue
@@ -534,31 +535,58 @@ def _records_events(project: Project, run_id: str, works: list[Work]) -> list[Ev
     ]
 
 
+def works_by_ids(project: Project, work_ids: Sequence[str]) -> list[Work]:
+    """The corpus works among `work_ids` (as `list_works` would give them), sorted by id.
+
+    Reads by primary key in chunks, never the whole corpus.
+    """
+    found: list[Work] = []
+    unique = sorted(set(work_ids))
+    for start in range(0, len(unique), _ID_CHUNK):
+        found.extend(_load_works(project, corpus=True, work_ids=unique[start : start + _ID_CHUNK]))
+    return found
+
+
+_ID_CHUNK = 500
+
+
 def _load_works(
     project: Project,
     work_id: str | None = None,
     *,
-    work_ids: Sequence[str] | None = None,
     corpus: bool = False,
+    work_ids: Sequence[str] | None = None,
 ) -> list[Work]:
     """Works rebuilt from their stored records and their provenance, sorted by id.
 
     With `corpus`, probe-purpose provenance rows are dropped and a work left with none is omitted.
+    `work_ids` restricts the read to those ids (at most `_ID_CHUNK` per call).
     """
     project.index.sync()
-    where = " WHERE work_id = :work" if work_id is not None else ""
-    params: dict[str, Any] = {"work": work_id} if work_id is not None else {}
-    if work_ids is not None:
-        names = {f"w{n}": wid for n, wid in enumerate(work_ids)}
-        where = f" WHERE work_id IN ({', '.join(':' + name for name in names) or 'NULL'})"
-        params = dict(names)
+    params: dict[str, Any] = {}
+    where = ""
+    if work_id is not None:
+        where = " WHERE work_id = :work"
+        params = {"work": work_id}
+    elif work_ids is not None:
+        where = " WHERE work_id IN :ids"
+        params = {"ids": list(work_ids)}
+
+    def run(sql: str) -> TextClause:
+        statement = text(sql)
+        return (
+            statement.bindparams(bindparam("ids", expanding=True))
+            if work_ids is not None
+            else statement
+        )
+
     with project.index.connect() as conn:
         rows = conn.execute(
-            text(f"SELECT work_id, data FROM works{where} ORDER BY work_id"), params
+            run(f"SELECT work_id, data FROM works{where} ORDER BY work_id"), params
         ).all()
         prov_rows = (
             conn.execute(
-                text(f"SELECT {_PROVENANCE_COLUMNS} FROM provenance{where} ORDER BY at, run_id"),
+                run(f"SELECT {_PROVENANCE_COLUMNS} FROM provenance{where} ORDER BY at, run_id"),
                 params,
             )
             .mappings()

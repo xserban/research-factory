@@ -23,6 +23,7 @@ from factory.model.dedup import DedupMerged, DedupReverted, MergeStatus
 class DedupTables:
     merges: Table
     blocked: Table
+    members: Table
 
 
 def dedup_tables(metadata: MetaData) -> DedupTables:
@@ -44,7 +45,15 @@ def dedup_tables(metadata: MetaData) -> DedupTables:
         Column("a", String, primary_key=True),
         Column("b", String, primary_key=True),
     )
-    return DedupTables(merges, blocked)
+    # Every work of a merge (primary and absorbed), so incremental deduplication finds the
+    # merges that touch a candidate by work id. Status lives on `merges`.
+    members = Table(
+        "merge_members",
+        metadata,
+        Column("work_id", String, primary_key=True),
+        Column("merge_id", String, primary_key=True),
+    )
+    return DedupTables(merges, blocked, members)
 
 
 def dedup_handlers(t: DedupTables) -> dict[str, Handler]:
@@ -68,6 +77,12 @@ def _merged(t: DedupTables) -> Handler:
             )
             .on_conflict_do_nothing(index_elements=["merge_id"])
         )
+        for member in (payload.primary, *payload.absorbed):
+            conn.execute(
+                sqlite_insert(t.members)
+                .values(work_id=member, merge_id=payload.merge_id)
+                .on_conflict_do_nothing(index_elements=["work_id", "merge_id"])
+            )
 
     return merged
 

@@ -43,7 +43,7 @@ def dedup_run(project: Project) -> DedupSummary:
 
 def _reconcile(project: Project) -> DedupSummary:
     works = list_works(project)
-    result = dedup(works, blocked=_blocked_pairs(project))
+    result = dedup(works, blocked=blocked_pairs(project))
     # Identity collapses (several records sharing one id) absorb nothing: they are not merges.
     groups = [group for group in result.merges if group.absorbed]
     active = active_merges(project)
@@ -51,15 +51,35 @@ def _reconcile(project: Project) -> DedupSummary:
     kept: set[str] = set()
     fresh: list[CascadeMerge] = []
     for group in groups:
-        match = _matching(active, group)
+        match = matching_merge(active, group)
         if match is None:
             fresh.append(group)
         else:
             kept.add(match.merge_id)
-    new_ids = [project.ids.new("mrg") for _ in fresh]
-
-    system = project.system_actor()
     stale = [merge for merge in active if merge.merge_id not in kept]
+    new_ids = write_reconciliation(project, stale, fresh)
+
+    return DedupSummary(
+        created=new_ids,
+        reverted=[merge.merge_id for merge in stale],
+        unchanged=len(kept),
+        records=corpus_size(project)[1],
+        works=len(works),
+        canonical=len(canonical_works(project)),
+    )
+
+
+def write_reconciliation(
+    project: Project, stale: list[DedupMerged], fresh: list[CascadeMerge]
+) -> list[str]:
+    """Record the reversal of each stale merge and the new merges, in one write.
+
+    Returns the new merge ids, in the order of `fresh`. A stale merge's reversal names the first
+    new merge that shares a member with it. Shared by `dedup_run` and incremental deduplication,
+    so both write the same events under the same rules. The caller holds the index lock.
+    """
+    new_ids = [project.ids.new("mrg") for _ in fresh]
+    system = project.system_actor()
     events: list[Event] = []
     for old in stale:
         successor = _successor(old, fresh, new_ids)
@@ -84,15 +104,7 @@ def _reconcile(project: Project) -> DedupSummary:
         )
     if events:
         project.record(events)
-
-    return DedupSummary(
-        created=new_ids,
-        reverted=[merge.merge_id for merge in stale],
-        unchanged=len(kept),
-        records=corpus_size(project)[1],
-        works=len(works),
-        canonical=len(canonical_works(project)),
-    )
+    return new_ids
 
 
 def revert_merge(project: Project, actor: Actor, merge_id: str, reason: str) -> None:
@@ -163,14 +175,14 @@ def canonical_works(project: Project) -> list[Work]:
     return sorted([*merged, *rest], key=lambda work: work.id)
 
 
-def _blocked_pairs(project: Project) -> frozenset[frozenset[str]]:
+def blocked_pairs(project: Project) -> frozenset[frozenset[str]]:
     project.index.sync()
     with project.index.connect() as conn:
         rows = conn.execute(text("SELECT a, b FROM blocked_pairs ORDER BY a, b")).all()
     return frozenset(frozenset({str(a), str(b)}) for a, b in rows)
 
 
-def _matching(active: list[DedupMerged], group: CascadeMerge) -> DedupMerged | None:
+def matching_merge(active: list[DedupMerged], group: CascadeMerge) -> DedupMerged | None:
     for merge in active:
         if merge.primary == group.primary and set(merge.absorbed) == set(group.absorbed):
             return merge

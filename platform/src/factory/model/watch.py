@@ -15,7 +15,6 @@ from pydantic import Field, field_validator, model_validator
 
 from factory.model.base import StrictModel
 
-
 CycleTrigger = Literal["scheduler", "human", "agent"]
 
 

@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from pydantic import JsonValue
-from sqlalchemy import Column, Integer, MetaData, String, Table, insert, select, update
+from sqlalchemy import Column, Index, Integer, MetaData, String, Table, insert, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Connection
 
@@ -18,6 +18,7 @@ from factory.canonical import canonical_json
 from factory.clock import format_ts
 from factory.events.envelope import Event
 from factory.index.projection import Handler
+from factory.model.dedup_keys import strong_keys, title_bucket_key
 from factory.model.search import (
     QueryRegistered,
     RunStatus,
@@ -36,6 +37,8 @@ class SearchTables:
     pages: Table
     works: Table
     provenance: Table
+    work_keys: Table
+    work_title_buckets: Table
 
 
 def search_tables(metadata: MetaData) -> SearchTables:
@@ -98,7 +101,26 @@ def search_tables(metadata: MetaData) -> SearchTables:
         Column("raw_ref", String),
         Column("at", String, nullable=False),
     )
-    return SearchTables(queries, runs, pages, works, provenance)
+    # Lookup tables for incremental deduplication (slice 4b): every strong identifier and every
+    # (year, normalised title, first surname) a parsed record carried, keyed by work id.
+    work_keys = Table(
+        "work_keys",
+        metadata,
+        Column("kind", String, primary_key=True),
+        Column("value", String, primary_key=True),
+        Column("work_id", String, primary_key=True),
+    )
+    work_title_buckets = Table(
+        "work_title_buckets",
+        metadata,
+        Column("year", Integer),
+        Column("work_id", String, primary_key=True),
+        Column("title_norm", String, nullable=False),
+        Column("surname", String, nullable=False),
+    )
+    Index("ix_work_title_buckets_year", work_title_buckets.c.year)
+    Index("ix_work_keys_work", work_keys.c.work_id)
+    return SearchTables(queries, runs, pages, works, provenance, work_keys, work_title_buckets)
 
 
 def search_handlers(t: SearchTables) -> dict[str, Handler]:
@@ -202,6 +224,7 @@ def _records_parsed(t: SearchTables) -> Handler:
             return
         for work in payload.records:
             _upsert_work(conn, t, work, event.id)
+            _index_keys(conn, t, work)
             for prov in work.provenance:
                 conn.execute(
                     sqlite_insert(t.provenance)
@@ -219,6 +242,22 @@ def _records_parsed(t: SearchTables) -> Handler:
                 )
 
     return records_parsed
+
+
+def _index_keys(conn: Connection, t: SearchTables, work: Work) -> None:
+    """Record the work's strong identifiers and title key; a later record only adds keys."""
+    for kind, value in strong_keys(work):
+        conn.execute(
+            sqlite_insert(t.work_keys)
+            .values(kind=kind, value=value, work_id=work.id)
+            .on_conflict_do_nothing()
+        )
+    year, title_norm, surname = title_bucket_key(work)
+    conn.execute(
+        sqlite_insert(t.work_title_buckets)
+        .values(year=year, work_id=work.id, title_norm=title_norm, surname=surname)
+        .on_conflict_do_nothing(index_elements=["work_id"])
+    )
 
 
 def _run_finished(t: SearchTables) -> Handler:
