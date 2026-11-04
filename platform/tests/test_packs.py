@@ -62,3 +62,12 @@ def test_groups_checks_and_units() -> None:
         assert f is not None and f.unit_family is UnitFamily.OTHER
     res = ML_BENCHMARK_V1.field("input_resolution")
     assert res is not None and res.normaliser == "resolution"
+
+
+def test_ml_benchmark_v1_digest_is_pinned() -> None:
+    import hashlib
+
+    digest = hashlib.sha256(repr(ML_BENCHMARK_V1).encode()).hexdigest()
+    assert digest == "6dcde06ee945e2af9fff6b5988538a20322bd3bf36ab8ae6f77b4fb3daa01865", (
+        "packs are versioned: add a new version"
+    )

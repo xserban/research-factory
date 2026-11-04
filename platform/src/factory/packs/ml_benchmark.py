@@ -6,7 +6,7 @@ Invariants: ``flops`` and ``macs`` are separate COUNT fields; ``value`` and
 
 from __future__ import annotations
 
-from factory.packs import Check, FieldDef, FieldKind, Pack, UnitFamily
+from factory.packs.model import Check, FieldDef, FieldKind, Pack, UnitFamily
 
 _COUNT_UNITS = ("K", "M", "G", "T", "B", "")
 _SCORE_UNITS = ("%", "fraction", "")
@@ -25,6 +25,26 @@ def _f(
 ) -> FieldDef:
     return FieldDef(name, group, kind, family, check, units, normaliser)
 
+
+# Citation markers. Known accepted false positives (safe direction: a spurious
+# marker only hides a number from being read as a result): ``[0, 1]``,
+# ``[2021]``, ``(June 2021)``.
+_UP = "A-Z\u00c0-\u00d6\u00d8-\u00de\u0100-\u017f\u0180-\u024f"
+_SURNAME = (
+    r"(?:(?:van|von|de|der|den|di|da|del|du|la|le|ter)\s+)*"
+    rf"[{_UP}](?:[^\W\d_]|['\u2019-])*"
+)
+_AUTHORS = rf"{_SURNAME}(?:(?:,\s*(?:(?:and|&)\s+)?|\s+(?:and|&)\s+){_SURNAME})*"
+_ENTRY = rf"{_AUTHORS}(?:\s+et al\.?)?,?\s+\d{{4}}[a-z]?"
+CITATION_PATTERNS = (
+    r"\[\s*\d+(?:\s*[,;\u2013\u2014-]\s*\d+)*\s*\]",
+    rf"\({_ENTRY}\)",
+    rf"(?<=\(){_ENTRY}(?=;)",
+    rf"(?<=;\s){_ENTRY}(?=[;)])",
+    rf"\b{_AUTHORS}\s+et al\.?,?\s+(?:\(\d{{4}}[a-z]?\)|\d{{4}}[a-z]?)",
+    rf"\b{_AUTHORS},?\s+\(\d{{4}}[a-z]?\)",
+    r"\\cite[a-z]*\*?(?:\[[^\]]*\])*\{[^}]*\}",
+)
 
 _TQ, _NUM, _NOCHK = Check.TEXT_IN_QUOTE, Check.NUMBER, Check.NONE
 
@@ -67,10 +87,5 @@ ML_BENCHMARK_V1 = Pack(
         "input_resolution",
         "pretraining_data",
     ),
-    citation_patterns=(
-        r"\[\d+(?:\s*[,\u2013\u2014-]\s*\d+)*\]",
-        r"\([A-Z][A-Za-z'\u2019-]+(?: et al\.?| (?:and|&) [A-Z][A-Za-z'\u2019-]+)?,? \d{4}[a-z]?\)",
-        r"\b[A-Z][A-Za-z'\u2019-]+ et al\.?,? \(?\d{4}[a-z]?\)?",
-        r"\\cite[a-z]*\{[^}]*\}",
-    ),
+    citation_patterns=CITATION_PATTERNS,
 )

@@ -3,6 +3,10 @@
 Invariant: the result depends only on ``text`` and ``patterns``; matches are
 returned in order of position, and a match overlapping an earlier accepted
 match is dropped (the earlier, then the longer, wins).
+
+The patterns come from the pack. For ``ml-benchmark`` the accepted false
+positives are ``[0, 1]``, ``[2021]`` and ``(June 2021)``: a spurious marker only
+excludes a number from being read as a result (the safe direction).
 """
 
 from __future__ import annotations

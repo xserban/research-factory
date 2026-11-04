@@ -94,3 +94,111 @@ def test_citation_markers() -> None:
     assert citation_markers("ViT-B/16", p) == []
     assert citation_markers(r"see \cite{wang21}", p) == [r"\cite{wang21}"]
     assert citation_markers("A [1] B [2]", p) == ["[1]", "[2]"]
+
+
+def _vals(text: str) -> list[Decimal]:
+    return [t.value for t in numbers_in(text)]
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["1,2345", "82.4.1", "1.2.3", "Table 2.82.4", "82.4_1", "12,34", "82,4", "1,23,456"],
+)
+def test_no_false_prefix_tokens(text: str) -> None:
+    assert numbers_in(text) == []
+
+
+def test_boundary_kept_cases() -> None:
+    assert _vals("182.45 82.41") == [Decimal("182.45"), Decimal("82.41")]
+    assert _vals("x -82.4") == [Decimal("-82.4")]
+    assert _vals("80-82") == [Decimal(80), Decimal(82)]
+    assert _vals("82.4±0.3") == [Decimal("82.4"), Decimal("0.3")]
+    assert _vals("in 2020, 5 models.") == [Decimal(2020), Decimal(5)]
+
+
+def test_canonical_is_exact() -> None:
+    a = canonical(Decimal("12345678901234567890123456789012"), None, UnitFamily.OTHER)
+    b = canonical(Decimal("12345678901234567890123456789013"), None, UnitFamily.OTHER)
+    assert a != b
+    assert a == "12345678901234567890123456789012"
+    assert canonical(Decimal("1E+999"), None, UnitFamily.OTHER) == "1" + "0" * 999
+
+
+def test_exponent_out_of_range() -> None:
+    assert numbers_in("1e999999999") == []
+    assert parse_printed("1e999999999") is None
+    assert parse_printed("1e300") == Decimal("1e300")
+
+
+@pytest.mark.parametrize(
+    ("unit", "family"),
+    [("k", UnitFamily.COUNT), ("x", UnitFamily.COUNT), ("M", UnitFamily.SCORE)],
+)
+def test_canonical_rejects_foreign_unit(unit: str, family: UnitFamily) -> None:
+    with pytest.raises(ValueError):
+        canonical(Decimal(1), unit, family)
+
+
+def test_suffix_with_space_and_unit_words() -> None:
+    assert [(t.value, t.suffix) for t in numbers_in("82.4 %")] == [(Decimal("82.4"), "%")]
+    assert numbers_in("3.5 B")[0].suffix == "B"
+    assert numbers_in("22.1 M")[0].suffix == "M"
+    assert numbers_in("22 Models")[0].suffix is None
+    assert numbers_in("22 M1")[0].suffix is None
+    assert numbers_in("4.6 GFLOPs")[0].suffix == "G"
+    assert numbers_in("4.6GMACs")[0].suffix == "G"
+    assert numbers_in("86 MB")[0].suffix == "M"
+    assert numbers_in("86MB")[0].suffix == "M"
+    assert numbers_in("22 m")[0].suffix is None
+    assert numbers_in("22 k")[0].suffix is None
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("1.5×10^3", Decimal(1500)),
+        ("1.5 x 10^3", Decimal(1500)),
+        (r"1.5\times 10^{3}", Decimal(1500)),
+        ("1.5×10^{-3}", Decimal("0.0015")),
+        ("-2×10^−2", Decimal("-0.02")),
+    ],
+)
+def test_times_ten_power_is_one_number(text: str, expected: Decimal) -> None:
+    assert _vals(text) == [expected]
+
+
+def test_power_exponent_known_limitation() -> None:
+    assert _vals("2^8") == [Decimal(2)]  # base only; exponent is not a token
+    assert _vals("10^{-3}") == [Decimal(10)]
+
+
+@pytest.mark.parametrize("text", ["٣", "１２", "٣.٤"])
+def test_ascii_digits_only(text: str) -> None:
+    assert numbers_in(text) == []
+    assert parse_printed(text) is None
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("(Wang, Li, and Zhu, 2021)", ["(Wang, Li, and Zhu, 2021)"]),
+        ("(van der Maaten, 2008)", ["(van der Maaten, 2008)"]),
+        ("(de Vries et al., 2020)", ["(de Vries et al., 2020)"]),
+        ("(Wang et al., 2021; Li et al., 2020)", ["Wang et al., 2021", "Li et al., 2020"]),
+        ("[41; 42]", ["[41; 42]"]),
+        ("[ 41 ]", ["[ 41 ]"]),
+        (r"\cite[p.2]{x}", [r"\cite[p.2]{x}"]),
+        ("(Müller, 2019)", ["(Müller, 2019)"]),
+        ("(Čech et al., 2020)", ["(Čech et al., 2020)"]),
+        ("Wang et al. (2021)", ["Wang et al. (2021)"]),
+    ],
+)
+def test_citation_coverage(text: str, expected: list[str]) -> None:
+    assert citation_markers(text, ML_BENCHMARK_V1.citation_patterns) == expected
+
+
+def test_citation_accepted_false_positives() -> None:
+    p = ML_BENCHMARK_V1.citation_patterns
+    assert citation_markers("[0, 1]", p) == ["[0, 1]"]
+    assert citation_markers("[2021]", p) == ["[2021]"]
+    assert citation_markers("(June 2021)", p) == ["(June 2021)"]
