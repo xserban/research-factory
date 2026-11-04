@@ -153,6 +153,138 @@ async def test_supersedes_keys_are_row_indices_given_as_strings(
     assert len(ok["data"]["rows"]["written"]) == 1
 
 
+async def _task_with_target(client: object, target_rows: int = 1) -> tuple[str, str]:
+    served = await client.call("extract_next", project="demo", pass_label="A", **AGENT_A)  # type: ignore[attr-defined]
+    task = served["data"]["batch"]["task_id"]
+    first = await client.call(  # type: ignore[attr-defined]
+        "extract_record", project="demo", task_id=task, rows=[_dump(_r())], **AGENT_A
+    )
+    return task, first["data"]["rows"]["written"][0]
+
+
+@pytest.mark.anyio
+async def test_supersedes_follows_the_original_index_past_a_rejected_row(
+    settings: Settings,
+    project: Project,
+    clock: FixedClock,
+    world: list[str],  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    install_skill(settings, "rf-extract")
+    _session(monkeypatch, SESSION_A)
+    async with open_session(settings, clock) as client:
+        task, target = await _task_with_target(client)
+        out = await client.call(
+            "extract_record",
+            project="demo",
+            task_id=task,
+            rows=[{"fields": {}}, _dump(_r())],
+            supersedes={"1": target},
+            **AGENT_A,
+        )
+    assert out["ok"] is True, out
+    assert [r["index"] for r in out["data"]["rows"]["rejected"]] == [0]
+    [new] = out["data"]["rows"]["written"]
+    events = {e.payload["extraction_id"]: e for e in _of(project, "extraction.recorded")}
+    assert events[new].payload["supersedes"] == target
+
+
+@pytest.mark.anyio
+async def test_supersedes_key_of_a_rejected_row_supersedes_nothing(
+    settings: Settings,
+    project: Project,
+    clock: FixedClock,
+    world: list[str],  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    install_skill(settings, "rf-extract")
+    _session(monkeypatch, SESSION_A)
+    async with open_session(settings, clock) as client:
+        task, target = await _task_with_target(client)
+        out = await client.call(
+            "extract_record",
+            project="demo",
+            task_id=task,
+            rows=[{"fields": {}}, _dump(_r("2", "t1.r3.c3"))],
+            supersedes={"0": target},
+            **AGENT_A,
+        )
+    assert out["ok"] is True, out
+    assert [r["index"] for r in out["data"]["rows"]["rejected"]] == [0]
+    [new] = out["data"]["rows"]["written"]
+    events = {e.payload["extraction_id"]: e for e in _of(project, "extraction.recorded")}
+    assert events[new].payload["supersedes"] is None
+
+
+@pytest.mark.anyio
+async def test_claim_supersedes_corrects_an_earlier_claim(
+    settings: Settings,
+    project: Project,
+    clock: FixedClock,
+    world: list[str],  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    install_skill(settings, "rf-extract")
+    _session(monkeypatch, SESSION_A)
+    claim = {
+        "statement": "The method is described in the method section.",
+        "claim_type": "finding",
+        "evidence_type": "experiment",
+        "strength": "moderate",
+        "anchor": "s3.p1",
+        "quote": "Lorem ipsum dolor sit amet.",
+    }
+    async with open_session(settings, clock) as client:
+        served = await client.call("extract_next", project="demo", pass_label="A", **AGENT_A)
+        task = served["data"]["batch"]["task_id"]
+        first = await client.call(
+            "extract_record", project="demo", task_id=task, rows=[], claims=[claim], **AGENT_A
+        )
+        assert first["ok"] is True, first
+        target = first["data"]["claims"]["written"][0]
+        out = await client.call(
+            "extract_record",
+            project="demo",
+            task_id=task,
+            rows=[],
+            claims=[{**claim, "claim_type": "limitation"}],
+            claim_supersedes={"0": target},
+            **AGENT_A,
+        )
+    assert out["ok"] is True, out
+    [new] = out["data"]["claims"]["written"]
+    events = {e.payload["claim_id"]: e for e in _of(project, "extraction.claim_recorded")}
+    assert events[new].payload["supersedes"] == target
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("key", [" 1", "+1", "1_0", "-1", "1.0", ""])
+async def test_index_keys_must_be_plain_digits(
+    settings: Settings,
+    project: Project,
+    clock: FixedClock,
+    world: list[str],  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+    key: str,
+) -> None:
+    install_skill(settings, "rf-extract")
+    _session(monkeypatch, SESSION_A)
+    async with open_session(settings, clock) as client:
+        task, target = await _task_with_target(client)
+        before = _count(project)
+        out = await client.call(
+            "extract_record",
+            project="demo",
+            task_id=task,
+            rows=[_dump(_r())],
+            supersedes={key: target},
+            **AGENT_A,
+        )
+    assert out["ok"] is False
+    assert out["errors"][0]["field"] == f"supersedes.{key}"
+    assert _count(project) == before
+
+
 @pytest.mark.anyio
 async def test_agreement_is_refused_to_pass_and_screening_sessions(
     settings: Settings,
@@ -244,3 +376,22 @@ async def test_reports_check_and_trace_are_refused_to_an_extraction_session(
         out = await client.call(tool, project="demo", **args)
     assert out["ok"] is False
     assert out["errors"][0]["field"] == "session"
+
+
+@pytest.mark.anyio
+async def test_a_second_audit_sample_call_is_refused_and_writes_nothing(
+    settings: Settings,
+    project: Project,
+    clock: FixedClock,
+    ext_a: Actor,  # noqa: F811
+    ext_b: Actor,  # noqa: F811
+    world: list[str],  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _both(project, ext_a, ext_b)
+    _session(monkeypatch, FRESH)
+    async with open_session(settings, clock) as client:
+        first = await client.call("extract_audit_sample", project="demo")
+        second = await client.call("extract_audit_sample", project="demo")
+    assert first["ok"] is True and second["ok"] is False
+    assert len(_of(project, "extraction.audit_sampled")) == 1

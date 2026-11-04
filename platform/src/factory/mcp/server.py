@@ -873,6 +873,7 @@ def build_server(
 
         def label() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
             event_id = extraction_audit_service.extraction_audit_record(
                 opened,
                 opened.human_actor(),
@@ -908,9 +909,9 @@ def _index_keys(name: str, given: Mapping[str, str]) -> dict[int, str]:
     out: dict[int, str] = {}
     issues: list[ValidationIssue] = []
     for key, target in given.items():
-        try:
+        if key.isascii() and key.isdigit():
             out[int(key)] = target
-        except ValueError:
+        else:
             issues.append(ValidationIssue(f"{name}.{key}", "key must be an integer item index"))
     if issues:
         raise FactoryValidationError(issues)
