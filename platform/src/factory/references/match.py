@@ -31,6 +31,9 @@ from factory.references.parse import RefFields
 
 MATCHER = "refmatch"
 MATCHER_VERSION = "1"
+# Ruling-16 provisional values. Uncalibrated: no fixture pairs (the Task 3 fixtures hold single
+# entries with their expected parsed fields, no entry/candidate title pairs); calibrate in
+# acceptance (Task 10) on the pilot corpus.
 TITLE_FUZZY = 0.92
 TITLE_FLOOR = 0.85
 MARGIN = 0.03

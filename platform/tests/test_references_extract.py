@@ -33,7 +33,7 @@ from tests.document_helpers import (
     promoted_works,
     run_convert,
 )
-from tests.references_service_helpers import Lookups, converted_work, corpus_works
+from tests.references_service_helpers import Lookups, converted_work, corpus_works, oa_item
 from tests.test_fulltext_service import StubRoute, always, retrieved
 
 ENTRIES = [
@@ -417,3 +417,69 @@ def test_bbl_archive_missing_is_flagged(
     monkeypatch.setattr(project.library, "get", get)
     [result] = _extract(project, agent, lookups).extractions
     assert "bbl-archive-missing" in result.flags
+
+
+def test_arxiv_miss_falls_back_to_the_doi(
+    project: Project, corpus: None, agent: Actor, lookups: Lookups
+) -> None:
+    lookups.openalex = [oa_item("Tidal lattices", "Ana Quill", 2021, "W601", "10.5555/tidal.1")]
+    converted_work(
+        project, ["A. Quill. Tidal lattices. arXiv:2101.00002, 2021. doi:10.5555/tidal.1."], ["x"]
+    )
+    [result] = _extract(project, agent, lookups).extractions
+    assert result.states[LinkState.RESOLVED] == 1
+    [resolved] = events_of_type(project, "reference.resolved")
+    [r] = resolved.payload["resolutions"]  # type: ignore[misc]
+    assert r["method"] == "lookup-identifier"  # type: ignore[index]
+    assert r["no_source_record"] is False  # type: ignore[index]
+    assert lookups.asked == ["arxiv 2101.00002", "openalex doi:10.5555/tidal.1"]
+
+
+def test_unqueryable_doi_is_not_a_source_error(
+    project: Project, corpus: None, agent: Actor, lookups: Lookups
+) -> None:
+    entries = [
+        "R. Thornbury. Sparse kernels for tidal data. Imaginary Methods, 2019. doi:10.5555/a,b.",
+        "doi:10.5555/c|d",
+    ]
+    converted_work(project, entries, ["x"])
+    _extract(project, agent, lookups)
+    [resolved] = events_of_type(project, "reference.resolved")
+    rs = resolved.payload["resolutions"]
+    assert rs[0]["no_source_record"] is True  # type: ignore[index]
+    assert rs[1]["reason"] == "not-found"  # type: ignore[index]
+    assert lookups.asked == []
+
+
+def test_identifier_lookups_are_chunked_at_fifty(
+    project: Project, corpus: None, agent: Actor, lookups: Lookups
+) -> None:
+    converted_work(project, [f"doi:10.5555/bulk.{i}" for i in range(1, 56)], ["x"])
+    [result] = _extract(project, agent, lookups).extractions
+    assert result.states[LinkState.UNRESOLVED] == 55
+    asked = [q for q in lookups.asked if q.startswith("openalex doi:")]
+    assert sorted(q.count("|") + 1 for q in asked) == [5, 50]
+    assert len(result.lookup_runs) == 2
+
+
+def test_no_entry_text_in_events_or_blobs(
+    project: Project, corpus: None, agent: Actor, lookups: Lookups
+) -> None:
+    planted = "Zanzibarquokka"
+    entries = [
+        f"B. Lee. Efficient reed transformers v2. Reed Conference, 2021. {planted} remark one.",
+        f"A. Zhou. Paper 2. Journal of Tests, 2020. {planted} remark two. doi:10.1000/p2.",
+        f"A. Quillfeather. A lattice is worth sixteen tokens. 2020. {planted} three. "
+        "arXiv:2010.99999.",
+    ]
+    converted_work(project, entries, ["x"])
+    _extract(project, agent, lookups)
+    assert events_of_type(project, "reference.extracted")
+    assert any(q.startswith("openalex title.search:") for q in lookups.asked)
+    scanned = 0
+    for root in (project.paths.events_dir, project.paths.blobs_dir):
+        for path in root.rglob("*"):
+            if path.is_file():
+                scanned += 1
+                assert planted.encode() not in path.read_bytes(), path
+    assert scanned > 0

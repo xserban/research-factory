@@ -255,3 +255,26 @@ def test_decision_on_superseded_extraction_refused(
     extract_references(project, agent, None, sources=lookups.sources())
     with pytest.raises(FactoryValidationError):
         _decide(project, human, extraction, 1, Decision.CONFIRM)
+
+
+def test_agent_binding_decision_refused_after_human_decision(
+    project: Project, extraction: str, agent: Actor, human: Actor
+) -> None:
+    _decide(project, human, extraction, 1, Decision.CONFIRM)
+    _decide(project, agent, extraction, 1, Decision.PROPOSE_REJECT)
+    for decision in (Decision.REJECT, Decision.CONFIRM):
+        with pytest.raises(FactoryValidationError):
+            _decide(project, second_agent(agent), extraction, 1, decision)
+    item = _item(project, 1)
+    assert item.state is LinkState.RESOLVED and item.confirmed_by == "human"
+
+
+def test_any_earlier_proposal_of_the_session_blocks_its_confirmation(
+    project: Project, extraction: str, agent: Actor
+) -> None:
+    checker = second_agent(agent)
+    _decide(project, agent, extraction, 1, Decision.PROPOSE_CONFIRM)
+    _decide(project, checker, extraction, 1, Decision.PROPOSE_CONFIRM)
+    with pytest.raises(FactoryValidationError):
+        _decide(project, agent, extraction, 1, Decision.CONFIRM)
+    assert _item(project, 1).state is LinkState.UNCONFIRMED

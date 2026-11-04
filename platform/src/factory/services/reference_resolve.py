@@ -6,10 +6,13 @@ that yields a decision wins:
 1. An identifier (DOI, arXiv id; a DataCite arXiv DOI counts as its arXiv id) is looked up among
    the corpus works, absorbed works mapped to their primary (`corpus-identifier`); else through
    probe-purpose lookups, arXiv `id_list` and OpenAlex `doi:` filters in chunks of at most
-   `LOOKUP_CHUNK` (`lookup-identifier`). An identifier no source returns gives a
-   `no-source-record` work (ruling 8) when the entry has a parsed title and year, else
-   `unresolved` / `not-found`. An entry with an identifier is never title-matched: its stated
-   identifier is authoritative, and a title match could only contradict it.
+   `LOOKUP_CHUNK` (`lookup-identifier`). An entry with an arXiv id is asked of arXiv first; on a
+   miss, a plain (non-DataCite) DOI it also states is asked of OpenAlex. An identifier no source
+   returns gives a `no-source-record` work (ruling 8) when the entry has a parsed title and year,
+   else `unresolved` / `not-found`. A DOI containing `|` or `,` cannot be carried by the OpenAlex
+   filter syntax; it is never asked and is settled as not returned (no-source-record or
+   not-found), not as a source error. An entry with an identifier is never title-matched: its
+   stated identifier is authoritative, and a title match could only contradict it.
 2. An entry without an identifier but with a parsed title is matched against the corpus
    (`corpus-title`), then through one probe OpenAlex `title.search` per entry (`lookup-title`).
 3. Otherwise `unresolved`: `no-identifier-no-title`, `not-found`, or `source-error` when the
@@ -21,8 +24,10 @@ is live; the link's recorded state is `unconfirmed` or `ambiguous`; the work is 
 one of its candidates; both quotes are verbatim (ruling 14a), the first in the entry text
 re-derived from the pinned conversion (`entry_text`, checked against `entry_sha256`), the second
 in the candidate's stored title or author line. A binding decision (`confirm`, `reject`) comes
-from a human, or in `pilot` mode from an agent whose session differs from the latest proposal's,
-on a title-fuzzy (`unconfirmed`) link only (ruling 3). Proposals never change a link's state.
+from a human, or in `pilot` mode from an agent whose session has made no earlier decision or
+proposal on the entry, seconding a recorded proposal, on a title-fuzzy (`unconfirmed`) link only,
+and never once a human has made a binding decision on it (ruling 3: a human's decision is final
+relative to agents). Proposals never change a link's state.
 """
 
 from __future__ import annotations
@@ -244,6 +249,7 @@ def resolve_entries(
     by_arxiv: dict[str, list[ReferenceEntry]] = {}
     by_doi: dict[str, list[ReferenceEntry]] = {}
     titled: list[ReferenceEntry] = []
+    arxiv_failed: set[int] = set()  # ordinals whose arXiv lookup failed before the DOI fallback
     for entry in entries:
         arxiv, doi = _keys(entry.doi, entry.arxiv)
         if arxiv is None and doi is None:
@@ -267,7 +273,7 @@ def resolve_entries(
                 out[entry.ordinal] = _resolved(
                     entry.ordinal, hit[0], LOOKUP_IDENTIFIER, blob=hit[1]
                 )
-            elif failed:
+            elif failed or entry.ordinal in arxiv_failed:
                 out[entry.ordinal] = _unresolved(entry.ordinal, "source-error", LOOKUP_IDENTIFIER)
             elif entry.title is not None and entry.year is not None:
                 no_source = work_id(
@@ -299,12 +305,26 @@ def resolve_entries(
             if key is not None:
                 hits.setdefault(key, (identity(work), blob))
         for key in chunk:
-            settle(by_arxiv, key, hits.get(key), result.status is not RunStatus.COMPLETE)
+            hit = hits.get(key)
+            failed = result.status is not RunStatus.COMPLETE
+            if hit is None:
+                # an arXiv miss: an entry that also states a plain DOI is asked by its DOI
+                rest: list[ReferenceEntry] = []
+                for entry in by_arxiv[key]:
+                    _, doi = _keys(entry.doi, None)
+                    if doi is not None:
+                        by_doi.setdefault(doi, []).append(entry)
+                        if failed:
+                            arxiv_failed.add(entry.ordinal)
+                    else:
+                        rest.append(entry)
+                by_arxiv[key] = rest
+            settle(by_arxiv, key, hit, failed)
 
     queryable = sorted(d for d in by_doi if "|" not in d and "," not in d)
     for key in sorted(set(by_doi) - set(queryable)):
-        # a DOI the filter syntax cannot carry is never asked: that is the source's limit
-        settle(by_doi, key, None, True)
+        # a DOI the filter syntax cannot carry is never asked; it is settled as not found
+        settle(by_doi, key, None, False)
     for chunk in _chunks(queryable):
         spec = QuerySpec(
             source="openalex",
@@ -428,13 +448,15 @@ class _Link:
     base_state: LinkState
     base_work_id: str | None
     candidates: tuple[str, ...]
+    confirmed_by: str | None
+    """Who made the current binding decision (`human`, `second-agent`), None when there is none."""
 
 
 def _link(project: Project, extraction_id: str, ordinal: int) -> _Link | None:
     with project.index.connect() as conn:
         row = conn.execute(
             text(
-                "SELECT x.live, l.base_state, l.base_work_id, l.candidates "
+                "SELECT x.live, l.base_state, l.base_work_id, l.candidates, l.confirmed_by "
                 "FROM reference_links l JOIN reference_extractions x "
                 "ON x.extraction_id = l.extraction_id "
                 "WHERE l.extraction_id = :rex AND l.ordinal = :ordinal"
@@ -449,20 +471,39 @@ def _link(project: Project, extraction_id: str, ordinal: int) -> _Link | None:
         base_state=LinkState(str(row[1])),
         base_work_id=None if row[2] is None else str(row[2]),
         candidates=listed,
+        confirmed_by=None if row[4] is None else str(row[4]),
     )
 
 
-def _proposal_session(project: Project, extraction_id: str, ordinal: int) -> str | None:
-    """The session of the latest proposal on the entry, or None when there is none."""
+def _has_proposal(project: Project, extraction_id: str, ordinal: int) -> bool:
     with project.index.connect() as conn:
         row = conn.execute(
             text(
-                "SELECT ev.session FROM reference_decisions d JOIN events ev ON ev.id = d.event_id "
-                "WHERE d.extraction_id = :rex AND d.ordinal = :ordinal AND d.kind = 'proposal'"
+                "SELECT 1 FROM reference_decisions WHERE extraction_id = :rex "
+                "AND ordinal = :ordinal AND kind = 'proposal'"
             ),
             {"rex": extraction_id, "ordinal": ordinal},
         ).first()
-    return None if row is None else str(row[0])
+    return row is not None
+
+
+def _entry_key(extraction_id: str, ordinal: int) -> str:
+    return f"{extraction_id}:{ordinal}"
+
+
+def _deciding_sessions(project: Project, extraction_id: str, ordinal: int) -> set[str]:
+    """Every session that recorded a decision or proposal on the entry (events are referenced by
+    the entry key, so all of them are found, not only the latest)."""
+    key = json.dumps(_entry_key(extraction_id, ordinal))
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT session FROM events WHERE type = 'reference.resolution_decided' "
+                "AND instr(refs, :key) > 0"
+            ),
+            {"key": key},
+        ).all()
+    return {str(row[0]) for row in rows}
 
 
 def _rigor_mode(project: Project) -> RigorMode:
@@ -487,11 +528,12 @@ def _confirmer(
         reasons.append("an agent may only propose outside pilot mode")
     if link.base_state is not LinkState.UNCONFIRMED:
         reasons.append("a second agent decides title-fuzzy (unconfirmed) links only")
-    session = _proposal_session(project, extraction_id, ordinal)
-    if session is None:
+    if link.confirmed_by == "human":
+        reasons.append("a human has decided this link; an agent cannot change that decision")
+    if not _has_proposal(project, extraction_id, ordinal):
         reasons.append("a second agent decides only a recorded proposal")
-    elif session == actor.session:
-        reasons.append("the proposer's session cannot confirm its own proposal")
+    elif actor.session in _deciding_sessions(project, extraction_id, ordinal):
+        reasons.append("a session that proposed or decided on this entry cannot confirm it")
     if reasons:
         return None, [ValidationIssue("decision", "; ".join(reasons))]
     return "second-agent", []
@@ -614,7 +656,7 @@ def decide_reference(
                     "reference.resolution_decided",
                     payload,
                     actor,
-                    refs=(extraction_id,),
+                    refs=(extraction_id, _entry_key(extraction_id, ordinal)),
                     input_blob=input_blob,
                 )
             ]
