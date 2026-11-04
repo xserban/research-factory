@@ -266,3 +266,35 @@ def test_from_json_rejects_invalid_utf8() -> None:
 def test_from_json_rejects_non_string_text() -> None:
     with pytest.raises(ManifestError, match="text"):
         Manifest.from_json(_data(_entry(text=3)))
+
+
+def test_anchor_id_with_trailing_newline_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    from factory.document import anchors
+
+    monkeypatch.setattr(anchors, "_units", lambda src, lines: iter([anchors._Anchor(0, "s1\n")]))
+    monkeypatch.setattr(anchors, "_check_anchor_occurrences", lambda src, units: None)
+    with pytest.raises(ManifestError, match="'s1\\\\n'"):
+        parse_manifest("ignored")
+
+
+def test_manifest_position_and_get_agree_for_every_anchor() -> None:
+    m = parse_manifest(MD)
+    assert len(m.anchors) > 3
+    for i, anchor in enumerate(m.anchors):
+        assert m.position(anchor.id) == i
+        assert m.get(anchor.id) is m.anchors[i]
+
+
+def test_manifest_position_of_unknown_id_is_none() -> None:
+    m = parse_manifest(MD)
+    assert m.position("s99") is None
+    assert m.get("s99") is None
+
+
+def test_manifest_json_round_trip_ignores_position_cache() -> None:
+    m = parse_manifest(MD)
+    fresh = parse_manifest(MD)
+    assert m.position("t1") is not None
+    assert m == fresh
+    assert m.to_json() == fresh.to_json()
+    assert Manifest.from_json(m.to_json()) == m

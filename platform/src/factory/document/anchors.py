@@ -10,14 +10,14 @@ Invariants of a parsed `Manifest`:
 - every non-page anchor is followed on the next line by an element of the matching kind;
 - every paragraph id `s<x>.p<k>` names section `s<x>` (`s0` is implicit);
 - bibliography entry anchors `b<n>` are numbered 1, 2, ... in document order, each on a paragraph;
-- every top-level table is rectangular, and each `t<n>` table yields one cell anchor per cell;
+- every anchored `t<n>` table is rectangular and yields one cell anchor per cell;
 - anchors are in document order, a table's cells directly after the table.
 """
 
 import json
 import re
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 
 from markdown_it import MarkdownIt
@@ -81,10 +81,23 @@ class Manifest:
     """The anchors of one document, in document order."""
 
     anchors: tuple[Anchor, ...]
+    _index: dict[str, int] | None = field(default=None, init=False, repr=False, compare=False)
+
+    def position(self, anchor_id: str) -> int | None:
+        """Index of the anchor with this id in `anchors`, or None; O(1) after the first call.
+
+        The lookup table is built lazily and is not part of equality or serialisation.
+        """
+        index = self._index
+        if index is None:
+            index = {a.id: i for i, a in enumerate(self.anchors)}
+            object.__setattr__(self, "_index", index)
+        return index.get(anchor_id)
 
     def get(self, anchor_id: str) -> Anchor | None:
         """The anchor with this id, or None."""
-        return next((a for a in self.anchors if a.id == anchor_id), None)
+        i = self.position(anchor_id)
+        return None if i is None else self.anchors[i]
 
     @classmethod
     def from_json(cls, data: bytes) -> "Manifest":
@@ -155,7 +168,7 @@ def parse_manifest(markdown: str) -> Manifest:
         if unit.id in seen:
             raise ManifestError(f"line {unit.line + 1}: duplicate anchor id {unit.id!r}")
         seen.add(unit.id)
-        if not ANCHOR_RE.match(unit.id):
+        if not ANCHOR_RE.fullmatch(unit.id):
             raise ManifestError(f"line {unit.line + 1}: {unit.id!r} is not a valid anchor id")
         if _PAGE_ID_RE.fullmatch(unit.id):
             anchors.append(Anchor(unit.id, AnchorKind.PAGE, None, ""))
