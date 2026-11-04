@@ -78,12 +78,15 @@ def register_query(
     *,
     sources: Mapping[str, SourceFactory],
     deviation_id: str | None = None,
+    round_id: str | None = None,
 ) -> str:
     """Record a query as the caller stated it. Writes nothing if the spec does not fit.
 
     A search in a pilot or systematic project must be authorised by the protocol
     (`protocol.search_authorization`); `deviation_id` names a recorded deviation that allows a
-    query the protocol does not plan. The event refers to the protocol and the deviation.
+    query the protocol does not plan. `round_id` names the recorded snowball round that planned
+    the query; the round's texts are waived only for a query that names it. The event refers to
+    the protocol, the deviation and the round (last).
     """
     # Imported here: the protocol service reads seeds, which read this module.
     from factory.services import protocol as protocol_service
@@ -91,7 +94,11 @@ def register_query(
     with project.index.exclusive():
         project.index.sync()
         issues = _spec_issues(project, spec, sources)
-        issues += protocol_service.search_authorization(project, spec, deviation_id=deviation_id)
+        if round_id is not None and not protocol_service.is_snowball_round(project, round_id):
+            issues.append(ValidationIssue("round_id", "not a recorded snowball round"))
+        issues += protocol_service.search_authorization(
+            project, spec, deviation_id=deviation_id, round_id=round_id
+        )
         if issues:
             raise FactoryValidationError(issues)
         query_id = project.ids.new("qry")
@@ -105,6 +112,7 @@ def register_query(
             interface=INTERFACES.get(spec.source, spec.source),
         )
         refs = protocol_service.search_refs(project, spec, deviation_id)
+        refs += () if round_id is None else (round_id,)
         project.record(
             [
                 project.events.make(
@@ -162,7 +170,10 @@ def run_query(
     with project.index.exclusive():
         project.index.sync()
         gate = protocol_service.search_authorization(
-            project, spec, deviation_id=protocol_service.registered_deviation(project, query_id)
+            project,
+            spec,
+            deviation_id=protocol_service.registered_deviation(project, query_id),
+            round_id=protocol_service.registered_round(project, query_id),
         )
         if gate:
             raise FactoryValidationError(gate)

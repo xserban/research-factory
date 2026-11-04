@@ -11,11 +11,12 @@ from typing import Any
 
 import pytest
 
-from factory.errors import FactoryValidationError
+from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
 from factory.model.project import RigorMode
 from factory.model.protocol import SnowballPlan
 from factory.model.references import Direction, SnowballRoundStarted
+from factory.model.screening import PassLabel
 from factory.model.search import QueryKind, QueryPurpose, QuerySpec, RunStatus
 from factory.model.work import ProvenanceMethod, WorkType
 from factory.model.work_ids import work_id
@@ -24,13 +25,16 @@ from factory.services.agreement import Outcome, final_outcomes
 from factory.services.context import Project
 from factory.services.protocol import amend_protocol, current_protocol
 from factory.services.references import extract_references, list_references
-from factory.services.search import get_work, list_works, register_query
+from factory.services.screening import open_pass
+from factory.services.search import get_work, list_works, register_query, run_query
+from factory.services.seeds import split_seeds
 from factory.services.snowball import (
     RoundCandidate,
     plan_round,
     round_runs,
     snowball_queries,
     snowball_round,
+    unqueryable_keys,
 )
 from factory.sources.registry import INTERFACES
 from tests.document_helpers import (
@@ -41,8 +45,10 @@ from tests.document_helpers import (
     promoted_works,
     run_convert,
 )
+from tests.helpers import SourcesFor, _setup
 from tests.references_service_helpers import Lookups, bib_html, oa_item
-from tests.test_screening_next import _decide
+from tests.test_fulltext_service import _include_all
+from tests.test_screening_next import _decide, _draw
 
 PLAN = SnowballPlan(max_backward_rounds=2, max_forward_rounds=1)
 LATTICE = ("A lattice is worth sixteen tokens", 2020, "Ana Quillfeather")
@@ -165,14 +171,103 @@ def test_round_refused_without_plan_in_pilot(
     assert event_bytes(project) == before
 
 
-def test_exploratory_allowed_without_plan_rule_none(
-    project: Project, agent: Actor, world: tuple[str, str], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(snowball, "_rigor_mode", lambda _p: RigorMode.EXPLORATORY)
+@pytest.fixture
+def explore_world(
+    explore_project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> Project:
+    """An exploratory project screened like `corpus`, with work A converted and extracted."""
+    project = explore_project
+    assert snowball._rigor_mode(project) is RigorMode.EXPLORATORY
+    protocol_id = _setup(project, agent, human, mock_sources, dual_sample=0.5, random_works=0)
+    split_seeds(project, random_seed=7)  # a pilot's probe draws the split; exploratory does not
+    _draw(project)
+    open_pass(project, agent, PassLabel.A)
+    open_pass(project, agent, PassLabel.B)
+    _include_all(project, agent, human, protocol_id)
+    work_a = promoted_works(project)[0]
+    fetched_document(project, work_a, bib_html(ENTRIES_A, BODY_A))
+    run_convert(project, make_registry())
+    extract_references(project, agent, None, sources=_lookups().sources())
+    return project
+
+
+def test_exploratory_allowed_without_plan_rule_none(explore_world: Project, agent: Actor) -> None:
+    project = explore_world
     result = snowball_round(project, agent, Direction.BACKWARD, sources=_sources(), dry_run=False)
     assert result.state.allowed and result.state.rule is None
     [event] = events_of_type(project, "snowball.round_started")
     assert SnowballRoundStarted.model_validate(event.payload).rule == "none"
+    blob = json.loads(project.blobs.get(str(event.input_blob)).decode())
+    assert blob == {"direction": "backward", "dry_run": False}
+
+
+def test_failed_previous_round_does_not_trigger_the_no_yield_stop(
+    project: Project, agent: Actor, planned: tuple[str, str]
+) -> None:
+    snowball_round(
+        project, agent, Direction.BACKWARD, sources=_sources(fail_openalex=True), dry_run=False
+    )
+    _screen_new(project, agent, "exclude")
+    state = plan_round(project, Direction.BACKWARD).state
+    assert "previous_round" not in [i.field for i in state.refusals]
+    assert state.allowed and state.round_no == 2
+    assert any("failed or partial" in note for note in state.notes)
+
+
+def test_failed_previous_round_keeps_the_maximum(
+    project: Project, agent: Actor, world: tuple[str, str]
+) -> None:
+    _amend(project, agent, SnowballPlan(max_backward_rounds=1, max_forward_rounds=0))
+    snowball_round(
+        project, agent, Direction.BACKWARD, sources=_sources(fail_openalex=True), dry_run=False
+    )
+    _screen_new(project, agent, "exclude")
+    state = plan_round(project, Direction.BACKWARD).state
+    assert [i.field for i in state.refusals] == ["round_no"]
+
+
+def _unqueryable_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    bad = RoundCandidate(
+        work_key="rf:d2020-x-00000000",
+        work_id="rf:d2020-x-00000000",
+        cited_by_included=1,
+        citing_anchors=(),
+        no_source_record=False,
+        doi="10.1000/a|b",
+    )
+    monkeypatch.setattr(snowball, "snowball_candidates", lambda _p, _s: [bad])
+
+
+def test_round_with_only_unqueryable_candidates_is_refused(
+    project: Project, agent: Actor, planned: tuple[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _unqueryable_only(monkeypatch)
+    plan = plan_round(project, Direction.BACKWARD)
+    assert plan.queries == [] and plan.unqueryable == ["rf:d2020-x-00000000"]
+    assert [(i.field, i.reason) for i in plan.state.refusals] == [
+        ("candidates", "no queryable candidate")
+    ]
+    before = event_bytes(project)
+    with pytest.raises(FactoryValidationError):
+        snowball_round(project, agent, Direction.BACKWARD, sources=_sources(), dry_run=False)
+    assert event_bytes(project) == before
+
+
+def test_gate_is_called_even_without_queries(
+    project: Project, agent: Actor, planned: tuple[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _unqueryable_only(monkeypatch)
+    calls: list[QuerySpec] = []
+
+    def gate(_p: Project, spec: QuerySpec, **_kw: Any) -> list[ValidationIssue]:
+        calls.append(spec)
+        return [ValidationIssue("protocol", "scripted refusal")]
+
+    monkeypatch.setattr(snowball, "search_authorization", gate)
+    with pytest.raises(FactoryValidationError) as caught:
+        snowball_round(project, agent, Direction.BACKWARD, sources=_sources(), dry_run=False)
+    assert len(calls) == 1 and calls[0].purpose is QueryPurpose.CHASE
+    assert {"candidates", "protocol"} <= set(_issue_fields(caught.value))
 
 
 def test_refused_at_maximum(project: Project, agent: Actor, world: tuple[str, str]) -> None:
@@ -277,6 +372,7 @@ def test_round_event_precedes_every_query(
     registered = events_of_type(project, "query.registered")
     chase = [e for e in registered if e.payload["spec"]["purpose"] == "chase"]  # type: ignore[index]
     assert len(chase) == 3 and all(e.id > event.id for e in chase)
+    assert all(e.refs[-1] == result.round_id for e in chase)
     assert [e.payload["spec"]["text"] for e in chase] == list(payload.queries)  # type: ignore[index]
     assert {r.run_id for r in result.runs} == set(round_runs(project, result.round_id))
 
@@ -347,15 +443,42 @@ def test_round_waives_only_its_own_texts(
     project: Project, agent: Actor, planned: tuple[str, str]
 ) -> None:
     sources = _sources()
-    snowball_round(project, agent, Direction.BACKWARD, sources=sources, dry_run=False)
+    result = snowball_round(project, agent, Direction.BACKWARD, sources=sources, dry_run=False)
+    assert result.round_id is not None
     own = QuerySpec(
         source="openalex", kind=QueryKind.FILTER, text="openalex:W501", purpose=QueryPurpose.CHASE
     )
-    register_query(project, agent, own, sources=sources)
-    hand = own.model_copy(update={"text": "openalex:W999"})
-    with pytest.raises(FactoryValidationError) as caught:
-        register_query(project, agent, hand, sources=sources)
-    assert "query" in _issue_fields(caught.value)
+    # the round's own text is waived only for a query that names the round
+    register_query(project, agent, own, sources=sources, round_id=result.round_id)
+    for text in ("openalex:W501", "openalex:W999"):
+        hand = own.model_copy(update={"text": text})
+        with pytest.raises(FactoryValidationError) as caught:
+            register_query(project, agent, hand, sources=sources)
+        assert "query" in _issue_fields(caught.value)
+
+
+def test_identically_worded_later_query_is_not_counted(
+    explore_world: Project, agent: Actor
+) -> None:
+    project = explore_world
+    sources = _sources()
+    result = snowball_round(project, agent, Direction.BACKWARD, sources=sources, dry_run=False)
+    assert result.round_id is not None
+    runs = set(round_runs(project, result.round_id))
+    assert runs == {r.run_id for r in result.runs}
+    same = QuerySpec(
+        source="openalex", kind=QueryKind.FILTER, text="openalex:W501", purpose=QueryPurpose.CHASE
+    )
+    query_id = register_query(project, agent, same, sources=sources)
+    run_query(project, query_id, sources=sources, actor=agent)
+    assert set(round_runs(project, result.round_id)) == runs
+
+
+def test_id_longer_than_a_query_is_unqueryable() -> None:
+    long_doi = _candidate("rf:e2020-x-00000000", doi="10.1000/" + "x" * 395)
+    fine = _candidate("rf:f2020-x-00000000", doi="10.1000/ok")
+    assert [q.text for q in snowball_queries([long_doi, fine])] == ["doi:10.1000/ok"]
+    assert unqueryable_keys([long_doi, fine]) == ["rf:e2020-x-00000000"]
 
 
 def test_round_refused_when_query_does_not_fit(

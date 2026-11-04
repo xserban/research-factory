@@ -25,7 +25,7 @@ from sqlalchemy import text
 from factory.clock import parse_ts
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
-from factory.index.chase import round_texts
+from factory.index.chase import chase_round_texts, snowball_round_texts
 from factory.model.base import StrictModel
 from factory.model.project import RigorMode
 from factory.model.protocol import (
@@ -563,6 +563,7 @@ def search_authorization(
     *,
     deviation_id: str | None,
     pending_round_texts: Collection[str] = (),
+    round_id: str | None = None,
 ) -> list[ValidationIssue]:
     """Why a query may not run under the protocol. Empty when it may, or when it is not gated.
 
@@ -573,8 +574,10 @@ def search_authorization(
     A `deviation_id`, when given, must name a deviation of the current protocol, whether or not
     the query is planned: a stale or foreign id is refused rather than recorded in the events.
 
-    A chase query is planned by its round: its text is waived when a recorded round registered
-    it, or when it is in `pending_round_texts`, the texts of a round about to be written.
+    A chase query is planned by its round: its text is waived when it is in
+    `pending_round_texts`, the texts of a round about to be written, when a recorded
+    `search_chase` round registered it, or when `round_id` names the recorded snowball round
+    whose texts include it (a snowball text is waived only for a query naming its round).
     """
     if spec.purpose is QueryPurpose.PROBE or _rigor_mode(project) not in _RIGOR_MODES_GATED:
         return []
@@ -606,7 +609,7 @@ def search_authorization(
     if (
         not planned
         and deviation_id is None
-        and not _chase_round_waives(project, spec, pending_round_texts)
+        and not _chase_round_waives(project, spec, pending_round_texts, round_id)
     ):
         issues.append(
             ValidationIssue("query", "not planned by the current protocol; record a deviation")
@@ -696,14 +699,42 @@ def _is_deviation_of(project: Project, deviation_id: str, protocol_id: str) -> b
     return row is not None
 
 
-def _chase_round_waives(project: Project, spec: QuerySpec, pending: Collection[str]) -> bool:
-    """Whether a chase spec's text is one a round registered, recorded or about to be."""
+def _chase_round_waives(
+    project: Project, spec: QuerySpec, pending: Collection[str], round_id: str | None
+) -> bool:
+    """Whether a chase spec's text is one a round planned: a round about to be written, a
+    recorded chase round, or the recorded snowball round `round_id`."""
     if spec.purpose is not QueryPurpose.CHASE:
         return False
     if spec.text in pending:
         return True
     with project.index.connect() as conn:
-        return spec.text in round_texts(conn)
+        if spec.text in chase_round_texts(conn):
+            return True
+        return round_id is not None and spec.text in snowball_round_texts(conn, round_id)
+
+
+def is_snowball_round(project: Project, round_id: str) -> bool:
+    """Whether `round_id` names a recorded snowball round."""
+    with project.index.connect() as conn:
+        row = conn.execute(
+            text("SELECT 1 FROM snowball_rounds WHERE round_id = :r"), {"r": round_id}
+        ).one_or_none()
+    return row is not None
+
+
+def registered_round(project: Project, query_id: str) -> str | None:
+    """The snowball round a registered query names in its `query.registered` refs, or None."""
+    with project.index.connect() as conn:
+        events = conn.execute(
+            text("SELECT refs FROM events WHERE type = 'query.registered' AND refs LIKE :pattern"),
+            {"pattern": f'%"{query_id}"%'},
+        ).all()
+    for (refs,) in events:
+        for ref in json.loads(str(refs)):
+            if str(ref).startswith("snw_") and is_snowball_round(project, str(ref)):
+                return str(ref)
+    return None
 
 
 def _measured_probes(project: Project) -> dict[str, set[str]]:

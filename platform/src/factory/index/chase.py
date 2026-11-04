@@ -1,9 +1,10 @@
 """Projection of citation chasing and late admission: rounds, sample extensions and seed admissions.
 
 `chase_rounds` keeps each round (directions, source works, unchasable works, canonical JSON) and
-`chase_queries` its query texts in registration order. `round_texts` returns those texts and the
-query texts of snowball rounds (`snowball_queries`, `factory.index.references`), the ones the
-authorisation gate may waive for a round's spec.
+`chase_queries` its query texts in registration order. The authorisation gate waives a
+`chase_round_texts` text for any chase query, and a `snowball_round_texts` text (from
+`snowball_queries`, `factory.index.references`) only for a query naming that snowball round.
+`round_texts` returns the texts of both kinds of round.
 
 `sample_extensions` keeps each pass-B extension draw, with its `stage`. `sample_considered` keeps
 every work any extension considered, once per stage, with `added` set when pass B took it;
@@ -163,10 +164,24 @@ def _seed_admitted(t: ChaseTables) -> Handler:
 
 
 def round_texts(conn: Connection) -> set[str]:
-    """Every query text a recorded chase or snowball round registered (the texts the gate may
-    waive). Both tables belong to the default projection."""
+    """Every query text a recorded chase or snowball round registered. Both tables belong to
+    the default projection. The gate reads the narrower functions below."""
     rows = conn.execute(
         text("SELECT query FROM chase_queries UNION SELECT query FROM snowball_queries")
+    ).all()
+    return {str(row[0]) for row in rows}
+
+
+def chase_round_texts(conn: Connection) -> set[str]:
+    """Every query text a recorded `search_chase` round registered."""
+    rows = conn.execute(text("SELECT query FROM chase_queries")).all()
+    return {str(row[0]) for row in rows}
+
+
+def snowball_round_texts(conn: Connection, round_id: str) -> set[str]:
+    """The query texts of one recorded snowball round."""
+    rows = conn.execute(
+        text("SELECT query FROM snowball_queries WHERE round_id = :r"), {"r": round_id}
     ).all()
     return {str(row[0]) for row in rows}
 

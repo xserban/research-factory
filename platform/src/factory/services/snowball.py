@@ -16,11 +16,15 @@ Invariants:
 - Validation precedes every write. A round is refused, writing nothing, when the protocol declares
   no `snowball_plan` in `pilot`/`systematic` (an `exploratory` round records `rule: none`), when
   the direction's maximum is reached, when the previous round of the direction yielded no included
-  work and the plan says to stop, while any corpus work's outcome is pending, while an included
-  work has a document but no current extraction (ruling 18), when there is no candidate, when a
-  query does not fit its source, or when the protocol gate refuses (the round's texts waived).
+  work and the plan says to stop (skipped, with a note, when that round had a failed or partial
+  run, so its retry is possible; the maximum still holds), while any corpus work's outcome is
+  pending, while an included work has a document but no current extraction (ruling 18), when
+  there is no candidate or no queryable candidate, when a query does not fit its source, or when
+  the protocol gate refuses (always asked; the round's texts waived).
 - `snowball.round_started` is written before any query is registered; each query is then
-  registered and run, and a failed run does not stop the others. A retry is a new round.
+  registered naming the round (`query.registered` refs end with the round id; only such a query
+  has the round's texts waived and counts as the round's run) and run, and a failed run does not
+  stop the others. A retry is a new round.
 - Candidates are never included: retrieved records enter the corpus as pending works.
 - Counts (`cited_by_included`, new works, round numbers) are computed, never supplied.
 """
@@ -30,6 +34,7 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping, Sequence
 
+from pydantic import Field
 from sqlalchemy import text
 
 from factory.errors import FactoryValidationError, ValidationIssue
@@ -48,7 +53,7 @@ from factory.model.references import (
     Unextracted,
     Via,
 )
-from factory.model.search import QueryKind, QueryPurpose, QuerySpec
+from factory.model.search import QueryKind, QueryPurpose, QuerySpec, RunStatus
 from factory.model.work_ids import arxiv_id_from_doi
 from factory.services.agreement import Outcome, final_outcomes
 from factory.services.calibration import calibration_items
@@ -100,6 +105,8 @@ class SnowballPlanState(StrictModel):
     allowed: bool
     refusals: list[ValidationIssue]
     rule: SnowballPlan | None
+    notes: list[str] = Field(default_factory=list)
+    """Facts that changed how the rule applied, e.g. a no-yield stop skipped after failed runs."""
 
 
 class RoundPlan(StrictModel):
@@ -174,34 +181,24 @@ def recorded_rounds(project: Project) -> list[RecordedRound]:
 
 
 def round_runs(project: Project, round_id: str) -> list[str]:
-    """The runs of a round's queries, sorted. A chase-purpose query belongs to the latest round
-    recorded before its registration (event order) whose texts include its text."""
-    rounds = recorded_rounds(project)
+    """The runs of the queries registered for the round, sorted: queries whose
+    `query.registered` refs name `round_id` (`register_query(..., round_id=...)`)."""
+    return [run for run, _ in _round_run_statuses(project, round_id)]
+
+
+def _round_run_statuses(project: Project, round_id: str) -> list[tuple[str, RunStatus]]:
+    project.index.sync()
     with project.index.connect() as conn:
         rows = conn.execute(
             text(
-                "SELECT q.query_id, q.text, e.id FROM queries q JOIN events e "
-                "ON e.type = 'query.registered' AND json_extract(e.refs, '$[0]') = q.query_id "
-                "WHERE q.purpose = :chase"
+                "SELECT r.run_id, r.status FROM runs r JOIN events e "
+                "ON e.type = 'query.registered' AND json_extract(e.refs, '$[0]') = r.query_id "
+                "WHERE EXISTS (SELECT 1 FROM json_each(e.refs) WHERE json_each.value = :round) "
+                "ORDER BY r.run_id"
             ),
-            {"chase": QueryPurpose.CHASE.value},
+            {"round": round_id},
         ).all()
-        owned: list[str] = []
-        for query_id, query_text, event_id in rows:
-            owner = None
-            for r in rounds:
-                if r.event_id < str(event_id) and str(query_text) in r.queries:
-                    owner = r.round_id
-            if owner == round_id:
-                owned.append(str(query_id))
-        runs = [
-            str(row[0])
-            for query_id in owned
-            for row in conn.execute(
-                text("SELECT run_id FROM runs WHERE query_id = :q"), {"q": query_id}
-            ).all()
-        ]
-    return sorted(runs)
+    return [(str(run), RunStatus(str(status))) for run, status in rows]
 
 
 def _round_included(project: Project, recorded: RecordedRound, included: set[str]) -> set[str]:
@@ -303,16 +300,25 @@ def _arxiv(arxiv: str | None, doi: str | None) -> str | None:
 
 
 def _route(candidate: RoundCandidate) -> tuple[str, str] | None:
-    """(query family, id) naming the candidate, or None when no query can name it."""
+    """(query family, id) naming the candidate, or None when no query can name it: no usable
+    identifier, a DOI the filter syntax cannot carry, or an id too long for one query."""
+    route: tuple[str, str] | None = None
     if candidate.no_source_record:
-        return "reflist", candidate.work_key
-    if candidate.openalex:
-        return "openalex", candidate.openalex
-    if candidate.arxiv:
-        return "arxiv", candidate.arxiv
-    if candidate.doi and not any(sep in candidate.doi for sep in "|,"):
-        return "doi", candidate.doi
-    return None
+        route = "reflist", candidate.work_key
+    elif candidate.openalex:
+        route = "openalex", candidate.openalex
+    elif candidate.arxiv:
+        route = "arxiv", candidate.arxiv
+    elif candidate.doi and not any(sep in candidate.doi for sep in "|,"):
+        route = "doi", candidate.doi
+    if route is None or len(_PREFIX[route[0]]) + len(route[1]) > MAX_QUERY:
+        return None
+    return route
+
+
+def unqueryable_keys(candidates: Sequence[RoundCandidate]) -> list[str]:
+    """Keys of the candidates no query can name, in the given order (listed, never dropped)."""
+    return [c.work_key for c in candidates if _route(c) is None]
 
 
 _FAMILIES: tuple[tuple[str, str, QueryKind, str, str], ...] = (
@@ -321,6 +327,10 @@ _FAMILIES: tuple[tuple[str, str, QueryKind, str, str], ...] = (
     ("doi", "openalex", QueryKind.FILTER, "doi:", "|"),
     ("arxiv", "arxiv", QueryKind.ID_LIST, "", ","),
     ("reflist", REFLIST, QueryKind.ID_LIST, "", ","),
+)
+_PREFIX = {family: prefix for family, _, _, prefix, _ in _FAMILIES}
+_GATE_PLACEHOLDER = QuerySpec(
+    source=REFLIST, kind=QueryKind.ID_LIST, text="snowball-round", purpose=QueryPurpose.CHASE
 )
 
 
@@ -437,6 +447,7 @@ def plan_round(project: Project, direction: Direction) -> RoundPlan:
     round_no = len(previous) + 1
     sources, extraction_ids, unextracted = _scope(project)
     refusals: list[ValidationIssue] = []
+    notes: list[str] = []
 
     if direction is not Direction.BACKWARD:
         refusals.append(
@@ -463,7 +474,17 @@ def plan_round(project: Project, direction: Direction) -> RoundPlan:
             )
         if rule.stop_when_no_new_included and previous:
             last = previous[-1]
-            if not _round_included(project, last, set(included_works(project))):
+            incomplete = [
+                run
+                for run, status in _round_run_statuses(project, last.round_id)
+                if status in (RunStatus.FAILED, RunStatus.PARTIAL)
+            ]
+            if incomplete:
+                notes.append(
+                    f"{last.round_id} had {len(incomplete)} failed or partial runs; the no-yield "
+                    "stop does not apply to its retry (the round maximum does)"
+                )
+            elif not _round_included(project, last, set(included_works(project))):
                 refusals.append(
                     ValidationIssue(
                         "previous_round",
@@ -484,16 +505,19 @@ def plan_round(project: Project, direction: Direction) -> RoundPlan:
             )
         )
     candidates = snowball_candidates(project, sources) if direction is Direction.BACKWARD else []
+    queries = snowball_queries(candidates)
+    unqueryable = unqueryable_keys(candidates)
     if direction is Direction.BACKWARD and not candidates:
         refusals.append(ValidationIssue("candidates", "no resolved reference outside the corpus"))
-    queries = snowball_queries(candidates)
-    unqueryable = [c.work_key for c in candidates if _route(c) is None]
+    elif direction is Direction.BACKWARD and not queries:
+        refusals.append(ValidationIssue("candidates", "no queryable candidate"))
     state = SnowballPlanState(
         direction=direction,
         round_no=round_no,
         allowed=not refusals,
         refusals=refusals,
         rule=rule,
+        notes=notes,
     )
     return RoundPlan(
         state=state,
@@ -578,13 +602,13 @@ def snowball_round(
         issues = list(plan.state.refusals)
         specs = plan.queries
         issues += [issue for spec in specs for issue in query_issues(project, spec, adapters)]
-        if specs:
-            # Every gate except the planned-query waiver is text-independent, and the waiver
-            # holds for every text of the round, as in `search_chase`.
-            texts = [spec.text for spec in specs]
-            issues += search_authorization(
-                project, specs[0], deviation_id=None, pending_round_texts=texts
-            )
+        # The gate is always asked. Every gate except the planned-query waiver is
+        # text-independent, and the waiver holds for every text of the round (as in
+        # `search_chase`), so the first spec stands for all; with no spec (already refused
+        # above) a placeholder chase spec still reports the text-independent gates.
+        probe = specs[0] if specs else _GATE_PLACEHOLDER
+        texts = [spec.text for spec in specs] or [probe.text]
+        issues += search_authorization(project, probe, deviation_id=None, pending_round_texts=texts)
         if issues:
             raise FactoryValidationError(issues)
 
@@ -624,7 +648,9 @@ def snowball_round(
             ]
         )
 
-    query_ids = [register_query(project, actor, spec, sources=adapters) for spec in specs]
+    query_ids = [
+        register_query(project, actor, spec, sources=adapters, round_id=round_id) for spec in specs
+    ]
     runs = [run_query(project, query_id, sources=adapters, actor=actor) for query_id in query_ids]
     after, _ = corpus_size(project)
     return _result(plan, round_id, runs, after - before)
