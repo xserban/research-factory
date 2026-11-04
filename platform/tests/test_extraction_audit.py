@@ -11,7 +11,9 @@ from factory.errors import FactoryValidationError
 from factory.events.envelope import Actor, Event
 from factory.events.reader import read_all
 from factory.model.extraction import AuditItemRef, ExtractionAuditSampled
+from factory.model.project import RigorMode
 from factory.model.screening import Channel, PassLabel
+from factory.packs import ML_BENCHMARK_V1
 from factory.services import extraction_audit as ea
 from factory.services.context import Project
 from factory.services.extraction_audit import (
@@ -65,7 +67,7 @@ def test_sample_size_is_decision_37_rule(
     n: int,
     expected: int,
 ) -> None:
-    _fake(monkeypatch, n)
+    _fake(monkeypatch, n)  # bypasses the digest-from-real-rows path; real-world tests cover it
     sampled = extraction_audit_sample(project, human, random_seed=1)
     assert len(sampled.items) == expected
     assert sampled.population == n
@@ -80,7 +82,7 @@ def test_agreed_values_are_sorted_and_cover_dual_rows(project: Project, agreed: 
 def test_sample_recorded_with_seed_and_reproducible(
     project: Project, human: Actor, agreed: list[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _fake(monkeypatch, 300)
+    _fake(monkeypatch, 300)  # bypasses the digest-from-real-rows path; real-world tests cover it
     first = extraction_audit_sample(project, human, random_seed=7)
     assert first.random_seed == 7
     (event,) = _events(project, "extraction.audit_sampled")
@@ -176,7 +178,7 @@ def test_outstanding_false_without_values(
 def test_record_refuses_unknown_audit_and_item_outside_sample(
     project: Project, human: Actor, agreed: list[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _fake(monkeypatch, 300)
+    _fake(monkeypatch, 300)  # bypasses the digest-from-real-rows path; real-world tests cover it
     sampled = extraction_audit_sample(project, human, random_seed=3)
     inside = {(i.work_id, i.row_key, i.field) for i in sampled.items}
     outside = next(
@@ -207,7 +209,7 @@ def test_record_refuses_unknown_audit_and_item_outside_sample(
 def test_error_rate_computed_from_labels(
     project: Project, human: Actor, agreed: list[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _fake(monkeypatch, 40)
+    _fake(monkeypatch, 40)  # bypasses the digest-from-real-rows path; real-world tests cover it
     sampled = extraction_audit_sample(project, human, random_seed=5)
     assert len(sampled.items) == 40
     for i, item in enumerate(sampled.items):
@@ -263,7 +265,7 @@ def test_evidence_shows_cited_element_text_from_pinned_conversion(
     project: Project, human: Actor, agreed: list[str]
 ) -> None:
     sampled = extraction_audit_sample(project, human, random_seed=5)
-    evidence = audit_evidence(project, sampled.audit_id)
+    evidence = audit_evidence(project, human, sampled.audit_id, CH)
     assert len(evidence) == len(sampled.items) > 0
     for e in evidence:
         assert e.extraction_id
@@ -272,7 +274,7 @@ def test_evidence_shows_cited_element_text_from_pinned_conversion(
         if e.item.field == "dataset":
             assert e.element_text == "Lorem ipsum dolor sit amet."
     with pytest.raises(FactoryValidationError):
-        audit_evidence(project, MISSING)
+        audit_evidence(project, human, MISSING, CH)
 
 
 def test_report_none_before_any_sample(project: Project, agreed: list[str]) -> None:
@@ -283,3 +285,111 @@ def test_reads_do_not_raise_without_schema(project: Project) -> None:
     assert extraction_audit_report(project) is None
     assert extraction_audit_outstanding(project) is False
     assert agreed_values(project) == []
+
+
+def test_evidence_refused_to_agent_and_to_relay_from_pass_sessions(
+    project: Project, human: Actor, agent: Actor, ext_a: Actor, agreed: list[str]
+) -> None:
+    sampled = extraction_audit_sample(project, human, random_seed=1)
+    with pytest.raises(FactoryValidationError) as e:
+        audit_evidence(project, agent, sampled.audit_id, CH)
+    assert e.value.issues[0].field == "actor"
+    extractor = ext_a.model_copy(update={"kind": "human"})
+    with pytest.raises(FactoryValidationError) as e:
+        audit_evidence(project, extractor, sampled.audit_id, Channel.MCP)
+    assert e.value.issues[0].field == "channel"
+    # The human fixture shares a session with the screening agents of the world.
+    with pytest.raises(FactoryValidationError) as e:
+        audit_evidence(project, human, sampled.audit_id, Channel.MCP)
+    assert e.value.issues[0].field == "channel"
+    assert audit_evidence(project, human, sampled.audit_id, CH)
+
+
+def test_relayed_label_from_screening_session_refused(
+    project: Project, human: Actor, agreed: list[str]
+) -> None:
+    sampled = extraction_audit_sample(project, human, random_seed=1)
+    item = sampled.items[0]
+    with pytest.raises(FactoryValidationError) as e:
+        extraction_audit_record(
+            project,
+            human,  # shares its session with the screening agents of the world
+            sampled.audit_id,
+            item.work_id,
+            item.row_key,
+            item.field,
+            True,
+            "",
+            Channel.MCP,
+        )
+    assert e.value.issues[0].field == "channel"
+    assert _events(project, "extraction.audit_labelled") == []
+
+
+def test_new_sample_allowed_after_agreed_set_changes(
+    project: Project, human: Actor, agreed: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    extraction_audit_sample(project, human, random_seed=1)
+    assert extraction_audit_outstanding(project) is False
+    real = ea._population
+
+    def changed(p: Project) -> list[tuple[AuditItemRef, str]]:
+        # One value now comes from another extraction, as after a re-extraction or re-resolution.
+        pairs = real(p)
+        return [(pairs[0][0], "ext_replaced"), *pairs[1:]]
+
+    monkeypatch.setattr(ea, "_population", changed)
+    assert extraction_audit_outstanding(project) is True
+    second = extraction_audit_sample(project, human, random_seed=2)
+    assert len(_events(project, "extraction.audit_sampled")) == 2
+    assert (
+        second.population_digest
+        != _events(project, "extraction.audit_sampled")[0].payload["population_digest"]
+    )
+    assert extraction_audit_outstanding(project) is False
+
+
+def test_enforced_in_systematic_rigor(
+    project: Project, human: Actor, agreed: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sampled = extraction_audit_sample(project, human, random_seed=5)
+    item = sampled.items[0]
+    extraction_audit_record(
+        project, human, sampled.audit_id, item.work_id, item.row_key, item.field, False, "", CH
+    )
+    monkeypatch.setattr(ea, "_rigor_mode", lambda p: RigorMode.SYSTEMATIC)
+    report = extraction_audit_report(project)
+    assert report is not None
+    assert (report.above_ceiling, report.enforced) == (True, True)
+
+
+def test_by_group_rates_per_group(project: Project, human: Actor, agreed: list[str]) -> None:
+    def group_of(name: str) -> str:
+        found = ML_BENCHMARK_V1.field(name)
+        assert found is not None
+        return found.group
+
+    sampled = extraction_audit_sample(project, human, random_seed=5)
+    labelled = sampled.items[:12]  # a value is wrong, any other field right
+    for item in labelled:
+        extraction_audit_record(
+            project,
+            human,
+            sampled.audit_id,
+            item.work_id,
+            item.row_key,
+            item.field,
+            item.field != "value",
+            "",
+            CH,
+        )
+    report = extraction_audit_report(project)
+    assert report is not None
+    expected: dict[str, float | None] = {group_of(i.field): None for i in sampled.items}
+    for g in {group_of(i.field) for i in labelled}:
+        mine = [i for i in labelled if group_of(i.field) == g]
+        expected[g] = sum(i.field == "value" for i in mine) / len(mine)
+    assert report.by_group == expected
+    assert report.labelled == 12
+    assert report.error_rate == sum(i.field == "value" for i in labelled) / 12
+    assert group_of("value") in expected and expected[group_of("value")] is not None

@@ -41,9 +41,9 @@ from factory.model.screening import Channel
 from factory.services.context import Project
 from factory.services.conversions import conversion_manifest
 from factory.services.extraction import (
-    _screening_session,
     is_extraction_session,
     require_schema,
+    screening_session,
 )
 from factory.services.extraction_agreement import extraction_agreement, final_rows
 from factory.services.screening_stats import audit_size
@@ -171,12 +171,31 @@ def extraction_audit_sample(
     return payload
 
 
-def audit_evidence(project: Project, audit_id: str) -> list[AuditEvidence]:
-    """The sampled values of an audit with their cited elements, sorted. An item whose value is no
-    longer in the agreed set is left out. Refused on `audit_id` for an unknown audit."""
+def _gate(project: Project, actor: Actor, channel: Channel) -> list[ValidationIssue]:
+    """Human acts only; an MCP relay must not come from a session that joined a pass."""
+    issues: list[ValidationIssue] = []
+    if actor.kind != "human":
+        issues.append(ValidationIssue("actor", "audit labels and evidence are for a human"))
+    if channel is Channel.MCP and (
+        is_extraction_session(project, actor.session) or screening_session(project, actor.session)
+    ):
+        issues.append(ValidationIssue("channel", "this session has joined a pass"))
+    return issues
+
+
+def audit_evidence(
+    project: Project, actor: Actor, audit_id: str, channel: Channel
+) -> list[AuditEvidence]:
+    """The sampled values of an audit with their cited document elements, sorted. An item whose
+    value is no longer in the agreed set is left out. Gated as `extraction_audit_record`: refused
+    for an agent (`actor`), an MCP relay from a pass session (`channel`), an unknown audit
+    (`audit_id`)."""
     project.index.sync()
+    issues = _gate(project, actor, channel)
     if not _audit_exists(project, audit_id):
-        raise FactoryValidationError([ValidationIssue("audit_id", "unknown audit")])
+        issues.append(ValidationIssue("audit_id", "unknown audit"))
+    if issues:
+        raise FactoryValidationError(issues)
     rows = {(r.work_id, r.row_key): r for r in final_rows(project)}
     manifests: dict[str, dict[str, str]] = {}
     out: list[AuditEvidence] = []
@@ -225,9 +244,7 @@ def extraction_audit_record(
     """
     with project.index.exclusive():
         project.index.sync()
-        issues: list[ValidationIssue] = []
-        if actor.kind != "human":
-            issues.append(ValidationIssue("actor", "audit labels are human acts"))
+        issues = _gate(project, actor, channel)
         if not _audit_exists(project, audit_id):
             issues.append(ValidationIssue("audit_id", "unknown audit"))
         elif not any(
@@ -235,11 +252,6 @@ def extraction_audit_record(
             for i in _items(project, audit_id)
         ):
             issues.append(ValidationIssue("field", "not in this audit sample"))
-        if channel is Channel.MCP and (
-            is_extraction_session(project, actor.session)
-            or _screening_session(project, actor.session)
-        ):
-            issues.append(ValidationIssue("channel", "this session has joined a pass"))
         if issues:
             raise FactoryValidationError(issues)
         try:
@@ -315,10 +327,7 @@ def extraction_audit_outstanding(project: Project) -> bool:
     """Whether there are agreed values and no audit has sampled the current agreed set. False when
     there is nothing to audit. Read-only; never raises."""
     project.index.sync()
-    try:
-        population = _population(project)
-    except FactoryValidationError:
-        return False
+    population = _population(project)  # final_rows never raises; empty without a schema
     if not population:
         return False
     return _last_digest(project) != _digest(population)

@@ -115,6 +115,7 @@ __all__ = [
     "live_rows",
     "pass_config",
     "require_schema",
+    "screening_session",
     "stale_claims",
     "stale_documents",
     "stale_extractions",
@@ -300,7 +301,8 @@ def _pass_models(project: Project, label: PassLabel) -> set[str]:
     return {str(row[0]) for row in rows}
 
 
-def _screening_session(project: Project, session: str) -> bool:
+def screening_session(project: Project, session: str) -> bool:
+    """Whether `session` joined a screening pass at any stage."""
     with project.index.connect() as conn:
         row = conn.execute(
             text("SELECT 1 FROM pass_sessions WHERE session = :s"), {"s": session}
@@ -352,7 +354,7 @@ def _check_join(project: Project, actor: Actor, label: PassLabel) -> bool:
         raise FactoryValidationError(
             [ValidationIssue("session", "this session relayed a human label and cannot extract")]
         )
-    if _screening_session(project, actor.session):
+    if screening_session(project, actor.session):
         raise FactoryValidationError(
             [ValidationIssue("session", "this session joined a screening pass and cannot extract")]
         )
