@@ -21,7 +21,7 @@ comparability-key gap (R-45) applies to the evidence schema only.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 
 from factory.errors import ValidationIssue
@@ -35,6 +35,7 @@ from factory.model.protocol import (
     CriterionKind,
     ExtractionSchema,
     ExtractionStale,
+    MethodProfile,
     PlannedQuery,
     ProtocolSpec,
     ReviewerRole,
@@ -171,9 +172,15 @@ def protocol_issues(
     seeds: Sequence[SeedRecord],
     probes: Mapping[str, set[str]],
     known_sources: set[str],
+    window_sources: Collection[str] = (),
 ) -> ProtocolCheck:
-    """Check a protocol against the current question, its seeds, its probes and its mode."""
+    """Check a protocol against the current question, its seeds, its probes and its mode.
+
+    `window_sources` names the sources whose adapter declares a listing-date filter; a
+    `watch_plan` may use `window` mode only for those.
+    """
     errors = _errors(spec, question, current_question_id, mode, seeds, known_sources)
+    errors.extend(_watch_plan_errors(spec, window_sources))
     gaps = _gaps(spec, question, mode, probes)
     return ProtocolCheck(errors=errors, gaps=gaps)
 
@@ -330,6 +337,40 @@ def snowball_plan_gaps(spec: ProtocolSpec, mode: RigorMode) -> list[ValidationIs
     return []
 
 
+WATCH_PLAN_REQUIRED = "required for living-review"
+
+
+def watch_plan_gaps(spec: ProtocolSpec, mode: RigorMode) -> list[ValidationIssue]:
+    """A `living-review` protocol without a `watch_plan`: a promotion gap in `exploratory`.
+
+    In `pilot` and `systematic` the same condition blocks `ready` (see `_gaps`).
+    """
+    if spec.method_profile is MethodProfile.LIVING_REVIEW and spec.watch_plan is None:
+        return [ValidationIssue("watch_plan", WATCH_PLAN_REQUIRED)]
+    return []
+
+
+def _watch_plan_errors(
+    spec: ProtocolSpec, window_sources: Collection[str]
+) -> list[ValidationIssue]:
+    """Every watched source is included; a window source's adapter has a listing-date filter."""
+    plan = spec.watch_plan
+    if plan is None:
+        return []
+    included = {source.name for source in spec.sources if source.included}
+    issues: list[ValidationIssue] = []
+    for i, item in enumerate(plan.sources):
+        if item.source not in included:
+            issues.append(
+                ValidationIssue(f"watch_plan.sources[{i}].source", "not an included source")
+            )
+        elif item.mode == "window" and item.source not in window_sources:
+            issues.append(
+                ValidationIssue(f"watch_plan.sources[{i}].mode", "source has no window filter")
+            )
+    return issues
+
+
 def _resolves(parent: str, slot_names: set[str], non_goal_ids: set[str]) -> bool:
     if parent.startswith(SLOT_PREFIX):
         return parent[len(SLOT_PREFIX) :] in slot_names
@@ -344,6 +385,7 @@ def _gaps(
 ) -> list[ValidationIssue]:
     gaps: list[ValidationIssue] = []
     if mode in (RigorMode.PILOT, RigorMode.SYSTEMATIC):
+        gaps.extend(watch_plan_gaps(spec, mode))
         gaps.extend(_coverage_gaps(spec, question))
         gaps.extend(_priority_gaps(spec))
         gaps.extend(_probe_gaps(spec, probes))

@@ -29,6 +29,7 @@ class SourceFactory:
     kinds: frozenset[QueryKind]
     build: Callable[[Settings, Clock], Source]
     probe_kinds: frozenset[QueryKind] | None = None  # None: same as `kinds`
+    window_filter: bool = False  # the adapter honours `filters["listed_since"]` (slice 4b)
 
     def __call__(self, settings: Settings, clock: Clock) -> Source:
         return self.build(settings, clock)
@@ -66,3 +67,8 @@ def default_sources() -> dict[str, SourceFactory]:
             probe_kinds=frozenset({QueryKind.KEYWORD}),
         ),
     }
+
+
+def window_filter_sources() -> frozenset[str]:
+    """The default sources whose adapter filters by listing date, so a watch may window them."""
+    return frozenset(name for name, factory in default_sources().items() if factory.window_filter)

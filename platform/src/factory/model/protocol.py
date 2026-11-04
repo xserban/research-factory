@@ -23,6 +23,7 @@ from factory.model.base import StrictModel
 from factory.model.identity import ULID_RE
 from factory.model.question import QUESTION_ID_RE
 from factory.model.search import QueryKind, QuerySpec
+from factory.model.watch import WatchPlan
 
 CRITERION_ID_RE = r"^(IN|EX)\d{2}$"
 PARENT_RE = r"^(slot:.+|NG\d{2})$"
@@ -60,6 +61,7 @@ _OMITTED_WHEN_NONE = frozenset(
         "snowball_plan",
         "contribution_schema",
         "supplied_links",
+        "watch_plan",
     }
 )
 """Optional sections left out of every hash while unset, so protocols that predate them keep
@@ -253,6 +255,9 @@ class ProtocolSpec(StrictModel):
     comparability keys, no claims. Absent (None) until declared; left out of the hash."""
     supplied_links: SuppliedLinksPlan | None = None
     """Who may supply links (slice 4a). Absent (None) until declared; left out of the hash."""
+    watch_plan: WatchPlan | None = None
+    """The living-corpus watch (slice 4b). Absent (None) until declared; left out of the hash
+    while unset, and never part of `S@`."""
     rationale: str = ""
 
 
@@ -301,6 +306,7 @@ AMENDABLE_FIELDS = (
     "snowball_plan",
     "contribution_schema",
     "supplied_links",
+    "watch_plan",
 )
 """Top-level hashed fields other than criteria, which an amendment reports as `other_changes`."""
 

@@ -57,7 +57,7 @@ from factory.services.protocol_rules import (
 )
 from factory.services.question import current_question, get_question
 from factory.services.seeds import all_seeds
-from factory.sources.registry import default_sources
+from factory.sources.registry import default_sources, window_filter_sources
 
 
 class ProtocolResult(StrictModel):
@@ -104,6 +104,7 @@ def record_protocol(
             seeds=all_seeds(project),
             probes=_measured_probes(project),
             known_sources=set(default_sources()),
+            window_sources=window_filter_sources(),
         )
         if check.errors:
             raise FactoryValidationError(check.errors)
@@ -228,6 +229,7 @@ def amend_protocol(
             seeds=all_seeds(project),
             probes=_measured_probes(project),
             known_sources=set(default_sources()),
+            window_sources=window_filter_sources(),
         )
         if check.errors or check.gaps:
             raise FactoryValidationError([*check.errors, *check.gaps])
