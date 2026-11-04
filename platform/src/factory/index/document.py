@@ -80,10 +80,16 @@ def _converted(conversions: Table) -> Handler:
 
 def _conversion_failed(failures: Table) -> Handler:
     def conversion_failed(conn: Connection, event: Event) -> None:
-        values = ConversionFailed.model_validate(event.payload).model_dump(mode="json")
+        payload = ConversionFailed.model_validate(event.payload)
         conn.execute(
             sqlite_insert(failures)
-            .values(**values, event_id=event.id)
+            .values(
+                event_id=event.id,
+                document_id=payload.document_id,
+                converter=payload.converter,
+                reason=payload.reason.value,
+                error_class=payload.error_class,
+            )
             .on_conflict_do_nothing(index_elements=["event_id"])
         )
 

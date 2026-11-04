@@ -540,10 +540,25 @@ def _converted_before(
 
 
 def _converted(project: Project, doc: _Doc, result: ConversionResult) -> ConversionOutcome:
-    markdown_ref = project.library.put(result.markdown.encode("utf-8"))
-    if markdown_ref != result.markdown_hash:
+    """Store the Markdown and manifest, then record the conversion. A storage failure is an
+    outcome with no event, so the document is retried by a later run."""
+    markdown = result.markdown.encode("utf-8")
+    if _sha256(markdown) != result.markdown_hash:
         raise AssertionError("library hash of the Markdown differs from the conversion's hash")
-    manifest_ref = project.library.put(result.manifest.to_json())
+    manifest = result.manifest.to_json()
+    manifest_ref = _sha256(manifest)
+    try:
+        _store(project, result.markdown_hash, markdown)
+        _store(project, manifest_ref, manifest)
+    except (BlobNotFoundError, BlobIntegrityError, OSError):
+        return ConversionOutcome(
+            document_id=doc.document_id,
+            work_id=doc.work_id,
+            status="failed",
+            conversion_id=None,
+            reason="store-error",
+        )
+    markdown_ref = result.markdown_hash
 
     counts = {kind.value: 0 for kind in AnchorKind}
     for anchor in result.manifest.anchors:

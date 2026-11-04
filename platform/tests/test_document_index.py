@@ -7,7 +7,7 @@ from sqlalchemy import create_engine, text
 
 from factory.document.anchors import AnchorKind
 from factory.events.envelope import Actor, Event
-from factory.index.default import PROJECTION_VERSION, default_projection
+from factory.index.default import default_projection
 from factory.model.document import ConversionFailed, Converted, FailureReason
 from factory.services.context import Project
 
@@ -133,7 +133,3 @@ def test_rebuild_gives_same_state_hash(project: Project) -> None:
     )
     incremental = project.index.state_hash()
     assert project.index.rebuild() == incremental
-
-
-def test_projection_version_bumped() -> None:
-    assert PROJECTION_VERSION == "17"

@@ -444,3 +444,57 @@ def test_convert_or_restore_refuses_a_scope_with_restore(project: Project, corpu
         ("restore", "takes no --work or --document")
     ]
     assert event_bytes(project) == before
+
+
+def test_store_error_is_failed_outcome_without_event_and_batch_continues(
+    project: Project, corpus: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The first library write raises OSError: that document is `failed` with `store-error` and
+    no event, the next document still converts, and a later run converts the first."""
+    first_work, second_work = promoted_works(project)[0], promoted_works(project)[1]
+    first = fetched_document(project, first_work, ARTICLE)
+    second_html = ARTICLE.replace(SENTENCE, b"Sed ut perspiciatis unde")
+    second = fetched_document(project, second_work, second_html)
+    real_put = project.library.put
+    calls: list[bytes] = []
+
+    def put_first_failing(data: bytes) -> str:
+        calls.append(data)
+        if len(calls) == 1:
+            raise OSError("disk full")
+        return real_put(data)
+
+    monkeypatch.setattr(project.library, "put", put_first_failing)
+    summary = run_convert(project, make_registry())
+
+    assert _statuses(summary) == ["failed", "converted"]
+    assert summary.outcomes[0].reason == "store-error"
+    assert summary.outcomes[0].conversion_id is None
+    assert summary.failed == 1
+    assert summary.converted == 1
+    assert [e.payload["document_id"] for e in events_of_type(project, "document.converted")] == [
+        second
+    ]
+    assert events_of_type(project, "document.conversion_failed") == []
+
+    monkeypatch.undo()
+    rerun = run_convert(project, make_registry())
+
+    assert _statuses(rerun) == ["converted", "unchanged"]
+    assert rerun.outcomes[0].document_id == first
+
+
+def test_corrupt_blob_at_markdown_path_is_replaced_by_convert(
+    project: Project, corpus: None
+) -> None:
+    """A corrupt file already at the Markdown's hash path is replaced, not reused."""
+    fetched_document(project, promoted_works(project)[0], ARTICLE)
+    direct = convert(LatexmlHtmlConverter(), ARTICLE, "text/html")
+    path = project.library.path(direct.markdown_hash)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"tampered")
+
+    summary = run_convert(project, make_registry())
+
+    assert _statuses(summary) == ["converted"]
+    assert project.library.get(direct.markdown_hash) == direct.markdown.encode("utf-8")

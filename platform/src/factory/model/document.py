@@ -36,7 +36,7 @@ class FailureReason(StrEnum):
     CONVERSION_ERROR = "conversion-error"
 
 
-Warning = Annotated[NonBlank, StringConstraints(max_length=WARNING_MAX_CHARS)]
+WarningText = Annotated[NonBlank, StringConstraints(max_length=WARNING_MAX_CHARS)]
 
 
 # --- Event payloads (schema 1). Written by `factory.services.document`, folded by
@@ -54,7 +54,7 @@ class Converted(StrictModel):
     markdown_hash: str = Field(pattern=BLOB_REF_RE)
     manifest_hash: str = Field(pattern=BLOB_REF_RE)
     counts: dict[str, int]
-    warnings: list[Warning] = Field(max_length=WARNINGS_MAX)
+    warnings: list[WarningText] = Field(max_length=WARNINGS_MAX)
 
     @field_validator("counts")
     @classmethod
