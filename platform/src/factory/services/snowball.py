@@ -83,6 +83,7 @@ from factory.services.context import Project
 from factory.services.dedup import active_merges
 from factory.services.document_read import default_conversion
 from factory.services.protocol import current_protocol, search_authorization
+from factory.services.protocol_rules import snowball_plan_gaps
 from factory.services.references import current_extraction, included_works
 from factory.services.search import (
     RunSummary,
@@ -725,6 +726,15 @@ def _forward_queries(project: Project, chasable: Sequence[str]) -> list[QuerySpe
         QuerySpec(source="openalex", kind=QueryKind.FILTER, text=t, purpose=QueryPurpose.CHASE)
         for t in chase_queries([ChaseDirection.FORWARD], [openalex[w] for w in chasable])
     ]
+
+
+def plan_gaps(project: Project) -> list[ValidationIssue]:
+    """The protocol's `snowball_plan` gaps under the project's current rigor mode."""
+    project.index.sync()
+    protocol = current_protocol(project)
+    if protocol is None:
+        return []
+    return snowball_plan_gaps(protocol.spec, _rigor_mode(project))
 
 
 def plan_round(project: Project, direction: Direction) -> RoundPlan:

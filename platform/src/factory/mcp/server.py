@@ -32,6 +32,7 @@ from factory.model.inbox import Basis
 from factory.model.project import RigorMode
 from factory.model.protocol import CriterionEffect, PressFinding, ProtocolSpec, ScreeningStage
 from factory.model.question import QuestionSpec
+from factory.model.references import Decision, Direction, LinkState
 from factory.model.screening import CalibrationLabelled, Channel, PassLabel, ScreeningItem
 from factory.model.search import QueryKind, QueryPurpose, QuerySpec
 from factory.model.seed import SeedSpec
@@ -58,9 +59,12 @@ from factory.services import probe as probe_service
 from factory.services import project as project_service
 from factory.services import protocol as protocol_service
 from factory.services import question as question_service
+from factory.services import reference_resolve as reference_resolve_service
+from factory.services import references as references_service
 from factory.services import screening as screening_service
 from factory.services import search as search_service
 from factory.services import seeds as seeds_service
+from factory.services import snowball as snowball_service
 from factory.services import trace as trace_service
 from factory.services import watch as watch_service
 from factory.services.context import Project, open_project
@@ -1134,6 +1138,153 @@ def build_server(
 
         return _reply(project, label, include_work_ids=False)
 
+    @server.tool()
+    def references_extract(
+        project: str, role: str, model: str, skill: str, work_ids: list[str] | None = None
+    ) -> dict[str, JsonValue]:
+        """Extract and resolve the reference lists of included works from their converted
+        documents. With no `work_ids`: every included work with a conversion and no current
+        extraction. A malformed id refuses the call; works that cannot be extracted (not
+        included, no conversion) are reported under `skipped` while the others are recorded.
+        Refused to a session that has joined a pass."""
+
+        def extract() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            actor = make_agent_actor(settings, session, role, model, skill)
+            summary = references_service.extract_references(
+                opened, actor, work_ids, sources=adapters
+            )
+            return _withheld(opened, summary.model_dump(mode="json"))
+
+        return _reply(project, extract)
+
+    @server.tool()
+    def references_status(project: str) -> dict[str, JsonValue]:
+        """Counts over the live reference extractions: entries by link state (they sum to
+        `entries`), works in the corpus and new candidates. Read-only. Refused to a session that
+        has joined a pass."""
+
+        def status() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            counts = references_service.reference_counts(opened)
+            return _withheld(opened, counts.model_dump(mode="json"))
+
+        return _reply(project, status)
+
+    @server.tool()
+    def references_list(
+        project: str,
+        state: str | None = None,
+        work_id: str | None = None,
+        after: int = 0,
+        limit: int = 50,
+    ) -> dict[str, JsonValue]:
+        """Entries of the live extractions with their links, by citing work and ordinal.
+        `state` filters by link state (resolved, unconfirmed, ambiguous, unresolved), `work_id`
+        by citing work; `after` is the number of items already seen and `limit` at most 100.
+        Read-only. Refused to a session that has joined a pass."""
+
+        def listing() -> JsonValue:
+            link_state = _link_state(state)
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            page = references_service.list_references(
+                opened, state=link_state, work_id=work_id, after=after, limit=limit
+            )
+            return _withheld(opened, page.model_dump(mode="json"))
+
+        return _reply(project, listing)
+
+    @server.tool()
+    def reference_decide(
+        project: str,
+        extraction_id: str,
+        ordinal: int,
+        decision: str,
+        rationale: str,
+        quotes: list[str],
+        role: str,
+        model: str,
+        skill: str,
+        work_id: str | None = None,
+    ) -> dict[str, JsonValue]:
+        """Propose or record a decision on an unconfirmed or ambiguous reference link.
+        `decision` is `propose-confirm` or `propose-reject`; `confirm` and `reject` are binding
+        and a human's (a second agent may only confirm in pilot mode, a recorded proposal of
+        another session). `quotes` is exactly two strings: a verbatim part of the entry, and a
+        verbatim part of the candidate's title or author line. `work_id` names the candidate for
+        an ambiguous link. Refused to a session that has joined a pass."""
+
+        def decide() -> JsonValue:
+            parsed = _decision(decision)
+            if len(quotes) != 2:
+                raise FactoryValidationError(
+                    [
+                        ValidationIssue(
+                            "quotes", "give exactly two: the entry quote, then the candidate quote"
+                        )
+                    ]
+                )
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            actor = make_agent_actor(settings, session, role, model, skill)
+            reference_resolve_service.decide_reference(
+                opened,
+                actor,
+                extraction_id,
+                ordinal,
+                parsed,
+                rationale=rationale,
+                quotes=(quotes[0], quotes[1]),
+                work_id=work_id,
+            )
+            return {"extraction_id": extraction_id, "ordinal": ordinal, "decision": parsed.value}
+
+        return _reply(project, decide)
+
+    @server.tool()
+    def snowball_round(
+        project: str,
+        direction: str,
+        role: str,
+        model: str,
+        skill: str,
+        dry_run: bool = True,
+    ) -> dict[str, JsonValue]:
+        """Plan (default) or run a snowball round: `backward` (the references of the included
+        works' documents) or `forward` (works citing them). A dry run writes nothing and shows
+        the candidates, the queries and whether the protocol's `snowball_plan` allows the round.
+        Run a real round only after the researcher's go-ahead; follow with `dedup_run`.
+        Refused to a session that has joined a pass."""
+
+        def round_() -> JsonValue:
+            parsed = _round_direction(direction)
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            actor = make_agent_actor(settings, session, role, model, skill)
+            result = snowball_service.snowball_round(
+                opened, actor, parsed, sources=adapters, dry_run=dry_run
+            )
+            return _withheld(opened, result.model_dump(mode="json"))
+
+        return _reply(project, round_)
+
+    @server.tool()
+    def snowball_compare(project: str, round_id: str) -> dict[str, JsonValue]:
+        """For a recorded backward round: the works its resolved references name against the
+        works the `cited_by:` chase rounds found. A quality check, not a selection. Read-only.
+        Refused to a session that has joined a pass."""
+
+        def compare() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            result = snowball_service.snowball_compare(opened, round_id)
+            return _withheld(opened, result.model_dump(mode="json"))
+
+        return _reply(project, compare)
+
     return server
 
 
@@ -1442,6 +1593,37 @@ def _spec(source: str, query: str, kind: str, purpose: str, limit: int | None) -
 
 def _choices(values: Iterable[QueryKind | QueryPurpose]) -> str:
     return ", ".join(str(value.value) for value in values)
+
+
+def _link_state(value: str | None) -> LinkState | None:
+    if value is None:
+        return None
+    try:
+        return LinkState(value)
+    except ValueError:
+        choices = ", ".join(s.value for s in LinkState)
+        raise FactoryValidationError(
+            [ValidationIssue("state", f"must be one of: {choices}")]
+        ) from None
+
+
+def _decision(value: str) -> Decision:
+    try:
+        return Decision(value)
+    except ValueError:
+        choices = ", ".join(d.value for d in Decision)
+        raise FactoryValidationError(
+            [ValidationIssue("decision", f"must be one of: {choices}")]
+        ) from None
+
+
+def _round_direction(value: str) -> Direction:
+    try:
+        return Direction(value)
+    except ValueError:
+        raise FactoryValidationError(
+            [ValidationIssue("direction", "must be one of: backward, forward")]
+        ) from None
 
 
 def run(settings: Settings) -> None:

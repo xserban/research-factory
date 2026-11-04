@@ -25,6 +25,7 @@ from factory.model.identity import IdGenerator
 from factory.model.imports import ImportRole
 from factory.model.project import RigorMode
 from factory.model.protocol import ScreeningStage
+from factory.model.references import Decision, Direction, LinkState
 from factory.model.screening import Channel
 from factory.model.watch import CycleStatus
 from factory.model.work import ProvenanceMethod
@@ -52,7 +53,10 @@ from factory.services import portfolio as portfolio_service
 from factory.services import prisma as prisma_service
 from factory.services import project as project_service
 from factory.services import protocol as protocol_service
+from factory.services import reference_resolve as reference_resolve_service
+from factory.services import references as references_service
 from factory.services import seeds as seeds_service
+from factory.services import snowball as snowball_service
 from factory.services import trace as trace_service
 from factory.services import watch as watch_service
 from factory.services.context import Project, list_projects, open_project
@@ -161,6 +165,16 @@ inbox_app = typer.Typer(
     help="Supplied links: capture, list, resolve into the corpus, withdraw.",
     no_args_is_help=True,
 )
+references_app = typer.Typer(
+    name="references",
+    help="Reference lists of the included works: extract, status, list, decide.",
+    no_args_is_help=True,
+)
+snowball_app = typer.Typer(
+    name="snowball", help="Snowball rounds: plan, run, compare.", no_args_is_help=True
+)
+app.add_typer(references_app)
+app.add_typer(snowball_app)
 app.add_typer(seeds_app)
 app.add_typer(watch_app)
 app.add_typer(inbox_app)
@@ -675,6 +689,155 @@ def protocol_confirm_press(
             project, project.human_actor(), review_id, list(response or [])
         )
     typer.echo(f"confirmed {review_id}")
+
+
+@references_app.command("extract")
+def references_extract_cmd(
+    ctx: typer.Context,
+    work: Annotated[
+        list[str] | None, typer.Option("--work", help="A work to extract; repeatable.")
+    ] = None,
+) -> None:
+    """Extract and resolve the reference lists; default: every included work not yet extracted."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        summary = references_service.extract_references(
+            project, project.human_actor(), work, sources=dict(default_sources())
+        )
+    for line in render.extract_summary_lines(summary):
+        typer.echo(line)
+
+
+@references_app.command("status")
+def references_status_cmd(ctx: typer.Context) -> None:
+    """Counts over the live extractions; the four link states sum to the entries."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        counts = references_service.reference_counts(project)
+    for line in render.reference_counts_lines(counts):
+        typer.echo(line)
+
+
+@references_app.command("list")
+def references_list_cmd(
+    ctx: typer.Context,
+    state_filter: Annotated[
+        str | None, typer.Option("--state", help="resolved, unconfirmed, ambiguous or unresolved.")
+    ] = None,
+    work: Annotated[str | None, typer.Option("--work", help="A citing work.")] = None,
+    after: Annotated[int, typer.Option("--after", help="Items already seen.")] = 0,
+    limit: Annotated[int, typer.Option("--limit", help="At most 100.")] = 50,
+) -> None:
+    """Entries with their links."""
+    state = _state(ctx)
+    with _reporting_errors():
+        parsed = None
+        if state_filter is not None:
+            try:
+                parsed = LinkState(state_filter)
+            except ValueError:
+                choices = ", ".join(s.value for s in LinkState)
+                raise FactoryValidationError(
+                    [ValidationIssue("state", f"must be one of: {choices}")]
+                ) from None
+        project = _resolve_project(state)
+        page = references_service.list_references(
+            project, state=parsed, work_id=work, after=after, limit=limit
+        )
+    for line in render.reference_page_lines(page):
+        typer.echo(line)
+
+
+@references_app.command("decide")
+def references_decide_cmd(
+    ctx: typer.Context,
+    extraction: Annotated[str, typer.Argument(help="The extraction id (rex_...).")],
+    ordinal: Annotated[int, typer.Argument(help="The entry's ordinal.")],
+    confirm: Annotated[bool, typer.Option("--confirm", help="Confirm the link.")] = False,
+    reject: Annotated[bool, typer.Option("--reject", help="Reject the link.")] = False,
+    rationale: Annotated[str, typer.Option("--rationale", help="Why.")] = "",
+    entry_quote: Annotated[
+        str, typer.Option("--entry-quote", help="Verbatim from the entry.")
+    ] = "",
+    candidate_quote: Annotated[
+        str, typer.Option("--candidate-quote", help="Verbatim from the candidate's title/authors.")
+    ] = "",
+    work: Annotated[str | None, typer.Option("--work", help="The candidate work.")] = None,
+) -> None:
+    """The human's binding decision on an unconfirmed or ambiguous link."""
+    state = _state(ctx)
+    if confirm == reject:
+        _fail("give exactly one of --confirm and --reject", 2)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        reference_resolve_service.decide_reference(
+            project,
+            project.human_actor(),
+            extraction,
+            ordinal,
+            Decision.CONFIRM if confirm else Decision.REJECT,
+            rationale=rationale,
+            quotes=(entry_quote, candidate_quote),
+            work_id=work,
+        )
+    typer.echo(f"{'confirmed' if confirm else 'rejected'} {extraction}:{ordinal}")
+
+
+def _round_direction(value: str) -> Direction:
+    try:
+        return Direction(value)
+    except ValueError:
+        _fail("direction must be backward or forward", 2)
+
+
+@snowball_app.command("plan")
+def snowball_plan_cmd(
+    ctx: typer.Context,
+    direction: Annotated[str, typer.Argument(help="backward or forward.")],
+) -> None:
+    """A dry run: what a round would do, the candidates ranked, and the plan's gaps."""
+    state = _state(ctx)
+    parsed = _round_direction(direction)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        result = snowball_service.snowball_round(
+            project, project.human_actor(), parsed, sources=dict(default_sources()), dry_run=True
+        )
+        gaps = snowball_service.plan_gaps(project)
+    for line in render.round_plan_lines(parsed.value, result, gaps):
+        typer.echo(line)
+
+
+@snowball_app.command("run")
+def snowball_run_cmd(
+    ctx: typer.Context,
+    direction: Annotated[str, typer.Argument(help="backward or forward.")],
+) -> None:
+    """Record and run a round (the researcher's go-ahead is this command)."""
+    state = _state(ctx)
+    parsed = _round_direction(direction)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        result = snowball_service.snowball_round(
+            project, project.human_actor(), parsed, sources=dict(default_sources()), dry_run=False
+        )
+    for line in render.round_result_lines(result):
+        typer.echo(line)
+
+
+@snowball_app.command("compare")
+def snowball_compare_cmd(
+    ctx: typer.Context, round_id: Annotated[str, typer.Argument(help="A backward round.")]
+) -> None:
+    """A backward round's resolved references against the chase rounds."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        comparison = snowball_service.snowball_compare(project, round_id)
+    for line in render.comparison_lines(comparison):
+        typer.echo(line)
 
 
 @app.command()

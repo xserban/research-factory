@@ -1,6 +1,7 @@
 """Markdown and text renderings of the report models for the CLI. Formatting only: every figure
 is read from the model, so the CLI and the MCP tools cannot differ (R-05)."""
 
+from factory.errors import ValidationIssue
 from factory.model.screening import PassLabel
 from factory.services.agreement import DecisionView
 from factory.services.audit import AuditReport
@@ -26,6 +27,8 @@ from factory.services.imports import (
 )
 from factory.services.inbox import InboxPage, ResolveOutcome
 from factory.services.prisma import UNCONVERTED, PrismaFlow, SearchReport
+from factory.services.references import ExtractSummary, Page, ReferenceCounts
+from factory.services.snowball import Comparison, RoundCandidate, RoundResult
 from factory.services.trace import TraceNode
 from factory.services.watch import CycleSummary, WatchStatus
 
@@ -459,4 +462,69 @@ def watch_status_lines(slug: str, status: WatchStatus) -> list[str]:
             f"  {s.source}: {s.mode}, every {s.interval_days} d, {due}{window}{replay}, "
             f"{s.consecutive_failures} consecutive failures"
         )
+    return lines
+
+
+def extract_summary_lines(summary: ExtractSummary) -> list[str]:
+    """Extractions with their counts, then the works that were skipped and why."""
+    lines = [f"{len(summary.extractions)} extraction(s), {len(summary.skipped)} skipped"]
+    for r in summary.extractions:
+        states = ", ".join(f"{k.value} {v}" for k, v in r.states.items() if v)
+        flags = f" [{', '.join(r.flags)}]" if r.flags else ""
+        lines.append(f"  {r.work_id}: {r.entries} entries, {r.markers} markers ({states}){flags}")
+    lines += [f"  skipped {s.work_id}: {s.reason}" for s in summary.skipped]
+    return lines
+
+
+def reference_counts_lines(counts: ReferenceCounts) -> list[str]:
+    return [f"{name}: {value}" for name, value in counts.model_dump().items()]
+
+
+def reference_page_lines(page: Page) -> list[str]:
+    """One line per entry: extraction:ordinal, state, linked work, year, the stated title."""
+    lines = [
+        f"{i.extraction_id}:{i.ordinal} {i.state.value} {i.work_id or '-'} "
+        f"{i.year or '-'} {i.title or i.anchor}"
+        for i in page.items
+    ]
+    more = "" if page.next_after is None else f"; next --after {page.next_after}"
+    return [*lines, f"({len(page.items)} of {page.total}{more})"]
+
+
+def _candidate_line(c: RoundCandidate) -> str:
+    flag = " (no source record)" if c.no_source_record else ""
+    return f"  cited by {c.cited_by_included} included work(s): {c.work_key}{flag}"
+
+
+def round_plan_lines(direction: str, result: RoundResult, gaps: list[ValidationIssue]) -> list[str]:
+    """A dry run: whether the round is allowed and why not, the plan's gaps, the candidates
+    ranked by how many included works cite them, and the queries."""
+    state = result.state
+    verdict = "allowed" if state.allowed else "refused"
+    lines = [f"{direction} round {state.round_no}: {verdict}"]
+    lines += [f"  {i.field}: {i.reason}" for i in state.refusals]
+    lines += [f"  note: {n}" for n in state.notes]
+    lines += [f"  plan gap {i.field}: {i.reason}" for i in gaps]
+    lines.append(f"{len(result.candidates)} candidate(s)")
+    lines += [_candidate_line(c) for c in result.candidates]
+    lines.append(f"{len(result.queries)} query(ies), {len(result.unqueryable)} unqueryable")
+    lines += [f"  {q.source}: {q.text}" for q in result.queries]
+    lines += [f"  not extracted {w}: {why}" for w, why in result.unextracted]
+    return lines
+
+
+def round_result_lines(result: RoundResult) -> list[str]:
+    return [
+        f"round {result.round_id}: {len(result.runs)} queries run, {result.new_works} new works"
+    ]
+
+
+def comparison_lines(comparison: Comparison) -> list[str]:
+    lines = [
+        f"round {comparison.round_id} against chase rounds {', '.join(comparison.chase_rounds)}",
+        f"both: {len(comparison.both)}",
+        f"document only: {len(comparison.document_only)}",
+        f"metadata only: {len(comparison.metadata_only)}",
+    ]
+    lines += [f"note: {n}" for n in comparison.notes]
     return lines
