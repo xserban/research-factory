@@ -15,6 +15,7 @@ Invariants:
 
 from factory.model.base import StrictModel
 from factory.services.agreement import Outcome, final_outcomes
+from factory.services.call_memo import memoised
 from factory.services.context import Project
 from factory.services.document_read import default_conversion
 
@@ -34,6 +35,7 @@ class FulltextQueue(StrictModel):
     not_retrieved: list[str]
 
 
+@memoised
 def fulltext_queue(project: Project) -> FulltextQueue:
     """Every promoted work as eligible (converted) or not retrieved (no conversion)."""
     project.index.sync()

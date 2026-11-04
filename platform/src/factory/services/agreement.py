@@ -57,6 +57,7 @@ from factory.model.screening import (
 )
 from factory.model.task import TaskStatus
 from factory.services.calibration import calibration_items, calibration_labels, stage_population
+from factory.services.call_memo import memoised
 from factory.services.context import Project
 from factory.services.conversions import conversion_document
 from factory.services.protocol import ProtocolVersion, current_protocol, lineage_through
@@ -273,6 +274,7 @@ def agreed_works(project: Project, *, stage: ScreeningStage = TA) -> dict[str, A
     return agreed
 
 
+@memoised
 def final_outcomes(project: Project, *, stage: ScreeningStage = TA) -> dict[str, Outcome]:
     """The outcome of every work of the corpus at `stage`: the human's label for a calibration
     work; for any other work its resolution, else the agreed outcome of both passes, else the

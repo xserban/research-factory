@@ -40,6 +40,7 @@ from factory.model.work import ProvenanceMethod
 from factory.services.agreement import Outcome, agreement_summary, final_outcomes, single_pass_works
 from factory.services.audit import audit_outstanding, audit_report
 from factory.services.calibration import calibration_status
+from factory.services.call_memo import entering
 from factory.services.chase import chase_rounds
 from factory.services.context import Project
 from factory.services.dedup import active_merges
@@ -242,9 +243,12 @@ def agent_view(report: CheckReport, *, labelled_audit: str | None = None) -> Che
 def agent_check(project: Project, *, promote_to: RigorMode | None = None) -> CheckReport:
     """`check` as an agent may read it (`agent_view`), with the neutral statement of the latest
     extraction audit when it has labels. Read-only."""
-    audit = extraction_audit_report(project)
-    labelled = audit.audit_id if audit is not None and (audit.labelled or audit.outdated) else None
-    return agent_view(check(project, promote_to=promote_to), labelled_audit=labelled)
+    with entering():
+        audit = extraction_audit_report(project)
+        labelled = (
+            audit.audit_id if audit is not None and (audit.labelled or audit.outdated) else None
+        )
+        return agent_view(check(project, promote_to=promote_to), labelled_audit=labelled)
 
 
 @dataclass(frozen=True)
@@ -286,18 +290,19 @@ no stage in this platform in slice 1 that derives them, so each is reported unti
 def check(project: Project, *, promote_to: RigorMode | None = None) -> CheckReport:
     """The gaps of the project under its own rigour mode, or, with `promote_to`, the errors a
     promotion to that mode would add. Read-only."""
-    current = _rigor_mode(project)
-    if promote_to is None:
-        return CheckReport(
-            mode=current, evaluated_as=current, findings=_findings_as(project, current)
-        )
-    own_errors = {_gap_key(f) for f in _findings_as(project, current) if f.severity == "error"}
-    gaps = [
-        f
-        for f in _findings_as(project, promote_to)
-        if f.severity == "error" and _gap_key(f) not in own_errors
-    ]
-    return CheckReport(mode=current, evaluated_as=promote_to, findings=gaps)
+    with entering():
+        current = _rigor_mode(project)
+        if promote_to is None:
+            return CheckReport(
+                mode=current, evaluated_as=current, findings=_findings_as(project, current)
+            )
+        own_errors = {_gap_key(f) for f in _findings_as(project, current) if f.severity == "error"}
+        gaps = [
+            f
+            for f in _findings_as(project, promote_to)
+            if f.severity == "error" and _gap_key(f) not in own_errors
+        ]
+        return CheckReport(mode=current, evaluated_as=promote_to, findings=gaps)
 
 
 def _gap_key(finding: Finding) -> tuple[str, tuple[str, ...], str | None]:

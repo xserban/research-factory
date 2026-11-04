@@ -500,3 +500,30 @@ def test_methods_agreement_none_while_tasks_open(
     report = methods_report(project)
     assert report.extraction_agreement is None
     assert "Overall agreement of the passes: not computed" in render_methods(report)
+
+
+def test_check_computes_each_shared_input_once(
+    world: list[str], project: Project, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from collections import Counter
+
+    from factory.services import agreement
+    from factory.services.check import agent_check, check
+
+    calls: Counter[str] = Counter()
+    original = agreement.final_outcomes.__wrapped__  # type: ignore[attr-defined]
+
+    def counting(proj: Project, *, stage: ScreeningStage = ScreeningStage.TITLE_ABSTRACT):  # type: ignore[no-untyped-def]
+        calls[stage.value] += 1
+        return original(proj, stage=stage)
+
+    monkeypatch.setattr(agreement.final_outcomes, "__wrapped__", counting)
+    expected = check(project)
+    assert calls and max(calls.values()) == 1
+    calls.clear()
+    agent_check(project)
+    assert calls and max(calls.values()) == 1
+    # Nothing is cached across calls: a second check recomputes, with identical findings.
+    calls.clear()
+    assert check(project) == expected
+    assert max(calls.values()) == 1

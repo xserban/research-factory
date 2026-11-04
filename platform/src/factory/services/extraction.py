@@ -78,6 +78,7 @@ from factory.model.staleness import RowRef, stale_rows, touches
 from factory.model.task import Task, TaskCompleted, TaskStatus
 from factory.packs import FieldKind, Pack, get_pack
 from factory.services.agreement import Outcome, final_outcomes
+from factory.services.call_memo import memoised
 from factory.services.context import Project
 from factory.services.conversions import conversion_manifest
 from factory.services.document_read import ConversionRef, default_conversion
@@ -218,6 +219,7 @@ def require_schema(project: Project) -> tuple[ProtocolVersion, ExtractionSchema,
     return protocol, schema, pack
 
 
+@memoised
 def extraction_population(project: Project) -> list[str]:
     """The works whose full-text screening outcome is INCLUDED, sorted. Raises on field
     `full_text_screening` when the protocol declares no full-text plan."""

@@ -30,6 +30,7 @@ from factory.model.search import (
     SearchRunStarted,
 )
 from factory.model.work import Provenance, ProvenanceMethod, Work
+from factory.services.call_memo import memoised
 from factory.services.context import Project
 from factory.sources.base import RawPage, SourceError
 from factory.sources.http import redact
@@ -377,6 +378,7 @@ def get_work(project: Project, work_id: str) -> Work | None:
     return works[0] if works else None
 
 
+@memoised
 def list_works(project: Project, *, include_probe: bool = False) -> list[Work]:
     """The corpus, sorted by id: works with at least one provenance row from a non-probe query.
 
