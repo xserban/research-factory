@@ -17,3 +17,4 @@ Minor review findings parked during the v1 build, to address when iterating from
 - G1 T8: prisma mechanisms.get(first, CHASE_BACKWARD) silently defaults when a chase run has no registered query; snowball-unscreened check only tested via monkeypatch.
 - inbox T5-10: actor refusal and `before` snapshot outside exclusive lock (services/inbox.py:164,301); discovery chase direction read from query text (discovery.py:178); _registered_submitter LIKE ref match (search.py:536); AC10 held-out recall 0.0 before/after is a weak assertion.
 - cleanups-2 T1–2: event_refs test never compares an incremental index with a rebuilt one; no substring-id case (qry_1/qry_10); trace._chase_assignment MAX(o.ref) wants a comment.
+- G1 T10: acceptance 2's `test_parse_quality_report` named in the plan is not on the base (only fixture field tests in test_references_parse.py).

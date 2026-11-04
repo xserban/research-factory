@@ -116,6 +116,15 @@ Numbering continues by blocks of ten per slice so that no two drafts' provisiona
 
 **Reserved for slices 3a–3c** (rulings adopted 2026-11-04; rows added by plans G1 Task 10, G2-E Task 5 and G3-C Task 6 when built): R-80 reference completeness (3a R-xx(a)), R-81 link provenance (3a (b)), R-82 snowball discipline (3a (c)), R-83 citation-context minimality (3a (d)), R-84 stated versus inferred relations (3b (e)), R-85 edge basis (3b (f)), R-86 graph as projection (3b (g)), R-87 interpretation is not evidence (3c (h)), R-88 reviewable interpretation (3c (i)), R-89 concept sources (3c (j)).
 
+**References and snowballing (slice 3a; proposed rows, built by plan G1; numbering confirmed at merge)**
+
+| ID | Requirement | Modes |
+| --- | --- | --- |
+| R-80 (proposed) | **Reference completeness.** Per document the parsed entry count and the distinct marker count are both stored; a mismatch is flagged and listed by `check`. Unresolved references are listed, never dropped; the counts resolved, unconfirmed, ambiguous and unresolved sum to the entry count. `references-unresolved-ceiling` warns above 30% unresolved or ambiguous (provisional, pending the pilot) | all |
+| R-81 (proposed) | **Link provenance.** Every reference link records method, confidence class, score, matcher version and source response; a non-identifier link feeds candidates only after confirmation (title-exact excepted). An agent proposes and never confirms; a rejection supersedes | all |
+| R-82 (proposed) | **Snowball discipline.** Rounds, directions and the stopping rule are declared in the protocol and recorded before any query runs; a candidate is never included without screening; rounds and the yield per round (new after deduplication, included) are reported | P, S |
+| R-83 (proposed) | **Citation-context minimality.** Only anchors and marker tokens are stored; bibliography text is stored only as bounded parsed entry fields and an `entry_sha256` that re-derives from the pinned conversion | all |
+
 ### K. Organisation and imported libraries ([slice 3d](slice-3d-regions-import.md))
 | ID | Requirement | Modes |
 | --- | --- | --- |

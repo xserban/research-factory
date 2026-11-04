@@ -158,6 +158,10 @@ Contribution items, relations, lineage graph and its queries/export (G2); interp
 17. **Pilot.** On the linear-attention pilot, at least one backward round runs from the included works; the report states the counts found only by the document list and only by `search_chase`; entries unresolved are listed with their count.
 18. **Quality.** `mypy --strict` and ruff pass; coverage ≥ 90% for `services/` and `model/`; TDD per project rule; reference resolution and the event/index additions by subagent-driven development.
 
+## Implemented in plan G1
+
+Built as specified (events, tables, parser, matcher, snowball rounds, PRISMA, check, trace, MCP tools, CLI, skill `rf-references`). Acceptance 2 is the fixture-set scoring test; 1, 3–12 and 14–16 are covered in one flow by `tests/test_acceptance_references.py` (marked `slow`, synthetic pilot-shaped fixture, no network). Acceptance 17 (the linear-attention pilot) is not run: pilot steps are set aside (decision 74). The matcher constants of ruling 16 and the unresolved ceiling of ruling 17 are unchanged and uncalibrated, pending the pilot; the fixture titles show no misclassification. Notes: `seed_check` is not an MCP tool (decision 43); `factory snowball plan` also prints the protocol's `snowball_plan` gaps for the current mode; `references_extract` accepts a batch with partial success (works that cannot be extracted are reported under `skipped`).
+
 ## Sub-plan
 | Plan | Content |
 | --- | --- |

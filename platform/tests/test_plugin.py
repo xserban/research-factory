@@ -8,7 +8,15 @@ from factory.config import Settings
 from factory.services.skills import skill_ref
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SKILLS = ("rf-extract", "rf-frame", "rf-probe", "rf-protocol", "rf-screen", "rf-search")
+SKILLS = (
+    "rf-extract",
+    "rf-frame",
+    "rf-probe",
+    "rf-protocol",
+    "rf-references",
+    "rf-screen",
+    "rf-search",
+)
 
 
 def _frontmatter(name: str) -> dict[str, str]:
@@ -46,6 +54,30 @@ def test_rf_screen_full_text_mode_section() -> None:
     assert "screen_agreement" in section  # named only to forbid it
     for kept in ("## Independence", "## Procedure", "## Tool arguments", "## Done when"):
         assert kept in text
+
+
+def test_rf_references_skill_text() -> None:
+    text = (REPO_ROOT / "plugin" / "skills" / "rf-references" / "SKILL.md").read_text("utf-8")
+    for needed in (
+        "references_extract",
+        "references_list",
+        "reference_decide",
+        "propose-confirm",
+        "snowball_round",
+        "snowball_compare",
+        "exactly two strings",
+        "character for character",
+        "Never confirm or reject a link",
+        "dry_run",
+        "go ahead",
+        "## Never",
+        "## Tool arguments",
+        "## Done when",
+    ):
+        assert needed in text, needed
+    never = text.split("## Never", 1)[1].split("\n## ", 1)[0]
+    assert "by hand" in never and "held-out" in never.lower()
+    assert "seed_check" not in text and "found_by" not in text
 
 
 def test_rf_extract_skill_text() -> None:
