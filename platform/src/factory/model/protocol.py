@@ -53,7 +53,7 @@ _SORT_KEYS: dict[str, tuple[str, ...]] = {
     "limits": ("field", "value"),
 }
 _SEARCH_STRATEGY_KEYS = ("sources", "queries", "limits")
-_OMITTED_WHEN_NONE = frozenset({"full_text_screening", "extraction_schema"})
+_OMITTED_WHEN_NONE = frozenset({"full_text_screening", "extraction_schema", "snowball_plan"})
 """Optional sections left out of every hash while unset, so protocols that predate them keep
 their versions. Other `None` values stay in the hash."""
 
@@ -194,6 +194,15 @@ class ExtractionSchema(StrictModel):
         return self
 
 
+class SnowballPlan(StrictModel):
+    """The snowballing stopping rule (slice 3a, ruling 19): the most rounds per direction, and
+    whether a direction stops once its previous round yielded no newly included work."""
+
+    max_backward_rounds: int = Field(ge=0)
+    max_forward_rounds: int = Field(ge=0)
+    stop_when_no_new_included: bool = True
+
+
 class ProtocolSpec(StrictModel):
     """The protocol as an agent or a human states it. Keys are unique within each list."""
 
@@ -208,6 +217,8 @@ class ProtocolSpec(StrictModel):
     """The full-text plan. Absent (None) until the protocol declares full-text screening."""
     extraction_schema: ExtractionSchema | None = None
     """What is extracted. Absent (None) until the protocol declares it; left out of the hash."""
+    snowball_plan: SnowballPlan | None = None
+    """The snowballing stopping rule. Absent (None) until declared; left out of the hash."""
     rationale: str = ""
 
 
@@ -253,6 +264,7 @@ AMENDABLE_FIELDS = (
     "screening",
     "full_text_screening",
     "extraction_schema",
+    "snowball_plan",
 )
 """Top-level hashed fields other than criteria, which an amendment reports as `other_changes`."""
 

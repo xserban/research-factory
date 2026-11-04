@@ -119,8 +119,8 @@ def _resolved(project: Project, field: str | None, choice: str, reason: str) -> 
     return _record(project, "extraction.resolved", payload)
 
 
-def test_projection_version_is_20() -> None:
-    assert PROJECTION_VERSION == "20"
+def test_projection_version_pinned() -> None:
+    assert PROJECTION_VERSION == "21"
 
 
 def test_pass_join_and_close_first_write_wins(project: Project) -> None:

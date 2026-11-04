@@ -7,6 +7,10 @@ must meet before it is declared ready; a draft with gaps may still be recorded.
 
 Held-out seeds are never named in an issue: a worked example that is held out gets the same
 message as an unknown seed (R-20).
+
+`snowball_plan_gaps` is separate from readiness: a missing `snowball_plan` blocks snowball rounds
+in `pilot` and `systematic` and is a promotion gap (slice 3a, ruling 19); it never blocks `ready`.
+Negative round maxima are refused by the `SnowballPlan` model at the boundary.
 """
 
 from __future__ import annotations
@@ -261,6 +265,16 @@ def _extraction_errors(schema: ExtractionSchema | None) -> list[ValidationIssue]
                 )
             )
     return issues
+
+
+SNOWBALL_PLAN_MISSING = "snowball-plan-missing"
+
+
+def snowball_plan_gaps(spec: ProtocolSpec, mode: RigorMode) -> list[ValidationIssue]:
+    """`snowball-plan-missing` when `pilot` or `systematic` has no declared stopping rule."""
+    if spec.snowball_plan is None and mode in (RigorMode.PILOT, RigorMode.SYSTEMATIC):
+        return [ValidationIssue("snowball_plan", SNOWBALL_PLAN_MISSING)]
+    return []
 
 
 def _resolves(parent: str, slot_names: set[str], non_goal_ids: set[str]) -> bool:

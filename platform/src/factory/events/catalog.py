@@ -26,6 +26,13 @@ from factory.model.protocol import (
     ProtocolRecorded,
 )
 from factory.model.question import GoalStated, QuestionRecorded
+from factory.model.references import (
+    CitationContextsRecorded,
+    ReferenceExtracted,
+    ReferenceResolutionDecided,
+    ReferenceResolved,
+    SnowballRoundStarted,
+)
 from factory.model.screening import (
     AuditLabelled,
     AuditSampled,
@@ -140,4 +147,9 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("extraction.audit_labelled", ExtractionAuditLabelled, 1))
     catalog.register(EventType("document.converted", Converted, 1))
     catalog.register(EventType("document.conversion_failed", ConversionFailed, 1))
+    catalog.register(EventType("reference.extracted", ReferenceExtracted, 1))
+    catalog.register(EventType("citation.contexts_recorded", CitationContextsRecorded, 1))
+    catalog.register(EventType("reference.resolved", ReferenceResolved, 1))
+    catalog.register(EventType("reference.resolution_decided", ReferenceResolutionDecided, 1))
+    catalog.register(EventType("snowball.round_started", SnowballRoundStarted, 1))
     return catalog
