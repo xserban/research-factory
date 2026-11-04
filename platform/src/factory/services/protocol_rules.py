@@ -35,7 +35,7 @@ from factory.model.protocol import (
 )
 from factory.model.staleness import DecisionRef as DecisionRef
 from factory.model.staleness import stale_decisions as stale_decisions
-from factory.packs import get_pack
+from factory.packs import NON_COMPARABLE_KEYS, get_pack
 from factory.services.question import QuestionVersion
 from factory.services.seeds import SeedRecord, SeedRole
 
@@ -251,6 +251,13 @@ def _extraction_errors(schema: ExtractionSchema | None) -> list[ValidationIssue]
             issues.append(
                 ValidationIssue(
                     f"extraction_schema.comparability_keys[{i}]", "must be a declared field"
+                )
+            )
+        if key in NON_COMPARABLE_KEYS:
+            issues.append(
+                ValidationIssue(
+                    f"extraction_schema.comparability_keys[{i}]",
+                    "speed/memory are not comparability keys",
                 )
             )
     return issues

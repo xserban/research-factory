@@ -42,6 +42,7 @@ from factory.services.extraction import (
     pass_config,
 )
 from factory.services.extraction_agreement import (
+    NON_COMPARABLE_KEYS,
     AgreementOverall,
     FinalField,
     FinalRow,
@@ -61,6 +62,8 @@ from factory.sources.registry import SourceFactory
 from tests.test_acceptance_fulltext_screening import _screened_full_text_world
 from tests.test_extraction_next import SESSION_A, SESSION_B, _extractor
 from tests.test_extraction_record import _amend_schema
+from tests.test_extraction_schema import _schema, _with
+from tests.test_protocol_rules import _check
 
 FT = ScreeningStage.FULL_TEXT
 SourcesFor = Callable[..., Mapping[str, SourceFactory]]
@@ -380,9 +383,10 @@ def test_agreement_refused_when_passes_share_model(
 def test_agreement_overall_never_refuses(
     project: Project, human: Actor, ext_a: Actor, ext_b: Actor, screened: list[str], agent: Actor
 ) -> None:
-    assert agreement_overall(project) == AgreementOverall(overall=None, dual=0, single=0)
+    empty = AgreementOverall(overall=None, dual=0, single=0, rows_aligned=0, rows_unmatched=0)
+    assert agreement_overall(project) == empty
     _declare(project, agent)
-    assert agreement_overall(project) == AgreementOverall(overall=None, dual=0, single=0)
+    assert agreement_overall(project) == empty
     _run(project, ext_a, PassLabel.A, _same_rows)
     assert extract_next(project, ext_b, PassLabel.B).batch is not None
     open_tasks = agreement_overall(project)
@@ -554,24 +558,24 @@ def test_neither_drops_field_and_lists_it(
         ext_a,
         ext_b,
         a=lambda w: [_r(), _r("2", "t1.r3.c3")] if w == other else [_r()],
-        b=lambda w: [_r(task="detection")] if w == odd else [_r()],
+        b=lambda w: [_r(split="test")] if w == odd else [_r()],
     )
     ag = extraction_agreement(project, human)
     (field,) = [d for d in ag.disagreements if d.kind == "value"]
     (row,) = [d for d in ag.disagreements if d.kind == "row"]
     resolve_extraction(
-        project, human, odd, field.row_key, "task", "neither", "unclear", Channel.CLI
+        project, human, odd, field.row_key, "split", "neither", "unclear", Channel.CLI
     )
     resolve_extraction(
         project, human, other, row.row_key, None, "neither", "not a row", Channel.CLI
     )
     (final,) = _final(project, odd)
-    assert final.status == "resolved" and "task" not in final.fields
+    assert final.status == "resolved" and "split" not in final.fields
     (kept,) = _final(project, other)
     assert kept.row_key != row.row_key and kept.status == "agreed"
     after = extraction_agreement(project, human)
     assert after.disagreements == [] and after.resolved == 2
-    assert {(d.work_id, d.field) for d in after.dropped} == {(odd, "task"), (other, None)}
+    assert {(d.work_id, d.field) for d in after.dropped} == {(odd, "split"), (other, None)}
 
 
 def test_resolution_refusals_write_nothing(
@@ -694,7 +698,11 @@ def test_sample_recorded_with_seed_and_single_extraction_listed(
     status = {r.work_id: r.status for r in final_rows(project)}
     assert status == {**dict.fromkeys(dual, "agreed"), **dict.fromkeys(single, "single")}
     assert agreement_overall(project) == AgreementOverall(
-        overall=1.0, dual=len(dual), single=len(single)
+        overall=1.0,
+        dual=len(dual),
+        single=len(single),
+        rows_aligned=len(dual),
+        rows_unmatched=0,
     )
 
 
@@ -860,7 +868,7 @@ def test_grouped_rows_through_the_services(
     project: Project, agent: Actor, ext_a: Actor, ext_b: Actor, screened: list[str]
 ) -> None:
     fields = (*FIELDS, "throughput")
-    _declare(project, agent, fields=fields, keys=(*KEYS, "pretraining_data", "throughput"))
+    _declare(project, agent, fields=fields, keys=(*KEYS, "pretraining_data"))
     unsplit = screened[0]
 
     def rows_for(work: str) -> list[ExtractedRowInput]:
@@ -891,3 +899,154 @@ def test_number_keys_use_canonical_value() -> None:
     b = _keyed("rk_000000000002", params=_ff("22100000", unit="", canon="22100000"))
     g = group_rows([a, b], PACK, (*GROUP_KEYS, "params"))
     assert len(g.groups) == 1
+
+
+# --- Fix round 1: required fields, neither rules, denominators, schema rule, model check ---
+
+
+def _value_split(project: Project, ext_a: Actor, ext_b: Actor, odd: str) -> None:
+    """Pass B differs on the value's unit and on `task` in `odd`, and omits `split` there."""
+    _both(
+        project,
+        ext_a,
+        ext_b,
+        b=lambda w: [_r(unit="%", task="detection", split=None)] if w == odd else [_r()],
+    )
+
+
+def _required_present(project: Project) -> None:
+    for row in final_rows(project):
+        assert set(PACK.required) <= set(row.fields), row
+
+
+def test_neither_on_value_drops_the_whole_row(
+    project: Project, human: Actor, ext_a: Actor, ext_b: Actor, world: list[str]
+) -> None:
+    odd = world[0]
+    _value_split(project, ext_a, ext_b, odd)
+    key = extraction_agreement(project, human).disagreements[0].row_key
+    resolve_extraction(project, human, odd, key, "value", "neither", "unreadable", Channel.CLI)
+    assert _final(project, odd) == []
+    after = extraction_agreement(project, human)
+    assert after.disagreements == []
+    assert [(d.work_id, d.row_key, d.field) for d in after.dropped] == [(odd, key, None)]
+    _required_present(project)
+
+
+def test_neither_on_another_required_field_is_refused(
+    project: Project, human: Actor, ext_a: Actor, ext_b: Actor, world: list[str]
+) -> None:
+    odd = world[0]
+    _value_split(project, ext_a, ext_b, odd)
+    key = extraction_agreement(project, human).disagreements[0].row_key
+    before = len(_events(project))
+    with pytest.raises(FactoryValidationError) as e:
+        resolve_extraction(project, human, odd, key, "task", "neither", "x", Channel.CLI)
+    assert e.value.issues[0].field == "choice"
+    assert "drop the row instead" in e.value.issues[0].reason
+    assert len(_events(project)) == before
+    # A field the pack does not require may be dropped; the row is final once all is resolved.
+    resolve_extraction(project, human, odd, key, "split", "neither", "x", Channel.CLI)
+    resolve_extraction(project, human, odd, key, "task", "a", "x", Channel.CLI)
+    resolve_extraction(project, human, odd, key, "value", "b", "x", Channel.CLI)
+    (row,) = _final(project, odd)
+    assert "split" not in row.fields and row.status == "resolved"
+    _required_present(project)
+
+
+def test_no_final_row_lacks_a_required_field(
+    project: Project, human: Actor, ext_a: Actor, ext_b: Actor, world: list[str]
+) -> None:
+    odd = world[0]
+    _value_split(project, ext_a, ext_b, odd)
+    _required_present(project)
+    key = extraction_agreement(project, human).disagreements[0].row_key
+    resolve_extraction(project, human, odd, key, None, "b", "B", Channel.CLI)
+    (row,) = _final(project, odd)
+    assert "split" not in row.fields
+    _required_present(project)
+
+
+def test_field_choice_on_a_dropped_row_is_refused(
+    project: Project, human: Actor, ext_a: Actor, ext_b: Actor, world: list[str]
+) -> None:
+    odd = world[0]
+    _value_split(project, ext_a, ext_b, odd)
+    key = extraction_agreement(project, human).disagreements[0].row_key
+    resolve_extraction(project, human, odd, key, None, "neither", "drop", Channel.CLI)
+    before = len(_events(project))
+    with pytest.raises(FactoryValidationError) as e:
+        resolve_extraction(project, human, odd, key, "split", "a", "x", Channel.CLI)
+    assert e.value.issues[0].field == "field"
+    assert len(_events(project)) == before
+    # A whole-row choice still changes something and is accepted.
+    resolve_extraction(project, human, odd, key, None, "a", "keep A", Channel.CLI)
+    assert len(_final(project, odd)) == 1
+
+
+def test_field_choice_after_neither_on_value_is_refused(
+    project: Project, human: Actor, ext_a: Actor, ext_b: Actor, world: list[str]
+) -> None:
+    odd = world[0]
+    _value_split(project, ext_a, ext_b, odd)
+    key = extraction_agreement(project, human).disagreements[0].row_key
+    resolve_extraction(project, human, odd, key, "value", "neither", "drop", Channel.CLI)
+    with pytest.raises(FactoryValidationError) as e:
+        resolve_extraction(project, human, odd, key, "split", "a", "x", Channel.CLI)
+    assert e.value.issues[0].field == "field"
+
+
+def test_agreement_overall_reports_its_row_denominators(
+    project: Project, human: Actor, ext_a: Actor, ext_b: Actor, world: list[str]
+) -> None:
+    extra = world[0]
+    _both(
+        project,
+        ext_a,
+        ext_b,
+        a=lambda w: [_r(), _r("2", "t1.r3.c3")] if w == extra else [_r()],
+    )
+    overall = agreement_overall(project)
+    ag = extraction_agreement(project, human)
+    assert (overall.rows_aligned, overall.rows_unmatched) == (ag.rows_aligned, ag.rows_unmatched)
+    assert (overall.rows_aligned, overall.rows_unmatched) == (len(world), 1)
+
+
+def test_speed_and_memory_are_not_comparability_keys() -> None:
+    fields = ("method_name", "task", "dataset", "metric", "value", "throughput", "memory")
+    bad = _schema(fields=fields, comparability_keys=("task", "throughput", "memory"))
+    issues = {i.field: i.reason for i in _check(_with(bad)).errors}
+    for index in (1, 2):
+        assert issues[f"extraction_schema.comparability_keys[{index}]"] == (
+            "speed/memory are not comparability keys"
+        )
+    assert "extraction_schema.comparability_keys[0]" not in issues
+    assert {"throughput", "latency", "memory"} == NON_COMPARABLE_KEYS
+
+
+def test_model_switch_in_recorded_rows_is_caught(
+    project: Project, human: Actor, ext_a: Actor, ext_b: Actor, world: list[str]
+) -> None:
+    _both(project, ext_a, ext_b)
+    b_row = live_rows(project, PassLabel.B)[0]
+    original = next(e for e in _events(project) if b_row.extraction_id in e.refs)
+    payload = ExtractionRecorded.model_validate(original.payload)
+    fix = payload.model_copy(
+        update={"extraction_id": project.ids.new("ext"), "supersedes": b_row.extraction_id}
+    )
+    switched = original.actor.model_copy(update={"model": ext_a.model})
+    project.record(
+        [
+            project.events.make(
+                "extraction.recorded",
+                fix,
+                switched,
+                refs=(fix.extraction_id,),
+                input_blob=original.input_blob,
+            )
+        ]
+    )
+    with pytest.raises(FactoryValidationError) as e:
+        extraction_agreement(project, human)
+    assert e.value.issues[0].field == "passes"
+    assert "model" in e.value.issues[0].reason

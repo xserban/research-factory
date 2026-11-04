@@ -46,7 +46,7 @@ from factory.model.extraction import (
 )
 from factory.model.protocol import ExtractionSchema
 from factory.model.screening import Channel, PassLabel
-from factory.packs import FieldDef, FieldKind, Pack, UnitFamily
+from factory.packs import NON_COMPARABLE_KEYS, FieldDef, FieldKind, Pack, UnitFamily
 from factory.services.context import Project
 from factory.services.document_read import default_conversion
 from factory.services.extraction import (
@@ -88,8 +88,6 @@ __all__ = [
     "resolve_extraction",
 ]
 
-NON_COMPARABLE_KEYS = frozenset({"throughput", "latency", "memory"})
-"""Fields never part of a group key: speed and memory are compared only within a paper."""
 
 Choice = Literal["a", "b", "neither"]
 
@@ -166,9 +164,13 @@ class ExtractionAgreement(StrictModel):
 
 
 class AgreementOverall(StrictModel):
+    """`overall` = agreed / compared field values of the `rows_aligned` aligned rows."""
+
     overall: float | None
     dual: int
     single: int
+    rows_aligned: int
+    rows_unmatched: int
 
 
 class FinalField(StrictModel):
@@ -330,6 +332,8 @@ class _Pair:
     resolved: int = 0
     dropped: list[DroppedItem] = field(default_factory=list)
     final: FinalRow | None = None
+    row_dropped: bool = False
+    """A human's `neither` on the whole row or on its `value` field drops the row."""
 
     @property
     def aligned(self) -> bool:
@@ -430,7 +434,7 @@ def _load(project: Project) -> _State | None:
     for pair in pairs:
         if pair.aligned:
             pair.compared = _compare(pack, schema.fields, pair.a[0], pair.b[0])
-        _settle(pair, schema, resolutions)
+        _settle(pair, schema, pack, resolutions)
     return _State(schema, pack, configs, known, dual, single, blocking, pairs)
 
 
@@ -458,50 +462,75 @@ def _resolutions(project: Project) -> dict[tuple[str, str, str], _Resolution]:
 
 
 def _settle(
-    pair: _Pair, schema: ExtractionSchema, resolutions: dict[tuple[str, str, str], _Resolution]
+    pair: _Pair,
+    schema: ExtractionSchema,
+    pack: Pack,
+    resolutions: dict[tuple[str, str, str], _Resolution],
 ) -> None:
     """Apply the resolutions that still apply (recorded after every row of the pair) and build
-    the final row when nothing stays unresolved."""
+    the final row when nothing stays unresolved. A `neither` on the whole row or on `value`
+    drops the row. A row that would lack a pack-required field is never final: a resolved one
+    keeps its disagreements open (the resolution refusals make this unreachable)."""
     newest = max((r.event_id for r in (*pair.a, *pair.b)), default="")
 
     def applicable(name: str) -> _Resolution | None:
         found = resolutions.get((pair.work_id, pair.row_key, name))
         return found if found is not None and found.event_id > newest else None
 
+    def drop_row() -> None:
+        pair.resolved = len(disagreements)
+        pair.row_dropped = True
+        pair.dropped.append(DroppedItem(work_id=pair.work_id, row_key=pair.row_key, field=None))
+
     disagreements = pair.disagreements
     if not disagreements:
         status: Literal["agreed", "single"] = "agreed" if pair.dual else "single"
-        pair.final = _final(pair, pair.a[0], {}, status, schema)
+        pair.final = _final(pair, pair.a[0], {}, status, schema, pack)
         return
     whole = applicable(WHOLE_ROW)
     if whole is not None and whole.choice == "neither":
-        pair.resolved = len(disagreements)
-        pair.dropped.append(DroppedItem(work_id=pair.work_id, row_key=pair.row_key, field=None))
+        drop_row()
         return
     if not pair.aligned:  # a row disagreement: only a whole-row choice of a single row settles it
         chosen = None if whole is None else pair.side(whole.choice)
-        if chosen is None or len(chosen) != 1:
+        final = (
+            None
+            if not chosen or len(chosen) != 1
+            else _final(pair, chosen[0], {}, "resolved", schema, pack)
+        )
+        if final is None:
             pair.open = disagreements
             return
         pair.resolved = 1
-        pair.final = _final(pair, chosen[0], {}, "resolved", schema)
+        pair.final = final
         return
     choices: dict[str, Choice] = {}
+    pending: list[FieldDisagreement] = []
     for d in disagreements:
         assert d.field is not None
         candidates = [r for r in (applicable(d.field), whole) if r is not None]
         if not candidates:
-            pair.open.append(d)
+            pending.append(d)
             continue
         choices[d.field] = max(candidates, key=lambda r: r.event_id).choice
+    if choices.get(VALUE_FIELD) == "neither":
+        drop_row()
+        return
+    pair.open = pending
+    if pending:
+        pair.resolved = len(choices)
+        return
+    final = _final(pair, pair.a[0], choices, "resolved", schema, pack)
+    if final is None:
+        pair.open = disagreements
+        return
     pair.resolved = len(choices)
+    pair.final = final
     pair.dropped.extend(
         DroppedItem(work_id=pair.work_id, row_key=pair.row_key, field=name)
         for name, choice in choices.items()
         if choice == "neither"
     )
-    if not pair.open:
-        pair.final = _final(pair, pair.a[0], choices, "resolved", schema)
 
 
 def _final(
@@ -510,8 +539,10 @@ def _final(
     choices: dict[str, Choice],
     status: Literal["agreed", "resolved", "single"],
     schema: ExtractionSchema,
-) -> FinalRow:
-    """The final row: each declared field of `base`, or of the pass a human chose for it."""
+    pack: Pack,
+) -> FinalRow | None:
+    """The final row: each declared field of `base`, or of the pass a human chose for it. None
+    when it would lack a field the pack requires."""
     fields: dict[str, FinalField] = {}
     for name in schema.fields:
         source = base
@@ -524,6 +555,8 @@ def _final(
         stored = source.fields.get(name)
         if stored is not None:
             fields[name] = final_field(stored, source.extraction_id)
+    if any(name not in fields for name in pack.required):
+        return None
     value = fields.get(VALUE_FIELD)
     return FinalRow(
         work_id=pair.work_id,
@@ -539,8 +572,18 @@ def _final(
 # --- Agreement ---
 
 
-def _tally(state: _State) -> tuple[list[GroupRate], float | None]:
-    """Per-group and overall agreement over the compared fields of aligned rows."""
+@dataclass(frozen=True)
+class _Tally:
+    rates: list[GroupRate]
+    overall: float | None
+    rows_aligned: int
+    rows_unmatched: int
+
+
+def _tally(state: _State) -> _Tally:
+    """Per-group and overall agreement over the compared fields of aligned rows, and the row
+    counts: aligned pairs, and row keys of dual works that do not align (one pass only, or a
+    pass holding the key twice)."""
     groups: dict[str, list[int]] = {}
     for definition in state.pack.fields:
         if definition.name in state.schema.fields:
@@ -557,27 +600,38 @@ def _tally(state: _State) -> tuple[list[GroupRate], float | None]:
     ]
     compared = sum(r.compared for r in rates)
     agreed = sum(r.agreed for r in rates)
-    return rates, (agreed / compared if compared else None)
-
-
-def _overall(state: _State) -> float | None:
-    if state.blocking or not state.known:
-        return None
-    return _tally(state)[1]
+    return _Tally(
+        rates=rates,
+        overall=agreed / compared if compared else None,
+        rows_aligned=sum(p.aligned for p in state.pairs),
+        rows_unmatched=sum(p.dual and not p.aligned for p in state.pairs),
+    )
 
 
 def agreement_overall(project: Project) -> AgreementOverall:
-    """Overall agreement and the dual and single work counts. Read-only, needs no actor and
-    never raises. `dual` and `single` are 0 until pass B has opened; `overall` is None while a
-    unit is open or stale, before both passes opened, or when nothing is compared. It does not
-    check session or model independence; `extraction_agreement` does."""
+    """Overall agreement, the dual and single work counts and the row counts. Read-only, needs
+    no actor and never raises.
+
+    `overall` = agreed / compared field values, where a compared field value is one declared
+    field present in either row of an aligned pair (`rows_aligned` pairs of current, live,
+    non-stale rows of dual works); unmatched rows (`rows_unmatched`) are not in the denominator.
+    `overall` is None while a unit is open or stale, before both passes opened, or when nothing
+    is compared. `dual` and `single` are 0 until pass B has opened. It does not check session or
+    model independence; `extraction_agreement` does."""
     try:
         state = _load(project)
     except FactoryValidationError:
         state = None
     if state is None:
-        return AgreementOverall(overall=None, dual=0, single=0)
-    return AgreementOverall(overall=_overall(state), dual=len(state.dual), single=len(state.single))
+        return AgreementOverall(overall=None, dual=0, single=0, rows_aligned=0, rows_unmatched=0)
+    tally = _tally(state)
+    return AgreementOverall(
+        overall=None if state.blocking or not state.known else tally.overall,
+        dual=len(state.dual),
+        single=len(state.single),
+        rows_aligned=tally.rows_aligned,
+        rows_unmatched=tally.rows_unmatched,
+    )
 
 
 def extraction_agreement(project: Project, actor: Actor) -> ExtractionAgreement:
@@ -607,14 +661,14 @@ def extraction_agreement(project: Project, actor: Actor) -> ExtractionAgreement:
             "extraction units are still open, stale or queued; agreement waits until both "
             "passes finish"
         )
-    rates, overall = _tally(state)
+    tally = _tally(state)
     return ExtractionAgreement(
         passes=views,
         dual_works=len(state.dual),
-        rows_aligned=sum(p.aligned for p in state.pairs),
-        rows_unmatched=sum(p.dual and not p.aligned for p in state.pairs),
-        rates=rates,
-        overall=overall,
+        rows_aligned=tally.rows_aligned,
+        rows_unmatched=tally.rows_unmatched,
+        rates=tally.rates,
+        overall=tally.overall,
         disagreements=[d for p in state.pairs for d in p.open],
         resolved=sum(p.resolved for p in state.pairs),
         dropped=[d for p in state.pairs for d in p.dropped],
@@ -650,7 +704,9 @@ def _pass_views(project: Project, state: _State) -> list[ExtractionPassView]:
 
 def _refuse_shared(project: Project, views: list[ExtractionPassView]) -> None:
     """Refuse when one session joined both passes or the passes share a model. Joins are read
-    from the log: the projection keeps the first join of a session only."""
+    from the log: the projection keeps the first join of a session only. A pass's models are
+    those of its joins and of the actors that recorded its rows, so a session that changed to
+    the other pass's model after joining is caught."""
     joins: dict[str, set[PassLabel]] = {}
     models: dict[PassLabel, set[str]] = {label: set() for label in PassLabel}
     for event in read_all(project.paths.events_dir, project.catalog):
@@ -658,6 +714,9 @@ def _refuse_shared(project: Project, views: list[ExtractionPassView]) -> None:
             payload = ExtractionPassJoined.model_validate(event.payload)
             joins.setdefault(payload.session, set()).add(payload.pass_label)
             models[payload.pass_label].add(payload.model)
+        elif event.type == "extraction.recorded" and event.actor.model is not None:
+            label = PassLabel(str(event.payload["pass_label"]))
+            models[label].add(event.actor.model)
     for view in views:
         models[view.pass_label].update(view.models)
     if any(len(labels) > 1 for labels in joins.values()):
@@ -686,12 +745,15 @@ def resolve_extraction(
     field choice takes that pass's field, or drops the field on `neither`. Refused, with nothing
     written: for an actor that is not a human (`actor`); an MCP-relayed choice from a session
     that joined an extraction pass (`channel`); a row key of the work with no current
-    disagreement (`row_key`); a field not declared, not in disagreement in that row, or given for
-    a row disagreement (`field`); a pass that has no single row there (`choice`); a blank reason
-    (`reason`). Re-resolving a disagreement replaces the earlier choice (last write wins)."""
+    disagreement (`row_key`); a field not declared, not in disagreement in that row, given for
+    a row disagreement, or given for a row a `neither` already drops, where it would have no
+    effect (`field`); a pass that has no single row there, a `neither` on a pack-required field
+    other than `value`, or a pass lacking a pack-required field chosen (`choice`: drop the row
+    instead); a blank reason (`reason`). A `neither` on `value` drops the whole row.
+    Re-resolving a disagreement replaces the earlier choice (last write wins)."""
     with project.index.exclusive():
         project.index.sync()
-        protocol, schema, _ = require_schema(project)
+        protocol, schema, pack = require_schema(project)
         issues: list[ValidationIssue] = []
         if actor.kind != "human":
             issues.append(ValidationIssue("actor", "disagreements are resolved by a human"))
@@ -707,7 +769,7 @@ def resolve_extraction(
             raise FactoryValidationError(
                 [ValidationIssue("row_key", "is not a row of this work with a disagreement")]
             )
-        _check_target(pair, disagreements, schema, field, choice)
+        _check_target(pair, disagreements, schema, pack, field, choice)
         try:
             payload = ExtractionResolved(
                 work_id=work_id,
@@ -734,9 +796,13 @@ def _check_target(
     pair: _Pair,
     disagreements: list[FieldDisagreement],
     schema: ExtractionSchema,
+    pack: Pack,
     field_name: str | None,
     choice: Choice,
 ) -> None:
+    drop_instead = FactoryValidationError(
+        [ValidationIssue("choice", "the pack requires this field; drop the row instead")]
+    )
     if field_name is not None:
         if field_name not in schema.fields:
             raise FactoryValidationError(
@@ -750,6 +816,25 @@ def _check_target(
             raise FactoryValidationError(
                 [ValidationIssue("field", "the passes do not disagree on this field")]
             )
+        if pair.row_dropped:
+            raise FactoryValidationError(
+                [
+                    ValidationIssue(
+                        "field",
+                        "a neither already drops this row; only a whole-row choice changes it",
+                    )
+                ]
+            )
+        required = field_name in pack.required
+        if choice == "neither" and required and field_name != VALUE_FIELD:
+            raise drop_instead
+    if choice != "neither":
+        chosen = pair.side(choice)
+        targets = pack.required if field_name is None else (field_name,)
+        if len(chosen) == 1 and any(
+            t in pack.required and t not in chosen[0].fields for t in targets
+        ):
+            raise drop_instead
     if choice != "neither" and len(pair.side(choice)) != 1:
         raise FactoryValidationError(
             [

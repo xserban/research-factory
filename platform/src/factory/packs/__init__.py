@@ -14,6 +14,11 @@ _PACKS: dict[tuple[str, int], Pack] = {
 }
 
 
+NON_COMPARABLE_KEYS = frozenset({"throughput", "latency", "memory"})
+"""Fields that are never comparability keys: speed and memory are compared only within a paper
+(decision 42 item 3, acceptance 12a)."""
+
+
 def get_pack(name: str, version: int) -> Pack | None:
     """Return the registered pack ``(name, version)``, or None."""
     return _PACKS.get((name, version))
@@ -21,6 +26,7 @@ def get_pack(name: str, version: int) -> Pack | None:
 
 __all__ = [
     "ML_BENCHMARK_V1",
+    "NON_COMPARABLE_KEYS",
     "Check",
     "FieldDef",
     "FieldKind",
