@@ -1,10 +1,12 @@
 from sqlalchemy import MetaData
 
+from factory.events.blobs import BlobStore
 from factory.index.chase import chase_handlers, chase_tables
 from factory.index.dedup import dedup_handlers, dedup_tables
 from factory.index.document import document_handlers, document_tables
 from factory.index.extraction import extraction_handlers, extraction_tables
 from factory.index.fulltext import fulltext_handlers, fulltext_tables
+from factory.index.imports import import_handlers, import_tables
 from factory.index.inbox import inbox_handlers, inbox_tables
 from factory.index.probe import probe_handlers, probe_tables
 from factory.index.project import project_created_handler, project_table
@@ -18,13 +20,14 @@ from factory.index.seeds import seed_handlers, seed_tables
 from factory.index.tasks import task_handlers, tasks_table
 
 # Bump on any change to the tables or handlers below; the index is then rebuilt.
-PROJECTION_VERSION = "24"
+PROJECTION_VERSION = "25"
 
 
-def default_projection() -> Projection:
+def default_projection(blobs: BlobStore | None = None) -> Projection:
     """A fresh projection: core tables plus the project, task, search, dedup, question, seed,
-    probe, protocol, screening, chase, full-text, extraction, document, reference and inbox
-    tables."""
+    probe, protocol, screening, chase, full-text, extraction, document, reference, import and
+    inbox tables. `blobs` is the project's blob store, which the import handlers read records
+    from; without it, folding an import event raises."""
     metadata = MetaData()
     core_tables(metadata)
     project = project_table(metadata)
@@ -41,6 +44,7 @@ def default_projection() -> Projection:
     extraction = extraction_tables(metadata)
     conversions, conversion_failures = document_tables(metadata)
     references = reference_tables(metadata)
+    imports = import_tables(metadata)
     inbox = inbox_tables(metadata)
     handlers: dict[str, Handler] = {
         "project.created": project_created_handler(project),
@@ -57,6 +61,7 @@ def default_projection() -> Projection:
         **extraction_handlers(extraction),
         **document_handlers(conversions, conversion_failures),
         **reference_handlers(references),
+        **import_handlers(imports, blobs),
         **inbox_handlers(inbox),
     }
     return Projection(version=PROJECTION_VERSION, metadata=metadata, handlers=handlers)

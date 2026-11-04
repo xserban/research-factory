@@ -99,7 +99,7 @@ def build_project(settings: Settings, slug: str, *, session: str, clock: Clock) 
         library=BlobStore(paths.library_dir),
         events=EventFactory(slug, catalog, ids),
         writer=EventWriter(paths.events_dir, project=slug, catalog=catalog, blobs=blobs),
-        index=Index(paths.index_path, paths.events_dir, catalog, default_projection()),
+        index=Index(paths.index_path, paths.events_dir, catalog, default_projection(blobs)),
     )
 
 

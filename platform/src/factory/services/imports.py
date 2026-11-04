@@ -30,7 +30,6 @@ from pydantic import JsonValue
 from sqlalchemy import text
 
 from factory.errors import FactoryValidationError, ValidationIssue
-from factory.events.reader import read_all
 from factory.imports.model import (
     ImportFormat,
     ImportFormatError,
@@ -56,6 +55,7 @@ _SPLIT = "import.split_drawn"
 _SEED_LIMIT = 2**32
 
 Part = Literal["development", "held-out", "unsplit"]
+_PART: dict[str, Part] = {"development": "development", "held-out": "held-out"}
 
 
 class ImportSummary(StrictModel):
@@ -133,31 +133,85 @@ def record_import(
 
 
 def import_records(project: Project, import_id: str) -> list[ImportRecord]:
-    """Every record of an import, in ordinal order, read from its records blob."""
-    payload = ImportRecorded.model_validate(_payload(project, _RECORDED, import_id))
-    raw = project.blobs.get_json(payload.records_blob)
+    """Every record of an import, in ordinal order, read from the records blob the index names."""
+    raw = project.blobs.get_json(_import_row(project, import_id).records_blob)
     assert isinstance(raw, list)
     return [ImportRecord.model_validate(item) for item in raw]
 
 
 def import_part(project: Project, import_id: str, ordinal: int) -> Part:
     """The part of one record: `unsplit` when no split was drawn or the record is malformed."""
-    parts = _parts(project, import_id)
-    if parts is None:
-        return "unsplit"
-    development, held_out = parts
-    if ordinal in development:
-        return "development"
-    return "held-out" if ordinal in held_out else "unsplit"
+    _import_row(project, import_id)
+    with project.index.connect() as conn:
+        row = conn.execute(
+            text("SELECT part FROM import_records WHERE import_id = :i AND ordinal = :o"),
+            {"i": import_id, "o": ordinal},
+        ).first()
+    return _PART.get(str(row[0]) if row is not None else "", "unsplit")
 
 
 def development_ordinals(project: Project, import_id: str) -> list[int]:
     """The ordinals an agent may see: the development part, or every record that is not
     malformed when the import was not split."""
-    parts = _parts(project, import_id)
-    if parts is not None:
-        return sorted(parts[0])
-    return [r.ordinal for r in import_records(project, import_id) if _splittable(r)]
+    row = _import_row(project, import_id)
+    if row.split_mode == "drawn":
+        sql = "SELECT ordinal FROM import_records WHERE import_id = :i AND part = 'development'"
+    else:
+        sql = "SELECT ordinal FROM import_records WHERE import_id = :i AND outcome != :malformed"
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text(f"{sql} ORDER BY ordinal"),
+            {"i": import_id, "malformed": ParseOutcome.MALFORMED.value},
+        ).all()
+    return [int(r[0]) for r in rows]
+
+
+class ImportRow(StrictModel):
+    """One import as the index holds it."""
+
+    import_id: str
+    format: ImportFormat
+    role: ImportRole
+    collection: str | None
+    parser: str
+    parser_version: str
+    file_hash: str
+    records_blob: str
+    split_mode: SplitMode | None
+    split_seed: int | None
+    recorded_at: str
+
+
+_IMPORT_COLUMNS = (
+    "import_id, format, role, collection, parser, parser_version, file_hash, records_blob,"
+    " split_mode, split_seed, recorded_at"
+)
+
+
+def list_imports(project: Project) -> list[ImportRow]:
+    """Every import, oldest first."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text(f"SELECT {_IMPORT_COLUMNS} FROM imports ORDER BY recorded_at, event_id")
+        ).mappings()
+        return [ImportRow.model_validate(dict(r)) for r in rows]
+
+
+def _import_row(project: Project, import_id: str) -> ImportRow:
+    project.index.sync()
+    with project.index.connect() as conn:
+        row = (
+            conn.execute(
+                text(f"SELECT {_IMPORT_COLUMNS} FROM imports WHERE import_id = :i"),
+                {"i": import_id},
+            )
+            .mappings()
+            .first()
+        )
+    if row is None:
+        raise FactoryValidationError([ValidationIssue("import_id", "no such import")])
+    return ImportRow.model_validate(dict(row))
 
 
 def _split(
@@ -203,24 +257,6 @@ def _search_started(project: Project) -> bool:
             {"purpose": QueryPurpose.SEARCH.value},
         ).first()
     return row is not None
-
-
-def _parts(project: Project, import_id: str) -> tuple[set[int], set[int]] | None:
-    payload = ImportSplitDrawn.model_validate(_payload(project, _SPLIT, import_id))
-    if payload.parts_blob is None:
-        return None
-    raw = project.blobs.get_json(payload.parts_blob)
-    assert isinstance(raw, dict)
-    development, held_out = raw["development"], raw["held_out"]
-    assert isinstance(development, list) and isinstance(held_out, list)
-    return {int(str(o)) for o in development}, {int(str(o)) for o in held_out}
-
-
-def _payload(project: Project, type_: str, import_id: str) -> dict[str, JsonValue]:
-    for event in read_all(project.paths.events_dir, project.catalog):
-        if event.type == type_ and event.refs == (import_id,):
-            return dict(event.payload)
-    raise FactoryValidationError([ValidationIssue("import_id", "no such import")])
 
 
 def _collection_issues(collection: str | None) -> list[ValidationIssue]:
