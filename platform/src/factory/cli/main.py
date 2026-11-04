@@ -3,13 +3,14 @@
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Literal, NoReturn
 
 import typer
 
-from factory.cli import evidence_render, render
+from factory.cli import evidence_render, portfolio_render, render
 from factory.clock import Clock, SystemClock
 from factory.config import Settings
 from factory.document.registry import default_converters
@@ -39,6 +40,7 @@ from factory.services import fulltext as fulltext_service
 from factory.services import fulltext_import as fulltext_import_service
 from factory.services import fulltext_status as fulltext_status_service
 from factory.services import methods as methods_service
+from factory.services import portfolio as portfolio_service
 from factory.services import prisma as prisma_service
 from factory.services import project as project_service
 from factory.services import protocol as protocol_service
@@ -291,6 +293,54 @@ def status(
             f"shortfall: {short.run_id} {short.source} "
             f"{short.retrieved_count}/{short.reported_count} \u2014 {short.note or 'no note'}"
         )
+    if report.human is not None and report.human.items:
+        typer.echo("waiting on you:")
+        for item in report.human.items:
+            stage = "" if item.stage is None else f" ({item.stage})"
+            typer.echo(f"  {item.gate.value}{stage}: {item.count} \u2014 {item.command}")
+
+
+@app.command("portfolio")
+def portfolio_cmd(
+    ctx: typer.Context,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Print the Portfolio model as JSON.")
+    ] = False,
+    html: Annotated[
+        Path | None, typer.Option("--html", help="Write a self-contained HTML report here.")
+    ] = None,
+    as_of: Annotated[
+        str | None,
+        typer.Option("--as-of", help="ISO timestamp for ages and the stamp; default: now."),
+    ] = None,
+) -> None:
+    """Every project: derived stage, open work and pending human decisions. Writes no event."""
+    state = _state(ctx)
+    moment = state.clock.now()
+    if as_of is not None:
+        try:
+            moment = datetime.fromisoformat(as_of)
+        except ValueError:
+            _fail(f"--as-of: not an ISO timestamp: {as_of}", 2)
+        if moment.tzinfo is None:
+            moment = moment.replace(tzinfo=UTC)
+    if html is not None and html.is_dir():
+        _fail(f"--html: {html} is a directory", 1)
+    with _reporting_errors():
+        built = portfolio_service.portfolio(state.settings, clock=state.clock, as_of=moment)
+    if not built.projects:
+        _fail("no project; run factory init", 2)
+    if html is not None:
+        try:
+            html.write_text(portfolio_render.render_html(built, moment), encoding="utf-8")
+        except OSError as exc:
+            _fail(f"--html: {exc.strerror or 'cannot write'}: {html}", 1)
+    if as_json:
+        typer.echo(built.model_dump_json())
+    elif html is None:
+        typer.echo(portfolio_render.render_markdown(built, moment), nl=False)
+    if all(row.error is not None for row in built.projects):
+        _fail("no project could be read", 1)
 
 
 def _screening_lines(screening: ScreeningStatus) -> list[str]:
