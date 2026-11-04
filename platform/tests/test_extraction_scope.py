@@ -1,0 +1,618 @@
+"""Scope through passes, tasks, recording, staleness and reads (plan G2-A, task 4).
+
+The pinned conversion is plan D's synthetic LaTeXML fixture: paragraph `s3.p1` reads "Lorem ipsum
+dolor sit amet." and table `t1` has the row `Lorem | 1 | 2`. Contribution items quote `s3.p1`.
+"""
+
+from collections.abc import Callable, Mapping, Sequence
+
+import pytest
+
+from factory.errors import FactoryValidationError, ValidationIssue
+from factory.events.envelope import Actor, Event
+from factory.events.reader import read_all
+from factory.model.extraction import (
+    CitedEntry,
+    ExtractedRowInput,
+    FieldInput,
+    Scope,
+    StoredField,
+    UnitReferences,
+)
+from factory.model.protocol import ExtractionSchema, ScreeningStage
+from factory.model.screening import PassLabel
+from factory.packs.contribution import CONTRIBUTION_V1
+from factory.services import extraction
+from factory.services.agreement import Outcome, final_outcomes
+from factory.services.context import Project
+from factory.services.document_read import document_read
+from factory.services.extraction import (
+    DUPLICATE_ITEM,
+    DUPLICATE_ROW,
+    ContributionBatch,
+    ContributionBatchContent,
+    ExtractBatch,
+    ExtractBatchContent,
+    ExtractionRow,
+    ExtraVerdict,
+    UnitPin,
+    extract_next,
+    extract_record,
+    is_extraction_session,
+    join_extraction_pass,
+    live_rows,
+    next_unit,
+    pass_config,
+    record_unit,
+    scope_population,
+    session_scope,
+    stale_extractions,
+    unit_states,
+)
+from factory.services.methods import methods_report
+from factory.services.protocol import amend_protocol, current_protocol
+from factory.services.references import current_extraction, extract_references, included_works
+from factory.services.stages import CONTRIB_KINDS, EXTRACT_KINDS, kinds_for, scope_of_kind
+from factory.services.tasks import TaskSpec, claim_next, create_tasks, get_task, task_content
+from factory.sources.registry import SourceFactory
+from tests.test_acceptance_fulltext_screening import _screened_full_text_world
+from tests.test_extraction_next import FIELDS, SESSION_A, SESSION_B, _declare, _extractor
+from tests.test_extraction_record import _row
+from tests.test_extraction_stale import _new_document_version
+
+FT = ScreeningStage.FULL_TEXT
+C = Scope.CONTRIBUTION
+SourcesFor = Callable[..., Mapping[str, SourceFactory]]
+SESSION_C = "01JZ9Q3K5M7N8P0R2S4T6V8W1C"
+SESSION_D = "01JZ9Q3K5M7N8P0R2S4T6V8W1D"
+QUOTE = "Lorem ipsum dolor sit amet."
+REX = "rex_01JZ9Q3K5M7N8P0R2S4T6V8W0X"
+CONTRIB_FIELDS = tuple(f.name for f in CONTRIBUTION_V1.fields)
+
+
+@pytest.fixture
+def ext_a() -> Actor:
+    return _extractor(SESSION_A, "claude-opus-5-5")
+
+
+@pytest.fixture
+def ext_b() -> Actor:
+    return _extractor(SESSION_B, "claude-sonnet-5-5")
+
+
+@pytest.fixture
+def ctr_a() -> Actor:
+    return _extractor(SESSION_C, "claude-opus-5-5")
+
+
+@pytest.fixture
+def ctr_b() -> Actor:
+    return _extractor(SESSION_D, "claude-sonnet-5-5")
+
+
+def _schemas() -> tuple[ExtractionSchema, ExtractionSchema]:
+    evidence = ExtractionSchema(
+        pack="ml-benchmark",
+        pack_version=1,
+        fields=FIELDS,
+        comparability_keys=("task", "dataset", "metric"),
+        dual_extract_sample=1.0,
+    )
+    contribution = ExtractionSchema(
+        pack="contribution",
+        pack_version=1,
+        fields=CONTRIB_FIELDS,
+        dual_extract_sample=1.0,
+        claims=False,
+    )
+    return evidence, contribution
+
+
+def _declare_both(project: Project, agent: Actor) -> None:
+    current = current_protocol(project)
+    assert current is not None
+    evidence, contribution = _schemas()
+    amend_protocol(
+        project,
+        agent,
+        current.spec.model_copy(
+            update={"extraction_schema": evidence, "contribution_schema": contribution}
+        ),
+        reason="declare both schemas",
+        semantic=True,
+        effects={},
+    )
+
+
+def _amend(project: Project, agent: Actor, section: str, **update: object) -> None:
+    current = current_protocol(project)
+    assert current is not None
+    schema = getattr(current.spec, section)
+    assert schema is not None
+    amend_protocol(
+        project,
+        agent,
+        current.spec.model_copy(update={section: schema.model_copy(update=update)}),
+        reason=f"amend {section}",
+        semantic=True,
+        effects={},
+    )
+
+
+@pytest.fixture
+def screened(
+    project: Project, agent: Actor, agent_other: Actor, human: Actor, mock_sources: SourcesFor
+) -> list[str]:
+    _screened_full_text_world(project, agent, agent_other, human, mock_sources)
+    return sorted(w for w, o in final_outcomes(project, stage=FT).items() if o is Outcome.INCLUDED)
+
+
+@pytest.fixture
+def world(project: Project, agent: Actor, screened: list[str]) -> list[str]:
+    _declare_both(project, agent)
+    return screened
+
+
+def add_refs(project: Project, content: ExtractBatchContent) -> ExtractBatchContent:
+    """The content hook G2-B supplies: here a fixed reference list and one item rule."""
+    return ContributionBatchContent(
+        **content.model_dump(),
+        references=UnitReferences(status="none", extraction_id=None, entries=[]),
+        item_rules=["a not-stated item names absent_kind and nothing else"],
+    )
+
+
+def _events(project: Project) -> list[Event]:
+    return read_all(project.paths.events_dir, project.catalog)
+
+
+def _contrib(project: Project, actor: Actor, label: PassLabel = PassLabel.A) -> ContributionBatch:
+    batch = next_unit(project, actor, label, scope=C, content=add_refs).batch
+    assert isinstance(batch, ContributionBatch)
+    return batch
+
+
+def _work(batch: ExtractBatch | ContributionBatch) -> str:
+    return batch.records[0]["work_id"]
+
+
+def _item(
+    kind: str = "base-idea", name: str | None = "Lorem", **extra: FieldInput
+) -> ExtractedRowInput:
+    fields: dict[str, FieldInput] = {
+        "item_kind": FieldInput(value=kind),
+        "statement": FieldInput(value=QUOTE, anchor="s3.p1", quote=QUOTE),
+    }
+    if name is not None:
+        fields["name"] = FieldInput(value=name, anchor="s3.p1", quote=QUOTE)
+    fields.update(extra)
+    return ExtractedRowInput(fields=fields)
+
+
+def _cite(rex: str) -> Callable[..., ExtraVerdict]:
+    def check(
+        project: Project,
+        pin: UnitPin,
+        fields: Mapping[str, StoredField],
+        rows: Sequence[ExtractionRow],
+    ) -> ExtraVerdict:
+        return ExtraVerdict(
+            cited=CitedEntry(reference_extraction_id=rex, ordinal=1, marker="absent"), issues=[]
+        )
+
+    return check
+
+
+# --- Kinds ---
+
+
+def test_kinds_per_scope() -> None:
+    assert CONTRIB_KINDS == {PassLabel.A: "contrib_a", PassLabel.B: "contrib_b"}
+    assert kinds_for(Scope.EVIDENCE) is EXTRACT_KINDS and kinds_for(C) is CONTRIB_KINDS
+    assert [scope_of_kind(k) for k in ("extract_a", "contrib_b", "screen_a")] == [
+        Scope.EVIDENCE,
+        C,
+        None,
+    ]
+
+
+# --- Preconditions and population ---
+
+
+def test_contribution_refused_until_schema_declared(
+    project: Project, agent: Actor, ctr_a: Actor, screened: list[str]
+) -> None:
+    _declare(project, agent, 1.0)  # the evidence schema only
+    before = len(_events(project))
+    with pytest.raises(FactoryValidationError) as e:
+        next_unit(project, ctr_a, PassLabel.A, scope=C, content=add_refs)
+    assert e.value.issues[0].field == "contribution_schema"
+    assert "R-13" in e.value.issues[0].reason
+    assert len(_events(project)) == before
+
+
+def test_evidence_schema_cannot_use_the_contribution_pack(
+    project: Project, agent: Actor, screened: list[str]
+) -> None:
+    current = current_protocol(project)
+    assert current is not None
+    _, contribution = _schemas()
+    before = len(_events(project))
+    with pytest.raises(FactoryValidationError) as e:
+        amend_protocol(
+            project,
+            agent,
+            current.spec.model_copy(update={"extraction_schema": contribution}),
+            reason="misuse the reserved pack",
+            semantic=True,
+            effects={},
+        )
+    assert "extraction_schema.pack" in [i.field for i in e.value.issues]
+    assert len(_events(project)) == before
+
+
+def test_contribution_population_is_g1_included_works(
+    project: Project, ctr_a: Actor, world: list[str]
+) -> None:
+    population = scope_population(project, C)
+    assert population == included_works(project) == world
+    assert all(current_extraction(project, w) is None for w in population)
+    batch = _contrib(project, ctr_a)
+    assert _work(batch) in population  # a work with no G1 extraction is served
+
+
+# --- Sessions and passes ---
+
+
+def test_session_cannot_cross_scopes(
+    project: Project, ext_a: Actor, ctr_a: Actor, ctr_b: Actor, world: list[str]
+) -> None:
+    assert extract_next(project, ext_a, PassLabel.A).batch is not None
+    before = len(_events(project))
+    for label in PassLabel:
+        with pytest.raises(FactoryValidationError) as e:
+            next_unit(project, ext_a, label, scope=C, content=add_refs)
+        assert e.value.issues[0].field == "pass"
+        with pytest.raises(FactoryValidationError):
+            join_extraction_pass(project, ext_a, label, scope=C)
+    assert len(_events(project)) == before
+    _contrib(project, ctr_a)
+    with pytest.raises(FactoryValidationError) as e:
+        extract_next(project, ctr_a, PassLabel.B)
+    assert e.value.issues[0].field == "pass"
+    assert session_scope(project, ctr_a.session) is C
+    assert session_scope(project, ext_a.session) is Scope.EVIDENCE
+    assert is_extraction_session(project, ctr_a.session)
+    # Models are independent per scope: contribution B may not reuse contribution A's model.
+    with pytest.raises(FactoryValidationError) as e:
+        same_model = ctr_b.model_copy(update={"model": ctr_a.model})
+        next_unit(project, same_model, PassLabel.B, scope=C, content=add_refs)
+    assert e.value.issues[0].field == "model"
+
+
+def test_both_scopes_open_pass_a_independently(
+    project: Project, ext_a: Actor, ctr_a: Actor, world: list[str]
+) -> None:
+    extract_next(project, ext_a, PassLabel.A)
+    _contrib(project, ctr_a)
+    evidence = pass_config(project, PassLabel.A)
+    contribution = pass_config(project, PassLabel.A, scope=C)
+    assert evidence is not None and contribution is not None
+    opened = [e for e in _events(project) if e.type == "extraction.pass_opened"]
+    joined = [e for e in _events(project) if e.type == "extraction.pass_joined"]
+    assert [e.payload.get("pack") for e in opened] == [None, "contribution"]
+    assert [e.payload.get("pack") for e in joined] == [None, "contribution"]
+    report = methods_report(project)
+    assert report.extraction_passes == 1 and report.extraction_sessions == 1
+
+
+# --- Tasks ---
+
+
+def test_contribution_tasks_use_contrib_kinds_and_content_hook(
+    project: Project, ctr_a: Actor, world: list[str]
+) -> None:
+    nxt = next_unit(project, ctr_a, PassLabel.A, scope=C, content=add_refs)
+    assert nxt.batch is not None
+    task = get_task(project, nxt.batch.task_id)
+    assert task is not None and task.kind == "contrib_a"
+    stored = ContributionBatchContent.model_validate(task_content(project, task))
+    assert stored.schema_ref == "contribution@1" and stored.claims is False
+    assert [f["name"] for f in stored.fields] == list(CONTRIB_FIELDS)
+    assert nxt.remaining == len(world)
+
+
+def test_contribution_task_served_as_contribution_batch(
+    project: Project, ctr_a: Actor, world: list[str]
+) -> None:
+    batch = _contrib(project, ctr_a)
+    assert batch.references.status == "none"
+    assert batch.item_rules == ["a not-stated item names absent_kind and nothing else"]
+    # Served again while held: the same task, still a contribution batch.
+    again = next_unit(project, ctr_a, PassLabel.A, scope=C, content=add_refs).batch
+    assert isinstance(again, ContributionBatch) and again.task_id == batch.task_id
+
+
+def test_contribution_needs_a_content_hook(
+    project: Project, ctr_a: Actor, world: list[str]
+) -> None:
+    with pytest.raises(TypeError):
+        next_unit(project, ctr_a, PassLabel.A, scope=C)
+
+
+# --- Recording ---
+
+
+def test_extract_record_refuses_contribution_task(
+    project: Project, ctr_a: Actor, world: list[str]
+) -> None:
+    batch = _contrib(project, ctr_a)
+    before = len(_events(project))
+    with pytest.raises(FactoryValidationError) as e:
+        extract_record(project, ctr_a, batch.task_id, [_item()])
+    assert e.value.issues[0].field == "task_id"
+    assert "contribution_record" in e.value.issues[0].reason
+    assert len(_events(project)) == before
+
+
+def test_task_schema_must_match_its_scope(
+    project: Project, agent: Actor, ctr_a: Actor, world: list[str]
+) -> None:
+    batch = _contrib(project, ctr_a)
+    evidence, _ = _schemas()
+    content = ContributionBatchContent.model_validate(
+        {**batch.model_dump(exclude={"task_id"}), "schema_ref": "ml-benchmark@1"}
+    )
+    created = create_tasks(
+        project, agent, [TaskSpec(kind="contrib_a", content=content.model_dump(mode="json"))]
+    )
+    (bogus,) = created.written
+    assert claim_next(project, ctr_a, "contrib_a", task_ids={bogus}) is not None
+    with pytest.raises(FactoryValidationError) as e:
+        record_unit(project, ctr_a, bogus, [_item()])
+    assert e.value.issues[0].field == "task_id"
+    assert evidence.pack in e.value.issues[0].reason or "scope" in e.value.issues[0].reason
+
+
+def test_extra_check_rejects_row_and_stores_cited(
+    project: Project, ctr_a: Actor, world: list[str]
+) -> None:
+    batch = _contrib(project, ctr_a)
+    seen: list[list[str]] = []
+    pins: list[UnitPin] = []
+
+    def check(
+        project: Project,
+        pin: UnitPin,
+        fields: Mapping[str, StoredField],
+        rows: Sequence[ExtractionRow],
+    ) -> ExtraVerdict:
+        pins.append(pin)
+        seen.append([r.row_key for r in rows])
+        if fields["name"].value == "ipsum":
+            return ExtraVerdict(
+                cited=None, issues=[ValidationIssue("fields.cited_entry", "entry-unknown")]
+            )
+        return ExtraVerdict(
+            cited=CitedEntry(reference_extraction_id=REX, ordinal=1, marker="absent"), issues=[]
+        )
+
+    res = record_unit(
+        project,
+        ctr_a,
+        batch.task_id,
+        [_item(cited_entry=FieldInput(value=1)), _item(name="ipsum"), _item(name="dolor")],
+        extra_check=check,
+    )
+    assert len(res.rows.written) == 2
+    assert [(e.index, e.issues[0].field) for e in res.rows.rejected] == [(1, "fields.cited_entry")]
+    assert len(seen[0]) == 0 and len(seen[1]) == 1 and len(seen[2]) == 1
+    assert pins[0].scope is C and pins[0].work_id == _work(batch)
+    assert pins[0].pass_label is PassLabel.A and pins[0].task_id == batch.task_id
+    rows = live_rows(project, scope=C)
+    assert {r.extraction_id for r in rows} == set(res.rows.written)
+    assert all(
+        r.cited == CitedEntry(reference_extraction_id=REX, ordinal=1, marker="absent") for r in rows
+    )
+    recorded = [e for e in _events(project) if e.type == "extraction.recorded"]
+    assert all(e.payload["cited"]["reference_extraction_id"] == REX for e in recorded)
+    assert all(e.payload["schema_ref"] == "contribution@1" for e in recorded)
+
+
+def test_close_check_refuses_finish(project: Project, ctr_a: Actor, world: list[str]) -> None:
+    batch = _contrib(project, ctr_a)
+    record_unit(project, ctr_a, batch.task_id, [_item()])
+    before = len(_events(project))
+    seen: list[tuple[int, str | None]] = []
+
+    def refuse(
+        project: Project, pin: UnitPin, rows: Sequence[ExtractionRow], reason: str | None
+    ) -> list[ValidationIssue]:
+        seen.append((len(rows), reason))
+        return [ValidationIssue("finish", "an addition is required")]
+
+    with pytest.raises(FactoryValidationError) as e:
+        record_unit(
+            project, ctr_a, batch.task_id, [_item(name="ipsum")], finish=True, close_check=refuse
+        )
+    assert e.value.issues[0].field == "finish"
+    assert len(_events(project)) == before
+    assert seen == [(2, None)]
+    res = record_unit(project, ctr_a, batch.task_id, [], finish=True, close_check=lambda *_: [])
+    assert res.completed
+    (closed,) = [e for e in _events(project) if e.type == "extraction.closed"]
+    assert closed.payload["pack"] == "contribution" and closed.payload["rows"] == 1
+
+
+def test_duplicate_reason_replaces_message(
+    project: Project, ctr_a: Actor, world: list[str]
+) -> None:
+    batch = _contrib(project, ctr_a)
+    res = record_unit(
+        project, ctr_a, batch.task_id, [_item(), _item()], duplicate_reason=DUPLICATE_ITEM
+    )
+    assert [(i.field, i.reason) for i in res.rows.rejected[0].issues] == [
+        ("fields.value", DUPLICATE_ITEM)
+    ]
+    assert "finer anchor" in DUPLICATE_ITEM and DUPLICATE_ITEM != DUPLICATE_ROW
+    res = record_unit(project, ctr_a, batch.task_id, [_item()])
+    assert [(i.field, i.reason) for i in res.rows.rejected[0].issues] == [
+        ("fields.value", DUPLICATE_ROW)
+    ]
+
+
+# --- Separation of reads ---
+
+
+def _both_units(
+    project: Project, ext_a: Actor, ctr_a: Actor
+) -> tuple[str, str, ExtractBatch, ContributionBatch]:
+    """One closed evidence unit (a row carrying `split`) and one closed contribution unit of the
+    same work (an addition carrying `compared_to`); (evidence row, contribution row, batches)."""
+    evidence = extract_next(project, ext_a, PassLabel.A).batch
+    assert isinstance(evidence, ExtractBatch)
+    for _ in range(50):
+        contribution = _contrib(project, ctr_a)
+        if _work(contribution) == _work(evidence):
+            break
+        record_unit(project, ctr_a, contribution.task_id, [], finish=True, reason="not this one")
+    else:
+        raise AssertionError("work not served")
+    ev = extract_record(
+        project, ext_a, evidence.task_id, [_row(split=FieldInput(value="test"))], finish=True
+    )
+    item = _item("addition", compared_to=FieldInput(value="ipsum", anchor="s3.p1", quote=QUOTE))
+    ct = record_unit(project, ctr_a, contribution.task_id, [item], finish=True)
+    assert ev.completed and ct.completed, (ev.rows.rejected, ct.rows.rejected)
+    return ev.rows.written[0], ct.rows.written[0], evidence, contribution
+
+
+def test_evidence_reads_exclude_contribution_rows(
+    project: Project, ext_a: Actor, ctr_a: Actor, world: list[str]
+) -> None:
+    ev, ct, evidence, _ = _both_units(project, ext_a, ctr_a)
+    assert [r.extraction_id for r in live_rows(project)] == [ev]
+    assert [r.extraction_id for r in live_rows(project, scope=C)] == [ct]
+    assert [
+        r.extraction_id for r in live_rows(project, PassLabel.A, work_id=_work(evidence), scope=C)
+    ] == [ct]
+    work = _work(evidence)
+    states = {s.work_id: s.state for s in unit_states(project) if s.pass_label is PassLabel.A}
+    c_states = {
+        s.work_id: s.state for s in unit_states(project, scope=C) if s.pass_label is PassLabel.A
+    }
+    assert states[work] == c_states[work] == "current"
+    assert stale_extractions(project) == stale_extractions(project, scope=C) == set()
+
+
+# --- Staleness ---
+
+
+def test_contribution_amendment_stales_only_contribution_rows(
+    project: Project, agent: Actor, ext_a: Actor, ctr_a: Actor, world: list[str]
+) -> None:
+    ev, ct, evidence, _ = _both_units(project, ext_a, ctr_a)
+    work = _work(evidence)
+    _amend(
+        project,
+        agent,
+        "contribution_schema",
+        fields=tuple(f for f in CONTRIB_FIELDS if f != "compared_to"),
+    )
+    assert stale_extractions(project, scope=C) == {ct}
+    assert stale_extractions(project) == set()
+    (c_state,) = [
+        s
+        for s in unit_states(project, scope=C)
+        if s.work_id == work and s.pass_label is PassLabel.A
+    ]
+    (e_state,) = [
+        s for s in unit_states(project) if s.work_id == work and s.pass_label is PassLabel.A
+    ]
+    assert (c_state.state, c_state.reason) == ("stale", "schema")
+    assert e_state.state == "current"
+    _amend(project, agent, "extraction_schema", fields=tuple(f for f in FIELDS if f != "split"))
+    assert stale_extractions(project) == {ev}
+    assert stale_extractions(project, scope=C) == {ct}
+
+
+def test_new_document_version_stales_both_scopes(
+    project: Project, ext_a: Actor, ctr_a: Actor, world: list[str]
+) -> None:
+    ev, ct, evidence, _ = _both_units(project, ext_a, ctr_a)
+    work = _work(evidence)
+    _new_document_version(project, work)
+    assert stale_extractions(project) == {ev}
+    assert stale_extractions(project, scope=C) == {ct}
+    for scope in Scope:
+        (state,) = [
+            s
+            for s in unit_states(project, scope=scope)
+            if s.work_id == work and s.pass_label is PassLabel.A
+        ]
+        assert (state.state, state.reason) == ("stale", "document-version")
+
+
+def test_cited_row_stale_when_g1_extraction_replaced(
+    project: Project, agent: Actor, ctr_a: Actor, world: list[str]
+) -> None:
+    batch = _contrib(project, ctr_a)
+    work = _work(batch)
+    extract_references(project, agent, [work], sources={})
+    first = current_extraction(project, work)
+    assert first is not None
+    res = record_unit(
+        project,
+        ctr_a,
+        batch.task_id,
+        [_item(cited_entry=FieldInput(value=1))],
+        finish=True,
+        extra_check=_cite(first),
+    )
+    assert res.completed
+    (row_id,) = res.rows.written
+    assert stale_extractions(project, scope=C) == set()
+    extract_references(project, agent, [work], sources={})
+    assert current_extraction(project, work) not in (None, first)
+    assert stale_extractions(project, scope=C) == {row_id}
+    (state,) = [
+        s
+        for s in unit_states(project, scope=C)
+        if s.work_id == work and s.pass_label is PassLabel.A
+    ]
+    assert (state.state, state.reason) == ("stale", "references")
+    assert stale_extractions(project) == set()
+    # The next call queues a new task for the stale unit: it is no longer stale.
+    _contrib(project, ctr_a)
+    (state,) = [
+        s
+        for s in unit_states(project, scope=C)
+        if s.work_id == work and s.pass_label is PassLabel.A
+    ]
+    assert state.state in ("queued", "open") and state.reason is None
+
+
+# --- document_read gate ---
+
+
+def test_contribution_session_reads_only_its_queue(
+    project: Project, ctr_a: Actor, world: list[str]
+) -> None:
+    batch = _contrib(project, ctr_a)
+    work = _work(batch)
+    page = document_read(project, work_id=work, session=ctr_a.session)
+    assert page.conversion_id == batch.records[0]["conversion_id"]
+    other = next(w for w in world if w != work)
+    with pytest.raises(FactoryValidationError) as e:
+        document_read(project, work_id=other, session=ctr_a.session)
+    assert e.value.issues[0].field == "work_id"
+
+
+def test_unit_pin_is_per_scope(project: Project, ctr_a: Actor, world: list[str]) -> None:
+    batch = _contrib(project, ctr_a)
+    work = _work(batch)
+    assert extraction.unit_pin(project, work) is None
+    assert extraction.unit_pin(project, work, scope=C) == (
+        batch.records[0]["document_id"],
+        batch.records[0]["conversion_id"],
+    )

@@ -7,9 +7,11 @@ refused as the stage of a run. Full-text screening needs a declared plan
 Invariants:
 - Every refusal is a FactoryValidationError and writes nothing.
 - `task_kind` and `stage_of_kind` are inverse on the four screening task kinds.
+- `kinds_for` and `scope_of_kind` are inverse on the four extraction task kinds.
 """
 
 from factory.errors import FactoryValidationError, ValidationIssue
+from factory.model.extraction import Scope
 from factory.model.protocol import ScreeningPlan, ScreeningStage
 from factory.model.screening import PassLabel
 from factory.services.protocol import ProtocolVersion
@@ -22,7 +24,23 @@ _KINDS: dict[tuple[ScreeningStage, PassLabel], str] = {
 }
 
 EXTRACT_KINDS: dict[PassLabel, str] = {PassLabel.A: "extract_a", PassLabel.B: "extract_b"}
-"""The task kind of each extraction pass; one task per work per pass."""
+"""The task kind of each evidence extraction pass; one task per work per pass."""
+
+CONTRIB_KINDS: dict[PassLabel, str] = {PassLabel.A: "contrib_a", PassLabel.B: "contrib_b"}
+"""The task kind of each contribution extraction pass (slice 3b); one task per work per pass."""
+
+
+def kinds_for(scope: Scope) -> dict[PassLabel, str]:
+    """The extraction task kinds of `scope`."""
+    return CONTRIB_KINDS if scope is Scope.CONTRIBUTION else EXTRACT_KINDS
+
+
+def scope_of_kind(kind: str) -> Scope | None:
+    """The scope an extraction task kind belongs to; None for any other kind."""
+    for scope in Scope:
+        if kind in kinds_for(scope).values():
+            return scope
+    return None
 
 
 def require_pass_stage(stage: ScreeningStage) -> ScreeningStage:

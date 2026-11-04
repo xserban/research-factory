@@ -14,10 +14,11 @@ Invariants:
 - Pass independence (decision 37): when `session` is given, a session joined to a title/abstract
   pass and to no full-text pass is refused (field `session`). A session joined to a full-text pass
   reads only the works of the full-text batches of its own pass that it holds or has completed,
-  and only the conversion such a batch pins; a session joined to an extraction pass is gated the
-  same way on the tasks of its own pass; this rule applies whether or not the session also
-  joined a title/abstract pass, so a title/abstract membership never widens the access. Any
-  other work, document or conversion is refused on its own field. A session in neither stage, and
+  and only the conversion such a batch pins; a session joined to an extraction pass (of either
+  scope, evidence or contribution) is gated the same way on the tasks of its own pass; this rule
+  applies whether or not the session also joined a title/abstract pass, so a title/abstract
+  membership never widens the access. Any other work, document or conversion is refused on its
+  own field. A session in neither stage, and
   a call without `session` (the researcher's CLI), are not gated. The tool returns only document
   segments, never a verdict or label of either pass.
 - Read-only: nothing is written, and the index is only synced, never written.
@@ -41,6 +42,7 @@ from sqlalchemy import text
 from factory.document.anchors import Anchor, AnchorKind, Manifest
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.model.base import StrictModel
+from factory.model.extraction import Scope
 from factory.model.fulltext import ROUTE_ORDER, Quality, Route
 from factory.model.protocol import ScreeningStage
 from factory.model.screening import PassLabel
@@ -56,7 +58,7 @@ from factory.services.conversions import (
     conversion_manifest,
     resolve_anchor,
 )
-from factory.services.stages import EXTRACT_KINDS, task_kind
+from factory.services.stages import kinds_for, task_kind
 
 __all__ = [
     "DocumentPage",
@@ -199,7 +201,7 @@ def _gate(
     kind = None if label is None else task_kind(ScreeningStage.FULL_TEXT, label)
     if label is None:
         extracting = _extraction_pass(project, session)
-        kind = None if extracting is None else EXTRACT_KINDS[extracting]
+        kind = None if extracting is None else kinds_for(extracting[0])[extracting[1]]
     if kind is None:
         if is_pass_session(project, session, stage=ScreeningStage.TITLE_ABSTRACT):
             raise FactoryValidationError(
@@ -239,12 +241,14 @@ def _full_text_pass(project: Project, session: str) -> PassLabel | None:
     return None if row is None else PassLabel(str(row[0]))
 
 
-def _extraction_pass(project: Project, session: str) -> PassLabel | None:
+def _extraction_pass(project: Project, session: str) -> tuple[Scope, PassLabel] | None:
+    """The (scope, pass) of the extraction pass the session joined, if any."""
     with project.index.connect() as conn:
         row = conn.execute(
-            text("SELECT pass_label FROM extraction_sessions WHERE session = :s"), {"s": session}
+            text("SELECT scope, pass_label FROM extraction_sessions WHERE session = :s"),
+            {"s": session},
         ).first()
-    return None if row is None else PassLabel(str(row[0]))
+    return None if row is None else (Scope(str(row[0])), PassLabel(str(row[1])))
 
 
 def _held_pins(project: Project, session: str, kind: str, work_id: str) -> list[tuple[str, str]]:

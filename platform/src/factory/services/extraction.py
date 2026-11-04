@@ -18,6 +18,14 @@ serves the other pass, from a session that joined any screening pass, and from a
 relayed a human label over MCP (it could read an answer key). A refusal raises
 FactoryValidationError and writes nothing.
 
+Every pass, task, row, closing and read belongs to one scope (slice 3b ruling 6): `evidence`
+(`extraction_schema`, tasks `extract_a`/`extract_b`) or `contribution` (`contribution_schema`,
+tasks `contrib_a`/`contrib_b`, population G1's `included_works`). Each scope keeps its own passes,
+seeds, units, pins and staleness; every read defaults to evidence, and a session joins at most one
+pass across both scopes (ruling 2). Evidence events carry no `pack` (as before G2); contribution
+events carry `pack = contribution`. A contribution row is also stale when it cites a reference
+extraction that is no longer its work's current G1 extraction (unit reason `references`).
+
 Invariants:
 - Nothing is queued until the protocol is ready and declares an extraction schema of a known pack
   and a full-text screening plan (R-13).
@@ -40,13 +48,13 @@ Invariants:
 
 import hashlib
 import secrets
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from fractions import Fraction
 from typing import Any, Literal
 
 from pydantic import JsonValue, ValidationError
-from sqlalchemy import text
+from sqlalchemy import RowMapping, text
 
 from factory.clock import format_ts
 from factory.document.anchors import Manifest
@@ -57,7 +65,9 @@ from factory.events.reader import read_all
 from factory.extraction.verify import ANCHOR_UNKNOWN, QUOTE_NOT_IN_ANCHOR
 from factory.model.base import StrictModel
 from factory.model.extraction import (
+    CONTRIBUTION_SCOPE_NAME,
     VERIFIER_VERSION,
+    CitedEntry,
     ClaimInput,
     ClaimRecorded,
     ClaimType,
@@ -68,13 +78,16 @@ from factory.model.extraction import (
     ExtractionPassOpened,
     ExtractionRecorded,
     ReportedIn,
+    Scope,
     StoredField,
     Strength,
     UnitReferences,
+    scope_of_pack,
+    scope_of_schema_ref,
 )
 from factory.model.protocol import ExtractionSchema, ProtocolAmended, ProtocolStatus, ScreeningStage
-from factory.model.screening import PassLabel
-from factory.model.staleness import RowRef, stale_rows, touches
+from factory.model.screening import Channel, PassLabel
+from factory.model.staleness import RowRef, scope_rule, stale_rows, touches
 from factory.model.task import Task, TaskCompleted, TaskStatus
 from factory.packs import FieldKind, Pack, get_pack
 from factory.services.agreement import Outcome, final_outcomes
@@ -84,10 +97,11 @@ from factory.services.conversions import conversion_manifest
 from factory.services.document_read import ConversionRef, default_conversion
 from factory.services.extraction_verify import VALUE_FIELD, verify_row_in
 from factory.services.protocol import ProtocolVersion, amendments_with_events, current_protocol
+from factory.services.references import current_extraction, included_works
 from factory.services.results import BatchResult, ItemError
 from factory.services.screening import _is_label_session, relayed_extraction_label
 from factory.services.search import list_works
-from factory.services.stages import EXTRACT_KINDS, screening_plan
+from factory.services.stages import EXTRACT_KINDS, kinds_for, scope_of_kind, screening_plan
 from factory.services.tasks import (
     TaskSpec,
     build_task_events,
@@ -98,14 +112,23 @@ from factory.services.tasks import (
 )
 
 __all__ = [
+    "DUPLICATE_ITEM",
+    "DUPLICATE_ROW",
     "EXTRACT_KINDS",
     "ClaimRow",
+    "CloseCheck",
+    "ContentHook",
+    "ContributionBatch",
+    "ContributionBatchContent",
+    "ExtraCheck",
+    "ExtraVerdict",
     "ExtractBatch",
     "ExtractBatchContent",
     "ExtractNext",
     "ExtractResult",
     "ExtractionRow",
     "PassConfig",
+    "UnitPin",
     "UnitState",
     "extract_next",
     "extract_record",
@@ -115,9 +138,13 @@ __all__ = [
     "join_extraction_pass",
     "live_claims",
     "live_rows",
+    "next_unit",
     "pass_config",
+    "record_unit",
     "require_schema",
+    "scope_population",
     "screening_session",
+    "session_scope",
     "stale_claims",
     "stale_documents",
     "stale_extractions",
@@ -136,6 +163,12 @@ INSTRUCTIONS = (
 )
 CLAIMS_INSTRUCTIONS = (
     " Also record the claims the paper makes, each with a verbatim quote and its anchor."
+)
+CONTRIBUTION_INSTRUCTIONS = (
+    "Record the contribution items the pinned document states. Read it with document_read. "
+    "Give each item its item_kind and the fields that kind requires, each text field with the "
+    "verbatim quote that contains it and its anchor. Never paraphrase a quote or infer an item "
+    "the document does not state; record an absent base idea or limitation as not-stated."
 )
 
 
@@ -167,13 +200,25 @@ class ExtractBatch(ExtractBatchContent):
     task_id: str
 
 
+class ContributionBatch(ContributionBatchContent):
+    """A contribution task as served: its content (with references and item rules) and task."""
+
+    task_id: str
+
+
 class ExtractNext(StrictModel):
     """`batch` is None when nothing is served; `blocked` says why; `remaining` counts the works of
-    this pass whose task is not yet completed."""
+    this pass whose task is not yet completed. A contribution task is a `ContributionBatch`."""
 
-    batch: ExtractBatch | None
+    batch: ExtractBatch | ContributionBatch | None
     blocked: list[str]
     remaining: int
+
+
+ContentHook = Callable[[Project, ExtractBatchContent], ExtractBatchContent]
+"""Builds a task's stored content from the plan-D content when the task is created. It must keep
+the records, pass, schema and fields; a contribution task's content is a
+`ContributionBatchContent`."""
 
 
 @dataclass(frozen=True)
@@ -187,22 +232,41 @@ class PassConfig:
 # --- Preconditions ---
 
 
-def require_schema(project: Project) -> tuple[ProtocolVersion, ExtractionSchema, Pack]:
-    """The ready protocol, its extraction schema and the schema's pack. Raises on field
-    `protocol` when no ready protocol exists, `extraction_schema` when none is declared (R-13) and
-    `extraction_schema.pack` for an unknown pack."""
+_SECTIONS: dict[Scope, tuple[str, str]] = {
+    Scope.EVIDENCE: ("extraction_schema", "extraction schema"),
+    Scope.CONTRIBUTION: ("contribution_schema", "contribution schema"),
+}
+
+
+def require_schema(
+    project: Project, *, scope: Scope = Scope.EVIDENCE
+) -> tuple[ProtocolVersion, ExtractionSchema, Pack]:
+    """The ready protocol, the schema of `scope` and the schema's pack. Raises on field
+    `protocol` when no ready protocol exists; on the scope's section (`extraction_schema` or
+    `contribution_schema`) when none is declared (R-13); and on `<section>.pack` for an unknown
+    pack or a pack of the other scope (the name `contribution` is reserved for its section)."""
     protocol = current_protocol(project)
     if protocol is None or protocol.status is not ProtocolStatus.READY:
         raise FactoryValidationError(
             [ValidationIssue("protocol", "the protocol is not ready; record it ready first")]
         )
-    schema = protocol.spec.extraction_schema
+    section, title = _SECTIONS[scope]
+    schema = (
+        protocol.spec.contribution_schema
+        if scope is Scope.CONTRIBUTION
+        else protocol.spec.extraction_schema
+    )
     if schema is None:
+        raise FactoryValidationError(
+            [ValidationIssue(section, f"declare the {title} in the protocol first (R-13)")]
+        )
+    if scope_of_pack(schema.pack) is not scope:
         raise FactoryValidationError(
             [
                 ValidationIssue(
-                    "extraction_schema",
-                    "declare the extraction schema in the protocol first (R-13)",
+                    f"{section}.pack",
+                    f"pack {schema.pack} does not belong in {section}; "
+                    f"pack {CONTRIBUTION_SCOPE_NAME} is reserved for contribution_schema",
                 )
             ]
         )
@@ -211,7 +275,7 @@ def require_schema(project: Project) -> tuple[ProtocolVersion, ExtractionSchema,
         raise FactoryValidationError(
             [
                 ValidationIssue(
-                    "extraction_schema.pack",
+                    f"{section}.pack",
                     f"unknown pack {schema.pack} version {schema.pack_version}",
                 )
             ]
@@ -231,6 +295,16 @@ def extraction_population(project: Project) -> list[str]:
     return sorted(w for w, o in final_outcomes(project, stage=FT).items() if o is Outcome.INCLUDED)
 
 
+def scope_population(project: Project, scope: Scope) -> list[str]:
+    """The works a scope extracts, sorted: `extraction_population` for evidence; G1's
+    `included_works` for contribution (slice 3b ruling 9: a work without a current G1 extraction
+    is included)."""
+    if scope is Scope.EVIDENCE:
+        return extraction_population(project)
+    project.index.sync()
+    return included_works(project)
+
+
 def in_dual_sample(seed: int, work_id: str, fraction: float | None) -> bool:
     """Whether `work_id` is in the dual-extraction sample of `fraction` under `seed`.
 
@@ -246,37 +320,57 @@ def in_dual_sample(seed: int, work_id: str, fraction: float | None) -> bool:
 # --- Reads ---
 
 
-def pass_config(project: Project, label: PassLabel) -> PassConfig | None:
-    """The seed and field order recorded when pass `label` opened; None when it has not."""
+def pass_config(
+    project: Project, label: PassLabel, *, scope: Scope = Scope.EVIDENCE
+) -> PassConfig | None:
+    """The seed and field order recorded when pass `label` of `scope` opened; None when it has
+    not."""
     project.index.sync()
     with project.index.connect() as conn:
         row = conn.execute(
-            text("SELECT random_seed, field_order FROM extraction_passes WHERE pass_label = :l"),
-            {"l": label.value},
+            text(
+                "SELECT random_seed, field_order FROM extraction_passes "
+                "WHERE scope = :scope AND pass_label = :l"
+            ),
+            {"scope": scope.value, "l": label.value},
         ).one_or_none()
     return None if row is None else PassConfig(seed=int(row[0]), field_order=str(row[1]))
 
 
 def is_extraction_session(project: Project, session: str) -> bool:
-    """Whether the session has joined an extraction pass."""
+    """Whether the session has joined an extraction pass of either scope."""
     project.index.sync()
-    return _joined_pass(project, session) is not None
+    return _joined(project, session) is not None
 
 
-def unit_pin(project: Project, work_id: str) -> tuple[str, str] | None:
-    """The (document, conversion) the extraction of `work_id` is pinned to, for both passes: the
-    pin of its latest task of either pass, by task id, while that document is the work's current
-    one (or the work has none); else the work's default conversion (ruling 5). None when no task
-    of the work exists."""
+def session_scope(project: Project, session: str) -> Scope | None:
+    """The scope of the extraction pass the session joined; None when it joined none."""
     project.index.sync()
-    ledger = _ledger(project)
+    joined = _joined(project, session)
+    return None if joined is None else joined[0]
+
+
+def unit_pin(
+    project: Project, work_id: str, *, scope: Scope = Scope.EVIDENCE
+) -> tuple[str, str] | None:
+    """The (document, conversion) the extraction of `work_id` in `scope` is pinned to, for both
+    passes: the pin of its latest task of either pass of the scope, by task id, while that
+    document is the work's current one (or the work has none); else the work's default conversion
+    (ruling 5). None when no task of the work exists in the scope."""
+    project.index.sync()
+    ledger = _ledger(project, scope)
     if ledger.latest(work_id) is None:
         return None
     return ledger.pin(work_id)
 
 
-def _kind_tasks(project: Project, *kinds: str) -> list[tuple[str, str, ExtractBatchContent]]:
-    """Every task of the kinds as (task id, status, content), in task-ID order."""
+def _content_model(scope: Scope) -> type[ExtractBatchContent]:
+    return ContributionBatchContent if scope is Scope.CONTRIBUTION else ExtractBatchContent
+
+
+def _kind_tasks(project: Project, scope: Scope) -> list[tuple[str, str, ExtractBatchContent]]:
+    """Every task of the scope's kinds as (task id, status, content), in task-ID order."""
+    kinds = list(kinds_for(scope).values())
     marks = ", ".join(f":k{i}" for i in range(len(kinds)))
     with project.index.connect() as conn:
         rows = conn.execute(
@@ -286,29 +380,28 @@ def _kind_tasks(project: Project, *kinds: str) -> list[tuple[str, str, ExtractBa
             ),
             {f"k{i}": kind for i, kind in enumerate(kinds)},
         ).all()
+    model = _content_model(scope)
     return [
-        (
-            str(task_id),
-            str(status),
-            ExtractBatchContent.model_validate(project.blobs.get_json(str(blob))),
-        )
+        (str(task_id), str(status), model.model_validate(project.blobs.get_json(str(blob))))
         for task_id, status, blob in rows
     ]
 
 
-def _joined_pass(project: Project, session: str) -> PassLabel | None:
+def _joined(project: Project, session: str) -> tuple[Scope, PassLabel] | None:
+    """The (scope, pass) the session joined, if any (one per session, ruling 2)."""
     with project.index.connect() as conn:
         row = conn.execute(
-            text("SELECT pass_label FROM extraction_sessions WHERE session = :s"), {"s": session}
+            text("SELECT scope, pass_label FROM extraction_sessions WHERE session = :s"),
+            {"s": session},
         ).one_or_none()
-    return None if row is None else PassLabel(str(row[0]))
+    return None if row is None else (Scope(str(row[0])), PassLabel(str(row[1])))
 
 
-def _pass_models(project: Project, label: PassLabel) -> set[str]:
+def _pass_models(project: Project, label: PassLabel, scope: Scope) -> set[str]:
     with project.index.connect() as conn:
         rows = conn.execute(
-            text("SELECT model FROM extraction_sessions WHERE pass_label = :l"),
-            {"l": label.value},
+            text("SELECT model FROM extraction_sessions WHERE scope = :scope AND pass_label = :l"),
+            {"scope": scope.value, "l": label.value},
         ).all()
     return {str(row[0]) for row in rows}
 
@@ -329,24 +422,33 @@ def _other(label: PassLabel) -> PassLabel:
 # --- Joining ---
 
 
-def join_extraction_pass(project: Project, actor: Actor, label: PassLabel) -> None:
-    """Bind the session to extraction pass `label`. Refused, with nothing written, when the actor
-    is not an agent, when the session relayed a human label or joined a screening pass, or when
-    it or its model already serves the other pass. Joining the same pass again writes nothing."""
+def join_extraction_pass(
+    project: Project, actor: Actor, label: PassLabel, *, scope: Scope = Scope.EVIDENCE
+) -> None:
+    """Bind the session to extraction pass `label` of `scope`. Refused, with nothing written, when
+    the actor is not an agent, when the session relayed a human label or joined a screening pass,
+    when it already serves any other pass of either scope (field `pass`, ruling 2), or when its
+    model already serves the other pass of the same scope. Joining the same pass again writes
+    nothing."""
     with project.index.exclusive():
         project.index.sync()
-        if _check_join(project, actor, label):
-            project.record([_join_event(project, actor, label)])
+        if _check_join(project, actor, label, scope):
+            project.record([_join_event(project, actor, label, scope)])
 
 
-def _check_join(project: Project, actor: Actor, label: PassLabel) -> bool:
+def _scoped_name(scope: Scope, label: PassLabel) -> str:
+    prefix = "contribution " if scope is Scope.CONTRIBUTION else ""
+    return f"{prefix}pass {label.value}"
+
+
+def _check_join(project: Project, actor: Actor, label: PassLabel, scope: Scope) -> bool:
     """True when a join must be written; raises on a refusal."""
     if actor.kind != "agent" or actor.model is None:
         raise FactoryValidationError(
             [ValidationIssue("actor", "only an agent extractor joins a pass")]
         )
-    joined = _joined_pass(project, actor.session)
-    if joined is label:
+    joined = _joined(project, actor.session)
+    if joined == (scope, label):
         return False
     if _is_label_session(project, actor.session) or relayed_extraction_label(
         project, actor.session
@@ -360,29 +462,39 @@ def _check_join(project: Project, actor: Actor, label: PassLabel) -> bool:
         )
     if joined is not None:
         raise FactoryValidationError(
-            [ValidationIssue("pass", f"this session already extracts pass {joined.value}")]
+            [ValidationIssue("pass", f"this session already extracts {_scoped_name(*joined)}")]
         )
-    if actor.model in _pass_models(project, _other(label)):
+    other = _other(label)
+    if actor.model in _pass_models(project, other, scope):
         raise FactoryValidationError(
-            [ValidationIssue("model", f"pass {_other(label).value} already uses this model")]
+            [ValidationIssue("model", f"{_scoped_name(scope, other)} already uses this model")]
         )
     return True
 
 
-def _input(project: Project, actor: Actor, label: PassLabel) -> str | None:
+def _pack_tag(scope: Scope) -> str | None:
+    """The `pack` an event of `scope` carries: none for evidence (as before G2)."""
+    return CONTRIBUTION_SCOPE_NAME if scope is Scope.CONTRIBUTION else None
+
+
+def _input(project: Project, actor: Actor, label: PassLabel, scope: Scope) -> str | None:
     value: dict[str, JsonValue] = {"pass_label": label.value}
+    if scope is Scope.CONTRIBUTION:
+        value["scope"] = scope.value
     return project.blobs.put_json(value) if actor.kind == "agent" else None
 
 
-def _join_event(project: Project, actor: Actor, label: PassLabel) -> Event:
+def _join_event(project: Project, actor: Actor, label: PassLabel, scope: Scope) -> Event:
     model = actor.model
     if model is None:
         raise FactoryValidationError(
             [ValidationIssue("actor", "only an agent extractor joins a pass")]
         )
-    payload = ExtractionPassJoined(pass_label=label, session=actor.session, model=model)
+    payload = ExtractionPassJoined(
+        pass_label=label, session=actor.session, model=model, pack=_pack_tag(scope)
+    )
     return project.events.make(
-        "extraction.pass_joined", payload, actor, input_blob=_input(project, actor, label)
+        "extraction.pass_joined", payload, actor, input_blob=_input(project, actor, label, scope)
     )
 
 
@@ -390,28 +502,49 @@ def _join_event(project: Project, actor: Actor, label: PassLabel) -> Event:
 
 
 def extract_next(project: Project, actor: Actor, label: PassLabel) -> ExtractNext:
-    """Serve the next task of extraction pass `label` to the session, or say why none is served.
+    """Serve the next task of evidence extraction pass `label`: `next_unit` with scope
+    evidence."""
+    return next_unit(project, actor, label, scope=Scope.EVIDENCE)
+
+
+def next_unit(
+    project: Project,
+    actor: Actor,
+    label: PassLabel,
+    *,
+    scope: Scope,
+    content: ContentHook | None = None,
+) -> ExtractNext:
+    """Serve the next task of extraction pass `label` of `scope` to the session, or say why none
+    is served.
 
     Refused (nothing written) for a non-agent, for a join the rules forbid, and until the protocol
-    is ready with an extraction schema and a full-text screening plan. Otherwise the session
-    joins, the pass opens once, a task is queued for each unit of the pass that has none or whose
-    latest task is stale (`unit_states`), and the next claimable task that is the latest, not
-    stale, task of its unit is claimed. A session that already holds a live claim on such a task
-    is served that task again; a stale task is never served. `remaining` counts the units of the
-    pass that are not current. `ExtractionSchema.dual_extract_sample=None` means every work, so
-    pass B then queues the whole population. `blocked` carries content-free reasons: how many
-    works have no converted document, and that no work falls in the dual sample."""
+    is ready with the scope's schema (and, for evidence, a full-text screening plan). Otherwise
+    the session joins, the pass opens once, a task is queued for each unit of the pass that has
+    none or whose latest task is stale (`unit_states`), and the next claimable task that is the
+    latest, not stale, task of its unit is claimed. A session that already holds a live claim on
+    such a task is served that task again; a stale task is never served. `remaining` counts the
+    units of the pass that are not current. `ExtractionSchema.dual_extract_sample=None` means
+    every work, so pass B then queues the whole population. `blocked` carries content-free
+    reasons: how many works have no converted document, and that no work falls in the dual
+    sample.
+
+    `content`, when given, builds each new task's stored content from the plan-D content; a
+    contribution task needs one returning a `ContributionBatchContent` (TypeError otherwise: a
+    programming error, not input) and is served as a `ContributionBatch`."""
     with project.index.exclusive():
         project.index.sync()
-        protocol, schema, pack = require_schema(project)
-        population = extraction_population(project)
+        protocol, schema, pack = require_schema(project, scope=scope)
+        population = scope_population(project, scope)
+        if scope is Scope.CONTRIBUTION and content is None:
+            raise TypeError("a contribution task needs a content hook")
         if actor.kind != "agent" or actor.model is None:
             raise FactoryValidationError(
                 [ValidationIssue("actor", "only an agent extractor joins a pass")]
             )
-        needs_join = _check_join(project, actor, label)
+        needs_join = _check_join(project, actor, label, scope)
         events: list[Event] = []
-        config = pass_config(project, label)
+        config = pass_config(project, label, scope=scope)
         if config is None:
             seed = secrets.randbits(32)
             order: Literal["schema", "reversed"] = "schema" if label is PassLabel.A else "reversed"
@@ -419,16 +552,28 @@ def extract_next(project: Project, actor: Actor, label: PassLabel) -> ExtractNex
             events.append(
                 project.events.make(
                     "extraction.pass_opened",
-                    ExtractionPassOpened(pass_label=label, random_seed=seed, field_order=order),
+                    ExtractionPassOpened(
+                        pass_label=label,
+                        random_seed=seed,
+                        field_order=order,
+                        pack=_pack_tag(scope),
+                    ),
                     actor,
-                    input_blob=_input(project, actor, label),
+                    input_blob=_input(project, actor, label, scope),
                 )
             )
         if needs_join:
-            events.append(_join_event(project, actor, label))
+            events.append(_join_event(project, actor, label, scope))
         queue = _queue(label, population, config.seed, schema)
         queued, remaining, unconverted = _enqueue(
-            project, actor, label, protocol, schema, pack, config, queue, _ledger(project)
+            project,
+            actor,
+            label,
+            (protocol, schema, pack),
+            config,
+            queue,
+            _ledger(project, scope),
+            content,
         )
         blocked: list[str] = []
         if unconverted:
@@ -436,11 +581,12 @@ def extract_next(project: Project, actor: Actor, label: PassLabel) -> ExtractNex
         if label is PassLabel.B and population and not queue:
             blocked.append("no work falls in the dual sample")
         project.record([*events, *queued])
-        servable = _servable(_ledger(project), label, queue, schema, pack)
-        task = _held(project, actor, label, servable) or claim_next(
-            project, actor, EXTRACT_KINDS[label], task_ids=servable
+        servable = _servable(_ledger(project, scope), label, queue, schema, pack)
+        kind = kinds_for(scope)[label]
+        task = _held(project, actor, kind, servable) or claim_next(
+            project, actor, kind, task_ids=servable
         )
-        batch = None if task is None else _batch(project, task)
+        batch = None if task is None else _batch(project, task, scope)
         return ExtractNext(batch=batch, blocked=blocked, remaining=remaining)
 
 
@@ -457,17 +603,24 @@ def _enqueue(
     project: Project,
     actor: Actor,
     label: PassLabel,
-    protocol: ProtocolVersion,
-    schema: ExtractionSchema,
-    pack: Pack,
+    declared: tuple[ProtocolVersion, ExtractionSchema, Pack],
     config: PassConfig,
     queue: list[str],
     ledger: "_Ledger",
+    hook: ContentHook | None,
 ) -> tuple[list[Event], int, int]:
     """The `task.created` events for the units of `queue` lacking a current unit (no task, or a
     stale latest task), not yet recorded; how many units of the queue are not current; and how
-    many of those have no converted document (never servable, so not counted as remaining)."""
-    kind = EXTRACT_KINDS[label]
+    many of those have no converted document (never servable, so not counted as remaining).
+    `hook` turns each task's plan-D content into its stored content (`_hooked`)."""
+    protocol, schema, pack = declared
+    scope = ledger.scope
+    kind = kinds_for(scope)[label]
+    instructions = (
+        CONTRIBUTION_INSTRUCTIONS
+        if scope is Scope.CONTRIBUTION
+        else INSTRUCTIONS + (CLAIMS_INSTRUCTIONS if schema.claims else "")
+    )
     titles = {work.id: work.title for work in list_works(project)}
     fields = _fields(pack, schema, config.field_order)
     specs: list[TaskSpec] = []
@@ -486,7 +639,7 @@ def _enqueue(
             continue
         content = ExtractBatchContent(
             pass_label=label,
-            instructions=INSTRUCTIONS + (CLAIMS_INSTRUCTIONS if schema.claims else ""),
+            instructions=instructions,
             protocol_id=protocol.protocol_id,
             schema_ref=_schema_ref(schema),
             fields=fields,
@@ -501,11 +654,28 @@ def _enqueue(
                 }
             ],
         )
+        if hook is not None:
+            content = _hooked(project, hook, content, scope)
         specs.append(TaskSpec(kind=kind, content=content.model_dump(mode="json")))
     events, result = build_task_events(project, actor, specs)
     if result.rejected:
         raise FactoryValidationError([issue for item in result.rejected for issue in item.issues])
     return events, pending - unconverted, unconverted
+
+
+def _hooked(
+    project: Project, hook: ContentHook, base: ExtractBatchContent, scope: Scope
+) -> ExtractBatchContent:
+    """The hook's content for `base`. It must keep what the ledger reads (pass, schema, fields,
+    records) and, for a contribution task, be a `ContributionBatchContent`; anything else is a
+    programming error (TypeError), never stored."""
+    content = hook(project, base)
+    if not isinstance(content, _content_model(scope)):
+        raise TypeError(f"the content hook must return {_content_model(scope).__name__}")
+    kept = ("pass_label", "protocol_id", "schema_ref", "fields", "required", "records")
+    if any(getattr(content, name) != getattr(base, name) for name in kept):
+        raise TypeError("the content hook must keep the task's pass, schema, fields and records")
+    return content
 
 
 def _servable(
@@ -554,8 +724,8 @@ def _fields(
     return out
 
 
-def _held(project: Project, actor: Actor, label: PassLabel, servable: set[str]) -> Task | None:
-    """The live claim this session holds on a servable task of the pass, if any."""
+def _held(project: Project, actor: Actor, kind: str, servable: set[str]) -> Task | None:
+    """The live claim this session holds on a servable task of the pass (task `kind`), if any."""
     now = format_ts(project.clock.now())
     with project.index.connect() as conn:
         rows = conn.execute(
@@ -564,7 +734,7 @@ def _held(project: Project, actor: Actor, label: PassLabel, servable: set[str]) 
                 "AND claim_session = :s AND lease_until > :now ORDER BY task_id"
             ),
             {
-                "kind": EXTRACT_KINDS[label],
+                "kind": kind,
                 "claimed": TaskStatus.CLAIMED.value,
                 "s": actor.session,
                 "now": now,
@@ -574,10 +744,11 @@ def _held(project: Project, actor: Actor, label: PassLabel, servable: set[str]) 
     return get_task(project, held[0]) if held else None
 
 
-def _batch(project: Project, task: Task) -> ExtractBatch:
+def _batch(project: Project, task: Task, scope: Scope) -> ExtractBatch | ContributionBatch:
     content = task_content(project, task)
     fields = dict(content) if isinstance(content, dict) else {}
-    return ExtractBatch.model_validate({**fields, "task_id": task.task_id})
+    model = ContributionBatch if scope is Scope.CONTRIBUTION else ExtractBatch
+    return model.model_validate({**fields, "task_id": task.task_id})
 
 
 # --- Recording ---
@@ -585,6 +756,13 @@ def _batch(project: Project, task: Task) -> ExtractBatch:
 DUPLICATE_ROW = "a row for this location is already recorded; supersede it"
 """Why a row whose row_key a live row (or an earlier row of the call) of its unit holds is
 rejected. Duplicate claims are not refused: a claim has no location key."""
+
+DUPLICATE_ITEM = (
+    "an item of this kind, name and metric is already recorded at this anchor; supersede it, "
+    "or, for a distinct item, cite a finer anchor (the sentence or the table cell)"
+)
+"""The duplicate refusal for contribution items (passed as `record_unit(duplicate_reason=)`):
+two results of one metric quoted from one paragraph share a row key (G2-A ruling 4)."""
 
 
 class ExtractionRow(StrictModel):
@@ -604,6 +782,7 @@ class ExtractionRow(StrictModel):
     row_key: str
     fields: dict[str, StoredField]
     event_id: str
+    cited: CitedEntry | None = None
 
 
 class ClaimRow(StrictModel):
@@ -632,18 +811,63 @@ class ExtractResult(StrictModel):
 
 
 @dataclass(frozen=True)
+class UnitPin:
+    """The unit a recording hook judges: its task, work, pass, scope and pinned conversion."""
+
+    task_id: str
+    work_id: str
+    pass_label: PassLabel
+    scope: Scope
+    document_id: str
+    conversion_id: str
+
+
+@dataclass(frozen=True)
+class ExtraVerdict:
+    """A hook's verdict on one verified row: issues reject it; `cited` is stored on its event."""
+
+    cited: CitedEntry | None
+    issues: list[ValidationIssue]
+
+
+ExtraCheck = Callable[
+    [Project, UnitPin, Mapping[str, StoredField], Sequence[ExtractionRow]], ExtraVerdict
+]
+"""A scope-specific check of one verified row: the unit, the row's stored fields, and the unit's
+live, not stale rows (less those an accepted row of the call supersedes) plus the rows accepted
+earlier in the same call (with `event_id` "" since not yet recorded)."""
+
+CloseCheck = Callable[
+    [Project, UnitPin, Sequence[ExtractionRow], str | None], list[ValidationIssue]
+]
+"""A scope-specific closing rule: the unit, its rows live after the call, and the closing reason.
+Any issue refuses the call, with nothing written."""
+
+
+@dataclass(frozen=True)
 class _Unit:
-    """The work, pass and pin of the task being recorded."""
+    """The work, pass, scope and pin of the task being recorded."""
 
     task_id: str
     content: ExtractBatchContent
     work_id: str
     document_id: str
     conversion_id: str
+    scope: Scope
 
     @property
     def label(self) -> PassLabel:
         return self.content.pass_label
+
+    def pin(self) -> UnitPin:
+        return UnitPin(
+            task_id=self.task_id,
+            work_id=self.work_id,
+            pass_label=self.label,
+            scope=self.scope,
+            document_id=self.document_id,
+            conversion_id=self.conversion_id,
+        )
 
 
 @dataclass(frozen=True)
@@ -651,6 +875,8 @@ class _Row:
     index: int
     fields: dict[str, StoredField]
     row_key: str
+    extraction_id: str
+    cited: CitedEntry | None
 
 
 def extract_record(
@@ -665,27 +891,59 @@ def extract_record(
     supersedes: Mapping[int, str] | None = None,
     claim_supersedes: Mapping[int, str] | None = None,
 ) -> ExtractResult:
-    """Record the rows and claims an agent extracted for a held task, and close it on `finish`.
+    """Record an evidence task: `record_unit` without hooks. A contribution task is refused on
+    `task_id` (its items go through `contribution_record`, which supplies the hooks)."""
+    return _record(
+        project,
+        actor,
+        task_id,
+        rows,
+        claims,
+        _Options(finish, reason, supersedes, claim_supersedes, None, None, DUPLICATE_ROW),
+        evidence_only=True,
+    )
+
+
+def record_unit(
+    project: Project,
+    actor: Actor,
+    task_id: str,
+    rows: Sequence[ExtractedRowInput],
+    claims: Sequence[ClaimInput] = (),
+    *,
+    finish: bool = False,
+    reason: str | None = None,
+    supersedes: Mapping[int, str] | None = None,
+    claim_supersedes: Mapping[int, str] | None = None,
+    extra_check: ExtraCheck | None = None,
+    close_check: CloseCheck | None = None,
+    duplicate_reason: str = DUPLICATE_ROW,
+) -> ExtractResult:
+    """Record the rows and claims an agent extracted for a held task of either scope, and close
+    it on `finish`.
 
     Refused, with nothing written, when the actor is not an agent (`actor`); the task is unknown,
-    not held by this session or not an extraction task (`task_id`); the session does not extract
-    the task's pass (`pass`); the current schema's pack, version or declared fields differ from
+    not held by this session or not an extraction task, or its schema reference is not of its
+    kind's scope (`task_id`); the session does not extract the task's pass in the task's scope
+    (`pass`); the current schema of the scope differs in pack, version or declared fields from
     what the task served (`task_id`, ruling 12; any other amendment is accepted and the events
     carry the current protocol id); the task is not the latest task of its unit, pins a document
-    that is no longer the work's current one, or holds a work full-text screening no longer
-    includes (`task_id`); a key of `supersedes` or `claim_supersedes` is not an index
-    of the call (that name); or `finish` would close a unit with no live row and no live claim
-    without a non-blank `reason` (`reason`).
+    that is no longer the work's current one, or holds a work its scope's population no longer
+    includes (`task_id`); a key of `supersedes` or `claim_supersedes` is not an index of the
+    call (that name); `finish` would close a unit with no live row and no live claim without a
+    non-blank `reason` (`reason`); or `close_check` returns an issue for a closing call.
 
-    Otherwise each row is verified alone against the task's pinned conversion and each claim's
-    quote is verified in its anchor's element like a field quote; an invalid item is an
-    `ItemError` (issues located within the item, its index locating it) and is not written.
-    Claims are rejected (`claims`) unless the schema enables them and the task is of pass A.
-    `supersedes` maps a row index to the id of a live row of the same work and pass that the row
-    corrects; any other target, or one target an accepted row already corrects, rejects that row
-    (`supersedes`). A row whose row_key a live row of the unit holds (other than its own target),
-    or an earlier accepted row of the call, is rejected (`fields.value`, `DUPLICATE_ROW`). Claims
-    are superseded likewise with `claim_supersedes`; duplicate claims are not refused.
+    Otherwise each row is verified alone against the task's pinned conversion, then, when given,
+    judged by `extra_check` (its issues reject the row like verification issues; its `cited` is
+    stored on the row's event); each claim's quote is verified in its anchor's element like a
+    field quote. An invalid item is an `ItemError` (issues located within the item, its index
+    locating it) and is not written. Claims are rejected (`claims`) unless the schema enables
+    them and the task is of pass A. `supersedes` maps a row index to the id of a live row of the
+    same work and pass that the row corrects; any other target, or one target an accepted row
+    already corrects, rejects that row (`supersedes`). A row whose row_key a live row of the unit
+    holds (other than its own target), or an earlier accepted row of the call, is rejected
+    (`fields.value`, `duplicate_reason`; contribution callers pass `DUPLICATE_ITEM`). Claims are
+    superseded likewise with `claim_supersedes`; duplicate claims are not refused.
 
     `finish` closes the unit only when no item of the call is rejected: `extraction.closed`, with
     counts computed as the live items minus the superseded targets plus the accepted items, and
@@ -695,6 +953,48 @@ def extract_record(
     claims, closure and completion are appended in one write; each extraction event carries the
     whole call's input as its input blob, stored only when something is appended.
     """
+    return _record(
+        project,
+        actor,
+        task_id,
+        rows,
+        claims,
+        _Options(
+            finish,
+            reason,
+            supersedes,
+            claim_supersedes,
+            extra_check,
+            close_check,
+            duplicate_reason,
+        ),
+        evidence_only=False,
+    )
+
+
+@dataclass(frozen=True)
+class _Options:
+    finish: bool
+    reason: str | None
+    supersedes: Mapping[int, str] | None
+    claim_supersedes: Mapping[int, str] | None
+    extra_check: ExtraCheck | None
+    close_check: CloseCheck | None
+    duplicate_reason: str
+
+
+def _record(
+    project: Project,
+    actor: Actor,
+    task_id: str,
+    rows: Sequence[ExtractedRowInput],
+    claims: Sequence[ClaimInput],
+    options: _Options,
+    *,
+    evidence_only: bool,
+) -> ExtractResult:
+    """`record_unit`; with `evidence_only`, a contribution task is refused on `task_id`."""
+    finish = options.finish
     with project.index.exclusive():
         project.index.sync()
         if actor.kind != "agent" or actor.model is None:
@@ -703,46 +1003,63 @@ def extract_record(
             )
         task = require_holder(project, actor, task_id)
         unit = _unit_of(project, task)
-        if _joined_pass(project, actor.session) is not unit.label:
+        if evidence_only and unit.scope is Scope.CONTRIBUTION:
             raise FactoryValidationError(
-                [ValidationIssue("pass", f"this session does not extract pass {unit.label}")]
+                [ValidationIssue("task_id", "this is a contribution task; use contribution_record")]
             )
-        protocol, schema, pack = require_schema(project)
+        if _joined(project, actor.session) != (unit.scope, unit.label):
+            raise FactoryValidationError(
+                [
+                    ValidationIssue(
+                        "pass",
+                        f"this session does not extract {_scoped_name(unit.scope, unit.label)}",
+                    )
+                ]
+            )
+        protocol, schema, pack = require_schema(project, scope=unit.scope)
         _require_same_schema(project, unit, schema, pack)
-        ledger = _ledger(project)
+        ledger = _ledger(project, unit.scope)
         _require_current_task(project, ledger, unit, schema, pack)
         stale = ledger.stale_rows()
-        row_targets = _targets(supersedes, len(rows), "supersedes")
-        claim_targets = _targets(claim_supersedes, len(claims), "claim_supersedes")
+        row_targets = _targets(options.supersedes, len(rows), "supersedes")
+        claim_targets = _targets(options.claim_supersedes, len(claims), "claim_supersedes")
         manifest = conversion_manifest(project, unit.conversion_id)
         corpus = {work.id for work in list_works(project)}
+        pin = unit.pin()
 
-        live_keys = {
-            r.extraction_id: r.row_key
+        live = {
+            r.extraction_id: r
             for r in ledger.rows.get((unit.work_id, unit.label), [])
             if r.extraction_id not in stale
         }
         used: set[str] = set()
-        accepted_keys: set[str] = set()
         row_errors: list[ItemError] = []
         accepted_rows: list[_Row] = []
         for index, row in enumerate(rows):
             target = row_targets.get(index)
             issues, verified = _row_issues(pack, schema, row, unit, manifest, corpus)
-            issues += _target_issues("supersedes", target, set(live_keys), used, "row")
+            cited: CitedEntry | None = None
+            if not issues and verified is not None and options.extra_check is not None:
+                seen = [r for ident, r in live.items() if ident not in used]
+                seen += [_accepted_row(unit, protocol, a) for a in accepted_rows]
+                verdict = options.extra_check(project, pin, verified[0], seen)
+                issues += verdict.issues
+                cited = verdict.cited
+            issues += _target_issues("supersedes", target, set(live), used, "row")
             if not issues and verified is not None:
-                occupied = accepted_keys | {
-                    key for ident, key in live_keys.items() if ident not in used and ident != target
+                occupied = {a.row_key for a in accepted_rows} | {
+                    r.row_key for ident, r in live.items() if ident not in used and ident != target
                 }
                 if verified[1] in occupied:
-                    issues.append(ValidationIssue(f"fields.{VALUE_FIELD}", DUPLICATE_ROW))
+                    issues.append(
+                        ValidationIssue(f"fields.{VALUE_FIELD}", options.duplicate_reason)
+                    )
             if issues or verified is None:
                 row_errors.append(ItemError(index=index, issues=issues))
                 continue
             if target is not None:
                 used.add(target)
-            accepted_keys.add(verified[1])
-            accepted_rows.append(_Row(index, *verified))
+            accepted_rows.append(_Row(index, *verified, project.ids.new("ext"), cited))
 
         stale_c = ledger.stale_claims()
         live_c = {
@@ -766,9 +1083,10 @@ def extract_record(
             accepted_claims.append((index, claim))
 
         closing = finish and not row_errors and not claim_errors
+        reason = options.reason
         reason = reason.strip() if reason is not None and reason.strip() else None
         # Live after this call: live before, minus the targets superseded, plus the new items.
-        remaining_rows = sorted(set(live_keys) - used)
+        remaining_rows = sorted(set(live) - used)
         remaining_claims = sorted(live_c - used_c)
         if (
             closing
@@ -778,6 +1096,12 @@ def extract_record(
             raise FactoryValidationError(
                 [ValidationIssue("reason", "closing a unit with no row or claim needs a reason")]
             )
+        if closing and options.close_check is not None:
+            after = [live[i] for i in remaining_rows]
+            after += [_accepted_row(unit, protocol, a) for a in accepted_rows]
+            refusals = options.close_check(project, pin, after, reason)
+            if refusals:
+                raise FactoryValidationError(refusals)
         if not (accepted_rows or accepted_claims or closing):
             return ExtractResult(
                 rows=BatchResult[str](written=[], rejected=row_errors),
@@ -799,9 +1123,8 @@ def extract_record(
         events: list[Event] = []
         row_ids: list[str] = []
         for accepted in accepted_rows:
-            extraction_id = project.ids.new("ext")
             payload = ExtractionRecorded(
-                extraction_id=extraction_id,
+                extraction_id=accepted.extraction_id,
                 work_id=unit.work_id,
                 pass_label=unit.label,
                 task_id=task_id,
@@ -813,13 +1136,18 @@ def extract_record(
                 fields=accepted.fields,
                 supersedes=row_targets.get(accepted.index),
                 verifier=VERIFIER_VERSION,
+                cited=accepted.cited,
             )
             events.append(
                 project.events.make(
-                    "extraction.recorded", payload, actor, refs=(extraction_id,), input_blob=blob
+                    "extraction.recorded",
+                    payload,
+                    actor,
+                    refs=(accepted.extraction_id,),
+                    input_blob=blob,
                 )
             )
-            row_ids.append(extraction_id)
+            row_ids.append(accepted.extraction_id)
         claim_ids: list[str] = []
         for index, claim in accepted_claims:
             claim_id = project.ids.new("clm")
@@ -875,16 +1203,28 @@ def extract_record(
 
 
 def _unit_of(project: Project, task: Task) -> _Unit:
-    """The extraction unit a task holds. Raises on `task_id` for any other task."""
+    """The extraction unit a task holds, in the scope of its kind. Raises on `task_id` for any
+    other task, and for one whose schema reference names a pack of the other scope."""
     refusal = FactoryValidationError([ValidationIssue("task_id", "is not an extraction task")])
-    if task.kind not in EXTRACT_KINDS.values():
+    scope = scope_of_kind(task.kind)
+    if scope is None:
         raise refusal
     try:
-        content = ExtractBatchContent.model_validate(task_content(project, task))
+        content = _content_model(scope).model_validate(task_content(project, task))
     except ValidationError as exc:
         raise refusal from exc
-    if task.kind != EXTRACT_KINDS[content.pass_label] or len(content.records) != 1:
+    if task.kind != kinds_for(scope)[content.pass_label] or len(content.records) != 1:
         raise refusal
+    if scope_of_schema_ref(content.schema_ref) is not scope:
+        raise FactoryValidationError(
+            [
+                ValidationIssue(
+                    "task_id",
+                    f"the task's schema {content.schema_ref} is not of its pass's scope "
+                    f"({scope.value})",
+                )
+            ]
+        )
     record = content.records[0]
     if not {"work_id", "document_id", "conversion_id"} <= record.keys():
         raise refusal
@@ -894,6 +1234,24 @@ def _unit_of(project: Project, task: Task) -> _Unit:
         work_id=record["work_id"],
         document_id=record["document_id"],
         conversion_id=record["conversion_id"],
+        scope=scope,
+    )
+
+
+def _accepted_row(unit: _Unit, protocol: ProtocolVersion, row: _Row) -> ExtractionRow:
+    """A row accepted earlier in the call, as a hook sees it (not yet recorded: no event id)."""
+    return ExtractionRow(
+        extraction_id=row.extraction_id,
+        work_id=unit.work_id,
+        pass_label=unit.label,
+        task_id=unit.task_id,
+        protocol_id=protocol.protocol_id,
+        conversion_id=unit.conversion_id,
+        document_id=unit.document_id,
+        row_key=row.row_key,
+        fields=row.fields,
+        event_id="",
+        cited=row.cited,
     )
 
 
@@ -990,6 +1348,7 @@ def _closing_events(
         rows=len(row_ids),
         claims=len(claim_ids),
         reason=reason,
+        pack=_pack_tag(unit.scope),
     )
     completed = TaskCompleted(task_id=unit.task_id, result_refs=(*row_ids, *claim_ids))
     return [
@@ -1011,7 +1370,7 @@ def _require_same_schema(
 ) -> None:
     """Refuse a stale task (ruling 12): the current schema's pack, version or declared fields
     differ from what the task served. Any other amendment leaves the task valid."""
-    config = pass_config(project, unit.label)
+    config = pass_config(project, unit.label, scope=unit.scope)
     order = "reversed" if unit.label is PassLabel.B else "schema"
     if config is not None:
         order = config.field_order
@@ -1038,7 +1397,7 @@ def _require_current_task(
         not tasks
         or tasks[-1].task_id != unit.task_id
         or ledger.issue(unit.work_id, unit.label, tasks[-1], schema, pack) is not None
-        or unit.work_id not in extraction_population(project)
+        or unit.work_id not in scope_population(project, unit.scope)
     ):
         raise FactoryValidationError(
             [
@@ -1058,7 +1417,9 @@ class UnitState(StrictModel):
     """One extraction unit: an included work in one pass in use, and whether its extraction is
     current. `queued`: no task yet, or its latest task waits unclaimed; `open`: its latest task
     is claimed; `current`: its latest task completed and is not stale; `stale`: its latest task
-    is stale, `reason` saying why (`schema` or `document-version`). `reason` is otherwise None."""
+    is stale, `reason` saying why (`schema`, `document-version`, or, for a contribution unit,
+    `references`: a live row cites a reference extraction that is no longer its work's current G1
+    extraction, slice 3b ruling 12). `reason` is otherwise None."""
 
     work_id: str
     pass_label: PassLabel
@@ -1088,9 +1449,11 @@ class _Ledger:
 
     `tasks` holds each unit's extraction tasks in task-ID order; `closed_at` the event ID of each
     task's `extraction.closed`; `rows` the live rows of each unit; `amendments` every amendment
-    with its event ID, in recording order; `orders` each pass's field order."""
+    with its event ID, in recording order; `orders` each pass's field order. Everything is of one
+    `scope`, whose amendment rule (`scope_rule`) alone stales its rows."""
 
     project: Project
+    scope: Scope
     tasks: dict[tuple[str, PassLabel], list[_UnitTask]]
     closed_at: dict[str, str]
     rows: dict[tuple[str, PassLabel], list[ExtractionRow]]
@@ -1098,6 +1461,20 @@ class _Ledger:
     orders: dict[PassLabel, str]
     claims: dict[tuple[str, PassLabel], list["ClaimRow"]]
     documents: dict[str, ConversionRef | None] = field(default_factory=dict)
+    references: dict[str, str | None] = field(default_factory=dict)
+
+    def reference_extraction(self, work_id: str) -> str | None:
+        """The work's current G1 reference extraction (`current_extraction`), read once."""
+        if work_id not in self.references:
+            self.references[work_id] = current_extraction(self.project, work_id)
+        return self.references[work_id]
+
+    def cites_old_references(self, row: ExtractionRow) -> bool:
+        """Whether `row` cites a reference extraction other than its work's current one."""
+        return (
+            row.cited is not None
+            and row.cited.reference_extraction_id != self.reference_extraction(row.work_id)
+        )
 
     def current(self, work_id: str) -> ConversionRef | None:
         """The work's default conversion; its document is the work's current document."""
@@ -1149,21 +1526,30 @@ class _Ledger:
             and not self._stale_by(row, closed)
         ]
         for when, amendment in self.amendments:
-            rule = amendment.extraction_stale
+            rule = scope_rule(amendment, self.scope)
             if rule is None or when <= closed:
                 continue
             if rule.all_records or any(touches(rule, fields) for fields in carried):
                 return "schema"
+        if any(
+            self.cites_old_references(row)
+            for row in self.rows.get((work_id, label), [])
+            if (current is None or row.document_id == current.document_id)
+        ):
+            return "references"
         return None
 
     def _stale_by(self, row: ExtractionRow, position: str) -> bool:
         """Whether an amendment recorded after `row` and no later than `position` stales it."""
-        return any(
-            amendment.extraction_stale is not None
-            and row.event_id < when <= position
-            and touches(amendment.extraction_stale, tuple(row.fields))
-            for when, amendment in self.amendments
-        )
+        for when, amendment in self.amendments:
+            rule = scope_rule(amendment, self.scope)
+            if (
+                rule is not None
+                and row.event_id < when <= position
+                and touches(rule, tuple(row.fields))
+            ):
+                return True
+        return False
 
     def stale_claims(self) -> set[str]:
         """The live claims pinned to a document other than the work's current one. Schema
@@ -1199,19 +1585,25 @@ class _Ledger:
         live = [row for rows in self.rows.values() for row in rows]
         refs = [RowRef(row_id=r.extraction_id, fields=tuple(r.fields), at=r.event_id) for r in live]
         stale = set(
-            stale_rows([a for _, a in self.amendments], [w for w, _ in self.amendments], refs)
+            stale_rows(
+                [a for _, a in self.amendments],
+                [w for w, _ in self.amendments],
+                refs,
+                scope=self.scope,
+            )
         )
         for row in live:
             current = self.current(row.work_id)
-            if current is not None and row.document_id != current.document_id:
+            replaced = current is not None and row.document_id != current.document_id
+            if replaced or self.cites_old_references(row):
                 stale.add(row.extraction_id)
         return stale
 
 
-def _ledger(project: Project) -> _Ledger:
-    """Read the ledger; the caller has synced the index."""
+def _ledger(project: Project, scope: Scope = Scope.EVIDENCE) -> _Ledger:
+    """Read the ledger of `scope`; the caller has synced the index."""
     tasks: dict[tuple[str, PassLabel], list[_UnitTask]] = {}
-    for task_id, status, content in _kind_tasks(project, *EXTRACT_KINDS.values()):
+    for task_id, status, content in _kind_tasks(project, scope):
         if len(content.records) != 1:
             continue
         task = _UnitTask(task_id, status, content)
@@ -1220,7 +1612,8 @@ def _ledger(project: Project) -> _Ledger:
         closed_at = {
             str(task_id): str(event_id)
             for task_id, event_id in conn.execute(
-                text("SELECT task_id, event_id FROM extraction_closures")
+                text("SELECT task_id, event_id FROM extraction_closures WHERE scope = :scope"),
+                {"scope": scope.value},
             )
         }
     unclosed = {
@@ -1231,17 +1624,20 @@ def _ledger(project: Project) -> _Ledger:
     }
     closed_at.update(_completion_positions(project, unclosed))
     rows: dict[tuple[str, PassLabel], list[ExtractionRow]] = {}
-    for row in live_rows(project):
+    for row in live_rows(project, scope=scope):
         rows.setdefault((row.work_id, row.pass_label), []).append(row)
     claims: dict[tuple[str, PassLabel], list[ClaimRow]] = {}
-    for claim in live_claims(project):
-        claims.setdefault((claim.work_id, claim.pass_label), []).append(claim)
+    if scope is Scope.EVIDENCE:  # contribution items carry no claims
+        for claim in live_claims(project):
+            claims.setdefault((claim.work_id, claim.pass_label), []).append(claim)
     orders: dict[PassLabel, str] = {}
     for label in PassLabel:
-        config = pass_config(project, label)
+        config = pass_config(project, label, scope=scope)
         default = "schema" if label is PassLabel.A else "reversed"
         orders[label] = default if config is None else config.field_order
-    return _Ledger(project, tasks, closed_at, rows, amendments_with_events(project), orders, claims)
+    return _Ledger(
+        project, scope, tasks, closed_at, rows, amendments_with_events(project), orders, claims
+    )
 
 
 def _completion_positions(project: Project, task_ids: set[str]) -> dict[str, str]:
@@ -1263,14 +1659,15 @@ def _completion_positions(project: Project, task_ids: set[str]) -> dict[str, str
     return {t: completed.get(t, created.get(t, "")) for t in task_ids}
 
 
-def stale_extractions(project: Project) -> set[str]:
-    """The live rows that are stale: made stale by an amendment recorded after the row (ruling
-    12, compared by event ID as `model.staleness` does, so a reverted amendment keeps recording
-    order), or pinned to a document that is no longer the work's current one. It ignores the
-    population: rows of works full-text screening no longer includes are filtered downstream.
-    Read-only."""
+def stale_extractions(project: Project, *, scope: Scope = Scope.EVIDENCE) -> set[str]:
+    """The live rows of `scope` that are stale: made stale by an amendment of the scope's section
+    recorded after the row (ruling 12, compared by event ID as `model.staleness` does, so a
+    reverted amendment keeps recording order), pinned to a document that is no longer the work's
+    current one, or (contribution) citing a reference extraction that is no longer the work's
+    current G1 extraction. It ignores the population: rows of works no longer included are
+    filtered downstream. Read-only."""
     project.index.sync()
-    return _ledger(project).stale_rows()
+    return _ledger(project, scope).stale_rows()
 
 
 def abandoned_task_ids(project: Project) -> set[str]:
@@ -1280,7 +1677,8 @@ def abandoned_task_ids(project: Project) -> set[str]:
     project.index.sync()
     return {
         task.task_id
-        for unit in _ledger(project).tasks.values()
+        for scope in Scope
+        for unit in _ledger(project, scope).tasks.values()
         for task in unit[:-1]
         if task.status != TaskStatus.COMPLETED.value
     }
@@ -1294,11 +1692,12 @@ def stale_claims(project: Project) -> set[str]:
     return _ledger(project).stale_claims()
 
 
-def stale_documents(project: Project) -> list[str]:
-    """The works, sorted, whose live rows pin a conversion other than the work's default while
-    their document is the current one: a newer conversion only warns, it stales nothing."""
+def stale_documents(project: Project, *, scope: Scope = Scope.EVIDENCE) -> list[str]:
+    """The works, sorted, whose live rows of `scope` pin a conversion other than the work's
+    default while their document is the current one: a newer conversion only warns, it stales
+    nothing."""
     project.index.sync()
-    ledger = _ledger(project)
+    ledger = _ledger(project, scope)
     out: set[str] = set()
     for rows in ledger.rows.values():
         for row in rows:
@@ -1312,25 +1711,26 @@ def stale_documents(project: Project) -> list[str]:
     return sorted(out)
 
 
-def unit_states(project: Project) -> list[UnitState]:
-    """One state per unit, by work then pass: every work of `extraction_population` in pass A,
-    and in pass B the works of its dual sample once pass B has opened (every work before then
+def unit_states(project: Project, *, scope: Scope = Scope.EVIDENCE) -> list[UnitState]:
+    """One state per unit of `scope`, by work then pass: every work of `scope_population` in pass
+    A, and in pass B the works of its dual sample once pass B has opened (every work before then
     when the declared sample takes every work). Empty, with no refusal, when there is no ready
-    protocol with a known extraction schema or no full-text screening plan. Read-only."""
+    protocol with a known schema of the scope or (evidence) no full-text screening plan.
+    Read-only."""
     project.index.sync()
     try:
-        _, schema, pack = require_schema(project)
-        population = extraction_population(project)
+        _, schema, pack = require_schema(project, scope=scope)
+        population = scope_population(project, scope)
     except FactoryValidationError:
         return []
-    config = pass_config(project, PassLabel.B)
+    config = pass_config(project, PassLabel.B, scope=scope)
     if config is not None:
         sample = set(_queue(PassLabel.B, population, config.seed, schema))
     elif schema.dual_extract_sample is None or schema.dual_extract_sample >= 1:
         sample = set(population)
     else:
         sample = set()
-    ledger = _ledger(project)
+    ledger = _ledger(project, scope)
     out: list[UnitState] = []
     for work_id in population:
         out.append(ledger.state(work_id, PassLabel.A, schema, pack))
@@ -1343,17 +1743,25 @@ def unit_states(project: Project) -> list[UnitState]:
 
 
 def live_rows(
-    project: Project, pass_label: PassLabel | None = None, *, work_id: str | None = None
+    project: Project,
+    pass_label: PassLabel | None = None,
+    *,
+    work_id: str | None = None,
+    scope: Scope = Scope.EVIDENCE,
 ) -> list[ExtractionRow]:
-    """The rows no later row supersedes, optionally of one pass and one work, by extraction id."""
+    """The rows of `scope` no later row supersedes, optionally of one pass and one work, by
+    extraction id. The default scope is evidence: no evidence read sees a contribution row."""
     project.index.sync()
     where, params = _filters(pass_label, work_id)
+    where += " AND scope = :scope"
+    params["scope"] = scope.value
     with project.index.connect() as conn:
         heads = (
             conn.execute(
                 text(
                     "SELECT extraction_id, work_id, pass_label, task_id, protocol_id, "
-                    "conversion_id, document_id, row_key, schema_ref, event_id "
+                    "conversion_id, document_id, row_key, schema_ref, event_id, "
+                    "cited_extraction_id, cited_ordinal, cited_marker "
                     f"FROM extraction_rows WHERE superseded_by IS NULL{where} "
                     "ORDER BY extraction_id"
                 ),
@@ -1391,15 +1799,27 @@ def live_rows(
                 row_key=str(head["row_key"]),
                 fields={str(c["field"]): _stored_field(pack, c) for c in cells[ident]},
                 event_id=str(head["event_id"]),
+                cited=_cited(head),
             )
         )
     return out
 
 
+def _cited(head: RowMapping) -> CitedEntry | None:
+    if head["cited_extraction_id"] is None:
+        return None
+    return CitedEntry(
+        reference_extraction_id=str(head["cited_extraction_id"]),
+        ordinal=int(head["cited_ordinal"]),
+        marker=head["cited_marker"],
+    )
+
+
 def live_claims(
     project: Project, pass_label: PassLabel | None = None, *, work_id: str | None = None
 ) -> list[ClaimRow]:
-    """The claims no later claim supersedes, optionally of one pass and one work, by claim id."""
+    """The claims no later claim supersedes, optionally of one pass and one work, by claim id.
+    Claims are evidence only: contribution items carry none."""
     project.index.sync()
     where, params = _filters(pass_label, work_id)
     with project.index.connect() as conn:

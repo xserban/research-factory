@@ -263,17 +263,25 @@ def _supplied_links(project: Project) -> SuppliedLinks | None:
 
 
 def _extraction_sessions(project: Project) -> list[tuple[str, str]]:
-    """(session, model) of every session bound to an extraction pass."""
+    """(session, model) of every session bound to an evidence extraction pass (the methods
+    report describes the evidence table; contribution passes are not counted)."""
     with project.index.connect() as conn:
         rows = conn.execute(
-            text("SELECT session, model FROM extraction_sessions ORDER BY session")
+            text(
+                "SELECT session, model FROM extraction_sessions WHERE scope = 'evidence' "
+                "ORDER BY session"
+            )
         ).all()
     return [(str(session), str(model)) for session, model in rows]
 
 
 def _extraction_pass_count(project: Project) -> int:
     with project.index.connect() as conn:
-        return int(conn.execute(text("SELECT COUNT(*) FROM extraction_passes")).scalar_one())
+        return int(
+            conn.execute(
+                text("SELECT COUNT(*) FROM extraction_passes WHERE scope = 'evidence'")
+            ).scalar_one()
+        )
 
 
 def _full_text_sessions(project: Project) -> list[tuple[str, str]]:

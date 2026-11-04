@@ -453,7 +453,10 @@ def _eligible_rows(project: Project, population: set[str]) -> list[ExtractionRow
 def _resolutions(project: Project) -> dict[tuple[str, str, str], _Resolution]:
     with project.index.connect() as conn:
         rows = conn.execute(
-            text("SELECT work_id, row_key, field, choice, event_id FROM extraction_resolutions")
+            text(
+                "SELECT work_id, row_key, field, choice, event_id FROM extraction_resolutions "
+                "WHERE scope = 'evidence'"
+            )
         ).all()
     out: dict[tuple[str, str, str], _Resolution] = {}
     for work, key, name, choice, event_id in rows:
@@ -684,7 +687,10 @@ def _refuse(reason: str) -> FactoryValidationError:
 def _pass_views(project: Project, state: _State) -> list[ExtractionPassView]:
     with project.index.connect() as conn:
         joined = conn.execute(
-            text("SELECT session, pass_label, model FROM extraction_sessions ORDER BY session")
+            text(
+                "SELECT session, pass_label, model FROM extraction_sessions "
+                "WHERE scope = 'evidence' ORDER BY session"
+            )
         ).all()
     views: list[ExtractionPassView] = []
     for label in PassLabel:

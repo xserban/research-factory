@@ -8,6 +8,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from factory.model.base import StrictModel
+from factory.model.extraction import Scope
 from factory.model.protocol import ExtractionStale, ProtocolAmended, ScreeningStage, StaleRule
 
 
@@ -96,17 +97,30 @@ def touches(rule: ExtractionStale, fields: Sequence[str]) -> bool:
     return rule.all_records or bool(set(rule.fields) & set(fields))
 
 
+def scope_rule(amendment: ProtocolAmended, scope: Scope) -> ExtractionStale | None:
+    """The amendment's stale rule for rows of `scope`: `extraction_stale` for evidence,
+    `contribution_stale` for contribution. A rule never crosses scopes."""
+    if scope is Scope.CONTRIBUTION:
+        return amendment.contribution_stale
+    return amendment.extraction_stale
+
+
 def stale_rows(
-    amendments: Sequence[ProtocolAmended], amended_at: Sequence[str], rows: Sequence[RowRef]
+    amendments: Sequence[ProtocolAmended],
+    amended_at: Sequence[str],
+    rows: Sequence[RowRef],
+    *,
+    scope: Scope = Scope.EVIDENCE,
 ) -> list[str]:
-    """The ids of rows an amendment's `extraction_stale` makes stale, sorted and unique.
+    """The ids of rows of `scope` an amendment's rule for that scope (`scope_rule`) makes stale,
+    sorted and unique.
 
     As for decisions (decision 50), an amendment judges only the rows recorded before it, by
     recording order (`amended_at` is parallel to `amendments`), never by protocol version: after a
     reverted amendment (A to B, then B to A) a row recorded before A to B is judged by both."""
     stale: set[str] = set()
     for amendment, when in zip(amendments, amended_at, strict=True):
-        rule = amendment.extraction_stale
+        rule = scope_rule(amendment, scope)
         if rule is None:
             continue
         stale.update(row.row_id for row in rows if row.at < when and touches(rule, row.fields))
