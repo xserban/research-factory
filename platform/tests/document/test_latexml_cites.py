@@ -28,7 +28,7 @@ def _cite(*targets: str) -> str:
 
 
 def test_version() -> None:
-    assert CONVERTER_VERSION == "1.1"
+    assert CONVERTER_VERSION == "1.2"
 
 
 def test_cite_becomes_link_to_b_ordinal() -> None:

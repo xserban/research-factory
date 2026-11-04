@@ -42,8 +42,9 @@ Mapping (LaTeXML class to Markdown):
   (`ltx_toc`, `ltx_page_header`, `ltx_page_footer`, `nav`) is dropped.
 
 Text escaping: `&`, `<` and `>` in text, math alttext and captions are written as entities, so the
-output contains no `<` (anchor lines are added later by the anchoriser). Cell text additionally goes
-through `escape_cell`.
+output contains no `<` (anchor lines are added later by the anchoriser). In running text (not math)
+`*`, `_`, backtick and `~` are backslash-escaped, so they render literally. Cell text
+additionally goes through `escape_cell`.
 
 Determinism: the parser is lxml with the encoding from the first `<meta charset>` (UTF-8 by
 default); the walk is in document order; no state outside the call.
@@ -58,7 +59,7 @@ from lxml import etree
 
 from factory.document.normalise import escape_cell
 
-CONVERTER_VERSION = "1.1"
+CONVERTER_VERSION = "1.2"
 
 _SECTION_LEVELS = {"ltx_section": 2, "ltx_appendix": 2, "ltx_subsection": 3, "ltx_subsubsection": 4}
 _SKIP_TAGS = frozenset(
@@ -114,6 +115,7 @@ _ORDERED_MARKER = re.compile(r"(\d{1,9})([.)])(?=\s|$)")
 _BLOCK_MARKERS = "#>+-*=_"
 _SECTION_TAG = re.compile(r"[A-Za-z0-9]+(\.[0-9]+)*\.?")
 _LABEL = re.compile(r"[A-Za-z0-9().]+")
+_MD_META = re.compile(r"[*_`~]")
 _BARE_DOLLAR = re.compile(r"(?<!\\)\$")
 _MAX_WIDTH = 64
 _SLOT_BUDGET = 200_000
@@ -190,13 +192,18 @@ def _collapse(text: str) -> str:
     return " ".join(text.split())
 
 
-def _esc(text: str) -> str:
+def _entities(text: str) -> str:
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _esc(text: str) -> str:
+    """Entity-escape `& < >`; backslash-escape star, underscore, backtick and tilde."""
+    return _MD_META.sub(r"\\\g<0>", _entities(text))
 
 
 def _math_text(text: str) -> str:
     """Escaped math alttext in which every bare `$` is written `\\$`."""
-    return _BARE_DOLLAR.sub(r"\\$", _esc(text))
+    return _BARE_DOLLAR.sub(r"\\$", _entities(text))
 
 
 def _safe_start(text: str) -> str:
