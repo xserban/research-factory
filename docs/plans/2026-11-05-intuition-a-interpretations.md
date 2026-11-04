@@ -2,13 +2,13 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-Status: provisional — depends on the unconfirmed [confirm] rulings of slice-3c-intuition.md and on the G2 (slice-3b) plans.
+Status: ready — rulings adopted 2026-11-04; depends on G1 and G2 being built.
 
-> **Dependencies.** G1 (`2026-11-04-references-snowballing.md`) and all G2 plans (`2026-11-05-lineage-{a..e}-*.md`) merged: this plan reads G2's graph projection, ideas and contribution items, and G1's reference links. Plans D and E (extraction, evidence report) are merged. G3-B and G3-C build on this plan; it ends in a state where every earlier suite passes unchanged.
+> **Dependencies.** G1 (`2026-11-04-references-snowballing.md`) and all G2 plans (`2026-11-05-lineage-{a..e}-*.md`) merged: this plan reads G2's graph service, ideas and contribution items, and G1's reference links through G2-B's reference view. Plans D and E (extraction, evidence report) are merged. G3-B and G3-C build on this plan; it ends in a state where every earlier suite passes unchanged.
 
 **Goal:** Let Claude record short, source-bound interpretations of why an idea or paper works, let a human review, reject or supersede them, and prove by construction that no evidence output reads them.
 
-**Architecture:** A new layer module family: model `model/intuition.py`, pure helpers `factory/intuition/` (`validate.py`, `labels.py`), projection `index/intuition.py`, services `services/intuition_sources.py` (quote and citation verification, shared with G3-B) and `services/interpretations.py` (next, record, review, supersede, list, history). Layer nodes and `explains` edges are projected into G2's `graph_nodes` / `graph_edges` with `class = interpretation`; every G2 read is restricted to `class = evidence` in this plan so default views are unchanged before G3-C adds the opt-in filter. An AST architecture test and a differential test guard the boundary.
+**Architecture:** A new layer module family: model `model/intuition.py`, pure helpers `factory/intuition/` (`validate.py`, `labels.py`), projection `index/intuition.py`, services `services/intuition_sources.py` (quote and citation verification, shared with G3-B) and `services/interpretations.py` (next, record, review, supersede, list, history). Layer nodes and `explains` edges are projected into the layer's own tables `layer_nodes` / `layer_edges` (class `interpretation`); G2's `graph_nodes` / `graph_edges` and `services/lineage.py` are not touched, so G2 views are unchanged by construction until G3-C attaches the layer as a separate, opt-in part. An AST architecture test and a differential test guard the boundary.
 
 **Tech Stack:** as plans D, E and G2; stdlib `ast`; no new dependencies.
 
@@ -16,9 +16,9 @@ Status: provisional — depends on the unconfirmed [confirm] rulings of slice-3c
 
 ## Rulings made in this plan
 
-Spec rulings 1–11 are adopted as written and remain **[confirm]**. The following decide gaps; they are **[confirm]** and G3-C Task 6 records them in the *Proposed* decision.
+Spec rulings 1–11 are adopted as written. The following decide gaps. All were Adopted 2026-11-04 (researcher's standing approval of the recommendation), A1 in the stricter form ruled by the controller the same day; G3-C Task 6 records them in the *Proposed* decision when built.
 
-A1. **Layer rows in the graph tables.** G2's `graph_nodes` and `graph_edges` gain `class TEXT NOT NULL DEFAULT 'evidence'` and `review_state TEXT NULL`. The G3 projector writes interpretation nodes (`node_type = interpretation`, id `int_…`) and `explains` edges (`edge_id = "explains:" + int_id`) there. Every G2 query and statistic in `services/lineage.py` reads through one predicate `class = 'evidence'` until G3-C adds the `layer` parameter.
+A1. **Layer rows in their own tables.** The G3 projector writes interpretation nodes (`node_type = interpretation`, id `int_…`) and `explains` edges (`edge_id = "explains:" + int_id`) to `layer_nodes` and `layer_edges` (`index/intuition.py`), each row with `class = 'interpretation'` and `review_state`. G2's `graph_nodes` / `graph_edges` (`index/graph.py`) gain no column and receive no layer row, and `services/lineage.py` is not modified by G3-A or G3-B; separation therefore does not depend on a filter predicate. G3-C attaches the layer to G2 results as a separate part (`layer` parameter).
 A2. **Input seen by the writer.** `intuition_next` creates a task (kind `intuition`, one target per task) whose content (target, member works, live contribution items with quotes) is the task's `input_blob`. `interpretation.recorded` stores as `input_blob` the canonical JSON `{"task_input": <task content blob hash>, "call": <validated call input>}`. A human-written interpretation has no task and stores the call input only.
 A3. **Default targets.** Without `targets`, `intuition_next` serves confirmed ideas only, in idea-id order; papers are served only when named in `targets` (spec open question 2). A target with a live interpretation or an open task is skipped.
 A4. **Citation sources.** A `citation` source names either a G1 reference entry key `rex_<ULID>:<ordinal>` of a live extraction (its link state and resolved work, if any, are stored as computed fields) or a corpus work id. An entry whose link is `unresolved` is accepted and stored with `link_state = unresolved`; the reviewer sees it.
@@ -28,15 +28,17 @@ A7. **Distinct humans.** Humans are distinguished by `actor.user` of `kind = hum
 A8. **Transitions.** `unreviewed → reviewed|wrong`, `reviewed ↔ wrong` (each a new event; the latest wins), any live state `→ superseded` (by a new interpretation); `superseded` is terminal and a review of it is refused. `wrong` requires a non-blank note.
 A9. **Label wording** (spec open question 6). `layer_label(state) = "interpretation · " + state`; the class token is always `interpretation`.
 
-## G2 and G1 names assumed
+## G2 and G1 names consumed
 
-The G2 plans are drafted in parallel; this plan consumes the names the 3b spec states, with these assumed signatures. If a G2 plan differs, the executor adapts the call sites and records the difference in the task's commit message; the interfaces this plan produces do not change.
-- `services/lineage.py`: `graph_node(project, node_id) -> GraphNode | None` (`node_id`, `node_type: Literal["paper", "idea"]`, `scope: Literal["corpus", "external"] | None`); `graph_status`, `graph_query`, `graph_export` as in spec 3b §MCP; one private SQL access layer in which the `class` predicate is added.
-- `services/ideas.py`: `live_idea(project, idea_id) -> IdeaView | None` with `state` (`confirmed|proposed|rejected`), `merged_into`, `name`, `origin`, `members: list[str]`.
-- `services/contributions.py`: `live_items(project, work_id) -> list[ContributionItem]` with `extraction_id`, `item_kind`, `name`, `statement`, `anchor`, `quote`, `conversion_id`.
-- `index/lineage.py`: tables `graph_nodes(node_id PK, node_type, …)`, `graph_edges(edge_id PK, edge_type, source, target, status, basis, …)`; `PROJECTION_VERSION` value after G2 (call it `N`).
-- G1 `index/references.py`: `reference_extractions(extraction_id, work_id, live)`, `reference_entries(extraction_id, ordinal)`, `reference_links(extraction_id, ordinal, state, work_id, confidence)`.
-- Pass sessions: G2 contribution passes are plan-D extraction passes (spec 3b ruling 6), so `is_extraction_session` covers them.
+Exactly the names of the G2 plans' Interfaces (Produces) blocks; G3-B and G3-C consume the same list.
+- G2-D `services/lineage.py`: `GraphFilter(include_inferred=False, include_stale=False, edge_types=…, include_ideas=True)`; `load_graph(project, flt: GraphFilter = GraphFilter()) -> Graph` with `Graph.node(node_id) -> GraphNode | None`; `GraphNode(node_id, node_type: Literal["paper", "idea"], scope: Literal["corpus", "external"] | None, title, name, members)`; `graph_status(project) -> GraphStatus`; `graph_query(project, query: QueryKind, *, node=None, target=None, depth=3, k=2, flt=GraphFilter()) -> GraphQueryResult`; `graph_export(project, fmt: ExportFormat, *, query=None, node=None, target=None, depth=3, k=2, flt=GraphFilter()) -> str`. Read only; G3-A and G3-B do not modify the module.
+- G2-C `services/ideas.py`: `idea_view(project, idea_id) -> IdeaView | None` (`idea_id`, `name`, `origin`, `name_item`, `members: tuple[str, ...]`, `effective_members: tuple[str, ...]`, `state: IdeaState` = `proposed|confirmed|rejected|merged|superseded`, `merged_into`); `list_ideas(project, *, include_unconfirmed=False) -> list[IdeaView]` (default: confirmed, unmerged, unsuperseded, by idea id); `resolve_idea(project, idea_id) -> str`. G2-C `model/lineage.py`: `IDEA_ID_RE`.
+- G2-B `services/contributions.py`: `final_items(project) -> list[ItemView]` (one per final contribution row); `contribution_item(project, extraction_id) -> ItemView | None`; `ItemView` fields used: `extraction_id`, `work_id`, `item_kind`, `name`, `statement`, `anchor`, `quote`, `conversion_id`, `live`, `stale`.
+- G2-B `services/reference_view.py` (the only G1 read path): `reference_view(project, work_id) -> ReferenceView | None` (live extraction), `reference_view_of(project, extraction_id) -> ReferenceView | None`, `is_live_reference_extraction(project, extraction_id) -> bool`; `ReferenceView.entry(ordinal) -> EntryView | None` with `link_state: LinkState`, `link_work: str | None`, `confidence`. G1 tables are not read directly (`reference_entries` has no text column under G1 ruling 14 (b)).
+- G2-D `index/graph.py`: `graph_nodes(node_id, node_type, event_id)`, `graph_edges(edge_id, edge_type, source, target, base_status, basis, reference_extraction_id, ordinal, live, decision, flags, event_id)` — named only by the architecture test; never written or altered by G3.
+- G2-A `model/extraction.py` / `services/extraction.py`: `Scope`, `scope_population(project, scope)`, `is_extraction_session(project, session)` (true for evidence and contribution sessions), `final_rows(project, *, scope=Scope.EVIDENCE)`.
+- `PROJECTION_VERSION`: bumped once each by G1, G2-A, G2-C, G2-D, in that order; `N` is the value after G2-D. G3-A sets `N + 1`, G3-B `N + 2`.
+- Renamed from this plan's draft: `graph_node` → `load_graph(...).node`; `live_idea` → `idea_view`; `IdeaView.members: list[str]` → `effective_members: tuple[str, ...]`; idea state `confirmed|proposed|rejected` → `IdeaState` (adds `merged`, `superseded`); `live_items(project, work_id)` → `final_items(project)` filtered by `work_id`; `ContributionItem` → `ItemView`; `index/lineage.py` graph tables → `index/graph.py`; `graph_edges.status` → `base_status`; direct G1 table reads → `reference_view*` / `is_live_reference_extraction`.
 
 ## Global Constraints
 
@@ -59,7 +61,7 @@ The G2 plans are drafted in parallel; this plan consumes the names the 3b spec s
 ## File Structure
 
 - Create `model/intuition.py`; `factory/intuition/__init__.py`, `validate.py`, `labels.py`; `index/intuition.py`; `services/intuition_sources.py`, `services/interpretations.py`; `plugin/skills/rf-intuition/SKILL.md`.
-- Modify `events/catalog.py`, `index/default.py`, `index/lineage.py` (G2: two columns), `services/lineage.py` (G2: evidence predicate), `services/fulltext.py` (public `document_superseded`), `mcp/server.py`, `tests/test_plugin.py` (`SKILLS`).
+- Modify `events/catalog.py`, `index/default.py`, `services/fulltext.py` (public `document_superseded`), `mcp/server.py`, `tests/test_plugin.py` (`SKILLS`). No G2 module is modified (ruling A1).
 - Tests: `test_intuition_model.py`, `test_intuition_index.py`, `test_intuition_sources.py`, `test_interpretations_record.py`, `test_interpretations_review.py`, `test_intuition_separation.py`, `test_mcp_intuition.py`; helper `tests/intuition_helpers.py` (a G2 fixture project with two confirmed ideas, three corpus papers converted from hand-written Markdown, live contribution items, one G1 extraction with a resolved and an unresolved entry; `quote_src(...)`, `cite_src(...)` builders; `populate_layer(project)` writing a fixed set of layer events).
 
 ---
@@ -96,24 +98,23 @@ def test_reviewed_payload_states_limited(): ...   # "superseded" and "unreviewed
 ```
 - [ ] **Step 2:** Run `uv run pytest tests/test_intuition_model.py -v`; expect FAIL (modules missing). **Step 3:** Implement per Interfaces. **Step 4:** Tests, `mypy --strict`, ruff pass. **Step 5:** Commit `feat(intuition): interpretation model and shape validation`.
 
-### Task 2: Events, projection and the evidence predicate
+### Task 2: Events, projection and the layer graph tables
 
-*Tier: critical (events, index, the boundary in G2 reads).*
+*Tier: critical (events, index, the storage boundary with G2).*
 
-**Files:** Create `index/intuition.py`; modify `events/catalog.py`, `index/default.py`, `index/lineage.py`, `services/lineage.py`; Test `tests/test_intuition_index.py`; update the `PROJECTION_VERSION` pin test.
+**Files:** Create `index/intuition.py`; modify `events/catalog.py`, `index/default.py`; Test `tests/test_intuition_index.py`; update the `PROJECTION_VERSION` pin test.
 
 **Interfaces:**
-- Consumes: Task 1 payloads; G2 `graph_nodes`, `graph_edges`.
-- Produces: event types `interpretation.recorded`, `interpretation.reviewed`, schema 1. Tables (`index/intuition.py`): `interpretations(interpretation_id PK, target, target_kind, text, author, author_user, writer_session, writer_model, task_id, supersedes, superseded_by, review_state, self_reviewed, last_review_event, input_blob, event_id)`; `interpretation_sources(interpretation_id, position, role, kind, work_id, conversion_id, document_id, anchor, quote, reference, link_state, resolved_work; PK (interpretation_id, position))`; `interpretation_reviews(event_id PK, interpretation_id, state, note, reviewer_user, self_reviewed, channel)`; view `layer_hidden(item, reason, n)` with rows (`interpretation`, `wrong` | `superseded`, count). Handlers: `recorded` inserts the row (`review_state = unreviewed`) and, when `supersedes` is set, sets the prior row's `superseded_by` and `review_state = superseded`; `reviewed` appends history and sets `review_state` and `self_reviewed` unless the row is `superseded` (stored in history, state unchanged). Each handler also upserts the graph row: node `(int_id, node_type = "interpretation", class = "interpretation", review_state)` and edge `("explains:" + int_id, edge_type = "explains", source = int_id, target, status = NULL, basis = int_id, class = "interpretation", review_state)`. Handlers are total: an unknown target or prior id is stored as given.
-- Produces (`index/lineage.py`, G2): columns `class TEXT NOT NULL DEFAULT 'evidence'` and `review_state TEXT` on both graph tables, indexed on `class`. (`services/lineage.py`, G2): every read of the graph tables adds `class = 'evidence'` through one helper `_evidence_only(sql)` (ruling A1). `PROJECTION_VERSION = N + 1`.
+- Consumes: Task 1 payloads; G2-D `graph_status`, `graph_query`, `graph_export` (for the unchanged-output test only).
+- Produces: event types `interpretation.recorded`, `interpretation.reviewed`, schema 1. Tables (`index/intuition.py`): `interpretations(interpretation_id PK, target, target_kind, text, author, author_user, writer_session, writer_model, task_id, supersedes, superseded_by, review_state, self_reviewed, last_review_event, input_blob, event_id)`; `interpretation_sources(interpretation_id, position, role, kind, work_id, conversion_id, document_id, anchor, quote, reference, link_state, resolved_work; PK (interpretation_id, position))`; `interpretation_reviews(event_id PK, interpretation_id, state, note, reviewer_user, self_reviewed, channel)`; view `layer_hidden(item, reason, n)` with rows (`interpretation`, `wrong` | `superseded`, count). Handlers: `recorded` inserts the row (`review_state = unreviewed`) and, when `supersedes` is set, sets the prior row's `superseded_by` and `review_state = superseded`; `reviewed` appends history and sets `review_state` and `self_reviewed` unless the row is `superseded` (stored in history, state unchanged). Layer graph tables (ruling A1): `layer_nodes(node_id PK, node_type interpretation|concept, class NOT NULL CHECK (class = 'interpretation'), review_state, event_id)` and `layer_edges(edge_id PK, edge_type explains|uses, source, target, class NOT NULL CHECK (class = 'interpretation'), review_state, basis, event_id)`, indexed on `source` and `target`. Each handler also upserts the layer rows: node `(int_id, "interpretation", "interpretation", review_state)` and edge `("explains:" + int_id, "explains", source = int_id, target, "interpretation", review_state, basis = int_id)`. Handlers are total: an unknown target or prior id is stored as given. G2's `graph_nodes` / `graph_edges` are not touched. `PROJECTION_VERSION = N + 1` (N = value after G2-D).
 
 - [ ] **Step 1: Tests.**
 ```python
 def test_record_projects_row_sources_and_graph_rows():
     replay([recorded(int1, target=IDEA, sources=[q1, c1])])
     assert row(int1).review_state == "unreviewed" and n_sources(int1) == 2
-    assert graph_node(int1) == ("interpretation", "interpretation", "unreviewed")
-    assert graph_edge("explains:" + int1)[:3] == (int1, IDEA, "interpretation")
+    assert layer_node(int1) == ("interpretation", "interpretation", "unreviewed")
+    assert layer_edge("explains:" + int1)[:3] == (int1, IDEA, "interpretation")
 def test_review_fold_latest_wins_and_history_kept():
     replay([recorded(int1), reviewed(int1, "reviewed"), reviewed(int1, "wrong", note="misreads eq. 3")])
     assert row(int1).review_state == "wrong" and len(history(int1)) == 2
@@ -121,13 +122,13 @@ def test_supersession_marks_prior_and_both_remain(): ...
 def test_review_of_superseded_row_kept_in_history_state_unchanged(): ...
 def test_layer_hidden_view_counts(): assert hidden() == {("interpretation", "wrong"): 1, ("interpretation", "superseded"): 1}
 def test_rebuild_state_hash_stable(): ...          # replay twice, equal hashes
-def test_g2_reads_exclude_layer_rows():             # Review Focus 4
+def test_g2_outputs_unchanged_by_layer():          # Review Focus 4
     base = g2_outputs(project)                      # graph_status, every graph_query kind, both exports
     populate_layer(project); assert g2_outputs(project) == base
-def test_earlier_tables_unchanged_by_layer_events(): ...
+def test_earlier_tables_unchanged_by_layer_events(): ...   # includes graph_nodes, graph_edges: same rows, no new columns
 def test_projection_version_bumped(): assert PROJECTION_VERSION == str(int(G2_VERSION) + 1)
 ```
-- [ ] **Step 2:** Run; FAIL. **Step 3:** Implement and register handlers; add columns and the predicate; bump the version. **Step 4:** Tests, all G2 suites unedited, mypy, ruff. **Step 5:** Commit `feat(intuition): interpretation events, projection, evidence predicate on graph reads`.
+- [ ] **Step 2:** Run; FAIL. **Step 3:** Implement and register handlers; create the layer graph tables; bump the version. **Step 4:** Tests, all G2 suites unedited, mypy, ruff. **Step 5:** Commit `feat(intuition): interpretation events, projection, layer graph tables`.
 
 ### Task 3: Source verification and stale sources
 
@@ -136,9 +137,9 @@ def test_projection_version_bumped(): assert PROJECTION_VERSION == str(int(G2_VE
 **Files:** Create `services/intuition_sources.py`; modify `services/fulltext.py`; Test `tests/test_intuition_sources.py`.
 
 **Interfaces:**
-- Consumes: `conversion_manifest`, `resolve_anchor`, `quote_in_element` (`factory/document/quotes.py`), `list_works`, G1 reference tables.
+- Consumes: `conversion_manifest`, `resolve_anchor`, `quote_in_element` (`factory/document/quotes.py`), `list_works`; G2-B `is_live_reference_extraction`, `reference_view_of`, `ReferenceView.entry`, `EntryView.link_state` / `link_work`.
 - Produces (`services/fulltext.py`): `document_superseded(project: Project, document_id: str) -> bool` (public wrapper over `_document`).
-- Produces (`services/intuition_sources.py`): `@dataclass(frozen=True) SourceVerdict(stored: tuple[StoredSource, ...], issues: list[ValidationIssue])`; `verify_sources(project: Project, sources: Sequence[SourceInput], *, field: str = "sources") -> SourceVerdict` (all-or-nothing: `stored` is empty when any issue). Quote rules (ruling A5): work is a corpus work (`work-unknown`); conversion exists and belongs to that work (`conversion-not-of-work`); its document is not superseded (`document-superseded`); anchor resolves (`anchor-unknown`); quote verbatim after B2 normalisation (`quote-not-in-anchor`). Citation rules (ruling A4): an entry key must exist in a live G1 extraction (`entry-unknown`, `extraction-not-live`), stored with the link's `state` and `work_id`; a work id must be a corpus work (`work-unknown`). Reasons are a fixed vocabulary at `<field>[i].<attr>`; never document text. `entry_link(project, entry_key) -> tuple[str, str | None] | None` (link state, resolved work). `stale_sources(project: Project) -> dict[str, tuple[str, ...]]`: interpretation id → document ids of its quote sources that are now superseded (G3-B extends the same mapping to concept quotes under `cpt_` keys).
+- Produces (`services/intuition_sources.py`): `@dataclass(frozen=True) SourceVerdict(stored: tuple[StoredSource, ...], issues: list[ValidationIssue])`; `verify_sources(project: Project, sources: Sequence[SourceInput], *, field: str = "sources") -> SourceVerdict` (all-or-nothing: `stored` is empty when any issue). Quote rules (ruling A5): work is a corpus work (`work-unknown`); conversion exists and belongs to that work (`conversion-not-of-work`); its document is not superseded (`document-superseded`); anchor resolves (`anchor-unknown`); quote verbatim after B2 normalisation (`quote-not-in-anchor`). Citation rules (ruling A4): an entry key `rex_…:n` must name a live G1 extraction (`is_live_reference_extraction`, else `extraction-not-live`) with entry `n` (`reference_view_of(...).entry(n)`, else `entry-unknown`), stored with the entry's `link_state` and `link_work`; a work id must be a corpus work (`work-unknown`). Reasons are a fixed vocabulary at `<field>[i].<attr>`; never document text. `entry_link(project, entry_key) -> tuple[str, str | None] | None` (link state, resolved work; a thin wrapper over `reference_view_of`). `stale_sources(project: Project) -> dict[str, tuple[str, ...]]`: interpretation id → document ids of its quote sources that are now superseded (G3-B extends the same mapping to concept quotes under `cpt_` keys).
 
 - [ ] **Step 1: Tests** (fixture: paper P1 Markdown with paragraph `s1.p2` "We replace the softmax kernel with a positive random-feature map."; G1 extraction of P1 with entry 4 resolved to P2 and entry 7 unresolved).
 ```python
@@ -169,8 +170,8 @@ def test_stale_sources_after_new_document_version():         # Review Focus 1, a
 **Files:** Create `services/interpretations.py`; Test `tests/test_interpretations_record.py`.
 
 **Interfaces:**
-- Consumes: Task 3 `verify_sources`; Task 1 `shape_issues`; G2 `graph_node`, `live_idea`, `live_items`; task services (`create`, `claim_next`, `require_holder`, `complete_task`); `blobs.put`.
-- Produces: `INTUITION_KIND = "intuition"`; `class IntuitionBatch(StrictModel)`: `task_id`, `instructions`, `target`, `target_kind`, `target_name: str | None`, `members: list[str]`, `items: list[ServedItem]` (`ServedItem`: `work_id`, `extraction_id`, `item_kind`, `name`, `statement`, `anchor`, `quote`, `conversion_id`), `max_chars: int`, `max_sources: int`; `IntuitionNext(batch: IntuitionBatch | None, skipped: list[TargetSkip], remaining: int)` (`TargetSkip(target, reason)`, reasons `has-live-interpretation`, `task-open`, `not-confirmed`, `merged`, `external`, `unknown`); `intuition_next(project: Project, actor: Actor, *, targets: Sequence[str] | None = None) -> IntuitionNext` (ruling A3; agents only; inside `project.index.exclusive()`); `target_issue(project, target) -> ValidationIssue | None` (exists, `class = evidence`, idea confirmed and not merged, paper `scope = corpus`); `record_interpretation(project: Project, actor: Actor, entry: InterpretationInput, *, task_id: str | None = None) -> str` returns the `int_` id. Agents must pass the held task (`task_id`) whose target equals `entry.target`; humans pass none. Order: shape issues, target issue, supersedes rule (ruling A6: same target, live, and for agents unreviewed-or-wrong and agent-written), `verify_sources`; any issue raises `FactoryValidationError` with all issues and writes nothing. On success one append: `interpretation.recorded` (`author` from `actor.kind`, `input_blob` per ruling A2) and, for an agent, `task.completed`.
+- Consumes: Task 3 `verify_sources`; Task 1 `shape_issues`; G2-D `load_graph`, `GraphFilter`, `Graph.node`; G2-C `idea_view`, `list_ideas`, `IDEA_ID_RE`; G2-B `final_items`; task services (`create`, `claim_next`, `require_holder`, `complete_task`); `blobs.put`.
+- Produces: `INTUITION_KIND = "intuition"`; `class IntuitionBatch(StrictModel)`: `task_id`, `instructions`, `target`, `target_kind`, `target_name: str | None`, `members: list[str]`, `items: list[ServedItem]` (`ServedItem`: `work_id`, `extraction_id`, `item_kind`, `name`, `statement`, `anchor`, `quote`, `conversion_id`), `max_chars: int`, `max_sources: int`; `IntuitionNext(batch: IntuitionBatch | None, skipped: list[TargetSkip], remaining: int)` (`TargetSkip(target, reason)`, reasons `has-live-interpretation`, `task-open`, `not-confirmed`, `merged`, `external`, `unknown`); `intuition_next(project: Project, actor: Actor, *, targets: Sequence[str] | None = None) -> IntuitionNext` (ruling A3; agents only; inside `project.index.exclusive()`; default targets = `list_ideas(project)`; `members` = the idea's `effective_members`, or `[target]` for a paper; `items` = `final_items(project)` of those works that are `live` and not `stale`, mapped to `ServedItem`); `target_issue(project, target) -> ValidationIssue | None` (an `ida_` id: `idea_view` exists (`unknown`), `state != "merged"` (`merged`, naming `resolve_idea`), `state == "confirmed"` (`not-confirmed`); otherwise a paper node of `load_graph(project, GraphFilter(include_inferred=True, include_stale=True))` (`unknown`) with `scope == "corpus"` (`external`); layer ids are never targets); `record_interpretation(project: Project, actor: Actor, entry: InterpretationInput, *, task_id: str | None = None) -> str` returns the `int_` id. Agents must pass the held task (`task_id`) whose target equals `entry.target`; humans pass none. Order: shape issues, target issue, supersedes rule (ruling A6: same target, live, and for agents unreviewed-or-wrong and agent-written), `verify_sources`; any issue raises `FactoryValidationError` with all issues and writes nothing. On success one append: `interpretation.recorded` (`author` from `actor.kind`, `input_blob` per ruling A2) and, for an agent, `task.completed`.
 
 - [ ] **Step 1: Tests.**
 ```python
@@ -246,7 +247,7 @@ def test_review_counts_are_computed(): ...
 
 **Interfaces:**
 - Consumes: `final_rows`, `grouped_rows`, `independence_counts`, `live_claims`, `evidence_report`, `prisma_flow`, `search_report`, `methods_report`, G2 `graph_status`, `graph_query` (every kind), `graph_export` (`json`, `dot`).
-- Produces (test helpers, reused by G3-B and G3-C): `LAYER_MODULES: frozenset[str]` (the module names of the Global Constraints, including `factory.services.concepts` ahead of G3-B); `ALLOWED_IMPORTERS: frozenset[str]`; `LAYER_TABLES = ("interpretations", "interpretation_sources", "interpretation_reviews", "layer_hidden")` (G3-B appends its tables); `evidence_outputs(project) -> dict[str, str]` (each output's canonical JSON); `twin_projects(tmp_path) -> tuple[Project, Project]` (builds the G2 fixture once, copies the project directory, runs `populate_layer` on the copy, rebuilds both indexes).
+- Produces (test helpers, reused by G3-B and G3-C): `LAYER_MODULES: frozenset[str]` (the module names of the Global Constraints, including `factory.services.concepts` ahead of G3-B); `ALLOWED_IMPORTERS: frozenset[str]`; `LAYER_TABLES = ("interpretations", "interpretation_sources", "interpretation_reviews", "layer_nodes", "layer_edges", "layer_hidden")` (G3-B appends its tables); `evidence_outputs(project) -> dict[str, str]` (each output's canonical JSON); `twin_projects(tmp_path) -> tuple[Project, Project]` (builds the G2 fixture once, copies the project directory, runs `populate_layer` on the copy, rebuilds both indexes).
 
 - [ ] **Step 1: Tests.**
 ```python
@@ -255,6 +256,8 @@ def test_no_evidence_module_imports_the_layer():              # acceptance 8
     assert offenders == []
 def test_no_sql_outside_layer_names_layer_tables():
     assert [m for m in modules_with_string_literals(LAYER_TABLES) if m not in LAYER_MODULES | {"factory.services.lineage", "factory.services.check", "factory.services.trace"}] == []
+def test_layer_modules_never_name_g2_graph_tables():           # ruling A1: no layer row in graph_nodes / graph_edges
+    assert [m for m in modules_with_string_literals(("graph_nodes", "graph_edges")) if m in LAYER_MODULES] == []
 def test_scanner_catches_a_planted_import(tmp_path): ...       # a synthetic module importing factory.services.interpretations is reported
 def test_evidence_outputs_byte_identical_with_and_without_layer(tmp_path):
     plain, layered = twin_projects(tmp_path)
@@ -280,4 +283,4 @@ def test_differential_detects_a_leak(tmp_path, monkeypatch): ...   # patch final
 
 - **Spec coverage.** Interpretation shape and sources (rulings 4, 5; Tasks 1, 3, 4); node class (ruling 3; Task 2); review states, human-only review, supersession, self-review (rulings 6, 8; Task 5); default visibility and hidden counts for interpretations (ruling 7; Tasks 2, 5); stale sources (ruling 9; Tasks 3, 5); separation 1–3 and 5 (Tasks 2, 6); provenance and `input_blob` (Task 4); MCP tools `intuition_next`, `interpretation_record`, `interpretation_list` and pass refusal (Task 7). Concepts, `uses`, merge are G3-B; layer filter, `graph_status` layer counts, export, check, trace and CLI are G3-C.
 - **Types.** `InterpretationInput`, `StoredSource`, `verify_sources`, `stale_sources`, `ReviewState`, `layer_label`, `InterpretationView`, `InterpretationHidden`, `evidence_outputs`, `LAYER_MODULES` keep these names in G3-B and G3-C.
-- **Risk.** Task 2 touches G2's tables and reads; its gate is the unchanged G2 suites plus the differential test. Tiers: Tasks 1–6 critical, Task 7 standard.
+- **Risk.** Task 2 adds tables beside G2's and touches no G2 module; its gate is the unchanged G2 suites, the G2-output test and the differential test. Tiers: Tasks 1–6 critical, Task 7 standard.
