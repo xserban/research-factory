@@ -80,7 +80,7 @@ def _anchor_form(value: str | None) -> str | None:
     """Accept a document anchor (`ANCHOR_RE`) or a table cell anchor; the form only."""
     if value is None:
         return None
-    if ANCHOR_RE.match(value) or re.match(CELL_ANCHOR_RE, value):
+    if ANCHOR_RE.fullmatch(value) or re.fullmatch(CELL_ANCHOR_RE, value):
         return value
     raise ValueError(f"{value!r} is not a document anchor")
 

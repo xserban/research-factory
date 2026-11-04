@@ -238,3 +238,12 @@ def test_payloads_registered() -> None:
     for name, payload in expected.items():
         assert name in catalog
         assert catalog.get(name).payload is payload
+
+
+def test_cell_anchor_with_trailing_newline_rejected() -> None:
+    """The anchor form is a full match: a trailing newline is not a cell anchor (Task 1 minor)."""
+    item = dict(work_id="w", verdict="include", quote="q", rationale="r")
+    ScreeningItem.model_validate({**item, "anchor": "t2.r5.c3"})
+    for bad in ("t2.r5.c3\n", "s1.p1\n"):
+        with pytest.raises(ValidationError):
+            ScreeningItem.model_validate({**item, "anchor": bad})

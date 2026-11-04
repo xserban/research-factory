@@ -35,12 +35,13 @@ import json
 import math
 import random
 import secrets
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Literal
 
 from pydantic import JsonValue, ValidationError
 from sqlalchemy import text
 
+from factory.document.quotes import quote_in_element
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor, Event
 from factory.index.chase import considered_works, extended_works
@@ -92,6 +93,7 @@ from factory.services.tasks import (
 
 SCREEN_BATCH = 10
 TA = ScreeningStage.TITLE_ABSTRACT
+FT = ScreeningStage.FULL_TEXT
 
 _FRAMING = {PassLabel.A: Framing.INCLUSION, PassLabel.B: Framing.EXCLUSION}
 _CRITERION_ORDER: dict[PassLabel, Literal["protocol", "reversed"]] = {
@@ -459,10 +461,6 @@ def screen_record(
         task = require_holder(project, actor, task_id)
         batch = _batch_of(project, task)
         stage = _stage_of_task(task)
-        if stage is not TA:
-            raise FactoryValidationError(
-                [ValidationIssue("task_id", "recording full-text verdicts is not available yet")]
-            )
         if _joined_pass(project, actor.session, stage) is not batch.pass_label:
             raise FactoryValidationError(
                 [ValidationIssue("pass", f"this session does not screen pass {batch.pass_label}")]
@@ -481,7 +479,7 @@ def screen_record(
         for index, item in enumerate(items):
             duplicate = item.work_id in answered
             answered.add(item.work_id)
-            issues = _item_issues(index, item, records, criteria, duplicate)
+            issues = _item_issues(project, stage, index, item, records, criteria, duplicate)
             if issues:
                 rejected.append(ItemError(index=index, issues=issues))
             else:
@@ -516,6 +514,8 @@ def screen_record(
                 protocol_id=batch.protocol_id,
                 task_id=task_id,
                 supersedes=None if prior is None else prior.decision_id,
+                anchor=item.anchor if stage is FT else None,
+                conversion_id=_pinned_conversion(records[item.work_id]) if stage is FT else None,
             )
             events.append(
                 project.events.make(
@@ -561,7 +561,14 @@ def _stage_of_task(task: Task) -> ScreeningStage:
     return stage
 
 
+def _pinned_conversion(record: Mapping[str, str | None]) -> str | None:
+    """The conversion a full-text record pins, or None."""
+    return record.get("conversion_id")
+
+
 def _item_issues(
+    project: Project,
+    stage: ScreeningStage,
     index: int,
     item: ScreeningItem,
     records: dict[str, dict[str, str | None]],
@@ -571,7 +578,12 @@ def _item_issues(
     """Why one item may not be written, located as `items.<index>.<field>`; empty when valid.
 
     The item's own rules (Task 1) are re-checked here, so an item built without validation is
-    still refused. The record and criterion checks depend on the batch the task holds."""
+    still refused. The record and criterion checks depend on the batch the task holds.
+
+    At title/abstract an item carries no anchor and its quote is in the record's title or abstract.
+    At full text it names an anchor of the conversion its record pins, and its quote is verbatim in
+    that anchor's element (never across blocks or cells); nothing outside the pinned conversion is
+    read."""
     field = f"items.{index}"
     record = records.get(item.work_id)
     if record is None:
@@ -585,16 +597,43 @@ def _item_issues(
             ValidationIssue(".".join([field, *map(str, err["loc"])]), str(err["msg"]))
             for err in exc.errors()
         ]
+    if stage is not FT and item.anchor is not None:
+        return [ValidationIssue(f"{field}.anchor", "is only for full-text screening")]
     if item.criterion is not None and item.criterion not in criteria:
         return [
             ValidationIssue(
                 f"{field}.criterion",
                 "is not a criterion of this batch: not in its protocol version, or not "
-                "applicable at title and abstract",
+                f"applicable at {'full text' if stage is FT else 'title and abstract'}",
             )
         ]
+    if stage is FT:
+        return _anchored_quote_issues(project, field, item, _pinned_conversion(record))
     if not quote_in(item.quote, str(record.get("title") or ""), record.get("abstract")):
         return [ValidationIssue(f"{field}.quote", "is not in the record's title or abstract")]
+    return []
+
+
+def _anchored_quote_issues(
+    project: Project, field: str, item: ScreeningItem, conversion_id: str | None
+) -> list[ValidationIssue]:
+    """The full-text checks of one item: the anchor exists in the record's pinned conversion and
+    the quote is verbatim, after normalisation, in that anchor's element only."""
+    if item.anchor is None:
+        return [ValidationIssue(f"{field}.anchor", "is required at full-text screening")]
+    if conversion_id is None:
+        return [ValidationIssue(f"{field}.work_id", "has no pinned conversion in this task")]
+    # Imported here: document_read depends on agreement, which depends on this module.
+    from factory.services.document_read import resolve_anchor
+
+    try:
+        anchor = resolve_anchor(project, conversion_id, item.anchor)
+    except FactoryValidationError as exc:
+        if all(issue.field == "anchor" for issue in exc.issues):
+            return [ValidationIssue(f"{field}.anchor", issue.reason) for issue in exc.issues]
+        raise
+    if not quote_in_element(anchor.text, item.quote):
+        return [ValidationIssue(f"{field}.quote", "is not in the cited anchor")]
     return []
 
 
