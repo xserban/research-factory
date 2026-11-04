@@ -12,6 +12,7 @@ from factory.events.reader import read_all
 from factory.model.search import QueryKind, QuerySpec
 from factory.model.seed import SeedKind, SeedSpec
 from factory.model.work import ProvenanceMethod
+from factory.model.work_ids import arxiv_id_from_doi
 from factory.services.context import Project
 from factory.services.dedup import dedup_run
 from factory.services.project import project_status
@@ -330,3 +331,79 @@ def test_admission_refused_when_seed_already_retrieved(
     assert [issue.field for issue in caught.value.issues] == ["seed_id"]
     assert seed_id not in str(caught.value)
     assert _admitted_events(explore_project) == []
+
+
+def test_lookup_source_missing_rejects_item_and_writes_nothing_for_it(
+    project: Project, agent: Actor, mock_sources: SourcesFor
+) -> None:
+    only_arxiv = {"arxiv": mock_sources()["arxiv"]}
+    result = add_seeds(
+        project,
+        agent,
+        [
+            _positive(arxiv="2301.01234"),
+            _positive(doi="10.1000/xyz"),
+            _positive(arxiv="2301.09999"),
+        ],
+        sources=only_arxiv,
+    )
+    assert [item.index for item in result.rejected] == [1]
+    assert result.rejected[0].issues[0].field == "source"
+    assert [o.seed_id for o in result.written] == ["SEED01", "SEED02"]
+    assert len(_events_of(project, "seed.added")) == 2
+
+
+def test_repeat_explanation_is_refused(
+    explore_project: Project, human: Actor, mock_sources: SourcesFor
+) -> None:
+    seed_id = _admission_seed(explore_project, human, mock_sources, 9)
+    with pytest.raises(FactoryValidationError) as caught:
+        explain_seed_miss(explore_project, human, seed_id, "again", ProvenanceMethod.SEED_ADMISSION)
+    assert [issue.field for issue in caught.value.issues] == ["seed_id"]
+    assert seed_id not in str(caught.value)
+    assert len(_events_of(explore_project, "seed.miss_explained")) == 1
+
+
+def test_seed_check_equals_the_pairwise_loop(
+    explore_project: Project, human: Actor, mock_sources: SourcesFor
+) -> None:
+    specs = [
+        _positive(doi="10.1000/p1"),
+        _positive(arxiv="2301.01234"),
+        _positive(doi="10.48550/arXiv.2302.00002"),
+        _positive(doi="10.1000/absent"),
+    ]
+    add_seeds(explore_project, human, specs, sources=mock_sources())
+    sources = mock_sources(
+        openalex=[_openalex_for(1), _openalex_for(2)],
+        arxiv=arxiv_atom(
+            [
+                ("2301.01234v1", "Linear attention", 2023, "Ada"),
+                ("2302.00002v1", "Other", 2023, "Bo"),
+            ]
+        ),
+    )
+    for source in ("openalex", "arxiv"):
+        spec = QuerySpec(source=source, kind=QueryKind.KEYWORD, text="attention")
+        query_id = register_query(explore_project, human, spec, sources=sources)
+        run_query(explore_project, query_id, sources=sources)
+    corpus = list_works(explore_project)
+    assert len(corpus) >= 3
+
+    def arxiv_of(work: Any) -> str | None:
+        if work.identifiers.arxiv:
+            return str(work.identifiers.arxiv)
+        return arxiv_id_from_doi(work.identifiers.doi) if work.identifiers.doi else None
+
+    def oracle(spec: SeedSpec) -> str | None:
+        keys = spec.identity_keys()
+        for work in corpus:
+            if "doi" in keys and work.identifiers.doi == keys["doi"]:
+                return str(work.id)
+            if "arxiv" in keys and arxiv_of(work) == keys["arxiv"]:
+                return str(work.id)
+        return None
+
+    checks = seed_check(explore_project)
+    assert [c.matched_work for c in checks] == [oracle(s) for s in specs]
+    assert sum(c.matched_work is not None for c in checks) >= 2

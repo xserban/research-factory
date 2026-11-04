@@ -88,6 +88,9 @@ def add_seeds(
             project.index.sync()
             existing = _existing_seeds(project)
             issues = _spec_issues(spec, existing)
+            if not issues:
+                # The lookup must be registrable, or the seed could never resolve.
+                issues = query_issues(project, _lookup_query(spec), sources)
             if issues:
                 rejected.append(ItemError(index=index, issues=issues))
                 continue
@@ -397,13 +400,17 @@ def explain_seed_miss(
 ) -> None:
     """Record why a positive seed was not retrieved, and the admission route planned for it.
 
-    Validation messages name the field, never the seed, so a held-out id is not echoed back.
+    A seed is explained once. Validation messages name the field, never the seed, so a held-out
+    id is not echoed back.
     """
     with project.index.exclusive():
+        project.index.sync()
         positive_ids = {s.seed_id for s in _load_seeds(project) if s.spec.kind is SeedKind.POSITIVE}
         issues: list[ValidationIssue] = []
         if seed_id not in positive_ids:
             issues.append(ValidationIssue("seed_id", "not a positive seed"))
+        elif seed_id in _explained_ids(project):
+            issues.append(ValidationIssue("seed_id", "already explained"))
         if route is ProvenanceMethod.DATABASE:
             issues.append(ValidationIssue("route", "an admission route, not the database search"))
         if not reason.strip():
@@ -573,12 +580,21 @@ def seed_check(project: Project) -> list[SeedCheck]:
     groups = _merge_groups(project)
     explained = _explained_ids(project)
     admitted = _admitted(project)
+    by_doi: dict[str, str] = {}
+    by_arxiv: dict[str, str] = {}
+    for work in corpus:
+        if work.identifiers.doi:
+            by_doi.setdefault(work.identifiers.doi, work.id)
+        arxiv = _work_arxiv(work)
+        if arxiv:
+            by_arxiv.setdefault(arxiv, work.id)
+    position = {work.id: n for n, work in enumerate(corpus)}
     checks: list[SeedCheck] = []
     for seed in seeds:
         if seed.spec.kind is not SeedKind.POSITIVE:
             continue
         found = seed.work_id if seed.work_id is not None else admitted.get(seed.seed_id)
-        matched = _matching_work(seed, corpus, found)
+        matched = _matching_work(seed.spec.identity_keys(), found, by_doi, by_arxiv, position)
         if matched is not None:
             status: Literal["retrieved", "explained", "missing"] = "retrieved"
         elif seed.seed_id in explained:
@@ -658,18 +674,25 @@ def _roles(seeds: list[_Seed], split: _Split | None) -> dict[str, SeedRole]:
     return roles
 
 
-def _matching_work(seed: _Seed, corpus: list[Work], found: str | None) -> str | None:
-    """The corpus work that is the seed: the one `found` names, else one sharing its DOI or arXiv
-    id. `found` is the work the seed's lookup or admission resolved to, if any."""
-    keys = seed.spec.identity_keys()
-    for work in corpus:
-        if found is not None and work.id == found:
-            return work.id
-        if "doi" in keys and work.identifiers.doi == keys["doi"]:
-            return work.id
-        if "arxiv" in keys and _work_arxiv(work) == keys["arxiv"]:
-            return work.id
-    return None
+def _matching_work(
+    keys: Mapping[str, str],
+    found: str | None,
+    by_doi: Mapping[str, str],
+    by_arxiv: Mapping[str, str],
+    position: Mapping[str, int],
+) -> str | None:
+    """The corpus work that is the seed: the first, in corpus order, that `found` names or that
+    shares its DOI or arXiv id. `found` is the work the seed's lookup or admission resolved to."""
+    candidates = [
+        work_id
+        for work_id in (
+            found if found in position else None,
+            by_doi.get(keys["doi"]) if "doi" in keys else None,
+            by_arxiv.get(keys["arxiv"]) if "arxiv" in keys else None,
+        )
+        if work_id is not None
+    ]
+    return min(candidates, key=lambda work_id: position[work_id], default=None)
 
 
 def _work_arxiv(work: Work) -> str | None:
