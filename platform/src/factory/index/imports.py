@@ -13,7 +13,19 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from sqlalchemy import Column, Float, Index, Integer, MetaData, String, Table, and_, update
+from sqlalchemy import (
+    Column,
+    Float,
+    Index,
+    Integer,
+    MetaData,
+    String,
+    Table,
+    and_,
+    delete,
+    select,
+    update,
+)
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Connection
 
@@ -23,9 +35,17 @@ from factory.events.blobs import BlobStore
 from factory.events.envelope import Event
 from factory.imports.model import ImportRecord
 from factory.index.projection import Handler
-from factory.model.imports import ImportRecorded, ImportResolved, ImportSplitDrawn
+from factory.model.imports import (
+    ImportRecorded,
+    ImportResolutionDecided,
+    ImportResolved,
+    ImportSplitDrawn,
+)
+from factory.model.references import BINDING_DECISIONS, Confidence, Decision, LinkState
 
 UNSPLIT = "unsplit"
+BINDING = "binding"
+PROPOSAL = "proposal"
 _PARTS = {"development": "development", "held_out": "held-out"}
 _CHUNK = 500
 
@@ -34,6 +54,7 @@ _CHUNK = 500
 class ImportTables:
     imports: Table
     records: Table
+    decisions: Table
 
 
 def import_tables(metadata: MetaData) -> ImportTables:
@@ -84,10 +105,24 @@ def import_tables(metadata: MetaData) -> ImportTables:
         Column("candidates", String),
         Column("reason", String),
         Column("no_source_record", Integer),
+        Column("decision", String),
+        Column("confirmed_by", String),
+        Column("proposal", String),
+    )
+    decisions = Table(
+        "import_decisions",
+        metadata,
+        Column("import_id", String, primary_key=True),
+        Column("ordinal", Integer, primary_key=True),
+        Column("kind", String, primary_key=True),
+        Column("decision", String, nullable=False),
+        Column("work_id", String),
+        Column("confirmed_by", String),
+        Column("event_id", String, nullable=False),
     )
     Index("ix_import_records_doi", records.c.doi)
     Index("ix_import_records_arxiv", records.c.arxiv)
-    return ImportTables(imports, records)
+    return ImportTables(imports, records, decisions)
 
 
 def import_handlers(t: ImportTables, blobs: BlobStore | None) -> dict[str, Handler]:
@@ -95,6 +130,7 @@ def import_handlers(t: ImportTables, blobs: BlobStore | None) -> dict[str, Handl
         "import.recorded": _recorded(t, blobs),
         "import.split_drawn": _split_drawn(t, blobs),
         "import.resolved": _resolved(t),
+        "import.resolution_decided": _decided(t),
     }
 
 
@@ -160,6 +196,13 @@ def _resolved(t: ImportTables) -> Handler:
 
     def resolved(conn: Connection, event: Event) -> None:
         p = ImportResolved.model_validate(event.payload)
+        # A new resolution starts the import's links again: earlier decisions leave the live view.
+        conn.execute(delete(t.decisions).where(t.decisions.c.import_id == p.import_id))
+        conn.execute(
+            update(t.records)
+            .where(t.records.c.import_id == p.import_id)
+            .values(decision=None, confirmed_by=None, proposal=None)
+        )
         for r in p.resolutions:
             confidence = None if r.confidence is None else r.confidence.value
             conn.execute(
@@ -183,6 +226,70 @@ def _resolved(t: ImportTables) -> Handler:
             )
 
     return resolved
+
+
+def _decided(t: ImportTables) -> Handler:
+    """A decision replaces the earlier one of its kind (binding or proposal) for the record."""
+
+    def decided(conn: Connection, event: Event) -> None:
+        p = ImportResolutionDecided.model_validate(event.payload)
+        kind = BINDING if p.decision in BINDING_DECISIONS else PROPOSAL
+        values = {
+            "decision": p.decision.value,
+            "work_id": p.work_id,
+            "confirmed_by": p.confirmed_by,
+            "event_id": event.id,
+        }
+        conn.execute(
+            sqlite_insert(t.decisions)
+            .values(import_id=p.import_id, ordinal=p.ordinal, kind=kind, **values)
+            .on_conflict_do_update(index_elements=["import_id", "ordinal", "kind"], set_=values)
+        )
+        _fold(conn, t, p.import_id, p.ordinal)
+
+    return decided
+
+
+def _fold(conn: Connection, t: ImportTables, import_id: str, ordinal: int) -> None:
+    """Recompute a record's live link from its recorded resolution and its latest decisions."""
+    where = and_(t.records.c.import_id == import_id, t.records.c.ordinal == ordinal)
+    base = conn.execute(
+        select(t.records.c.base_state, t.records.c.base_work_id, t.records.c.base_confidence).where(
+            where
+        )
+    ).first()
+    if base is None or base[0] is None:
+        return
+    d = t.decisions.c
+    rows = conn.execute(
+        select(d.kind, d.decision, d.work_id, d.confirmed_by).where(
+            and_(d.import_id == import_id, d.ordinal == ordinal)
+        )
+    ).all()
+    by_kind = {str(row[0]): row for row in rows}
+    state, work_id, confidence = base[0], base[1], base[2]
+    decision = confirmed_by = None
+    binding = by_kind.get(BINDING)
+    if binding is not None:
+        decision, confirmed_by = binding[1], binding[3]
+        if decision == Decision.CONFIRM.value:
+            state, work_id = LinkState.RESOLVED.value, binding[2]
+            confidence = Confidence.CONFIRMED.value
+        else:
+            state, work_id, confidence = LinkState.UNRESOLVED.value, None, None
+    proposal = by_kind.get(PROPOSAL)
+    conn.execute(
+        update(t.records)
+        .where(where)
+        .values(
+            link_state=state,
+            work_id=work_id,
+            confidence=confidence,
+            decision=decision,
+            confirmed_by=confirmed_by,
+            proposal=None if proposal is None else proposal[1],
+        )
+    )
 
 
 def _split_drawn(t: ImportTables, blobs: BlobStore | None) -> Handler:

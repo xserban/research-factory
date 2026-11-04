@@ -17,8 +17,19 @@ from pydantic import Field, StringConstraints, model_validator
 
 from factory.imports.model import ImportFormat, ParseOutcome
 from factory.model.base import StrictModel
+from factory.model.chase import WorkId
 from factory.model.identity import BLOB_REF_RE, ULID_RE
-from factory.model.references import Resolution, VersionLabel
+from factory.model.references import (
+    BINDING_DECISIONS,
+    MAX_QUOTE,
+    MAX_RATIONALE,
+    ConfirmedBy,
+    Decision,
+    Ordinal,
+    Resolution,
+    VersionLabel,
+)
+from factory.model.screening import NonBlank
 from factory.model.work import RUN_ID_RE
 
 IMPORT_ID_RE = rf"^imp_{ULID_RE}$"
@@ -95,4 +106,32 @@ class ImportResolved(StrictModel):
             raise ValueError("resolutions name each ordinal once, in ascending order")
         if len(set(self.lookup_runs)) != len(self.lookup_runs):
             raise ValueError("lookup_runs must not repeat a run")
+        return self
+
+
+Quote = Annotated[NonBlank, Field(max_length=MAX_QUOTE)]
+
+
+class ImportResolutionDecided(StrictModel):
+    """A decision on one import record's match; it supersedes the previous one of its kind.
+
+    `quotes` is (the record's title, the candidate's title), as the service reads them from the
+    record and the stored work. A binding decision (`confirm`, `reject`) names who confirmed it; a
+    proposal never does; a confirmation names its work.
+    """
+
+    import_id: str = Field(pattern=IMPORT_ID_RE)
+    ordinal: Ordinal
+    decision: Decision
+    work_id: WorkId | None
+    rationale: Annotated[NonBlank, Field(max_length=MAX_RATIONALE)]
+    quotes: tuple[Quote, Quote]
+    confirmed_by: ConfirmedBy | None
+
+    @model_validator(mode="after")
+    def _shape(self) -> Self:
+        if (self.decision in BINDING_DECISIONS) != (self.confirmed_by is not None):
+            raise ValueError("a binding decision, and only a binding decision, names who confirmed")
+        if self.decision in (Decision.CONFIRM, Decision.PROPOSE_CONFIRM) and self.work_id is None:
+            raise ValueError("a confirmation names its work")
         return self

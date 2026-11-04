@@ -33,7 +33,14 @@ NON_STATE_TABLES: frozenset[str] = frozenset(
     }
 )
 OMITTED_WHEN_EMPTY: frozenset[str] = frozenset(
-    {"watch_cycles", "watch_cycle_sources", "watch_cycle_runs", "imports", "import_records"}
+    {
+        "watch_cycles",
+        "watch_cycle_sources",
+        "watch_cycle_runs",
+        "imports",
+        "import_records",
+        "import_decisions",
+    }
 )
 """Tables added after slice 3: while empty they leave no trace in the hash, so a log without
 their events keeps the state hash it had before they existed."""

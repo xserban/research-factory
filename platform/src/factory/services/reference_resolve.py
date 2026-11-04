@@ -540,28 +540,57 @@ def _rigor_mode(project: Project) -> RigorMode:
     return RigorMode(str(value))
 
 
-def _confirmer(
-    project: Project, actor: Actor, extraction_id: str, ordinal: int, link: _Link
+def confirmer_ruling(
+    actor: Actor,
+    *,
+    mode: RigorMode,
+    base_state: LinkState,
+    confirmed_by: str | None,
+    has_proposal: bool,
+    deciding_sessions: set[str],
 ) -> tuple[ConfirmedBy | None, list[ValidationIssue]]:
-    """Who a binding decision by `actor` is recorded as, or why it is refused (ruling 3)."""
+    """Who a binding decision by `actor` is recorded as, or why it is refused (ruling 3).
+
+    The policy of slice-3a ruling 3, shared by reference links and import records: a human always;
+    in `pilot` a second agent, on a title-fuzzy (`unconfirmed`) link only, seconding a recorded
+    proposal, from a session that made no earlier decision or proposal (`deciding_sessions`), and
+    never once a human has decided.
+    """
     if actor.kind == "human":
         return "human", []
     if actor.kind != "agent":
         return None, [ValidationIssue("actor", "only a human confirms or rejects a link")]
     reasons: list[str] = []
-    if _rigor_mode(project) is not RigorMode.PILOT:
+    if mode is not RigorMode.PILOT:
         reasons.append("an agent may only propose outside pilot mode")
-    if link.base_state is not LinkState.UNCONFIRMED:
+    if base_state is not LinkState.UNCONFIRMED:
         reasons.append("a second agent decides title-fuzzy (unconfirmed) links only")
-    if link.confirmed_by == "human":
+    if confirmed_by == "human":
         reasons.append("a human has decided this link; an agent cannot change that decision")
-    if not _has_proposal(project, extraction_id, ordinal):
+    if not has_proposal:
         reasons.append("a second agent decides only a recorded proposal")
-    elif actor.session in _deciding_sessions(project, extraction_id, ordinal):
+    elif actor.session in deciding_sessions:
         reasons.append("a session that proposed or decided on this entry cannot confirm it")
     if reasons:
         return None, [ValidationIssue("decision", "; ".join(reasons))]
     return "second-agent", []
+
+
+def _confirmer(
+    project: Project, actor: Actor, extraction_id: str, ordinal: int, link: _Link
+) -> tuple[ConfirmedBy | None, list[ValidationIssue]]:
+    """`confirmer_ruling` for a reference link."""
+    has_proposal = _has_proposal(project, extraction_id, ordinal)
+    return confirmer_ruling(
+        actor,
+        mode=_rigor_mode(project),
+        base_state=link.base_state,
+        confirmed_by=link.confirmed_by,
+        has_proposal=has_proposal,
+        deciding_sessions=(
+            _deciding_sessions(project, extraction_id, ordinal) if has_proposal else set()
+        ),
+    )
 
 
 def _candidate_quote_ok(work: Work, quote: str) -> bool:
