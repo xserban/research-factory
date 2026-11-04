@@ -34,6 +34,7 @@ Invariants:
 from __future__ import annotations
 
 from dataclasses import dataclass
+from itertools import islice
 
 from sqlalchemy import text
 
@@ -401,25 +402,33 @@ def _page(
     if after is None:
         start = -1
     else:
-        position = next((i for i, a in enumerate(anchors) if a.id == after), None)
+        position = manifest.position(after)
         if position is None:
             raise FactoryValidationError(
                 [ValidationIssue("after", f"{after}: not an anchor of {conversion_id}")]
             )
         start = position
-    candidates = [a for a in anchors[start + 1 :] if a.kind is not AnchorKind.CELL]
 
     segments: list[Segment] = []
     used = 0
-    for anchor in candidates:
+    index = start + 1
+    end = len(anchors)
+    while index < end:
+        anchor = anchors[index]
+        index += 1
+        if anchor.kind is AnchorKind.CELL:
+            continue
         if len(segments) == limit:
+            index -= 1
             break
         segment = _segment(anchor, PAGE_SEGMENT_MAX_CHARS)
         if segments and used + len(segment.text) > max_chars:
+            index -= 1
             break
         segments.append(segment)
         used += len(segment.text)
 
-    more = len(segments) < len(candidates)
+    # `index` is the first anchor not consumed; more output exists iff a non-cell one follows.
+    more = any(a.kind is not AnchorKind.CELL for a in islice(anchors, index, end))
     next_after = segments[-1].anchor if segments and more else None
     return segments, next_after

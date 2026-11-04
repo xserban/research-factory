@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 from sqlalchemy import text
 
-from factory.document.anchors import AnchorKind, Manifest
+from factory.document.anchors import Anchor, AnchorKind, Manifest
 from factory.document.converter import convert
 from factory.document.registry import ConverterRegistry
 from factory.errors import FactoryValidationError, ValidationIssue
@@ -21,6 +21,7 @@ from factory.services.context import Project
 from factory.services.document_convert import convert_documents
 from factory.services.document_read import (
     Segment,
+    _page,
     conversion_manifest,
     document_read,
     resolve_anchor,
@@ -472,3 +473,53 @@ def _conversion_row(project: Project, conversion_id: str) -> dict[str, Any]:
             .one()
         )
     return dict(row)
+
+
+class _CountingAnchor(Anchor):
+    """An anchor that counts attribute reads in a shared counter."""
+
+    reads = 0
+
+    def __getattribute__(self, name: str) -> Any:
+        if name in ("id", "kind"):
+            _CountingAnchor.reads += 1
+        return object.__getattribute__(self, name)
+
+
+def _counting_manifest(count: int) -> Manifest:
+    anchors: list[Anchor] = []
+    for i in range(count):
+        if i % 10 == 9:
+            anchors.append(_CountingAnchor(f"t1r1c{i}", AnchorKind.CELL, "t1", "x"))
+        else:
+            anchors.append(_CountingAnchor(f"p{i}", AnchorKind.PARAGRAPH, "s0", "x"))
+    return Manifest(tuple(anchors))
+
+
+def test_paging_a_large_manifest_does_not_rescan() -> None:
+    manifest = _counting_manifest(20_000)
+    expected = [a.id for a in manifest.anchors if a.kind is not AnchorKind.CELL]
+    _CountingAnchor.reads = 0
+    seen: list[str] = []
+    after: str | None = None
+    while True:
+        segments, after = _page(manifest, after, 50, 10**9, "c1")
+        seen += [s.anchor for s in segments]
+        if after is None:
+            break
+    assert _CountingAnchor.reads <= 6 * 20_000
+    assert seen == expected
+
+
+def test_after_cell_anchor_resumes_at_next_non_cell_anchor() -> None:
+    manifest = Manifest(
+        (
+            Anchor("p1", AnchorKind.PARAGRAPH, "s0", "a"),
+            Anchor("t1r1c1", AnchorKind.CELL, "t1", "b"),
+            Anchor("t1r1c2", AnchorKind.CELL, "t1", "c"),
+            Anchor("p2", AnchorKind.PARAGRAPH, "s0", "d"),
+        )
+    )
+    segments, after = _page(manifest, "t1r1c2", 10, 1000, "c1")
+    assert [s.anchor for s in segments] == ["p2"]
+    assert after is None
