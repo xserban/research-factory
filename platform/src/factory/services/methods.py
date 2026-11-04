@@ -22,6 +22,7 @@ from factory.services.calibration import calibration_status
 from factory.services.chase import chase_rounds
 from factory.services.context import Project
 from factory.services.extraction_agreement import agreement_overall
+from factory.services.extraction_audit import extraction_audit_report
 from factory.services.prisma import (
     UNCONVERTED,
     PrismaFlow,
@@ -102,6 +103,7 @@ def methods_report(project: Project) -> MethodsReport:
     ft_sessions = _full_text_sessions(project)
     schema = None if protocol is None else protocol.spec.extraction_schema
     ex_sessions = [] if schema is None else _extraction_sessions(project)
+    ex_audit = None if schema is None else extraction_audit_report(project)
     return MethodsReport(
         rigor_mode=_rigor_mode(project).value,
         method_profile=None if protocol is None else protocol.spec.method_profile.value,
@@ -141,6 +143,8 @@ def methods_report(project: Project) -> MethodsReport:
         extraction_sessions=len(ex_sessions),
         extraction_models=sorted({model for _, model in ex_sessions}),
         extraction_agreement=None if schema is None else agreement_overall(project).overall,
+        extraction_audit_n=0 if ex_audit is None else ex_audit.labelled,
+        extraction_error_rate=None if ex_audit is None else ex_audit.error_rate,
     )
 
 
@@ -363,7 +367,8 @@ def _extraction(report: MethodsReport, withheld: frozenset[str]) -> str:
         f"{report.extraction_passes}; planned dual-extracted share: "
         f"{dual}. Extraction sessions: {report.extraction_sessions}; models (as reported by the "
         f"agent): {_list(report.extraction_models)}. Overall agreement of the passes: "
-        f"{_fmt(report.extraction_agreement)}. {audit} Known limits: the citation-marker "
+        f"{_fmt(report.extraction_agreement)}, over the compared field values of aligned rows "
+        f"(unmatched rows are reported separately). {audit} Known limits: the citation-marker "
         "check matches at most five author surnames, so a longer parenthetical citation "
         'without "et al" is not detected as a copy marker; a value inside a cell such as '
         "`79.8 ± 0.2` lets `0.2` match, which agreement and audit catch; `reproduced` is "

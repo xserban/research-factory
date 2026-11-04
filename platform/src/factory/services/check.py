@@ -54,6 +54,7 @@ from factory.services.extraction import (
     unit_states,
 )
 from factory.services.extraction_agreement import grouped_rows
+from factory.services.extraction_audit import extraction_audit_outstanding, extraction_audit_report
 from factory.services.fulltext_status import fulltext_status
 from factory.services.methods import MethodsReport, methods_report
 from factory.services.prisma import search_report
@@ -817,6 +818,17 @@ def _extraction(project: Project) -> list[_Hit]:
                 "extraction-unresolved",
                 tuple(unresolved),
                 f"{len(unresolved)} work(s) have unresolved extraction disagreements",
+            )
+        )
+    if extraction_audit_outstanding(project):
+        hits.append(_Hit("extraction-audit-missing", (), "extraction audit not yet drawn"))
+    audit = extraction_audit_report(project)
+    if audit is not None and audit.above_ceiling:
+        hits.append(
+            _Hit(
+                "extraction-error-high",
+                (audit.audit_id,),
+                "the extraction audit's error rate is above the declared ceiling",
             )
         )
     stale = stale_extractions(project)

@@ -11,10 +11,12 @@ import pytest
 from sqlalchemy import text
 
 from factory.events.envelope import Actor
+from factory.model.extraction import AuditItemRef
 from factory.model.project import RigorMode
 from factory.model.protocol import ScreeningStage
 from factory.model.screening import Channel, PassLabel
 from factory.services import check as check_module
+from factory.services import extraction_audit as ea
 from factory.services.agreement import Outcome, final_outcomes
 from factory.services.check import (
     LEVELS,
@@ -34,6 +36,10 @@ from factory.services.extraction import (
     pass_config,
 )
 from factory.services.extraction_agreement import extraction_agreement, resolve_extraction
+from factory.services.extraction_audit import (
+    extraction_audit_record,
+    extraction_audit_sample,
+)
 from factory.services.methods import agent_methods, methods_report, render_methods
 from factory.services.trace import TraceNode, trace
 from factory.sources.registry import SourceFactory
@@ -206,6 +212,82 @@ def test_agent_view_hides_error_rate() -> None:
     assert (shown.code, shown.severity) == ("extraction-error-high", "error")
 
 
+def _label_all(project: Project, human: Actor, monkeypatch: pytest.MonkeyPatch, wrong: int) -> str:
+    items = [
+        AuditItemRef(work_id="rf:w1", row_key="rk_0123456789ab", field=f"f{i:04d}")
+        for i in range(40)
+    ]
+    monkeypatch.setattr(ea, "_population", lambda project: [(i, f"ext_{i.field}") for i in items])
+    sampled = extraction_audit_sample(project, human, random_seed=5)
+    for i, item in enumerate(sampled.items):
+        extraction_audit_record(
+            project,
+            human,
+            sampled.audit_id,
+            item.work_id,
+            item.row_key,
+            item.field,
+            i >= wrong,
+            "",
+            Channel.CLI,
+        )
+    return sampled.audit_id
+
+
+def test_audit_missing_until_drawn(
+    project: Project,
+    human: Actor,
+    monkeypatch: pytest.MonkeyPatch,
+    ext_a: Actor,
+    ext_b: Actor,
+    world: list[str],
+) -> None:
+    _both(project, ext_a, ext_b)
+    found = _hit(project, "extraction-audit-missing")
+    assert found is not None and found.refs == []
+    assert found.message == "extraction audit not yet drawn"
+    assert _severities(project, "extraction-audit-missing") == [None, "warning", "error"]
+    _label_all(project, human, monkeypatch, 0)
+    assert _hit(project, "extraction-audit-missing") is None
+
+
+def test_error_high_severity_and_agent_view(
+    project: Project,
+    human: Actor,
+    monkeypatch: pytest.MonkeyPatch,
+    ext_a: Actor,
+    ext_b: Actor,
+    world: list[str],
+) -> None:
+    _both(project, ext_a, ext_b)
+    audit_id = _label_all(project, human, monkeypatch, 3)  # 3 of 40 = 0.075 > 0.05
+    found = _hit(project, "extraction-error-high")
+    assert found is not None and found.refs == [audit_id]
+    assert "0.075" not in found.message and "0.05" not in found.message
+    assert _severities(project, "extraction-error-high") == [None, "warning", "error"]
+    # The fixture project is a pilot: not an error under its own mode.
+    report = check(project)
+    assert [f.severity for f in report.findings if f.code == "extraction-error-high"] == ["warning"]
+    shown = [f for f in agent_view(report).findings if f.code == "extraction-error-high"]
+    assert len(shown) == 1 and "0.075" not in shown[0].message
+    text = render_methods(methods_report(project))
+    assert "0.075 over 40 labelled values" in text
+    assert methods_report(project).extraction_audit_n == 40
+
+
+def test_error_high_absent_below_ceiling(
+    project: Project,
+    human: Actor,
+    monkeypatch: pytest.MonkeyPatch,
+    ext_a: Actor,
+    ext_b: Actor,
+    world: list[str],
+) -> None:
+    _both(project, ext_a, ext_b)
+    _label_all(project, human, monkeypatch, 1)  # 0.025
+    assert _hit(project, "extraction-error-high") is None
+
+
 def test_audit_levels_are_declared() -> None:
     assert LEVELS["extraction-audit-missing"] == (None, "warning", "error")
     assert LEVELS["extraction-error-high"] == (None, "warning", "error")
@@ -310,6 +392,8 @@ def test_methods_states_extraction_plan_and_sessions(
     assert report.extraction_models == ["claude-opus-5-5", "claude-sonnet-5-5"]
     assert report.extraction_agreement == 1.0
     text = render_methods(report)
+    assert "compared field values of aligned rows" in text
+    assert "unmatched rows are reported separately" in text
     assert "Extraction. Data were extracted with the pack ml-benchmark@1" in text
     for limit in ("at most five author surnames", "79.8 ± 0.2", "`reproduced` is recorded"):
         assert limit in text
