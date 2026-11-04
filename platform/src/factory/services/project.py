@@ -17,6 +17,7 @@ from factory.services.audit import audit_report
 from factory.services.calibration import CalibrationStatus, calibration_status
 from factory.services.chase import chase_rounds
 from factory.services.context import Project, ProjectPaths, build_project, slug_issues
+from factory.services.human_queue import HumanQueue, human_queue
 from factory.services.prisma import has_full_text_plan
 from factory.services.protocol import current_protocol
 from factory.services.question import current_question
@@ -75,6 +76,8 @@ class ProjectStatus(StrictModel):
     screening: ScreeningStatus
     chase_rounds: int
     admitted_seeds: int
+    human: HumanQueue | None = None
+    """Pending human decisions per gate kind; counts only."""
 
 
 def init_project(
@@ -163,6 +166,7 @@ def project_status(project: Project) -> ProjectStatus:
         screening=_screening_status(project),
         chase_rounds=len(chase_rounds(project)),
         admitted_seeds=admitted_seed_count(project),
+        human=human_queue(project),
     )
 
 
