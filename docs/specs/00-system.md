@@ -25,10 +25,12 @@ research-factory/
       cli/                  thin CLI: init, rebuild, status, trace, check, report, serve
     tests/
   plugin/                   Claude Code plugin: research skills, subagents, hooks (+ provenance manifest)
-  domain-packs/             vocabularies, extraction schemas, gold sets
+  domain-packs/             (not created; see note) vocabularies, extraction schemas, gold sets
   projects/<slug>/          one directory per research project (data; see §4)
   docs/                     vision, decisions, specs, plans
 ```
+
+*Note (reconciled 2026-11-04 with the code):* domain packs live in `platform/src/factory/packs/` (`ml_benchmark.py`, `contribution.py`); there is no top-level `domain-packs/`. Gold sets are not stored there.
 
 Rule: business logic lives in `services/`. `mcp/` and `cli/` only parse input, call a service, and format output.
 
@@ -91,7 +93,7 @@ IDs are never reused and never change. A changed entity is a new version or a su
 
 Strict, validated models (decisions #5, #18): `Work` (with `Identifiers`, `Provenance` — a work cannot exist without provenance), `Question`, `Protocol`, `Criterion`, `Seed`, `Query`, `SearchRun`, `Merge`, `Decision`, `Task`.
 
-Generic graph nodes, edges and free labels arrive with the graph slice. Claims arrive with the extraction slice.
+Generic graph nodes, edges and free labels arrive with the graph slice. *Note (2026-11-04):* [slice-3b-lineage.md](slice-3b-lineage.md) supersedes this sketch: the graph is typed tables and tools with no free labels. Claims arrive with the extraction slice.
 
 ## 6. Rigor modes
 

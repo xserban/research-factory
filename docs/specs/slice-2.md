@@ -9,7 +9,7 @@ Pilot for acceptance: **best linear attention mechanism for vision models** — 
 
 ## User flow
 1. **Declare before reading (R-13):** the protocol gains an extraction schema (from a domain pack, e.g. `ml-benchmark`), the full-text screening plan, and the comparability keys. Changes are amendments with blast radius (R-14, R-15).
-2. **Acquire:** the platform fetches full text for every work whose title/abstract outcome is `promote`, trying legal routes in a fixed order; every attempt is recorded; failures are PRISMA "not retrieved" with a reason.
+2. **Acquire:** the platform fetches full text for every work whose title/abstract outcome is `promote` (implemented as `Outcome.INCLUDED`; reconciled 2026-11-04 with decision 48), trying legal routes in a fixed order; every attempt is recorded; failures are PRISMA "not retrieved" with a reason.
 3. **Normalise:** every retrieved source, whatever its format, is converted deterministically into one canonical **Markdown** document with stable anchors; raw source and Markdown are both content-addressed in the project's local library.
 4. **Full-text screening:** criteria with `applies_at = full-text | either` are applied with the slice-1 machinery (two passes, calibration, κ, audit, verified quotes) — quotes now cite anchors.
 5. **Extract:** for each included work, Claude extracts schema rows (results, settings) and atomic claims through `extract_next` / `extract_record`; the platform verifies every quote and every number against the anchored source.
@@ -30,7 +30,7 @@ Pilot for acceptance: **best linear attention mechanism for vision models** — 
 
 Legal routes only. Each attempt records route, URL, HTTP status, retrieved_at, licence (if known), source version (arXiv `vN`, publisher DOI) and raw blob hash. Rate limiting reuses slice-1 `PoliteClient`.
 
-**Version rule (decided 2026-11-02):** extraction applies to one recorded version — **the latest available version** at retrieval time (latest arXiv `vN` or a later version of record, by date). A newer version found later is a new document, never an edit; earlier extractions stay attached to their version and are marked superseded-by-version, prompting re-extraction. Numbers in older versions are not extracted; when another paper's copied value matches only an older version, the copied-result flag notes the version mismatch.
+**Version rule (decided 2026-11-02):** extraction applies to one recorded version — **the latest available version** at retrieval time (on the successful route: the latest arXiv `vN`, or the version the route offers; versions of record are not compared across routes by date in slice 2; reconciled 2026-11-04 with decision 46). A newer version found later is a new document, never an edit; earlier extractions stay attached to their version and are marked superseded-by-version, prompting re-extraction. Numbers in older versions are not extracted; when another paper's copied value matches only an older version, the copied-result flag notes the version mismatch.
 
 ### Canonical document
 - **Everything is converted to Markdown** (decided 2026-11-03): HTML, LaTeX, JATS and PDF all end as one canonical Markdown document per document version. Agents read only this Markdown (via `document_read`); raw sources are kept for re-conversion and audit.
@@ -97,7 +97,7 @@ Plus **atomic claims** (R-40): statement, type (finding / mechanism / limitation
 
 *Implemented in plan 2B2:* `document_read` (MCP; read-only, refused to a session that has joined a pass (narrowed for full-text screeners in plan 2C)); `factory document convert|status|read` (CLI; `convert` is the researcher's act); events `document.converted` and `document.conversion_failed`; one conversion per (document, converter, version). The LaTeXML-HTML converter is registered; the LaTeX and PDF converters are registered after decision 49.
 
-*Implemented in plan 2C:* stage-aware screening (`stage` on passes, sessions, calibration, agreement, audit, resolutions and decisions); full-text decisions cite an anchor of the pinned conversion and are verified against it; `screen_next`, `screen_agreement`, `audit_sample` and `calibration_label` take `stage`; CLI `--stage`; `document_read` for full-text screeners is limited to their own queue and pinned conversion; PRISMA full-text boxes; the `fulltext-decision-stale-document` check finding; protocol field `full_text_screening` (omitted from the version hash when absent); decision 50 (Proposed) on decisions carrying along the protocol lineage.
+*Implemented in plan 2C:* stage-aware screening (`stage` on passes, sessions, calibration, agreement, audit, resolutions and decisions); full-text decisions cite an anchor of the pinned conversion and are verified against it; `screen_next`, `screen_agreement`, `audit_sample` and `calibration_label` take `stage`; CLI `--stage`; `document_read` for full-text screeners is limited to their own queue and pinned conversion; PRISMA full-text boxes; the `fulltext-decision-stale-document` check finding; protocol field `full_text_screening` (omitted from the version hash when absent); decision 50 (Decided 2026-11-04; reconciled with decisions.md) on decisions carrying along the protocol lineage.
 
 *Implemented in plan 2D:* protocol field `extraction_schema` (pack, fields, comparability keys, dual-extraction sample, audit parameters) and the `ml-benchmark` pack; extraction in two independent passes with per-field provenance, verified quotes, number and table-cell checks, copied-result flags and pass-A-only claims; schema amendments stale affected rows and re-queue their units; agreement per field, human resolution (the human chooses between verified values and never types one), final and grouped rows; audit of agreed values with `EXTRACTION_ERROR_CEILING = 0.05`; `check` findings, `trace` from an extraction to the question, and a methods paragraph. MCP: `extract_next`, `extract_record`, `extract_agreement`, `extract_audit_sample`, `extract_audit_record`. CLI: `factory extract status|agreement|resolve|audit-sample|audit-label|audit-report`. Decision 51. Known limits: citations are capped at five surnames; the cell token `79.8 ± 0.2` is not split; `reproduced` is not checked; unit labels of the OTHER family match exactly (for example `MB` is not `M`).
 
@@ -131,7 +131,7 @@ Appraisal (deferred, IDEA-21); PubMed search and PMC route (first biomedical pro
 | B | Markdown conversion: converter bake-off, anchors, tables, `document_read` |
 | C | Full-text screening and full PRISMA |
 | D | Schema, extraction, verification, dual extraction, agreement, audit |
-| E | Evidence report, trace extensions, `ml-benchmark` pack |
+| E | Evidence report, trace extensions (the `ml-benchmark` pack was built in plan D; reconciled 2026-11-04) |
 
 ## Open questions
 1. **Converters:** which tool per input format (LaTeXML HTML, LaTeX source, PDF: deterministic parser such as PyMuPDF vs. layout-model tools such as Docling or GROBID) to reach Markdown. Criteria: determinism, table fidelity, offline, licence. Decided by a bake-off on a fixed off-topic ML test set (plan B, decision 47); re-checked on the pilot's included works in the end-to-end run.

@@ -29,7 +29,7 @@ Principle: **a deterministic platform, with the intelligence outside it.** The p
 
 ## 1. Storage
 - **Event log (append-only) as source of truth.** Each event: actor (human/agent), session, model, timestamp, change, evidence. Graph = projection of events. Gives provenance, versioning/snapshots, per-person branches, replay, credit.
-- **Graph tables:** nodes, edges, labels, properties (relational property graph; recursive SQL for neighbourhoods and paths). SQLite (via SQLAlchemy) first; Postgres for teams. No graph database needed at this scale.
+- **Graph tables:** *(superseded 2026-11-04 by [specs/slice-3b-lineage.md](specs/slice-3b-lineage.md): typed tables and tools, no free labels)* nodes, edges, labels, properties (relational property graph; recursive SQL for neighbourhoods and paths). SQLite (via SQLAlchemy) first; Postgres for teams. No graph database needed at this scale.
 - **Blob store:** PDFs, parsed full text, datasets, experiment outputs; content-addressed (hash).
 - **Search index:** full text; embeddings optional (open decision #9 — if used, a local model chosen and evaluated for scientific text, no API).
 
