@@ -7,6 +7,8 @@ Every entry and work is invented; the fixtures are those of `test_snowball_round
 from __future__ import annotations
 
 import re
+from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -21,8 +23,10 @@ from factory.model.project import RigorMode
 from factory.model.protocol import SnowballPlan
 from factory.model.references import Direction, Via
 from factory.model.seed import SeedKind, SeedSpec
+from factory.model.work import Provenance, ProvenanceMethod, Work
 from factory.services import check as check_service
 from factory.services import references as references_service
+from factory.services import seeds as seeds_service
 from factory.services.agreement import Outcome
 from factory.services.chase import search_chase
 from factory.services.check import LEVELS, _findings_as
@@ -367,3 +371,50 @@ def test_seed_found_by_snowball_labelled_in_cli_only(
     [line] = [x for x in result.stdout.splitlines() if x.startswith(outcome.seed_id)]
     assert "retrieved (snowball)" in line
     assert all("found_by" not in s.model_dump() for s in agent_seeds(project))
+
+
+# --- Seed route under decision 54 (fix round 1) ---
+
+_ULIDS = iter(f"01HZX3K4M5N6P7Q8R9S0TVWX{n:02d}" for n in range(10, 99))
+
+
+def _work(work_id: str, *methods: ProvenanceMethod) -> Work:
+    return Work(
+        id=work_id,
+        title="Invented",
+        provenance=[
+            Provenance(
+                source="openalex",
+                run_id=f"run_{next(_ULIDS)}",
+                query_id=f"qry_{next(_ULIDS)}",
+                at=datetime(2026, 1, 1, tzinfo=UTC),
+                raw_blob="sha256:" + "a" * 64,
+                method=method,
+            )
+            for method in methods
+        ],
+    )
+
+
+def test_hand_search_only_seed_is_found_by_search() -> None:
+    work = _work("rf:a2020-x-00000001", ProvenanceMethod.HAND_SEARCH)
+    assert seeds_service._found_by([work], set()) == "search"
+
+
+def test_admission_only_work_with_merged_database_work_is_found_by_search(
+    project: Project, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    primary = _work("rf:a2020-x-00000002", ProvenanceMethod.SEED_ADMISSION)
+    absorbed = _work("rf:a2020-x-00000003", ProvenanceMethod.DATABASE)
+    merge = SimpleNamespace(primary=primary.id, absorbed=(absorbed.id,))
+    monkeypatch.setattr(seeds_service, "active_merges", lambda _p: [merge])
+    groups = seeds_service._merge_groups(project)
+    assert groups[primary.id] == groups[absorbed.id] == {primary.id, absorbed.id}
+    group = [w for w in (primary, absorbed) if w.id in groups[primary.id]]
+    assert seeds_service._found_by(group, set()) == "search"
+
+
+def test_admission_only_seed_stays_admission() -> None:
+    work = _work("rf:a2020-x-00000004", ProvenanceMethod.SEED_ADMISSION)
+    assert seeds_service._found_by([work], set()) == "admission"
+    assert seeds_service._found_by([], set()) is None
