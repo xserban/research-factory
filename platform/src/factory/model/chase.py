@@ -25,7 +25,8 @@ from pydantic import Field, StringConstraints, model_validator
 
 from factory.model.base import StrictModel
 from factory.model.identity import ULID_RE
-from factory.model.screening import NonBlank, PassLabel
+from factory.model.protocol import ScreeningStage
+from factory.model.screening import NonBlank, PassLabel, RunStage
 from factory.model.seed import POSITIVE_SEED_ID_RE
 from factory.model.work import RUN_ID_RE
 from factory.model.work_ids import WORK_ID_RE
@@ -72,6 +73,7 @@ class SampleExtended(StrictModel):
     random_seed: int = Field(ge=0, lt=2**32)
     considered: tuple[WorkId, ...]
     added: tuple[WorkId, ...]
+    stage: RunStage = ScreeningStage.TITLE_ABSTRACT
 
     @model_validator(mode="after")
     def _pass_b_and_subset(self) -> Self:

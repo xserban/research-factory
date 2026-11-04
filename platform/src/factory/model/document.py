@@ -21,10 +21,8 @@ from pydantic import Field, StringConstraints, field_validator, model_validator
 from factory.document.anchors import AnchorKind
 from factory.model.base import StrictModel
 from factory.model.fulltext import DOCUMENT_ID_RE
-from factory.model.identity import BLOB_REF_RE, ULID_RE
+from factory.model.identity import BLOB_REF_RE, CONVERSION_ID_RE
 from factory.model.screening import NonBlank
-
-CONVERSION_ID_RE = rf"^cnv_{ULID_RE}$"
 
 WARNING_MAX_CHARS = 200
 WARNINGS_MAX = 50

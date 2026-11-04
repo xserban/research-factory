@@ -53,6 +53,9 @@ _SORT_KEYS: dict[str, tuple[str, ...]] = {
     "limits": ("field", "value"),
 }
 _SEARCH_STRATEGY_KEYS = ("sources", "queries", "limits")
+_OMITTED_WHEN_NONE = frozenset({"full_text_screening"})
+"""Optional sections left out of every hash while unset, so protocols that predate them keep
+their versions. Other `None` values stay in the hash."""
 
 
 class MethodProfile(StrEnum):
@@ -67,7 +70,7 @@ class MethodProfile(StrEnum):
 class ScreeningStage(StrEnum):
     TITLE_ABSTRACT = "title-abstract"
     FULL_TEXT = "full-text"
-    EITHER = "either"
+    EITHER = "either"  # A criterion's `applies_at` only, never the stage of a run or an event.
 
 
 class CriterionKind(StrEnum):
@@ -177,6 +180,8 @@ class ProtocolSpec(StrictModel):
     queries: tuple[PlannedQuery, ...]
     limits: tuple[Limit, ...] = ()
     screening: ScreeningPlan
+    full_text_screening: ScreeningPlan | None = None
+    """The full-text plan. Absent (None) until the protocol declares full-text screening."""
     rationale: str = ""
 
 
@@ -196,6 +201,8 @@ def _digest(dump: dict[str, Any], keys: Iterable[str]) -> str:
         if key in PROSE_KEYS:
             continue
         items: Any = dump[key]
+        if key in _OMITTED_WHEN_NONE and items is None:
+            continue
         if key in _SORT_KEYS:
             sort_keys = _SORT_KEYS[key]
             items = sorted(items, key=lambda item: tuple(str(item[k]) for k in sort_keys))
@@ -211,7 +218,15 @@ def protocol_version(spec: ProtocolSpec) -> str:
     return "P@" + _digest(dump, dump.keys())
 
 
-AMENDABLE_FIELDS = ("question_id", "method_profile", "sources", "queries", "limits", "screening")
+AMENDABLE_FIELDS = (
+    "question_id",
+    "method_profile",
+    "sources",
+    "queries",
+    "limits",
+    "screening",
+    "full_text_screening",
+)
 """Top-level hashed fields other than criteria, which an amendment reports as `other_changes`."""
 
 
