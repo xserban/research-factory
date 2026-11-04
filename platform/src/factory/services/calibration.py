@@ -254,6 +254,39 @@ def calibration_status(
     )
 
 
+def calibrated_models(
+    project: Project, label: PassLabel, stage: ScreeningStage = ScreeningStage.TITLE_ABSTRACT
+) -> set[str]:
+    """The models that recorded a calibration decision for pass `label` at `stage`, under the
+    current protocol lineage and since the last criterion-changing amendment: the models the
+    pass's gate was measured on. Empty before any calibration decision."""
+    require_pass_stage(stage)
+    project.index.sync()
+    protocol = current_protocol(project)
+    if protocol is None:
+        return set()
+    versions = lineage_through(project, protocol.protocol_id)
+    cut = last_criterion_change(project, stage=stage)
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT DISTINCT d.protocol_id, d.event_id, e.model FROM decisions d"
+                " JOIN events e ON e.id = d.event_id WHERE d.phase = :phase AND d.stage = :stage"
+                " AND d.pass_label = :label AND e.model IS NOT NULL"
+            ),
+            {
+                "phase": ScreeningPhase.CALIBRATION.value,
+                "stage": stage.value,
+                "label": label.value,
+            },
+        ).all()
+    return {
+        str(model)
+        for version, event_id, model in rows
+        if str(version) in versions and (cut is None or str(event_id) > cut)
+    }
+
+
 def _calibration_population(project: Project, stage: ScreeningStage) -> set[str]:
     """The works a calibration set of `stage` is drawn from: the corpus at title/abstract; at full
     text, the works whose title/abstract final outcome is INCLUDED and that have a converted live

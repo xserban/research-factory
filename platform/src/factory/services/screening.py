@@ -48,6 +48,7 @@ from factory.events.reader import read_all
 from factory.index.chase import considered_works, extended_works
 from factory.model.base import StrictModel
 from factory.model.chase import SampleExtended
+from factory.model.project import RigorMode
 from factory.model.protocol import ProtocolStatus, ScreeningStage
 from factory.model.screening import (
     Channel,
@@ -64,6 +65,7 @@ from factory.model.task import Task, TaskStatus
 from factory.model.work import Work
 from factory.services.calibration import (
     CalibrationStatus,
+    calibrated_models,
     calibration_drawn,
     calibration_items,
     calibration_status,
@@ -84,6 +86,7 @@ from factory.services.protocol_rules import DecisionRef, stale_decisions
 from factory.services.results import BatchResult, ItemError
 from factory.services.screening_stats import quote_in
 from factory.services.search import list_works
+from factory.services.seeds import _rigor_mode
 from factory.services.stages import require_pass_stage, screening_plan, stage_of_kind, task_kind
 from factory.services.tasks import (
     TaskSpec,
@@ -290,12 +293,28 @@ def _check_join(
             raise FactoryValidationError(
                 [ValidationIssue("model", f"pass {_other(label).value} already uses this model")]
             )
+        if (
+            _drifted(project, actor.model, label, stage)
+            and _rigor_mode(project) is RigorMode.SYSTEMATIC
+        ):
+            raise FactoryValidationError([ValidationIssue("model", "not calibrated for this pass")])
         return True
     if joined is label:
         return False
     raise FactoryValidationError(
         [ValidationIssue("pass", f"this session already screens pass {joined.value}")]
     )
+
+
+def _drifted(project: Project, model: str, label: PassLabel, stage: ScreeningStage) -> bool:
+    """Whether `model` is new to a pass that has been calibrated on other models, after a watch
+    cycle has run (ruling 22): the calibration measured another model."""
+    models = calibrated_models(project, label, stage)
+    if not models or model in models:
+        return False
+    with project.index.connect() as conn:
+        cycles = conn.execute(text("SELECT count(*) FROM watch_cycles")).scalar_one()
+    return bool(cycles)
 
 
 def _join_event(

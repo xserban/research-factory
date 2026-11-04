@@ -22,6 +22,7 @@ import json
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from datetime import date, datetime, timedelta
 from typing import Literal
 
 from sqlalchemy import text
@@ -30,16 +31,18 @@ from factory.errors import FactoryValidationError
 from factory.events.blobs import BlobIntegrityError
 from factory.events.reader import read_all
 from factory.index.chase import admitted_works
+from factory.living.counts import source_counts
 from factory.model.base import StrictModel
 from factory.model.project import RigorMode
 from factory.model.protocol import ProtocolStatus, ScreeningStage
 from factory.model.references import Direction, LinkState
 from factory.model.screening import PassLabel
 from factory.model.seed import SEED_ID_RE
+from factory.model.watch import CycleStatus
 from factory.model.work import ProvenanceMethod
 from factory.services.agreement import Outcome, agreement_summary, final_outcomes, single_pass_works
-from factory.services.audit import audit_outstanding, audit_report
-from factory.services.calibration import calibration_status
+from factory.services.audit import audit_outstanding, audit_report, audit_shortfall
+from factory.services.calibration import calibrated_models, calibration_status
 from factory.services.call_memo import entering
 from factory.services.chase import chase_rounds
 from factory.services.context import Project
@@ -62,11 +65,12 @@ from factory.services.fulltext_status import fulltext_status
 from factory.services.methods import MethodsReport, methods_report
 from factory.services.prisma import search_report
 from factory.services.protocol import current_protocol
-from factory.services.protocol_rules import snowball_plan_gaps
+from factory.services.protocol_rules import snowball_plan_gaps, watch_plan_gaps
 from factory.services.references import current_extraction, included_works
 from factory.services.seeds import SeedRole, _rigor_mode, seed_check
 from factory.services.snowball import recorded_rounds, round_runs
 from factory.services.trace import dangling_refs
+from factory.services.watch import cycles, watch_status
 
 Severity = Literal["error", "warning"]
 
@@ -116,6 +120,13 @@ LEVELS: dict[str, tuple[Severity | None, Severity | None, Severity | None]] = {
     "inbox-open-after-screening": ("warning", "warning", "warning"),
     "inbox-resolve-failed": ("warning", "warning", "warning"),
     "supplied-without-plan": (None, "warning", "warning"),
+    "watch-plan-missing": ("warning", "error", "error"),
+    "watch-overdue": ("warning", "warning", "warning"),
+    "watch-source-failing": ("warning", "warning", "error"),
+    "watch-cycle-open": ("warning", "warning", "warning"),
+    "window-misses": ("warning", "warning", "warning"),
+    "update-audit-outstanding": (None, "warning", "error"),
+    "calibration-model-drift": (None, "warning", "error"),
 }
 
 REFERENCE_UNRESOLVED_CEILING = 0.30
@@ -359,6 +370,134 @@ def _hits(project: Project) -> list[_Hit]:
     hits += _references(project)
     hits += _snowball(project, outcomes)
     hits += _inbox(project, outcomes)
+    hits += _living(project)
+    return hits
+
+
+# --- Living review (slice 4b) ---
+
+
+def _living(project: Project) -> list[_Hit]:
+    """Findings of a living review: the watch, its cycles, the update audit, model drift.
+
+    Messages carry ids, source names and counts, never document text. Nothing is reported for a
+    project that declares no watch and has run no cycle, except `watch-plan-missing`."""
+    protocol = current_protocol(project)
+    if protocol is None:
+        return []
+    hits: list[_Hit] = []
+    if watch_plan_gaps(protocol.spec, RigorMode.EXPLORATORY):
+        hits.append(
+            _Hit("watch-plan-missing", (), "the living-review profile declares no watch_plan")
+        )
+    views = cycles(project)
+    now = project.clock.now()
+    for view in views:
+        if view.status is CycleStatus.OPEN and now - view.started_at > timedelta(days=1):
+            hits.append(
+                _Hit("watch-cycle-open", (view.cycle_id,), "a watch cycle has been open over a day")
+            )
+    plan = protocol.spec.watch_plan
+    if plan is not None:
+        hits += _watch_sources(project, plan.max_consecutive_failures, plan.until, now)
+    if views:
+        hits += _window_misses(project)
+        shortfall = audit_shortfall(project)
+        if shortfall > 0:
+            hits.append(
+                _Hit(
+                    "update-audit-outstanding",
+                    (),
+                    f"the audit is short by {shortfall} work(s) after the updates; "
+                    "run `factory audit sample --top-up`",
+                )
+            )
+        hits += _model_drift(project)
+    return hits
+
+
+def _watch_sources(
+    project: Project, max_failures: int, until: date | None, now: datetime
+) -> list[_Hit]:
+    status = watch_status(project)
+    hits: list[_Hit] = []
+    for item in status.sources:
+        if item.consecutive_failures >= max_failures:
+            hits.append(
+                _Hit(
+                    "watch-source-failing",
+                    (item.source,),
+                    f"{item.source}: {item.consecutive_failures} cycles ended without it "
+                    "completing",
+                )
+            )
+        ended = until is not None and now.date() > until
+        if (
+            not ended
+            and item.next_due is not None
+            and now > item.next_due + timedelta(days=item.interval_days)
+        ):
+            hits.append(
+                _Hit(
+                    "watch-overdue",
+                    (item.source,),
+                    f"{item.source}: no finished cycle for more than two intervals",
+                )
+            )
+    return hits
+
+
+def _window_misses(project: Project) -> list[_Hit]:
+    """The latest full replay of a windowed source, when it found works the windows missed."""
+    with project.index.connect() as conn:
+        row = conn.execute(
+            text(
+                "SELECT s.cycle_id, s.source FROM watch_cycle_sources s JOIN watch_cycles c"
+                " ON c.cycle_id = s.cycle_id WHERE s.mode = 'window' AND s.full_replay = 1"
+                " AND c.status != 'open' ORDER BY c.started_at DESC, c.cycle_id DESC LIMIT 1"
+            )
+        ).one_or_none()
+    if row is None:
+        return []
+    cycle_id, source = str(row[0]), str(row[1])
+    missed = next(
+        (c.window_missed for c in source_counts(project, cycle_id) if c.source == source), None
+    )
+    if not missed:
+        return []
+    return [
+        _Hit(
+            "window-misses",
+            (cycle_id,),
+            f"{source}: the full replay found {missed} work(s) the windows missed",
+        )
+    ]
+
+
+def _model_drift(project: Project) -> list[_Hit]:
+    """Sessions of a pass whose model no calibration of the pass recorded (ruling 22)."""
+    hits: list[_Hit] = []
+    for label in PassLabel:
+        models = calibrated_models(project, label)
+        if not models:
+            continue
+        with project.index.connect() as conn:
+            rows = conn.execute(
+                text(
+                    "SELECT DISTINCT model FROM pass_sessions WHERE pass_label = :label"
+                    " AND stage = 'title-abstract' ORDER BY model"
+                ),
+                {"label": label.value},
+            ).all()
+        drifted = [str(r[0]) for r in rows if str(r[0]) not in models]
+        if drifted:
+            hits.append(
+                _Hit(
+                    "calibration-model-drift",
+                    (f"pass-{label.value}",),
+                    f"pass {label.value}: model(s) {', '.join(drifted)} were not calibrated for it",
+                )
+            )
     return hits
 
 
