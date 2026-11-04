@@ -77,3 +77,33 @@ def test_bibitem_without_label_and_with_nested_braces() -> None:
         BblEntry("k1", "A. Name. Title http://x.org/a_b."),
         BblEntry("k2", "B. C."),
     ]
+
+
+def test_unclosed_href_is_linear_time() -> None:
+    import time
+
+    t0 = time.perf_counter()
+    read_bbl(b"\\bibitem{k} " + b"\\href{" * 20000)
+    read_bbl(b"\\bibitem{k} " + b"\\doi{" * 20000 + b"\\url{" * 20000)
+    assert time.perf_counter() - t0 < 0.5
+
+
+def test_decompressed_tar_over_limit_is_rejected() -> None:
+    """The limit bounds the decompressed tar; member sizes can only be smaller than it."""
+    archive = _tar_gz({"a.bbl": BBL, "b.bbl": BBL})
+    raw = gzip.decompress(archive)
+    assert len(raw) > len(BBL) * 2
+    assert read_bbl(archive, max_bytes=len(raw) - 1) == []
+    assert len(read_bbl(archive, max_bytes=len(raw))) == 4
+    assert read_bbl(raw, max_bytes=len(raw) - 1) == []
+
+
+def test_outer_archive_over_limit_is_rejected() -> None:
+    assert read_bbl(BBL, max_bytes=len(BBL) - 1) == []
+    assert len(read_bbl(BBL, max_bytes=len(BBL))) == 2
+
+
+def test_members_are_read_in_name_order() -> None:
+    b = b"\\bibitem{kb} Bee. T. 2002.\n"
+    a = b"\\bibitem{ka} Ay. T. 2001.\n"
+    assert [e.key for e in read_bbl(_tar_gz({"b.bbl": b, "a.bbl": a}))] == ["ka", "kb"]

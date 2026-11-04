@@ -95,15 +95,21 @@ def _numbering(text: str) -> str | None:
     return None
 
 
-def _is_bibliography_heading(text: str) -> bool:
-    """True if the heading text, minus any section number, names a bibliography."""
+def normalise_heading(text: str) -> str:
+    """A heading's text folded for matching: section or appendix number and trailing colon
+    stripped, whitespace collapsed, case folded. Shared with the reference parser."""
     stripped = text.strip()
     for pattern in (_DIGITS, _APPENDIX_SUB, _APPENDIX_LETTER):
         match = pattern.match(stripped)
         if match is not None:
             stripped = stripped[match.end() :].lstrip(" .:)\t")
             break
-    return " ".join(stripped.casefold().split()) in BIBLIOGRAPHY_HEADINGS
+    return " ".join(stripped.casefold().split()).rstrip(": ")
+
+
+def _is_bibliography_heading(text: str) -> bool:
+    """True if the heading text, minus any section number, names a bibliography."""
+    return normalise_heading(text) in BIBLIOGRAPHY_HEADINGS
 
 
 def _appendix_index(letter: str) -> int:

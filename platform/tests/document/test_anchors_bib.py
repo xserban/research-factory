@@ -2,7 +2,7 @@
 
 import pytest
 
-from factory.document.anchorise import BIBLIOGRAPHY_HEADINGS, anchorise
+from factory.document.anchorise import BIBLIOGRAPHY_HEADINGS, anchorise, normalise_heading
 from factory.document.anchors import AnchorKind, Manifest, ManifestError, parse_manifest
 
 BIB = (
@@ -88,3 +88,10 @@ def test_numbering_is_document_wide() -> None:
 def test_headings_constant() -> None:
     expected = {"references", "bibliography", "literature cited", "works cited", "reference list"}
     assert set(BIBLIOGRAPHY_HEADINGS) == expected
+
+
+def test_trailing_colon_heading_gets_b_anchors() -> None:
+    out = anchorise("# Paper\n\n## 1 Intro\n\nText.\n\n## References:\n\nSmith J. A. 2020.\n")
+    assert '<a id="b1"></a>' in out
+    assert normalise_heading("References:") == "references"
+    assert normalise_heading("A.1 Bibliography :") == "bibliography"

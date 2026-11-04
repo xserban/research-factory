@@ -17,7 +17,7 @@ def manifest(
     ]
     for i, t in enumerate(entries, start=1):
         anchors.append(
-            Anchor(f"b{i}", AnchorKind.PARAGRAPH, "s2", t)
+            Anchor(f"b{i}", AnchorKind.BIBLIOGRAPHY_ENTRY, "s2", t)
             if b_anchors
             else Anchor(f"s2.p{i}", AnchorKind.PARAGRAPH, "s2", t)
         )

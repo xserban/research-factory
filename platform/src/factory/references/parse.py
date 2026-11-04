@@ -9,6 +9,7 @@ import re
 from dataclasses import dataclass
 from typing import Literal
 
+from factory.document.anchorise import BIBLIOGRAPHY_HEADINGS, normalise_heading
 from factory.document.anchors import Anchor, AnchorKind, Manifest
 from factory.model.work_ids import normalize_arxiv, normalize_doi
 
@@ -16,14 +17,25 @@ PARSER = "refparse"
 PARSER_VERSION = "1"
 MAX_ENTRY_CHARS = 1000
 
-# Folded heading texts (number stripped) that open a bibliography section.
-BIBLIOGRAPHY_HEADINGS = frozenset(
-    {"references", "bibliography", "literature cited", "works cited", "reference list"}
-)
+MAX_FIELD_CHARS = 4000  # entry text examined for fields; longer tails are ignored
 
-_ENTRY_ID_RE = re.compile(r"^b(\d+)$")
+
+def _uppercase_class() -> str:
+    """A regex character-class body of the BMP uppercase letters (`re` has no `\\p{Lu}`)."""
+    ranges: list[tuple[int, int]] = []
+    for cp in range(0x10000):
+        if chr(cp).isupper():
+            if ranges and ranges[-1][1] == cp - 1:
+                ranges[-1] = (ranges[-1][0], cp)
+            else:
+                ranges.append((cp, cp))
+    return "".join(f"\\u{a:04x}" if a == b else f"\\u{a:04x}-\\u{b:04x}" for a, b in ranges)
+
+
+UPPER = _uppercase_class()
+_LOWER_WORD = r"(?:[^\W\d_]|['\u2019\-])"
+
 _HEADING_PREFIX_RE = re.compile(r"^\s*#+\s*")
-_HEADING_NUMBER_RE = re.compile(r"^\d+(?:\.\d+)*[.)]?\s+")
 _LABEL_RE = re.compile(r"^\s*(?:\[([^\]\s]{1,20})\]|\((\d{1,4})\)|(\d{1,4})[.)])\s*")
 
 _DOI_RE = re.compile(
@@ -38,13 +50,13 @@ _URL_RE = re.compile(r"https?://[^\s<>\"]+", re.IGNORECASE)
 _YEAR_RE = re.compile(r"(?<![\d.])((?:19|20)\d{2})(?![\d])")
 _TRAIL = ".,;:'\"]>}"
 
-_SURNAME = r"[A-Z][\w'\u2019\-]+"
-_AUTHOR_COMMA_RE = re.compile(rf"^({_SURNAME}),\s*(?:[A-Z]\.|[A-Z][a-z]+)")
-_AUTHOR_VANCOUVER_RE = re.compile(rf"^({_SURNAME}) [A-Z]{{1,3}}\b[,.]")
+_SURNAME = rf"[{UPPER}][\w'\u2019\-]+"
+_AUTHOR_COMMA_RE = re.compile(rf"^({_SURNAME}),\s*(?:[{UPPER}]\.|[{UPPER}][^\W\d_]+)")
+_AUTHOR_VANCOUVER_RE = re.compile(rf"^({_SURNAME}) [{UPPER}]{{1,3}}\b[,.]")
 _AUTHOR_INITIALS_RE = re.compile(
-    rf"^(?:[A-Z]\.[\s\-]*)+(?:(?:van|von|de|der|den|di|da|le|la)\s+)*({_SURNAME})"
+    rf"^(?:[{UPPER}]\.[\s\-]*)+(?:(?:van|von|de|der|den|di|da|le|la)\s+)*({_SURNAME})"
 )
-_AUTHOR_GIVEN_RE = re.compile(rf"^[A-Z][a-z]+\s+({_SURNAME})\s*(?:,|and\b|&|et al)")
+_AUTHOR_GIVEN_RE = re.compile(rf"^[{UPPER}][^\W\d_]+\s+({_SURNAME})\s*(?:,|and\b|&|et al)")
 _PAREN_YEAR_TITLE_RE = re.compile(r"\((?:19|20)\d{2}[a-z]?\)\.?\s*([^.?!]+[.?!]?)(.*)$", re.DOTALL)
 _QUOTED_RE = re.compile(r"[“\"]([^”\"]{8,})[”\"]")
 _PREFIX_RE = re.compile(r"(?i)\b(?:doi|arxiv|url|available at|accessed)\s*:?\s*$")
@@ -87,34 +99,35 @@ class Bibliography:
 def parse_bibliography(manifest: Manifest) -> Bibliography:
     """Entries from `b<n>` anchors; else the paragraphs of the bibliography section.
 
-    With neither, the result has no entries and the flag `no-bibliography` (`entry_anchors` is
-    then `"b"` by convention, there being nothing to anchor).
+    With neither, the result has no entries. The flag is `bibliography-without-entries` when a
+    bibliography heading exists but has no paragraph entries (for example a list), else
+    `no-bibliography`; `entry_anchors` is then `"b"` by convention, there being nothing to anchor.
     """
-    b_anchors = [a for a in manifest.anchors if _ENTRY_ID_RE.match(a.id)]
+    b_anchors = [a for a in manifest.anchors if a.kind is AnchorKind.BIBLIOGRAPHY_ENTRY]
     if b_anchors:
         return Bibliography(_entries(b_anchors), "b", ())
-    section = _bibliography_section(manifest)
-    if section is not None:
+    sections = _bibliography_sections(manifest)
+    for section in sections:
         paragraphs = [
             a for a in manifest.anchors if a.kind is AnchorKind.PARAGRAPH and a.parent == section.id
         ]
         if paragraphs:
             return Bibliography(_entries(paragraphs), "paragraph", ("entry-anchors-paragraph",))
-    return Bibliography((), "b", ("no-bibliography",))
+    flag = "bibliography-without-entries" if sections else "no-bibliography"
+    return Bibliography((), "b", (flag,))
 
 
 def _heading_text(anchor: Anchor) -> str:
     lines = anchor.text.strip().splitlines()
-    text = _HEADING_PREFIX_RE.sub("", lines[0] if lines else "")
-    text = _HEADING_NUMBER_RE.sub("", text.strip())
-    return text.strip().rstrip(":").strip().casefold()
+    return normalise_heading(_HEADING_PREFIX_RE.sub("", lines[0] if lines else ""))
 
 
-def _bibliography_section(manifest: Manifest) -> Anchor | None:
-    for a in manifest.anchors:
-        if a.kind is AnchorKind.SECTION and _heading_text(a) in BIBLIOGRAPHY_HEADINGS:
-            return a
-    return None
+def _bibliography_sections(manifest: Manifest) -> list[Anchor]:
+    return [
+        a
+        for a in manifest.anchors
+        if a.kind is AnchorKind.SECTION and _heading_text(a) in BIBLIOGRAPHY_HEADINGS
+    ]
 
 
 def _entries(anchors: list[Anchor]) -> tuple[Entry, ...]:
@@ -130,7 +143,7 @@ def _entries(anchors: list[Anchor]) -> tuple[Entry, ...]:
                 label=label,
                 text=raw[:MAX_ENTRY_CHARS],
                 truncated=len(raw) > MAX_ENTRY_CHARS,
-                fields=parse_entry_fields(raw),
+                fields=parse_entry_fields(raw[:MAX_FIELD_CHARS]),
             )
         )
     return tuple(out)
@@ -145,7 +158,7 @@ def _clean_tail(token: str) -> str:
 
 def parse_entry_fields(text: str) -> RefFields:
     """Recover the fields of one entry by ordered rules (DOI, arXiv, URL, then the rest)."""
-    work = " ".join(text.split())
+    work = " ".join(text.split())[:MAX_FIELD_CHARS]
     label = _LABEL_RE.match(work)
     if label:
         work = work[label.end() :]
@@ -182,18 +195,25 @@ def _first_author(text: str) -> str | None:
     return None
 
 
-def _vancouver_end(words: list[str]) -> bool:
-    """True for `Surname I.` (initials after a surname, no comma): the end of an author list."""
-    return len(words) > 1 and re.fullmatch(r"[A-Z][a-z'\u2019\-]+", words[-2]) is not None
+def _vancouver_end(previous: str) -> bool:
+    """True if `previous` is a surname: a single initial after it ends a Vancouver author list."""
+    return re.fullmatch(rf"[{UPPER}]{_LOWER_WORD}+", previous) is not None
 
 
 def _boundaries(text: str) -> list[int]:
-    """Indices just after sentence-ending periods that do not follow an author initial."""
+    """Indices just after sentence-ending periods that do not follow an author initial.
+
+    Linear: each period inspects only the one or two words before it.
+    """
     out: list[int] = []
     for m in re.finditer(r"\.\s+|\.$", text):
-        words = text[: m.start()].split(" ")
-        if re.fullmatch(r"[A-Z]", words[-1].split("-")[-1]) and not _vancouver_end(words):
-            continue
+        start = text.rfind(" ", 0, m.start()) + 1
+        word = text[start : m.start()].split("-")[-1]
+        if re.fullmatch(rf"[{UPPER}]", word):
+            prev_start = text.rfind(" ", 0, max(start - 1, 0)) + 1 if start > 0 else 0
+            previous = text[prev_start : start - 1] if start > 0 else ""
+            if not (start > 0 and _vancouver_end(previous)):
+                continue
         out.append(m.end())
     return out
 

@@ -1,3 +1,5 @@
+import dataclasses
+
 from factory.document.anchors import Anchor, AnchorKind, Manifest
 from factory.references.markers import completeness_flags, find_contexts
 from factory.references.parse import parse_bibliography
@@ -143,3 +145,71 @@ def test_paragraph_fallback_ignores_bibliography_paragraphs() -> None:
     bib = parse_bibliography(m)
     ctx, _ = find_contexts(m, bib)
     assert [(c.citing_anchor, c.entry) for c in ctx] == [("s1.p1", 2)]
+
+
+def _timed(fn):  # type: ignore[no-untyped-def]
+    import time
+
+    t0 = time.perf_counter()
+    result = fn()
+    return result, time.perf_counter() - t0
+
+
+def test_unclosed_paren_is_linear_time() -> None:
+    body = "(" + "2020 " * 8000
+    (_, ctx, _), elapsed = _timed(lambda: _ctx([body]))
+    assert elapsed < 0.5 and ctx == []
+
+
+def test_unicode_author_year_marker() -> None:
+    entries = ["Łukasiewicz, J. (1920). On logic. Journal.", "Émile, A. (2001). T. V."]
+    _, ctx, _ = _ctx(["see Łukasiewicz (1920) and (Émile, 2001)"], entries)
+    assert [(c.entry, c.state) for c in ctx] == [(1, "matched"), (2, "matched")]
+
+
+def test_stray_digit_label_keeps_ordinal_mapping() -> None:
+    entries = ["2018. Foo bar.", "Baz. Qux.", "Quux. Corge."]
+    bib, ctx, _ = _ctx(["see [2] and [3]"], entries)
+    assert [(c.entry, c.state) for c in ctx] == [(2, "matched"), (3, "matched")]
+    assert completeness_flags(bib, ctx) == ()
+
+
+def test_link_maps_through_anchor_ids_not_ordinals() -> None:
+    m = manifest(NUMERIC[:2], ["a [x](#b1) b [y](#b3) c [z](#b2)"])
+    bib = parse_bibliography(m)
+    renamed = dataclasses.replace(
+        bib, entries=(bib.entries[0], dataclasses.replace(bib.entries[1], anchor="b3"))
+    )
+    ctx, _ = find_contexts(m, renamed)
+    assert [(c.entry, c.state) for c in ctx] == [
+        (1, "matched"),
+        (2, "matched"),
+        (None, "unmatched"),
+    ]
+
+
+def test_range_with_em_dash_and_semicolon_list() -> None:
+    _, ctx, _ = _ctx(["see [2—4] and [1; 5]"])
+    assert [c.entry for c in ctx] == [2, 3, 4, 1, 5]
+
+
+def test_numeric_bracket_followed_by_url_is_not_a_marker() -> None:
+    _, ctx, _ = _ctx(["see [1](http://example.org/x)"])
+    assert ctx == []
+
+
+def test_same_author_year_suffix_is_ambiguous() -> None:
+    entries = ["Wang, L. (2021a). First. V.", "Wang, L. (2021b). Second. V."]
+    _, ctx, _ = _ctx(["see Wang (2021b)"], entries)
+    assert [(c.entry, c.state) for c in ctx] == [(None, "ambiguous")]
+
+
+def test_duplicate_numeric_labels_are_ambiguous() -> None:
+    bib, ctx, _ = _ctx(["see [1]"], ["[1] A. A. T. 2001.", "[1] B. B. T. 2002."])
+    assert [(c.entry, c.state) for c in ctx] == [(None, "ambiguous")]
+    assert completeness_flags(bib, ctx) == ("parse-incomplete",)
+
+
+def test_labels_not_one_to_k_flag_incomplete_without_marker() -> None:
+    bib, ctx, _ = _ctx([], ["[1] A. A. T. 2001.", "[1] B. B. T. 2002."])
+    assert completeness_flags(bib, ctx) == ("parse-incomplete",)

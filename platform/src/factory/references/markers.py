@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from factory.document.anchors import AnchorKind, Manifest
-from factory.references.parse import Bibliography
+from factory.references.parse import UPPER, Bibliography
 
 MAX_TOKEN = 80
 _MAX_RANGE = 200
@@ -23,13 +23,13 @@ _MAX_RANGE = 200
 MarkerState = Literal["matched", "unmatched", "ambiguous"]
 Method = Literal["link", "numeric", "author-year"]
 
-_SN = r"[A-Z][\w'\u2019\-]+"
+_SN = rf"[{UPPER}][\w'\u2019\-]+"
 _YEAR = r"((?:19|20)\d{2})[a-z]?"
 _MARKER_RE = re.compile(
     r"(?P<link>\[(?P<ltext>[^\]\[]*)\]\(#b(?P<ln>\d+)\))"
-    r"|(?P<num>\[(?P<nbody>\d+(?:\s*[-\u2013,]\s*\d+)*)\])"
+    r"|(?P<num>\[(?P<nbody>\d+(?:\s*[-\u2013\u2014,;]\s*\d+)*)\](?!\())"
     rf"|(?P<narr>(?P<nname>{_SN})(?:\s+et\s+al\.?|\s+(?:and|&)\s+{_SN})?\s*\((?P<nyear>(?:19|20)\d{{2}})[a-z]?\))"
-    rf"|(?P<paren>\((?P<pbody>[^()]*?(?:19|20)\d{{2}}[a-z]?[^()]*?)\))"
+    rf"|(?P<paren>\((?P<pbody>[^()]{{0,200}}?(?:19|20)\d{{2}}[a-z]?[^()]{{0,200}})\))"
 )
 _PART_RE = re.compile(rf"({_SN})(?:\s+et\s+al\.?|\s+(?:and|&)\s+{_SN})?,?\s+{_YEAR}")
 _INT_RE = re.compile(r"\d+")
@@ -62,10 +62,12 @@ def find_contexts(manifest: Manifest, bib: Bibliography) -> tuple[list[Context],
     """
     entry_ids = {e.anchor for e in bib.entries}
     ordinals = {e.ordinal for e in bib.entries}
+    by_anchor = {e.anchor: e.ordinal for e in bib.entries}
     digit_labels: dict[int, list[int]] = {}
-    for e in bib.entries:
-        if e.label is not None and e.label.isdigit():
-            digit_labels.setdefault(int(e.label), []).append(e.ordinal)
+    if _digit_label_mode(bib):
+        for e in bib.entries:
+            if e.label is not None and e.label.isdigit():
+                digit_labels.setdefault(int(e.label), []).append(e.ordinal)
     author_year: dict[tuple[str, int], list[int]] = {}
     for e in bib.entries:
         if e.fields.first_author and e.fields.year:
@@ -85,14 +87,16 @@ def find_contexts(manifest: Manifest, bib: Bibliography) -> tuple[list[Context],
     contexts: list[Context] = []
     kinds = (AnchorKind.PARAGRAPH, AnchorKind.CELL, AnchorKind.FIGURE_CAPTION)
     for anchor in manifest.anchors:
-        if anchor.kind not in kinds or anchor.id in entry_ids:
+        # bibliography entries (`b<n>`, or section paragraphs in the fallback) are never searched
+        if anchor.kind is AnchorKind.BIBLIOGRAPHY_ENTRY or anchor.kind not in kinds:
+            continue
+        if anchor.id in entry_ids:
             continue
         for m in _MARKER_RE.finditer(anchor.text):
             if m.group("link"):
                 text = " ".join(m.group("ltext").split())
                 token = _token(f"[{text}]" if text.isdigit() else text or f"[{m.group('ln')}]")
-                n = int(m.group("ln"))
-                entry: int | None = n if n in ordinals else None
+                entry: int | None = by_anchor.get(f"b{m.group('ln')}")
                 state: MarkerState = "matched" if entry is not None else "unmatched"
                 contexts.append(Context(anchor.id, entry, token, "link", state))
             elif m.group("num"):
@@ -123,10 +127,16 @@ def find_contexts(manifest: Manifest, bib: Bibliography) -> tuple[list[Context],
     return contexts, len({c.marker for c in contexts})
 
 
+def _digit_label_mode(bib: Bibliography) -> bool:
+    """True when at least half of the entries carry a numeric label (else ordinals are used)."""
+    digits = sum(1 for e in bib.entries if e.label is not None and e.label.isdigit())
+    return digits > 0 and 2 * digits >= len(bib.entries)
+
+
 def _numbers(body: str) -> list[int | None]:
     """The numbers a bracket body stands for; a descending or oversized range is one `None`."""
     out: list[int | None] = []
-    for piece in body.split(","):
+    for piece in re.split(r"[,;]", body):
         bounds = [int(x) for x in _INT_RE.findall(piece)]
         if len(bounds) == 1:
             out.append(bounds[0])
@@ -157,7 +167,11 @@ def completeness_flags(bib: Bibliography, contexts: Sequence[Context]) -> tuple[
     or the numeric labels are not exactly 1..k. `marker-gap`: a linked marker targets no entry.
     """
     count = len(bib.entries)
-    labels = sorted(int(e.label) for e in bib.entries if e.label is not None and e.label.isdigit())
+    labels = sorted(
+        int(e.label)
+        for e in bib.entries
+        if _digit_label_mode(bib) and e.label is not None and e.label.isdigit()
+    )
     incomplete = bool(labels) and (labels[-1] > count or labels != list(range(1, len(labels) + 1)))
     for c in contexts:
         if c.method == "numeric" and c.state == "unmatched":

@@ -50,10 +50,6 @@ def test_no_bibliography_is_recorded() -> None:
     assert empty.flags == ("no-bibliography",)
 
 
-def test_heading_with_no_paragraphs_is_no_bibliography() -> None:
-    assert parse_bibliography(manifest([], ["x"], b_anchors=False)).flags == ("no-bibliography",)
-
-
 @pytest.mark.parametrize("case", CASES, ids=lambda c: c["text"][:25])
 def test_fields_on_hand_checked_entries(case: dict[str, object]) -> None:
     f = parse_entry_fields(str(case["text"]))
@@ -120,3 +116,92 @@ def test_label_forms() -> None:
 def test_section_anchor_kind_only() -> None:
     m = Manifest((Anchor("s1", AnchorKind.PARAGRAPH, None, "References"),))
     assert parse_bibliography(m).flags == ("no-bibliography",)
+
+
+def _timed(fn):  # type: ignore[no-untyped-def]
+    import time
+
+    t0 = time.perf_counter()
+    result = fn()
+    return result, time.perf_counter() - t0
+
+
+def test_long_sentence_entry_is_linear_time() -> None:
+    text = "Word. " * 8000
+    f, elapsed = _timed(lambda: parse_entry_fields(text))
+    assert elapsed < 0.5 and f.year is None
+    bib, elapsed = _timed(lambda: parse_bibliography(manifest([text], ["x"])))
+    assert elapsed < 0.5 and bib.entries[0].truncated
+
+
+@pytest.mark.parametrize(
+    ("text", "author"),
+    [
+        ("Łukasiewicz, J. (1920). On three-valued logic. Ruch Filozoficzny.", "Łukasiewicz"),
+        ("Émile, A. (2001). Title here. Venue.", "Émile"),
+        ("Šimon, P. (1999). Title here. Venue.", "Šimon"),
+        ("Ł. Kowalski. Title here. Venue, 2003.", "Kowalski"),
+        ("Šimon P, Novak J. Title here. Venue. 2004;1:2.", "Šimon"),
+    ],
+)
+def test_unicode_uppercase_surnames_and_initials(text: str, author: str) -> None:
+    assert parse_entry_fields(text).first_author == author
+
+
+def test_stray_digit_label_is_still_a_label() -> None:
+    bib = parse_bibliography(manifest(["2018. Foo bar.", "Baz. Qux.", "Quux. Corge."], []))
+    assert [e.label for e in bib.entries] == ["2018", None, None]
+
+
+def test_last_year_wins() -> None:
+    assert parse_entry_fields("Smith, J. (1999). Title. Journal, 2005.").year == 2005
+
+
+def test_truncation_boundary_is_exactly_1000() -> None:
+    exact = "A. " + "x" * (MAX_ENTRY_CHARS - 3)
+    over = exact + "y"
+    bib = parse_bibliography(manifest([exact, over], []))
+    assert [(len(e.text), e.truncated) for e in bib.entries] == [(1000, False), (1000, True)]
+
+
+def test_all_matching_sections_are_tried() -> None:
+    m = manifest(["[1] A. T. 2001."], ["x"], b_anchors=False)
+    # an earlier empty "References" heading must not hide a later one with paragraphs
+    first = Anchor("s0", AnchorKind.SECTION, None, "## References")
+    full = Manifest((first, *m.anchors))
+    bib = parse_bibliography(full)
+    assert [e.anchor for e in bib.entries] == ["s2.p1"]
+
+
+def test_heading_without_entries_flag() -> None:
+    bib = parse_bibliography(manifest([], ["x"], b_anchors=False))
+    assert bib.flags == ("bibliography-without-entries",) and not bib.entries
+
+
+def test_heading_with_trailing_colon_is_a_bibliography() -> None:
+    bib = parse_bibliography(manifest(ENTRIES, ["x"], b_anchors=False, heading="References:"))
+    assert bib.entry_anchors == "paragraph" and len(bib.entries) == 3
+
+
+def test_real_anchorise_output() -> None:
+    from factory.document.anchorise import anchorise
+    from factory.document.anchors import parse_manifest
+
+    md = (
+        "# Paper\n\n## 1 Intro\n\nSee [1].\n\n## References\n\n"
+        "One, A. (2001). First. Venue.\n\nTwo, B. (2002). Second. Venue.\n"
+    )
+    bib = parse_bibliography(parse_manifest(anchorise(md)))
+    assert bib.entry_anchors == "b" and [e.anchor for e in bib.entries] == ["b1", "b2"]
+    assert bib.entries[1].fields.first_author == "Two"
+
+
+def test_b_entries_selected_by_kind_not_id_shape() -> None:
+    m = Manifest(
+        (
+            Anchor("b1", AnchorKind.PARAGRAPH, None, "body paragraph with an odd id"),
+            Anchor("s2", AnchorKind.SECTION, None, "## References"),
+            Anchor("b2", AnchorKind.BIBLIOGRAPHY_ENTRY, "s2", "Real, A. (2001). T. V."),
+        )
+    )
+    assert [e.anchor for e in parse_bibliography(m).entries] == ["b2"]

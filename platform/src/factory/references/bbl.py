@@ -145,10 +145,10 @@ def _parse(text: str) -> list[BblEntry]:
 
 
 def _plain(body: str) -> str:
-    body = re.sub(r"\\href\{([^}]*)\}\{([^}]*)\}", r"\2 \1", body)
-    body = re.sub(r"\\doi\{([^}]*)\}", r"doi:\1", body)
-    body = re.sub(r"\\url\{([^}]*)\}", r"\1", body)
-    body = re.sub(r"\\natexlab\{[^}]*\}", "", body)
+    body = re.sub(r"\\href\{([^{}]{0,2000})\}\{([^{}]{0,2000})\}", r"\2 \1", body)
+    body = re.sub(r"\\doi\{([^{}]{0,2000})\}", r"doi:\1", body)
+    body = re.sub(r"\\url\{([^{}]{0,2000})\}", r"\1", body)
+    body = re.sub(r"\\natexlab\{[^{}]{0,200}\}", "", body)
     body = body.replace("\\newblock", " ").replace("~", " ")
     body = re.sub(r"\\([&%_#$])", r"\1", body)
     body = re.sub(r"\\[a-zA-Z]+\*?", " ", body)
