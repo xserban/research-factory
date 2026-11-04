@@ -34,11 +34,12 @@ from collections.abc import Mapping
 from datetime import datetime
 from typing import Any
 
-from pydantic import Field, model_validator
+from pydantic import Field, SerializerFunctionWrapHandler, model_serializer, model_validator
 from sqlalchemy import text
 
 from factory.clock import parse_ts
 from factory.errors import FactoryError
+from factory.imports.model import ImportFormat
 from factory.model.base import StrictModel
 from factory.model.protocol import Limit, ProtocolSpec, ScreeningStage, search_strategy_hash
 from factory.model.references import Direction, Via
@@ -50,7 +51,7 @@ from factory.services.context import Project
 from factory.services.dedup import canonical_works
 from factory.services.fulltext_screening import fulltext_queue
 from factory.services.fulltext_status import fulltext_status
-from factory.services.protocol import current_protocol, registered_deviation
+from factory.services.protocol import current_protocol, registered_deviation, registered_import
 from factory.services.search import RunSummary
 from factory.services.snowball import query_yields, recorded_rounds
 
@@ -64,8 +65,11 @@ OTHER_METHODS: tuple[ProvenanceMethod, ...] = (
     ProvenanceMethod.SEED_ADMISSION,
     ProvenanceMethod.HAND_SEARCH,
     ProvenanceMethod.SUPPLIED,
+    ProvenanceMethod.LIBRARY_IMPORT,
 )
-"""Non-database methods in precedence order: a work counts under the first one it carries."""
+"""Non-database methods in precedence order: a work counts under the first one it carries.
+The `library-import` line is reported only once an import has been admitted (`has_admission`),
+so a project without imports keeps its flow unchanged."""
 
 CHASE_BACKWARD = "chase-backward"
 CHASE_FORWARD = "chase-forward"
@@ -182,6 +186,15 @@ class PrismaFlow(StrictModel):
         return self
 
 
+_IMPORT_KEYS = (
+    "import_id",
+    "import_file_hash",
+    "import_format",
+    "import_parser",
+    "import_parser_version",
+)
+
+
 class SearchReportRow(StrictModel):
     """One registered search (PRISMA-S): its exact text, its filters, its date, and what it
     retrieved. Probe queries are not rows."""
@@ -209,6 +222,21 @@ class SearchReportRow(StrictModel):
     included: int | None = None
     """For a round's query: how many of those are included at the last declared stage; None
     while any of them is pending there."""
+    import_id: str | None = None
+    """The import whose admission planned this query (slice 3d); None for any other query."""
+    import_file_hash: str | None = None
+    import_format: ImportFormat | None = None
+    import_parser: str | None = None
+    import_parser_version: str | None = None
+
+    @model_serializer(mode="wrap")
+    def _omit_import_fields(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        """A query that is not an import's serialises exactly as it did before imports existed."""
+        data: dict[str, Any] = handler(self)
+        if self.import_id is None:
+            for key in _IMPORT_KEYS:
+                data.pop(key, None)
+        return data
 
 
 class SearchReport(StrictModel):
@@ -226,7 +254,12 @@ def prisma_flow(project: Project) -> PrismaFlow:
     criteria = exclusion_criteria(project)
 
     databases = _database_records(project)
-    other = {method.value: 0 for method in OTHER_METHODS}
+    imports = has_admission(project)
+    other = {
+        method.value: 0
+        for method in OTHER_METHODS
+        if imports or method is not ProvenanceMethod.LIBRARY_IMPORT
+    }
     mechanisms = _chase_mechanisms(project)
     detail = dict.fromkeys(OTHER_DETAIL_KEYS, 0)
     canonical_with_database = 0
@@ -269,6 +302,16 @@ def prisma_flow(project: Project) -> PrismaFlow:
         provisional=pending > 0,
         protocol_id=None if protocol is None else protocol.protocol_id,
     )
+
+
+def has_admission(project: Project) -> bool:
+    """Whether any `import`-purpose query has been registered (an import has been admitted)."""
+    with project.index.connect() as conn:
+        row = conn.execute(
+            text("SELECT 1 FROM queries WHERE purpose = :import LIMIT 1"),
+            {"import": QueryPurpose.IMPORT.value},
+        ).first()
+    return row is not None
 
 
 def has_full_text_plan(project: Project) -> bool:
@@ -405,7 +448,7 @@ def search_report(project: Project) -> SearchReport:
     rows = [
         _row(project, dict(query), by_query.get(str(query["query_id"]), [])) for query in queries
     ]
-    rows = _with_rounds(project, rows)
+    rows = _with_imports(project, _with_rounds(project, rows))
     press_id, confirmed = _press(project, None if protocol is None else protocol.spec)
     return SearchReport(
         rows=rows,
@@ -537,6 +580,45 @@ def _with_rounds(project: Project, rows: list[SearchReportRow]) -> list[SearchRe
         row.model_copy(update=labels[row.query_id]) if row.query_id in labels else row
         for row in rows
     ]
+
+
+def _with_imports(project: Project, rows: list[SearchReportRow]) -> list[SearchReportRow]:
+    """`rows` with each import-purpose query labelled by its import: id, file hash, format and
+    parser (R-23: the library is a recorded source)."""
+    out: list[SearchReportRow] = []
+    with project.index.connect() as conn:
+        for row in rows:
+            import_id = (
+                registered_import(project, row.query_id)
+                if row.purpose is QueryPurpose.IMPORT
+                else None
+            )
+            recorded = (
+                None
+                if import_id is None
+                else conn.execute(
+                    text(
+                        "SELECT file_hash, format, parser, parser_version FROM imports "
+                        "WHERE import_id = :i"
+                    ),
+                    {"i": import_id},
+                ).first()
+            )
+            if import_id is None or recorded is None:
+                out.append(row)
+                continue
+            out.append(
+                row.model_copy(
+                    update={
+                        "import_id": import_id,
+                        "import_file_hash": str(recorded[0]),
+                        "import_format": ImportFormat(str(recorded[1])),
+                        "import_parser": str(recorded[2]),
+                        "import_parser_version": str(recorded[3]),
+                    }
+                )
+            )
+    return out
 
 
 def _press(project: Project, spec: ProtocolSpec | None) -> tuple[str | None, bool]:

@@ -689,9 +689,12 @@ def held_out(project: Project) -> HeldOut:
     return HeldOut(work_ids=held_out_work_ids(project), keys=frozenset(keys))
 
 
-_NOT_SEARCH = frozenset({ProvenanceMethod.SEED_ADMISSION, ProvenanceMethod.SUPPLIED})
-"""Methods that put a work in the corpus without a search finding it: a human admission and a
-supplied link (slice 4a ruling 9). The corpus listing already drops probe-query provenance."""
+_NOT_SEARCH = frozenset(
+    {ProvenanceMethod.SEED_ADMISSION, ProvenanceMethod.SUPPLIED, ProvenanceMethod.LIBRARY_IMPORT}
+)
+"""Methods that put a work in the corpus without a search finding it: a human admission, a
+supplied link (slice 4a ruling 9) and an imported library (decision 54, slice 3d). The corpus
+listing already drops probe-query provenance."""
 
 
 def _merge_groups(project: Project) -> dict[str, tuple[str, ...]]:

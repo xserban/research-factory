@@ -562,8 +562,8 @@ def test_supplied_counts_under_its_method(
     assert (flow.duplicates_removed, flow.screened, flow.included) == (0, 10, 10)
 
 
-def test_supplied_ranks_last_among_other_methods() -> None:
-    assert OTHER_METHODS[-1] is ProvenanceMethod.SUPPLIED
+def test_library_import_ranks_last_among_other_methods() -> None:
+    assert OTHER_METHODS[-2:] == (ProvenanceMethod.SUPPLIED, ProvenanceMethod.LIBRARY_IMPORT)
 
 
 def test_prisma_supplied_and_database_counts_database(
