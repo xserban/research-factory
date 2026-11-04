@@ -71,8 +71,9 @@ from factory.services.calibration import (
 from factory.services.context import Project
 from factory.services.protocol import (
     ProtocolVersion,
+    amendments_with_events,
     current_protocol,
-    list_amendments,
+    last_criterion_change,
     protocol_lineage,
 )
 from factory.services.protocol_rules import DecisionRef, stale_decisions
@@ -396,9 +397,20 @@ def live_decisions(
     return [DecisionRecorded.model_validate(dict(row)) for row in rows]
 
 
+def decision_events(project: Project) -> dict[str, str]:
+    """The event ID each live decision was recorded at."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text("SELECT decision_id, event_id FROM decisions WHERE superseded_by IS NULL")
+        ).all()
+    return {str(decision): str(event) for decision, event in rows}
+
+
 def stale_screening_decisions(project: Project, *, stage: ScreeningStage | None = None) -> set[str]:
     """The live decisions that a protocol amendment's stale rules make doubtful (R-30), of
     `stage`, or of every stage when None. Each rule matches a decision's own stage."""
+    events = decision_events(project)
     refs = [
         DecisionRef(
             decision_id=decision.decision_id,
@@ -406,10 +418,19 @@ def stale_screening_decisions(project: Project, *, stage: ScreeningStage | None 
             criterion=decision.criterion,
             protocol_id=decision.protocol_id,
             stage=decision.stage,
+            at=events.get(decision.decision_id),
         )
         for decision in live_decisions(project, stage=stage)
     ]
-    return set(stale_decisions(list_amendments(project), protocol_lineage(project), refs))
+    amended = amendments_with_events(project)
+    return set(
+        stale_decisions(
+            [amendment for _, amendment in amended],
+            protocol_lineage(project),
+            refs,
+            amended_at=[event for event, _ in amended],
+        )
+    )
 
 
 # --- Recording ---
@@ -791,12 +812,21 @@ def _criteria(
 def _done_keys(
     project: Project, label: PassLabel, stage: ScreeningStage = TA
 ) -> set[tuple[str, str]]:
-    """(work, phase) pairs with a live, non-stale decision in the pass at `stage`."""
+    """(work, phase) pairs with a live, non-stale decision in the pass at `stage`. A calibration
+    decision recorded before the latest criterion-changing amendment is not done: the gate is
+    passed again (R-26; a clarification counts, slice-1 behaviour)."""
     stale = stale_screening_decisions(project, stage=stage)
+    cut = last_criterion_change(project)
+    events = decision_events(project)
     return {
         (decision.work_id, decision.phase.value)
         for decision in live_decisions(project, label, stage=stage)
         if decision.decision_id not in stale
+        and not (
+            decision.phase is ScreeningPhase.CALIBRATION
+            and cut is not None
+            and events.get(decision.decision_id, "") < cut
+        )
     }
 
 

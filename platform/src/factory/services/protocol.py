@@ -328,13 +328,39 @@ def protocol_lineage(project: Project) -> list[str]:
 
 
 def lineage_through(project: Project, protocol_id: str) -> frozenset[str]:
-    """The protocol versions recorded up to and including `protocol_id` (decision 50): the
-    versions whose decisions still count under `protocol_id` unless a stale rule says otherwise.
-    Empty when `protocol_id` was never recorded."""
-    lineage = protocol_lineage(project)
-    if protocol_id not in lineage:
+    """The protocol versions recorded up to and including the latest recording of `protocol_id`
+    (decision 50): the versions whose decisions still count under `protocol_id` unless a stale
+    rule says otherwise. A reverted amendment (A, B, A) keeps B in the lineage of A. Empty when
+    `protocol_id` was never recorded."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        rows = [
+            str(row[0])
+            for row in conn.execute(text("SELECT protocol_id FROM protocols ORDER BY event_id"))
+        ]
+    if protocol_id not in rows:
         return frozenset()
-    return frozenset(lineage[: lineage.index(protocol_id) + 1])
+    last = len(rows) - 1 - rows[::-1].index(protocol_id)
+    return frozenset(rows[: last + 1])
+
+
+def amendments_with_events(project: Project) -> list[tuple[str, ProtocolAmended]]:
+    """Every recorded amendment with the event ID it was recorded at, in recording order."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text("SELECT event_id, payload FROM amendments ORDER BY event_id")
+        ).all()
+    return [
+        (str(event), ProtocolAmended.model_validate_json(str(payload))) for event, payload in rows
+    ]
+
+
+def last_criterion_change(project: Project) -> str | None:
+    """The event ID of the latest amendment that changed a criterion (a clarification included);
+    calibration decisions recorded before it no longer count (R-26)."""
+    changed = [event for event, amendment in amendments_with_events(project) if amendment.changes]
+    return changed[-1] if changed else None
 
 
 def list_amendments(project: Project) -> list[ProtocolAmended]:

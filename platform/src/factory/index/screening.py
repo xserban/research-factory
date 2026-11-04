@@ -36,7 +36,7 @@ from sqlalchemy.engine import Connection
 from factory.canonical import canonical_json, population_digest
 from factory.events.envelope import Event
 from factory.index.projection import Handler
-from factory.model.protocol import ScreeningStage
+from factory.model.protocol import ProtocolAmended, ScreeningStage
 from factory.model.screening import (
     AuditLabelled,
     AuditSampled,
@@ -49,6 +49,7 @@ from factory.model.screening import (
     PassOpened,
     Verdict,
 )
+from factory.model.staleness import DecisionRef, stale_decisions
 
 
 @dataclass(frozen=True)
@@ -412,15 +413,62 @@ def _current_protocol_id(conn: Connection) -> str | None:
 
 
 def _lineage_through(conn: Connection, protocol_id: str) -> list[str]:
-    """The protocol versions in recording order (first occurrence) up to and including
-    `protocol_id`; the projector's twin of `protocol.lineage_through`."""
+    """The protocol versions recorded up to the latest recording of `protocol_id`; the
+    projector's twin of `protocol.lineage_through`."""
+    rows = [
+        str(row[0])
+        for row in conn.execute(text("SELECT protocol_id FROM protocols ORDER BY event_id"))
+    ]
+    if protocol_id not in rows:
+        return []
+    last = len(rows) - 1 - rows[::-1].index(protocol_id)
+    return sorted(set(rows[: last + 1]))
+
+
+def _stale_ids(conn: Connection, t: ScreeningTables, stage: str) -> set[str]:
+    """The live decisions of `stage` that the amendments recorded so far make stale; the same
+    rules and order as `screening.stale_screening_decisions`."""
+    amended = [
+        (str(event), ProtocolAmended.model_validate_json(str(payload)))
+        for event, payload in conn.execute(
+            text("SELECT event_id, payload FROM amendments ORDER BY event_id")
+        )
+    ]
+    if not any(amendment.stale_rules for _, amendment in amended):
+        return set()
     seen: dict[str, None] = {}
     for (version,) in conn.execute(text("SELECT protocol_id FROM protocols ORDER BY event_id")):
         seen.setdefault(str(version), None)
-    versions = list(seen)
-    if protocol_id not in seen:
-        return []
-    return versions[: versions.index(protocol_id) + 1]
+    rows = conn.execute(
+        select(
+            t.decisions.c.decision_id,
+            t.decisions.c.verdict,
+            t.decisions.c.criterion,
+            t.decisions.c.protocol_id,
+            t.decisions.c.event_id,
+        )
+        .where(t.decisions.c.stage == stage)
+        .where(t.decisions.c.superseded_by.is_(None))
+    ).all()
+    refs = [
+        DecisionRef(
+            decision_id=str(decision),
+            verdict=str(verdict),
+            criterion=None if criterion is None else str(criterion),
+            protocol_id=str(version),
+            stage=ScreeningStage(stage),
+            at=str(event),
+        )
+        for decision, verdict, criterion, version, event in rows
+    ]
+    return set(
+        stale_decisions(
+            [amendment for _, amendment in amended],
+            list(seen),
+            refs,
+            amended_at=[event for event, _ in amended],
+        )
+    )
 
 
 def _agreed_by_work(
@@ -436,6 +484,7 @@ def _agreed_by_work(
         return {}
     rows = conn.execute(
         select(
+            t.decisions.c.decision_id,
             t.decisions.c.pass_label,
             t.decisions.c.work_id,
             t.decisions.c.verdict,
@@ -447,8 +496,11 @@ def _agreed_by_work(
         .where(t.decisions.c.superseded_by.is_(None))
         .order_by(t.decisions.c.event_id)
     ).all()
+    stale = _stale_ids(conn, t, stage)
     decided: dict[str, dict[str, tuple[Verdict, str | None]]] = {}
-    for pass_label, work_id, verdict, criterion in rows:
+    for decision_id, pass_label, work_id, verdict, criterion in rows:
+        if decision_id in stale:
+            continue
         bare = None if criterion is None else str(criterion).rsplit(":", 1)[-1]
         decided.setdefault(str(work_id), {})[str(pass_label)] = (Verdict(str(verdict)), bare)
     agreed: dict[str, tuple[str, str | None]] = {}
