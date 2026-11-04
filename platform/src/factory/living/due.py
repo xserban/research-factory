@@ -18,7 +18,8 @@ class CycleView:
     """One watch cycle as the index records it.
 
     `sources` are the sources the cycle ran; `complete_sources` those whose every run completed;
-    `full_replay_sources` those that ran as a full replay (not a window).
+    `full_replay_sources` those that ran as a full replay (not a window); `protocol_id` the
+    protocol version the cycle ran under (empty when unknown).
     """
 
     cycle_id: str
@@ -28,6 +29,7 @@ class CycleView:
     sources: tuple[str, ...]
     complete_sources: tuple[str, ...]
     full_replay_sources: tuple[str, ...]
+    protocol_id: str = ""
 
 
 def next_due(plan: WatchSource, cycles: Sequence[CycleView]) -> datetime | None:

@@ -60,6 +60,7 @@ from factory.model.seed import (
     SeedUnresolved,
 )
 from factory.model.task import TaskClaimed, TaskCompleted, TaskCreated, TaskReleased
+from factory.model.watch import WatchCycleFinished, WatchCycleStarted
 
 _NAME_RE = re.compile(r"[a-z][a-z_]*\.[a-z][a-z_]*")
 
@@ -159,4 +160,6 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("inbox.link_added", InboxLinkAdded, 1))
     catalog.register(EventType("inbox.link_withdrawn", InboxLinkWithdrawn, 1))
     catalog.register(EventType("inbox.link_resolved", InboxLinkResolved, 1))
+    catalog.register(EventType("watch.cycle_started", WatchCycleStarted, 1))
+    catalog.register(EventType("watch.cycle_finished", WatchCycleFinished, 1))
     return catalog

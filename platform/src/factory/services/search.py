@@ -136,11 +136,13 @@ def run_query(
     sources: Mapping[str, SourceFactory],
     resume_run: str | None = None,
     actor: Actor | None = None,
+    cycle_id: str | None = None,
 ) -> RunSummary:
     """Run one registered query against its source and record everything it returns.
 
     `actor` is the triggering actor, recorded on `search.run_started`; without one the run is
     recorded as the system's. An agent's run keeps its input (`query_id`, `resume_run`) verbatim.
+    `cycle_id`, the watch cycle (`wcy_`) the run belongs to, is the last ref of the start event.
 
     A query that the protocol no longer authorises (see `protocol.search_authorization`) is
     refused before anything is written, including on a resume.
@@ -196,7 +198,7 @@ def run_query(
                         resume_from=resume_token,
                     ),
                     started_by,
-                    refs=(run_id,),
+                    refs=(run_id,) if cycle_id is None else (run_id, cycle_id),
                     input_blob=input_blob,
                 )
             ]

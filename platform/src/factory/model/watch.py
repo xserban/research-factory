@@ -14,6 +14,10 @@ from typing import Literal, Self
 from pydantic import Field, field_validator, model_validator
 
 from factory.model.base import StrictModel
+from factory.model.identity import ULID_RE
+
+WCY_ID_RE = rf"^wcy_{ULID_RE}$"
+_PROTOCOL_ID_RE = r"^P@[0-9a-f]{8}$"  # as model.protocol; that module imports this one
 
 CycleTrigger = Literal["scheduler", "human", "agent"]
 
@@ -69,3 +73,64 @@ class WatchPlan(StrictModel):
         cls, value: tuple[Literal["openalex", "crossref"], ...]
     ) -> tuple[Literal["openalex", "crossref"], ...]:
         return tuple(sorted(set(value)))
+
+
+# --- Event payloads (schema 1). Written by `factory.services.watch`, folded by `index.watch`.
+
+
+class SourceCounts(StrictModel):
+    """What one source contributed to one cycle. Always computed from run events and index rows
+    (`factory.living.counts`), never supplied.
+
+    `runs` and `complete_runs` count planned queries run in the cycle and those whose latest run
+    in the cycle completed; `retrieved` sums the records those latest runs retrieved. `new_works`
+    counts works first seen in the cycle by this source; `duplicates_in_cycle` works this source
+    returned that an earlier source of the same cycle had found first. `window_missed` and
+    `disappeared` exist only for a full replay (None otherwise, and `disappeared` None when a
+    run of the source did not complete).
+    """
+
+    source: str
+    runs: int = Field(ge=0)
+    complete_runs: int = Field(ge=0)
+    retrieved: int = Field(ge=0)
+    new_works: int = Field(ge=0)
+    duplicates_in_cycle: int = Field(ge=0)
+    window_missed: int | None = Field(default=None, ge=0)
+    disappeared: int | None = Field(default=None, ge=0)
+
+    @property
+    def complete(self) -> bool:
+        return self.runs > 0 and self.runs == self.complete_runs
+
+
+class CycleSource(StrictModel):
+    """One source of a cycle: how it runs, and the window it lists from."""
+
+    source: str
+    mode: Literal["full", "window"]
+    window_start: date | None = None
+    full_replay: bool
+
+
+class WatchCycleStarted(StrictModel):
+    cycle_id: str = Field(pattern=WCY_ID_RE)
+    protocol_id: str = Field(pattern=_PROTOCOL_ID_RE)
+    sources: tuple[CycleSource, ...] = Field(min_length=1)
+    skipped: tuple[str, ...] = ()
+    trigger: CycleTrigger
+
+
+class WatchCycleFinished(StrictModel):
+    cycle_id: str = Field(pattern=WCY_ID_RE)
+    status: CycleStatus
+    run_ids: tuple[str, ...] = ()
+    status_run_ids: tuple[str, ...] = ()
+    counts: tuple[SourceCounts, ...] = ()
+    note: str | None = None
+
+    @model_validator(mode="after")
+    def _terminal(self) -> Self:
+        if self.status is CycleStatus.OPEN:
+            raise ValueError("a finished cycle is complete, partial or failed")
+        return self
