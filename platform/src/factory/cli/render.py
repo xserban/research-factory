@@ -2,6 +2,8 @@
 is read from the model, so the CLI and the MCP tools cannot differ (R-05)."""
 
 from factory.services.check import CheckReport
+from factory.services.document_convert import ConvertSummary, DocumentStatus
+from factory.services.document_read import DocumentPage
 from factory.services.fulltext import FetchSummary
 from factory.services.fulltext_import import ImportReport
 from factory.services.fulltext_status import FulltextStatus
@@ -113,4 +115,59 @@ def fulltext_status_lines(status: FulltextStatus) -> list[str]:
     for work in status.works:
         reasons = "; ".join(f"{route.value} {reason}" for route, reason in work.reasons.items())
         lines.append(f"{work.work_id}  {work.state}" + (f"  ({reasons})" if reasons else ""))
+    return lines
+
+
+def convert_lines(summary: ConvertSummary) -> list[str]:
+    """One line per document outcome (document, work, status, reason), then the counts."""
+    lines = [
+        f"{o.document_id}  {o.work_id}  {o.status}  {o.reason if o.reason else '-'}"
+        for o in summary.outcomes
+    ]
+    lines.append(
+        f"converted {summary.converted}, unchanged {summary.unchanged}, failed {summary.failed}, "
+        f"raw-missing {summary.raw_missing}, restored {summary.restored}"
+    )
+    return lines
+
+
+def document_status_lines(status: DocumentStatus) -> list[str]:
+    """The counts, then each live document: its converter and anchor counts, or not converted,
+    with its latest recorded failure."""
+    lines = [
+        f"documents: {len(status.documents)}",
+        f"converted: {status.converted}",
+        f"not converted: {status.not_converted}",
+    ]
+    for doc in status.documents:
+        if doc.converted:
+            state = (
+                f"converted  {doc.converter} {doc.converter_version}"
+                f"  anchors {_anchor_counts(doc.counts)}"
+            )
+        else:
+            state = "not converted"
+        failure = f"  last failure: {doc.latest_failure.value}" if doc.latest_failure else ""
+        lines.append(f"{doc.document_id}  {doc.work_id}  {state}{failure}")
+    return lines
+
+
+def _anchor_counts(counts: dict[str, int] | None) -> str:
+    if counts is None:
+        return "-"
+    return ", ".join(f"{kind} {n}" for kind, n in counts.items() if n) or "none"
+
+
+def document_page_lines(page: DocumentPage) -> list[str]:
+    """Each segment as its anchor and kind (with a truncation marker), then its text; then the
+    anchor to pass as `--after` for the next page, if there is one."""
+    lines: list[str] = []
+    for index, segment in enumerate(page.segments):
+        if index:
+            lines.append("")
+        marker = "  (truncated)" if segment.truncated else ""
+        lines.append(f"[{segment.anchor}] {segment.kind.value}{marker}")
+        lines.append(segment.text)
+    if page.next_after is not None:
+        lines += ["", f"next_after: {page.next_after}"]
     return lines

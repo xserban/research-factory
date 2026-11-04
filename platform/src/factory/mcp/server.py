@@ -37,6 +37,7 @@ from factory.services import calibration as calibration_service
 from factory.services import chase as chase_service
 from factory.services import check as check_service
 from factory.services import dedup as dedup_service
+from factory.services import document_read as document_read_service
 from factory.services import fulltext as fulltext_service
 from factory.services import fulltext_status as fulltext_status_service
 from factory.services import methods as methods_service
@@ -685,6 +686,41 @@ def build_server(
             return _withheld(opened, report.model_dump(mode="json"))
 
         return _reply(project, status)
+
+    @server.tool()
+    def document_read(
+        project: str,
+        work_id: str,
+        document_id: str | None = None,
+        conversion_id: str | None = None,
+        after: str | None = None,
+        anchor: str | None = None,
+        limit: int = document_read_service.DEFAULT_LIMIT,
+        max_chars: int = document_read_service.DEFAULT_MAX_CHARS,
+    ) -> dict[str, JsonValue]:
+        """One page of a promoted work's converted document: its segments in document order, each
+        with its anchor, kind and text (cut and flagged when long), and `next_after` for the next
+        page. `anchor` reads one anchor, cells included. Agents read documents only through this
+        tool. Conversion is the researcher's act (`factory document convert`); there is no MCP
+        convert tool. Only works promoted at title/abstract are read. Read-only. Refused to a
+        session that has joined a pass."""
+
+        def read() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            page = document_read_service.document_read(
+                opened,
+                work_id=work_id,
+                document_id=document_id,
+                conversion_id=conversion_id,
+                after=after,
+                anchor=anchor,
+                limit=limit,
+                max_chars=max_chars,
+            )
+            return _withheld(opened, page.model_dump(mode="json"))
+
+        return _reply(project, read)
 
     return server
 

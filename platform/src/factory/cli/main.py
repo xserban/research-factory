@@ -11,6 +11,7 @@ import typer
 from factory.cli import render
 from factory.clock import Clock, SystemClock
 from factory.config import Settings
+from factory.document.registry import default_converters
 from factory.errors import FactoryValidationError, ProjectNotFoundError, ValidationIssue
 from factory.mcp.conventions import parse_routes
 from factory.mcp.server import run
@@ -25,6 +26,8 @@ from factory.services import audit as audit_service
 from factory.services import calibration as calibration_service
 from factory.services import chase as chase_service
 from factory.services import check as check_service
+from factory.services import document_convert as document_convert_service
+from factory.services import document_read as document_read_service
 from factory.services import fulltext as fulltext_service
 from factory.services import fulltext_import as fulltext_import_service
 from factory.services import fulltext_status as fulltext_status_service
@@ -72,6 +75,11 @@ fulltext_app = typer.Typer(
     help="Full text: fetch, status, restore, and import the researcher's PDFs.",
     no_args_is_help=True,
 )
+document_app = typer.Typer(
+    name="document",
+    help="Convert retrieved documents to Markdown, check them, and read them.",
+    no_args_is_help=True,
+)
 report_app = typer.Typer(
     name="report", help="PRISMA flow, search report and methods statement.", no_args_is_help=True
 )
@@ -83,6 +91,7 @@ app.add_typer(screen_app)
 app.add_typer(audit_app)
 app.add_typer(search_app)
 app.add_typer(fulltext_app)
+app.add_typer(document_app)
 
 
 @dataclass
@@ -717,6 +726,98 @@ def fulltext_restore_cmd(
     unavailable = [d for d, outcome in results if outcome == "unavailable"]
     if unavailable:
         _fail(f"unavailable: {' '.join(unavailable)}", 1)
+
+
+@document_app.command("convert")
+def document_convert_cmd(
+    ctx: typer.Context,
+    work: Annotated[
+        list[str] | None,
+        typer.Option("--work", help="A promoted work; repeat for several."),
+    ] = None,
+    document: Annotated[
+        list[str] | None,
+        typer.Option("--document", help="A live document; repeat for several."),
+    ] = None,
+    restore: Annotated[
+        bool,
+        typer.Option(
+            "--restore",
+            help="Regenerate missing or damaged stored conversions. Takes no --work or --document.",
+        ),
+    ] = False,
+) -> None:
+    """Convert the retrieved documents of promoted works, as the researcher.
+
+    Without --work or --document, converts every live document of a promoted work. A failed
+    document is recorded and the rest continue. --restore regenerates the stored Markdown of
+    recorded conversions that are missing or damaged; it writes no event.
+    """
+    state = _state(ctx)
+    with _reporting_errors():
+        if restore and (work or document):
+            raise FactoryValidationError(
+                [ValidationIssue("restore", "takes no --work or --document")]
+            )
+        project = _resolve_project(state)
+        if restore:
+            summary = document_convert_service.restore_conversions(project, default_converters())
+        else:
+            summary = document_convert_service.convert_documents(
+                project, default_converters(), work_ids=work, document_ids=document
+            )
+    for line in render.convert_lines(summary):
+        typer.echo(line)
+
+
+@document_app.command("status")
+def document_status_cmd(ctx: typer.Context) -> None:
+    """Show each live document of a promoted work: converted or not, its converter and version,
+    anchor counts, and its latest recorded failure."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        status = document_convert_service.document_status(project)
+    for line in render.document_status_lines(status):
+        typer.echo(line)
+
+
+@document_app.command("read")
+def document_read_cmd(
+    ctx: typer.Context,
+    work: Annotated[str, typer.Argument(help="A promoted work.")],
+    document: Annotated[
+        str | None, typer.Option("--document", help="Read this document's latest conversion.")
+    ] = None,
+    conversion: Annotated[
+        str | None, typer.Option("--conversion", help="Read this conversion.")
+    ] = None,
+    anchor: Annotated[
+        str | None, typer.Option("--anchor", help="Read only this anchor, cells included.")
+    ] = None,
+    after: Annotated[
+        str | None, typer.Option("--after", help="Continue after this anchor (the next_after).")
+    ] = None,
+    limit: Annotated[
+        int,
+        typer.Option("--limit", help="At most this many segments (1 to 200)."),
+    ] = document_read_service.DEFAULT_LIMIT,
+) -> None:
+    """Print a promoted work's converted text, one page of segments at a time."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        page = document_read_service.document_read(
+            project,
+            work_id=work,
+            document_id=document,
+            conversion_id=conversion,
+            after=after,
+            anchor=anchor,
+            limit=limit,
+        )
+    for line in render.document_page_lines(page):
+        typer.echo(line)
 
 
 @app.command()

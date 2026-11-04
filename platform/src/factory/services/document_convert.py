@@ -25,6 +25,7 @@ Invariants:
 from __future__ import annotations
 
 import hashlib
+import json
 from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -255,6 +256,103 @@ def _restore_outcome(
         conversion_id=record.conversion_id if status == "restored" else None,
         reason=reason,
     )
+
+
+class DocumentStatusEntry(StrictModel):
+    """One live document of a promoted work. `converter`, `converter_version`, `conversion_id` and
+    `counts` are those of its latest conversion (None when it has none). `latest_failure` is the
+    reason of its latest recorded failure, None when it has none."""
+
+    document_id: str
+    work_id: str
+    converted: bool
+    conversion_id: str | None
+    converter: str | None
+    converter_version: str | None
+    counts: dict[str, int] | None
+    latest_failure: FailureReason | None
+
+
+class DocumentStatus(StrictModel):
+    """Every live document of a promoted work, in event order, with the count of each state."""
+
+    documents: list[DocumentStatusEntry]
+    converted: int
+    not_converted: int
+
+
+def document_status(project: Project) -> DocumentStatus:
+    """The conversion state of each live document of a promoted work.
+
+    "Latest" means latest in event order. Read-only: nothing is written, and the index is only
+    synced. The library is never read, so a missing blob does not change the status.
+    """
+    with project.index.exclusive():
+        project.index.sync()
+    promoted = _promoted(project)
+    latest = _latest_conversions(project)
+    failures = _latest_failures(project)
+    entries = []
+    for doc in _live_documents(project):
+        if doc.work_id not in promoted:
+            continue
+        row = latest.get(doc.document_id)
+        entries.append(
+            DocumentStatusEntry(
+                document_id=doc.document_id,
+                work_id=doc.work_id,
+                converted=row is not None,
+                conversion_id=None if row is None else row[0],
+                converter=None if row is None else row[1],
+                converter_version=None if row is None else row[2],
+                counts=None if row is None else row[3],
+                latest_failure=failures.get(doc.document_id),
+            )
+        )
+    converted = sum(1 for entry in entries if entry.converted)
+    return DocumentStatus(
+        documents=entries, converted=converted, not_converted=len(entries) - converted
+    )
+
+
+def _latest_conversions(
+    project: Project,
+) -> dict[str, tuple[str, str, str, dict[str, int]]]:
+    """Per document, the latest conversion's (conversion id, converter, version, counts)."""
+    with project.index.connect() as conn:
+        rows = (
+            conn.execute(
+                text(
+                    "SELECT conversion_id, document_id, converter, converter_version, counts "
+                    "FROM document_conversions ORDER BY event_id"
+                )
+            )
+            .mappings()
+            .all()
+        )
+    latest: dict[str, tuple[str, str, str, dict[str, int]]] = {}
+    for row in rows:
+        counts = {str(k): int(v) for k, v in json.loads(str(row["counts"])).items()}
+        latest[str(row["document_id"])] = (
+            str(row["conversion_id"]),
+            str(row["converter"]),
+            str(row["converter_version"]),
+            counts,
+        )
+    return latest
+
+
+def _latest_failures(project: Project) -> dict[str, FailureReason]:
+    """Per document, the reason of its latest recorded failure, in event order."""
+    with project.index.connect() as conn:
+        rows = (
+            conn.execute(
+                text("SELECT document_id, reason FROM document_failures ORDER BY event_id")
+            )
+            .mappings()
+            .all()
+        )
+    return {str(row["document_id"]): FailureReason(str(row["reason"])) for row in rows}
 
 
 # --- Scope (validated before any write) ---

@@ -16,10 +16,10 @@ from factory.document.converter import convert
 from factory.document.latexml_html import LatexmlHtmlConverter
 from factory.document.registry import default_converters
 from factory.errors import FactoryValidationError, ValidationIssue
-from factory.model.document import Converted
+from factory.model.document import Converted, FailureReason
 from factory.model.fulltext import AttemptOutcome, Route
 from factory.services.context import Project
-from factory.services.document_convert import ConvertSummary
+from factory.services.document_convert import ConvertSummary, document_status
 from factory.services.fulltext import fetch_fulltext, record_supplied_document
 from factory.sources.fulltext.base import not_retrieved
 from tests.document_helpers import (
@@ -395,3 +395,31 @@ def test_corrupt_raw_is_raw_missing_and_batch_continues(project: Project, corpus
         summary.outcomes[1].document_id
     ]
     assert events_of_type(project, "document.conversion_failed") == []
+
+
+def test_status_reports_latest_conversion_and_failure(project: Project, corpus: None) -> None:
+    """Status is read-only; a failed document shows its failure, and a converted one its latest
+    conversion's converter, version and counts, with the failure it recorded before."""
+    work = promoted_works(project)[0]
+    document = fetched_document(project, work, ARTICLE)
+    run_convert(project, make_registry(StubConverter(unavailable=True)))
+    before = event_bytes(project)
+
+    [entry] = document_status(project).documents
+    assert entry.document_id == document and entry.work_id == work
+    assert entry.converted is False and entry.conversion_id is None
+    assert entry.converter is None and entry.counts is None
+    assert entry.latest_failure is FailureReason.CONVERTER_UNAVAILABLE
+    assert event_bytes(project) == before
+
+    run_convert(project, make_registry())
+    direct = convert(LatexmlHtmlConverter(), ARTICLE, "text/html")
+    [entry] = document_status(project).documents
+    assert entry.converted is True
+    assert entry.converter == direct.converter
+    assert entry.converter_version == "1.0+stub"
+    assert entry.counts == {
+        kind.value: sum(1 for a in direct.manifest.anchors if a.kind is kind) for kind in AnchorKind
+    }
+    assert entry.latest_failure is FailureReason.CONVERTER_UNAVAILABLE
+    assert event_bytes(project) != before
