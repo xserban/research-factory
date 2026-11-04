@@ -17,6 +17,7 @@ from pydantic import Field, StringConstraints, model_validator
 from factory.imports.model import ImportFormat, ImportRole, ParseOutcome
 from factory.model.base import StrictModel
 from factory.model.chase import WorkId
+from factory.model.fulltext import DOCUMENT_ID_RE
 from factory.model.identity import BLOB_REF_RE, ULID_RE
 from factory.model.references import (
     BINDING_DECISIONS,
@@ -155,3 +156,16 @@ class ImportAdmissionPlanned(StrictModel):
 
     import_id: str = Field(pattern=IMPORT_ID_RE)
     queries: tuple[PlannedImportQuery, ...] = Field(min_length=1)
+
+
+class ImportAttachmentLinked(StrictModel):
+    """A record's export-named file recorded as a document of its promoted work.
+
+    Written in the same append as the document's attempt and `fulltext.document_added`, so a link
+    never exists without its document.
+    """
+
+    import_id: str = Field(pattern=IMPORT_ID_RE)
+    ordinal: Ordinal
+    work_id: WorkId
+    document_id: str = Field(pattern=DOCUMENT_ID_RE)

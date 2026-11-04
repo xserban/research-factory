@@ -37,6 +37,7 @@ from factory.imports.model import ImportRecord
 from factory.index.projection import Handler
 from factory.model.imports import (
     ImportAdmissionPlanned,
+    ImportAttachmentLinked,
     ImportRecorded,
     ImportResolutionDecided,
     ImportResolved,
@@ -57,6 +58,7 @@ class ImportTables:
     records: Table
     decisions: Table
     admission_queries: Table
+    attachments: Table
 
 
 def import_tables(metadata: MetaData) -> ImportTables:
@@ -136,7 +138,16 @@ def import_tables(metadata: MetaData) -> ImportTables:
         Column("record_keys", String, nullable=False),
         Index("ix_import_admission_queries_import", "import_id"),
     )
-    return ImportTables(imports, records, decisions, admission_queries)
+    attachments = Table(
+        "import_attachments",
+        metadata,
+        Column("import_id", String, primary_key=True),
+        Column("ordinal", Integer, primary_key=True),
+        Column("work_id", String, nullable=False),
+        Column("document_id", String, nullable=False),
+        Column("event_id", String, nullable=False),
+    )
+    return ImportTables(imports, records, decisions, admission_queries, attachments)
 
 
 def import_handlers(t: ImportTables, blobs: BlobStore | None) -> dict[str, Handler]:
@@ -146,6 +157,7 @@ def import_handlers(t: ImportTables, blobs: BlobStore | None) -> dict[str, Handl
         "import.resolved": _resolved(t),
         "import.resolution_decided": _decided(t),
         "import.admission_planned": _admission_planned(t),
+        "import.attachment_linked": _attachment_linked(t),
     }
 
 
@@ -264,6 +276,26 @@ def _admission_planned(t: ImportTables) -> Handler:
             )
 
     return planned
+
+
+def _attachment_linked(t: ImportTables) -> Handler:
+    """One link per record, first write wins."""
+
+    def linked(conn: Connection, event: Event) -> None:
+        p = ImportAttachmentLinked.model_validate(event.payload)
+        conn.execute(
+            sqlite_insert(t.attachments)
+            .values(
+                import_id=p.import_id,
+                ordinal=p.ordinal,
+                work_id=p.work_id,
+                document_id=p.document_id,
+                event_id=event.id,
+            )
+            .on_conflict_do_nothing(index_elements=["import_id", "ordinal"])
+        )
+
+    return linked
 
 
 def _decided(t: ImportTables) -> Handler:

@@ -18,6 +18,7 @@ from factory.model.extraction import (
 from factory.model.fulltext import Attempted, DocumentAdded, FetchStarted, SourceChanged
 from factory.model.imports import (
     ImportAdmissionPlanned,
+    ImportAttachmentLinked,
     ImportRecorded,
     ImportResolutionDecided,
     ImportResolved,
@@ -165,6 +166,7 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("import.split_drawn", ImportSplitDrawn, 1))
     catalog.register(EventType("import.resolved", ImportResolved, 1))
     catalog.register(EventType("import.admission_planned", ImportAdmissionPlanned, 1))
+    catalog.register(EventType("import.attachment_linked", ImportAttachmentLinked, 1))
     catalog.register(EventType("import.resolution_decided", ImportResolutionDecided, 1))
     catalog.register(EventType("inbox.link_added", InboxLinkAdded, 1))
     catalog.register(EventType("inbox.link_withdrawn", InboxLinkWithdrawn, 1))

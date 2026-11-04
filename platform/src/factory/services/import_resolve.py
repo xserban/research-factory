@@ -24,7 +24,7 @@ from sqlalchemy import text
 
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
-from factory.imports.model import ParseOutcome
+from factory.imports.model import ImportFormat, ParseOutcome
 from factory.model.base import StrictModel
 from factory.model.imports import ImportResolutionDecided, ImportResolved
 from factory.model.references import (
@@ -178,6 +178,26 @@ def _link(project: Project, import_id: str, ordinal: int) -> _Link | None:
     )
 
 
+def _identity_case(project: Project, import_id: str, ordinal: int, link: _Link) -> bool:
+    """Whether the decision vouches for a file's identity: a PDF-folder record that resolved to a
+    work (by identifier) and carries its file. Such a record's `confirm` is what lets
+    `attach_import` attach a file whose first page does not show the work's title; only a human
+    can give it (a second agent decides `unconfirmed` records only)."""
+    if link.base_state is not LinkState.RESOLVED or link.base_work_id is None:
+        return False
+    if import_row(project, import_id).format is not ImportFormat.PDFS:
+        return False
+    with project.index.connect() as conn:
+        row = conn.execute(
+            text(
+                "SELECT 1 FROM import_records WHERE import_id = :i AND ordinal = :o "
+                "AND attachment_content_sha256 IS NOT NULL"
+            ),
+            {"i": import_id, "o": ordinal},
+        ).first()
+    return row is not None
+
+
 def _has_proposal(project: Project, import_id: str, ordinal: int) -> bool:
     with project.index.connect() as conn:
         row = conn.execute(
@@ -240,7 +260,8 @@ def decide_import(
         if link is None:
             issues.append(ValidationIssue("ordinal", "no such resolved record"))
             raise FactoryValidationError(issues)
-        if link.base_state not in (LinkState.UNCONFIRMED, LinkState.AMBIGUOUS):
+        identity = _identity_case(project, import_id, ordinal, link)
+        if link.base_state not in (LinkState.UNCONFIRMED, LinkState.AMBIGUOUS) and not identity:
             issues.append(
                 ValidationIssue(
                     "ordinal",
@@ -252,7 +273,7 @@ def decide_import(
             dict.fromkeys(w for w in (link.base_work_id, *link.candidates) if w is not None)
         )
         target = work_id
-        if target is None and link.base_state is LinkState.UNCONFIRMED:
+        if target is None and link.base_state in (LinkState.UNCONFIRMED, LinkState.RESOLVED):
             target = link.base_work_id
         if target is None and decision in (Decision.CONFIRM, Decision.PROPOSE_CONFIRM):
             issues.append(ValidationIssue("work_id", "a confirmation names the work it confirms"))
@@ -277,9 +298,9 @@ def decide_import(
         record_title = _record_title(project, import_id, ordinal)
         if work is None:
             issues.append(ValidationIssue("work_id", "the candidate work is not stored"))
-        if record_title is None:
+        if record_title is None and not identity:
             issues.append(ValidationIssue("ordinal", "the record has no title to quote"))
-        if issues or work is None or record_title is None:
+        if issues or work is None:
             raise FactoryValidationError(issues)
 
         payload = ImportResolutionDecided(
@@ -288,7 +309,7 @@ def decide_import(
             decision=decision,
             work_id=target,
             rationale=rationale,
-            quotes=(record_title[:MAX_QUOTE], work.title[:MAX_QUOTE]),
+            quotes=((record_title or work.title)[:MAX_QUOTE], work.title[:MAX_QUOTE]),
             confirmed_by=confirmed_by,
         )
         input_blob = (

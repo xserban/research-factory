@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal
 
@@ -634,8 +634,12 @@ def record_supplied_document(
     source_version: str,
     media_type: str,
     actor: Actor,
+    link: Callable[[str], Event] | None = None,
 ) -> str | None:
     """Record a researcher-supplied PDF: its library entry, one attempt and one document.
+
+    `link`, when given, builds one more event from the new document's id (an import's
+    `import.attachment_linked`); it is appended in the same `record` call.
 
     Returns the new document's id, or None if the bytes already back a document of this work, in
     which case nothing is written (the library is not touched either). The caller holds the write
@@ -679,7 +683,7 @@ def record_supplied_document(
         actor,
         refs=(document_id, work_id, attempt_id),
     )
-    project.record([attempt, document])
+    project.record([attempt, document, *([] if link is None else [link(document_id)])])
     return document_id
 
 
