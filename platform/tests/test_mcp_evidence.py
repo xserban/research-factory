@@ -7,8 +7,12 @@ from factory.config import Settings
 from factory.events.envelope import Actor
 from factory.events.reader import read_all
 from factory.mcp import server as mcp_server
+from factory.model.project import RigorMode
+from factory.services import check as check_service
 from factory.services import evidence_report as evidence_report_service
+from factory.services.check import CheckReport, Finding
 from factory.services.context import Project
+from factory.services.extraction_audit import ExtractionAuditReport
 from factory.services.evidence_report import EvidenceReport, assemble_report
 from tests.evidence_helpers import pilot_inputs
 from tests.helpers import SESSION, open_session
@@ -139,3 +143,39 @@ async def test_empty_map_and_blank_value_are_refused(
         out = await client.call("report_evidence", project="demo", expect=[bad])
     assert out["ok"] is False
     assert out["errors"][0]["field"] == "expect.0"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("above", [True, False])
+async def test_mcp_check_states_a_labelled_audit_without_its_flag(
+    settings: Settings,
+    project: Project,
+    clock: FixedClock,
+    monkeypatch: pytest.MonkeyPatch,
+    above: bool,
+) -> None:
+    findings = (
+        [Finding(code="extraction-error-high", severity="error", refs=["xau_1"], message="x")]
+        if above
+        else []
+    )
+    audit = ExtractionAuditReport(
+        audit_id="xau_1",
+        sample_size=40,
+        labelled=40,
+        incorrect=3 if above else 0,
+        error_rate=0.075 if above else 0.0,
+        ceiling=0.05,
+        above_ceiling=above,
+        enforced=True,
+        by_group={},
+    )
+    report = CheckReport(mode=RigorMode.PILOT, evaluated_as=RigorMode.PILOT, findings=findings)
+    monkeypatch.setattr(check_service, "check", lambda _p, promote_to=None: report)
+    monkeypatch.setattr(check_service, "extraction_audit_report", lambda _p: audit)
+    async with open_session(settings, clock) as client:
+        out = await client.call("check", project="demo")
+    assert out["ok"] is True, out
+    data = out["data"]
+    assert [f["code"] for f in data["findings"]] == ["extraction-audit-reported"]
+    assert data["ok"] is True

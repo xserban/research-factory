@@ -23,6 +23,7 @@ from factory.services.check import (
     CheckReport,
     Finding,
     _findings_as,
+    agent_check,
     agent_view,
     check,
 )
@@ -248,9 +249,25 @@ def test_agent_view_hides_error_rate() -> None:
         message="error rate 0.123 is above the ceiling 0.05",
     )
     report = CheckReport(mode=RigorMode.PILOT, evaluated_as=RigorMode.PILOT, findings=[finding])
-    (shown,) = agent_view(report).findings
-    assert "0.123" not in shown.message and "0.05" not in shown.message
-    assert (shown.code, shown.severity) == ("extraction-error-high", "error")
+    # The flag itself is withheld (decision 52): presence would reveal it.
+    assert agent_view(report).findings == []
+    assert agent_view(report).ok
+
+
+def test_agent_view_states_a_labelled_audit_neutrally() -> None:
+    finding = Finding(code="extraction-error-high", severity="error", refs=["xau_01"], message="x")
+    above = CheckReport(mode=RigorMode.PILOT, evaluated_as=RigorMode.PILOT, findings=[finding])
+    below = CheckReport(mode=RigorMode.PILOT, evaluated_as=RigorMode.PILOT, findings=[])
+    shown_above = agent_view(above, labelled_audit="xau_01").findings
+    shown_below = agent_view(below, labelled_audit="xau_01").findings
+    assert shown_above == shown_below
+    (neutral,) = shown_above
+    assert (neutral.code, neutral.severity, neutral.refs) == (
+        "extraction-audit-reported",
+        "warning",
+        ["xau_01"],
+    )
+    assert not any(ch.isdigit() for ch in neutral.message)
 
 
 def _label_all(project: Project, human: Actor, monkeypatch: pytest.MonkeyPatch, wrong: int) -> str:
@@ -309,9 +326,11 @@ def test_error_high_severity_and_agent_view(
     # The fixture project is a pilot: not an error under its own mode.
     report = check(project)
     assert [f.severity for f in report.findings if f.code == "extraction-error-high"] == ["warning"]
-    shown = [f for f in agent_view(report).findings if f.code == "extraction-error-high"]
-    assert len(shown) == 1 and "0.075" not in shown[0].message
-    assert not any(ch.isdigit() for ch in found.message + shown[0].message)
+    assert not any(ch.isdigit() for ch in found.message)
+    codes = [f.code for f in agent_check(project).findings]
+    assert "extraction-error-high" not in codes
+    assert codes.count("extraction-audit-reported") == 1
+    assert "0.075" not in agent_check(project).model_dump_json()
     text = render_methods(methods_report(project))
     assert "0.075 over 40 labelled values" in text
     assert methods_report(project).extraction_audit_n == 40
@@ -328,6 +347,35 @@ def test_error_high_absent_below_ceiling(
     _both(project, ext_a, ext_b)
     _label_all(project, human, monkeypatch, 1)  # 0.025
     assert _hit(project, "extraction-error-high") is None
+    codes = [f.code for f in agent_check(project).findings]
+    assert codes.count("extraction-audit-reported") == 1
+
+
+def test_agent_check_findings_do_not_depend_on_the_ceiling_flag(
+    project: Project,
+    human: Actor,
+    monkeypatch: pytest.MonkeyPatch,
+    ext_a: Actor,
+    ext_b: Actor,
+    world: list[str],
+) -> None:
+    _both(project, ext_a, ext_b)
+    before = [f.code for f in agent_check(project).findings]
+    assert "extraction-audit-reported" not in before  # no labelled audit yet
+    _label_all(project, human, monkeypatch, 3)  # above the ceiling
+    above = agent_check(project)
+    below = agent_check(project).model_copy(
+        update={
+            "findings": [f for f in check(project).findings if f.code != "extraction-error-high"]
+        }
+    )
+    assert [f.code for f in above.findings] == [
+        f.code for f in agent_view(below, labelled_audit=above.findings[-1].refs[0]).findings
+    ]
+    assert above.ok == agent_view(below, labelled_audit=above.findings[-1].refs[0]).ok
+    for mode in MODES:
+        promoted = agent_check(project, promote_to=mode)
+        assert "extraction-error-high" not in [f.code for f in promoted.findings]
 
 
 def test_audit_levels_are_declared() -> None:

@@ -676,7 +676,7 @@ def build_server(
             opened = open_project(settings, project, session=session, clock=clock)
             _refuse_pass_session(opened)
             mode = _rigor_mode(promote_to)
-            report = check_service.agent_view(check_service.check(opened, promote_to=mode))
+            report = check_service.agent_check(opened, promote_to=mode)
             data: dict[str, JsonValue] = {
                 **report.model_dump(mode="json"),
                 "ok": report.ok,

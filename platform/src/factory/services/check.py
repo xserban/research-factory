@@ -151,25 +151,34 @@ _SEED_PHRASES = {
 _RATE_CODES = {
     "audit-error-high": "the audit's false-exclusion rate is above the declared ceiling "
     "(figures withheld from the agent view)",
-    "extraction-error-high": "the extraction audit's error rate is above the declared ceiling "
-    "(figures withheld from the agent view)",
 }
 """Findings whose message carries a label-derived rate or threshold, and the message an agent
 reads instead (decision 37.14). The finding itself, its code and severity are unchanged."""
 
+_WITHHELD_CODES = frozenset({"extraction-error-high"})
+"""Findings an agent never reads, because their presence is the extraction audit's ceiling flag
+(decision 52)."""
 
-def agent_view(report: CheckReport) -> CheckReport:
-    """The report as an agent may read it: seed findings by role and count only (R-20), and no
-    label-derived rate.
+_AUDIT_REPORTED = "extraction-audit-reported"
+
+
+def agent_view(report: CheckReport, *, labelled_audit: str | None = None) -> CheckReport:
+    """The report as an agent may read it: seed findings by role and count only (R-20), no
+    label-derived rate, and no extraction audit ceiling flag.
 
     A seed finding becomes one finding per code, severity and role, with no refs, so a held-out
     seed is never named. A positive still `unsplit` may become held-out, so it is counted as
     `held-out-possible` and never as development. Any other ref that is a seed id is dropped.
+    `extraction-error-high` is dropped; when `labelled_audit` names an extraction audit with
+    labels, one neutral `extraction-audit-reported` warning is appended last whatever the flag,
+    so neither the findings, their order nor `ok` depend on it (decision 52).
     """
     counts: dict[tuple[str, Severity, str], int] = {}
     others: list[Finding] = []
     order: list[tuple[str, Severity, str] | int] = []
     for finding in report.findings:
+        if finding.code in _WITHHELD_CODES:
+            continue
         if finding.role is None:
             refs = [r for r in finding.refs if not re.fullmatch(SEED_ID_RE, r)]
             update: dict[str, object] = {"refs": refs}
@@ -195,7 +204,25 @@ def agent_view(report: CheckReport) -> CheckReport:
         )
         for item in order
     ]
+    if labelled_audit is not None:
+        findings.append(
+            Finding(
+                code=_AUDIT_REPORTED,
+                severity="warning",
+                refs=[labelled_audit],
+                message="the extraction audit is labelled; its result is reported to the "
+                "researcher",
+            )
+        )
     return report.model_copy(update={"findings": findings})
+
+
+def agent_check(project: Project, *, promote_to: RigorMode | None = None) -> CheckReport:
+    """`check` as an agent may read it (`agent_view`), with the neutral statement of the latest
+    extraction audit when it has labels. Read-only."""
+    audit = extraction_audit_report(project)
+    labelled = audit.audit_id if audit is not None and (audit.labelled or audit.outdated) else None
+    return agent_view(check(project, promote_to=promote_to), labelled_audit=labelled)
 
 
 @dataclass(frozen=True)
