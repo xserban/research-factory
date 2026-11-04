@@ -119,3 +119,63 @@ def test_speed_ratio_rounds_half_even_to_two_places() -> None:
     assert speed_ratio(Decimal("1.005"), Decimal("1"), higher_is_faster=True) == Decimal("1.00")
     assert speed_ratio(Decimal("1.015"), Decimal("1"), higher_is_faster=True) == Decimal("1.02")
     assert str(speed_ratio(Decimal("2"), Decimal("1"), higher_is_faster=True)) == "2.00"
+
+
+_NON_FINITE = ["NaN", "sNaN", "Infinity", "-Infinity"]
+
+
+@pytest.mark.parametrize("value", _NON_FINITE)
+def test_non_finite_cost_raises_value_error(value: str) -> None:
+    with pytest.raises(ValueError):
+        pareto([P("a", "1", "1"), P("b", value, "2")], higher_is_better=True)
+
+
+@pytest.mark.parametrize("value", _NON_FINITE)
+def test_non_finite_metric_raises_value_error(value: str) -> None:
+    for hib in (True, False):
+        with pytest.raises(ValueError):
+            pareto([P("a", "1", "1"), P("b", "2", value)], higher_is_better=hib)
+
+
+def test_non_finite_error_names_only_the_row_identity() -> None:
+    with pytest.raises(ValueError) as info:
+        pareto([P("row-7", "NaN", "1", "meth", "rf:w9")], higher_is_better=True)
+    assert str(info.value) == "non-finite cost or metric: meth/rf:w9/row-7"
+
+
+def test_infinite_cost_is_rejected_before_sorting() -> None:
+    # +inf is positive, so the non-positive check alone would let it through.
+    with pytest.raises(ValueError):
+        pareto([P("a", "Infinity", "1")], higher_is_better=True)
+
+
+@pytest.mark.parametrize(
+    ("proposed", "baseline"),
+    [
+        ("NaN", "1"),
+        ("1", "NaN"),
+        ("sNaN", "1"),
+        ("1", "sNaN"),
+        ("Infinity", "1"),
+        ("1", "Infinity"),
+        ("-Infinity", "1"),
+        ("1", "-Infinity"),
+    ],
+)
+@pytest.mark.parametrize("higher_is_faster", [True, False])
+def test_speed_ratio_non_finite_input_is_none(
+    proposed: str, baseline: str, higher_is_faster: bool
+) -> None:
+    result = speed_ratio(Decimal(proposed), Decimal(baseline), higher_is_faster=higher_is_faster)
+    assert result is None
+
+
+def test_speed_ratio_huge_and_tiny_values_do_not_raise() -> None:
+    result = speed_ratio(Decimal("1E30"), Decimal("1E-30"), higher_is_faster=True)
+    assert isinstance(result, Decimal)
+    assert result == Decimal("1E60")
+
+
+def test_speed_ratio_tiny_result_displays_as_zero() -> None:
+    # Below the two-decimal resolution: a displayed 0.00 means "less than 0.005".
+    assert speed_ratio(Decimal("1"), Decimal("1E30"), higher_is_faster=True) == Decimal("0.00")
