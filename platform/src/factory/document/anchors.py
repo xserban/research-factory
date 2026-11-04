@@ -194,6 +194,18 @@ def parse_manifest(markdown: str) -> Manifest:
     return Manifest(tuple(anchors))
 
 
+# The id form each kind must carry; a manifest entry whose id contradicts its kind is rejected.
+_ID_FORMS: dict[AnchorKind, re.Pattern[str]] = {
+    AnchorKind.SECTION: _SECTION_ID_RE,
+    AnchorKind.PARAGRAPH: _PARAGRAPH_ID_RE,
+    AnchorKind.PAGE: _PAGE_ID_RE,
+    AnchorKind.TABLE: _TABLE_ID_RE,
+    AnchorKind.CELL: _CELL_ID_RE,
+    AnchorKind.FIGURE_CAPTION: _CAPTION_ID_RE,
+    AnchorKind.EQUATION: _EQUATION_ID_RE,
+}
+
+
 def _anchor_from_entry(entry: object, index: int) -> Anchor:
     where = f"manifest entry {index}"
     if not isinstance(entry, dict):
@@ -201,17 +213,20 @@ def _anchor_from_entry(entry: object, index: int) -> Anchor:
     if set(entry) != _ENTRY_KEYS:
         raise ManifestError(f"{where} must have exactly the keys id, kind, parent, text")
     anchor_id, kind, parent, text = entry["id"], entry["kind"], entry["parent"], entry["text"]
-    if not isinstance(anchor_id, str) or not (
-        ANCHOR_RE.fullmatch(anchor_id) or _CELL_ID_RE.fullmatch(anchor_id)
-    ):
-        raise ManifestError(f"{where} has an invalid id {anchor_id!r}")
-    if not isinstance(kind, str) or kind not in {k.value for k in AnchorKind}:
-        raise ManifestError(f"{where} has an invalid kind {kind!r}")
+    try:
+        parsed_kind = AnchorKind(kind)
+    except ValueError as exc:
+        raise ManifestError(f"{where} has an invalid kind {kind!r}") from exc
+    form = _ID_FORMS[parsed_kind]
+    if not isinstance(anchor_id, str) or form.fullmatch(anchor_id) is None:
+        raise ManifestError(
+            f"{where} has id {anchor_id!r}, which is not an id of kind {parsed_kind.value!r}"
+        )
     if parent is not None and not isinstance(parent, str):
         raise ManifestError(f"{where} has a parent that is neither a string nor null")
     if not isinstance(text, str):
         raise ManifestError(f"{where} has a text that is not a string")
-    return Anchor(anchor_id, AnchorKind(kind), parent, text)
+    return Anchor(anchor_id, parsed_kind, parent, text)
 
 
 def _is_section(anchor_id: str) -> bool:

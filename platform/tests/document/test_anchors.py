@@ -224,3 +224,44 @@ def test_from_json_accepts_cell_ids() -> None:
 def test_from_json_rejects_malformed_input(data: bytes) -> None:
     with pytest.raises(ManifestError):
         Manifest.from_json(data)
+
+
+def test_manifest_round_trip_covers_every_kind() -> None:
+    md = (
+        '<a id="p1"></a>\n\n<a id="s0.p1"></a>\nPreamble.\n\n'
+        '<a id="s1"></a>\n# 1\n\n<a id="f1.cap"></a>\nFigure one.\n\n'
+        '<a id="e1"></a>\n$x$\n\n<a id="t1"></a>\n| a |\n|---|\n| 1 |\n'
+    )
+    m = parse_manifest(md)
+    assert {a.kind for a in m.anchors} == set(AnchorKind)
+    assert Manifest.from_json(m.to_json()) == m
+
+
+@pytest.mark.parametrize(
+    ("anchor_id", "kind"),
+    [
+        ("s1", "table"),
+        ("s1.p1", "section"),
+        ("t1", "paragraph"),
+        ("p1", "table"),
+        ("t1", "cell"),
+        ("f1.cap", "equation"),
+        ("e1", "figure_caption"),
+        ("s1", "page"),
+        ("t1.r1.c1", "table"),
+    ],
+)
+def test_from_json_rejects_id_form_that_contradicts_kind(anchor_id: str, kind: str) -> None:
+    with pytest.raises(ManifestError, match="id"):
+        Manifest.from_json(_data(_entry(id=anchor_id, kind=kind)))
+
+
+def test_from_json_rejects_invalid_utf8() -> None:
+    data = b'[{"id":"s1","kind":"section","parent":null,"text":"\xff"}]'
+    with pytest.raises(ManifestError, match="not valid JSON"):
+        Manifest.from_json(data)
+
+
+def test_from_json_rejects_non_string_text() -> None:
+    with pytest.raises(ManifestError, match="text"):
+        Manifest.from_json(_data(_entry(text=3)))

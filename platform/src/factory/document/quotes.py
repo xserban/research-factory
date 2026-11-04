@@ -1,9 +1,10 @@
 """Verbatim quote check against the plain text of a canonical Markdown element.
 
 A quote is accepted only if its normalised form occurs as a contiguous substring of the normalised
-plain text of the element. Normalisation is NFKC (folding ligatures and no-break spaces), removal
-of soft hyphens and zero-width characters, and collapse of every whitespace run to one space.
-Case is preserved: the check is case-sensitive.
+text of one block of the element. Blocks and table cells are never joined, so a quote cannot span
+them. Normalisation is NFKC (folding ligatures and no-break spaces), removal of soft hyphens and
+zero-width characters, and collapse of every whitespace run to one space. Case is preserved: the
+check is case-sensitive.
 """
 
 import unicodedata
@@ -13,18 +14,31 @@ from markdown_it.token import Token
 
 from factory.document.anchors import MARKDOWN
 
-_INVISIBLE = frozenset("­​‌‍⁠﻿")
+_INVISIBLE = frozenset(
+    {
+        "\N{SOFT HYPHEN}",
+        "\N{ZERO WIDTH SPACE}",
+        "\N{ZERO WIDTH NON-JOINER}",
+        "\N{ZERO WIDTH JOINER}",
+        "\N{WORD JOINER}",
+        "\N{ZERO WIDTH NO-BREAK SPACE}",
+    }
+)
 _LINE_BREAKS = frozenset({"softbreak", "hardbreak"})
 
 
-def element_plain_text(markdown: str) -> str:
-    """The plain text of a Markdown element: markup removed, its blocks joined with a space.
+def element_blocks(markdown: str) -> list[str]:
+    """The plain text of each non-empty block of a Markdown element, in document order.
 
-    Inline text, code spans and image alt text are kept; line breaks become spaces. The result is
-    not whitespace-normalised; `normalise_quote` does that for the comparison.
+    Table cells are separate blocks. Inline text, code spans and image alt text are kept; line
+    breaks become spaces. The texts are not whitespace-normalised.
     """
-    parts = [_block_text(token) for token in MARKDOWN.parse(markdown)]
-    return " ".join(part for part in parts if part)
+    return [text for text in (_block_text(t) for t in MARKDOWN.parse(markdown)) if text]
+
+
+def element_plain_text(markdown: str) -> str:
+    """The plain text of a Markdown element: markup removed, its blocks joined with a space."""
+    return " ".join(element_blocks(markdown))
 
 
 def normalise_quote(text: str) -> str:
@@ -35,11 +49,15 @@ def normalise_quote(text: str) -> str:
 
 
 def quote_in_element(element_markdown: str, quote: str) -> bool:
-    """True if the quote, normalised, is a non-empty substring of the normalised element text."""
+    """True if the normalised quote is a non-empty substring of the normalised text of one block.
+
+    A quote never spans two blocks: table cells and paragraphs are matched separately. A soft
+    break inside a block is a space, so a quote across the line break of one paragraph matches.
+    """
     needle = normalise_quote(quote)
     if not needle:
         return False
-    return needle in normalise_quote(element_plain_text(element_markdown))
+    return any(needle in normalise_quote(block) for block in element_blocks(element_markdown))
 
 
 def _block_text(token: Token) -> str:

@@ -1,6 +1,11 @@
 import pytest
 
-from factory.document.quotes import element_plain_text, normalise_quote, quote_in_element
+from factory.document.quotes import (
+    element_blocks,
+    element_plain_text,
+    normalise_quote,
+    quote_in_element,
+)
 
 LIGATURE_FI = "\N{LATIN SMALL LIGATURE FI}"
 NBSP = "\N{NO-BREAK SPACE}"
@@ -68,3 +73,30 @@ def test_quote_must_be_contiguous() -> None:
 @pytest.mark.parametrize("quote", ["cell", "x|y"])
 def test_quote_in_plain_cell_text(quote: str) -> None:
     assert quote_in_element("x|y cell", quote)
+
+
+TABLE = "| a | b |\n|---|---|\n| 1 | 2 |"
+
+
+@pytest.mark.parametrize("quote", ["a", "2", "1", "b"])
+def test_quote_matches_a_single_table_cell(quote: str) -> None:
+    assert quote_in_element(TABLE, quote)
+
+
+@pytest.mark.parametrize("quote", ["b 1", "a b", "a b 1 2"])
+def test_quote_never_spans_table_cells(quote: str) -> None:
+    assert not quote_in_element(TABLE, quote)
+
+
+def test_quote_never_spans_two_paragraphs() -> None:
+    assert not quote_in_element("First paragraph.\n\nSecond paragraph.", "paragraph Second")
+    assert quote_in_element("First paragraph.\n\nSecond paragraph.", "Second paragraph.")
+
+
+def test_soft_break_within_one_paragraph_still_matches() -> None:
+    assert quote_in_element("alpha beta\ngamma delta", "beta gamma")
+
+
+def test_element_blocks_lists_each_block_separately() -> None:
+    assert element_blocks("# Title\n\nPara one.") == ["Title", "Para one."]
+    assert element_blocks(TABLE) == ["a", "b", "1", "2"]
