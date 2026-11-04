@@ -33,6 +33,7 @@ from factory.events.reader import read_all
 from factory.model.base import StrictModel
 from factory.model.chase import CHASE_ROUND_ID_RE
 from factory.model.dedup import MERGE_ID_RE
+from factory.model.extraction import CLAIM_ID_RE, EXTRACTION_ID_RE
 from factory.model.fulltext import ATTEMPT_ID_RE, DOCUMENT_ID_RE
 from factory.model.identity import BLOB_REF_RE, CONVERSION_ID_RE, ULID_RE
 from factory.model.protocol import PROTOCOL_ID_RE, ProtocolSpec
@@ -59,6 +60,8 @@ KINDS: tuple[str, ...] = (
     "conversion",
     "anchor",
     "decision",
+    "extraction",
+    "claim",
     "resolution",
     "audit",
     "seed",
@@ -85,6 +88,8 @@ _PATTERNS: tuple[tuple[str, str], ...] = (
     (RUN_ID_RE, "run"),
     (MERGE_ID_RE, "merge"),
     (DECISION_ID_RE, "decision"),
+    (EXTRACTION_ID_RE, "extraction"),
+    (CLAIM_ID_RE, "claim"),
     (AUDIT_ID_RE, "audit"),
     (_AUDIT_ITEM_RE, "audit"),
     (CHASE_ROUND_ID_RE, "chase_round"),
@@ -356,6 +361,8 @@ class _Walk:
             "conversion": self._conversion,
             "anchor": self._anchor,
             "decision": self._decision,
+            "extraction": self._extraction,
+            "claim": self._claim,
             "resolution": self._resolution,
             "audit": self._audit,
             "seed": self._seed,
@@ -626,6 +633,37 @@ class _Walk:
         label = f"pass {pass_label}, {phase}: {verdict}"
         if criterion is not None:
             label += f" under {str(criterion).rsplit(':', 1)[-1]}"
+        if superseded_by is not None:
+            label += " (superseded)"
+        return _Described(label, str(event_id))
+
+    def _extraction(self, ident: str) -> _Described | None:
+        """An extraction row. The label gives its pass and field count, never a value."""
+        rows = self._all(
+            "SELECT pass_label, superseded_by, event_id, "
+            "(SELECT COUNT(*) FROM extraction_fields f WHERE f.extraction_id = r.extraction_id) "
+            "FROM extraction_rows r WHERE extraction_id = :e",
+            e=ident,
+        )
+        if not rows:
+            return None
+        pass_label, superseded_by, event_id, fields = rows[0]
+        label = f"pass {pass_label}, {fields} field(s)"
+        if superseded_by is not None:
+            label += " (superseded)"
+        return _Described(label, str(event_id))
+
+    def _claim(self, ident: str) -> _Described | None:
+        """A claim. The label gives its pass, type and strength, never its statement."""
+        rows = self._all(
+            "SELECT pass_label, claim_type, strength, superseded_by, event_id "
+            "FROM extraction_claims WHERE claim_id = :c",
+            c=ident,
+        )
+        if not rows:
+            return None
+        pass_label, claim_type, strength, superseded_by, event_id = rows[0]
+        label = f"pass {pass_label}, {claim_type}, {strength}"
         if superseded_by is not None:
             label += " (superseded)"
         return _Described(label, str(event_id))
@@ -945,6 +983,18 @@ class _Walk:
             for d in self._column("SELECT decision_id FROM decisions WHERE work_id = :w", w=ident)
         ]
         down += [
+            ("extraction", e)
+            for e in self._column(
+                "SELECT extraction_id FROM extraction_rows WHERE work_id = :w", w=ident
+            )
+        ]
+        down += [
+            ("claim", k)
+            for k in self._column(
+                "SELECT claim_id FROM extraction_claims WHERE work_id = :w", w=ident
+            )
+        ]
+        down += [
             ("resolution", _res_key(str(st), ident))
             for st in self._column("SELECT stage FROM resolutions WHERE work_id = :w", w=ident)
         ]
@@ -1005,7 +1055,21 @@ class _Walk:
                 c=ident,
             )
         ]
+        down += [("anchor", f"{ident}/{a}") for a in self._extraction_anchors(ident)]
         return up, down
+
+    def _extraction_anchors(self, conversion_id: str) -> list[str]:
+        """The anchors and cells that extraction rows and claims cite in a conversion."""
+        return self._column(
+            "SELECT f.anchor FROM extraction_fields f JOIN extraction_rows r "
+            "ON r.extraction_id = f.extraction_id WHERE r.conversion_id = :c "
+            "AND f.anchor IS NOT NULL "
+            "UNION SELECT f.cell FROM extraction_fields f JOIN extraction_rows r "
+            "ON r.extraction_id = f.extraction_id WHERE r.conversion_id = :c "
+            "AND f.cell IS NOT NULL "
+            "UNION SELECT anchor FROM extraction_claims WHERE conversion_id = :c",
+            c=conversion_id,
+        )
 
     def _edges_anchor(self, ident: str) -> tuple[list[Key], list[Key]]:
         conversion_id, anchor = ident.split("/", 1)
@@ -1017,7 +1081,78 @@ class _Walk:
                 a=anchor,
             )
         ]
+        down += [
+            ("extraction", e)
+            for e in self._column(
+                "SELECT DISTINCT r.extraction_id FROM extraction_rows r JOIN extraction_fields f "
+                "ON f.extraction_id = r.extraction_id WHERE r.conversion_id = :c "
+                "AND (f.anchor = :a OR f.cell = :a)",
+                c=conversion_id,
+                a=anchor,
+            )
+        ]
+        down += [
+            ("claim", k)
+            for k in self._column(
+                "SELECT claim_id FROM extraction_claims WHERE conversion_id = :c AND anchor = :a",
+                c=conversion_id,
+                a=anchor,
+            )
+        ]
         return [("conversion", conversion_id)], down
+
+    def _full_text_decisions(self, work_id: str) -> list[Key]:
+        return [
+            ("decision", d)
+            for d in self._column(
+                "SELECT decision_id FROM decisions WHERE work_id = :w AND stage = 'full-text'",
+                w=work_id,
+            )
+        ]
+
+    def _edges_extraction(self, ident: str) -> tuple[list[Key], list[Key]]:
+        rows = self._all(
+            "SELECT work_id, protocol_id, conversion_id, supersedes, superseded_by "
+            "FROM extraction_rows WHERE extraction_id = :e",
+            e=ident,
+        )
+        up: list[Key] = []
+        down: list[Key] = []
+        if rows:
+            work_id, protocol_id, conversion_id, supersedes, superseded_by = rows[0]
+            up += [("work", str(work_id)), ("protocol", str(protocol_id))]
+            cited = self._column(
+                "SELECT anchor FROM extraction_fields WHERE extraction_id = :e "
+                "AND anchor IS NOT NULL UNION SELECT cell FROM extraction_fields "
+                "WHERE extraction_id = :e AND cell IS NOT NULL",
+                e=ident,
+            )
+            up += [("anchor", f"{conversion_id}/{a}") for a in cited]
+            up += self._full_text_decisions(str(work_id))
+            if supersedes is not None:
+                up.append(("extraction", str(supersedes)))
+            if superseded_by is not None:
+                down.append(("extraction", str(superseded_by)))
+        return up, down
+
+    def _edges_claim(self, ident: str) -> tuple[list[Key], list[Key]]:
+        rows = self._all(
+            "SELECT work_id, protocol_id, conversion_id, anchor, supersedes, superseded_by "
+            "FROM extraction_claims WHERE claim_id = :c",
+            c=ident,
+        )
+        up: list[Key] = []
+        down: list[Key] = []
+        if rows:
+            work_id, protocol_id, conversion_id, anchor, supersedes, superseded_by = rows[0]
+            up += [("work", str(work_id)), ("protocol", str(protocol_id))]
+            up.append(("anchor", f"{conversion_id}/{anchor}"))
+            up += self._full_text_decisions(str(work_id))
+            if supersedes is not None:
+                up.append(("claim", str(supersedes)))
+            if superseded_by is not None:
+                down.append(("claim", str(superseded_by)))
+        return up, down
 
     def _edges_decision(self, ident: str) -> tuple[list[Key], list[Key]]:
         rows = self._all(
@@ -1147,6 +1282,8 @@ _EDGES: dict[str, Callable[[_Walk, str], tuple[list[Key], list[Key]]]] = {
     "conversion": _Walk._edges_conversion,
     "anchor": _Walk._edges_anchor,
     "decision": _Walk._edges_decision,
+    "extraction": _Walk._edges_extraction,
+    "claim": _Walk._edges_claim,
     "resolution": _Walk._edges_resolution,
     "audit": _Walk._edges_audit,
     "seed": _Walk._edges_seed,

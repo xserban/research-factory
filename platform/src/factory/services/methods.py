@@ -21,6 +21,7 @@ from factory.services.audit import audit_report
 from factory.services.calibration import calibration_status
 from factory.services.chase import chase_rounds
 from factory.services.context import Project
+from factory.services.extraction_agreement import agreement_overall
 from factory.services.prisma import (
     UNCONVERTED,
     PrismaFlow,
@@ -65,6 +66,19 @@ class MethodsReport(StrictModel):
     full_text_kappa: float | None = None
     full_text_sessions: int = 0
     full_text_models: list[str] = Field(default_factory=list)
+    extraction_pack: str | None = None
+    """`name@version` of the declared extraction pack; None (and the fields below empty) when the
+    protocol declares no extraction schema."""
+    extraction_fields: list[str] = Field(default_factory=list)
+    extraction_passes: int = 0
+    """Extraction passes opened."""
+    extraction_dual_sample: float | None = None
+    extraction_sessions: int = 0
+    extraction_models: list[str] = Field(default_factory=list)
+    extraction_agreement: float | None = None
+    """Overall agreement of the passes; None while units are open or nothing is compared."""
+    extraction_audit_n: int = 0
+    extraction_error_rate: float | None = None
 
 
 def methods_report(project: Project) -> MethodsReport:
@@ -86,6 +100,8 @@ def methods_report(project: Project) -> MethodsReport:
         summary = agreement_summary(project, stage=ScreeningStage.FULL_TEXT)
         ft_kappa = None if summary is None else summary.kappa
     ft_sessions = _full_text_sessions(project)
+    schema = None if protocol is None else protocol.spec.extraction_schema
+    ex_sessions = [] if schema is None else _extraction_sessions(project)
     return MethodsReport(
         rigor_mode=_rigor_mode(project).value,
         method_profile=None if protocol is None else protocol.spec.method_profile.value,
@@ -118,7 +134,28 @@ def methods_report(project: Project) -> MethodsReport:
         full_text_kappa=ft_kappa,
         full_text_sessions=len(ft_sessions),
         full_text_models=sorted({model for _, model in ft_sessions}),
+        extraction_pack=None if schema is None else f"{schema.pack}@{schema.pack_version}",
+        extraction_fields=[] if schema is None else list(schema.fields),
+        extraction_passes=0 if schema is None else _extraction_pass_count(project),
+        extraction_dual_sample=None if schema is None else schema.dual_extract_sample,
+        extraction_sessions=len(ex_sessions),
+        extraction_models=sorted({model for _, model in ex_sessions}),
+        extraction_agreement=None if schema is None else agreement_overall(project).overall,
     )
+
+
+def _extraction_sessions(project: Project) -> list[tuple[str, str]]:
+    """(session, model) of every session bound to an extraction pass."""
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text("SELECT session, model FROM extraction_sessions ORDER BY session")
+        ).all()
+    return [(str(session), str(model)) for session, model in rows]
+
+
+def _extraction_pass_count(project: Project) -> int:
+    with project.index.connect() as conn:
+        return int(conn.execute(text("SELECT COUNT(*) FROM extraction_passes")).scalar_one())
 
 
 def _full_text_sessions(project: Project) -> list[tuple[str, str]]:
@@ -149,7 +186,9 @@ def _agent_values(project: Project, statement: TextClause) -> list[str]:
 
 WITHHELD_RATES = "withheld from the agent view"
 WITHHELD_RECALL = "not computed (withheld until screening has started)"
-_RATE_FIELDS = frozenset({"calibration_sensitivity", "audit_false_exclusion_rate"})
+_RATE_FIELDS = frozenset(
+    {"calibration_sensitivity", "audit_false_exclusion_rate", "extraction_error_rate"}
+)
 
 
 def agent_methods(project: Project, report: MethodsReport) -> tuple[MethodsReport, frozenset[str]]:
@@ -164,6 +203,7 @@ def agent_methods(project: Project, report: MethodsReport) -> tuple[MethodsRepor
     update: dict[str, object] = {
         "calibration_sensitivity": {label: None for label in report.calibration_sensitivity},
         "audit_false_exclusion_rate": None,
+        "extraction_error_rate": None,
     }
     if not _screening_started(project):
         withheld.add("recall_held_out")
@@ -191,6 +231,7 @@ def render_methods(report: MethodsReport, *, withheld: frozenset[str] = frozense
         _screening(report),
         _agreement_and_audit(report, withheld),
         _full_text(report),
+        *([] if report.extraction_pack is None else [_extraction(report, withheld)]),
         _seed_recall(report, withheld),
         _deviations(report),
     ]
@@ -298,6 +339,35 @@ def _full_text(report: MethodsReport) -> str:
         f"(Cohen's kappa): {_fmt(report.full_text_kappa)}. Full-text sessions: "
         f"{report.full_text_sessions}; models (as reported by the agent): "
         f"{_list(report.full_text_models)}."
+    )
+
+
+def _extraction(report: MethodsReport, withheld: frozenset[str]) -> str:
+    rate = _fmt(report.extraction_error_rate)
+    audit = (
+        f"Extraction audit error rate: {WITHHELD_RATES}."
+        if "extraction_error_rate" in withheld
+        else f"Extraction audit error rate: {rate} over {report.extraction_audit_n} labelled "
+        "values."
+        if report.extraction_audit_n
+        else f"Extraction audit error rate: {NOT_COMPUTED} (no audit labels)."
+    )
+    dual = (
+        "all works"
+        if report.extraction_dual_sample is None
+        else _fmt(report.extraction_dual_sample)
+    )
+    return (
+        f"Extraction. Data were extracted with the pack {report.extraction_pack}; declared "
+        f"fields: {_list(report.extraction_fields)}. Extraction passes opened: "
+        f"{report.extraction_passes}; planned dual-extracted share: "
+        f"{dual}. Extraction sessions: {report.extraction_sessions}; models (as reported by the "
+        f"agent): {_list(report.extraction_models)}. Overall agreement of the passes: "
+        f"{_fmt(report.extraction_agreement)}. {audit} Known limits: the citation-marker "
+        "check matches at most five author surnames, so a longer parenthetical citation "
+        'without "et al" is not detected as a copy marker; a value inside a cell such as '
+        "`79.8 ± 0.2` lets `0.2` match, which agreement and audit catch; `reproduced` is "
+        "recorded and not checked. The platform extracted nothing itself."
     )
 
 

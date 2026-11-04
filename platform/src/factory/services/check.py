@@ -26,12 +26,14 @@ from typing import Literal
 
 from sqlalchemy import text
 
+from factory.errors import FactoryValidationError
 from factory.events.blobs import BlobIntegrityError
 from factory.events.reader import read_all
 from factory.index.chase import admitted_works
 from factory.model.base import StrictModel
 from factory.model.project import RigorMode
 from factory.model.protocol import ProtocolStatus, ScreeningStage
+from factory.model.screening import PassLabel
 from factory.model.seed import SEED_ID_RE
 from factory.model.work import ProvenanceMethod
 from factory.services.agreement import Outcome, agreement_summary, final_outcomes, single_pass_works
@@ -41,6 +43,17 @@ from factory.services.chase import chase_rounds
 from factory.services.context import Project
 from factory.services.dedup import active_merges
 from factory.services.document_read import default_conversion
+from factory.services.extraction import (
+    extraction_population,
+    in_dual_sample,
+    live_rows,
+    pass_config,
+    require_schema,
+    stale_documents,
+    stale_extractions,
+    unit_states,
+)
+from factory.services.extraction_agreement import grouped_rows
 from factory.services.fulltext_status import fulltext_status
 from factory.services.methods import MethodsReport, methods_report
 from factory.services.prisma import search_report
@@ -73,6 +86,15 @@ LEVELS: dict[str, tuple[Severity | None, Severity | None, Severity | None]] = {
     "source-changed": ("warning", "warning", "warning"),
     "fulltext-unsought": ("warning", "warning", "warning"),
     "fulltext-decision-stale-document": ("warning", "warning", "warning"),
+    "extraction-pending": ("warning", "warning", "warning"),
+    "extraction-single": (None, "warning", "error"),
+    "extraction-unresolved": (None, "warning", "error"),
+    "extraction-audit-missing": (None, "warning", "error"),
+    "extraction-error-high": (None, "warning", "error"),
+    "extraction-schema-stale": ("warning", "warning", "warning"),
+    "extraction-library-missing": ("warning", "warning", "warning"),
+    "extraction-document-stale": ("warning", "warning", "warning"),
+    "extraction-copy-flag": ("warning", "warning", "warning"),
 }
 
 _MODE_ORDER: tuple[RigorMode, ...] = (
@@ -123,6 +145,8 @@ _SEED_PHRASES = {
 
 _RATE_CODES = {
     "audit-error-high": "the audit's false-exclusion rate is above the declared ceiling "
+    "(figures withheld from the agent view)",
+    "extraction-error-high": "the extraction audit's error rate is above the declared ceiling "
     "(figures withheld from the agent view)",
 }
 """Findings whose message carries a label-derived rate or threshold, and the message an agent
@@ -271,6 +295,7 @@ def _hits(project: Project) -> list[_Hit]:
     hits += _checklist(project)
     hits += _merge_conflicts(project, outcomes)
     hits += _fulltext(project)
+    hits += _extraction(project)
     return hits
 
 
@@ -747,3 +772,109 @@ def _library_state(project: Project, raw_hash: str) -> Literal["ok", "missing", 
     except BlobIntegrityError:
         return "corrupt"
     return "ok"
+
+
+# --- Extraction (plan D, task 10) ---
+
+
+def _extraction(project: Project) -> list[_Hit]:
+    """Findings of the extraction stage. Each names works, rows or conversions by identifier and
+    carries counts and fixed text only, never a field value or a quote. Without a ready protocol
+    declaring a schema and a full-text plan there is no extraction stage and no finding."""
+    try:
+        _, schema, _ = require_schema(project)
+        population = extraction_population(project)
+    except FactoryValidationError:
+        return []
+    inside = set(population)
+    hits: list[_Hit] = []
+    pending = sorted({s.work_id for s in unit_states(project) if s.state != "current"})
+    if pending:
+        hits.append(
+            _Hit(
+                "extraction-pending",
+                tuple(pending),
+                f"{len(pending)} included work(s) have a unit not yet current",
+            )
+        )
+    config = pass_config(project, PassLabel.B)
+    if config is not None:
+        single = sorted(
+            w for w in population if not in_dual_sample(config.seed, w, schema.dual_extract_sample)
+        )
+        if single:
+            hits.append(
+                _Hit(
+                    "extraction-single",
+                    tuple(single),
+                    f"{len(single)} work(s) are extracted once, outside the dual sample",
+                )
+            )
+    unresolved = sorted({d.work_id for d in grouped_rows(project).unresolved})
+    if unresolved:
+        hits.append(
+            _Hit(
+                "extraction-unresolved",
+                tuple(unresolved),
+                f"{len(unresolved)} work(s) have unresolved extraction disagreements",
+            )
+        )
+    stale = stale_extractions(project)
+    live = [row for row in live_rows(project) if row.work_id in inside]
+    stale_ids = sorted(row.extraction_id for row in live if row.extraction_id in stale)
+    if stale_ids:
+        hits.append(
+            _Hit(
+                "extraction-schema-stale",
+                tuple(stale_ids),
+                f"{len(stale_ids)} extraction row(s) are stale and are re-extracted",
+            )
+        )
+    hits += _extraction_library(project, {row.conversion_id for row in live})
+    documents = [w for w in stale_documents(project) if w in inside]
+    if documents:
+        hits.append(
+            _Hit(
+                "extraction-document-stale",
+                tuple(documents),
+                f"{len(documents)} work(s) are extracted from a conversion that is no longer "
+                "the current one",
+            )
+        )
+    copied = sorted(
+        {
+            row.work_id
+            for row in live
+            if row.extraction_id not in stale
+            and any(f.copy_marker and f.reported_in.value == "own" for f in row.fields.values())
+        }
+    )
+    if copied:
+        hits.append(
+            _Hit(
+                "extraction-copy-flag",
+                tuple(copied),
+                f"{len(copied)} work(s) declare a result as their own where a citation marker "
+                "was found",
+            )
+        )
+    return hits
+
+
+def _extraction_library(project: Project, pinned: set[str]) -> list[_Hit]:
+    """Pinned conversions whose Markdown or manifest blob is absent from the library."""
+    missing = sorted(
+        conversion_id
+        for conversion_id, _document, _work, markdown, manifest in _conversions(project)
+        if conversion_id in pinned
+        and "missing" in {_library_state(project, markdown), _library_state(project, manifest)}
+    )
+    if not missing:
+        return []
+    return [
+        _Hit(
+            "extraction-library-missing",
+            tuple(missing),
+            f"{len(missing)} conversion(s) pinned by extraction rows have a missing library entry",
+        )
+    ]
