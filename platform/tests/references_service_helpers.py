@@ -127,6 +127,9 @@ def _oa_matches(item: dict[str, Any], expression: str) -> bool:
         wanted = {normalize_doi(d) for d in expression[4:].split("|")}
         doi = item.get("doi")
         return doi is not None and normalize_doi(str(doi)) in wanted
+    if expression.startswith("openalex:"):
+        wanted = set(expression[len("openalex:") :].split("|"))
+        return str(item["id"]).rsplit("/", 1)[-1] in wanted
     if expression.startswith("title.search:"):
         words = set(normalize_title(expression.split(":", 1)[1]).split())
         title = set(normalize_title(str(item["display_name"])).split())

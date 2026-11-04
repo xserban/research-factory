@@ -14,6 +14,8 @@ from factory.sources.arxiv import ArxivSource
 from factory.sources.base import Source
 from factory.sources.http import default_http
 from factory.sources.openalex import OpenAlexSource
+from factory.sources.reflist import NAME as REFLIST
+from factory.sources.reflist import EntryReader, ReflistSource
 
 
 @dataclass(frozen=True)
@@ -35,7 +37,19 @@ class SourceFactory:
 INTERFACES: dict[str, str] = {
     "openalex": "OpenAlex REST API (api.openalex.org/works)",
     "arxiv": "arXiv API (export.arxiv.org/api/query)",
+    REFLIST: "Stored reference entries of the included documents (offline)",
 }
+
+
+def reflist_factory(read: EntryReader) -> SourceFactory:
+    """The offline `reflist` source over one project's stored entries.
+
+    It is not in `default_sources`: its reader is bound to a project, so the snowball service
+    builds it for the round it runs (`services.snowball.round_sources`).
+    """
+    return SourceFactory(
+        ReflistSource.kinds, lambda _settings, clock: ReflistSource(read, clock=clock)
+    )
 
 
 def default_sources() -> dict[str, SourceFactory]:
