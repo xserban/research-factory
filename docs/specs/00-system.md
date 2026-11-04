@@ -49,6 +49,7 @@ Rule: business logic lives in `services/`. `mcp/` and `cli/` only parse input, c
 | Full-text fetch (slice 2) | `fft_<ULID>` | One acquisition attempt chain for a work; references library blobs by hash |
 | Full-text attempt (slice 2) | `att_<ULID>` | One access attempt (route, outcome) within a fetch |
 | Library document (slice 2) | `doc_<ULID>` | A stored full-text document (raw source or canonical Markdown) in the project library |
+| Inbox item (slice 4a) | `inb_<ULID>` | One captured link, parsed to one identifier; never reused |
 
 IDs are never reused and never change. A changed entity is a new version or a superseding record.
 
@@ -114,7 +115,7 @@ Tasks are events (`task.created`, `task.claimed`, `task.completed`, `task.releas
 
 ## 9. Commands (thin CLI)
 
-`factory init <slug>` · `factory rebuild` · `factory status` · `factory trace <id> [--forward]` · `factory check [--promote-to <mode>]` · `factory report prisma` · `factory fulltext import <folder>` · `factory fulltext fetch [--work ID]… [--route R]… [--refresh] [--limit N]` · `factory fulltext status` · `factory fulltext restore <doc_id>|--missing` · `factory portfolio [--json] [--html PATH] [--as-of ISO]` · `factory serve` (MCP over stdio).
+`factory init <slug>` · `factory rebuild` · `factory status` · `factory trace <id> [--forward]` · `factory check [--promote-to <mode>]` · `factory report prisma` · `factory fulltext import <folder>` · `factory fulltext fetch [--work ID]… [--route R]… [--refresh] [--limit N]` · `factory fulltext status` · `factory fulltext restore <doc_id>|--missing` · `factory inbox add <link>… [--note TEXT]` · `factory inbox list [--status S]` · `factory inbox resolve [--item ID]… [--deviation ID]` · `factory inbox withdraw <inb_id> --reason TEXT` · `factory report discovery [--json]` · `factory portfolio [--json] [--html PATH] [--as-of ISO]` · `factory serve` (MCP over stdio).
 
 ## 10. Quality and tooling
 

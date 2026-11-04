@@ -274,14 +274,14 @@ Status: new · Added: 2026-11-04 · Slice: 3 (graph) · Depends on: IDEA-30, IDE
 The researcher re-raised IDEA-01 (a UI to manage several projects) on 2026-11-04, and added the two ideas below.
 
 ### IDEA-34 — Link inbox for researcher-supplied papers
-Status: new · Added: 2026-11-04 · Slice: — · Depends on: slice 1 `seed_add`, IDEA-02 (candidate inbox), plan C/D pipeline
+Status: accepted ([slice 4a](specs/slice-4a-inbox-discovery.md), decision 61; implemented v1) · Added: 2026-11-04 · Slice: 4a · Depends on: slice 1 `seed_add`, IDEA-02 (candidate inbox), plan C/D pipeline
 **What:** the researcher drops links (arXiv, DOI, publisher page) into a per-project inbox, from the CLI, the MCP server or a future UI; each link is resolved to a work, deduplicated against the corpus, marked as researcher-supplied, and then goes through the same path as any candidate: screening under the protocol, full-text acquisition, conversion and extraction.
 **Why:** papers the researcher finds by reading, talks or colleagues are often the most relevant, and today they enter only as seeds.
 **Rigour notes:** a supplied link enters the corpus as a candidate, never as an inclusion: it is screened by the protocol like every other record, and PRISMA reports it as its own source ("researcher-supplied") so the search remains reproducible. Supplying is a human event with the human actor. Whether supplied papers may be screened differently is a protocol choice declared before screening, not a silent default.
 **Open questions:** one inbox per project or a shared inbox routed to projects; how this differs from `seed_add` (seeds steer search and are not screened the same way); whether a supplied link after the search date counts as a supplementary search.
 
 ### IDEA-35 — Record and report how each paper was discovered
-Status: new · Added: 2026-11-04 · Slice: — · Depends on: slice 1 search events, IDEA-34
+Status: accepted ([slice 4a](specs/slice-4a-inbox-discovery.md), decision 61; implemented v1) · Added: 2026-11-04 · Slice: 4a · Depends on: slice 1 search events, IDEA-34
 **What:** for every work, a computed discovery record: which routes found it (database search, snowballing backward or forward, researcher-supplied, seed, agent suggestion), whether a human or an agent first surfaced it, and when. Reports show per-route and human-versus-agent counts for the corpus, the included set and the final evidence.
 **Why:** whether humans or AI systems find the papers that end up mattering is itself useful data, for this programme and as evidence about AI-assisted research. It can later inform how much weight a route deserves.
 **Rigour notes:** the record is derived from events (actor kind and channel already sit on every event), never typed. Weighting by discovery route must never change screening or evidence counts silently: any use of it is a declared protocol rule, reported in methods, with the unweighted figures shown too.

@@ -1,6 +1,6 @@
 # Slice 4a — Link inbox and discovery provenance
 
-Status: Accepted 2026-11-04 (researcher's instruction: build everything, MVP v1; recommended rulings adopted). Decision 61; requirements R-100, R-101. Drafted 2026-11-05 · Outline slice: **4 (living corpus)** of [README.md](README.md). Builds on [00-system.md](00-system.md), slices 1, 2 and 3a (G1 snowball rounds); must satisfy [01-rigour.md](01-rigour.md) R-01–R-05, R-13–R-16, R-21–R-26, R-30–R-39, R-47, R-51. Takes in backlog IDEA-34 (link inbox) and IDEA-35 (discovery record). Rulings marked **[confirm]** are recommendations awaiting the researcher; on acceptance the plan records them as one decision (text proposed at the end).
+Status: Accepted 2026-11-04 (researcher's instruction: build everything, MVP v1; recommended rulings adopted); implemented (v1, see the note under Acceptance criteria). Decision 61; requirements R-100, R-101. Drafted 2026-11-05 · Outline slice: **4 (living corpus)** of [README.md](README.md). Builds on [00-system.md](00-system.md), slices 1, 2 and 3a (G1 snowball rounds); must satisfy [01-rigour.md](01-rigour.md) R-01–R-05, R-13–R-16, R-21–R-26, R-30–R-39, R-47, R-51. Takes in backlog IDEA-34 (link inbox) and IDEA-35 (discovery record). Rulings marked **[confirm]** are recommendations awaiting the researcher; on acceptance the plan records them as one decision (text proposed at the end).
 
 ## Cross-spec reconciliation 2026-11-04
 
@@ -109,6 +109,8 @@ Added on acceptance (numbers in [01-rigour.md](01-rigour.md)):
 12. **Withdrawal:** withdrawing an open item writes one event and the item no longer resolves; withdrawing a resolved item writes nothing.
 13. **Trace:** `trace` from a supplied work's screening decision reaches the `inb_` item and its capturing actor.
 14. **Quality:** `mypy --strict` and ruff pass; coverage ≥ 90% for `services/` and `model/`.
+
+*Implemented in plan 2026-11-05-inbox-discovery (v1):* link parser (`factory/inbox/links.py`); events `inbox.link_added`, `inbox.link_withdrawn`, `inbox.link_resolved` and tables `inbox_items`, `inbox_resolutions`; `ProvenanceMethod.SUPPLIED` and `QueryPurpose.SUPPLIED`; protocol section `supplied_links` (omitted from the hash while absent); `register_query(..., inbox_item=...)` passes the capturing actor's kind to the gate, at registration and at run time; `services/inbox.py`, `services/discovery.py`; seed status `supplied`, and `supplied` refused as a seed-miss route (a search miss is remedied by admission); PRISMA, methods paragraph, trace node `inbox_item` (hidden from the agent view), check findings `inbox-open-after-screening`, `inbox-resolve-failed`, `supplied-without-plan`, status `inbox` counts; MCP `inbox_add`, `inbox_resolve`, `inbox_list`, `report_discovery`; CLI `factory inbox add|list|resolve|withdraw`, `factory report discovery`. Acceptance tests in `platform/tests/test_acceptance_inbox.py`; the fixture's third link is also found by a citation-chase round (a snowball round needs reference extraction), and chase and snowball are told apart by round reference.
 
 ## Out of scope
 Scheduled watches and their inbox feed (IDEA-02); digests (IDEA-03); a shared cross-project inbox (IDEA-04, IDEA-37 corpus layer); publisher-page resolution; PDF capture in the inbox (decision 46 item 7 stays the PDF path); any weighting by discovery route (ruling 11); a UI (slice 7).
