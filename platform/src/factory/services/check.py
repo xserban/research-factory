@@ -20,7 +20,7 @@ Invariants:
 
 import json
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Literal
 
@@ -112,6 +112,9 @@ LEVELS: dict[str, tuple[Severity | None, Severity | None, Severity | None]] = {
     "snowball-plan-missing": (None, "warning", "error"),
     "snowball-over-plan": ("warning", "warning", "warning"),
     "snowball-unscreened": ("error", "error", "error"),
+    "inbox-open-after-screening": ("warning", "warning", "warning"),
+    "inbox-resolve-failed": ("warning", "warning", "warning"),
+    "supplied-without-plan": (None, "warning", "warning"),
 }
 
 REFERENCE_UNRESOLVED_CEILING = 0.30
@@ -350,6 +353,65 @@ def _hits(project: Project) -> list[_Hit]:
     hits += _evidence(project)
     hits += _references(project)
     hits += _snowball(project, outcomes)
+    hits += _inbox(project, outcomes)
+    return hits
+
+
+def _inbox(project: Project, outcomes: Mapping[str, Outcome]) -> list[_Hit]:
+    """Link inbox (slice 4a): items left open once title/abstract screening has nothing
+    pending, items whose last resolve failed, and supplied lookups run under a deviation while
+    the protocol declares no `supplied_links` (listed for the methods text, not an error)."""
+    with project.index.connect() as conn:
+        open_items = [
+            str(i)
+            for (i,) in conn.execute(
+                text("SELECT item_id FROM inbox_items WHERE status = 'open' ORDER BY item_id")
+            ).all()
+        ]
+        failed = [
+            str(i)
+            for (i,) in conn.execute(
+                text(
+                    "SELECT r.item_id FROM inbox_resolutions r JOIN inbox_items i"
+                    " ON i.item_id = r.item_id WHERE i.status = 'open' AND r.event_id ="
+                    " (SELECT MAX(event_id) FROM inbox_resolutions WHERE item_id = r.item_id)"
+                    " AND r.status = 'failed' ORDER BY r.item_id"
+                )
+            ).all()
+        ]
+        deviated = [
+            str(i)
+            for (i,) in conn.execute(
+                text(
+                    "SELECT DISTINCT item_id FROM inbox_resolutions"
+                    " WHERE deviation_id IS NOT NULL ORDER BY item_id"
+                )
+            ).all()
+        ]
+    hits: list[_Hit] = []
+    screened = bool(outcomes) and Outcome.PENDING not in outcomes.values()
+    if open_items and screened:
+        hits.append(
+            _Hit(
+                "inbox-open-after-screening",
+                tuple(open_items),
+                f"{len(open_items)} inbox item(s) open while no title/abstract work is pending",
+            )
+        )
+    if failed:
+        hits.append(
+            _Hit("inbox-resolve-failed", tuple(failed), f"{len(failed)} inbox item(s) failed")
+        )
+    protocol = current_protocol(project)
+    if deviated and (protocol is None or protocol.spec.supplied_links is None):
+        hits.append(
+            _Hit(
+                "supplied-without-plan",
+                tuple(deviated),
+                f"{len(deviated)} supplied link(s) resolved under a deviation; the protocol "
+                "declares no supplied_links",
+            )
+        )
     return hits
 
 

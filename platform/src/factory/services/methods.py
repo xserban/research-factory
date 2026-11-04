@@ -26,6 +26,7 @@ from factory.services.audit import audit_report
 from factory.services.calibration import calibration_status
 from factory.services.chase import chase_rounds
 from factory.services.context import Project
+from factory.services.discovery import FT_INCLUDED, TA_INCLUDED, Route, discovery_report
 from factory.services.evidence_report import evidence_report
 from factory.services.extraction_agreement import agreement_overall
 from factory.services.extraction_audit import extraction_audit_report
@@ -43,6 +44,16 @@ from factory.services.snowball import recorded_rounds
 
 NOT_COMPUTED = "not computed"
 NONE_RECORDED = "none recorded"
+_SUPPLIERS = ("human", "agent")
+
+
+class SuppliedLinks(StrictModel):
+    """Supplied links by submitter kind (slice 4a): captured, resolved, and included works first
+    surfaced by a supplied link (the discovery report's figure at the last included level)."""
+
+    captured: dict[str, int]
+    resolved: dict[str, int]
+    included: dict[str, int]
 
 
 class MethodsReport(StrictModel):
@@ -100,6 +111,8 @@ class MethodsReport(StrictModel):
     evidence_comparability_keys: list[str] = Field(default_factory=list)
     evidence_frontier_costs: list[str] = Field(default_factory=list)
     """Cost axes on which at least one group has a frontier."""
+    supplied_links: SuppliedLinks | None = None
+    """None when no link was ever captured: the paragraph is then left out."""
     reference_extractions: int = 0
     """Live reference-list extractions (slice 3a); 0, and the fields below empty, when the
     project has neither an extraction nor a snowball round."""
@@ -192,6 +205,7 @@ def methods_report(project: Project) -> MethodsReport:
         evidence_comparability_keys=[] if evidence is None else list(evidence.comparability_keys),
         evidence_frontier_costs=sorted({a.axis for g in groups for a in g.frontiers}),
         **references,
+        supplied_links=_supplied_links(project),
     )
 
 
@@ -226,6 +240,37 @@ def _rule(plan: SnowballPlan) -> str:
         f"at most {plan.max_backward_rounds} backward and {plan.max_forward_rounds} forward "
         f"round(s); {stop}"
     )
+
+
+def _supplied_links(project: Project) -> SuppliedLinks | None:
+    """Captured and resolved items by submitter kind, and included works first surfaced by a
+    supplied link, as the discovery report counts them. None when no link was captured."""
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text("SELECT actor_kind, status, COUNT(*) FROM inbox_items GROUP BY 1, 2")
+        ).all()
+    if not rows:
+        return None
+    captured = dict.fromkeys(_SUPPLIERS, 0)
+    resolved = dict.fromkeys(_SUPPLIERS, 0)
+    for kind, status, count in rows:
+        captured[str(kind)] += int(count)
+        if status == "resolved":
+            resolved[str(kind)] += int(count)
+    report = discovery_report(project)
+    level = FT_INCLUDED if FT_INCLUDED in report.levels else TA_INCLUDED
+    included = dict.fromkeys(_SUPPLIERS, 0)
+    for route, counts in report.by_first_route.items():
+        if route in _SUPPLIED_ROUTES:
+            included[_SUPPLIED_ROUTES[route]] += counts[level]
+    return SuppliedLinks(captured=captured, resolved=resolved, included=included)
+
+
+_SUPPLIED_ROUTES = {
+    Route.SUPPLIED_HUMAN: "human",
+    Route.SUPPLIED_AGENT: "agent",
+    Route.SUPPLIED_AGENT_KNOWLEDGE: "agent",
+}
 
 
 def _extraction_sessions(project: Project) -> list[tuple[str, str]]:
@@ -321,6 +366,7 @@ def render_methods(report: MethodsReport, *, withheld: frozenset[str] = frozense
         *([] if report.extraction_pack is None else [_evidence(report)]),
         *([] if report.reference_parser is None else [_references_paragraph(report)]),
         _seed_recall(report, withheld),
+        *([] if report.supplied_links is None else [_supplied(report.supplied_links)]),
         _deviations(report),
     ]
     return "\n\n".join(paragraphs) + "\n"
@@ -505,6 +551,16 @@ def _seed_recall(report: MethodsReport, withheld: frozenset[str]) -> str:
         f"retrieved but not counted.{held_admitted} "
         f"Development seeds admitted, not counted: {report.recall_development_admitted}. "
         f"Seeds admitted by lookup: {report.admitted_seeds}."
+    )
+
+
+def _supplied(links: SuppliedLinks) -> str:
+    return (
+        f"Supplied links. Links captured: {_counts(links.captured)}. "
+        f"Links resolved: {_counts(links.resolved)}. "
+        f"Included works first surfaced by a supplied link: {_counts(links.included)}. "
+        "Supplied works were screened under the same protocol, criteria and passes as every "
+        "other record; screeners did not see how a work was found."
     )
 
 

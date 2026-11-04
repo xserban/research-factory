@@ -41,6 +41,7 @@ from factory.model.dedup import MERGE_ID_RE
 from factory.model.extraction import CLAIM_ID_RE, EXTRACTION_ID_RE
 from factory.model.fulltext import ATTEMPT_ID_RE, DOCUMENT_ID_RE
 from factory.model.identity import BLOB_REF_RE, CONVERSION_ID_RE, ULID_RE
+from factory.model.inbox import INBOX_ID_RE
 from factory.model.protocol import PROTOCOL_ID_RE, ProtocolSpec
 from factory.model.question import QUESTION_ID_RE, QuestionSpec
 from factory.model.references import ENTRY_KEY_RE, REX_ID_RE, SNW_ID_RE
@@ -55,6 +56,7 @@ KINDS: tuple[str, ...] = (
     "element",
     "criterion",
     "protocol",
+    "inbox_item",
     "query",
     "run",
     "page",
@@ -106,6 +108,7 @@ _PATTERNS: tuple[tuple[str, str], ...] = (
     (CHASE_ROUND_ID_RE, "chase_round"),
     (REX_ID_RE, "reference_extraction"),
     (SNW_ID_RE, "snowball_round"),
+    (INBOX_ID_RE, "inbox_item"),
     (SEED_ID_RE, "seed"),
     (BLOB_REF_RE, "page"),
     (WORK_ID_RE, "work"),
@@ -195,7 +198,7 @@ def trace(
 
 
 _HIDDEN_PURPOSES = ("seed", "probe")
-_GENERIC_METHODS = ("seed-admission", "hand-search")
+_GENERIC_METHODS = ("seed-admission", "hand-search", "supplied")
 
 
 def agent_trace(
@@ -250,7 +253,8 @@ def _hidden(node: TraceNode, queries: set[str], runs: set[str]) -> bool:
         return node.id in runs
     if node.kind == "record":
         return node.id.split("/", 1)[0] in runs
-    return False
+    # How a work was supplied is a route; the agent view never shows one (slice 4a ruling 8).
+    return node.kind == "inbox_item"
 
 
 def without_seeds(node: TraceNode) -> TraceNode:
@@ -391,6 +395,7 @@ class _Walk:
             "chase_round": self._chase_round,
             "reference_extraction": self._reference_extraction,
             "snowball_round": self._snowball_round,
+            "inbox_item": self._inbox_item,
         }
 
     # --- Rows and events ---
@@ -770,6 +775,17 @@ class _Walk:
             status = "not yet looked up"
         return _Described(f"{kind} seed, {status}", str(added))
 
+    def _inbox_item(self, ident: str) -> _Described | None:
+        rows = self._all(
+            "SELECT identifier_kind, actor_kind, added_event_id FROM inbox_items "
+            "WHERE item_id = :i",
+            i=ident,
+        )
+        if not rows:
+            return None
+        kind, actor, event_id = rows[0]
+        return _Described(f"link ({kind}) captured by {actor}", str(event_id))
+
     def _chase_round(self, ident: str) -> _Described | None:
         rows = self._all(
             "SELECT directions, from_works, event_id FROM chase_rounds WHERE round_id = :c",
@@ -1026,6 +1042,12 @@ class _Walk:
         up += [
             ("merge", m)
             for m in self._column('SELECT merge_id FROM merges WHERE "primary" = :w', w=ident)
+        ]
+        up += [
+            ("inbox_item", i)
+            for i in self._column(
+                "SELECT DISTINCT item_id FROM inbox_resolutions WHERE work_id = :w", w=ident
+            )
         ]
         up += [
             ("seed", s)
@@ -1388,6 +1410,18 @@ class _Walk:
         ]
         return up, down
 
+    def _edges_inbox_item(self, ident: str) -> tuple[list[Key], list[Key]]:
+        """An inbox item leads to the works its resolutions found (slice 4a)."""
+        down: list[Key] = [
+            ("work", w)
+            for w in self._column(
+                "SELECT DISTINCT work_id FROM inbox_resolutions "
+                "WHERE item_id = :i AND work_id IS NOT NULL",
+                i=ident,
+            )
+        ]
+        return [], down
+
     def _edges_chase_round(self, ident: str) -> tuple[list[Key], list[Key]]:
         up: list[Key] = [
             ("work", w)
@@ -1492,4 +1526,5 @@ _EDGES: dict[str, Callable[[_Walk, str], tuple[list[Key], list[Key]]]] = {
     "chase_round": _Walk._edges_chase_round,
     "reference_extraction": _Walk._edges_reference_extraction,
     "snowball_round": _Walk._edges_snowball_round,
+    "inbox_item": _Walk._edges_inbox_item,
 }

@@ -58,6 +58,14 @@ class ScreeningStatus(StrictModel):
     """Pass progress at full text; None while the protocol declares no full-text plan."""
 
 
+class InboxCounts(StrictModel):
+    """Link inbox items by status (slice 4a). Counts only: no link or note."""
+
+    open: int = 0
+    resolved: int = 0
+    withdrawn: int = 0
+
+
 class ProjectStatus(StrictModel):
     slug: str
     rigor_mode: RigorMode
@@ -78,6 +86,7 @@ class ProjectStatus(StrictModel):
     admitted_seeds: int
     human: HumanQueue | None = None
     """Pending human decisions per gate kind; counts only."""
+    inbox: InboxCounts = InboxCounts()
 
 
 def init_project(
@@ -167,7 +176,14 @@ def project_status(project: Project) -> ProjectStatus:
         chase_rounds=len(chase_rounds(project)),
         admitted_seeds=admitted_seed_count(project),
         human=human_queue(project),
+        inbox=_inbox_counts(project),
     )
+
+
+def _inbox_counts(project: Project) -> InboxCounts:
+    with project.index.connect() as conn:
+        rows = conn.execute(text("SELECT status, COUNT(*) FROM inbox_items GROUP BY status")).all()
+    return InboxCounts.model_validate({str(status): int(n) for status, n in rows})
 
 
 def _screening_status(project: Project) -> ScreeningStatus:
