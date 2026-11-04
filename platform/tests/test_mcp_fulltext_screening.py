@@ -90,6 +90,64 @@ async def test_full_text_screen_next_serves_a_pinned_batch(
     assert all(d.anchor == "s3.p1" for d in decisions)
 
 
+def _kinds(node: dict[str, JsonValue]) -> set[str]:
+    kinds = {str(node["kind"])}
+    children = node["children"]
+    assert isinstance(children, list)
+    for child in children:
+        assert isinstance(child, dict)
+        kinds |= _kinds(child)
+    return kinds
+
+
+@pytest.mark.anyio
+async def test_trace_of_a_full_text_decision_reaches_conversion_and_anchor(
+    settings: Settings,
+    project: Project,
+    clock: FixedClock,
+    agent: Actor,
+    human: Actor,
+    mock_sources: SourcesFor,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _make(project, agent, human, mock_sources)
+    monkeypatch.setattr(mcp_server, "IdGenerator", _FixedIds)
+    async with open_session(settings, clock) as client:
+        served = await client.call(
+            "screen_next", project="demo", pass_label="A", stage="full-text", **AGENT
+        )
+        batch = served["data"]["batch"]
+        items = [
+            {
+                "work_id": r["work_id"],
+                "verdict": "include",
+                "criterion": None,
+                "quote": "Lorem ipsum dolor sit amet.",
+                "rationale": "fits",
+                "anchor": "s3.p1",
+            }
+            for r in batch["records"]
+        ]
+        await client.call(
+            "screen_record", project="demo", task_id=batch["task_id"], items=items, **AGENT
+        )
+        decision = live_decisions(project, PassLabel.A, stage=FT)[0].decision_id
+        refused = await client.call("trace", project="demo", ref=decision)
+    assert refused["ok"] is False and refused["errors"][0]["field"] == "session"
+
+    class _OtherSession:
+        def __init__(self, _clock: object) -> None: ...
+
+        def ulid(self) -> str:
+            return "01JZ9Q3K5M7N8P0R2S4T6V8W1C"
+
+    monkeypatch.setattr(mcp_server, "IdGenerator", _OtherSession)
+    async with open_session(settings, clock) as client:
+        traced = await client.call("trace", project="demo", ref=decision)
+    assert traced["ok"] is True, traced
+    assert {"decision", "conversion", "anchor"} <= _kinds(traced["data"])
+
+
 @pytest.mark.anyio
 async def test_screen_record_reports_a_bad_anchor_by_index(
     settings: Settings,

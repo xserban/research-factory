@@ -298,3 +298,19 @@ def test_manifest_json_round_trip_ignores_position_cache() -> None:
     assert m == fresh
     assert m.to_json() == fresh.to_json()
     assert Manifest.from_json(m.to_json()) == m
+
+
+def test_equation_and_figure_caption_anchors_validate_and_resolve() -> None:
+    md = (
+        '<a id="s1"></a>\n# 1 Intro\n\n'
+        '<a id="e1"></a>\n$$x = 1$$\n\n'
+        '<a id="f1.cap"></a>\nFigure one.\n'
+    )
+    m = parse_manifest(md)
+    equation = m.get("e1")
+    caption = m.get("f1.cap")
+    assert equation is not None and equation.kind is AnchorKind.EQUATION
+    assert equation.text == "$$x = 1$$" and equation.parent == "s1"
+    assert caption is not None and caption.kind is AnchorKind.FIGURE_CAPTION
+    assert caption.text == "Figure one." and caption.parent == "s1"
+    assert Manifest.from_json(m.to_json()).get("e1") == equation

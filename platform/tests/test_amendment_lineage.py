@@ -295,6 +295,57 @@ def test_revert_of_criterion_amendment_stales_per_rules(
     )  # an exclusion under B: loosening A -> B predates it, tightening spares it
 
 
+def test_three_amendment_lineage_back_to_the_first_spec_keeps_every_decision(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    _world(project, agent, human, mock_sources)
+    before = _snapshot(project)
+    decisions = {d.decision_id for d in live_decisions(project, stage=None)}
+    original = current_protocol(project)
+    assert original is not None and decisions
+
+    _amend(project, agent, _limits)  # A -> B
+    _amend(project, agent, _screening)  # B -> C
+    amend_protocol(project, agent, original.spec, reason="back", semantic=True, effects={})
+
+    assert {d.decision_id for d in live_decisions(project, stage=None)} == decisions
+    assert _snapshot(project) == before
+    assert not stale_screening_decisions(project)
+
+
+def test_lineage_through_a_criterion_change_stales_only_by_the_rules(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    _world(project, agent, human, mock_sources)
+    original = current_protocol(project)
+    assert original is not None
+    ta = live_decisions(project, stage=TA)
+    decisions = {d.decision_id for d in live_decisions(project, stage=None)}
+    ex01 = {
+        d.decision_id
+        for d in ta
+        if d.verdict is Verdict.EXCLUDE
+        and d.criterion is not None
+        and d.criterion.endswith(":EX01")
+    }
+    includes = {d.decision_id for d in ta if d.verdict is Verdict.INCLUDE}
+
+    _loosen(project, agent, "EX01")  # A -> B
+    _amend(project, agent, _limits)  # B -> C: no criterion effect
+    assert stale_screening_decisions(project, stage=TA) == ex01
+    amend_protocol(
+        project,
+        agent,
+        original.spec,
+        reason="back",
+        semantic=True,
+        effects={"EX01": CriterionEffect.TIGHTENED},
+    )  # C -> A
+
+    assert {d.decision_id for d in live_decisions(project, stage=None)} == decisions
+    assert stale_screening_decisions(project, stage=TA) == ex01 | includes
+
+
 def _decide_b(project: Project, agent: Actor, work: str, protocol_id: str) -> str:
     from tests.test_stage_services import _decide_at
 
