@@ -189,7 +189,10 @@ def _gate(
     document_id: str | None,
     conversion_id: str | None,
 ) -> tuple[str | None, str | None]:
-    """The (document, conversion) to read for `session`, or a refusal. See the module invariants."""
+    """The (document, conversion) to read for `session`, or a refusal. See the module invariants.
+
+    When a work is in several of the session's batches with different pins, the pin of the last
+    task by task ID is the default (deterministic)."""
     label = _full_text_pass(project, session)
     if label is None:
         if is_pass_session(project, session, stage=ScreeningStage.TITLE_ABSTRACT):

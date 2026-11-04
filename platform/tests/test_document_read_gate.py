@@ -20,12 +20,13 @@ from factory.events.envelope import Actor
 from factory.mcp import server as mcp_server
 from factory.mcp.server import build_server
 from factory.model.protocol import ScreeningStage
-from factory.model.screening import PassLabel
-from factory.services.calibration import draw_calibration
+from factory.model.screening import Channel, PassLabel, ScreeningItem, Verdict
+from factory.services.calibration import calibration_items, draw_calibration, label_calibration
 from factory.services.context import Project
 from factory.services.document_read import DocumentPage, document_read
 from factory.services.fulltext_screening import fulltext_queue
-from factory.services.screening import ScreenBatch, pass_b_sample, screen_next
+from factory.services.screening import ScreenBatch, pass_b_sample, screen_next, screen_record
+from factory.services.tasks import release_task
 from factory.sources.registry import SourceFactory
 from tests.document_helpers import (
     StubConverter,
@@ -138,9 +139,7 @@ def test_ta_pass_session_refused(
     _world(project, agent, human, mock_sources, dual_sample=0.5)
     work = promoted_works(project)[0]
     _convert(project, [work])
-    from factory.services.screening import screen_next as sn
-
-    assert sn(project, agent, PassLabel.A).batch is not None
+    assert screen_next(project, agent, PassLabel.A).batch is not None
     assert _fields(project, work_id=work, session=SESSION) == ["session"]
 
 
@@ -243,3 +242,40 @@ async def test_mcp_document_read_gate(
     other = await read(work_id=world.outside[0])
     assert other["ok"] is False
     assert [e["field"] for e in other["errors"]] == ["work_id"]
+
+
+def test_pass_b_cannot_read_a_batch_held_by_pass_a(
+    project: Project, agent: Actor, agent_other: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    """With the calibration gate passed by pass A, A claims an ordinary batch that B does not."""
+    w = _make(project, agent, agent_other, human, mock_sources, with_b=True, dual=0.2)
+    assert w.b is not None
+    for item in calibration_items(project, stage=FT):
+        label_calibration(project, human, item, "include", None, Channel.CLI, stage=FT)
+    done = screen_record(
+        project,
+        agent,
+        w.a.task_id,
+        [
+            ScreeningItem(
+                work_id=str(r["work_id"]),
+                verdict=Verdict.INCLUDE,
+                quote="Lorem ipsum dolor sit amet.",
+                rationale="it fits",
+                anchor="s3.p1",
+            )
+            for r in w.a.records
+        ],
+    )
+    assert len(done.written) == len(w.a.records)
+    ordinary = screen_next(project, agent, PassLabel.A, stage=FT)
+    assert ordinary.blocked == [] and ordinary.batch is not None
+    b_calibration = {str(r["work_id"]) for r in w.b.records}
+    mine = next(
+        str(r["work_id"]) for r in ordinary.batch.records if str(r["work_id"]) not in b_calibration
+    )
+    assert document_read(project, work_id=mine, session=SESSION).work_id == mine
+    assert _fields(project, work_id=mine, session=agent_other.session) == ["work_id"]
+    assert document_read(project, work_id=mine, session=STRANGER).work_id == mine
+    release_task(project, agent, ordinary.batch.task_id, "test")
+    assert _fields(project, work_id=mine, session=SESSION) == ["work_id"]
