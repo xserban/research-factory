@@ -227,10 +227,11 @@ TOOLS = [
 
 @pytest.mark.anyio
 async def test_tool_list_is_unchanged(settings: Settings, clock: FixedClock) -> None:
-    """The full-text stage adds arguments, not tools."""
+    """The full-text stage adds arguments, not tools: every tool of plan 2C's list is still
+    registered, in the same relative order (later plans may add tools of their own)."""
     async with Client(build_server(settings, clock=clock)) as client:
         names = [t.name for t in (await client.list_tools()).tools]
-    assert names == TOOLS
+    assert [name for name in names if name in TOOLS] == TOOLS
 
 
 @pytest.mark.anyio

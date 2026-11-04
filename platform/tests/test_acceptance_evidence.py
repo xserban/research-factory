@@ -9,6 +9,7 @@ recorded, for what needs events, the index and `trace`. Values are invented; no 
 import shutil
 from collections.abc import Iterator
 
+import pytest
 from typer.testing import CliRunner
 
 from factory.cli.main import app
@@ -25,6 +26,8 @@ from factory.services.trace import TraceNode, dangling_refs, trace
 from tests.evidence_helpers import ff, frow, pilot_inputs
 from tests.test_cli import _env
 from tests.test_evidence_trace import ext_a, ext_b, world  # noqa: F401
+
+pytestmark = pytest.mark.slow  # acceptance suite: dev runs deselect with -m "not slow"
 
 POPULATION = tuple(f"rf:w{i}" for i in range(1, 8))
 
