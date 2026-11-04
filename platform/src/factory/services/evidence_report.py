@@ -193,6 +193,8 @@ class FrontierAxis(StrictModel):
     axis: str
     partitions: list[FrontierPartition]
     missing: dict[str, list[str]]
+    statement: str | None = None
+    """Set when no independent row reports this cost, so the axis has no partition."""
 
 
 class GroupReport(StrictModel):
@@ -289,6 +291,9 @@ class ReportInputs:
     agreement: AgreementOverall
     audit: ExtractionAuditReport | None
     audit_outstanding: bool
+    declared_fields: tuple[str, ...] | None = None
+    """Field names the protocol's extraction schema declares; a frontier axis must be among them.
+    None leaves the pack as the only restriction."""
 
 
 def report_inputs(project: Project) -> ReportInputs | None:
@@ -341,6 +346,7 @@ def report_inputs(project: Project) -> ReportInputs | None:
         agreement=agreement_overall(project),
         audit=extraction_audit_report(project),
         audit_outstanding=extraction_audit_outstanding(project),
+        declared_fields=tuple(schema.fields),
     )
 
 
@@ -420,7 +426,9 @@ def assemble_report(
     for key, members in inputs.grouped.groups.items():
         rows = keep(members)
         if rows:
-            groups.append(_group(list(key), rows, pack, spec, inputs.titles))
+            groups.append(
+                _group(list(key), rows, pack, spec, inputs.titles, inputs.declared_fields)
+            )
     groups.sort(key=lambda g: g.key)
     ungrouped = _rows(keep(inputs.grouped.ungrouped), spec, inputs.titles, pack)
 
@@ -566,6 +574,7 @@ def _group(
     pack: Pack,
     spec: ReportSpec,
     titles: Mapping[str, str],
+    declared: Sequence[str] | None = None,
 ) -> GroupReport:
     gid = group_id(key)
     counts = independence_counts(rows)
@@ -630,7 +639,7 @@ def _group(
     shown = _rows(rows, spec, titles, pack)
     frontiers: list[FrontierAxis] = []
     if status in ("declared", "pack-default") and direction is not None:
-        frontiers = _frontiers(rows, pack, spec, dict(key), direction)
+        frontiers = _frontiers(rows, pack, spec, dict(key), direction, declared)
         for axis in frontiers:
             for part in axis.partitions:
                 if part.statement is not None:
@@ -675,16 +684,24 @@ def _frontiers(
     spec: ReportSpec,
     key: Mapping[str, str],
     higher_is_better: bool,
+    declared: Sequence[str] | None = None,
 ) -> list[FrontierAxis]:
     """One frontier per cost axis of the spec over the group's independent rows (ruling 6),
     partitioned by value unit and, if not a group key, by resolution. Speed fields are never
-    axes. An axis with no plottable point is omitted."""
+    axes. An axis whose pack field or schema declaration is
+    missing is omitted; one with no plottable point is kept with its missing counts."""
     by_resolution = "input_resolution" not in key
     resolution_def = pack.field("input_resolution")
     own = sorted((r for r in rows if r.independent), key=lambda r: r.row_key)
     axes: list[FrontierAxis] = []
+    if not own:
+        return axes
     for name in spec.frontier_costs:
-        if name in spec.speed_fields or pack.field(name) is None:
+        if (
+            name in spec.speed_fields
+            or pack.field(name) is None
+            or (declared is not None and name not in declared)
+        ):
             continue
         missing: dict[str, list[str]] = {}
         buckets: dict[tuple[str, str], list[Point]] = {}
@@ -720,14 +737,19 @@ def _frontiers(
             buckets.setdefault(bucket, []).append(
                 Point(row.row_key, amount, value, normalise_text(method or ""), row.work_id)
             )
-        if not buckets:
-            continue
         names = {r.row_key: _text(r.fields.get("method_name")) for r in own}
         partitions = [
             _partition(units[b], b[1] or None, points, names, higher_is_better=higher_is_better)
             for b, points in sorted(buckets.items())
         ]
-        axes.append(FrontierAxis(axis=name, partitions=partitions, missing=missing))
+        statement = (
+            None
+            if buckets or "cost-not-positive" in missing
+            else f"No independent row reports {name}; no frontier is computed."
+        )
+        axes.append(
+            FrontierAxis(axis=name, partitions=partitions, missing=missing, statement=statement)
+        )
     return axes
 
 

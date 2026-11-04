@@ -1,5 +1,8 @@
 """Evidence report frontiers per group and cost axis (plan E, task 3; rulings 6 and 8)."""
 
+from dataclasses import replace
+
+from factory.packs import ML_BENCHMARK_V1
 from factory.services.evidence_report import (
     EvidenceReport,
     FrontierAxis,
@@ -74,7 +77,7 @@ def test_flops_and_macs_are_separate_axes() -> None:
         frow("rf:w2", "rk_000000000201", "B", "81.0", flops=cost("9")),
     ]
     r = r_of(rows)
-    assert {a.axis for a in only_group(r).frontiers} == {"flops", "macs"}
+    assert {a.axis for a in only_group(r).frontiers if a.partitions} == {"flops", "macs"}
     assert len(axis(r, "flops").partitions[0].points) == 2
     assert [p.row_key for p in axis(r, "macs").partitions[0].points] == ["rk_000000000101"]
 
@@ -187,5 +190,21 @@ def test_no_speed_value_in_any_frontier_structure() -> None:
     assert "throughput" not in dump and "123456" not in dump and "latency" not in dump
 
 
-def test_rows_without_cost_give_no_axis() -> None:
-    assert all(g.frontiers == [] for g in assemble_report(pilot_inputs()).groups)
+def test_rows_without_cost_keep_the_axis_with_missing_counts() -> None:
+    rows = [
+        frow("rf:w1", "rk_000000000101", "A", "80"),
+        frow("rf:w2", "rk_000000000201", "B", "81"),
+    ]
+    ax = axis(r_of(rows), "params")
+    assert ax.partitions == []
+    assert ax.missing == {"cost-missing": ["rk_000000000101", "rk_000000000201"]}
+    assert ax.statement is not None and "No independent row reports params" in ax.statement
+
+
+def test_axis_not_declared_by_the_schema_gives_no_axis() -> None:
+    inputs = pilot_inputs(three())
+    declared = tuple(f for f in [d.name for d in ML_BENCHMARK_V1.fields] if f != "params")
+    r = assemble_report(replace(inputs, declared_fields=declared))
+    assert "params" not in {a.axis for a in only_group(r).frontiers}
+    r2 = assemble_report(replace(inputs, declared_fields=(*declared, "params")))
+    assert "params" in {a.axis for a in only_group(r2).frontiers}
