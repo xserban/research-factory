@@ -571,3 +571,18 @@ def test_probe_rebuild_equals_incremental(
     run_probe(project, agent, [_probe_spec()], sources=mock_sources(openalex=[_item(1)]))
     before = project.index.state_hash()
     assert project.index.rebuild() == before
+
+
+def test_probe_kinds_come_from_the_factory(
+    project: Project, agent: Actor, mock_sources: SourcesFor
+) -> None:
+    _question(project, agent)
+    _positives(project, agent, mock_sources, 3)
+    inner = mock_sources(openalex=[_item(1)])["openalex"]
+    narrow = SourceFactory(inner.kinds, inner.build, probe_kinds=frozenset({QueryKind.KEYWORD}))
+    spec = QuerySpec(source="openalex", kind=QueryKind.FILTER, text="x")
+    with pytest.raises(FactoryValidationError) as refused:
+        run_probe(project, agent, [spec], sources={"openalex": narrow})
+    assert [(i.field, i.reason) for i in refused.value.issues if i.field == "queries[0].kind"] == [
+        ("queries[0].kind", "openalex cannot measure filter queries")
+    ]

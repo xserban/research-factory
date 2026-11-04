@@ -224,9 +224,9 @@ def _spec_issues(spec: SeedSpec, existing: list[tuple[str, SeedSpec]]) -> list[V
     A spec built without the model's own checks is still refused here: the identifier is what
     the lookup needs, and a seed without one could never resolve.
     """
-    if not spec.identity_keys():
-        return [ValidationIssue("identifier", "give at least one of doi, arxiv or openalex")]
     keys = spec.identity_keys()
+    if not keys:
+        return [ValidationIssue("identifier", "give at least one of doi, arxiv or openalex")]
     for field in _IDENTITY_FIELDS:
         if field not in keys:
             continue

@@ -121,6 +121,15 @@ def test_pilot_needs_fraction_systematic_needs_all() -> None:
     assert not _gap_fields(RigorMode.SYSTEMATIC, dual_extract_sample=None)
 
 
+def test_systematic_gap_message_says_every_work_is_extracted_twice() -> None:
+    gaps = _check(_with(_schema(dual_extract_sample=0.5)), RigorMode.SYSTEMATIC).gaps
+    [gap] = [g for g in gaps if g.field == "extraction_schema.dual_extract_sample"]
+    assert gap.reason == (
+        "systematic extraction needs dual_extract_sample unset or 1.0: "
+        "every work is extracted twice"
+    )
+
+
 def test_pilot_and_systematic_need_comparability_keys() -> None:
     for mode in (RigorMode.PILOT, RigorMode.SYSTEMATIC):
         assert "extraction_schema.comparability_keys" in _gap_fields(

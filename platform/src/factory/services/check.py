@@ -826,7 +826,13 @@ def _extraction(project: Project) -> list[_Hit]:
             )
         )
     if extraction_audit_outstanding(project):
-        hits.append(_Hit("extraction-audit-missing", (), "extraction audit not yet drawn"))
+        hits.append(
+            _Hit(
+                "extraction-audit-missing",
+                (),
+                "extraction audit not drawn for the current agreed values",
+            )
+        )
     audit = extraction_audit_report(project)
     if audit is not None and audit.above_ceiling:
         hits.append(

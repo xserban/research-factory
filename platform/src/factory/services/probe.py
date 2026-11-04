@@ -30,7 +30,7 @@ from factory.model.probe import (
     TermSuggestion,
 )
 from factory.model.project import RigorMode
-from factory.model.search import QueryKind, QueryPurpose, QuerySpec
+from factory.model.search import QueryPurpose, QuerySpec
 from factory.model.seed import SeedKind
 from factory.model.work import Work
 from factory.services.context import Project
@@ -48,10 +48,6 @@ THRESHOLDS: dict[RigorMode, float] = {
     RigorMode.PILOT: 0.9,
     RigorMode.SYSTEMATIC: 1.0,
 }
-
-# The kinds a prober measures. arXiv measures keyword queries only: its id-list intersection is
-# keyed to the query's own `search_query`. Any other source measures every kind its adapter takes.
-_PROBE_KINDS: dict[str, frozenset[QueryKind]] = {"arxiv": frozenset({QueryKind.KEYWORD})}
 
 
 class ProbeQueryResult(StrictModel):
@@ -154,7 +150,7 @@ def _validate(
             continue
         for issue in query_issues(project, spec, sources):
             issues.append(ValidationIssue(f"{field}.{issue.field}", issue.reason))
-        probe_kinds = _PROBE_KINDS.get(spec.source, factory.kinds)
+        probe_kinds = factory.probe_kinds or factory.kinds
         if spec.kind in factory.kinds and spec.kind not in probe_kinds:
             issues.append(
                 ValidationIssue(

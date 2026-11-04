@@ -286,7 +286,7 @@ def test_audit_missing_until_drawn(
     _both(project, ext_a, ext_b)
     found = _hit(project, "extraction-audit-missing")
     assert found is not None and found.refs == []
-    assert found.message == "extraction audit not yet drawn"
+    assert found.message == "extraction audit not drawn for the current agreed values"
     assert _severities(project, "extraction-audit-missing") == [None, "warning", "error"]
     _label_all(project, human, monkeypatch, 0)
     assert _hit(project, "extraction-audit-missing") is None

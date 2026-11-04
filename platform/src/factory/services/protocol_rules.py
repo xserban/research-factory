@@ -386,7 +386,8 @@ def _sampling_gaps(
         gaps.append(
             ValidationIssue(
                 f"{section}.dual_extract_sample",
-                "systematic extraction covers every work twice or none",
+                "systematic extraction needs dual_extract_sample unset or 1.0: "
+                "every work is extracted twice",
             )
         )
     if schema.audit_fraction < AUDIT_FRACTION_MIN:

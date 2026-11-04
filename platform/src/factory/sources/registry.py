@@ -28,6 +28,7 @@ class SourceFactory:
 
     kinds: frozenset[QueryKind]
     build: Callable[[Settings, Clock], Source]
+    probe_kinds: frozenset[QueryKind] | None = None  # None: same as `kinds`
 
     def __call__(self, settings: Settings, clock: Clock) -> Source:
         return self.build(settings, clock)
@@ -61,5 +62,7 @@ def default_sources() -> dict[str, SourceFactory]:
         "arxiv": SourceFactory(
             ArxivSource.kinds,
             lambda s, c: ArxivSource(default_http(s), clock=c, mailto=s.mailto),
+            # Its id-list intersection is keyed to the query's own `search_query`.
+            probe_kinds=frozenset({QueryKind.KEYWORD}),
         ),
     }

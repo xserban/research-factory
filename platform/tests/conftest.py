@@ -14,6 +14,7 @@ from factory.events.factory import EventFactory
 from factory.events.writer import EventWriter
 from factory.model.identity import IdGenerator
 from factory.model.screening import PassLabel
+from factory.model.search import QueryKind
 from factory.model.work import Provenance
 from factory.services.calibration import calibration_items
 from factory.services.context import Project, open_project
@@ -225,6 +226,7 @@ def mock_sources(http_log: list[httpx.Request]) -> Callable[..., dict[str, Sourc
             "arxiv": SourceFactory(
                 ArxivSource.kinds,
                 lambda s, c: ArxivSource(polite(arxiv_handler), clock=c, mailto=s.mailto),
+                probe_kinds=frozenset({QueryKind.KEYWORD}),
             ),
         }
 

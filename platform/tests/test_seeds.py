@@ -16,7 +16,13 @@ from factory.services.context import Project
 from factory.services.dedup import dedup_run
 from factory.services.project import project_status
 from factory.services.search import get_work, list_works, register_query, run_query
-from factory.services.seeds import add_seeds, admit_seed, explain_seed_miss, seed_check
+from factory.services.seeds import (
+    _spec_issues,
+    add_seeds,
+    admit_seed,
+    explain_seed_miss,
+    seed_check,
+)
 from factory.sources.registry import SourceFactory
 from tests.helpers import arxiv_atom, openalex_item
 
@@ -140,6 +146,20 @@ def test_duplicate_seed_in_another_form_is_rejected(
     [item] = result.rejected
     assert item.issues[0].field == "arxiv"
     assert item.issues[0].reason == "duplicate of SEED01"
+
+
+def test_spec_issues_compute_identity_keys_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = 0
+    original = SeedSpec.identity_keys
+
+    def spy(self: SeedSpec) -> dict[str, str]:
+        nonlocal calls
+        calls += 1
+        return original(self)
+
+    monkeypatch.setattr(SeedSpec, "identity_keys", spy)
+    assert _spec_issues(_positive(arxiv="2301.01234"), []) == []
+    assert calls == 1
 
 
 def test_duplicate_openalex_id_across_forms_is_rejected(
