@@ -14,6 +14,11 @@ dependencies = [
     "lxml>=5",
 ]
 
+[project.optional-dependencies]
+# Optional converters; inactive until decision 49. Never core dependencies.
+docling = ["docling>=2"]  # MIT; layout models must be supplied (FACTORY_DOCLING_MODELS)
+pymupdf = ["pymupdf4llm>=0.0.17", "pymupdf>=1.24"]  # AGPL-3.0
+
 [project.scripts]
 factory = "factory.cli.main:app"
 
