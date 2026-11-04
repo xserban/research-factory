@@ -90,6 +90,18 @@
 - [ ] **Step 1: Tests.** `test_eligible_are_promoted_with_a_converted_document`; `test_full_text_sample_extends_when_works_become_eligible`; `test_title_abstract_sample_tables_unchanged`; `test_promoted_without_conversion_is_not_retrieved` (Review Focus 2); `test_batch_pins_conversion_and_ignores_later_conversion` (convert again with a bumped converter version after enqueue; the task still names the first); `test_dual_sample_applies_at_full_text`; `test_ineligible_works_never_queued`.
 - [ ] **Step 2:** Run; FAIL. **Step 3:** Implement. **Step 4:** Tests pass. **Step 5:** Commit `feat(screening): full-text eligibility and pinned batches`.
 
+### Task 4b: Decisions carry along the protocol lineage (slice-1 defect found in the Task 4 review)
+
+Any amendment that changes the protocol id (`limits`, `screening`, `full_text_screening`, a clarified criterion) currently makes `agreement._decided` drop every earlier decision, because it keeps only decisions whose `protocol_id` equals the current id; `_done_keys` counts them as done, so the works are stranded as pending and cannot be re-screened. R-15 says the stale rules decide what is re-screened. Declaring the full-text plan after title/abstract screening, the normal order for an existing project, triggers it.
+
+**Files:** `services/agreement.py`, `services/audit.py`, `services/calibration.py`, `services/prisma.py` as needed; Test `tests/test_amendment_lineage.py`; modify `docs/decisions.md` (a *Proposed* entry 50, the researcher confirms it).
+
+**Interfaces:**
+- Produces: `_decided` keeps a live, non-stale decision whose `protocol_id` is in `protocol_lineage(project)` (the versions up to and including the current one) instead of equal to the current id. Criterion references compared to the current protocol (per-criterion κ, `exclusion_criteria`, audit `agreed_verdict`, calibration thresholds) are compared by bare criterion id (`EX03`), not by the version-qualified string. `screen_record` still refuses a batch whose protocol id is not current (new decisions are made under the current protocol). The audit `population_digest` is computed over the agreed decision ids, so it does not change across a non-criterion amendment.
+
+- [ ] **Step 1: Tests.** `test_non_criterion_amendment_keeps_title_abstract_outcomes` (limits, `screening`, `full_text_screening` each: `final_outcomes`, `pass_progress`, PRISMA numbers unchanged, no works pending); `test_criterion_amendment_requeues_only_stale_decisions` (loosening an exclusion stales exactly the decisions citing it; they are served again by `screen_next`, others stay decided); `test_clarification_stales_nothing`; `test_per_criterion_kappa_spans_versions`; `test_audit_digest_stable_across_non_criterion_amendment`; `test_new_decisions_still_need_current_protocol`. Every slice-1 test that asserted the old reset is listed in the report with the reason it changed; none is changed silently.
+- [ ] **Step 2:** Run; expect FAIL. **Step 3:** Implement; add decision 50 (*Proposed*): "Decisions carry along the protocol lineage; only the stale rules of R-15 cause re-screening." **Step 4:** Full suite, mypy, ruff pass. **Step 5:** Commit `fix(screening): decisions carry along the protocol lineage`.
+
 ### Task 5: Recording full-text decisions with anchor-verified quotes
 
 **Files:** `services/screening.py` (`screen_record`, `_item_issues`); Test `tests/test_fulltext_screen_record.py`.
