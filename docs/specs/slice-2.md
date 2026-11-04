@@ -97,6 +97,8 @@ Plus **atomic claims** (R-40): statement, type (finding / mechanism / limitation
 
 *Implemented in plan 2B2:* `document_read` (MCP; read-only, refused to a session that has joined a pass); `factory document convert|status|read` (CLI; `convert` is the researcher's act); events `document.converted` and `document.conversion_failed`; one conversion per (document, converter, version). The LaTeXML-HTML converter is registered; the LaTeX and PDF converters are registered after decision 49.
 
+*Implemented in plan 2C:* stage-aware screening (`stage` on passes, sessions, calibration, agreement, audit, resolutions and decisions); full-text decisions cite an anchor of the pinned conversion and are verified against it; `screen_next`, `screen_agreement`, `audit_sample` and `calibration_label` take `stage`; CLI `--stage`; `document_read` for full-text screeners is limited to their own queue and pinned conversion; PRISMA full-text boxes; the `fulltext-decision-stale-document` check finding; protocol field `full_text_screening` (omitted from the version hash when absent); decision 50 (Proposed) on decisions carrying along the protocol lineage.
+
 ## Out of scope
 Appraisal (deferred, IDEA-21); PubMed search and PMC route (first biomedical project, IDEA-22); consistency check of copied results against the cited paper (IDEA-23); graph, regions and labels (slice 3); living updates (slice 4); shared blob store and teams (slice 5); hypotheses and reproduction experiments (slice 6); prose synthesis and related-work writing (slice 7); OCR of scanned PDFs; figures as data (plots digitised).
 
