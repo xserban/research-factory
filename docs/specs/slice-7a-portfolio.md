@@ -82,7 +82,7 @@ Plan [2026-11-05-portfolio](../plans/2026-11-05-portfolio.md): `services/human_q
 - The reference-confirmation (G1) and inbox (slice 4a) gates are omitted: no CLI or MCP surface lets a human act on them yet (ruling 5, omitted rather than zero).
 - `press-confirmation` counts 1 only when a PRESS review is recorded and unconfirmed; a protocol that still needs an agent's review shows no human item.
 - Exit codes: 0; 1 when every project failed to read, or `--html` names a directory or an unwritable path; 2 for an empty root or an unparsable `--as-of`.
-- The `full-text` stage row matches while any promoted work has no converted document (including a work whose fetch attempts all failed), as the rule is written.
+- The `full-text` stage row matches while any promoted work has no converted document (including a work whose fetch attempts all failed), as the rule is written. The row therefore does not clear while a promoted work has only failed fetch attempts (a spec gap, raised with the researcher).
 
 ## Out of scope
 Live server (option B); publishing artifacts from the platform (option C is a skill-level step); cross-project suggestions (IDEA-04); literature watches and digests (IDEA-02, IDEA-03); any write action from the view.

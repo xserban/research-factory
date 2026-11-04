@@ -10,9 +10,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import pytest
+from sqlalchemy.exc import OperationalError
+
 from factory.clock import FixedClock
 from factory.config import Settings
-from factory.services.context import list_projects
+from factory.services.context import Project, list_projects
 from factory.services.human_queue import Gate
 from factory.services.portfolio import (
     Portfolio,
@@ -22,7 +25,7 @@ from factory.services.portfolio import (
     stage_facts,
 )
 from factory.services.prisma import prisma_flow
-from factory.services.project import init_project, project_status
+from factory.services.project import ProjectStatus, init_project, project_status
 from factory.services.search import list_works
 from factory.services.seeds import all_seeds
 from tests.helpers import SESSION, T0
@@ -156,3 +159,25 @@ def test_deterministic_across_calls_and_rebuild(portfolio_settings: Settings) ->
 def test_no_projects_gives_an_empty_portfolio(tmp_path: Path) -> None:
     built = portfolio(Settings(root=tmp_path, user="obd"), clock=FixedClock(T0), as_of=AS_OF)
     assert built.projects == []
+
+
+def test_database_and_os_errors_isolate_one_project(
+    portfolio_settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import factory.services.portfolio as module
+
+    real = module.project_status
+
+    def flaky(project: Project) -> ProjectStatus:
+        if project.paths.slug == TA_SLUG:
+            raise OperationalError("select 1", {}, Exception("database is locked"))
+        if project.paths.slug == EXT_SLUG:
+            raise PermissionError("unreadable")
+        return real(project)
+
+    monkeypatch.setattr(module, "project_status", flaky)
+    by_slug = {row.slug: row for row in _build(portfolio_settings).projects}
+    assert by_slug[TA_SLUG].error == "OperationalError"
+    assert by_slug[EXT_SLUG].error == "PermissionError"
+    assert by_slug[SCOPING_SLUG].error is None
+    assert by_slug[SCOPING_SLUG].stage is Stage.SCOPING

@@ -18,6 +18,7 @@ from typing import Literal
 
 from pydantic import ValidationError
 from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 
 from factory.clock import Clock, parse_ts
 from factory.config import Settings
@@ -209,7 +210,7 @@ def _row(settings: Settings, slug: str, session: str, clock: Clock) -> Portfolio
         flow = prisma_flow(project)
         stage = derive_stage(stage_facts(project))
         last_search = _last_search_at(project)
-    except (FactoryError, ValidationError) as exc:
+    except (FactoryError, ValidationError, OSError, SQLAlchemyError) as exc:
         return PortfolioRow(slug=slug, error=type(exc).__name__)
     protocol: ProtocolSummary | None = status.protocol
     return PortfolioRow(
