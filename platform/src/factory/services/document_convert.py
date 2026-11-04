@@ -17,6 +17,8 @@ Invariants:
 - The Markdown and manifest bytes go to the project library. The stored Markdown hash equals
   `ConversionResult.markdown_hash`, and the manifest hash is the hash of `manifest.to_json()`.
 - A batch continues past a failed document. Each document's events are one `project.record` call.
+- `convert_or_restore` is the single entry point of the CLI command: it refuses a scope combined
+  with `restore` before anything is read.
 - `restore_conversions` regenerates the Markdown and manifest blobs of recorded conversions that
   are missing or corrupt. It writes no event. The regenerated Markdown and manifest must hash to
   the recorded references, or nothing is stored. It runs outside the write lock.
@@ -146,6 +148,27 @@ def restore_conversions(project: Project, registry: ConverterRegistry) -> Conver
         records = _records(project)
     damaged = [record for record in records if not _intact(project, record)]
     return _summary([_restore_one(project, registry, record) for record in damaged])
+
+
+def convert_or_restore(
+    project: Project,
+    registry: ConverterRegistry,
+    *,
+    restore: bool,
+    work_ids: Sequence[str] | None = None,
+    document_ids: Sequence[str] | None = None,
+) -> ConvertSummary:
+    """Restore damaged conversions, or convert the documents in scope, as one command.
+
+    `restore` takes no scope: with `work_ids` or `document_ids` it raises `FactoryValidationError`
+    on field `restore`, before anything is read or written. Otherwise it is `restore_conversions`
+    when `restore` is set and `convert_documents` when it is not.
+    """
+    if restore and (work_ids or document_ids):
+        raise FactoryValidationError([ValidationIssue("restore", "takes no --work or --document")])
+    if restore:
+        return restore_conversions(project, registry)
+    return convert_documents(project, registry, work_ids=work_ids, document_ids=document_ids)
 
 
 def _records(project: Project) -> list[_Record]:

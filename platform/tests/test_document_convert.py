@@ -19,7 +19,11 @@ from factory.errors import FactoryValidationError, ValidationIssue
 from factory.model.document import Converted, FailureReason
 from factory.model.fulltext import AttemptOutcome, Route
 from factory.services.context import Project
-from factory.services.document_convert import ConvertSummary, document_status
+from factory.services.document_convert import (
+    ConvertSummary,
+    convert_or_restore,
+    document_status,
+)
 from factory.services.fulltext import fetch_fulltext, record_supplied_document
 from factory.sources.fulltext.base import not_retrieved
 from tests.document_helpers import (
@@ -423,3 +427,20 @@ def test_status_reports_latest_conversion_and_failure(project: Project, corpus: 
     }
     assert entry.latest_failure is FailureReason.CONVERTER_UNAVAILABLE
     assert event_bytes(project) != before
+
+
+def test_convert_or_restore_refuses_a_scope_with_restore(project: Project, corpus: None) -> None:
+    """The restore rule lives in the service: refused before anything is read or written."""
+    work = promoted_works(project)[0]
+    fetched_document(project, work, ARTICLE)
+    before = event_bytes(project)
+
+    with pytest.raises(FactoryValidationError) as raised:
+        convert_or_restore(
+            project, make_registry(), restore=True, work_ids=[work], document_ids=None
+        )
+
+    assert [(i.field, i.reason) for i in raised.value.issues] == [
+        ("restore", "takes no --work or --document")
+    ]
+    assert event_bytes(project) == before

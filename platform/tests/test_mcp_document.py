@@ -13,10 +13,17 @@ from mcp.types import CallToolResult, TextContent
 
 from factory.clock import FixedClock
 from factory.config import Settings
+from factory.events.envelope import Actor
 from factory.mcp.server import build_server
 from factory.services.context import Project
 from factory.services.document_convert import convert_documents
-from tests.document_helpers import ARTICLE, fetched_document, make_registry, promoted_works
+from tests.document_helpers import (
+    ARTICLE,
+    excluded_after_conversion,
+    fetched_document,
+    make_registry,
+    promoted_works,
+)
 from tests.helpers import _setup, open_session
 from tests.test_screening_next import _draw
 
@@ -101,7 +108,31 @@ async def test_document_read_refused_for_a_work_not_included(
             await client.call_tool("document_read", {"project": "demo", "work_id": corpus_leaving})
         )
 
-    assert _fields(body) == ["work_id"]
+    assert body == {
+        "ok": False,
+        "errors": [
+            {"field": "work_id", "reason": f"{corpus_leaving}: not promoted at title/abstract"}
+        ],
+    }
+
+
+@pytest.mark.usefixtures("corpus")
+@pytest.mark.anyio
+async def test_document_read_gate_refuses_a_converted_work_no_longer_included(
+    settings: Settings, project: Project, clock: FixedClock, agent: Actor
+) -> None:
+    """The work has a live conversion, so only the INCLUDED gate can refuse the read."""
+    work = promoted_works(project)[0]
+    excluded_after_conversion(project, agent, work)
+    server = build_server(settings, clock=clock)
+
+    async with Client(server) as client:
+        body = _body(await client.call_tool("document_read", {"project": "demo", "work_id": work}))
+
+    assert body == {
+        "ok": False,
+        "errors": [{"field": "work_id", "reason": f"{work}: not promoted at title/abstract"}],
+    }
 
 
 @pytest.mark.anyio

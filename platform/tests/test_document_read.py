@@ -14,6 +14,7 @@ from factory.document.anchors import AnchorKind, Manifest
 from factory.document.converter import convert
 from factory.document.registry import ConverterRegistry
 from factory.errors import FactoryValidationError, ValidationIssue
+from factory.events.envelope import Actor
 from factory.model.fulltext import Route
 from factory.services.agreement import Outcome, final_outcomes
 from factory.services.context import Project
@@ -25,7 +26,7 @@ from factory.services.document_read import (
     resolve_anchor,
 )
 from factory.services.fulltext import fetch_fulltext, record_supplied_document
-from tests.document_helpers import fetched_document
+from tests.document_helpers import excluded_after_conversion, fetched_document
 from tests.test_fulltext_service import StubRoute, always, retrieved
 
 MD = b"""# Study
@@ -220,7 +221,26 @@ def test_work_not_included_refused(project: Project, corpus_leaving: str) -> Non
     with pytest.raises(FactoryValidationError) as raised:
         document_read(project, work_id=corpus_leaving)
 
-    assert [issue.field for issue in raised.value.issues] == ["work_id"]
+    assert [(i.field, i.reason) for i in raised.value.issues] == [
+        ("work_id", f"{corpus_leaving}: not promoted at title/abstract")
+    ]
+
+
+@pytest.mark.usefixtures("corpus")
+def test_converted_work_no_longer_included_refused_by_the_gate(
+    project: Project, agent: Actor
+) -> None:
+    """The work has a live conversion, so only the INCLUDED gate can refuse the read."""
+    work = _promoted(project)[0]
+    excluded_after_conversion(project, agent, work)
+    assert work not in _promoted(project)
+
+    with pytest.raises(FactoryValidationError) as raised:
+        document_read(project, work_id=work)
+
+    assert [(i.field, i.reason) for i in raised.value.issues] == [
+        ("work_id", f"{work}: not promoted at title/abstract")
+    ]
 
 
 @pytest.mark.usefixtures("corpus")

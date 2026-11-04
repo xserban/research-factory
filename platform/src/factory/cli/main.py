@@ -755,17 +755,14 @@ def document_convert_cmd(
     """
     state = _state(ctx)
     with _reporting_errors():
-        if restore and (work or document):
-            raise FactoryValidationError(
-                [ValidationIssue("restore", "takes no --work or --document")]
-            )
         project = _resolve_project(state)
-        if restore:
-            summary = document_convert_service.restore_conversions(project, default_converters())
-        else:
-            summary = document_convert_service.convert_documents(
-                project, default_converters(), work_ids=work, document_ids=document
-            )
+        summary = document_convert_service.convert_or_restore(
+            project,
+            default_converters(),
+            restore=restore,
+            work_ids=work,
+            document_ids=document,
+        )
     for line in render.convert_lines(summary):
         typer.echo(line)
 

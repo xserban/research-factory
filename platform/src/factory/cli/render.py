@@ -132,8 +132,9 @@ def convert_lines(summary: ConvertSummary) -> list[str]:
 
 
 def document_status_lines(status: DocumentStatus) -> list[str]:
-    """The counts, then each live document: its converter and anchor counts, or not converted,
-    with its latest recorded failure."""
+    """The counts, then each live document: its converter and anchor counts, or not converted.
+    Its latest recorded failure follows: `earlier failure` for a converted document, `last failure`
+    for one not converted."""
     lines = [
         f"documents: {len(status.documents)}",
         f"converted: {status.converted}",
@@ -147,7 +148,10 @@ def document_status_lines(status: DocumentStatus) -> list[str]:
             )
         else:
             state = "not converted"
-        failure = f"  last failure: {doc.latest_failure.value}" if doc.latest_failure else ""
+        failure = ""
+        if doc.latest_failure:
+            label = "earlier failure" if doc.converted else "last failure"
+            failure = f"  {label}: {doc.latest_failure.value}"
         lines.append(f"{doc.document_id}  {doc.work_id}  {state}{failure}")
     return lines
 

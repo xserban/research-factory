@@ -11,12 +11,15 @@ from typer.testing import CliRunner
 
 from factory.cli.main import app
 from factory.config import Settings
+from factory.events.envelope import Actor
 from factory.model.document import Converted
 from factory.services.context import Project
 from tests.document_helpers import (
     ARTICLE,
+    StubConverter,
     event_bytes,
     events_of_type,
+    excluded_after_conversion,
     fetched_document,
     make_registry,
     promoted_works,
@@ -34,6 +37,10 @@ def _env(root: Any) -> dict[str, str | None]:
 @pytest.fixture
 def stub_converters(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("factory.cli.main.default_converters", make_registry)
+
+
+def _use_registry(monkeypatch: pytest.MonkeyPatch, converter: StubConverter) -> None:
+    monkeypatch.setattr("factory.cli.main.default_converters", lambda: make_registry(converter))
 
 
 @pytest.mark.usefixtures("corpus", "stub_converters")
@@ -116,4 +123,80 @@ def test_restore_with_work_is_rejected(project: Project, settings: Settings) -> 
 
     assert result.exit_code == 1
     assert result.stderr.startswith("restore: takes no --work or --document")
+    assert event_bytes(project) == before
+
+
+@pytest.mark.usefixtures("corpus", "stub_converters")
+def test_status_labels_a_failure_by_whether_the_document_is_converted(
+    project: Project, settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    work = promoted_works(project)[0]
+    document = fetched_document(project, work, ARTICLE)
+    _use_registry(monkeypatch, StubConverter(unavailable=True))
+    runner.invoke(app, ["document", "convert"], env=_env(settings.root))
+
+    failed = runner.invoke(app, ["document", "status"], env=_env(settings.root))
+    assert failed.exit_code == 0, failed.stderr
+    assert f"{document}  {work}  not converted  last failure: converter-unavailable" in (
+        failed.stdout.splitlines()
+    )
+
+    _use_registry(monkeypatch, StubConverter())
+    runner.invoke(app, ["document", "convert"], env=_env(settings.root))
+
+    converted = runner.invoke(app, ["document", "status"], env=_env(settings.root))
+    assert converted.exit_code == 0, converted.stderr
+    [line] = [ln for ln in converted.stdout.splitlines() if ln.startswith(document)]
+    assert "converted  latexml-html 1.0+stub" in line
+    assert line.endswith("earlier failure: converter-unavailable")
+    assert "last failure" not in line
+
+
+@pytest.mark.usefixtures("corpus", "stub_converters")
+def test_read_refuses_a_work_no_longer_included_with_its_conversion(
+    project: Project, settings: Settings, agent: Actor
+) -> None:
+    work = promoted_works(project)[0]
+    excluded_after_conversion(project, agent, work)
+    before = event_bytes(project)
+
+    result = runner.invoke(app, ["document", "read", work], env=_env(settings.root))
+
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    assert result.stderr == f"work_id: {work}: not promoted at title/abstract\n"
+    assert event_bytes(project) == before
+
+
+@pytest.mark.usefixtures("corpus", "stub_converters")
+def test_read_refuses_a_work_with_no_conversion(project: Project, settings: Settings) -> None:
+    work = promoted_works(project)[0]
+    before = event_bytes(project)
+
+    result = runner.invoke(app, ["document", "read", work], env=_env(settings.root))
+
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    assert result.stderr == (
+        f"work_id: {work}: has no conversion; run `factory document convert` first\n"
+    )
+    assert event_bytes(project) == before
+
+
+@pytest.mark.usefixtures("corpus", "stub_converters")
+def test_read_refuses_after_combined_with_anchor(project: Project, settings: Settings) -> None:
+    work = promoted_works(project)[0]
+    fetched_document(project, work, ARTICLE)
+    runner.invoke(app, ["document", "convert"], env=_env(settings.root))
+    before = event_bytes(project)
+
+    result = runner.invoke(
+        app,
+        ["document", "read", work, "--after", "sec_x", "--anchor", "sec_y"],
+        env=_env(settings.root),
+    )
+
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    assert result.stderr == "after: cannot be combined with anchor\n"
     assert event_bytes(project) == before

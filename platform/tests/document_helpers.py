@@ -8,15 +8,17 @@ from factory.document.converter import ConverterUnavailable
 from factory.document.latexml_html import LatexmlHtmlConverter
 from factory.document.registry import ConverterRegistry
 from factory.events.catalog import default_catalog
-from factory.events.envelope import Event
+from factory.events.envelope import Actor, Event
 from factory.events.reader import read_all
 from factory.model.fulltext import AttemptOutcome, Route
 from factory.services.agreement import Outcome, final_outcomes
 from factory.services.context import Project
 from factory.services.document_convert import ConvertSummary, convert_documents
 from factory.services.fulltext import fetch_fulltext
+from factory.services.protocol import current_protocol
 from factory.sources.fulltext.base import not_retrieved
 from tests.test_fulltext_service import StubRoute, always, retrieved
+from tests.test_screening_next import _decide
 
 ARTICLE = (Path(__file__).parent / "fixtures" / "document" / "latexml_article.html").read_bytes()
 
@@ -107,3 +109,19 @@ def promoted_works(project: Project) -> list[str]:
     return sorted(
         w for w, outcome in final_outcomes(project).items() if outcome is Outcome.INCLUDED
     )
+
+
+def excluded_after_conversion(project: Project, agent: Actor, work_id: str) -> str:
+    """A promoted work whose document is fetched and converted, then excluded by both passes.
+
+    The work keeps its live document and conversion, but its final outcome is EXCLUDED, so only
+    the INCLUDED gate refuses a read of it. Returns the work's document id.
+    """
+    document = fetched_document(project, work_id, ARTICLE)
+    run_convert(project, make_registry())
+    protocol = current_protocol(project)
+    assert protocol is not None, "the corpus fixtures record a protocol"
+    protocol_id = protocol.protocol_id
+    for pass_label in ("A", "B"):
+        _decide(project, agent, work_id, pass_label, "screening", "exclude", "EX01", protocol_id)
+    return document
