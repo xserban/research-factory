@@ -1,6 +1,6 @@
 import json
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
@@ -90,14 +90,18 @@ def claim_next(
     lease: timedelta = TASK_LEASE,
     *,
     accept: Callable[[JsonValue], bool] | None = None,
+    task_ids: Collection[str] | None = None,
 ) -> Task | None:
     """Claim the lowest-ID claimable task of `kind`, or return None when none can be claimed.
 
-    `accept`, when given, sees each candidate's content and may pass over it; a passed-over task
-    stays open and nothing is written for it."""
+    `accept`, when given, sees each candidate's content and may pass over it; `task_ids`, when
+    given, limits the candidates to those tasks. A passed-over task stays open and nothing is
+    written for it."""
     project.index.sync()
     now = _now(project)
     for task_id, content_blob in _claimable(project, kind, now):
+        if task_ids is not None and task_id not in task_ids:
+            continue
         if accept is not None and not accept(project.blobs.get_json(content_blob)):
             continue
         project.record(

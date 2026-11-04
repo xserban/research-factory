@@ -1,4 +1,4 @@
-"""Which earlier decisions an amendment's stale rules make doubtful (R-15).
+"""Which earlier decisions and extraction rows an amendment's stale rules make doubtful (R-15).
 
 Pure: the services and the index projector both evaluate the rules here, so they agree.
 """
@@ -8,7 +8,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from factory.model.base import StrictModel
-from factory.model.protocol import ProtocolAmended, ScreeningStage, StaleRule
+from factory.model.protocol import ExtractionStale, ProtocolAmended, ScreeningStage, StaleRule
 
 
 class DecisionRef(StrictModel):
@@ -79,3 +79,35 @@ def _stales(rule: StaleRule, decision: DecisionRef) -> bool:
 
 def _cid(criterion: str | None) -> str | None:
     return None if criterion is None else criterion.rsplit(":", 1)[-1]
+
+
+class RowRef(StrictModel):
+    """An extraction row as the extraction stale rule sees it: its id, the fields it carries and
+    its recording position (event ID)."""
+
+    row_id: str
+    fields: tuple[str, ...]
+    at: str
+
+
+def touches(rule: ExtractionStale, fields: Sequence[str]) -> bool:
+    """Whether `rule` stales a row carrying `fields` (ruling 12): every row, or one carrying a
+    removed field."""
+    return rule.all_records or bool(set(rule.fields) & set(fields))
+
+
+def stale_rows(
+    amendments: Sequence[ProtocolAmended], amended_at: Sequence[str], rows: Sequence[RowRef]
+) -> list[str]:
+    """The ids of rows an amendment's `extraction_stale` makes stale, sorted and unique.
+
+    As for decisions (decision 50), an amendment judges only the rows recorded before it, by
+    recording order (`amended_at` is parallel to `amendments`), never by protocol version: after a
+    reverted amendment (A to B, then B to A) a row recorded before A to B is judged by both."""
+    stale: set[str] = set()
+    for amendment, when in zip(amendments, amended_at, strict=True):
+        rule = amendment.extraction_stale
+        if rule is None:
+            continue
+        stale.update(row.row_id for row in rows if row.at < when and touches(rule, row.fields))
+    return sorted(stale)

@@ -3,8 +3,15 @@
 Pass A extracts every work that full-text screening included; pass B extracts the dual sample
 (`ExtractionSchema.dual_extract_sample`, None = every work) with the fields in reverse order. Each
 pass is opened once, with a seed; B's seed orders the sample. One task holds one work of one pass
-and pins the document and conversion read: both passes of a work share the pin of its first task
-(`unit_pin`), so a later conversion never changes a queued or served task.
+and pins the document and conversion read: both passes of a work share the pin of its latest task
+while that task's document is the work's current one (`unit_pin`, ruling 5), so a later
+conversion of the same document never changes a queued or served task.
+
+A unit (one work in one pass) is stale when an amendment recorded after its closing stales one of
+its live rows or all rows (`ProtocolAmended.extraction_stale`, ruling 12), or when its latest
+task pins a document that is no longer the work's current one; a served task is stale when the
+schema it served differs from the current one. A stale unit gets a new task under the current
+schema and pin; the stale task is never served again and nothing in the log is edited.
 
 A session joins one extraction pass. It is refused from the other pass, from a model that already
 serves the other pass, from a session that joined any screening pass, and from a session that
@@ -15,8 +22,12 @@ Invariants:
 - Nothing is queued until the protocol is ready and declares an extraction schema of a known pack
   and a full-text screening plan (R-13).
 - `extraction_population` is exactly the works whose full-text outcome is INCLUDED, sorted.
-- A task is created at most once per (work, pass); `extract_next` is idempotent while the session
-  holds a live claim.
+- A unit gets a new task only when it has none or its latest task is stale; only the latest task
+  of a unit of the population, when not stale, is served; `extract_next` is idempotent while the
+  session holds a live claim on such a task.
+- A row is stale when an amendment recorded after it stales it (by recording order, decision 50,
+  as `model.staleness`), or when it pins a document other than the work's current one. Stale
+  rows stay live and readable but count neither as duplicates nor in a closing.
 - `in_dual_sample` is pure and monotone in `fraction`: the works sampled at a smaller fraction are
   sampled at every larger one.
 - Pass events, the join and the new tasks are written in one append.
@@ -30,7 +41,7 @@ Invariants:
 import hashlib
 import secrets
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from fractions import Fraction
 from typing import Any, Literal
 
@@ -60,16 +71,17 @@ from factory.model.extraction import (
     StoredField,
     Strength,
 )
-from factory.model.protocol import ExtractionSchema, ProtocolStatus, ScreeningStage
+from factory.model.protocol import ExtractionSchema, ProtocolAmended, ProtocolStatus, ScreeningStage
 from factory.model.screening import Channel, PassLabel
+from factory.model.staleness import RowRef, stale_rows, touches
 from factory.model.task import Task, TaskCompleted, TaskStatus
 from factory.packs import FieldKind, Pack, get_pack
 from factory.services.agreement import Outcome, final_outcomes
 from factory.services.context import Project
 from factory.services.conversions import conversion_manifest
-from factory.services.document_read import default_conversion
+from factory.services.document_read import ConversionRef, default_conversion
 from factory.services.extraction_verify import VALUE_FIELD, verify_row_in
-from factory.services.protocol import ProtocolVersion, current_protocol
+from factory.services.protocol import ProtocolVersion, amendments_with_events, current_protocol
 from factory.services.results import BatchResult, ItemError
 from factory.services.screening import _is_label_session
 from factory.services.search import list_works
@@ -92,6 +104,7 @@ __all__ = [
     "ExtractResult",
     "ExtractionRow",
     "PassConfig",
+    "UnitState",
     "extract_next",
     "extract_record",
     "extraction_population",
@@ -102,7 +115,10 @@ __all__ = [
     "live_rows",
     "pass_config",
     "require_schema",
+    "stale_documents",
+    "stale_extractions",
     "unit_pin",
+    "unit_states",
 ]
 
 FT = ScreeningStage.FULL_TEXT
@@ -234,18 +250,15 @@ def is_extraction_session(project: Project, session: str) -> bool:
 
 
 def unit_pin(project: Project, work_id: str) -> tuple[str, str] | None:
-    """The (document, conversion) the extraction of `work_id` is pinned to: the pin of its first
-    task, of either pass, by task id; None when no task of the work exists."""
-    return _pins(project).get(work_id)
-
-
-def _pins(project: Project) -> dict[str, tuple[str, str]]:
-    """The pin of every work that has an extraction task: that of its first task by task id."""
-    pins: dict[str, tuple[str, str]] = {}
-    for _, _, content in _kind_tasks(project, *EXTRACT_KINDS.values()):
-        for record in content.records:
-            pins.setdefault(record["work_id"], (record["document_id"], record["conversion_id"]))
-    return pins
+    """The (document, conversion) the extraction of `work_id` is pinned to, for both passes: the
+    pin of its latest task of either pass, by task id, while that document is the work's current
+    one (or the work has none); else the work's default conversion (ruling 5). None when no task
+    of the work exists."""
+    project.index.sync()
+    ledger = _ledger(project)
+    if ledger.latest(work_id) is None:
+        return None
+    return ledger.pin(work_id)
 
 
 def _kind_tasks(project: Project, *kinds: str) -> list[tuple[str, str, ExtractBatchContent]]:
@@ -378,11 +391,13 @@ def extract_next(project: Project, actor: Actor, label: PassLabel) -> ExtractNex
 
     Refused (nothing written) for a non-agent, for a join the rules forbid, and until the protocol
     is ready with an extraction schema and a full-text screening plan. Otherwise the session
-    joins, the pass opens once, a task is queued for each work of the pass lacking one, and the
-    next claimable task is claimed. A session that already holds a live claim is served that task
-    again. `ExtractionSchema.dual_extract_sample=None` means every work, so pass B then queues the
-    whole population. `blocked` carries content-free reasons: how many works have no converted
-    document, and that no work falls in the dual sample."""
+    joins, the pass opens once, a task is queued for each unit of the pass that has none or whose
+    latest task is stale (`unit_states`), and the next claimable task that is the latest, not
+    stale, task of its unit is claimed. A session that already holds a live claim on such a task
+    is served that task again; a stale task is never served. `remaining` counts the units of the
+    pass that are not current. `ExtractionSchema.dual_extract_sample=None` means every work, so
+    pass B then queues the whole population. `blocked` carries content-free reasons: how many
+    works have no converted document, and that no work falls in the dual sample."""
     with project.index.exclusive():
         project.index.sync()
         protocol, schema, pack = require_schema(project)
@@ -410,7 +425,7 @@ def extract_next(project: Project, actor: Actor, label: PassLabel) -> ExtractNex
             events.append(_join_event(project, actor, label))
         queue = _queue(label, population, config.seed, schema)
         queued, remaining, unconverted = _enqueue(
-            project, actor, label, protocol, schema, pack, config, queue
+            project, actor, label, protocol, schema, pack, config, queue, _ledger(project)
         )
         blocked: list[str] = []
         if unconverted:
@@ -418,7 +433,10 @@ def extract_next(project: Project, actor: Actor, label: PassLabel) -> ExtractNex
         if label is PassLabel.B and population and not queue:
             blocked.append("no work falls in the dual sample")
         project.record([*events, *queued])
-        task = _held(project, actor, label) or claim_next(project, actor, EXTRACT_KINDS[label])
+        servable = _servable(_ledger(project), label, queue, schema, pack)
+        task = _held(project, actor, label, servable) or claim_next(
+            project, actor, EXTRACT_KINDS[label], task_ids=servable
+        )
         batch = None if task is None else _batch(project, task)
         return ExtractNext(batch=batch, blocked=blocked, remaining=remaining)
 
@@ -441,39 +459,33 @@ def _enqueue(
     pack: Pack,
     config: PassConfig,
     queue: list[str],
+    ledger: "_Ledger",
 ) -> tuple[list[Event], int, int]:
-    """The `task.created` events for the works of `queue` lacking a task of this pass, not yet
-    recorded; how many works of the queue still await a completed task; and how many have no
-    converted document (never servable, so not counted as remaining)."""
+    """The `task.created` events for the units of `queue` lacking a current unit (no task, or a
+    stale latest task), not yet recorded; how many units of the queue are not current; and how
+    many of those have no converted document (never servable, so not counted as remaining)."""
     kind = EXTRACT_KINDS[label]
-    tasks = _kind_tasks(project, kind)
-    queued = {str(record["work_id"]) for _, _, content in tasks for record in content.records}
-    done = {
-        str(record["work_id"])
-        for _, status, content in tasks
-        if status == TaskStatus.COMPLETED.value
-        for record in content.records
-    }
     titles = {work.id: work.title for work in list_works(project)}
     fields = _fields(pack, schema, config.field_order)
-    pins = _pins(project)
     specs: list[TaskSpec] = []
     unconverted = 0
+    pending = 0
     for work_id in queue:
-        if work_id in queued:
+        state = ledger.state(work_id, label, schema, pack)
+        if state.state == "current":
             continue
-        pin = pins.get(work_id)
+        pending += 1
+        if state.state != "stale" and ledger.tasks.get((work_id, label)):
+            continue  # its latest task waits or is served
+        pin = ledger.pin(work_id)
         if pin is None:
-            chosen = default_conversion(project, work_id)
-            if chosen is None:
-                unconverted += 1  # not retrieved or not converted: nothing to extract from
-                continue
-            pin = (chosen.document_id, chosen.conversion_id)
+            unconverted += 1  # not retrieved or not converted: nothing to extract from
+            continue
         content = ExtractBatchContent(
             pass_label=label,
             instructions=INSTRUCTIONS + (CLAIMS_INSTRUCTIONS if schema.claims else ""),
             protocol_id=protocol.protocol_id,
-            schema_ref=f"{schema.pack}@{schema.pack_version}",
+            schema_ref=_schema_ref(schema),
             fields=fields,
             required=list(pack.required),
             claims=schema.claims,
@@ -490,7 +502,26 @@ def _enqueue(
     events, result = build_task_events(project, actor, specs)
     if result.rejected:
         raise FactoryValidationError([issue for item in result.rejected for issue in item.issues])
-    return events, len(set(queue) - done) - unconverted, unconverted
+    return events, pending - unconverted, unconverted
+
+
+def _servable(
+    ledger: "_Ledger", label: PassLabel, queue: list[str], schema: ExtractionSchema, pack: Pack
+) -> set[str]:
+    """The tasks of the pass that may be served: for each unit of `queue`, its latest task when
+    that task is neither completed nor stale."""
+    out: set[str] = set()
+    for work_id in queue:
+        tasks = ledger.tasks.get((work_id, label))
+        if not tasks or tasks[-1].status == TaskStatus.COMPLETED.value:
+            continue
+        if ledger.issue(work_id, label, tasks[-1], schema, pack) is None:
+            out.add(tasks[-1].task_id)
+    return out
+
+
+def _schema_ref(schema: ExtractionSchema) -> str:
+    return f"{schema.pack}@{schema.pack_version}"
 
 
 def _fields(
@@ -520,14 +551,14 @@ def _fields(
     return out
 
 
-def _held(project: Project, actor: Actor, label: PassLabel) -> Task | None:
-    """The live claim this session holds on a task of the pass, if any."""
+def _held(project: Project, actor: Actor, label: PassLabel, servable: set[str]) -> Task | None:
+    """The live claim this session holds on a servable task of the pass, if any."""
     now = format_ts(project.clock.now())
     with project.index.connect() as conn:
-        row = conn.execute(
+        rows = conn.execute(
             text(
                 "SELECT task_id FROM tasks WHERE kind = :kind AND status = :claimed "
-                "AND claim_session = :s AND lease_until > :now ORDER BY task_id LIMIT 1"
+                "AND claim_session = :s AND lease_until > :now ORDER BY task_id"
             ),
             {
                 "kind": EXTRACT_KINDS[label],
@@ -535,10 +566,9 @@ def _held(project: Project, actor: Actor, label: PassLabel) -> Task | None:
                 "s": actor.session,
                 "now": now,
             },
-        ).one_or_none()
-    if row is None:
-        return None
-    return get_task(project, str(row[0]))
+        ).all()
+    held = [str(row[0]) for row in rows if str(row[0]) in servable]
+    return get_task(project, held[0]) if held else None
 
 
 def _batch(project: Project, task: Task) -> ExtractBatch:
@@ -637,7 +667,9 @@ def extract_record(
     not held by this session or not an extraction task (`task_id`); the session does not extract
     the task's pass (`pass`); the current schema's pack, version or declared fields differ from
     what the task served (`task_id`, ruling 12; any other amendment is accepted and the events
-    carry the current protocol id); a key of `supersedes` or `claim_supersedes` is not an index
+    carry the current protocol id); the task is not the latest task of its unit, pins a document
+    that is no longer the work's current one, or holds a work full-text screening no longer
+    includes (`task_id`); a key of `supersedes` or `claim_supersedes` is not an index
     of the call (that name); or `finish` would close a unit with no live row and no live claim
     without a non-blank `reason` (`reason`).
 
@@ -653,7 +685,9 @@ def extract_record(
 
     `finish` closes the unit only when no item of the call is rejected: `extraction.closed`, with
     counts computed as the live items minus the superseded targets plus the accepted items, and
-    `task.completed`, with those row ids then claim ids (each sorted) as results. The rows,
+    `task.completed`, with those row ids then claim ids (each sorted) as results. Stale rows
+    (`stale_extractions`) are neither duplicates, nor targets, nor counted: a re-served unit
+    starts afresh. The rows,
     claims, closure and completion are appended in one write; each extraction event carries the
     whole call's input as its input blob, stored only when something is appended.
     """
@@ -671,13 +705,18 @@ def extract_record(
             )
         protocol, schema, pack = require_schema(project)
         _require_same_schema(project, unit, schema, pack)
+        ledger = _ledger(project)
+        _require_current_task(project, ledger, unit, schema, pack)
+        stale = ledger.stale_rows()
         row_targets = _targets(supersedes, len(rows), "supersedes")
         claim_targets = _targets(claim_supersedes, len(claims), "claim_supersedes")
         manifest = conversion_manifest(project, unit.conversion_id)
         corpus = {work.id for work in list_works(project)}
 
         live_keys = {
-            r.extraction_id: r.row_key for r in live_rows(project, unit.label, work_id=unit.work_id)
+            r.extraction_id: r.row_key
+            for r in ledger.rows.get((unit.work_id, unit.label), [])
+            if r.extraction_id not in stale
         }
         used: set[str] = set()
         accepted_keys: set[str] = set()
@@ -978,6 +1017,238 @@ def _require_same_schema(
                 )
             ]
         )
+
+
+def _require_current_task(
+    project: Project, ledger: "_Ledger", unit: _Unit, schema: ExtractionSchema, pack: Pack
+) -> None:
+    """Refuse a task that is no longer its unit's current task: a later task replaced it, its
+    document is no longer the work's current one, or the work left the population."""
+    tasks = ledger.tasks.get((unit.work_id, unit.label), [])
+    if (
+        not tasks
+        or tasks[-1].task_id != unit.task_id
+        or ledger.issue(unit.work_id, unit.label, tasks[-1], schema, pack) is not None
+        or unit.work_id not in extraction_population(project)
+    ):
+        raise FactoryValidationError(
+            [
+                ValidationIssue(
+                    "task_id",
+                    "this task is no longer current (a newer task or document replaced it, or "
+                    "the work is no longer included); release the task and call extract_next",
+                )
+            ]
+        )
+
+
+# --- Units and staleness ---
+
+
+class UnitState(StrictModel):
+    """One extraction unit: an included work in one pass in use, and whether its extraction is
+    current. `queued`: no task yet, or its latest task waits unclaimed; `open`: its latest task
+    is claimed; `current`: its latest task completed and is not stale; `stale`: its latest task
+    is stale, `reason` saying why (`schema` or `document-version`). `reason` is otherwise None."""
+
+    work_id: str
+    pass_label: PassLabel
+    state: Literal["open", "current", "stale", "queued"]
+    reason: str | None
+
+
+@dataclass(frozen=True)
+class _UnitTask:
+    task_id: str
+    status: str
+    content: ExtractBatchContent
+
+    @property
+    def work_id(self) -> str:
+        return self.content.records[0]["work_id"]
+
+    @property
+    def pin(self) -> tuple[str, str]:
+        record = self.content.records[0]
+        return record["document_id"], record["conversion_id"]
+
+
+@dataclass
+class _Ledger:
+    """What staleness is judged from, read once (the caller has synced the index).
+
+    `tasks` holds each unit's extraction tasks in task-ID order; `closed_at` the event ID of each
+    task's `extraction.closed`; `rows` the live rows of each unit; `amendments` every amendment
+    with its event ID, in recording order; `orders` each pass's field order."""
+
+    project: Project
+    tasks: dict[tuple[str, PassLabel], list[_UnitTask]]
+    closed_at: dict[str, str]
+    rows: dict[tuple[str, PassLabel], list[ExtractionRow]]
+    amendments: list[tuple[str, ProtocolAmended]]
+    orders: dict[PassLabel, str]
+    documents: dict[str, ConversionRef | None] = field(default_factory=dict)
+
+    def current(self, work_id: str) -> ConversionRef | None:
+        """The work's default conversion; its document is the work's current document."""
+        if work_id not in self.documents:
+            self.documents[work_id] = default_conversion(self.project, work_id)
+        return self.documents[work_id]
+
+    def latest(self, work_id: str) -> _UnitTask | None:
+        """The latest task of the work in either pass, by task id."""
+        found = [t for label in PassLabel for t in self.tasks.get((work_id, label), [])]
+        return max(found, key=lambda t: t.task_id) if found else None
+
+    def pin(self, work_id: str) -> tuple[str, str] | None:
+        """The pin a new task of the work gets (ruling 5): the latest task's while its document
+        is current (or the work has no current document), else the default conversion."""
+        latest = self.latest(work_id)
+        current = self.current(work_id)
+        if latest is not None and (current is None or latest.pin[0] == current.document_id):
+            return latest.pin
+        return None if current is None else (current.document_id, current.conversion_id)
+
+    def issue(
+        self,
+        work_id: str,
+        label: PassLabel,
+        task: _UnitTask,
+        schema: ExtractionSchema,
+        pack: Pack,
+    ) -> str | None:
+        """Why `task` of the unit is stale, or None. `document-version`: it pins a document
+        other than the work's current one. `schema`: for a task not completed, the current
+        schema's reference or fields differ from what it served; for a completed one, an
+        amendment recorded after its closing stales all rows or a live row of the unit (a task
+        completed without a closing has no position, so every such amendment counts)."""
+        current = self.current(work_id)
+        if current is not None and task.pin[0] != current.document_id:
+            return "document-version"
+        if task.status != TaskStatus.COMPLETED.value:
+            served = task.content.schema_ref, task.content.fields
+            if served != (_schema_ref(schema), _fields(pack, schema, self.orders[label])):
+                return "schema"
+            return None
+        closed = self.closed_at.get(task.task_id, "")
+        carried = [tuple(row.fields) for row in self.rows.get((work_id, label), [])]
+        for when, amendment in self.amendments:
+            rule = amendment.extraction_stale
+            if rule is None or when <= closed:
+                continue
+            if rule.all_records or any(touches(rule, fields) for fields in carried):
+                return "schema"
+        return None
+
+    def state(
+        self, work_id: str, label: PassLabel, schema: ExtractionSchema, pack: Pack
+    ) -> UnitState:
+        tasks = self.tasks.get((work_id, label))
+        if not tasks:
+            return UnitState(work_id=work_id, pass_label=label, state="queued", reason=None)
+        latest = tasks[-1]
+        reason = self.issue(work_id, label, latest, schema, pack)
+        if reason is not None:
+            return UnitState(work_id=work_id, pass_label=label, state="stale", reason=reason)
+        state: Literal["open", "current", "queued"] = "queued"
+        if latest.status == TaskStatus.COMPLETED.value:
+            state = "current"
+        elif latest.status == TaskStatus.CLAIMED.value:
+            state = "open"
+        return UnitState(work_id=work_id, pass_label=label, state=state, reason=None)
+
+    def stale_rows(self) -> set[str]:
+        """The live rows an amendment recorded after them stales, or that pin a document other
+        than the work's current one."""
+        live = [row for rows in self.rows.values() for row in rows]
+        refs = [RowRef(row_id=r.extraction_id, fields=tuple(r.fields), at=r.event_id) for r in live]
+        stale = set(
+            stale_rows([a for _, a in self.amendments], [w for w, _ in self.amendments], refs)
+        )
+        for row in live:
+            current = self.current(row.work_id)
+            if current is not None and row.document_id != current.document_id:
+                stale.add(row.extraction_id)
+        return stale
+
+
+def _ledger(project: Project) -> _Ledger:
+    """Read the ledger; the caller has synced the index."""
+    tasks: dict[tuple[str, PassLabel], list[_UnitTask]] = {}
+    for task_id, status, content in _kind_tasks(project, *EXTRACT_KINDS.values()):
+        if len(content.records) != 1:
+            continue
+        task = _UnitTask(task_id, status, content)
+        tasks.setdefault((task.work_id, content.pass_label), []).append(task)
+    with project.index.connect() as conn:
+        closed_at = {
+            str(task_id): str(event_id)
+            for task_id, event_id in conn.execute(
+                text("SELECT task_id, event_id FROM extraction_closures")
+            )
+        }
+    rows: dict[tuple[str, PassLabel], list[ExtractionRow]] = {}
+    for row in live_rows(project):
+        rows.setdefault((row.work_id, row.pass_label), []).append(row)
+    orders: dict[PassLabel, str] = {}
+    for label in PassLabel:
+        config = pass_config(project, label)
+        default = "schema" if label is PassLabel.A else "reversed"
+        orders[label] = default if config is None else config.field_order
+    return _Ledger(project, tasks, closed_at, rows, amendments_with_events(project), orders)
+
+
+def stale_extractions(project: Project) -> set[str]:
+    """The live rows that are stale: made stale by an amendment recorded after the row (ruling
+    12, compared by event ID as `model.staleness` does, so a reverted amendment keeps recording
+    order), or pinned to a document that is no longer the work's current one. Read-only."""
+    project.index.sync()
+    return _ledger(project).stale_rows()
+
+
+def stale_documents(project: Project) -> list[str]:
+    """The works, sorted, whose live rows pin a conversion other than the work's default while
+    their document is the current one: a newer conversion only warns, it stales nothing."""
+    project.index.sync()
+    ledger = _ledger(project)
+    out: set[str] = set()
+    for rows in ledger.rows.values():
+        for row in rows:
+            current = ledger.current(row.work_id)
+            if (
+                current is not None
+                and row.document_id == current.document_id
+                and row.conversion_id != current.conversion_id
+            ):
+                out.add(row.work_id)
+    return sorted(out)
+
+
+def unit_states(project: Project) -> list[UnitState]:
+    """One state per unit, by work then pass: every work of `extraction_population` in pass A,
+    and in pass B the works of its dual sample once pass B has opened (every work before then
+    when the declared sample takes every work). Empty, with no refusal, when there is no ready
+    protocol with a known extraction schema or no full-text screening plan. Read-only."""
+    project.index.sync()
+    try:
+        _, schema, pack = require_schema(project)
+        population = extraction_population(project)
+    except FactoryValidationError:
+        return []
+    config = pass_config(project, PassLabel.B)
+    if config is not None:
+        sample = set(_queue(PassLabel.B, population, config.seed, schema))
+    elif schema.dual_extract_sample is None or schema.dual_extract_sample >= 1:
+        sample = set(population)
+    else:
+        sample = set()
+    ledger = _ledger(project)
+    out: list[UnitState] = []
+    for work_id in population:
+        out.append(ledger.state(work_id, PassLabel.A, schema, pack))
+        if work_id in sample:
+            out.append(ledger.state(work_id, PassLabel.B, schema, pack))
+    return out
 
 
 # --- Reading recorded rows and claims ---
