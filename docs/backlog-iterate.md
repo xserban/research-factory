@@ -18,3 +18,5 @@ Minor review findings parked during the v1 build, to address when iterating from
 - inbox T5-10: actor refusal and `before` snapshot outside exclusive lock (services/inbox.py:164,301); discovery chase direction read from query text (discovery.py:178); _registered_submitter LIKE ref match (search.py:536); AC10 held-out recall 0.0 before/after is a weak assertion.
 - cleanups-2 T1–2: event_refs test never compares an incremental index with a rebuilt one; no substring-id case (qry_1/qry_10); trace._chase_assignment MAX(o.ref) wants a comment.
 - G1 T10: acceptance 2's `test_parse_quality_report` named in the plan is not on the base (only fixture field tests in test_references_parse.py).
+- G2-A T4: _Ledger._created_at reads the whole event log (once per ledger, only when a citation is old) — project task-created position if it shows up.
+- G1 T9-10: displayed new_works is reduced by held-out works while report_prisma is not; difference reveals that a held-out work was added, never which (low).
