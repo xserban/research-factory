@@ -28,6 +28,8 @@ async def test_project_status_tool(settings: Settings, project: Project, clock: 
             "search_run",
             "search_chase",
             "dedup_run",
+            "watch_status",
+            "watch_run",
             "question_record",
             "seed_add",
             "seed_list",

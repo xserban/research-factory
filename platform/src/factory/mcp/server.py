@@ -58,6 +58,7 @@ from factory.services import screening as screening_service
 from factory.services import search as search_service
 from factory.services import seeds as seeds_service
 from factory.services import trace as trace_service
+from factory.services import watch as watch_service
 from factory.services.context import Project, open_project
 from factory.services.extraction import ExtractResult
 from factory.services.results import BatchResult, ItemError
@@ -206,6 +207,43 @@ def build_server(
             return _withheld(opened, report)
 
         return _reply(project, dedup)
+
+    @server.tool()
+    def watch_status(project: str) -> dict[str, JsonValue]:
+        """Per watched source: last cycle, next due, mode, window start, consecutive failures;
+        and the open cycle. Read-only. Refused to a session that has joined a pass."""
+
+        def status() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            report = watch_service.watch_status(opened).model_dump(mode="json")
+            return _withheld(opened, report)
+
+        return _reply(project, status)
+
+    @server.tool()
+    def watch_run(
+        project: str, role: str, model: str, skill: str, force: bool = False
+    ) -> dict[str, JsonValue]:
+        """Run the project's due watch cycle: every planned query of every due source, then
+        incremental deduplication; the platform builds the queries. `force` runs every watched
+        source whether or not it is due. Writes nothing and returns `cycle: null` when nothing is
+        due. An open cycle is resumed. Refused to a session that has joined a pass."""
+
+        def run_cycle() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            actor = make_agent_actor(settings, session, role, model, skill)
+            summary = watch_service.watch_run(
+                opened, sources=adapters, trigger="agent", actor=actor, force=force
+            )
+            if summary is None:
+                return {"cycle": None}
+            report = summary.model_dump(mode="json", exclude={"new_work_ids"})
+            report["new_works"] = len(summary.new_work_ids)
+            return _withheld(opened, {"cycle": report})
+
+        return _reply(project, run_cycle)
 
     @server.tool()
     def question_record(

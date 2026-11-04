@@ -1,5 +1,6 @@
 """The `factory` command: parse arguments, call a service, format output. No business logic here."""
 
+import json
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -25,6 +26,7 @@ from factory.model.imports import ImportRole
 from factory.model.project import RigorMode
 from factory.model.protocol import ScreeningStage
 from factory.model.screening import Channel
+from factory.model.watch import CycleStatus
 from factory.model.work import ProvenanceMethod
 from factory.services import agreement as agreement_service
 from factory.services import audit as audit_service
@@ -50,6 +52,7 @@ from factory.services import project as project_service
 from factory.services import protocol as protocol_service
 from factory.services import seeds as seeds_service
 from factory.services import trace as trace_service
+from factory.services import watch as watch_service
 from factory.services.context import Project, list_projects, open_project
 from factory.services.extraction_agreement import Choice
 from factory.services.project import ScreeningStatus
@@ -146,7 +149,13 @@ export_app = typer.Typer(
     help="Bibliography (BibTeX, CSL-JSON) and the PRISMA diagram (SVG), from the events.",
     no_args_is_help=True,
 )
+watch_app = typer.Typer(
+    name="watch",
+    help="Run the due watch cycle, show the watch status and plan.",
+    no_args_is_help=True,
+)
 app.add_typer(seeds_app)
+app.add_typer(watch_app)
 app.add_typer(report_app)
 app.add_typer(export_app)
 app.add_typer(protocol_app)
@@ -1278,6 +1287,136 @@ def trace(
         tree = trace_service.trace(project, ref, direction="forward" if forward else "back")
     for line in render.trace_lines(tree):
         typer.echo(line)
+
+
+def _watch_projects(state: CliState, project: str | None, all_projects: bool) -> list[str]:
+    """The slugs a `watch` command covers: all, the named one, or the one the root resolves."""
+    if all_projects and project is not None:
+        _fail("--all and --project are exclusive", 2)
+    if all_projects:
+        return list_projects(state.settings)
+    if project is not None:
+        return [project]
+    return [_resolve_project(state).paths.slug]
+
+
+def _watch_one(
+    state: CliState,
+    slug: str,
+    *,
+    dry_run: bool,
+    force: bool,
+    human: bool,
+    skip_unplanned: bool,
+) -> tuple[int, dict[str, object], list[str]]:
+    """Run, or preview, one project's cycle. Returns its exit code, JSON and text lines."""
+    try:
+        project = open_project(state.settings, slug, session=state.session, clock=state.clock)
+        status = watch_service.watch_status(project)
+        if not status.has_plan and skip_unplanned:
+            return 0, {"project": slug, "result": "no watch_plan"}, [f"{slug}: no watch_plan"]
+        if dry_run:
+            due = [s.source for s in status.sources if force or s.due]
+            lines = [f"{slug}: would run {', '.join(due) or 'nothing'}"]
+            lines += render.watch_status_lines(slug, status)[1:]
+            return 0, {"project": slug, "result": "dry-run", "sources": due}, lines
+        summary = watch_service.watch_run(
+            project,
+            sources=dict(default_sources()),
+            trigger="human" if human else "scheduler",
+            actor=project.human_actor() if human else None,
+            force=force,
+        )
+    except FactoryValidationError as exc:
+        lines = [f"{slug}: {issue.field}: {issue.reason}" for issue in exc.issues]
+        issues = [{"field": i.field, "reason": i.reason} for i in exc.issues]
+        return 2, {"project": slug, "result": "invalid", "issues": issues}, lines
+    except ProjectNotFoundError as exc:
+        return 2, {"project": slug, "result": "invalid", "issues": [str(exc)]}, [str(exc)]
+    except Exception as exc:  # one project's failure must not stop the others
+        message = f"{slug}: {type(exc).__name__}: {exc}"
+        return 1, {"project": slug, "result": "error", "error": message}, [message]
+    if summary is None:
+        return 0, {"project": slug, "result": "nothing-due"}, render.cycle_lines(slug, None)
+    code = 0 if summary.status is CycleStatus.COMPLETE else 1
+    data = {"project": slug, "result": summary.status.value, **summary.model_dump(mode="json")}
+    return code, data, render.cycle_lines(slug, summary)
+
+
+@watch_app.command("run")
+def watch_run_cmd(
+    ctx: typer.Context,
+    project: Annotated[str | None, typer.Option("--project", help="Project slug.")] = None,
+    all_projects: Annotated[
+        bool, typer.Option("--all", help="Every project; those without a watch_plan are skipped.")
+    ] = False,
+    due: Annotated[
+        bool, typer.Option("--due/--force", help="Run what is due (default), or every source.")
+    ] = True,
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run", help="Show what would run; write nothing.")
+    ] = False,
+    human: Annotated[
+        bool, typer.Option("--human", help="Record the cycle as a human's, not the scheduler's.")
+    ] = False,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Print one JSON object per project.")
+    ] = False,
+) -> None:
+    """Run the due watch cycle; exit 0 nothing due or complete, 1 partial or failed, 2 invalid."""
+    state = _state(ctx)
+    slugs = _watch_projects(state, project if project is not None else state.project, all_projects)
+    exit_code = 0
+    for slug in slugs:
+        code, data, lines = _watch_one(
+            state, slug, dry_run=dry_run, force=not due, human=human, skip_unplanned=all_projects
+        )
+        exit_code = max(exit_code, code)
+        if as_json:
+            typer.echo(json.dumps(data, sort_keys=True))
+        else:
+            for line in lines:
+                typer.echo(line, err=code == 2)
+    raise typer.Exit(exit_code)
+
+
+def _watch_target(state: CliState, project: str | None) -> Project:
+    if project is None:
+        return _resolve_project(state)
+    return open_project(state.settings, project, session=state.session, clock=state.clock)
+
+
+@watch_app.command("status")
+def watch_status_cmd(
+    ctx: typer.Context,
+    project: Annotated[str | None, typer.Option("--project", help="Project slug.")] = None,
+    as_json: Annotated[bool, typer.Option("--json", help="Print WatchStatus as JSON.")] = False,
+) -> None:
+    """Per source: last cycle, next due, mode, window start and failures."""
+    state = _state(ctx)
+    with _reporting_errors():
+        opened = _watch_target(state, project)
+        status = watch_service.watch_status(opened)
+    if as_json:
+        typer.echo(status.model_dump_json())
+        return
+    for line in render.watch_status_lines(opened.paths.slug, status):
+        typer.echo(line)
+
+
+@watch_app.command("plan")
+def watch_plan_cmd(
+    ctx: typer.Context,
+    project: Annotated[str | None, typer.Option("--project", help="Project slug.")] = None,
+) -> None:
+    """Print the current protocol's watch_plan as JSON."""
+    state = _state(ctx)
+    with _reporting_errors():
+        current = protocol_service.current_protocol(_watch_target(state, project))
+    plan = None if current is None else current.spec.watch_plan
+    if plan is None:
+        _fail("no watch_plan in the current protocol", 1)
+    typer.echo(plan.model_dump_json(indent=2))
 
 
 @app.command()

@@ -25,6 +25,7 @@ from factory.services.imports import (
 )
 from factory.services.prisma import UNCONVERTED, PrismaFlow, SearchReport
 from factory.services.trace import TraceNode
+from factory.services.watch import CycleSummary, WatchStatus
 
 
 def prisma_markdown(flow: PrismaFlow) -> str:
@@ -357,6 +358,24 @@ def import_record_lines(records: list[RecordRow]) -> list[str]:
     return lines
 
 
+def cycle_lines(slug: str, summary: CycleSummary | None) -> list[str]:
+    """One project's watch result: nothing due, or the cycle with a line per source."""
+    if summary is None:
+        return [f"{slug}: nothing due"]
+    lines = [
+        f"{slug}: cycle {summary.cycle_id} {summary.status.value} "
+        f"({len(summary.run_ids)} runs, {len(summary.new_work_ids)} new works)"
+    ]
+    for c in summary.counts:
+        extra = "" if c.disappeared is None else f", {c.disappeared} no longer returned"
+        extra += "" if c.window_missed is None else f", {c.window_missed} missed by windows"
+        lines.append(
+            f"  {c.source}: {c.complete_runs}/{c.runs} queries complete, {c.retrieved} records, "
+            f"{c.new_works} new, {c.duplicates_in_cycle} duplicate in cycle{extra}"
+        )
+    return lines
+
+
 def development_view_lines(view: DevelopmentView) -> list[str]:
     """The default view: counts, then one line per record keyed by its hash, in hash order.
 
@@ -371,5 +390,21 @@ def development_view_lines(view: DevelopmentView) -> list[str]:
         lines.append(
             f"sha256:{r.record_sha256[:16]}  {r.outcome.value}  {year}  {identifier}"
             f"  {r.title or '-'}"
+        )
+    return lines
+
+
+def watch_status_lines(slug: str, status: WatchStatus) -> list[str]:
+    """Per-source due state of one project's watch."""
+    if not status.has_plan:
+        return [f"{slug}: no watch_plan"]
+    lines = [f"{slug}: protocol {status.protocol_id}, open cycle {status.open_cycle or 'none'}"]
+    for s in status.sources:
+        due = "due now" if s.due else f"next due {s.next_due:%Y-%m-%d %H:%M}"
+        window = f", window from {s.window_start}" if s.window_start else ""
+        replay = ", full replay next" if s.full_replay_next else ""
+        lines.append(
+            f"  {s.source}: {s.mode}, every {s.interval_days} d, {due}{window}{replay}, "
+            f"{s.consecutive_failures} consecutive failures"
         )
     return lines
