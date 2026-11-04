@@ -13,16 +13,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from sqlalchemy import Column, Index, Integer, MetaData, String, Table, and_, update
+from sqlalchemy import Column, Float, Index, Integer, MetaData, String, Table, and_, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Connection
 
+from factory.canonical import canonical_json
 from factory.clock import format_ts
 from factory.events.blobs import BlobStore
 from factory.events.envelope import Event
 from factory.imports.model import ImportRecord
 from factory.index.projection import Handler
-from factory.model.imports import ImportRecorded, ImportSplitDrawn
+from factory.model.imports import ImportRecorded, ImportResolved, ImportSplitDrawn
 
 UNSPLIT = "unsplit"
 _PARTS = {"development": "development", "held_out": "held-out"}
@@ -70,6 +71,19 @@ def import_tables(metadata: MetaData) -> ImportTables:
         Column("attachment_path_sha256", String),
         Column("attachment_content_sha256", String),
         Column("part", String, nullable=False),
+        # The resolution as recorded (`base_*`) and the live state folded from it (`link_state`,
+        # `work_id`, `confidence`). NULL until the import is resolved.
+        Column("link_state", String),
+        Column("work_id", String),
+        Column("method", String),
+        Column("confidence", String),
+        Column("score", Float),
+        Column("base_state", String),
+        Column("base_work_id", String),
+        Column("base_confidence", String),
+        Column("candidates", String),
+        Column("reason", String),
+        Column("no_source_record", Integer),
     )
     Index("ix_import_records_doi", records.c.doi)
     Index("ix_import_records_arxiv", records.c.arxiv)
@@ -80,6 +94,7 @@ def import_handlers(t: ImportTables, blobs: BlobStore | None) -> dict[str, Handl
     return {
         "import.recorded": _recorded(t, blobs),
         "import.split_drawn": _split_drawn(t, blobs),
+        "import.resolved": _resolved(t),
     }
 
 
@@ -138,6 +153,36 @@ def _row(import_id: str, r: ImportRecord) -> dict[str, object]:
         "attachment_content_sha256": r.attachment.content_sha256 if r.attachment else None,
         "part": UNSPLIT,
     }
+
+
+def _resolved(t: ImportTables) -> Handler:
+    """A resolution replaces the earlier one of the import, record by record (last write wins)."""
+
+    def resolved(conn: Connection, event: Event) -> None:
+        p = ImportResolved.model_validate(event.payload)
+        for r in p.resolutions:
+            confidence = None if r.confidence is None else r.confidence.value
+            conn.execute(
+                update(t.records)
+                .where(and_(t.records.c.import_id == p.import_id, t.records.c.ordinal == r.ordinal))
+                .values(
+                    link_state=r.state.value,
+                    work_id=r.work_id,
+                    method=r.method,
+                    confidence=confidence,
+                    score=r.score,
+                    base_state=r.state.value,
+                    base_work_id=r.work_id,
+                    base_confidence=confidence,
+                    candidates=canonical_json(
+                        [c.model_dump(mode="json") for c in r.candidates]
+                    ).decode(),
+                    reason=r.reason,
+                    no_source_record=1 if r.no_source_record else 0,
+                )
+            )
+
+    return resolved
 
 
 def _split_drawn(t: ImportTables, blobs: BlobStore | None) -> Handler:

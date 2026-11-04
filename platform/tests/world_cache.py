@@ -254,7 +254,10 @@ def _reopen_index(project: Project) -> None:
     """Point the project at the restored database; the old engine held the replaced file."""
     old = project.index
     project.index = Index(
-        project.paths.index_path, project.paths.events_dir, project.catalog, default_projection()
+        project.paths.index_path,
+        project.paths.events_dir,
+        project.catalog,
+        default_projection(project.blobs),
     )
     old._engine.dispose()
 

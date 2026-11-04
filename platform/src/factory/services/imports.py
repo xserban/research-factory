@@ -292,6 +292,11 @@ def list_import_records(
         return [RecordRow.model_validate(dict(r)) for r in rows.mappings()]
 
 
+def import_row(project: Project, import_id: str) -> ImportRow:
+    """One import as the index holds it; `FactoryValidationError` when there is none."""
+    return _import_row(project, import_id)
+
+
 def _import_row(project: Project, import_id: str) -> ImportRow:
     project.index.sync()
     with project.index.connect() as conn:

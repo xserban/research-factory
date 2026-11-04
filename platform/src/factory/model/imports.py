@@ -11,13 +11,15 @@ Invariants:
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Literal, Self
+from typing import Annotated, Literal, Self
 
-from pydantic import Field, model_validator
+from pydantic import Field, StringConstraints, model_validator
 
 from factory.imports.model import ImportFormat, ParseOutcome
 from factory.model.base import StrictModel
 from factory.model.identity import BLOB_REF_RE, ULID_RE
+from factory.model.references import Resolution, VersionLabel
+from factory.model.work import RUN_ID_RE
 
 IMPORT_ID_RE = rf"^imp_{ULID_RE}$"
 RECORD_KEY_RE = rf"^imp_{ULID_RE}:[1-9][0-9]*$"
@@ -70,4 +72,27 @@ class ImportSplitDrawn(StrictModel):
         drawn = self.mode == "drawn"
         if drawn != (self.random_seed is not None) or drawn != (self.parts_blob is not None):
             raise ValueError("a drawn split, and only a drawn split, has a seed and parts")
+        return self
+
+
+class ImportResolved(StrictModel):
+    """How the resolvable records of an import resolved (plan Import-B task 1).
+
+    Names each ordinal once, ascending. A later event for the same import supersedes an earlier
+    one, decisions on the earlier resolution included. Records that are malformed are not named.
+    """
+
+    import_id: str = Field(pattern=IMPORT_ID_RE)
+    resolutions: tuple[Resolution, ...]
+    lookup_runs: tuple[Annotated[str, StringConstraints(pattern=RUN_ID_RE)], ...] = ()
+    matcher: VersionLabel
+    matcher_version: VersionLabel
+
+    @model_validator(mode="after")
+    def _ordinals(self) -> Self:
+        ordinals = [r.ordinal for r in self.resolutions]
+        if ordinals != sorted(set(ordinals)):
+            raise ValueError("resolutions name each ordinal once, in ascending order")
+        if len(set(self.lookup_runs)) != len(self.lookup_runs):
+            raise ValueError("lookup_runs must not repeat a run")
         return self

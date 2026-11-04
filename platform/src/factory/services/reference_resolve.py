@@ -36,6 +36,7 @@ import hashlib
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from typing import Protocol
 
 from sqlalchemy import text
 
@@ -53,7 +54,6 @@ from factory.model.references import (
     DecisionQuote,
     LinkCandidate,
     LinkState,
-    ReferenceEntry,
     ReferenceResolutionDecided,
     Resolution,
     UnresolvedReason,
@@ -78,6 +78,31 @@ LOOKUP_IDENTIFIER = "lookup-identifier"
 CORPUS_TITLE = "corpus-title"
 LOOKUP_TITLE = "lookup-title"
 NO_SOURCE_RECORD = "no-source-record"
+
+
+class Resolvable(Protocol):
+    """What `resolve_entries` reads of an entry: an ordinal and the parsed fields of one record.
+
+    `ReferenceEntry` (a bibliography entry) and `ImportResolvable` (an import record) both satisfy
+    it, so the two share one resolver. Attributes are read-only.
+    """
+
+    @property
+    def ordinal(self) -> int: ...
+    @property
+    def doi(self) -> str | None: ...
+    @property
+    def arxiv(self) -> str | None: ...
+    @property
+    def url(self) -> str | None: ...
+    @property
+    def year(self) -> int | None: ...
+    @property
+    def first_author(self) -> str | None: ...
+    @property
+    def title(self) -> str | None: ...
+    @property
+    def venue(self) -> str | None: ...
 
 
 def entry_raw(anchor_text: str) -> str:
@@ -219,7 +244,7 @@ def _from_match(ordinal: int, match: Match, method: str, blob: str | None) -> Re
     )
 
 
-def _fields(entry: ReferenceEntry) -> RefFields:
+def _fields(entry: Resolvable) -> RefFields:
     return RefFields(
         entry.doi,
         entry.arxiv,
@@ -234,7 +259,7 @@ def _fields(entry: ReferenceEntry) -> RefFields:
 def resolve_entries(
     project: Project,
     actor: Actor,
-    entries: Sequence[ReferenceEntry],
+    entries: Sequence[Resolvable],
     *,
     sources: Mapping[str, SourceFactory],
 ) -> ResolutionOutcome:
@@ -246,9 +271,9 @@ def resolve_entries(
     corpus = _corpus(project)
     out: dict[int, Resolution] = {}
     runs: list[str] = []
-    by_arxiv: dict[str, list[ReferenceEntry]] = {}
-    by_doi: dict[str, list[ReferenceEntry]] = {}
-    titled: list[ReferenceEntry] = []
+    by_arxiv: dict[str, list[Resolvable]] = {}
+    by_doi: dict[str, list[Resolvable]] = {}
+    titled: list[Resolvable] = []
     arxiv_failed: set[int] = set()  # ordinals whose arXiv lookup failed before the DOI fallback
     for entry in entries:
         arxiv, doi = _keys(entry.doi, entry.arxiv)
@@ -263,7 +288,7 @@ def resolve_entries(
             by_doi.setdefault(doi, []).append(entry)
 
     def settle(
-        waiting: dict[str, list[ReferenceEntry]],
+        waiting: dict[str, list[Resolvable]],
         key: str,
         hit: tuple[str, str] | None,
         failed: bool,
@@ -309,7 +334,7 @@ def resolve_entries(
             failed = result.status is not RunStatus.COMPLETE
             if hit is None:
                 # an arXiv miss: an entry that also states a plain DOI is asked by its DOI
-                rest: list[ReferenceEntry] = []
+                rest: list[Resolvable] = []
                 for entry in by_arxiv[key]:
                     _, doi = _keys(entry.doi, None)
                     if doi is not None:
