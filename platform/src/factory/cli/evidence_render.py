@@ -15,9 +15,43 @@ from factory.services.evidence_report import (
 
 
 def _speed_section(report: EvidenceReport) -> list[str]:
-    """Hook for the within-paper speed section (plan E task 4); returns no lines until wired.
-    When wired it returns the whole section, starting with `## Within-paper speed ratios`."""
-    return []
+    """The within-paper speed section; empty when there are no ratios and no unpaired counts.
+    Ratios are read as "times faster" within one paper; nothing is compared across papers."""
+    if not report.speed_ratios and not report.speed_unpaired:
+        return []
+    out = ["## Within-paper speed ratios", ""]
+    if report.speed_ratios:
+        head = [
+            "work",
+            "field",
+            "method",
+            "baseline",
+            "hardware",
+            "batch",
+            "precision",
+            "ratio",
+            "trace",
+        ]
+        out += ["| " + " | ".join(head) + " |", "|" + "---|" * len(head)]
+        for x in report.speed_ratios:
+            cells = [
+                x.work_id,
+                x.field,
+                x.method,
+                x.baseline_method,
+                x.hardware,
+                x.batch_size or "",
+                x.precision or "",
+                f"{x.ratio} times faster",
+                f"{x.proposed.trace_id}; {x.baseline.trace_id}",
+            ]
+            out.append("| " + " | ".join(_cell(c) for c in cells) + " |")
+        out.append("")
+    if report.speed_unpaired:
+        out.append("Pairs not formed, by reason:")
+        out.append("")
+        out += [f"- {reason}: {n}" for reason, n in sorted(report.speed_unpaired.items())]
+    return out
 
 
 def _cell(text: object) -> str:

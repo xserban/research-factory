@@ -737,9 +737,14 @@ def _speed(
     Only effectively own speed cells with equal unit, hardware (present), batch size and
     precision are paired; every other proposed/baseline pair is counted under its reason.
     A proposed speed cell with no baseline speed cell in its paper counts once as
-    `no-baseline`. Results are deduplicated on the ruling's key."""
+    `no-baseline` (once per proposed speed cell). Units are compared as text: convertible but
+    different units count as `unit-differs`, nothing is scaled. A row with no `is_proposed`
+    is ignored. Pairs with the same ruling key collapse when their values are equal; when
+    the values differ both are dropped and counted once as `ambiguous`."""
     unpaired: dict[str, int] = {}
     found: dict[tuple[str, ...], WithinPaperRatio] = {}
+    values: dict[tuple[str, ...], tuple[Decimal, Decimal]] = {}
+    ambiguous: set[tuple[str, ...]] = set()
 
     def skip(reason: str) -> None:
         unpaired[reason] = unpaired.get(reason, 0) + 1
@@ -784,7 +789,7 @@ def _speed(
                         else None
                     )
                     if value is None:
-                        skip("value-not-positive")
+                        skip("value-unusable")
                         continue
                     method = _text(p.fields.get("method_name")) or ""
                     base_method = _text(b.fields.get("method_name")) or ""
@@ -799,8 +804,16 @@ def _speed(
                         batch_p or "",
                         prec_p or "",
                     )
-                    if ident in found:
+                    if ident in ambiguous:
                         continue
+                    if ident in found:
+                        if values[ident] != (num_p, num_b):
+                            del found[ident], values[ident]
+                            ambiguous.add(ident)
+                            skip("ambiguous")
+                        continue
+                    assert num_p is not None and num_b is not None
+                    values[ident] = (num_p, num_b)
                     assert name in ("throughput", "latency")
                     found[ident] = WithinPaperRatio(
                         work_id=work,

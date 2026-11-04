@@ -176,14 +176,14 @@ def test_printed_fallback_without_canonical_is_used() -> None:
     assert r.speed_ratios[0].ratio == "2.00"
 
 
-def test_nonpositive_value_is_counted() -> None:
+def test_unusable_value_is_counted() -> None:
     r = rep(
         [
             row("rf:w1", "rk_000000000101", "Ours", True, thr=num("180")),
             row("rf:w1", "rk_000000000102", "B", False, thr=num("0")),
         ]
     )
-    assert r.speed_ratios == [] and r.speed_unpaired == {"value-not-positive": 1}
+    assert r.speed_ratios == [] and r.speed_unpaired == {"value-unusable": 1}
 
 
 def test_speed_values_absent_from_group_tables_and_points() -> None:  # acceptance 12a
@@ -230,3 +230,24 @@ def test_duplicates_collapse_and_order_is_stable() -> None:
 def test_no_speed_rows_gives_empty() -> None:
     r = assemble_report(pilot_inputs())
     assert r.speed_ratios == [] and r.speed_unpaired == {}
+
+
+def test_printed_fallback_with_scaled_unit_text() -> None:
+    r = rep(
+        [
+            row("rf:w1", "rk_000000000101", "Ours", True, thr=ff("3", unit="k img/s")),
+            row("rf:w1", "rk_000000000102", "B", False, thr=ff("2", unit="k img/s")),
+        ]
+    )
+    assert r.speed_ratios[0].ratio == "1.50" and r.speed_unpaired == {}
+
+
+def test_conflicting_duplicates_are_ambiguous_not_silently_dropped() -> None:
+    r = rep(
+        [
+            row("rf:w1", "rk_000000000101", "Ours", True, thr=num("180")),
+            row("rf:w1", "rk_000000000102", "B", False, thr=num("100")),
+            row("rf:w1", "rk_000000000103", "B", False, thr=num("50")),
+        ]
+    )
+    assert r.speed_ratios == [] and r.speed_unpaired == {"ambiguous": 1}

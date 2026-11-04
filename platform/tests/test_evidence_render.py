@@ -116,3 +116,41 @@ def test_audit_rate_hidden_when_show_audit_false() -> None:
 
 def test_render_is_deterministic() -> None:
     assert evidence_markdown(report()) == evidence_markdown(report())
+
+
+def _speed_report(extra_unpaired: bool = False) -> EvidenceReport:
+    from tests.test_evidence_speed import num, row
+
+    rows = [
+        row("rf:w2", "rk_000000000201", "Z", True, thr=num("200")),
+        row("rf:w2", "rk_000000000202", "B", False, thr=num("100")),
+        row("rf:w1", "rk_000000000101", "Ours", True, thr=num("180")),
+        row("rf:w1", "rk_000000000102", "DeiT-S", False, thr=num("100")),
+    ]
+    if extra_unpaired:
+        rows.append(row("rf:w3", "rk_000000000301", "Y", True, thr=num("10")))
+    return assemble_report(pilot_inputs(rows))
+
+
+def test_speed_section_absent_without_ratios_or_unpaired() -> None:
+    assert "Within-paper speed ratios" not in evidence_markdown(report())
+
+
+def test_speed_section_lists_ratios_in_order_with_traces() -> None:
+    md = evidence_markdown(_speed_report(True))
+    assert md.count("## Within-paper speed ratios") == 1
+    sec = md.split("## Within-paper speed ratios")[1].split("\n## ")[0]
+    assert sec.index("rf:w1") < sec.index("rf:w2")
+    assert "1.80 times faster" in sec and "rk_000000000101/throughput" in sec
+    assert "- no-baseline: 1" in sec
+    assert evidence_markdown(_speed_report(True)) == md
+    for banned in ("best", "winner", "ranking", "rank "):
+        assert banned not in sec.lower()
+
+
+def test_speed_section_with_only_unpaired_counts() -> None:
+    from tests.test_evidence_speed import num, row
+
+    r = assemble_report(pilot_inputs([row("rf:w3", "rk_000000000301", "Y", True, thr=num("10"))]))
+    sec = evidence_markdown(r).split("## Within-paper speed ratios")[1]
+    assert "- no-baseline: 1" in sec and "| work |" not in sec.split("## Claims")[0]
