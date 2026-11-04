@@ -1,8 +1,11 @@
+import json
+
 import pytest
 
 from factory.document.anchors import (
     ANCHOR_RE,
     AnchorKind,
+    Manifest,
     ManifestError,
     parse_manifest,
 )
@@ -166,3 +169,58 @@ def test_manifest_json_is_canonical_and_stable() -> None:
             '{"id":"s1.p1","kind":"paragraph","parent":"s1","text":"é \\"q\\""}]'
         ).encode()
     )
+
+
+def test_manifest_json_round_trip() -> None:
+    m = parse_manifest(MD)
+    assert Manifest.from_json(m.to_json()) == m
+
+
+def _entry(**changes: object) -> dict[str, object]:
+    entry: dict[str, object] = {"id": "s1", "kind": "section", "parent": None, "text": "# 1"}
+    entry.update(changes)
+    return entry
+
+
+def _data(*entries: object) -> bytes:
+    return json.dumps(list(entries)).encode()
+
+
+def test_from_json_rejects_unknown_kind() -> None:
+    with pytest.raises(ManifestError, match="kind"):
+        Manifest.from_json(_data(_entry(kind="bogus")))
+
+
+def test_from_json_accepts_cell_ids() -> None:
+    cell = _entry(id="t1.r2.c1", kind="cell", parent="t1", text="1")
+    assert Manifest.from_json(_data(cell)).anchors[0].id == "t1.r2.c1"
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        b"not json",
+        b'{"id": "s1"}',
+        b'["not an object"]',
+        _data({"id": "s1", "kind": "section", "parent": None}),
+        _data(_entry(extra=1)),
+        _data(_entry(id="x1")),
+        _data(_entry(id="t1.r1.c1x")),
+        _data(_entry(parent=3)),
+        _data(_entry(text=None)),
+    ],
+    ids=[
+        "not-json",
+        "not-a-list",
+        "not-an-object",
+        "missing-key",
+        "extra-key",
+        "bad-id",
+        "bad-cell-id",
+        "bad-parent",
+        "bad-text",
+    ],
+)
+def test_from_json_rejects_malformed_input(data: bytes) -> None:
+    with pytest.raises(ManifestError):
+        Manifest.from_json(data)

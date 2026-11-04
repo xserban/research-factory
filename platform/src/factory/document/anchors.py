@@ -13,6 +13,7 @@ Invariants of a parsed `Manifest`:
 - anchors are in document order, a table's cells directly after the table.
 """
 
+import json
 import re
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -33,6 +34,8 @@ _PAGE_ID_RE = re.compile(r"p\d+")
 _TABLE_ID_RE = re.compile(r"t\d+")
 _CAPTION_ID_RE = re.compile(r"f\d+\.cap")
 _EQUATION_ID_RE = re.compile(r"e\d+")
+_CELL_ID_RE = re.compile(r"t\d+\.r\d+\.c\d+")
+_ENTRY_KEYS = frozenset({"id", "kind", "parent", "text"})
 
 MARKDOWN = MarkdownIt("commonmark").enable("table").disable(["html_block", "html_inline"])
 
@@ -79,6 +82,22 @@ class Manifest:
     def get(self, anchor_id: str) -> Anchor | None:
         """The anchor with this id, or None."""
         return next((a for a in self.anchors if a.id == anchor_id), None)
+
+    @classmethod
+    def from_json(cls, data: bytes) -> "Manifest":
+        """Read the output of `to_json`; the inverse of it.
+
+        Raises `ManifestError` unless `data` is a JSON list of objects with exactly the keys `id`,
+        `kind`, `parent` and `text`, with a valid anchor or cell id, a valid `AnchorKind` value, a
+        string or null parent and a string text.
+        """
+        try:
+            body: object = json.loads(data)
+        except ValueError as exc:
+            raise ManifestError(f"manifest is not valid JSON: {exc}") from exc
+        if not isinstance(body, list):
+            raise ManifestError("manifest must be a JSON list")
+        return cls(tuple(_anchor_from_entry(entry, i) for i, entry in enumerate(body)))
 
     def to_json(self) -> bytes:
         """Canonical JSON of the anchors; equal manifests give equal bytes."""
@@ -173,6 +192,26 @@ def parse_manifest(markdown: str) -> Manifest:
             anchors.append(Anchor(unit.id, AnchorKind.EQUATION, enclosing, following.text))
         i += 2
     return Manifest(tuple(anchors))
+
+
+def _anchor_from_entry(entry: object, index: int) -> Anchor:
+    where = f"manifest entry {index}"
+    if not isinstance(entry, dict):
+        raise ManifestError(f"{where} is not an object")
+    if set(entry) != _ENTRY_KEYS:
+        raise ManifestError(f"{where} must have exactly the keys id, kind, parent, text")
+    anchor_id, kind, parent, text = entry["id"], entry["kind"], entry["parent"], entry["text"]
+    if not isinstance(anchor_id, str) or not (
+        ANCHOR_RE.fullmatch(anchor_id) or _CELL_ID_RE.fullmatch(anchor_id)
+    ):
+        raise ManifestError(f"{where} has an invalid id {anchor_id!r}")
+    if not isinstance(kind, str) or kind not in {k.value for k in AnchorKind}:
+        raise ManifestError(f"{where} has an invalid kind {kind!r}")
+    if parent is not None and not isinstance(parent, str):
+        raise ManifestError(f"{where} has a parent that is neither a string nor null")
+    if not isinstance(text, str):
+        raise ManifestError(f"{where} has a text that is not a string")
+    return Anchor(anchor_id, AnchorKind(kind), parent, text)
 
 
 def _is_section(anchor_id: str) -> bool:
