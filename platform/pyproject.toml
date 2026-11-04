@@ -43,8 +43,8 @@ packages = ["src/factory"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-m 'not network' --strict-markers"
-markers = ["network: contacts external services"]
+addopts = "-m 'not network and not slow' --strict-markers"
+markers = ["network: contacts external services", "slow: scale tests, excluded from the default run"]
 
 [tool.mypy]
 strict = true

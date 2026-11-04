@@ -7,7 +7,7 @@ The SQLite projection (`factory.index.search`) is the only place these are read 
 """
 
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from sqlalchemy import text
@@ -335,6 +335,11 @@ def resume_query_id(project: Project, resume_run: str, spec: QuerySpec) -> str:
     return query_id
 
 
+def load_works(project: Project, work_ids: Sequence[str]) -> list[Work]:
+    """The corpus works among `work_ids` (at most a few hundred per call), sorted by id."""
+    return _load_works(project, work_ids=work_ids, corpus=True)
+
+
 def get_work(project: Project, work_id: str) -> Work | None:
     """One work, with every provenance row that names it."""
     works = _load_works(project, work_id)
@@ -530,7 +535,11 @@ def _records_events(project: Project, run_id: str, works: list[Work]) -> list[Ev
 
 
 def _load_works(
-    project: Project, work_id: str | None = None, *, corpus: bool = False
+    project: Project,
+    work_id: str | None = None,
+    *,
+    work_ids: Sequence[str] | None = None,
+    corpus: bool = False,
 ) -> list[Work]:
     """Works rebuilt from their stored records and their provenance, sorted by id.
 
@@ -539,6 +548,10 @@ def _load_works(
     project.index.sync()
     where = " WHERE work_id = :work" if work_id is not None else ""
     params: dict[str, Any] = {"work": work_id} if work_id is not None else {}
+    if work_ids is not None:
+        names = {f"w{n}": wid for n, wid in enumerate(work_ids)}
+        where = f" WHERE work_id IN ({', '.join(':' + name for name in names) or 'NULL'})"
+        params = dict(names)
     with project.index.connect() as conn:
         rows = conn.execute(
             text(f"SELECT work_id, data FROM works{where} ORDER BY work_id"), params
