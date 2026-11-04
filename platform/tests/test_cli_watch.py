@@ -142,3 +142,10 @@ def test_cli_watch_status_and_plan(
 def test_cli_watch_plan_absent(project: Project, settings: Settings) -> None:
     code, _, err = _cli(settings.root, "watch", "plan", "--project", "demo")
     assert code == 1 and "no watch_plan" in err
+
+
+def test_living_snapshot_command(ready: Project, tmp_path: Path) -> None:
+    code, out, _ = _cli(ready.settings.root, "--project", "demo", "living", "snapshot")
+    assert code == 0 and out.startswith("snapshot snp_")
+    code, _, err = _cli(ready.settings.root, "--project", "demo", "living", "snapshot")
+    assert code == 0, err

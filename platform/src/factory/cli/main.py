@@ -58,6 +58,7 @@ from factory.services import protocol as protocol_service
 from factory.services import reference_resolve as reference_resolve_service
 from factory.services import references as references_service
 from factory.services import seeds as seeds_service
+from factory.services import snapshots as snapshot_service
 from factory.services import snowball as snowball_service
 from factory.services import trace as trace_service
 from factory.services import watch as watch_service
@@ -163,6 +164,11 @@ watch_app = typer.Typer(
     help="Run the due watch cycle, show the watch status and plan.",
     no_args_is_help=True,
 )
+living_app = typer.Typer(
+    name="living",
+    help="Living review: snapshots and the PRISMA update flow.",
+    no_args_is_help=True,
+)
 inbox_app = typer.Typer(
     name="inbox",
     help="Supplied links: capture, list, resolve into the corpus, withdraw.",
@@ -180,6 +186,7 @@ app.add_typer(references_app)
 app.add_typer(snowball_app)
 app.add_typer(seeds_app)
 app.add_typer(watch_app)
+app.add_typer(living_app)
 app.add_typer(inbox_app)
 app.add_typer(report_app)
 app.add_typer(export_app)
@@ -1668,6 +1675,16 @@ def _watch_target(state: CliState, project: str | None) -> Project:
     if project is None:
         return _resolve_project(state)
     return open_project(state.settings, project, session=state.session, clock=state.clock)
+
+
+@living_app.command("snapshot")
+def living_snapshot_cmd(ctx: typer.Context) -> None:
+    """Take a snapshot of the review: the computed PRISMA flow and included works now."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        recorded = snapshot_service.snapshot(project, project.human_actor(), trigger="human")
+    typer.echo(f"snapshot {recorded.snapshot_id} at {recorded.cutoff_event}")
 
 
 @watch_app.command("status")

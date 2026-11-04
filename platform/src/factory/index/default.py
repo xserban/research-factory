@@ -10,6 +10,7 @@ from factory.index.extraction import extraction_handlers, extraction_tables
 from factory.index.fulltext import fulltext_handlers, fulltext_tables
 from factory.index.imports import import_handlers, import_tables
 from factory.index.inbox import inbox_handlers, inbox_tables
+from factory.index.living import living_handlers, living_tables
 from factory.index.probe import probe_handlers, probe_tables
 from factory.index.project import project_created_handler, project_table
 from factory.index.projection import Handler, Projection, core_tables
@@ -23,7 +24,7 @@ from factory.index.tasks import task_handlers, tasks_table
 from factory.index.watch import run_started_handler, watch_handlers, watch_tables
 
 # Bump on any change to the tables or handlers below; the index is then rebuilt.
-PROJECTION_VERSION = "28"
+PROJECTION_VERSION = "29"
 
 
 def _chain(first: Handler, second: Handler) -> Handler:
@@ -58,6 +59,7 @@ def default_projection(blobs: BlobStore | None = None) -> Projection:
     imports = import_tables(metadata)
     inbox = inbox_tables(metadata)
     watch = watch_tables(metadata, search.runs)
+    snapshots = living_tables(metadata)
     handlers: dict[str, Handler] = {
         "project.created": project_created_handler(project),
         **task_handlers(tasks),
@@ -76,6 +78,7 @@ def default_projection(blobs: BlobStore | None = None) -> Projection:
         **import_handlers(imports, blobs),
         **inbox_handlers(inbox),
         **watch_handlers(watch),
+        **living_handlers(snapshots),
     }
     # A run's start is folded by the search projection first, then linked to its watch cycle.
     handlers["search.run_started"] = _chain(

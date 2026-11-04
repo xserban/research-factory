@@ -25,6 +25,7 @@ from factory.model.imports import (
     ImportSplitDrawn,
 )
 from factory.model.inbox import InboxLinkAdded, InboxLinkResolved, InboxLinkWithdrawn
+from factory.model.living import SnapshotRecorded
 from factory.model.probe import ProbeFailed, ProbeMeasured, ProbePageArchived
 from factory.model.project import ProjectCreated
 from factory.model.protocol import (
@@ -173,4 +174,5 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("inbox.link_resolved", InboxLinkResolved, 1))
     catalog.register(EventType("watch.cycle_started", WatchCycleStarted, 1))
     catalog.register(EventType("watch.cycle_finished", WatchCycleFinished, 1))
+    catalog.register(EventType("living.snapshot_recorded", SnapshotRecorded, 1))
     return catalog

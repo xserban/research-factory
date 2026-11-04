@@ -5,10 +5,14 @@ from __future__ import annotations
 from typing import Any
 
 from factory.events.envelope import Actor
+from factory.model.screening import PassLabel
 from factory.model.watch import WatchPlan, WatchSource
+from factory.services.calibration import calibration_items, draw_calibration
 from factory.services.context import Project
 from factory.services.protocol import amend_protocol, current_protocol
+from factory.services.screening import open_pass, screen_next
 from tests.helpers import SourcesFor, _setup
+from tests.screening_helpers import decide
 from tests.watch_helpers import record
 
 
@@ -49,3 +53,21 @@ def filler(count: int, *, first: int = 0) -> list[dict[str, Any]]:
         record(f"Watch study {k} of routing", author=f"Wat {k}", year=2025)
         for k in range(first, first + count)
     ]
+
+
+def start_screening(project: Project, agent: Actor) -> tuple[str, set[str]]:
+    """Draw the calibration set, open both passes and queue pass A; return the protocol id and
+    the calibration works (which a test must not decide)."""
+    draw_calibration(project, project.system_actor(), random_seed=11)
+    screen_next(project, agent, PassLabel.A)
+    open_pass(project, agent, PassLabel.B)
+    protocol = current_protocol(project)
+    assert protocol is not None
+    return protocol.protocol_id, set(calibration_items(project))
+
+
+def agree(project: Project, agent: Actor, work_id: str, protocol_id: str, verdict: str) -> None:
+    """Both passes decide `work_id` alike (criterion EX01 for an exclusion)."""
+    criterion = "EX01" if verdict == "exclude" else None
+    for label in PassLabel:
+        decide(project, agent, work_id, protocol_id, verdict, pass_label=label, criterion=criterion)
