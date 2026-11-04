@@ -268,3 +268,21 @@ Status: new · Added: 2026-11-04 · Slice: 3 (graph) · Depends on: IDEA-30, IDE
 **Why:** a lineage graph (IDEA-32) shows what came after what, not why a change helps. Understanding why a method works, and which older or outside ideas it borrows, is what lets a researcher judge whether it transfers to another problem.
 **Rigour notes:** an intuition is interpretation, not evidence. It is stored as a separate node type, labelled "interpretation" with the agent's model, skill version and input blob, and it never counts as evidence in any report or comparison. Every foundation link cites the paper's own statement (a verified quote) or a cited source; a link the paper does not state is a human-confirmed "inferred" edge, as in IDEA-32. A human can mark an intuition as reviewed, wrong or superseded; corrections supersede and never edit.
 **Open questions:** where background-concept nodes get their source (the citing paper's text, a textbook reference the researcher supplies, or a cited survey); how to keep the explanations short and checkable; whether the researcher writes the first version of a concept node and the agent only links to it.
+
+## Researcher inputs and discovery provenance (added 2026-11-04)
+
+The researcher re-raised IDEA-01 (a UI to manage several projects) on 2026-11-04, and added the two ideas below.
+
+### IDEA-34 — Link inbox for researcher-supplied papers
+Status: new · Added: 2026-11-04 · Slice: — · Depends on: slice 1 `seed_add`, IDEA-02 (candidate inbox), plan C/D pipeline
+**What:** the researcher drops links (arXiv, DOI, publisher page) into a per-project inbox, from the CLI, the MCP server or a future UI; each link is resolved to a work, deduplicated against the corpus, marked as researcher-supplied, and then goes through the same path as any candidate: screening under the protocol, full-text acquisition, conversion and extraction.
+**Why:** papers the researcher finds by reading, talks or colleagues are often the most relevant, and today they enter only as seeds.
+**Rigour notes:** a supplied link enters the corpus as a candidate, never as an inclusion: it is screened by the protocol like every other record, and PRISMA reports it as its own source ("researcher-supplied") so the search remains reproducible. Supplying is a human event with the human actor. Whether supplied papers may be screened differently is a protocol choice declared before screening, not a silent default.
+**Open questions:** one inbox per project or a shared inbox routed to projects; how this differs from `seed_add` (seeds steer search and are not screened the same way); whether a supplied link after the search date counts as a supplementary search.
+
+### IDEA-35 — Record and report how each paper was discovered
+Status: new · Added: 2026-11-04 · Slice: — · Depends on: slice 1 search events, IDEA-34
+**What:** for every work, a computed discovery record: which routes found it (database search, snowballing backward or forward, researcher-supplied, seed, agent suggestion), whether a human or an agent first surfaced it, and when. Reports show per-route and human-versus-agent counts for the corpus, the included set and the final evidence.
+**Why:** whether humans or AI systems find the papers that end up mattering is itself useful data, for this programme and as evidence about AI-assisted research. It can later inform how much weight a route deserves.
+**Rigour notes:** the record is derived from events (actor kind and channel already sit on every event), never typed. Weighting by discovery route must never change screening or evidence counts silently: any use of it is a declared protocol rule, reported in methods, with the unweighted figures shown too.
+**Open questions:** what "first surfaced" means when several routes find a work in one session; whether a researcher-supplied paper that a search also finds counts for both; what a weight would be used for (ordering screening, sensitivity analysis), since inclusion must stay protocol-based.
