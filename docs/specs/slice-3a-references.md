@@ -1,0 +1,170 @@
+# Slice 3a (G1) — Reference extraction, resolution and snowballing
+
+Status: **draft for review** · 2026-11-04 · Builds on [00-system.md](00-system.md), slices 1 and 2; must satisfy [01-rigour.md](01-rigour.md) R-01–R-05, R-13–R-15, R-22–R-26, R-30–R-38 (for snowballed candidates), R-43, R-47, plus the proposed requirements below. Implements sub-slice G1 of [outlines/lineage-graph.md](outlines/lineage-graph.md) (backlog IDEA-31, researcher priority: very important). G2 (contributions, lineage graph) and G3 (interpretation layer) are not in this spec. Rulings marked **[confirm]** are provisional: they adopt the outline's recommendations or fill a gap, and the researcher confirms them at review; the plan records them as a *Proposed* decision.
+
+## Goal
+Take each full-text-included paper's own reference list into the corpus. For every included document version: parse its bibliography, link every in-text citation marker to its bibliography entry, resolve each entry to a work (or list it as unresolved), and bring the resolved works that are missing from the corpus in through recorded **snowball rounds** that end at the project's screening protocol. The result is a complete, resolved, recorded reference graph of the corpus (the data G2 draws) and a more complete corpus (R-24, R-25).
+
+Pilot for acceptance: **best linear attention mechanism for vision models** — snowballing from the full-text-included works runs at least one backward round, and the report states which references the document lists found and `search_chase` did not, and the reverse.
+
+## User flow
+1. After full-text screening and conversion (slice 2, plans A–C), `references_extract` runs for an included work (or all of them). The platform parses the bibliography of the work's pinned conversion (and the LaTeX `.bbl` when the raw source is held), links in-text markers to entries, and resolves each entry by identifier, then by title/year match. Every step is recorded with its method.
+2. `references_status` shows counts (parsed, resolved, unconfirmed, ambiguous, unresolved; already in corpus; new candidates) and parse quality per document. `references_list` pages through entries, filtered by state.
+3. Ambiguous and unconfirmed links wait for a decision. The agent may propose (`reference_decide`, a recorded act quoting both entries); a human confirms or rejects (CLI), per ruling 3.
+4. `snowball_round` plans a round (dry run: sources, candidates ranked by derived citation count, the stopping-rule state) and, on go-ahead, registers it and runs its queries as supplementary searches. New records enter dedup and title/abstract screening exactly like any other record; nothing is auto-included.
+5. Included candidates are converted and screened at full text (slice 2); their references are extracted and the next round becomes possible, until the protocol's stopping rule holds.
+6. `report_prisma` shows the new records under "other methods" per round; `check` lists missing extractions, unresolved ceilings and rule breaches.
+
+## Rulings (provisional)
+
+Rulings 1–12 answer the outline's twelve open questions with its recommendations. Rulings 13–20 are this spec's own.
+
+1. **Idea node identity [confirm].** Papers are the only evidence-bearing nodes; an `Idea` node is a named, human-confirmed grouping of papers whose `origin` is the introducing paper; aliases merge by recorded, reversible `idea.merged`; no automatic clustering. *Applies to G2; G1 builds no idea nodes.*
+2. **Contribution fields [confirm].** A small generic `contribution` pack (four item kinds) that every project may enable, independent of the domain pack. *Applies to G2.*
+3. **Who confirms fuzzy links [confirm].** The reviewer of record (R-39) or a delegated human confirms or rejects ambiguous and title-fuzzy reference links. An agent may propose, never confirm (R-51). In `pilot` mode a second agent, in a session that is not the proposer's and has no shared context, may confirm fuzzy reference links only; the event records `confirmed_by = second-agent`. *Inferred relations stay human-only (G2).*
+4. **Background-concept sources [confirm].** The researcher supplies or approves the first source for each concept; concept nodes without one stay `unreviewed` and hidden. *Applies to G3.*
+5. **PDF reference parsing [confirm].** G1 ships with recorded quality flags and no layout-model parser. Where a work's LaTeX source is held (route `arxiv-source`), its `.bbl` is read as a **separate document role**, solely to obtain bibliography structure; route preference for the screening document does not change. PDF recall is measured in acceptance 2 before a layout-model parser (e.g. GROBID, offline, fixed model, as decision 40 allows) is considered.
+6. **Stopping rule [confirm].** The protocol declares a maximum of two backward rounds and one forward round for `pilot` (the default offered by `rf-protocol`), and stops earlier when a round yields no new included work. `systematic` requires an explicit rule and a reported yield per round.
+7. **Ranking [confirm].** Candidates show the derived count of distinct included papers citing them and are sorted by it, descending, ties by work id; there is no threshold. Screening does the selection; a threshold would be an undeclared truncation (R-21 spirit).
+8. **Candidates absent from OpenAlex [confirm].** A resolved identifier or a title that no source returns still enters, as a work of type `other`, identified by `work_id()` from its parsed title, first author and year (and DOI or arXiv id if present), with the raw reference text as provenance and the flag `no-source-record`. Its fetch route is researcher-supplied only (slice 2).
+9. **Citation-context storage [confirm].** Only the citing anchor, the entry anchor and the marker token (e.g. `[41]`, `Wang et al., 2021`, ≤ 80 characters) are stored. The surrounding sentence is read through `document_read`. No body text enters git.
+10. **Forward chasing [confirm].** G1 does not extend `search_chase`'s forward direction: forward stays source-metadata based, because a document cannot list its citers. A forward snowball round delegates to `search_chase` and shares the round ledger and the stopping rule.
+11. **Graph tooling [confirm].** The platform provides queries and export only, no layout engine. *Applies to G2.*
+12. **Reuse of the old repo [confirm].** `docs/09-existing-assets.md` is checked in plan task 3 before parsing code is written; nothing is ported unless it lists reference-parsing code, in which case it is ported with its tests (CLAUDE.md reuse rule).
+13. **Bibliography anchors `b<n>` [confirm].** Each entry of a document's bibliography section is anchored `b<n>` (n from 1, document order), a new anchor kind `bibliography_entry`. This extends the plan-B anchor grammar (see Design, Anchors); documents converted earlier stay valid and are parsed through a paragraph fallback.
+14. **Entry text in events [confirm].** The raw text of a reference entry (≤ 1000 characters, truncation flagged) is bibliographic metadata, like a title in a search record, and is stored in the `reference.extracted` event so that the projection and resolution need no library. It is the only document text G1 stores besides the marker tokens of ruling 9.
+15. **Population and version [confirm].** G1 extracts for each work whose final outcome is `INCLUDED` at the last declared stage (full text when a full-text plan exists, else title/abstract) and which has a pinned default conversion. It uses the work's current default conversion (decision 42, latest version rule). A new document version makes the earlier extraction stale; a new extraction supersedes its links (corrections supersede, never edit).
+16. **Matcher thresholds [confirm; calibrate in plan task 5].** Declared platform constants, versioned with the matcher: title similarity is `difflib.SequenceMatcher` ratio of `normalize_title` strings; `title-exact` = equal normalised titles, first-author surname equal (when both present) and year within 1; `title-fuzzy` = ratio ≥ 0.92, year within 1, unique best with margin ≥ 0.03 over the runner-up, otherwise `ambiguous` when ≥ 0.85, otherwise unmatched. Values are provisional and are set against the hand-checked reference set (acceptance 2).
+17. **Unresolved ceiling [confirm].** `REFERENCE_UNRESOLVED_CEILING = 0.30` (unresolved + ambiguous over parsed entries, per document, advisory in `pilot`, a `check` error in `systematic`). Provisional; set against the pilot.
+18. **Round sequencing [confirm].** A snowball round is refused while the previous round's records still have a pending outcome, or while an included work from the previous round has a convertible document but no current extraction (listed by id). An included work with no document is listed `no-document` and does not block (it is reported, never silently dropped).
+19. **Protocol declaration [confirm].** The stopping rule is a new amendable, hashed protocol section `snowball_plan`, omitted from every hash while absent (slice-2 pattern), so existing `P@` ids are unchanged. It is required for rounds in `pilot` and `systematic`, a promotion gap otherwise; `exploratory` rounds are allowed without it and record `rule: none`.
+20. **Search surface [confirm].** Reference resolution lookups are probe-purpose queries (not gated, records stay outside the corpus, as seed lookups); snowball candidate retrieval is chase-purpose (gated, planned by the round, as `search_chase`). Provenance method is `citation-chase` for both snowball and `search_chase` records; the mechanism is told apart through the round tables (`via = document-reference-list` | `source-metadata`), not by a new provenance field.
+
+## Design
+
+### Anchors: bibliography entries (a plan-B grammar change)
+**Requirement.** The anchor grammar gains `b<n>`:
+- `ANCHOR_RE` (`document/anchors.py`) accepts `b\d+` in addition to the present forms; nothing is removed, so every manifest of an earlier document still parses.
+- `AnchorKind.BIBLIOGRAPHY_ENTRY = "bibliography_entry"`; a `b<n>` anchor is followed on the next line by a paragraph; its `parent` is the enclosing section; ids are unique and `n` runs 1, 2, … in document order without gaps.
+- The **anchoriser** treats the paragraphs directly under a section whose heading text (number stripped, case-folded) is one of `references`, `bibliography`, `literature cited`, `works cited`, `reference list` as bibliography entries and numbers them `b<n>` instead of `s<x>.p<k>`. They consume no paragraph numbers. Anchoring stays idempotent (the output is a fixed point of `anchorise`).
+- The **LaTeXML converter** keeps emitting `## References` and one paragraph per `ltx_bibitem` (the anchoriser numbers them), and now writes each in-text `ltx_cite` link to a bibitem as a Markdown link `[marker text](#b<n>)`, where `n` is the ordinal of the target `ltx_bibitem`. Its `CONVERTER_VERSION` becomes `1.1`: the same raw source with the new version is a new conversion (decision 40; slice-2 AC 3), the old conversion and its anchors remain valid.
+- Verification (`quote_in_element`, `document_read`, the screening and extraction anchor checks) treats a `b<n>` anchor like a paragraph; link markup does not alter verified plain text (the link text is the visible text).
+- Converters for other formats (decision 49) need no change: the anchoriser alone writes `b<n>` from the Markdown structure.
+
+### Parsing (platform, deterministic)
+Input is one conversion's Markdown and manifest, read through `conversion_manifest` / `conversion_document` (no converter-specific structure, so any converted document works). Entries are the manifest's `b<n>` anchors; for documents without them (converted before this slice), the paragraphs of the bibliography section are used and the extraction is flagged `entry-anchors: paragraph` (anchors then are `s<x>.p<k>`). A document with no recognisable bibliography section gets `reference.extracted` with zero entries and the flag `no-bibliography` — recorded, listed by `check`, never skipped.
+
+Per entry the parser stores the anchor, an ordinal, the printed label if any (`[12]`, `12.`), the raw text (ruling 14) and the fields it can recover by ordered rules: DOI (`10.\d{4,9}/\S+`, trailing punctuation stripped, normalised by `normalize_doi`), arXiv id (modern and legacy forms, `normalize_arxiv`), URL, year (last plausible `19xx|20xx` token outside the DOI), first-author surname, title (author-year and numeric-label patterns; `None` when no pattern matches), venue (best effort). Only DOI, arXiv id, URL and year are claimed reliable; the others are best effort and are never used to include anything. Parser name `refparse` and version are recorded; the same conversion and parser version give identical entries.
+
+**In-text markers.** Markers are found in every paragraph, table cell and caption outside the bibliography: (a) Markdown links to `#b<n>` (method `link`, exact); (b) numeric markers `[3]`, `[3, 5]`, `[3-6]`, mapped through the entry labels, else the ordinals; (c) author-year `(Wang et al., 2021)` / `Wang et al. (2021)`, mapped by first-author surname and year to a unique entry. A marker that maps to no entry or to several is recorded as `unmatched`/`ambiguous` and counted. Contexts are recorded per (citing anchor, entry, marker token) once per marker occurrence.
+
+**Completeness (proposed R-xx(a)).** Per document the parser stores the entry count and the distinct-marker count and sets flags: `parse-incomplete` (the highest numeric marker or label exceeds the entry count, or labelled entries have gaps), `marker-gap` (linked markers target a missing entry), `no-bibliography`, `entry-anchors: paragraph`. Counts are computed.
+
+**LaTeX `.bbl`.** When the work's current document set includes a live `arxiv-source` document, its raw archive is read from the library (stdlib `tarfile`/`gzip`, bounded size, no extraction to disk) and every `*.bbl` is parsed for `\bibitem[label]{key}` entries. If the bbl entry count equals the Markdown entry count, entries are aligned by order and the bbl text is used to recover DOI/arXiv/URL fields missed in the Markdown (recorded `bbl: aligned`, with the blob hash of the archive); otherwise the Markdown entries stand, `bbl: count-mismatch` is flagged and the two counts stored. The bbl never creates entries.
+
+### Resolution (platform, deterministic, recorded)
+Each entry resolves by ordered methods; the first that yields a decision wins, and every attempt is recorded:
+1. **Identifier in the entry** (DOI, arXiv id): looked up among corpus works (`canonical_works`, absorbed ids included; DOI↔arXiv-DOI bridging through `arxiv_id_from_doi`), else through a probe-purpose source lookup (OpenAlex `doi:` filter chunks ≤ 50; arXiv `id_list` chunks) whose raw blob is the link's source. Confidence `identifier`.
+2. **Title match** for entries with a parsed title: against corpus works first, then one probe-purpose OpenAlex title-search per entry, per ruling 16: `title-exact` or `title-fuzzy`.
+3. Otherwise the entry is `unresolved` with a reason (`no-identifier-no-title`, `not-found`, `source-error`). An entry with an identifier that no source returns is resolved to a `no-source-record` work (ruling 8) when it has a parsed title and year; with no title it is `unresolved`.
+
+Link states (computed; counts sum to the entry count): `resolved` (identifier, title-exact, or confirmed), `unconfirmed` (single title-fuzzy match), `ambiguous` (several near-equal matches, or a match between the floor and the fuzzy threshold), `unresolved`. A link records `work_id`, `method`, `confidence` (`identifier | title-exact | title-fuzzy | confirmed`), `score`, the best candidates (≤ 3 with scores), `source_blob`, `matcher_version`. Decisions (`reference_decide`) overlay: `confirm` makes an `unconfirmed`/`ambiguous` link `resolved` with confidence `confirmed`; `reject` makes it `unresolved`; each is an event that supersedes the previous decision; the link itself is never edited. Only `resolved` links create candidates (proposed R-xx(b)).
+
+### Snowball rounds (platform, recorded)
+A round is a supplementary search (R-25) with a direction:
+- **Backward** (`via = document-reference-list`): sources are the included works with a current extraction; candidates are works of `resolved` links that are not in the corpus, each with `cited_by_included` (derived count of distinct source works citing it) and the citing anchors. The platform builds the queries from the candidates (chase-purpose, planned by the round, recorded before any query runs, like `chase.round_started`): OpenAlex `doi:`/`openalex:` filter chunks of ≤ 50, arXiv `id_list` chunks, and a `reflist` pseudo-source for `no-source-record` candidates (offline; its records come from the stored entries; its "raw blob" is the canonical JSON of those entries). Retrieved records get method `citation-chase` and enter dedup and title/abstract screening as pending works.
+- **Forward** (`via = source-metadata`): delegates to `search_chase` for `FORWARD` from the same sources; the round ledger records the delegated `chase.round_started` id.
+
+Each round stores PRISMA-S fields (R-22, R-23): sources and interfaces, query strings, date, reported vs retrieved counts, partial runs, plus `candidates`, `new_in_corpus` (computed after the runs), and after screening `included` (computed). **Stopping rule** (`snowball_plan`): `max_backward_rounds`, `max_forward_rounds`, `stop_when_no_new_included` (default true). A round is refused (nothing written) when the plan is missing (pilot/systematic), the direction's maximum is reached, the previous round of that direction yielded no included work and the flag is set, or ruling 18 applies. Candidates are never included without screening decisions (R-30–R-38).
+
+**Comparison with `search_chase`.** For a round, `snowball_compare` lists the works found by the document reference list only, by a source-metadata backward chase from the same sources only (`cited_by:` runs), and by both; counts and ids, computed from the round and chase tables. It is a quality check on each mechanism, not a selection.
+
+**Seeds.** A positive seed whose work enters the corpus through a snowball record is reported as found by snowballing (route) in the CLI seed check; it counts towards R-24 recall as any retrieved seed does, labelled with its route. The MCP views keep decision 43: held-out figures and seed identities are not shown to agents; the route label is part of the human view only.
+
+### Deterministic vs agent
+| Platform (deterministic, tested, offline except recorded source lookups) | Agent (Claude via MCP) |
+| --- | --- |
+| Parse bibliographies and markers; counts; parse flags; `.bbl` alignment | Judge an ambiguous or unconfirmed match when asked: a recorded proposal quoting both entry texts (verbatim, verified against the stored entries) |
+| Resolve by identifier and title match with recorded method, score, matcher version, source blob | Never decides relevance of a candidate except through screening |
+| Create candidates, rank by derived count, build queries, run them as recorded searches, compute yields and the stopping-rule state | Chooses to start a round (after the researcher's go-ahead); never sets counts, hashes or ids |
+| Anchors `b<n>`, citation contexts, comparison with `search_chase` | — |
+A human confirms or rejects fuzzy links (ruling 3). Every agent-written event carries model, skill version and `input_blob` (R-04).
+
+## Events (schema 1)
+| Event | Payload (summary) |
+| --- | --- |
+| `reference.extracted` | `extraction_id` (`rex_<ULID>`), `work_id`, `document_id`, `conversion_id`, `parser`, `parser_version`, `entry_anchors` (`b`\|`paragraph`), `source_quality` (document quality label), `entries` (ordinal, anchor, label, raw text, parsed fields, truncated), `marker_count` (distinct), `flags`, `bbl` (`absent`\|`aligned`\|`count-mismatch`, archive hash, counts) |
+| `citation.contexts_recorded` | `extraction_id`, `contexts` (citing anchor, entry ordinal or null, marker token, method, state `matched`\|`unmatched`\|`ambiguous`) |
+| `reference.resolved` | `extraction_id`, `resolutions` (entry ordinal, state, `work_id` or null, method, confidence, score, candidates, `source_blob`, reason, `no_source_record`), `matcher_version`, `lookup_runs` (run ids) |
+| `reference.resolution_decided` | `extraction_id`, entry ordinal, `decision` (`confirm`\|`reject`\|`propose-confirm`\|`propose-reject`), `work_id`, `rationale`, `quotes` (both entries), `confirmed_by` (`human`\|`second-agent`\|null); supersedes the previous decision for the entry |
+| `snowball.round_started` | `round_id` (`snw_<ULID>`), `direction`, `via`, `round_no` (per direction), `sources` (work ids), `extraction_ids`, `candidates` (work id or entry key, `cited_by_included`, citing anchors, `no_source_record`), `queries`, `chase_round_id` (forward), `rule` (the plan snapshot or `none`), `unextracted` (work ids with reason) |
+Searches themselves are the existing `query.registered` / `search.run_*` / `search.records_parsed` events. Extraction events are written by the platform on an agent's or the researcher's call; agent calls carry provenance. No event is edited; a new extraction supersedes the previous one of the work.
+
+## Index tables (projections, written only by the projector)
+`reference_extractions`, `reference_entries`, `reference_links` (entry → work, state, method, confidence; the live row folds the latest decision), `citation_contexts`, `snowball_rounds`, `snowball_queries`, `snowball_candidates`. `index/chase.round_texts` also returns snowball query texts, which the authorisation gate waives for the round. Rebuild determinism (slice-1 AC 1) holds.
+
+## MCP tools and CLI
+| Tool | Purpose | Actor |
+| --- | --- | --- |
+| `references_extract` | Parse and resolve for given works (default: all included without a current extraction); returns counts and flagged documents | agent |
+| `references_status` / `references_list` | Counts by state, format, flag; paginated entries by state (a fixed page cap) | read |
+| `reference_decide` | Propose (agent) or confirm/reject (second agent in `pilot` only, ruling 3) a link | agent |
+| `snowball_round` | `dry_run` (default true) plans a round; otherwise registers and runs it | agent, after go-ahead |
+| `snowball_compare` | The comparison with `search_chase` for a round | read |
+All five mutating/reading tools are refused to sessions that have joined a screening or extraction pass (decisions 43, 48). Names follow `<area>_<verb>`; mutating tools validate fully and write nothing on failure (00-system §7).
+CLI: `factory references extract|status|list|decide` (`decide` confirms/rejects as the human), `factory snowball plan|run|compare`, with `factory report` and `factory check` extended. Services: `services/references.py` (extraction orchestration), `services/reference_resolve.py`, `services/snowball.py`; pure helpers in `factory/references/` (`parse.py`, `markers.py`, `bbl.py`, `match.py`). `mcp/` and `cli/` only parse and format. Skill: `rf-references` (reading ambiguous pairs, proposing decisions, running rounds), with a version hash.
+
+## Check findings
+`references-missing-extraction` (included work with a convertible document and no current extraction; warning in `pilot`, error in `systematic`) · `references-stale-extraction` (extraction pinned to a superseded document) · `references-parse-incomplete` (flags `parse-incomplete`, `marker-gap`, `no-bibliography`, `bbl: count-mismatch`) · `references-unresolved-ceiling` (ruling 17) · `references-library-missing` (conversion or bbl archive absent) · `snowball-plan-missing` (promotion gap, ruling 19) · `snowball-over-plan` (more rounds than the plan, which can only arise from an amendment) · `snowball-unscreened` (a snowballed work with a final outcome `INCLUDED` and no screening decision, a broken-chain check). Messages never contain document text.
+
+## PRISMA and reports
+- `identified_other` keeps the slice-1 meaning (new-after-dedup works with a non-database method; `citation-chase` for both mechanisms). A breakdown `identified_other_detail` adds `chase-forward`, `chase-backward`, `snowball-backward`, derived from the round tables (R-25).
+- `search_report` (PRISMA-S) gains one row per snowball round: direction, via, sources and interface, queries, date, reported/retrieved, partial runs, `new_after_dedup`, `included`, with the yield per round (R-23, R-25).
+- `report_methods` states the mechanisms used, the stopping rule and the parser/matcher versions.
+- `trace` resolves a `snw_`/`rex_` id and a candidate work back to the citing anchor, extraction, conversion, document, retrieval attempt, work, screening decisions, protocol and question (R-01).
+
+## Rigour requirements
+Existing, in scope: R-01, R-02 (a snowballed work has provenance: source, run, query, raw reference, method), R-03 (lookup and search responses archived verbatim), R-04, R-05 (counts derived), R-13–R-15 (stopping rule declared before use, changes are amendments), R-22–R-25, R-26 (reference-based identity reuses `work_id`; a reference to a corpus work in another identifier form creates no duplicate), R-30–R-38 (candidates screened as any record), R-43, R-47 (parsing uses recorded document versions in the local library; no literature text in git), R-51 (the proposer does not confirm).
+
+Proposed:
+- **R-xx(a) (proposed) Reference completeness.** Per document, the parsed entry count and the distinct marker count are both stored; a mismatch is flagged and listed by `check`. Unresolved references are listed, never dropped; the counts resolved, unconfirmed, ambiguous and unresolved sum to the entry count (computed). All modes.
+- **R-xx(b) (proposed) Link provenance.** Every reference link records method, confidence class, score, matcher version and source response; a non-identifier link feeds candidates only after confirmation (title-exact excepted). All modes.
+- **R-xx(c) (proposed) Snowball discipline.** Rounds, directions and the stopping rule are declared in the protocol; a candidate is never included without screening; rounds and yield per round are reported. P, S.
+- **R-xx(d) (proposed) Citation-context minimality.** Only anchors and marker tokens are stored; bibliography text is stored only as entry metadata. All modes.
+
+## In scope
+Anchor grammar change `b<n>` (spec, anchoriser, LaTeXML converter, manifest) · reference parser, markers and contexts, `.bbl` reader · resolution with recorded methods and decisions · `snowball_plan` protocol section and gap · backward snowball rounds, forward rounds via `search_chase`, comparison · events, tables, services, MCP tools, CLI · check findings, PRISMA/search-report/methods/trace extensions · skill `rf-references`.
+
+## Out of scope
+Contribution items, relations, lineage graph and its queries/export (G2); interpretation and concept nodes (G3); a layout-model or PDF-specific parser (revisit after acceptance 2); automatic inclusion by citation count or centrality; bibliometric indicators; citation-function or sentiment classification; the consistency check of copied results (IDEA-23); full-text acquisition beyond slice 2; living updates and watch (slice 4); any model call by the platform; a parser for `.bib` files (only `.bbl`, which contains the formatted entries).
+
+## Acceptance criteria
+1. **Anchor compatibility.** `b<n>` anchors parse; a manifest from before the change still parses and verifies; anchorising its Markdown is unchanged apart from the bibliography numbering on re-conversion; anchoring is idempotent.
+2. **Parse quality.** A fixed set of hand-checked reference lists (LaTeXML HTML with `.bbl`, LaTeXML HTML alone, other-HTML-style Markdown, PDF-style flowing text) is scored: entry recall, DOI/arXiv recovery, marker-to-entry accuracy; the PDF figure is reported and flagged below a declared floor; thresholds of ruling 16 are set from this set.
+3. **Determinism.** Same conversion and parser version give identical entries, markers and contexts.
+4. **Resolution record.** Every entry has a link state; states sum to the entry count; each link has method, confidence, score, matcher version and, when a source was used, its blob.
+5. **Identity reuse.** An entry resolving to an existing corpus work yields that work's id; a DOI form and an arXiv form of the same paper create one work (R-26 tests).
+6. **Fuzzy handling.** A title-fuzzy match is `unconfirmed`; two near-equal matches are `ambiguous`; neither creates a candidate until confirmed; an agent cannot confirm; a rejection supersedes.
+7. **Unresolved visibility.** Unresolved and `no-source-record` entries appear in `references_list`; none disappears.
+8. **Snowball round.** The round's definition and queries are written before any query runs; refusals (missing plan, maximum reached, no yield, pending, unextracted) write nothing; PRISMA-S fields present; candidates are pending after the round, never included.
+9. **Stopping rule.** The plan is read from the protocol; an amendment changing it is recorded; a round beyond it is refused.
+10. **Forward round.** A forward round delegates to `search_chase`, appears in the ledger with `via = source-metadata`, and obeys the same rule.
+11. **Comparison.** `snowball_compare` lists references found by one mechanism only and by both, matching the tables.
+12. **PRISMA.** Per-round new-after-dedup and included counts and the `identified_other_detail` breakdown are derived from events; `identified_other` equals its slice-1 value for projects with no snowball round.
+13. **Check.** Each finding of the list appears in a constructed case; none carries document text.
+14. **Independence and access.** The MCP tools refuse pass sessions; no tool shows held-out seeds; the seed route is visible in the CLI only.
+15. **Rebuild.** Deleting the index and rebuilding gives the same state hash with the new tables.
+16. **Local library.** No test finds literature text beyond entry text and marker tokens in any event or git-tracked blob.
+17. **Pilot.** On the linear-attention pilot, at least one backward round runs from the included works; the report states the counts found only by the document list and only by `search_chase`; entries unresolved are listed with their count.
+18. **Quality.** `mypy --strict` and ruff pass; coverage ≥ 90% for `services/` and `model/`; TDD per project rule; reference resolution and the event/index additions by subagent-driven development.
+
+## Sub-plan
+| Plan | Content |
+| --- | --- |
+| G1 (`docs/plans/2026-11-04-references-snowballing.md`) | All of the above, in 10 tasks. Depends on plans B2 (conversion, anchors) and C (full-text screening); decision 49 pending: parsing reads only the manifest and Markdown, so it works on any converted document. |
+
+## Open questions
+1. The matcher thresholds (ruling 16) and the unresolved ceiling (ruling 17) are provisional until measured on the hand-checked set and the pilot.
+2. Whether a recorded `reference.resolution_decided` by a second agent suffices in `pilot` (ruling 3) once the pilot's agent-confirmation error rate is known; audit of confirmed fuzzy links is not yet specified.
+3. Whether PDF-sourced bibliographies need a layout-model parser (acceptance 2 decides).
+4. Whether a seed found only by snowballing should also be reported in the MCP view in aggregate (decision 43 currently forbids per-seed information).
