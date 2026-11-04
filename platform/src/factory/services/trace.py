@@ -62,6 +62,7 @@ KINDS: tuple[str, ...] = (
     "decision",
     "extraction",
     "claim",
+    "cell",
     "resolution",
     "audit",
     "seed",
@@ -79,6 +80,7 @@ _RECORD_RE = rf"^(run_{ULID_RE})/(rf:.+)$"
 _AUDIT_ITEM_RE = rf"^(aud_{ULID_RE})/(rf:.+)$"
 _ANCHOR_RE = rf"^(cnv_{ULID_RE})/([^/\s]+)$"
 _RESOLUTION_RE = r"^res:(?:full-text:)?(rf:.+)$"
+_CELL_RE = r"^rk_[0-9a-f]{12}(?:/[a-z][a-z_]*)?$"
 _PATTERNS: tuple[tuple[str, str], ...] = (
     (QUESTION_ID_RE, "question"),
     (PROTOCOL_ID_RE, "protocol"),
@@ -90,6 +92,7 @@ _PATTERNS: tuple[tuple[str, str], ...] = (
     (DECISION_ID_RE, "decision"),
     (EXTRACTION_ID_RE, "extraction"),
     (CLAIM_ID_RE, "claim"),
+    (_CELL_RE, "cell"),
     (AUDIT_ID_RE, "audit"),
     (_AUDIT_ITEM_RE, "audit"),
     (CHASE_ROUND_ID_RE, "chase_round"),
@@ -300,6 +303,12 @@ def _event_index(events: Iterable[Event]) -> dict[tuple[str, str], str]:
     return index
 
 
+def _split_cell(ident: str) -> tuple[str, str]:
+    """`(row_key, field)` of a cell identifier; a bare row key names its `value` cell."""
+    row_key, _, field = ident.partition("/")
+    return row_key, field or "value"
+
+
 def _parse(ref: str) -> Key | None:
     for pattern, kind in _PATTERNS:
         if re.fullmatch(pattern, ref):
@@ -363,6 +372,7 @@ class _Walk:
             "decision": self._decision,
             "extraction": self._extraction,
             "claim": self._claim,
+            "cell": self._cell,
             "resolution": self._resolution,
             "audit": self._audit,
             "seed": self._seed,
@@ -667,6 +677,21 @@ class _Walk:
         if superseded_by is not None:
             label += " (superseded)"
         return _Described(label, str(event_id))
+
+    def _cell(self, ident: str) -> _Described | None:
+        """A cell of an evidence-report row. The label names the field and the work, never a value;
+        the event is that of the earliest extraction carrying the cell."""
+        row_key, field = _split_cell(ident)
+        rows = self._all(
+            "SELECT r.work_id, r.event_id FROM extraction_rows r "
+            "JOIN extraction_fields f ON f.extraction_id = r.extraction_id "
+            "WHERE r.row_key = :k AND f.field = :f ORDER BY r.event_id LIMIT 1",
+            k=row_key,
+            f=field,
+        )
+        if not rows:
+            return None
+        return _Described(f"{field} cell of {rows[0][0]}", str(rows[0][1]))
 
     def _resolution(self, ident: str) -> _Described | None:
         stage, work_id = _split_res(ident)
@@ -1154,6 +1179,20 @@ class _Walk:
                 down.append(("claim", str(superseded_by)))
         return up, down
 
+    def _edges_cell(self, ident: str) -> tuple[list[Key], list[Key]]:
+        row_key, field = _split_cell(ident)
+        up: list[Key] = [
+            ("extraction", e)
+            for e in self._column(
+                "SELECT r.extraction_id FROM extraction_rows r "
+                "JOIN extraction_fields f ON f.extraction_id = r.extraction_id "
+                "WHERE r.row_key = :k AND f.field = :f",
+                k=row_key,
+                f=field,
+            )
+        ]
+        return up, []
+
     def _edges_decision(self, ident: str) -> tuple[list[Key], list[Key]]:
         rows = self._all(
             "SELECT work_id, criterion, protocol_id, supersedes FROM decisions "
@@ -1284,6 +1323,7 @@ _EDGES: dict[str, Callable[[_Walk, str], tuple[list[Key], list[Key]]]] = {
     "decision": _Walk._edges_decision,
     "extraction": _Walk._edges_extraction,
     "claim": _Walk._edges_claim,
+    "cell": _Walk._edges_cell,
     "resolution": _Walk._edges_resolution,
     "audit": _Walk._edges_audit,
     "seed": _Walk._edges_seed,
