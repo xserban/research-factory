@@ -17,7 +17,7 @@ from factory.canonical import canonical_json
 from factory.clock import format_ts
 from factory.events.catalog import EventCatalog
 from factory.events.envelope import Event
-from factory.events.reader import event_files, read_file
+from factory.events.reader import event_files, read_file, relative_name
 from factory.index.projection import Projection
 
 NON_STATE_TABLES: frozenset[str] = frozenset({"meta", "sync_state"})
@@ -112,14 +112,22 @@ class Index:
         current = {
             _relative(path, self._events_dir): path for path in event_files(self._events_dir)
         }
+        unchanged: set[str] = set()
         for name, offset in known.items():
             path = current.get(name)
-            if path is None or path.stat().st_size < offset:
+            if path is None:
                 return self._rebuilt()
+            size = path.stat().st_size
+            if size < offset:
+                return self._rebuilt()
+            if size == offset:
+                unchanged.add(name)
 
         new: list[Event] = []
         offsets: dict[str, int] = {}
         for name, path in current.items():
+            if name in unchanged:  # nothing appended since the last sync: skip opening it
+                continue
             result = read_file(path, self._catalog, known.get(name, 0))
             new.extend(result.events)
             offsets[name] = result.end_offset
@@ -295,7 +303,7 @@ def _file_identity(path: Path) -> tuple[int, int] | None:
 
 
 def _relative(path: Path, events_dir: Path) -> str:
-    return path.relative_to(events_dir).as_posix()
+    return relative_name(path, events_dir)
 
 
 def _sidecars(path: Path) -> tuple[Path, Path]:

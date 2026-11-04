@@ -1,3 +1,4 @@
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -25,9 +26,37 @@ class ReadResult:
     truncated_tail: bool
 
 
+def relative_name(path: Path, events_dir: Path) -> str:
+    """`path` relative to `events_dir`, POSIX form; equal to `path.relative_to(events_dir)`.
+
+    Lexical, like `relative_to`, but without its per-call walk over every ancestor of
+    `events_dir`, which dominated index syncs. Raises `ValueError` if `path` is not inside.
+    """
+    base = events_dir.parts
+    parts = path.parts
+    if len(parts) <= len(base) or parts[: len(base)] != base:
+        raise ValueError(f"{path} is not inside {events_dir}")
+    return "/".join(parts[len(base) :])
+
+
 def event_files(events_dir: Path) -> list[Path]:
-    paths = list(events_dir.glob("*/*.jsonl"))
-    return sorted(paths, key=lambda p: p.relative_to(events_dir).as_posix())
+    """Every event file (`<dir>/<name>.jsonl`), ordered by its POSIX path relative to `events_dir`.
+
+    Equivalent to `events_dir.glob("*/*.jsonl")`, but with `os.scandir`: the index syncs on every
+    read, and pathlib's glob was a large share of each sync.
+    """
+    names: list[str] = []
+    try:
+        top = os.scandir(events_dir)
+    except (FileNotFoundError, NotADirectoryError):
+        return []
+    with top:
+        for entry in top:
+            if not entry.is_dir():
+                continue
+            with os.scandir(entry.path) as inner:
+                names.extend(f"{entry.name}/{f.name}" for f in inner if f.name.endswith(".jsonl"))
+    return [events_dir / name for name in sorted(names)]
 
 
 def read_file(path: Path, catalog: EventCatalog, start: int = 0) -> ReadResult:

@@ -6,7 +6,13 @@ from factory.errors import FactoryValidationError
 from factory.events.catalog import EventCatalog
 from factory.events.envelope import Actor
 from factory.events.factory import EventFactory
-from factory.events.reader import EventLogCorruptError, event_files, read_all, read_file
+from factory.events.reader import (
+    EventLogCorruptError,
+    event_files,
+    read_all,
+    read_file,
+    relative_name,
+)
 from factory.events.writer import EventWriter
 from tests.helpers import Demo
 
@@ -128,3 +134,39 @@ def test_append_after_partial_write_recovers(
     res = read_file(path, cat)
     assert [e.id for e in res.events] == [first_event.id, second_event.id]
     assert not res.truncated_tail
+
+
+def test_relative_name_matches_relative_to(tmp_path: Path) -> None:
+    events_dir = tmp_path / "events"
+    for name in ("s1/2026-01-01.jsonl", "s-1/a.jsonl", "s/b.jsonl"):
+        path = events_dir / name
+        assert relative_name(path, events_dir) == path.relative_to(events_dir).as_posix()
+
+
+def test_relative_name_rejects_paths_outside(tmp_path: Path) -> None:
+    events_dir = tmp_path / "events"
+    for outside in (tmp_path / "other" / "a.jsonl", tmp_path / "eventsx" / "a.jsonl", events_dir):
+        with pytest.raises(ValueError):
+            relative_name(outside, events_dir)
+
+
+def test_event_files_order_by_relative_posix_path(tmp_path: Path) -> None:
+    """`s-1` sorts before `s/` as a string ('-' < '/'), unlike a per-part comparison."""
+    events_dir = tmp_path / "events"
+    for name in ("s/a.jsonl", "s-1/a.jsonl", "r/z.jsonl"):
+        (events_dir / name).parent.mkdir(parents=True, exist_ok=True)
+        (events_dir / name).write_text("")
+    names = [relative_name(p, events_dir) for p in event_files(events_dir)]
+    assert names == ["r/z.jsonl", "s-1/a.jsonl", "s/a.jsonl"]
+
+
+def test_event_files_matches_the_glob(tmp_path: Path) -> None:
+    """Only `<dir>/<name>.jsonl`: no top-level files, no deeper files, no other suffixes."""
+    events_dir = tmp_path / "events"
+    assert event_files(events_dir) == []
+    for name in ("top.jsonl", "s/a.jsonl", "s/a.json", "s/deep/b.jsonl", "t/.hidden.jsonl"):
+        (events_dir / name).parent.mkdir(parents=True, exist_ok=True)
+        (events_dir / name).write_text("")
+    expected = sorted(events_dir.glob("*/*.jsonl"), key=lambda p: p.relative_to(events_dir))
+    assert event_files(events_dir) == expected
+    assert [relative_name(p, events_dir) for p in expected] == ["s/a.jsonl", "t/.hidden.jsonl"]
