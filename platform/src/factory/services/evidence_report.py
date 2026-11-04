@@ -26,9 +26,13 @@ import hashlib
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from typing import Literal
 
+from pydantic import Field
+
 from factory.errors import FactoryValidationError
+from factory.evidence.pareto import Point, pareto
 from factory.extraction.numbers import canonical, normalise_for, normalise_text, parse_printed
 from factory.model.base import StrictModel
 from factory.model.extraction import ClaimType, EvidenceType, ReportedIn, Strength
@@ -72,6 +76,9 @@ __all__ = [
     "EvidenceRow",
     "Excluded",
     "ExpectationResult",
+    "FrontierAxis",
+    "FrontierPartition",
+    "FrontierPoint",
     "GroupCounts",
     "GroupReport",
     "Limit",
@@ -155,6 +162,39 @@ class MethodConflict(StrictModel):
     rows: list[str]
 
 
+class FrontierPoint(StrictModel):
+    """One independent row plotted on a cost axis; `cost` and `metric` are canonical decimal
+    strings, `trace_id` is `<row_key>/value`."""
+
+    row_key: str
+    work_id: str
+    method_name: str | None
+    cost: str
+    metric: str
+    on_frontier: bool
+    dominated_by: str | None
+    trace_id: str
+
+
+class FrontierPartition(StrictModel):
+    """Points sharing a value unit (and a resolution when it is not a group key); compared only
+    with each other."""
+
+    unit: str | None
+    resolution: str | None
+    points: list[FrontierPoint]
+    statement: str | None
+
+
+class FrontierAxis(StrictModel):
+    """The frontier on one hardware-independent cost axis. `missing` maps `cost-missing`,
+    `cost-not-positive` and `value-not-numeric` to the row keys left out for that reason."""
+
+    axis: str
+    partitions: list[FrontierPartition]
+    missing: dict[str, list[str]]
+
+
 class GroupReport(StrictModel):
     group_id: str
     key: list[tuple[str, str]]
@@ -162,6 +202,7 @@ class GroupReport(StrictModel):
     counts: GroupCounts
     direction: bool | None
     direction_status: DirectionStatus
+    frontiers: list[FrontierAxis] = Field(default_factory=list)
     method_conflicts: list[MethodConflict]
     statements: list[Limit]
 
@@ -587,6 +628,19 @@ def _group(
             )
         )
     shown = _rows(rows, spec, titles, pack)
+    frontiers: list[FrontierAxis] = []
+    if status in ("declared", "pack-default") and direction is not None:
+        frontiers = _frontiers(rows, pack, spec, dict(key), direction)
+        for axis in frontiers:
+            for part in axis.partitions:
+                if part.statement is not None:
+                    statements.append(
+                        Limit(
+                            code="frontier-single-point",
+                            text=f"Axis {axis.axis}: {part.statement}",
+                            subject=gid,
+                        )
+                    )
     return GroupReport(
         group_id=gid,
         key=key,
@@ -594,9 +648,119 @@ def _group(
         counts=group_counts,
         direction=direction,
         direction_status=status,
+        frontiers=frontiers,
         method_conflicts=_conflicts(shown),
         statements=statements,
     )
+
+
+def _decimal(f: FinalField) -> Decimal | None:
+    """The canonical number of a field, else its printed number; None unless finite."""
+    if isinstance(f.value, bool):
+        return None
+    try:
+        d = Decimal(f.canonical) if f.canonical is not None else parse_printed(str(f.value))
+    except InvalidOperation:
+        return None
+    return d if d is not None and d.is_finite() else None
+
+
+def _plain(d: Decimal) -> str:
+    return "0" if d == 0 else format(d.normalize(), "f")
+
+
+def _frontiers(
+    rows: Sequence[FinalRow],
+    pack: Pack,
+    spec: ReportSpec,
+    key: Mapping[str, str],
+    higher_is_better: bool,
+) -> list[FrontierAxis]:
+    """One frontier per cost axis of the spec over the group's independent rows (ruling 6),
+    partitioned by value unit and, if not a group key, by resolution. Speed fields are never
+    axes. An axis with no plottable point is omitted."""
+    by_resolution = "input_resolution" not in key
+    resolution_def = pack.field("input_resolution")
+    own = sorted((r for r in rows if r.independent), key=lambda r: r.row_key)
+    axes: list[FrontierAxis] = []
+    for name in spec.frontier_costs:
+        if name in spec.speed_fields or pack.field(name) is None:
+            continue
+        missing: dict[str, list[str]] = {}
+        buckets: dict[tuple[str, str], list[Point]] = {}
+        units: dict[tuple[str, str], str | None] = {}
+        for row in own:
+            value = _decimal(row.fields[spec.value_field])
+            if value is None:
+                missing.setdefault("value-not-numeric", []).append(row.row_key)
+                continue
+            field = row.fields.get(name)
+            if field is None:
+                missing.setdefault("cost-missing", []).append(row.row_key)
+                continue
+            amount = _decimal(field)
+            if amount is None:
+                missing.setdefault("cost-missing", []).append(row.row_key)
+                continue
+            if amount <= 0:
+                missing.setdefault("cost-not-positive", []).append(row.row_key)
+                continue
+            unit = row.fields[spec.value_field].unit
+            resolution: str | None = None
+            if by_resolution and "input_resolution" in row.fields:
+                res = row.fields["input_resolution"]
+                resolution = (
+                    key_value(resolution_def, res)
+                    if resolution_def is not None
+                    else normalise_text(str(res.value))
+                )
+            bucket = (unit or "", resolution or "")
+            units[bucket] = unit
+            method = _text(row.fields.get("method_name"))
+            buckets.setdefault(bucket, []).append(
+                Point(row.row_key, amount, value, normalise_text(method or ""), row.work_id)
+            )
+        if not buckets:
+            continue
+        names = {r.row_key: _text(r.fields.get("method_name")) for r in own}
+        partitions = [
+            _partition(units[b], b[1] or None, points, names, higher_is_better=higher_is_better)
+            for b, points in sorted(buckets.items())
+        ]
+        axes.append(FrontierAxis(axis=name, partitions=partitions, missing=missing))
+    return axes
+
+
+def _partition(
+    unit: str | None,
+    resolution: str | None,
+    points: Sequence[Point],
+    names: Mapping[str, str | None],
+    *,
+    higher_is_better: bool,
+) -> FrontierPartition:
+    result = pareto(points, higher_is_better=higher_is_better)
+    dominators = {p.row_key: q.row_key for p, q in result.dominated}
+    on = {p.row_key for p in result.frontier}
+    shown = [
+        FrontierPoint(
+            row_key=p.row_key,
+            work_id=p.work_id,
+            method_name=names.get(p.row_key),
+            cost=_plain(p.cost),
+            metric=_plain(p.metric),
+            on_frontier=p.row_key in on,
+            dominated_by=dominators.get(p.row_key),
+            trace_id=f"{p.row_key}/value",
+        )
+        for p in sorted(points, key=lambda p: (p.cost, p.row_key))
+    ]
+    statement = (
+        "Fewer than two points in this partition; no frontier can be drawn."
+        if len(points) < 2
+        else None
+    )
+    return FrontierPartition(unit=unit, resolution=resolution, points=shown, statement=statement)
 
 
 def _direction(
