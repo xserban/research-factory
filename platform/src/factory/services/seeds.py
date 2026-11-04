@@ -698,11 +698,12 @@ def _snowball_runs(project: Project) -> set[str]:
     with project.index.connect() as conn:
         rows = conn.execute(
             text(
-                "SELECT r.run_id FROM runs r JOIN events e ON e.type = 'query.registered' "
-                "AND json_extract(e.refs, '$[0]') = r.query_id "
-                "WHERE EXISTS (SELECT 1 FROM json_each(e.refs) j "
-                "WHERE substr(j.value, 1, 4) = 'snw_' OR j.value IN "
-                "(SELECT chase_round_id FROM snowball_rounds WHERE chase_round_id IS NOT NULL))"
+                "SELECT r.run_id FROM runs r "
+                "JOIN event_refs f ON f.type = 'query.registered' AND f.position = 0 "
+                "AND f.ref = r.query_id "
+                "WHERE EXISTS (SELECT 1 FROM event_refs n WHERE n.event_id = f.event_id "
+                "AND n.position > 0 AND (substr(n.ref, 1, 4) = 'snw_' OR n.ref IN "
+                "(SELECT chase_round_id FROM snowball_rounds WHERE chase_round_id IS NOT NULL)))"
             )
         ).all()
     return {str(run) for (run,) in rows}

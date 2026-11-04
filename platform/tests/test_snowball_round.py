@@ -26,7 +26,7 @@ from factory.services import snowball
 from factory.services.agreement import Outcome, final_outcomes
 from factory.services.chase import chase_rounds
 from factory.services.context import Project
-from factory.services.protocol import amend_protocol, current_protocol
+from factory.services.protocol import amend_protocol, current_protocol, registered_round
 from factory.services.references import extract_references, included_works, list_references
 from factory.services.screening import open_pass
 from factory.services.search import get_work, list_works, register_query, run_query
@@ -745,3 +745,19 @@ def test_yield_is_unsettled_without_runs(
     )
     state = plan_round(project, Direction.BACKWARD).state
     assert "previous_round" not in [i.field for i in state.refusals]
+
+
+def test_registered_round_matches_the_old_scan(
+    project: Project, agent: Actor, planned: tuple[str, str]
+) -> None:
+    from tests.test_event_refs import old_registered_round
+
+    sources = _sources()
+    result = snowball_round(project, agent, Direction.BACKWARD, sources=sources, dry_run=False)
+    assert result.round_id is not None
+    queries = [r.query_id for r in result.runs]
+    assert queries
+    project.index.sync()
+    for query_id in (*queries, "qry_missing"):
+        assert registered_round(project, query_id) == old_registered_round(project, query_id)
+    assert registered_round(project, queries[0]) == result.round_id

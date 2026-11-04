@@ -28,6 +28,8 @@ NON_STATE_TABLES: frozenset[str] = frozenset(
         "work_keys",
         "work_title_buckets",
         "merge_members",
+        # One row per event ref, derived from the events table, which the hash covers.
+        "event_refs",
     }
 )
 OMITTED_WHEN_EMPTY: frozenset[str] = frozenset(
@@ -260,8 +262,17 @@ class Index:
 
     def _write(self, conn: Connection, events: list[Event], offsets: dict[str, int]) -> None:
         events_table = self._table("events")
+        refs_table = self._table("event_refs")
         for event in events:
             conn.execute(insert(events_table).values(**_event_row(event)))
+            if event.refs:
+                conn.execute(
+                    insert(refs_table),
+                    [
+                        {"event_id": event.id, "position": i, "ref": ref, "type": event.type}
+                        for i, ref in enumerate(event.refs)
+                    ],
+                )
             handler = self._projection.handlers.get(event.type)
             if handler is not None:
                 handler(conn, event)

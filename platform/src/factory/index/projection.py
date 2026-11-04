@@ -1,7 +1,7 @@
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
-from sqlalchemy import Column, Integer, MetaData, String, Table
+from sqlalchemy import Column, Index, Integer, MetaData, String, Table
 from sqlalchemy.engine import Connection
 
 from factory.events.envelope import Event
@@ -23,7 +23,7 @@ class Projection:
 
 
 def core_tables(metadata: MetaData) -> None:
-    """Add the tables every projection shares: meta, sync_state and events."""
+    """Add the tables every projection shares: meta, sync_state, events and event_refs."""
     Table(
         "meta",
         metadata,
@@ -51,3 +51,12 @@ def core_tables(metadata: MetaData) -> None:
         Column("input_blob", String),
         Column("refs", String, nullable=False),
     )
+    refs = Table(
+        "event_refs",
+        metadata,
+        Column("event_id", String, primary_key=True),
+        Column("position", Integer, primary_key=True),
+        Column("ref", String, nullable=False),
+        Column("type", String, nullable=False),
+    )
+    Index("ix_event_refs_ref", refs.c.ref)

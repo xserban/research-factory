@@ -691,19 +691,16 @@ def registered_deviation(project: Project, query_id: str) -> str | None:
     """The deviation a registered query was run under, read from its `query.registered` refs,
     or None when it was planned. A ref is a deviation when the deviations table names it."""
     with project.index.connect() as conn:
-        events = conn.execute(
-            text("SELECT refs FROM events WHERE type = 'query.registered' AND refs LIKE :pattern"),
-            {"pattern": f'%"{query_id}"%'},
-        ).all()
-        for (refs,) in events:
-            for ref in json.loads(str(refs)):
-                known = conn.execute(
-                    text("SELECT 1 FROM deviations WHERE deviation_id = :deviation"),
-                    {"deviation": ref},
-                ).one_or_none()
-                if known is not None:
-                    return str(ref)
-    return None
+        row = conn.execute(
+            text(
+                "SELECT o.ref FROM event_refs q JOIN event_refs o ON o.event_id = q.event_id "
+                "JOIN deviations d ON d.deviation_id = o.ref "
+                "WHERE q.ref = :q AND q.position = 0 AND q.type = 'query.registered' "
+                "ORDER BY o.event_id, o.position LIMIT 1"
+            ),
+            {"q": query_id},
+        ).one_or_none()
+    return None if row is None else str(row[0])
 
 
 def search_refs(project: Project, spec: QuerySpec, deviation_id: str | None) -> tuple[str, ...]:
@@ -813,32 +810,30 @@ def is_watch_cycle(project: Project, cycle_id: str) -> bool:
     return row is not None
 
 
+def _registered_ref(project: Project, query_id: str, table: str, column: str) -> str | None:
+    """The first ref, after the query's own, of its `query.registered` event that `table` names
+    in `column`."""
+    with project.index.connect() as conn:
+        row = conn.execute(
+            text(
+                "SELECT o.ref FROM event_refs q JOIN event_refs o ON o.event_id = q.event_id "
+                f"JOIN {table} t ON t.{column} = o.ref "
+                "WHERE q.ref = :q AND q.position = 0 AND q.type = 'query.registered' "
+                "ORDER BY o.event_id, o.position LIMIT 1"
+            ),
+            {"q": query_id},
+        ).one_or_none()
+    return None if row is None else str(row[0])
+
+
 def registered_cycle(project: Project, query_id: str) -> str | None:
     """The watch cycle a registered query names in its `query.registered` refs, or None."""
-    with project.index.connect() as conn:
-        events = conn.execute(
-            text("SELECT refs FROM events WHERE type = 'query.registered' AND refs LIKE :pattern"),
-            {"pattern": f'%"{query_id}"%'},
-        ).all()
-    for (refs,) in events:
-        for ref in json.loads(str(refs)):
-            if str(ref).startswith("wcy_") and is_watch_cycle(project, str(ref)):
-                return str(ref)
-    return None
+    return _registered_ref(project, query_id, "watch_cycles", "cycle_id")
 
 
 def registered_round(project: Project, query_id: str) -> str | None:
     """The snowball round a registered query names in its `query.registered` refs, or None."""
-    with project.index.connect() as conn:
-        events = conn.execute(
-            text("SELECT refs FROM events WHERE type = 'query.registered' AND refs LIKE :pattern"),
-            {"pattern": f'%"{query_id}"%'},
-        ).all()
-    for (refs,) in events:
-        for ref in json.loads(str(refs)):
-            if str(ref).startswith("snw_") and is_snowball_round(project, str(ref)):
-                return str(ref)
-    return None
+    return _registered_ref(project, query_id, "snowball_rounds", "round_id")
 
 
 def _measured_probes(project: Project) -> dict[str, set[str]]:

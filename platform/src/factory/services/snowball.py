@@ -280,10 +280,12 @@ def _ref_runs(project: Project, ref: str, *, text_prefix: str = "") -> list[_Run
     with project.index.connect() as conn:
         rows = conn.execute(
             text(
-                "SELECT r.run_id, r.status, r.query_id FROM runs r JOIN events e "
-                "ON e.type = 'query.registered' AND json_extract(e.refs, '$[0]') = r.query_id "
+                "SELECT r.run_id, r.status, r.query_id FROM runs r "
+                "JOIN event_refs f ON f.type = 'query.registered' AND f.position = 0 "
+                "AND f.ref = r.query_id "
                 "JOIN queries q ON q.query_id = r.query_id "
-                "WHERE EXISTS (SELECT 1 FROM json_each(e.refs) WHERE json_each.value = :ref) "
+                "WHERE EXISTS (SELECT 1 FROM event_refs n WHERE n.event_id = f.event_id "
+                "AND n.position > 0 AND n.ref = :ref) "
                 "AND substr(q.text, 1, :n) = :prefix ORDER BY r.run_id"
             ),
             {"ref": ref, "n": len(text_prefix), "prefix": text_prefix},
@@ -299,8 +301,8 @@ def _named_queries(project: Project, ref: str) -> int:
     with project.index.connect() as conn:
         count = conn.execute(
             text(
-                "SELECT COUNT(*) FROM events e WHERE e.type = 'query.registered' "
-                "AND EXISTS (SELECT 1 FROM json_each(e.refs) WHERE json_each.value = :ref)"
+                "SELECT COUNT(*) FROM event_refs WHERE type = 'query.registered' "
+                "AND position > 0 AND ref = :ref"
             ),
             {"ref": ref},
         ).scalar_one()
