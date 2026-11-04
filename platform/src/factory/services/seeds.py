@@ -33,6 +33,7 @@ from factory.model.project import RigorMode
 from factory.model.search import QueryKind, QueryPurpose, QuerySpec, RunStatus
 from factory.model.seed import (
     SPLIT_PROCEDURE,
+    HeldOut,
     SeedAdded,
     SeedKind,
     SeedMissExplained,
@@ -675,6 +676,17 @@ def held_out_work_ids(project: Project) -> frozenset[str]:
         work for _, role, work in _positive_matches(project) if role is SeedRole.HELD_OUT and work
     )
     return merge_closure(project, matched)
+
+
+def held_out(project: Project) -> HeldOut:
+    """The held-out seeds' corpus works and identifier values, for agent-facing filters (R-20)."""
+    keys = {
+        value
+        for seed, role, _ in _positive_matches(project)
+        if role is SeedRole.HELD_OUT
+        for value in seed.spec.identity_keys().values()
+    }
+    return HeldOut(work_ids=held_out_work_ids(project), keys=frozenset(keys))
 
 
 _NOT_SEARCH = frozenset({ProvenanceMethod.SEED_ADMISSION, ProvenanceMethod.SUPPLIED})

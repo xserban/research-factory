@@ -1155,6 +1155,7 @@ def build_server(
             summary = references_service.extract_references(
                 opened, actor, work_ids, sources=adapters
             )
+            summary = references_service.agent_extract_view(summary, seeds_service.held_out(opened))
             return _withheld(opened, summary.model_dump(mode="json"))
 
         return _reply(project, extract)
@@ -1168,7 +1169,7 @@ def build_server(
         def status() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
             _refuse_pass_session(opened)
-            counts = references_service.reference_counts(opened)
+            counts = references_service.reference_counts(opened, seeds_service.held_out(opened))
             return _withheld(opened, counts.model_dump(mode="json"))
 
         return _reply(project, status)
@@ -1191,7 +1192,12 @@ def build_server(
             opened = open_project(settings, project, session=session, clock=clock)
             _refuse_pass_session(opened)
             page = references_service.list_references(
-                opened, state=link_state, work_id=work_id, after=after, limit=limit
+                opened,
+                state=link_state,
+                work_id=work_id,
+                after=after,
+                limit=limit,
+                held_out=seeds_service.held_out(opened),
             )
             return _withheld(opened, page.model_dump(mode="json"))
 
@@ -1267,6 +1273,9 @@ def build_server(
             result = snowball_service.snowball_round(
                 opened, actor, parsed, sources=adapters, dry_run=dry_run
             )
+            result = snowball_service.agent_round_view(
+                opened, result, seeds_service.held_out(opened)
+            )
             return _withheld(opened, result.model_dump(mode="json"))
 
         return _reply(project, round_)
@@ -1280,7 +1289,9 @@ def build_server(
         def compare() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
             _refuse_pass_session(opened)
-            result = snowball_service.snowball_compare(opened, round_id)
+            result = snowball_service.snowball_compare(
+                opened, round_id, seeds_service.held_out(opened)
+            )
             return _withheld(opened, result.model_dump(mode="json"))
 
         return _reply(project, compare)
@@ -1413,6 +1424,8 @@ def _held_out_tokens(project: Project, include_work_ids: bool = True) -> set[str
         tokens.update(value for value in (seed.doi, seed.arxiv, seed.openalex) if value)
         if include_work_ids and seed.work_id:
             tokens.add(seed.work_id)
+    if include_work_ids:
+        tokens.update(seeds_service.held_out_work_ids(project))
     return tokens
 
 

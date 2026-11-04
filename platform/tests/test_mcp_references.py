@@ -247,3 +247,65 @@ async def test_mcp_views_hide_seed_route_and_held_out(
     text = json.dumps(bodies)
     assert _leaks(text, forms) == []
     assert "found_by" not in text
+
+
+@pytest.mark.anyio
+async def test_held_out_work_matched_by_search_is_absent_from_every_view(
+    settings: Settings,
+    project: Project,
+    agent: Actor,
+    clock: FixedClock,
+    corpus: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R-20 with `seed.work_id` unset: the held-out seed is matched to its corpus work by DOI
+    only. The work is cited (by DOI) from one document and has a document of its own."""
+    from factory.services import seeds as seeds_service
+    from factory.services.search import get_work
+
+    real = seeds_service._load_seeds
+    monkeypatch.setattr(
+        seeds_service,
+        "_load_seeds",
+        lambda p: [s.model_copy(update={"work_id": None}) for s in real(p)],
+    )
+    [held, *_] = [s for s in all_seeds(project) if s.role is SeedRole.HELD_OUT]
+    assert held.work_id is None and held.doi is not None
+    [target] = seeds_service.held_out_work_ids(project)
+    work = get_work(project, target)
+    assert work is not None
+    others = [w for w in promoted_works(project) if w != target]
+    entries = [f"A. Zhou. A held paper. Journal of Tests, 2020. doi:{held.doi}.", *ENTRIES_A[1:]]
+    fetched_document(project, others[0], bib_html(entries, BODY_A))
+    fetched_document(project, target, bib_html(ENTRIES_B, BODY_B))
+    run_convert(project, make_registry())
+    _amend(project, agent, PLAN)
+    async with open_session(settings, clock, _lookups().sources()) as session:
+        bodies = [await _extracted(session)]
+        bodies.append(await session.call("references_status", project="demo"))
+        listed = await session.call("references_list", project="demo", limit=100)
+        bodies.append(listed)
+        bodies.append(
+            await session.call("snowball_round", project="demo", direction="backward", **AGENT)
+        )
+        real_round = await session.call(
+            "snowball_round", project="demo", direction="backward", dry_run=False, **AGENT
+        )
+        assert real_round["ok"] is True, real_round
+        bodies.append(real_round)
+        bodies.append(
+            await session.call(
+                "snowball_compare", project="demo", round_id=real_round["data"]["round_id"]
+            )
+        )
+    text = json.dumps(bodies)
+    assert _leaks(text, {target, held.doi, held.seed_id}) == []
+    at = text.find("[withheld]")
+    assert at < 0, text[max(at - 300, 0) : at + 100]
+    at = text.find(work.title)
+    assert at < 0, (work.title, text[max(at - 200, 0) : at + 100])
+    assert all(i["work_id"] != target for i in listed["data"]["items"])
+    masked = [
+        i for i in listed["data"]["items"] if i["ordinal"] == 1 and i["citing_work"] == others[0]
+    ]
+    assert [(i["state"], i["work_id"], i["doi"]) for i in masked] == [("unresolved", None, None)]

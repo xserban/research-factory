@@ -75,6 +75,7 @@ from factory.model.references import (
     Via,
 )
 from factory.model.search import QueryKind, QueryPurpose, QuerySpec, RunStatus
+from factory.model.seed import HeldOut
 from factory.model.work_ids import arxiv_id_from_doi
 from factory.services.agreement import Outcome, final_outcomes
 from factory.services.calibration import calibration_items
@@ -448,7 +449,9 @@ def _new_after_dedup(project: Project, runs: Sequence[str], rows: Sequence[str])
     return {primary.get(w, w) for w in rows} - earlier
 
 
-def snowball_compare(project: Project, round_id: str) -> Comparison:
+def snowball_compare(
+    project: Project, round_id: str, held_out: HeldOut | None = None
+) -> Comparison:
     """A backward round's resolved references (the `resolved` links, as they stand now, of its
     recorded extractions) against the works the `cited_by:` runs of every backward chase round whose
     `from_works` overlap the round's sources retrieved; dedup primaries on both sides."""
@@ -486,13 +489,18 @@ def snowball_compare(project: Project, round_id: str) -> Comparison:
         r.run_id for c in chases for r in _ref_runs(project, c.round_id, text_prefix="cited_by:")
     ]
     metadata = {primary.get(w, w) for w in _retrieved(project, runs)}
+    hidden = held_out or HeldOut()
+    document = {w for w in document if not hidden.hides(w)}
+    metadata = {w for w in metadata if not hidden.hides(w)}
     return Comparison(
         round_id=round_id,
         chase_rounds=sorted(c.round_id for c in chases),
         document_only=sorted(document - metadata),
         metadata_only=sorted(metadata - document),
         both=sorted(document & metadata),
-        extra_chase_sources=sorted({w for c in chases for w in c.from_works} - sources),
+        extra_chase_sources=sorted(
+            {w for c in chases for w in c.from_works if not hidden.hides(w)} - sources
+        ),
         notes=sorted(notes),
     )
 
@@ -989,6 +997,74 @@ def snowball_round(
     if chase is None:
         return result
     return result.model_copy(update={"chase_round_id": chase.payload.round_id})
+
+
+def agent_round_view(project: Project, result: RoundResult, held_out: HeldOut) -> RoundResult:
+    """`result` as an agent may see it (R-20): held-out works are left out of the candidates,
+    their citing entries and anchors, the sources, the unextracted list and the queries, before
+    any count is taken, and the new-work counts exclude the held-out works the runs added."""
+    primary = _primaries(project)
+
+    def hidden(work: str | None, *identifiers: str | None) -> bool:
+        return held_out.hides(work, *identifiers) or (
+            work is not None and held_out.hides(primary.get(work))
+        )
+
+    candidates: list[RoundCandidate] = []
+    for c in result.candidates:
+        if hidden(c.work_id, c.doi, c.arxiv, c.openalex):
+            continue
+        entries = tuple(e for e in c.cited_by if not hidden(e.work_id))
+        anchors = tuple(a for a in c.citing_anchors if not hidden(a[0]))
+        citing = {e.work_id for e in entries}
+        count = len(citing) if c.cited_by else c.cited_by_included
+        if count == 0:
+            continue
+        candidates.append(
+            c.model_copy(
+                update={"cited_by": entries, "citing_anchors": anchors, "cited_by_included": count}
+            )
+        )
+    queries = result.queries
+    if result.state.direction is Direction.BACKWARD:
+        queries = snowball_queries(candidates)
+    else:
+        ids = {w for w in _openalex_ids(project).items() if hidden(w[0])}
+        dropped = {oid for _, oid in ids}
+        queries = _without_ids(queries, dropped)
+    runs = []
+    removed_total = 0
+    for run in result.runs:
+        retrieved = _retrieved(project, [run.run_id])
+        fresh = _new_after_dedup(project, [run.run_id], retrieved)
+        removed = len({w for w in fresh if hidden(w)})
+        removed_total += removed
+        runs.append(run.model_copy(update={"new_works": max(run.new_works - removed, 0)}))
+    return result.model_copy(
+        update={
+            "candidates": candidates,
+            "queries": queries,
+            "sources": [w for w in result.sources if not hidden(w)],
+            "unextracted": [(w, why) for w, why in result.unextracted if not hidden(w)],
+            "unqueryable": [k for k in result.unqueryable if k in {c.work_key for c in candidates}],
+            "runs": runs,
+            "new_works": max(result.new_works - removed_total, 0),
+        }
+    )
+
+
+def _without_ids(queries: Sequence[QuerySpec], dropped: set[str]) -> list[QuerySpec]:
+    """Forward `cites:` queries without the OpenAlex ids in `dropped`; empty queries vanish."""
+    out: list[QuerySpec] = []
+    for q in queries:
+        prefix, sep, rest = q.text.partition(":")
+        if not sep or prefix != "cites":
+            out.append(q)
+            continue
+        kept = [i for i in rest.split("|") if i not in dropped]
+        if kept:
+            out.append(q.model_copy(update={"text": "cites:" + "|".join(kept)}))
+    return out
 
 
 def _unextracted(plan: RoundPlan) -> tuple[Unextracted, ...]:

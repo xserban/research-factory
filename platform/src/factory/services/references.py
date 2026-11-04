@@ -53,6 +53,7 @@ from factory.model.references import (
     ReferenceExtracted,
     ReferenceResolved,
 )
+from factory.model.seed import HeldOut
 from factory.model.work_ids import WORK_ID_RE
 from factory.references.bbl import align, read_bbl
 from factory.references.markers import completeness_flags, find_contexts
@@ -423,7 +424,78 @@ def _extract_one(
 _LIVE = "JOIN reference_extractions x ON x.extraction_id = {t}.extraction_id AND x.live = 1"
 
 
-def reference_counts(project: Project) -> ReferenceCounts:
+def agent_extract_view(summary: ExtractSummary, held_out: HeldOut) -> ExtractSummary:
+    """`summary` without the extractions and skips of held-out works (R-20)."""
+    return ExtractSummary(
+        extractions=[e for e in summary.extractions if not held_out.hides(e.work_id)],
+        skipped=[k for k in summary.skipped if not held_out.hides(k.work_id)],
+    )
+
+
+def _hidden(item: ReferenceItem, held: HeldOut) -> bool:
+    """Whether a link touches a held-out seed's work: its linked, base or candidate work, or an
+    identifier the entry states."""
+    works = (item.work_id, item.base_work_id, *(w for w, _ in item.candidates))
+    return any(held.hides(w) for w in works) or held.hides(None, item.doi, item.arxiv)
+
+
+def _masked(item: ReferenceItem) -> ReferenceItem:
+    """The item as an unresolved entry: no linked work, no identifier, no title (R-20)."""
+    return item.model_copy(
+        update={
+            "state": LinkState.UNRESOLVED,
+            "work_id": None,
+            "confidence": None,
+            "method": None,
+            "score": None,
+            "candidates": [],
+            "reason": None,
+            "base_state": LinkState.UNRESOLVED,
+            "base_work_id": None,
+            "decision": None,
+            "confirmed_by": None,
+            "proposal": None,
+            "no_source_record": False,
+            "doi": None,
+            "arxiv": None,
+            "title": None,
+        }
+    )
+
+
+def reference_counts(project: Project, held_out: HeldOut | None = None) -> ReferenceCounts:
+    """Counts over the live extractions; the four states sum to `entries`. With `held_out`, a link
+    that touches a held-out seed's work counts as unresolved, as `list_references` shows it."""
+    if held_out is not None and (held_out.work_ids or held_out.keys):
+        return _counts(project, _agent_items(project, held_out))
+    return _counts_sql(project)
+
+
+def _counts(project: Project, items: Sequence[ReferenceItem]) -> ReferenceCounts:
+    corpus = {w.id for w in list_works(project)}
+    states = {state: 0 for state in LinkState}
+    targets: set[str] = set()
+    no_source = 0
+    extractions = {i.extraction_id for i in items}
+    for i in items:
+        states[i.state] += 1
+        if i.state is LinkState.RESOLVED and i.work_id is not None:
+            targets.add(i.work_id)
+            no_source += int(i.no_source_record)
+    return ReferenceCounts(
+        extractions=len(extractions),
+        entries=len(items),
+        resolved=states[LinkState.RESOLVED],
+        unconfirmed=states[LinkState.UNCONFIRMED],
+        ambiguous=states[LinkState.AMBIGUOUS],
+        unresolved=states[LinkState.UNRESOLVED],
+        no_source_record=no_source,
+        in_corpus=len(targets & corpus),
+        new_candidates=len(targets - corpus),
+    )
+
+
+def _counts_sql(project: Project) -> ReferenceCounts:
     """Counts over the live extractions; the four states sum to `entries`."""
     project.index.sync()
     with project.index.connect() as conn:
@@ -461,25 +533,8 @@ def reference_counts(project: Project) -> ReferenceCounts:
     )
 
 
-def list_references(
-    project: Project,
-    *,
-    state: LinkState | None,
-    work_id: str | None,
-    after: int,
-    limit: int,
-) -> Page:
-    """Entries of the live extractions with their links, by citing work, extraction and ordinal.
-
-    `after` is the number of matching items already seen; `limit` is 1..`MAX_PAGE`.
-    """
-    issues: list[ValidationIssue] = []
-    if not 1 <= limit <= MAX_PAGE:
-        issues.append(ValidationIssue("limit", f"between 1 and {MAX_PAGE}"))
-    if after < 0:
-        issues.append(ValidationIssue("after", "must not be negative"))
-    if issues:
-        raise FactoryValidationError(issues)
+def _all_items(project: Project, work_id: str | None = None) -> list[ReferenceItem]:
+    """Every entry of the live extractions with its link, by citing work, extraction, ordinal."""
     project.index.sync()
     with project.index.connect() as conn:
         rows = (
@@ -493,17 +548,15 @@ def list_references(
                     f"FROM reference_entries n {_LIVE.format(t='n')} "
                     "JOIN reference_links l ON l.extraction_id = n.extraction_id "
                     "AND l.ordinal = n.ordinal "
-                    "WHERE (:state IS NULL OR l.state = :state) "
-                    "AND (:work IS NULL OR x.work_id = :work) "
+                    "WHERE (:work IS NULL OR x.work_id = :work) "
                     "ORDER BY x.work_id, n.extraction_id, n.ordinal"
                 ),
-                {"state": None if state is None else state.value, "work": work_id},
+                {"work": work_id},
             )
             .mappings()
             .all()
         )
-    page = rows[after : after + limit]
-    items = [
+    return [
         ReferenceItem(
             extraction_id=str(r["extraction_id"]),
             citing_work=str(r["citing_work"]),
@@ -531,7 +584,49 @@ def list_references(
             proposal=r["proposal"],
             no_source_record=bool(r["no_source_record"]),
         )
-        for r in page
+        for r in rows
     ]
+
+
+def _agent_items(
+    project: Project, held: HeldOut, work_id: str | None = None
+) -> list[ReferenceItem]:
+    """The items an agent may see: entries cited from a held-out work are left out; a link that
+    touches a held-out work is shown as an unresolved entry."""
+    return [
+        _masked(i) if _hidden(i, held) else i
+        for i in _all_items(project, work_id)
+        if not held.hides(i.citing_work)
+    ]
+
+
+def list_references(
+    project: Project,
+    *,
+    state: LinkState | None,
+    work_id: str | None,
+    after: int,
+    limit: int,
+    held_out: HeldOut | None = None,
+) -> Page:
+    """Entries of the live extractions with their links, by citing work, extraction and ordinal.
+
+    `after` is the number of matching items already seen; `limit` is 1..`MAX_PAGE`. With
+    `held_out` (agent views) the held-out works are hidden before filtering and counting.
+    """
+    issues: list[ValidationIssue] = []
+    if not 1 <= limit <= MAX_PAGE:
+        issues.append(ValidationIssue("limit", f"between 1 and {MAX_PAGE}"))
+    if after < 0:
+        issues.append(ValidationIssue("after", "must not be negative"))
+    if issues:
+        raise FactoryValidationError(issues)
+    everything = (
+        _all_items(project, work_id)
+        if held_out is None
+        else _agent_items(project, held_out, work_id)
+    )
+    rows = [i for i in everything if state is None or i.state is state]
+    page = rows[after : after + limit]
     end = after + len(page)
-    return Page(items=items, total=len(rows), next_after=end if end < len(rows) else None)
+    return Page(items=page, total=len(rows), next_after=end if end < len(rows) else None)
