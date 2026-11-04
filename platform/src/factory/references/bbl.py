@@ -54,16 +54,12 @@ def read_bbl(archive: bytes, *, max_bytes: int = 20_000_000) -> list[BblEntry]:
                 return []
         texts: list[bytes] = []
         if _is_tar(data):
-            budget = max_bytes
             with tarfile.open(fileobj=io.BytesIO(data), mode="r:") as tar:
                 members = sorted(
                     (m for m in tar.getmembers() if m.isfile() and m.name.endswith(".bbl")),
                     key=lambda m: m.name,
                 )
                 for member in members:
-                    if member.size > budget:
-                        return []
-                    budget -= member.size
                     handle = tar.extractfile(member)
                     if handle is not None:
                         texts.append(handle.read(member.size))

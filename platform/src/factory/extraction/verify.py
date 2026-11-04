@@ -23,7 +23,7 @@ from factory.document.anchors import Anchor, AnchorKind, Manifest
 from factory.document.quotes import normalise_quote, quote_in_element
 from factory.extraction.citations import citation_markers
 from factory.extraction.numbers import (
-    _WORD_UNITS,
+    WORD_UNITS,
     NumberToken,
     canonical,
     normalise_for,
@@ -191,7 +191,7 @@ def _suffix_agrees(family: UnitFamily, unit: str | None, token: NumberToken) -> 
             return False
         return _alias(unit) == _alias(suffix)
     if family is UnitFamily.OTHER and unit:
-        return unit == suffix or _WORD_UNITS.get(unit) == suffix
+        return unit == suffix or WORD_UNITS.get(unit) == suffix
     return False
 
 

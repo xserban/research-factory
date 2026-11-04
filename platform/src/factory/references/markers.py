@@ -4,8 +4,10 @@ Pure and deterministic. Three methods, in this priority at any text position: Ma
 `#b<n>` (`link`, exact), numeric brackets `[3]`, `[3, 5]`, `[3-6]` (`numeric`, mapped through the
 entry labels when any entry has a numeric label, else through the ordinals) and author-year
 `(Wang et al., 2021)` / `Wang et al. (2021)` (`author-year`, mapped by folded first-author surname
-and year). A marker that maps to no entry is `unmatched`, to several `ambiguous`; both carry
-`entry=None`. Only the marker token (at most `MAX_TOKEN` characters) is kept, never body text.
+and year). The parenthetical body is capped at 200 characters each side of the year; a longer
+parenthetical is not matched. A marker that maps to no entry is `unmatched`, to several
+`ambiguous`; both carry `entry=None`. Only the marker token (at most `MAX_TOKEN` characters) is
+kept, never body text.
 """
 
 import re

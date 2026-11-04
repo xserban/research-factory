@@ -3,6 +3,7 @@
 Pure and deterministic: the same manifest and `PARSER_VERSION` give identical entries. Only DOI,
 arXiv id, URL and year are claimed reliable; first author, title and venue are best effort and
 `None` when no pattern matches. Entry text is truncated at `MAX_ENTRY_CHARS`, with a flag.
+Fields are parsed from the first `MAX_FIELD_CHARS` (4000) characters of an entry.
 """
 
 import re

@@ -36,7 +36,8 @@ _MULTIPLIER = {
     "B": 10**9,
     "T": 10**12,
 }
-_WORD_UNITS = {"GFLOPs": "G", "GMACs": "G", "MB": "M"}
+# Word-form unit suffixes mapped to the SI prefix they stand for (for comparison, never conversion).
+WORD_UNITS = {"GFLOPs": "G", "GMACs": "G", "MB": "M"}
 _FAMILY_UNITS: dict[UnitFamily, frozenset[str]] = {
     UnitFamily.COUNT: frozenset(_MULTIPLIER),
     UnitFamily.SCORE: frozenset({"", "%", "fraction"}),
@@ -77,7 +78,7 @@ def numbers_in(text: str) -> list[NumberToken]:
         out.append(
             NumberToken(
                 _to_decimal(m.group("sign"), m.group("num").replace("−", "-"), m.group("texp")),
-                _WORD_UNITS.get(suffix, suffix) if suffix else None,
+                WORD_UNITS.get(suffix, suffix) if suffix else None,
             )
         )
     return out
