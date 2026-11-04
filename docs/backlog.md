@@ -236,3 +236,28 @@ Status: new · Added: 2026-11-03 · Slice: — · Depends on: decision 46 item 9
 **Why:** the version of record can differ from what the source now reports, with no event saying so.
 **Rigour notes:** a version mismatch with identical bytes is recorded or refused, never silent.
 **Open questions:** whether this is a `source-changed` variant or a separate attempt reason.
+
+## Idea graph from full text (added 2026-11-04)
+
+Three linked ideas from the researcher: read each selected paper for what it builds on and adds, take its references into the corpus, and draw the lineage as a graph. The researcher rates the reference and snowballing part (IDEA-31) as very important.
+
+### IDEA-30 — Per-paper contribution extraction
+Status: new · Added: 2026-11-04 · Slice: — (candidate: extension of slice 2 extraction, or slice 3) · Depends on: slice 2 plan D (extraction, verified quotes), `document_read`
+**What:** for each selected paper, extract a fixed set of items beyond result rows: the base idea (what the paper builds on), what it adds over that base, the reported results or improvements, and the stated limitations. Each item is an atomic claim with an anchored, verified quote.
+**Why:** the evidence table says how well a method scores; this says what each method is and how it relates to the ones before it, which the lineage graph (IDEA-32) needs.
+**Rigour notes:** every item carries a verbatim quote verified against an anchor (slice 2 verification); "builds on" and "adds over" are the paper's own statements, not inferred relations; the extraction schema is declared in the protocol before reading (R-13); dual extraction and audit apply as for other fields.
+**Open questions:** whether these fields belong in the `ml-benchmark` domain pack or in a separate generic pack; how to treat papers that do not state a base idea.
+
+### IDEA-31 — Reference extraction and snowballing from full text
+Status: new · Added: 2026-11-04 · Slice: — (candidate: right after slice 2; researcher priority: high) · Depends on: slice 2 plan B (canonical Markdown, anchors), slice 1 `search_chase`, work identity and dedup
+**What:** parse each included paper's reference list from its canonical document, resolve every reference to a work (DOI, arXiv id, title match), and record the paper-to-reference links as events. Resolved references that are not yet in the corpus become snowballing candidates that enter through the project's screening protocol. Also record where in the text each reference is cited (the anchor), so the citation context is available.
+**Why:** slice 1 chases citations through the search sources' metadata; the paper's own reference list is more complete for recent work and gives the citation context. This serves both the graph (IDEA-32) and a more complete corpus.
+**Rigour notes:** link resolution is deterministic and recorded with its method and confidence; unresolved references are listed, never dropped silently; a snowballed work is a candidate, never auto-included; snowballing rounds are recorded search runs with their PRISMA-S fields (R-24, R-25); the corpus count of references is computed, not typed.
+**Open questions:** reference parsing per input format (HTML bibliography, LaTeX `.bbl`, PDF reference sections are the weakest); how to rank candidates (frequency of citation across included papers is a derived number, not a judgement); stopping rule for snowball rounds.
+
+### IDEA-32 — Idea lineage graph
+Status: new · Added: 2026-11-04 · Slice: 3 (graph) · Depends on: IDEA-30, IDEA-31, slice 3 graph design
+**What:** a graph whose nodes are papers and base ideas and whose edges are "builds on", "improves on" and "cites", built from the extracted contribution items and the resolved references. A path from a base idea through its improvements to the current best methods is readable from it.
+**Why:** answer "what is this method an improvement of, and what improved on it" across the corpus, and show the field's structure beyond a ranked table.
+**Rigour notes:** every edge cites its source (a verified quote for stated relations, a reference link for citations); a relation the paper does not state is not drawn, or is drawn as a separate, labelled "inferred" edge type decided by a human; the graph is a projection of events and can be rebuilt (R-05).
+**Open questions:** the node identity of an "idea" (a method family vs. a paper); how to merge naming variants of one idea; who confirms an inferred edge.
