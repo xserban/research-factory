@@ -1,6 +1,6 @@
 ---
 name: rf-screen
-description: Use when records of a ready protocol must be screened on title and abstract, as pass A or pass B of the two-pass screen, in a Claude Code session dedicated to that pass.
+description: Use when records of a ready protocol must be screened, on title and abstract or (full-text mode) on the converted full text, as pass A or pass B of the two-pass screen, in a Claude Code session dedicated to that pass.
 ---
 
 # rf-screen
@@ -49,6 +49,36 @@ one batch at a time. Each judgement is recorded with a verbatim quote so that it
    the work; report and stop. Calibration, agreement and audit are human steps; do not
    attempt them and do not work around the block. A pass that fails calibration needs a
    protocol amendment by the researcher; do not retry it.
+
+## Full-text mode
+
+Run this mode only when the researcher asks for the full-text pass; call `screen_next` with
+`stage="full-text"` (the default, `title-abstract`, is the procedure above) and keep the same
+independence rules within that stage. A session may screen both stages, but never both passes
+of one stage. `screen_record` takes the stage from the batch.
+
+1. A full-text batch lists records that each name a work (`work_id`), its `document_id` and a
+   pinned `conversion_id`. Judge the work only from that conversion; a later conversion of the
+   document never replaces it.
+2. Read the document with the MCP tool `document_read(work_id=..., conversion_id=...)`, paging
+   with `next_after` until you have read the sections that the criteria need. The abstract is
+   not a substitute for the text. Read only the works of your own batch; the platform refuses
+   any other work, document or conversion.
+3. Cite exactly ONE `anchor` per record: the id of the segment you rely on, as served by
+   `document_read` (for example `s3.2.p4`, or a table cell such as `t2.r5.c3`).
+4. Give `quote`: a span copied character for character from that anchor's text. The quote must
+   lie inside the single paragraph or table cell of the cited anchor; it may not run across two
+   paragraphs, cells or anchors. Pick the one anchor whose text supports the verdict.
+5. Never rely on outside knowledge of the authors, venue, reputation or results of the paper;
+   judge only the text of the pinned conversion.
+6. The verdict rules are those of title and abstract: when in doubt include; `exclude` names an
+   `EX` criterion and a `rationale`; `cannot-assess` names the criterion that the text cannot
+   settle; `unsure` needs a `rationale`.
+7. Call `screen_record` with items `{work_id, verdict, criterion, quote, rationale, anchor}`.
+   For a rejected item, re-read the cited anchor and resubmit with a span that occurs in it, or
+   cite the anchor that does contain the support; never edit a quote to pass the check. If no
+   anchor supports the verdict, change it to `cannot-assess` or `unsure`.
+8. Do not call `screen_agreement` or the audit and calibration tools; they are human steps.
 
 ## Tool arguments
 

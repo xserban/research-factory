@@ -3,6 +3,7 @@
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Literal, NoReturn
 
@@ -19,6 +20,7 @@ from factory.model.chase import ChaseDirection
 from factory.model.fulltext import Route
 from factory.model.identity import IdGenerator
 from factory.model.project import RigorMode
+from factory.model.protocol import ScreeningStage
 from factory.model.screening import Channel
 from factory.model.work import ProvenanceMethod
 from factory.services import agreement as agreement_service
@@ -42,6 +44,23 @@ from factory.services.project import ScreeningStatus
 from factory.services.search import list_works
 from factory.sources.fulltext.registry import default_routes
 from factory.sources.registry import default_sources
+
+
+class StageChoice(StrEnum):
+    """The stages a screening run can have; `either` is a criterion's scope, not a stage."""
+
+    TITLE_ABSTRACT = "title-abstract"
+    FULL_TEXT = "full-text"
+
+
+StageOption = Annotated[
+    StageChoice, typer.Option("--stage", help="The screening stage: title-abstract or full-text.")
+]
+
+
+def _stage(choice: StageChoice) -> ScreeningStage:
+    return ScreeningStage(choice.value)
+
 
 app = typer.Typer(
     name="factory",
@@ -227,7 +246,7 @@ def status(
         f"tasks: open {tasks.open} / claimed {tasks.claimed} / "
         f"expired {tasks.expired} / completed {tasks.completed}"
     )
-    for line in _screening_lines(report.screening):
+    for line in [*_screening_lines(report.screening), *_full_text_lines(report.screening)]:
         typer.echo(line)
     typer.echo(f"chase rounds: {report.chase_rounds}")
     typer.echo(f"admitted seeds: {report.admitted_seeds}")
@@ -276,6 +295,22 @@ def _screening_lines(screening: ScreeningStatus) -> list[str]:
             f"audit: sample {screening.audit_sample}, labelled {screening.audit_labelled}, "
             f"false-exclusion rate {_rate(screening.false_exclusion_rate)}"
         )
+    return lines
+
+
+def _full_text_lines(screening: ScreeningStatus) -> list[str]:
+    """Pass progress at full text: nothing while the protocol declares no full-text plan."""
+    if screening.full_text_passes is None:
+        return []
+    lines: list[str] = []
+    for label, progress in screening.full_text_passes.items():
+        if progress.queued is None:
+            lines.append(f"full-text pass {label}: not opened")
+        else:
+            lines.append(
+                f"full-text pass {label}: queued {progress.queued}, "
+                f"decided {progress.decided}, remaining {progress.remaining}"
+            )
     return lines
 
 
@@ -448,12 +483,14 @@ def serve(ctx: typer.Context) -> None:
 
 
 @calibrate_app.command("draw")
-def calibrate_draw(ctx: typer.Context) -> None:
+def calibrate_draw(ctx: typer.Context, stage: StageOption = StageChoice.TITLE_ABSTRACT) -> None:
     """Draw the calibration set once; a later draw returns the same set."""
     state = _state(ctx)
     with _reporting_errors():
         project = _resolve_project(state)
-        items = calibration_service.draw_calibration(project, project.human_actor())
+        items = calibration_service.draw_calibration(
+            project, project.human_actor(), stage=_stage(stage)
+        )
     typer.echo(f"calibration set: {len(items)} works")
 
 
@@ -465,24 +502,35 @@ def calibrate_label(
     criterion: Annotated[
         str | None, typer.Option("--criterion", help="The EX criterion of an exclusion.")
     ] = None,
+    stage: StageOption = StageChoice.TITLE_ABSTRACT,
 ) -> None:
     """A human's label on one work of the calibration set."""
     state = _state(ctx)
     with _reporting_errors():
         project = _resolve_project(state)
         calibration_service.label_calibration(
-            project, project.human_actor(), work, verdict, criterion, Channel.CLI
+            project,
+            project.human_actor(),
+            work,
+            verdict,
+            criterion,
+            Channel.CLI,
+            stage=_stage(stage),
         )
     typer.echo(f"labelled {work} ({verdict})")
 
 
 @screen_app.command("disagreements")
-def screen_disagreements(ctx: typer.Context) -> None:
+def screen_disagreements(
+    ctx: typer.Context, stage: StageOption = StageChoice.TITLE_ABSTRACT
+) -> None:
     """List the works the two passes disagree on, each pass's decision and quote."""
     state = _state(ctx)
     with _reporting_errors():
         project = _resolve_project(state)
-        agreement = agreement_service.screen_agreement(project, project.human_actor())
+        agreement = agreement_service.screen_agreement(
+            project, project.human_actor(), stage=_stage(stage)
+        )
     if not agreement.disagreements:
         typer.echo("no unresolved disagreements")
         return
@@ -505,6 +553,7 @@ def screen_resolve(
     criterion: Annotated[
         str | None, typer.Option("--criterion", help="The EX criterion of an exclusion.")
     ] = None,
+    stage: StageOption = StageChoice.TITLE_ABSTRACT,
 ) -> None:
     """The human's verdict on a disagreement, or on an unsure single-pass work."""
     state = _state(ctx)
@@ -518,19 +567,20 @@ def screen_resolve(
             criterion,
             reason,
             Channel.CLI,
+            stage=_stage(stage),
         )
     typer.echo(f"resolved {work} ({verdict})")
 
 
 @audit_app.command("sample")
-def audit_sample_cmd(ctx: typer.Context) -> None:
+def audit_sample_cmd(ctx: typer.Context, stage: StageOption = StageChoice.TITLE_ABSTRACT) -> None:
     """Draw the audit sample of the agreed works; each work with its agreed verdict and title."""
     state = _state(ctx)
     with _reporting_errors():
         project = _resolve_project(state)
-        drawn = audit_service.audit_sample(project, project.human_actor())
+        drawn = audit_service.audit_sample(project, project.human_actor(), stage=_stage(stage))
         titles = {work.id: work.title for work in list_works(project)}
-        agreed = agreement_service.agreed_works(project)
+        agreed = agreement_service.agreed_works(project, stage=_stage(stage))
     typer.echo(
         f"audit {drawn.audit_id}: {len(drawn.work_ids)} of {drawn.population} agreed works "
         f"({drawn.exclusions} exclusions, {drawn.inclusions} inclusions)"
@@ -560,12 +610,12 @@ def audit_label(
 
 
 @audit_app.command("report")
-def audit_report_cmd(ctx: typer.Context) -> None:
+def audit_report_cmd(ctx: typer.Context, stage: StageOption = StageChoice.TITLE_ABSTRACT) -> None:
     """The latest audit's labelled count, false-exclusion rate and implicated criteria."""
     state = _state(ctx)
     with _reporting_errors():
         project = _resolve_project(state)
-        report = audit_service.audit_report(project)
+        report = audit_service.audit_report(project, stage=_stage(stage))
     if report is None:
         typer.echo("no audit sampled")
         return

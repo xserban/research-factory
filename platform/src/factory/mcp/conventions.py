@@ -11,9 +11,10 @@ from factory.config import Settings
 from factory.errors import FactoryValidationError, ProjectNotFoundError, ValidationIssue
 from factory.events.envelope import Actor
 from factory.model.fulltext import ROUTE_ORDER, Route
-from factory.model.protocol import ProtocolSpec
+from factory.model.protocol import ProtocolSpec, ScreeningStage
 from factory.model.question import QuestionSpec
 from factory.services.skills import skill_ref
+from factory.services.stages import require_pass_stage
 
 PAGE_LIMIT = 50
 
@@ -183,3 +184,15 @@ def guarded(
         return fail([ValidationIssue(rename(i.field), i.reason) for i in exc.issues])
     except ProjectNotFoundError:
         return fail([ValidationIssue("project", "unknown project")])
+
+
+def parse_stage(value: str) -> ScreeningStage:
+    """The screening stage named by `value`: `title-abstract` or `full-text`, else an error on
+    field `stage` (including `either`, which is a criterion's scope and not a stage of a run)."""
+    try:
+        stage = ScreeningStage(value)
+    except ValueError:
+        raise FactoryValidationError(
+            [ValidationIssue("stage", "must be title-abstract or full-text")]
+        ) from None
+    return require_pass_stage(stage)

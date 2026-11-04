@@ -29,3 +29,17 @@ def test_plugin_skills_resolve_and_have_frontmatter(name: str) -> None:
     assert skill_ref(s, name).startswith(f"{name}@")
     assert _frontmatter(name)["name"] == name
     assert _frontmatter(name)["description"].startswith("Use when")
+
+
+def test_rf_screen_full_text_mode_section() -> None:
+    text = (REPO_ROOT / "plugin" / "skills" / "rf-screen" / "SKILL.md").read_text("utf-8")
+    assert "## Full-text mode" in text
+    section = text.split("## Full-text mode", 1)[1].split("\n## ", 1)[0]
+    assert "document_read(work_id=" in section and "conversion_id" in section
+    assert 'stage="full-text"' in section
+    assert "pinned" in section and "ONE `anchor`" in section
+    assert "character for character" in section and "single paragraph or table cell" in section
+    assert "outside knowledge" in section
+    assert "screen_agreement" in section  # named only to forbid it
+    for kept in ("## Independence", "## Procedure", "## Tool arguments", "## Done when"):
+        assert kept in text

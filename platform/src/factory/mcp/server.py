@@ -18,6 +18,7 @@ from factory.mcp.conventions import (
     paginate,
     parse_input,
     parse_routes,
+    parse_stage,
     spec_path,
     withhold,
 )
@@ -26,7 +27,7 @@ from factory.model.chase import ChaseDirection
 from factory.model.fulltext import Route
 from factory.model.identity import IdGenerator
 from factory.model.project import RigorMode
-from factory.model.protocol import CriterionEffect, PressFinding, ProtocolSpec
+from factory.model.protocol import CriterionEffect, PressFinding, ProtocolSpec, ScreeningStage
 from factory.model.question import QuestionSpec
 from factory.model.screening import CalibrationLabelled, Channel, PassLabel, ScreeningItem
 from factory.model.search import QueryKind, QueryPurpose, QuerySpec
@@ -369,15 +370,25 @@ def build_server(
 
     @server.tool()
     def screen_next(
-        project: str, pass_label: str, role: str, model: str, skill: str
+        project: str,
+        pass_label: str,
+        role: str,
+        model: str,
+        skill: str,
+        stage: str = "title-abstract",
     ) -> dict[str, JsonValue]:
         """Serve the next screening batch of pass A or B to this session, or say why none is
-        served. The records are the text to screen; `blocked` says why ordinary work waits."""
+        served. The records are the text to screen; `blocked` says why ordinary work waits.
+        `stage` is `title-abstract` (default) or `full-text`; a full-text batch names each work's
+        document and the pinned conversion to read with `document_read`."""
 
         def screen() -> JsonValue:
+            run_stage = parse_stage(stage)
             opened = open_project(settings, project, session=session, clock=clock)
             actor = make_agent_actor(settings, session, role, model, skill)
-            result = screening_service.screen_next(opened, actor, _pass_label(pass_label))
+            result = screening_service.screen_next(
+                opened, actor, _pass_label(pass_label), stage=run_stage
+            )
             return _withheld(opened, result.model_dump(mode="json"), include_work_ids=False)
 
         return _reply(project, screen, include_work_ids=False)
@@ -392,7 +403,8 @@ def build_server(
         skill: str,
     ) -> dict[str, JsonValue]:
         """Record verdicts for a held batch. Each item is {work_id, verdict, criterion, quote,
-        rationale}; an invalid item is reported by index and the valid ones are written."""
+        rationale}, plus `anchor` for a full-text batch (the stage is the batch's); an invalid item
+        is reported by index and the valid ones are written."""
 
         def record() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
@@ -425,19 +437,22 @@ def build_server(
         role: str | None = None,
         model: str | None = None,
         skill: str | None = None,
+        stage: str = "title-abstract",
     ) -> dict[str, JsonValue]:
-        """The agreement of the two passes: κ, per-criterion κ, disagreements and cannot-assess
-        rates. Read-only. The actor is an agent when role, model or skill is given, else human.
-        Refused to a session that has joined a pass."""
+        """The agreement of the two passes at `stage` (`title-abstract` or `full-text`): κ,
+        per-criterion κ, disagreements and cannot-assess rates. Read-only. The actor is an agent
+        when role, model or skill is given, else human. Refused to a session that has joined a
+        pass."""
 
         def agreement() -> JsonValue:
+            run_stage = parse_stage(stage)
             opened = open_project(settings, project, session=session, clock=clock)
             _refuse_pass_session(opened)
             if role is None and model is None and skill is None:
                 actor = opened.human_actor()
             else:
                 actor = make_agent_actor(settings, session, role or "", model or "", skill or "")
-            result = agreement_service.screen_agreement(opened, actor)
+            result = agreement_service.screen_agreement(opened, actor, stage=run_stage)
             return _withheld(opened, result.model_dump(mode="json"), include_work_ids=False)
 
         return _reply(project, agreement, include_work_ids=False)
@@ -448,12 +463,15 @@ def build_server(
         work_id: str | None = None,
         verdict: str | None = None,
         criterion: str | None = None,
+        stage: str = "title-abstract",
     ) -> dict[str, JsonValue]:
         """With no `work_id`: the next unlabelled calibration record and the counts. With one: the
-        human's label on it. The first no-argument call draws the calibration set. Labels are human
-        acts; a session that has joined a pass cannot use this tool."""
+        human's label on it. The first no-argument call draws the calibration set of `stage`
+        (`title-abstract` or `full-text`). Labels are human acts; a session that has joined a pass
+        cannot use this tool."""
 
         def label() -> JsonValue:
+            run_stage = parse_stage(stage)
             opened = open_project(settings, project, session=session, clock=clock)
             human = opened.human_actor()
             if work_id is None:
@@ -462,8 +480,10 @@ def build_server(
                     raise FactoryValidationError(
                         [ValidationIssue("work_id", "is required to record a label")]
                     )
-                calibration_service.draw_calibration(opened, human)
-                return _withheld(opened, _next_calibration(opened), include_work_ids=False)
+                calibration_service.draw_calibration(opened, human, stage=run_stage)
+                return _withheld(
+                    opened, _next_calibration(opened, run_stage), include_work_ids=False
+                )
             if verdict is None:
                 raise FactoryValidationError(
                     [ValidationIssue("verdict", "is required with a work_id")]
@@ -471,7 +491,7 @@ def build_server(
             # Only the no-argument call draws the set. A labelled call is refused, and writes
             # nothing, while the set is undrawn; its own fields are checked first.
             _check_label(work_id, verdict, criterion)
-            if not calibration_service.calibration_drawn(opened):
+            if not calibration_service.calibration_drawn(opened, stage=run_stage):
                 raise FactoryValidationError(
                     [
                         ValidationIssue(
@@ -480,24 +500,25 @@ def build_server(
                     ]
                 )
             event_id = calibration_service.label_calibration(
-                opened, human, work_id, verdict, criterion, Channel.MCP
+                opened, human, work_id, verdict, criterion, Channel.MCP, stage=run_stage
             )
             return {"event_id": event_id}
 
         return _reply(project, label, include_work_ids=False)
 
     @server.tool()
-    def audit_sample(project: str) -> dict[str, JsonValue]:
-        """Draw the audit sample of the agreed works, for the human to label: each work's id,
-        title and agreed verdict, with the population and the counts. Refused to a session that has
-        joined a pass."""
+    def audit_sample(project: str, stage: str = "title-abstract") -> dict[str, JsonValue]:
+        """Draw the audit sample of the agreed works of `stage` (`title-abstract` or `full-text`),
+        for the human to label: each work's id, title and agreed verdict, with the population and
+        the counts. Refused to a session that has joined a pass."""
 
         def sample() -> JsonValue:
+            run_stage = parse_stage(stage)
             opened = open_project(settings, project, session=session, clock=clock)
             _refuse_pass_session(opened)
-            drawn = audit_service.audit_sample(opened, opened.human_actor())
+            drawn = audit_service.audit_sample(opened, opened.human_actor(), stage=run_stage)
             titles = {work.id: work.title for work in list_works(opened)}
-            agreed = agreement_service.agreed_works(opened)
+            agreed = agreement_service.agreed_works(opened, stage=run_stage)
             data: dict[str, JsonValue] = {
                 "audit_id": drawn.audit_id,
                 "items": [
@@ -524,8 +545,8 @@ def build_server(
         verdict: str,
         criterion: str | None = None,
     ) -> dict[str, JsonValue]:
-        """The human's label on one sampled work. `criterion` names an EX criterion for an
-        exclusion, and is qualified against the current protocol."""
+        """The human's label on one sampled work; the audit's stage is the sample's. `criterion`
+        names an EX criterion for an exclusion, and is qualified against the current protocol."""
 
         def record() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
@@ -856,10 +877,10 @@ def _items_path(field: str, original: int) -> str:
     return re.sub(r"^items\.\d+", f"items.{original}", field)
 
 
-def _next_calibration(project: Project) -> JsonValue:
+def _next_calibration(project: Project, stage: ScreeningStage) -> JsonValue:
     """The first calibration work without a human label, with the counts. Counts only otherwise."""
-    items = calibration_service.calibration_items(project)
-    labels = calibration_service.calibration_labels(project)
+    items = calibration_service.calibration_items(project, stage=stage)
+    labels = calibration_service.calibration_labels(project, stage=stage)
     corpus = {work.id: work for work in list_works(project)}
     pending = [item for item in items if item not in labels]
     record: JsonValue = None
