@@ -12,8 +12,8 @@ from factory.services import check as check_service
 from factory.services import evidence_report as evidence_report_service
 from factory.services.check import CheckReport, Finding
 from factory.services.context import Project
-from factory.services.extraction_audit import ExtractionAuditReport
 from factory.services.evidence_report import EvidenceReport, assemble_report
+from factory.services.extraction_audit import ExtractionAuditReport
 from tests.evidence_helpers import pilot_inputs
 from tests.helpers import SESSION, open_session
 from tests.test_extraction_agreement import (  # noqa: F401
