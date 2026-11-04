@@ -31,6 +31,9 @@ from factory.services import check as check_service
 from factory.services import document_convert as document_convert_service
 from factory.services import document_read as document_read_service
 from factory.services import evidence as evidence_service
+from factory.services import extraction as extraction_service
+from factory.services import extraction_agreement as extraction_agreement_service
+from factory.services import extraction_audit as extraction_audit_service
 from factory.services import fulltext as fulltext_service
 from factory.services import fulltext_import as fulltext_import_service
 from factory.services import fulltext_status as fulltext_status_service
@@ -41,6 +44,7 @@ from factory.services import protocol as protocol_service
 from factory.services import seeds as seeds_service
 from factory.services import trace as trace_service
 from factory.services.context import Project, list_projects, open_project
+from factory.services.extraction_agreement import Choice
 from factory.services.project import ScreeningStatus
 from factory.services.search import list_works
 from factory.sources.fulltext.registry import default_routes
@@ -57,6 +61,21 @@ class StageChoice(StrEnum):
 StageOption = Annotated[
     StageChoice, typer.Option("--stage", help="The screening stage: title-abstract or full-text.")
 ]
+
+
+class ExtractChoice(StrEnum):
+    """A human's choice on an extraction disagreement."""
+
+    A = "a"
+    B = "b"
+    NEITHER = "neither"
+
+
+_CHOICES: dict[ExtractChoice, Choice] = {
+    ExtractChoice.A: "a",
+    ExtractChoice.B: "b",
+    ExtractChoice.NEITHER: "neither",
+}
 
 
 def _stage(choice: StageChoice) -> ScreeningStage:
@@ -100,6 +119,11 @@ document_app = typer.Typer(
     help="Convert retrieved documents to Markdown, check them, and read them.",
     no_args_is_help=True,
 )
+extract_app = typer.Typer(
+    name="extract",
+    help="Extraction: unit status, agreement, resolution and the audit.",
+    no_args_is_help=True,
+)
 report_app = typer.Typer(
     name="report", help="PRISMA flow, search report and methods statement.", no_args_is_help=True
 )
@@ -112,6 +136,7 @@ app.add_typer(audit_app)
 app.add_typer(search_app)
 app.add_typer(fulltext_app)
 app.add_typer(document_app)
+app.add_typer(extract_app)
 
 
 @dataclass
@@ -651,6 +676,121 @@ def audit_report_cmd(ctx: typer.Context, stage: StageOption = StageChoice.TITLE_
         f"(ceiling {report.ceiling:.2f}, above ceiling: {above})"
     )
     typer.echo(f"criteria implicated: {', '.join(report.criteria_implicated) or 'none'}")
+
+
+@extract_app.command("status")
+def extract_status_cmd(ctx: typer.Context) -> None:
+    """Extraction units per pass: current, open, queued and stale."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        states = extraction_service.unit_states(project)
+    for line in render.extraction_status_lines(states):
+        typer.echo(line)
+
+
+@extract_app.command("agreement")
+def extract_agreement_cmd(ctx: typer.Context) -> None:
+    """The agreement of the two extraction passes and the unresolved disagreements."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        agreement = extraction_agreement_service.extraction_agreement(
+            project, project.human_actor()
+        )
+    for line in render.agreement_lines(agreement):
+        typer.echo(line)
+
+
+@extract_app.command("resolve")
+def extract_resolve_cmd(
+    ctx: typer.Context,
+    work: Annotated[str, typer.Argument(help="A work with a disagreement.")],
+    row_key: Annotated[str, typer.Argument(help="The disputed row.")],
+    choice: Annotated[ExtractChoice, typer.Option("--choice", help="a, b or neither.")],
+    reason: Annotated[str, typer.Option("--reason", help="Why the human decided.")],
+    field: Annotated[
+        str | None, typer.Option("--field", help="One field; the whole row when omitted.")
+    ] = None,
+) -> None:
+    """The human's choice between the passes on one disagreement."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        extraction_agreement_service.resolve_extraction(
+            project,
+            project.human_actor(),
+            work,
+            row_key,
+            field,
+            _CHOICES[choice],
+            reason,
+            Channel.CLI,
+        )
+    typer.echo(f"resolved {work} {row_key} {field or 'row'} ({choice.value})")
+
+
+@extract_app.command("audit-sample")
+def extract_audit_sample_cmd(ctx: typer.Context) -> None:
+    """Draw the extraction audit sample; each value with its quote and the cited element text."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        human = project.human_actor()
+        drawn = extraction_audit_service.extraction_audit_sample(project, human)
+        evidence = extraction_audit_service.audit_evidence(
+            project, human, drawn.audit_id, Channel.CLI
+        )
+    typer.echo(f"audit {drawn.audit_id}: {len(drawn.items)} of {drawn.population} agreed values")
+    for item in evidence:
+        for line in render.audit_evidence_lines(item):
+            typer.echo(line)
+
+
+@extract_app.command("audit-label")
+def extract_audit_label_cmd(
+    ctx: typer.Context,
+    audit_id: Annotated[str, typer.Argument(help="The audit being labelled.")],
+    work: Annotated[str, typer.Argument(help="A work of the audit sample.")],
+    row_key: Annotated[str, typer.Argument(help="The sampled row.")],
+    field: Annotated[str, typer.Argument(help="The sampled field.")],
+    correct: Annotated[
+        bool, typer.Option("--correct/--incorrect", help="Whether the value was extracted right.")
+    ],
+    note: Annotated[str, typer.Option("--note", help="An optional note.")] = "",
+) -> None:
+    """A human's label on one sampled value."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        extraction_audit_service.extraction_audit_record(
+            project,
+            project.human_actor(),
+            audit_id,
+            work,
+            row_key,
+            field,
+            correct,
+            note,
+            Channel.CLI,
+        )
+    typer.echo(
+        f"labelled {work} {row_key} {field} in {audit_id} ({'correct' if correct else 'incorrect'})"
+    )
+
+
+@extract_app.command("audit-report")
+def extract_audit_report_cmd(ctx: typer.Context) -> None:
+    """The latest extraction audit's counts and error rate."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        report = extraction_audit_service.extraction_audit_report(project)
+    if report is None:
+        typer.echo("no audit sampled")
+        return
+    for line in render.audit_report_lines(report):
+        typer.echo(line)
 
 
 _JSON = Annotated[bool, typer.Option("--json", help="Print the report model as JSON.")]

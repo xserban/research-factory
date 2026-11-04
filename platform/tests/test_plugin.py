@@ -8,7 +8,7 @@ from factory.config import Settings
 from factory.services.skills import skill_ref
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SKILLS = ("rf-frame", "rf-probe", "rf-protocol", "rf-screen", "rf-search")
+SKILLS = ("rf-extract", "rf-frame", "rf-probe", "rf-protocol", "rf-screen", "rf-search")
 
 
 def _frontmatter(name: str) -> dict[str, str]:
@@ -46,3 +46,26 @@ def test_rf_screen_full_text_mode_section() -> None:
     assert "screen_agreement" in section  # named only to forbid it
     for kept in ("## Independence", "## Procedure", "## Tool arguments", "## Done when"):
         assert kept in text
+
+
+def test_rf_extract_skill_text() -> None:
+    text = (REPO_ROOT / "plugin" / "skills" / "rf-extract" / "SKILL.md").read_text("utf-8")
+    for needed in (
+        "extract_next",
+        "document_read",
+        "finish",
+        "verbatim",
+        "never compute",
+        "## Independence",
+        "## Procedure",
+        "## Tool arguments",
+        "## Done when",
+        "`supersedes`",
+        "row indices",
+        "the cell text",
+    ):
+        assert needed in text, needed
+    independence = " ".join(text.split("## Independence", 1)[1].split("\n## ", 1)[0].split())
+    assert "different model" in independence
+    assert "Do not read the other pass's rows" in independence
+    assert "human labels" in independence and "audit" in independence

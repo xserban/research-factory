@@ -1,10 +1,18 @@
 """Markdown and text renderings of the report models for the CLI. Formatting only: every figure
 is read from the model, so the CLI and the MCP tools cannot differ (R-05)."""
 
+from factory.model.screening import PassLabel
 from factory.services.agreement import DecisionView
 from factory.services.check import CheckReport
 from factory.services.document_convert import ConvertSummary, DocumentStatus
 from factory.services.document_read import DocumentPage
+from factory.services.extraction import UnitState
+from factory.services.extraction_agreement import (
+    ExtractionAgreement,
+    FieldDisagreement,
+    FieldView,
+)
+from factory.services.extraction_audit import AuditEvidence, ExtractionAuditReport
 from factory.services.fulltext import FetchSummary
 from factory.services.fulltext_import import ImportReport
 from factory.services.fulltext_status import FulltextStatus
@@ -212,3 +220,85 @@ def decision_lines(label: str, view: DecisionView) -> list[str]:
         f"  {label}: {view.verdict.value} {cited}{anchor}  quote: {view.quote}  "
         f"rationale: {view.rationale}"
     ]
+
+
+def _rate(value: float | None) -> str:
+    return "n/a" if value is None else f"{value:.3f}"
+
+
+def extraction_status_lines(states: list[UnitState]) -> list[str]:
+    """One line per pass in use: its units by state."""
+    if not states:
+        return ["no extraction units"]
+    lines: list[str] = []
+    for label in PassLabel:
+        mine = [s for s in states if s.pass_label is label]
+        if not mine:
+            continue
+        counts = ", ".join(
+            f"{name} {sum(1 for s in mine if s.state == name)}"
+            for name in ("current", "open", "queued", "stale")
+        )
+        lines.append(f"pass {label.value}: {counts}")
+    return lines
+
+
+def field_view_lines(label: str, view: FieldView | None) -> list[str]:
+    """One pass's value of a disagreement: value, unit, anchor, cell and the verbatim quote."""
+    if view is None:
+        return [f"  {label}: -"]
+    unit = f" {view.unit}" if view.unit else ""
+    return [
+        f"  {label}: {view.value}{unit}  anchor {view.anchor or '-'}  cell {view.cell or '-'}"
+        f"  quote: {view.quote or '-'}  reported {view.reported_in.value}"
+    ]
+
+
+def disagreement_lines(item: FieldDisagreement) -> list[str]:
+    """A disagreement with both passes' values."""
+    lines = [f"{item.work_id}  {item.row_key}  {item.field or 'row'} ({item.kind})"]
+    lines += field_view_lines("A", item.a)
+    lines += field_view_lines("B", item.b)
+    return lines
+
+
+def agreement_lines(agreement: ExtractionAgreement) -> list[str]:
+    """The extraction agreement: counts, per-group rates and the unresolved disagreements."""
+    lines = [
+        f"dual works {agreement.dual_works}, rows aligned {agreement.rows_aligned}, "
+        f"unmatched {agreement.rows_unmatched}, resolved {agreement.resolved}, "
+        f"dropped {len(agreement.dropped)}, single-extraction {len(agreement.single_extraction)}",
+        f"overall {_rate(agreement.overall)}",
+    ]
+    lines += [
+        f"group {g.group}: {g.agreed}/{g.compared} rate {_rate(g.rate)}" for g in agreement.rates
+    ]
+    if not agreement.disagreements:
+        lines.append("no unresolved disagreements")
+    for item in agreement.disagreements:
+        lines += disagreement_lines(item)
+    return lines
+
+
+def audit_evidence_lines(item: AuditEvidence) -> list[str]:
+    """One sampled value with its quote and the text of the element it cites."""
+    ref = item.item
+    unit = f" {item.unit}" if item.unit else ""
+    return [
+        f"{ref.work_id}  {ref.row_key}  {ref.field} = {item.value}{unit}",
+        f"  anchor {item.anchor or '-'}  cell {item.cell or '-'}  quote: {item.quote or '-'}",
+        f"  element: {item.element_text}",
+    ]
+
+
+def audit_report_lines(report: ExtractionAuditReport) -> list[str]:
+    """The extraction audit's counts, error rate against the ceiling and per-group rates."""
+    above = "yes" if report.above_ceiling else "no"
+    lines = [
+        f"audit {report.audit_id}: sample {report.sample_size}, labelled {report.labelled}, "
+        f"incorrect {report.incorrect}",
+        f"error rate {_rate(report.error_rate)} (ceiling {report.ceiling:.2f}, "
+        f"above ceiling: {above}, enforced: {'yes' if report.enforced else 'no'})",
+    ]
+    lines += [f"group {g}: {_rate(r)}" for g, r in report.by_group.items()]
+    return lines

@@ -162,6 +162,8 @@ TOOLS = [
     "screen_next", "screen_record", "screen_agreement", "calibration_label", "audit_sample",
     "audit_record", "protocol_deviation", "report_prisma", "report_methods", "trace", "check",
     "fulltext_fetch", "fulltext_status", "document_read",
+    "extract_next", "extract_record", "extract_agreement", "extract_audit_sample",
+    "extract_audit_record",
 ]  # fmt: skip
 
 

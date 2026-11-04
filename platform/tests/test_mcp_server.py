@@ -49,6 +49,11 @@ async def test_project_status_tool(settings: Settings, project: Project, clock: 
             "fulltext_fetch",
             "fulltext_status",
             "document_read",
+            "extract_next",
+            "extract_record",
+            "extract_agreement",
+            "extract_audit_sample",
+            "extract_audit_record",
         ]
         res = await client.call_tool("project_status", {"project": "demo"})
         body = _body(res)

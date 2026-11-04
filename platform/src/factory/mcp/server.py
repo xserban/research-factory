@@ -1,8 +1,8 @@
 """The MCP server: one session per process. Tools parse input, call a service and format output."""
 
 import re
-from collections.abc import Callable, Iterable, Mapping
-from typing import Annotated, Literal
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from typing import Annotated, Literal, TypeVar
 
 from mcp.server.mcpserver import MCPServer
 from pydantic import Field, JsonValue, StringConstraints, ValidationError
@@ -24,6 +24,7 @@ from factory.mcp.conventions import (
 )
 from factory.model.base import StrictModel
 from factory.model.chase import ChaseDirection
+from factory.model.extraction import ClaimInput, ExtractedRowInput
 from factory.model.fulltext import Route
 from factory.model.identity import IdGenerator
 from factory.model.project import RigorMode
@@ -40,6 +41,9 @@ from factory.services import check as check_service
 from factory.services import dedup as dedup_service
 from factory.services import document_read as document_read_service
 from factory.services import evidence as evidence_service
+from factory.services import extraction as extraction_service
+from factory.services import extraction_agreement as extraction_agreement_service
+from factory.services import extraction_audit as extraction_audit_service
 from factory.services import fulltext as fulltext_service
 from factory.services import fulltext_status as fulltext_status_service
 from factory.services import methods as methods_service
@@ -53,6 +57,7 @@ from factory.services import search as search_service
 from factory.services import seeds as seeds_service
 from factory.services import trace as trace_service
 from factory.services.context import Project, open_project
+from factory.services.extraction import ExtractResult
 from factory.services.results import BatchResult, ItemError
 from factory.services.search import list_works
 from factory.services.seeds import SeedOutcome, SeedRole
@@ -60,6 +65,7 @@ from factory.sources.fulltext.base import FullTextRoute
 from factory.sources.fulltext.registry import default_routes
 from factory.sources.registry import SourceFactory, default_sources
 
+_M = TypeVar("_M", bound=StrictModel)
 _SYSTEM_CLOCK = SystemClock()
 _FIELD_NAMES = {"text": "query"}  # QuerySpec calls the query text `text`; the tool calls it `query`
 
@@ -746,15 +752,214 @@ def build_server(
 
         return _reply(project, read)
 
+    @server.tool()
+    def extract_next(
+        project: str, pass_label: str, role: str, model: str, skill: str
+    ) -> dict[str, JsonValue]:
+        """Serve the next extraction task of pass A or B to this session, or say why none is
+        served. The batch names the declared fields, the work and the pinned conversion to read
+        with `document_read`; `blocked` says why ordinary work waits. Joins this session to the
+        pass on its first call."""
+
+        def serve() -> JsonValue:
+            label = _pass_label(pass_label)
+            opened = open_project(settings, project, session=session, clock=clock)
+            actor = make_agent_actor(settings, session, role, model, skill)
+            served = extraction_service.extract_next(opened, actor, label)
+            return _withheld(opened, served.model_dump(mode="json"), include_work_ids=False)
+
+        return _reply(project, serve, include_work_ids=False)
+
+    @server.tool()
+    def extract_record(
+        project: str,
+        task_id: str,
+        rows: list[dict[str, JsonValue]],
+        role: str,
+        model: str,
+        skill: str,
+        claims: list[dict[str, JsonValue]] | None = None,
+        finish: bool = False,
+        reason: str | None = None,
+        supersedes: dict[str, str] | None = None,
+        claim_supersedes: dict[str, str] | None = None,
+    ) -> dict[str, JsonValue]:
+        """Record the rows (and, in pass A, claims) extracted from a held task. A row is
+        {fields: {name: {value, unit, anchor, cell, quote, reported_in, cited_work}}}. An invalid
+        item is reported by index and the valid ones are written. `supersedes` maps the index of
+        a row of this call (a string key) to the id of the row it corrects; `claim_supersedes`
+        likewise for claims. `finish` closes the work once no item is rejected; a work with no
+        results needs a `reason`."""
+
+        def record() -> JsonValue:
+            row_targets = _index_keys("supersedes", supersedes or {})
+            claim_targets = _index_keys("claim_supersedes", claim_supersedes or {})
+            opened = open_project(settings, project, session=session, clock=clock)
+            actor = make_agent_actor(settings, session, role, model, skill)
+            good_rows, bad_rows = _parse_all(ExtractedRowInput, rows, "rows")
+            good_claims, bad_claims = _parse_all(ClaimInput, claims or [], "claims")
+            result = extraction_service.extract_record(
+                opened,
+                actor,
+                task_id,
+                [item for _, item in good_rows],
+                [item for _, item in good_claims],
+                finish=finish and not bad_rows and not bad_claims,
+                reason=reason,
+                supersedes=_renumbered("supersedes", row_targets, good_rows, len(rows)),
+                claim_supersedes=_renumbered(
+                    "claim_supersedes", claim_targets, good_claims, len(claims or [])
+                ),
+            )
+            merged = ExtractResult(
+                rows=_merged(result.rows, good_rows, bad_rows),
+                claims=_merged(result.claims, good_claims, bad_claims),
+                completed=result.completed,
+            )
+            return _withheld(opened, merged.model_dump(mode="json"), include_work_ids=False)
+
+        return _reply(project, record, include_work_ids=False)
+
+    @server.tool()
+    def extract_agreement(project: str) -> dict[str, JsonValue]:
+        """The agreement of the two extraction passes: per-group rates, the unresolved
+        disagreements with both values, and the single-extraction works. Read-only. Refused to a
+        session that has joined an extraction or screening pass."""
+
+        def agreement() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            result = extraction_agreement_service.extraction_agreement(opened, opened.human_actor())
+            return _withheld(opened, result.model_dump(mode="json"), include_work_ids=False)
+
+        return _reply(project, agreement, include_work_ids=False)
+
+    @server.tool()
+    def extract_audit_sample(project: str) -> dict[str, JsonValue]:
+        """Draw the audit sample of the agreed extracted values, for the human to label: each
+        item with its value, quote and the text of the cited document element. Refused to a
+        session that has joined an extraction or screening pass."""
+
+        def sample() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            human = opened.human_actor()
+            drawn = extraction_audit_service.extraction_audit_sample(opened, human)
+            evidence = extraction_audit_service.audit_evidence(
+                opened, human, drawn.audit_id, Channel.MCP
+            )
+            data: dict[str, JsonValue] = {
+                "audit_id": drawn.audit_id,
+                "items": [item.model_dump(mode="json") for item in evidence],
+                "population": drawn.population,
+                "sample_size": len(drawn.items),
+            }
+            return _withheld(opened, data, include_work_ids=False)
+
+        return _reply(project, sample, include_work_ids=False)
+
+    @server.tool()
+    def extract_audit_record(
+        project: str,
+        audit_id: str,
+        work_id: str,
+        row_key: str,
+        field: str,
+        correct: bool,
+        note: str = "",
+    ) -> dict[str, JsonValue]:
+        """The human's label on one sampled value: was it extracted correctly. Refused to a
+        session that has joined an extraction or screening pass."""
+
+        def label() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            event_id = extraction_audit_service.extraction_audit_record(
+                opened,
+                opened.human_actor(),
+                audit_id,
+                work_id,
+                row_key,
+                field,
+                correct,
+                note,
+                Channel.MCP,
+            )
+            return {"event_id": event_id}
+
+        return _reply(project, label, include_work_ids=False)
+
     return server
 
 
 def _refuse_pass_session(project: Project) -> None:
-    """A session that screens must not read the other pass's results or the answer key (R-20)."""
-    if calibration_service.is_pass_session(project, project.session):
+    """A session that screens or extracts must not read the other pass's results, the report
+    surfaces or the answer key (R-20)."""
+    if calibration_service.is_pass_session(
+        project, project.session
+    ) or extraction_service.is_extraction_session(project, project.session):
         raise FactoryValidationError(
             [ValidationIssue("session", "this session has joined a pass and cannot use this tool")]
         )
+
+
+def _index_keys(name: str, given: Mapping[str, str]) -> dict[int, str]:
+    """A `supersedes` object's keys as row indices; MCP delivers JSON keys as strings. A key that
+    is not an integer is refused, with every such key named, before anything is written."""
+    out: dict[int, str] = {}
+    issues: list[ValidationIssue] = []
+    for key, target in given.items():
+        try:
+            out[int(key)] = target
+        except ValueError:
+            issues.append(ValidationIssue(f"{name}.{key}", "key must be an integer item index"))
+    if issues:
+        raise FactoryValidationError(issues)
+    return out
+
+
+def _parse_all(
+    model: type[_M], items: list[dict[str, JsonValue]], name: str
+) -> tuple[list[tuple[int, _M]], list[ItemError]]:
+    """Each item that is a valid `model`, with its index, and each rejection by index."""
+    accepted: list[tuple[int, _M]] = []
+    rejected: list[ItemError] = []
+    for index, item in enumerate(items):
+        try:
+            accepted.append((index, parse_input(model, item, f"{name}.{index}")))
+        except FactoryValidationError as exc:
+            rejected.append(ItemError(index=index, issues=exc.issues))
+    return accepted, rejected
+
+
+def _renumbered(
+    name: str, targets: Mapping[int, str], accepted: Sequence[tuple[int, object]], total: int
+) -> dict[int, str]:
+    """`targets` (keyed by call index) keyed by position among the items that parsed. A target of
+    an item that failed to parse is dropped, since that item is reported rejected; a key outside
+    the call is refused."""
+    position = {original: place for place, (original, _) in enumerate(accepted)}
+    out: dict[int, str] = {}
+    for index, target in targets.items():
+        if index in position:
+            out[position[index]] = target
+        elif not 0 <= index < total:
+            raise FactoryValidationError(
+                [ValidationIssue(f"{name}.{index}", "is not an item index of this call")]
+            )
+    return out
+
+
+def _merged(
+    result: BatchResult[str], accepted: Sequence[tuple[int, object]], parse_errors: list[ItemError]
+) -> BatchResult[str]:
+    """The service's result with its rejections renumbered to call indices, and those of items
+    that failed to parse added, by index."""
+    errors = [
+        ItemError(index=accepted[error.index][0], issues=error.issues) for error in result.rejected
+    ]
+    return BatchResult[str](
+        written=result.written, rejected=sorted(errors + parse_errors, key=lambda e: e.index)
+    )
 
 
 def _without_rates(report: dict[str, JsonValue]) -> dict[str, JsonValue]:
