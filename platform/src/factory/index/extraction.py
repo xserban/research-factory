@@ -5,7 +5,8 @@ gets `superseded_by` set, so a live row has `superseded_by` NULL. `extraction_fi
 per field of each row with its provenance. `extraction_claims` is likewise kept with supersession.
 `extraction_resolutions` keeps the latest human choice per (work, row_key, field); a whole-row
 choice stores field `*`. `extraction_audit_items.correct` is NULL until labelled; the latest label
-wins. `row_key` and `field` are indexed because plan E's cell trace queries them directly.
+wins; its `extraction_id` is the extraction the value came from when sampled (NULL in older
+samples). `row_key` and `field` are indexed because plan E's cell trace queries them directly.
 
 Handlers are total: an event naming an unknown row, claim or audit is stored (or changes nothing),
 never refused. A repeated pass, join, close, row, claim or sample changes nothing (first write
@@ -176,6 +177,7 @@ def extraction_tables(metadata: MetaData) -> ExtractionTables:
         Column("scope", String, nullable=False, server_default="evidence"),
         Column("correct", Boolean),
         Column("note", String, nullable=False, server_default=""),
+        Column("extraction_id", String),
     )
     return ExtractionTables(
         passes=passes,
@@ -405,6 +407,7 @@ def _audit_sampled(t: ExtractionTables) -> Handler:
                     work_id=item.work_id,
                     row_key=item.row_key,
                     field=item.field,
+                    extraction_id=item.extraction_id,
                     correct=None,
                     note="",
                 )

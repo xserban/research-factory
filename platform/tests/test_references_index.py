@@ -116,8 +116,8 @@ FUZZY = resolution(
 )
 
 
-def test_projection_version_is_21() -> None:
-    assert PROJECTION_VERSION == "23"
+def test_projection_version_pinned() -> None:
+    assert PROJECTION_VERSION == "24"
 
 
 def test_extraction_and_entries_projected_without_text(project: Project) -> None:

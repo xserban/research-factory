@@ -25,6 +25,7 @@ from factory.services.extraction_audit import (
     extraction_audit_report,
     extraction_audit_sample,
 )
+from factory.services.protocol import current_protocol
 from tests.test_extraction_agreement import (  # noqa: F401
     _both,
     _r,
@@ -89,7 +90,8 @@ def test_sample_recorded_with_seed_and_reproducible(
     assert ExtractionAuditSampled.model_validate(event.payload).items == first.items
     population = sorted((i for i, _ in ea._population(project)), key=ea._sort_key)
     expected = ea._draw(population, 50, 7)
-    assert list(first.items) == expected
+    assert [ea._sort_key(i) for i in first.items] == [ea._sort_key(i) for i in expected]
+    assert all(i.extraction_id == f"ext_{i.field}" for i in first.items)
     assert ea._draw(population, 50, 8) != expected
 
 
@@ -393,3 +395,107 @@ def test_by_group_rates_per_group(project: Project, human: Actor, agreed: list[s
     assert report.labelled == 12
     assert report.error_rate == sum(i.field == "value" for i in labelled) / 12
     assert group_of("value") in expected and expected[group_of("value")] is not None
+
+
+def test_sample_stores_the_extraction_of_each_item(
+    project: Project, human: Actor, agreed: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _fake(monkeypatch, 40)
+    sampled = extraction_audit_sample(project, human, random_seed=5)
+    assert [i.extraction_id for i in sampled.items] == [f"ext_{i.field}" for i in sampled.items]
+    stored = _events(project, "extraction.audit_sampled")[0].payload["items"]
+    assert all(i["extraction_id"] == f"ext_{i['field']}" for i in stored)
+
+
+def _replace_first(monkeypatch: pytest.MonkeyPatch, sampled: ExtractionAuditSampled) -> None:
+    """The first sampled value now comes from another extraction (a re-extraction)."""
+    real = ea._population
+    first = sampled.items[0]
+
+    def changed(p: Project) -> list[tuple[AuditItemRef, str]]:
+        return [
+            (i, "ext_replaced")
+            if (i.work_id, i.row_key, i.field) == (first.work_id, first.row_key, first.field)
+            else (i, e)
+            for i, e in real(p)
+        ]
+
+    monkeypatch.setattr(ea, "_population", changed)
+
+
+def test_label_on_a_changed_value_is_refused(
+    project: Project, human: Actor, agreed: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _fake(monkeypatch, 40)
+    sampled = extraction_audit_sample(project, human, random_seed=5)
+    _replace_first(monkeypatch, sampled)
+    item = sampled.items[0]
+    with pytest.raises(FactoryValidationError) as e:
+        extraction_audit_record(
+            project, human, sampled.audit_id, item.work_id, item.row_key, item.field, True, "", CH
+        )
+    assert [i.field for i in e.value.issues] == ["item"]
+    assert _events(project, "extraction.audit_labelled") == []
+    other = sampled.items[1]
+    extraction_audit_record(
+        project, human, sampled.audit_id, other.work_id, other.row_key, other.field, True, "", CH
+    )
+
+
+def test_outdated_labels_are_left_out_of_the_rate(
+    project: Project, human: Actor, agreed: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _fake(monkeypatch, 40)
+    sampled = extraction_audit_sample(project, human, random_seed=5)
+    for i, item in enumerate(sampled.items):
+        extraction_audit_record(
+            project,
+            human,
+            sampled.audit_id,
+            item.work_id,
+            item.row_key,
+            item.field,
+            i >= 3,
+            "",
+            CH,
+        )
+    _replace_first(monkeypatch, sampled)  # the first item was labelled incorrect
+    report = extraction_audit_report(project)
+    assert report is not None
+    assert (report.sample_size, report.labelled, report.incorrect, report.outdated) == (
+        40,
+        39,
+        2,
+        1,
+    )
+    assert report.error_rate == 2 / 39
+    assert report.above_ceiling is True
+    assert [r for r in report.by_group.values() if r is not None] == [2 / 39]
+
+
+def test_items_sampled_without_an_extraction_are_never_outdated(
+    project: Project, human: Actor, agreed: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An audit sampled before the extraction id was stored (an older event) keeps its labels."""
+    _fake(monkeypatch, 40)
+    current = current_protocol(project)
+    assert current is not None
+    items = tuple(
+        AuditItemRef(work_id="rf:w1", row_key="rk_0123456789ab", field=f"f{i:04d}")
+        for i in range(40)
+    )
+    old = ExtractionAuditSampled(
+        audit_id="xau_01JZ9Q3K5M7N8P0R2S4T6V8W1C",
+        items=items,
+        random_seed=1,
+        population=40,
+        population_digest="sha256:old",
+        protocol_id=current.protocol_id,
+    )
+    project.record([project.events.make("extraction.audit_sampled", old, human)])
+    extraction_audit_record(
+        project, human, old.audit_id, "rf:w1", "rk_0123456789ab", "f0000", False, "", CH
+    )
+    report = extraction_audit_report(project)
+    assert report is not None
+    assert (report.labelled, report.incorrect, report.outdated) == (1, 1, 0)

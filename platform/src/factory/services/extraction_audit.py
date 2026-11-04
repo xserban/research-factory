@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import random
 import secrets
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 from pydantic import ValidationError
 from sqlalchemy import text
@@ -83,7 +83,10 @@ class ExtractionAuditReport(StrictModel):
     audit_id: str
     sample_size: int
     labelled: int
+    """Labels on values unchanged since the sample; outdated labels are not counted."""
     incorrect: int
+    outdated: int = 0
+    """Labels on values whose extraction changed after the sample; outside the rate."""
     error_rate: float | None
     ceiling: float
     above_ceiling: bool
@@ -159,9 +162,13 @@ def extraction_audit_sample(
         if _last_digest(project) == digest:
             raise _refuse("an audit of this agreed set is open; a new one waits for a change to it")
         size = audit_size(len(population), schema.audit_fraction, schema.audit_minimum)
+        source = {_sort_key(item): extraction_id for item, extraction_id in population}
+        drawn = _draw([item for item, _ in population], size, seed)
         payload = ExtractionAuditSampled(
             audit_id=project.ids.new("xau"),
-            items=tuple(_draw([item for item, _ in population], size, seed)),
+            items=tuple(
+                item.model_copy(update={"extraction_id": source[_sort_key(item)]}) for item in drawn
+            ),
             random_seed=seed,
             population=len(population),
             population_digest=digest,
@@ -187,9 +194,9 @@ def audit_evidence(
     project: Project, actor: Actor, audit_id: str, channel: Channel
 ) -> list[AuditEvidence]:
     """The sampled values of an audit with their cited document elements, sorted. An item whose
-    value is no longer in the agreed set is left out. Gated as `extraction_audit_record`: refused
-    for an agent (`actor`), an MCP relay from a pass session (`channel`), an unknown audit
-    (`audit_id`)."""
+    value is no longer in the agreed set, or now comes from another extraction, is left out.
+    Gated as `extraction_audit_record`: refused for an agent (`actor`), an MCP relay from a pass
+    session (`channel`), an unknown audit (`audit_id`)."""
     project.index.sync()
     issues = _gate(project, actor, channel)
     if not _audit_exists(project, audit_id):
@@ -203,6 +210,8 @@ def audit_evidence(
         row = rows.get((item.work_id, item.row_key))
         found = None if row is None else row.fields.get(item.field)
         if row is None or found is None:
+            continue
+        if item.extraction_id is not None and found.extraction_id != item.extraction_id:
             continue
         if row.conversion_id not in manifests:
             manifest = conversion_manifest(project, row.conversion_id)
@@ -239,19 +248,31 @@ def extraction_audit_record(
     the earlier label (last write wins).
 
     Refused, with nothing written: for an actor that is not human (`actor`); an unknown audit
-    (`audit_id`); a value outside the sample (`field`); an MCP-relayed label from a session that
-    joined an extraction or screening pass (`channel`).
+    (`audit_id`); a value outside the sample (`field`); a sampled value whose current extraction
+    differs from the one sampled, or that is no longer agreed (`item`); an MCP-relayed label from
+    a session that joined an extraction or screening pass (`channel`).
     """
     with project.index.exclusive():
         project.index.sync()
         issues = _gate(project, actor, channel)
         if not _audit_exists(project, audit_id):
             issues.append(ValidationIssue("audit_id", "unknown audit"))
-        elif not any(
-            (i.work_id, i.row_key, i.field) == (work_id, row_key, field)
-            for i in _items(project, audit_id)
-        ):
-            issues.append(ValidationIssue("field", "not in this audit sample"))
+        else:
+            sampled = [
+                i
+                for i in _items(project, audit_id)
+                if (i.work_id, i.row_key, i.field) == (work_id, row_key, field)
+            ]
+            if not sampled:
+                issues.append(ValidationIssue("field", "not in this audit sample"))
+            elif _outdated(sampled[0], _current(project)):
+                issues.append(
+                    ValidationIssue(
+                        "item",
+                        "the sampled value changed after the audit was drawn; "
+                        "it is outdated and cannot be labelled",
+                    )
+                )
         if issues:
             raise FactoryValidationError(issues)
         try:
@@ -278,7 +299,9 @@ def extraction_audit_record(
 
 def extraction_audit_report(project: Project) -> ExtractionAuditReport | None:
     """The latest audit's counts and error rate; None when no audit has been sampled. Items not
-    yet labelled count in the sample size only. Read-only; never raises."""
+    yet labelled count in the sample size only. A label on a value whose current extraction
+    differs from the sampled one (or that is no longer agreed) is outdated: counted in `outdated`
+    and left out of `labelled`, the error rate and `by_group`. Read-only; never raises."""
     project.index.sync()
     with project.index.connect() as conn:
         latest = conn.execute(
@@ -289,7 +312,8 @@ def extraction_audit_report(project: Project) -> ExtractionAuditReport | None:
         audit_id = str(latest[0])
         rows = conn.execute(
             text(
-                "SELECT field, correct FROM extraction_audit_items "
+                "SELECT work_id, row_key, field, correct, extraction_id "
+                "FROM extraction_audit_items "
                 "WHERE audit_id = :a ORDER BY work_id, row_key, field"
             ),
             {"a": audit_id},
@@ -298,12 +322,22 @@ def extraction_audit_report(project: Project) -> ExtractionAuditReport | None:
         _, _, pack = require_schema(project)
     except FactoryValidationError:
         pack = None
+    current = _current(project)
     tally: dict[str, list[int]] = {}
-    labelled = incorrect = 0
-    for name, correct in rows:
+    labelled = incorrect = outdated = 0
+    for work_id, row_key, name, correct, extraction_id in rows:
         found = None if pack is None else pack.field(str(name))
         counts = tally.setdefault(found.group if found else "other", [0, 0])
         if correct is None:
+            continue
+        item = AuditItemRef(
+            work_id=str(work_id),
+            row_key=str(row_key),
+            field=str(name),
+            extraction_id=None if extraction_id is None else str(extraction_id),
+        )
+        if _outdated(item, current):
+            outdated += 1
             continue
         counts[0] += 1
         counts[1] += not correct
@@ -315,6 +349,7 @@ def extraction_audit_report(project: Project) -> ExtractionAuditReport | None:
         sample_size=len(rows),
         labelled=labelled,
         incorrect=incorrect,
+        outdated=outdated,
         error_rate=rate,
         ceiling=EXTRACTION_ERROR_CEILING,
         above_ceiling=rate is not None and rate > EXTRACTION_ERROR_CEILING,
@@ -356,12 +391,31 @@ def _items(project: Project, audit_id: str) -> list[AuditItemRef]:
     with project.index.connect() as conn:
         rows = conn.execute(
             text(
-                "SELECT work_id, row_key, field FROM extraction_audit_items "
+                "SELECT work_id, row_key, field, extraction_id FROM extraction_audit_items "
                 "WHERE audit_id = :a ORDER BY work_id, row_key, field"
             ),
             {"a": audit_id},
         ).all()
-    return [AuditItemRef(work_id=str(w), row_key=str(r), field=str(f)) for w, r, f in rows]
+    return [
+        AuditItemRef(
+            work_id=str(w),
+            row_key=str(r),
+            field=str(f),
+            extraction_id=None if e is None else str(e),
+        )
+        for w, r, f, e in rows
+    ]
+
+
+def _current(project: Project) -> dict[tuple[str, str, str], str]:
+    """The extraction each agreed value currently comes from, by location."""
+    return {_sort_key(item): extraction_id for item, extraction_id in _population(project)}
+
+
+def _outdated(item: AuditItemRef, current: Mapping[tuple[str, str, str], str]) -> bool:
+    """Whether a sampled value changed since the sample: its extraction differs, or it is no
+    longer agreed. An item sampled without an extraction id is never outdated."""
+    return item.extraction_id is not None and current.get(_sort_key(item)) != item.extraction_id
 
 
 def _refuse(reason: str) -> FactoryValidationError:

@@ -261,9 +261,13 @@ class ExtractionResolved(StrictModel):
 
 
 class AuditItemRef(StrictModel):
+    """One audited value by location. `extraction_id` is the extraction the value came from when
+    it was sampled; None in a sample recorded before it was stored, or in a bare reference."""
+
     work_id: str = Field(min_length=1)
     row_key: str = Field(pattern=ROW_KEY_RE)
     field: FieldName
+    extraction_id: str | None = None
 
 
 class ExtractionAuditSampled(StrictModel):
