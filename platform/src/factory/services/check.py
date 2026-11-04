@@ -616,6 +616,7 @@ def _fulltext(project: Project) -> list[_Hit]:
                     "a library entry does not hash to its document",
                 )
             )
+    hits += _conversion_library(project)
     for document_id, work_id in _changed_sources(project):
         hits.append(
             _Hit(
@@ -645,6 +646,49 @@ def _stored_documents(project: Project) -> list[tuple[str, str, str]]:
             text("SELECT document_id, work_id, raw_hash FROM fulltext_documents ORDER BY event_id")
         ).all()
     return [(str(d), str(w), str(h)) for d, w, h in rows]
+
+
+def _conversion_library(project: Project) -> list[_Hit]:
+    """Conversions whose Markdown or manifest blob is missing (a warning) or corrupt (an error).
+
+    A hit names (document id, work id, conversion id), in event order. A conversion with one blob
+    missing and the other corrupt gets one hit of each code.
+    """
+    hits: list[_Hit] = []
+    for conversion_id, document_id, work_id, markdown_hash, manifest_hash in _conversions(project):
+        refs = (document_id, work_id, conversion_id)
+        states = {_library_state(project, markdown_hash), _library_state(project, manifest_hash)}
+        if "missing" in states:
+            hits.append(
+                _Hit(
+                    "library-missing",
+                    refs,
+                    "a conversion has no library entry; run `factory document convert --restore`",
+                )
+            )
+        if "corrupt" in states:
+            hits.append(
+                _Hit(
+                    "library-corrupt",
+                    refs,
+                    "a conversion's library entry does not hash to its reference",
+                )
+            )
+    return hits
+
+
+def _conversions(project: Project) -> list[tuple[str, str, str, str, str]]:
+    """(conversion id, document id, work id, Markdown hash, manifest hash) of every conversion, in
+    event order. Superseded documents included."""
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT c.conversion_id, c.document_id, d.work_id, c.markdown_hash, "
+                "c.manifest_hash FROM document_conversions c JOIN fulltext_documents d "
+                "ON d.document_id = c.document_id ORDER BY c.event_id"
+            )
+        ).all()
+    return [(str(a), str(b), str(c), str(d), str(e)) for a, b, c, d, e in rows]
 
 
 def _changed_sources(project: Project) -> list[tuple[str, str]]:
