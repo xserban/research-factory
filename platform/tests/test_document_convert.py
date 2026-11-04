@@ -18,38 +18,22 @@ from factory.document.latexml_html import LatexmlHtmlConverter
 from factory.document.registry import ConverterRegistry, default_converters
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.catalog import default_catalog
-from factory.events.envelope import Actor, Event
+from factory.events.envelope import Event
 from factory.events.reader import read_all
 from factory.model.document import Converted
 from factory.model.fulltext import AttemptOutcome, Route
-from factory.model.screening import PassLabel
 from factory.services.agreement import Outcome, final_outcomes
-from factory.services.calibration import calibration_items
 from factory.services.context import Project
 from factory.services.document_convert import ConvertSummary, convert_documents
 from factory.services.fulltext import fetch_fulltext, record_supplied_document
-from factory.services.screening import open_pass
-from factory.services.search import list_works
 from factory.sources.fulltext.base import not_retrieved
 from tests.document_helpers import fetched_document
-from tests.helpers import _setup
-from tests.test_fulltext_service import StubRoute, _include_all, always, retrieved
-from tests.test_screening_next import _draw
+from tests.test_fulltext_service import StubRoute, always, retrieved
 
 ARTICLE = (Path(__file__).parent / "fixtures" / "document" / "latexml_article.html").read_bytes()
 SENTENCE = b"Ut enim ad minim veniam"
 MARKER = b"FAIL-ME"
 PDF = b"%PDF-1.4 synthetic"
-
-
-@pytest.fixture
-def corpus(project: Project, agent: Actor, human: Actor, mock_sources: Any) -> None:
-    """Both passes opened and every ordinary work included, so several works are promoted."""
-    protocol_id = _setup(project, agent, human, mock_sources, dual_sample=0.5, random_works=0)
-    _draw(project)
-    open_pass(project, agent, PassLabel.A)
-    open_pass(project, agent, PassLabel.B)
-    _include_all(project, agent, human, protocol_id)
 
 
 class StubConverter:
@@ -141,19 +125,6 @@ def _git_ignored(relative: str) -> bool | None:
         check=False,
     )
     return check.returncode == 0
-
-
-@pytest.fixture
-def corpus_leaving(project: Project, agent: Actor, human: Actor, mock_sources: Any) -> str:
-    """As `corpus`, but one ordinary work gets no decision, so it is not promoted. Returns it."""
-    protocol_id = _setup(project, agent, human, mock_sources, dual_sample=0.5, random_works=0)
-    _draw(project)
-    open_pass(project, agent, PassLabel.A)
-    open_pass(project, agent, PassLabel.B)
-    calibration = set(calibration_items(project))
-    leave = sorted(w.id for w in list_works(project) if w.id not in calibration)[0]
-    _include_all(project, agent, human, protocol_id, leave=leave)
-    return leave
 
 
 def _strip_library(project: Project) -> None:

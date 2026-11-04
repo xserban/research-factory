@@ -2,7 +2,8 @@
 
 `document_read` returns the non-cell anchors of one conversion in document order, in pages. A
 single anchor (cells included) is read with `anchor=`. `conversion_manifest` and `resolve_anchor`
-are the entry points that quote checks and later plans use.
+are the entry points that quote checks and later plans use. They apply no INCLUDED gate and no work
+scoping, so they must not be exposed through a tool without that gate.
 
 Choosing the conversion (ruling 5): an explicit `conversion_id` wins; else an explicit `document_id`
 (its latest conversion); else the first live document with a conversion, in route order
@@ -128,7 +129,7 @@ def document_read(
             [ValidationIssue("work_id", f"{work_id}: not promoted at title/abstract")]
         )
     conversion = _select(project, work_id, document_id, conversion_id)
-    manifest = _load_manifest(project, conversion, check_markdown=True)
+    manifest = _load(project, conversion)
     anchors = manifest.anchors
     total = sum(1 for a in anchors if a.kind is not AnchorKind.CELL)
 
@@ -158,8 +159,12 @@ def document_read(
 def conversion_manifest(project: Project, conversion_id: str) -> Manifest:
     """The manifest of one conversion, read from the library and verified by hash.
 
-    Raises `FactoryValidationError` on field `conversion_id` if the conversion is unknown or its
-    manifest is missing or damaged.
+    Both the Markdown and the manifest blob must be present and hash correctly, as in
+    `document_read`. Raises `FactoryValidationError` on field `conversion_id` if the conversion is
+    unknown or either blob is missing or damaged (naming `factory document convert --restore`).
+
+    No INCLUDED gate and no work scoping apply: the conversion is found by id alone. Do not expose
+    this through a tool without the gate of `document_read`.
     """
     project.index.sync()
     conversion = _find(project, "c.conversion_id = :cid", {"cid": conversion_id})
@@ -167,14 +172,17 @@ def conversion_manifest(project: Project, conversion_id: str) -> Manifest:
         raise FactoryValidationError(
             [ValidationIssue("conversion_id", f"{conversion_id}: unknown conversion")]
         )
-    return _load_manifest(project, conversion, check_markdown=False)
+    return _load(project, conversion)
 
 
 def resolve_anchor(project: Project, conversion_id: str, anchor_id: str) -> Anchor:
     """The anchor `anchor_id` of one conversion, exactly as its manifest holds it.
 
-    Raises `FactoryValidationError` on field `conversion_id` if the conversion is unknown, and on
-    field `anchor` if the conversion has no such anchor.
+    Verifies the blobs as `conversion_manifest` does. Raises `FactoryValidationError` on field
+    `conversion_id` if the conversion is unknown or damaged, and on field `anchor` if the conversion
+    has no such anchor.
+
+    No INCLUDED gate and no work scoping apply. Do not expose this through a tool without the gate.
     """
     manifest = conversion_manifest(project, conversion_id)
     return _anchor_or_refuse(manifest, anchor_id, conversion_id)
@@ -315,17 +323,18 @@ def _query(project: Project, where: str, params: dict[str, Any]) -> list[_Conver
 # --- Blobs ---
 
 
-def _load_manifest(project: Project, conversion: _Conversion, *, check_markdown: bool) -> Manifest:
-    """The manifest, verified by hash; with `check_markdown`, the Markdown blob is verified too.
+def _load(project: Project, conversion: _Conversion) -> Manifest:
+    """The conversion's manifest, after verifying that its Markdown and manifest blobs exist and
+    hash correctly. The one loading path for `document_read`, `conversion_manifest` and
+    `resolve_anchor`.
 
-    A missing, mismatching or unparseable blob is refused on field `conversion_id`, naming the
-    restore command. The exception message is not carried, since it may name a path.
+    A missing, mismatching, unreadable or unparseable blob is refused on field `conversion_id`,
+    naming the restore command. The exception message is not carried, since it may name a path.
     """
     try:
-        if check_markdown:
-            project.library.get(conversion.markdown_hash)
+        project.library.get(conversion.markdown_hash)
         return Manifest.from_json(project.library.get(conversion.manifest_hash))
-    except (BlobNotFoundError, BlobIntegrityError, ManifestError) as exc:
+    except (BlobNotFoundError, BlobIntegrityError, ManifestError, OSError) as exc:
         raise FactoryValidationError(
             [
                 ValidationIssue(

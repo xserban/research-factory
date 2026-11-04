@@ -24,9 +24,8 @@ from factory.services.document_read import (
     document_read,
     resolve_anchor,
 )
-from factory.services.fulltext import fetch_fulltext
+from factory.services.fulltext import fetch_fulltext, record_supplied_document
 from tests.document_helpers import fetched_document
-from tests.test_document_convert import corpus, corpus_leaving  # noqa: F401
 from tests.test_fulltext_service import StubRoute, always, retrieved
 
 MD = b"""# Study
@@ -111,17 +110,19 @@ def _snapshot(project: Project) -> tuple[dict[Path, bytes], set[Path]]:
 
 @pytest.mark.usefixtures("corpus")
 def test_default_document_follows_route_order(project: Project) -> None:
+    """The oa-pdf document is fetched first and the arXiv HTML document second, so event order
+    favours oa-pdf; route order must still pick arXiv HTML."""
     work = _promoted(project)[0]
-    arxiv = fetched_document(project, work, MD)
     oa = _fetch_only(project, work, Route.OA_PDF, MD_OTHER)
+    arxiv = _fetch_only(project, work, Route.ARXIV_HTML, MD)
     _convert(project)
 
     page = document_read(project, work_id=work)
 
+    assert oa != arxiv
     assert page.document_id == arxiv
     assert page.route is Route.ARXIV_HTML
     assert page.work_id == work
-    assert oa != arxiv
 
 
 @pytest.mark.usefixtures("corpus")
@@ -163,7 +164,59 @@ def test_page_bounded_by_max_chars(project: Project) -> None:
     assert page.total_segments == 3
 
 
-def test_work_not_included_refused(project: Project, corpus_leaving: str) -> None:  # noqa: F811
+@pytest.mark.usefixtures("corpus")
+def test_pdf_only_work_refused_naming_convert(project: Project) -> None:
+    """A work whose only document has no converter is refused, naming the convert command."""
+    work = _promoted(project)[0]
+    with project.index.exclusive():
+        project.index.sync()
+        record_supplied_document(
+            project,
+            work,
+            content=b"%PDF-1.4 synthetic",
+            source_version="v1",
+            media_type="application/pdf",
+            actor=project.human_actor(),
+        )
+    summary = convert_documents(project, _registry())
+    assert [o.reason for o in summary.outcomes] == ["no-converter"]
+
+    with pytest.raises(FactoryValidationError) as raised:
+        document_read(project, work_id=work)
+
+    [issue] = raised.value.issues
+    assert issue.field == "work_id"
+    assert "factory document convert" in issue.reason
+
+
+@pytest.mark.usefixtures("corpus")
+def test_max_chars_first_segment_always_returned_and_paging_covers_all(project: Project) -> None:
+    work = _promoted(project)[0]
+    long_paragraph = "lorem ipsum " * 130
+    body = f"{long_paragraph}\n\n# Next\n\nShort one.\n\n## Sub\n\nAnother short.\n"
+    fetched_document(project, work, body.encode())
+    _convert(project)
+    expected = _non_cell_ids(_manifest(project, _conversion_of(project, work)))
+
+    first = document_read(project, work_id=work, max_chars=1000)
+
+    assert len(first.segments) == 1
+    assert first.segments[0].anchor == expected[0]
+    assert len(first.segments[0].text) > 1000
+    assert first.next_after == expected[0]
+
+    seen: list[str] = []
+    after: str | None = None
+    while True:
+        page = document_read(project, work_id=work, after=after, max_chars=1000)
+        seen += [segment.anchor for segment in page.segments]
+        if page.next_after is None:
+            break
+        after = page.next_after
+    assert seen == expected
+
+
+def test_work_not_included_refused(project: Project, corpus_leaving: str) -> None:
     with pytest.raises(FactoryValidationError) as raised:
         document_read(project, work_id=corpus_leaving)
 
@@ -292,6 +345,26 @@ def test_missing_blob_names_restore(project: Project, field: str) -> None:
     [issue] = raised.value.issues
     assert issue.field == "conversion_id"
     assert "factory document convert --restore" in issue.reason
+
+
+@pytest.mark.usefixtures("corpus")
+def test_manifest_entry_points_verify_markdown_blob(project: Project) -> None:
+    """conversion_manifest and resolve_anchor refuse a missing Markdown blob, naming restore."""
+    work = _promoted(project)[0]
+    fetched_document(project, work, MD)
+    _convert(project)
+    conversion_id = _conversion_of(project, work)
+    _strip_blob(project, _conversion_row(project, conversion_id)["markdown_hash"])
+
+    with pytest.raises(FactoryValidationError) as manifest_error:
+        conversion_manifest(project, conversion_id)
+    with pytest.raises(FactoryValidationError) as anchor_error:
+        resolve_anchor(project, conversion_id, "s1")
+
+    for raised in (manifest_error, anchor_error):
+        [issue] = raised.value.issues
+        assert issue.field == "conversion_id"
+        assert "factory document convert --restore" in issue.reason
 
 
 @pytest.mark.usefixtures("corpus")
