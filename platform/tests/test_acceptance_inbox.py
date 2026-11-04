@@ -51,6 +51,8 @@ from tests.test_extraction_schema import PINNED_P_ID
 from tests.test_inbox_screening import NOTE, _n, _search, _seeded, _supply_seed
 from tests.test_screening_next import _draw
 
+pytestmark = pytest.mark.slow  # acceptance suite: dev runs deselect with -m "not slow"
+
 
 def _events(project: Project, type_: str) -> list[Event]:
     return [e for e in read_all(project.paths.events_dir, project.catalog) if e.type == type_]
