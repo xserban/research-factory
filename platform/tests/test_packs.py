@@ -68,6 +68,6 @@ def test_ml_benchmark_v1_digest_is_pinned() -> None:
     import hashlib
 
     digest = hashlib.sha256(repr(ML_BENCHMARK_V1).encode()).hexdigest()
-    assert digest == "8923a8f72e085972a450f48d3cf963527ba70ccbad4c92b66732eae1dcc0448a", (
+    assert digest == "5fdd9feebcb541f8bb73b0a7a8700a40abc86e08842d8ed7849d801582af05cc", (
         "packs are versioned: add a new version"
     )

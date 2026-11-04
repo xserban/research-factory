@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
+from typing import Literal
 
 
 class FieldKind(StrEnum):
@@ -35,7 +36,11 @@ class Check(StrEnum):
 
 @dataclass(frozen=True)
 class FieldDef:
-    """One extractable field. ``normaliser`` names a text normaliser or is None."""
+    """One extractable field. ``normaliser`` names a text normaliser or is None.
+
+    ``allowed`` is an enumeration of permitted values compared after ``normalise_for``; empty
+    means free.
+    """
 
     name: str
     group: str
@@ -44,6 +49,20 @@ class FieldDef:
     check: Check
     units: tuple[str, ...] = ()
     normaliser: str | None = None
+    allowed: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class Conditional:
+    """``field`` is ``rule`` (required or forbidden) when field ``when`` has one of ``values``.
+
+    ``when`` names a field with an ``allowed`` enumeration; ``values`` are members of it.
+    """
+
+    field: str
+    when: str
+    values: tuple[str, ...]
+    rule: Literal["required", "forbidden"]
 
 
 @dataclass(frozen=True)
@@ -68,7 +87,14 @@ class ReportSpec:
 
 @dataclass(frozen=True)
 class Pack:
-    """A versioned set of fields with required fields and default keys."""
+    """A versioned set of fields with required fields and default keys.
+
+    ``conditionals`` make fields required or forbidden by the value of another field.
+    ``row_key_fields`` non-empty makes the row key a hash of those fields' normalised values and
+    the anchor of the first present field of ``row_anchor_fields``; empty keeps the plan-D key
+    (the location of the field ``value``). ``compared_fields`` are the fields dual extraction
+    compares; None means every declared field.
+    """
 
     name: str
     version: int
@@ -76,6 +102,10 @@ class Pack:
     required: tuple[str, ...]
     default_comparability_keys: tuple[str, ...]
     citation_patterns: tuple[str, ...]
+    conditionals: tuple[Conditional, ...] = ()
+    row_key_fields: tuple[str, ...] = ()
+    row_anchor_fields: tuple[str, ...] = ()
+    compared_fields: tuple[str, ...] | None = None
     report: ReportSpec | None = field(default=None, repr=False, compare=False, hash=False)
     """Derivation-only report spec (plan E ruling 15): outside repr, equality and the digest."""
 

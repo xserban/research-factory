@@ -2,8 +2,13 @@
 
 Invariants: a row is accepted only if it has no issue; issues are located as ``fields.<name>`` or
 ``fields.<name>.<attr>`` and carry fixed reasons, never document text. The service reads the
-conversion's manifest and the corpus and writes nothing. The row's identity comes from the field
-named ``value``.
+conversion's manifest and the corpus and writes nothing. The row's identity is `pack_row_key`:
+the field named ``value`` for unkeyed packs, the pack's key fields for keyed ones.
+
+A value outside a field's ``allowed`` enumeration is ``value-not-allowed``. Conditionals are
+evaluated on the normalised value of their ``when`` field only when that field passed its kind
+and ``allowed`` checks, so a row failing ``allowed`` reports only that; a forbidden field present
+is ``not-allowed-for-kind`` and is not verified further.
 """
 
 from __future__ import annotations
@@ -13,7 +18,7 @@ from dataclasses import dataclass
 
 from factory.document.anchors import Manifest
 from factory.errors import ValidationIssue
-from factory.extraction.numbers import parse_printed
+from factory.extraction.numbers import normalise_for, parse_printed
 from factory.extraction.verify import (
     ANCHOR_REQUIRED,
     ANCHOR_UNKNOWN,
@@ -22,7 +27,7 @@ from factory.extraction.verify import (
     QUOTE_NOT_IN_ANCHOR,
     QUOTE_REQUIRED,
     VerifiedField,
-    row_key,
+    pack_row_key,
     verify_field,
 )
 from factory.model.extraction import ExtractedRowInput, FieldInput, StoredField
@@ -34,6 +39,9 @@ from factory.services.search import list_works
 
 VALUE_FIELD = "value"
 UNDECLARED = "not declared in the protocol's extraction schema"
+VALUE_NOT_ALLOWED = "value-not-allowed"
+REQUIRED = "required"
+NOT_ALLOWED_FOR_KIND = "not-allowed-for-kind"
 
 _ATTR = {
     ANCHOR_UNKNOWN: "anchor",
@@ -83,10 +91,14 @@ def verify_row_in(
     """As `verify_row`, with the manifest and the corpus work ids already loaded."""
     issues: list[ValidationIssue] = []
     stored: dict[str, StoredField] = {}
+    required, forbidden = _conditional_rules(pack, declared, row)
     for name, entry in row.items():
         field = pack.field(name)
         if field is None or name not in declared:
             issues.append(ValidationIssue(f"fields.{name}", UNDECLARED))
+            continue
+        if name in forbidden:
+            issues.append(ValidationIssue(f"fields.{name}", NOT_ALLOWED_FOR_KIND))
             continue
         before = len(issues)
         issues.extend(_kind_issues(name, field, entry))
@@ -102,15 +114,35 @@ def verify_row_in(
                 ValidationIssue(f"fields.{name}.{_ATTR.get(reason, 'value')}", reason)
                 for reason in out
             )
-    issues.extend(
-        ValidationIssue(f"fields.{name}", "required") for name in pack.required if name not in row
-    )
+    missing = [n for n in (*pack.required, *required) if n not in row]
+    issues.extend(ValidationIssue(f"fields.{n}", REQUIRED) for n in dict.fromkeys(missing))
     if issues:
         return RowVerdict(None, None, issues)
-    value = stored.get(VALUE_FIELD)
-    if value is None:  # the pack does not require `value`: the row has no identity
-        return RowVerdict(None, None, [ValidationIssue(f"fields.{VALUE_FIELD}", "required")])
-    return RowVerdict(stored, row_key(conversion_id, value), [])
+    if not pack.row_key_fields and VALUE_FIELD not in stored:
+        # the pack does not require `value`: the row has no identity
+        return RowVerdict(None, None, [ValidationIssue(f"fields.{VALUE_FIELD}", REQUIRED)])
+    return RowVerdict(stored, pack_row_key(pack, conversion_id, stored), [])
+
+
+def _conditional_rules(
+    pack: Pack, declared: Collection[str], row: Mapping[str, FieldInput]
+) -> tuple[set[str], set[str]]:
+    """The fields the pack's conditionals make required and forbidden for ``row``.
+
+    A conditional applies only when its ``when`` field is declared, present and valid (right kind,
+    inside ``allowed``); its value is compared after ``normalise_for``.
+    """
+    required: set[str] = set()
+    forbidden: set[str] = set()
+    for cond in pack.conditionals:
+        when, entry = pack.field(cond.when), row.get(cond.when)
+        if when is None or entry is None or cond.when not in declared:
+            continue
+        if _kind_issues(cond.when, when, entry):
+            continue
+        if normalise_for(when, str(entry.value)) in cond.values:
+            (required if cond.rule == "required" else forbidden).add(cond.field)
+    return required, forbidden
 
 
 def _kind_issues(name: str, field: FieldDef, entry: FieldInput) -> list[ValidationIssue]:
@@ -129,6 +161,8 @@ def _kind_issues(name: str, field: FieldDef, entry: FieldInput) -> list[Validati
         problem = "not text"
     if problem is not None:
         out.append(ValidationIssue(f"fields.{name}.value", problem))
+    elif field.allowed and normalise_for(field, str(value)) not in field.allowed:
+        out.append(ValidationIssue(f"fields.{name}.value", VALUE_NOT_ALLOWED))
     if entry.unit is not None and field.units and entry.unit not in field.units:
         out.append(ValidationIssue(f"fields.{name}.unit", "unit not allowed for this field"))
     return out

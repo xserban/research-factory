@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from decimal import Decimal
 
@@ -78,6 +79,42 @@ def row_key(conversion_id: str, value: StoredField) -> str:
         cell = value.anchor
     location = cell if cell is not None else f"{value.anchor}\x1f{value.canonical}"
     digest = hashlib.sha256(f"{conversion_id}\x1f{location}".encode()).hexdigest()
+    return f"rk_{digest[:12]}"
+
+
+NO_ANCHOR = "-"
+"""The anchor part of a keyed row key when no anchor field is present (``not-stated``)."""
+
+
+def pack_row_key(pack: Pack, conversion_id: str, fields: Mapping[str, StoredField]) -> str:
+    """The row key of verified ``fields`` under ``pack`` (G2-A ruling 4).
+
+    Keyed packs (``row_key_fields`` non-empty): ``rk_`` plus 12 hex of the hash of the
+    conversion, the anchor of the first field of ``row_anchor_fields`` present with an anchor
+    (``-`` when none) and ``normalise_for`` of each key field (``""`` when absent), joined by
+    the unit separator. Otherwise `row_key` of the field ``value``; raises ValueError when it
+    is absent.
+    """
+    if not pack.row_key_fields:
+        value = fields.get("value")
+        if value is None:
+            raise ValueError("an unkeyed pack's row needs the field 'value'")
+        return row_key(conversion_id, value)
+    anchor = next(
+        (
+            a
+            for name in pack.row_anchor_fields
+            if (f := fields.get(name)) is not None and (a := f.anchor) is not None
+        ),
+        NO_ANCHOR,
+    )
+    parts = [conversion_id, anchor]
+    for name in pack.row_key_fields:
+        stored, fdef = fields.get(name), pack.field(name)
+        parts.append(
+            "" if stored is None or fdef is None else normalise_for(fdef, str(stored.value))
+        )
+    digest = hashlib.sha256("\x1f".join(parts).encode()).hexdigest()
     return f"rk_{digest[:12]}"
 
 
@@ -220,6 +257,7 @@ def _copy_marker(pack: Pack, entry: FieldInput, cell: Anchor | None, manifest: M
 __all__ = [
     "VerifiedField",
     "cell_row",
+    "pack_row_key",
     "row_key",
     "verify_field",
 ]
