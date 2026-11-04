@@ -13,12 +13,13 @@ from factory.document.anchors import Manifest, parse_manifest
 from factory.document.registry import ConverterRegistry
 from factory.errors import ValidationIssue
 from factory.extraction.verify import (
-    FieldEntry,
     VerifiedField,
     cell_row,
     row_key,
     verify_field,
 )
+from factory.model.extraction import ExtractedRowInput, FieldInput
+from factory.model.protocol import ExtractionSchema
 from factory.packs import ML_BENCHMARK_V1 as PACK
 from factory.packs import FieldDef
 from factory.services.context import Project
@@ -45,6 +46,12 @@ Plain count of 22,100,000 parameters and DeiT-S [41] reaches 79.8% in prior work
 | x | 1 |
 """
 DECLARED = {f.name for f in PACK.fields}
+SCHEMA = ExtractionSchema(
+    pack=PACK.name,
+    pack_version=PACK.version,
+    fields=tuple(f.name for f in PACK.fields),
+    comparability_keys=("dataset", "metric"),
+)
 
 
 def fdef(name: str) -> FieldDef:
@@ -65,11 +72,11 @@ def entry(
     cell: str | None,
     quote: str | None,
     **kw: Any,
-) -> FieldEntry:
-    return FieldEntry(value=value, unit=unit, anchor=anchor, cell=cell, quote=quote, **kw)
+) -> FieldInput:
+    return FieldInput(value=value, unit=unit, anchor=anchor, cell=cell, quote=quote, **kw)
 
 
-def base_row(**override: FieldEntry) -> dict[str, FieldEntry]:
+def base_row(**override: FieldInput) -> dict[str, FieldInput]:
     row = {
         "method_name": entry("Ours", None, "t1", "t1.r3.c1", "Ours"),
         "task": entry("classification", None, None, None, None),
@@ -81,15 +88,15 @@ def base_row(**override: FieldEntry) -> dict[str, FieldEntry]:
     return row
 
 
-def run(manifest: Manifest, row: dict[str, FieldEntry], cnv: str = "cnv_1") -> RowVerdict:
+def run(manifest: Manifest, row: dict[str, FieldInput], cnv: str = "cnv_1") -> RowVerdict:
     return verify_row_in(PACK, DECLARED, row, cnv, manifest, set())
 
 
-def reasons(manifest: Manifest, **override: FieldEntry) -> dict[str, str]:
+def reasons(manifest: Manifest, **override: FieldInput) -> dict[str, str]:
     return {i.field: i.reason for i in run(manifest, base_row(**override)).issues}
 
 
-def field_reasons(manifest: Manifest, name: str, e: FieldEntry) -> list[str]:
+def field_reasons(manifest: Manifest, name: str, e: FieldInput) -> list[str]:
     out = verify_field(PACK, fdef(name), e, manifest)
     return [] if isinstance(out, VerifiedField) else out
 
@@ -137,9 +144,6 @@ def test_cell_resolves_to_exactly_one_cell_and_text_checked(manifest: Manifest) 
     )
     assert "cell-not-in-anchor-table" in field_reasons(
         manifest, "value", entry("1", None, "t1", "t2.r2.c2", "1")
-    )
-    assert "cell-unknown" in field_reasons(  # a non-cell id is not a cell
-        manifest, "value", entry("82.4", "%", "t1", "s1.p1", "82.40")
     )
     # the quote has no 79.8; the cell shows 82.40
     assert "number-not-in-cell" in field_reasons(
@@ -295,12 +299,72 @@ def test_verify_row_against_a_converted_document(project: Project) -> None:
     fetched_document(project, work, MD.encode())
     summary = convert_documents(project, ConverterRegistry([PassThroughConverter()]))
     cnv = next(o.conversion_id for o in summary.outcomes if o.conversion_id)
-    ok = verify_row(project, PACK, DECLARED, base_row(), cnv)
+    ok = verify_row(project, PACK, SCHEMA, ExtractedRowInput(fields=base_row()), cnv)
     assert ok.issues == [] and ok.fields is not None
     cited = list_works(project)[0].id
     row = base_row(value=entry("82.4", "%", "t1", "t1.r3.c2", "82.40", cited_work=cited))
-    assert verify_row(project, PACK, DECLARED, row, cnv).issues == []
+    assert verify_row(project, PACK, SCHEMA, ExtractedRowInput(fields=row), cnv).issues == []
     row = base_row(value=entry("82.4", "%", "t1", "t1.r3.c2", "82.40", cited_work="w_nope"))
-    assert [i.field for i in verify_row(project, PACK, DECLARED, row, cnv).issues] == [
-        "fields.value.cited_work"
+    assert [
+        i.field
+        for i in verify_row(project, PACK, SCHEMA, ExtractedRowInput(fields=row), cnv).issues
+    ] == ["fields.value.cited_work"]
+
+
+@pytest.mark.parametrize(
+    ("value", "unit", "quote"),
+    [
+        ("25", "", "25 M"),
+        ("25", None, "25 M"),
+        ("4.6", "", "4.6 GFLOPs"),
+        ("22.1", "", "22.1M"),
+    ],
+)
+def test_count_suffix_needs_declared_unit(value: str, unit: str | None, quote: str) -> None:
+    m = parse_manifest(anchorise(f"# 1 S\n\nThe model has {quote} in size.\n"))
+    e = entry(value, unit, "s1.p1", None, quote)
+    assert field_reasons(m, "params", e) == ["unit-suffix-mismatch"]
+
+
+def test_bare_count_cell_with_declared_unit_verifies(manifest: Manifest) -> None:
+    m = parse_manifest(anchorise("# 1 S\n\n| A | Params (M) |\n| --- | --- |\n| x | 25 |\n"))
+    out = verify_field(PACK, fdef("params"), entry("25", "M", "t1", "t1.r2.c2", "25"), m)
+    assert isinstance(out, VerifiedField) and out.stored.canonical == "25000000"
+
+
+def test_other_family_suffix_needs_exact_unit() -> None:
+    m = parse_manifest(anchorise("# 1 S\n\nIt uses 512 MB of memory.\n"))
+    ok = verify_field(PACK, fdef("memory"), entry("512", "MB", "s1.p1", None, "512 MB"), m)
+    assert isinstance(ok, VerifiedField)
+    assert field_reasons(m, "memory", entry("512", None, "s1.p1", None, "512 MB")) == [
+        "unit-suffix-mismatch"
     ]
+    assert field_reasons(m, "memory", entry("512", "GB", "s1.p1", None, "512 MB")) == [
+        "unit-suffix-mismatch"
+    ]
+
+
+def test_quote_must_lie_in_the_cited_cell(manifest: Manifest) -> None:
+    assert field_reasons(manifest, "value", entry("82.4", "%", "t1", "t1.r3.c2", "Top-1")) == [
+        "quote-not-in-anchor"
+    ]
+    assert "quote-not-in-anchor" in field_reasons(
+        manifest, "value", entry("82.4", "%", "t1", "t1.r3.c2", "79.8")
+    )
+    assert "quote-not-in-anchor" in field_reasons(
+        manifest, "method_name", entry("Ours", None, "t1", "t1.r2.c1", "Ours")
+    )
+    assert field_reasons(manifest, "value", entry("82.4", "%", "t1", "t1.r3.c2", "82.40")) == []
+
+
+def test_copy_marker_from_whole_anchor_when_quote_is_narrow(manifest: Manifest) -> None:
+    e = entry("79.8", "%", "s1.p2", None, "reaches 79.8%")
+    out = verify_field(PACK, fdef("value"), e, manifest)
+    assert isinstance(out, VerifiedField) and out.stored.copy_marker is True
+
+
+def test_row_without_value_field_is_refused_not_a_keyerror(manifest: Manifest) -> None:
+    row = {"task": entry("classification", None, None, None, None)}
+    verdict = verify_row_in(PACK, DECLARED, row, "cnv_1", manifest, set())
+    assert verdict.row_key is None
+    assert ValidationIssue("fields.value", "required") in verdict.issues

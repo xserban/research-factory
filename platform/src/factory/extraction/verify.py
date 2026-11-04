@@ -2,9 +2,14 @@
 
 Invariants: a field is verified only against the anchored element it cites; a number is matched
 as a whole token (``82.4`` is never found inside ``182.45``) and its suffix must agree with the
-declared unit; a quote never spans two cells; reasons come from a fixed vocabulary and never carry
-document text. Nothing here judges: the same input always gives the same verdict. False accepts
-are worse than false rejects, so every doubtful case rejects.
+declared unit; a quote never spans two cells and, when a cell is cited, lies inside that cell;
+reasons come from a fixed vocabulary and never carry document text. Nothing here judges: the same
+input always gives the same verdict. False accepts are worse than false rejects, so every doubtful
+case rejects.
+
+Known limits (caught by dual extraction and the audit, not here): ``reproduced`` is stored, never
+checked; a cell such as ``79.8 ± 0.2`` contains the token ``0.2``, so a value of ``0.2`` cited at
+that cell matches; header cells are cells, so a header number can be cited as a value.
 """
 
 from __future__ import annotations
@@ -18,6 +23,7 @@ from factory.document.anchors import Anchor, AnchorKind, Manifest
 from factory.document.quotes import normalise_quote, quote_in_element
 from factory.extraction.citations import citation_markers
 from factory.extraction.numbers import (
+    _WORD_UNITS,
     NumberToken,
     canonical,
     normalise_for,
@@ -25,7 +31,8 @@ from factory.extraction.numbers import (
     numbers_in,
     parse_printed,
 )
-from factory.packs import Check, FieldDef, FieldKind, Pack, UnitFamily
+from factory.model.extraction import FieldInput, StoredField
+from factory.packs import Check, FieldDef, Pack, UnitFamily
 
 QUOTE_NOT_IN_ANCHOR = "quote-not-in-anchor"
 ANCHOR_UNKNOWN = "anchor-unknown"
@@ -44,32 +51,10 @@ _COUNT_SUFFIXES = frozenset("KMGTB")
 
 
 @dataclass(frozen=True)
-class FieldEntry:
-    """What an agent declares for one field: a value and its evidence."""
-
-    value: str | int | float | bool
-    unit: str | None = None
-    anchor: str | None = None
-    cell: str | None = None
-    quote: str | None = None
-    reported_in: str = "own"
-    reproduced: bool = False
-    cited_work: str | None = None
-
-
-@dataclass(frozen=True)
-class StoredEntry(FieldEntry):
-    """A verified entry plus the values the platform computed: canonical and copy marker."""
-
-    canonical: str | None = None
-    copy_marker: bool = False
-
-
-@dataclass(frozen=True)
 class VerifiedField:
     """A field that passed every check."""
 
-    stored: StoredEntry
+    stored: StoredField
 
 
 def cell_row(manifest: Manifest, cell_id: str) -> list[Anchor]:
@@ -82,7 +67,7 @@ def cell_row(manifest: Manifest, cell_id: str) -> list[Anchor]:
     return [a for a in manifest.anchors if a.kind is AnchorKind.CELL and a.id.startswith(prefix)]
 
 
-def row_key(conversion_id: str, value: StoredEntry) -> str:
+def row_key(conversion_id: str, value: StoredField) -> str:
     """``rk_`` plus 12 hex of the hash of the conversion and the value field's location.
 
     The location is the value's cell (the anchor when that is itself a cell), else its anchor and
@@ -97,7 +82,7 @@ def row_key(conversion_id: str, value: StoredEntry) -> str:
 
 
 def verify_field(
-    pack: Pack, field: FieldDef, entry: FieldEntry, manifest: Manifest
+    pack: Pack, field: FieldDef, entry: FieldInput, manifest: Manifest
 ) -> VerifiedField | list[str]:
     """The stored field, or every reason it fails (fixed vocabulary, no document text).
 
@@ -115,13 +100,12 @@ def verify_field(
     if anchor is None:
         return [*reasons, ANCHOR_UNKNOWN]
 
-    quote_ok = True
-    if entry.quote is not None:
-        quote_ok = quote_in_element(anchor.text, entry.quote)
-        if not quote_ok:
-            reasons.append(QUOTE_NOT_IN_ANCHOR)
-
     cell, cell_reasons = _resolve_cell(entry, anchor, manifest)
+    if entry.quote is not None:
+        in_anchor = quote_in_element(anchor.text, entry.quote)
+        in_cell = cell is None or quote_in_element(cell.text, entry.quote)
+        if not (in_anchor and in_cell):
+            reasons.append(QUOTE_NOT_IN_ANCHOR)
     reasons.extend(cell_reasons)
 
     if field.check is Check.NUMBER:
@@ -143,25 +127,12 @@ def verify_field(
     return _stored(entry, canon, marker)
 
 
-def _stored(entry: FieldEntry, canon: str | None, marker: bool) -> VerifiedField:
-    return VerifiedField(
-        StoredEntry(
-            value=entry.value,
-            unit=entry.unit,
-            anchor=entry.anchor,
-            cell=entry.cell,
-            quote=entry.quote,
-            reported_in=entry.reported_in,
-            reproduced=entry.reproduced,
-            cited_work=entry.cited_work,
-            canonical=canon,
-            copy_marker=marker,
-        )
-    )
+def _stored(entry: FieldInput, canon: str | None, marker: bool) -> VerifiedField:
+    return VerifiedField(StoredField(**entry.model_dump(), canonical=canon, copy_marker=marker))
 
 
 def _resolve_cell(
-    entry: FieldEntry, anchor: Anchor, manifest: Manifest
+    entry: FieldInput, anchor: Anchor, manifest: Manifest
 ) -> tuple[Anchor | None, list[str]]:
     """The one cell the evidence points at: ``cell``, or the anchor when it is itself a cell."""
     if entry.cell is None:
@@ -177,7 +148,7 @@ def _resolve_cell(
 
 
 def _number_reasons(
-    field: FieldDef, entry: FieldEntry, anchor: Anchor, cell: Anchor | None
+    field: FieldDef, entry: FieldInput, anchor: Anchor, cell: Anchor | None
 ) -> list[str]:
     if anchor.kind is AnchorKind.TABLE and entry.cell is None:
         return [NUMBER_NEEDS_CELL]
@@ -206,16 +177,21 @@ def _suffix_agrees(family: UnitFamily, unit: str | None, token: NumberToken) -> 
     """A bare token agrees with any unit; a suffix only with its own family and unit.
 
     ``%`` goes with a score field whose unit is ``%`` or unstated (never ``fraction``);
-    ``K M G T B`` go with a count field whose unit is that suffix (``B`` and ``G`` are the same).
+    ``K M G T B`` go with a count field whose unit is stated and is that suffix (``B`` and ``G``
+    are the same); in any other family only a unit equal to the suffix or its unit word
+    (``MB``, ``GFLOPs``, ``GMACs``) agrees.
     """
     suffix = token.suffix
     if suffix is None:
         return True
     if suffix == "%":
         return family is UnitFamily.SCORE and (unit or "%") == "%"
-    if suffix in _COUNT_SUFFIXES and family is UnitFamily.COUNT:
-        want = unit or suffix
-        return _alias(want) == _alias(suffix)
+    if family is UnitFamily.COUNT:
+        if suffix not in _COUNT_SUFFIXES or not unit:
+            return False
+        return _alias(unit) == _alias(suffix)
+    if family is UnitFamily.OTHER and unit:
+        return unit == suffix or _WORD_UNITS.get(unit) == suffix
     return False
 
 
@@ -223,7 +199,7 @@ def _alias(unit: str) -> str:
     return "G" if unit == "B" else unit
 
 
-def _text_in(field: FieldDef, entry: FieldEntry, cell: Anchor | None) -> bool:
+def _text_in(field: FieldDef, entry: FieldInput, cell: Anchor | None) -> bool:
     value = normalise_for(field, str(entry.value))
     if not value:
         return False
@@ -231,19 +207,17 @@ def _text_in(field: FieldDef, entry: FieldEntry, cell: Anchor | None) -> bool:
     return any(value in normalise_text(s) for s in sources)
 
 
-def _copy_marker(pack: Pack, entry: FieldEntry, cell: Anchor | None, manifest: Manifest) -> bool:
-    """A citation marker in any cell of the value cell's row, else in the quote."""
+def _copy_marker(pack: Pack, entry: FieldInput, cell: Anchor | None, manifest: Manifest) -> bool:
+    """A citation marker in any cell of the value cell's row, else in the anchored element."""
     if cell is not None:
         texts = [a.text for a in cell_row(manifest, cell.id)]
     else:
-        texts = [entry.quote] if entry.quote else []
+        anchor = manifest.get(entry.anchor) if entry.anchor else None
+        texts = [t for t in (entry.quote, anchor.text if anchor else None) if t]
     return any(citation_markers(t, pack.citation_patterns) for t in texts)
 
 
 __all__ = [
-    "FieldEntry",
-    "FieldKind",
-    "StoredEntry",
     "VerifiedField",
     "cell_row",
     "row_key",

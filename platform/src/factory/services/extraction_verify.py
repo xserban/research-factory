@@ -21,12 +21,12 @@ from factory.extraction.verify import (
     CELL_UNKNOWN,
     QUOTE_NOT_IN_ANCHOR,
     QUOTE_REQUIRED,
-    FieldEntry,
-    StoredEntry,
     VerifiedField,
     row_key,
     verify_field,
 )
+from factory.model.extraction import ExtractedRowInput, FieldInput, StoredField
+from factory.model.protocol import ExtractionSchema
 from factory.packs import FieldDef, FieldKind, Pack
 from factory.services.context import Project
 from factory.services.conversions import conversion_manifest
@@ -50,7 +50,7 @@ _ATTR = {
 class RowVerdict:
     """``fields`` and ``row_key`` are set only when ``issues`` is empty."""
 
-    fields: dict[str, StoredEntry] | None
+    fields: dict[str, StoredField] | None
     row_key: str | None
     issues: list[ValidationIssue]
 
@@ -58,31 +58,31 @@ class RowVerdict:
 def verify_row(
     project: Project,
     pack: Pack,
-    declared: Collection[str],
-    row: Mapping[str, FieldEntry],
+    schema: ExtractionSchema,
+    row: ExtractedRowInput,
     conversion_id: str,
 ) -> RowVerdict:
     """Verify ``row`` against the pinned conversion and the corpus. Read-only.
 
-    ``declared`` are the schema's field names. Raises `FactoryValidationError` on field
+    The declared fields are ``schema.fields``. Raises `FactoryValidationError` on field
     `conversion_id` when the conversion is unknown or damaged.
     """
     manifest = conversion_manifest(project, conversion_id)
     corpus = {w.id for w in list_works(project)}
-    return verify_row_in(pack, declared, row, conversion_id, manifest, corpus)
+    return verify_row_in(pack, schema.fields, row.fields, conversion_id, manifest, corpus)
 
 
 def verify_row_in(
     pack: Pack,
     declared: Collection[str],
-    row: Mapping[str, FieldEntry],
+    row: Mapping[str, FieldInput],
     conversion_id: str,
     manifest: Manifest,
     corpus: Collection[str],
 ) -> RowVerdict:
     """As `verify_row`, with the manifest and the corpus work ids already loaded."""
     issues: list[ValidationIssue] = []
-    stored: dict[str, StoredEntry] = {}
+    stored: dict[str, StoredField] = {}
     for name, entry in row.items():
         field = pack.field(name)
         if field is None or name not in declared:
@@ -107,10 +107,13 @@ def verify_row_in(
     )
     if issues:
         return RowVerdict(None, None, issues)
-    return RowVerdict(stored, row_key(conversion_id, stored[VALUE_FIELD]), [])
+    value = stored.get(VALUE_FIELD)
+    if value is None:  # the pack does not require `value`: the row has no identity
+        return RowVerdict(None, None, [ValidationIssue(f"fields.{VALUE_FIELD}", "required")])
+    return RowVerdict(stored, row_key(conversion_id, value), [])
 
 
-def _kind_issues(name: str, field: FieldDef, entry: FieldEntry) -> list[ValidationIssue]:
+def _kind_issues(name: str, field: FieldDef, entry: FieldInput) -> list[ValidationIssue]:
     out: list[ValidationIssue] = []
     value = entry.value
     problem: str | None = None
