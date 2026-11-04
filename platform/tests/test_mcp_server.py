@@ -44,6 +44,7 @@ async def test_project_status_tool(settings: Settings, project: Project, clock: 
             "protocol_deviation",
             "report_prisma",
             "report_methods",
+            "report_evidence",
             "trace",
             "check",
             "fulltext_fetch",

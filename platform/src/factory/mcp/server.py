@@ -41,6 +41,7 @@ from factory.services import check as check_service
 from factory.services import dedup as dedup_service
 from factory.services import document_read as document_read_service
 from factory.services import evidence as evidence_service
+from factory.services import evidence_report as evidence_report_service
 from factory.services import extraction as extraction_service
 from factory.services import extraction_agreement as extraction_agreement_service
 from factory.services import extraction_audit as extraction_audit_service
@@ -626,6 +627,26 @@ def build_server(
         return _reply(project, methods, include_work_ids=False)
 
     @server.tool()
+    def report_evidence(
+        project: str, expect: list[dict[str, JsonValue]] | None = None
+    ) -> dict[str, JsonValue]:
+        """The evidence report: final extracted rows grouped by comparable setting, with
+        frontiers, limits and the researcher's expectations (each a partial key, as
+        `{"dataset": "coco"}`) matched against the groups. The audit error rate is reported to
+        the researcher and withheld here. Refused to any session that has joined a screening or
+        extraction pass. Read-only."""
+
+        def evidence() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            report = evidence_report_service.agent_evidence(
+                evidence_report_service.evidence_report(opened, expect=_expectations(expect or []))
+            )
+            return _withheld(opened, report.model_dump(mode="json"), include_work_ids=False)
+
+        return _reply(project, evidence, include_work_ids=False)
+
+    @server.tool()
     def trace(project: str, ref: str, direction: str = "back") -> dict[str, JsonValue]:
         """The chain from any identifier: `back` to what it was derived from, `forward` to what
         was derived from it. Held-out seed ids are refused as unknown; seed nodes, and the seed
@@ -916,6 +937,22 @@ def _index_keys(name: str, given: Mapping[str, str]) -> dict[int, str]:
     if issues:
         raise FactoryValidationError(issues)
     return out
+
+
+def _expectations(items: list[dict[str, JsonValue]]) -> list[dict[str, str]]:
+    """Each expectation as a non-empty map of text to text, or a refusal naming the item."""
+    issues: list[ValidationIssue] = []
+    parsed: list[dict[str, str]] = []
+    for index, item in enumerate(items):
+        if not item or not all(isinstance(v, str) and v.strip() for v in item.values()):
+            issues.append(
+                ValidationIssue(f"expect.{index}", "must be a non-empty map of key to text value")
+            )
+        else:
+            parsed.append({k: str(v) for k, v in item.items()})
+    if issues:
+        raise FactoryValidationError(issues)
+    return parsed
 
 
 def _parse_all(

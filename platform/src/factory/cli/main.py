@@ -9,7 +9,7 @@ from typing import Annotated, Literal, NoReturn
 
 import typer
 
-from factory.cli import render
+from factory.cli import evidence_render, render
 from factory.clock import Clock, SystemClock
 from factory.config import Settings
 from factory.document.registry import default_converters
@@ -31,6 +31,7 @@ from factory.services import check as check_service
 from factory.services import document_convert as document_convert_service
 from factory.services import document_read as document_read_service
 from factory.services import evidence as evidence_service
+from factory.services import evidence_report as evidence_report_service
 from factory.services import extraction as extraction_service
 from factory.services import extraction_agreement as extraction_agreement_service
 from factory.services import extraction_audit as extraction_audit_service
@@ -125,7 +126,9 @@ extract_app = typer.Typer(
     no_args_is_help=True,
 )
 report_app = typer.Typer(
-    name="report", help="PRISMA flow, search report and methods statement.", no_args_is_help=True
+    name="report",
+    help="PRISMA flow, search report, methods statement and evidence report.",
+    no_args_is_help=True,
 )
 app.add_typer(seeds_app)
 app.add_typer(report_app)
@@ -830,6 +833,58 @@ def report_methods(ctx: typer.Context, as_json: _JSON = False) -> None:
         report.model_dump_json() if as_json else methods_service.render_methods(report),
         nl=as_json,
     )
+
+
+class EvidenceFormat(StrEnum):
+    MD = "md"
+    JSON = "json"
+    CSV_ROWS = "csv-rows"
+    CSV_POINTS = "csv-points"
+
+
+def _parse_expect(text: str) -> dict[str, str]:
+    """`key=value,key=value` as a partial key; anything else exits 2 with a message."""
+    parsed: dict[str, str] = {}
+    for part in text.split(","):
+        key, sep, value = part.partition("=")
+        if not sep or not key.strip() or not value.strip() or key.strip() in parsed:
+            _fail(f"bad --expect {text!r}: want key=value,key=value", 2)
+        parsed[key.strip()] = value.strip()
+    return parsed
+
+
+@report_app.command("evidence")
+def report_evidence(
+    ctx: typer.Context,
+    expect: Annotated[
+        list[str] | None,
+        typer.Option("--expect", help="An expected partial key, key=value,key=value (repeatable)."),
+    ] = None,
+    fmt: Annotated[
+        EvidenceFormat, typer.Option("--format", help="Output format.")
+    ] = EvidenceFormat.MD,
+    output: Annotated[
+        Path | None, typer.Option("--output", help="Write to this file instead of printing.")
+    ] = None,
+) -> None:
+    """The evidence report: grouped final rows, frontiers and limits (full view, audit shown)."""
+    state = _state(ctx)
+    expectations = [_parse_expect(e) for e in expect or []]
+    with _reporting_errors():
+        project = _resolve_project(state)
+        report = evidence_report_service.evidence_report(project, expect=expectations)
+    if fmt is EvidenceFormat.JSON:
+        text = report.model_dump_json()
+    elif fmt is EvidenceFormat.CSV_ROWS:
+        text = evidence_render.rows_csv(report)
+    elif fmt is EvidenceFormat.CSV_POINTS:
+        text = evidence_render.points_csv(report)
+    else:
+        text = evidence_render.evidence_markdown(report, show_audit=True)
+    if output is not None:
+        output.write_text(text, encoding="utf-8")
+        return
+    typer.echo(text, nl=not text.endswith("\n"))
 
 
 @fulltext_app.command("import")
