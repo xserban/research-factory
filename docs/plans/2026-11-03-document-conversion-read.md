@@ -94,8 +94,8 @@
 - Produces:
   - `class ConverterRegistry`: `__init__(converters: Sequence[Converter])`; `for_media_type(media_type: str) -> Converter | None` (first registered that accepts it).
   - `default_converters() -> ConverterRegistry` (only `LatexmlHtmlConverter` until Task 8).
-  - `class ConversionOutcome(StrictModel)`: `document_id`, `work_id`, `status: Literal["converted","unchanged","failed","raw-missing"]`, `conversion_id: str | None`, `reason: str | None`.
-  - `class ConvertSummary(StrictModel)`: `outcomes: list[ConversionOutcome]` and counts per status.
+  - `class ConversionOutcome(StrictModel)`: `document_id`, `work_id`, `status: Literal["converted","unchanged","failed","raw-missing","restored"]`, `conversion_id: str | None`, `reason: str | None`.
+  - `class ConvertSummary(StrictModel)`: `outcomes: list[ConversionOutcome]` and counts per status (`restored` counts the regenerated conversions of `restore_conversions`).
   - `convert_documents(project: Project, registry: ConverterRegistry, *, work_ids: Sequence[str] | None = None, document_ids: Sequence[str] | None = None) -> ConvertSummary` — targets live (not superseded) documents of promoted works, or the named ones (a named document that is unknown or superseded is a `FactoryValidationError` on `document_ids`). Raw bytes from `project.library`; Markdown and `manifest.to_json()` stored with `library.put`; the stored hash must equal `ConversionResult.markdown_hash`. Events use `project.human_actor()` and one `project.record` per document.
   - `tests/document_helpers.py`: `fetched_document(project, work_id, html: bytes) -> str` (document id, via `fetch_fulltext` with a stub route as in `tests/test_fulltext_status.py`).
 

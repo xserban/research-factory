@@ -12,6 +12,8 @@ Invariants:
   outside the write lock, and its result is recorded under the lock after a re-check.
 - Conversion events carry hashes, counts and warnings, never document text. A failure carries the
   exception class name only, never its message.
+- A raw blob that is missing, corrupt or unreadable is `raw-missing` for that document, with no
+  event, and the batch continues.
 - The Markdown and manifest bytes go to the project library. The stored Markdown hash equals
   `ConversionResult.markdown_hash`, and the manifest hash is the hash of `manifest.to_json()`.
 - A batch continues past a failed document. Each document's events are one `project.record` call.
@@ -52,6 +54,9 @@ from factory.services.agreement import Outcome, final_outcomes
 from factory.services.context import Project
 
 ConversionStatus = Literal["converted", "unchanged", "failed", "raw-missing", "restored"]
+RestoreReason = Literal["version-unavailable", "hash-differs", "store-error"]
+OutcomeReason = FailureReason | RestoreReason
+"""The reason of a `failed` outcome: a conversion failure, or a restore failure."""
 
 
 class ConversionOutcome(StrictModel):
@@ -62,7 +67,7 @@ class ConversionOutcome(StrictModel):
     work_id: str
     status: ConversionStatus
     conversion_id: str | None
-    reason: str | None
+    reason: OutcomeReason | None
 
 
 class ConvertSummary(StrictModel):
@@ -183,7 +188,7 @@ def _blob_ok(project: Project, ref: str) -> bool:
         return False
     try:
         project.library.get(ref)
-    except BlobIntegrityError:
+    except (BlobNotFoundError, BlobIntegrityError, OSError):
         return False
     return True
 
@@ -202,32 +207,37 @@ def _restore_one(
         return _restore_outcome(record, "failed", "version-unavailable")
     try:
         raw = project.library.get(record.raw_hash)
-    except (BlobNotFoundError, BlobIntegrityError):
+    except (BlobNotFoundError, BlobIntegrityError, OSError):
         return _restore_outcome(record, "raw-missing")
     try:
         result = convert(converter, raw, record.media_type)
     except ConverterUnavailable:
-        return _restore_outcome(record, "failed", FailureReason.CONVERTER_UNAVAILABLE.value)
+        return _restore_outcome(record, "failed", FailureReason.CONVERTER_UNAVAILABLE)
     except Exception:
-        return _restore_outcome(record, "failed", FailureReason.CONVERSION_ERROR.value)
+        return _restore_outcome(record, "failed", FailureReason.CONVERSION_ERROR)
     manifest = result.manifest.to_json()
     if result.markdown_hash != record.markdown_hash or _sha256(manifest) != record.manifest_hash:
         return _restore_outcome(record, "failed", "hash-differs")
-    _store(project, record.markdown_hash, result.markdown.encode("utf-8"))
-    _store(project, record.manifest_hash, manifest)
+    try:
+        _store(project, record.markdown_hash, result.markdown.encode("utf-8"))
+        _store(project, record.manifest_hash, manifest)
+    except (BlobNotFoundError, BlobIntegrityError, OSError):
+        # A partial store is safe: the blob that landed is intact, and a rerun restores the other.
+        return _restore_outcome(record, "failed", "store-error")
     return _restore_outcome(record, "restored")
 
 
 def _store(project: Project, ref: str, data: bytes) -> None:
     """Put `data`, which hashes to `ref`, in the library, replacing a corrupt file at that path.
 
-    `BlobStore.put` keeps an existing file, so a corrupt one is removed first.
+    `BlobStore.put` keeps an existing file, so a corrupt or unreadable one is removed first. Raises
+    `OSError` when the library cannot be written; the caller reports that as `store-error`.
     """
     if project.library.exists(ref):
         try:
             project.library.get(ref)
-        except BlobIntegrityError:
-            project.library.path(ref).unlink()
+        except (BlobNotFoundError, BlobIntegrityError, OSError):
+            project.library.path(ref).unlink(missing_ok=True)
     project.library.put(data)
 
 
@@ -236,7 +246,7 @@ def _sha256(data: bytes) -> str:
 
 
 def _restore_outcome(
-    record: _Record, status: ConversionStatus, reason: str | None = None
+    record: _Record, status: ConversionStatus, reason: OutcomeReason | None = None
 ) -> ConversionOutcome:
     return ConversionOutcome(
         document_id=record.document_id,
@@ -378,7 +388,11 @@ def _decide(project: Project, registry: ConverterRegistry, doc: _Doc) -> Convers
         return _failed(project, doc, None, FailureReason.NO_CONVERTER, None)
     if version is None:
         return _failed(project, doc, converter.name, FailureReason.CONVERTER_UNAVAILABLE, None)
-    return _Ready(converter, version, project.library.get(doc.raw_hash))
+    try:
+        raw = project.library.get(doc.raw_hash)
+    except (BlobNotFoundError, BlobIntegrityError, OSError):
+        return _outcome(doc, "raw-missing")
+    return _Ready(converter, version, raw)
 
 
 def _version_or_none(converter: Converter) -> str | None:
@@ -466,7 +480,7 @@ def _failed(
         work_id=doc.work_id,
         status="failed",
         conversion_id=None,
-        reason=reason.value,
+        reason=reason,
     )
 
 
