@@ -207,15 +207,13 @@ def test_full_text_not_reported_as_zero(
 
     flow = prisma_flow(project)
 
-    assert flow.full_text == FULL_TEXT
-    # The serialised value is the exact string, never a number or an empty field.
-    assert flow.model_dump(mode="json")["full_text"] == "not assessed in this review stage"
-    assert '"full_text":"not assessed in this review stage"' in flow.model_dump_json()
-    # The Literal is enforced: any other value, a number included, is refused.
-    base = flow.model_dump()
-    for other in ("0", "", "not assessed", 0):
-        with pytest.raises(ValidationError):
-            PrismaFlow(**{**base, "full_text": other})
+    # Plan 2C: the full-text box is derived. Before any full-text decision it is provisional and
+    # carries no outcome, never a zero that reads as "assessed and nothing found".
+    assert flow.full_text.stage_run is False
+    assert flow.full_text.provisional is True
+    assert flow.full_text.assessed == 0 and flow.full_text.included == 0
+    assert flow.included_in_review is None
+    assert flow.model_dump(mode="json")["full_text"]["stage_run"] is False
 
 
 def test_probe_runs_never_counted(

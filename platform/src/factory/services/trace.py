@@ -34,7 +34,7 @@ from factory.model.base import StrictModel
 from factory.model.chase import CHASE_ROUND_ID_RE
 from factory.model.dedup import MERGE_ID_RE
 from factory.model.fulltext import ATTEMPT_ID_RE, DOCUMENT_ID_RE
-from factory.model.identity import BLOB_REF_RE, ULID_RE
+from factory.model.identity import BLOB_REF_RE, CONVERSION_ID_RE, ULID_RE
 from factory.model.protocol import PROTOCOL_ID_RE, ProtocolSpec
 from factory.model.question import QUESTION_ID_RE, QuestionSpec
 from factory.model.screening import AUDIT_ID_RE, DECISION_ID_RE, QUALIFIED_CRITERION_RE
@@ -56,6 +56,8 @@ KINDS: tuple[str, ...] = (
     "work",
     "attempt",
     "document",
+    "conversion",
+    "anchor",
     "decision",
     "resolution",
     "audit",
@@ -72,6 +74,7 @@ _MISSING = "no such row"
 _ELEMENT_RE = r"^(Q@[0-9a-f]{8})/(slot:.+|NG\d{2})$"
 _RECORD_RE = rf"^(run_{ULID_RE})/(rf:.+)$"
 _AUDIT_ITEM_RE = rf"^(aud_{ULID_RE})/(rf:.+)$"
+_ANCHOR_RE = rf"^(cnv_{ULID_RE})/([^/\s]+)$"
 _RESOLUTION_RE = r"^res:(?:full-text:)?(rf:.+)$"
 _PATTERNS: tuple[tuple[str, str], ...] = (
     (QUESTION_ID_RE, "question"),
@@ -90,6 +93,8 @@ _PATTERNS: tuple[tuple[str, str], ...] = (
     (WORK_ID_RE, "work"),
     (ATTEMPT_ID_RE, "attempt"),
     (DOCUMENT_ID_RE, "document"),
+    (CONVERSION_ID_RE, "conversion"),
+    (_ANCHOR_RE, "anchor"),
     (_RECORD_RE, "record"),
     (_RESOLUTION_RE, "resolution"),
 )
@@ -348,6 +353,8 @@ class _Walk:
             "work": self._work,
             "attempt": self._attempt,
             "document": self._document,
+            "conversion": self._conversion,
+            "anchor": self._anchor,
             "decision": self._decision,
             "resolution": self._resolution,
             "audit": self._audit,
@@ -586,6 +593,26 @@ class _Walk:
         if superseded_by is not None:
             label += " (superseded)"
         return _Described(label, str(event_id))
+
+    def _conversion(self, ident: str) -> _Described | None:
+        rows = self._all(
+            "SELECT converter, converter_version, event_id FROM document_conversions "
+            "WHERE conversion_id = :c",
+            c=ident,
+        )
+        if not rows:
+            return None
+        converter, version, event_id = rows[0]
+        return _Described(f"{converter} {version}", str(event_id))
+
+    def _anchor(self, ident: str) -> _Described | None:
+        """An anchor cited by a full-text decision, keyed `<conversion_id>/<anchor>`. It exists
+        when its conversion does; its event is the conversion's."""
+        conversion_id, anchor = ident.split("/", 1)
+        described = self._conversion(conversion_id)
+        if described is None:
+            return None
+        return _Described(f"anchor {anchor}", described.event_id)
 
     def _decision(self, ident: str) -> _Described | None:
         rows = self._all(
@@ -955,7 +982,42 @@ class _Walk:
                 "SELECT attempt_id FROM fulltext_documents WHERE document_id = :d", d=ident
             )
         ]
-        return up, []
+        down: list[Key] = [
+            ("conversion", c)
+            for c in self._column(
+                "SELECT conversion_id FROM document_conversions WHERE document_id = :d", d=ident
+            )
+        ]
+        return up, down
+
+    def _edges_conversion(self, ident: str) -> tuple[list[Key], list[Key]]:
+        up: list[Key] = [
+            ("document", d)
+            for d in self._column(
+                "SELECT document_id FROM document_conversions WHERE conversion_id = :c", c=ident
+            )
+        ]
+        down: list[Key] = [
+            ("anchor", f"{ident}/{a}")
+            for a in self._column(
+                "SELECT DISTINCT anchor FROM decisions "
+                "WHERE conversion_id = :c AND anchor IS NOT NULL",
+                c=ident,
+            )
+        ]
+        return up, down
+
+    def _edges_anchor(self, ident: str) -> tuple[list[Key], list[Key]]:
+        conversion_id, anchor = ident.split("/", 1)
+        down: list[Key] = [
+            ("decision", d)
+            for d in self._column(
+                "SELECT decision_id FROM decisions WHERE conversion_id = :c AND anchor = :a",
+                c=conversion_id,
+                a=anchor,
+            )
+        ]
+        return [("conversion", conversion_id)], down
 
     def _edges_decision(self, ident: str) -> tuple[list[Key], list[Key]]:
         rows = self._all(
@@ -972,6 +1034,12 @@ class _Walk:
             up.append(("protocol", str(protocol_id)))
             if supersedes is not None:
                 up.append(("decision", str(supersedes)))
+            for conversion_id, anchor in self._all(
+                "SELECT conversion_id, anchor FROM decisions WHERE decision_id = :d "
+                "AND conversion_id IS NOT NULL AND anchor IS NOT NULL",
+                d=ident,
+            ):
+                up.append(("anchor", f"{conversion_id}/{anchor}"))
         down: list[Key] = [
             ("decision", d)
             for d in self._column(
@@ -1076,6 +1144,8 @@ _EDGES: dict[str, Callable[[_Walk, str], tuple[list[Key], list[Key]]]] = {
     "work": _Walk._edges_work,
     "attempt": _Walk._edges_attempt,
     "document": _Walk._edges_document,
+    "conversion": _Walk._edges_conversion,
+    "anchor": _Walk._edges_anchor,
     "decision": _Walk._edges_decision,
     "resolution": _Walk._edges_resolution,
     "audit": _Walk._edges_audit,

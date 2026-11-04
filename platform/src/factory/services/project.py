@@ -10,13 +10,14 @@ from factory.errors import FactoryValidationError, ProjectNotFoundError, Validat
 from factory.model.base import StrictModel
 from factory.model.dedup import MergeStatus
 from factory.model.project import ProjectCreated, RigorMode
-from factory.model.protocol import ProtocolStatus
+from factory.model.protocol import ProtocolStatus, ScreeningStage
 from factory.model.seed import SeedKind
 from factory.services.agreement import Agreement, PassProgress, pass_progress, screen_agreement
 from factory.services.audit import audit_report
 from factory.services.calibration import CalibrationStatus, calibration_status
 from factory.services.chase import chase_rounds
 from factory.services.context import Project, ProjectPaths, build_project, slug_issues
+from factory.services.prisma import has_full_text_plan
 from factory.services.protocol import current_protocol
 from factory.services.question import current_question
 from factory.services.screening import stale_screening_decisions
@@ -52,6 +53,8 @@ class ScreeningStatus(StrictModel):
     audit_sample: int | None
     audit_labelled: int
     false_exclusion_rate: float | None
+    full_text_passes: dict[str, PassProgress] | None = None
+    """Pass progress at full text; None while the protocol declares no full-text plan."""
 
 
 class ProjectStatus(StrictModel):
@@ -175,6 +178,11 @@ def _screening_status(project: Project) -> ScreeningStatus:
         audit_sample=None if report is None else report.sample_size,
         audit_labelled=0 if report is None else report.labelled,
         false_exclusion_rate=None if report is None else report.rates.false_exclusion,
+        full_text_passes=(
+            pass_progress(project, stage=ScreeningStage.FULL_TEXT)
+            if has_full_text_plan(project)
+            else None
+        ),
     )
 
 

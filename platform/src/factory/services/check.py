@@ -40,6 +40,7 @@ from factory.services.calibration import calibration_status
 from factory.services.chase import chase_rounds
 from factory.services.context import Project
 from factory.services.dedup import active_merges
+from factory.services.document_read import default_conversion
 from factory.services.fulltext_status import fulltext_status
 from factory.services.methods import MethodsReport, methods_report
 from factory.services.prisma import search_report
@@ -71,6 +72,7 @@ LEVELS: dict[str, tuple[Severity | None, Severity | None, Severity | None]] = {
     "library-corrupt": ("error", "error", "error"),
     "source-changed": ("warning", "warning", "warning"),
     "fulltext-unsought": ("warning", "warning", "warning"),
+    "fulltext-decision-stale-document": ("warning", "warning", "warning"),
 }
 
 _MODE_ORDER: tuple[RigorMode, ...] = (
@@ -636,7 +638,38 @@ def _fulltext(project: Project) -> list[_Hit]:
                 f"{len(unsought)} promoted work(s) have no full-text attempt",
             )
         )
+    hits += _stale_document_decisions(project)
     return hits
+
+
+def _stale_document_decisions(project: Project) -> list[_Hit]:
+    """Live full-text decisions pinned to a conversion that is no longer the work's default
+    (a newer document or conversion exists, or the pinned one is gone). The decision stands; the
+    finding names its works so the researcher can decide whether to re-screen (plan 2C ruling 3).
+    Reads decisions only, so it never touches the full-text plan."""
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT work_id, conversion_id FROM decisions WHERE stage = :stage "
+                "AND superseded_by IS NULL AND conversion_id IS NOT NULL ORDER BY work_id"
+            ),
+            {"stage": "full-text"},
+        ).all()
+    stale: set[str] = set()
+    for work_id, conversion_id in rows:
+        current = default_conversion(project, str(work_id))
+        if current is None or current.conversion_id != str(conversion_id):
+            stale.add(str(work_id))
+    if not stale:
+        return []
+    return [
+        _Hit(
+            "fulltext-decision-stale-document",
+            tuple(sorted(stale)),
+            f"{len(stale)} work(s) have a full-text decision pinned to a conversion that is "
+            "no longer the current one",
+        )
+    ]
 
 
 def _stored_documents(project: Project) -> list[tuple[str, str, str]]:

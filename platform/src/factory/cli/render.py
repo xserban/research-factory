@@ -21,8 +21,21 @@ def prisma_markdown(flow: PrismaFlow) -> str:
     lines += ["", "## Screening", f"- records screened: {flow.screened}"]
     lines += [f"- excluded, {criterion}: {n}" for criterion, n in flow.excluded.items()]
     lines.append(f"- pending: {flow.pending}")
-    lines.append(f"- full-text assessment: {flow.full_text}")
+    boxes = flow.full_text
+    lines += ["", "## Full-text assessment"]
+    lines.append(f"- reports sought: {boxes.sought}")
+    lines.append(f"- reports not retrieved: {boxes.not_retrieved}")
+    lines += [f"  - {reason}: {n}" for reason, n in boxes.not_retrieved_reasons.items()]
+    if boxes.stage_run:
+        lines.append(f"- reports assessed for eligibility: {boxes.assessed}")
+        lines += [f"- excluded, {criterion}: {n}" for criterion, n in boxes.excluded.items()]
+        lines.append(f"- pending: {boxes.pending}")
+        lines.append(f"- included at full text: {boxes.included}")
+    else:
+        lines.append("- not assessed in this review stage (no full-text decisions)")
     lines += ["", "## Included", f"- included: {flow.included}"]
+    if flow.included_in_review is not None:
+        lines.append(f"- included in the review: {flow.included_in_review}")
     if flow.provisional:
         lines += ["", "The flow is provisional: works are pending."]
     lines.append(f"\nProtocol: {flow.protocol_id or 'none'}")

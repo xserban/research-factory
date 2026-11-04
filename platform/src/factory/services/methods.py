@@ -11,15 +11,17 @@ number of its own. Invariants:
 - No seed is named: no seed ID, DOI, arXiv ID or title appears in the render.
 """
 
+from pydantic import Field
 from sqlalchemy import TextClause, text
 
 from factory.model.base import StrictModel
+from factory.model.protocol import ScreeningStage
 from factory.services.agreement import agreement_summary
 from factory.services.audit import audit_report
 from factory.services.calibration import calibration_status
 from factory.services.chase import chase_rounds
 from factory.services.context import Project
-from factory.services.prisma import PrismaFlow, prisma_flow, search_report
+from factory.services.prisma import PrismaFlow, has_full_text_plan, prisma_flow, search_report
 from factory.services.protocol import current_protocol, list_amendments, list_deviations
 from factory.services.seeds import _rigor_mode, admitted_seed_count, seed_recall
 
@@ -48,6 +50,15 @@ class MethodsReport(StrictModel):
     chase_rounds: int
     admitted_seeds: int
     prisma: PrismaFlow
+    full_text_passes: int = 0
+    """0 when the protocol declares no full-text plan; the other full-text fields are then empty."""
+    full_text_dual_sample: float | None = None
+    full_text_kappa_floor: float | None = None
+    full_text_audit_fraction: float | None = None
+    full_text_audit_minimum: int | None = None
+    full_text_kappa: float | None = None
+    full_text_sessions: int = 0
+    full_text_models: list[str] = Field(default_factory=list)
 
 
 def methods_report(project: Project) -> MethodsReport:
@@ -63,6 +74,12 @@ def methods_report(project: Project) -> MethodsReport:
     agreement = agreement_summary(project)
     audit = audit_report(project)
     recall = seed_recall(project)
+    full_text = None if protocol is None else protocol.spec.full_text_screening
+    ft_kappa = None
+    if full_text is not None and has_full_text_plan(project):
+        summary = agreement_summary(project, stage=ScreeningStage.FULL_TEXT)
+        ft_kappa = None if summary is None else summary.kappa
+    ft_sessions = _full_text_sessions(project)
     return MethodsReport(
         rigor_mode=_rigor_mode(project).value,
         method_profile=None if protocol is None else protocol.spec.method_profile.value,
@@ -87,7 +104,25 @@ def methods_report(project: Project) -> MethodsReport:
         chase_rounds=len(chase_rounds(project)),
         admitted_seeds=admitted_seed_count(project),
         prisma=flow,
+        full_text_passes=0 if full_text is None else full_text.passes,
+        full_text_dual_sample=None if full_text is None else full_text.dual_sample,
+        full_text_kappa_floor=None if full_text is None else full_text.kappa_floor,
+        full_text_audit_fraction=None if full_text is None else full_text.audit_fraction,
+        full_text_audit_minimum=None if full_text is None else full_text.audit_minimum,
+        full_text_kappa=ft_kappa,
+        full_text_sessions=len(ft_sessions),
+        full_text_models=sorted({model for _, model in ft_sessions}),
     )
+
+
+def _full_text_sessions(project: Project) -> list[tuple[str, str]]:
+    """(session, model) of every session bound to a full-text pass, as the sessions reported."""
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text("SELECT session, model FROM pass_sessions WHERE stage = :stage ORDER BY session"),
+            {"stage": ScreeningStage.FULL_TEXT.value},
+        ).all()
+    return [(str(session), str(model)) for session, model in rows]
 
 
 _AGENT_MODELS = text(
@@ -148,6 +183,7 @@ def render_methods(report: MethodsReport, *, withheld: frozenset[str] = frozense
         _deduplication(report),
         _screening(report),
         _agreement_and_audit(report, withheld),
+        *([_full_text(report)] if report.full_text_passes else []),
         _seed_recall(report, withheld),
         _deviations(report),
     ]
@@ -222,6 +258,29 @@ def _agreement_and_audit(report: MethodsReport, withheld: frozenset[str]) -> str
         f"{_fmt(report.kappa)}; per-criterion kappa: {per_criterion or NOT_COMPUTED}. "
         f"Calibration sensitivity per pass: {sensitivity or NOT_COMPUTED}. "
         f"{audit}"
+    )
+
+
+def _full_text(report: MethodsReport) -> str:
+    boxes = report.prisma.full_text
+    reasons = ", ".join(f"{reason} ({n})" for reason, n in boxes.not_retrieved_reasons.items())
+    excluded = ", ".join(f"{criterion} ({n})" for criterion, n in boxes.excluded.items())
+    fraction = _fmt(report.full_text_audit_fraction)
+    state = (
+        f"{boxes.assessed} assessed, {boxes.included} included, {boxes.excluded_total} excluded, "
+        f"{boxes.pending} pending. Exclusions by criterion: {excluded or NONE_RECORDED}."
+        if boxes.stage_run
+        else "No full-text decision has been recorded; the stage has not run."
+    )
+    return (
+        f"Full-text screening. Screening passes: {report.full_text_passes}; planned dual-coded "
+        f"share: {_fmt(report.full_text_dual_sample)}; kappa floor "
+        f"{_fmt(report.full_text_kappa_floor)}; audit fraction {fraction} with a minimum of "
+        f"{report.full_text_audit_minimum}. Of {boxes.sought} sought, {boxes.not_retrieved} not "
+        f"retrieved (reasons: {reasons or NONE_RECORDED}); {state} Agreement between passes "
+        f"(Cohen's kappa): {_fmt(report.full_text_kappa)}. Full-text sessions: "
+        f"{report.full_text_sessions}; models (as reported by the agent): "
+        f"{_list(report.full_text_models)}."
     )
 
 
