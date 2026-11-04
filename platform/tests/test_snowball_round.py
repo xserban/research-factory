@@ -761,3 +761,23 @@ def test_registered_round_matches_the_old_scan(
     for query_id in (*queries, "qry_missing"):
         assert registered_round(project, query_id) == old_registered_round(project, query_id)
     assert registered_round(project, queries[0]) == result.round_id
+
+
+def test_unqueried_round_does_not_stop_plan(
+    project: Project, agent: Actor, planned: tuple[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A round recorded whose every query was refused has no run at all: the no-yield stop
+    does not apply to its retry (the maximum does), as for a round with failed runs."""
+
+    def refuse(*args: Any, **kwargs: Any) -> str:
+        raise FactoryValidationError([ValidationIssue("query", "refused")])
+
+    monkeypatch.setattr(snowball, "register_query", refuse)
+    with pytest.raises(FactoryValidationError):
+        snowball_round(project, agent, Direction.BACKWARD, sources=_sources(), dry_run=False)
+    monkeypatch.undo()
+    assert len(snowball.recorded_rounds(project)) == 1
+    state = plan_round(project, Direction.BACKWARD).state
+    assert "previous_round" not in [i.field for i in state.refusals]
+    assert state.allowed and state.round_no == 2
+    assert any("does not apply to its retry" in note for note in state.notes)

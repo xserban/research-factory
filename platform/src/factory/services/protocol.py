@@ -781,24 +781,18 @@ def _chase_round_waives(
         return round_id is not None and spec.text in snowball_round_texts(conn, round_id)
 
 
-def is_snowball_round(project: Project, round_id: str) -> bool:
-    """Whether `round_id` names a recorded snowball round."""
+def recorded_round(project: Project, round_id: str) -> Literal["chase", "snowball"] | None:
+    """The kind of recorded round `round_id` names: a snowball round, a chase round, or None."""
     with project.index.connect() as conn:
-        row = conn.execute(
+        if conn.execute(
             text("SELECT 1 FROM snowball_rounds WHERE round_id = :r"), {"r": round_id}
-        ).one_or_none()
-    return row is not None
-
-
-def is_recorded_round(project: Project, round_id: str) -> bool:
-    """Whether `round_id` names a recorded snowball round or a recorded chase round."""
-    if is_snowball_round(project, round_id):
-        return True
-    with project.index.connect() as conn:
-        row = conn.execute(
+        ).one_or_none():
+            return "snowball"
+        if conn.execute(
             text("SELECT 1 FROM chase_rounds WHERE round_id = :r"), {"r": round_id}
-        ).one_or_none()
-    return row is not None
+        ).one_or_none():
+            return "chase"
+    return None
 
 
 def is_watch_cycle(project: Project, cycle_id: str) -> bool:

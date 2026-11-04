@@ -455,14 +455,24 @@ class _Walk:
     def _chase_assignment(self) -> tuple[dict[str, str], dict[str, list[str]]]:
         """Each chase query mapped to the round it belongs to, and each round to its queries.
 
-        A query belongs to the latest round, recorded before the query, whose text it ran. Both
-        identifiers are time-ordered ULIDs, so the comparison is on their ULID parts.
+        A query belongs to the chase round its `query.registered` refs name. A query that names
+        none (a log written before the ref existed) belongs to the latest round, recorded before
+        the query, whose text it ran. Both identifiers are time-ordered ULIDs, so that comparison
+        is on their ULID parts.
 
-        Assumption: `chase.round_started` is recorded before the round's queries are registered
-        (`services.chase.search_chase` does this). Two rounds with identical texts are then told
-        apart by order: each query links to the latest earlier round, never to a later one.
+        Assumption for the fallback: `chase.round_started` is recorded before the round's queries
+        are registered, so each query links to the latest earlier round, never to a later one.
         """
         if self._chase is None:
+            named = {
+                str(query_id): str(round_id)
+                for query_id, round_id in self._all(
+                    "SELECT q.ref, MAX(o.ref) FROM event_refs q "
+                    "JOIN event_refs o ON o.event_id = q.event_id AND o.position > 0 "
+                    "JOIN chase_rounds r ON r.round_id = o.ref "
+                    "WHERE q.type = 'query.registered' AND q.position = 0 GROUP BY q.ref"
+                )
+            }
             rounds: dict[str, list[str]] = {}
             for round_id, query_text in self._all(
                 "SELECT r.round_id, c.query FROM chase_rounds r "
@@ -474,13 +484,15 @@ class _Walk:
             for query_id, query_text in self._all(
                 "SELECT query_id, text FROM queries WHERE purpose = 'chase'"
             ):
-                earlier = [
-                    round_id
-                    for round_id in rounds.get(str(query_text), [])
-                    if round_id[len("chs_") :] < str(query_id)[len("qry_") :]
-                ]
-                if earlier:
-                    chosen = max(earlier)
+                chosen = named.get(str(query_id))
+                if chosen is None:
+                    earlier = [
+                        round_id
+                        for round_id in rounds.get(str(query_text), [])
+                        if round_id[len("chs_") :] < str(query_id)[len("qry_") :]
+                    ]
+                    chosen = max(earlier) if earlier else None
+                if chosen is not None:
                     query_round[str(query_id)] = chosen
                     round_queries.setdefault(chosen, []).append(str(query_id))
             self._chase = (query_round, round_queries)

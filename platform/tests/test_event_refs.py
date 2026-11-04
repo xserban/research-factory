@@ -14,8 +14,8 @@ from factory.events.reader import read_all
 from factory.model.search import QueryKind, QuerySpec
 from factory.services.context import Project
 from factory.services.protocol import (
-    is_snowball_round,
     record_deviation,
+    recorded_round,
     registered_deviation,
     registered_round,
 )
@@ -49,7 +49,7 @@ def old_registered_round(project: Project, query_id: str) -> str | None:
         ).all()
     for (refs,) in events:
         for ref in json.loads(str(refs)):
-            if str(ref).startswith("snw_") and is_snowball_round(project, str(ref)):
+            if str(ref).startswith("snw_") and recorded_round(project, str(ref)) == "snowball":
                 return str(ref)
     return None
 

@@ -104,7 +104,7 @@ def register_query(
     with project.index.exclusive():
         project.index.sync()
         issues = _spec_issues(project, spec, sources)
-        if round_id is not None and not protocol_service.is_recorded_round(project, round_id):
+        if round_id is not None and protocol_service.recorded_round(project, round_id) is None:
             issues.append(ValidationIssue("round_id", "not a recorded snowball or chase round"))
         if cycle_id is not None and round_id is not None:
             issues.append(ValidationIssue("cycle_id", "a query names a round or a cycle, not both"))
