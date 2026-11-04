@@ -53,6 +53,7 @@ from factory.services import inbox as inbox_service
 from factory.services import methods as methods_service
 from factory.services import portfolio as portfolio_service
 from factory.services import prisma as prisma_service
+from factory.services import prisma_update as prisma_update_service
 from factory.services import project as project_service
 from factory.services import protocol as protocol_service
 from factory.services import reference_resolve as reference_resolve_service
@@ -1167,13 +1168,27 @@ def report_prisma(
     fmt: Annotated[
         PrismaFormat, typer.Option("--format", help="Markdown (default) or the SVG diagram.")
     ] = PrismaFormat.MD,
+    update: Annotated[
+        str | None,
+        typer.Option("--update", help="The update flow: `last`, or the snapshot it closed at."),
+    ] = None,
 ) -> None:
     """The PRISMA 2020 flow, computed from the events."""
     state = _state(ctx)
     if as_json and fmt is PrismaFormat.SVG:
         _fail("--json and --format svg are exclusive", 2)
+    if update is not None and fmt is PrismaFormat.SVG:
+        _fail("--update and --format svg are exclusive", 2)
     with _reporting_errors():
         project = _resolve_project(state)
+        if update is not None:
+            shown = prisma_update_service.prisma_update(
+                project, until=None if update == "last" else update
+            )
+            typer.echo(
+                shown.model_dump_json() if as_json else render.update_markdown(shown), nl=as_json
+            )
+            return
         if fmt is PrismaFormat.SVG:
             svg = exports_service.export_prisma_svg(project)
         else:
@@ -1685,6 +1700,23 @@ def living_snapshot_cmd(ctx: typer.Context) -> None:
         project = _resolve_project(state)
         recorded = snapshot_service.snapshot(project, project.human_actor(), trigger="human")
     typer.echo(f"snapshot {recorded.snapshot_id} at {recorded.cutoff_event}")
+
+
+@living_app.command("prisma-update")
+def living_prisma_update_cmd(
+    ctx: typer.Context,
+    since: Annotated[
+        str | None, typer.Option("--since", help="Snapshot id the update opens at.")
+    ] = None,
+    until: Annotated[str | None, typer.Option("--until", help="Snapshot id it closes at.")] = None,
+    as_json: _JSON = False,
+) -> None:
+    """The PRISMA update flow between two snapshots (default: the last snapshot to now)."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        flow = prisma_update_service.prisma_update(project, since=since, until=until)
+    typer.echo(flow.model_dump_json() if as_json else render.update_markdown(flow), nl=as_json)
 
 
 @watch_app.command("status")

@@ -30,7 +30,7 @@ Invariants, enforced by `PrismaFlow`:
 """
 
 import json
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from datetime import datetime
 from typing import Any
 
@@ -195,6 +195,13 @@ _IMPORT_KEYS = (
 )
 
 
+class ReportRun(RunSummary):
+    """A run as the PRISMA-S report lists it: `cycle_id` names the watch cycle that ran it
+    (living review), None for any other run."""
+
+    cycle_id: str | None = None
+
+
 class SearchReportRow(StrictModel):
     """One registered search (PRISMA-S): its exact text, its filters, its date, and what it
     retrieved. Probe queries are not rows."""
@@ -207,7 +214,7 @@ class SearchReportRow(StrictModel):
     filters: dict[str, str]
     purpose: QueryPurpose
     registered_at: datetime
-    runs: list[RunSummary]
+    runs: list[ReportRun]
     reported: int | None
     retrieved: int
     shortfall_reason: str | None
@@ -321,13 +328,17 @@ def has_full_text_plan(project: Project) -> bool:
     return protocol is not None and protocol.spec.full_text_screening is not None
 
 
-def full_text_boxes(project: Project) -> FullTextBoxes:
-    """The full-text boxes as the events stand; never raises for a protocol with no plan."""
+def full_text_boxes(project: Project, *, only: Collection[str] | None = None) -> FullTextBoxes:
+    """The full-text boxes as the events stand; never raises for a protocol with no plan.
+
+    `only` restricts the boxes to those works (an update's), by the same rules."""
     project.index.sync()
     queue = fulltext_queue(project)
-    eligible = [entry.work_id for entry in queue.eligible]
-    sought = len(eligible) + len(queue.not_retrieved)
-    reasons, attempts = _not_retrieved_reasons(project, set(queue.not_retrieved))
+    keep = None if only is None else set(only)
+    eligible = [e.work_id for e in queue.eligible if keep is None or e.work_id in keep]
+    missing = [w for w in queue.not_retrieved if keep is None or w in keep]
+    sought = len(eligible) + len(missing)
+    reasons, attempts = _not_retrieved_reasons(project, set(missing))
     run = has_full_text_plan(project) and _has_full_text_decision(project)
     excluded: dict[str, int] = {}
     included = 0
@@ -346,7 +357,7 @@ def full_text_boxes(project: Project) -> FullTextBoxes:
     pending = len(eligible) - assessed
     return FullTextBoxes(
         sought=sought,
-        not_retrieved=len(queue.not_retrieved),
+        not_retrieved=len(missing),
         not_retrieved_reasons=reasons,
         failed_attempts_by_route=attempts,
         eligible=len(eligible),
@@ -438,10 +449,18 @@ def search_report(project: Project) -> SearchReport:
                 "GROUP BY first.run_id"
             )
         ).all()
+        cycle_of = {
+            str(run_id): str(cycle_id)
+            for run_id, cycle_id in conn.execute(
+                text("SELECT run_id, cycle_id FROM watch_cycle_runs")
+            ).all()
+        }
     new_by_run = {str(run_id): int(count) for run_id, count in first_found}
-    by_query: dict[str, list[RunSummary]] = {}
+    by_query: dict[str, list[ReportRun]] = {}
     for run in runs:
-        summary = _run_summary(dict(run), new_by_run.get(str(run["run_id"]), 0))
+        summary = _run_summary(
+            dict(run), new_by_run.get(str(run["run_id"]), 0), cycle_of.get(str(run["run_id"]))
+        )
         by_query.setdefault(summary.query_id, []).append(summary)
 
     protocol = current_protocol(project)
@@ -512,9 +531,10 @@ def _other_method(work: Work) -> ProvenanceMethod:
 # --- Search report ---
 
 
-def _run_summary(row: Mapping[str, Any], new_works: int) -> RunSummary:
+def _run_summary(row: Mapping[str, Any], new_works: int, cycle_id: str | None) -> ReportRun:
     status = RunStatus(str(row["status"]))
-    return RunSummary(
+    return ReportRun(
+        cycle_id=cycle_id,
         run_id=str(row["run_id"]),
         query_id=str(row["query_id"]),
         source=str(row["source"]),
@@ -528,7 +548,7 @@ def _run_summary(row: Mapping[str, Any], new_works: int) -> RunSummary:
     )
 
 
-def _row(project: Project, query: Mapping[str, Any], runs: list[RunSummary]) -> SearchReportRow:
+def _row(project: Project, query: Mapping[str, Any], runs: list[ReportRun]) -> SearchReportRow:
     query_id = str(query["query_id"])
     reported = next((run.reported_count for run in runs if run.reported_count is not None), None)
     # A run explains its own shortfall in its note (R-23); the row carries those notes.

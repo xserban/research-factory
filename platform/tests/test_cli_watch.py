@@ -149,3 +149,17 @@ def test_living_snapshot_command(ready: Project, tmp_path: Path) -> None:
     assert code == 0 and out.startswith("snapshot snp_")
     code, _, err = _cli(ready.settings.root, "--project", "demo", "living", "snapshot")
     assert code == 0, err
+
+
+def test_living_prisma_update_command(ready: Project, monkeypatch: pytest.MonkeyPatch) -> None:
+    _use(monkeypatch, ScriptedSource(by_text({"attention": [A], "transformers": [B]})))
+    root = ready.settings.root
+    assert _cli(root, "watch", "run", "--project", "demo")[0] == 0
+    assert _cli(root, "--project", "demo", "living", "snapshot")[0] == 0
+    code, out, err = _cli(root, "--project", "demo", "living", "prisma-update", "--json")
+    assert code == 0, err
+    assert json.loads(out)["screened"] == 0
+    code, out, _ = _cli(root, "--project", "demo", "report", "prisma", "--update", "last")
+    assert code == 0 and "update flow" in out
+    code, _, err = _cli(root, "--project", "demo", "living", "prisma-update", "--since", "snp_x")
+    assert code == 1 and "since" in err

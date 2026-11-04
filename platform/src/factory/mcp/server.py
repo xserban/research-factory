@@ -55,6 +55,7 @@ from factory.services import fulltext_status as fulltext_status_service
 from factory.services import inbox as inbox_service
 from factory.services import methods as methods_service
 from factory.services import prisma as prisma_service
+from factory.services import prisma_update as prisma_update_service
 from factory.services import probe as probe_service
 from factory.services import project as project_service
 from factory.services import protocol as protocol_service
@@ -655,10 +656,12 @@ def build_server(
         return _reply(project, deviate)
 
     @server.tool()
-    def report_prisma(project: str) -> dict[str, JsonValue]:
+    def report_prisma(project: str, update: str | None = None) -> dict[str, JsonValue]:
         """The PRISMA 2020 flow and the PRISMA-S search report, computed from the events.
-        Refused to a session that has joined a pass: the flow's included, pending and per-criterion
-        exclusion counts derive from the final outcomes (human labels and both passes)."""
+        `update` adds the update flow of a living review: `last` (since the last snapshot) or a
+        snapshot id (the update that snapshot closed). Refused to a session that has joined a
+        pass: the flow's included, pending and per-criterion exclusion counts derive from the final
+        outcomes (human labels and both passes)."""
 
         def report() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
@@ -667,9 +670,14 @@ def build_server(
                 "flow": prisma_service.prisma_flow(opened).model_dump(mode="json"),
                 "search": prisma_service.search_report(opened).model_dump(mode="json"),
             }
-            return _withheld(opened, data, include_work_ids=False)
+            if update is not None:
+                until = None if update == "last" else update
+                flow = prisma_update_service.prisma_update(opened, until=until)
+                shown = prisma_update_service.agent_update(opened, flow)
+                data["update"] = shown.model_dump(mode="json")
+            return _withheld(opened, data, include_work_ids=update is not None)
 
-        return _reply(project, report, include_work_ids=False)
+        return _reply(project, report, include_work_ids=update is not None)
 
     @server.tool()
     def report_methods(project: str) -> dict[str, JsonValue]:

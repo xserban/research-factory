@@ -23,6 +23,7 @@ def decide(
     pass_label: PassLabel = PassLabel.A,
     criterion: str | None = None,
     stage: ScreeningStage = ScreeningStage.TITLE_ABSTRACT,
+    supersedes: str | None = None,
 ) -> str:
     """Write one screening-phase decision event directly; return its id."""
     decision_id = f"dec_{project.ids.ulid()}"
@@ -38,7 +39,7 @@ def decide(
         rationale="rationale",
         protocol_id=protocol_id,
         task_id="tsk_test",
-        supersedes=None,
+        supersedes=supersedes,
     )
     blob = project.blobs.put_json({"work_id": work_id, "verdict": verdict})
     project.record(

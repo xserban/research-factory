@@ -66,8 +66,28 @@ def start_screening(project: Project, agent: Actor) -> tuple[str, set[str]]:
     return protocol.protocol_id, set(calibration_items(project))
 
 
-def agree(project: Project, agent: Actor, work_id: str, protocol_id: str, verdict: str) -> None:
-    """Both passes decide `work_id` alike (criterion EX01 for an exclusion)."""
+def agree(
+    project: Project,
+    agent: Actor,
+    work_id: str,
+    protocol_id: str,
+    verdict: str,
+    *,
+    supersedes: dict[PassLabel, str] | None = None,
+) -> dict[PassLabel, str]:
+    """Both passes decide `work_id` alike (criterion EX01 for an exclusion); returns the decision
+    ids by pass. `supersedes` replaces the earlier decisions of those ids."""
     criterion = "EX01" if verdict == "exclude" else None
-    for label in PassLabel:
-        decide(project, agent, work_id, protocol_id, verdict, pass_label=label, criterion=criterion)
+    return {
+        label: decide(
+            project,
+            agent,
+            work_id,
+            protocol_id,
+            verdict,
+            pass_label=label,
+            criterion=criterion,
+            supersedes=None if supersedes is None else supersedes[label],
+        )
+        for label in PassLabel
+    }

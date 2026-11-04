@@ -121,7 +121,7 @@ def build_snapshot_blob(
         protocol_id="" if protocol is None else protocol.protocol_id,
         cutoff_event=cutoff_event,
         prisma=flow,
-        included_ids=_included_ids(project, flow),
+        included_ids=included_work_ids(project, flow),
         conclusion_facts=slots.get("conclusion_facts"),
         conclusions=slots.get("conclusions"),
     )
@@ -168,7 +168,7 @@ def last_snapshot_event(project: Project) -> str | None:
     return None if row[0] is None else str(row[0])
 
 
-def _included_ids(project: Project, flow: PrismaFlow) -> tuple[str, ...]:
+def included_work_ids(project: Project, flow: PrismaFlow) -> tuple[str, ...]:
     """The canonical works included in the review: at full text once that stage has run, else at
     title/abstract."""
     full_text = flow.included_in_review is not None

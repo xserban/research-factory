@@ -31,6 +31,7 @@ from factory.services.imports import (
 )
 from factory.services.inbox import InboxPage, ResolveOutcome
 from factory.services.prisma import UNCONVERTED, PrismaFlow, SearchReport
+from factory.services.prisma_update import UpdateFlow
 from factory.services.references import ExtractSummary, Page, ReferenceCounts
 from factory.services.snowball import Comparison, RoundCandidate, RoundResult
 from factory.services.trace import TraceNode
@@ -67,6 +68,29 @@ def prisma_markdown(flow: PrismaFlow) -> str:
     if flow.provisional:
         lines += ["", "The flow is provisional: works are pending."]
     lines.append(f"\nProtocol: {flow.protocol_id or 'none'}")
+    return "\n".join(lines) + "\n"
+
+
+def update_markdown(flow: UpdateFlow) -> str:
+    """The PRISMA 2020 update flow of a living review as a Markdown list."""
+    window = f"{flow.since_snapshot or 'start'} to {flow.until_snapshot or 'now'}"
+    lines = ["# PRISMA 2020 update flow", "", f"Window: {window}", ""]
+    lines.append(f"- studies included in the previous version: {flow.previous_included}")
+    lines += ["", "## Identification"]
+    lines += [f"- {source}: {n}" for source, n in flow.identified_databases.items()]
+    lines += [f"- other methods, {method}: {n}" for method, n in flow.identified_other.items()]
+    lines.append(f"- duplicates removed: {flow.duplicates_removed}")
+    lines += ["", "## Screening", f"- records screened: {flow.screened}"]
+    lines += [f"- excluded, {criterion}: {n}" for criterion, n in flow.excluded.items()]
+    lines.append(f"- pending: {flow.pending}")
+    lines.append(f"- full-text reports sought: {flow.full_text.sought}")
+    lines += ["", "## Included", f"- included in this update: {flow.included}"]
+    lines.append(f"- total included now: {flow.total_included}")
+    if flow.changed_previous:
+        lines.append(f"- earlier works whose inclusion changed: {len(flow.changed_previous)}")
+        lines += [f"  - {work}" for work in flow.changed_previous]
+    if flow.provisional:
+        lines += ["", "The update flow is provisional: works are pending."]
     return "\n".join(lines) + "\n"
 
 
