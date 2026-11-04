@@ -25,6 +25,7 @@ Invariants:
 import hashlib
 import secrets
 from dataclasses import dataclass
+from fractions import Fraction
 from typing import Literal
 
 from pydantic import JsonValue
@@ -164,13 +165,13 @@ def extraction_population(project: Project) -> list[str]:
 def in_dual_sample(seed: int, work_id: str, fraction: float | None) -> bool:
     """Whether `work_id` is in the dual-extraction sample of `fraction` under `seed`.
 
-    Each work gets a fixed position in [0, 1) from a hash of the seed and the work, and is in the
-    sample when the position is below `fraction`; so a larger fraction only adds works. None
-    means every work."""
+    Each work gets a fixed position, the full sha256 digest of the seed and the work as a fraction
+    of 2**256, and is in the sample when the position is below `fraction` (compared exactly); so a
+    larger fraction only adds works. None means every work (ruling 1)."""
     if fraction is None:
         return True
     digest = hashlib.sha256(f"{seed}:{work_id}".encode()).digest()
-    return int.from_bytes(digest[:8], "big") / 2**64 < fraction
+    return Fraction(int.from_bytes(digest, "big"), 2**256) < Fraction(fraction)
 
 
 # --- Reads ---
@@ -196,11 +197,16 @@ def is_extraction_session(project: Project, session: str) -> bool:
 def unit_pin(project: Project, work_id: str) -> tuple[str, str] | None:
     """The (document, conversion) the extraction of `work_id` is pinned to: the pin of its first
     task, of either pass, by task id; None when no task of the work exists."""
+    return _pins(project).get(work_id)
+
+
+def _pins(project: Project) -> dict[str, tuple[str, str]]:
+    """The pin of every work that has an extraction task: that of its first task by task id."""
+    pins: dict[str, tuple[str, str]] = {}
     for _, _, content in _kind_tasks(project, *EXTRACT_KINDS.values()):
         for record in content.records:
-            if record.get("work_id") == work_id:
-                return record["document_id"], record["conversion_id"]
-    return None
+            pins.setdefault(record["work_id"], (record["document_id"], record["conversion_id"]))
+    return pins
 
 
 def _kind_tasks(project: Project, *kinds: str) -> list[tuple[str, str, ExtractBatchContent]]:
@@ -335,7 +341,9 @@ def extract_next(project: Project, actor: Actor, label: PassLabel) -> ExtractNex
     is ready with an extraction schema and a full-text screening plan. Otherwise the session
     joins, the pass opens once, a task is queued for each work of the pass lacking one, and the
     next claimable task is claimed. A session that already holds a live claim is served that task
-    again."""
+    again. `ExtractionSchema.dual_extract_sample=None` means every work, so pass B then queues the
+    whole population. `blocked` carries content-free reasons: how many works have no converted
+    document, and that no work falls in the dual sample."""
     with project.index.exclusive():
         project.index.sync()
         protocol, schema, pack = require_schema(project)
@@ -362,11 +370,18 @@ def extract_next(project: Project, actor: Actor, label: PassLabel) -> ExtractNex
         if needs_join:
             events.append(_join_event(project, actor, label))
         queue = _queue(label, population, config.seed, schema)
-        queued, remaining = _enqueue(project, actor, label, protocol, schema, pack, config, queue)
+        queued, remaining, unconverted = _enqueue(
+            project, actor, label, protocol, schema, pack, config, queue
+        )
+        blocked: list[str] = []
+        if unconverted:
+            blocked.append(f"{unconverted} works have no converted document")
+        if label is PassLabel.B and population and not queue:
+            blocked.append("no work falls in the dual sample")
         project.record([*events, *queued])
         task = _held(project, actor, label) or claim_next(project, actor, EXTRACT_KINDS[label])
         batch = None if task is None else _batch(project, task)
-        return ExtractNext(batch=batch, blocked=[], remaining=remaining)
+        return ExtractNext(batch=batch, blocked=blocked, remaining=remaining)
 
 
 def _queue(
@@ -387,9 +402,10 @@ def _enqueue(
     pack: Pack,
     config: PassConfig,
     queue: list[str],
-) -> tuple[list[Event], int]:
+) -> tuple[list[Event], int, int]:
     """The `task.created` events for the works of `queue` lacking a task of this pass, not yet
-    recorded, and how many works of the queue have no completed task."""
+    recorded; how many works of the queue still await a completed task; and how many have no
+    converted document (never servable, so not counted as remaining)."""
     kind = EXTRACT_KINDS[label]
     tasks = _kind_tasks(project, kind)
     queued = {str(record["work_id"]) for _, _, content in tasks for record in content.records}
@@ -401,15 +417,18 @@ def _enqueue(
     }
     titles = {work.id: work.title for work in list_works(project)}
     fields = _fields(pack, schema, config.field_order)
+    pins = _pins(project)
     specs: list[TaskSpec] = []
+    unconverted = 0
     for work_id in queue:
         if work_id in queued:
             continue
-        pin = unit_pin(project, work_id)
+        pin = pins.get(work_id)
         if pin is None:
             chosen = default_conversion(project, work_id)
             if chosen is None:
-                continue  # not retrieved or not converted: nothing to extract from
+                unconverted += 1  # not retrieved or not converted: nothing to extract from
+                continue
             pin = (chosen.document_id, chosen.conversion_id)
         content = ExtractBatchContent(
             pass_label=label,
@@ -432,7 +451,7 @@ def _enqueue(
     events, result = build_task_events(project, actor, specs)
     if result.rejected:
         raise FactoryValidationError([issue for item in result.rejected for issue in item.issues])
-    return events, len(set(queue) - done)
+    return events, len(set(queue) - done) - unconverted, unconverted
 
 
 def _fields(

@@ -265,6 +265,10 @@ def _check_join(
         raise FactoryValidationError(
             [ValidationIssue("session", "this session relayed a human label and cannot screen")]
         )
+    if _is_extraction_session(project, actor.session):
+        raise FactoryValidationError(
+            [ValidationIssue("session", "this session joined an extraction pass and cannot screen")]
+        )
     joined = _joined_pass(project, actor.session, stage)
     if joined is None:
         if actor.model in _pass_models(project, _other(label), stage):
@@ -1003,6 +1007,15 @@ def _is_label_session(project: Project, session: str) -> bool:
     with project.index.connect() as conn:
         row = conn.execute(
             text("SELECT 1 FROM label_sessions WHERE session = :session"), {"session": session}
+        ).one_or_none()
+    return row is not None
+
+
+def _is_extraction_session(project: Project, session: str) -> bool:
+    with project.index.connect() as conn:
+        row = conn.execute(
+            text("SELECT 1 FROM extraction_sessions WHERE session = :session"),
+            {"session": session},
         ).one_or_none()
     return row is not None
 
