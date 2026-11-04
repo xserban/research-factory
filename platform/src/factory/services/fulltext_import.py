@@ -19,43 +19,34 @@ Invariants:
 - The actor is the researcher (`project.human_actor()`), and the source version is
   `file:<first 12 hex digits of the sha256>`.
 - Identifier sniffing is advisory. It reads no more than page 1, and a reader failure means no
-  identifiers, never an error.
+  identifiers, never an error. `sniff_identifiers` lives in `factory.imports.pdfs` (slice 3d)
+  and is re-exported here.
 """
 
 from __future__ import annotations
 
 import hashlib
-import re
 from pathlib import Path
-from typing import Literal
 
 from pydantic import Field
-from pypdf import PdfReader
 
 from factory.errors import FactoryValidationError, ValidationIssue
+from factory.imports.pdfs import Source as Source
+from factory.imports.pdfs import canonical_doi_key
+from factory.imports.pdfs import sniff_identifiers as sniff_identifiers
 from factory.model.base import StrictModel
 from factory.model.work import Work
-from factory.model.work_ids import arxiv_id_from_doi, normalize_arxiv, normalize_doi
+from factory.model.work_ids import normalize_arxiv
 from factory.services.agreement import Outcome, final_outcomes
 from factory.services.context import Project
 from factory.services.fulltext import record_supplied_document
 from factory.services.search import list_works
-
-Source = Literal["filename", "first-page", "none"]
 
 _PDF_HEADER = b"%PDF-"
 _HEADER_WINDOW = 1024
 _MEDIA_TYPE = "application/pdf"
 _SOURCE_PREFIX = "file:"
 _SOURCE_DIGITS = 12
-
-# A new-style arXiv id, not preceded by a digit or dot, so `10.48550_arXiv.2301.01234` is left to
-# the DOI pattern, and the id's version suffix is optional.
-_FILE_ARXIV = re.compile(r"(?<![\d.])(\d{4}\.\d{4,5})(?:v\d+)?(?!\d)", re.IGNORECASE)
-_FILE_DOI = re.compile(r"(?<![\w.])10\.\d{4,9}_\S+")
-_TEXT_ARXIV = re.compile(r"arXiv:\s*(\d{4}\.\d{4,5})(?:v\d+)?(?!\d)", re.IGNORECASE)
-_TEXT_DOI = re.compile(r"(?<![\w.])10\.\d{4,9}/[^\s\"<>]+")
-_TRAILING_PUNCTUATION = ".,;:)]}"
 
 
 class ImportReport(StrictModel):
@@ -67,25 +58,6 @@ class ImportReport(StrictModel):
     ambiguous: list[str] = Field(default_factory=list)
     not_promoted: list[str] = Field(default_factory=list)
     not_pdf: list[str] = Field(default_factory=list)
-
-
-def sniff_identifiers(path: Path) -> tuple[set[str], Source]:
-    """The normalised identifiers a PDF names, and where they were found.
-
-    Identifiers are `arxiv:<id>` and `doi:<doi>`. A DOI that DataCite minted for an arXiv preprint
-    is returned as its `arxiv:` form. The filename is read first; page 1's text is read only if the
-    filename yields nothing. A reader failure yields `(set(), "none")`.
-    """
-    from_name = _identifiers_in(_FILE_ARXIV, _FILE_DOI, _file_stem(path.name), underscore=True)
-    if from_name:
-        return from_name, "filename"
-    try:
-        text = PdfReader(path).pages[0].extract_text() or ""
-    # pypdf raises many exception types on damaged input, and none of them is fatal here.
-    except Exception:
-        return set(), "none"
-    from_text = _identifiers_in(_TEXT_ARXIV, _TEXT_DOI, text, underscore=False)
-    return (from_text, "first-page") if from_text else (set(), "none")
 
 
 def import_folder(project: Project, folder: Path) -> ImportReport:
@@ -156,35 +128,7 @@ def _work_identifiers(work: Work) -> frozenset[str]:
     """A corpus work's canonical identifiers, in the same form `sniff_identifiers` returns."""
     keys: set[str] = set()
     if work.identifiers.doi:
-        keys.add(_canonical_doi(work.identifiers.doi))
+        keys.add(canonical_doi_key(work.identifiers.doi))
     if work.identifiers.arxiv:
         keys.add(f"arxiv:{normalize_arxiv(work.identifiers.arxiv)}")
     return frozenset(keys)
-
-
-def _canonical_doi(doi: str) -> str:
-    """`arxiv:<id>` for a DataCite arXiv DOI, else `doi:<doi>`."""
-    bridged = arxiv_id_from_doi(doi)
-    return f"arxiv:{bridged}" if bridged else f"doi:{normalize_doi(doi)}"
-
-
-def _identifiers_in(
-    arxiv: re.Pattern[str], doi: re.Pattern[str], text: str, *, underscore: bool
-) -> set[str]:
-    """Every arXiv id and DOI in `text`, normalised.
-
-    `underscore` says that `_` stands for `/` in a DOI, as it must in a filename. An arXiv id is
-    recognised by its pattern in a filename, but only after `arXiv:` in running text, to keep page
-    numbers and dates from matching.
-    """
-    found: set[str] = set()
-    for match in arxiv.finditer(text):
-        found.add(f"arxiv:{normalize_arxiv(match.group(1))}")
-    for match in doi.finditer(text):
-        raw = match.group(0).rstrip(_TRAILING_PUNCTUATION)
-        found.add(_canonical_doi(raw.replace("_", "/") if underscore else raw))
-    return found
-
-
-def _file_stem(name: str) -> str:
-    return name[: -len(".pdf")] if name.lower().endswith(".pdf") else name
