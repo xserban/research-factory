@@ -27,7 +27,7 @@ compares A with B inside one scope (decision 37). Evidence events leave `pack` n
 payloads now hold `"pack": null`, and rows `"cited": null`, which replay as before); contribution
 events carry `pack = contribution`. A contribution row is also stale when it cites a reference
 extraction that is no longer its work's current G1 extraction; its unit is stale (reason
-`references`) when that extraction was replaced after the unit's closing.
+`references`) when that extraction was replaced after the task that closed the unit was created.
 
 Invariants:
 - Nothing is queued until the protocol is ready and declares an extraction schema of a known pack
@@ -1467,6 +1467,7 @@ class _Ledger:
     claims: dict[tuple[str, PassLabel], list["ClaimRow"]]
     documents: dict[str, ConversionRef | None] = field(default_factory=dict)
     references: dict[str, str | None] = field(default_factory=dict)
+    created: dict[str, str] = field(default_factory=dict)
 
     def reference_extraction(self, work_id: str) -> str | None:
         """The work's current G1 reference extraction (`current_extraction`), read once."""
@@ -1516,8 +1517,9 @@ class _Ledger:
         row of the unit that was not already stale at that position (pinned to a replaced
         document, or staled by an amendment recorded between the row and the closing).
         `references`: a completed task's carried row cites a reference extraction replaced after
-        that position. A row whose citation was replaced before the closing was already stale
-        then: it stays live and stale but never re-queues the unit, as it cannot be superseded."""
+        that task was created, so no agent of the task saw the replacement. A row whose citation
+        was replaced before the task was created stays live and stale but never re-queues the
+        unit, as it cannot be superseded."""
         current = self.current(work_id)
         if current is not None and task.pin[0] != current.document_id:
             return "document-version"
@@ -1539,15 +1541,28 @@ class _Ledger:
                 continue
             if rule.all_records or any(touches(rule, tuple(r.fields)) for r in carried):
                 return "schema"
-        if any(self._replaced_after(row, closed) for row in carried):
+        # Deliberate: a task created after the replacement may close the unit current with a
+        # reason alone; its agent saw the new list, and the old row stays in `stale_extractions`.
+        if any(self._replaced_after(row, task.task_id) for row in carried):
             return "references"
         return None
 
-    def _replaced_after(self, row: ExtractionRow, position: str) -> bool:
+    def _created_at(self, task_id: str) -> str:
+        """The event ID of the task's `task.created`. Read from the log, as the projection keeps
+        none, once per ledger and only when a row cites a replaced extraction."""
+        if not self.created:
+            wanted = {t.task_id for unit in self.tasks.values() for t in unit}
+            for event in read_all(self.project.paths.events_dir, self.project.catalog):
+                if event.type == "task.created" and event.payload.get("task_id") in wanted:
+                    self.created[str(event.payload["task_id"])] = event.id
+        return self.created[task_id]
+
+    def _replaced_after(self, row: ExtractionRow, task_id: str) -> bool:
         """Whether the reference extraction `row` cites is not current and the next extraction of
-        its work was recorded after `position`. With no later extraction (a new conversion or
-        parser left the work without a current one) the row is stale but the unit waits: a new
-        task could cite nothing newer, and the re-extraction that follows re-queues it."""
+        its work was recorded after `task_id` was created. With no later extraction (a new
+        conversion or parser left the work without a current one) the row is stale but the unit
+        waits: a new task could cite nothing newer, and the re-extraction that follows re-queues
+        it."""
         if row.cited is None or not self.cites_old_references(row):
             return False
         with self.project.index.connect() as conn:
@@ -1559,7 +1574,7 @@ class _Ledger:
                 ),
                 {"cited": row.cited.reference_extraction_id},
             ).scalar_one()
-        return replaced is not None and str(replaced) > position
+        return replaced is not None and str(replaced) > self._created_at(task_id)
 
     def _stale_by(self, row: ExtractionRow, position: str) -> bool:
         """Whether an amendment recorded after `row` and no later than `position` stales it."""

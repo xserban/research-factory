@@ -196,9 +196,10 @@ def _cite(rex: str) -> Callable[..., ExtraVerdict]:
         fields: Mapping[str, StoredField],
         rows: Sequence[ExtractionRow],
     ) -> ExtraVerdict:
-        return ExtraVerdict(
-            cited=CitedEntry(reference_extraction_id=rex, ordinal=1, marker="absent"), issues=[]
-        )
+        if "cited_entry" not in fields:
+            return ExtraVerdict(cited=None, issues=[])
+        entry = CitedEntry(reference_extraction_id=rex, ordinal=1, marker="absent")
+        return ExtraVerdict(cited=entry, issues=[])
 
     return check
 
@@ -629,6 +630,64 @@ def test_cited_row_stale_when_g1_extraction_replaced(
     extract_references(project, agent, [work], sources={})
     assert _state_of(project, work) == ("stale", "references")
     assert stale_extractions(project, scope=C) == {row_id, new_id}
+
+
+def test_references_replaced_during_an_open_task_reoffer_the_unit_once(
+    project: Project, agent: Actor, ctr_a: Actor, world: list[str]
+) -> None:
+    batch = _contrib(project, ctr_a)
+    work = _work(batch)
+    extract_references(project, agent, [work], sources={})
+    first = current_extraction(project, work)
+    assert first is not None
+    rows = [_item(cited_entry=FieldInput(value=1)), _item(name="ipsum")]
+    written = record_unit(project, ctr_a, batch.task_id, rows, extra_check=_cite(first))
+    assert len(written.rows.written) == 2
+    extract_references(project, agent, [work], sources={})  # no agent has seen this extraction
+    second = current_extraction(project, work)
+    assert second is not None
+    assert record_unit(project, ctr_a, batch.task_id, [], finish=True).completed
+    assert _state_of(project, work) == ("stale", "references")
+    served = _serve_until(project, ctr_a, work)
+    assert served is not None and served.task_id != batch.task_id
+    res = record_unit(
+        project,
+        ctr_a,
+        served.task_id,
+        [_item(cited_entry=FieldInput(value=1))],
+        finish=True,
+        extra_check=_cite(second),
+    )
+    assert res.completed
+    assert _state_of(project, work) == ("current", None)
+    assert _serve_until(project, ctr_a, work) is None
+
+
+def test_requeued_task_may_close_with_a_reason_and_keep_the_stale_row_visible(
+    project: Project, agent: Actor, ctr_a: Actor, world: list[str]
+) -> None:
+    batch = _contrib(project, ctr_a)
+    work = _work(batch)
+    extract_references(project, agent, [work], sources={})
+    first = current_extraction(project, work)
+    assert first is not None
+    res = record_unit(
+        project,
+        ctr_a,
+        batch.task_id,
+        [_item(cited_entry=FieldInput(value=1))],
+        finish=True,
+        extra_check=_cite(first),
+    )
+    (row_id,) = res.rows.written
+    extract_references(project, agent, [work], sources={})
+    served = _serve_until(project, ctr_a, work)
+    assert served is not None
+    reason = "the new reference list no longer holds the entry"
+    assert record_unit(project, ctr_a, served.task_id, [], finish=True, reason=reason).completed
+    assert _state_of(project, work) == ("current", None)
+    assert stale_extractions(project, scope=C) == {row_id}
+    assert _serve_until(project, ctr_a, work) is None
 
 
 # --- document_read gate ---
