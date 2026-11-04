@@ -101,7 +101,12 @@ def test_identified_other_unchanged_without_rounds(
     # a plain chase keeps its slice-1 count; the detail names the mechanism
     search_chase(project, agent, [ChaseDirection.BACKWARD], sources=_chase_sources(cited=[CHASED]))
     flow = prisma_flow(project)
-    assert flow.identified_other == {"citation-chase": 1, "seed-admission": 0, "hand-search": 0}
+    assert flow.identified_other == {
+        "citation-chase": 1,
+        "seed-admission": 0,
+        "hand-search": 0,
+        "supplied": 0,
+    }
     assert flow.identified_other_detail == {
         "chase-backward": 1,
         "chase-forward": 0,
