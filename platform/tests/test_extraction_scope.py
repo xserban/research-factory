@@ -553,6 +553,28 @@ def test_new_document_version_stales_both_scopes(
         assert (state.state, state.reason) == ("stale", "document-version")
 
 
+def _state_of(project: Project, work: str) -> tuple[str, str | None]:
+    (state,) = [
+        s
+        for s in unit_states(project, scope=C)
+        if s.work_id == work and s.pass_label is PassLabel.A
+    ]
+    return state.state, state.reason
+
+
+def _serve_until(project: Project, actor: Actor, work: str) -> ContributionBatch | None:
+    """Serve pass A, closing every other unit, until `work` is served; None when the queue ends."""
+    for _ in range(50):
+        batch = next_unit(project, actor, PassLabel.A, scope=C, content=add_refs).batch
+        if batch is None:
+            return None
+        assert isinstance(batch, ContributionBatch)
+        if _work(batch) == work:
+            return batch
+        record_unit(project, actor, batch.task_id, [], finish=True, reason="not this one")
+    raise AssertionError("the queue did not end")
+
+
 def test_cited_row_stale_when_g1_extraction_replaced(
     project: Project, agent: Actor, ctr_a: Actor, world: list[str]
 ) -> None:
@@ -582,14 +604,31 @@ def test_cited_row_stale_when_g1_extraction_replaced(
     ]
     assert (state.state, state.reason) == ("stale", "references")
     assert stale_extractions(project) == set()
-    # The next call queues a new task for the stale unit: it is no longer stale.
-    _contrib(project, ctr_a)
-    (state,) = [
-        s
-        for s in unit_states(project, scope=C)
-        if s.work_id == work and s.pass_label is PassLabel.A
-    ]
-    assert state.state in ("queued", "open") and state.reason is None
+    # The next call queues a new task for the stale unit; recording against the new extraction
+    # makes the unit current, though the old row stays live and stale.
+    second = current_extraction(project, work)
+    assert second is not None
+    served = _serve_until(project, ctr_a, work)
+    assert served is not None and served.task_id != batch.task_id
+    res = record_unit(
+        project,
+        ctr_a,
+        served.task_id,
+        [_item(cited_entry=FieldInput(value=1))],
+        finish=True,
+        extra_check=_cite(second),
+    )
+    assert res.completed
+    (new_id,) = res.rows.written
+    assert _state_of(project, work) == ("current", None)
+    assert stale_extractions(project, scope=C) == {row_id}
+    # next_unit does not offer the unit again.
+    assert _serve_until(project, ctr_a, work) is None
+    assert _state_of(project, work) == ("current", None)
+    # A later replacement stales the unit again: only rows stale at the closing are discounted.
+    extract_references(project, agent, [work], sources={})
+    assert _state_of(project, work) == ("stale", "references")
+    assert stale_extractions(project, scope=C) == {row_id, new_id}
 
 
 # --- document_read gate ---

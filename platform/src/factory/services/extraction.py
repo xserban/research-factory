@@ -22,9 +22,12 @@ Every pass, task, row, closing and read belongs to one scope (slice 3b ruling 6)
 (`extraction_schema`, tasks `extract_a`/`extract_b`) or `contribution` (`contribution_schema`,
 tasks `contrib_a`/`contrib_b`, population G1's `included_works`). Each scope keeps its own passes,
 seeds, units, pins and staleness; every read defaults to evidence, and a session joins at most one
-pass across both scopes (ruling 2). Evidence events carry no `pack` (as before G2); contribution
+pass across both scopes (ruling 2); a model is independent only within a scope, since agreement
+compares A with B inside one scope (decision 37). Evidence events leave `pack` null (their
+payloads now hold `"pack": null`, and rows `"cited": null`, which replay as before); contribution
 events carry `pack = contribution`. A contribution row is also stale when it cites a reference
-extraction that is no longer its work's current G1 extraction (unit reason `references`).
+extraction that is no longer its work's current G1 extraction; its unit is stale (reason
+`references`) when that extraction was replaced after the unit's closing.
 
 Invariants:
 - Nothing is queued until the protocol is ready and declares an extraction schema of a known pack
@@ -473,7 +476,7 @@ def _check_join(project: Project, actor: Actor, label: PassLabel, scope: Scope) 
 
 
 def _pack_tag(scope: Scope) -> str | None:
-    """The `pack` an event of `scope` carries: none for evidence (as before G2)."""
+    """The `pack` an event of `scope` carries: null for evidence, which projects as before G2."""
     return CONTRIBUTION_SCOPE_NAME if scope is Scope.CONTRIBUTION else None
 
 
@@ -833,9 +836,11 @@ class ExtraVerdict:
 ExtraCheck = Callable[
     [Project, UnitPin, Mapping[str, StoredField], Sequence[ExtractionRow]], ExtraVerdict
 ]
-"""A scope-specific check of one verified row: the unit, the row's stored fields, and the unit's
-live, not stale rows (less those an accepted row of the call supersedes) plus the rows accepted
-earlier in the same call (with `event_id` "" since not yet recorded)."""
+"""A scope-specific check of one verified row: the unit, the row's stored fields, and `seen`: the
+unit's live, not stale rows (less those an accepted row of the call supersedes) plus the rows
+accepted earlier in the same call. `seen` includes the row's own supersede target, which is still
+live while its correction is judged; rows accepted earlier in the call have `event_id` "", since
+they are not yet recorded."""
 
 CloseCheck = Callable[
     [Project, UnitPin, Sequence[ExtractionRow], str | None], list[ValidationIssue]
@@ -1509,7 +1514,10 @@ class _Ledger:
         schema's reference or fields differ from what it served; for a completed one, an
         amendment recorded after its closing position (`closed_at`) stales all rows or a live
         row of the unit that was not already stale at that position (pinned to a replaced
-        document, or staled by an amendment recorded between the row and the closing)."""
+        document, or staled by an amendment recorded between the row and the closing).
+        `references`: a completed task's carried row cites a reference extraction replaced after
+        that position. A row whose citation was replaced before the closing was already stale
+        then: it stays live and stale but never re-queues the unit, as it cannot be superseded."""
         current = self.current(work_id)
         if current is not None and task.pin[0] != current.document_id:
             return "document-version"
@@ -1520,7 +1528,7 @@ class _Ledger:
             return None
         closed = self.closed_at.get(task.task_id, "")
         carried = [
-            tuple(row.fields)
+            row
             for row in self.rows.get((work_id, label), [])
             if (current is None or row.document_id == current.document_id)
             and not self._stale_by(row, closed)
@@ -1529,15 +1537,29 @@ class _Ledger:
             rule = scope_rule(amendment, self.scope)
             if rule is None or when <= closed:
                 continue
-            if rule.all_records or any(touches(rule, fields) for fields in carried):
+            if rule.all_records or any(touches(rule, tuple(r.fields)) for r in carried):
                 return "schema"
-        if any(
-            self.cites_old_references(row)
-            for row in self.rows.get((work_id, label), [])
-            if (current is None or row.document_id == current.document_id)
-        ):
+        if any(self._replaced_after(row, closed) for row in carried):
             return "references"
         return None
+
+    def _replaced_after(self, row: ExtractionRow, position: str) -> bool:
+        """Whether the reference extraction `row` cites is not current and the next extraction of
+        its work was recorded after `position`. With no later extraction (a new conversion or
+        parser left the work without a current one) the row is stale but the unit waits: a new
+        task could cite nothing newer, and the re-extraction that follows re-queues it."""
+        if row.cited is None or not self.cites_old_references(row):
+            return False
+        with self.project.index.connect() as conn:
+            replaced = conn.execute(
+                text(
+                    "SELECT MIN(later.event_id) FROM reference_extractions later "
+                    "JOIN reference_extractions cited ON cited.extraction_id = :cited "
+                    "WHERE later.work_id = cited.work_id AND later.event_id > cited.event_id"
+                ),
+                {"cited": row.cited.reference_extraction_id},
+            ).scalar_one()
+        return replaced is not None and str(replaced) > position
 
     def _stale_by(self, row: ExtractionRow, position: str) -> bool:
         """Whether an amendment recorded after `row` and no later than `position` stales it."""
