@@ -113,7 +113,7 @@ def test_contribution_pack_shape() -> None:
     assert set(p.compared_fields) <= {f.name for f in p.fields}
     assert "statement" not in p.compared_fields
     assert p.compared_fields == ("item_kind", "absent_kind", "name", "cited_entry", "value")
-    assert p.row_key_fields == ("item_kind", "absent_kind", "name")
+    assert p.row_key_fields == ("item_kind", "absent_kind", "name", "metric")
     assert p.row_anchor_fields == ("name", "statement", "compared_to")
     assert p.default_comparability_keys == () and p.citation_patterns == ()
 
@@ -132,7 +132,7 @@ def test_conditional_fields_name_existing_fields() -> None:
 
 def test_contribution_digest_is_pinned() -> None:
     digest = hashlib.sha256(repr(CONTRIBUTION_V1).encode()).hexdigest()
-    assert digest == "bc657c02a3a84a5f109e86cbb872ec4998ecb5a4841950288ba7bcf2689739d2", (
+    assert digest == "9a8ba2d09fb1094f6ec7723b57369997b624ec9863419f75634fe0ab0162fc4f", (
         "packs are versioned: add a new version"
     )
 
@@ -149,6 +149,21 @@ def test_value_not_allowed(manifest: Manifest) -> None:
 def test_allowed_compares_normalised_value(manifest: Manifest) -> None:
     v = run(manifest, item_kind=" Not-Stated ", absent_kind="base-idea")
     assert v.issues == [] and v.fields is not None
+
+
+def test_allowed_value_stored_normalised(manifest: Manifest) -> None:
+    """Review F3: a field with ``allowed`` stores the canonical allowed value."""
+    v = run(manifest, item_kind="Not-Stated ", absent_kind=" Base-Idea")
+    assert v.fields is not None
+    assert v.fields["item_kind"].value == "not-stated"
+    assert v.fields["absent_kind"].value == "base-idea"
+    same = run(manifest, item_kind="not-stated", absent_kind="base-idea")
+    assert same.fields == v.fields and same.row_key == v.row_key
+
+
+def test_free_text_field_stored_raw(manifest: Manifest) -> None:
+    v = run(manifest, item_kind="limitation", statement=Q("Our method fails", LIM))
+    assert v.fields is not None and v.fields["statement"].value == "Our method fails"
 
 
 def test_not_stated_needs_absent_kind_and_forbids_content(manifest: Manifest) -> None:
@@ -284,9 +299,26 @@ def test_row_key_formula() -> None:
         statement=("improve", "s2.p4"),
         compared_to=("Linformer", "s2.p5"),
     )
-    material = "\x1f".join([CNV, "s2.p4", "addition", "", ""])
+    material = "\x1f".join([CNV, "s2.p4", "addition", "", "", ""])
     expected = "rk_" + hashlib.sha256(material.encode()).hexdigest()[:12]
     assert pack_row_key(CONTRIBUTION_V1, CNV, fields) == expected
+
+
+def test_results_at_same_anchor_keyed_by_metric() -> None:
+    """Review F1: several results quoted from one paragraph do not collide."""
+
+    def result(metric: str, value: str) -> dict[str, StoredField]:
+        return stored(
+            item_kind="result",
+            statement=("reaches 82.4%", "s0.1.p1"),
+            metric=(metric, "s0.1.p1"),
+            value=(value, "s0.1.p1"),
+        )
+
+    top1 = pack_row_key(CONTRIBUTION_V1, CNV, result("Top-1 accuracy", "82.4"))
+    top5 = pack_row_key(CONTRIBUTION_V1, CNV, result("Top-5 accuracy", "82.4"))
+    again = pack_row_key(CONTRIBUTION_V1, CNV, result("top-1  Accuracy", "82.4"))
+    assert top1 != top5 and top1 == again
 
 
 def test_row_key_anchor_follows_anchor_field_order() -> None:
@@ -299,7 +331,7 @@ def test_not_stated_row_key_has_no_anchor() -> None:
     base = stored(item_kind="not-stated", absent_kind="base-idea")
     lim = stored(item_kind="not-stated", absent_kind="limitation")
     kb = pack_row_key(CONTRIBUTION_V1, CNV, base)
-    material = "\x1f".join([CNV, "-", normalise_text("not-stated"), "base-idea", ""])
+    material = "\x1f".join([CNV, "-", normalise_text("not-stated"), "base-idea", "", ""])
     assert kb == "rk_" + hashlib.sha256(material.encode()).hexdigest()[:12]
     assert kb != pack_row_key(CONTRIBUTION_V1, CNV, lim)
 

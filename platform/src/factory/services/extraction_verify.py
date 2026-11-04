@@ -8,7 +8,8 @@ the field named ``value`` for unkeyed packs, the pack's key fields for keyed one
 A value outside a field's ``allowed`` enumeration is ``value-not-allowed``. Conditionals are
 evaluated on the normalised value of their ``when`` field only when that field passed its kind
 and ``allowed`` checks, so a row failing ``allowed`` reports only that; a forbidden field present
-is ``not-allowed-for-kind`` and is not verified further.
+is ``not-allowed-for-kind`` and is not verified further. A field with ``allowed`` is stored as
+its normalised value, so stored values compare with ``==``; other fields are stored as given.
 """
 
 from __future__ import annotations
@@ -108,7 +109,7 @@ def verify_row_in(
             continue
         out = verify_field(pack, field, entry, manifest)
         if isinstance(out, VerifiedField):
-            stored[name] = out.stored
+            stored[name] = _canonical_allowed(field, out.stored)
         else:
             issues.extend(
                 ValidationIssue(f"fields.{name}.{_ATTR.get(reason, 'value')}", reason)
@@ -122,6 +123,13 @@ def verify_row_in(
         # the pack does not require `value`: the row has no identity
         return RowVerdict(None, None, [ValidationIssue(f"fields.{VALUE_FIELD}", REQUIRED)])
     return RowVerdict(stored, pack_row_key(pack, conversion_id, stored), [])
+
+
+def _canonical_allowed(field: FieldDef, value: StoredField) -> StoredField:
+    """A field with an ``allowed`` enumeration is stored as its normalised (allowed) value."""
+    if not field.allowed:
+        return value
+    return value.model_copy(update={"value": normalise_for(field, str(value.value))})
 
 
 def _conditional_rules(

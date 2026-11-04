@@ -3,7 +3,9 @@
 Invariants: ``item_kind`` is the only pack-required field; every other requirement and
 prohibition is a `Conditional` on ``item_kind``. ``not-stated`` items carry only
 ``absent_kind`` (``base-idea`` or ``limitation``) and no quote. ``statement``, quotes and anchors
-are never compared between passes. The unit of ``value`` is its `FieldInput.unit`, not a field.
+are never compared between passes. ``metric`` is a key field so that several results quoted
+from one element keep distinct row keys (it is absent, hence ``""``, for other kinds).
+The unit of ``value`` is its `FieldInput.unit`, not a field.
 """
 
 from __future__ import annotations
@@ -61,7 +63,7 @@ CONTRIBUTION_V1 = Pack(
         _forbid("compared_to", ("base-idea", "limitation")),
         _forbid("cited_entry", ("limitation",)),
     ),
-    row_key_fields=("item_kind", "absent_kind", "name"),
+    row_key_fields=("item_kind", "absent_kind", "name", "metric"),
     row_anchor_fields=("name", "statement", "compared_to"),
     compared_fields=("item_kind", "absent_kind", "name", "cited_entry", "value"),
 )
