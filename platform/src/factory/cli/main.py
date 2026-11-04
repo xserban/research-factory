@@ -45,6 +45,9 @@ from factory.services import extraction_audit as extraction_audit_service
 from factory.services import fulltext as fulltext_service
 from factory.services import fulltext_import as fulltext_import_service
 from factory.services import fulltext_status as fulltext_status_service
+from factory.services import import_admit as import_admit_service
+from factory.services import import_attach as import_attach_service
+from factory.services import import_resolve as import_resolve_service
 from factory.services import imports as imports_service
 from factory.services import inbox as inbox_service
 from factory.services import methods as methods_service
@@ -1850,4 +1853,118 @@ def import_show_cmd(
             view = imports_service.development_view(project, import_id)
             lines = render.development_view_lines(view)
     for line in lines:
+        typer.echo(line)
+
+
+@import_app.command("resolve")
+def import_resolve_cmd(
+    ctx: typer.Context,
+    import_id: Annotated[str, typer.Argument(help="An import id (imp_...).")],
+) -> None:
+    """Resolve the import's records to works (probe lookups, outside the corpus); prints counts
+    by state. Fuzzy and ambiguous matches wait for `import confirm` or `import reject`."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        summary = import_resolve_service.resolve_import(
+            project, import_id, sources=dict(default_sources())
+        )
+    for line in render.import_resolve_lines(summary):
+        typer.echo(line)
+
+
+RationaleOption = Annotated[str, typer.Option("--rationale", help="Why (required).")]
+
+
+def _decide_import(
+    ctx: typer.Context,
+    import_id: str,
+    ordinal: int,
+    decision: Decision,
+    rationale: str,
+    work: str | None,
+) -> None:
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        import_resolve_service.decide_import(
+            project,
+            project.human_actor(),
+            import_id,
+            ordinal,
+            decision,
+            rationale=rationale,
+            work_id=work,
+        )
+        live = import_resolve_service.record_states(project, import_id).get(ordinal)
+    for line in render.import_decision_lines(import_id, decision, live):
+        typer.echo(line)
+
+
+@import_app.command("confirm")
+def import_confirm_cmd(
+    ctx: typer.Context,
+    import_id: Annotated[str, typer.Argument(help="An import id (imp_...).")],
+    ordinal: Annotated[
+        int, typer.Argument(help="The record's ordinal (`import show --researcher`).")
+    ],
+    rationale: RationaleOption,
+    work: Annotated[
+        str | None, typer.Option("--work", help="The candidate work (needed for ambiguous).")
+    ] = None,
+) -> None:
+    """Confirm a fuzzy or ambiguous match, or a PDF's identity, as the researcher."""
+    _decide_import(ctx, import_id, ordinal, Decision.CONFIRM, rationale, work)
+
+
+@import_app.command("reject")
+def import_reject_cmd(
+    ctx: typer.Context,
+    import_id: Annotated[str, typer.Argument(help="An import id (imp_...).")],
+    ordinal: Annotated[
+        int, typer.Argument(help="The record's ordinal (`import show --researcher`).")
+    ],
+    rationale: RationaleOption,
+) -> None:
+    """Reject a match as the researcher; the record is then unresolved."""
+    _decide_import(ctx, import_id, ordinal, Decision.REJECT, rationale, None)
+
+
+@import_app.command("admit")
+def import_admit_cmd(
+    ctx: typer.Context,
+    import_id: Annotated[str, typer.Argument(help="An import id (imp_...).")],
+) -> None:
+    """Admit a corpus import's resolved records as pending candidates through recorded searches;
+    prints counts and any promotion gap."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        summary = import_admit_service.admit_import(
+            project, import_id, sources=dict(default_sources())
+        )
+    for line in render.import_admit_lines(summary):
+        typer.echo(line)
+
+
+@import_app.command("attach")
+def import_attach_cmd(
+    ctx: typer.Context,
+    import_id: Annotated[str, typer.Argument(help="An import id (imp_...).")],
+    researcher: Annotated[
+        bool,
+        typer.Option("--researcher", help="List ordinals, works and documents (not for agents)."),
+    ] = False,
+) -> None:
+    """Attach the files the export names to their records' promoted works; prints counts."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        report = import_attach_service.attach_import(project, import_id)
+    if researcher:
+        typer.echo(
+            "warning: researcher view with ordinals; this output must not be shown to agents",
+            err=True,
+        )
+    for line in render.import_attach_lines(report, researcher=researcher):
         typer.echo(line)

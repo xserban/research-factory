@@ -209,6 +209,8 @@ class RecordRow(StrictModel):
     year: int | None
     doi: str | None
     arxiv: str | None
+    link_state: str | None = None
+    """The live link state once the import is resolved (`resolved`, ...), else None."""
 
 
 def list_imports(project: Project) -> list[ImportListing]:
@@ -280,7 +282,7 @@ def list_import_records(
     """
     _import_row(project, import_id)
     sql = (
-        "SELECT ordinal, part, outcome, title, first_author, year, doi, arxiv"
+        "SELECT ordinal, part, outcome, title, first_author, year, doi, arxiv, link_state"
         " FROM import_records WHERE import_id = :i"
     )
     if view == "development":

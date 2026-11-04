@@ -2,6 +2,7 @@
 is read from the model, so the CLI and the MCP tools cannot differ (R-05)."""
 
 from factory.errors import ValidationIssue
+from factory.model.references import Decision, LinkState
 from factory.model.screening import PassLabel
 from factory.services.agreement import DecisionView
 from factory.services.audit import AuditReport
@@ -19,6 +20,9 @@ from factory.services.extraction_audit import AuditEvidence, ExtractionAuditRepo
 from factory.services.fulltext import FetchSummary
 from factory.services.fulltext_import import ImportReport
 from factory.services.fulltext_status import FulltextStatus
+from factory.services.import_admit import AdmissionSummary
+from factory.services.import_attach import AttachReport
+from factory.services.import_resolve import ImportResolutionSummary
 from factory.services.imports import (
     DevelopmentView,
     ImportListing,
@@ -402,14 +406,66 @@ def library_imports_lines(listings: list[ImportListing]) -> list[str]:
 
 
 def import_record_lines(records: list[RecordRow]) -> list[str]:
-    """One line per record: ordinal, part, outcome, year, identifier, title."""
-    lines = ["ordinal  part  outcome  year  identifier  title"]
+    """One line per record: ordinal, part, outcome, link state, year, identifier, title."""
+    lines = ["ordinal  part  outcome  state  year  identifier  title"]
     for r in records:
         identifier = f"doi:{r.doi}" if r.doi else f"arxiv:{r.arxiv}" if r.arxiv else "-"
         year = str(r.year) if r.year is not None else "-"
         lines.append(
-            f"{r.ordinal}  {r.part}  {r.outcome.value}  {year}  {identifier}  {r.title or '-'}"
+            f"{r.ordinal}  {r.part}  {r.outcome.value}  {r.link_state or '-'}  {year}"
+            f"  {identifier}  {r.title or '-'}"
         )
+    return lines
+
+
+def import_resolve_lines(summary: ImportResolutionSummary) -> list[str]:
+    """A resolution as counts by link state; no ordinal and no record is named."""
+    lines = [f"import: {summary.import_id}"]
+    lines += [f"{state.value}: {n}" for state, n in summary.counts.items()]
+    lines.append(f"lookups: {len(summary.lookup_runs)} runs")
+    return lines
+
+
+def import_decision_lines(import_id: str, decision: Decision, state: LinkState | None) -> list[str]:
+    """One decision recorded, and the record's live state after it."""
+    return [f"import: {import_id}", f"{decision.value} recorded; the record is now {state or '-'}"]
+
+
+def import_admit_lines(summary: AdmissionSummary) -> list[str]:
+    """An admission as counts, then its promotion gaps."""
+    lines = [
+        f"import: {summary.import_id}",
+        f"runs: {len(summary.runs)}",
+        f"new works: {summary.new_works}",
+        f"already in corpus: {summary.already_in_corpus}",
+        f"failed runs: {summary.failed_runs}",
+    ]
+    lines += [f"gap: {g.field}: {g.reason}" for g in summary.gaps]
+    return lines
+
+
+def import_attach_lines(report: AttachReport, *, researcher: bool) -> list[str]:
+    """An attachment pass as counts; with `researcher`, also the ordinals (and works and
+    documents) behind each count, which must not be shown to agents."""
+    lines = [
+        f"attached: {len(report.attached)}",
+        f"already attached: {len(report.already_attached)}",
+        f"not promoted: {len(report.not_promoted)}",
+        f"unresolved: {len(report.unresolved)}",
+        f"attachment missing: {len(report.attachment_missing)}",
+        f"identity unchecked: {len(report.identity_unchecked)}",
+    ]
+    if researcher:
+        lines += [f"attached: {o} {w} {d}" for o, w, d in report.attached]
+        for label, ordinals in (
+            ("already attached", report.already_attached),
+            ("not promoted", report.not_promoted),
+            ("unresolved", report.unresolved),
+            ("attachment missing", report.attachment_missing),
+            ("identity unchecked", report.identity_unchecked),
+        ):
+            if ordinals:
+                lines.append(f"{label} ordinals: {', '.join(str(o) for o in ordinals)}")
     return lines
 
 
