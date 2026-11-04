@@ -699,7 +699,7 @@ def _enqueue(
         (ScreeningPhase.SCREENING, [w for w in ordinary if (w, scr_phase) not in unavailable]),
     ]
 
-    examples = _examples(project, corpus)
+    examples = _examples(project, corpus, stage)
     criteria = _criteria(protocol, label, stage)
     specs: list[TaskSpec] = []
     index = len(tasks)
@@ -829,17 +829,22 @@ def _sample(
     return tuple(sorted(set(drawn) | calibration))
 
 
-def _examples(project: Project, corpus: dict[str, Work]) -> list[dict[str, str]]:
-    """The worked examples with their expected verdicts. Seed ids are never included."""
+def _examples(
+    project: Project, corpus: dict[str, Work], stage: ScreeningStage = TA
+) -> list[dict[str, str]]:
+    """The worked examples with their expected verdicts. Seed ids are never included. Their
+    verdicts rest on title and abstract, so at full text each is marked as style only."""
     examples: list[dict[str, str]] = []
     for view in worked_examples(project):
         work = corpus.get(view.work_id or "")
         if work is None:
             continue
         expected = "include" if view.kind is SeedKind.POSITIVE else "exclude"
-        examples.append(
-            {"title": work.title, "abstract": work.abstract or "", "expected": expected}
-        )
+        example = {"title": work.title, "abstract": work.abstract or "", "expected": expected}
+        if stage is not TA:
+            example["basis"] = "title_abstract"
+            example["use"] = "style only; verdicts were decided on title and abstract"
+        examples.append(example)
     return examples
 
 

@@ -404,3 +404,20 @@ def test_calibration_only_full_text_decisions_leave_the_stage_not_run(
     assert len(result.written) == 1 and _ft_live(project)
 
     assert prisma_flow(project).full_text.stage_run is False
+
+
+def test_full_text_batch_examples_are_marked_style_only(batch: ScreenBatch) -> None:
+    assert batch.worked_examples
+    for example in batch.worked_examples:
+        assert example["basis"] == "title_abstract"
+        assert example["use"] == "style only; verdicts were decided on title and abstract"
+        assert {"title", "abstract", "expected"} <= set(example)
+
+
+def test_title_abstract_batch_examples_unchanged(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    served = ta_batch(project, agent, human, mock_sources)
+    assert served.worked_examples
+    for example in served.worked_examples:
+        assert set(example) == {"title", "abstract", "expected"}

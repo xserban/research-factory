@@ -24,6 +24,7 @@ one batch at a time. Each judgement is recorded with a verbatim quote so that it
    screen them like any batch.
 2. Judge each record only from its title and abstract, against the protocol criteria as served.
    Do not use outside knowledge of the paper, its full text, or its citations.
+   At full text the worked examples show title-and-abstract text; use them for style only.
 3. Choose one verdict per record:
    - `include`: the text meets every inclusion criterion and no exclusion criterion applies.
    - `exclude`: the text shows that an exclusion criterion applies. Give `criterion` (the bare
