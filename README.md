@@ -18,6 +18,7 @@ A research factory is a platform in which teams of researchers and AI agents run
 | [docs/07-research-programme.md](docs/07-research-programme.md) | Our research projects and their graphs (TAVI, linear attention, angiography, ND thesis) |
 | [docs/08-roadmap.md](docs/08-roadmap.md) | Build tiers, phases, next steps |
 | [docs/09-existing-assets.md](docs/09-existing-assets.md) | Review of existing projects (arxiv-miner): what to extract, what not |
+| [docs/10-abstractions.md](docs/10-abstractions.md) | Abstractions across all specs (artifacts, stage modules, gates, miners, builders) for brainstorming; background, not binding |
 | [docs/specs/](docs/specs/README.md) | System contracts, slice specs and slice roadmap |
 | [docs/backlog.md](docs/backlog.md) | Idea backlog: not yet in any spec |
 | [docs/pilot/](docs/pilot/seeds.md) | Manual pilot (linear attention for vision): seeds, split, log |
