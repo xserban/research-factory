@@ -15,11 +15,13 @@ from factory.clock import Clock, SystemClock
 from factory.config import Settings
 from factory.document.registry import default_converters
 from factory.errors import FactoryValidationError, ProjectNotFoundError, ValidationIssue
+from factory.imports.model import ImportFormat
 from factory.mcp.conventions import parse_routes
 from factory.mcp.server import run
 from factory.model.chase import ChaseDirection
 from factory.model.fulltext import Route
 from factory.model.identity import IdGenerator
+from factory.model.imports import ImportRole
 from factory.model.project import RigorMode
 from factory.model.protocol import ScreeningStage
 from factory.model.screening import Channel
@@ -39,6 +41,7 @@ from factory.services import extraction_audit as extraction_audit_service
 from factory.services import fulltext as fulltext_service
 from factory.services import fulltext_import as fulltext_import_service
 from factory.services import fulltext_status as fulltext_status_service
+from factory.services import imports as imports_service
 from factory.services import methods as methods_service
 from factory.services import portfolio as portfolio_service
 from factory.services import prisma as prisma_service
@@ -127,6 +130,11 @@ extract_app = typer.Typer(
     help="Extraction: unit status, agreement, resolution and the audit.",
     no_args_is_help=True,
 )
+import_app = typer.Typer(
+    name="import",
+    help="Import an existing library (BibTeX, CSL JSON, a PDF folder); list and show imports.",
+    no_args_is_help=True,
+)
 report_app = typer.Typer(
     name="report",
     help="PRISMA flow, search report, methods statement and evidence report.",
@@ -142,6 +150,7 @@ app.add_typer(search_app)
 app.add_typer(fulltext_app)
 app.add_typer(document_app)
 app.add_typer(extract_app)
+app.add_typer(import_app)
 
 
 @dataclass
@@ -1191,3 +1200,123 @@ def _mode(value: str | None) -> RigorMode | None:
         raise FactoryValidationError(
             [ValidationIssue("promote-to", f"must be one of: {choices}")]
         ) from None
+
+
+class PartChoice(StrEnum):
+    """Which records `factory import show` lists."""
+
+    DEVELOPMENT = "development"
+    HELD_OUT = "held-out"
+    ALL = "all"
+
+
+RoleOption = Annotated[
+    ImportRole,
+    typer.Option("--role", help="reference (kept outside the corpus) or corpus (candidates)."),
+]
+CollectionOption = Annotated[
+    str | None, typer.Option("--collection", help="The collection this file exports.")
+]
+SeedOption = Annotated[
+    int | None, typer.Option("--seed", help="Random seed of the development/held-out split.")
+]
+NoSplitOption = Annotated[
+    bool, typer.Option("--no-split", help="Decline the split of a pre-search import.")
+]
+
+
+def _library_import(
+    ctx: typer.Context,
+    path: Path,
+    format: ImportFormat,
+    role: ImportRole,
+    collection: str | None,
+    seed: int | None,
+    no_split: bool,
+) -> None:
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        summary = imports_service.record_import(
+            project,
+            path,
+            format=format,
+            role=role,
+            collection=collection,
+            random_seed=seed,
+            split=not no_split,
+        )
+    for line in render.library_import_lines(summary):
+        typer.echo(line)
+
+
+@import_app.command("bib")
+def import_bib_cmd(
+    ctx: typer.Context,
+    path: Annotated[Path, typer.Argument(help="A BibTeX export.")],
+    role: RoleOption,
+    collection: CollectionOption = None,
+    seed: SeedOption = None,
+    no_split: NoSplitOption = False,
+) -> None:
+    """Archive and record a BibTeX export; prints the import id, counts and split."""
+    _library_import(ctx, path, ImportFormat.BIBTEX, role, collection, seed, no_split)
+
+
+@import_app.command("csl")
+def import_csl_cmd(
+    ctx: typer.Context,
+    path: Annotated[Path, typer.Argument(help="A CSL JSON export.")],
+    role: RoleOption,
+    collection: CollectionOption = None,
+    seed: SeedOption = None,
+    no_split: NoSplitOption = False,
+) -> None:
+    """Archive and record a CSL JSON export; prints the import id, counts and split."""
+    _library_import(ctx, path, ImportFormat.CSL, role, collection, seed, no_split)
+
+
+@import_app.command("pdfs")
+def import_pdfs_cmd(
+    ctx: typer.Context,
+    folder: Annotated[Path, typer.Argument(help="A folder of PDFs.")],
+    role: RoleOption,
+    collection: CollectionOption = None,
+    seed: SeedOption = None,
+    no_split: NoSplitOption = False,
+) -> None:
+    """Archive and record a folder of PDFs; prints the import id, counts and split."""
+    _library_import(ctx, folder, ImportFormat.PDFS, role, collection, seed, no_split)
+
+
+@import_app.command("list")
+def import_list_cmd(ctx: typer.Context) -> None:
+    """Every import, oldest first, with its counts."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        listings = imports_service.list_imports(project)
+    for line in render.library_imports_lines(listings):
+        typer.echo(line)
+
+
+@import_app.command("show")
+def import_show_cmd(
+    ctx: typer.Context,
+    import_id: Annotated[str, typer.Argument(help="An import id (imp_...).")],
+    part: Annotated[
+        PartChoice, typer.Option("--part", help="development, held-out or all.")
+    ] = PartChoice.ALL,
+) -> None:
+    """The records of an import with their parts (the researcher's view, held-out included)."""
+    state = _state(ctx)
+    chosen: imports_service.Part | None = None
+    if part is PartChoice.DEVELOPMENT:
+        chosen = "development"
+    elif part is PartChoice.HELD_OUT:
+        chosen = "held-out"
+    with _reporting_errors():
+        project = _resolve_project(state)
+        records = imports_service.list_import_records(project, import_id, part=chosen)
+    for line in render.import_record_lines(records):
+        typer.echo(line)

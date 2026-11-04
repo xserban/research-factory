@@ -188,14 +188,59 @@ _IMPORT_COLUMNS = (
 )
 
 
-def list_imports(project: Project) -> list[ImportRow]:
-    """Every import, oldest first."""
+class ImportListing(StrictModel):
+    """An import with its record counts by parse outcome."""
+
+    row: ImportRow
+    counts: dict[ParseOutcome, int]
+
+
+class RecordRow(StrictModel):
+    """One record as the researcher sees it, with its part (held-out included)."""
+
+    ordinal: int
+    part: Part
+    outcome: ParseOutcome
+    title: str | None
+    first_author: str | None
+    year: int | None
+    doi: str | None
+    arxiv: str | None
+
+
+def list_imports(project: Project) -> list[ImportListing]:
+    """Every import, oldest first, with its counts."""
     project.index.sync()
     with project.index.connect() as conn:
         rows = conn.execute(
             text(f"SELECT {_IMPORT_COLUMNS} FROM imports ORDER BY recorded_at, event_id")
         ).mappings()
-        return [ImportRow.model_validate(dict(r)) for r in rows]
+        imports = [ImportRow.model_validate(dict(r)) for r in rows]
+        tallies = conn.execute(
+            text("SELECT import_id, outcome, COUNT(*) FROM import_records GROUP BY 1, 2")
+        ).all()
+    counts = {i.import_id: {o: 0 for o in ParseOutcome} for i in imports}
+    for import_id, outcome, n in tallies:
+        if import_id in counts:
+            counts[import_id][ParseOutcome(outcome)] = int(n)
+    return [ImportListing(row=i, counts=counts[i.import_id]) for i in imports]
+
+
+def list_import_records(
+    project: Project, import_id: str, *, part: Part | None = None
+) -> list[RecordRow]:
+    """The records of one import in ordinal order, optionally of one part. The researcher's view:
+    held-out records are listed; no agent surface calls this."""
+    _import_row(project, import_id)
+    sql = (
+        "SELECT ordinal, part, outcome, title, first_author, year, doi, arxiv"
+        " FROM import_records WHERE import_id = :i"
+    )
+    if part is not None:
+        sql += " AND part = :part"
+    with project.index.connect() as conn:
+        rows = conn.execute(text(f"{sql} ORDER BY ordinal"), {"i": import_id, "part": part})
+        return [RecordRow.model_validate(dict(r)) for r in rows.mappings()]
 
 
 def _import_row(project: Project, import_id: str) -> ImportRow:

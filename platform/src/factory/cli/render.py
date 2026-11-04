@@ -17,6 +17,7 @@ from factory.services.extraction_audit import AuditEvidence, ExtractionAuditRepo
 from factory.services.fulltext import FetchSummary
 from factory.services.fulltext_import import ImportReport
 from factory.services.fulltext_status import FulltextStatus
+from factory.services.imports import ImportListing, ImportSummary, RecordRow
 from factory.services.prisma import UNCONVERTED, PrismaFlow, SearchReport
 from factory.services.trace import TraceNode
 
@@ -313,4 +314,39 @@ def audit_report_lines(report: ExtractionAuditReport) -> list[str]:
         f"above ceiling: {above}, enforced: {'yes' if report.enforced else 'no'})",
     ]
     lines += [f"group {g}: {_rate(r)}" for g, r in report.by_group.items()]
+    return lines
+
+
+def library_import_lines(summary: ImportSummary) -> list[str]:
+    """A recorded import: its id, counts by parse outcome, attachments and split mode."""
+    lines = [f"import: {summary.import_id}"]
+    lines += [f"{outcome.value}: {n}" for outcome, n in summary.counts.items()]
+    lines.append(f"attachments: {summary.attachments} (missing {summary.attachments_missing})")
+    lines.append(f"split: {summary.split}")
+    return lines
+
+
+def library_imports_lines(listings: list[ImportListing]) -> list[str]:
+    """One line per import, oldest first: id, time, format, role, split, counts, collection."""
+    lines = []
+    for listing in listings:
+        row = listing.row
+        counts = " ".join(f"{o.value}={n}" for o, n in listing.counts.items())
+        collection = f"  collection={row.collection}" if row.collection else ""
+        lines.append(
+            f"{row.import_id}  {row.recorded_at}  {row.format.value}  {row.role.value}"
+            f"  split={row.split_mode}  {counts}{collection}"
+        )
+    return lines or ["no imports"]
+
+
+def import_record_lines(records: list[RecordRow]) -> list[str]:
+    """One line per record: ordinal, part, outcome, year, identifier, title."""
+    lines = ["ordinal  part  outcome  year  identifier  title"]
+    for r in records:
+        identifier = f"doi:{r.doi}" if r.doi else f"arxiv:{r.arxiv}" if r.arxiv else "-"
+        year = str(r.year) if r.year is not None else "-"
+        lines.append(
+            f"{r.ordinal}  {r.part}  {r.outcome.value}  {year}  {identifier}  {r.title or '-'}"
+        )
     return lines
