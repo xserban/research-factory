@@ -84,9 +84,10 @@ def register_query(
 
     A search in a pilot or systematic project must be authorised by the protocol
     (`protocol.search_authorization`); `deviation_id` names a recorded deviation that allows a
-    query the protocol does not plan. `round_id` names the recorded snowball round that planned
-    the query; the round's texts are waived only for a query that names it. The event refers to
-    the protocol, the deviation and the round (last).
+    query the protocol does not plan. `round_id` names the recorded snowball (`snw_`) or chase
+    (`chs_`) round that planned the query, so its runs are linked to the round by reference; a
+    snowball round's texts are waived only for a query that names it. The event refers to the
+    protocol, the deviation and the round (last).
     """
     # Imported here: the protocol service reads seeds, which read this module.
     from factory.services import protocol as protocol_service
@@ -94,8 +95,8 @@ def register_query(
     with project.index.exclusive():
         project.index.sync()
         issues = _spec_issues(project, spec, sources)
-        if round_id is not None and not protocol_service.is_snowball_round(project, round_id):
-            issues.append(ValidationIssue("round_id", "not a recorded snowball round"))
+        if round_id is not None and not protocol_service.is_recorded_round(project, round_id):
+            issues.append(ValidationIssue("round_id", "not a recorded snowball or chase round"))
         issues += protocol_service.search_authorization(
             project, spec, deviation_id=deviation_id, round_id=round_id
         )

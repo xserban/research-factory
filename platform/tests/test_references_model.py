@@ -416,6 +416,25 @@ def test_every_event_string_is_bounded() -> None:
         )
 
 
+def test_forward_round_queries_are_forward_chase_texts() -> None:
+    """A forward round records its delegated `cites:` texts, up to CHASE_CHUNK ids each, which
+    may exceed the backward bound; any other text is refused (no free text, ruling 14)."""
+    fwd = round_payload(
+        direction="forward", via="source-metadata", chase_round_id=CHS, candidates=[]
+    )
+    ids = "|".join(f"W{4000000000 + i}" for i in range(50))
+    SnowballRoundStarted.model_validate({**fwd, "queries": [f"cites:{ids}"]})
+    assert len(f"cites:{ids}") > 400
+    for bad in (
+        "doi:10.9999/invented.1",
+        f"cites:{ids}|W1",
+        "cites:W1|free text",
+        "cites:" + "W" * 41,
+    ):
+        with pytest.raises(ValidationError):
+            SnowballRoundStarted.model_validate({**fwd, "queries": [bad]})
+
+
 def test_citing_extraction_is_one_of_the_rounds() -> None:
     p = round_payload()
     other = "rex_01HZX3K4M5N6P7Q8R9S0TVWXZ0"

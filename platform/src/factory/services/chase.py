@@ -8,7 +8,8 @@ Works with no OpenAlex id are reported as unchasable and named in no query.
 `search_chase` validates everything before it writes: pending works, the chasable works, the
 directions, every query's source fit, and the protocol gate for the first query (with the round's
 own texts waived). A refusal writes nothing. Only then is the round recorded, each query
-registered and run; a source error in one run does not stop the others.
+registered naming the round (its `query.registered` refs end with the `chs_` id, which links the
+runs to the round) and run; a source error in one run does not stop the others.
 """
 
 import json
@@ -188,7 +189,9 @@ def search_chase(
             ]
         )
 
-    query_ids = [register_query(project, actor, spec, sources=sources) for spec in specs]
+    query_ids = [
+        register_query(project, actor, spec, sources=sources, round_id=round_id) for spec in specs
+    ]
     runs = [run_query(project, query_id, sources=sources, actor=actor) for query_id in query_ids]
     after, _ = corpus_size(project)
     return ChaseSummary(

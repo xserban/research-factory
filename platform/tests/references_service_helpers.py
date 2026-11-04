@@ -87,6 +87,10 @@ class Lookups:
     fail_openalex: bool = False
     fail_arxiv: bool = False
     asked: list[str] = field(default_factory=list)
+    citing: list[dict[str, Any]] = field(default_factory=list)
+    """Answers to every `cites:` filter (a forward chase)."""
+    cited: list[dict[str, Any]] = field(default_factory=list)
+    """Answers to every `cited_by:` filter (a backward chase)."""
 
     def sources(self) -> dict[str, SourceFactory]:
         def openalex(request: httpx.Request) -> httpx.Response:
@@ -94,7 +98,10 @@ class Lookups:
             self.asked.append(f"openalex {expression}")
             if self.fail_openalex:
                 raise httpx.ConnectError("scripted failure", request=request)
-            results = [i for i in self.openalex if _oa_matches(i, expression)]
+            if expression.startswith(("cites:", "cited_by:")):
+                results = self.citing if expression.startswith("cites:") else self.cited
+            else:
+                results = [i for i in self.openalex if _oa_matches(i, expression)]
             page = {"meta": {"count": len(results), "next_cursor": None}, "results": results}
             return httpx.Response(200, json=page)
 

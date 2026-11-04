@@ -13,15 +13,17 @@ import pytest
 
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
+from factory.model.chase import ChaseDirection, ChaseRoundStarted
 from factory.model.project import RigorMode
 from factory.model.protocol import SnowballPlan
-from factory.model.references import Direction, SnowballRoundStarted
+from factory.model.references import Direction, SnowballRoundStarted, Via
 from factory.model.screening import PassLabel
 from factory.model.search import QueryKind, QueryPurpose, QuerySpec, RunStatus
 from factory.model.work import ProvenanceMethod, WorkType
 from factory.model.work_ids import work_id
 from factory.services import snowball
 from factory.services.agreement import Outcome, final_outcomes
+from factory.services.chase import chase_rounds
 from factory.services.context import Project
 from factory.services.protocol import amend_protocol, current_protocol
 from factory.services.references import extract_references, list_references
@@ -531,3 +533,117 @@ def test_unconverted_document_blocks_as_not_extracted(
     fetched_document(project, third, bib_html(ENTRIES_B, BODY_B))
     plan = plan_round(project, Direction.BACKWARD)
     assert (third, "not-extracted") in plan.unextracted and not plan.state.allowed
+
+
+# --- Forward rounds (delegated to search_chase) ---
+
+CITING = oa_item("Reeds revisited", "Cai Wu", 2024, "W901")
+
+
+def _forward_sources(**kw: Any) -> Any:
+    return _lookups(citing=[CITING], **kw).sources()
+
+
+def test_forward_round_delegates_and_obeys_plan(
+    project: Project, agent: Actor, planned: tuple[str, str]
+) -> None:
+    dry = snowball_round(project, agent, Direction.FORWARD, sources=_forward_sources())
+    assert dry.state.allowed and dry.round_id is None and dry.candidates == []
+    assert dry.queries and all(q.text.startswith("cites:") for q in dry.queries)
+    assert all(q.purpose is QueryPurpose.CHASE for q in dry.queries)
+    result = snowball_round(
+        project, agent, Direction.FORWARD, sources=_forward_sources(), dry_run=False
+    )
+    assert result.round_id is not None and result.new_works == 1
+    assert [q.text for q in result.queries] == [q.text for q in dry.queries]
+    [chase] = chase_rounds(project)
+    assert chase.directions == (ChaseDirection.FORWARD,)
+    assert list(chase.queries) == [q.text for q in result.queries]
+    _screen_new(project, agent, "include")
+    state = plan_round(project, Direction.FORWARD).state
+    assert not state.allowed and state.round_no == 2
+    assert [i.field for i in state.refusals] == ["round_no"]
+    before = event_bytes(project)
+    with pytest.raises(FactoryValidationError):
+        snowball_round(project, agent, Direction.FORWARD, sources=_forward_sources(), dry_run=False)
+    assert event_bytes(project) == before
+
+
+def test_forward_round_ledger_via_source_metadata(
+    project: Project, agent: Actor, planned: tuple[str, str]
+) -> None:
+    result = snowball_round(
+        project, agent, Direction.FORWARD, sources=_forward_sources(), dry_run=False
+    )
+    assert result.round_id is not None
+    [chase_event] = events_of_type(project, "chase.round_started")
+    [event] = events_of_type(project, "snowball.round_started")
+    payload = SnowballRoundStarted.model_validate(event.payload)
+    chase = ChaseRoundStarted.model_validate(chase_event.payload)
+    assert event.id > chase_event.id and event.actor == agent
+    assert payload.round_id == result.round_id and payload.round_no == 1
+    assert payload.direction is Direction.FORWARD and payload.via is Via.SOURCE_METADATA
+    assert payload.chase_round_id == chase.round_id
+    assert payload.sources == chase.from_works and result.sources == list(chase.from_works)
+    assert payload.queries == chase.queries
+    assert payload.candidates == () and payload.extraction_ids == () and payload.rule == PLAN
+    registered = [
+        e
+        for e in events_of_type(project, "query.registered")
+        if e.payload["spec"]["purpose"] == "chase"  # type: ignore[index]
+    ]
+    assert registered and all(e.refs[-1] == chase.round_id for e in registered)
+    assert set(round_runs(project, result.round_id)) == {r.run_id for r in result.runs}
+    [recorded] = snowball.recorded_rounds(project)
+    assert recorded.chase_round_id == chase.round_id
+
+
+def test_forward_refused_writes_no_chase_round(
+    project: Project, agent: Actor, world: tuple[str, str]
+) -> None:
+    _amend(project, agent, SnowballPlan(max_backward_rounds=2, max_forward_rounds=0))
+    before = event_bytes(project)
+    with pytest.raises(FactoryValidationError) as caught:
+        snowball_round(project, agent, Direction.FORWARD, sources=_forward_sources(), dry_run=False)
+    assert _issue_fields(caught.value) == ["round_no"]
+    assert event_bytes(project) == before
+    assert events_of_type(project, "chase.round_started") == []
+
+
+def test_forward_refused_while_backward_round_pending(
+    project: Project, agent: Actor, planned: tuple[str, str]
+) -> None:
+    snowball_round(project, agent, Direction.BACKWARD, sources=_sources(), dry_run=False)
+    before = event_bytes(project)
+    with pytest.raises(FactoryValidationError) as caught:
+        snowball_round(project, agent, Direction.FORWARD, sources=_forward_sources(), dry_run=False)
+    assert "screening" in _issue_fields(caught.value)
+    assert event_bytes(project) == before
+    assert events_of_type(project, "chase.round_started") == []
+
+
+def test_forward_no_yield_stop_uses_its_own_direction(
+    project: Project, agent: Actor, world: tuple[str, str]
+) -> None:
+    _amend(project, agent, SnowballPlan(max_backward_rounds=2, max_forward_rounds=2))
+    snowball_round(project, agent, Direction.FORWARD, sources=_forward_sources(), dry_run=False)
+    _screen_new(project, agent, "exclude")
+    refusals = plan_round(project, Direction.FORWARD).state.refusals
+    assert [i.field for i in refusals] == ["previous_round"]
+    assert plan_round(project, Direction.BACKWARD).state.allowed
+
+
+def test_forward_refused_without_chasable_work_or_with_unfit_text(
+    project: Project, planned: tuple[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    included = sorted(promoted_works(project))
+    monkeypatch.setattr(snowball, "chase_sources", lambda _p: ([], included))
+    plan = plan_round(project, Direction.FORWARD)
+    assert [i.field for i in plan.state.refusals] == ["sources"]
+    assert plan.queries == [] and plan.unqueryable == included
+    monkeypatch.undo()
+    bad = QuerySpec(
+        source="openalex", kind=QueryKind.FILTER, text="cites:W1/x", purpose=QueryPurpose.CHASE
+    )
+    monkeypatch.setattr(snowball, "_forward_queries", lambda _p, _s: [bad])
+    assert [i.field for i in plan_round(project, Direction.FORWARD).state.refusals] == ["queries"]

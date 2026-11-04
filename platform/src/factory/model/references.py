@@ -36,7 +36,7 @@ from pydantic import Field, StringConstraints, model_validator
 
 from factory.document.anchors import ANCHOR_RE
 from factory.model.base import StrictModel
-from factory.model.chase import CHASE_ROUND_ID_RE, WorkId
+from factory.model.chase import CHASE_CHUNK, CHASE_ROUND_ID_RE, WorkId
 from factory.model.fulltext import DOCUMENT_ID_RE, Quality
 from factory.model.identity import BLOB_REF_RE, CONVERSION_ID_RE, ULID_RE
 from factory.model.protocol import SnowballPlan
@@ -76,6 +76,13 @@ Method = Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9-]*$", max_leng
 VersionLabel = Annotated[NonBlank, Field(max_length=MAX_VERSION)]
 """A parser or matcher name or version: a short label, never document text."""
 Query = Annotated[NonBlank, Field(max_length=MAX_QUERY)]
+FORWARD_CHASE_RE = re.compile(
+    rf"^cites:[A-Za-z0-9]{{1,40}}(\|[A-Za-z0-9]{{1,40}}){{0,{CHASE_CHUNK - 1}}}$"
+)
+"""A forward chase text as `search_chase` builds it: `cites:` and up to `CHASE_CHUNK` OpenAlex
+ids. A forward round records these delegated texts; the grammar bounds them, so they may exceed
+`MAX_QUERY` but never carry free text."""
+RoundQuery = Annotated[NonBlank, Field(max_length=len("cites:") + CHASE_CHUNK * 41)]
 
 
 class LinkState(StrEnum):
@@ -337,7 +344,9 @@ class SnowballRoundStarted(StrictModel):
     sources: tuple[WorkId, ...]
     extraction_ids: tuple[ExtractionId, ...]
     candidates: tuple[SnowballCandidate, ...]
-    queries: tuple[Query, ...]
+    queries: tuple[RoundQuery, ...]
+    """Backward: the round's own texts, each at most `MAX_QUERY`. Forward: the delegated chase
+    round's texts, each a `FORWARD_CHASE_RE` text."""
     chase_round_id: str | None = Field(default=None, pattern=CHASE_ROUND_ID_RE)
     rule: SnowballPlan | Literal["none"]
     unextracted: tuple[Unextracted, ...] = ()
@@ -347,8 +356,15 @@ class SnowballRoundStarted(StrictModel):
         if self.direction is Direction.BACKWARD:
             if self.via is not Via.DOCUMENT_REFERENCE_LIST or self.chase_round_id is not None:
                 raise ValueError("a backward round goes via the reference list, without a chase")
-        elif self.via is not Via.SOURCE_METADATA or self.chase_round_id is None:
-            raise ValueError("a forward round goes via source metadata and names its chase round")
+            if any(len(q) > MAX_QUERY for q in self.queries):
+                raise ValueError(f"a backward round's query is at most {MAX_QUERY} characters")
+        else:
+            if self.via is not Via.SOURCE_METADATA or self.chase_round_id is None:
+                raise ValueError(
+                    "a forward round goes via source metadata and names its chase round"
+                )
+            if any(FORWARD_CHASE_RE.fullmatch(q) is None for q in self.queries):
+                raise ValueError("a forward round's queries are its chase round's cites: texts")
         _unique(self.sources, "sources")
         _unique(self.extraction_ids, "extraction_ids")
         _unique(tuple(c.work_key for c in self.candidates), "candidate work keys")

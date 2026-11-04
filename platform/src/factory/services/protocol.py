@@ -723,6 +723,17 @@ def is_snowball_round(project: Project, round_id: str) -> bool:
     return row is not None
 
 
+def is_recorded_round(project: Project, round_id: str) -> bool:
+    """Whether `round_id` names a recorded snowball round or a recorded chase round."""
+    if is_snowball_round(project, round_id):
+        return True
+    with project.index.connect() as conn:
+        row = conn.execute(
+            text("SELECT 1 FROM chase_rounds WHERE round_id = :r"), {"r": round_id}
+        ).one_or_none()
+    return row is not None
+
+
 def registered_round(project: Project, query_id: str) -> str | None:
     """The snowball round a registered query names in its `query.registered` refs, or None."""
     with project.index.connect() as conn:
