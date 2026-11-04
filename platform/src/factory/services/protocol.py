@@ -289,6 +289,9 @@ def amend_protocol(
             extraction_stale=extraction_stale(
                 current.spec.extraction_schema, spec.extraction_schema
             ),
+            contribution_stale=extraction_stale(
+                current.spec.contribution_schema, spec.contribution_schema
+            ),
         )
         input_blob = (
             project.blobs.put_json(

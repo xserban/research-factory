@@ -11,6 +11,12 @@ message as an unknown seed (R-20).
 `snowball_plan_gaps` is separate from readiness: a missing `snowball_plan` blocks snowball rounds
 in `pilot` and `systematic` and is a promotion gap (slice 3a, ruling 19); it never blocks `ready`.
 Negative round maxima are refused by the `SnowballPlan` model at the boundary.
+
+The two extraction sections share one machinery (slice 3b, ruling 5; plan G2-A ruling 6):
+`extraction_schema` may name any pack except `contribution`; `contribution_schema` must name
+pack `contribution`, declare no comparability keys and set `claims` false. Field checks and the
+plan-D ruling-9 sampling and audit gaps apply to both, each reported under its own section; the
+comparability-key gap (R-45) applies to the evidence schema only.
 """
 
 from __future__ import annotations
@@ -40,6 +46,7 @@ from factory.model.protocol import (
 from factory.model.staleness import DecisionRef as DecisionRef
 from factory.model.staleness import stale_decisions as stale_decisions
 from factory.packs import NON_COMPARABLE_KEYS, get_pack
+from factory.packs.contribution import CONTRIBUTION_PACK
 from factory.services.question import QuestionVersion
 from factory.services.seeds import SeedRecord, SeedRole
 
@@ -220,17 +227,54 @@ def _errors(
                 )
             )
     issues.extend(_extraction_errors(spec.extraction_schema))
+    issues.extend(_contribution_errors(spec.contribution_schema))
     return issues
 
 
+EXTRACTION_SECTION = "extraction_schema"
+CONTRIBUTION_SECTION = "contribution_schema"
+
+
 def _extraction_errors(schema: ExtractionSchema | None) -> list[ValidationIssue]:
+    """The evidence schema: any known pack but `contribution`, plus the plan-D field checks."""
     if schema is None:
         return []
+    if schema.pack == CONTRIBUTION_PACK:
+        return [
+            ValidationIssue(
+                f"{EXTRACTION_SECTION}.pack", "pack contribution belongs in contribution_schema"
+            )
+        ]
+    return _schema_field_errors(schema, EXTRACTION_SECTION)
+
+
+def _contribution_errors(schema: ExtractionSchema | None) -> list[ValidationIssue]:
+    """The contribution schema: pack `contribution`, no comparability keys, no claims."""
+    if schema is None:
+        return []
+    section = CONTRIBUTION_SECTION
+    if schema.pack != CONTRIBUTION_PACK:
+        return [ValidationIssue(f"{section}.pack", f"must be pack {CONTRIBUTION_PACK}")]
+    issues = _schema_field_errors(schema, section)
+    if schema.claims:
+        issues.append(ValidationIssue(f"{section}.claims", "contribution items carry no claims"))
+    if schema.comparability_keys:
+        issues.append(
+            ValidationIssue(
+                f"{section}.comparability_keys", "contribution items have no comparability keys"
+            )
+        )
+    return issues
+
+
+def _schema_field_errors(schema: ExtractionSchema, section: str) -> list[ValidationIssue]:
+    """Plan-D checks: a known pack version, declared fields of the pack, the pack's required
+    fields declared, comparability keys among the declared fields and comparable."""
     pack = get_pack(schema.pack, schema.pack_version)
     if pack is None:
         return [
             ValidationIssue(
-                "extraction_schema.pack",
+                f"{section}.pack",
                 f"unknown pack {schema.pack} version {schema.pack_version}",
             )
         ]
@@ -239,28 +283,22 @@ def _extraction_errors(schema: ExtractionSchema | None) -> list[ValidationIssue]
     for i, name in enumerate(schema.fields):
         if name not in known:
             issues.append(
-                ValidationIssue(
-                    f"extraction_schema.fields[{i}]", f"not a field of the pack: {name}"
-                )
+                ValidationIssue(f"{section}.fields[{i}]", f"not a field of the pack: {name}")
             )
     missing = [name for name in pack.required if name not in schema.fields]
     if missing:
         issues.append(
-            ValidationIssue(
-                "extraction_schema.fields", f"required by the pack: {', '.join(missing)}"
-            )
+            ValidationIssue(f"{section}.fields", f"required by the pack: {', '.join(missing)}")
         )
     for i, key in enumerate(schema.comparability_keys):
         if key not in schema.fields:
             issues.append(
-                ValidationIssue(
-                    f"extraction_schema.comparability_keys[{i}]", "must be a declared field"
-                )
+                ValidationIssue(f"{section}.comparability_keys[{i}]", "must be a declared field")
             )
         if key in NON_COMPARABLE_KEYS:
             issues.append(
                 ValidationIssue(
-                    f"extraction_schema.comparability_keys[{i}]",
+                    f"{section}.comparability_keys[{i}]",
                     "speed/memory are not comparability keys",
                 )
             )
@@ -308,47 +346,60 @@ def _gaps(
     gaps.extend(_reviewer_gaps(spec))
     if mode in (RigorMode.PILOT, RigorMode.SYSTEMATIC):
         gaps.extend(_extraction_gaps(spec.extraction_schema, mode))
+        gaps.extend(_sampling_gaps(spec.contribution_schema, mode, CONTRIBUTION_SECTION))
     return gaps
 
 
 def _extraction_gaps(schema: ExtractionSchema | None, mode: RigorMode) -> list[ValidationIssue]:
-    """Ruling 9: pilot needs a dual-extraction fraction, systematic needs every work; both need
-    the audit floors."""
+    """The evidence schema needs comparability keys (R-45) and the ruling-9 sampling gaps."""
+    if schema is None:
+        return []
+    gaps: list[ValidationIssue] = []
+    if not schema.comparability_keys:
+        gaps.append(
+            ValidationIssue(
+                f"{EXTRACTION_SECTION}.comparability_keys",
+                "declare the comparability keys (R-45)",
+            )
+        )
+    gaps.extend(_sampling_gaps(schema, mode, EXTRACTION_SECTION))
+    return gaps
+
+
+def _sampling_gaps(
+    schema: ExtractionSchema | None, mode: RigorMode, section: str
+) -> list[ValidationIssue]:
+    """Plan-D ruling 9: pilot needs a dual-extraction fraction, systematic needs every work;
+    both need the audit floors."""
     if schema is None:
         return []
     gaps: list[ValidationIssue] = []
     sample = schema.dual_extract_sample
-    if not schema.comparability_keys:
-        gaps.append(
-            ValidationIssue(
-                "extraction_schema.comparability_keys", "declare the comparability keys (R-45)"
-            )
-        )
     if mode is RigorMode.PILOT and sample is None:
         gaps.append(
             ValidationIssue(
-                "extraction_schema.dual_extract_sample",
+                f"{section}.dual_extract_sample",
                 "pilot extraction needs a dual-extracted fraction",
             )
         )
     if mode is RigorMode.SYSTEMATIC and sample not in (None, 1.0):
         gaps.append(
             ValidationIssue(
-                "extraction_schema.dual_extract_sample",
+                f"{section}.dual_extract_sample",
                 "systematic extraction covers every work twice or none",
             )
         )
     if schema.audit_fraction < AUDIT_FRACTION_MIN:
         gaps.append(
             ValidationIssue(
-                "extraction_schema.audit_fraction",
+                f"{section}.audit_fraction",
                 f"the audit samples at least {AUDIT_FRACTION_MIN:.0%} of agreed values",
             )
         )
     if schema.audit_minimum < AUDIT_MINIMUM_MIN:
         gaps.append(
             ValidationIssue(
-                "extraction_schema.audit_minimum",
+                f"{section}.audit_minimum",
                 f"the audit draws at least {AUDIT_MINIMUM_MIN} values",
             )
         )

@@ -53,7 +53,9 @@ _SORT_KEYS: dict[str, tuple[str, ...]] = {
     "limits": ("field", "value"),
 }
 _SEARCH_STRATEGY_KEYS = ("sources", "queries", "limits")
-_OMITTED_WHEN_NONE = frozenset({"full_text_screening", "extraction_schema", "snowball_plan"})
+_OMITTED_WHEN_NONE = frozenset(
+    {"full_text_screening", "extraction_schema", "snowball_plan", "contribution_schema"}
+)
 """Optional sections left out of every hash while unset, so protocols that predate them keep
 their versions. Other `None` values stay in the hash."""
 
@@ -219,6 +221,9 @@ class ProtocolSpec(StrictModel):
     """What is extracted. Absent (None) until the protocol declares it; left out of the hash."""
     snowball_plan: SnowballPlan | None = None
     """The snowballing stopping rule. Absent (None) until declared; left out of the hash."""
+    contribution_schema: ExtractionSchema | None = None
+    """What is extracted for the lineage graph (slice 3b, ruling 5): pack `contribution`, no
+    comparability keys, no claims. Absent (None) until declared; left out of the hash."""
     rationale: str = ""
 
 
@@ -265,6 +270,7 @@ AMENDABLE_FIELDS = (
     "full_text_screening",
     "extraction_schema",
     "snowball_plan",
+    "contribution_schema",
 )
 """Top-level hashed fields other than criteria, which an amendment reports as `other_changes`."""
 
@@ -374,7 +380,10 @@ class DeviationRecorded(StrictModel):
 
 
 class ExtractionStale(StrictModel):
-    """Extraction rows an amendment makes stale: all of them, or those carrying `fields`."""
+    """Extraction rows an amendment makes stale: all of them, or those carrying `fields`.
+
+    The rule applies within one scope: `ProtocolAmended.extraction_stale` to evidence rows,
+    `ProtocolAmended.contribution_stale` to contribution rows."""
 
     all_records: bool
     fields: tuple[str, ...] = ()
@@ -385,7 +394,10 @@ class ProtocolAmended(StrictModel):
 
     `spec` is the amended protocol; `to_version` must be its version hash. `changes` lists the
     criteria that were added, removed or changed; `other_changes` lists the other hashed fields
-    (`AMENDABLE_FIELDS`) that differ. `semantic` is false only for a clarification or prose."""
+    (`AMENDABLE_FIELDS`) that differ. `semantic` is false only for a clarification or prose.
+    `extraction_stale` and `contribution_stale` are computed from the old and new
+    `extraction_schema` and `contribution_schema` respectively; neither touches the other's
+    rows. Events written before `contribution_schema` existed lack `contribution_stale`."""
 
     amendment_id: str = Field(pattern=AMENDMENT_ID_RE)
     from_version: str = Field(pattern=PROTOCOL_ID_RE)
@@ -397,6 +409,7 @@ class ProtocolAmended(StrictModel):
     stale_rules: tuple[StaleRule, ...] = ()
     other_changes: tuple[str, ...] = ()
     extraction_stale: ExtractionStale | None = None
+    contribution_stale: ExtractionStale | None = None
 
     @model_validator(mode="after")
     def _to_version_matches_spec(self) -> Self:
