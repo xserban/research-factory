@@ -21,7 +21,7 @@ from factory.document.converter import ConverterUnavailable
 
 PDF = "application/pdf"
 MODELS_ENV = "FACTORY_DOCLING_MODELS"
-CONVERTER_VERSION = "1.0"
+CONVERTER_VERSION = "1.1"
 
 
 _HASH_CACHE: dict[tuple[str, tuple[tuple[str, int, int], ...]], str] = {}

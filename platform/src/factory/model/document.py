@@ -14,7 +14,7 @@ This module is pure. Services in `factory.services` decide when these events are
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Annotated, Self
+from typing import Annotated, Any, Self
 
 from pydantic import Field, StringConstraints, field_validator, model_validator
 
@@ -53,6 +53,14 @@ class Converted(StrictModel):
     manifest_hash: str = Field(pattern=BLOB_REF_RE)
     counts: dict[str, int]
     warnings: list[WarningText] = Field(max_length=WARNINGS_MAX)
+
+    @field_validator("counts", mode="before")
+    @classmethod
+    def _legacy_counts_lack_bibliography(cls, counts: Any) -> Any:
+        """Events stored before `bibliography_entry` existed read it as 0 (events are immutable)."""
+        if isinstance(counts, dict) and AnchorKind.BIBLIOGRAPHY_ENTRY.value not in counts:
+            return {**counts, AnchorKind.BIBLIOGRAPHY_ENTRY.value: 0}
+        return counts
 
     @field_validator("counts")
     @classmethod

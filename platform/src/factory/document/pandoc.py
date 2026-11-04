@@ -25,7 +25,7 @@ EPRINT_SINGLE = "application/x-eprint"
 PANDOC_ENV = "FACTORY_PANDOC"
 TIMEOUT_SECONDS: float = 300
 MIN_VERSION = (2, 15)  # `--sandbox` exists from pandoc 2.15
-CONVERTER_VERSION = "1.0"
+CONVERTER_VERSION = "1.1"
 
 
 def pandoc_path() -> str | None:

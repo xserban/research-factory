@@ -68,6 +68,12 @@ def test_non_bibliography_section_keeps_paragraph_anchors() -> None:
     assert '<a id="s2.p1"></a>\nPrior.' in out and '<a id="b1"></a>' not in out
 
 
+def test_references_as_only_top_heading_is_title_and_keeps_paragraph_anchors() -> None:
+    out = anchorise("# References\n\nSmith J. A. 2020.\n\n## 1 Intro\n\nText.\n")
+    assert '<a id="s0"></a>\n# References' in out
+    assert '<a id="s0.p1"></a>\nSmith' in out and '<a id="b1"></a>' not in out
+
+
 def test_subsection_paragraphs_are_not_entries() -> None:
     out = anchorise("# T\n\n## 1 References\n\nA.\n\n### 1.1 Notes\n\nB.\n\n## 2 Next\n\nC.\n")
     assert '<a id="b1"></a>\nA.' in out

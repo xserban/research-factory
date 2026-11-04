@@ -57,6 +57,19 @@ def test_converted_requires_every_kind_count() -> None:
         Converted(**converted_kwargs(counts={**counts(), "unknown_kind": 0}))
 
 
+def test_converted_accepts_pre_bibliography_counts_as_zero() -> None:
+    old = {k: v for k, v in counts().items() if k != AnchorKind.BIBLIOGRAPHY_ENTRY.value}
+    assert len(old) == len(AnchorKind) - 1
+    event = Converted(**converted_kwargs(counts=old))
+    assert event.counts[AnchorKind.BIBLIOGRAPHY_ENTRY.value] == 0
+    assert event.counts[AnchorKind.TABLE.value] == 1
+    with pytest.raises(ValidationError):
+        Converted(**converted_kwargs(counts={**old, "unknown_kind": 0}))
+    del old[AnchorKind.TABLE.value]
+    with pytest.raises(ValidationError):
+        Converted(**converted_kwargs(counts=old))
+
+
 def test_converted_rejects_negative_count() -> None:
     bad = {**counts(), AnchorKind.PARAGRAPH.value: -1}
     with pytest.raises(ValidationError):

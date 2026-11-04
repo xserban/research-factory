@@ -139,7 +139,7 @@ def test_available_converters_lists_present_pandoc(
     found = available_converters().for_media_type("application/x-eprint-tar")
     assert found is not None
     assert found.name == "pandoc"
-    assert found.version() == "1.0+pandoc 9.9"
+    assert found.version() == "1.1+pandoc 9.9"
 
 
 def test_pandoc_eprint_without_main_tex_is_an_error(

@@ -13,7 +13,7 @@ from typing import Any
 from factory.document.converter import ConverterUnavailable
 
 PDF = "application/pdf"
-CONVERTER_VERSION = "1.0"
+CONVERTER_VERSION = "1.1"
 
 
 def _dist_version(dist: str) -> str:
