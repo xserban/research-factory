@@ -5,7 +5,8 @@ Invariants enforced here (validated at the boundary, before any event is written
   unit, anchor, cell, quote, `reported_in`, `reproduced`). The platform adds `canonical` and
   `copy_marker` (`StoredField`); an agent never supplies them.
 - A `cell` has the table-cell form `t<N>.r<N>.c<N>`; an anchor has the document or cell form.
-- A claim's statement, anchor and quote are non-blank; its vocabularies are closed enums.
+- A claim's statement, anchor and quote are non-blank; the statement is at most
+  `CLAIM_STATEMENT_MAX` characters; its vocabularies are closed enums.
 - A human resolves a disagreement by choosing `a`, `b` or `neither`; no value is typed.
 
 This module is pure. Services in `factory.services` decide when these events are written.
@@ -39,6 +40,8 @@ ROW_KEY_RE = r"^rk_[0-9a-f]{12}$"
 WHOLE_ROW_MARKER = "*"
 VERIFIER_VERSION = 1
 """Version of the verification rules (ruling 6) a row was checked under."""
+CLAIM_STATEMENT_MAX = 600
+"""Upper bound on a claim's statement: it is the agent's paraphrase, not literature text."""
 
 
 class ReportedIn(StrEnum):
@@ -92,6 +95,9 @@ def _field_name(value: str) -> str:
 FieldName = Annotated[str, AfterValidator(_field_name)]
 """A field name of a row, resolution or audit item: non-blank and not `*`."""
 
+Statement = Annotated[NonBlank, Field(max_length=CLAIM_STATEMENT_MAX)]
+"""A claim's statement: the agent's bounded paraphrase."""
+
 FiniteFloat = Annotated[float, Field(allow_inf_nan=False)]
 """A float that is finite; NaN and infinities are not values a field can hold."""
 
@@ -121,7 +127,7 @@ class ExtractedRowInput(StrictModel):
 
 
 class ClaimInput(StrictModel):
-    statement: NonBlank
+    statement: Statement
     claim_type: ClaimType
     evidence_type: EvidenceType
     strength: Strength
@@ -164,7 +170,7 @@ class ClaimRecorded(StrictModel):
     protocol_id: str = Field(pattern=PROTOCOL_ID_RE)
     document_id: str = Field(pattern=DOCUMENT_ID_RE)
     conversion_id: str = Field(pattern=CONVERSION_ID_RE)
-    statement: NonBlank
+    statement: Statement
     claim_type: ClaimType
     evidence_type: EvidenceType
     strength: Strength

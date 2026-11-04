@@ -20,47 +20,87 @@ Invariants:
 - `in_dual_sample` is pure and monotone in `fraction`: the works sampled at a smaller fraction are
   sampled at every larger one.
 - Pass events, the join and the new tasks are written in one append.
+- `extract_record` writes a row only after it is verified against the task's pinned conversion,
+  and a claim only from pass A, with its quote verified in its anchor; a correction supersedes a
+  live row (or claim) of the same work and pass, and both stay in the log.
+- A unit closes only when no item of the closing call is rejected, and a unit with no live row
+  and no live claim closes only with a reason; its counts are computed, never supplied.
 """
 
 import hashlib
 import secrets
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from fractions import Fraction
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import JsonValue
+from pydantic import JsonValue, ValidationError
 from sqlalchemy import text
 
 from factory.clock import format_ts
+from factory.document.anchors import Manifest
+from factory.document.quotes import quote_in_element
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor, Event
 from factory.events.reader import read_all
+from factory.extraction.verify import ANCHOR_UNKNOWN, QUOTE_NOT_IN_ANCHOR
 from factory.model.base import StrictModel
-from factory.model.extraction import ExtractionPassJoined, ExtractionPassOpened
+from factory.model.extraction import (
+    VERIFIER_VERSION,
+    ClaimInput,
+    ClaimRecorded,
+    ClaimType,
+    EvidenceType,
+    ExtractedRowInput,
+    ExtractionClosed,
+    ExtractionPassJoined,
+    ExtractionPassOpened,
+    ExtractionRecorded,
+    ReportedIn,
+    StoredField,
+    Strength,
+)
 from factory.model.protocol import ExtractionSchema, ProtocolStatus, ScreeningStage
 from factory.model.screening import Channel, PassLabel
 from factory.model.task import Task, TaskStatus
-from factory.packs import Pack, get_pack
+from factory.packs import FieldKind, Pack, get_pack
 from factory.services.agreement import Outcome, final_outcomes
 from factory.services.context import Project
+from factory.services.conversions import conversion_manifest
 from factory.services.document_read import default_conversion
+from factory.services.extraction_verify import verify_row_in
 from factory.services.protocol import ProtocolVersion, current_protocol
+from factory.services.results import BatchResult, ItemError
 from factory.services.screening import _is_label_session
 from factory.services.search import list_works
 from factory.services.stages import EXTRACT_KINDS, screening_plan
-from factory.services.tasks import TaskSpec, build_task_events, claim_next, get_task, task_content
+from factory.services.tasks import (
+    TaskSpec,
+    build_task_events,
+    claim_next,
+    complete_task,
+    get_task,
+    require_holder,
+    task_content,
+)
 
 __all__ = [
     "EXTRACT_KINDS",
+    "ClaimRow",
     "ExtractBatch",
     "ExtractBatchContent",
     "ExtractNext",
+    "ExtractResult",
+    "ExtractionRow",
     "PassConfig",
     "extract_next",
+    "extract_record",
     "extraction_population",
     "in_dual_sample",
     "is_extraction_session",
     "join_extraction_pass",
+    "live_claims",
+    "live_rows",
     "pass_config",
     "require_schema",
     "unit_pin",
@@ -506,3 +546,478 @@ def _batch(project: Project, task: Task) -> ExtractBatch:
     content = task_content(project, task)
     fields = dict(content) if isinstance(content, dict) else {}
     return ExtractBatch.model_validate({**fields, "task_id": task.task_id})
+
+
+# --- Recording ---
+
+
+class ExtractionRow(StrictModel):
+    """A live recorded row as the projection holds it. Field values are the stored text, with
+    booleans restored by the field's kind."""
+
+    extraction_id: str
+    work_id: str
+    pass_label: PassLabel
+    task_id: str
+    protocol_id: str
+    conversion_id: str
+    document_id: str
+    row_key: str
+    fields: dict[str, StoredField]
+    event_id: str
+
+
+class ClaimRow(StrictModel):
+    """A live recorded claim as the projection holds it."""
+
+    claim_id: str
+    work_id: str
+    pass_label: PassLabel
+    claim_type: ClaimType
+    evidence_type: EvidenceType
+    strength: Strength
+    statement: str
+    anchor: str
+    quote: str
+    conversion_id: str
+    event_id: str
+
+
+class ExtractResult(StrictModel):
+    """What one `extract_record` call wrote and rejected, and whether it completed the task."""
+
+    rows: BatchResult[str]
+    claims: BatchResult[str]
+    completed: bool
+
+
+@dataclass(frozen=True)
+class _Unit:
+    """The work, pass and pin of the task being recorded."""
+
+    task_id: str
+    content: ExtractBatchContent
+    work_id: str
+    document_id: str
+    conversion_id: str
+
+    @property
+    def label(self) -> PassLabel:
+        return self.content.pass_label
+
+
+@dataclass(frozen=True)
+class _Row:
+    index: int
+    fields: dict[str, StoredField]
+    row_key: str
+
+
+def extract_record(
+    project: Project,
+    actor: Actor,
+    task_id: str,
+    rows: Sequence[ExtractedRowInput],
+    claims: Sequence[ClaimInput] = (),
+    *,
+    finish: bool = False,
+    reason: str | None = None,
+    supersedes: Mapping[int, str] | None = None,
+    claim_supersedes: Mapping[int, str] | None = None,
+) -> ExtractResult:
+    """Record the rows and claims an agent extracted for a held task, and close it on `finish`.
+
+    Refused, with nothing written, when the actor is not an agent (`actor`); the task is unknown,
+    not held by this session or not an extraction task (`task_id`); the session does not extract
+    the task's pass (`pass`); the protocol or its extraction schema is no longer the one the task
+    served (`task_id`); a key of `supersedes` or `claim_supersedes` is not an index of the call
+    (that name); or `finish` would close a unit with no live row and no live claim without a
+    non-blank `reason` (`reason`).
+
+    Otherwise each row is verified alone against the task's pinned conversion and each claim's
+    quote is verified in its anchor's element like a field quote; an invalid item is an
+    `ItemError` (issues located within the item, its index locating it) and is not written.
+    Claims are rejected (`claims`) unless the schema enables them and the task is of pass A.
+    `supersedes` maps a row index to the id of a live row of the same work and pass that the row
+    corrects; any other target, or one target named twice, rejects that row (`supersedes`).
+    Claims likewise with `claim_supersedes`. The valid rows and claims are appended in one write,
+    each event carrying the whole call's input as its input blob.
+
+    `finish` closes the unit only when no item of the call is rejected: it writes
+    `extraction.closed` with the computed live row and claim counts and completes the task with
+    the live row ids then the live claim ids (each sorted) as its results.
+    """
+    with project.index.exclusive():
+        project.index.sync()
+        if actor.kind != "agent" or actor.model is None:
+            raise FactoryValidationError(
+                [ValidationIssue("actor", "only an agent extractor records an extraction")]
+            )
+        task = require_holder(project, actor, task_id)
+        unit = _unit_of(project, task)
+        if _joined_pass(project, actor.session) is not unit.label:
+            raise FactoryValidationError(
+                [ValidationIssue("pass", f"this session does not extract pass {unit.label}")]
+            )
+        protocol, schema, pack = require_schema(project)
+        if unit.content.protocol_id != protocol.protocol_id or unit.content.schema_ref != (
+            f"{schema.pack}@{schema.pack_version}"
+        ):
+            raise FactoryValidationError(
+                [ValidationIssue("task_id", "the task's protocol version is no longer current")]
+            )
+        row_targets = _targets(supersedes, len(rows), "supersedes")
+        claim_targets = _targets(claim_supersedes, len(claims), "claim_supersedes")
+        manifest = conversion_manifest(project, unit.conversion_id)
+        corpus = {work.id for work in list_works(project)}
+
+        live = {r.extraction_id for r in live_rows(project, unit.label, work_id=unit.work_id)}
+        used: set[str] = set()
+        row_errors: list[ItemError] = []
+        accepted_rows: list[_Row] = []
+        for index, row in enumerate(rows):
+            issues, verified = _row_issues(pack, schema, row, unit, manifest, corpus)
+            issues += _target_issues("supersedes", row_targets.get(index), live, used, "row")
+            if issues or verified is None:
+                row_errors.append(ItemError(index=index, issues=issues))
+            else:
+                accepted_rows.append(_Row(index, *verified))
+
+        live_c = {c.claim_id for c in live_claims(project, unit.label, work_id=unit.work_id)}
+        used_c: set[str] = set()
+        claim_errors: list[ItemError] = []
+        accepted_claims: list[tuple[int, ClaimInput]] = []
+        for index, claim in enumerate(claims):
+            issues = _claim_issues(schema, unit, claim, manifest)
+            if not issues:
+                issues = _target_issues(
+                    "claim_supersedes", claim_targets.get(index), live_c, used_c, "claim"
+                )
+            if issues:
+                claim_errors.append(ItemError(index=index, issues=issues))
+            else:
+                accepted_claims.append((index, claim))
+
+        closing = finish and not row_errors and not claim_errors
+        reason = reason.strip() if reason is not None and reason.strip() else None
+        if closing and reason is None:
+            new_rows = sum(1 for r in accepted_rows if r.index not in row_targets)
+            new_claims = sum(1 for index, _ in accepted_claims if index not in claim_targets)
+            if len(live) + new_rows == 0 and len(live_c) + new_claims == 0:
+                raise FactoryValidationError(
+                    [
+                        ValidationIssue(
+                            "reason", "closing a unit with no row or claim needs a reason"
+                        )
+                    ]
+                )
+
+        blob = project.blobs.put_json(
+            {
+                "task_id": task_id,
+                "rows": [row.model_dump(mode="json") for row in rows],
+                "claims": [claim.model_dump(mode="json") for claim in claims],
+                "supersedes": {str(k): v for k, v in row_targets.items()},
+                "claim_supersedes": {str(k): v for k, v in claim_targets.items()},
+                "finish": finish,
+                "reason": reason,
+            }
+        )
+        events: list[Event] = []
+        row_ids: list[str] = []
+        for accepted in accepted_rows:
+            extraction_id = project.ids.new("ext")
+            payload = ExtractionRecorded(
+                extraction_id=extraction_id,
+                work_id=unit.work_id,
+                pass_label=unit.label,
+                task_id=task_id,
+                protocol_id=unit.content.protocol_id,
+                schema_ref=unit.content.schema_ref,
+                document_id=unit.document_id,
+                conversion_id=unit.conversion_id,
+                row_key=accepted.row_key,
+                fields=accepted.fields,
+                supersedes=row_targets.get(accepted.index),
+                verifier=VERIFIER_VERSION,
+            )
+            events.append(
+                project.events.make(
+                    "extraction.recorded", payload, actor, refs=(extraction_id,), input_blob=blob
+                )
+            )
+            row_ids.append(extraction_id)
+        claim_ids: list[str] = []
+        for index, claim in accepted_claims:
+            claim_id = project.ids.new("clm")
+            claim_payload = ClaimRecorded(
+                claim_id=claim_id,
+                work_id=unit.work_id,
+                pass_label=unit.label,
+                task_id=task_id,
+                protocol_id=unit.content.protocol_id,
+                document_id=unit.document_id,
+                conversion_id=unit.conversion_id,
+                statement=claim.statement,
+                claim_type=claim.claim_type,
+                evidence_type=claim.evidence_type,
+                strength=claim.strength,
+                anchor=claim.anchor,
+                quote=claim.quote,
+                supersedes=claim_targets.get(index),
+            )
+            events.append(
+                project.events.make(
+                    "extraction.claim_recorded",
+                    claim_payload,
+                    actor,
+                    refs=(claim_id,),
+                    input_blob=blob,
+                )
+            )
+            claim_ids.append(claim_id)
+        if events:
+            project.record(events)
+        if closing:
+            _close(project, actor, unit, reason, blob)
+        return ExtractResult(
+            rows=BatchResult[str](written=row_ids, rejected=row_errors),
+            claims=BatchResult[str](written=claim_ids, rejected=claim_errors),
+            completed=closing,
+        )
+
+
+def _unit_of(project: Project, task: Task) -> _Unit:
+    """The extraction unit a task holds. Raises on `task_id` for any other task."""
+    refusal = FactoryValidationError([ValidationIssue("task_id", "is not an extraction task")])
+    if task.kind not in EXTRACT_KINDS.values():
+        raise refusal
+    try:
+        content = ExtractBatchContent.model_validate(task_content(project, task))
+    except ValidationError as exc:
+        raise refusal from exc
+    if task.kind != EXTRACT_KINDS[content.pass_label] or len(content.records) != 1:
+        raise refusal
+    record = content.records[0]
+    if not {"work_id", "document_id", "conversion_id"} <= record.keys():
+        raise refusal
+    return _Unit(
+        task_id=task.task_id,
+        content=content,
+        work_id=record["work_id"],
+        document_id=record["document_id"],
+        conversion_id=record["conversion_id"],
+    )
+
+
+def _targets(given: Mapping[int, str] | None, count: int, name: str) -> dict[int, str]:
+    """The supersession map; refused (nothing written) when a key is not an index of the call."""
+    targets = dict(given or {})
+    if any(isinstance(k, bool) or not isinstance(k, int) or not 0 <= k < count for k in targets):
+        raise FactoryValidationError(
+            [ValidationIssue(name, "every key must be the index of an item of this call")]
+        )
+    return targets
+
+
+def _target_issues(
+    name: str, target: str | None, live: set[str], used: set[str], what: str
+) -> list[ValidationIssue]:
+    """Why a correction may not supersede `target`: it must be a live item of the same work and
+    pass, named once per call. Marks the target used."""
+    if target is None:
+        return []
+    if target in used:
+        return [ValidationIssue(name, f"this {what} is already corrected in this call")]
+    used.add(target)
+    if target not in live:
+        return [ValidationIssue(name, f"is not a live {what} of this work and pass")]
+    return []
+
+
+def _row_issues(
+    pack: Pack,
+    schema: ExtractionSchema,
+    row: ExtractedRowInput,
+    unit: _Unit,
+    manifest: Manifest,
+    corpus: set[str],
+) -> tuple[list[ValidationIssue], tuple[dict[str, StoredField], str] | None]:
+    """The issues of one row (re-validated, then verified), else its stored fields and key."""
+    try:
+        checked = ExtractedRowInput.model_validate(row.model_dump(mode="python"))
+    except ValidationError as exc:
+        return _loc_issues(exc), None
+    verdict = verify_row_in(
+        pack, schema.fields, checked.fields, unit.conversion_id, manifest, corpus
+    )
+    if verdict.issues or verdict.fields is None or verdict.row_key is None:
+        return list(verdict.issues), None
+    return [], (verdict.fields, verdict.row_key)
+
+
+def _claim_issues(
+    schema: ExtractionSchema, unit: _Unit, claim: ClaimInput, manifest: Manifest
+) -> list[ValidationIssue]:
+    """Why a claim may not be written: claims disabled or not pass A, invalid input, or a quote
+    not verbatim in its anchor's element (as a field quote). Reasons never carry document text."""
+    if not schema.claims:
+        return [ValidationIssue("claims", "the extraction schema does not record claims")]
+    if unit.label is not PassLabel.A:
+        return [ValidationIssue("claims", "claims are recorded by pass A only")]
+    try:
+        checked = ClaimInput.model_validate(claim.model_dump(mode="python"))
+    except ValidationError as exc:
+        return _loc_issues(exc)
+    anchor = manifest.get(checked.anchor)
+    if anchor is None:
+        return [ValidationIssue("anchor", ANCHOR_UNKNOWN)]
+    if not quote_in_element(anchor.text, checked.quote):
+        return [ValidationIssue("quote", QUOTE_NOT_IN_ANCHOR)]
+    return []
+
+
+def _loc_issues(exc: ValidationError) -> list[ValidationIssue]:
+    return [
+        ValidationIssue(".".join(map(str, err["loc"])) or "item", str(err["msg"]))
+        for err in exc.errors()
+    ]
+
+
+def _close(project: Project, actor: Actor, unit: _Unit, reason: str | None, blob: str) -> None:
+    """Write `extraction.closed` with the computed live counts and complete the task."""
+    row_ids = sorted(r.extraction_id for r in live_rows(project, unit.label, work_id=unit.work_id))
+    claim_ids = sorted(c.claim_id for c in live_claims(project, unit.label, work_id=unit.work_id))
+    closed = ExtractionClosed(
+        work_id=unit.work_id,
+        pass_label=unit.label,
+        task_id=unit.task_id,
+        rows=len(row_ids),
+        claims=len(claim_ids),
+        reason=reason,
+    )
+    project.record(
+        [
+            project.events.make(
+                "extraction.closed", closed, actor, refs=(unit.task_id,), input_blob=blob
+            )
+        ]
+    )
+    complete_task(project, actor, unit.task_id, [*row_ids, *claim_ids])
+
+
+# --- Reading recorded rows and claims ---
+
+
+def live_rows(
+    project: Project, pass_label: PassLabel | None = None, *, work_id: str | None = None
+) -> list[ExtractionRow]:
+    """The rows no later row supersedes, optionally of one pass and one work, by extraction id."""
+    project.index.sync()
+    where, params = _filters(pass_label, work_id)
+    with project.index.connect() as conn:
+        heads = (
+            conn.execute(
+                text(
+                    "SELECT extraction_id, work_id, pass_label, task_id, protocol_id, "
+                    "conversion_id, document_id, row_key, schema_ref, event_id "
+                    f"FROM extraction_rows WHERE superseded_by IS NULL{where} "
+                    "ORDER BY extraction_id"
+                ),
+                params,
+            )
+            .mappings()
+            .all()
+        )
+        cells: dict[str, list[Mapping[str, Any]]] = {str(h["extraction_id"]): [] for h in heads}
+        if cells:
+            marks = ", ".join(f":e{i}" for i in range(len(cells)))
+            found = (
+                conn.execute(
+                    text(f"SELECT * FROM extraction_fields WHERE extraction_id IN ({marks})"),
+                    {f"e{i}": ident for i, ident in enumerate(cells)},
+                )
+                .mappings()
+                .all()
+            )
+            for cell in found:
+                cells[str(cell["extraction_id"])].append(dict(cell))
+    out: list[ExtractionRow] = []
+    for head in heads:
+        pack = _pack_of(str(head["schema_ref"]))
+        ident = str(head["extraction_id"])
+        out.append(
+            ExtractionRow(
+                extraction_id=ident,
+                work_id=str(head["work_id"]),
+                pass_label=PassLabel(str(head["pass_label"])),
+                task_id=str(head["task_id"]),
+                protocol_id=str(head["protocol_id"]),
+                conversion_id=str(head["conversion_id"]),
+                document_id=str(head["document_id"]),
+                row_key=str(head["row_key"]),
+                fields={str(c["field"]): _stored_field(pack, c) for c in cells[ident]},
+                event_id=str(head["event_id"]),
+            )
+        )
+    return out
+
+
+def live_claims(
+    project: Project, pass_label: PassLabel | None = None, *, work_id: str | None = None
+) -> list[ClaimRow]:
+    """The claims no later claim supersedes, optionally of one pass and one work, by claim id."""
+    project.index.sync()
+    where, params = _filters(pass_label, work_id)
+    with project.index.connect() as conn:
+        rows = (
+            conn.execute(
+                text(
+                    "SELECT claim_id, work_id, pass_label, claim_type, evidence_type, strength, "
+                    "statement, anchor, quote, conversion_id, event_id FROM extraction_claims "
+                    f"WHERE superseded_by IS NULL{where} ORDER BY claim_id"
+                ),
+                params,
+            )
+            .mappings()
+            .all()
+        )
+    return [ClaimRow.model_validate(dict(row)) for row in rows]
+
+
+def _filters(pass_label: PassLabel | None, work_id: str | None) -> tuple[str, dict[str, str]]:
+    where = ""
+    params: dict[str, str] = {}
+    if pass_label is not None:
+        where += " AND pass_label = :label"
+        params["label"] = pass_label.value
+    if work_id is not None:
+        where += " AND work_id = :work"
+        params["work"] = work_id
+    return where, params
+
+
+def _pack_of(schema_ref: str) -> Pack | None:
+    name, _, version = schema_ref.rpartition("@")
+    return get_pack(name, int(version)) if version.isdigit() else None
+
+
+def _stored_field(pack: Pack | None, cell: Mapping[str, Any]) -> StoredField:
+    """A stored field from its projected row: the value as text, or a boolean for a BOOL field."""
+    definition = None if pack is None else pack.field(str(cell["field"]))
+    raw = str(cell["value"])
+    value: str | bool = raw
+    if definition is not None and definition.kind is FieldKind.BOOL and raw in ("True", "False"):
+        value = raw == "True"
+    return StoredField(
+        value=value,
+        unit=cell["unit"],
+        anchor=cell["anchor"],
+        cell=cell["cell"],
+        quote=cell["quote"],
+        reported_in=ReportedIn(cell["reported_in"]),
+        reproduced=bool(cell["reproduced"]),
+        cited_work=cell["cited_work"],
+        canonical=cell["canonical"],
+        copy_marker=bool(cell["copy_marker"]),
+    )
