@@ -959,6 +959,7 @@ pymupdf = [
 [package.dev-dependencies]
 dev = [
     { name = "anyio" },
+    { name = "bibtexparser" },
     { name = "mypy" },
     { name = "pytest" },
     { name = "pytest-cov" },
@@ -987,6 +988,7 @@ provides-extras = ["docling", "pymupdf"]
 [package.metadata.requires-dev]
 dev = [
     { name = "anyio", specifier = ">=4" },
+    { name = "bibtexparser", specifier = ">=1.4,<2" },
     { name = "mypy", specifier = ">=1.11" },
     { name = "pytest", specifier = ">=8" },
     { name = "pytest-cov", specifier = ">=5" },

@@ -24,7 +24,15 @@ pymupdf = ["pymupdf4llm>=2.1", "pymupdf>=1.24"]  # AGPL-3.0
 factory = "factory.cli.main:app"
 
 [dependency-groups]
-dev = ["pytest>=8", "pytest-cov>=5", "anyio>=4", "mypy>=1.11", "ruff>=0.6", "types-lxml"]
+dev = [
+    "pytest>=8",
+    "pytest-cov>=5",
+    "anyio>=4",
+    "mypy>=1.11",
+    "ruff>=0.6",
+    "types-lxml",
+    "bibtexparser>=1.4,<2",
+]
 
 [build-system]
 requires = ["hatchling"]
