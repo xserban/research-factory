@@ -83,7 +83,7 @@ def test_pack_report_spec() -> None:
     )
     assert spec.frontier_costs == spec.display_costs == ("params", "flops", "macs")
     assert dict(spec.speed_fields) == {"throughput": True, "latency": False}
-    assert spec.speed_context == ("hardware", "batch_size", "precision")
+    assert spec.speed_context == ("hardware", "batch_size", "precision", "input_resolution")
     assert {m for m, up in spec.metric_directions.items() if up} == {
         "top-1 accuracy",
         "top-5 accuracy",
@@ -531,3 +531,22 @@ def test_audit_limits_from_the_audit_report() -> None:
     assert (q.audit_n, q.audit_error_rate, q.audit_above_ceiling) == (8, 0.125, True)
     assert {"audit-outdated", "audit-incomplete", "audit-above-ceiling"} <= codes(r.limits)
     assert "audit-missing" not in codes(r.limits)
+
+
+def test_outdated_labels_are_stated_and_not_counted_as_unlabelled() -> None:
+    audit = ExtractionAuditReport(
+        audit_id="aud_1",
+        sample_size=10,
+        labelled=8,
+        incorrect=0,
+        outdated=2,
+        error_rate=0.0,
+        ceiling=0.05,
+        above_ceiling=False,
+        enforced=False,
+        by_group={},
+    )
+    r = assemble_report(replace(pilot_inputs(), audit=audit, audit_outstanding=False))
+    (outdated,) = [lim for lim in r.limits if lim.code == "audit-outdated"]
+    assert "2 labels are on values that changed" in outdated.text
+    assert "audit-incomplete" not in codes(r.limits)

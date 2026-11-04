@@ -237,3 +237,72 @@ def test_row_without_resolution_is_reported_and_kept() -> None:
     ax = axis(r_of(rows, keys=keys), "params")
     assert ax.missing == {"resolution-missing": ["rk_000000000101"]}
     assert [(p.resolution, len(p.points)) for p in ax.partitions] == [(None, 1), ("384x384", 1)]
+
+
+METRIC_FREE = ("task", "dataset", "split", "input_resolution", "pretraining_data")
+
+
+def two_metrics() -> list[FinalRow]:
+    """One group (metric is not a key) holding top-1 and top-5 rows; Swin-T in both metrics.
+    The direction is declared: with two metrics in a group no single pack default applies."""
+    up = ff(True)
+    top5 = "Top-5 Accuracy"
+    return [
+        frow("rf:w1", "rk_000000000101", "Swin-T", "81.3", params=cost("28"), higher_is_better=up),
+        frow("rf:w2", "rk_000000000201", "B", "79.0", params=cost("30"), higher_is_better=up),
+        frow(
+            "rf:w1",
+            "rk_000000000102",
+            "Swin-T",
+            "95.5",
+            metric=top5,
+            params=cost("28"),
+            higher_is_better=up,
+        ),
+        frow(
+            "rf:w3",
+            "rk_000000000301",
+            "C",
+            "94.0",
+            metric=top5,
+            params=cost("20"),
+            higher_is_better=up,
+        ),
+    ]
+
+
+def test_frontiers_partition_by_metric_when_metric_is_not_a_key() -> None:
+    r = r_of(two_metrics(), keys=METRIC_FREE)
+    parts = axis(r, "params").partitions
+    assert [(p.metric, sorted(q.row_key for q in p.points)) for p in parts] == [
+        ("top-1 accuracy", ["rk_000000000101", "rk_000000000201"]),
+        ("top-5 accuracy", ["rk_000000000102", "rk_000000000301"]),
+    ]
+    # Only B is dominated, by Swin-T's top-1 row; no top-5 value is compared with a top-1 one.
+    dominated = {q.row_key: q.dominated_by for p in parts for q in p.points if q.dominated_by}
+    assert dominated == {"rk_000000000201": "rk_000000000101"}
+
+
+def test_no_method_conflict_across_metrics() -> None:
+    r = r_of(two_metrics(), keys=METRIC_FREE)
+    assert only_group(r).method_conflicts == []
+    rows = [
+        *two_metrics(),
+        frow(
+            "rf:w4",
+            "rk_000000000401",
+            "Swin-T",
+            "80.0",
+            params=cost("28"),
+            higher_is_better=ff(True),
+        ),
+    ]
+    (conflict,) = only_group(r_of(rows, keys=METRIC_FREE)).method_conflicts
+    assert conflict.metric == "top-1 accuracy"
+    assert conflict.rows == ["rk_000000000101", "rk_000000000401"]
+
+
+def test_metric_partition_absent_when_metric_is_a_key() -> None:
+    r = r_of(three())
+    assert all(p.metric is None for a in only_group(r).frontiers for p in a.partitions)
+    assert all(c.metric is None for c in only_group(r).method_conflicts)

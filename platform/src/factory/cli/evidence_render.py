@@ -29,6 +29,7 @@ def _speed_section(report: EvidenceReport) -> list[str]:
             "hardware",
             "batch",
             "precision",
+            "resolution",
             "ratio",
             "trace",
         ]
@@ -39,9 +40,10 @@ def _speed_section(report: EvidenceReport) -> list[str]:
                 x.field,
                 x.method,
                 x.baseline_method,
-                x.hardware,
+                x.hardware or "",
                 x.batch_size or "",
                 x.precision or "",
+                x.context.get("input_resolution") or "",
                 f"{x.ratio} times faster",
                 f"{x.proposed.trace_id}; {x.baseline.trace_id}",
             ]

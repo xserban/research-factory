@@ -109,7 +109,7 @@ ML_BENCHMARK_V1 = Pack(
         ),
         frontier_costs=("params", "flops", "macs"),
         speed_fields=MappingProxyType({"throughput": True, "latency": False}),
-        speed_context=("hardware", "batch_size", "precision"),
+        speed_context=("hardware", "batch_size", "precision", "input_resolution"),
         proposed_field="is_proposed",
         display_costs=("params", "flops", "macs"),
     ),

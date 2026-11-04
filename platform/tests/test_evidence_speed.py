@@ -1,5 +1,7 @@
 """Evidence report within-paper speed ratios (plan E, task 4; ruling 7, acceptance 12a)."""
 
+import dataclasses
+
 from factory.services.evidence_report import EvidenceReport, WithinPaperRatio, assemble_report
 from factory.services.extraction_agreement import FinalField, FinalRow
 from tests.evidence_helpers import ff, frow, pilot_inputs
@@ -251,3 +253,82 @@ def test_conflicting_duplicates_are_ambiguous_not_silently_dropped() -> None:
         ]
     )
     assert r.speed_ratios == [] and r.speed_unpaired == {"ambiguous": 1}
+
+
+NO_RESOLUTION_KEY = ("task", "dataset", "split", "metric", "pretraining_data")
+
+
+def at(resolution: str, key: str, method: str, proposed: bool, value: str) -> FinalRow:
+    out = row("rf:w1", key, method, proposed, thr=num(value))
+    return out.model_copy(update={"fields": {**out.fields, "input_resolution": ff(resolution)}})
+
+
+def test_resolution_is_speed_context() -> None:
+    rows = [
+        at("384", "rk_000000000101", "Ours", True, "180"),
+        at("224", "rk_000000000102", "B", False, "100"),
+    ]
+    # Resolution not a group key: one group, the pair differs in context.
+    r = assemble_report(pilot_inputs(rows, keys=NO_RESOLUTION_KEY))
+    assert len(r.groups) == 1
+    assert r.speed_ratios == [] and r.speed_unpaired == {"context-differs": 1}
+    same = [at("224", "rk_000000000101", "Ours", True, "180"), rows[1]]
+    (x,) = assemble_report(pilot_inputs(same, keys=NO_RESOLUTION_KEY)).speed_ratios
+    assert x.context["input_resolution"] == "224"
+
+
+def test_resolution_compared_normalised() -> None:
+    rows = [
+        at("224x224", "rk_000000000101", "Ours", True, "180"),
+        at("224", "rk_000000000102", "B", False, "100"),
+    ]
+    r = assemble_report(pilot_inputs(rows, keys=NO_RESOLUTION_KEY))
+    assert len(r.speed_ratios) == 1
+
+
+def test_no_pair_across_groups() -> None:
+    detection = frow(
+        "rf:w1",
+        "rk_000000000102",
+        "B",
+        "50.0",
+        task="object detection",
+        metric="box AP",
+        is_proposed=ff(False),
+        throughput=num("100"),
+        hardware=ff("A100"),
+        batch_size=ff("64", canon="64"),
+    )
+    rows = [row("rf:w1", "rk_000000000101", "Ours", True, thr=num("180")), detection]
+    r = rep(rows)
+    assert len(r.groups) == 2
+    assert r.speed_ratios == [] and r.speed_unpaired == {"group-differs": 1}
+    # Resolution a group key (the pack default): 384 vs 224 never pairs either.
+    res = rep(
+        [
+            at("384", "rk_000000000101", "Ours", True, "180"),
+            at("224", "rk_000000000102", "B", False, "100"),
+        ]
+    )
+    assert res.speed_ratios == [] and res.speed_unpaired == {"group-differs": 1}
+
+
+def test_ungrouped_rows_are_not_paired() -> None:
+    rows = pair()
+    del rows[1].fields["dataset"]
+    r = rep(rows)
+    assert r.speed_ratios == [] and r.speed_unpaired == {"key-missing": 1}
+
+
+def test_pairing_follows_the_spec_speed_context() -> None:
+    rows = [
+        row("rf:w1", "rk_000000000101", "Ours", True, thr=num("180")),
+        row("rf:w1", "rk_000000000102", "B", False, thr=num("100"), batch="128"),
+    ]
+    inputs = pilot_inputs(rows)
+    assert inputs.pack is not None and inputs.pack.report is not None
+    spec = dataclasses.replace(inputs.pack.report, speed_context=("hardware", "precision"))
+    pack = dataclasses.replace(inputs.pack, report=spec)
+    r = assemble_report(dataclasses.replace(inputs, pack=pack))
+    (x,) = r.speed_ratios
+    assert x.batch_size is None and set(x.context) == {"hardware", "precision"}

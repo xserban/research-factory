@@ -74,6 +74,12 @@ def test_speed_section_is_the_only_place_speed_appears() -> None:
     assert "a100" in speed
 
 
+def test_speed_table_shows_the_resolution_context() -> None:
+    speed = evidence_markdown(_speed_report()).split("## Within-paper speed ratios")[1]
+    assert "| hardware | batch | precision | resolution | ratio |" in speed
+    assert "| a100 | 64 |  | 224 | 1.80 times faster |" in speed
+
+
 def test_csv_points_have_no_speed_columns_and_are_stable() -> None:
     r = report()
     out = points_csv(r)

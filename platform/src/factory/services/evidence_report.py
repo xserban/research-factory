@@ -156,11 +156,13 @@ class GroupCounts(StrictModel):
 
 class MethodConflict(StrictModel):
     """Independent rows of one normalised (method, variant) in a group whose values differ;
-    listed, never averaged."""
+    listed, never averaged. When `metric` is not a group key, rows are compared only within one
+    normalised metric, named in `metric` (None when the metric is a key)."""
 
     method: str
     variant: str | None
     rows: list[str]
+    metric: str | None = None
 
 
 class FrontierPoint(StrictModel):
@@ -178,13 +180,14 @@ class FrontierPoint(StrictModel):
 
 
 class FrontierPartition(StrictModel):
-    """Points sharing a value unit (and a resolution when it is not a group key); compared only
-    with each other."""
+    """Points sharing a value unit (and a resolution, and a normalised metric, when that is not a
+    group key); compared only with each other. `metric` is None when the metric is a key."""
 
     unit: str | None
     resolution: str | None
     points: list[FrontierPoint]
     statement: str | None
+    metric: str | None = None
 
 
 class FrontierAxis(StrictModel):
@@ -255,8 +258,10 @@ class Quality(StrictModel):
 class WithinPaperRatio(StrictModel):
     """How many times faster a proposed row is than a baseline row of the same paper (ruling 7).
 
-    Both speed cells are effectively own, share unit, hardware, batch size and precision; the
-    ratio is a two-place string. `hardware` is the normalised text."""
+    Both rows are in one group; both speed cells are effectively own, share unit and the pack's
+    speed context (`ReportSpec.speed_context`); the ratio is a two-place string. `hardware` is
+    the normalised text (None when hardware is not a context field); `context` maps every
+    context field to the proposed row's printed value (None when absent)."""
 
     work_id: str
     document_id: str
@@ -265,11 +270,12 @@ class WithinPaperRatio(StrictModel):
     baseline_method: str
     ratio: str
     unit: str | None
-    hardware: str
+    hardware: str | None
     batch_size: str | None
     precision: str | None
     proposed: Provenance
     baseline: Provenance
+    context: dict[str, str | None] = Field(default_factory=dict)
 
 
 class EvidenceReport(StrictModel):
@@ -490,8 +496,7 @@ def assemble_report(
         or not (groups or ungrouped)
     )
     limits = _limits(inputs, groups, ungrouped, excluded, expectations, quality, finals)
-    every = [r for members in inputs.grouped.groups.values() for r in members]
-    ratios, unpaired = _speed(every + list(inputs.grouped.ungrouped), spec)
+    ratios, unpaired = _speed(inputs.grouped, spec, pack)
     return EvidenceReport(
         project_protocol_id=inputs.protocol_id,
         pack=pack.name,
@@ -709,7 +714,7 @@ def _group(
         direction=direction,
         direction_status=status,
         frontiers=frontiers,
-        method_conflicts=_conflicts(shown),
+        method_conflicts=_conflicts(shown, _metrics_of(rows, pack, dict(key))),
         statements=statements,
     )
 
@@ -747,45 +752,69 @@ def _own(f: FinalField) -> bool:
     return f.reported_in is ReportedIn.OWN and not f.copy_marker
 
 
-def _context(row: FinalRow, name: str) -> str | None:
+def _context(row: FinalRow, name: str, pack: Pack) -> str | None:
+    """A speed-context field's comparable value: by the pack's normaliser when it declares one
+    (so 224 and 224x224 are one resolution), else the normalised text; None when absent."""
     f = row.fields.get(name)
-    return None if f is None else normalise_text(str(f.value))
+    if f is None:
+        return None
+    definition = pack.field(name)
+    if definition is not None and definition.normaliser is not None:
+        return key_value(definition, f)
+    return normalise_text(str(f.value))
+
+
+_HARDWARE = "hardware"
 
 
 def _speed(
-    rows: Sequence[FinalRow], spec: ReportSpec
+    grouped: Grouped, spec: ReportSpec, pack: Pack
 ) -> tuple[list[WithinPaperRatio], dict[str, int]]:
-    """Proposed/baseline speed ratios inside one work and document (ruling 7).
+    """Proposed/baseline speed ratios inside one work and document (ruling 7, decision 52).
 
-    Only effectively own speed cells with equal unit, hardware (present), batch size and
-    precision are paired; every other proposed/baseline pair is counted under its reason.
-    A proposed speed cell with no baseline speed cell in its paper counts once as
-    `no-baseline` (once per proposed speed cell). Units are compared as text: convertible but
-    different units count as `unit-differs`, nothing is scaled. A row with no `is_proposed`
-    is ignored. Pairs with the same ruling key collapse when their values are equal; when
-    the values differ both are dropped and counted once as `ambiguous`."""
+    Only effectively own speed cells of rows in the same group (identical comparability key)
+    with equal unit and equal `spec.speed_context` values are paired: `hardware`, when it is a
+    context field, must be present in both; every other context field must be equal or absent
+    in both. Every other proposed/baseline pair is counted under its reason: `key-missing` (a
+    row in no group), `group-differs`, `not-own`, `unit-differs`, `hardware-missing`,
+    `hardware-differs`, `context-differs`, `value-unusable`. A proposed speed cell with no
+    baseline speed cell in its paper counts once as `no-baseline`. Units are compared as text:
+    convertible but different units count as `unit-differs`, nothing is scaled. A row with no
+    `is_proposed` is ignored. Pairs with the same ruling key collapse when their values are
+    equal; when the values differ both are dropped and counted once as `ambiguous`."""
     unpaired: dict[str, int] = {}
     found: dict[tuple[str, ...], WithinPaperRatio] = {}
     values: dict[tuple[str, ...], tuple[Decimal, Decimal]] = {}
     ambiguous: set[tuple[str, ...]] = set()
+    context = spec.speed_context
 
     def skip(reason: str) -> None:
         unpaired[reason] = unpaired.get(reason, 0) + 1
 
-    papers: dict[tuple[str, str], list[FinalRow]] = {}
-    for row in sorted(rows, key=lambda r: r.row_key):
-        papers.setdefault((row.work_id, row.document_id), []).append(row)
+    tagged: list[tuple[str | None, FinalRow]] = [
+        (group_id(list(key)), r) for key, members in grouped.groups.items() for r in members
+    ]
+    tagged += [(None, r) for r in grouped.ungrouped]
+    papers: dict[tuple[str, str], list[tuple[str | None, FinalRow]]] = {}
+    for gid, row in sorted(tagged, key=lambda t: t[1].row_key):
+        papers.setdefault((row.work_id, row.document_id), []).append((gid, row))
     for (work, document), members in sorted(papers.items()):
-        proposed = [r for r in members if _as_bool(r.fields.get(spec.proposed_field)) is True]
-        baselines = [r for r in members if _as_bool(r.fields.get(spec.proposed_field)) is False]
+        proposed = [m for m in members if _as_bool(m[1].fields.get(spec.proposed_field)) is True]
+        baselines = [m for m in members if _as_bool(m[1].fields.get(spec.proposed_field)) is False]
         for name, higher in sorted(spec.speed_fields.items()):
             family = UnitFamily.OTHER
-            bases = [b for b in baselines if name in b.fields]
-            for p in (r for r in proposed if name in r.fields):
+            bases = [b for b in baselines if name in b[1].fields]
+            for gp, p in (m for m in proposed if name in m[1].fields):
                 if not bases:
                     skip("no-baseline")
                     continue
-                for b in bases:
+                for gb, b in bases:
+                    if gp is None or gb is None:
+                        skip("key-missing")
+                        continue
+                    if gp != gb:
+                        skip("group-differs")
+                        continue
                     pf, bf = p.fields[name], b.fields[name]
                     if not (_own(pf) and _own(bf)):
                         skip("not-own")
@@ -793,16 +822,17 @@ def _speed(
                     if normalise_text(pf.unit or "") != normalise_text(bf.unit or ""):
                         skip("unit-differs")
                         continue
-                    hw_p, hw_b = _context(p, "hardware"), _context(b, "hardware")
-                    if not hw_p or not hw_b:
-                        skip("hardware-missing")
-                        continue
-                    if hw_p != hw_b:
-                        skip("hardware-differs")
-                        continue
-                    batch_p, batch_b = _context(p, "batch_size"), _context(b, "batch_size")
-                    prec_p, prec_b = _context(p, "precision"), _context(b, "precision")
-                    if (batch_p, prec_p) != (batch_b, prec_b):
+                    ctx_p = tuple(_context(p, c, pack) for c in context)
+                    ctx_b = tuple(_context(b, c, pack) for c in context)
+                    if _HARDWARE in context:
+                        at = context.index(_HARDWARE)
+                        if not ctx_p[at] or not ctx_b[at]:
+                            skip("hardware-missing")
+                            continue
+                        if ctx_p[at] != ctx_b[at]:
+                            skip("hardware-differs")
+                            continue
+                    if ctx_p != ctx_b:
                         skip("context-differs")
                         continue
                     num_p, num_b = _cost_decimal(pf, family), _cost_decimal(bf, family)
@@ -823,9 +853,8 @@ def _speed(
                         normalise_text(_text(p.fields.get("variant")) or ""),
                         normalise_text(base_method),
                         normalise_text(_text(b.fields.get("variant")) or ""),
-                        hw_p,
-                        batch_p or "",
-                        prec_p or "",
+                        gp,
+                        *(c or "" for c in ctx_p),
                     )
                     if ident in ambiguous:
                         continue
@@ -838,6 +867,9 @@ def _speed(
                     assert num_p is not None and num_b is not None
                     values[ident] = (num_p, num_b)
                     assert name in ("throughput", "latency")
+                    printed = {
+                        c: (None if c not in p.fields else str(p.fields[c].value)) for c in context
+                    }
                     found[ident] = WithinPaperRatio(
                         work_id=work,
                         document_id=document,
@@ -846,9 +878,10 @@ def _speed(
                         baseline_method=base_method,
                         ratio=format(value, "f"),
                         unit=pf.unit,
-                        hardware=hw_p,
-                        batch_size=None if batch_p is None else str(p.fields["batch_size"].value),
-                        precision=None if prec_p is None else str(p.fields["precision"].value),
+                        hardware=ctx_p[context.index(_HARDWARE)] if _HARDWARE in context else None,
+                        batch_size=printed.get("batch_size"),
+                        precision=printed.get("precision"),
+                        context=printed,
                         proposed=_provenance(p.row_key, name, pf),
                         baseline=_provenance(b.row_key, name, bf),
                     )
@@ -872,10 +905,12 @@ def _frontiers(
     declared: Sequence[str] | None = None,
 ) -> list[FrontierAxis]:
     """One frontier per cost axis of the spec over the group's independent rows (ruling 6),
-    partitioned by value unit and, if not a group key, by resolution. Speed fields are never
+    partitioned by value unit and, each if not a group key, by normalised metric and by
+    resolution (decision 52). Speed fields are never
     axes. An axis whose pack field or schema declaration is
     missing is omitted; one with no plottable point is kept with its missing counts."""
     by_resolution = "input_resolution" not in key
+    by_metric = "metric" not in key
     resolution_def = pack.field("input_resolution")
     own = sorted((r for r in rows if r.independent), key=lambda r: r.row_key)
     axes: list[FrontierAxis] = []
@@ -892,8 +927,8 @@ def _frontiers(
         assert cost_def is not None
         cost_family = cost_def.unit_family
         missing: dict[str, list[str]] = {}
-        buckets: dict[tuple[str, str], list[Point]] = {}
-        units: dict[tuple[str, str], str | None] = {}
+        buckets: dict[tuple[str, str, str], list[Point]] = {}
+        units: dict[tuple[str, str, str], str | None] = {}
         for row in own:
             value = _decimal(row.fields[spec.value_field])
             if value is None:
@@ -921,7 +956,7 @@ def _frontiers(
                     if resolution_def is not None
                     else normalise_text(str(res.value))
                 )
-            bucket = (unit or "", resolution or "")
+            bucket = (_metric_of(row, pack) if by_metric else "", unit or "", resolution or "")
             units[bucket] = unit
             method = _text(row.fields.get("method_name"))
             buckets.setdefault(bucket, []).append(
@@ -929,7 +964,14 @@ def _frontiers(
             )
         names = {r.row_key: _text(r.fields.get("method_name")) for r in own}
         partitions = [
-            _partition(units[b], b[1] or None, points, names, higher_is_better=higher_is_better)
+            _partition(
+                units[b],
+                b[2] or None,
+                points,
+                names,
+                higher_is_better=higher_is_better,
+                metric=b[0] if by_metric else None,
+            )
             for b, points in sorted(buckets.items())
         ]
         statement: str | None = None
@@ -953,6 +995,7 @@ def _partition(
     names: Mapping[str, str | None],
     *,
     higher_is_better: bool,
+    metric: str | None = None,
 ) -> FrontierPartition:
     result = pareto(points, higher_is_better=higher_is_better)
     dominators = {p.row_key: q.row_key for p, q in result.dominated}
@@ -975,7 +1018,9 @@ def _partition(
         if len(points) < 2
         else None
     )
-    return FrontierPartition(unit=unit, resolution=resolution, points=shown, statement=statement)
+    return FrontierPartition(
+        unit=unit, resolution=resolution, points=shown, statement=statement, metric=metric
+    )
 
 
 def _direction(
@@ -1013,15 +1058,37 @@ def _direction(
     return None, "unknown"
 
 
-def _conflicts(rows: Sequence[EvidenceRow]) -> list[MethodConflict]:
-    by_method: dict[tuple[str, str], list[EvidenceRow]] = {}
+def _metric_of(row: FinalRow, pack: Pack) -> str:
+    """The row's normalised metric, as a group key would hold it; "" when absent."""
+    f = row.fields.get("metric")
+    return "" if f is None else key_value(pack.field("metric"), f)
+
+
+def _metrics_of(
+    rows: Sequence[FinalRow], pack: Pack, key: Mapping[str, str]
+) -> Mapping[str, str] | None:
+    """Row key -> normalised metric when the metric is not a group key, else None (one metric)."""
+    if "metric" in key:
+        return None
+    return {r.row_key: _metric_of(r, pack) for r in rows}
+
+
+def _conflicts(
+    rows: Sequence[EvidenceRow], metrics: Mapping[str, str] | None = None
+) -> list[MethodConflict]:
+    """Ruling: independent rows of one normalised (method, variant) and, when `metrics` is given
+    (the metric is not a group key), one normalised metric, whose values differ."""
+    by_method: dict[tuple[str, str, str], list[EvidenceRow]] = {}
     for row in rows:
         if not row.independent or row.method_name is None:
             continue
-        ident = normalise_text(row.method_name), normalise_text(row.variant or "")
+        metric = "" if metrics is None else metrics.get(row.row_key, "")
+        ident = metric, normalise_text(row.method_name), normalise_text(row.variant or "")
         by_method.setdefault(ident, []).append(row)
     out: list[MethodConflict] = []
-    for (method, variant), members in sorted(by_method.items()):
+    for (metric, method, variant), members in sorted(
+        by_method.items(), key=lambda kv: (kv[0][1], kv[0][2], kv[0][0])
+    ):
         values = {(_number_identity(r.value), normalise_text(r.value.unit or "")) for r in members}
         if len(values) > 1:
             out.append(
@@ -1029,6 +1096,7 @@ def _conflicts(rows: Sequence[EvidenceRow]) -> list[MethodConflict]:
                     method=method,
                     variant=variant or None,
                     rows=sorted(r.row_key for r in members),
+                    metric=None if metrics is None else metric,
                 )
             )
     return out
@@ -1234,20 +1302,26 @@ def _limits(
                 )
             )
         else:
-            if inputs.audit_outstanding:
+            if inputs.audit_outstanding or audit.outdated:
                 out.append(
                     Limit(
                         code="audit-outdated",
-                        text="The agreed values changed after the latest audit was sampled.",
+                        text="The agreed values changed after the latest audit was sampled."
+                        + (
+                            f" {audit.outdated} labels are on values that changed and are left "
+                            "out of the error rate."
+                            if audit.outdated
+                            else ""
+                        ),
                         subject=audit.audit_id,
                     )
                 )
-            if audit.labelled < audit.sample_size:
+            unlabelled = audit.sample_size - audit.labelled - audit.outdated
+            if unlabelled > 0:
                 out.append(
                     Limit(
                         code="audit-incomplete",
-                        text=f"{audit.sample_size - audit.labelled} of {audit.sample_size} "
-                        "audit items are not labelled.",
+                        text=f"{unlabelled} of {audit.sample_size} audit items are not labelled.",
                         subject=audit.audit_id,
                     )
                 )
