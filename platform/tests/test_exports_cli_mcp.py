@@ -13,7 +13,13 @@ from factory.config import Settings
 from factory.events.envelope import Actor
 from factory.mcp import server as mcp_server
 from factory.services.context import Project
-from factory.services.exports import export_bibliography, export_prisma_svg, select_works
+from factory.services.exports import (
+    export_bibliography,
+    export_prisma_svg,
+    held_out_work_ids,
+    render_bibliography,
+    select_works,
+)
 from factory.sources.registry import SourceFactory
 from tests.helpers import open_session
 from tests.test_chase_service import _corpus, _settle
@@ -41,7 +47,12 @@ async def test_mcp_export_bibliography(
 ) -> None:
     pid = _corpus(project, agent, human, mock_sources)
     _settle(project, agent, human, pid)
-    expected = "".join(export_bibliography(project, "bibtex"))
+    hidden = held_out_work_ids(project)
+    expected = "".join(
+        render_bibliography(
+            project, "bibtex", select_works(project, "included", exclude_work_ids=hidden)
+        )
+    )
     async with open_session(settings, clock) as session:
         body = await session.call("export_bibliography", project="demo")
         csl = await session.call("export_bibliography", project="demo", format="csl")
@@ -53,13 +64,10 @@ async def test_mcp_export_bibliography(
         bad_fmt = await session.call("export_bibliography", project="demo", format="ris")
         bad_scope = await session.call("export_bibliography", project="demo", scope="all")
     assert body["ok"] is True
-    # Held-out seed identifiers are withheld from agents (R-20); nothing else differs.
-    got = body["data"]["text"].splitlines()
-    assert len(got) == len(expected.splitlines())
-    differing = [(a, b) for a, b in zip(got, expected.splitlines(), strict=True) if a != b]
-    assert differing and all("[withheld]" in a for a, _ in differing)
+    # Held-out works are absent from the agent view (R-20), so the text is byte-identical.
+    assert body["data"]["text"] == expected
     assert body["data"]["scope"] == "included"
-    assert body["data"]["count"] == len(select_works(project, "included"))
+    assert body["data"]["count"] == len(select_works(project, "included", exclude_work_ids=hidden))
     assert isinstance(json.loads(csl["data"]["text"]), list)
     assert explicit["data"]["count"] == 2 and explicit["data"]["scope"] == "ids"
     assert bad_ids["errors"][0]["field"] == "ids"

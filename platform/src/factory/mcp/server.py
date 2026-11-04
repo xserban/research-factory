@@ -670,6 +670,7 @@ def build_server(
                 opened,
                 None if ids else scope,
                 ids or (),
+                exclude_work_ids=exports_service.held_out_work_ids(opened),
             )
             if len(chosen) > MCP_EXPORT_MAX_WORKS:
                 raise FactoryValidationError(

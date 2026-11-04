@@ -29,6 +29,7 @@ from factory.services.dedup import active_merges
 from factory.services.dedup_cascade import merge_works
 from factory.services.prisma import has_full_text_plan, prisma_flow
 from factory.services.search import load_works
+from factory.services.seeds import SeedRole, all_seeds
 
 BibScope = Literal["included", "corpus"]
 BibFormat = Literal["bibtex", "csl"]
@@ -53,10 +54,30 @@ def _corpus_ids(project: Project) -> list[str]:
     return [str(row[0]) for row in rows]
 
 
-def _canonical_ids(project: Project) -> list[str]:
-    """Corpus ids less those absorbed by an active merge whose primary is in the corpus."""
+def held_out_work_ids(project: Project) -> frozenset[str]:
+    """Work ids matched to held-out seeds: what an agent-facing export must not show (R-20)."""
+    return frozenset(
+        seed.work_id
+        for seed in all_seeds(project)
+        if seed.role is SeedRole.HELD_OUT and seed.work_id
+    )
+
+
+def _canonical_ids(project: Project, exclude: frozenset[str] = frozenset()) -> list[str]:
+    """Corpus ids less those absorbed by an active merge whose primary is in the corpus.
+
+    A canonical work is dropped when it or any work merged into it is in `exclude`.
+    """
     corpus = _corpus_ids(project)
     present = set(corpus)
+    if exclude:
+        hidden = {
+            merge.primary
+            for merge in active_merges(project)
+            if exclude & {merge.primary, *merge.absorbed}
+        } | exclude
+    else:
+        hidden = set()
     absorbed = {
         wid
         for merge in active_merges(project)
@@ -64,25 +85,33 @@ def _canonical_ids(project: Project) -> list[str]:
         for wid in merge.absorbed
         if wid != merge.primary
     }
-    return [wid for wid in corpus if wid not in absorbed]
+    return [wid for wid in corpus if wid not in absorbed and wid not in hidden]
 
 
 def select_works(
-    project: Project, scope: BibScope | str | None = None, ids: Sequence[str] = ()
+    project: Project,
+    scope: BibScope | str | None = None,
+    ids: Sequence[str] = (),
+    *,
+    exclude_work_ids: frozenset[str] = frozenset(),
 ) -> list[str]:
     """Canonical work ids (sorted) of a scope, or the explicit `ids` validated against them.
 
     `included` is the final outcome INCLUDED at the last declared screening stage: full text when
-    the protocol declares a plan, else title/abstract.
+    the protocol declares a plan, else title/abstract. v1: this scope loads every outcome through
+    `final_outcomes`, so it is not streamed (the corpus scope and `ids` are).
+
+    `exclude_work_ids` hides those works, and any work merged with one, before anything else: an
+    explicit id naming a hidden work is refused exactly as an unknown id is (agent view, R-20).
     """
     if (scope is None) == (not ids):
         raise _issue("scope", "give exactly one of a scope and a list of ids")
-    canonical = _canonical_ids(project)
+    canonical = _canonical_ids(project, exclude_work_ids)
     if ids:
         known = set(canonical)
         unknown = sorted({wid for wid in ids if wid not in known})
         if unknown:
-            raise _issue("ids", f"not canonical works of this project: {', '.join(unknown)}")
+            raise _issue("ids", f"{len(unknown)} id(s) are not works of this project")
         return sorted(set(ids))
     if scope == "corpus":
         return canonical
@@ -125,6 +154,7 @@ def export_bibliography(
     scope: BibScope | str | None = None,
     ids: Sequence[str] = (),
     ascii_only: bool = False,
+    exclude_work_ids: frozenset[str] = frozenset(),
 ) -> Iterator[str]:
     """The bibliography text, streamed. With no `ids`, `scope` defaults to `included`.
 
@@ -133,7 +163,10 @@ def export_bibliography(
     if scope is None and not ids:
         scope = "included"
     return render_bibliography(
-        project, fmt, select_works(project, scope, ids), ascii_only=ascii_only
+        project,
+        fmt,
+        select_works(project, scope, ids, exclude_work_ids=exclude_work_ids),
+        ascii_only=ascii_only,
     )
 
 
@@ -166,6 +199,7 @@ __all__ = [
     "BibScope",
     "export_bibliography",
     "export_prisma_svg",
+    "held_out_work_ids",
     "iter_works",
     "render_bibliography",
     "select_works",
