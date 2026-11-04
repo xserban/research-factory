@@ -1,3 +1,4 @@
+import shutil
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -254,3 +255,21 @@ def corpus_leaving(project: Project, agent: Actor, human: Actor, mock_sources: A
     leave = sorted(w.id for w in list_works(project) if w.id not in calibration)[0]
     _include_all(project, agent, human, protocol_id, leave=leave)
     return leave
+
+
+@pytest.fixture(scope="session")
+def portfolio_world_root(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Three projects at known stages, built once per session (see `build_world`)."""
+    from tests.portfolio_helpers import build_world
+
+    root = tmp_path_factory.mktemp("portfolio-world")
+    build_world(root)
+    return root
+
+
+@pytest.fixture
+def portfolio_settings(portfolio_world_root: Path, tmp_path: Path) -> Settings:
+    """A private copy of the portfolio world, safe for a test to modify."""
+    root = tmp_path / "factory"
+    shutil.copytree(portfolio_world_root, root)
+    return Settings(root=root, user="obd")
