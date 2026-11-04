@@ -388,18 +388,20 @@ def evidence_report(
 
 def agent_evidence(report: EvidenceReport) -> EvidenceReport:
     """The report as an agent outside the passes may read it: no label-derived audit rate or
-    ceiling flag (decision 37.14), and the `audit-above-ceiling` limit replaced by a fixed
-    sentence. Counts (`audit_n`) are unchanged; the researcher's view keeps the rate."""
-    limits = [
-        Limit(
-            code="audit-reported-to-researcher",
-            text="The audit result is reported to the researcher and withheld from the agent view.",
-            subject=lim.subject,
+    ceiling flag (decision 37.14). Any `audit-above-ceiling` limit is dropped, and the fixed limit
+    `audit-reported-to-researcher` is present whenever an audit is labelled, whatever the flag, so
+    the limits do not reveal it. Counts (`audit_n`) are unchanged; the researcher's view keeps
+    the rate."""
+    limits = [lim for lim in report.limits if lim.code != "audit-above-ceiling"]
+    if report.quality.audit_n > 0:
+        limits.append(
+            Limit(
+                code="audit-reported-to-researcher",
+                text="The audit result is reported to the researcher and withheld from the "
+                "agent view.",
+                subject=None,
+            )
         )
-        if lim.code == "audit-above-ceiling"
-        else lim
-        for lim in report.limits
-    ]
     quality = report.quality.model_copy(
         update={"audit_error_rate": None, "audit_above_ceiling": None}
     )

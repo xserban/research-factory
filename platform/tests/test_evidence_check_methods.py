@@ -9,8 +9,10 @@ from collections.abc import Callable, Mapping
 import pytest
 
 from factory.events.envelope import Actor
+from factory.model.extraction import FieldInput
 from factory.model.project import RigorMode
 from factory.model.protocol import ScreeningStage
+from factory.model.screening import PassLabel
 from factory.services import check as check_module
 from factory.services import methods as methods_module
 from factory.services.agreement import Outcome, final_outcomes
@@ -19,14 +21,17 @@ from factory.services.context import Project
 from factory.services.evidence_report import (
     EvidenceReport,
     Limit,
+    agent_evidence,
     assemble_report,
     evidence_report,
 )
+from factory.services.extraction_agreement import FinalRow
 from factory.services.methods import methods_report, render_methods
 from factory.sources.registry import SourceFactory
-from tests.evidence_helpers import disagreement, frow, pilot_inputs, pilot_rows
+from tests.evidence_helpers import disagreement, frow, pilot_inputs, pilot_rows, run_pass
 from tests.test_acceptance_fulltext_screening import _screened_full_text_world
-from tests.test_extraction_agreement import _declare
+from tests.test_extraction_agreement import FIELDS, _declare, _r
+from tests.test_extraction_next import SESSION_A, SESSION_B, _extractor
 
 FT = ScreeningStage.FULL_TEXT
 SourcesFor = Callable[..., Mapping[str, SourceFactory]]
@@ -45,13 +50,13 @@ def _hit(project: Project, code: str, mode: RigorMode = RigorMode.PILOT) -> Find
     return found[0] if found else None
 
 
+def _clean_rows() -> list[FinalRow]:
+    """The pilot rows without the ungrouped one and the one without a value."""
+    return [r for r in pilot_rows() if r.row_key not in ("rk_000000000502", "rk_000000000402")]
+
+
 def _clean() -> EvidenceReport:
-    rows = [
-        r
-        for r in pilot_rows()
-        if r.row_key not in ("rk_000000000502", "rk_000000000402")  # ungrouped, no value
-    ]
-    return assemble_report(pilot_inputs(rows))
+    return assemble_report(pilot_inputs(_clean_rows()))
 
 
 @pytest.fixture
@@ -120,10 +125,6 @@ def test_evidence_direction_positive(project: Project, monkeypatch: pytest.Monke
     assert hit is not None and hit.refs == sorted(bad)
 
 
-def _clean_rows() -> list:  # type: ignore[type-arg]
-    return [r for r in pilot_rows() if r.row_key not in ("rk_000000000502", "rk_000000000402")]
-
-
 def test_evidence_direction_absent(project: Project, monkeypatch: pytest.MonkeyPatch) -> None:
     _inject(monkeypatch, _clean())
     assert _hit(project, "evidence-direction") is None
@@ -152,7 +153,7 @@ def test_check_findings_name_no_document_text(
     assert "rank" not in " ".join(texts).lower()
 
 
-def test_evidence_report_called_once_per_check(
+def test_check_module_calls_evidence_report_once(
     project: Project, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     calls: list[int] = []
@@ -208,12 +209,6 @@ def test_methods_text_states_cost_axes_and_no_ranking(
     assert "within-paper ratios" in text
 
 
-def test_methods_evidence_real_service_on_world(project: Project, world: list[str]) -> None:
-    m = methods_report(project)
-    r = evidence_report(project)
-    assert m.evidence_groups == len(r.groups)
-
-
 # --- agent view ---
 
 
@@ -228,22 +223,71 @@ def _audited() -> EvidenceReport:
     return report.model_copy(update={"quality": quality, "limits": [*report.limits, limit]})
 
 
-def test_agent_view_hides_audit_rate_and_flag() -> None:
-    from factory.services.evidence_report import agent_evidence
+def _with_ceiling(above: bool) -> EvidenceReport:
+    report = _audited()
+    quality = report.quality.model_copy(update={"audit_above_ceiling": above})
+    limits = [lim for lim in report.limits if lim.code != "audit-above-ceiling"]
+    if above:
+        limits.append(Limit(code="audit-above-ceiling", text="Above the ceiling.", subject="a1"))
+    return report.model_copy(update={"quality": quality, "limits": limits})
 
-    view = agent_evidence(_audited())
+
+def test_agent_view_hides_audit_rate_and_flag() -> None:
+    view = agent_evidence(_with_ceiling(True))
     assert view.quality.audit_error_rate is None
     assert view.quality.audit_above_ceiling is None
     assert view.quality.audit_n == 8
     codes = [lim.code for lim in view.limits]
     assert "audit-above-ceiling" not in codes
-    assert "audit-reported-to-researcher" in codes
+    assert codes.count("audit-reported-to-researcher") == 1
     assert "0.25" not in view.model_dump_json()
-    assert len(view.limits) == len(_audited().limits)
 
 
-def test_cli_view_shows_audit_rate() -> None:
-    report = _audited()
-    assert report.quality.audit_error_rate == 0.25
-    assert report.quality.audit_above_ceiling is True
-    assert "audit-above-ceiling" in [lim.code for lim in report.limits]
+def test_agent_view_limits_do_not_depend_on_the_ceiling_flag() -> None:
+    above = agent_evidence(_with_ceiling(True))
+    below = agent_evidence(_with_ceiling(False))
+    assert [lim.code for lim in above.limits] == [lim.code for lim in below.limits]
+    assert [lim.subject for lim in above.limits] == [lim.subject for lim in below.limits]
+
+
+def test_agent_view_without_audit_adds_no_audit_limit() -> None:
+    view = agent_evidence(_clean())
+    assert "audit-reported-to-researcher" not in [lim.code for lim in view.limits]
+
+
+# --- real path ---
+
+
+@pytest.fixture
+def extracted(
+    project: Project,
+    agent: Actor,
+    agent_other: Actor,
+    human: Actor,
+    mock_sources: SourcesFor,
+) -> EvidenceReport:
+    row = _r()
+    row.fields["params"] = FieldInput(value="2", anchor="t1", cell="t1.r3.c3", quote="2")
+    _screened_full_text_world(project, agent, agent_other, human, mock_sources)
+    _declare(project, agent, fields=(*FIELDS, "params"))
+    run_pass(project, _extractor(SESSION_A, "claude-opus-5-5"), PassLabel.A, lambda _w: [row])
+    run_pass(project, _extractor(SESSION_B, "claude-sonnet-5-5"), PassLabel.B, lambda _w: [row])
+    return evidence_report(project)
+
+
+def test_real_methods_counts_equal_report(project: Project, extracted: EvidenceReport) -> None:
+    assert extracted.groups
+    m = methods_report(project)
+    assert m.evidence_groups == len(extracted.groups)
+    assert m.evidence_rows == sum(len(g.rows) for g in extracted.groups) > 0
+    assert m.evidence_independent == sum(g.counts.independent for g in extracted.groups)
+    assert m.evidence_copied == sum(g.counts.copied for g in extracted.groups)
+
+
+def test_real_direction_finding_names_real_group(
+    project: Project, extracted: EvidenceReport
+) -> None:
+    unknown = sorted(g.group_id for g in extracted.groups if g.direction_status == "unknown")
+    assert unknown
+    hit = _hit(project, "evidence-direction")
+    assert hit is not None and hit.refs == unknown
