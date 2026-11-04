@@ -31,7 +31,7 @@ dev = [
     "mypy>=1.11",
     "ruff>=0.6",
     "types-lxml",
-    "bibtexparser>=1.4,<2",
+    "pytest-xdist>=3.8.0",
 ]
 
 [build-system]
@@ -44,7 +44,10 @@ packages = ["src/factory"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-m 'not network and not slow' --strict-markers"
-markers = ["network: contacts external services", "slow: scale tests, excluded from the default run"]
+markers = [
+    "network: contacts external services",
+    "slow: scale and acceptance suites and other long files; excluded by default, run at milestones with -m 'not network'",
+]
 
 [tool.mypy]
 strict = true

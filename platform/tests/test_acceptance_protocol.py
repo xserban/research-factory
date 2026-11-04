@@ -44,6 +44,8 @@ from tests.helpers import (
     record_pilot_question,
 )
 
+pytestmark = pytest.mark.slow  # acceptance suite: dev runs deselect with -m "not slow"
+
 AGENT = {"role": "screener-a", "model": "claude-opus-5-5", "skill": "rf-screen"}
 MockSources = Any
 

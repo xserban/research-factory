@@ -4,6 +4,7 @@ import shutil
 from datetime import timedelta
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from factory.cli.main import app
@@ -14,6 +15,8 @@ from factory.services.context import Project, open_project
 from factory.services.project import init_project
 from factory.services.tasks import TaskSpec, claim_next, complete_task, create_tasks, release_task
 from tests.helpers import S2, S3, SESSION
+
+pytestmark = pytest.mark.slow  # acceptance suite: dev runs deselect with -m "not slow"
 
 
 def agent_on(project: Project, role: str) -> Actor:

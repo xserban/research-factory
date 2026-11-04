@@ -36,6 +36,8 @@ from tests.helpers import (
     record_pilot_question,
 )
 
+pytestmark = pytest.mark.slow  # acceptance suite: dev runs deselect with -m "not slow"
+
 PASS_A = {"role": "screener-a", "model": "claude-sonnet-5-5", "skill": "rf-screen"}
 PASS_B = {"role": "screener-b", "model": "claude-haiku-5-5", "skill": "rf-screen"}
 Script = Callable[[dict[str, Any], str], dict[str, Any]]

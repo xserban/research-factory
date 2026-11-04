@@ -52,6 +52,8 @@ from tests.test_extraction_agreement import (  # noqa: F401
     world,
 )
 
+pytestmark = pytest.mark.slow  # acceptance suite: dev runs deselect with -m "not slow"
+
 CH = Channel.CLI
 TESTS = Path(__file__).parent
 

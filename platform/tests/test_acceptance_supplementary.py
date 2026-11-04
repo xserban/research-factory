@@ -54,6 +54,8 @@ from tests.test_chase_service import _citing, _corpus, _of_type, _ordinary, _set
 from tests.test_cli import _cli_env, runner
 from tests.test_screening_next import _decide, _draw
 
+pytestmark = pytest.mark.slow  # acceptance suite: dev runs deselect with -m "not slow"
+
 ARGS = {"role": "searcher", "model": "claude-opus-5-5", "skill": "rf-search"}
 SourcesFor = Callable[..., Mapping[str, SourceFactory]]
 

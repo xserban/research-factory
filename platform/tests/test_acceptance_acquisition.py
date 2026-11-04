@@ -11,6 +11,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 import httpx
+import pytest
 from typer.testing import CliRunner
 
 from factory.cli.main import app
@@ -33,6 +34,8 @@ from factory.sources.http import PoliteClient
 from factory.sources.openalex import OpenAlexSource
 from factory.sources.registry import SourceFactory
 from tests.helpers import SESSION, arxiv_atom, openalex_item
+
+pytestmark = pytest.mark.slow  # acceptance suite: dev runs deselect with -m "not slow"
 
 MockSources = Callable[..., Mapping[str, SourceFactory]]
 DOI_ARXIV = "10.48550/arXiv.2301.01234"  # DataCite DOI that arXiv mints for 2301.01234

@@ -43,6 +43,8 @@ from tests.test_fulltext_import import _pdf
 from tests.test_fulltext_service import StubRoute, _include_all, retrieved
 from tests.test_screening_next import _draw
 
+pytestmark = pytest.mark.slow  # acceptance suite: dev runs deselect with -m "not slow"
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SourcesFor = Callable[..., Mapping[str, SourceFactory]]
 CONTENT = b"LITERATURE-MARKER full text of a promoted work"

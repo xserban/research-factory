@@ -85,6 +85,8 @@ from tests.helpers import SESSION, install_skill
 from tests.test_chase_service import _citing, _corpus, _settle
 from tests.test_cli import _cli_env, runner
 
+pytestmark = pytest.mark.slow  # acceptance suite: dev runs deselect with -m "not slow"
+
 SourcesFor = Callable[..., Mapping[str, SourceFactory]]
 
 

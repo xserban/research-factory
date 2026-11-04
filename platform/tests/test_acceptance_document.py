@@ -47,6 +47,8 @@ from tests.helpers import SESSION, _setup, install_skill
 from tests.test_fulltext_service import _include_all
 from tests.test_screening_next import _draw
 
+pytestmark = pytest.mark.slow  # acceptance suite: dev runs deselect with -m "not slow"
+
 SENTENCE = "Ut enim ad minim veniam"
 PDF = b"%PDF-1.4 synthetic"
 CELL_ID = re.compile(r"t\d+\.r\d+\.c\d+")
