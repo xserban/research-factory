@@ -16,7 +16,7 @@ from collections.abc import Iterable
 from enum import StrEnum
 from typing import Annotated, Any, Literal, Self
 
-from pydantic import Field, JsonValue, StringConstraints, model_validator
+from pydantic import Field, JsonValue, StringConstraints, field_validator, model_validator
 
 from factory.canonical import canonical_json
 from factory.model.base import StrictModel
@@ -54,7 +54,13 @@ _SORT_KEYS: dict[str, tuple[str, ...]] = {
 }
 _SEARCH_STRATEGY_KEYS = ("sources", "queries", "limits")
 _OMITTED_WHEN_NONE = frozenset(
-    {"full_text_screening", "extraction_schema", "snowball_plan", "contribution_schema"}
+    {
+        "full_text_screening",
+        "extraction_schema",
+        "snowball_plan",
+        "contribution_schema",
+        "supplied_links",
+    }
 )
 """Optional sections left out of every hash while unset, so protocols that predate them keep
 their versions. Other `None` values stay in the hash."""
@@ -205,6 +211,27 @@ class SnowballPlan(StrictModel):
     stop_when_no_new_included: bool = True
 
 
+SubmitterKind = Literal["human", "agent"]
+
+
+class SuppliedLinksPlan(StrictModel):
+    """Who may supply links whose lookups run without a deviation (slice 4a, ruling 7).
+
+    `accept_from` is non-empty, has no duplicates and is kept sorted, so the order in which the
+    kinds are stated never changes the protocol's hash. A `supplied` lookup of an item captured by
+    a listed kind is planned; any other needs a recorded deviation in `pilot` and `systematic`.
+    """
+
+    accept_from: tuple[SubmitterKind, ...] = Field(min_length=1)
+
+    @field_validator("accept_from")
+    @classmethod
+    def _unique(cls, value: tuple[SubmitterKind, ...]) -> tuple[SubmitterKind, ...]:
+        if len(set(value)) != len(value):
+            raise ValueError("accept_from must not repeat a kind")
+        return tuple(sorted(value))
+
+
 class ProtocolSpec(StrictModel):
     """The protocol as an agent or a human states it. Keys are unique within each list."""
 
@@ -224,6 +251,8 @@ class ProtocolSpec(StrictModel):
     contribution_schema: ExtractionSchema | None = None
     """What is extracted for the lineage graph (slice 3b, ruling 5): pack `contribution`, no
     comparability keys, no claims. Absent (None) until declared; left out of the hash."""
+    supplied_links: SuppliedLinksPlan | None = None
+    """Who may supply links (slice 4a). Absent (None) until declared; left out of the hash."""
     rationale: str = ""
 
 
@@ -271,6 +300,7 @@ AMENDABLE_FIELDS = (
     "extraction_schema",
     "snowball_plan",
     "contribution_schema",
+    "supplied_links",
 )
 """Top-level hashed fields other than criteria, which an amendment reports as `other_changes`."""
 

@@ -42,6 +42,7 @@ from factory.model.protocol import (
     ProtocolStatus,
     ScreeningStage,
     StaleRule,
+    SubmitterKind,
     protocol_version,
     search_strategy_hash,
 )
@@ -564,6 +565,7 @@ def search_authorization(
     deviation_id: str | None,
     pending_round_texts: Collection[str] = (),
     round_id: str | None = None,
+    supplied_by: SubmitterKind | None = None,
 ) -> list[ValidationIssue]:
     """Why a query may not run under the protocol. Empty when it may, or when it is not gated.
 
@@ -578,6 +580,11 @@ def search_authorization(
     `pending_round_texts`, the texts of a round about to be written, when a recorded
     `search_chase` round registered it, or when `round_id` names the recorded snowball round
     whose texts include it (a snowball text is waived only for a query naming its round).
+
+    A `supplied` lookup is planned when `supplied_by`, the kind of actor that captured the link,
+    is in the protocol's `supplied_links.accept_from` (slice 4a, ruling 7). Without the section,
+    or with `supplied_by` unset, it needs a deviation. `supplied_by` waives nothing for any other
+    purpose, and no waiver lifts the readiness, question or PRESS checks.
     """
     if spec.purpose is QueryPurpose.PROBE or _rigor_mode(project) not in _RIGOR_MODES_GATED:
         return []
@@ -610,11 +617,25 @@ def search_authorization(
         not planned
         and deviation_id is None
         and not _chase_round_waives(project, spec, pending_round_texts, round_id)
+        and not _supplied_waives(current.spec, spec, supplied_by)
     ):
         issues.append(
             ValidationIssue("query", "not planned by the current protocol; record a deviation")
         )
     return issues
+
+
+def _supplied_waives(
+    protocol: ProtocolSpec, spec: QuerySpec, supplied_by: SubmitterKind | None
+) -> bool:
+    """Whether the protocol's `supplied_links` section plans this supplied lookup."""
+    plan = protocol.supplied_links
+    return (
+        spec.purpose is QueryPurpose.SUPPLIED
+        and supplied_by is not None
+        and plan is not None
+        and supplied_by in plan.accept_from
+    )
 
 
 def registered_deviation(project: Project, query_id: str) -> str | None:
