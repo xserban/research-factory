@@ -573,28 +573,11 @@ def seed_check(project: Project) -> list[SeedCheck]:
     reason, admitted or not), or missing. A seed is retrieved when a corpus work shares its work
     id, the work its admission found, its DOI, or its arXiv id (a DataCite arXiv DOI counts as its
     arXiv id on either side)."""
-    seeds = _load_seeds(project)
-    roles = _roles(seeds, _split(project))
-    corpus = list_works(project)
-    by_id = {work.id: work for work in corpus}
+    by_id = {work.id: work for work in list_works(project)}
     groups = _merge_groups(project)
     explained = _explained_ids(project)
-    admitted = _admitted(project)
-    by_doi: dict[str, str] = {}
-    by_arxiv: dict[str, str] = {}
-    for work in corpus:
-        if work.identifiers.doi:
-            by_doi.setdefault(work.identifiers.doi, work.id)
-        arxiv = _work_arxiv(work)
-        if arxiv:
-            by_arxiv.setdefault(arxiv, work.id)
-    position = {work.id: n for n, work in enumerate(corpus)}
     checks: list[SeedCheck] = []
-    for seed in seeds:
-        if seed.spec.kind is not SeedKind.POSITIVE:
-            continue
-        found = seed.work_id if seed.work_id is not None else admitted.get(seed.seed_id)
-        matched = _matching_work(seed.spec.identity_keys(), found, by_doi, by_arxiv, position)
+    for seed, role, matched in _positive_matches(project):
         if matched is not None:
             status: Literal["retrieved", "explained", "missing"] = "retrieved"
         elif seed.seed_id in explained:
@@ -604,7 +587,7 @@ def seed_check(project: Project) -> list[SeedCheck]:
         checks.append(
             SeedCheck(
                 seed_id=seed.seed_id,
-                role=roles[seed.seed_id],
+                role=role,
                 status=status,
                 matched_work=matched,
                 found_by_search=matched is not None
@@ -616,6 +599,51 @@ def seed_check(project: Project) -> list[SeedCheck]:
             )
         )
     return checks
+
+
+def _positive_matches(project: Project) -> list[tuple[_Seed, SeedRole, str | None]]:
+    """Each positive seed with its role and the corpus work it resolves to (by the work its lookup
+    or admission found, its DOI or its arXiv id), or None. The one place seeds are matched."""
+    seeds = _load_seeds(project)
+    roles = _roles(seeds, _split(project))
+    corpus = list_works(project)
+    admitted = _admitted(project)
+    by_doi: dict[str, str] = {}
+    by_arxiv: dict[str, str] = {}
+    for work in corpus:
+        if work.identifiers.doi:
+            by_doi.setdefault(work.identifiers.doi, work.id)
+        arxiv = _work_arxiv(work)
+        if arxiv:
+            by_arxiv.setdefault(arxiv, work.id)
+    position = {work.id: n for n, work in enumerate(corpus)}
+    out: list[tuple[_Seed, SeedRole, str | None]] = []
+    for seed in seeds:
+        if seed.spec.kind is not SeedKind.POSITIVE:
+            continue
+        found = seed.work_id if seed.work_id is not None else admitted.get(seed.seed_id)
+        matched = _matching_work(seed.spec.identity_keys(), found, by_doi, by_arxiv, position)
+        out.append((seed, roles[seed.seed_id], matched))
+    return out
+
+
+def merge_closure(project: Project, work_ids: frozenset[str]) -> frozenset[str]:
+    """`work_ids` plus every member of an active merge group that holds one of them, whether or
+    not the group's primary is in the corpus."""
+    groups = _merge_groups(project)
+    closed = set(work_ids)
+    for wid in work_ids:
+        closed.update(groups.get(wid, ()))
+    return frozenset(closed)
+
+
+def held_out_work_ids(project: Project) -> frozenset[str]:
+    """Every corpus work a held-out seed resolves to, with its merge group: what an agent-facing
+    output must not show (R-20)."""
+    matched = frozenset(
+        work for _, role, work in _positive_matches(project) if role is SeedRole.HELD_OUT and work
+    )
+    return merge_closure(project, matched)
 
 
 def _searched(provenance: Sequence[Provenance]) -> bool:

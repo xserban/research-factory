@@ -29,7 +29,7 @@ from factory.services.dedup import active_merges
 from factory.services.dedup_cascade import merge_works
 from factory.services.prisma import has_full_text_plan, prisma_flow
 from factory.services.search import load_works
-from factory.services.seeds import SeedRole, all_seeds
+from factory.services.seeds import held_out_work_ids
 
 BibScope = Literal["included", "corpus"]
 BibFormat = Literal["bibtex", "csl"]
@@ -52,15 +52,6 @@ def _corpus_ids(project: Project) -> list[str]:
             {"probe": QueryPurpose.PROBE.value},
         ).all()
     return [str(row[0]) for row in rows]
-
-
-def held_out_work_ids(project: Project) -> frozenset[str]:
-    """Work ids matched to held-out seeds: what an agent-facing export must not show (R-20)."""
-    return frozenset(
-        seed.work_id
-        for seed in all_seeds(project)
-        if seed.role is SeedRole.HELD_OUT and seed.work_id
-    )
 
 
 def _canonical_ids(project: Project, exclude: frozenset[str] = frozenset()) -> list[str]:
