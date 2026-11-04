@@ -25,12 +25,13 @@ class QueryKind(StrEnum):
 
 
 class QueryPurpose(StrEnum):
-    """Why a query is being run: a feasibility probe, a search, a citation chase, or a seed."""
+    """Why a query is being run: a probe, a search, a citation chase, a seed or a supplied link."""
 
     PROBE = "probe"
     SEARCH = "search"
     CHASE = "chase"
     SEED = "seed"
+    SUPPLIED = "supplied"
 
 
 class RunStatus(StrEnum):

@@ -203,7 +203,7 @@ def test_enum_values_are_lowercase_strings() -> None:
     assert QueryKind.KEYWORD.value == "keyword"
     assert QueryKind.FILTER.value == "filter"
     assert QueryKind.ID_LIST.value == "id_list"
-    assert {p.value for p in QueryPurpose} == {"probe", "search", "chase", "seed"}
+    assert {p.value for p in QueryPurpose} == {"probe", "search", "chase", "seed", "supplied"}
     assert {s.value for s in RunStatus} == {
         "running",
         "complete",

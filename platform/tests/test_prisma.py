@@ -24,7 +24,7 @@ from factory.services.chase import search_chase
 from factory.services.context import Project
 from factory.services.dedup import active_merges, dedup_run, revert_merge
 from factory.services.methods import methods_report, render_methods
-from factory.services.prisma import PrismaFlow, prisma_flow, search_report
+from factory.services.prisma import OTHER_METHODS, PrismaFlow, prisma_flow, search_report
 from factory.services.probe import run_probe
 from factory.services.protocol import (
     amend_protocol,
@@ -81,7 +81,12 @@ def test_prisma_identities_hold(
     # Nine search records (six positives, three negatives); probe lookups of the same works
     # are not records (see test_probe_runs_never_counted).
     assert flow.identified_databases == {"openalex": 9}
-    assert flow.identified_other == {"citation-chase": 0, "seed-admission": 0, "hand-search": 0}
+    assert flow.identified_other == {
+        "citation-chase": 0,
+        "seed-admission": 0,
+        "hand-search": 0,
+        "supplied": 0,
+    }
     assert (flow.duplicates_removed, flow.screened) == (0, 9)
     assert (flow.included, flow.excluded, flow.pending) == (9, {}, 0)
     assert flow.provisional is False
@@ -428,7 +433,12 @@ def test_seed_admission_counts_under_its_method(
     flow = prisma_flow(project)
 
     _assert_identities(flow)
-    assert flow.identified_other == {"citation-chase": 0, "seed-admission": 1, "hand-search": 0}
+    assert flow.identified_other == {
+        "citation-chase": 0,
+        "seed-admission": 1,
+        "hand-search": 0,
+        "supplied": 0,
+    }
     assert flow.identified_databases == {"openalex": 9}
     assert (flow.duplicates_removed, flow.screened, flow.included) == (0, 10, 10)
 
@@ -449,7 +459,12 @@ def test_hand_search_counts_under_its_method(
     flow = prisma_flow(project)
 
     _assert_identities(flow)
-    assert flow.identified_other == {"citation-chase": 0, "seed-admission": 0, "hand-search": 1}
+    assert flow.identified_other == {
+        "citation-chase": 0,
+        "seed-admission": 0,
+        "hand-search": 1,
+        "supplied": 0,
+    }
     assert flow.identified_databases == {"openalex": 9}
     assert (flow.duplicates_removed, flow.screened, flow.included) == (0, 10, 10)
 
@@ -481,7 +496,12 @@ def test_chase_outranks_seed_admission(
     _assert_identities(flow)
     # The admitted work counts once, under citation-chase (precedence over seed-admission); the
     # newly cited work is the other chase entry.
-    assert flow.identified_other == {"citation-chase": 2, "seed-admission": 0, "hand-search": 0}
+    assert flow.identified_other == {
+        "citation-chase": 2,
+        "seed-admission": 0,
+        "hand-search": 0,
+        "supplied": 0,
+    }
     assert (flow.duplicates_removed, flow.screened) == (0, 11)
     assert (flow.pending, flow.included) == (1, 10)
 
@@ -503,3 +523,69 @@ def test_excluded_total_is_the_sum_of_the_breakdown_and_not_serialised() -> None
 
     assert flow.excluded_total == 3
     assert "excluded_total" not in flow.model_dump()
+
+
+def _supply(project: Project, human: Actor, mock_sources: SourcesFor, item: dict[str, Any]) -> None:
+    """Resolve one supplied link as a recorded `supplied`-purpose lookup under a deviation."""
+    deviation = record_deviation(project, human, description="Supplied link", reason="Colleague.")
+    sources = mock_sources(openalex=[item])
+    query = QuerySpec(
+        source="openalex",
+        kind=QueryKind.FILTER,
+        text=f"doi:{item['doi']}",
+        purpose=QueryPurpose.SUPPLIED,
+    )
+    query_id = register_query(project, human, query, sources=sources, deviation_id=deviation)
+    run_query(project, query_id, sources=sources)
+
+
+def test_supplied_counts_under_its_method(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    protocol_id = _corpus(project, agent, human, mock_sources)
+    supplied = openalex_item(
+        title="A supplied paper",
+        author="Cy Park",
+        published="2021-01-01",
+        openalex_id="W8001",
+        doi="10.1000/supplied",
+    )
+    _supply(project, human, mock_sources, supplied)
+    _settle(project, agent, human, protocol_id)
+
+    flow = prisma_flow(project)
+
+    _assert_identities(flow)
+    assert flow.identified_other["supplied"] == 1
+    assert sum(flow.identified_other.values()) == 1
+    assert flow.identified_databases == {"openalex": 9}
+    assert (flow.duplicates_removed, flow.screened, flow.included) == (0, 10, 10)
+
+
+def test_supplied_ranks_last_among_other_methods() -> None:
+    assert OTHER_METHODS[-1] is ProvenanceMethod.SUPPLIED
+
+
+def test_prisma_supplied_and_database_counts_database(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    protocol_id = _corpus(project, agent, human, mock_sources)
+    [first] = [w for w in list_works(project) if w.id == _ordinary(project)[0]]
+    again = openalex_item(
+        title=first.title,
+        author="Ada Zhou",
+        published="2020-01-01",
+        openalex_id="W8002",
+        doi=first.identifiers.doi,
+    )
+    _supply(project, human, mock_sources, again)
+    dedup_run(project)
+    _settle(project, agent, human, protocol_id)
+
+    flow = prisma_flow(project)
+
+    _assert_identities(flow)
+    assert flow.identified_other["supplied"] == 0
+    assert flow.identified_databases == {"openalex": 9}
+    methods = {p.method for w in list_works(project) for p in w.provenance}
+    assert ProvenanceMethod.SUPPLIED in methods

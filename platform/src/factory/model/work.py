@@ -62,6 +62,7 @@ class ProvenanceMethod(StrEnum):
     CITATION_CHASE = "citation-chase"
     SEED_ADMISSION = "seed-admission"
     HAND_SEARCH = "hand-search"
+    SUPPLIED = "supplied"
 
 
 class Identifiers(_WorkModel):

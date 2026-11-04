@@ -53,6 +53,7 @@ OTHER_METHODS: tuple[ProvenanceMethod, ...] = (
     ProvenanceMethod.CITATION_CHASE,
     ProvenanceMethod.SEED_ADMISSION,
     ProvenanceMethod.HAND_SEARCH,
+    ProvenanceMethod.SUPPLIED,
 )
 """Non-database methods in precedence order: a work counts under the first one it carries."""
 

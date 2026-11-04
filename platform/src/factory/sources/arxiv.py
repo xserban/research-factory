@@ -46,6 +46,7 @@ _PAGE_SIZE = 100
 _METHODS: dict[QueryPurpose, ProvenanceMethod] = {
     QueryPurpose.CHASE: ProvenanceMethod.CITATION_CHASE,
     QueryPurpose.SEED: ProvenanceMethod.SEED_ADMISSION,
+    QueryPurpose.SUPPLIED: ProvenanceMethod.SUPPLIED,
 }
 
 _SKIPPED = "records skipped (untitled or duplicate within run)"
