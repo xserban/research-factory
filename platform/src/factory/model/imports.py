@@ -51,3 +51,23 @@ class ImportRecorded(StrictModel):
         if self.attachments_missing > self.attachments:
             raise ValueError("more attachments missing than recorded")
         return self
+
+
+class ImportSplitDrawn(StrictModel):
+    """The development/held-out split of an import, or why there is none.
+
+    `drawn` carries the random seed and the parts blob (`{"development": [...], "held_out":
+    [...]}`, ordinals); `post-search` and `declined` carry neither.
+    """
+
+    import_id: str = Field(pattern=IMPORT_ID_RE)
+    mode: SplitMode
+    random_seed: int | None = Field(default=None, ge=0, lt=2**32)
+    parts_blob: str | None = Field(default=None, pattern=BLOB_REF_RE)
+
+    @model_validator(mode="after")
+    def _shape(self) -> Self:
+        drawn = self.mode == "drawn"
+        if drawn != (self.random_seed is not None) or drawn != (self.parts_blob is not None):
+            raise ValueError("a drawn split, and only a drawn split, has a seed and parts")
+        return self

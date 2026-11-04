@@ -16,7 +16,7 @@ from factory.model.extraction import (
     ExtractionResolved,
 )
 from factory.model.fulltext import Attempted, DocumentAdded, FetchStarted, SourceChanged
-from factory.model.imports import ImportRecorded
+from factory.model.imports import ImportRecorded, ImportSplitDrawn
 from factory.model.inbox import InboxLinkAdded, InboxLinkResolved, InboxLinkWithdrawn
 from factory.model.probe import ProbeFailed, ProbeMeasured, ProbePageArchived
 from factory.model.project import ProjectCreated
@@ -155,6 +155,7 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("reference.resolution_decided", ReferenceResolutionDecided, 1))
     catalog.register(EventType("snowball.round_started", SnowballRoundStarted, 1))
     catalog.register(EventType("import.recorded", ImportRecorded, 1))
+    catalog.register(EventType("import.split_drawn", ImportSplitDrawn, 1))
     catalog.register(EventType("inbox.link_added", InboxLinkAdded, 1))
     catalog.register(EventType("inbox.link_withdrawn", InboxLinkWithdrawn, 1))
     catalog.register(EventType("inbox.link_resolved", InboxLinkResolved, 1))
