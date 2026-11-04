@@ -133,6 +133,27 @@ factory check [--promote-to systematic]
 ```
 `report prisma` gives the PRISMA 2020 flow with full-text boxes (sought, not retrieved, assessed, excluded by reason). `report methods` states the automation, figures and the full-text plan. `trace` follows a decision, work, query or seed back to the question (`--forward` for what was derived from it). `check --promote-to <mode>` lists what the record lacks for a higher mode; the exit code is 1 when any finding is an error.
 
+### Step 15. Extraction passes, agreement, resolution and audit [A/H]
+Declare the extraction schema by `protocol_amend` (pack `ml-benchmark`, fields, comparability keys), then in **two new sessions with different models** run pass A and pass B: `extract_next(pass_label=...)`, `document_read`, `extract_record(task_id, rows=[...], claims=[...], finish=True)` (claims in pass A only). Then, as the researcher:
+```
+factory extract status
+factory extract agreement
+factory extract resolve <work> <row_key> --choice a|b|neither --reason "..." [--field F]
+factory extract audit-sample
+factory extract audit-label <audit_id> <work> <row_key> <field> --correct|--incorrect
+factory extract audit-report
+```
+The human chooses between the two verified values and never types one. `extract_agreement` and `extract_audit_*` are the MCP equivalents; the audit rate is withheld from agent views.
+
+### Step 16. Evidence report [H]
+```
+factory report evidence --expect task="image classification",dataset=imagenet-1k
+factory report evidence --format json|csv-points|csv-rows [--output FILE]
+factory check
+factory trace <row_key>/value
+```
+The report groups final rows by identical comparability keys and never ranks across groups. Each frontier point, cell and claim carries a trace id; `factory trace rk_<12hex>/value` follows a cell to the question through the extraction, anchor, conversion, document, retrieval attempt and work. `--expect` names a group the review must contain; an empty one is stated as `expectation-empty`. Speed appears only as within-paper ratios.
+
 ## 3. Checklist: does the machinery behave?
 
 Counts that must add up (`factory report prisma`, `factory status`):
@@ -141,6 +162,13 @@ Counts that must add up (`factory report prisma`, `factory status`):
 - Full-text excluded counts per criterion sum to the excluded total; each exclusion names an `EX` criterion.
 - `fulltext status` and `document status` agree on how many promoted works have a live document and a conversion.
 - Kappa and disagreement counts at each stage are computed, never typed; `screen disagreements` lists exactly the works where passes differ.
+
+Evidence report (steps 15 and 16), on the real run:
+- Acceptance 12: no table or statement orders groups; each group lists its independent and copied counts; the ImageNet-1K classification group (top-1, 224, no pretraining) is populated from at least three works; an expected group with no rows is stated; single-paper groups are stated as such.
+- Acceptance 12a: frontier axes are only `params`, `flops` and `macs`; throughput and latency appear only in the within-paper section, each with hardware and batch size, and unpaired rows are counted with a reason.
+- Acceptance 14: `factory trace` of three frontier points (`<row_key>/value`), one cost cell (`<row_key>/params`) and one claim (`clm_...`) reaches the question; open each cited anchor in `factory document read` and compare it with the paper.
+- Conversion quality (acceptance 16, decision 47): compare the included works' conversion results (`factory document status`) with `experiments/converter-bakeoff/results/` and note any work whose tables were converted worse than the bake-off showed.
+- Reproducibility: save `report evidence --format json`, run `factory rebuild`, move `library/` aside, and confirm the same output.
 
 Files and git:
 - `git status` after the run must show changes only under `projects/<slug>/events/` and `projects/<slug>/blobs/` (text). Nothing under `library/`, `.index/` or `*.pdf` blobs. Verify with `git check-ignore -v projects/<slug>/library projects/<slug>/.index`.
