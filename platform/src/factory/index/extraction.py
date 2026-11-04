@@ -21,6 +21,7 @@ from sqlalchemy.engine import Connection
 from factory.events.envelope import Event
 from factory.index.projection import Handler
 from factory.model.extraction import (
+    CONTRIBUTION_SCOPE_NAME,
     WHOLE_ROW_MARKER,
     ClaimRecorded,
     ExtractionAuditLabelled,
@@ -30,6 +31,9 @@ from factory.model.extraction import (
     ExtractionPassOpened,
     ExtractionRecorded,
     ExtractionResolved,
+    Scope,
+    scope_of_pack,
+    scope_of_schema_ref,
 )
 
 WHOLE_ROW = WHOLE_ROW_MARKER
@@ -53,6 +57,7 @@ def extraction_tables(metadata: MetaData) -> ExtractionTables:
     passes = Table(
         "extraction_passes",
         metadata,
+        Column("scope", String, primary_key=True),
         Column("pass_label", String, primary_key=True),
         Column("random_seed", Integer, nullable=False),
         Column("field_order", String, nullable=False),
@@ -62,6 +67,7 @@ def extraction_tables(metadata: MetaData) -> ExtractionTables:
         "extraction_sessions",
         metadata,
         Column("session", String, primary_key=True),
+        Column("scope", String, nullable=False, server_default="evidence"),
         Column("pass_label", String, nullable=False),
         Column("model", String, nullable=False),
     )
@@ -69,6 +75,11 @@ def extraction_tables(metadata: MetaData) -> ExtractionTables:
         "extraction_rows",
         metadata,
         Column("extraction_id", String, primary_key=True),
+        Column("scope", String, nullable=False, server_default="evidence"),
+        Column("pack", String),
+        Column("cited_extraction_id", String),
+        Column("cited_ordinal", Integer),
+        Column("cited_marker", String),
         Column("work_id", String, nullable=False),
         Column("pass_label", String, nullable=False),
         Column("task_id", String, nullable=False),
@@ -81,6 +92,7 @@ def extraction_tables(metadata: MetaData) -> ExtractionTables:
         Column("superseded_by", String),
         Column("event_id", String, nullable=False),
         Index("ix_extraction_rows_row_key", "row_key"),
+        Index("ix_extraction_rows_pack", "pack"),
         Index("ix_extraction_rows_work_pass", "work_id", "pass_label"),
     )
     fields = Table(
@@ -124,6 +136,7 @@ def extraction_tables(metadata: MetaData) -> ExtractionTables:
         "extraction_closures",
         metadata,
         Column("task_id", String, primary_key=True),
+        Column("scope", String, nullable=False, server_default="evidence"),
         Column("work_id", String, nullable=False),
         Column("pass_label", String, nullable=False),
         Column("rows", Integer, nullable=False),
@@ -134,6 +147,7 @@ def extraction_tables(metadata: MetaData) -> ExtractionTables:
     resolutions = Table(
         "extraction_resolutions",
         metadata,
+        Column("scope", String, primary_key=True),
         Column("work_id", String, primary_key=True),
         Column("row_key", String, primary_key=True),
         Column("field", String, primary_key=True),
@@ -145,6 +159,7 @@ def extraction_tables(metadata: MetaData) -> ExtractionTables:
         "extraction_audits",
         metadata,
         Column("audit_id", String, primary_key=True),
+        Column("scope", String, nullable=False, server_default="evidence"),
         Column("random_seed", Integer, nullable=False),
         Column("population", Integer, nullable=False),
         Column("population_digest", String, nullable=False),
@@ -158,6 +173,7 @@ def extraction_tables(metadata: MetaData) -> ExtractionTables:
         Column("work_id", String, primary_key=True),
         Column("row_key", String, primary_key=True),
         Column("field", String, primary_key=True),
+        Column("scope", String, nullable=False, server_default="evidence"),
         Column("correct", Boolean),
         Column("note", String, nullable=False, server_default=""),
     )
@@ -193,12 +209,13 @@ def _pass_opened(t: ExtractionTables) -> Handler:
         conn.execute(
             sqlite_insert(t.passes)
             .values(
+                scope=scope_of_pack(payload.pack).value,
                 pass_label=payload.pass_label.value,
                 random_seed=payload.random_seed,
                 field_order=payload.field_order,
                 event_id=event.id,
             )
-            .on_conflict_do_nothing(index_elements=["pass_label"])
+            .on_conflict_do_nothing(index_elements=["scope", "pass_label"])
         )
 
     return pass_opened
@@ -211,6 +228,7 @@ def _pass_joined(t: ExtractionTables) -> Handler:
             sqlite_insert(t.sessions)
             .values(
                 session=payload.session,
+                scope=scope_of_pack(payload.pack).value,
                 pass_label=payload.pass_label.value,
                 model=payload.model,
             )
@@ -223,10 +241,17 @@ def _pass_joined(t: ExtractionTables) -> Handler:
 def _recorded(t: ExtractionTables) -> Handler:
     def recorded(conn: Connection, event: Event) -> None:
         payload = ExtractionRecorded.model_validate(event.payload)
+        cited = payload.cited
+        scope = scope_of_schema_ref(payload.schema_ref)
         inserted = conn.execute(
             sqlite_insert(t.rows)
             .values(
                 extraction_id=payload.extraction_id,
+                scope=scope.value,
+                pack=CONTRIBUTION_SCOPE_NAME if scope is Scope.CONTRIBUTION else None,
+                cited_extraction_id=cited.reference_extraction_id if cited else None,
+                cited_ordinal=cited.ordinal if cited else None,
+                cited_marker=cited.marker if cited else None,
                 work_id=payload.work_id,
                 pass_label=payload.pass_label.value,
                 task_id=payload.task_id,
@@ -316,6 +341,7 @@ def _closed(t: ExtractionTables) -> Handler:
             sqlite_insert(t.closures)
             .values(
                 task_id=payload.task_id,
+                scope=scope_of_pack(payload.pack).value,
                 work_id=payload.work_id,
                 pass_label=payload.pass_label.value,
                 rows=payload.rows,
@@ -333,6 +359,7 @@ def _resolved(t: ExtractionTables) -> Handler:
     def resolved(conn: Connection, event: Event) -> None:
         payload = ExtractionResolved.model_validate(event.payload)
         values = {
+            "scope": scope_of_pack(payload.pack).value,
             "work_id": payload.work_id,
             "row_key": payload.row_key,
             "field": WHOLE_ROW if payload.field is None else payload.field,
@@ -343,7 +370,9 @@ def _resolved(t: ExtractionTables) -> Handler:
         conn.execute(
             sqlite_insert(t.resolutions)
             .values(**values)
-            .on_conflict_do_update(index_elements=["work_id", "row_key", "field"], set_=values)
+            .on_conflict_do_update(
+                index_elements=["scope", "work_id", "row_key", "field"], set_=values
+            )
         )
 
     return resolved
@@ -356,6 +385,7 @@ def _audit_sampled(t: ExtractionTables) -> Handler:
             sqlite_insert(t.audits)
             .values(
                 audit_id=payload.audit_id,
+                scope=scope_of_pack(payload.pack).value,
                 random_seed=payload.random_seed,
                 population=payload.population,
                 population_digest=payload.population_digest,
@@ -371,6 +401,7 @@ def _audit_sampled(t: ExtractionTables) -> Handler:
                 sqlite_insert(t.audit_items)
                 .values(
                     audit_id=payload.audit_id,
+                    scope=scope_of_pack(payload.pack).value,
                     work_id=item.work_id,
                     row_key=item.row_key,
                     field=item.field,

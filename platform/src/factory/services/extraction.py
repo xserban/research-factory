@@ -70,6 +70,7 @@ from factory.model.extraction import (
     ReportedIn,
     StoredField,
     Strength,
+    UnitReferences,
 )
 from factory.model.protocol import ExtractionSchema, ProtocolAmended, ProtocolStatus, ScreeningStage
 from factory.model.screening import Channel, PassLabel
@@ -148,6 +149,15 @@ class ExtractBatchContent(StrictModel):
     required: list[str]
     claims: bool
     records: list[dict[str, str]]
+
+
+class ContributionBatchContent(ExtractBatchContent):
+    """Content of a contribution task: the batch plus the unit's reference list and the pack's
+    conditional rules as fixed sentences. Lives here, not in `model`, because it extends
+    `ExtractBatchContent`."""
+
+    references: UnitReferences
+    item_rules: list[str]
 
 
 class ExtractBatch(ExtractBatchContent):

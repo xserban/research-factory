@@ -23,6 +23,7 @@ from factory.model.base import StrictModel
 from factory.model.fulltext import DOCUMENT_ID_RE
 from factory.model.identity import CONVERSION_ID_RE, ULID_RE
 from factory.model.protocol import PROTOCOL_ID_RE
+from factory.model.references import REX_ID_RE
 from factory.model.screening import (
     CELL_ANCHOR_RE,
     Anchor,
@@ -42,6 +43,27 @@ VERIFIER_VERSION = 1
 """Version of the verification rules (ruling 6) a row was checked under."""
 CLAIM_STATEMENT_MAX = 600
 """Upper bound on a claim's statement: it is the agent's paraphrase, not literature text."""
+
+
+CONTRIBUTION_SCOPE_NAME = "contribution"
+"""The pack name (and schema name) of the contribution scope; any other pack is evidence."""
+
+
+class Scope(StrEnum):
+    """Which family of rows an extraction event belongs to. Absent `pack` means evidence."""
+
+    EVIDENCE = "evidence"
+    CONTRIBUTION = "contribution"
+
+
+def scope_of_pack(pack: str | None) -> Scope:
+    """Scope of an event's optional `pack`: events written before G2 have none (evidence)."""
+    return Scope.CONTRIBUTION if pack == CONTRIBUTION_SCOPE_NAME else Scope.EVIDENCE
+
+
+def scope_of_schema_ref(ref: str) -> Scope:
+    """Scope of a `<name>@<version>` schema reference."""
+    return scope_of_pack(ref.split("@", 1)[0])
 
 
 class ReportedIn(StrEnum):
@@ -139,12 +161,47 @@ class ExtractionPassOpened(StrictModel):
     pass_label: PassLabel
     random_seed: int
     field_order: Literal["schema", "reversed"]
+    pack: str | None = None
 
 
 class ExtractionPassJoined(StrictModel):
     pass_label: PassLabel
     session: str = Field(min_length=1)
     model: str = Field(min_length=1)
+    pack: str | None = None
+
+
+MarkerCheck = Literal["matched", "mismatch", "absent"]
+"""Whether a cited reference entry's marker was found where the contribution quote cites it."""
+
+
+class CitedEntry(StrictModel):
+    """The reference-list entry (plan G1) a contribution item names as its predecessor."""
+
+    reference_extraction_id: str = Field(pattern=REX_ID_RE)
+    ordinal: int = Field(ge=1)
+    marker: MarkerCheck
+
+
+class EntryBrief(StrictModel):
+    """One entry of a unit's reference list as shown to the agent."""
+
+    ordinal: int
+    anchor: str
+    label: str | None
+    title: str | None
+    first_author: str | None
+    year: int | None
+    doi: str | None
+    arxiv: str | None
+
+
+class UnitReferences(StrictModel):
+    """The reference list attached to a contribution unit; `entries` is empty unless current."""
+
+    status: Literal["current", "none", "other-conversion"]
+    extraction_id: str | None
+    entries: list[EntryBrief]
 
 
 class ExtractionRecorded(StrictModel):
@@ -160,6 +217,7 @@ class ExtractionRecorded(StrictModel):
     fields: dict[FieldName, StoredField] = Field(min_length=1)
     supersedes: str | None
     verifier: int = Field(ge=1)
+    cited: CitedEntry | None = None
 
 
 class ClaimRecorded(StrictModel):
@@ -186,6 +244,7 @@ class ExtractionClosed(StrictModel):
     rows: int = Field(ge=0)
     claims: int = Field(ge=0)
     reason: str | None
+    pack: str | None = None
 
 
 class ExtractionResolved(StrictModel):
@@ -198,6 +257,7 @@ class ExtractionResolved(StrictModel):
     reason: NonBlank
     channel: Channel
     protocol_id: str = Field(pattern=PROTOCOL_ID_RE)
+    pack: str | None = None
 
 
 class AuditItemRef(StrictModel):
@@ -213,6 +273,7 @@ class ExtractionAuditSampled(StrictModel):
     population: int = Field(ge=0)
     population_digest: str = Field(min_length=1)
     protocol_id: str = Field(pattern=PROTOCOL_ID_RE)
+    pack: str | None = None
 
 
 class ExtractionAuditLabelled(StrictModel):
@@ -223,3 +284,4 @@ class ExtractionAuditLabelled(StrictModel):
     correct: bool
     note: str = ""
     channel: Channel
+    pack: str | None = None
