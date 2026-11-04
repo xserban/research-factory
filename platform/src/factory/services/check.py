@@ -461,10 +461,12 @@ def _seeds(project: Project) -> list[_Hit]:
     pending: dict[str, list[str]] = {}
     for check in seed_check(project):
         key = _ROLE_KEYS[check.role]
-        if check.status == "missing":
+        # A seed reached only by a supplied link was not retrieved (slice 4a ruling 9).
+        unexplained = check.status == "supplied" and check.seed_id not in routes
+        if check.status == "missing" or unexplained:
             missing.setdefault(key, []).append(check.seed_id)
         elif (
-            check.status == "explained"
+            check.status in ("explained", "supplied")
             and check.seed_id not in admitted
             and routes.get(check.seed_id) in _ADMISSION_ROUTES
         ):

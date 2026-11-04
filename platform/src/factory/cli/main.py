@@ -499,7 +499,9 @@ def seeds_explain(
             method = ProvenanceMethod(route)
         except ValueError:
             choices = ", ".join(
-                m.value for m in ProvenanceMethod if m is not ProvenanceMethod.DATABASE
+                m.value
+                for m in ProvenanceMethod
+                if m not in (ProvenanceMethod.DATABASE, ProvenanceMethod.SUPPLIED)
             )
             raise FactoryValidationError(
                 [ValidationIssue("route", f"must be one of: {choices}")]

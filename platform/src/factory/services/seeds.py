@@ -41,7 +41,7 @@ from factory.model.seed import (
     SeedSplitDrawn,
     SeedUnresolved,
 )
-from factory.model.work import Provenance, ProvenanceMethod, Work
+from factory.model.work import ProvenanceMethod, Work
 from factory.model.work_ids import arxiv_id_from_doi
 from factory.services.context import Project
 from factory.services.dedup import active_merges
@@ -294,6 +294,9 @@ class SeedRecord(StrictModel):
 
 
 FoundBy = Literal["search", "chase", "snowball", "admission"]
+SeedStatus = Literal["retrieved", "supplied", "explained", "missing"]
+"""`supplied`: the seed's work is in the corpus only through a supplied link, so it counts as
+not retrieved (slice 4a ruling 9)."""
 
 
 class SeedCheck(StrictModel):
@@ -306,7 +309,7 @@ class SeedCheck(StrictModel):
 
     seed_id: str
     role: SeedRole
-    status: Literal["retrieved", "explained", "missing"]
+    status: SeedStatus
     matched_work: str | None
     found_by_search: bool = False
     found_by: FoundBy | None = None
@@ -422,8 +425,10 @@ def explain_seed_miss(
             issues.append(ValidationIssue("seed_id", "not a positive seed"))
         elif seed_id in _explained_ids(project):
             issues.append(ValidationIssue("seed_id", "already explained"))
-        if route is ProvenanceMethod.DATABASE:
-            issues.append(ValidationIssue("route", "an admission route, not the database search"))
+        if route in (ProvenanceMethod.DATABASE, ProvenanceMethod.SUPPLIED):
+            issues.append(
+                ValidationIssue("route", "an admission route, not the database search or a link")
+            )
         if not reason.strip():
             issues.append(ValidationIssue("reason", "must not be empty"))
         if issues:
@@ -590,8 +595,21 @@ def seed_check(project: Project) -> list[SeedCheck]:
     snowball_runs = _snowball_runs(project)
     checks: list[SeedCheck] = []
     for seed, role, matched in _positive_matches(project):
-        if matched is not None:
-            status: Literal["retrieved", "explained", "missing"] = "retrieved"
+        methods = (
+            set()
+            if matched is None
+            else {
+                row.method
+                for wid in groups.get(matched, (matched,))
+                if wid in by_id
+                for row in by_id[wid].provenance
+            }
+        )
+        status: SeedStatus
+        if matched is not None and methods == {ProvenanceMethod.SUPPLIED}:
+            status = "supplied"
+        elif matched is not None:
+            status = "retrieved"
         elif seed.seed_id in explained:
             status = "explained"
         else:
@@ -602,12 +620,7 @@ def seed_check(project: Project) -> list[SeedCheck]:
                 role=role,
                 status=status,
                 matched_work=matched,
-                found_by_search=matched is not None
-                and any(
-                    _searched(by_id[wid].provenance)
-                    for wid in groups.get(matched, (matched,))
-                    if wid in by_id
-                ),
+                found_by_search=bool(methods - _NOT_SEARCH),
                 found_by=_found_by(
                     [by_id[wid] for wid in groups.get(matched or "", (matched,)) if wid in by_id]
                     if matched is not None
@@ -664,10 +677,9 @@ def held_out_work_ids(project: Project) -> frozenset[str]:
     return merge_closure(project, matched)
 
 
-def _searched(provenance: Sequence[Provenance]) -> bool:
-    """Whether a work was found by a search: any provenance other than a seed admission. The
-    corpus listing already drops probe-query provenance."""
-    return any(row.method is not ProvenanceMethod.SEED_ADMISSION for row in provenance)
+_NOT_SEARCH = frozenset({ProvenanceMethod.SEED_ADMISSION, ProvenanceMethod.SUPPLIED})
+"""Methods that put a work in the corpus without a search finding it: a human admission and a
+supplied link (slice 4a ruling 9). The corpus listing already drops probe-query provenance."""
 
 
 def _merge_groups(project: Project) -> dict[str, tuple[str, ...]]:
@@ -705,7 +717,7 @@ def _found_by(works: Sequence[Work], snowball_runs: set[str]) -> FoundBy | None:
     if not entries:
         return None
     methods = {entry.method for entry in entries}
-    if methods <= {ProvenanceMethod.SEED_ADMISSION}:
+    if methods <= _NOT_SEARCH:
         return "admission"
     if methods & {ProvenanceMethod.DATABASE, ProvenanceMethod.HAND_SEARCH}:
         return "search"

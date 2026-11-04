@@ -114,4 +114,7 @@ class SeedMissExplained(StrictModel):
     def _route_is_not_the_database(self) -> Self:
         if self.route is ProvenanceMethod.DATABASE:
             raise ValueError("a miss is not explained by the database search itself")
+        if self.route is ProvenanceMethod.SUPPLIED:
+            # A search miss is remedied by admission; a supplied link is not a seed route.
+            raise ValueError("a miss is not explained by a supplied link")
         return self
