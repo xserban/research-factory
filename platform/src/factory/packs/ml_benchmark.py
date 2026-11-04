@@ -6,7 +6,9 @@ Invariants: ``flops`` and ``macs`` are separate COUNT fields; ``value`` and
 
 from __future__ import annotations
 
-from factory.packs.model import Check, FieldDef, FieldKind, Pack, UnitFamily
+from types import MappingProxyType
+
+from factory.packs.model import Check, FieldDef, FieldKind, Pack, ReportSpec, UnitFamily
 
 _COUNT_UNITS = ("K", "M", "G", "T", "B", "")
 _SCORE_UNITS = ("%", "fraction", "")
@@ -88,4 +90,27 @@ ML_BENCHMARK_V1 = Pack(
         "pretraining_data",
     ),
     citation_patterns=CITATION_PATTERNS,
+    report=ReportSpec(
+        value_field="value",
+        direction_field="higher_is_better",
+        metric_directions=MappingProxyType(
+            {
+                "top-1 accuracy": True,
+                "top-5 accuracy": True,
+                "miou": True,
+                "box ap": True,
+                "mask ap": True,
+                "accuracy": True,
+                "perplexity": False,
+                "top-1 error": False,
+                "error rate": False,
+                "fid": False,
+            }
+        ),
+        frontier_costs=("params", "flops", "macs"),
+        speed_fields=MappingProxyType({"throughput": True, "latency": False}),
+        speed_context=("hardware", "batch_size", "precision"),
+        proposed_field="is_proposed",
+        display_costs=("params", "flops", "macs"),
+    ),
 )

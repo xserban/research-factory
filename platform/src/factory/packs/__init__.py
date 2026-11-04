@@ -7,7 +7,7 @@ any change to a pack's content is a new version. No pack logic judges.
 from __future__ import annotations
 
 from factory.packs.ml_benchmark import ML_BENCHMARK_V1
-from factory.packs.model import Check, FieldDef, FieldKind, Pack, UnitFamily
+from factory.packs.model import Check, FieldDef, FieldKind, Pack, ReportSpec, UnitFamily
 
 _PACKS: dict[tuple[str, int], Pack] = {
     (ML_BENCHMARK_V1.name, ML_BENCHMARK_V1.version): ML_BENCHMARK_V1,
@@ -31,6 +31,7 @@ __all__ = [
     "FieldDef",
     "FieldKind",
     "Pack",
+    "ReportSpec",
     "UnitFamily",
     "get_pack",
 ]
