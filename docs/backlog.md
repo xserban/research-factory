@@ -288,8 +288,35 @@ Status: new · Added: 2026-11-04 · Slice: — · Depends on: slice 1 search eve
 **Open questions:** what "first surfaced" means when several routes find a work in one session; whether a researcher-supplied paper that a search also finds counts for both; what a weight would be used for (ordering screening, sensitivity analysis), since inclusion must stay protocol-based.
 
 ### IDEA-36 — Reuse extractions across projects
-Status: new · Added: 2026-11-04 · Slice: — · Depends on: plan 2D (extraction), IDEA-01, IDEA-06
+Status: new (to be folded into IDEA-37 as its shared mining layer) · Added: 2026-11-04 · Slice: — · Depends on: plan 2D (extraction), IDEA-01, IDEA-06
 **What:** a shared, read-only library of finished extractions keyed by work, document version (canonical Markdown hash) and pack version. When a project includes a work that another project has already extracted with the same pack, the project can import those rows instead of extracting them again. The imported rows are re-verified deterministically against the project's own copy of the document (quote-in-cell, units), and the project extracts only the fields its protocol declares that the library does not hold.
 **Why:** the same benchmark papers recur across ML projects. Extracting them again costs agent time and gives no new evidence.
 **Rigour notes:** an import is a recorded event in the importing project, with the source project, the source extraction ids and both pass identities. It is never a silent copy. Imported rows count as reused, not as independent dual extraction, unless the source already had two agreeing passes; methods and the report state how many rows were imported. Rows become stale under the same rules as local rows: a different document version or pack version means no import. Each project's protocol can decline reuse, or require a fresh audit sample on imported rows. Events stay per project; the library is a projection over finished extractions, never a writable store.
 **Open questions:** whether the library is built from events across `projects/` or kept as a separate store; how the protocol's comparability keys interact with rows extracted under another project's keys; whether a correction in the source project propagates as a staleness flag to the projects that imported it.
+
+## Mining abstraction (added 2026-11-04)
+
+The researcher proposed on 2026-11-04 that extraction be treated as *mining*: a set of miners runs over a corpus and reports back, more miners are added over time, their output is the basis for graphs and other views, and agents may author and run miners of their own. The entry records the abstraction so that later slices build towards it; nothing here is built until a slice spec takes it in.
+
+### IDEA-37 — Miners: one abstraction for screening, extraction, references and graph nodes
+Status: new · Added: 2026-11-04 · Slice: — (after the worked example) · Depends on: plans 2C, 2D, 2E, G1, G2, G3; absorbs IDEA-36 and project-declared fields
+**What:** four layers.
+- *Corpus layer.* Works and their canonical documents, shared across projects (documents are already project-independent by content hash).
+- *Mining layer.* A **miner** is a declared, versioned, hashed specification: a *selector* (which works, documents or sections it reads), an *output schema* (typed records whose fields come from a fixed menu of verifiable kinds: number with unit, enum, verbatim quote, citation, anchor reference, work reference), an *evidence rule* (every record anchored to a span and checked by a deterministic verifier), a *procedure* (the skill text the agent follows) and a *quality regime* (number of independent passes, agreement rule, human audit rate). A **run** is agents pulling tasks (`mine_next`) and submitting records (`mine_record`); the platform verifies, records events and never calls a model. A mined record is keyed by (miner id, miner version, document version), so it does not depend on any project.
+- *Builder layer.* Deterministic consumers of mined records: the evidence report and its frontiers, the citation graph, the lineage graph, a contradiction finder (IDEA-07), and so on. A builder declares which miners and versions it reads.
+- *Project layer.* A project's question selects corpus subsets, chooses miners and builders, and states in its protocol which mined records count as evidence.
+
+What is built or planned today maps onto it as four hand-written miners sharing one machinery (task queue, dual pass, agreement, audit sample, span verification, staleness on document or schema change):
+
+| Today | As a miner |
+|---|---|
+| Screening (slice 1, 2C) | work → include/exclude with cited criteria |
+| Extraction (2D, `ML_BENCHMARK_V1` pack) | document → table rows, each value quoted from its cell |
+| References (G1) | document → citation edges, each tied to a bibliography entry |
+| Contributions, concepts (G2, G3) | document → lineage and concept nodes with source spans |
+
+**Agent-authored miners.** Agents running over a corpus may propose and run miners of their own, under these rules: (1) a miner is registered (versioned, hashed) before its first task, as a protocol amendment is, and its schema cannot change after results are seen; (2) its fields use only the verifiable kinds above, so every value stays traceable to source text; (3) its output is *exploratory* until it passes a calibration sample (human-labelled set, declared agreement threshold), and only then may a protocol count it as evidence; the proposer is not the evaluator (R-51); (4) a discarded or failed miner stays recorded (R-52, IDEA-16).
+**Why:** each new kind of question currently needs a new pack or service in code. A miner abstraction lets the corpus be organised for many scientific outputs at once, lets mined records be reused across projects (IDEA-36), and gives graphs and reports one uniform input.
+**Rigour notes:** the platform still never calls a model; generality must not cost the specific checks (the number tokenizer, unit agreement, quote-in-cell, citation markers survive as field kinds and verifiers, not as free text); imported or reused records are labelled as such and do not count as independent passes unless their source had them; evidence status is a protocol decision, never a default.
+**Open questions:** whether screening fits the same record model or stays a special case (its PRISMA accounting is stricter); how a miner's selector names document sections stably across converter versions; where the shared mining store lives (a projection across `projects/` or its own event log); how builders handle records from several versions of one miner; cost control for agent-authored miners run over a whole corpus.
+**Plan:** generalise only after the worked example, from the four concrete miners (rule of three), via brainstorming on the existing specs into a slice spec.
