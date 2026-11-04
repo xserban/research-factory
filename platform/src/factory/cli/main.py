@@ -954,12 +954,21 @@ def screen_resolve(
 
 
 @audit_app.command("sample")
-def audit_sample_cmd(ctx: typer.Context, stage: StageOption = StageChoice.TITLE_ABSTRACT) -> None:
+def audit_sample_cmd(
+    ctx: typer.Context,
+    stage: StageOption = StageChoice.TITLE_ABSTRACT,
+    top_up: Annotated[
+        bool,
+        typer.Option("--top-up", help="Extend the previous audit over works agreed since."),
+    ] = False,
+) -> None:
     """Draw the audit sample of the agreed works; each work with its agreed verdict and title."""
     state = _state(ctx)
     with _reporting_errors():
         project = _resolve_project(state)
-        drawn = audit_service.audit_sample(project, project.human_actor(), stage=_stage(stage))
+        drawn = audit_service.audit_sample(
+            project, project.human_actor(), stage=_stage(stage), top_up=top_up
+        )
         titles = {work.id: work.title for work in list_works(project)}
         agreed = agreement_service.agreed_works(project, stage=_stage(stage))
         found = {

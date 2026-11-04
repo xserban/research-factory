@@ -31,7 +31,8 @@ import secrets
 from typing import Literal
 
 from pydantic import Field, ValidationError
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
+from sqlalchemy.engine import Connection
 
 from factory.canonical import population_digest
 from factory.errors import FactoryValidationError, ValidationIssue
@@ -39,10 +40,11 @@ from factory.events.envelope import Actor
 from factory.model.base import StrictModel
 from factory.model.project import RigorMode
 from factory.model.protocol import ScreeningStage
-from factory.model.screening import AuditLabelled, AuditSampled, Channel
-from factory.services.agreement import agreed_works, screen_agreement
+from factory.model.screening import AuditLabelled, AuditSampled, Channel, ScreeningPhase
+from factory.services.agreement import AgreedWork, agreed_works, screen_agreement
 from factory.services.context import Project
 from factory.services.protocol import current_protocol
+from factory.services.screening import decision_events, live_decisions
 from factory.services.screening_stats import (
     AUDIT_ERROR_CEILING,
     AuditRates,
@@ -81,12 +83,19 @@ def audit_sample(
     *,
     random_seed: int | None = None,
     stage: ScreeningStage = ScreeningStage.TITLE_ABSTRACT,
+    top_up: bool = False,
 ) -> AuditSampled:
     """Draw and record an audit sample of the agreed works of `stage`; return the event payload.
 
     Refused, with nothing written, when the actor is not human, the seed is out of range, the passes
     do not yet agree (see `screen_agreement`), there is no agreed work, or an audit of the current
     agreed set is already open.
+
+    With `top_up` (a living review's update) the sample instead extends the previous audit of the
+    stage: it draws `audit_shortfall` works, 3:1 as always, from the works agreed since that audit
+    was drawn, never one already sampled. Refused (field `top_up`) when the stage has no previous
+    audit, the previous audit has unlabelled items, there is no shortfall, or no work has been
+    agreed since.
     """
     require_pass_stage(stage)
     seed = secrets.randbits(32) if random_seed is None else random_seed
@@ -107,14 +116,20 @@ def audit_sample(
         if not agreed:
             raise _refuse("there are no agreed dual-coded works to audit")
         digest = population_digest((work, item.verdict) for work, item in agreed.items())
-        if _last_population_digest(project, stage) == digest:
+        if not top_up and _last_population_digest(project, stage) == digest:
             raise _refuse("an audit of this agreed set is open; a new one waits for a change to it")
         if protocol is None:  # unreachable once screen_agreement has passed
             raise _refuse("record a protocol first")
         plan = screening_plan(protocol, stage)
-        exclusions = sorted(w for w, item in agreed.items() if item.verdict == "exclude")
-        inclusions = sorted(w for w, item in agreed.items() if item.verdict == "include")
+        pool = agreed
+        previous: str | None = None
         size = audit_size(len(agreed), plan.audit_fraction, plan.audit_minimum)
+        if top_up:
+            previous = _last_audit(project, stage)
+            pool = _newly_agreed(project, stage, agreed, previous)
+            size = _top_up_size(project, stage, size, pool)
+        exclusions = sorted(w for w, item in pool.items() if item.verdict == "exclude")
+        inclusions = sorted(w for w, item in pool.items() if item.verdict == "include")
         drawn = draw_audit(exclusions, inclusions, size, random.Random(seed))
         payload = AuditSampled(
             audit_id=project.ids.new("aud"),
@@ -124,6 +139,7 @@ def audit_sample(
             exclusions=len(set(drawn) & set(exclusions)),
             inclusions=len(set(drawn) & set(inclusions)),
             stage=stage,
+            top_up_of=previous,
         )
         project.record([project.events.make("audit.sampled", payload, actor)])
     return payload
@@ -201,12 +217,14 @@ def audit_report(
         ).one_or_none()
         if latest is None:
             return None
+        # A top-up pools its items with those of every audit it extends.
+        chain = _chain(conn, str(latest[0]))
         items = conn.execute(
             text(
                 "SELECT work_id, agreed_verdict, agreed_criteria, human_verdict FROM audit_items "
-                "WHERE audit_id = :a ORDER BY work_id"
-            ),
-            {"a": str(latest[0])},
+                "WHERE audit_id IN :a ORDER BY work_id"
+            ).bindparams(bindparam("a", expanding=True)),
+            {"a": chain},
         ).all()
     # The population and the cited criteria were fixed when the sample was drawn, so later changes
     # to the agreed set leave the report as it was.
@@ -264,6 +282,121 @@ def audit_outstanding(
         return False
     digest = population_digest((work, item.verdict) for work, item in agreed.items())
     return _last_population_digest(project, stage) != digest
+
+
+def audit_shortfall(
+    project: Project, *, stage: ScreeningStage = ScreeningStage.TITLE_ABSTRACT
+) -> int:
+    """How many works a top-up would draw at `stage`: the audit size now over the agreed set, less
+    the works already sampled in any audit of the stage. 0 when the stage has no audit yet (its
+    first audit is `audit_outstanding`) or nothing is agreed. Computed, never stored."""
+    require_pass_stage(stage)
+    project.index.sync()
+    protocol = current_protocol(project)
+    if protocol is None or not _audit_ids(project, stage):
+        return 0
+    agreed = agreed_works(project, stage=stage)
+    if not agreed:
+        return 0
+    plan = screening_plan(protocol, stage)
+    target = audit_size(len(agreed), plan.audit_fraction, plan.audit_minimum)
+    return max(0, target - len(_sampled_works(project, stage)))
+
+
+# --- Top-up ---
+
+
+def _refuse_top_up(reason: str) -> FactoryValidationError:
+    return FactoryValidationError([ValidationIssue("top_up", reason)])
+
+
+def _last_audit(project: Project, stage: ScreeningStage) -> str:
+    """The latest audit of `stage`, which a top-up extends; refused when it has none or when it
+    still has unlabelled items."""
+    ids = _audit_ids(project, stage)
+    if not ids:
+        raise _refuse_top_up("there is no previous audit of this stage to top up")
+    with project.index.connect() as conn:
+        unlabelled = conn.execute(
+            text("SELECT count(*) FROM audit_items WHERE audit_id = :a AND human_verdict IS NULL"),
+            {"a": ids[-1]},
+        ).scalar_one()
+    if unlabelled:
+        raise _refuse_top_up(f"the previous audit has {unlabelled} unlabelled item(s)")
+    return ids[-1]
+
+
+def _newly_agreed(
+    project: Project,
+    stage: ScreeningStage,
+    agreed: dict[str, AgreedWork],
+    previous: str,
+) -> dict[str, AgreedWork]:
+    """The agreed works whose later live decision was recorded after `previous` was drawn and
+    that no audit of the stage has sampled."""
+    with project.index.connect() as conn:
+        cut = str(
+            conn.execute(
+                text("SELECT event_id FROM audit_events WHERE audit_id = :a"), {"a": previous}
+            ).scalar_one()
+        )
+    events = decision_events(project)
+    latest: dict[str, str] = {}
+    for decision in live_decisions(project, stage=stage):
+        if decision.phase is not ScreeningPhase.SCREENING:
+            continue
+        at = events.get(decision.decision_id, "")
+        latest[decision.work_id] = max(latest.get(decision.work_id, ""), at)
+    sampled = _sampled_works(project, stage)
+    return {
+        work: item
+        for work, item in agreed.items()
+        if latest.get(work, "") > cut and work not in sampled
+    }
+
+
+def _top_up_size(
+    project: Project, stage: ScreeningStage, size_now: int, pool: dict[str, AgreedWork]
+) -> int:
+    shortfall = max(0, size_now - len(_sampled_works(project, stage)))
+    if shortfall == 0:
+        raise _refuse_top_up("the works already sampled meet the audit size")
+    if not pool:
+        raise _refuse_top_up("no work has been agreed since the previous audit")
+    return shortfall
+
+
+def _audit_ids(project: Project, stage: ScreeningStage) -> list[str]:
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text("SELECT audit_id FROM audits WHERE stage = :stage ORDER BY audit_id"),
+            {"stage": stage.value},
+        ).all()
+    return [str(r[0]) for r in rows]
+
+
+def _sampled_works(project: Project, stage: ScreeningStage) -> set[str]:
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT DISTINCT i.work_id FROM audit_items i JOIN audits a"
+                " ON a.audit_id = i.audit_id WHERE a.stage = :stage"
+            ),
+            {"stage": stage.value},
+        ).all()
+    return {str(r[0]) for r in rows}
+
+
+def _chain(conn: Connection, audit_id: str) -> list[str]:
+    """`audit_id` and every audit it tops up, newest first."""
+    chain = [audit_id]
+    while True:
+        row = conn.execute(
+            text("SELECT top_up_of FROM audit_top_ups WHERE audit_id = :a"), {"a": chain[-1]}
+        ).one_or_none()
+        if row is None or str(row[0]) in chain:
+            return chain
+        chain.append(str(row[0]))
 
 
 # --- Reading the audit tables ---

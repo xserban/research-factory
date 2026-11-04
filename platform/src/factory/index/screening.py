@@ -64,6 +64,8 @@ class ScreeningTables:
     audits: Table
     audit_items: Table
     label_sessions: Table
+    audit_top_ups: Table
+    audit_events: Table
 
 
 TITLE_ABSTRACT = ScreeningStage.TITLE_ABSTRACT.value
@@ -174,6 +176,19 @@ def screening_tables(metadata: MetaData) -> ScreeningTables:
         metadata,
         Column("session", String, primary_key=True),
     )
+    audit_top_ups = Table(
+        "audit_top_ups",
+        metadata,
+        Column("audit_id", String, primary_key=True),
+        Column("top_up_of", String, nullable=False),
+    )
+    # The event that recorded each audit: derived from the events table (not part of the hash).
+    audit_events = Table(
+        "audit_events",
+        metadata,
+        Column("audit_id", String, primary_key=True),
+        Column("event_id", String, nullable=False),
+    )
     return ScreeningTables(
         passes=passes,
         pass_sessions=pass_sessions,
@@ -185,6 +200,8 @@ def screening_tables(metadata: MetaData) -> ScreeningTables:
         audits=audits,
         audit_items=audit_items,
         label_sessions=label_sessions,
+        audit_top_ups=audit_top_ups,
+        audit_events=audit_events,
     )
 
 
@@ -360,6 +377,17 @@ def _audit_sampled(t: ScreeningTables) -> Handler:
             )
             .on_conflict_do_nothing(index_elements=["audit_id"])
         )
+        conn.execute(
+            sqlite_insert(t.audit_events)
+            .values(audit_id=payload.audit_id, event_id=event.id)
+            .on_conflict_do_nothing(index_elements=["audit_id"])
+        )
+        if payload.top_up_of is not None:
+            conn.execute(
+                sqlite_insert(t.audit_top_ups)
+                .values(audit_id=payload.audit_id, top_up_of=payload.top_up_of)
+                .on_conflict_do_nothing(index_elements=["audit_id"])
+            )
         for work_id in payload.work_ids:
             agreed_verdict, agreed_criteria = agreed.get(work_id, (None, None))
             conn.execute(

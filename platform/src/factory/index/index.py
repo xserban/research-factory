@@ -30,6 +30,8 @@ NON_STATE_TABLES: frozenset[str] = frozenset(
         "merge_members",
         # One row per event ref, derived from the events table, which the hash covers.
         "event_refs",
+        # The event that recorded each audit sample, derived from the events table.
+        "audit_events",
     }
 )
 OMITTED_WHEN_EMPTY: frozenset[str] = frozenset(
@@ -42,6 +44,7 @@ OMITTED_WHEN_EMPTY: frozenset[str] = frozenset(
         "import_decisions",
         "import_admission_queries",
         "import_attachments",
+        "audit_top_ups",
     }
 )
 """Tables added after slice 3: while empty they leave no trace in the hash, so a log without

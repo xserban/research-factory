@@ -214,6 +214,8 @@ class AuditSampled(StrictModel):
     exclusions: int = Field(ge=0)
     inclusions: int = Field(ge=0)
     stage: RunStage = ScreeningStage.TITLE_ABSTRACT
+    top_up_of: str | None = Field(default=None, pattern=AUDIT_ID_RE)
+    """The audit this sample tops up (living review); absent on every other audit."""
 
 
 class AuditLabelled(StrictModel):
