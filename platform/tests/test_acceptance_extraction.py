@@ -280,7 +280,18 @@ EARLIER = (
 def test_earlier_acceptance_suites_unchanged() -> None:
     paths = [str(TESTS / n) for n in EARLIER]
     run = subprocess.run(
-        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", *paths],
+        # The acceptance suites are marked slow, which the default addopts deselect.
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "-m",
+            "not network",
+            *paths,
+        ],
         capture_output=True,
         text=True,
         check=False,
