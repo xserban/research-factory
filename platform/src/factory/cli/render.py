@@ -5,6 +5,7 @@ from factory.model.screening import PassLabel
 from factory.services.agreement import DecisionView
 from factory.services.audit import AuditReport
 from factory.services.check import CheckReport
+from factory.services.discovery import DiscoveryReport
 from factory.services.document_convert import ConvertSummary, DocumentStatus
 from factory.services.document_read import DocumentPage
 from factory.services.extraction import UnitState
@@ -23,6 +24,7 @@ from factory.services.imports import (
     ImportSummary,
     RecordRow,
 )
+from factory.services.inbox import InboxPage, ResolveOutcome
 from factory.services.prisma import UNCONVERTED, PrismaFlow, SearchReport
 from factory.services.trace import TraceNode
 from factory.services.watch import CycleSummary, WatchStatus
@@ -93,6 +95,55 @@ def trace_lines(node: TraceNode, depth: int = 0) -> list[str]:
     for child in node.children:
         lines += trace_lines(child, depth + 1)
     return lines
+
+
+def inbox_lines(page: InboxPage) -> list[str]:
+    """One line per inbox item: id, status, last outcome, identifier, submitter and work."""
+    if not page.items:
+        return ["no inbox items"]
+    lines = []
+    for item in page.items:
+        outcome = item.last_outcome or "-"
+        work = f"  {item.work_id}" if item.work_id else ""
+        lines.append(
+            f"{item.item_id}  {item.status}  {outcome}  {item.identifier_kind}:"
+            f"{item.identifier_value}  {item.actor_kind}{work}"
+        )
+    if page.next_cursor is not None:
+        lines.append(f"more: --cursor {page.next_cursor}")
+    return lines
+
+
+def resolve_lines(outcomes: list[ResolveOutcome]) -> list[str]:
+    """One line per attempted or refused item."""
+    if not outcomes:
+        return ["no open inbox items"]
+    lines = []
+    for o in outcomes:
+        if o.status is None:
+            reasons = "; ".join(f"{i.field}: {i.reason}" for i in o.issues)
+            lines.append(f"{o.item_id}  refused  {reasons}")
+        else:
+            work = f"  {o.work_id}" if o.work_id else ""
+            lines.append(f"{o.item_id}  {o.status.value}{work}")
+    return lines
+
+
+def discovery_markdown(report: DiscoveryReport) -> str:
+    """The discovery report as Markdown tables: by first route, by first surfacer, overlaps."""
+    head = "| | " + " | ".join(report.levels) + " |"
+    rule = "|---" * (len(report.levels) + 1) + "|"
+
+    def row(name: str, counts: dict[str, int]) -> str:
+        return f"| {name} | " + " | ".join(str(counts[level]) for level in report.levels) + " |"
+
+    lines = ["# Discovery", "", "## By first-surfaced route", "", head, rule]
+    lines += [row(route.value, counts) for route, counts in report.by_first_route.items()]
+    lines += [row("total", report.totals), "", "## By first surfacer", "", head, rule]
+    lines += [row(kind, counts) for kind, counts in report.by_first_actor.items()]
+    lines += ["", "## Route overlaps", ""]
+    lines += [f"- {key}: {n}" for key, n in report.overlaps.items()] or ["- none"]
+    return "\n".join(lines) + "\n"
 
 
 def check_lines(report: CheckReport) -> list[str]:

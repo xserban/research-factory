@@ -33,6 +33,7 @@ from factory.services import audit as audit_service
 from factory.services import calibration as calibration_service
 from factory.services import chase as chase_service
 from factory.services import check as check_service
+from factory.services import discovery as discovery_service
 from factory.services import document_convert as document_convert_service
 from factory.services import document_read as document_read_service
 from factory.services import evidence as evidence_service
@@ -45,6 +46,7 @@ from factory.services import fulltext as fulltext_service
 from factory.services import fulltext_import as fulltext_import_service
 from factory.services import fulltext_status as fulltext_status_service
 from factory.services import imports as imports_service
+from factory.services import inbox as inbox_service
 from factory.services import methods as methods_service
 from factory.services import portfolio as portfolio_service
 from factory.services import prisma as prisma_service
@@ -154,8 +156,14 @@ watch_app = typer.Typer(
     help="Run the due watch cycle, show the watch status and plan.",
     no_args_is_help=True,
 )
+inbox_app = typer.Typer(
+    name="inbox",
+    help="Supplied links: capture, list, resolve into the corpus, withdraw.",
+    no_args_is_help=True,
+)
 app.add_typer(seeds_app)
 app.add_typer(watch_app)
+app.add_typer(inbox_app)
 app.add_typer(report_app)
 app.add_typer(export_app)
 app.add_typer(protocol_app)
@@ -537,6 +545,86 @@ def seeds_admit(
         )
     found = "found a work" if admitted.work_id else "found no work"
     typer.echo(f"admitted {seed_id} ({found})")
+
+
+@inbox_app.command("add")
+def inbox_add(
+    ctx: typer.Context,
+    links: Annotated[list[str], typer.Argument(help="arXiv, DOI or OpenAlex links or ids.")],
+    note: Annotated[
+        str | None, typer.Option("--note", help="A short note (at most 300 characters).")
+    ] = None,
+) -> None:
+    """Capture links as inbox items. Offline; an unsupported link is reported and not written."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        items = [inbox_service.LinkInput(link, note=note) for link in links]
+        result = inbox_service.add_links(project, project.human_actor(), items, Channel.CLI)
+    for item_id in result.written:
+        typer.echo(f"captured {item_id}")
+    for error in result.rejected:
+        reasons = "; ".join(f"{i.field}: {i.reason}" for i in error.issues)
+        typer.echo(f"rejected {links[error.index]}  {reasons}", err=True)
+    if result.rejected:
+        raise typer.Exit(1)
+
+
+@inbox_app.command("list")
+def inbox_list(
+    ctx: typer.Context,
+    status: Annotated[
+        str | None, typer.Option("--status", help="open, resolved or withdrawn.")
+    ] = None,
+    cursor: Annotated[str | None, typer.Option("--cursor", help="Next page offset.")] = None,
+) -> None:
+    """Inbox items with their status and last resolution outcome."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        page = inbox_service.list_items(project, status=status, cursor=cursor)
+    for line in render.inbox_lines(page):
+        typer.echo(line)
+
+
+@inbox_app.command("resolve")
+def inbox_resolve(
+    ctx: typer.Context,
+    item: Annotated[
+        list[str] | None, typer.Option("--item", help="Resolve only these open items.")
+    ] = None,
+    deviation: Annotated[
+        str | None,
+        typer.Option("--deviation", help="A recorded deviation that authorises the lookups."),
+    ] = None,
+) -> None:
+    """Look up open items by identifier as recorded `supplied` queries, gated by the protocol."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        outcomes = inbox_service.resolve_links(
+            project,
+            project.human_actor(),
+            sources=dict(default_sources()),
+            item_ids=item or None,
+            deviation_id=deviation,
+        )
+    for line in render.resolve_lines(outcomes):
+        typer.echo(line)
+
+
+@inbox_app.command("withdraw")
+def inbox_withdraw(
+    ctx: typer.Context,
+    item_id: Annotated[str, typer.Argument(help="An open inbox item.")],
+    reason: Annotated[str, typer.Option("--reason", help="Why the link is withdrawn.")],
+) -> None:
+    """Withdraw an open item; a resolved item stays (its work leaves only by screening)."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        inbox_service.withdraw_link(project, project.human_actor(), item_id, reason)
+    typer.echo(f"withdrew {item_id}")
 
 
 @search_app.command("chase")
@@ -1016,6 +1104,18 @@ def report_methods(ctx: typer.Context, as_json: _JSON = False) -> None:
     typer.echo(
         report.model_dump_json() if as_json else methods_service.render_methods(report),
         nl=as_json,
+    )
+
+
+@report_app.command("discovery")
+def report_discovery(ctx: typer.Context, as_json: _JSON = False) -> None:
+    """How the corpus was found: by first-surfaced route and surfacer, and route overlaps."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        report = discovery_service.discovery_report(project)
+    typer.echo(
+        report.model_dump_json() if as_json else render.discovery_markdown(report), nl=as_json
     )
 
 

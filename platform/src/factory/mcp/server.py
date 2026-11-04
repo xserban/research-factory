@@ -10,6 +10,7 @@ from pydantic import Field, JsonValue, StringConstraints, ValidationError
 from factory.clock import Clock, SystemClock
 from factory.config import Settings
 from factory.errors import FactoryValidationError, ProjectNotFoundError, ValidationIssue
+from factory.events.envelope import Actor
 from factory.mcp.conventions import (
     PAGE_LIMIT,
     dotted,
@@ -27,6 +28,7 @@ from factory.model.chase import ChaseDirection
 from factory.model.extraction import ClaimInput, ExtractedRowInput
 from factory.model.fulltext import Route
 from factory.model.identity import IdGenerator
+from factory.model.inbox import Basis
 from factory.model.project import RigorMode
 from factory.model.protocol import CriterionEffect, PressFinding, ProtocolSpec, ScreeningStage
 from factory.model.question import QuestionSpec
@@ -39,6 +41,7 @@ from factory.services import calibration as calibration_service
 from factory.services import chase as chase_service
 from factory.services import check as check_service
 from factory.services import dedup as dedup_service
+from factory.services import discovery as discovery_service
 from factory.services import document_read as document_read_service
 from factory.services import evidence as evidence_service
 from factory.services import evidence_report as evidence_report_service
@@ -48,6 +51,7 @@ from factory.services import extraction_agreement as extraction_agreement_servic
 from factory.services import extraction_audit as extraction_audit_service
 from factory.services import fulltext as fulltext_service
 from factory.services import fulltext_status as fulltext_status_service
+from factory.services import inbox as inbox_service
 from factory.services import methods as methods_service
 from factory.services import prisma as prisma_service
 from factory.services import probe as probe_service
@@ -71,6 +75,14 @@ from factory.sources.registry import SourceFactory, default_sources
 _M = TypeVar("_M", bound=StrictModel)
 _SYSTEM_CLOCK = SystemClock()
 _FIELD_NAMES = {"text": "query"}  # QuerySpec calls the query text `text`; the tool calls it `query`
+
+
+class _LinkItem(StrictModel):
+    """One `inbox_add` item as sent: the link, a relayed human note, or an agent's basis."""
+
+    link: str
+    note: str | None = None
+    basis: Basis | None = None
 
 
 class _ProbeQuery(StrictModel):
@@ -668,6 +680,134 @@ def build_server(
             return _withheld(opened, data, include_work_ids=False)
 
         return _reply(project, methods, include_work_ids=False)
+
+    def _inbox_actor(
+        opened: Project, role: str | None, model: str | None, skill: str | None
+    ) -> Actor:
+        """An agent when role, model or skill is given; else the human, relayed over MCP."""
+        if role is None and model is None and skill is None:
+            return opened.human_actor()
+        return make_agent_actor(settings, session, role or "", model or "", skill or "")
+
+    @server.tool()
+    def inbox_add(
+        project: str,
+        items: list[dict[str, JsonValue]],
+        channel: str = "agent",
+        role: str | None = None,
+        model: str | None = None,
+        skill: str | None = None,
+    ) -> dict[str, JsonValue]:
+        """Capture links (arXiv, DOI or OpenAlex) as inbox items: each `{link, note?, basis?}`.
+        `channel="agent"`: an agent proposes the link and must give `basis`, either
+        `{"kind": "document", "document_id": "doc_...", "anchor": "..."}` for a citing span it
+        read or `{"kind": "knowledge"}`; it gives no note. `channel="mcp"`: a human's link relayed
+        verbatim, with an optional note and no basis. Offline; each item is written or rejected
+        on its own. Refused to a session that has joined a pass; a session that captures a link
+        cannot later screen. Screeners never see how a work was found."""
+
+        def add() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            if channel not in ("agent", "mcp"):
+                raise FactoryValidationError([ValidationIssue("channel", "agent or mcp")])
+            actor = (
+                make_agent_actor(settings, session, role or "", model or "", skill or "")
+                if channel == "agent"
+                else opened.human_actor()
+            )
+            accepted: list[tuple[int, inbox_service.LinkInput]] = []
+            rejected: list[ItemError] = []
+            for index, item in enumerate(items):
+                try:
+                    parsed = parse_input(_LinkItem, item, f"items.{index}")
+                    accepted.append(
+                        (index, inbox_service.LinkInput(parsed.link, parsed.note, parsed.basis))
+                    )
+                except FactoryValidationError as exc:
+                    rejected.append(ItemError(index=index, issues=exc.issues))
+            result = inbox_service.add_links(
+                opened, actor, [link for _, link in accepted], Channel.MCP
+            )
+            for error in result.rejected:
+                original = accepted[error.index][0]
+                issues = [
+                    ValidationIssue(f"items.{original}.{issue.field}", issue.reason)
+                    for issue in error.issues
+                ]
+                rejected.append(ItemError(index=original, issues=issues))
+            batch = BatchResult[str](
+                written=result.written, rejected=sorted(rejected, key=lambda e: e.index)
+            )
+            return _withheld(opened, batch.model_dump(mode="json"))
+
+        return _reply(project, add)
+
+    @server.tool()
+    def inbox_resolve(
+        project: str,
+        item_ids: list[str] | None = None,
+        deviation_id: str | None = None,
+        role: str | None = None,
+        model: str | None = None,
+        skill: str | None = None,
+    ) -> dict[str, JsonValue]:
+        """Look up open inbox items (all, or `item_ids`) by identifier as recorded `supplied`
+        queries, each gated by the protocol (`supplied_links`, or `deviation_id`). Returns each
+        item's status (`new`, `in-corpus`, `not-found`, `ambiguous`, `failed`) or why it was
+        refused. The actor is an agent when role, model or skill is given, else the human.
+        Refused to a session that has joined a pass."""
+
+        def run() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            actor = _inbox_actor(opened, role, model, skill)
+            outcomes = inbox_service.resolve_links(
+                opened, actor, sources=adapters, item_ids=item_ids, deviation_id=deviation_id
+            )
+            data: list[JsonValue] = [
+                {
+                    "item_id": o.item_id,
+                    "status": None if o.status is None else o.status.value,
+                    "work_id": o.work_id,
+                    "run_id": o.run_id,
+                    "errors": [{"field": i.field, "reason": i.reason} for i in o.issues],
+                }
+                for o in outcomes
+            ]
+            return _withheld(opened, {"items": data})
+
+        return _reply(project, run)
+
+    @server.tool()
+    def inbox_list(
+        project: str, status: str | None = None, cursor: str | None = None, limit: int = PAGE_LIMIT
+    ) -> dict[str, JsonValue]:
+        """Inbox items in id order with status and last resolution outcome, one page at a time
+        (`status`: open, resolved or withdrawn). Refused to a session that has joined a pass."""
+
+        def listing() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            page = inbox_service.list_items(opened, status=status, cursor=cursor, limit=limit)
+            return _withheld(opened, page.model_dump(mode="json"))
+
+        return _reply(project, listing)
+
+    @server.tool()
+    def report_discovery(project: str) -> dict[str, JsonValue]:
+        """How the corpus was found: counts by first-surfaced route and by first surfacer's
+        actor kind at each level (identified, title/abstract included, full-text included, in
+        evidence), and route overlaps. Seed admission is reported as `other`. Refused to a
+        session that has joined a pass."""
+
+        def report() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            view = discovery_service.agent_view(discovery_service.discovery_report(opened))
+            return _withheld(opened, view, include_work_ids=False)
+
+        return _reply(project, report, include_work_ids=False)
 
     @server.tool()
     def report_evidence(

@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Literal
 
+from pydantic import JsonValue
 from sqlalchemy import text
 
 from factory.model.base import StrictModel
@@ -284,3 +285,32 @@ def _overlaps(records: Iterable[WorkDiscovery]) -> dict[str, int]:
             key = "+".join(route.value for route in record.routes)
             out[key] = out.get(key, 0) + 1
     return dict(sorted(out.items()))
+
+
+OTHER = "other"
+
+
+def agent_view(report: DiscoveryReport) -> dict[str, JsonValue]:
+    """The report as an agent may read it (ruling 12): `seed-admission` is reported as `other`,
+    in the route rows and in the overlap keys, so no figure marks a work as a seed's."""
+
+    def name(route: str) -> str:
+        return OTHER if route == Route.SEED_ADMISSION.value else route
+
+    by_route: dict[str, dict[str, int]] = {}
+    for route, counts in report.by_first_route.items():
+        row = by_route.setdefault(name(route.value), dict.fromkeys(report.levels, 0))
+        for level, n in counts.items():
+            row[level] += n
+    overlaps: dict[str, int] = {}
+    for key, n in report.overlaps.items():
+        renamed = "+".join(name(part) for part in key.split("+"))
+        overlaps[renamed] = overlaps.get(renamed, 0) + n
+    view: dict[str, JsonValue] = {
+        "levels": list(report.levels),
+        "by_first_route": {k: dict(v) for k, v in by_route.items()},
+        "by_first_actor": {k: dict(v) for k, v in report.by_first_actor.items()},
+        "overlaps": dict(sorted(overlaps.items())),
+        "totals": dict(report.totals),
+    }
+    return view

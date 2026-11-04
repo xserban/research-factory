@@ -44,6 +44,20 @@ round and routes the new works back into screening.
 - Never retry a refused round by changing what the platform computed. Report the refusal
   message to the researcher.
 
+## Supplied links (`inbox_add`)
+
+- Use `inbox_add` with `channel` `agent` only when a document you read cites a paper the corpus
+  may lack, or when you know of one from outside knowledge. Give `basis` on every item:
+  `{"kind": "document", "document_id": "doc_…", "anchor": "…"}` for the citing span you read,
+  or `{"kind": "knowledge"}` for outside knowledge, which the discovery report shows as its own
+  row. An agent gives no note.
+- Use `channel` `mcp` only to relay a link the researcher gave you, verbatim, with their note.
+- Capture is offline and never fetches. `inbox_resolve` looks the items up; in a `pilot` or
+  `systematic` project the protocol's `supplied_links` must accept the submitter, or the
+  researcher must record a deviation. Report refused items as returned.
+- A session that captures a link cannot join a screening pass. Screeners never see how a work
+  was found; never tell them.
+
 ## Tool arguments
 
 Every tool call also takes `project` (the project slug), `role`, and `model` (your own model
