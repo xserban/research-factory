@@ -8,22 +8,29 @@ Invariants:
 - Nothing is written to disk here; `unpack_eprint` returns `{relative posix path: bytes}`.
 - Member count, per-file size and total size are capped, also for decompression (a gzip bomb
   stops at the cap). A breach raises `EprintError`; its message carries no archive content.
+- Names are relative, UTF-8 round-trippable, free of any path component starting with `-` (so a
+  member can never be read as a command-line option), and no file name is a directory prefix of
+  another (a conflict raises `EprintError`).
 - Only regular files are kept. Links, devices and members with an unsafe name (absolute, `..`,
   backslash, NUL, empty) are skipped and counted; the count is returned.
 """
 
 import io
 import posixpath
+import re
 import tarfile
 import zlib
 
+from factory.errors import FactoryError
+
 MAX_MEMBERS = 2000
 MAX_FILE_BYTES = 50 * 1024 * 1024
-MAX_TOTAL_BYTES = 200 * 1024 * 1024
+MAX_TOTAL_BYTES = 100 * 1024 * 1024
 _GZIP_MAGIC = b"\x1f\x8b"
+_DOCUMENTCLASS = re.compile(r"^[^%\n]*\\documentclass", re.MULTILINE)
 
 
-class EprintError(ValueError):
+class EprintError(FactoryError):
     """The archive breaches a cap or is unreadable. The message never contains archive text."""
 
 
@@ -31,9 +38,15 @@ def safe_member_name(name: str) -> str | None:
     """The normalised relative POSIX name, or None when the name could escape its directory."""
     if not name or "\x00" in name or "\\" in name or name.startswith("/"):
         return None
+    try:
+        name.encode("utf-8")
+    except UnicodeEncodeError:
+        return None
     normal = posixpath.normpath(name)
     parts = normal.split("/")
     if normal == "." or ".." in parts or "" in parts:
+        return None
+    if any(part.startswith("-") for part in parts):
         return None
     return normal
 
@@ -81,18 +94,25 @@ def unpack_eprint(raw: bytes) -> tuple[dict[str, bytes], int]:
                 files[name] = handle.read()
     except (tarfile.TarError, EOFError, OSError) as exc:
         raise EprintError("tar archive is corrupt") from exc
+    for name in files:
+        parent = posixpath.dirname(name)
+        while parent:
+            if parent in files:
+                raise EprintError("e-print member names conflict (file and directory)")
+            parent = posixpath.dirname(parent)
     return files, skipped
 
 
 def find_main_tex(files: dict[str, bytes]) -> str | None:
-    """The main .tex name: has `\\documentclass`, `\\begin{document}` preferred, then shallowest,
-    then lexicographic. None when no .tex declares a document class."""
+    """Heuristic choice of the main .tex name (a ranking, not a TeX parse): the file has an
+    uncommented `\\documentclass`; `\\begin{document}` preferred, then shallowest, then
+    lexicographic. None when no .tex declares a document class."""
     candidates: list[tuple[int, int, str]] = []
     for name, content in files.items():
         if not name.endswith(".tex"):
             continue
         text = content.decode("utf-8", errors="replace")
-        if "\\documentclass" in text:
+        if _DOCUMENTCLASS.search(text):
             body = 0 if "\\begin{document}" in text else 1
             candidates.append((body, name.count("/"), name))
     return min(candidates)[2] if candidates else None

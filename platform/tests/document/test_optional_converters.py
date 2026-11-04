@@ -14,10 +14,13 @@ from factory.document import docling as docling_module
 from factory.document import pandoc as pandoc_module
 from factory.document.converter import ConverterUnavailable, convert
 from factory.document.docling import DoclingConverter
+from factory.document.eprint import EprintError
+from factory.document.errors import ConversionToolError
 from factory.document.optional import available_converters
 from factory.document.pandoc import PandocConverter
 from factory.document.pymupdf4llm import PyMuPdf4LlmConverter
 from factory.document.registry import default_converters
+from factory.errors import FactoryError
 from tests.document.kit import assert_converter_contract
 
 HTML_SAMPLE = (
@@ -146,7 +149,7 @@ def test_pandoc_eprint_without_main_tex_is_an_error(
     fake.write_text("#!/bin/sh\necho 'pandoc 9.9'\n")
     fake.chmod(0o755)
     monkeypatch.setenv("FACTORY_PANDOC", str(fake))
-    with pytest.raises(ValueError, match="document class"):
+    with pytest.raises(EprintError, match="document class"):
         PandocConverter().to_markdown(_eprint(b"no class here"), "application/x-eprint-tar")
 
 
@@ -188,3 +191,129 @@ def test_docling_contract() -> None:
     if docling_module.models_dir() is None:
         pytest.skip("FACTORY_DOCLING_MODELS not set")
     assert_converter_contract(DoclingConverter(), [(_sample_pdf(), "application/pdf")])
+
+
+# --- hardening: fake pandoc ----------------------------------------------------------------
+
+
+def _fake_pandoc(tmp_path: Path, body: str, version: str = "9.9") -> Path:
+    fake = tmp_path / "pandoc"
+    fake.write_text(
+        f'#!/bin/sh\nif [ "$1" = "--version" ]; then echo "pandoc {version}"; exit 0; fi\n' + body
+    )
+    fake.chmod(0o755)
+    return fake
+
+
+def test_pandoc_argv_is_sandboxed_and_main_is_dot_slash(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    log = tmp_path / "argv.log"
+    env_log = tmp_path / "env.log"
+    fake = _fake_pandoc(
+        tmp_path,
+        f'for a in "$@"; do echo "$a" >> {log}; done\nenv > {env_log}\necho ok\n',
+    )
+    monkeypatch.setenv("FACTORY_PANDOC", str(fake))
+    monkeypatch.setenv("SECRET_TOKEN", "leak")
+    PandocConverter().to_markdown(_eprint(LATEX_SAMPLE), "application/x-eprint-tar")
+    argv = log.read_text().split()
+    assert "--sandbox" in argv
+    assert argv[-1] == "./paper.tex"
+    assert "SECRET_TOKEN" not in env_log.read_text()
+    log.unlink()
+    PandocConverter().to_markdown(HTML_SAMPLE, "text/html")
+    assert "--sandbox" in log.read_text().split()
+
+
+def test_pandoc_old_version_is_unavailable(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("FACTORY_PANDOC", str(_fake_pandoc(tmp_path, "echo x\n", "2.14.2")))
+    with pytest.raises(ConverterUnavailable, match=r"2\.15"):
+        PandocConverter().version()
+
+
+def test_pandoc_leading_dash_member_is_skipped(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    log = tmp_path / "argv.log"
+    fake = _fake_pandoc(tmp_path, f'for a in "$@"; do echo "$a" >> {log}; done\necho ok\n')
+    monkeypatch.setenv("FACTORY_PANDOC", str(fake))
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w") as archive:
+        for name in ("--lua-filter=a.tex", "paper.tex"):
+            info = tarfile.TarInfo(name)
+            info.size = len(LATEX_SAMPLE)
+            archive.addfile(info, io.BytesIO(LATEX_SAMPLE))
+    PandocConverter().to_markdown(buffer.getvalue(), "application/x-eprint-tar")
+    assert "lua-filter" not in log.read_text()
+
+
+def test_pandoc_latex_stdin_is_devnull(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    out = tmp_path / "stdin.log"
+    fake = _fake_pandoc(tmp_path, f"cat > {out}\necho ok\n")
+    monkeypatch.setenv("FACTORY_PANDOC", str(fake))
+    PandocConverter().to_markdown(_eprint(LATEX_SAMPLE), "application/x-eprint-tar")
+    assert out.read_bytes() == b""
+
+
+def test_pandoc_timeout_is_content_free_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("FACTORY_PANDOC", str(_fake_pandoc(tmp_path, "sleep 5\n")))
+    monkeypatch.setattr(pandoc_module, "TIMEOUT_SECONDS", 0.2)
+    with pytest.raises(ConversionToolError, match="timed out"):
+        PandocConverter().to_markdown(HTML_SAMPLE, "text/html")
+
+
+def test_pandoc_nonzero_exit_is_content_free_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    body = "echo SECRETTEXT >&2\nexit 1\n"
+    monkeypatch.setenv("FACTORY_PANDOC", str(_fake_pandoc(tmp_path, body)))
+    with pytest.raises(ConversionToolError) as info:
+        PandocConverter().to_markdown(HTML_SAMPLE, "text/html")
+    assert "SECRETTEXT" not in str(info.value)
+    assert isinstance(info.value, FactoryError)
+
+
+def test_pandoc_invalid_utf8_output_is_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("FACTORY_PANDOC", str(_fake_pandoc(tmp_path, "printf '\\377\\376'\n")))
+    with pytest.raises(ConversionToolError, match="UTF-8"):
+        PandocConverter().to_markdown(HTML_SAMPLE, "text/html")
+
+
+def test_docling_version_is_cached_per_tree_state(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    (tmp_path / "w.bin").write_bytes(b"weights")
+    monkeypatch.setattr(metadata, "version", lambda _dist: "2.0")
+    monkeypatch.setenv("FACTORY_DOCLING_MODELS", str(tmp_path))
+    calls: list[Path] = []
+    real = docling_module.tree_hash
+
+    def counting(root: Path) -> str:
+        calls.append(root)
+        return real(root)
+
+    monkeypatch.setattr(docling_module, "tree_hash", counting)
+    docling_module.clear_hash_cache()
+    first = DoclingConverter().version()
+    assert DoclingConverter().version() == first
+    assert len(calls) == 1
+    (tmp_path / "w.bin").write_bytes(b"other-longer")
+    assert DoclingConverter().version() != first
+    assert len(calls) == 2
+
+
+def test_docling_tree_hash_does_not_follow_symlinks(tmp_path: Path) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "x.bin").write_bytes(b"x")
+    root = tmp_path / "models"
+    root.mkdir()
+    (root / "w.bin").write_bytes(b"w")
+    before = docling_module.tree_hash(root)
+    (root / "link").symlink_to(outside, target_is_directory=True)
+    assert docling_module.tree_hash(root) == before

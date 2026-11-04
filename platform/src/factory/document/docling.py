@@ -24,10 +24,43 @@ MODELS_ENV = "FACTORY_DOCLING_MODELS"
 CONVERTER_VERSION = "1.0"
 
 
+_HASH_CACHE: dict[tuple[str, tuple[tuple[str, int, int], ...]], str] = {}
+
+
+def clear_hash_cache() -> None:
+    """Forget cached tree hashes (tests)."""
+    _HASH_CACHE.clear()
+
+
+def _files(root: Path) -> list[Path]:
+    """Regular files under `root`, sorted; symlinked files and directories are not followed."""
+    found: list[Path] = []
+    for here, dirs, names in os.walk(root, followlinks=False):
+        dirs[:] = [d for d in dirs if not (Path(here) / d).is_symlink()]
+        found.extend(p for n in names if not (p := Path(here) / n).is_symlink() and p.is_file())
+    return sorted(found)
+
+
+def _cached_tree_hash(root: Path) -> str:
+    """`tree_hash`, cached per process by (resolved path, sorted (relpath, size, mtime_ns))."""
+    resolved = root.resolve()
+    signature = tuple(
+        (p.relative_to(resolved).as_posix(), (st := p.stat()).st_size, st.st_mtime_ns)
+        for p in _files(resolved)
+    )
+    key = (str(resolved), signature)
+    if key not in _HASH_CACHE:
+        _HASH_CACHE[key] = tree_hash(resolved)
+    return _HASH_CACHE[key]
+
+
 def tree_hash(root: Path) -> str:
-    """sha256 over the sorted (relative path, file sha256) pairs of every file under `root`."""
+    """sha256 over the sorted (relative path, file sha256) pairs of every file under `root`.
+
+    Symlinks are not followed.
+    """
     digest = hashlib.sha256()
-    for path in sorted(p for p in root.rglob("*") if p.is_file()):
+    for path in _files(root):
         file_hash = hashlib.sha256()
         with path.open("rb") as handle:
             for chunk in iter(lambda: handle.read(1 << 20), b""):
@@ -65,7 +98,9 @@ class DoclingConverter:
         models = models_dir()
         if models is None:
             raise ConverterUnavailable(f"docling models missing (set {MODELS_ENV})")
-        return f"{CONVERTER_VERSION}+docling {library} weights sha256:{tree_hash(models)[:16]}"
+        # 16 hex digits (64 bits) identify the weights; this is a label, not an integrity proof.
+        weights = _cached_tree_hash(models)[:16]
+        return f"{CONVERTER_VERSION}+docling {library} weights sha256:{weights}"
 
     def _build(self, models: Path) -> Any:
         base = importlib.import_module("docling.datamodel.base_models")
@@ -84,10 +119,18 @@ class DoclingConverter:
         self.version()
         models = models_dir()
         assert models is not None
-        if self._converter is None:
-            self._converter = self._build(models)
-        base = importlib.import_module("docling.datamodel.base_models")
-        stream = base.DocumentStream(name="doc.pdf", stream=io.BytesIO(raw))
-        result = self._converter.convert(stream)
+        previous = os.environ.get("HF_HUB_OFFLINE")
+        os.environ["HF_HUB_OFFLINE"] = "1"
+        try:
+            if self._converter is None:
+                self._converter = self._build(models)
+            base = importlib.import_module("docling.datamodel.base_models")
+            stream = base.DocumentStream(name="doc.pdf", stream=io.BytesIO(raw))
+            result = self._converter.convert(stream)
+        finally:
+            if previous is None:
+                os.environ.pop("HF_HUB_OFFLINE", None)
+            else:
+                os.environ["HF_HUB_OFFLINE"] = previous
         text = str(result.document.export_to_markdown(page_break_placeholder="\f"))
         return text, (f"docling status: {result.status.value}",)

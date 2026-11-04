@@ -958,14 +958,14 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "docling", marker = "extra == 'docling'", specifier = ">=2" },
+    { name = "docling", marker = "extra == 'docling'", specifier = ">=2.147.0" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "lxml", specifier = ">=5" },
     { name = "markdown-it-py", specifier = ">=3" },
     { name = "mcp", specifier = ">=2.3,<3" },
     { name = "pydantic", specifier = ">=2.7" },
     { name = "pymupdf", marker = "extra == 'pymupdf'", specifier = ">=1.24" },
-    { name = "pymupdf4llm", marker = "extra == 'pymupdf'", specifier = ">=0.0.17" },
+    { name = "pymupdf4llm", marker = "extra == 'pymupdf'", specifier = ">=2.1" },
     { name = "pypdf", specifier = ">=5" },
     { name = "rapidfuzz", specifier = ">=3.10" },
     { name = "sqlalchemy", specifier = ">=2.0" },
