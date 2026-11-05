@@ -10,6 +10,8 @@ Invariants:
 - A user id is never reused, and an `(issuer, subject)` pair names one user for good.
 - A change that would leave the lab with no active admin does not fold, since nothing could then
   repair the registry.
+- Deactivation revokes the user's live credentials, so reactivation revives none: a returning
+  user needs a new token.
 """
 
 from collections.abc import Mapping, Sequence
@@ -244,6 +246,12 @@ def _user_deactivated(tables: Mapping[str, Table]) -> Handler:
             return
         if is_active(conn, tables, payload.user) and not is_last_admin(conn, tables, payload.user):
             _set_active(conn, tables, payload.user, False)
+            credentials = tables["credentials"]
+            conn.execute(
+                update(credentials)
+                .where(credentials.c.user == payload.user, credentials.c.revoked_at.is_(None))
+                .values(revoked_at=format_ts(event.ts))
+            )
 
     return fold
 

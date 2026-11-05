@@ -59,6 +59,14 @@ GATED_AGENT_ACTS: frozenset[str] = frozenset(
 """Tools through which an agent acts at a decision gate of slices 6 and M: the gate policy says when
 it may, so the human permission is not subtracted. The caller names the tool to `authorize`."""
 
+OPEN_WITHOUT_LAB: frozenset[str] = frozenset({"cli:init"})
+"""What a person may do on a root with no lab registry, where nobody can hold `lab:admin`: stage 0
+creates its projects freely. On a lab server the row applies, so the caller passes the lab."""
+
+SYSTEM_JOBS: frozenset[str] = frozenset({"cli:commit"})
+"""Scheduled jobs of the server, which run as a `system` actor and not for a person (ruling 5). The
+row applies when a person runs one."""
+
 _READ = frozenset({Permission.PROJECT_READ})
 _CONTRIBUTE = _READ | {Permission.WORK_RUN}
 _MAINTAIN = _CONTRIBUTE | {
@@ -189,7 +197,7 @@ TOOL_PERMISSIONS: Mapping[str, Permission] = {
     "notice_assess": Permission.HUMAN_CONFIRM,
     # Mutating CLI commands, as `cli:<group> <command>`. Read-only commands have no row, but for
     # the three lists of the admin groups, which are authorised like the rest of those groups.
-    "cli:init": Permission.PROJECT_GOVERN,
+    "cli:init": Permission.LAB_ADMIN,
     "cli:commit": Permission.LAB_ADMIN,
     "cli:server init": Permission.LAB_ADMIN,
     "cli:user add": Permission.LAB_ADMIN,
@@ -328,6 +336,10 @@ def _holds(
     lab: Lab | None,
     tool: str | None,
 ) -> bool:
+    if actor_kind == "system" and tool in SYSTEM_JOBS:
+        return True
+    if actor_kind == "human" and lab is None and tool in OPEN_WITHOUT_LAB:
+        return True
     gated = (
         actor_kind == "agent"
         and tool in GATED_AGENT_ACTS

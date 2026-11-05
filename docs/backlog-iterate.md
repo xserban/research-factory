@@ -207,6 +207,11 @@ Minor review findings parked during the v1 build, to address when iterating from
 - M-E: `available_units` has no MCP tool; a relaying agent names units from the researcher's `mine import --list`.
 - teams-A: `access_log.prune` has no caller yet; deploy-B's server start is the natural place (services/access_log.py).
 - teams-A: `set_lab_roles` has no CLI command; `factory user add --admin` is the only way to name an admin from the command line (cli/admin.py).
-- teams-A: `factory commit` commits project logs only, so the lab log has no git backup (services/commit.py).
 - teams-A: `authorize` checks that a principal is active only when given a lab; deploy-B's planned call passes none and relies on `verify_token` (services/access.py).
 - teams-A: `user_for_subject` returns a deactivated user; a caller must read `active` (services/lab.py).
+- teams-A: `make_agent_actor` keeps its default principal: making it required touches 53 call sites and tests, and deploy-B replaces those calls with the provider's principal (mcp/conventions.py).
+- teams-A: store the first lab event id in `.server/`, so `server check` can tell a lab log replaced or emptied (services/server_check.py).
+- teams-A: `factory commit` must take `lab/events` too before the first multi-user pilot; it stages per project under each project's lock, so this is more than a small edit (services/commit.py).
+- teams-A: a line written by hand in the entitled person's own name still folds as the first grant, a backdated one included; only the host check and the signed history answer it (index/members.py).
+- teams-A: `--as` attributes and does not authenticate: whoever runs as the service account can state an admin, on a `server init` re-run too. The boundary is the OS account (services/access_log.py stated_admin).
+- teams-A: if the person who hosted a project has left, `bootstrap_owner` needs a new `project.hosted` first, since the fold entitles the last hoster (services/members.py).
