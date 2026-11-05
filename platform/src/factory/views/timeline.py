@@ -5,8 +5,8 @@ Pure: no project, index or I/O. Declares: `DatedPoint`, `records`, `yearly_front
 Invariants:
 - Only independent rows with a year take part; a copied row is never a record and never a
   frontier point (evidence-report ruling 6), an undated row is neither.
-- A point is a record when its value is strictly better than every earlier-dated point's (the
-  first dated year therefore makes every point sharing its best value a record). Rows of one year
+- A point is a record when its value is strictly better than every earlier-dated point's (in the
+  first dated year, the points sharing its best value). Rows of one year
   never make each other earlier. Output is ordered by (year, work id, row key) whatever the input
   order.
 - The frontier of a year and an axis is `evidence.pareto.pareto` over the points dated up to and
@@ -46,20 +46,27 @@ def _usable(points: Sequence[DatedPoint]) -> list[DatedPoint]:
 
 
 def records(points: Sequence[DatedPoint], higher_is_better: bool) -> list[DatedPoint]:
-    """The record points, in (year, work id, row key) order."""
+    """The record points, in (year, work id, row key) order. In the first dated year the records
+    are the points sharing that year's best value; in a later year every point strictly better
+    than the best of all earlier years."""
+    by_year: dict[int, list[DatedPoint]] = {}
+    for p in _usable(points):
+        assert p.year is not None
+        by_year.setdefault(p.year, []).append(p)
     out: list[DatedPoint] = []
     best: Decimal | None = None  # best value among strictly earlier years
-    pending: Decimal | None = None
-    current: int | None = None
-    for p in _usable(points):
-        if p.year != current:
-            if pending is not None and (best is None or _better(pending, best, higher_is_better)):
-                best = pending
-            current, pending = p.year, None
-        if best is None or _better(p.value, best, higher_is_better):
-            out.append(p)
-        if pending is None or _better(p.value, pending, higher_is_better):
-            pending = p.value
+    for year in sorted(by_year):
+        group = by_year[year]
+        year_best = group[0].value
+        for p in group:
+            if _better(p.value, year_best, higher_is_better):
+                year_best = p.value
+        if best is None:
+            out += [p for p in group if p.value == year_best]
+        else:
+            out += [p for p in group if _better(p.value, best, higher_is_better)]
+        if best is None or _better(year_best, best, higher_is_better):
+            best = year_best
     return out
 
 

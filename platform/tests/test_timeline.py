@@ -70,6 +70,19 @@ def test_equal_value_later_is_not_a_record_and_first_date_ties_all_are() -> None
     assert [x.trace_id for x in records(pts, True)] == ["t2018", "t2018b"]
 
 
+def test_first_year_records_are_only_the_best_value() -> None:  # review I1
+    pts = [
+        p(2019, 70),
+        p(2019, 65, wid="b"),
+        p(2019, 50, wid="c"),
+        p(2019, 70, wid="d"),
+        p(2020, 71),
+    ]
+    assert [x.trace_id for x in records(pts, True)] == ["t2019", "t2019d", "t2020"]
+    low = [p(2019, 30), p(2019, 35, wid="b"), p(2019, 40, wid="c"), p(2020, 29)]
+    assert [x.trace_id for x in records(low, False)] == ["t2019", "t2020"]
+
+
 def test_lower_is_better() -> None:
     pts = [p(2019, 30), p(2020, 28), p(2021, 29), p(2022, 28, wid="b")]
     assert [x.trace_id for x in records(pts, False)] == ["t2019", "t2020"]
