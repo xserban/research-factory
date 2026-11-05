@@ -42,7 +42,7 @@ from factory.packs import NON_COMPARABLE_KEYS
 from factory.services.cards import effective_card_props, property_family
 from factory.services.context import Project
 from factory.services.contributions import contribution_item
-from factory.services.evidence_report import EvidenceRow, evidence_report
+from factory.services.evidence_report import EvidenceRow, agent_evidence, evidence_report
 from factory.services.extraction import require_schema
 from factory.services.extraction_agreement import final_rows, key_value
 from factory.services.matching import subject_works
