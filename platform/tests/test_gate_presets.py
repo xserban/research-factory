@@ -52,6 +52,7 @@ def test_presets_reproduce_behaviour(gate: str, kind: str, mode: RigorMode) -> N
     )
     confirmed, issues = confirmer_ruling(
         actor,
+        gate_id=gate,
         policy=preset(mode, gate),
         base_state=LinkState.UNCONFIRMED,
         confirmed_by=None,
@@ -90,3 +91,21 @@ def test_weaker_order() -> None:
     # incomparable parameters are not weaker either way
     mixed = GatePolicy(PolicyKind.AGENT_AUDIT, 0.05, 50)
     assert not weaker(mixed, AUDIT) and not weaker(AUDIT, mixed)
+
+
+def test_tightened_gate_refusal_names_gate_and_policy_only() -> None:
+    actor = Actor(
+        kind="agent", id="a", user="ana", session=SESSION, model="m", skill="rf-x@1a2b3c4d"
+    )
+    _, issues = confirmer_ruling(
+        actor,
+        gate_id="reference.link_confirm",
+        policy=HUMAN,
+        base_state=LinkState.UNCONFIRMED,
+        confirmed_by=None,
+        has_proposal=True,
+        deciding_sessions=set(),
+    )
+    assert [i.reason for i in issues] == [
+        "gate reference.link_confirm is human: an agent may only propose"
+    ]

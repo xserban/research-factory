@@ -40,6 +40,7 @@ from factory.services.context import Project
 from factory.services.gates import effective_policy
 from factory.services.imports import import_records, import_row, record_key
 from factory.services.reference_resolve import (
+    _rigor_mode,
     confirmer_ruling,
     load_corpus,
     resolve_entries,
@@ -295,7 +296,10 @@ def decide_import(
             has_proposal = _has_proposal(project, import_id, ordinal)
             confirmed_by, refused = confirmer_ruling(
                 actor,
-                policy=effective_policy(project, "import.resolution_confirm"),
+                gate_id="import.resolution_confirm",
+                policy=effective_policy(
+                    project, "import.resolution_confirm", mode=_rigor_mode(project)
+                ),
                 base_state=link.base_state,
                 confirmed_by=link.confirmed_by,
                 has_proposal=has_proposal,

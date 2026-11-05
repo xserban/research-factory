@@ -637,6 +637,7 @@ def _rigor_mode(project: Project) -> RigorMode:
 def confirmer_ruling(
     actor: Actor,
     *,
+    gate_id: str,
     policy: GatePolicy,
     base_state: LinkState,
     confirmed_by: str | None,
@@ -656,7 +657,7 @@ def confirmer_ruling(
         return None, [ValidationIssue("actor", "only a human confirms or rejects a link")]
     reasons: list[str] = []
     if policy.kind is PolicyKind.HUMAN:
-        reasons.append("an agent may only propose outside pilot mode")
+        reasons.append(f"gate {gate_id} is {policy.kind.value}: an agent may only propose")
     if base_state is not LinkState.UNCONFIRMED:
         reasons.append("a second agent decides title-fuzzy (unconfirmed) links only")
     if confirmed_by == "human":
@@ -677,6 +678,7 @@ def _confirmer(
     has_proposal = _has_proposal(project, extraction_id, ordinal)
     return confirmer_ruling(
         actor,
+        gate_id="reference.link_confirm",
         policy=effective_policy(project, "reference.link_confirm", mode=_rigor_mode(project)),
         base_state=link.base_state,
         confirmed_by=link.confirmed_by,
