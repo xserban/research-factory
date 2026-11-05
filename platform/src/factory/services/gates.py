@@ -104,6 +104,12 @@ def _rigor_mode(project: Project) -> RigorMode:
     return RigorMode(str(value))
 
 
+def rigor_mode(project: Project) -> RigorMode:
+    """The project's rigor mode (the index is synced first)."""
+    project.index.sync()
+    return _rigor_mode(project)
+
+
 def _policies_of(project: Project, protocol_id: str | None) -> GatePolicies | None:
     """The `gate_policies` of `protocol_id`'s latest recording, or of the latest protocol."""
     with project.index.connect() as conn:

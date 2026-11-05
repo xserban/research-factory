@@ -10,18 +10,23 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from sqlalchemy import Boolean, Column, Integer, MetaData, String, Table, update
+from sqlalchemy import Boolean, Column, Index, Integer, MetaData, String, Table, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Connection
 
+from factory.canonical import canonical_json
 from factory.events.envelope import Event
 from factory.index.projection import Handler
+from factory.model.miner_calibration import MinerCalibrationDrawn, MinerCalibrationLabelled
 from factory.model.miners import MinerRegistered, MinerRetired
 
 
 @dataclass(frozen=True)
 class MinerTables:
     miners: Table
+    calibrations: Table
+    calibration_units: Table
+    calibration_labels: Table
 
 
 def miner_tables(metadata: MetaData) -> MinerTables:
@@ -38,7 +43,39 @@ def miner_tables(metadata: MetaData) -> MinerTables:
         Column("retired", Boolean, nullable=False),
         Column("event_id", String, nullable=False),
     )
-    return MinerTables(miners)
+    calibrations = Table(
+        "miner_calibrations",
+        metadata,
+        Column("calibration_id", String, primary_key=True),
+        Column("name", String, nullable=False),
+        Column("version", Integer, nullable=False),
+        Column("digest", String, nullable=False),
+        Column("random_seed", Integer, nullable=False),
+        Column("population", Integer, nullable=False),
+        Column("population_digest", String, nullable=False),
+        Column("protocol_id", String, nullable=False),
+        Column("event_id", String, nullable=False),
+        Index("ix_miner_calibrations_miner", "name", "version"),
+    )
+    units = Table(
+        "miner_calibration_units",
+        metadata,
+        Column("calibration_id", String, primary_key=True),
+        Column("work_id", String, primary_key=True),
+        Column("conversion_id", String, nullable=False),
+    )
+    labels = Table(
+        "miner_calibration_labels",
+        metadata,
+        Column("calibration_id", String, primary_key=True),
+        Column("work_id", String, primary_key=True),
+        Column("empty", Boolean, nullable=False),
+        Column("rows_json", String, nullable=False),
+        Column("channel", String, nullable=False),
+        Column("session", String, nullable=False),
+        Column("event_id", String, nullable=False),
+    )
+    return MinerTables(miners, calibrations, units, labels)
 
 
 def miner_handlers(t: MinerTables) -> dict[str, Handler]:
@@ -68,4 +105,63 @@ def miner_handlers(t: MinerTables) -> dict[str, Handler]:
             .values(retired=True)
         )
 
-    return {"miner.registered": registered, "miner.retired": retired}
+    def drawn(conn: Connection, event: Event) -> None:
+        payload = MinerCalibrationDrawn.model_validate(event.payload)
+        inserted = conn.execute(
+            sqlite_insert(t.calibrations)
+            .values(
+                calibration_id=payload.calibration_id,
+                name=payload.name,
+                version=payload.version,
+                digest=payload.digest,
+                random_seed=payload.random_seed,
+                population=payload.population,
+                population_digest=payload.population_digest,
+                protocol_id=payload.protocol_id,
+                event_id=event.id,
+            )
+            .on_conflict_do_nothing(index_elements=["calibration_id"])
+        )
+        if inserted.rowcount:
+            conn.execute(
+                sqlite_insert(t.calibration_units),
+                [
+                    {
+                        "calibration_id": payload.calibration_id,
+                        "work_id": u.work_id,
+                        "conversion_id": u.conversion_id,
+                    }
+                    for u in payload.units
+                ],
+            )
+
+    def labelled(conn: Connection, event: Event) -> None:
+        payload = MinerCalibrationLabelled.model_validate(event.payload)
+        unit = conn.execute(
+            select(t.calibration_units.c.work_id).where(
+                t.calibration_units.c.calibration_id == payload.calibration_id,
+                t.calibration_units.c.work_id == payload.work_id,
+            )
+        ).first()
+        if unit is None:
+            return  # a label of no drawn unit changes nothing
+        rows = canonical_json([r.model_dump(mode="json") for r in payload.rows]).decode()
+        values = {
+            "empty": payload.empty,
+            "rows_json": rows,
+            "channel": payload.channel.value,
+            "session": event.actor.session,
+            "event_id": event.id,
+        }
+        conn.execute(
+            sqlite_insert(t.calibration_labels)
+            .values(calibration_id=payload.calibration_id, work_id=payload.work_id, **values)
+            .on_conflict_do_update(index_elements=["calibration_id", "work_id"], set_=values)
+        )
+
+    return {
+        "miner.registered": registered,
+        "miner.retired": retired,
+        "miner.calibration_drawn": drawn,
+        "miner.calibration_labelled": labelled,
+    }

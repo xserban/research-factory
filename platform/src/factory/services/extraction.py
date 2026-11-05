@@ -1838,6 +1838,19 @@ def abandoned_task_ids(project: Project) -> set[str]:
     }
 
 
+def started_works(project: Project, *, scope: ScopeKey = Scope.EVIDENCE) -> set[str]:
+    """The works of `scope` an agent has taken up: a task of either pass was claimed or
+    completed (a queued task nobody served does not count), or a row exists. Read-only."""
+    project.index.sync()
+    ledger = _ledger(project, scope)
+    started = {
+        work
+        for (work, _), tasks in ledger.tasks.items()
+        if any(t.status != TaskStatus.OPEN.value for t in tasks)
+    }
+    return started | {work for work, _ in ledger.rows}
+
+
 def stale_claims(project: Project) -> set[str]:
     """The live claims pinned to a document that is no longer the work's current one. Schema
     amendments never stale a claim. Like `stale_extractions`, it ignores the population: claims
