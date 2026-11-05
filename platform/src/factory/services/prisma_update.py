@@ -57,6 +57,7 @@ from factory.services.prisma import (
     UNSPECIFIED,
     FullTextBoxes,
     full_text_boxes,
+    has_admission,
     prisma_flow,
 )
 from factory.services.seeds import held_out_work_ids
@@ -208,7 +209,12 @@ def compute_update(
         else:
             criterion = criteria.get(work) or UNSPECIFIED
             excluded[criterion] = excluded.get(criterion, 0) + 1
-    other = {method.value: 0 for method in OTHER_METHODS}
+    imports = has_admission(project)
+    other = {
+        method.value: 0
+        for method in OTHER_METHODS
+        if imports or method is not ProvenanceMethod.LIBRARY_IMPORT
+    }
     for method in facts.other.values():
         other[method] += 1
     flow = prisma_flow(project)
