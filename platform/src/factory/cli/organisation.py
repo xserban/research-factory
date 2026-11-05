@@ -305,7 +305,7 @@ def consolidation_status_cmd(ctx: typer.Context) -> None:
         due = consolidation_service.consolidation_due(project)
         open_pass = consolidation_service.open_pass_id(project)
     typer.echo(f"new label keys: {due.new_label_keys}")
-    typer.echo(f"new ideas and concepts: {due.new_nodes}")
+    typer.echo(f"new idea and concept nodes: {due.new_nodes}")
     typer.echo(f"due: {'yes' if due.due else 'no'}")
     typer.echo(f"open pass: {open_pass or '-'}")
 
