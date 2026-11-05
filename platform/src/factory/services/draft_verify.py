@@ -17,12 +17,13 @@ Invariants:
 
 from __future__ import annotations
 
+import json
 from collections.abc import Sequence
 
 from pydantic import Field, JsonValue, ValidationError
 from sqlalchemy import text
 
-from factory.errors import FactoryValidationError, ValidationIssue
+from factory.errors import FactoryError, FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
 from factory.index.drafts import CLAIM_BEARING, VERIFY_SKILL, identities, writers_of
 from factory.model.base import StrictModel
@@ -107,18 +108,31 @@ def _content(
     }
 
 
-def _open_tasks(project: Project) -> dict[str, str]:
-    """The task of each sentence that has one not completed: sentence id to task id."""
+def _open_tasks(project: Project, draft_id: str) -> dict[str, str]:
+    """The task of each sentence of the draft that has one not completed: sentence id to task id,
+    read from the task's refs. A task whose content is not a unit of that sentence was written by
+    hand and is passed over, so it blocks nothing."""
     with project.index.connect() as conn:
         rows = conn.execute(
-            text("SELECT task_id, content_blob FROM tasks WHERE kind = :k AND status != :done"),
+            text(
+                "SELECT task_id, content_blob, refs FROM tasks WHERE kind = :k AND status != :done"
+            ),
             {"k": DRAFT_VERIFY_TASK_KIND, "done": TaskStatus.COMPLETED.value},
         ).all()
     found: dict[str, str] = {}
-    for task_id, blob in rows:
-        content = project.blobs.get_json(str(blob))
-        if isinstance(content, dict):
-            found[str(content["sentence_id"])] = str(task_id)
+    for task_id, blob, refs in rows:
+        named = json.loads(str(refs))
+        if len(named) != 2 or named[0] != draft_id:
+            continue
+        try:
+            content = project.blobs.get_json(str(blob))
+            if not isinstance(content, dict):
+                continue
+            unit = VerifyUnit.model_validate({**content, "task_id": str(task_id)})
+        except (FactoryError, OSError, ValueError):
+            continue
+        if unit.sentence_id == named[1]:
+            found[unit.sentence_id] = str(task_id)
     return found
 
 
@@ -153,7 +167,7 @@ def verify_next(project: Project, draft_id: str, *, actor: Actor) -> VerifyUnit 
             raise _refuse("session", "a session that wrote in this draft cannot verify it")
         mode = rigor_mode(project)
         verified = _verified(project, draft_id)
-        tasks = _open_tasks(project)
+        tasks = _open_tasks(project, draft_id)
         passed_over = False
         previous: tuple[str, str] | None = None
         for row in sentence_rows(project, draft_id):

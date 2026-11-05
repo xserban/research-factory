@@ -1046,7 +1046,10 @@ def _open_slot_task(project: Project, draft_id: str, section_id: str) -> str | N
             {"k": DRAFT_SLOT_TASK_KIND, "done": TaskStatus.COMPLETED.value},
         ).all()
     for task_id, blob in rows:
-        content = project.blobs.get_json(str(blob))
+        try:
+            content = project.blobs.get_json(str(blob))
+        except (FactoryError, OSError, ValueError):
+            continue  # a hand-written task blocks nothing
         if (
             isinstance(content, dict)
             and content.get("draft_id") == draft_id
