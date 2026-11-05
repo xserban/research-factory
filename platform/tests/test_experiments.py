@@ -330,3 +330,24 @@ def test_an_agent_cannot_raise_the_test_access_limit_by_amending_the_protocol(
     lowered = raised.model_copy(update={"hypothesis_plan": HypothesisPlan(test_access_limit=2)})
     amend_protocol(project, OTHER, lowered, reason="fewer reads", semantic=True, effects={})
     assert effective_plan(project).test_access_limit == 2
+
+
+def test_projector_recomputes_the_access_limit_of_a_freeze(
+    project: Project, human: Actor, xw: XW
+) -> None:
+    # review I3: the limit is the design's or the plan's at that point of the log, not the payload's
+    exp, version = design_experiment(project, DRAFTER, xw.design(baselines=[]))
+    forged = ExperimentFrozen(
+        experiment_id=exp,
+        e_version=version,
+        policy=PolicyKind.HUMAN,
+        autonomy="human",
+        test_access_limit=99,
+    )
+    project.record([project.events.make("experiment.frozen", forged, human)])
+    view = experiment_view(project, exp)
+    assert view is not None and view.state == "draft" and view.access_limit is None
+    honest = forged.model_copy(update={"test_access_limit": 1})
+    project.record([project.events.make("experiment.frozen", honest, human)])
+    view = experiment_view(project, exp)
+    assert view is not None and (view.state, view.access_limit) == ("frozen", 1)

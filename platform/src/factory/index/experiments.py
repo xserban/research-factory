@@ -59,6 +59,7 @@ from factory.model.experiments import (
     XrunRegistered,
     XrunReported,
 )
+from factory.model.protocol import ProtocolSpec
 from factory.modules.contract import PolicyKind
 
 GATE = "experiments.freeze_unlock"
@@ -211,6 +212,17 @@ def act_is_consistent(
     return event.actor.session not in proposers
 
 
+def plan_access_limit(conn: Connection, t: ExperimentTables) -> int:
+    """`hypothesis_plan.test_access_limit` of the latest protocol recorded so far, else 1."""
+    row = conn.execute(
+        select(t.protocols.c.spec).order_by(t.protocols.c.event_id.desc()).limit(1)
+    ).first()
+    if row is None:
+        return 1
+    plan = ProtocolSpec.model_validate_json(str(row[0])).hypothesis_plan
+    return 1 if plan is None else plan.test_access_limit
+
+
 def _sessions(raw: object) -> set[str]:
     return {str(s) for s in json.loads(str(raw))}
 
@@ -311,9 +323,15 @@ def _frozen(t: ExperimentTables) -> Handler:
                 t.experiments.c.frozen_event_id,
                 t.experiments.c.superseded_by,
                 t.experiments.c.designer_sessions_json,
+                t.experiments.c.design_json,
             ).where(t.experiments.c.experiment_id == p.experiment_id)
         ).first()
         if row is None or row[1] is not None or row[2] is not None or str(row[0]) != p.e_version:
+            return
+        # the allowance is the design's or the plan's at this point of the log, never the payload's
+        if p.test_access_limit != (
+            design_of(row[4]).test_access_limit or plan_access_limit(conn, t)
+        ):
             return
         if not act_is_consistent(conn, t, event, p.policy, p.autonomy, _sessions(row[3])):
             return
