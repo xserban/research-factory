@@ -37,9 +37,9 @@ from factory.model.references import (
 )
 from factory.references.match import MATCHER, MATCHER_VERSION
 from factory.services.context import Project
+from factory.services.gates import effective_policy
 from factory.services.imports import import_records, import_row, record_key
 from factory.services.reference_resolve import (
-    _rigor_mode,
     confirmer_ruling,
     load_corpus,
     resolve_entries,
@@ -295,7 +295,7 @@ def decide_import(
             has_proposal = _has_proposal(project, import_id, ordinal)
             confirmed_by, refused = confirmer_ruling(
                 actor,
-                mode=_rigor_mode(project),
+                policy=effective_policy(project, "import.resolution_confirm"),
                 base_state=link.base_state,
                 confirmed_by=link.confirmed_by,
                 has_proposal=has_proposal,

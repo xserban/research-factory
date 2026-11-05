@@ -211,7 +211,9 @@ def extraction_audit_sample(
 
 def _gate(project: Project, actor: Actor, channel: Channel) -> list[ValidationIssue]:
     """Human acts only; an MCP relay must not come from a session that joined a pass."""
-    return audit_core.human_gate(project, actor, channel, noun="extraction-label")
+    return audit_core.human_gate(
+        project, actor, channel, noun="extraction-label", gate_id="extraction.audit_label"
+    )
 
 
 def _card_parameters(project: Project) -> tuple[ProtocolVersion, float, int]:

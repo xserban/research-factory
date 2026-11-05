@@ -73,13 +73,13 @@ from factory.model.references import (
 from factory.model.search import QueryKind, QueryPurpose, QuerySpec, RunStatus
 from factory.model.work import Work
 from factory.model.work_ids import arxiv_id_from_doi, normalize_title, work_id
-from factory.modules.contract import PolicyKind
-from factory.modules.presets import preset
+from factory.modules.contract import GatePolicy, PolicyKind
 from factory.references.match import Candidate, Match, match_title
 from factory.references.parse import PARSER_VERSION, RefFields, parse_bibliography
 from factory.services.context import Project
 from factory.services.conversions import conversion_manifest
 from factory.services.dedup import active_merges, canonical_works
+from factory.services.gates import effective_policy
 from factory.services.search import get_work, list_works, register_query, run_query
 from factory.sources.registry import SourceFactory
 
@@ -637,7 +637,7 @@ def _rigor_mode(project: Project) -> RigorMode:
 def confirmer_ruling(
     actor: Actor,
     *,
-    mode: RigorMode,
+    policy: GatePolicy,
     base_state: LinkState,
     confirmed_by: str | None,
     has_proposal: bool,
@@ -646,16 +646,16 @@ def confirmer_ruling(
     """Who a binding decision by `actor` is recorded as, or why it is refused (ruling 3).
 
     The policy of slice-3a ruling 3, shared by reference links and import records: a human always;
-    in `pilot` a second agent, on a title-fuzzy (`unconfirmed`) link only, seconding a recorded
-    proposal, from a session that made no earlier decision or proposal (`deciding_sessions`), and
-    never once a human has decided.
+    where the gate's policy is `agent_audit` (pilot by preset) a second agent, on a title-fuzzy
+    (`unconfirmed`) link only, seconding a recorded proposal, from a session that made no earlier
+    decision or proposal (`deciding_sessions`), and never once a human has decided.
     """
     if actor.kind == "human":
         return "human", []
     if actor.kind != "agent":
         return None, [ValidationIssue("actor", "only a human confirms or rejects a link")]
     reasons: list[str] = []
-    if preset(mode, "reference.link_confirm").kind is not PolicyKind.AGENT_AUDIT:
+    if policy.kind is PolicyKind.HUMAN:
         reasons.append("an agent may only propose outside pilot mode")
     if base_state is not LinkState.UNCONFIRMED:
         reasons.append("a second agent decides title-fuzzy (unconfirmed) links only")
@@ -677,7 +677,7 @@ def _confirmer(
     has_proposal = _has_proposal(project, extraction_id, ordinal)
     return confirmer_ruling(
         actor,
-        mode=_rigor_mode(project),
+        policy=effective_policy(project, "reference.link_confirm", mode=_rigor_mode(project)),
         base_state=link.base_state,
         confirmed_by=link.confirmed_by,
         has_proposal=has_proposal,

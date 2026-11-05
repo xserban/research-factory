@@ -71,7 +71,8 @@ from factory.services.extraction import (
     unit_states,
 )
 from factory.services.extraction_verify import VALUE_FIELD
-from factory.services.passes import require_not_pass_session, shared_refusal
+from factory.services.gates import gate_issues
+from factory.services.passes import shared_refusal
 
 __all__ = [
     "NON_COMPARABLE_KEYS",
@@ -812,9 +813,15 @@ def resolve_extraction(
         project.index.sync()
         protocol, schema, pack = require_schema(project, scope=scope)
         issues: list[ValidationIssue] = []
-        if actor.kind != "human":
-            issues.append(ValidationIssue("actor", "disagreements are resolved by a human"))
-        issues.extend(require_not_pass_session(project, actor, channel))
+        issues.extend(
+            gate_issues(
+                project,
+                actor,
+                "extraction.resolve",
+                channel=channel,
+                agent_text="disagreements are resolved by a human",
+            )
+        )
         if issues:
             raise FactoryValidationError(issues)
         state = _load(project, scope)

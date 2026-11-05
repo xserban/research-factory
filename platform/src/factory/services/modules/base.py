@@ -2,8 +2,8 @@
 
 A module's `hits` are the findings of the rules that carry its codes. The rules themselves stay
 in `services/check.py`, grouped in the order `check` reports them; this class selects the hits
-whose code the module declares. `methods` and `autonomy_acts` are empty until slice M-B and the
-methods plan give a module something to say.
+whose code the module declares. `autonomy_acts` lists the acts at the module's decision gates
+(services/gates.py); `methods` is empty until the methods plan gives a module something to say.
 
 Invariants:
 - `hits` never invents a hit: it returns exactly the rule results whose code is in `spec.checks`,
@@ -13,7 +13,13 @@ Invariants:
 
 from collections.abc import Iterable
 
-from factory.modules.contract import AutonomyAct, CheckHit, MethodsSection, ModuleSpec
+from factory.modules.contract import (
+    AutonomyAct,
+    CheckHit,
+    GateKind,
+    MethodsSection,
+    ModuleSpec,
+)
 from factory.services.context import Project
 
 
@@ -33,4 +39,7 @@ class RuleModule:
         return None
 
     def autonomy_acts(self, project: Project) -> Iterable[AutonomyAct]:
-        return ()
+        from factory.services.gates import as_autonomy_acts  # gates imports the registry
+
+        decision = tuple(g.gate_id for g in self.spec.gates if g.kind is GateKind.DECISION)
+        return as_autonomy_acts(project, decision)

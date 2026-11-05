@@ -43,7 +43,7 @@ from factory.model.seed import SeedKind
 from factory.modules.presets import Enforcement, enforcement
 from factory.services import passes
 from factory.services.context import Project
-from factory.services.passes import require_not_pass_session
+from factory.services.gates import gate_issues
 from factory.services.protocol import current_protocol, last_criterion_change, lineage_through
 from factory.services.screening_stats import CALIBRATION_SENSITIVITY, Rates, sensitivity_specificity
 from factory.services.search import list_works
@@ -158,8 +158,15 @@ def label_calibration(
     with project.index.exclusive():
         project.index.sync()
         issues: list[ValidationIssue] = []
-        if actor.kind != "human":
-            issues.append(ValidationIssue("actor", "calibration labels are human acts"))
+        issues.extend(
+            gate_issues(
+                project,
+                actor,
+                "screening.calibration_label",
+                channel=channel,
+                agent_text="calibration labels are human acts",
+            )
+        )
         if work_id not in _drawn_items(project, stage):
             issues.append(ValidationIssue("work_id", "not in the calibration set"))
         protocol = current_protocol(project)
@@ -171,7 +178,6 @@ def label_calibration(
                 issues.append(ValidationIssue("criterion", "not a criterion of the protocol"))
             else:
                 qualified = f"{protocol.protocol_id}:{criterion}"
-        issues.extend(require_not_pass_session(project, actor, channel))
         if issues:
             raise FactoryValidationError(issues)
         try:

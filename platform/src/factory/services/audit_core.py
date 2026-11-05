@@ -58,10 +58,20 @@ class AuditPopulation:
 
 
 def human_gate(
-    project: Project, actor: Actor, channel: Channel, *, noun: GateNoun
+    project: Project,
+    actor: Actor,
+    channel: Channel,
+    *,
+    noun: GateNoun,
+    gate_id: str | None = None,
 ) -> list[ValidationIssue]:
     """Issues for an audit act: a non-human `actor` (text by `noun`), and, for a label or an
-    evidence read, an MCP relay from a session in a pass of any module (`channel`)."""
+    evidence read, an MCP relay from a session in a pass of any module (`channel`). A label names
+    its decision gate, whose effective policy decides the actor check (`gates.gate_issues`)."""
+    if gate_id is not None:
+        from factory.services.gates import gate_issues  # gates imports this module
+
+        return gate_issues(project, actor, gate_id, channel=channel, agent_text=_ACTOR_TEXT[noun])
     issues: list[ValidationIssue] = []
     if actor.kind != "human":
         issues.append(ValidationIssue("actor", _ACTOR_TEXT[noun]))

@@ -60,7 +60,8 @@ from factory.services.calibration import calibration_items, calibration_labels, 
 from factory.services.call_memo import memoised
 from factory.services.context import Project
 from factory.services.conversions import conversion_document
-from factory.services.passes import require_not_pass_session, shared_refusal
+from factory.services.gates import gate_issues
+from factory.services.passes import shared_refusal
 from factory.services.protocol import ProtocolVersion, current_protocol, lineage_through
 from factory.services.screening import (
     live_decisions,
@@ -206,9 +207,15 @@ def resolve_disagreement(
         if screen is None:
             raise FactoryValidationError([ValidationIssue("protocol", "record a protocol first")])
         issues: list[ValidationIssue] = []
-        if actor.kind != "human":
-            issues.append(ValidationIssue("actor", "disagreements are resolved by a human"))
-        issues.extend(require_not_pass_session(project, actor, channel))
+        issues.extend(
+            gate_issues(
+                project,
+                actor,
+                "screening.resolve",
+                channel=channel,
+                agent_text="disagreements are resolved by a human",
+            )
+        )
         if work_id not in _open_for_resolution(screen):
             issues.append(
                 ValidationIssue(

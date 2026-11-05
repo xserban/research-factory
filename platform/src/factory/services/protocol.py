@@ -51,6 +51,7 @@ from factory.model.search import QueryKind, QueryPurpose, QuerySpec
 from factory.model.watch import CycleStatus
 from factory.modules.presets import Enforcement, enforcement
 from factory.services.context import Project
+from factory.services.gates import gate_issues
 from factory.services.protocol_rules import (
     criterion_changes,
     extraction_stale,
@@ -480,11 +481,14 @@ def press_review(
 
 def confirm_press(project: Project, actor: Actor, review_id: str, responses: Sequence[str]) -> None:
     """A human's confirmation of a PRESS review: one non-empty response per finding."""
-    issues: list[ValidationIssue] = []
-    if actor.kind != "human":
-        issues.append(ValidationIssue("actor", "a PRESS confirmation is human-only"))
     with project.index.exclusive():
         project.index.sync()
+        issues = gate_issues(
+            project,
+            actor,
+            "protocol.press_confirm",
+            agent_text="a PRESS confirmation is human-only",
+        )
         review = _review(project, review_id)
         if review is None:
             issues.append(ValidationIssue("review_id", "unknown review"))

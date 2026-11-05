@@ -165,7 +165,9 @@ def audit_record(
     """
     with project.index.exclusive():
         project.index.sync()
-        issues = audit_core.human_gate(project, actor, channel, noun="screening-label")
+        issues = audit_core.human_gate(
+            project, actor, channel, noun="screening-label", gate_id="screening.audit_label"
+        )
         stage = _audit_stage(project, audit_id)
         if stage is None:
             issues.append(ValidationIssue("audit_id", "unknown audit"))

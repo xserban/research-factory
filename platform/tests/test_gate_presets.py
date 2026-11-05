@@ -52,7 +52,7 @@ def test_presets_reproduce_behaviour(gate: str, kind: str, mode: RigorMode) -> N
     )
     confirmed, issues = confirmer_ruling(
         actor,
-        mode=mode,
+        policy=preset(mode, gate),
         base_state=LinkState.UNCONFIRMED,
         confirmed_by=None,
         has_proposal=True,
