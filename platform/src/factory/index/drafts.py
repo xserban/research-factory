@@ -31,6 +31,7 @@ from sqlalchemy import Column, Index, Integer, MetaData, String, Table, select, 
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Connection
 
+from factory.errors import FactoryError
 from factory.events.blobs import BlobStore
 from factory.events.envelope import Event
 from factory.index.projection import Handler
@@ -162,7 +163,7 @@ def _outline_matches(blobs: BlobStore | None, ref: str, blob: str) -> bool:
         return True
     try:
         data = blobs.get_json(blob)
-    except (OSError, ValueError):
+    except (FactoryError, OSError, ValueError):
         return False
     if not isinstance(data, dict):
         return False
