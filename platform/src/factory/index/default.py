@@ -11,6 +11,7 @@ from factory.index.fulltext import fulltext_handlers, fulltext_tables
 from factory.index.graph import graph_handlers, graph_tables
 from factory.index.imports import import_handlers, import_tables
 from factory.index.inbox import inbox_handlers, inbox_tables
+from factory.index.intuition import intuition_handlers, intuition_tables
 from factory.index.lineage import lineage_handlers, lineage_tables
 from factory.index.living import digest_handlers, digest_tables, living_handlers, living_tables
 from factory.index.notices import notice_handlers, notice_tables
@@ -61,6 +62,7 @@ def default_projection(blobs: BlobStore | None = None) -> Projection:
     conclusions = conclusion_tables(metadata)
     digests = digest_tables(metadata)
     cards = card_tables(metadata)
+    intuition = intuition_tables(metadata, screening.label_sessions)
     handlers: dict[str, Handler] = {
         "project.created": project_created_handler(project),
         **task_handlers(tasks),
@@ -85,6 +87,7 @@ def default_projection(blobs: BlobStore | None = None) -> Projection:
         **conclusion_handlers(conclusions),
         **digest_handlers(digests),
         **card_handlers(cards),
+        **intuition_handlers(intuition, screening.label_sessions),
     }
     # The graph projection reads the tables the other handlers of the same event just folded.
     for event_type, handler in graph_handlers().items():

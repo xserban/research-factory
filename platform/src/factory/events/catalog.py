@@ -37,6 +37,7 @@ from factory.model.imports import (
     ImportSplitDrawn,
 )
 from factory.model.inbox import InboxLinkAdded, InboxLinkResolved, InboxLinkWithdrawn
+from factory.model.intuition import InterpretationRecorded, InterpretationReviewed
 from factory.model.lineage import (
     IdeaDecided,
     IdeaMerged,
@@ -219,4 +220,6 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("card.asserted", CardAsserted, 1))
     catalog.register(EventType("card.assertion_decided", AssertionDecided, 1))
     catalog.register(EventType("card.imported", CardImported, 1))
+    catalog.register(EventType("interpretation.recorded", InterpretationRecorded, 1))
+    catalog.register(EventType("interpretation.reviewed", InterpretationReviewed, 1))
     return catalog
