@@ -24,6 +24,7 @@ from factory.services.relations import (
     relation_views,
 )
 from tests.contribution_helpers import P2, P4, P5, item
+from tests.document_helpers import StubConverter, make_registry, run_convert
 from tests.lineage_helpers import Lineage, ctr_a, ctr_b, lin, record_both, screened, world
 
 
@@ -58,12 +59,18 @@ def test_fresh_relations_have_proposal_status(project: Project, agent: Actor, li
     assert relation_view(project, "rel_01M68X9EG06809NC9ZQF9CAZZ0") is None
 
 
+def _reconvert(project: Project) -> None:
+    """A re-extraction on the same conversion is refused; convert the documents anew first."""
+    run_convert(project, make_registry(StubConverter(version="9.9+lineage")))
+
+
 def test_basis_correction_stales_and_reproposal_restores(  # Review Focus 5
     project: Project, agent: Actor, ctr_a: Actor, ctr_b: Actor, lin: Lineage
 ) -> None:
     # The basis is the base idea that cites nothing, so a new G1 extraction (which re-opens the
     # unit) does not make it stale; only its correction does.
     rid = _propose(project, agent, lin, lin.target5, lin.uncited_base)
+    _reconvert(project)
     extract_references(project, agent, [lin.source], sources=lin.lookups.sources())
     fixed = [
         item("base-idea", P5, name="Plain text", statement="Plain text with no marker"),
@@ -105,6 +112,7 @@ def test_amendment_removing_field_stales_relation(
 
 def test_new_g1_extraction_stales_relation(project: Project, agent: Actor, lin: Lineage) -> None:
     rid = _propose(project, agent, lin, lin.target5, lin.base)
+    _reconvert(project)
     extract_references(project, agent, [lin.source], sources={})
     reasons = _reasons(project, rid)
     assert "references-superseded" in reasons and "basis-stale" in reasons

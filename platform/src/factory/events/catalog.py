@@ -25,8 +25,6 @@ from factory.model.imports import (
     ImportSplitDrawn,
 )
 from factory.model.inbox import InboxLinkAdded, InboxLinkResolved, InboxLinkWithdrawn
-from factory.model.living import SnapshotRecorded
-from factory.model.notices import NoticeAssessed, NoticeObserved
 from factory.model.lineage import (
     IdeaDecided,
     IdeaMerged,
@@ -35,6 +33,8 @@ from factory.model.lineage import (
     RelationDecided,
     RelationProposed,
 )
+from factory.model.living import SnapshotRecorded
+from factory.model.notices import NoticeAssessed, NoticeObserved
 from factory.model.probe import ProbeFailed, ProbeMeasured, ProbePageArchived
 from factory.model.project import ProjectCreated
 from factory.model.protocol import (

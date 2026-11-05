@@ -10,9 +10,9 @@ from factory.index.extraction import extraction_handlers, extraction_tables
 from factory.index.fulltext import fulltext_handlers, fulltext_tables
 from factory.index.imports import import_handlers, import_tables
 from factory.index.inbox import inbox_handlers, inbox_tables
+from factory.index.lineage import lineage_handlers, lineage_tables
 from factory.index.living import living_handlers, living_tables
 from factory.index.notices import notice_handlers, notice_tables
-from factory.index.lineage import lineage_handlers, lineage_tables
 from factory.index.probe import probe_handlers, probe_tables
 from factory.index.project import project_created_handler, project_table
 from factory.index.projection import Handler, Projection, core_tables
