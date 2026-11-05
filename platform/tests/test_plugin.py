@@ -11,8 +11,10 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SKILLS = (
     "rf-cards",
     "rf-contributions",
+    "rf-critic",
     "rf-extract",
     "rf-frame",
+    "rf-ideate",
     "rf-intuition",
     "rf-lineage",
     "rf-probe",
@@ -169,3 +171,51 @@ def test_rf_intuition_skill_text() -> None:
     assert "not evidence" in lowered and "verbatim" in lowered
     assert "never review" in lowered and "never supersede a reviewed" in lowered
     assert "background" in lowered and "supports" in lowered
+
+
+def test_rf_ideate_names_its_tools_and_never_registers() -> None:
+    text = (REPO_ROOT / "plugin" / "skills" / "rf-ideate" / "SKILL.md").read_text("utf-8")
+    for tool in (
+        "lead_record",
+        "hypothesis_draft",
+        "hypothesis_view",
+        "match_query",
+        "finder_contradictions",
+        "finder_gaps",
+    ):
+        assert tool in text, tool
+    lowered = text.lower()
+    for phrase in (
+        "never register",
+        "prior",
+        "framework",
+        "falsifier",
+        "comparability keys",
+        "margin",
+        "superiority",
+        "non-inferiority",
+        "literature-direction",
+    ):
+        assert phrase in lowered, phrase
+    for kept in ("## Independence", "## Procedure", "## Tool arguments", "## Done when"):
+        assert kept in text
+    assert "hypothesis_register" not in text and "hypothesis_review" not in text
+
+
+def test_rf_critic_reads_only_the_artefact() -> None:
+    text = (REPO_ROOT / "plugin" / "skills" / "rf-critic" / "SKILL.md").read_text("utf-8")
+    assert "hypothesis_review_next" in text and "hypothesis_review`" in text
+    lowered = text.lower()
+    for phrase in (
+        "do not read the proposer's notes",
+        "revise",
+        "reject",
+        "falsifiable",
+        "conditions-in-evidence",
+        "drafter",
+        "lead author",
+    ):
+        assert phrase in lowered, phrase
+    for kept in ("## Independence", "## Procedure", "## Tool arguments", "## Done when"):
+        assert kept in text
+    assert "lead_record" not in text and "hypothesis_draft" not in text

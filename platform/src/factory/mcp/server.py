@@ -30,6 +30,13 @@ from factory.model.chase import ChaseDirection
 from factory.model.extraction import ClaimInput, ExtractedRowInput
 from factory.model.findings import ContradictionInput
 from factory.model.fulltext import Route
+from factory.model.hypotheses import (
+    DiscardReason,
+    HypothesisSpec,
+    LeadDecision,
+    LeadInput,
+    ReviewInput,
+)
 from factory.model.identity import IdGenerator
 from factory.model.inbox import Basis
 from factory.model.intuition import ConceptInput, InterpretationInput, ReviewState, UseBasisInput
@@ -42,6 +49,7 @@ from factory.model.references import Decision, Direction, LinkState
 from factory.model.screening import CalibrationLabelled, Channel, PassLabel, ScreeningItem
 from factory.model.search import QueryKind, QueryPurpose, QuerySpec
 from factory.model.seed import SeedSpec
+from factory.modules.contract import PolicyKind
 from factory.services import agreement as agreement_service
 from factory.services import audit as audit_service
 from factory.services import calibration as calibration_service
@@ -65,9 +73,12 @@ from factory.services import extraction_audit as extraction_audit_service
 from factory.services import finders as findings_service
 from factory.services import fulltext as fulltext_service
 from factory.services import fulltext_status as fulltext_status_service
+from factory.services import hypotheses as hypotheses_service
+from factory.services import hypothesis_review as review_service
 from factory.services import ideas as ideas_service
 from factory.services import inbox as inbox_service
 from factory.services import interpretations as interpretations_service
+from factory.services import leads as leads_service
 from factory.services import lineage as graph_service
 from factory.services import matching as matching_service
 from factory.services import methods as methods_service
@@ -93,6 +104,7 @@ from factory.services import watch as watch_service
 from factory.services.context import Project, open_project
 from factory.services.extraction import ExtractResult
 from factory.services.gate_status import gates_status
+from factory.services.hypothesis_gates import GateName, gate_policy
 from factory.services.living_hooks import default_hooks
 from factory.services.results import BatchResult, ItemError
 from factory.services.search import list_works
@@ -2247,6 +2259,227 @@ def build_server(
             )
 
         return _reply(project, propose, include_work_ids=False)
+
+    # --- Leads and hypotheses (slice 6, plan H-C) -----------------------------------------
+    # Every tool is refused to a pass session and, before a pass opens, answers with the same
+    # neutral message as the finders. The decision tools exist for the gates an agent may pass:
+    # they refuse under a `human` policy and never name a rate, a label or a threshold.
+
+    def _agent_gate(opened: Project, gate: GateName) -> None:
+        if gate_policy(opened, gate).kind is PolicyKind.HUMAN:
+            raise FactoryValidationError(
+                [ValidationIssue("gate", f"{gate} is a human gate: the researcher decides")]
+            )
+
+    @server.tool()
+    def lead_record(
+        project: str,
+        text: str,
+        triggers: list[dict[str, JsonValue]],
+        role: str,
+        model: str,
+        skill: str,
+        framework: str | None = None,
+    ) -> dict[str, JsonValue]:
+        """Record a research-idea lead (at most 600 characters) with at least one trigger: a
+        work (`rf:`), an evidence `row` key, a `claim`, a contribution `item`, an `idea`, an
+        `interpretation`, a `concept`, a method or problem `card`, a `contradiction`, an earlier
+        `lead` or `hypothesis`, or a builder row (`match`, `conflict`, `gap`) given with the key
+        and the row exactly as the builder returned it. Each trigger is `{kind, ref}` (builder
+        kinds also `row`). The answer lists `prior`: the parked and discarded leads and the
+        hypotheses that share a trigger, card, idea or property; read it and say how this lead
+        differs. Name the ideation `framework` you used. Refused to a session that has joined a
+        pass."""
+
+        def record() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            _require_pass_opened(opened)
+            actor = make_agent_actor(settings, session, role, model, skill)
+            item = parse_input(
+                LeadInput,
+                {"text": text, "triggers": cast(JsonValue, triggers), "framework": framework},
+                "lead",
+            )
+            lead_id = leads_service.record_lead(opened, actor, item)
+            view = leads_service.lead_view(opened, lead_id)
+            assert view is not None
+            data: dict[str, JsonValue] = {
+                "lead_id": lead_id,
+                "prior": list(view.prior),
+                "prior_total": view.prior_total,
+            }
+            return _withheld(opened, data, include_work_ids=False)
+
+        return _reply(project, record, include_work_ids=False)
+
+    @server.tool()
+    def lead_decide(
+        project: str,
+        lead_id: str,
+        decision: str,
+        role: str,
+        model: str,
+        skill: str,
+        reason: str | None = None,
+        note: str | None = None,
+    ) -> dict[str, JsonValue]:
+        """Promote, park or discard a lead. Refused unless the gate `hypotheses.lead_decide` is
+        one an agent may pass in this project, and refused to the lead's own session. A discard
+        needs a `reason` (duplicate, prior-failure, out-of-scope, infeasible, not-falsifiable,
+        other) and `other` needs a `note`. Refused to a session that has joined a pass."""
+
+        def decide() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            _require_pass_opened(opened)
+            _agent_gate(opened, "hypotheses.lead_decide")
+            actor = make_agent_actor(settings, session, role, model, skill)
+            if decision not in ("promote", "park", "discard"):
+                raise FactoryValidationError(
+                    [ValidationIssue("decision", "must be promote, park or discard")]
+                )
+            try:
+                why = None if reason is None else DiscardReason(reason)
+            except ValueError:
+                raise FactoryValidationError(
+                    [ValidationIssue("reason", "not a discard reason")]
+                ) from None
+            event_id = leads_service.decide_lead(
+                opened,
+                actor,
+                lead_id,
+                cast(LeadDecision, decision),
+                why,
+                note,
+            )
+            return _withheld(opened, {"event_id": event_id}, include_work_ids=False)
+
+        return _reply(project, decide, include_work_ids=False)
+
+    @server.tool()
+    def hypothesis_draft(
+        project: str,
+        spec: dict[str, JsonValue],
+        role: str,
+        model: str,
+        skill: str,
+        supersedes: str | None = None,
+    ) -> dict[str, JsonValue]:
+        """Draft a hypothesis: kind (experiment or literature), a statement, the promoted `lead`
+        (required in pilot and systematic mode), treatment and baseline (a method card, a lineage
+        idea or a name, with an optional evidence row), one metric, conditions (comparability
+        keys of the evidence schema), a prediction with a margin stated before any result, a
+        decision rule from the menu (superiority, non-inferiority, literature-direction) and a
+        test. The platform computes the version `H@` and the falsifier sentence; you never state
+        a state or a version. `supersedes` names the draft this one replaces; a hypothesis with
+        evidence cannot be replaced. Refused to a session that has joined a pass."""
+
+        def draft() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            _require_pass_opened(opened)
+            actor = make_agent_actor(settings, session, role, model, skill)
+            parsed = parse_input(HypothesisSpec, spec, "spec")
+            hypothesis_id, version = hypotheses_service.draft_hypothesis(
+                opened, actor, parsed, supersedes=supersedes
+            )
+            created = hypotheses_service.hypothesis_view(opened, hypothesis_id)
+            assert created is not None
+            data: dict[str, JsonValue] = {
+                "hypothesis_id": hypothesis_id,
+                "h_version": version,
+                "falsifier": created.falsifier,
+            }
+            return _withheld(opened, data, include_work_ids=False)
+
+        return _reply(project, draft, include_work_ids=False)
+
+    @server.tool()
+    def hypothesis_view(project: str, hypothesis_id: str) -> dict[str, JsonValue]:
+        """One hypothesis: its spec, version, falsifier sentence, computed state, reviews,
+        registration, the R-53 flags of a literature hypothesis and the autonomy label of its
+        registration. Read-only; refused to a session that has joined a pass."""
+
+        def view() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            _require_pass_opened(opened)
+            found = hypotheses_service.hypothesis_view(opened, hypothesis_id)
+            if found is None:
+                raise FactoryValidationError([ValidationIssue("hypothesis_id", "unknown")])
+            return _withheld(opened, found.model_dump(mode="json"), include_work_ids=False)
+
+        return _reply(project, view, include_work_ids=False)
+
+    @server.tool()
+    def hypothesis_review_next(
+        project: str, role: str, model: str, skill: str
+    ) -> dict[str, JsonValue]:
+        """Claim the oldest hypothesis draft that has no independent review and return its
+        review task: the artefact only (spec without prose, statement, the lead's triggers and
+        the prior failures), never the lead's text or the drafter's reasoning. The data is null
+        when none waits. Refused to the drafter's session, to the lead author's session and, when
+        the protocol asks for a distinct critic model, to the drafter's model. Refused to a
+        session that has joined a pass."""
+
+        def serve() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            _require_pass_opened(opened)
+            actor = make_agent_actor(settings, session, role, model, skill)
+            served = review_service.review_next(opened, actor)
+            if served is None:
+                return None
+            return _withheld(opened, served.model_dump(mode="json"), include_work_ids=False)
+
+        return _reply(project, serve, include_work_ids=False)
+
+    @server.tool()
+    def hypothesis_review(
+        project: str,
+        task_id: str,
+        review: dict[str, JsonValue],
+        role: str,
+        model: str,
+        skill: str,
+    ) -> dict[str, JsonValue]:
+        """Record the review of a claimed review task: `items` (every checklist item as pass,
+        fail or n/a), optional `notes` per item (at most 300 characters) and `recommend`
+        (register, revise or reject; a failing item allows only revise or reject). Judge the
+        artefact in the task; do not ask for or read the proposer's notes. Refused to a session
+        that has joined a pass."""
+
+        def record() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            _require_pass_opened(opened)
+            actor = make_agent_actor(settings, session, role, model, skill)
+            parsed = parse_input(ReviewInput, review, "review")
+            event_id = review_service.record_review(opened, actor, task_id, parsed)
+            return _withheld(opened, {"event_id": event_id}, include_work_ids=False)
+
+        return _reply(project, record, include_work_ids=False)
+
+    @server.tool()
+    def hypothesis_register(
+        project: str, hypothesis_id: str, role: str, model: str, skill: str
+    ) -> dict[str, JsonValue]:
+        """Register a reviewed hypothesis and freeze its version. Refused unless the gate
+        `hypotheses.register` is one an agent may pass in this project, and refused to the
+        drafter's and the lead author's sessions. A registration by an agent is labelled and is
+        never reported as confirmatory. Refused to a session that has joined a pass."""
+
+        def register() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            _require_pass_opened(opened)
+            _agent_gate(opened, "hypotheses.register")
+            actor = make_agent_actor(settings, session, role, model, skill)
+            event_id = hypotheses_service.register_hypothesis(opened, actor, hypothesis_id)
+            return _withheld(opened, {"event_id": event_id}, include_work_ids=False)
+
+        return _reply(project, register, include_work_ids=False)
 
     return server
 

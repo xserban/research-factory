@@ -37,6 +37,7 @@ from factory.services.fulltext import FetchSummary
 from factory.services.fulltext_import import ImportReport
 from factory.services.fulltext_status import FulltextStatus
 from factory.services.gate_status import GateStatusRow
+from factory.services.hypotheses import HypothesisView
 from factory.services.ideas import IdeaCandidate, IdeaView
 from factory.services.import_admit import AdmissionSummary
 from factory.services.import_attach import AttachReport
@@ -49,6 +50,7 @@ from factory.services.imports import (
 )
 from factory.services.inbox import InboxPage, ResolveOutcome
 from factory.services.interpretations import InterpretationList, InterpretationView
+from factory.services.leads import LeadView
 from factory.services.lineage import GraphQueryResult, GraphStatus
 from factory.services.matching import MatchPage
 from factory.services.mining import MinerListing, MineStatus
@@ -1221,3 +1223,49 @@ def diff_lines(
         *(f"+ {kind.value} {member}" for kind, member in added),
         *(f"- {kind.value} {member}" for kind, member in removed),
     ]
+def lead_lines(views: list[LeadView]) -> list[str]:
+    if not views:
+        return ["no leads"]
+    lines: list[str] = []
+    for v in views:
+        shown = ", ".join(f"{t.kind.value} {t.ref}" for t in v.triggers)
+        lines.append(f"{v.lead_id}  {v.state}  {v.text}")
+        lines.append(f"    triggers: {shown}")
+        if v.prior:
+            more = "" if v.prior_total == len(v.prior) else f" of {v.prior_total}"
+            lines.append(f"    prior: {', '.join(v.prior)}{more}")
+        if v.framework:
+            lines.append(f"    framework: {v.framework}")
+    return lines
+
+
+def hypothesis_lines(views: list[HypothesisView]) -> list[str]:
+    if not views:
+        return ["no hypotheses"]
+    return [
+        f"{v.hypothesis_id}  {v.h_version}  {v.state}"
+        + (f"  autonomy: {v.autonomy}" if v.autonomy == "agent" else "")
+        + (f"  [{', '.join(v.flags)}]" if v.flags else "")
+        + f"  {v.spec.statement}"
+        for v in views
+    ]
+
+
+def hypothesis_detail_lines(v: HypothesisView) -> list[str]:
+    lines = [
+        f"{v.hypothesis_id}  {v.h_version}  {v.state}",
+        f"  {v.spec.statement}",
+        f"  falsifier: {v.falsifier}",
+        f"  kind: {v.spec.kind}; rule: {v.spec.decision_rule.rule}",
+    ]
+    if v.flags:
+        lines.append(f"  flags: {', '.join(v.flags)}")
+    if v.registration is not None:
+        lines.append(f"  registered by {v.autonomy}: {v.registration}")
+        if v.autonomy == "agent":
+            lines.append("  autonomy: agent (never reported as confirmatory)")
+    if v.reviews:
+        lines.append(f"  reviews: {', '.join(v.reviews)}")
+    if v.conclusion:
+        lines.append(f"  conclusion (interpretation): {v.conclusion}")
+    return lines

@@ -4,7 +4,7 @@ import json
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Literal, NoReturn, TypeVar, cast
@@ -28,6 +28,7 @@ from factory.model import lineage as lineage_model
 from factory.model.chase import ChaseDirection
 from factory.model.conclusions import BasisRef, Predicate
 from factory.model.fulltext import Route
+from factory.model.hypotheses import AbandonReason, DiscardReason
 from factory.model.identity import IdGenerator
 from factory.model.intuition import (
     ConceptInput,
@@ -71,6 +72,7 @@ from factory.services import fulltext as fulltext_service
 from factory.services import fulltext_import as fulltext_import_service
 from factory.services import fulltext_status as fulltext_status_service
 from factory.services import gates as gates_service
+from factory.services import hypotheses as hypotheses_service
 from factory.services import ideas as ideas_service
 from factory.services import import_admit as import_admit_service
 from factory.services import import_attach as import_attach_service
@@ -79,6 +81,7 @@ from factory.services import imports as imports_service
 from factory.services import inbox as inbox_service
 from factory.services import inbox_watch as inbox_watch_service
 from factory.services import interpretations as interpretations_service
+from factory.services import leads as leads_service
 from factory.services import lineage as graph_service
 from factory.services import matching as matching_service
 from factory.services import methods as methods_service
@@ -238,6 +241,21 @@ contradictions_app = typer.Typer(
     help="Claim contradictions: list, confirm and reject (human only).",
     no_args_is_help=True,
 )
+leads_app = typer.Typer(
+    name="leads",
+    help="Research-idea leads: list, promote, park and discard (human).",
+    no_args_is_help=True,
+)
+hypotheses_app = typer.Typer(
+    name="hypotheses",
+    help="Hypotheses: list, show, register, abandon and conclude (human).",
+    no_args_is_help=True,
+)
+models_app = typer.Typer(
+    name="models",
+    help="Model facts the platform cannot know: training cut-offs (human).",
+    no_args_is_help=True,
+)
 interpretations_app = typer.Typer(
     name="interpretations",
     help="Interpretations of the intuition layer: list, show, review, supersede and write (human).",
@@ -345,6 +363,9 @@ app.add_typer(vocabulary_app)
 app.add_typer(cards_app)
 app.add_typer(finders_app)
 app.add_typer(contradictions_app)
+app.add_typer(leads_app)
+app.add_typer(hypotheses_app)
+app.add_typer(models_app)
 app.add_typer(graph_app)
 app.add_typer(interpretations_app)
 app.add_typer(concepts_app)
@@ -4044,3 +4065,190 @@ def regions_diff_cmd(
         added, removed = regions_service.snapshot_diff(project, older, newer)
     for line in render.diff_lines(added, removed):
         typer.echo(line)
+# --- Leads, hypotheses and model cut-offs (slice 6, plan H-C) ------------------------------
+
+
+@leads_app.command("list")
+def leads_list_cmd(
+    ctx: typer.Context,
+    state_: Annotated[
+        list[str] | None,
+        typer.Option("--state", help="open, promoted, parked or discarded; repeat for more."),
+    ] = None,
+) -> None:
+    """Leads with their triggers and the prior failures they were shown; the default is all."""
+    chosen = state_ or ["open", "promoted", "parked", "discarded"]
+    for name in chosen:
+        if name not in ("open", "promoted", "parked", "discarded"):
+            _fail(f"--state {name!r}: expected open, promoted, parked or discarded", 2)
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        views = leads_service.list_leads(project, states=chosen)  # type: ignore[arg-type]
+    for line in render.lead_lines(views):
+        typer.echo(line)
+
+
+def _decide_lead_cmd(
+    ctx: typer.Context,
+    lead: str,
+    decision: Literal["promote", "park", "discard"],
+    reason: str | None = None,
+    note: str | None = None,
+) -> None:
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        try:
+            why = None if reason is None else DiscardReason(reason)
+        except ValueError:
+            choices = ", ".join(r.value for r in DiscardReason)
+            _fail(f"--reason {reason!r}: expected one of {choices}", 2)
+        leads_service.decide_lead(project, project.human_actor(), lead, decision, why, note)
+    typer.echo(
+        f"{ {'promote': 'promoted', 'park': 'parked', 'discard': 'discarded'}[decision] } {lead}"
+    )
+
+
+@leads_app.command("promote")
+def leads_promote_cmd(
+    ctx: typer.Context, lead: Annotated[str, typer.Argument(help="A lead id, led_.")]
+) -> None:
+    """Promote a lead so that a hypothesis may be drafted from it."""
+    _decide_lead_cmd(ctx, lead, "promote")
+
+
+@leads_app.command("park")
+def leads_park_cmd(
+    ctx: typer.Context, lead: Annotated[str, typer.Argument(help="A lead id, led_.")]
+) -> None:
+    """Park a lead; it stays in the log and shows as a prior for later leads."""
+    _decide_lead_cmd(ctx, lead, "park")
+
+
+@leads_app.command("discard")
+def leads_discard_cmd(
+    ctx: typer.Context,
+    lead: Annotated[str, typer.Argument(help="A lead id, led_.")],
+    reason: Annotated[
+        str,
+        typer.Option(
+            "--reason",
+            help="duplicate, prior-failure, out-of-scope, infeasible, not-falsifiable or other.",
+        ),
+    ],
+    note: Annotated[str | None, typer.Option("--note", help="Required for `other`.")] = None,
+) -> None:
+    """Discard a lead with a reason; nothing is deleted."""
+    _decide_lead_cmd(ctx, lead, "discard", reason, note)
+
+
+@hypotheses_app.command("list")
+def hypotheses_list_cmd(
+    ctx: typer.Context,
+    state_: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--state",
+            help="draft, reviewed, registered, evaluated, abandoned or superseded; repeat.",
+        ),
+    ] = None,
+) -> None:
+    """Hypotheses with their versions and computed states."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        views = hypotheses_service.list_hypotheses(project, states=state_)
+    for line in render.hypothesis_lines(views):
+        typer.echo(line)
+
+
+@hypotheses_app.command("show")
+def hypotheses_show_cmd(
+    ctx: typer.Context, hypothesis: Annotated[str, typer.Argument(help="A hypothesis id, hyp_.")]
+) -> None:
+    """One hypothesis: the falsifier sentence, state, flags and autonomy label."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        view = hypotheses_service.hypothesis_view(project, hypothesis)
+    if view is None:
+        _fail(f"unknown hypothesis {hypothesis}", 1)
+    for line in render.hypothesis_detail_lines(view):
+        typer.echo(line)
+
+
+@hypotheses_app.command("register")
+def hypotheses_register_cmd(
+    ctx: typer.Context, hypothesis: Annotated[str, typer.Argument(help="A hypothesis id, hyp_.")]
+) -> None:
+    """Register a reviewed hypothesis and freeze its version (a human act)."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        hypotheses_service.register_hypothesis(project, project.human_actor(), hypothesis)
+        view = hypotheses_service.hypothesis_view(project, hypothesis)
+    typer.echo(f"registered {hypothesis} {view.h_version if view else ''}".rstrip())
+
+
+@hypotheses_app.command("abandon")
+def hypotheses_abandon_cmd(
+    ctx: typer.Context,
+    hypothesis: Annotated[str, typer.Argument(help="A hypothesis id, hyp_.")],
+    reason: Annotated[
+        str,
+        typer.Option(
+            "--reason",
+            help="no-runnable-code, budget-exhausted, infeasible, data-unavailable or other.",
+        ),
+    ],
+    note: Annotated[str, typer.Option("--note", help="Why, in at most 300 characters.")],
+) -> None:
+    """Abandon a hypothesis with a reason (a human act); it stays in the log."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        try:
+            why = AbandonReason(reason)
+        except ValueError:
+            choices = ", ".join(r.value for r in AbandonReason)
+            _fail(f"--reason {reason!r}: expected one of {choices}", 2)
+        hypotheses_service.abandon_hypothesis(project, project.human_actor(), hypothesis, why, note)
+    typer.echo(f"abandoned {hypothesis}")
+
+
+@hypotheses_app.command("conclude")
+def hypotheses_conclude_cmd(
+    ctx: typer.Context,
+    hypothesis: Annotated[str, typer.Argument(help="A hypothesis id, hyp_.")],
+    text_: Annotated[
+        str, typer.Option("--text", help="Your reading of the outcome, at most 1,200 characters.")
+    ],
+) -> None:
+    """Add a conclusion, labelled as interpretation, to an evaluated hypothesis (a human act)."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        hypotheses_service.conclude_hypothesis(project, project.human_actor(), hypothesis, text_)
+    typer.echo(f"concluded {hypothesis}")
+
+
+@models_app.command("cutoff")
+def models_cutoff_cmd(
+    ctx: typer.Context,
+    model: Annotated[str, typer.Argument(help="The model name as agents report it.")],
+    cutoff: Annotated[str, typer.Argument(help="Training cut-off, YYYY-MM-DD.")],
+    source: Annotated[
+        str, typer.Option("--source", help="Where the cut-off is stated (a card, a page).")
+    ],
+) -> None:
+    """Declare a model's training cut-off (R-53); the latest declaration per model wins."""
+    try:
+        day = date.fromisoformat(cutoff)
+    except ValueError:
+        _fail(f"cutoff {cutoff!r}: expected YYYY-MM-DD", 2)
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        hypotheses_service.declare_cutoff(project, project.human_actor(), model, day, source)
+    typer.echo(f"declared {model} {day.isoformat()}")
