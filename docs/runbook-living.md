@@ -57,13 +57,17 @@ A daily call is enough: the command does nothing until a source's `interval_days
 
 ## A scheduled Claude routine
 
-A routine that reads what the watch found runs three steps, in order:
+A routine that reads what the watch found runs three steps, in order (skill `rf-living`):
 
-1. `factory watch run --due --all --json`. It reads the exit status and the per-project JSON; the platform decides what is due, the routine never builds a query.
-2. `factory digest --all --record`. **Pending:** the digest command arrives with plan living-D; until then the routine stops after step 1 and reports the cycle summaries.
-3. Deliver the output (mail, chat) as the researcher prefers.
+1. `factory watch run --due --all --json`. It reads the exit status and the per-project JSON; the platform decides what is due, the routine never builds a query. A non-zero exit does not stop step 2: the digest lists failed and overdue watches.
+2. `factory digest --all --record --format md --out DIR`. The file is named after the digest id; `--record` stores the digest and writes one `digest.generated` event per project, and the next digest starts at that cut-off. Without `--record` nothing is written (`--format both` writes Markdown and JSON). The MCP tool `digest_get` returns the agent view and never records.
+3. Deliver the file (mail, chat) as the researcher prefers. The platform sends nothing.
 
-The routine records no screening verdict and no priority: new works enter the corpus as pending works and are screened through the declared passes. A routine that runs `watch_run` over MCP is recorded with the agent actor and keeps its input.
+The routine records no screening verdict and no priority, and it does not assess notices, prefer documents or register conclusions: those are the researcher's acts (`factory notices assess`, `factory versions prefer`, `factory conclusions register`). New works enter the corpus as pending works and are screened through the declared passes in separate sessions. A routine that runs `watch_run` over MCP is recorded with the agent actor and keeps its input.
+
+## Conclusions
+
+`factory conclusions register --statement TEXT --basis KIND:REF ... [--predicate JSON]` records a conclusion with its basis (cell, row, group, work); every reference must resolve. `factory conclusions status|diff [--since SNAPSHOT]` show how each stands against a snapshot: `unchanged`, `changed`, `basis-affected` or `new`, all computed. Take a snapshot with `factory living snapshot` (or `snapshot_every` in the watch plan) so that later cycles have a reference.
 
 ## Reading a result
 
