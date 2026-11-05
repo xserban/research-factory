@@ -25,6 +25,7 @@ from factory.mcp.conventions import (
     withhold,
 )
 from factory.model.base import StrictModel
+from factory.model.cards import PropertyDef
 from factory.model.chase import ChaseDirection
 from factory.model.extraction import ClaimInput, ExtractedRowInput
 from factory.model.fulltext import Route
@@ -42,6 +43,7 @@ from factory.model.seed import SeedSpec
 from factory.services import agreement as agreement_service
 from factory.services import audit as audit_service
 from factory.services import calibration as calibration_service
+from factory.services import cards as cards_service
 from factory.services import chase as chase_service
 from factory.services import check as check_service
 from factory.services import conclusions as conclusions_service
@@ -68,6 +70,7 @@ from factory.services import prisma as prisma_service
 from factory.services import prisma_update as prisma_update_service
 from factory.services import probe as probe_service
 from factory.services import project as project_service
+from factory.services import properties as properties_service
 from factory.services import protocol as protocol_service
 from factory.services import question as question_service
 from factory.services import reference_resolve as reference_resolve_service
@@ -1666,6 +1669,114 @@ def build_server(
             return _withheld(opened, text, include_work_ids=False)
 
         return _reply(project, export, include_work_ids=False)
+
+    @server.tool()
+    def vocabulary_propose(
+        project: str,
+        definition: dict[str, JsonValue],
+        role: str,
+        model: str,
+        skill: str,
+    ) -> dict[str, JsonValue]:
+        """Propose a property for the project vocabulary: `definition` has `key` (`pr:<slug>`),
+        `kind` (enum, set, bool or number), `allowed` (enum and set), `unit_family` (number),
+        `match` (equal, covers, at-most or at-least), `applies_to` (method, problem or both),
+        `aliases` and `value_aliases` (phrases that stand for the property or a value), and a
+        `description`. It stays unusable until the researcher approves it; no tool approves,
+        rejects or merges properties. Propose only when no approved key fits. Refused to a
+        session that has joined a pass."""
+
+        def propose() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            actor = make_agent_actor(settings, session, role, model, skill)
+            parsed = parse_input(PropertyDef, definition, "definition")
+            key = properties_service.propose_property(opened, actor, parsed)
+            return _withheld(opened, {"key": key}, include_work_ids=False)
+
+        return _reply(project, propose, include_work_ids=False)
+
+    @server.tool()
+    def card_create(
+        project: str,
+        kind: str,
+        subject: str,
+        owner: str,
+        role: str,
+        model: str,
+        skill: str,
+    ) -> dict[str, JsonValue]:
+        """Create the card of a subject and return its id (an existing card of the subject is
+        returned instead). A `method` card's subject is a confirmed lineage idea (`ida_`) or a
+        work id; a `problem` card's subject is the project's current question id (`Q@...`) or a
+        short task name under it. `owner` names who the card is for. Refused to a session that
+        has joined a pass."""
+
+        def create() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            _require_pass_opened(opened)
+            if kind not in ("method", "problem"):
+                raise FactoryValidationError([ValidationIssue("kind", "must be method or problem")])
+            actor = make_agent_actor(settings, session, role, model, skill)
+            card_id = cards_service.create_card(opened, actor, kind, subject, owner)  # type: ignore[arg-type]
+            return _withheld(opened, {"card_id": card_id}, include_work_ids=False)
+
+        return _reply(project, create, include_work_ids=False)
+
+    @server.tool()
+    def card_assert(
+        project: str,
+        card_id: str,
+        items: list[dict[str, JsonValue]],
+        role: str,
+        model: str,
+        skill: str,
+        status: str | None = None,
+    ) -> dict[str, JsonValue]:
+        """Record property assertions on a card, each item alone (partial acceptance). An item is
+        {property, value, unit?, basis_kind, basis}: `basis_kind` `quote` with basis {work_id,
+        conversion_id, anchor, quote} (the quote must be verbatim and carry the value; a number is
+        checked as in extraction; a `false` bool cannot be quoted), `row` with basis {row_key,
+        field} of a final evidence row that says the same, or `inferred` with basis {note,
+        supports?} (waits for the researcher; say so). Record one assertion per property, quoting
+        the sentence that states it. The platform computes the status; `status` is not an input:
+        giving it, here or in an item, is refused. Rejected items are returned with their reasons.
+        No tool confirms an assertion. Refused to a session that has joined a pass."""
+
+        def assert_() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            _require_pass_opened(opened)
+            if status is not None:
+                raise FactoryValidationError(
+                    [ValidationIssue("status", "the platform sets the status; do not send one")]
+                )
+            actor = make_agent_actor(settings, session, role, model, skill)
+            result = cards_service.assert_properties_raw(opened, actor, card_id, items)
+            return _withheld(opened, result.model_dump(mode="json"), include_work_ids=False)
+
+        return _reply(project, assert_, include_work_ids=False)
+
+    @server.tool()
+    def card_view(
+        project: str, card_id: str, include_inferred: bool = False
+    ) -> dict[str, JsonValue]:
+        """A card with its live assertions and their effective status. The default view shows
+        stated and confirmed assertions; `include_inferred` adds inferred ones, labelled. Stale
+        and rejected assertions are counted in `hidden_counts`, not shown. Read-only; refused to
+        a session that has joined a pass."""
+
+        def view() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            _require_pass_opened(opened)
+            found = cards_service.card_view(opened, card_id, include_inferred=include_inferred)
+            if found is None:
+                raise FactoryValidationError([ValidationIssue("card_id", "unknown")])
+            return _withheld(opened, found.model_dump(mode="json"), include_work_ids=False)
+
+        return _reply(project, view, include_work_ids=False)
 
     return server
 

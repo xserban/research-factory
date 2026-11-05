@@ -9,6 +9,7 @@ from factory.model.references import Decision, LinkState
 from factory.model.screening import PassLabel
 from factory.services.agreement import DecisionView
 from factory.services.audit import AuditReport
+from factory.services.cards import CardSummary, CardView
 from factory.services.check import CheckReport
 from factory.services.contributions import ContributionStatus, ItemView
 from factory.services.coverage import CoverageReport, Ratio
@@ -39,6 +40,7 @@ from factory.services.inbox import InboxPage, ResolveOutcome
 from factory.services.lineage import GraphQueryResult, GraphStatus
 from factory.services.prisma import UNCONVERTED, PrismaFlow, SearchReport
 from factory.services.prisma_update import UpdateFlow
+from factory.services.properties import PropertyView
 from factory.services.references import ExtractSummary, Page, ReferenceCounts
 from factory.services.relations import RelationView
 from factory.services.snowball import Comparison, RoundCandidate, RoundResult
@@ -733,6 +735,51 @@ def idea_candidate_lines(candidates: list[IdeaCandidate]) -> list[str]:
     if not candidates:
         return ["no candidates"]
     return [f"{c.work_id}  {', '.join(c.reasons)}" for c in candidates]
+
+
+def property_lines(views: list[PropertyView]) -> list[str]:
+    if not views:
+        return ["no properties"]
+    return [
+        f"{v.key}  {v.state}  {v.definition.kind.value}  match {v.definition.match.value}  "
+        f"for {v.definition.applies_to}"
+        + (f"  allowed {', '.join(v.definition.allowed)}" if v.definition.allowed else "")
+        + (f"  into {v.merged_into}" if v.merged_into else "")
+        for v in views
+    ]
+
+
+def card_lines(cards: list[CardSummary]) -> list[str]:
+    if not cards:
+        return ["no cards"]
+    return [
+        f"{c.card_id}  {c.kind}  {c.subject}  assertions {c.assertions}  owner {c.owner}"
+        for c in cards
+    ]
+
+
+def _shown_value(value: str | tuple[str, ...] | bool, unit: str | None) -> str:
+    text = ", ".join(value) if isinstance(value, tuple) else str(value).lower()
+    return f"{text} {unit}" if unit else text
+
+
+def card_view_lines(view: CardView) -> list[str]:
+    """The card, one line per assertion, labelled by its effective status; a stale assertion
+    names why, and what the filter left out is counted."""
+    lines = [f"{view.card_id}  {view.kind}  {view.subject}  owner {view.owner}"]
+    for a in view.assertions:
+        label = a.effective if a.effective == a.status else f"{a.effective} ({a.status})"
+        why = f"  [{', '.join(a.stale_reasons)}]" if a.stale_reasons else ""
+        lines.append(
+            f"  {a.assertion_id}  {a.property} = {_shown_value(a.value, a.unit)}  "
+            f"{label}  basis {a.basis_kind}{why}"
+        )
+    if not view.assertions:
+        lines.append("  no assertions shown")
+    if view.hidden_counts:
+        hidden = ", ".join(f"{n} {k}" for k, n in sorted(view.hidden_counts.items()))
+        lines.append(f"  not shown: {hidden}")
+    return lines
 
 
 def _filter_line(filter_: Mapping[str, object]) -> str:

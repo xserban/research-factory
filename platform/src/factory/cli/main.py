@@ -37,6 +37,7 @@ from factory.model.work import ProvenanceMethod
 from factory.services import agreement as agreement_service
 from factory.services import audit as audit_service
 from factory.services import calibration as calibration_service
+from factory.services import cards as cards_service
 from factory.services import chase as chase_service
 from factory.services import check as check_service
 from factory.services import conclusions as conclusions_service
@@ -69,6 +70,7 @@ from factory.services import portfolio as portfolio_service
 from factory.services import prisma as prisma_service
 from factory.services import prisma_update as prisma_update_service
 from factory.services import project as project_service
+from factory.services import properties as properties_service
 from factory.services import protocol as protocol_service
 from factory.services import reference_resolve as reference_resolve_service
 from factory.services import references as references_service
@@ -180,6 +182,16 @@ ideas_app = typer.Typer(
     help="Ideas: define, list, confirm, reject, merge and unmerge (human only).",
     no_args_is_help=True,
 )
+vocabulary_app = typer.Typer(
+    name="vocabulary",
+    help="The property vocabulary: list, approve, reject, merge and unmerge (human only).",
+    no_args_is_help=True,
+)
+cards_app = typer.Typer(
+    name="cards",
+    help="Method cards and problem descriptions: list, show, assert, confirm and reject.",
+    no_args_is_help=True,
+)
 graph_app = typer.Typer(
     name="graph",
     help="The lineage graph: build, status, bounded queries and JSON or DOT export.",
@@ -260,6 +272,8 @@ app.add_typer(extract_app)
 app.add_typer(contributions_app)
 app.add_typer(relations_app)
 app.add_typer(ideas_app)
+app.add_typer(vocabulary_app)
+app.add_typer(cards_app)
 app.add_typer(graph_app)
 app.add_typer(import_app)
 
@@ -2715,6 +2729,195 @@ def ideas_candidates_cmd(
         found = ideas_service.idea_candidates(project, origin, name)
     for line in render.idea_candidate_lines(found):
         typer.echo(line)
+
+
+# --- Vocabulary and cards (slice 6, H-A): every decision here is a human act ---
+
+
+@vocabulary_app.command("list")
+def vocabulary_list_cmd(
+    ctx: typer.Context,
+    all_: Annotated[
+        bool,
+        typer.Option("--all", help="Also list proposed, rejected and superseded definitions."),
+    ] = False,
+) -> None:
+    """The approved properties (`V@` names them)."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        views = properties_service.list_properties(
+            project, include_proposed=all_, include_rejected=all_
+        )
+        version = properties_service.vocabulary_version(project)
+    typer.echo(f"vocabulary {version}")
+    for line in render.property_lines(views):
+        typer.echo(line)
+
+
+def _decide_property(
+    ctx: typer.Context, key: str, decision: Literal["approve", "reject"], why: str
+) -> None:
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        properties_service.decide_property(project, project.human_actor(), key, decision, why)
+
+
+@vocabulary_app.command("approve")
+def vocabulary_approve_cmd(
+    ctx: typer.Context,
+    key: Annotated[str, typer.Argument(help="A property key, pr:<slug>.")],
+    rationale: Annotated[str, typer.Option("--rationale", help="Why it belongs.")],
+) -> None:
+    """Approve a proposed definition; until then it is unusable."""
+    _decide_property(ctx, key, "approve", rationale)
+    typer.echo(f"approved {key}")
+
+
+@vocabulary_app.command("reject")
+def vocabulary_reject_cmd(
+    ctx: typer.Context,
+    key: Annotated[str, typer.Argument(help="A property key, pr:<slug>.")],
+    rationale: Annotated[str, typer.Option("--rationale", help="Why it does not belong.")],
+) -> None:
+    """Reject a pending proposal, or withdraw the approved definition of the key."""
+    _decide_property(ctx, key, "reject", rationale)
+    typer.echo(f"rejected {key}")
+
+
+@vocabulary_app.command("merge")
+def vocabulary_merge_cmd(
+    ctx: typer.Context,
+    from_key: Annotated[str, typer.Argument(help="The property that is folded away.")],
+    into: Annotated[str, typer.Argument(help="The property it joins.")],
+    reason: Annotated[str, typer.Option("--reason", help="Why they are one property.")],
+) -> None:
+    """Merge two properties of one kind; reversible with `vocabulary unmerge`."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        properties_service.merge_properties(project, project.human_actor(), from_key, into, reason)
+    typer.echo(f"merged {from_key} into {into}")
+
+
+@vocabulary_app.command("unmerge")
+def vocabulary_unmerge_cmd(
+    ctx: typer.Context,
+    from_key: Annotated[str, typer.Argument(help="The merged property to restore.")],
+    reason: Annotated[str, typer.Option("--reason", help="Why the merge is undone.")],
+) -> None:
+    """Undo the latest merge of a property."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        properties_service.unmerge_property(project, project.human_actor(), from_key, reason)
+    typer.echo(f"unmerged {from_key}")
+
+
+@cards_app.command("list")
+def cards_list_cmd(
+    ctx: typer.Context,
+    kind: Annotated[
+        str | None, typer.Option("--kind", help="method or problem; default both.")
+    ] = None,
+) -> None:
+    """Method cards and problem descriptions, with their live assertion counts."""
+    if kind not in (None, "method", "problem"):
+        _fail("--kind must be method or problem", 2)
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        found = cards_service.list_cards(project, kind)  # type: ignore[arg-type]
+    for line in render.card_lines(found):
+        typer.echo(line)
+
+
+@cards_app.command("show")
+def cards_show_cmd(
+    ctx: typer.Context,
+    card: Annotated[str, typer.Argument(help="A card id, mcd_ or pbd_.")],
+    inferred: Annotated[
+        bool,
+        typer.Option("--inferred", help="Also show inferred and imported-unverified assertions."),
+    ] = False,
+) -> None:
+    """A card with its assertions; stale ones are shown and labelled with why."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        view = cards_service.card_view(project, card, include_inferred=inferred, include_stale=True)
+    if view is None:
+        _fail(f"{card}: unknown card", 1)
+    for line in render.card_view_lines(view):
+        typer.echo(line)
+
+
+@cards_app.command("assert")
+def cards_assert_cmd(
+    ctx: typer.Context,
+    card: Annotated[str, typer.Argument(help="A card id.")],
+    property_key: Annotated[str, typer.Option("--property", help="An approved property key.")],
+    value: Annotated[
+        str, typer.Option("--value", help="The value; true/false for a bool, a,b for a set.")
+    ],
+    unit: Annotated[str | None, typer.Option("--unit", help="The unit of a number.")] = None,
+    researcher: Annotated[
+        bool,
+        typer.Option("--researcher", help="State it yourself (researcher basis); required."),
+    ] = False,
+) -> None:
+    """Record a property you state yourself (a `researcher` basis assertion, `stated`)."""
+    if not researcher:
+        _fail("a human assertion is a researcher statement: add --researcher", 2)
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        item = cards_service.AssertionInput(
+            property=property_key,
+            value=cards_service.parse_cli_value(project, property_key, value),
+            unit=unit,
+            basis_kind="researcher",
+        )
+        result = cards_service.assert_properties(project, project.human_actor(), card, [item])
+    for _, ident, status in result.accepted:
+        typer.echo(f"asserted {ident} ({status})")
+    for _, issues in result.rejected:
+        for issue in issues:
+            typer.echo(f"refused: {issue.field}: {issue.reason}", err=True)
+    if result.rejected:
+        raise typer.Exit(1)
+
+
+def _decide_assertion(
+    ctx: typer.Context, assertion: str, decision: Literal["confirm", "reject"], why: str
+) -> None:
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        cards_service.decide_assertion(project, project.human_actor(), assertion, decision, why)
+
+
+@cards_app.command("confirm")
+def cards_confirm_cmd(
+    ctx: typer.Context,
+    assertion: Annotated[str, typer.Argument(help="An inferred assertion id, pas_.")],
+    rationale: Annotated[str, typer.Option("--rationale", help="Why it holds.")],
+) -> None:
+    """Confirm an inferred (or imported-unverified) assertion."""
+    _decide_assertion(ctx, assertion, "confirm", rationale)
+    typer.echo(f"confirmed {assertion}")
+
+
+@cards_app.command("reject")
+def cards_reject_cmd(
+    ctx: typer.Context,
+    assertion: Annotated[str, typer.Argument(help="An assertion id, pas_.")],
+    rationale: Annotated[str, typer.Option("--rationale", help="Why it does not hold.")],
+) -> None:
+    """Reject an assertion; it stays in the log and leaves the default views."""
+    _decide_assertion(ctx, assertion, "reject", rationale)
+    typer.echo(f"rejected {assertion}")
 
 
 _INCLUDE_INFERRED = typer.Option(

@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Collection, Iterator, Sequence
+from collections.abc import Collection, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -458,6 +458,42 @@ def assert_properties(
         if events:
             project.record(events)
     return AssertResult(accepted=accepted, rejected=rejected)
+
+
+def assert_properties_raw(
+    project: Project, actor: Actor, card_id: str, raw_items: Sequence[Mapping[str, Any]]
+) -> AssertResult:
+    """As `assert_properties`, for items as a tool receives them: an item that does not parse
+    (an unknown or forbidden field such as `status`, a bad shape) is rejected on its own, with
+    the parse issues, and the others are still written."""
+    parsed: list[tuple[int, AssertionInput]] = []
+    rejected: list[tuple[int, list[ValidationIssue]]] = []
+    for index, raw in enumerate(raw_items):
+        try:
+            parsed.append((index, AssertionInput.model_validate(raw)))
+        except ValidationError as exc:
+            rejected.append((index, _model_issues(exc)))
+    result = assert_properties(project, actor, card_id, [item for _, item in parsed])
+    accepted = [(parsed[i][0], ident, status) for i, ident, status in result.accepted]
+    rejected += [(parsed[i][0], issues) for i, issues in result.rejected]
+    return AssertResult(accepted=accepted, rejected=sorted(rejected, key=lambda pair: pair[0]))
+
+
+def parse_cli_value(project: Project, property_key: str, raw: str) -> str | tuple[str, ...] | bool:
+    """A command-line value in the form of its property: `true` / `false` for a bool, a
+    comma-separated list for a set, the text otherwise. Raises on field `property` for a key with
+    no approved definition."""
+    project.index.sync()
+    defn = resolve_property(project, property_key)
+    if defn is None:
+        raise _refuse("property", "unknown")
+    if defn.kind is PropertyKind.BOOL:
+        if raw.lower() not in ("true", "false"):
+            raise _refuse("value", "value-not-allowed")
+        return raw.lower() == "true"
+    if defn.kind is PropertyKind.SET:
+        return tuple(part.strip() for part in raw.split(",") if part.strip())
+    return raw
 
 
 def decide_assertion(

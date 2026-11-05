@@ -9,6 +9,7 @@ from factory.services.skills import skill_ref
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SKILLS = (
+    "rf-cards",
     "rf-contributions",
     "rf-extract",
     "rf-frame",
@@ -139,3 +140,19 @@ def test_rf_lineage_skill_text() -> None:
     lowered = text.lower()
     assert "never merge" in lowered and "inferred" in lowered
     assert "the platform sets the status" in lowered
+
+
+def test_rf_cards_skill_text() -> None:
+    text = (REPO_ROOT / "plugin" / "skills" / "rf-cards" / "SKILL.md").read_text("utf-8")
+    for needed in (
+        "vocabulary_propose",
+        "card_create",
+        "card_assert",
+        "document_read",
+        "never confirm",
+        "inferred",
+        "row_key",
+    ):
+        assert needed in text, needed
+    for kept in ("## Independence", "## Procedure", "## Tool arguments", "## Done when"):
+        assert kept in text
