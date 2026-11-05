@@ -12,6 +12,7 @@ from factory.model.screening import PassLabel
 from factory.services.calibration import calibrated_models
 from factory.services.check import _findings_as
 from factory.services.context import Project
+from factory.services.protocol import current_protocol
 from factory.services.screening import join_pass
 from factory.services.watch import watch_run
 from tests.helpers import SourcesFor
@@ -20,6 +21,9 @@ from tests.test_check import _calibrate
 from tests.watch_helpers import ScriptedSource, adapters, by_text
 
 NEW_MODEL = "claude-sonnet-5-5"
+DRIFT_REASON = (
+    "not calibrated for this pass; recalibrate through a criterion-touching protocol amendment"
+)
 
 
 def _calibrated(project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor) -> str:
@@ -68,9 +72,7 @@ def test_model_drift_by_mode(
     before = len(read_all(project.paths.events_dir, project.catalog))
     with pytest.raises(FactoryValidationError) as exc:
         join_pass(project, drifter, PassLabel.A)
-    assert [(i.field, i.reason) for i in exc.value.issues] == [
-        ("model", "not calibrated for this pass")
-    ]
+    assert [(i.field, i.reason) for i in exc.value.issues] == [("model", DRIFT_REASON)]
     assert len(read_all(project.paths.events_dir, project.catalog)) == before
     join_pass(project, agent, PassLabel.A)  # the calibrated model joins
 
@@ -89,3 +91,31 @@ def test_no_drift_finding_for_a_calibrated_model(
     join_pass(project, agent, PassLabel.A)
     _cycle(project)
     assert _drift(project, RigorMode.SYSTEMATIC) == []
+
+
+def test_recalibration_route_after_drift(
+    project: Project,
+    agent: Actor,
+    agent_other: Actor,
+    human: Actor,
+    mock_sources: SourcesFor,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Refusal, then a criterion-touching amendment, then the new model calibrates."""
+    from tests.test_screening_next import _loosen_ex01
+
+    _calibrated(project, agent, human, mock_sources)
+    _cycle(project)
+    drifter = agent_other.model_copy(update={"model": NEW_MODEL})
+    monkeypatch.setattr("factory.services.screening._rigor_mode", lambda _p: RigorMode.SYSTEMATIC)
+    with pytest.raises(FactoryValidationError) as exc:
+        join_pass(project, drifter, PassLabel.A)
+    assert exc.value.issues[0].reason == DRIFT_REASON
+    _loosen_ex01(project, agent)
+    amended = current_protocol(project)
+    assert amended is not None
+    protocol_id = amended.protocol_id
+    assert calibrated_models(project, PassLabel.A) == set()  # the amendment reset the gate
+    join_pass(project, drifter, PassLabel.A)
+    _calibrate(project, drifter, human, protocol_id)
+    assert calibrated_models(project, PassLabel.A) == {NEW_MODEL}

@@ -297,7 +297,15 @@ def _check_join(
             _drifted(project, actor.model, label, stage)
             and _rigor_mode(project) is RigorMode.SYSTEMATIC
         ):
-            raise FactoryValidationError([ValidationIssue("model", "not calibrated for this pass")])
+            raise FactoryValidationError(
+                [
+                    ValidationIssue(
+                        "model",
+                        "not calibrated for this pass; recalibrate through a "
+                        "criterion-touching protocol amendment",
+                    )
+                ]
+            )
         return True
     if joined is label:
         return False
