@@ -20,7 +20,6 @@ Invariants:
 
 from __future__ import annotations
 
-import random
 import secrets
 from collections.abc import Mapping, Sequence
 
@@ -44,6 +43,7 @@ from factory.model.extraction import (
 from factory.model.project import RigorMode
 from factory.model.protocol import ExtractionSchema
 from factory.model.screening import Channel
+from factory.quality.stats import audit_size, draw_uniform
 from factory.services.context import Project
 from factory.services.conversions import conversion_manifest
 from factory.services.extraction import (
@@ -53,7 +53,6 @@ from factory.services.extraction import (
 )
 from factory.services.extraction_agreement import extraction_agreement, final_rows
 from factory.services.protocol import ProtocolVersion, current_protocol
-from factory.services.screening_stats import audit_size
 from factory.services.seeds import _rigor_mode
 
 __all__ = [
@@ -142,7 +141,7 @@ def _digest(population: Sequence[tuple[AuditItemRef, str]]) -> str:
 
 def _draw(items: Sequence[AuditItemRef], size: int, seed: int) -> list[AuditItemRef]:
     """`size` items of `items` (sorted), uniformly at random from `seed`; the result is sorted."""
-    return sorted(random.Random(seed).sample(sorted(items, key=_sort_key), size), key=_sort_key)
+    return draw_uniform(items, size, seed, key=_sort_key)
 
 
 def agreed_values(project: Project, *, scope: AuditScope = Scope.EVIDENCE) -> list[AuditItemRef]:
