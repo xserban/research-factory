@@ -5,7 +5,14 @@ Declaration only (slice M, decision 55); behaviour stays in the services. Drafti
 agent or a human makes sentence by sentence; its quality regime (an independent verifier pass) and
 its release gate belong to plan W-B and are declared there."""
 
-from factory.modules.contract import EventFamily, ModuleKind, ModuleSpec
+from factory.modules.contract import (
+    EventFamily,
+    GateKind,
+    GateSpec,
+    ModuleKind,
+    ModuleSpec,
+    PolicyKind,
+)
 from factory.services.modules.base import RuleModule
 from factory.services.modules.task_kinds import default_task_kinds
 
@@ -14,6 +21,8 @@ SPEC = ModuleSpec(
     kind=ModuleKind.PROPOSAL,
     events=EventFamily(
         types=(
+            "draft.audit_drawn",
+            "draft.audited",
             "draft.created",
             "draft.outline_repinned",
             "draft.reordered",
@@ -22,6 +31,8 @@ SPEC = ModuleSpec(
             "draft.verified",
         ),
         tables=(
+            "draft_audit_items",
+            "draft_audits",
             "draft_sections",
             "draft_sentences",
             "drafts",
@@ -32,6 +43,15 @@ SPEC = ModuleSpec(
         ),
     ),
     task_kinds=default_task_kinds().kinds_of("writing"),
+    gates=(
+        GateSpec(
+            "writing.audit_label",
+            GateKind.DECISION,
+            ("draft.audited",),
+            PolicyKind.HUMAN,
+            ("slice 7b ruling 12", "R-131"),
+        ),
+    ),
 )
 
 MODULE = RuleModule(SPEC)

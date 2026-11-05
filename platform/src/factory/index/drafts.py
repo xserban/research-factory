@@ -3,8 +3,9 @@
 `drafts` keeps one row per draft with the outline it is pinned to; `draft_sections` its sections;
 `draft_sentences` every recorded sentence with its author, session and model, `superseded_by` and
 `withdrawn`; `sentence_supports`, `sentence_flags` and `sentence_stats` the supports, the stored
-flags and the stat values read at write time; `sentence_verdicts` the verdicts (plan W-B). Status,
-staleness and eligibility are computed on read, never stored.
+flags and the stat values read at write time; `sentence_verdicts` the verdicts, `draft_audits` and
+`draft_audit_items` the samples and their labels (plan W-B). Status, staleness and eligibility are
+computed on read, never stored.
 
 An act is folded only when it is consistent with what the services enforce; an event that fails
 this stays in the log and changes nothing (no service writes one, so it was written by hand):
@@ -22,6 +23,8 @@ this stays in the log and changes nothing (no service writes one, so it was writ
   an agent of the skill `rf-verify`, who wrote no sentence of the draft, with a model other than
   the writer's in `systematic`, and whose `input_blob` is the unit of that sentence with the
   substrings of ruling 3 in it (`writing.verdicts`).
+- An audit sample is folded from the system actor when one is due, for the very verdicts the seed
+  draws from the population at that point of the log; a label from a human, for a sampled verdict.
 - A withdrawal is folded for a live sentence; a reorder only when `order` is a permutation of the
   section's live sentences.
 
@@ -44,6 +47,10 @@ from factory.events.envelope import Actor, Event
 from factory.extraction.numbers import numbers_in
 from factory.index.projection import Handler
 from factory.model.drafts import (
+    DRAFT_AUDIT_FRACTION,
+    DRAFT_AUDIT_MINIMUM,
+    DraftAudited,
+    DraftAuditDrawn,
     DraftCreated,
     DraftOutlineRepinned,
     DraftReordered,
@@ -53,9 +60,11 @@ from factory.model.drafts import (
     SentenceVerified,
     SentenceWithdrawn,
     SupportKind,
+    Verdict,
     outline_id_of,
 )
 from factory.model.project import RigorMode
+from factory.quality.stats import audit_size, draw_uniform
 from factory.writing.checks import citation_matches, is_single_sentence
 from factory.writing.verdicts import verdict_issues
 
@@ -75,6 +84,8 @@ class DraftTables:
     flags: Table
     stats: Table
     verdicts: Table
+    audits: Table
+    audit_items: Table
     protocols: Table
     project: Table
 
@@ -156,8 +167,37 @@ def draft_tables(metadata: MetaData, protocols: Table, project: Table) -> DraftT
         Index("ix_sentence_verdicts_sentence", "sentence_id"),
         Index("ix_sentence_verdicts_draft", "draft_id"),
     )
+    audits = Table(
+        "draft_audits",
+        metadata,
+        Column("audit_id", String, primary_key=True),
+        Column("draft_id", String, nullable=False),
+        Column("seed", Integer, nullable=False),
+        Column("population", Integer, nullable=False),
+        Column("event_id", String, nullable=False),
+        Index("ix_draft_audits_draft", "draft_id"),
+    )
+    audit_items = Table(
+        "draft_audit_items",
+        metadata,
+        Column("audit_id", String, primary_key=True),
+        Column("verdict_id", String, primary_key=True),
+        Column("label", String),
+        Column("channel", String),
+        Column("event_id", String),
+    )
     return DraftTables(
-        drafts, sections, sentences, supports, flags, stats, verdicts, protocols, project
+        drafts,
+        sections,
+        sentences,
+        supports,
+        flags,
+        stats,
+        verdicts,
+        audits,
+        audit_items,
+        protocols,
+        project,
     )
 
 
@@ -169,6 +209,8 @@ def draft_handlers(t: DraftTables, blobs: BlobStore | None = None) -> dict[str, 
         "draft.sentence_withdrawn": _total(_withdrawn(t)),
         "draft.reordered": _total(_reordered(t)),
         "draft.verified": _total(_verified(t, blobs)),
+        "draft.audit_drawn": _total(_audit_drawn(t)),
+        "draft.audited": _total(_audited(t)),
     }
 
 
@@ -225,6 +267,38 @@ def writers_of(conn: Connection, draft_id: str) -> frozenset[str]:
 def verifiers_of(conn: Connection, draft_id: str) -> frozenset[str]:
     """The `identities` of everyone with a verdict on a sentence of the draft."""
     return _acted(conn, "sentence_verdicts", draft_id)
+
+
+_SUPPORTED_LIVE = (
+    "FROM sentence_verdicts v JOIN draft_sentences s ON s.sentence_id = v.sentence_id "
+    "WHERE v.draft_id = :d AND v.verdict = :supported "
+    "AND s.superseded_by IS NULL AND s.withdrawn = 0"
+)
+
+
+def audit_population(conn: Connection, draft_id: str) -> list[str]:
+    """The `supported` verdicts of the draft's live sentences no sample has drawn, sorted."""
+    rows = conn.execute(
+        text(
+            f"SELECT v.verdict_id {_SUPPORTED_LIVE} AND v.verdict_id NOT IN "
+            "(SELECT verdict_id FROM draft_audit_items) ORDER BY v.verdict_id"
+        ),
+        {"d": draft_id, "supported": Verdict.SUPPORTED.value},
+    ).all()
+    return [str(r[0]) for r in rows]
+
+
+def audit_due(conn: Connection, draft_id: str) -> bool:
+    """Whether a live `supported` verdict is newer than the last draw (any such verdict when none
+    was drawn)."""
+    last = conn.execute(
+        text("SELECT MAX(event_id) FROM draft_audits WHERE draft_id = :d"), {"d": draft_id}
+    ).scalar()
+    newest = conn.execute(
+        text(f"SELECT MAX(v.event_id) {_SUPPORTED_LIVE}"),
+        {"d": draft_id, "supported": Verdict.SUPPORTED.value},
+    ).scalar()
+    return newest is not None and (last is None or str(newest) > str(last))
 
 
 def _writes(event: Event) -> bool:
@@ -475,6 +549,53 @@ def _verified(t: DraftTables, blobs: BlobStore | None) -> Handler:
         )
 
     return verified
+
+
+def _audit_drawn(t: DraftTables) -> Handler:
+    def drawn(conn: Connection, event: Event) -> None:
+        p = DraftAuditDrawn.model_validate(event.payload)
+        if event.actor.kind != "system" or not audit_due(conn, p.draft_id):
+            return
+        if conn.execute(
+            select(t.audits.c.audit_id).where(t.audits.c.audit_id == p.audit_id)
+        ).first():
+            return
+        population = audit_population(conn, p.draft_id)
+        size = audit_size(len(population), DRAFT_AUDIT_FRACTION, DRAFT_AUDIT_MINIMUM)
+        if p.population != len(population) or p.verdict_ids != draw_uniform(
+            population, size, p.seed, key=str
+        ):
+            return
+        conn.execute(
+            t.audits.insert().values(
+                audit_id=p.audit_id,
+                draft_id=p.draft_id,
+                seed=p.seed,
+                population=p.population,
+                event_id=event.id,
+            )
+        )
+        for verdict_id in p.verdict_ids:
+            conn.execute(t.audit_items.insert().values(audit_id=p.audit_id, verdict_id=verdict_id))
+
+    return drawn
+
+
+def _audited(t: DraftTables) -> Handler:
+    def audited(conn: Connection, event: Event) -> None:
+        p = DraftAudited.model_validate(event.payload)
+        if event.actor.kind != "human":
+            return
+        conn.execute(
+            update(t.audit_items)
+            .where(
+                t.audit_items.c.audit_id == p.audit_id,
+                t.audit_items.c.verdict_id == p.verdict_id,
+            )
+            .values(label=p.label.value, channel=p.channel.value, event_id=event.id)
+        )
+
+    return audited
 
 
 def _withdrawn(t: DraftTables) -> Handler:

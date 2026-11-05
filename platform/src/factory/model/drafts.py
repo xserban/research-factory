@@ -28,6 +28,7 @@ from factory.model.base import StrictModel
 from factory.model.extraction import CLAIM_ID_RE, EXTRACTION_ID_RE, ROW_KEY_RE
 from factory.model.identity import BLOB_REF_RE, ULID_RE
 from factory.model.references import REX_ID_RE
+from factory.model.screening import Channel
 from factory.model.task import TASK_ID_RE
 
 DRAFT_ID_RE = rf"^drf_{ULID_RE}$"
@@ -47,6 +48,13 @@ MAX_ORDER = 2**63 - 1
 """The largest sentence order and stat value: what the index's integer columns hold."""
 VERDICT_ID_RE = rf"^svd_{ULID_RE}$"
 NOTE_MAX_CHARS = 300
+DRAFT_AUDIT_ID_RE = rf"^dau_{ULID_RE}$"
+DRAFT_AUDIT_FRACTION = 0.1
+DRAFT_AUDIT_MINIMUM = 20
+"""The audit sample n = min(N, max(ceil(0.1 N), 20)) (spec ruling 12)."""
+DRAFT_VERIFY_ERROR_CEILING = 0.05
+"""The audit error rate above which the verifier is not trusted: advisory in `pilot`, a gate in
+`systematic` (spec ruling 12)."""
 _FIELD_RE = r"^[a-z][a-z0-9_]*$"
 _CITES_RE = rf"^cit:{REX_ID_RE[1:-1]}:[1-9][0-9]*$"
 _STAT_RE = r"^[a-z][a-z-]*(?::[A-Za-z0-9_.-]+){0,2}$"
@@ -83,6 +91,11 @@ class SentenceFlag(StrEnum):
     CROSS_GROUP = "cross-group"
     SINGLE_SOURCE_GENERALISATION = "single-source-generalisation"
     OFF_OUTLINE = "off-outline"
+
+
+class AuditLabel(StrEnum):
+    CORRECT = "correct"
+    INCORRECT = "incorrect"
 
 
 class Verdict(StrEnum):
@@ -298,3 +311,42 @@ class SentenceVerified(StrictModel):
     sentence_span: str | None = None
     support_spans: list[SupportSpan] = Field(default_factory=list)
     note: str | None = Field(default=None, max_length=NOTE_MAX_CHARS)
+
+
+class DraftAuditDrawn(StrictModel):
+    """A sample of `supported` verdicts, drawn by the platform from `seed` out of `population`."""
+
+    audit_id: str = Field(pattern=DRAFT_AUDIT_ID_RE)
+    draft_id: str = Field(pattern=DRAFT_ID_RE)
+    seed: int = Field(ge=0, lt=2**32)
+    population: int = Field(ge=1)
+    verdict_ids: list[str] = Field(min_length=1)
+
+    @field_validator("verdict_ids")
+    @classmethod
+    def _ids_are_verdicts(cls, value: list[str]) -> list[str]:
+        if any(re.fullmatch(VERDICT_ID_RE, v) is None for v in value) or (
+            len(set(value)) != len(value)
+        ):
+            raise ValueError("verdict_ids lists distinct verdict ids")
+        return value
+
+
+class DraftAudited(StrictModel):
+    audit_id: str = Field(pattern=DRAFT_AUDIT_ID_RE)
+    verdict_id: str = Field(pattern=VERDICT_ID_RE)
+    label: AuditLabel
+    note: str | None = Field(default=None, max_length=NOTE_MAX_CHARS)
+    channel: Channel
+
+
+class DraftAuditReport(StrictModel):
+    """Every sample of a draft read together. `incorrect`, `rate` and `above_ceiling` are None in
+    the agent variant; `rate` and `above_ceiling` also until a verdict is labelled."""
+
+    drawn: int
+    labelled: int
+    incorrect: int | None
+    rate: float | None
+    above_ceiling: bool | None
+    outdated: bool = False
