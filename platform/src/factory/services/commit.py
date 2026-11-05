@@ -12,7 +12,6 @@ Invariants:
 - A deletion is never committed: events are append-only.
 """
 
-import os
 import re
 import subprocess
 from pathlib import Path
@@ -21,7 +20,7 @@ from factory.clock import SystemClock
 from factory.config import Settings
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.model.base import StrictModel
-from factory.model.identity import IdGenerator
+from factory.model.identity import ACTOR_ID_RE, ULID_RE, IdGenerator
 from factory.services.context import list_projects, open_project
 from factory.services.hosting import current_host, git, server_author
 
@@ -29,6 +28,8 @@ _REMOTE_RE = r"[A-Za-z0-9][A-Za-z0-9._-]*"
 _PRIVATE_TOP = frozenset({"library", ".index", ".server"})
 _PRIVATE_IN_PROJECT = frozenset({"library", ".index"})
 _PATHSPEC_STDIN = ("--pathspec-from-file=-", "--pathspec-file-nul")
+_EVENT_FILE_RE = rf"{ACTOR_ID_RE.strip('^$')}/{ULID_RE}\.jsonl"
+_BLOB_FILE_RE = r"sha256/[0-9a-f]{2}/[0-9a-f]{62}"
 
 
 class CommitReport(StrictModel):
@@ -111,8 +112,12 @@ def _committable(root: Path, slug: str, changes: list[tuple[str, str]]) -> list[
     for path, status in changes:
         if "D" in status:
             continue
-        if path.startswith(events) or (path.startswith(blobs) and _is_text(root / path)):
-            paths.append(path)
+        if path.startswith(events):
+            if re.fullmatch(_EVENT_FILE_RE, path[len(events) :]) is not None:
+                paths.append(path)
+        elif path.startswith(blobs) and re.fullmatch(_BLOB_FILE_RE, path[len(blobs) :]) is not None:
+            if _is_text(root / path):
+                paths.append(path)
     return paths
 
 
@@ -134,7 +139,6 @@ def _commit(root: Path, host_id: str, staged: dict[str, list[str]], sign: bool) 
     author = server_author(host_id)
     email = f"factory-server@{host_id}"
     env = {
-        **os.environ,
         "GIT_AUTHOR_NAME": author,
         "GIT_AUTHOR_EMAIL": email,
         "GIT_COMMITTER_NAME": author,

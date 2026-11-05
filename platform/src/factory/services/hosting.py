@@ -10,6 +10,7 @@ Invariants:
 - `git` runs with fixed arguments; a machine without git gets a failed result, not an exception.
 """
 
+import os
 import re
 import subprocess
 from collections.abc import Mapping, Sequence
@@ -23,6 +24,11 @@ from factory.events.envelope import Actor
 from factory.model.hosting import ProjectHosted
 from factory.model.identity import ACTOR_ID_RE
 from factory.services.context import Project, hosted_by
+
+
+GIT_TIMEOUT_SECONDS = 300
+# Set by a git hook or a wrapping shell, these would point every command at another repository.
+_INHERITED_GIT = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR")
 
 
 @dataclass(frozen=True)
@@ -42,9 +48,22 @@ def server_author(host_id: str) -> str:
 def git(
     root: Path, *args: str, stdin: bytes | None = None, env: Mapping[str, str] | None = None
 ) -> subprocess.CompletedProcess[bytes]:
+    """Run git at `root`. `env` adds to a cleaned environment: a path is never a pattern, git never
+    asks a terminal, and a hung command fails instead of holding the caller."""
     command = ["git", "-C", str(root), *args]
+    clean = {name: value for name, value in os.environ.items() if name not in _INHERITED_GIT}
+    full = {**clean, "GIT_LITERAL_PATHSPECS": "1", "GIT_TERMINAL_PROMPT": "0", **(env or {})}
     try:
-        return subprocess.run(command, input=stdin, capture_output=True, env=env, check=False)
+        return subprocess.run(
+            command,
+            input=stdin,
+            capture_output=True,
+            env=full,
+            check=False,
+            timeout=GIT_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(command, 124, b"", b"git timed out")
     except OSError as exc:
         return subprocess.CompletedProcess(command, 127, b"", str(exc).encode())
 
