@@ -100,7 +100,8 @@ def _horizon() -> HorizonView:
         undated={"idea_members": 1, "new_ideas": 0, "new_edges": 0},
         horizon={"openalex": "2026-10-31"},
         total_ideas=1,
-        total_groups=1,
+        total_groups=5,
+        listed_groups=1,
     )
 
 
@@ -168,6 +169,11 @@ def test_horizon_markdown_and_csv() -> None:
     assert ["new_ideas", "ida_1", "2019", "1"] in rows
     assert ["new_edges", "", "2020", "1"] in rows
     assert ["group_records", "grp_aaa", "2020", "1"] in rows
+
+
+def test_horizon_markdown_states_a_group_cut() -> None:
+    cut = _horizon().model_copy(update={"meta": _meta("horizon", truncated=True)})
+    assert "1 of 5 groups" in horizon_markdown(cut)
 
 
 def test_renders_are_deterministic() -> None:

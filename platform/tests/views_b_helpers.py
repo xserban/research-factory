@@ -212,3 +212,14 @@ def vb_world(
         ),
     )
     return VbWorld(screened, idea, ids_a[0], sure.relation_id, maybe.relation_id)
+
+
+def real_merge(project: Project, primary: str, *absorbed: str) -> str:
+    """A real `dedup.merged` event (the cascade's own writer): `primary` absorbs the rest."""
+    from factory.services.dedup import write_reconciliation
+    from factory.services.dedup_cascade import CascadeMerge
+
+    (merge_id,) = write_reconciliation(
+        project, [], [CascadeMerge(primary=primary, absorbed=sorted(absorbed), rule="test")]
+    )
+    return merge_id

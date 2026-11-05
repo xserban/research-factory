@@ -160,3 +160,4 @@ class HorizonView(StrictModel):
     horizon: dict[str, str]
     total_ideas: int
     total_groups: int
+    listed_groups: int

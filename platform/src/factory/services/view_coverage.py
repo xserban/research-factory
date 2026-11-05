@@ -35,9 +35,9 @@ from factory.services.evidence_groups import summarise
 from factory.services.extraction import require_schema
 from factory.services.extraction_agreement import FinalRow, GroupKey, grouped_rows
 from factory.services.ideas import confirmed_ideas
-from factory.services.notices import work_states
 from factory.services.onion import VIEW_MAX_NODES
-from factory.services.view_corpus import corpus_among, horizon_notice, search_horizon
+from factory.services.view_corpus import horizon_notice, search_horizon
+from factory.services.view_rows import canonical_ids, visible_groups
 from factory.services.views import view_meta
 
 VIEW_VERSION = 1
@@ -144,20 +144,9 @@ class _Tally:
 
 
 def _shown_groups(project: Project) -> list[tuple[GroupKey, list[FinalRow]]]:
-    """The groups of `grouped_rows` restricted to corpus works that no notice excludes; a group
-    left without rows is dropped."""
-    grouped = grouped_rows(project)
-    works = sorted({r.work_id for rows in grouped.groups.values() for r in rows})
-    if not works:
-        return []
-    with project.index.connect() as conn:
-        corpus = corpus_among(conn, works)
-    excluded = {w for w, s in work_states(project).items() if s.synthesis == "excluded"}
-    keep = corpus - excluded
-    out = [
-        (k, [r for r in rows if r.work_id in keep]) for k, rows in sorted(grouped.groups.items())
-    ]
-    return [(k, rows) for k, rows in out if rows]
+    """The groups of `grouped_rows` restricted to visible rows (`view_rows`: corpus works read as
+    their primary, no retraction); a group left without rows is dropped."""
+    return visible_groups(project, sorted(grouped_rows(project).groups.items()))[0]
 
 
 def _method_definition(project: Project) -> FieldDef | None:
@@ -183,16 +172,24 @@ def _idea_cells(
     """Confirmed ideas with at least one linked row, and their per-group tallies."""
     if not row_group:
         return [], {}
-    links: dict[str, set[str]] = {}
-    for item in final_items(project):
-        if item.item_kind == "result" and item.result_row and item.live and not item.stale:
-            links.setdefault(item.work_id, set()).add(item.result_row)
-    if not links:
+    items = [
+        i
+        for i in final_items(project)
+        if i.item_kind == "result" and i.result_row and i.live and not i.stale
+    ]
+    if not items:
         return [], {}
+    ideas = confirmed_ideas(project)
+    raw = sorted({i.work_id for i in items} | {m for idea in ideas for m in idea.effective_members})
+    with project.index.connect() as conn:
+        canon = canonical_ids(conn, raw)
+    links: dict[str, set[str]] = {}
+    for item in items:  # an absorbed work's items belong to its primary
+        links.setdefault(canon.get(item.work_id, item.work_id), set()).add(str(item.result_row))
     out: dict[str, dict[str, _Tally]] = {}
-    for idea in confirmed_ideas(project):
+    for idea in ideas:
         seen: set[tuple[str, str]] = set()
-        for work in idea.effective_members:
+        for work in sorted({canon.get(m, m) for m in idea.effective_members}):
             for key in sorted(links.get(work, ())):
                 found = row_group.get((work, key))
                 if found is None or (work, key) in seen:

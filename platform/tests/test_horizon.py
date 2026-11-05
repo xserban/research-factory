@@ -14,6 +14,7 @@ from factory.services.context import Project
 from factory.services.evidence_groups import group_index
 from factory.services.horizon import horizon_view
 from factory.services.ideas import decide_idea, merge_ideas, propose_idea
+from factory.services.view_coverage import coverage_view
 from factory.services.views import to_json
 from tests.contribution_helpers import ctr_a, ctr_b, ext_a  # noqa: F401
 from tests.extraction_helpers import screened  # noqa: F401
@@ -138,3 +139,43 @@ def test_deterministic_across_rebuilds(project: Project, vb_world: VbWorld) -> N
     assert horizon_view(project).idea_members
     project.index.rebuild()
     assert to_json(horizon_view(project)) == before
+
+
+def test_idea_cut_ranks_by_members_and_series_stay_complete(
+    project: Project,
+    vb_world: VbWorld,
+    agent: Actor,
+    other_session_human: Actor,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:  # review I4
+    _dated(project, vb_world)
+    w = vb_world
+    second = propose_idea(
+        project, agent, "ipsum", w.works[0], w.name_item, [w.works[0], w.works[1], w.works[2]]
+    )
+    decide_idea(project, other_session_human, second, LineageDecision.CONFIRM, "named")
+    set_year(project, w.works[0], None)  # the origin of both ideas is now undated
+    full = horizon_view(project)
+    assert full.undated["new_ideas"] == 2
+    monkeypatch.setattr(horizon, "HORIZON_MAX_IDEAS", 1)
+    cut = horizon_view(project)
+    assert list(cut.idea_members) == [second]  # three members beat two, whatever the ids
+    assert cut.total_ideas == 2 and cut.meta.truncated
+    assert (cut.new_ideas, cut.undated) == (full.new_ideas, full.undated)  # series complete
+
+
+def test_group_totals_filter_first_then_rank_then_cut(
+    project: Project, vb_world: VbWorld, monkeypatch: pytest.MonkeyPatch
+) -> None:  # review I3
+    both = horizon_view(project)
+    assert both.total_groups == coverage_view(project).total_groups == 2
+    monkeypatch.setattr(horizon, "HORIZON_MAX_GROUPS", 1)
+    cut = horizon_view(project)
+    assert (cut.total_groups, cut.listed_groups, cut.meta.truncated) == (2, 1, True)
+    monkeypatch.undo()
+    with project.index.connect() as conn:  # the two detection works leave the corpus
+        for work in vb_world.works[4:6]:
+            conn.execute(text("DELETE FROM provenance WHERE work_id = :w"), {"w": work})
+        conn.commit()
+    after = horizon_view(project)
+    assert after.total_groups == coverage_view(project).total_groups == 1

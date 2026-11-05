@@ -272,7 +272,11 @@ def horizon_markdown(view: HorizonView) -> str:
         lines += _table(["source", "date"], [[s, d] for s, d in view.horizon.items()])
     years = [str(y) for y in view.years]
     if view.meta.truncated:
-        lines += [f"List cut: {len(view.idea_members)} of {view.total_ideas} ideas listed.", ""]
+        lines += [
+            f"List cut: showing {len(view.idea_members)} of {view.total_ideas} ideas and "
+            f"{view.listed_groups} of {view.total_groups} groups.",
+            "",
+        ]
     lines += ["## Included works per idea and year", ""]
     lines += _table(
         ["idea", *years],

@@ -519,17 +519,23 @@ def relation_years(
     project: Project, statuses: Collection[EdgeStatus] = DEFAULT_STATUSES
 ) -> dict[str | None, int]:
     """Live relations whose effective status is in `statuses` and whose source is a corpus work,
-    counted by the publication year of the source work (None: undated), in SQL."""
+    counted by the publication year of the source work (None: undated), in SQL. A source absorbed
+    by an active dedup merge is read as its primary."""
     project.index.sync()
     with project.index.connect() as conn:
         rows = conn.execute(
             text(
-                f"{_EFFECTIVE_SQL} SELECT substr(json_extract(w.data, '$.dates.published'), 1, 4), "
-                "COUNT(*) FROM shown s LEFT JOIN works w ON w.work_id = s.source_work "
+                f"{_EFFECTIVE_SQL}, src AS (SELECT s.relation_id, "
+                "COALESCE(ab.p, s.source_work) AS w "
+                'FROM shown s LEFT JOIN (SELECT mm.work_id AS a, m."primary" AS p '
+                "FROM merge_members mm JOIN merges m ON m.merge_id = mm.merge_id "
+                "WHERE m.status = 'active' AND mm.work_id != m.\"primary\") ab "
+                "ON ab.a = s.source_work "
                 "WHERE s.superseded_by IS NULL AND s.effective IN "
-                "(SELECT value FROM json_each(:st)) "
-                f"AND s.source_work IN {CORPUS_SQL} "
-                "GROUP BY 1"
+                "(SELECT value FROM json_each(:st))) "
+                "SELECT substr(json_extract(w.data, '$.dates.published'), 1, 4), COUNT(*) "
+                "FROM src LEFT JOIN works w ON w.work_id = src.w "
+                f"WHERE src.w IN {CORPUS_SQL} GROUP BY 1"
             ),
             {
                 **_basis_params(project),
