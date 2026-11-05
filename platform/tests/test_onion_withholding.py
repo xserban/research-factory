@@ -10,6 +10,7 @@ filtered, and the agent view carries no audit-derived depth.
 
 from __future__ import annotations
 
+import pytest
 from sqlalchemy import text
 
 from factory.events.envelope import Actor
@@ -120,6 +121,42 @@ def test_notice_does_not_reveal_a_withheld_region(region_project: RWorld, human:
     agent = onion_view(w.project, agent=True).meta.notices
     assert agent == empty  # the same notice, word for word, with a withheld region present
     assert onion_view(w.project).meta.notices == []  # the researcher sees the region
+
+
+def test_reviewed_focus_region_without_members_has_its_own_notice(
+    region_project: RWorld, human: Actor
+) -> None:
+    w = region_project
+    add_queries(w.project, {"qry_none": "search", "qry_imp": "import"})
+    nothing = RuleSet(include=(RunRule(query_id="qry_none"),))
+    _focus(w, human, "population", nothing)
+    researcher = onion_view(w.project).meta.notices
+    assert [n.code for n in researcher] == ["regions-empty"]
+    assert [n.code for n in onion_view(w.project, agent=True).meta.notices] == ["regions-empty"]
+    # a withheld empty region changes nothing an agent reads: its notice is the one of no region
+    other = region_project
+    barred = RuleSet(include=(RunRule(query_id="qry_imp"),))
+    _focus(other, human, "outcome", barred)
+    assert [n.code for n in onion_view(w.project, agent=True).meta.notices] == ["regions-empty"]
+
+
+def test_as_of_is_read_once_at_the_start(
+    region_project: RWorld, human: Actor, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from factory.services import onion
+    from factory.services.question import state_goal
+
+    project = region_project.project
+    start = project.index.head()
+    real = onion.depth_index
+
+    def moving(p: object, agent: bool = False) -> object:
+        state_goal(project, human, "A goal stated while the view is built")
+        return real(project, agent=agent)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(onion, "depth_index", moving)
+    assert onion_view(project).meta.as_of == start
+    assert project.index.head() != start
 
 
 def test_agent_depth_counts_ignore_audit_labels(region_project: RWorld) -> None:

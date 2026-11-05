@@ -130,7 +130,7 @@ def _build(project: Project, flt: OnionFilter, agent: bool) -> OnionView:
         edge_types=tuple(EdgeType(t) for t in flt.edge_types),
         include_ideas=False,
     )
-    project.index.sync()
+    as_of = project.index.head()  # once, before any read: the view describes this position
     focus = _focus(project, flt)
     if not focus:
         notices.append(
@@ -176,13 +176,7 @@ def _build(project: Project, flt: OnionFilter, agent: bool) -> OnionView:
             conn.execute(text(f"DROP TABLE IF EXISTS {_SEEN}"))
             conn.commit()
     rings = _with_regions(project, rings, agent)
-    if not _any_visible_region(project, agent):
-        notices.append(
-            ViewNotice(
-                code="regions-none",
-                text="No reviewed focus region exists here; the regions column is empty.",
-            )
-        )
+    notices.extend(_region_notices(project, agent))
     filter_note: dict[str, JsonValue] = {
         "max_ring": max_ring,
         "edge_types": [str(t) for t in sorted(flt.edge_types)],
@@ -198,6 +192,7 @@ def _build(project: Project, flt: OnionFilter, agent: bool) -> OnionView:
             filter_note,
             truncated=any(r.truncated for r in rings),
             notices=notices,
+            as_of=as_of,
         ),
         rings=rings,
         edges_considered={
@@ -387,19 +382,46 @@ def _focus_members(project: Project, work_ids: Sequence[str]) -> dict[str, list[
     return out
 
 
-def _any_visible_region(project: Project, agent: bool) -> bool:
-    """Whether some reviewed focus region (visible to the caller) holds a member."""
+def _region_notices(project: Project, agent: bool) -> list[ViewNotice]:
+    """`regions-none` when no reviewed focus region exists, `regions-empty` when some exists and
+    none holds a member. For an agent a withheld region is not counted either way, so the text
+    reads the same whether or not one exists."""
     with project.index.connect() as conn:
-        rows = conn.execute(
+        reviewed = [
+            str(r[0])
+            for r in conn.execute(
+                text(
+                    "SELECT r.region_id FROM regions r WHERE r.kind = :k AND COALESCE((SELECT "
+                    "rv.state FROM region_reviews rv WHERE rv.version = (SELECT s.version FROM "
+                    "region_snapshots s WHERE s.region_id = r.region_id ORDER BY s.event_id DESC "
+                    "LIMIT 1) ORDER BY rv.event_id DESC LIMIT 1), 'unreviewed') = 'reviewed'"
+                ),
+                {"k": RegionKind.FOCUS.value},
+            )
+        ]
+        visible = [r for r in reviewed if not (agent and region_withheld(project, r))]
+        if not visible:
+            return [
+                ViewNotice(
+                    code="regions-none",
+                    text="No reviewed focus region exists here; the regions column is empty.",
+                )
+            ]
+        held = conn.execute(
             text(
-                "SELECT DISTINCT m.region_id FROM region_members m "
-                "JOIN regions r ON r.region_id = m.region_id WHERE r.kind = :k AND "
-                "COALESCE((SELECT rv.state FROM region_reviews rv WHERE rv.version = m.version "
-                "ORDER BY rv.event_id DESC LIMIT 1), 'unreviewed') = 'reviewed'"
+                "SELECT 1 FROM region_members WHERE region_id IN (SELECT value FROM json_each(:r)) "
+                "LIMIT 1"
             ),
-            {"k": RegionKind.FOCUS.value},
-        ).all()
-    return any(not (agent and region_withheld(project, str(r[0]))) for r in rows)
+            {"r": json.dumps(visible)},
+        ).first()
+    if held is None:
+        return [
+            ViewNotice(
+                code="regions-empty",
+                text="No reviewed focus region holds a member; the regions column is empty.",
+            )
+        ]
+    return []
 
 
 __all__ = ["ONION_MAX_RING", "VIEW_MAX_NODES", "ProcessingDepth", "onion_view", "parse_filter"]
