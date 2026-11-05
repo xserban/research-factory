@@ -2,7 +2,7 @@
 
 import re
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from typing import Annotated, Literal, TypeVar
+from typing import Annotated, Literal, TypeVar, cast
 
 from mcp.server.mcpserver import MCPServer
 from pydantic import Field, JsonValue, StringConstraints, ValidationError
@@ -1588,17 +1588,21 @@ def build_server(
         return _reply(project, propose, include_work_ids=False)
 
     @server.tool()
-    def graph_status(project: str) -> dict[str, JsonValue]:
+    def graph_status(project: str, layer: str = "evidence") -> dict[str, JsonValue]:
         """Counts of the lineage graph: papers (corpus or external) and ideas, and edges by type
         and status (every status, derived from the log), plus the contribution works with no
-        extraction or no references. Names the status filter it counted. Read-only; refused to a
-        session that has joined a pass."""
+        extraction or no references. Names the status filter it counted. `layer` is `evidence`
+        (default) or `all`; `all` adds the interpretation layer's counts in a separate `layer`
+        part, labelled and never added to the evidence counts. Read-only; refused to a session
+        that has joined a pass."""
 
         def status() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
             _refuse_pass_session(opened)
             _require_pass_opened(opened)
-            report = graph_service.graph_status(opened).model_dump(mode="json")
+            report = graph_service.graph_status(
+                opened, layer=cast(graph_service.Layer, layer)
+            ).model_dump(mode="json")
             return _withheld(opened, report, include_work_ids=False)
 
         return _reply(project, status, include_work_ids=False)
@@ -1613,13 +1617,17 @@ def build_server(
         k: int = 2,
         include_inferred: bool = False,
         include_stale: bool = False,
+        layer: str = "evidence",
     ) -> dict[str, JsonValue]:
         """A bounded lineage query: `ancestors` / `descendants` (of `node`, up to `depth` levels,
         at most 8), `path` (shortest, `node` to `target`), `improvements_on` (`node`),
         `cited_by_at_least` (`k` distinct citing works) or `no_stated_base` (works with no stated
         base, by category). The default view shows stated and confirmed edges and confirmed
         ideas; `include_inferred` and `include_stale` widen it, labelled. The result names its
-        filter and carries ids and statuses only. Refused to a session that has joined a pass."""
+        filter and carries ids and statuses only. `layer` is `evidence` (default) or `all`; `all`
+        adds the interpretation layer attached to the result's nodes as a separate `layer` part,
+        every item labelled `interpretation` with its review state, never merged into `nodes` or
+        `edges`. Refused to a session that has joined a pass."""
 
         def run() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
@@ -1633,6 +1641,7 @@ def build_server(
                 depth=depth,
                 k=k,
                 flt=GraphFilter(include_inferred=include_inferred, include_stale=include_stale),
+                layer=cast(graph_service.Layer, layer),
             )
             return _withheld(opened, result.model_dump(mode="json"), include_work_ids=False)
 

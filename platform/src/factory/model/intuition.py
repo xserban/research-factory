@@ -18,7 +18,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Annotated, Literal, Self
 
-from pydantic import AfterValidator, Field, StringConstraints, model_validator
+from pydantic import AfterValidator, ConfigDict, Field, StringConstraints, model_validator
 
 from factory.model.base import StrictModel
 from factory.model.identity import CONVERSION_ID_RE, ULID_RE
@@ -57,6 +57,11 @@ __all__ = [
     "InterpretationRecorded",
     "InterpretationReviewed",
     "LayerClass",
+    "LayerCounts",
+    "LayerEdge",
+    "LayerGraph",
+    "LayerHidden",
+    "LayerNode",
     "LinkStatus",
     "QuoteSourceInput",
     "ReviewState",
@@ -360,3 +365,63 @@ class ConceptBrief(StrictModel):
     concept_id: str
     name: str
     aliases: list[str]
+
+
+# --- The visible layer (plan G3-C) ---
+
+
+class _LayerModel(StrictModel):
+    """Layer read models serialise `class_` as `class`, whichever model contains them."""
+
+    model_config = ConfigDict(
+        extra="forbid", frozen=True, populate_by_name=True, serialize_by_alias=True
+    )
+
+
+class LayerNode(_LayerModel):
+    """A visible layer node. `class` is always `interpretation`; `label` ends in the review state;
+    `flags` lists `source-stale`, `self-reviewed` and `unverifiable-source`."""
+
+    node_id: str
+    node_type: Literal["interpretation", "concept"]
+    class_: str = Field(serialization_alias="class")
+    review_state: str
+    label: str
+    name: str | None
+    flags: list[str]
+
+
+class LayerEdge(_LayerModel):
+    edge_id: str
+    edge_type: Literal["explains", "uses"]
+    source: str
+    target: str
+    class_: str = Field(serialization_alias="class")
+    review_state: str
+    label: str
+    basis: str | None
+
+
+class LayerHidden(_LayerModel):
+    """What the layer view hides, counted: interpretations (within the attached nodes), concepts
+    and links (the whole layer) and `uses` edges dropped because an endpoint is hidden."""
+
+    interpretations: InterpretationHidden
+    concepts: ConceptHidden
+    endpoint_hidden: int
+
+
+class LayerGraph(_LayerModel):
+    nodes: list[LayerNode]
+    edges: list[LayerEdge]
+    hidden: LayerHidden
+
+
+class LayerCounts(_LayerModel):
+    """The layer's own counts; there is no total across the evidence and the layer."""
+
+    interpretations: dict[str, int]
+    concepts: dict[str, int]
+    explains: int
+    uses: dict[str, int]
+    hidden: LayerHidden

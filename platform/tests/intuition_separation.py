@@ -66,6 +66,7 @@ LAYER_MODULES = frozenset(
         "factory.services.intuition_sources",
         "factory.services.interpretations",
         "factory.services.concepts",  # G3-B
+        "factory.services.layer_view",  # G3-C
     }
 )
 ALLOWED_IMPORTERS = frozenset(

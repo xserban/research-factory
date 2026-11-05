@@ -22,7 +22,7 @@ from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal, ParamSpec, TypeVar, get_args
 
-from pydantic import JsonValue
+from pydantic import Field, JsonValue
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
@@ -52,12 +52,14 @@ from factory.lineage.paths import (
 )
 from factory.model.base import StrictModel
 from factory.model.extraction import Scope
+from factory.model.intuition import LayerCounts, LayerGraph
 from factory.model.lineage import EdgeStatus, EdgeType
 from factory.services.call_memo import entering
 from factory.services.context import Project
 from factory.services.contributions import final_items
 from factory.services.extraction import scope_population, unit_states
 from factory.services.ideas import _EFFECTIVE_MEMBERS
+from factory.services.layer_view import layer_counts, layer_graph
 from factory.services.references import current_extraction
 from factory.services.relations import _EFFECTIVE_SQL, _basis_params, relation_counts
 
@@ -649,6 +651,9 @@ class GraphStatus(StrictModel):
     no_references: list[str]
     not_stated: int
     uncited_base: int
+    layer: LayerCounts | None = Field(default=None, exclude_if=lambda v: v is None)
+    """The interpretation layer's own counts; set only for `layer = all`, never added to the
+    evidence counts above."""
 
 
 def _population(project: Project) -> list[str]:
@@ -658,10 +663,29 @@ def _population(project: Project) -> list[str]:
         return []
 
 
+Layer = Literal["evidence", "all"]
+"""`evidence` (the default) leaves every result as it was; `all` adds the interpretation layer as
+a separate, labelled part (plan G3-C, ruling C1)."""
+_LAYERS = frozenset(get_args(Layer))
+
+
+def _check_layer(layer: str) -> None:
+    if layer not in _LAYERS:
+        raise FactoryValidationError([ValidationIssue("layer", "must be evidence or all")])
+
+
 @_scoped
-def graph_status(project: Project) -> GraphStatus:
+def graph_status(project: Project, *, layer: Layer = "evidence") -> GraphStatus:
     """Node and edge counts by SQL aggregates (no full-table read into memory), plus the
-    contribution population's gaps."""
+    contribution population's gaps. With `layer = all`, the layer's counts in their own part."""
+    _check_layer(layer)
+    status = _graph_status(project)
+    if layer == "all":
+        return status.model_copy(update={"layer": layer_counts(project)})
+    return status
+
+
+def _graph_status(project: Project) -> GraphStatus:
     project.index.sync()
     all_statuses = {s.value for s in EdgeStatus}
     with project.index.connect() as conn:
@@ -816,6 +840,9 @@ class GraphQueryResult(StrictModel):
     depth: int | None
     depth_clamped: bool = False
     categories: dict[str, list[str]] | None = None
+    layer: LayerGraph | None = Field(default=None, exclude_if=lambda v: v is None)
+    """The visible interpretation layer attached to the result's nodes; set only for
+    `layer = all`, never merged into `nodes` or `edges`."""
 
 
 def _node_rows(project: Project, ids: Sequence[str]) -> list[dict[str, JsonValue]]:
@@ -920,8 +947,31 @@ def graph_query(
     depth: int = 3,
     k: int = 2,
     flt: GraphFilter = DEFAULT_FILTER,
+    layer: Layer = "evidence",
 ) -> GraphQueryResult:
-    """Run a bounded query; invalid arguments raise `FactoryValidationError` and read nothing."""
+    """Run a bounded query; invalid arguments raise `FactoryValidationError` and read nothing.
+    With `layer = all` the result also carries the layer attached to its nodes (`layer` part)."""
+    _check_layer(layer)
+    result = _graph_query(project, query, node, target, depth, k, flt)
+    if layer == "evidence":
+        return result
+    attached = layer_graph(
+        project,
+        attach_to={str(n["id"]) for n in result.nodes} | {x for x in (node, target) if x},
+        include_inferred=flt.include_inferred,
+    )
+    return result.model_copy(update={"layer": attached})
+
+
+def _graph_query(
+    project: Project,
+    query: str,
+    node: str | None,
+    target: str | None,
+    depth: int,
+    k: int,
+    flt: GraphFilter,
+) -> GraphQueryResult:
     kind = _validate(project, query, node, target, depth, k, flt)
     if kind == "no_stated_base":
         base = no_stated_base(project, flt)

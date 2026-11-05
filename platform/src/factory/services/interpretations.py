@@ -56,6 +56,8 @@ from factory.services.contributions import final_item
 from factory.services.extraction import live_rows
 from factory.services.ideas import idea_view, list_ideas, resolve_idea
 from factory.services.intuition_sources import stale_sources, verify_sources
+from factory.services.layer_view import layer_counts as layer_counts
+from factory.services.layer_view import layer_graph as layer_graph
 from factory.services.lineage import graph_node
 from factory.services.search import works_by_ids
 from factory.services.tasks import (
