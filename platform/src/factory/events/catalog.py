@@ -24,6 +24,7 @@ from factory.model.experiments import (
     ExperimentFrozen,
     ExperimentUnlocked,
     XrunRegistered,
+    XrunReported,
 )
 from factory.model.extraction import (
     ClaimRecorded,
@@ -323,4 +324,5 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("experiment.unlocked", ExperimentUnlocked, 1))
     catalog.register(EventType("experiment.deviation_recorded", ExperimentDeviationRecorded, 1))
     catalog.register(EventType("xrun.registered", XrunRegistered, 1))
+    catalog.register(EventType("xrun.reported", XrunReported, 1))
     return catalog

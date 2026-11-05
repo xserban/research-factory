@@ -46,6 +46,7 @@ from factory.services.extraction import require_schema
 from factory.services.extraction_agreement import final_rows, key_value
 from factory.services.hypotheses import hypothesis_view
 from factory.services.hypothesis_gates import effective_plan, may_pass, project_mode
+from factory.services.xrun_accounting import BudgetView, access_counts, budget_view
 
 ExperimentState = Literal["draft", "frozen", "unlocked", "superseded"]
 
@@ -74,6 +75,9 @@ class ExperimentView(StrictModel):
     """The confirmatory reads per primary cell fixed at the freeze; None before it."""
     frozen_event: str | None = None
     unlocked_event: str | None = None
+    budget: BudgetView
+    access: dict[str, int]
+    """Primary cell hash to the completed confirmatory runs of that cell (ruling 18)."""
 
 
 def _refuse(field: str, reason: str) -> FactoryValidationError:
@@ -115,6 +119,8 @@ def _deviations(project: Project, experiment_id: str) -> list[DeviationView]:
 def _view(project: Project, row: Any) -> ExperimentView:
     experiment_id = str(row.experiment_id)
     deviations = _deviations(project, experiment_id)
+    budget = budget_view(project, experiment_id)
+    assert budget is not None
     flags: set[str] = set()
     if any(d.semantic and d.after_unlock for d in deviations):
         flags.add("deviated")
@@ -133,6 +139,8 @@ def _view(project: Project, row: Any) -> ExperimentView:
         access_limit=None if row.access_limit is None else int(row.access_limit),
         frozen_event=None if row.frozen_event_id is None else str(row.frozen_event_id),
         unlocked_event=None if row.unlocked_event_id is None else str(row.unlocked_event_id),
+        budget=budget,
+        access=access_counts(project, experiment_id),
     )
 
 

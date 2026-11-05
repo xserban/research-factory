@@ -16,12 +16,18 @@ Invariants:
 from __future__ import annotations
 
 import json
+import re
+import secrets
+from decimal import Decimal
+from pathlib import Path
 from typing import Any, Literal
 
+from pydantic import ValidationError
 from sqlalchemy import text
 
 from factory.errors import FactoryValidationError, ValidationIssue
-from factory.events.envelope import Actor
+from factory.events.envelope import Actor, Event
+from factory.extraction.numbers import canonical, parse_printed
 from factory.hypotheses.design import (
     cell_hash,
     cell_in_design,
@@ -29,10 +35,20 @@ from factory.hypotheses.design import (
     planned_cells,
     run_config,
 )
+from factory.index.experiments import report_flags
 from factory.model.base import StrictModel
-from factory.model.experiments import Cell, XrunRegistered
+from factory.model.experiments import (
+    MAX_RESULTS_BYTES,
+    CanonicalMetric,
+    Cell,
+    ExperimentDesign,
+    ResultsFile,
+    XrunRegistered,
+    XrunReported,
+)
 from factory.services.context import Project
-from factory.services.experiments import ExperimentView, experiment_view
+from factory.services.experiments import ExperimentView, experiment_view, make_deviation_event
+from factory.services.xrun_accounting import access_counts, budget_view
 
 XrunState = Literal["planned", "completed", "failed"]
 
@@ -191,3 +207,175 @@ def register_run(project: Project, actor: Actor, experiment_id: str, cell: Cell)
             ]
         )
     return run_id
+
+
+# --- Ingestion ----------------------------------------------------------------------------------
+
+RUNNER_RE = r"^[a-z0-9][a-z0-9-]{0,40}$"
+
+
+def _ingest_actor(project: Project, actor: Actor, runner: str | None) -> Actor:
+    """The actor a result is written as: the runner's `system` actor when `runner` names one (the
+    operator at the command line must be a human), else a human or a runner `system` actor passed
+    in. Never an agent (spec ruling 19: numbers come from machine output)."""
+    if runner is not None:
+        if re.fullmatch(RUNNER_RE, runner) is None:
+            raise _refuse("runner", "lowercase words joined by single hyphens")
+        if actor.kind != "human":
+            raise _refuse("actor", "human-or-runner-only")
+        return Actor(
+            kind="system",
+            id=f"runner-{runner}",
+            user=project.settings.user,
+            session=project.session,
+        )
+    if actor.kind == "human" or (actor.kind == "system" and actor.id.startswith("runner-")):
+        return actor
+    raise _refuse("actor", "human-or-runner-only")
+
+
+def _read_results(path: Path) -> tuple[bytes, ResultsFile]:
+    try:
+        size = path.stat().st_size
+    except OSError:
+        raise _refuse("path", "unreadable") from None
+    if size > MAX_RESULTS_BYTES:
+        raise _refuse("path", "too-large")
+    try:
+        raw = path.read_bytes()
+        body = json.loads(raw)
+    except (OSError, ValueError):
+        raise _refuse("path", "not-json") from None
+    try:
+        return raw, ResultsFile.model_validate(body)
+    except ValidationError as exc:
+        raise FactoryValidationError(
+            [
+                ValidationIssue(".".join(["file", *(str(p) for p in err["loc"])]), str(err["msg"]))
+                for err in exc.errors()
+            ]
+        ) from exc
+
+
+def _canonical_metrics(
+    design: ExperimentDesign, results: ResultsFile
+) -> tuple[dict[str, CanonicalMetric], list[ValidationIssue]]:
+    """The metrics of a file in canonical form, and what is wrong with them: each design metric
+    present (unless the run failed) with a printed number and a unit of its family (and equal to
+    the design's unit when it names one); none the design does not declare."""
+    issues: list[ValidationIssue] = []
+    out: dict[str, CanonicalMetric] = {}
+    declared = {m.name: m for m in design.metrics}
+    for name in sorted(results.metrics):
+        if name not in declared:
+            issues.append(ValidationIssue(f"metrics.{name}", "undeclared"))
+    for name, metric in declared.items():
+        got = results.metrics.get(name)
+        if got is None:
+            if results.exit_status == 0:
+                issues.append(ValidationIssue(f"metrics.{name}", "missing"))
+            continue
+        printed = parse_printed(got.value)
+        if printed is None:
+            issues.append(ValidationIssue(f"metrics.{name}", "not-a-number"))
+            continue
+        if metric.unit is not None and (got.unit or "") != metric.unit:
+            issues.append(ValidationIssue(f"metrics.{name}", "unit-invalid"))
+            continue
+        try:
+            value = canonical(printed, got.unit, metric.unit_family)
+        except ValueError:
+            issues.append(ValidationIssue(f"metrics.{name}", "unit-invalid"))
+            continue
+        out[name] = CanonicalMetric(printed=got.value, unit=got.unit, value=value)
+    return out, issues
+
+
+def ingest_results(project: Project, actor: Actor, path: Path, *, runner: str | None = None) -> str:
+    """Ingest a runner's results file for a registered run and return the `xrun.reported` event
+    id. The raw bytes are stored as a blob; the metrics are validated against the design and
+    stored in canonical form. A failed run (non-zero exit) is recorded and counted; a different
+    commit or environment is recorded with the flag `environment-differs` and kept; a second
+    confirmatory read of a primary cell beyond the access limit is recorded with the flag
+    `test-reused` and a `test-reuse` deviation; hours beyond the budget write one `budget-overrun`
+    deviation. Refused, with nothing written: an agent (`actor`); an unreadable, oversized,
+    non-JSON or malformed file (`path`, `file.*`); a run that is unknown or already reported (`run`:
+    `unknown`, `already-reported`); a metric that is missing, undeclared, not a number or in a unit
+    outside its family (`metrics.<name>`); a confirmatory run without the unlock nonce
+    (`nonce`: `nonce-mismatch`)."""
+    writer = _ingest_actor(project, actor, runner)
+    raw, results = _read_results(path)
+    with project.index.exclusive():
+        project.index.sync()
+        run = xrun_view(project, results.run)
+        if run is None:
+            raise _refuse("run", "unknown")
+        if run.reported_event_id is not None:
+            raise _refuse("run", "already-reported")
+        view = experiment_view(project, run.experiment_id)
+        assert view is not None
+        metrics, issues = _canonical_metrics(view.design, results)
+        if run.cell.needs_unlock:
+            from factory.services.experiments import unlock_nonce
+
+            nonce = unlock_nonce(project, run.experiment_id)
+            if (
+                nonce is None
+                or results.nonce is None
+                or not secrets.compare_digest(nonce, results.nonce)
+            ):
+                issues.append(ValidationIssue("nonce", "nonce-mismatch"))
+        if issues:
+            raise FactoryValidationError(issues)
+        before_hours = Decimal(budget_view(project, run.experiment_id).gpu_hours_used)  # type: ignore[union-attr]
+        reused = False
+        if run.cell.needs_unlock and results.exit_status == 0:
+            counts = access_counts(project, run.experiment_id)
+            reused = counts.get(run.cell_hash, 0) >= (view.access_limit or 1)
+        payload = XrunReported(
+            run_id=results.run,
+            results_blob=project.blobs.put(raw),
+            metrics=metrics,
+            gpu_hours=results.compute.gpu_hours,
+            exit_status=results.exit_status,
+            code_commit=results.code_commit,
+            environment=results.environment,
+            nonce=results.nonce,
+            tracker_run=results.tracker_run,
+            artifacts=results.artifacts,
+            flags=(),
+        )
+        flags = report_flags(view.design, payload, reused=reused)
+        payload = payload.model_copy(update={"flags": flags})
+        events: list[Event] = [
+            project.events.make(
+                "xrun.reported", payload, writer, refs=[results.run, run.experiment_id]
+            )
+        ]
+        system = project.system_actor()
+        if reused:
+            events.append(
+                make_deviation_event(
+                    project,
+                    system,
+                    view,
+                    "test-reuse",
+                    f"run {results.run} read the primary cell {run.cell_hash} again",
+                    False,
+                )
+            )
+        used = before_hours + Decimal(results.compute.gpu_hours)
+        already = any(d.kind == "budget-overrun" for d in view.deviations)
+        if used > Decimal(view.design.budget.gpu_hours) and not already:
+            events.append(
+                make_deviation_event(
+                    project,
+                    system,
+                    view,
+                    "budget-overrun",
+                    f"run {results.run} brought the hours used above the budget",
+                    False,
+                )
+            )
+        project.record(events)
+    return events[0].id

@@ -44,6 +44,7 @@ from factory.index.hypotheses import policy_of
 from factory.index.projection import Handler
 from factory.model.experiments import (
     AUTOMATIC_DEVIATIONS,
+    Cell,
     ExperimentAmended,
     ExperimentDesign,
     ExperimentDesigned,
@@ -51,6 +52,7 @@ from factory.model.experiments import (
     ExperimentFrozen,
     ExperimentUnlocked,
     XrunRegistered,
+    XrunReported,
 )
 from factory.modules.contract import PolicyKind
 
@@ -154,6 +156,7 @@ def experiment_handlers(t: ExperimentTables) -> dict[str, Handler]:
         "experiment.unlocked": _unlocked(t),
         "experiment.deviation_recorded": _deviation(t),
         "xrun.registered": _xrun_registered(t),
+        "xrun.reported": _xrun_reported(t),
     }
 
 
@@ -428,6 +431,86 @@ def _xrun_registered(t: ExperimentTables) -> Handler:
         )
 
     return registered
+
+
+def run_cell(row: object) -> Cell:
+    """The cell a registered run was registered against."""
+    r = row._mapping  # type: ignore[attr-defined]
+    return Cell(
+        universe=tuple((str(k), str(v)) for k, v in json.loads(str(r["universe_json"]))),
+        seed=int(r["seed"]),
+        arm=str(r["arm"]),
+        split=r["split"],
+    )
+
+
+def report_flags(design: ExperimentDesign, p: XrunReported, *, reused: bool) -> tuple[str, ...]:
+    """The flags a report carries, computed from the design and the access count (never typed)."""
+    flags: set[str] = set()
+    if p.exit_status != 0:
+        flags.add("failed")
+    if p.code_commit != design.code.commit or p.environment != design.environment:
+        flags.add("environment-differs")
+    if reused:
+        flags.add("test-reused")
+    return tuple(sorted(flags))
+
+
+def _xrun_reported(t: ExperimentTables) -> Handler:
+    """A report is folded for a registered, unreported run from a human or a `system` runner; its
+    metrics are the design's (all of them unless the run failed); a gated (confirmatory) run must
+    carry the unlock nonce. Flags are recomputed here, not taken from the payload."""
+
+    def reported(conn: Connection, event: Event) -> None:
+        p = XrunReported.model_validate(event.payload)
+        if event.actor.kind not in ("human", "system"):
+            return
+        run = conn.execute(select(t.xruns).where(t.xruns.c.run_id == p.run_id)).first()
+        if run is None or run.reported_event_id is not None:
+            return
+        exp = conn.execute(
+            select(
+                t.experiments.c.design_json, t.experiments.c.nonce, t.experiments.c.access_limit
+            ).where(t.experiments.c.experiment_id == run.experiment_id)
+        ).first()
+        if exp is None:
+            return
+        design = design_of(exp[0])
+        cell = run_cell(run)
+        wanted = {m.name for m in design.metrics}
+        if not set(p.metrics) <= wanted or (p.exit_status == 0 and set(p.metrics) != wanted):
+            return
+        reused = False
+        if cell.needs_unlock:
+            if exp[1] is None or p.nonce != str(exp[1]):
+                return
+            prior = conn.execute(
+                select(func.count())
+                .select_from(t.xruns)
+                .where(
+                    t.xruns.c.experiment_id == run.experiment_id,
+                    t.xruns.c.cell_hash == run.cell_hash,
+                    t.xruns.c.reported_event_id.is_not(None),
+                    t.xruns.c.exit_status == 0,
+                )
+            ).scalar_one()
+            reused = p.exit_status == 0 and int(prior) >= int(exp[2] or 1)
+        flags = report_flags(design, p, reused=reused)
+        conn.execute(
+            update(t.xruns)
+            .where(t.xruns.c.run_id == p.run_id)
+            .values(
+                reported_event_id=event.id,
+                exit_status=p.exit_status,
+                gpu_hours=p.gpu_hours,
+                metrics_json=canonical_json({k: v.value for k, v in p.metrics.items()}).decode(),
+                flags_json=canonical_json(list(flags)).decode(),
+                env_differs=int("environment-differs" in flags),
+                nonce_ok=1 if cell.needs_unlock else None,
+            )
+        )
+
+    return reported
 
 
 def design_of(raw: object) -> ExperimentDesign:

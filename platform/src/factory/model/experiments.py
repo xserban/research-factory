@@ -21,7 +21,7 @@ from pydantic import BeforeValidator, ConfigDict, Field, StringConstraints, mode
 from factory.model.base import StrictModel
 from factory.model.cards import ROW_KEY_RE
 from factory.model.hypotheses import HYP_ID_RE, Decimal0
-from factory.model.identity import ULID_RE
+from factory.model.identity import BLOB_REF_RE, ULID_RE
 from factory.model.screening import NonBlank
 from factory.modules.contract import PolicyKind
 from factory.packs import UnitFamily
@@ -285,3 +285,30 @@ class XrunRegistered(StrictModel):
     config_hash: Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{16}$")]
     exploratory: bool
     """True for a cell outside the design's planned cells (a post hoc run, on the dev split)."""
+
+
+class CanonicalMetric(StrictModel):
+    """A metric as stored: the printed value, its unit and the exact canonical decimal the
+    extraction rules give it (`extraction.numbers.canonical`)."""
+
+    printed: str
+    unit: str | None = None
+    value: str
+
+
+class XrunReported(StrictModel):
+    """A run's result, ingested from a runner's file by a human or a runner. The raw file is the
+    blob `results_blob`; `metrics` are its values after validation. `flags` are computed
+    (`failed`, `environment-differs`, `test-reused`); the projector recomputes them."""
+
+    run_id: RunId
+    results_blob: Annotated[str, StringConstraints(pattern=BLOB_REF_RE)]
+    metrics: dict[str, CanonicalMetric]
+    gpu_hours: Decimal0
+    exit_status: int
+    code_commit: Short
+    environment: Short
+    nonce: Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{32}$")] | None = None
+    tracker_run: Annotated[NonBlank, Field(max_length=200)] | None = None
+    artifacts: tuple[ResultArtifact, ...] = ()
+    flags: tuple[str, ...] = ()

@@ -27,6 +27,7 @@ SPEC = ModuleSpec(
             "experiment.frozen",
             "experiment.unlocked",
             "xrun.registered",
+            "xrun.reported",
         ),
         tables=(
             "experiment_amendments",

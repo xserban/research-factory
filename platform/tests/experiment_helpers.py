@@ -9,7 +9,9 @@ tasks need them.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -119,6 +121,41 @@ def frozen_design(project: Project, human: Actor, w: XW, **over: Any) -> str:
     exp, _ = design_experiment(project, DRAFTER, w.design(**over))
     freeze_experiment(project, human, exp)
     return exp
+
+
+def results_file(
+    tmp_path: Path,
+    run: str,
+    *,
+    value: str = "76.5",
+    metrics: dict[str, Any] | None = None,
+    nonce: str | None = None,
+    exit_status: int = 0,
+    gpu_hours: str = "1.5",
+    commit: str = COMMIT,
+    environment: str = ENV,
+    name: str = "results.json",
+    **extra: Any,
+) -> Path:
+    """A runner's results file (schema 1) for `run` with one primary metric `top-1 accuracy`."""
+    body: dict[str, Any] = {
+        "schema": 1,
+        "run": run,
+        "metrics": (
+            {"top-1 accuracy": {"value": value, "unit": "%"}} if metrics is None else metrics
+        ),
+        "compute": {"gpu_hours": gpu_hours, "wall_clock_s": 5400, "hardware": "1x A100"},
+        "exit_status": exit_status,
+        "code_commit": commit,
+        "environment": environment,
+        "nonce": nonce,
+        "tracker_run": None,
+        "artifacts": [],
+    }
+    body.update(extra)
+    path = tmp_path / name
+    path.write_text(json.dumps(body))
+    return path
 
 
 @pytest.fixture
