@@ -160,17 +160,25 @@ def _gap_current(project: Project, gap_key: str, stored: dict[str, JsonValue]) -
     if set(stored) != _GAP_ROW_KEYS:  # nothing but the builder's own row reaches the critic
         return False
     filters = stored["filters"]
+    if not isinstance(filters, dict):  # free text in `filters` would reach the critic (R-51)
+        return False
     report = find_gaps(
         project,
         rows_axis=str(stored["rows_axis"]),
         columns_axis=str(stored["columns_axis"]),
-        filters={str(k): str(v) for k, v in filters.items()} if isinstance(filters, dict) else None,
+        filters={str(k): str(v) for k, v in filters.items()},
     )
     if report.gap_key != gap_key:
         return False
     return any(
-        (c.row, c.column, c.count) == (stored.get("row"), stored.get("column"), stored.get("count"))
-        for c in report.empty
+        {
+            "rows_axis": report.rows_axis,
+            "columns_axis": report.columns_axis,
+            "filters": report.filters,
+            **cell.model_dump(mode="json"),
+        }
+        == stored
+        for cell in report.empty
     )
 
 
