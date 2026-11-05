@@ -6,7 +6,7 @@ description: Use when a draft (related work, review, grant background or horizon
 # rf-write
 
 Writes prose against a deterministic outline of verified material. The platform builds the outline
-from claims, evidence rows, lineage and reviewed interpretations; you write one sentence at a time
+from claims, evidence rows and lineage; you write one sentence at a time
 and say what class it is and which supports it rests on. The platform refuses a sentence whose
 support is not eligible, whose number is not in a support, or that is more than one sentence. It
 flags risky wording. It never writes prose, and you never set a status, a flag, a count or a
@@ -28,6 +28,8 @@ citation key.
 2. Pull a slot with `draft_next`. Its content lists the section's eligible supports with their
    verified quotes, the numbers they contain, the stat values the platform computed, the method
    disagreements and the sentences already written there. Cite only supports shown in the slot.
+   The one exception is `interp:`: a slot lists no interpretation, so take the id of a reviewed
+   interpretation from `interpretation_list`.
 3. Write with `draft_write`, one sentence per item, with the slot's `task_id`:
    - `claim`: states something about the literature. Cite at least one support and name only what
      its quote says. Prefer a `cell` or a `claim` support.

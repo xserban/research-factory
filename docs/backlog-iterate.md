@@ -110,3 +110,14 @@ Minor review findings parked during the v1 build, to address when iterating from
 - W-A: `resolve_supports` builds the visible-rows world (a full evidence fold) once per call; a long batch of cell supports on a large corpus pays it per call, not per sentence.
 - W-A: a session that wrote sentences may still join an extraction or screening pass; only the reverse is refused (pass sessions cannot use the tools).
 - W-A: `provisional_status` (structural, interpretive, unchecked) stands in for the status W-B computes from verdicts; W-B replaces it.
+- W-A: sentence masking: initials next to `et al.` can hide a real sentence boundary.
+- W-A: `best-performing` is not caught by the quantifier word boundary (the hyphen guard).
+- W-A: a slot task for one section accepts sentences of another section of the draft.
+- W-A: an all-rejected agent call leaves an orphan input blob.
+- W-A: a stale cell reads as `off-outline` on read, because its group is not resolved.
+- W-A: `_context_of` drops ineligible supports, so a stale support no longer guards structural sentences.
+- W-A: `_off` (services/drafts.py) duplicates `_off_outline` (writing/checks.py); `ORDER_STEP` is defined twice.
+- W-A: `edge:cit:` resolution has no test.
+- W-A: repin and reorder have no MCP tool, and repin and reorder no CLI command.
+- W-A: `_stated_edges` reads `list_relations` with its 500-row cap per work.
+- W-A: titles and withdrawal reasons are truncated silently (200 and 300 characters).
