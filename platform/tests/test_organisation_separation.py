@@ -51,6 +51,15 @@ AGENT = {"role": "indexer", "model": "claude-opus-5-5", "skill": "rf-consolidate
 ORGANISATION_CODES = frozenset(
     {"consolidation-due", "label-application-unconfirmed", "term-unused", "organisation-leak"}
 )
+REGION_CODES = frozenset(
+    {
+        "region-unreviewed",
+        "region-drift",
+        "region-subregion-violated",
+        "region-focus-slot-missing",
+        "region-member-proposal-pending",
+    }
+)
 ORGANISATION_EVENTS = ("label.", "term.", "consolidation.", "region.")
 
 
@@ -202,7 +211,9 @@ def test_differential_evidence_identical(
     monkeypatch.setattr(
         sep, "LAYER_EVENT_PREFIXES", (*sep.LAYER_EVENT_PREFIXES, *ORGANISATION_EVENTS)
     )
-    monkeypatch.setattr(sep, "LAYER_CHECK_CODES", sep.LAYER_CHECK_CODES | ORGANISATION_CODES)
+    monkeypatch.setattr(
+        sep, "LAYER_CHECK_CODES", sep.LAYER_CHECK_CODES | ORGANISATION_CODES | REGION_CODES
+    )
     plain, organised = organised_twin(tmp_path, project, iw)
     nodes = [iw.source, iw.other, iw.idea1]
     before = sep.evidence_outputs(plain, nodes)
