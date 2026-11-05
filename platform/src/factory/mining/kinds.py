@@ -84,8 +84,9 @@ class TitleRef:
 
 def title_candidates(project: Project, lo: int, hi: int) -> list[Candidate]:
     """The corpus works with a year in `[lo, hi]`, by work id, as the reference resolver sees the
-    corpus: only works with a non-probe provenance row (a seed or probe-only work is not a
-    candidate and is never revealed), and every active merge collapsed to its primary (an arXiv
+    corpus: only works with a non-probe provenance row, the `list_works` definition (a probe-only
+    work is not a candidate and is never revealed; no work is filtered by role), and every
+    active merge collapsed to its primary (an arXiv
     copy and its published copy are one candidate, so an exact title resolves instead of being
     ambiguous). A merge's members that differ in title stay as separate candidates for the same
     primary. The read is streamed in batches, bounded by the year window."""
