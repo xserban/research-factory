@@ -306,9 +306,7 @@ def import_tags_as_labels(project: Project, import_id: str) -> int:
         applied = {
             (str(r), str(k))
             for r, k in conn.execute(
-                text(
-                    "SELECT import_ref, key FROM labels WHERE import_ref LIKE :p"
-                ),
+                text("SELECT import_ref, key FROM labels WHERE import_ref LIKE :p"),
                 {"p": f"{import_id}:%"},
             ).all()
         }

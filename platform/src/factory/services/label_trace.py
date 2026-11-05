@@ -189,7 +189,8 @@ def edges(conn: Connection, kind: str, ident: str) -> tuple[list[Key], list[Key]
             ("label", str(r[0]))
             for r in _rows(
                 conn,
-                "SELECT application_id FROM labels WHERE withdrawn = 0 AND (key IN "
+                "SELECT application_id FROM labels WHERE withdrawn = 0 "
+                "AND COALESCE(decision, '') != 'reject' AND (key IN "
                 "(SELECT key FROM term_aliases WHERE term_id = :t) OR live_key IN "
                 "(SELECT key FROM term_aliases WHERE term_id = :t)) "
                 "ORDER BY application_id LIMIT :n",

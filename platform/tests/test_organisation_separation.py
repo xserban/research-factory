@@ -508,3 +508,14 @@ def test_mixed_cluster_serves_only_the_tag_free_part(project: Project, iw: IWorl
     assert task is not None
     assert sorted(m["id"] for m in task.members) == ["favor+", "performer"]
     assert "secret" not in task.model_dump_json().lower()
+
+
+def test_term_trace_skips_rejected_applications(project: Project, iw: IWorld) -> None:
+    from factory.services.labels import decide_application
+
+    keep = label(project, iw.human, "performer", iw.source)
+    drop = label(project, iw.human, "performer", iw.other)
+    decide_application(project, iw.human, drop, "reject")
+    term = promote_term(project, iw.human, name="performer", definition="d", applies_to=(W,))
+    ids = {c.id for c in trace(project, term).children}
+    assert keep in ids and drop not in ids
