@@ -31,11 +31,13 @@ from factory.services.context import Project
 from factory.services.extraction import started_works
 from factory.services.gates import rigor_mode
 from factory.services.mining import MinerRow, population, registered_row, require_listed
+from factory.services.protocol import amend_protocol, current_protocol
 
 __all__ = [
     "CalibrationRow",
     "MinerProposer",
     "MinerState",
+    "admit_miner",
     "calibration_by_id",
     "calibration_of",
     "draw_miner_calibration",
@@ -260,3 +262,38 @@ def draw_miner_calibration(
             [project.events.make("miner.calibration_drawn", payload, actor, refs=(row.miner_id,))]
         )
     return payload
+
+
+# --- Evidence admission ---
+
+
+def admit_miner(project: Project, actor: Actor, name: str) -> None:
+    """Admit the listed miner `name` as evidence: the protocol's `miners` use gets `evidence:
+    true`, by an amendment. A human act (R-51: an agent, the proposer above all, does not confirm
+    its own evidence status).
+
+    Refused, with nothing written: for a non-human actor (`actor`); a miner the protocol does not
+    list (`miners`); and by the readiness rules unless that version has a passed, not retired
+    calibration in this project (`miners.<i>.evidence`). Admitting an admitted miner writes
+    nothing."""
+    if actor.kind != "human":
+        raise FactoryValidationError(
+            [ValidationIssue("actor", "admitting a miner as evidence is a human act")]
+        )
+    protocol = current_protocol(project)
+    uses = () if protocol is None else tuple(protocol.spec.miners or ())
+    if protocol is None or not any(u.name == name for u in uses):
+        raise FactoryValidationError(
+            [ValidationIssue("miners", f"miner {name} is not listed in the protocol")]
+        )
+    if any(u.name == name and u.evidence for u in uses):
+        return
+    amended = tuple(u.model_copy(update={"evidence": True}) if u.name == name else u for u in uses)
+    amend_protocol(
+        project,
+        actor,
+        protocol.spec.model_copy(update={"miners": amended}),
+        reason=f"admit miner {name} as evidence",
+        semantic=True,
+        effects={},
+    )

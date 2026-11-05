@@ -474,6 +474,7 @@ def agent_methods(project: Project, report: MethodsReport) -> tuple[MethodsRepor
     update["miners"] = [
         m.model_copy(
             update={
+                "calibration_units": None,
                 "recall": None,
                 "field_agreement": None,
                 "precision": None,
@@ -760,9 +761,9 @@ def _miners_paragraph(report: MethodsReport, withheld: frozenset[str]) -> str:
         if m.state == "retired" and m.calibration in ("passed", "failed"):
             text += f" (calibration {m.calibration})"
         text += "."
-        if m.calibration_units is not None:
+        if m.calibration is not None:
             if "miner_scores" in withheld:
-                text += f" Calibration over {m.calibration_units} unit(s): {WITHHELD_RATES}."
+                text += f" Calibration: {WITHHELD_RATES}."
             elif m.recall is None and m.field_agreement is None:
                 text += f" Calibration over {m.calibration_units} unit(s): {NOT_COMPUTED}."
             else:

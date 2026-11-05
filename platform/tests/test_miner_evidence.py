@@ -284,6 +284,8 @@ def test_agent_methods_withhold_scores(
     blanked = agent_view.miners[0]
     assert (blanked.recall, blanked.field_agreement, blanked.precision) == (None, None, None)
     assert blanked.verification_rate is None and blanked.state == "calibrated"
+    assert blanked.calibration_units is None  # a short sample would show the floor
+    assert "unit(s)" not in render_methods(agent_view, withheld=withheld)
     text = render_methods(agent_view, withheld=withheld)
     assert "withheld from the agent view" in text and "record recall" not in text
 

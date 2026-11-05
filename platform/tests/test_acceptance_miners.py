@@ -5,7 +5,10 @@ hand-written conversions), not pilot data: five units are calibrated, the other 
 
 # ruff: noqa: F811
 import pytest
+from typer.testing import CliRunner
 
+from factory.cli.main import app
+from factory.config import Settings
 from factory.events.envelope import Actor
 from factory.model.extraction import MinerScope
 from factory.model.screening import Channel, PassLabel
@@ -26,6 +29,7 @@ from factory.services.methods import agent_methods, methods_report, render_metho
 from factory.services.miner_report import miner_calibration_report
 from factory.services.miners import MinerState, miner_state, proposer, retire_miner
 from factory.services.protocol import amend_protocol, current_protocol
+from tests.cli_helpers import _env
 from tests.extraction_helpers import _both, ext_a, ext_b, screened, world  # noqa: F401
 from tests.miner_calibration_helpers import (
     PROPOSER,
@@ -46,22 +50,8 @@ pytestmark = pytest.mark.slow  # acceptance suite: dev runs deselect with -m "no
 SCOPE = MinerScope(VISION_NAME)
 
 
-def _admit(project: Project, actor: Actor) -> None:
-    current = current_protocol(project)
-    assert current is not None
-    uses = tuple(u.model_copy(update={"evidence": True}) for u in current.spec.miners or ())
-    amend_protocol(
-        project,
-        actor,
-        current.spec.model_copy(update={"miners": uses}),
-        reason="admit the calibrated miner as evidence",
-        semantic=True,
-        effects={},
-    )
-
-
 def test_vision_result_miner_end_to_end(
-    project: Project, agent: Actor, human: Actor, world: list[str]
+    settings: Settings, project: Project, agent: Actor, human: Actor, world: list[str]
 ) -> None:
     # session P proposes the miner; the researcher lists it, draws and labels the sample
     cal = calibrated_world(project, agent, human)
@@ -73,7 +63,8 @@ def test_vision_result_miner_end_to_end(
     assert report is not None and report.passed is True
     assert miner_state(project, VISION_NAME, 1) is MinerState.CALIBRATED
     # the researcher admits the miner as evidence by amendment
-    _admit(project, human)
+    done = CliRunner().invoke(app, ["miner", "admit", VISION_NAME], env=_env(settings.root))
+    assert done.exit_code == 0, done.stderr
     # sessions A and B run the production passes on the units outside the sample
     worked = mine_pass(
         project, miner_actor(SESSION_M1, "claude-opus-5-5"), PassLabel.A, lambda w: [mine_row()]

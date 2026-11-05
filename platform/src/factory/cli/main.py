@@ -1403,6 +1403,18 @@ def miner_retire_cmd(
     typer.echo(f"retired {name} version {version}")
 
 
+@miner_app.command("admit")
+def miner_admit_cmd(
+    ctx: typer.Context, name: Annotated[str, typer.Argument(help="The listed miner's name.")]
+) -> None:
+    """Admit a calibrated miner as evidence (the researcher's act; an amendment of the protocol)."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        miners_service.admit_miner(project, project.human_actor(), name)
+    typer.echo(f"admitted {name} as evidence")
+
+
 @miner_calibrate_app.command("draw")
 def miner_calibrate_draw_cmd(
     ctx: typer.Context,
