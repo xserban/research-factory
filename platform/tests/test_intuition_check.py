@@ -261,6 +261,49 @@ def _definition_event(project: Project, cid: str) -> str:
     return str(event_id)
 
 
+def test_a_relayed_review_is_stored_unfolded_and_reported(project: Project, iw: IWorld) -> None:
+    """A human-kind review that came over the MCP channel (a relay by an agent session) never
+    counts, whatever its session; the service refusal stays, and the log is still kept."""
+    from tests.intuition_helpers import rows
+
+    ident = agent_interpretation(project, iw)
+    relay = iw.human.model_copy(update={"session": "01JZ9Q3K5M7N8P0R2S4T6V8W5A"})
+    event = record_event(
+        project, "interpretation.reviewed", reviewed(ident, "reviewed", channel="mcp"), relay
+    )
+    assert rows(project, "SELECT folded FROM interpretation_reviews") == [(0,)]
+    assert rows(project, "SELECT review_state FROM interpretations") == [("unreviewed",)]
+    cid = concept(project, iw, "softmax attention")
+    definition = _definition_event(project, cid)
+    ev2 = record_event(
+        project, "concept.reviewed", concept_reviewed(cid, definition, channel="mcp"), relay
+    )
+    assert rows(project, "SELECT folded FROM concept_reviews") == [(0,)]
+    assert rows(project, "SELECT review_state FROM concepts") == [("unreviewed",)]
+    assert codes(project)["layer-review-dropped"].refs == sorted([event.id, ev2.id])
+
+
+def test_a_relayed_link_or_source_decision_does_not_count(project: Project, iw: IWorld) -> None:
+    from tests.intuition_helpers import link_decided, rows, source_decided
+
+    entry = ConceptInput.model_validate({"name": "kernel", "source": TEXTBOOK})
+    cid = define_concept(project, iw.writer, entry)
+    digest = rows(project, f"SELECT source_digest FROM concepts WHERE concept_id='{cid}'")[0][0]
+    relay = iw.human.model_copy(update={"session": "01JZ9Q3K5M7N8P0R2S4T6V8W5A"})
+    record_event(
+        project,
+        "concept.source_decided",
+        source_decided(cid, "approve", str(digest), channel="mcp"),
+        relay,
+    )
+    assert rows(project, "SELECT source_state FROM concepts") == [("proposed",)]
+    link = propose_concept_link(project, iw.writer, iw.idea1, cid, UseBasisInput(), note="x")
+    payload = link_decided(link.link_id, "confirm")
+    payload["channel"] = "mcp"
+    record_event(project, "concept.link_decided", payload, relay)
+    assert rows(project, "SELECT status FROM concept_uses") == [("inferred",)]
+
+
 def test_a_review_that_counted_is_not_reported_dropped(project: Project, iw: IWorld) -> None:
     ident = agent_interpretation(project, iw)
     review_interpretation(project, iw.human, ident, "reviewed", "", Channel.CLI)
@@ -322,6 +365,29 @@ def test_a_quote_that_starts_like_an_edge_id_is_not_a_leak(
         check_module, "grouped_rows", lambda _p: ['"uses:cul_01HZX3K4M5N6P7Q8R9S0T1V2WA"']
     )
     assert codes(project)["layer-leak"].refs == ["grouped_rows"]
+
+
+def test_an_output_that_cannot_be_computed_is_reported_unscanned(
+    project: Project, iw: IWorld, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from factory.errors import FactoryValidationError, ValidationIssue
+
+    agent_interpretation(project, iw)
+
+    def fails(_p: object) -> None:
+        raise FactoryValidationError([ValidationIssue("schema", "missing")])
+
+    monkeypatch.setattr(check_module, "evidence_report", fails)
+    finding = codes(project)["layer-scan-incomplete"]
+    assert finding.severity == "warning" and finding.refs == ["evidence_report"]
+    assert "layer-leak" not in codes(project)
+
+
+def test_the_snapshot_includes_rendered_methods_text_and_status(
+    project: Project, iw: IWorld
+) -> None:
+    snapshot = evidence_snapshot(project)
+    assert {"methods_text", "status"} <= set(snapshot)
 
 
 def test_layer_leak_fires_on_a_layer_class_in_an_export(

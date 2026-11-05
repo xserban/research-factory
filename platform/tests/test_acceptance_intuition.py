@@ -17,7 +17,7 @@ from typing import Any
 import pytest
 from sqlalchemy import text
 
-from factory.errors import FactoryValidationError
+from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
 from factory.events.reader import read_all
 from factory.intuition.export import LAYER_NOTICE
@@ -318,7 +318,8 @@ def test_stale_source_flag_keeps_state(project: Project, iw: IWorld, agent: Acto
 
 
 def test_merge_round_trip(project: Project, iw: IWorld) -> None:
-    """11: merge then unmerge restores the layer view and the links' endpoints."""
+    """11: merge then unmerge restores `layer_graph` (nodes, edges, hidden counts) exactly. Only
+    that read is compared, not the tables."""
     keep, gone = concept(project, iw, "alpha"), concept(project, iw, "beta")
     link = propose_concept_link(
         project, iw.writer, iw.idea1, gone, UseBasisInput(), note="uses beta"
@@ -401,6 +402,11 @@ def test_every_check_code_constructed(
         )
     with_references(project, agent, iw.source, version="v4")
     monkeypatch.setattr(check_module, "grouped_rows", lambda _p: ["int_01HZX3K4M5N6P7Q8R9S0T1V2WA"])
+
+    def uncomputable(_p: object) -> None:
+        raise FactoryValidationError([ValidationIssue("schema", "missing")])
+
+    monkeypatch.setattr(check_module, "evidence_report", uncomputable)
     found = {hit.code for hit in check_module._layer(project)}
     assert found == LAYER_CHECK_CODES
 

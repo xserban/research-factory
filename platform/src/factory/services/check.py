@@ -90,13 +90,14 @@ from factory.services.layer_check import (
     unreviewed_interpretations,
 )
 from factory.services.lineage import graph_status, iter_graph_export
-from factory.services.methods import MethodsReport, methods_report
+from factory.services.methods import MethodsReport, methods_report, render_methods
 from factory.services.notices import (
     assessments,
     dependent_works,
     observed_notices,
 )
 from factory.services.prisma import prisma_flow, search_report
+from factory.services.project import project_status
 from factory.services.protocol import current_protocol
 from factory.services.protocol_rules import (
     library_source_gaps,
@@ -208,6 +209,7 @@ LEVELS: dict[str, tuple[Severity | None, Severity | None, Severity | None]] = {
     "concept-link-unconfirmed": ("warning", "warning", "warning"),
     "layer-review-dropped": ("warning", "warning", "warning"),
     "layer-leak": ("error", "error", "error"),
+    "layer-scan-incomplete": ("warning", "warning", "warning"),
     "concept-cycle": ("error", "error", "error"),
 }
 
@@ -221,6 +223,7 @@ LAYER_CHECK_CODES = frozenset(
         "concept-link-unconfirmed",
         "layer-review-dropped",
         "layer-leak",
+        "layer-scan-incomplete",
         "concept-cycle",
     }
 )
@@ -667,7 +670,16 @@ def _layer(project: Project) -> list[_Hit]:
     ):
         if found[0]:
             hits.append(_Hit(code, tuple(found[1]), f"{found[0]} {phrase}"))
-    leaked = _layer_leaks(project)
+    leaked, unscanned = _layer_leaks(project)
+    if unscanned:
+        hits.append(
+            _Hit(
+                "layer-scan-incomplete",
+                tuple(unscanned),
+                f"{len(unscanned)} evidence output(s) could not be computed and were not scanned "
+                "for the interpretation layer",
+            )
+        )
     if leaked:
         hits.append(
             _Hit(
@@ -687,18 +699,25 @@ def _snapshot_text(value: object) -> str:
     return repr(value)
 
 
+_NOT_COMPUTED = "not-computed:"
+
+
 def _attempt(read: Callable[[], object]) -> str:
     try:
         return _snapshot_text(read())
-    except FactoryValidationError as error:  # e.g. no schema yet: nothing to scan
-        return "error:" + ";".join(f"{i.field}:{i.reason}" for i in error.issues)
+    except FactoryValidationError as error:  # e.g. no schema yet; reported as unscanned
+        return _NOT_COMPUTED + ";".join(f"{i.field}:{i.reason}" for i in error.issues)
 
 
 def evidence_snapshot(project: Project) -> dict[str, str]:
     """Each evidence output but the graph exports, serialised by name: the final rows, claims,
     groups, independence counts, evidence report, PRISMA flow and search report, methods
-    statement, contribution items, ideas and graph counts. `check` is not included (it reads
-    this). The exports are scanned chunk by chunk in `_layer_leaks`."""
+    statement (data and rendered text), contribution items, ideas, graph counts and the project
+    status. An output that cannot be computed is marked `not-computed:` and reported by
+    `layer-scan-incomplete`. `check` is not included (it reads this). The exports are scanned
+    chunk by chunk in `_layer_leaks`. Not scanned: the Markdown renderings of the PRISMA flow and
+    the evidence report (they are renderings of outputs scanned as data), the digest and the
+    exports of bibliographies."""
     return {
         "final_rows": _attempt(lambda: final_rows(project)),
         "grouped_rows": _attempt(lambda: grouped_rows(project)),
@@ -711,6 +730,8 @@ def evidence_snapshot(project: Project) -> dict[str, str]:
         "contribution_items": _attempt(lambda: final_items(project)),
         "ideas": _attempt(lambda: list_ideas(project, include_unconfirmed=True)),
         "graph_status": _attempt(lambda: graph_status(project)),
+        "methods_text": _attempt(lambda: render_methods(methods_report(project))),
+        "status": _attempt(lambda: project_status(project)),
     }
 
 
@@ -718,16 +739,17 @@ def _mentions_layer(text_: str) -> bool:
     return bool(_LAYER_ID.search(text_) or _LAYER_EDGE.search(text_) or _LAYER_CLASS.search(text_))
 
 
-def _layer_leaks(project: Project) -> list[str]:
+def _layer_leaks(project: Project) -> tuple[list[str], list[str]]:
     """Names of the evidence outputs that carry a layer identifier, a layer edge id or the layer
-    class (ruling C5). The graph exports are read in chunks, never held whole."""
-    leaked = [
-        name for name, text_ in sorted(evidence_snapshot(project).items()) if _mentions_layer(text_)
-    ]
+    class (ruling C5), and of those that could not be computed. The graph exports are read in
+    chunks, never held whole."""
+    snapshot = evidence_snapshot(project)
+    unscanned = sorted(n for n, t in snapshot.items() if t.startswith(_NOT_COMPUTED))
+    leaked = [name for name, text_ in sorted(snapshot.items()) if _mentions_layer(text_)]
     for fmt in ("json", "dot"):
         if any(_mentions_layer(chunk) for chunk in iter_graph_export(project, fmt)):
             leaked.append(f"export:{fmt}")
-    return sorted(leaked)
+    return sorted(leaked), unscanned
 
 
 def _contribution_schema_missing(project: Project) -> list[_Hit]:

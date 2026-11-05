@@ -35,7 +35,7 @@ ALL = GraphFilter(include_inferred=True, include_stale=True)
 
 
 def test_projection_version_bumped() -> None:
-    assert PROJECTION_VERSION == "36"
+    assert PROJECTION_VERSION == "38"
 
 
 def test_layer_tables_are_omitted_when_empty() -> None:
@@ -135,8 +135,9 @@ def test_folded_review_is_marked_and_writes_no_screening_row(
     record_event(project, "interpretation.recorded", recorded(), agent)
     relay = project.human_actor().model_copy(update={"session": "01JZ9Q3K5M7N8P0R2S4T6V8W1B"})
     record_event(project, "interpretation.reviewed", reviewed(channel="mcp"), relay)
-    assert rows(project, "SELECT folded FROM interpretation_reviews") == [(1,)]
-    assert rows(project, "SELECT review_state FROM interpretations") == [("reviewed",)]
+    # a review over the MCP channel (a relay) is kept but never counts
+    assert rows(project, "SELECT folded FROM interpretation_reviews") == [(0,)]
+    assert rows(project, "SELECT review_state FROM interpretations") == [("unreviewed",)]
     assert rows(project, "SELECT session FROM label_sessions") == []
 
 

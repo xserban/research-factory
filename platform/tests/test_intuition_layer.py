@@ -30,7 +30,12 @@ from factory.services.concepts import (
     visible_concept_count,
 )
 from factory.services.context import Project
-from factory.services.interpretations import layer_counts, layer_graph
+from factory.services.interpretations import (
+    layer_counts,
+    layer_graph,
+    record_interpretation,
+    review_interpretation,
+)
 from factory.services.layer_view import iter_layer_nodes
 from factory.services.lineage import graph_export, graph_query, graph_status
 from tests.helpers import open_session
@@ -176,8 +181,8 @@ def test_graph_status_layer_counts_separate_no_total(project: Project, iw: IWorl
     assert "total" not in json.dumps(s)
     counts = layer_counts(project)
     assert s["layer"]["interpretations"] == {
-        "unreviewed": 1,
-        "reviewed": 1,
+        "unreviewed": 2,  # the relayed (mcp channel) review does not count
+        "reviewed": 0,
         "wrong": 1,
         "superseded": 1,
     }
@@ -230,10 +235,13 @@ def test_visibility_predicate_matches_the_concepts_service(project: Project, iw:
 def test_flags_mark_self_review_and_unverifiable_source(project: Project, iw: IWorld) -> None:
     populate_layer(project, iw)
     flags = {n.node_id: n.flags for n in layer_graph(project).nodes}
-    # a textbook source has no work id, so it cannot be verified; the relayed review is the
-    # human interpretation's own (self-reviewed)
+    # a textbook source has no work id, so it cannot be verified
     assert any("unverifiable-source" in f for f in flags.values())
-    assert any("self-reviewed" in f for f in flags.values())
+    # the lone human reviewing their own interpretation is flagged
+    mine = record_interpretation(project, iw.human, iw.entry(iw.idea2))
+    review_interpretation(project, iw.human, mine, "reviewed", "", Channel.CLI)
+    flags = {n.node_id: n.flags for n in layer_graph(project).nodes}
+    assert flags[mine] == ["self-reviewed"]
 
 
 @pytest.mark.anyio

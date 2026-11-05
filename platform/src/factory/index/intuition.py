@@ -15,7 +15,9 @@ storage, not on a filter.
 Handlers are total: an event naming an unknown interpretation changes nothing, never raises, and an
 interpretation id is first-write-wins. Defence in depth (R-51): a review is folded only when its
 actor is human, and not when it comes from the session that wrote an agent-written interpretation
-(a relay of a human answer by the writing session); no service writes such an event.
+(a relay of a human answer by the writing session); no service writes such an event. A decision
+that came over the MCP channel (`channel = mcp`: a relay by an agent session) is never folded
+whoever the actor is; a review is kept with `folded = 0`.
 `interpretation_reviews.folded` is 0 for a review the fold dropped, so the history lists it.
 No layer event writes a screening table (`label_sessions` gates pass joins).
 """
@@ -60,6 +62,7 @@ from factory.model.intuition import (
     InterpretationReviewed,
     ReviewState,
 )
+from factory.model.screening import Channel
 
 LAYER_CLASS = "interpretation"
 
@@ -330,6 +333,7 @@ def _reviewed(t: IntuitionTables) -> Handler:
         # agent-written one. A review of a superseded interpretation is kept and folded as history.
         folded = (
             ev.actor.kind == "human"
+            and p.channel is not Channel.MCP
             and row is not None
             and not (row[0] == Author.AGENT.value and row[1] == ev.actor.session)
         )
@@ -594,7 +598,7 @@ def _defined(t: IntuitionTables) -> Handler:
 def _source_decided(t: IntuitionTables) -> Handler:
     def decided(conn: Connection, ev: Event) -> None:
         p = ConceptSourceDecided.model_validate(ev.payload)
-        if not _human_not_writer(conn, ev, p.concept_id):
+        if p.channel is Channel.MCP or not _human_not_writer(conn, ev, p.concept_id):
             return
         conn.execute(
             sqlite_insert(t.concept_source_decisions)
@@ -618,7 +622,7 @@ def _concept_reviewed(t: IntuitionTables) -> Handler:
         p = ConceptReviewed.model_validate(ev.payload)
         # Every review is kept; `folded` says whether it counted (a human who is not the writer
         # of an agent-written definition, for a known concept).
-        folded = _human_not_writer(conn, ev, p.concept_id)
+        folded = p.channel is not Channel.MCP and _human_not_writer(conn, ev, p.concept_id)
         conn.execute(
             sqlite_insert(t.concept_reviews)
             .values(
@@ -680,7 +684,7 @@ def _link_proposed(t: IntuitionTables) -> Handler:
 def _link_decided(t: IntuitionTables) -> Handler:
     def decided(conn: Connection, ev: Event) -> None:
         p = ConceptLinkDecided.model_validate(ev.payload)
-        if ev.actor.kind != "human":
+        if ev.actor.kind != "human" or p.channel is Channel.MCP:
             return
         row = conn.execute(
             text(
