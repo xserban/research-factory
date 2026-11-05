@@ -474,3 +474,35 @@ class ModelCutoffDeclared(StrictModel):
     model: Annotated[NonBlank, Field(max_length=120)]
     cutoff: date
     source: Annotated[NonBlank, Field(max_length=300)]
+
+
+# --- Evaluation (plan XP-B) ---------------------------------------------------------------
+
+EVALUATOR_VERSION = "1"
+EVALUATION_OUTCOMES = ("supported", "refuted", "inconclusive", "incomplete")
+SIGNED_DECIMAL_RE = r"^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$"
+Level = Literal["0.90", "0.95", "0.99"]
+
+
+class HypothesisEvaluated(StrictModel):
+    """The computed outcome of a registered hypothesis, written by the platform (a `system` actor)
+    and by nothing else. There is no input model: no tool, command or service takes an outcome.
+    The projector recomputes the whole payload from the log and folds the event only if it is
+    equal to the recomputation (experiment hypotheses), so a hand-written event changes nothing."""
+
+    hypothesis_id: HypothesisId
+    h_version: HVersion
+    experiment_id: Annotated[str, StringConstraints(pattern=rf"^exp_{ULID_RE}$")] | None = None
+    e_version: Annotated[str, StringConstraints(pattern=r"^E@[0-9a-f]{8}$")] | None = None
+    outcome: Literal["supported", "refuted", "inconclusive", "incomplete"]
+    n: int = Field(ge=0)
+    mean: Annotated[str, StringConstraints(pattern=SIGNED_DECIMAL_RE)] | None = None
+    ci_low: Annotated[str, StringConstraints(pattern=SIGNED_DECIMAL_RE)] | None = None
+    ci_high: Annotated[str, StringConstraints(pattern=SIGNED_DECIMAL_RE)] | None = None
+    level: Level
+    counts: dict[str, int] = Field(default_factory=dict)
+    flags: tuple[str, ...] = ()
+    runs: tuple[str, ...] = ()
+    works: tuple[str, ...] = ()
+    inputs_hash: Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{16}$")]
+    evaluator_version: str

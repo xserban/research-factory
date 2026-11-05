@@ -391,4 +391,8 @@ def ingest_results(project: Project, actor: Actor, path: Path, *, runner: str | 
         project.record(events)
         if run.cell.is_reproduction:
             evaluate_baselines(project, run.experiment_id)  # a verdict once every seed is in
+        elif run.cell.split == "confirmatory":
+            from factory.services.evaluation import auto_evaluate  # it imports this module
+
+            auto_evaluate(project, run.experiment_id)  # once the last primary cell is complete
     return events[0].id

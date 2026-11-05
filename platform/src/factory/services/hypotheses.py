@@ -9,7 +9,8 @@ Invariants:
   evaluation exists for it and no confirmatory result references its design: otherwise the old one
   must be evaluated or abandoned (`evidence-exists`, R-52). The evaluation and confirmatory tests
   are provider hooks (`EVALUATION_SOURCES`, `CONFIRMATORY_SOURCES`) that plans XP-B and XP-A fill;
-  the confirmatory one is filled from import, the evaluation one stays empty until XP-B.
+  the confirmatory one is filled from import, the evaluation one by `services.evaluation`, which
+  `has_evaluation` imports where it reads the list.
 - The state is computed on read from the events and the hooks: `abandoned`, then `superseded`,
   then `evaluated`, `registered`, `reviewed`, else `draft`.
 - Abandonment and conclusion are human acts; a conclusion needs an evaluation and is labelled as
@@ -55,7 +56,8 @@ Autonomy = Literal["human", "agent"]
 
 Provider = Callable[[Project, str], bool]
 EVALUATION_SOURCES: list[Provider] = []
-"""Tests for "a `hypothesis.evaluated` event exists for this hypothesis"; plan XP-B fills it."""
+"""Tests for "a conclusive `hypothesis.evaluated` event exists for this hypothesis"; filled by
+`services.evaluation`, imported lazily by `has_evaluation` (it imports this module)."""
 CONFIRMATORY_SOURCES: list[Provider] = [confirmatory_evidence]
 """Tests for "a confirmatory run references this hypothesis's design". Plan XP-A's test is in the
 list from import, so that it is filled whichever surface loads first (a lazy fill would leave the
@@ -86,6 +88,8 @@ def _refuse(field: str, reason: str) -> FactoryValidationError:
 
 
 def has_evaluation(project: Project, hypothesis_id: str) -> bool:
+    import factory.services.evaluation  # noqa: F401  (fills EVALUATION_SOURCES; it imports this)
+
     return any(source(project, hypothesis_id) for source in EVALUATION_SOURCES)
 
 
