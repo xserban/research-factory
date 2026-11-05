@@ -37,14 +37,16 @@ from factory.services.protocol import current_protocol
 GATE = "writing.release"
 
 
-def _reviewer_of_record(project: Project) -> str | None:
+def _is_reviewer_of_record(project: Project, actor: Actor) -> bool:
+    """Whether the actor is a human named reviewer of record, read as the fold reads it: any such
+    entry of the latest protocol."""
     current = current_protocol(project)
-    if current is None:
-        return None
-    records = [
-        r for r in current.spec.screening.reviewers if r.role is ReviewerRole.REVIEWER_OF_RECORD
-    ]
-    return records[0].actor if records else None
+    if current is None or actor.kind != "human":
+        return False
+    return any(
+        r.role is ReviewerRole.REVIEWER_OF_RECORD and r.actor == actor.id
+        for r in current.spec.screening.reviewers
+    )
 
 
 def _audit_issues(report: DraftAuditReport) -> list[ValidationIssue]:
@@ -94,7 +96,7 @@ def release(project: Project, draft_id: str, *, actor: Actor) -> str:
                 [ValidationIssue("actor", "in this mode a draft is released at the terminal")]
             )
         policy = require_gate(project, actor, GATE)
-        if mode is RigorMode.SYSTEMATIC and actor.id != _reviewer_of_record(project):
+        if mode is RigorMode.SYSTEMATIC and not _is_reviewer_of_record(project, actor):
             raise FactoryValidationError(
                 [ValidationIssue("actor", "only the reviewer of record releases in this mode")]
             )
