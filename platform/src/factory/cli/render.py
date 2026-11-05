@@ -1,6 +1,7 @@
 """Markdown and text renderings of the report models for the CLI. Formatting only: every figure
 is read from the model, so the CLI and the MCP tools cannot differ (R-05)."""
 
+import json
 from collections.abc import Mapping, Sequence
 
 from factory.errors import ValidationIssue
@@ -13,6 +14,7 @@ from factory.model.intuition import (
     StoredSource,
 )
 from factory.model.references import Decision, LinkState
+from factory.model.regions import EdgeBasis, RegionMemberProposed
 from factory.model.screening import PassLabel
 from factory.regions.rules import MemberType
 from factory.services.agreement import DecisionView
@@ -59,7 +61,7 @@ from factory.services.prisma import UNCONVERTED, PrismaFlow, SearchReport
 from factory.services.prisma_update import UpdateFlow
 from factory.services.properties import PropertyView
 from factory.services.references import ExtractSummary, Page, ReferenceCounts
-from factory.services.regions import RegionState, VersionInfo
+from factory.services.regions import ExportRow, RegionState, VersionInfo
 from factory.services.relations import RelationView
 from factory.services.snowball import Comparison, RoundCandidate, RoundResult
 from factory.services.trace import TraceNode
@@ -1208,6 +1210,40 @@ def version_lines(info: VersionInfo) -> list[str]:
     latest = "latest" if info.latest else "older"
     return [
         f"{info.version}  {info.region_id}  {latest}  {info.review_state}  {_counts(info.counts)}"
+    ]
+
+
+def proposal_lines(proposals: Sequence[RegionMemberProposed]) -> list[str]:
+    if not proposals:
+        return ["no open proposals"]
+    return [
+        f"{p.proposal_id}  {p.member_type.value} {p.member}  "
+        f"{p.basis.kind} {p.basis.edge_id if isinstance(p.basis, EdgeBasis) else p.basis.anchor}"
+        for p in proposals
+    ]
+
+
+def export_lines(version: str, rows: Sequence[ExportRow], *, as_json: bool) -> list[str]:
+    """A version's members with their basis, one per line (tab separated), or one JSON document.
+    Ids, types and numbers only."""
+    if as_json:
+        document = {
+            "version": version,
+            "members": [
+                {
+                    "type": r.member_type.value,
+                    "id": r.member,
+                    "rules": r.rules,
+                    "decision": r.decision,
+                }
+                for r in rows
+            ],
+        }
+        return [json.dumps(document, sort_keys=True, indent=2)]
+    return [
+        f"{r.member_type.value}\t{r.member}\trules={','.join(str(i) for i in r.rules) or '-'}"
+        f"\tdecision={r.decision or '-'}"
+        for r in rows
     ]
 
 

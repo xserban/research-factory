@@ -111,6 +111,7 @@ from factory.services.protocol_rules import (
 )
 from factory.services.reference_resolve import lost_human_decisions
 from factory.services.references import current_extraction, included_works
+from factory.services.region_check import region_findings
 from factory.services.relations import RelationView, list_relations
 from factory.services.seeds import SeedRole, _rigor_mode, seed_check
 from factory.services.snowball import recorded_rounds, round_runs
@@ -479,6 +480,7 @@ def _run_rules(project: Project) -> list[_Hit]:
         _conclusions(project),
         _lineage(project),
         _layer(project),
+        _regions(project),
         gate_hits(project),
         audit_hits(project),
         _gate_policies(project),
@@ -700,6 +702,11 @@ def _layer(project: Project) -> list[_Hit]:
             )
         )
     return hits
+
+
+def _regions(project: Project) -> list[_Hit]:
+    """Findings of regions (plan Regions-B): ids and counts only, advisory in every mode."""
+    return [_Hit(f.code, f.refs, f.message) for f in region_findings(project)]
 
 
 def _snapshot_text(value: object) -> str:

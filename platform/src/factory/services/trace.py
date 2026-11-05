@@ -29,7 +29,7 @@ from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 from sqlalchemy.engine import Connection
 
 from factory.errors import FactoryValidationError, ValidationIssue
@@ -52,7 +52,7 @@ from factory.model.screening import AUDIT_ID_RE, DECISION_ID_RE, QUALIFIED_CRITE
 from factory.model.seed import SEED_ID_RE
 from factory.model.work import QUERY_ID_RE, RUN_ID_RE
 from factory.model.work_ids import WORK_ID_RE
-from factory.services import layer_trace
+from factory.services import layer_trace, region_trace
 from factory.services.context import Project
 from factory.services.contributions import contribution_item
 from factory.services.ideas import idea_view
@@ -97,6 +97,9 @@ KINDS: tuple[str, ...] = (
     "interpretation",
     "concept",
     "concept_link",
+    "region",
+    "region_version",
+    "region_member",
 )
 """Node kinds in chain order. The layer's kinds come last (G2's pinned order after `claim` is
 unchanged). Sibling nodes are listed in this order (reversed for back traces, so
@@ -119,6 +122,7 @@ _CITES_RE = rf"^cit:(rex_{ULID_RE}):([1-9][0-9]*)$"
 _QUOTE_RE = rf"^(ext_{ULID_RE})/quote$"
 _PATTERNS: tuple[tuple[str, str], ...] = (
     *layer_trace.LAYER_PATTERNS,
+    *region_trace.REGION_PATTERNS,
     (REL_ID_RE, "relation"),
     (IDEA_ID_RE, "idea"),
     (_CITES_RE, "cites"),
@@ -267,6 +271,7 @@ def agent_trace(
     any view (the corpus does not count it either).
     """
     tree = without_seeds(trace(project, ref, direction=direction, layer=layer))
+    tree = _without_withheld_regions(project, tree)
     project.index.sync()
     with project.index.connect() as conn:
         hidden_queries = {
@@ -283,6 +288,43 @@ def agent_trace(
     if _hidden(tree, hidden_queries, hidden_runs):
         raise FactoryValidationError([ValidationIssue("ref", "unknown id")])
     return _pruned(tree, hidden_queries, hidden_runs)
+
+
+def _without_withheld_regions(project: Project, tree: TraceNode) -> TraceNode:
+    """Regions withheld from agents (they reach an import's `all` part or a barred query purpose)
+    removed whole from an agent trace: the region, its versions and the memberships it holds. A
+    trace rooted at one reads as an unknown id."""
+    from factory.services.regions import region_ids, region_withheld
+
+    withheld = {rid for rid in region_ids(project) if region_withheld(project, rid)}
+    if not withheld:
+        return tree
+    with project.index.connect() as conn:
+        versions = {
+            str(v)
+            for (v,) in conn.execute(
+                text(
+                    "SELECT DISTINCT version FROM region_snapshots WHERE region_id IN :r"
+                ).bindparams(bindparam("r", expanding=True)),
+                {"r": sorted(withheld)},
+            )
+        }
+
+    def hidden(node: TraceNode) -> bool:
+        if node.kind == "region":
+            return node.id in withheld
+        if node.kind == "region_version":
+            return node.id in versions
+        return node.kind == "region_member" and region_trace.split_member(node.id)[0] in versions
+
+    def prune(node: TraceNode) -> TraceNode:
+        return node.model_copy(
+            update={"children": [prune(c) for c in node.children if not hidden(c)]}
+        )
+
+    if hidden(tree):
+        raise FactoryValidationError([ValidationIssue("ref", "unknown id")])
+    return prune(tree)
 
 
 def _pruned(node: TraceNode, queries: set[str], runs: set[str]) -> TraceNode:
@@ -465,6 +507,9 @@ class _Walk:
             "interpretation": self._layer_node,
             "concept": self._layer_node,
             "concept_link": self._layer_node,
+            "region": self._region_node,
+            "region_version": self._region_node,
+            "region_member": self._region_node,
         }
 
     # --- Rows and events ---
@@ -576,6 +621,17 @@ class _Walk:
     def _layer_node(self, ident: str) -> _Described | None:
         kind = {"int": "interpretation", "cpt": "concept", "cul": "concept_link"}[ident[:3]]
         found = layer_trace.describe(self._conn, kind, ident)
+        return None if found is None else _Described(*found)
+
+    def _region_node(self, ident: str) -> _Described | None:
+        kind = (
+            "region_member"
+            if "/" in ident
+            else "region_version"
+            if ident.startswith("R@")
+            else "region"
+        )
+        found = region_trace.describe(self._conn, kind, ident)
         return None if found is None else _Described(*found)
 
     def _question(self, ident: str) -> _Described | None:
@@ -1079,11 +1135,16 @@ class _Walk:
         """The upstream and downstream neighbours of a node, as keys. A key may name no row; the
         walk shows such a key as a missing node."""
         kind, ident = key
+        if kind in region_trace.REGION_KINDS:
+            return region_trace.edges(self._conn, kind, ident)
         if kind in layer_trace.LAYER_KINDS:
-            return layer_trace.edges(self._conn, kind, ident)
-        up, down = _EDGES[kind](self, ident)
+            up, down = layer_trace.edges(self._conn, kind, ident)
+        else:
+            up, down = _EDGES[kind](self, ident)
         if self._layer == "all" and kind in ("anchor", "work", "idea"):
             down = [*down, *layer_trace.attached(self._conn, kind, ident)]
+        if self._layer == "all" and kind in ("work", "idea", "concept"):
+            down = [*down, *region_trace.attached(self._conn, kind, ident)]
         return up, down
 
     def _up_question(self, ident: str) -> tuple[list[Key], list[Key]]:

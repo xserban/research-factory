@@ -1276,7 +1276,51 @@ def regions_of(project: Project, member_type: MemberType, member: str) -> list[R
     ]
 
 
+class ExportRow(StrictModel):
+    """One member of a version with the basis recorded for it: ids and numbers only."""
+
+    member_type: MemberType
+    member: str
+    rules: list[int]
+    decision: str | None
+
+
+def export_version(project: Project, version: str) -> list[ExportRow]:
+    """Every member of a pinned version with its basis (the positions of the include rules that
+    selected it, and the deciding event of a human add), sorted by (type, id). Read from the
+    version's blobs, so the answer is the same after the index is rebuilt. No name, definition or
+    document text. Refused (field `version`) for an unknown version."""
+    project.index.sync()
+    snapshot = _snapshot_of(project, version)
+    if snapshot is None:
+        raise _refuse(ValidationIssue("version", f"version-unknown:{version}"))
+    with project.index.connect() as conn:
+        basis_blob = conn.execute(
+            text("SELECT basis_blob FROM region_snapshots WHERE event_id = :e"),
+            {"e": snapshot["event_id"]},
+        ).scalar_one()
+    basis = project.blobs.get_json(str(basis_blob))
+    assert isinstance(basis, dict)
+    members = sorted(
+        read_members_blob(project.blobs.get(str(snapshot["members_blob"]))),
+        key=lambda m: (m[0].value, m[1]),
+    )
+    rows: list[ExportRow] = []
+    for kind, member in members:
+        entry: Any = basis.get(f"{kind.value}\t{member}") or {}
+        rows.append(
+            ExportRow(
+                member_type=kind,
+                member=member,
+                rules=[int(i) for i in entry.get("rules", [])],
+                decision=entry.get("decision"),
+            )
+        )
+    return rows
+
+
 __all__: Sequence[str] = [
+    "ExportRow",
     "Overlap",
     "RegionDiff",
     "RegionMembership",
@@ -1286,6 +1330,7 @@ __all__: Sequence[str] = [
     "decide_member",
     "define_region",
     "diff",
+    "export_version",
     "foci",
     "focus_slot_missing",
     "link_regions",

@@ -6,6 +6,7 @@ ruling 26).
 """
 
 from factory.modules.contract import (
+    CheckRule,
     EventFamily,
     GateKind,
     GateSpec,
@@ -60,6 +61,13 @@ SPEC = ModuleSpec(
             PolicyKind.HUMAN,
             ("slice 3d ruling 11", "R-51", "R-90"),
         ),
+    ),
+    checks=(
+        CheckRule("region-unreviewed", ("warning", "warning", "warning")),
+        CheckRule("region-drift", ("warning", "warning", "warning")),
+        CheckRule("region-subregion-violated", ("warning", "warning", "warning")),
+        CheckRule("region-focus-slot-missing", ("warning", "warning", "warning")),
+        CheckRule("region-member-proposal-pending", ("warning", "warning", "warning")),
     ),
 )
 

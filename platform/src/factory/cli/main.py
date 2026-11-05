@@ -3970,15 +3970,28 @@ def _decide_region_member(
     region: str,
     member: str,
     member_type: MemberType,
-    decision: Literal["add", "remove"],
+    decision: Literal["add", "remove", "reject"],
+    rationale: str | None = None,
+    proposal: str | None = None,
 ) -> None:
     state = _state(ctx)
     with _reporting_errors():
         project = _resolve_project(state)
         regions_service.decide_member(
-            project, project.human_actor(), region, member_type, member, decision
+            project,
+            project.human_actor(),
+            region,
+            member_type,
+            member,
+            decision,
+            rationale,
+            proposal_id=proposal,
         )
     typer.echo(f"{decision} {member}")
+
+
+_RATIONALE = typer.Option("--rationale", help="Why, at most 600 characters.")
+_PROPOSAL = typer.Option("--proposal", help="The proposal this answers, rmp_.")
 
 
 @regions_app.command("add")
@@ -3989,9 +4002,11 @@ def regions_add_cmd(
     member_type: Annotated[
         MemberType, typer.Option("--type", help="work, idea or concept.")
     ] = MemberType.WORK,
+    rationale: Annotated[str | None, _RATIONALE] = None,
+    proposal: Annotated[str | None, _PROPOSAL] = None,
 ) -> None:
     """Add a member to a region by a human decision; it enters the next snapshot."""
-    _decide_region_member(ctx, region, member, member_type, "add")
+    _decide_region_member(ctx, region, member, member_type, "add", rationale, proposal)
 
 
 @regions_app.command("remove")
@@ -4002,9 +4017,79 @@ def regions_remove_cmd(
     member_type: Annotated[
         MemberType, typer.Option("--type", help="work, idea or concept.")
     ] = MemberType.WORK,
+    rationale: Annotated[str | None, _RATIONALE] = None,
+    proposal: Annotated[str | None, _PROPOSAL] = None,
 ) -> None:
     """Remove a member from a region by a human decision; it leaves the next snapshot."""
-    _decide_region_member(ctx, region, member, member_type, "remove")
+    _decide_region_member(ctx, region, member, member_type, "remove", rationale, proposal)
+
+
+@regions_app.command("reject")
+def regions_reject_cmd(
+    ctx: typer.Context,
+    region: Annotated[str, typer.Argument(help="A region id, reg_.")],
+    member: Annotated[str, typer.Argument(help="A work, idea or concept id.")],
+    member_type: Annotated[
+        MemberType, typer.Option("--type", help="work, idea or concept.")
+    ] = MemberType.WORK,
+    rationale: Annotated[str | None, _RATIONALE] = None,
+    proposal: Annotated[str | None, _PROPOSAL] = None,
+) -> None:
+    """Reject the proposals of a member; membership is unchanged and the proposal closes."""
+    _decide_region_member(ctx, region, member, member_type, "reject", rationale, proposal)
+
+
+@regions_app.command("proposals")
+def regions_proposals_cmd(
+    ctx: typer.Context,
+    region: Annotated[str, typer.Argument(help="A region id, reg_.")],
+) -> None:
+    """The open member proposals of a region, with their verified basis."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        open_ones = regions_service.pending_proposals(project, region)
+    for line in render.proposal_lines(open_ones):
+        typer.echo(line)
+
+
+@regions_app.command("link")
+def regions_link_cmd(
+    ctx: typer.Context,
+    source: Annotated[str, typer.Argument(help="The first version, R@xxxxxxxx.")],
+    target: Annotated[str, typer.Argument(help="The second version, R@xxxxxxxx.")],
+    subregion_of: Annotated[
+        bool, typer.Option("--subregion-of", help="SOURCE's members are all in TARGET.")
+    ] = False,
+    related: Annotated[bool, typer.Option("--related", help="The two are related.")] = False,
+    note: Annotated[str | None, typer.Option("--note", help="A note on the link.")] = None,
+) -> None:
+    """Declare a link between two pinned versions (a human act; `subregion-of` is verified)."""
+    state = _state(ctx)
+    if subregion_of == related:
+        _fail("pass exactly one of --subregion-of and --related", 2)
+    link_type: Literal["subregion-of", "related"] = "subregion-of" if subregion_of else "related"
+    with _reporting_errors():
+        project = _resolve_project(state)
+        regions_service.link_regions(
+            project, project.human_actor(), link_type, source, target, note
+        )
+    typer.echo(f"{link_type} {source} {target}")
+
+
+@regions_app.command("export")
+def regions_export_cmd(
+    ctx: typer.Context,
+    version: Annotated[str, typer.Argument(help="A region version, R@xxxxxxxx.")],
+    as_json: Annotated[bool, typer.Option("--json", help="Print JSON.")] = False,
+) -> None:
+    """Every member of a version with its basis: ids and types only, no text."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        rows = regions_service.export_version(project, version)
+    for line in render.export_lines(version, rows, as_json=as_json):
+        typer.echo(line)
 
 
 @regions_app.command("list")

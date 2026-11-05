@@ -6,6 +6,8 @@
 
 > **Reconciled 2026-11-04 (cross-spec reconciliation, decision 75; v1 cut, decision 74).** v1 cut: the adoption task moved to Later (cross-project; spec v1 scope); the former Task 3 is Later L1, former Tasks 4 and 5 are now Tasks 3 and 4, and Review Focus item 3 applies only when the Later task is built. Bumps `PROJECTION_VERSION` by one from the value it finds.
 
+> **Built 2026-11-05 (v1 tasks 1 to 4; rulings in decision 88).** Tasks 1 and 2 share one commit; Task 3 adds the withheld-region guard (backlog-iterate, Regions-B). Later L1 (adoption) is not built.
+
 > **Dependencies.** Regions-A merged. The read interface of Task 3 (`regions_of`, `region_members`, `overlap`) is the one IDEA-04 (cross-project suggestions), slice 4 (alerts per region) and slice 6 (cross-region matching) are expected to consume; changing it later is an amendment to this plan.
 
 **Goal:** Let agents propose regions and individual members with verified bases and let the researcher decide them; declare and verify links between regions; compute overlap and differences; adopt a reviewed snapshot from another project read-only; expose all of it through MCP and the CLI with `check` and `trace`.
