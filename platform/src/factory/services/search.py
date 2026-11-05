@@ -89,6 +89,7 @@ def register_query(
     cycle_id: str | None = None,
     inbox_item: str | None = None,
     import_id: str | None = None,
+    names_works: Sequence[str] = (),
 ) -> str:
     """Record a query as the caller stated it. Writes nothing if the spec does not fit.
 
@@ -106,6 +107,10 @@ def register_query(
 
     `import_id` names the import (`imp_`) whose recorded admission planned an `import`-purpose
     query (slice 3d); it is the last ref, and only such a query may name it.
+
+    `names_works` lists the work ids a status lookup asks about (living-C); they are refs of the
+    event, before the cycle, so "when was this work last looked up" is an indexed read. Only a
+    status query may name works.
     """
     # Imported here: the protocol service reads seeds, which read this module.
     from factory.services import protocol as protocol_service
@@ -141,6 +146,8 @@ def register_query(
             supplied_by=supplied_by,
             import_id=import_id,
         )
+        if names_works and spec.purpose is not QueryPurpose.STATUS:
+            issues.append(ValidationIssue("names_works", "only a status query names works"))
         if import_id is not None and spec.purpose is not QueryPurpose.IMPORT:
             issues.append(
                 ValidationIssue("import_id", "only an import-purpose query names an import")
@@ -160,6 +167,7 @@ def register_query(
         refs = protocol_service.search_refs(project, spec, deviation_id)
         refs += () if inbox_item is None else (inbox_item,)
         refs += () if round_id is None else (round_id,)
+        refs += tuple(names_works)
         refs += () if cycle_id is None else (cycle_id,)
         refs += () if import_id is None else (import_id,)
         project.record(

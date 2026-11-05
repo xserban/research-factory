@@ -8,19 +8,24 @@ Invariants:
 - `extend_sample_hook` only extends pass B's sample, with the seed derived from the cycle id, so
   a rerun of the same cycle draws the same works and the event records the seed.
 - `snapshot_hook` records a snapshot after every `watch_plan.snapshot_every` finished cycles.
+- `status_hook` looks up notices (and, if the plan tracks them, versions) of the dependent works
+  as status runs of the cycle and returns their run ids; it decides nothing about any work.
 """
 
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Mapping
 
 from sqlalchemy import text
 
 from factory.services.context import Project
+from factory.services.notices import notice_check
 from factory.services.protocol import current_protocol
 from factory.services.screening import extend_sample
 from factory.services.snapshots import last_snapshot_event, snapshot
 from factory.services.watch import CycleHook
+from factory.sources.registry import SourceFactory, status_sources
 
 # Module kind (slice M): a cycle hook is a `status` module; hand-written until M-B lands.
 
@@ -60,5 +65,31 @@ def snapshot_hook(
     return ()
 
 
-DEFAULT_HOOKS: tuple[CycleHook, ...] = (extend_sample_hook, snapshot_hook)
+def make_status_hook(sources: Mapping[str, SourceFactory] | None = None) -> CycleHook:
+    """A status hook over `sources` (default: the real adapters, built when the hook runs)."""
+
+    def status_hook(
+        project: Project, cycle_id: str, new_work_ids: tuple[str, ...]
+    ) -> tuple[str, ...]:
+        protocol = current_protocol(project)
+        plan = None if protocol is None else protocol.spec.watch_plan
+        if plan is None:
+            return ()
+        factories = status_sources() if sources is None else sources
+        summary = notice_check(
+            project,
+            cycle_id,
+            sources=factories,
+            budget=plan.notice_budget,
+            notice_sources=plan.notices,
+        )
+        return summary.run_ids
+
+    return status_hook
+
+
+status_hook = make_status_hook()
+"""The status hook over the real adapters; a module kind `status` (slice M) until M-B lands."""
+
+DEFAULT_HOOKS: tuple[CycleHook, ...] = (extend_sample_hook, status_hook, snapshot_hook)
 """The hooks the CLI and the MCP server pass to `watch_run`, in order."""

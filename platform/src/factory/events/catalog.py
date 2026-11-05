@@ -26,6 +26,7 @@ from factory.model.imports import (
 )
 from factory.model.inbox import InboxLinkAdded, InboxLinkResolved, InboxLinkWithdrawn
 from factory.model.living import SnapshotRecorded
+from factory.model.notices import NoticeObserved
 from factory.model.probe import ProbeFailed, ProbeMeasured, ProbePageArchived
 from factory.model.project import ProjectCreated
 from factory.model.protocol import (
@@ -175,4 +176,5 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("watch.cycle_started", WatchCycleStarted, 1))
     catalog.register(EventType("watch.cycle_finished", WatchCycleFinished, 1))
     catalog.register(EventType("living.snapshot_recorded", SnapshotRecorded, 1))
+    catalog.register(EventType("notice.observed", NoticeObserved, 1))
     return catalog
