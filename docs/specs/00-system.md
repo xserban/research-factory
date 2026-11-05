@@ -50,6 +50,8 @@ Rule: business logic lives in `services/`. `mcp/` and `cli/` only parse input, c
 | Full-text attempt (slice 2) | `att_<ULID>` | One access attempt (route, outcome) within a fetch |
 | Library document (slice 2) | `doc_<ULID>` | A stored full-text document (raw source or canonical Markdown) in the project library |
 | Inbox item (slice 4a) | `inb_<ULID>` | One captured link, parsed to one identifier; never reused |
+| Relation (slice 3b) | `rel_<ULID>` | One proposed `builds-on` or `improves-on` relation; decisions and supersession are events (decision 82) |
+| Idea (slice 3b) | `ida_<ULID>` | One proposed named grouping of papers; merged and unmerged by events (decision 82) |
 
 IDs are never reused and never change. A changed entity is a new version or a superseding record.
 

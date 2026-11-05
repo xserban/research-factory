@@ -174,3 +174,10 @@ G2-A to G2-C each end in a state where the earlier slices' tests pass unchanged.
 5. **Idea scope in multi-project corpora.** Recommendation: project-local in this slice; cross-project reuse is IDEA-04.
 6. **Reading cost.** Dual extraction of all items for every work may be costly. Recommendation: the declared `dual_extract_sample` (pilot default 0.3, as the evidence schema) with the audit as the bound on the error rate.
 7. **Whether `limitation` items feed any statistic.** Recommendation: shown beside nodes, counted by kind, never used in selection or ranking.
+
+## Implemented in plans G2-A to G2-E
+
+Built as specified: pack `contribution` v1 and the `contribution_schema` section, contribution recording with dual extraction, agreement, resolution and audit, relations and ideas with the stated/inferred rule, the graph projection with bounded queries and JSON/DOT export, `check` findings and `trace` kinds `relation`, `idea`, `cites` and `quote`. MCP tools: `contribution_next`, `contribution_record`, `relation_propose`, `idea_propose`, `graph_status`, `graph_query`, `graph_export`. CLI groups: `factory contributions`, `factory relations`, `factory ideas`, `factory graph`, with `factory check` and `factory trace` extended. Skills: `rf-contributions`, `rf-lineage`. Acceptance 1–17 run in one flow in `tests/test_acceptance_lineage.py` (marked `slow`, hand-written documents, no network); 19 is the quality gate. Acceptance 18 (the linear-attention pilot) is not run: pilot steps are set aside (decision 74). Notes:
+- `check` has one finding beyond the list, `contribution-closed-without-items`, and withholds `contribution-error-ceiling` from the agent view (decision 82).
+- An item of a work that notices exclude from the synthesis makes its relations `stale` (reason `basis-retracted`).
+- A stale row is never superseded, so `contribution-stale` names a work only while one of its units is not current.

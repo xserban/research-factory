@@ -125,6 +125,14 @@ Numbering continues by blocks of ten per slice so that no two drafts' provisiona
 | R-82 (proposed) | **Snowball discipline.** Rounds, directions and the stopping rule are declared in the protocol and recorded before any query runs; a candidate is never included without screening; rounds and the yield per round (new after deduplication, included) are reported | P, S |
 | R-83 (proposed) | **Citation-context minimality.** Only anchors and marker tokens are stored; bibliography text is stored only as bounded parsed entry fields and an `entry_sha256` that re-derives from the pinned conversion | all |
 
+**Lineage (slice 3b; proposed rows, built by plans G2-A to G2-E; numbering confirmed at merge)**
+
+| ID | Requirement | Modes |
+| --- | --- | --- |
+| R-84 (proposed) | **Stated versus inferred relations.** An edge is `stated` (a verified quote plus a deterministically resolved target) or `inferred`. Inferred edges need human confirmation, are labelled wherever shown, and are excluded from default views and from every statement of fact. An agent proposes and never confirms | all |
+| R-85 (proposed) | **Edge basis.** Every edge carries a basis (a reference link or a live contribution row); an edge without one cannot be written as stated, and `trace` resolves any edge to the question | all |
+| R-86 (proposed) | **Graph as projection.** Nodes, edges and every graph statistic are rebuildable from events; deleting the index and rebuilding gives identical tables, and a merge and its reversal restore the previous graph exactly | all |
+
 ### K. Organisation and imported libraries ([slice 3d](slice-3d-regions-import.md))
 | ID | Requirement | Modes |
 | --- | --- | --- |

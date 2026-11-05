@@ -185,3 +185,4 @@ Built on the living-A/B base (`CycleHook`, `dedup_new`, `work_keys`, snapshots).
 - Agent views omit notices, version observations and preferences of held-out seeds' works (`notice_list`, `notice_assess`, `check`, `trace`), rebuilding counts after the omission.
 - `notice_check` reads dependents through `final_outcomes` (the same read every report makes), not a bare indexed query.
 
+**Follow-up done (plan G2-E).** `services/relations.py` reads `work_states`: a relation whose source work has `synthesis = excluded` is `stale` with reason `basis-retracted`, so it leaves the default lineage and graph views and `check` lists it as `relation-stale`. The test is `test_retracted_basis_leaves_default_views` in `tests/test_lineage_check.py`; the skipped placeholder is removed. The status is `stale`, not a separate `retracted-basis` value, to keep the five edge statuses of slice 3b.
