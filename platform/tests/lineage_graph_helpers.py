@@ -13,6 +13,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from factory.events.envelope import Actor, Event
 from factory.services.context import Project
 from tests.lineage_payloads import ITEM, inferred, stated
@@ -143,3 +145,12 @@ def write_fixture(project: Project, agent: Actor, path: Path = GRAPH_SMALL) -> N
                 {"relation_id": e["id"], "decision": decision, "rationale": "checked"},
                 human,
             )
+
+
+def stand_in_basis(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The fixture's relations name one stand-in basis item that is no real contribution item, so
+    the final-view basis check (G2-C) would mark every relation stale. Neutralise that check; the
+    other staleness reasons (link, extraction) stay real. Basis staleness is tested in G2-C."""
+    neutral = lambda project: {"stale": "[]", "unresolved": "[]", "cited": "{}"}  # noqa: E731
+    monkeypatch.setattr("factory.services.relations._basis_params", neutral)
+    monkeypatch.setattr("factory.services.lineage._basis_params", neutral)

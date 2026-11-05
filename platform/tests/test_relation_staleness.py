@@ -251,6 +251,7 @@ def test_inferred_relation_records_its_reference_extraction(
     assert view is not None
     assert (view.reference_extraction_id, view.cited_entry) == (lin.rex, 5)
     decide_relation(project, other_session_human, rid, LineageDecision.CONFIRM, "ok")
+    _reconvert(project)
     extract_references(project, agent, [lin.source], sources={})
     stale = relation_view(project, rid)
     assert stale is not None and "references-superseded" in stale.stale_reasons
@@ -271,6 +272,7 @@ def test_new_g1_extraction_after_resolution_stales_confirmed_relation(
     _resolved_to_b(project, human, disputed)
     rid = _propose(project, agent, disputed, disputed.target5, disputed.base)  # inferred
     decide_relation(project, other_session_human, rid, LineageDecision.CONFIRM, "ok")
+    _reconvert(project)
     extract_references(project, agent, [disputed.source], sources={})
     view = relation_view(project, rid)
     assert view is not None and view.effective is EdgeStatus.STALE

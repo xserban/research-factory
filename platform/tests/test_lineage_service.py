@@ -23,7 +23,7 @@ from factory.services.lineage import (
     iter_nodes,
     require_node,
 )
-from tests.lineage_graph_helpers import GRAPH_SMALL, record, write_fixture
+from tests.lineage_graph_helpers import GRAPH_SMALL, record, stand_in_basis, write_fixture
 from tests.lineage_payloads import ITEM, idea, merge
 
 FILTERS = [
@@ -50,7 +50,8 @@ def _ids(prefix: str) -> list[str]:
 
 
 @pytest.fixture
-def gp(project: Project, agent: Actor) -> Project:
+def gp(project: Project, agent: Actor, monkeypatch: pytest.MonkeyPatch) -> Project:
+    stand_in_basis(monkeypatch)
     write_fixture(project, agent)
     return project
 

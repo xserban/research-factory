@@ -34,7 +34,7 @@ from factory.model.lineage import EdgeStatus, EdgeType, RelationProposal
 from factory.services.context import Project
 from factory.services.lineage import GraphQueryResult, graph_query, no_stated_base
 from factory.services.relations import propose_relation
-from tests.lineage_graph_helpers import GRAPH_SMALL, write_fixture
+from tests.lineage_graph_helpers import GRAPH_SMALL, stand_in_basis, write_fixture
 from tests.lineage_helpers import Lineage, ctr_a, ctr_b, lin, screened, world  # noqa: F401
 
 P = {n: f"rf:p{n}-{n:08x}" for n in range(1, 10)}
@@ -141,7 +141,8 @@ def test_improvements_on_and_cited_by(nb: Neighbours) -> None:
 
 
 @pytest.fixture
-def gp(project: Project, agent: Actor) -> Project:
+def gp(project: Project, agent: Actor, monkeypatch: pytest.MonkeyPatch) -> Project:
+    stand_in_basis(monkeypatch)
     write_fixture(project, agent)
     return project
 

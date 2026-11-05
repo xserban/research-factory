@@ -53,10 +53,10 @@ from factory.model.extraction import Scope
 from factory.model.lineage import EdgeStatus, EdgeType
 from factory.services.context import Project
 from factory.services.contributions import final_items
-from factory.services.extraction import scope_population, stale_extractions, unit_states
+from factory.services.extraction import scope_population, unit_states
 from factory.services.ideas import _EFFECTIVE_MEMBERS
 from factory.services.references import current_extraction
-from factory.services.relations import _EFFECTIVE_SQL, relation_counts
+from factory.services.relations import _EFFECTIVE_SQL, _basis_params, relation_counts
 
 __all__ = [
     "GRAPH_PAGE",
@@ -87,10 +87,6 @@ def _is_idea(node_id: str) -> bool:
     return node_id.startswith(_IDEA_PREFIX)
 
 
-def _stale_json(project: Project) -> str:
-    return json.dumps(sorted(stale_extractions(project, scope=Scope.CONTRIBUTION)))
-
-
 @dataclass
 class _View:
     """The overlays of one filtered view, with per-view caches. One instance lives as long as one
@@ -98,7 +94,7 @@ class _View:
 
     project: Project
     flt: GraphFilter
-    stale: str
+    params: dict[str, str]
     shown_cache: dict[str, str | None] = field(default_factory=dict)
 
     # --- ideas ---
@@ -157,7 +153,7 @@ class _View:
                 f"{_EFFECTIVE_SQL} SELECT relation_id, effective FROM shown "
                 "WHERE relation_id IN (SELECT value FROM json_each(:ids))"
             ),
-            {"ids": json.dumps(sorted(set(ids))), "stale": self.stale},
+            {"ids": json.dumps(sorted(set(ids))), **self.params},
         ).all()
         return {str(r[0]): EdgeStatus(str(r[1])) for r in rows}
 
@@ -305,7 +301,7 @@ class _View:
 
 def _view(project: Project, flt: GraphFilter) -> _View:
     project.index.sync()
-    return _View(project, flt, _stale_json(project))
+    return _View(project, flt, _basis_params(project))
 
 
 _ABSORBED = (
@@ -388,7 +384,7 @@ def require_node(
         return node
     if _is_idea(node_id):
         with project.index.connect() as conn:
-            survivor = _View(project, GraphFilter(include_inferred=True), "[]").shown_idea(
+            survivor = _View(project, GraphFilter(include_inferred=True), {}).shown_idea(
                 conn, node_id
             )
         if survivor is not None and survivor != node_id:
