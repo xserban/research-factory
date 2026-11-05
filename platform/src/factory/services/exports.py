@@ -37,7 +37,6 @@ from dataclasses import dataclass, field
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, cast
-from urllib.parse import quote
 
 from pydantic import JsonValue
 from sqlalchemy import text
@@ -416,14 +415,10 @@ def _orcid_iri(project: Project) -> str | None:
 
 
 def _creator(project: Project) -> IRI | Literal_:
-    """The researcher: ORCID, else `mailto:`, else the user name as a literal."""
+    """The researcher: ORCID, else the user name as a literal (spec ruling 21). `FACTORY_MAILTO`
+    is for source APIs and never reaches an export."""
     orcid = _orcid_iri(project)
-    if orcid is not None:
-        return IRI(orcid)
-    mailto = project.settings.mailto
-    if mailto:
-        return iri(f"mailto:{quote(mailto, safe='@+')}")
-    return Literal_(project.settings.user)
+    return Literal_(project.settings.user) if orcid is None else IRI(orcid)
 
 
 def _vocab(project: Project) -> str:
