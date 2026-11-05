@@ -581,3 +581,27 @@ def accept_baseline(
         )
         project.record([accepted, deviation])
     return accepted.id
+
+
+# --- What an agent may see before the unlock ------------------------------------------------------
+
+
+def agent_baseline_view(
+    project: Project, view: ExperimentView
+) -> tuple[ExperimentView, dict[str, str]]:
+    """The view and the baseline states an agent is shown. A baseline that reproduces on the
+    confirmatory split reads the test split, and `reproduced` or `not-reproduced` with the
+    declared tolerance would bound a test-split value before the unlock: until then such a
+    baseline shows `pending` or `resolved`, and the flag and the deviation that would give the
+    verdict away are left out (review C1)."""
+    states: dict[str, str] = dict(baseline_verdicts(project, view.experiment_id))
+    hidden = {b.row_key for b in view.design.baselines if b.split == "confirmatory"}
+    if view.state == "unlocked" or not hidden:
+        return view, states
+    states = {
+        key: ("resolved" if key in hidden and state != "pending" else state)
+        for key, state in states.items()
+    }
+    flags = tuple(f for f in view.flags if f != "baseline-not-reproduced")
+    deviations = [d for d in view.deviations if d.kind != "baseline-accepted"]
+    return view.model_copy(update={"flags": flags, "deviations": deviations}), states

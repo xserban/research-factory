@@ -48,6 +48,7 @@ from factory.model.experiments import (
 )
 from factory.services.context import Project
 from factory.services.experiments import ExperimentView, experiment_view, make_deviation_event
+from factory.services.hypotheses import hypothesis_view
 from factory.services.reproduction import evaluate_baselines
 from factory.services.xrun_accounting import access_counts, budget_view
 
@@ -59,6 +60,8 @@ class XrunView(StrictModel):
     experiment_id: str
     cell: Cell
     cell_hash: str
+    access_hash: str | None = None
+    """The primary cell this run reads on the confirmatory split; None on another split."""
     config_hash: str
     state: XrunState
     exploratory: bool
@@ -101,6 +104,7 @@ def _view(row: Any) -> XrunView:
             split=row.split,
         ),
         cell_hash=str(row.cell_hash),
+        access_hash=None if row.access_hash is None else str(row.access_hash),
         config_hash=str(row.config_hash),
         state=_state(row),
         exploratory=bool(row.exploratory),
@@ -159,6 +163,11 @@ def _registration_issues(
             issues.append(ValidationIssue("cell", "not-in-design"))
     elif cell.needs_unlock and view.state != "unlocked":
         issues.append(ValidationIssue("split", "locked"))
+    if cell.is_reproduction and cell.split == "confirmatory":
+        hypothesis = hypothesis_view(project, view.hypothesis)
+        if hypothesis is None or hypothesis.state != "registered":
+            # it reads the test split before the unlock: the hypothesis is registered first
+            issues.append(ValidationIssue("split", "hypothesis-not-registered"))
     registered = len(xrun_list(project, view.experiment_id))
     if registered >= design.budget.max_runs:
         issues.append(ValidationIssue("experiment_id", "max-runs"))
@@ -330,9 +339,9 @@ def ingest_results(project: Project, actor: Actor, path: Path, *, runner: str | 
             raise FactoryValidationError(issues)
         before_hours = Decimal(budget_view(project, run.experiment_id).gpu_hours_used)  # type: ignore[union-attr]
         reused = False
-        if run.cell.needs_unlock and results.exit_status == 0:
+        if run.access_hash is not None and results.exit_status == 0:
             counts = access_counts(project, run.experiment_id)
-            reused = counts.get(run.cell_hash, 0) >= (view.access_limit or 1)
+            reused = counts.get(run.access_hash, 0) >= (view.access_limit or 1)
         payload = XrunReported(
             run_id=results.run,
             results_blob=project.blobs.put(raw),
@@ -361,7 +370,7 @@ def ingest_results(project: Project, actor: Actor, path: Path, *, runner: str | 
                     system,
                     view,
                     "test-reuse",
-                    f"run {results.run} read the primary cell {run.cell_hash} again",
+                    f"run {results.run} read the primary cell {run.access_hash} again",
                     False,
                 )
             )

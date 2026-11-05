@@ -53,11 +53,14 @@ def _repro(
     values: dict[int, str | None],
     *,
     tag: str = "",
+    split: str = "dev",
 ) -> dict[int, str]:
     """Register and report one reproduction run per seed; `None` is a failed run."""
     runs: dict[int, str] = {}
     for seed, value in values.items():
-        run = register_run(project, DRAFTER, exp, cell(f"reproduction:{row_key}", seed=seed))
+        run = register_run(
+            project, DRAFTER, exp, cell(f"reproduction:{row_key}", seed=seed, split=split)
+        )
         path = results_file(
             tmp_path,
             run,

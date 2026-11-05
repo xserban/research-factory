@@ -163,7 +163,7 @@ def test_primary_cells_count() -> None:
 def test_other_planned_cells_and_universes() -> None:
     d = design()
     assert len(reproduction_cells(d)) == 3
-    assert {c.split for c in reproduction_cells(d)} == {"confirmatory"}
+    assert {c.split for c in reproduction_cells(d)} == {"dev"}  # the default (review C1)
     cells = planned_cells(d)
     assert len(cells) == 6 + 3 + 3 + 6
     assert len({cell_hash(c) for c in cells}) == len(cells)

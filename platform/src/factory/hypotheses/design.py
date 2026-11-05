@@ -37,6 +37,7 @@ from factory.model.experiments import MAX_UNIVERSES, Cell, DesignMetric, Experim
 __all__ = [
     "MAX_UNIVERSES",
     "ablation_cells",
+    "access_hash",
     "cell_hash",
     "cell_in_design",
     "config_hash",
@@ -208,6 +209,17 @@ def cell_hash(cell: Cell) -> str:
         "universe": [[k, v] for k, v in cell.universe],
     }
     return hashlib.sha256(canonical_json(body)).hexdigest()[:16]
+
+
+def access_hash(cell: Cell) -> str | None:
+    """The hash of the primary cell a run reads on the confirmatory split, None for a run that
+    reads another split. A baseline reproduction on the confirmatory split reads the primary
+    baseline cell of its universe and seed (same data, same configuration)."""
+    if cell.split != "confirmatory":
+        return None
+    if cell.is_reproduction:
+        return cell_hash(cell.model_copy(update={"arm": "baseline"}))
+    return cell_hash(cell)
 
 
 def primary_cells(d: ExperimentDesign) -> list[Cell]:

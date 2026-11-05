@@ -34,6 +34,7 @@ from sqlalchemy.engine import Connection
 from factory.canonical import canonical_json
 from factory.events.envelope import Event
 from factory.hypotheses.design import (
+    access_hash,
     cell_hash,
     cell_in_design,
     config_hash,
@@ -132,6 +133,7 @@ def experiment_tables(
         Column("experiment_id", String, nullable=False),
         Column("e_version", String, nullable=False),
         Column("cell_hash", String, nullable=False),
+        Column("access_hash", String),
         Column("arm", String, nullable=False),
         Column("split", String, nullable=False),
         Column("seed", Integer, nullable=False),
@@ -147,6 +149,7 @@ def experiment_tables(
         Column("env_differs", Integer),
         Column("nonce_ok", Integer),
         Index("ix_xruns_cell", "experiment_id", "cell_hash"),
+        Index("ix_xruns_access", "experiment_id", "access_hash"),
     )
     baselines = Table(
         "baseline_evaluations",
@@ -429,6 +432,7 @@ def _xrun_registered(t: ExperimentTables) -> Handler:
                 t.experiments.c.frozen_event_id,
                 t.experiments.c.unlocked_event_id,
                 t.experiments.c.superseded_by,
+                t.experiments.c.hypothesis,
             ).where(t.experiments.c.experiment_id == p.experiment_id)
         ).first()
         if row is None or row[2] is None or row[4] is not None or str(row[1]) != p.e_version:
@@ -447,6 +451,14 @@ def _xrun_registered(t: ExperimentTables) -> Handler:
             return
         if p.cell.needs_unlock and row[3] is None:
             return
+        if p.cell.is_reproduction and p.cell.split == "confirmatory":
+            registered = conn.execute(
+                select(t.registrations.c.hypothesis_id).where(
+                    t.registrations.c.hypothesis_id == str(row[5])
+                )
+            ).first()
+            if registered is None:  # it reads the test split: the hypothesis is registered first
+                return
         existing = conn.execute(
             select(func.count())
             .select_from(t.xruns)
@@ -461,6 +473,7 @@ def _xrun_registered(t: ExperimentTables) -> Handler:
                 experiment_id=p.experiment_id,
                 e_version=p.e_version,
                 cell_hash=p.cell_hash,
+                access_hash=access_hash(p.cell),
                 arm=p.cell.arm,
                 split=p.cell.split,
                 seed=p.cell.seed,
@@ -522,16 +535,16 @@ def _xrun_reported(t: ExperimentTables) -> Handler:
         wanted = {m.name for m in design.metrics}
         if not set(p.metrics) <= wanted or (p.exit_status == 0 and set(p.metrics) != wanted):
             return
+        if cell.needs_unlock and (exp[1] is None or p.nonce != str(exp[1])):
+            return
         reused = False
-        if cell.needs_unlock:
-            if exp[1] is None or p.nonce != str(exp[1]):
-                return
+        if run.access_hash is not None:
             prior = conn.execute(
                 select(func.count())
                 .select_from(t.xruns)
                 .where(
                     t.xruns.c.experiment_id == run.experiment_id,
-                    t.xruns.c.cell_hash == run.cell_hash,
+                    t.xruns.c.access_hash == run.access_hash,
                     t.xruns.c.reported_event_id.is_not(None),
                     t.xruns.c.exit_status == 0,
                 )

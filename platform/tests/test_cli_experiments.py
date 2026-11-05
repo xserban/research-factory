@@ -115,7 +115,9 @@ def test_deviation_and_accept_baseline(
     code, _, err = _run(root, "experiments", "accept-baseline", exp, rk, "--rationale", "too early")
     assert code == 1 and "pending" in err
     for seed in (1, 2, 3):
-        run = register_run(project, DRAFTER, exp, cell(f"reproduction:{rk}", seed=seed))
+        run = register_run(
+            project, DRAFTER, exp, cell(f"reproduction:{rk}", seed=seed, split="dev")
+        )
         path = results_file(tmp_path, run, value="2", name=f"r{seed}.json")
         assert _run(root, "runs", "record", str(path))[0] == 0
     code, shown, _ = _run(root, "experiments", "show", exp)

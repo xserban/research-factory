@@ -100,7 +100,10 @@ class Baseline(StrictModel):
     row_key: Annotated[str, StringConstraints(pattern=ROW_KEY_RE)]
     tolerance: Decimal0
     tolerance_kind: Literal["absolute", "relative"] = "relative"
-    split: SplitRole = "confirmatory"
+    split: SplitRole = "dev"
+    """The split the reproduction reads. `confirmatory` reads the test split before the unlock: it
+    needs a registered hypothesis, counts as a read of the primary baseline cell and closes the
+    revision of the hypothesis (review C1)."""
 
 
 class Budget(StrictModel):

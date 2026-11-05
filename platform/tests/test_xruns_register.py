@@ -57,7 +57,7 @@ def test_config_computed_by_platform(project: Project, human: Actor, xw: XW) -> 
 
 def test_agent_may_register_planned_run(project: Project, human: Actor, xw: XW) -> None:
     exp = frozen_design(project, human, xw)
-    planned = cell("reproduction:" + xw.rows[0], split="confirmatory")
+    planned = cell("reproduction:" + xw.rows[0], split="dev")
     assert planned in planned_cells(experiment_view(project, exp).design)  # type: ignore[union-attr]
     run = register_run(project, OTHER, exp, planned)  # reproduction runs precede the unlock
     [event] = _events(project, "xrun.registered")

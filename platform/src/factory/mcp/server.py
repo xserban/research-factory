@@ -124,7 +124,6 @@ from factory.services.living_hooks import default_hooks
 from factory.services.results import BatchResult, ItemError
 from factory.services.search import list_works
 from factory.services.seeds import SeedOutcome, SeedRole
-from factory.services.xrun_accounting import baseline_verdicts
 from factory.sources.fulltext.base import FullTextRoute
 from factory.sources.fulltext.registry import default_routes
 from factory.sources.registry import SourceFactory, default_sources
@@ -3072,8 +3071,9 @@ def build_server(
             found = experiments_service.experiment_view(opened, experiment_id)
             if found is None:
                 raise FactoryValidationError([ValidationIssue("experiment_id", "unknown")])
-            data = found.model_dump(mode="json", exclude={"designer_sessions"})
-            data["baselines"] = cast(JsonValue, dict(baseline_verdicts(opened, experiment_id)))
+            shown, states = experiments_service.agent_baseline_view(opened, found)
+            data = shown.model_dump(mode="json", exclude={"designer_sessions"})
+            data["baselines"] = cast(JsonValue, states)
             return _withheld(opened, data, include_work_ids=False)
 
         return _reply(project, view, include_work_ids=False)

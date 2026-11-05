@@ -68,7 +68,8 @@ def budget_view(project: Project, experiment_id: str) -> BudgetView | None:
 
 
 def access_counts(project: Project, experiment_id: str) -> dict[str, int]:
-    """Primary cell hash to the number of completed confirmatory runs of that cell."""
+    """Primary cell hash to the number of completed runs that read it on the confirmatory split:
+    the primary runs of that cell and the confirmatory baseline reproductions of its seed."""
     project.index.sync()
     with project.index.connect() as conn:
         raw = conn.execute(
@@ -80,9 +81,9 @@ def access_counts(project: Project, experiment_id: str) -> dict[str, int]:
         counts = {cell_hash(c): 0 for c in primary_cells(design_of(raw))}
         rows = conn.execute(
             text(
-                "SELECT cell_hash, COUNT(*) FROM xruns WHERE experiment_id = :e "
-                "AND split = 'confirmatory' AND arm NOT LIKE 'reproduction:%' "
-                "AND reported_event_id IS NOT NULL AND exit_status = 0 GROUP BY cell_hash"
+                "SELECT access_hash, COUNT(*) FROM xruns WHERE experiment_id = :e "
+                "AND access_hash IS NOT NULL "
+                "AND reported_event_id IS NOT NULL AND exit_status = 0 GROUP BY access_hash"
             ),
             {"e": experiment_id},
         ).all()
@@ -101,7 +102,7 @@ def confirmatory_evidence(project: Project, hypothesis_id: str) -> bool:
             text(
                 "SELECT 1 FROM xruns x JOIN experiments e ON e.experiment_id = x.experiment_id "
                 "WHERE e.hypothesis = :h AND x.split = 'confirmatory' "
-                "AND x.arm NOT LIKE 'reproduction:%' AND x.reported_event_id IS NOT NULL LIMIT 1"
+                "AND x.reported_event_id IS NOT NULL LIMIT 1"
             ),
             {"h": hypothesis_id},
         ).first()

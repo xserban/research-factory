@@ -270,3 +270,37 @@ async def test_tools_are_role_blind_before_a_pass_opens(
             await client.call("xrun_list", project="demo", experiment_id="exp_x"),
         ]
     assert {(o["ok"], o["errors"][0]["reason"]) for o in outs} == {(False, "not available yet")}
+
+
+@pytest.mark.anyio
+async def test_a_confirmatory_reproduction_verdict_is_withheld_until_the_unlock(
+    settings: Settings,
+    project: Project,
+    clock: FixedClock,
+    human: Actor,
+    xw: XW,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`reproduced` with the tolerance would bound a test-split value before the unlock (C1)."""
+    from factory.services.experiments import accept_baseline
+    from tests.experiment_helpers import frozen_design
+    from tests.test_reproduction import _repro
+
+    install_skill(settings, "rf-experiment")
+    body = {"baselines": [{"row_key": xw.rows[0], "tolerance": "0.01", "split": "confirmatory"}]}
+    exp = frozen_design(project, human, xw, **body)
+    rk = xw.rows[0]
+    _repro(project, human, tmp_path, exp, rk, {1: "2", 2: "2", 3: "2"}, split="confirmatory")
+    accept_baseline(project, human, exp, rk, "other data")
+    _session(monkeypatch, SESSION_E)
+    async with open_session(settings, clock) as client:
+        before = await client.call("experiment_view", project="demo", experiment_id=exp)
+    assert before["data"]["baselines"] == {rk: "resolved"}
+    assert before["data"]["flags"] == []
+    assert [d["kind"] for d in before["data"]["deviations"]] == []
+    unlock_experiment(project, human, exp)
+    async with open_session(settings, clock) as client:
+        after = await client.call("experiment_view", project="demo", experiment_id=exp)
+    assert after["data"]["baselines"] == {rk: "accepted"}
+    assert after["data"]["flags"] == ["baseline-not-reproduced"]
