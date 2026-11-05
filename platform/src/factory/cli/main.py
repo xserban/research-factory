@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Annotated, Literal, NoReturn
+from typing import Annotated, Literal, NoReturn, cast
 
 import typer
 
@@ -17,6 +17,7 @@ from factory.config import Settings
 from factory.document.registry import default_converters
 from factory.errors import FactoryValidationError, ProjectNotFoundError, ValidationIssue
 from factory.imports.model import ImportFormat, ImportRole
+from factory.lineage.graph import GraphFilter
 from factory.mcp.conventions import parse_routes
 from factory.mcp.server import run
 from factory.model import lineage as lineage_model
@@ -56,6 +57,7 @@ from factory.services import import_resolve as import_resolve_service
 from factory.services import imports as imports_service
 from factory.services import inbox as inbox_service
 from factory.services import inbox_watch as inbox_watch_service
+from factory.services import lineage as graph_service
 from factory.services import methods as methods_service
 from factory.services import notices as notices_service
 from factory.services import portfolio as portfolio_service
@@ -173,6 +175,11 @@ ideas_app = typer.Typer(
     help="Ideas: define, list, confirm, reject, merge and unmerge (human only).",
     no_args_is_help=True,
 )
+graph_app = typer.Typer(
+    name="graph",
+    help="The lineage graph: build, status, bounded queries and JSON or DOT export.",
+    no_args_is_help=True,
+)
 import_app = typer.Typer(
     name="import",
     help="Import an existing library (BibTeX, CSL JSON, a PDF folder); list and show imports.",
@@ -242,6 +249,7 @@ app.add_typer(extract_app)
 app.add_typer(contributions_app)
 app.add_typer(relations_app)
 app.add_typer(ideas_app)
+app.add_typer(graph_app)
 app.add_typer(import_app)
 
 
@@ -2546,3 +2554,103 @@ def ideas_candidates_cmd(
         found = ideas_service.idea_candidates(project, origin, name)
     for line in render.idea_candidate_lines(found):
         typer.echo(line)
+
+
+_INCLUDE_INFERRED = typer.Option(
+    "--include-inferred", help="Also show inferred relations and unconfirmed ideas, labelled."
+)
+_INCLUDE_STALE = typer.Option("--include-stale", help="Also show stale relations, labelled.")
+
+
+@graph_app.command("build")
+def graph_build_cmd(ctx: typer.Context) -> None:
+    """Sync the index (which projects the graph) and print the graph status."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        project.index.sync()
+        status = graph_service.graph_status(project)
+    for line in render.graph_status_lines(status):
+        typer.echo(line)
+
+
+@graph_app.command("status")
+def graph_status_cmd(ctx: typer.Context) -> None:
+    """Node and edge counts by type and status."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        status = graph_service.graph_status(project)
+    for line in render.graph_status_lines(status):
+        typer.echo(line)
+
+
+@graph_app.command("query")
+def graph_query_cmd(
+    ctx: typer.Context,
+    kind: Annotated[
+        str,
+        typer.Argument(
+            help="ancestors, descendants, path, improvements_on, cited_by_at_least or "
+            "no_stated_base."
+        ),
+    ],
+    node: Annotated[str | None, typer.Option("--node", help="The work or idea.")] = None,
+    target: Annotated[str | None, typer.Option("--target", help="The path's end.")] = None,
+    depth: Annotated[int, typer.Option("--depth", help="Levels (at most 8).")] = 3,
+    k: Annotated[int, typer.Option("--k", help="Distinct citing works.")] = 2,
+    include_inferred: Annotated[bool, _INCLUDE_INFERRED] = False,
+    include_stale: Annotated[bool, _INCLUDE_STALE] = False,
+) -> None:
+    """Run a bounded lineage query; the default view shows stated and confirmed edges."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        result = graph_service.graph_query(
+            project,
+            kind,
+            node=node,
+            target=target,
+            depth=depth,
+            k=k,
+            flt=GraphFilter(include_inferred=include_inferred, include_stale=include_stale),
+        )
+    for line in render.graph_query_lines(result):
+        typer.echo(line)
+
+
+@graph_app.command("export")
+def graph_export_cmd(
+    ctx: typer.Context,
+    format_: Annotated[str, typer.Option("--format", help="json or dot.")] = "json",
+    query: Annotated[str | None, typer.Option("--query", help="Export a query's subgraph.")] = None,
+    node: Annotated[str | None, typer.Option("--node")] = None,
+    target: Annotated[str | None, typer.Option("--target")] = None,
+    depth: Annotated[int, typer.Option("--depth")] = 3,
+    k: Annotated[int, typer.Option("--k")] = 2,
+    include_inferred: Annotated[bool, _INCLUDE_INFERRED] = False,
+    include_stale: Annotated[bool, _INCLUDE_STALE] = False,
+    out: Annotated[Path | None, typer.Option("--out", help="Write to this file.")] = None,
+) -> None:
+    """Export the graph (no size cap), streamed in a deterministic order."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        chunks = graph_service.iter_graph_export(
+            project,
+            cast(graph_service.ExportFormat, format_),  # validated by the service
+            query=query,
+            node=node,
+            target=target,
+            depth=depth,
+            k=k,
+            flt=GraphFilter(include_inferred=include_inferred, include_stale=include_stale),
+        )
+        if out is None:
+            for chunk in chunks:
+                typer.echo(chunk, nl=False)
+        else:
+            with out.open("w", encoding="utf-8") as handle:
+                for chunk in chunks:
+                    handle.write(chunk)
+            typer.echo(f"wrote {out}")

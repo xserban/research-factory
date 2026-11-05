@@ -11,6 +11,7 @@ from factory.clock import Clock, SystemClock
 from factory.config import Settings
 from factory.errors import FactoryValidationError, ProjectNotFoundError, ValidationIssue
 from factory.events.envelope import Actor
+from factory.lineage.graph import GraphFilter
 from factory.mcp.conventions import (
     PAGE_LIMIT,
     dotted,
@@ -58,6 +59,7 @@ from factory.services import fulltext as fulltext_service
 from factory.services import fulltext_status as fulltext_status_service
 from factory.services import ideas as ideas_service
 from factory.services import inbox as inbox_service
+from factory.services import lineage as graph_service
 from factory.services import methods as methods_service
 from factory.services import notices as notices_service
 from factory.services import prisma as prisma_service
@@ -1537,6 +1539,92 @@ def build_server(
             return _withheld(opened, {"idea_id": idea_id}, include_work_ids=False)
 
         return _reply(project, propose, include_work_ids=False)
+
+    @server.tool()
+    def graph_status(project: str) -> dict[str, JsonValue]:
+        """Counts of the lineage graph: papers (corpus or external) and ideas, and edges by type
+        and status (every status, derived from the log), plus the contribution works with no
+        extraction or no references. Names the status filter it counted. Read-only; refused to a
+        session that has joined a pass."""
+
+        def status() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            report = graph_service.graph_status(opened).model_dump(mode="json")
+            return _withheld(opened, report, include_work_ids=False)
+
+        return _reply(project, status, include_work_ids=False)
+
+    @server.tool()
+    def graph_query(
+        project: str,
+        query: str,
+        node: str | None = None,
+        target: str | None = None,
+        depth: int = 3,
+        k: int = 2,
+        include_inferred: bool = False,
+        include_stale: bool = False,
+    ) -> dict[str, JsonValue]:
+        """A bounded lineage query: `ancestors` / `descendants` (of `node`, up to `depth` levels,
+        at most 8), `path` (shortest, `node` to `target`), `improvements_on` (`node`),
+        `cited_by_at_least` (`k` distinct citing works) or `no_stated_base` (works with no stated
+        base, by category). The default view shows stated and confirmed edges and confirmed
+        ideas; `include_inferred` and `include_stale` widen it, labelled. The result names its
+        filter and carries ids and statuses only. Refused to a session that has joined a pass."""
+
+        def run() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            result = graph_service.graph_query(
+                opened,
+                query,
+                node=node,
+                target=target,
+                depth=depth,
+                k=k,
+                flt=GraphFilter(include_inferred=include_inferred, include_stale=include_stale),
+            )
+            return _withheld(opened, result.model_dump(mode="json"), include_work_ids=False)
+
+        return _reply(project, run, include_work_ids=False)
+
+    @server.tool()
+    def graph_export(
+        project: str,
+        format: str = "json",
+        query: str | None = None,
+        node: str | None = None,
+        target: str | None = None,
+        depth: int = 3,
+        k: int = 2,
+        include_inferred: bool = False,
+        include_stale: bool = False,
+    ) -> dict[str, JsonValue]:
+        """The graph (or, with `query`, a query's subgraph) as JSON or Graphviz DOT text, in a
+        deterministic order, naming its filter; ids, statuses and bibliographic titles only. A
+        whole-graph export of more than 2000 edges is refused: use a query or the CLI. Refused to
+        a session that has joined a pass."""
+
+        def export() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            if format not in ("json", "dot"):
+                raise FactoryValidationError([ValidationIssue("format", "must be json or dot")])
+            text = graph_service.graph_export(
+                opened,
+                "json" if format == "json" else "dot",
+                query=query,
+                node=node,
+                target=target,
+                depth=depth,
+                k=k,
+                flt=GraphFilter(include_inferred=include_inferred, include_stale=include_stale),
+                max_edges=graph_service.MCP_EXPORT_MAX_EDGES,
+            )
+            return _withheld(opened, text, include_work_ids=False)
+
+        return _reply(project, export, include_work_ids=False)
 
     return server
 

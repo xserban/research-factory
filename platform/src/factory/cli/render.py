@@ -35,6 +35,7 @@ from factory.services.imports import (
     RecordRow,
 )
 from factory.services.inbox import InboxPage, ResolveOutcome
+from factory.services.lineage import GraphQueryResult, GraphStatus
 from factory.services.prisma import UNCONVERTED, PrismaFlow, SearchReport
 from factory.services.prisma_update import UpdateFlow
 from factory.services.references import ExtractSummary, Page, ReferenceCounts
@@ -726,3 +727,46 @@ def idea_candidate_lines(candidates: list[IdeaCandidate]) -> list[str]:
     if not candidates:
         return ["no candidates"]
     return [f"{c.work_id}  {', '.join(c.reasons)}" for c in candidates]
+
+
+def _filter_line(filter_: Mapping[str, object]) -> str:
+    statuses = ", ".join(str(s) for s in filter_.get("statuses", []))  # type: ignore[attr-defined]
+    types = ", ".join(str(t) for t in filter_.get("edge_types", []))  # type: ignore[attr-defined]
+    ideas = "ideas on" if filter_.get("include_ideas") else "ideas off"
+    return f"filter: statuses {statuses}; edge types {types}; {ideas}"
+
+
+def graph_status_lines(status: GraphStatus) -> list[str]:
+    """Counts of the lineage graph, naming the filter they were made with."""
+    lines = [_filter_line(status.filter)]
+    lines.append("nodes: " + ", ".join(f"{k} {v}" for k, v in status.nodes.items()))
+    for edge_type, counts in status.edges.items():
+        lines.append(f"{edge_type}: " + ", ".join(f"{k} {v}" for k, v in counts.items()))
+    lines.append(
+        f"unextracted {len(status.unextracted)}; no references {len(status.no_references)}; "
+        f"not-stated base ideas {status.not_stated}; uncited base ideas {status.uncited_base}"
+    )
+    return lines
+
+
+def graph_query_lines(result: GraphQueryResult) -> list[str]:
+    """A query's answer: header, the path when it is one, then edges with their statuses."""
+    depth = "" if result.depth is None else f" depth {result.depth}"
+    flags = (" (depth clamped)" if result.depth_clamped else "") + (
+        " (truncated)" if result.truncated else ""
+    )
+    lines = [_filter_line(result.filter), f"{result.query}{depth}{flags}"]
+    ids = [str(n["id"]) for n in result.nodes]
+    if result.query == "path":
+        lines.append(" -> ".join(ids) if ids else "no path")
+    for edge in result.edges:
+        lines.append(
+            f"{edge['source']} -> {edge['target']}  {edge['type']}  {edge['status']}  {edge['id']}"
+        )
+    if result.categories is not None:
+        for name, works in result.categories.items():
+            lines.append(f"{name}: {len(works)}")
+            lines.extend(f"  {w}" for w in works)
+    elif result.query != "path":
+        lines.extend(f"node {n['id']} ({n['type']}, {n['scope'] or '-'})" for n in result.nodes)
+    return lines

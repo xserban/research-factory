@@ -76,6 +76,9 @@ async def test_project_status_tool(settings: Settings, project: Project, clock: 
             "snowball_compare",
             "relation_propose",
             "idea_propose",
+            "graph_status",
+            "graph_query",
+            "graph_export",
         ]
         res = await client.call_tool("project_status", {"project": "demo"})
         body = _body(res)
