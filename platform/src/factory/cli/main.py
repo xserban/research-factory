@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Annotated, Literal, NoReturn, TypeVar, cast
+from typing import Annotated, Any, Literal, NoReturn, TypeVar, cast
 
 import typer
 from pydantic import BaseModel, TypeAdapter
@@ -28,6 +28,7 @@ from factory.mcp.server import run
 from factory.model import lineage as lineage_model
 from factory.model.chase import ChaseDirection
 from factory.model.conclusions import BasisRef, Predicate
+from factory.model.directions import Conditions, DirectionReason
 from factory.model.experiments import DeviationKind
 from factory.model.extraction import ExtractedRowInput, MinerScope
 from factory.model.fulltext import Route
@@ -52,6 +53,7 @@ from factory.model.work import ProvenanceMethod
 from factory.regions.rules import MemberType, RuleSet
 from factory.services import agreement as agreement_service
 from factory.services import audit as audit_service
+from factory.services import benchmark_ledger as ledger_service
 from factory.services import calibration as calibration_service
 from factory.services import cards as cards_service
 from factory.services import chase as chase_service
@@ -61,9 +63,12 @@ from factory.services import conclusions as conclusions_service
 from factory.services import contributions as contributions_service
 from factory.services import coverage as coverage_service
 from factory.services import digest as digest_service
+from factory.services import directions as directions_service
 from factory.services import discovery as discovery_service
 from factory.services import document_convert as document_convert_service
 from factory.services import document_read as document_read_service
+from factory.services import evaluation as evaluation_service
+from factory.services import evaluation_view as evaluation_view_service
 from factory.services import evidence as evidence_service
 from factory.services import evidence_report as evidence_report_service
 from factory.services import experiments as experiments_service
@@ -276,7 +281,7 @@ leads_app = typer.Typer(
 )
 hypotheses_app = typer.Typer(
     name="hypotheses",
-    help="Hypotheses: list, show, register, abandon and conclude (human).",
+    help="Hypotheses: list, show, register, evaluate, abandon and conclude (human).",
     no_args_is_help=True,
 )
 experiments_app = typer.Typer(
@@ -287,6 +292,11 @@ experiments_app = typer.Typer(
 runs_app = typer.Typer(
     name="runs",
     help="Experiment runs: list and record results from a runner's file (human or runner).",
+    no_args_is_help=True,
+)
+directions_app = typer.Typer(
+    name="directions",
+    help="Failed directions: close one that never became a hypothesis (human).",
     no_args_is_help=True,
 )
 models_app = typer.Typer(
@@ -409,6 +419,7 @@ app.add_typer(contradictions_app)
 app.add_typer(leads_app)
 app.add_typer(hypotheses_app)
 app.add_typer(models_app)
+app.add_typer(directions_app)
 app.add_typer(experiments_app)
 app.add_typer(runs_app)
 app.add_typer(graph_app)
@@ -4661,6 +4672,11 @@ def hypotheses_show_cmd(
         _fail(f"unknown hypothesis {hypothesis}", 1)
     for line in render.hypothesis_detail_lines(view):
         typer.echo(line)
+    with _reporting_errors():
+        evaluated = evaluation_view_service.researcher_evaluation(project, hypothesis)
+    if evaluated is not None:
+        for line in render.evaluation_lines(evaluated):
+            typer.echo(line)
 
 
 @hypotheses_app.command("register")
@@ -4700,6 +4716,32 @@ def hypotheses_abandon_cmd(
             _fail(f"--reason {reason!r}: expected one of {choices}", 2)
         hypotheses_service.abandon_hypothesis(project, project.human_actor(), hypothesis, why, note)
     typer.echo(f"abandoned {hypothesis}")
+
+
+@hypotheses_app.command("evaluate")
+def hypotheses_evaluate_cmd(
+    ctx: typer.Context,
+    hypothesis: Annotated[str, typer.Argument(help="A hypothesis id, hyp_.")],
+    incomplete: Annotated[
+        bool,
+        typer.Option(
+            "--incomplete", help="Record a progress report when a primary cell has no run yet."
+        ),
+    ] = False,
+) -> None:
+    """Evaluate a registered hypothesis: the platform computes the outcome from the recorded runs
+    (or the later literature) by the rule fixed at registration. Nobody sets an outcome."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        event_id = evaluation_service.evaluate_hypothesis(
+            project, hypothesis, request_incomplete=incomplete
+        )
+        evaluated = evaluation_view_service.researcher_evaluation(project, hypothesis)
+    typer.echo(f"evaluated {hypothesis}: {event_id}")
+    if evaluated is not None:
+        for line in render.evaluation_lines(evaluated):
+            typer.echo(line)
 
 
 @hypotheses_app.command("conclude")
@@ -4878,3 +4920,96 @@ def runs_record_cmd(
         project = _resolve_project(state)
         xruns_service.ingest_results(project, project.human_actor(), file, runner=runner)
     typer.echo(f"recorded {file.name}")
+
+
+@app.command("benchmark-ledger")
+def benchmark_ledger_cmd(
+    ctx: typer.Context,
+    group: Annotated[
+        str | None, typer.Option("--group", help="One evidence group, by its group id.")
+    ] = None,
+) -> None:
+    """Reported against reproduced values and own results, beside the evidence report (which
+    never contains them)."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        groups = ledger_service.ledger(project, group_id=group)
+    for line in render.ledger_lines(groups):
+        typer.echo(line)
+
+
+@app.command("registry")
+def registry_cmd(
+    ctx: typer.Context,
+    key: Annotated[
+        list[str] | None,
+        typer.Option("--key", help="A card, idea, property, work, trigger or ds:<name>; repeat."),
+    ] = None,
+    reason: Annotated[
+        list[str] | None, typer.Option("--reason", help="Narrow to a reason; repeat.")
+    ] = None,
+    limit: Annotated[int, typer.Option("--limit", help="Rows per page, 1 to 200.")] = 50,
+    after: Annotated[str | None, typer.Option("--after", help="Continue after this id.")] = None,
+) -> None:
+    """Search the failed-directions registry (the researcher's variant, with closing notes)."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        page = directions_service.registry_query(
+            project, key or (), reasons=reason, limit=limit, after=after
+        )
+    for line in render.registry_lines(page):
+        typer.echo(line)
+
+
+@directions_app.command("close")
+def directions_close_cmd(
+    ctx: typer.Context,
+    text_: Annotated[str, typer.Option("--text", help="What was tried, at most 600 characters.")],
+    reason: Annotated[str, typer.Option("--reason", help="Why it failed (a registry reason).")],
+    key: Annotated[
+        list[str],
+        typer.Option("--key", help="What the direction is about: a card, idea, work, ...; repeat."),
+    ],
+    condition: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--condition",
+            help="K=V of e_version, datasets, gpu_hours_used, models or code_commit; repeat.",
+        ),
+    ] = None,
+) -> None:
+    """Close a direction that never became a hypothesis, with the conditions it failed under (a
+    human act). The row stays for good: failed here, not impossible."""
+    state = _state(ctx)
+    fields: dict[str, Any] = {}
+    for item in condition or ():
+        name, sep, value = item.partition("=")
+        if not sep or name not in {
+            "e_version",
+            "datasets",
+            "gpu_hours_used",
+            "models",
+            "code_commit",
+        }:
+            _fail(f"--condition {item!r}: expected K=V with a known K", 2)
+        if name in ("datasets", "models"):
+            fields.setdefault(name, []).append(value)
+        else:
+            fields[name] = value
+    with _reporting_errors():
+        project = _resolve_project(state)
+        try:
+            why = DirectionReason(reason)
+        except ValueError:
+            choices = ", ".join(r.value for r in DirectionReason)
+            _fail(f"--reason {reason!r}: expected one of {choices}", 2)
+        try:
+            conditions = Conditions.model_validate(fields)
+        except PydanticValidationError as exc:
+            _fail(f"--condition: {exc.errors()[0]['msg']}", 2)
+        direction_id = directions_service.close_direction(
+            project, project.human_actor(), text_, why, conditions, key
+        )
+    typer.echo(f"closed {direction_id}")

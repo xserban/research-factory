@@ -106,3 +106,8 @@ Minor review findings parked during the v1 build, to address when iterating from
 - XP-A: `ingest_results` evaluates baselines in the same lock after the report is recorded; a crash between the two writes leaves a ready baseline without a verdict until the next reproduction run or `evaluate_baselines` call (there is no CLI for it).
 - XP-A: GPU-hours of a run are checked against the total budget only; the per-run cap is validated against the total at design time but not enforced on reports.
 - XP-A: the unlock nonce lives in the `experiment.unlocked` event of the tracked log; it evidences order only (as the spec says), it is not a secret against someone who can read the repository.
+- XP-B: the cards stage of the acceptance (vocabulary, imported card, match with a transfer row, conflict, gap) is not in `test_slice6_acceptance.py`: those worlds are not the evidence world of the experiments; a combined fixture would show the cards-to-lead trigger chain end to end.
+- XP-B: `xrun-reported-without-registration` can never fire (the projector folds a report only for a registered run); keep it as the broken-chain check or drop it.
+- XP-B: registry keys are fixed when a row is made, so a later idea merge does not reach an older row (a query expands the idea it is given, not the rows').
+- XP-B: `slice6_check` lists every card and recomputes every conclusive evaluation on each `check`; both want a cache at scale (literature recomputation reads the whole evidence report per hypothesis).
+- XP-B: `hypotheses.close` gates `direction.closed` only; `abandon` and `conclude` check for a human in the service but sit under no declared gate.

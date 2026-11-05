@@ -19,14 +19,17 @@ from factory.model.screening import PassLabel
 from factory.regions.rules import MemberType
 from factory.services.agreement import DecisionView
 from factory.services.audit import AuditReport
+from factory.services.benchmark_ledger import LedgerGroup
 from factory.services.cards import CardSummary, CardView
 from factory.services.check import LAYER_CHECK_CODES, CheckReport, Finding
 from factory.services.concepts import ConceptLinkList, ConceptList, ConceptView
 from factory.services.contributions import ContributionStatus, ItemView
 from factory.services.coverage import CoverageReport, Ratio
+from factory.services.directions import RegistryPage
 from factory.services.discovery import DiscoveryReport
 from factory.services.document_convert import ConvertSummary, DocumentStatus
 from factory.services.document_read import DocumentPage
+from factory.services.evaluation_view import ResearcherEvaluation
 from factory.services.experiments import ExperimentView
 from factory.services.extraction import UnitState
 from factory.services.extraction_agreement import (
@@ -1402,3 +1405,78 @@ def xrun_lines(runs: Sequence[XrunView]) -> list[str]:
             line += "  " + ", ".join(f"{k}={val}" for k, val in sorted(r.metrics.items()))
         out.append(line)
     return out
+
+
+# --- Evaluation, ledger and registry (slice 6, plan XP-B) --------------------------------------
+
+
+def evaluation_lines(r: "ResearcherEvaluation") -> list[str]:
+    p = r.evaluation.payload
+    head = f"  evaluation {r.evaluation.event_id}: {p.outcome}, n {p.n}"
+    if p.mean is not None:
+        head += f", mean {p.mean}"
+    if p.ci_low is not None and p.ci_high is not None:
+        head += f", {p.level} interval [{p.ci_low}, {p.ci_high}]"
+    lines = [head]
+    if p.flags:
+        lines.append(f"  flags: {', '.join(p.flags)}")
+    if p.counts:
+        lines.append("  counts: " + ", ".join(f"{k} {v}" for k, v in sorted(p.counts.items())))
+    if r.evaluation.supersedes:
+        lines.append(f"  supersedes {r.evaluation.supersedes}")
+    if r.curve is not None and r.curve.points:
+        lines.append("  specification curve (non-primary universes are descriptive, dev split):")
+        for pt in r.curve.points:
+            where = ", ".join(f"{k}={v}" for k, v in sorted(pt.universe.items())) or "-"
+            mark = "primary" if pt.primary else "descriptive"
+            lines.append(
+                f"    {where}  {mark}  {pt.split}  n {pt.n}  mean {pt.mean}  "
+                f"[{pt.ci_low}, {pt.ci_high}]  would be {pt.outcome_descriptive}"
+            )
+    for a in r.ablations:
+        lines.append(
+            f"  ablation {a.name} ({a.key}): n {a.n}, effect of removing it {a.mean} "
+            f"[{a.ci_low}, {a.ci_high}]"
+        )
+    for c in r.controls:
+        verdict = "not evaluated" if c.passed is None else ("passed" if c.passed else "FAILED")
+        lines.append(f"  control {c.name} ({c.kind}): n {c.n}, mean {c.mean}, {verdict}")
+    return lines
+
+
+def ledger_lines(groups: "list[LedgerGroup]") -> list[str]:
+    if not groups:
+        return ["no evidence groups (the evidence report is empty)"]
+    lines: list[str] = []
+    for g in groups:
+        key = ", ".join(f"{k}={v}" for k, v in g.key)
+        lines.append(f"{g.group_id}  {key}")
+        for row in g.rows:
+            repro: str = row.reproduction
+            if row.reproduced is not None:
+                repro += f" ({row.reproduced})"
+            lines.append(
+                f"  {row.row_key}  {row.method_name or '-'}  reported {row.reported}  "
+                f"reproduction {repro}"
+            )
+        for own in g.own_results:
+            stats = "" if own.mean is None else f", mean {own.mean} [{own.ci_low}, {own.ci_high}]"
+            flags = f" [{', '.join(own.flags)}]" if own.flags else ""
+            lines.append(
+                f"  own result {own.hypothesis_id}: {own.outcome}, n {own.n}{stats}{flags}"
+            )
+    return lines
+
+
+def registry_lines(page: "RegistryPage") -> list[str]:
+    if not page.rows:
+        return ["no failed directions recorded"]
+    lines = [f"{page.total} failed direction(s)"]
+    for r in page.rows:
+        lines.append(f"{r.direction_id}  {r.source_kind}  {r.reason}")
+        lines.append(f"  {r.summary}")
+        if r.text:
+            lines.append(f"  note: {r.text}")
+    if page.next:
+        lines.append(f"more: --after {page.next}")
+    return lines

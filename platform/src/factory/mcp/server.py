@@ -56,6 +56,7 @@ from factory.modules.contract import PolicyKind
 from factory.regions.rules import MemberType, RuleSet
 from factory.services import agreement as agreement_service
 from factory.services import audit as audit_service
+from factory.services import benchmark_ledger as ledger_service
 from factory.services import calibration as calibration_service
 from factory.services import cards as cards_service
 from factory.services import chase as chase_service
@@ -67,8 +68,10 @@ from factory.services import contributions as contributions_service
 from factory.services import coverage as coverage_service
 from factory.services import dedup as dedup_service
 from factory.services import digest as digest_service
+from factory.services import directions as directions_service
 from factory.services import discovery as discovery_service
 from factory.services import document_read as document_read_service
+from factory.services import evaluation_view as evaluation_view_service
 from factory.services import evidence as evidence_service
 from factory.services import evidence_report as evidence_report_service
 from factory.services import experiments as experiments_service
@@ -2691,8 +2694,11 @@ def build_server(
     def hypothesis_view(project: str, hypothesis_id: str) -> dict[str, JsonValue]:
         """One hypothesis: its spec, version, falsifier sentence, computed state, reviews,
         registration, the R-53 flags of a literature hypothesis and the autonomy label of its
-        registration. The rationale and the lead are shown to the drafting session only (R-51).
-        Read-only; refused to a session that has joined a pass."""
+        registration. Once the platform has evaluated it, also the computed `evaluation`: the
+        outcome, the number of pairs or works, the level, the counts and the flags, the number of
+        universes of the specification curve with its flags and whether each control passed; no
+        effect size, interval or metric value. The rationale and the lead are shown to the
+        drafting session only (R-51). Read-only; refused to a session that has joined a pass."""
 
         def view() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
@@ -2708,6 +2714,9 @@ def build_server(
                 assert isinstance(spec, dict)
                 spec.pop("rationale", None)
                 spec.pop("lead", None)
+            data["evaluation"] = cast(
+                JsonValue, evaluation_view_service.agent_evaluation(opened, hypothesis_id)
+            )
             return _withheld(opened, data, include_work_ids=False)
 
         return _reply(project, view, include_work_ids=False)
@@ -3142,6 +3151,56 @@ def build_server(
             return _withheld(opened, {"runs": rows}, include_work_ids=False)
 
         return _reply(project, listing, include_work_ids=False)
+
+    @server.tool()
+    def registry_query(
+        project: str,
+        keys: list[str] | None = None,
+        reasons: list[str] | None = None,
+        limit: int = 50,
+        after: str | None = None,
+    ) -> dict[str, JsonValue]:
+        """Search the failed-directions registry: refuted, inconclusive and abandoned hypotheses,
+        discarded leads, baselines that did not reproduce and directions the researcher closed.
+        Give `keys` (a method card, a lineage idea, a property key, a work, a trigger, an evidence
+        row or `ds:<dataset>`) to find the rows that share one, and `reasons` to narrow them. Each
+        row states why it failed and the conditions it failed under (design, datasets, compute,
+        models, code commit) in a fixed sentence of ids and names: a row says "failed here", never
+        "impossible", and is never removed. Read-only; refused to a session that has joined a
+        pass."""
+
+        def query() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            _require_pass_opened(opened)
+            page = directions_service.registry_query(
+                opened, keys or (), reasons=reasons, limit=limit, after=after, agent=True
+            )
+            return _withheld(opened, page.model_dump(mode="json"), include_work_ids=False)
+
+        return _reply(project, query, include_work_ids=False)
+
+    @server.tool()
+    def benchmark_ledger_view(project: str, group_id: str | None = None) -> dict[str, JsonValue]:
+        """The benchmark ledger: for each evidence group (or the one named), its rows with the
+        reported value, whether a reproduction run reproduced it (`reproduced`, `not-reproduced`,
+        `accepted`, `resolved` while a confirmatory reproduction awaits the unlock, or `none`) and
+        the own results of hypotheses whose conditions the group holds (outcome, number of units,
+        flags). Reproduced values, means and intervals are for the researcher. Own and reproduced
+        results never enter the evidence report. Read-only; refused to a session that has joined
+        a pass."""
+
+        def view() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            _require_pass_opened(opened)
+            groups = ledger_service.ledger(opened, group_id=group_id, agent=True)
+            data: dict[str, JsonValue] = {
+                "groups": [g.model_dump(mode="json") for g in groups],
+            }
+            return _withheld(opened, data, include_work_ids=False)
+
+        return _reply(project, view, include_work_ids=False)
 
     return server
 

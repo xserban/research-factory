@@ -9,6 +9,10 @@ Invariants:
 - Own results (a computed evaluation's outcome, mean and interval) sit in `own_results` of the
   group whose key holds every condition of the hypothesis; they never enter a group's rows,
   frontiers or counts. A hypothesis with no condition appears in every group.
+- The agent variant (`agent=True`) carries no reproduced value and no mean or interval of an
+  own result (decision 93 item 9: no MCP view carries a metric value), and a baseline that
+  reproduces on the confirmatory split reads `resolved` until the design is unlocked (it would
+  bound a test-split value, review C1). The researcher's variant is complete.
 - A row's reproduction is read from the latest design that declares the row as a baseline:
   `reproduced`; `not-reproduced` (or `no-runs-completed`); `accepted` when a human accepted a
   baseline that did not reproduce (the deviation is on the design); `none` otherwise.
@@ -21,12 +25,13 @@ from typing import Literal
 from sqlalchemy import text
 
 from factory.errors import FactoryValidationError, ValidationIssue
+from factory.index.experiments import design_of
 from factory.model.base import StrictModel
 from factory.services.context import Project
 from factory.services.evaluation import latest_evaluation
 from factory.services.evidence_report import agent_evidence, evidence_report
 
-Reproduction = Literal["reproduced", "not-reproduced", "accepted", "none"]
+Reproduction = Literal["reproduced", "not-reproduced", "accepted", "resolved", "none"]
 
 
 class LedgerRow(StrictModel):
@@ -49,6 +54,9 @@ class OwnResult(StrictModel):
     ci_high: str | None
     n: int
     flags: tuple[str, ...]
+
+    def agent_view(self) -> OwnResult:
+        return self.model_copy(update={"mean": None, "ci_low": None, "ci_high": None})
 
 
 class LedgerGroup(StrictModel):
@@ -73,6 +81,23 @@ def _reproductions(project: Project) -> dict[str, tuple[str, str, str | None, bo
         str(r[0]): (str(r[1]), str(r[2]), None if r[3] is None else str(r[3]), bool(r[4]))
         for r in rows
     }
+
+
+def _hidden_before_unlock(project: Project) -> set[tuple[str, str]]:
+    """(experiment, row key) of baselines that reproduce on the confirmatory split in a design
+    that is not unlocked yet."""
+    hidden: set[tuple[str, str]] = set()
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT experiment_id, design_json FROM experiments WHERE unlocked_event_id IS NULL"
+            )
+        ).all()
+    for experiment_id, raw in rows:
+        for baseline in design_of(raw).baselines:
+            if baseline.split == "confirmatory":
+                hidden.add((str(experiment_id), baseline.row_key))
+    return hidden
 
 
 def _own_results(project: Project) -> list[tuple[dict[str, str], OwnResult]]:
@@ -125,6 +150,7 @@ def ledger(
             raise FactoryValidationError([ValidationIssue("group_id", "unknown")])
     reproductions = _reproductions(project)
     own = _own_results(project)
+    hidden = _hidden_before_unlock(project) if agent else set()
     out: list[LedgerGroup] = []
     for group in groups:
         key = set(group.key)
@@ -141,6 +167,8 @@ def ledger(
                     if accepted
                     else "not-reproduced"
                 )
+                if (found[0], row.row_key) in hidden:
+                    reproduction = "resolved"
             rows.append(
                 LedgerRow(
                     row_key=row.row_key,
@@ -150,7 +178,7 @@ def ledger(
                     if row.value.canonical is not None
                     else str(row.value.value),
                     reproduction=reproduction,
-                    reproduced=None if found is None else found[2],
+                    reproduced=None if found is None or agent else found[2],
                     experiment_id=None if found is None else found[0],
                     trace_id=row.value.trace_id,
                 )
@@ -160,7 +188,9 @@ def ledger(
                 group_id=group.group_id,
                 key=list(group.key),
                 rows=rows,
-                own_results=[r for cond, r in own if set(cond.items()) <= key],
+                own_results=[
+                    r.agent_view() if agent else r for cond, r in own if set(cond.items()) <= key
+                ],
             )
         )
     return out
