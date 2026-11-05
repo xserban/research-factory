@@ -246,3 +246,54 @@ def test_agent_proposal_carries_provenance(
             )
         ).one()
     assert row[0] == "agent" and row[1] and row[2] and row[3]
+
+
+def old_conversion(w: RWorld, work: str) -> str:
+    """A conversion of a document of `work` that a newer document has superseded."""
+    with w.project.index.connect() as conn:
+        found = conn.execute(
+            text(
+                "SELECT c.conversion_id FROM document_conversions c "
+                "JOIN fulltext_documents d ON d.document_id = c.document_id "
+                "WHERE d.work_id = :w AND d.superseded_by IS NOT NULL "
+                "ORDER BY c.event_id LIMIT 1"
+            ),
+            {"w": work},
+        ).scalar_one_or_none()
+    assert found is not None, "the lineage world supersedes the source's first document"
+    return str(found)
+
+
+def test_quote_basis_refuses_a_superseded_document(
+    region_project: RWorld, lin: Lineage, human: Actor, agent: Actor
+) -> None:
+    w = region_project
+    region = region_without(w, human, lin)
+    old = old_conversion(w, lin.source)
+    basis = QuoteBasis(work_id=lin.source, conversion_id=old, anchor="s1.p4", quote=QUOTE)
+    before = event_count(w)
+    with pytest.raises(FactoryValidationError) as caught:
+        propose_member(w.project, agent, region, W, lin.source, basis)
+    assert [(i.field, i.reason) for i in caught.value.issues] == [
+        ("basis.conversion_id", "document-superseded")
+    ]
+    assert event_count(w) == before
+
+
+def test_quote_basis_refuses_an_unpromoted_work(
+    region_project: RWorld,
+    lin: Lineage,
+    human: Actor,
+    agent: Actor,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from factory.services import regions
+
+    w = region_project
+    region = region_without(w, human, lin)
+    monkeypatch.setattr(regions, "promoted_works", lambda project: frozenset())
+    with pytest.raises(FactoryValidationError) as caught:
+        propose_member(w.project, agent, region, W, lin.source, quote_basis(w, lin))
+    assert [(i.field, i.reason) for i in caught.value.issues] == [
+        ("basis.work_id", "work-not-promoted")
+    ]

@@ -82,7 +82,9 @@ from factory.regions.version import (
     rules_hash,
 )
 from factory.services.context import Project
-from factory.services.conversions import conversion_manifest, conversion_work
+from factory.services.conversions import conversion_manifest, conversion_of, conversion_work
+from factory.services.document_read import promoted_works
+from factory.services.fulltext import document_superseded
 from factory.services.gates import gate_issues
 from factory.services.lineage import index_neighbours
 from factory.services.question import current_question, get_question
@@ -521,17 +523,24 @@ def _proposal_matches(
 def _quote_issues(
     project: Project, member_type: MemberType, member: str, basis: QuoteBasis
 ) -> list[ValidationIssue]:
-    """The quote must be verbatim in the anchored element of a conversion of the candidate work."""
+    """The quote must be verbatim in the anchored element of the named conversion of the
+    candidate work, which must be promoted and whose document must not be superseded: the same
+    documents `document_read` serves, so a proposal is no oracle on any other text."""
     if member_type is not MemberType.WORK:
         return [ValidationIssue("basis", "quote-needs-work-member")]
     wanted = _resolve_member(project, MemberType.WORK, member)
     if _resolve_member(project, MemberType.WORK, basis.work_id) != wanted:
         return [ValidationIssue("basis.work_id", "quote-other-work")]
+    if wanted not in promoted_works(project):
+        return [ValidationIssue("basis.work_id", "work-not-promoted")]
     owner = conversion_work(project, basis.conversion_id)
     if owner is None:
         return [ValidationIssue("basis.conversion_id", "conversion-unknown")]
     if _resolve_member(project, MemberType.WORK, owner) != wanted:
         return [ValidationIssue("basis.conversion_id", "conversion-other-work")]
+    document = conversion_of(project, basis.conversion_id)
+    if document is not None and document_superseded(project, document.document_id):
+        return [ValidationIssue("basis.conversion_id", "document-superseded")]
     try:
         manifest = conversion_manifest(project, basis.conversion_id)
     except FactoryValidationError:
