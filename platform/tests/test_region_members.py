@@ -297,3 +297,64 @@ def test_quote_basis_refuses_an_unpromoted_work(
     assert [(i.field, i.reason) for i in caught.value.issues] == [
         ("basis.work_id", "work-not-promoted")
     ]
+
+
+def test_concept_use_of_an_unapproved_concept_is_no_basis(
+    region_project: RWorld, human: Actor, agent: Actor
+) -> None:
+    w = region_project
+    b = w.included[1]
+    region = included_region(w, human)
+    decide_member(w.project, human, region, MemberType.CONCEPT, w.concept, "add")
+    decide_member(w.project, human, region, W, b, "remove")
+    with w.project.index.connect() as conn:
+        conn.execute(
+            text("UPDATE concepts SET source_state = 'proposed' WHERE concept_id = :c"),
+            {"c": w.concept},
+        )
+        conn.commit()
+    with pytest.raises(FactoryValidationError) as caught:
+        propose_member(w.project, agent, region, W, b, EdgeBasis(edge_id="lnk_1"))
+    assert caught.value.issues[0].reason == "edge-unknown"
+
+
+def test_decision_on_a_merge_survivor_closes_a_proposal_on_the_absorbed_id(
+    region_project: RWorld, lin: Lineage, human: Actor, agent: Actor
+) -> None:
+    from tests.region_helpers import merge_works
+
+    w = region_project
+    region = region_without(w, human, lin)
+    other = next(x for x in w.included if x != lin.source)
+    propose_member(w.project, agent, region, W, lin.source, quote_basis(w, lin))
+    merge_works(w.project, other, lin.source)
+    assert len(pending_proposals(w.project, region)) == 1
+    decide_member(w.project, human, region, W, other, "reject")
+    assert pending_proposals(w.project, region) == []
+
+
+def test_rebuild_keeps_proposals_links_and_proposal_ids(
+    region_project: RWorld, lin: Lineage, human: Actor, agent: Actor
+) -> None:
+    from factory.services.regions import link_regions
+
+    w = region_project
+    region = region_without(w, human, lin)
+    first = snapshot_region(w.project, human, region)
+    proposal = propose_member(w.project, agent, region, W, lin.source, quote_basis(w, lin))
+    decide_member(w.project, human, region, W, lin.source, "add", "ok", proposal_id=proposal)
+    second = snapshot_region(w.project, human, region)
+    link_regions(w.project, human, "related", first, second, "same region")
+    tables = ("region_member_proposals", "region_links", "region_member_decisions")
+
+    def dump() -> list[list[tuple[object, ...]]]:
+        with w.project.index.connect() as conn:
+            return [
+                [tuple(r) for r in conn.execute(text(f"SELECT * FROM {t} ORDER BY 1")).all()]
+                for t in tables
+            ]
+
+    before = dump()
+    assert all(before) and proposal in {c for row in before[2] for c in row}
+    w.project.index.rebuild()
+    assert dump() == before

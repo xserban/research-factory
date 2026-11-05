@@ -680,33 +680,53 @@ def propose_member(
 
 def pending_proposals(project: Project, region_id: str) -> list[RegionMemberProposed]:
     """The proposals of the region not yet closed, oldest first: a proposal is closed by any later
-    human decision (add, remove or reject) on the same member, or one that names it."""
+    human decision (add, remove or reject) on the same member or one that names it. Members are
+    compared after merges, so a decision on a survivor closes a proposal on an absorbed id."""
     project.index.sync()
     with project.index.connect() as conn:
         rows = conn.execute(
             text(
-                "SELECT p.proposal_id, p.region_id, p.member_type, p.member, p.basis, p.note "
-                "FROM region_member_proposals p WHERE p.region_id = :r AND NOT EXISTS ("
-                "SELECT 1 FROM region_member_decisions d WHERE d.region_id = p.region_id "
-                "AND d.member_type = p.member_type AND d.member = p.member "
-                "AND (d.event_id > p.event_id OR d.proposal_id = p.proposal_id)) "
-                "ORDER BY p.event_id"
+                "SELECT event_id, proposal_id, region_id, member_type, member, basis, note "
+                "FROM region_member_proposals WHERE region_id = :r ORDER BY event_id"
             ),
             {"r": region_id},
         ).all()
-    return [
-        RegionMemberProposed.model_validate(
-            {
-                "proposal_id": pid,
-                "region_id": rid,
-                "member_type": kind,
-                "member": member,
-                "basis": json.loads(str(basis)),
-                "note": note,
-            }
+        decisions = conn.execute(
+            text(
+                "SELECT event_id, member_type, member, proposal_id FROM region_member_decisions "
+                "WHERE region_id = :r ORDER BY event_id"
+            ),
+            {"r": region_id},
+        ).all()
+    resolved: dict[tuple[str, str], str] = {}
+
+    def canon(kind: str, member: str) -> str:
+        if (kind, member) not in resolved:
+            resolved[(kind, member)] = _resolve_member(project, MemberType(kind), member)
+        return resolved[(kind, member)]
+
+    decided = [(str(e), str(t), canon(str(t), str(m)), p) for e, t, m, p in decisions]
+    open_ones: list[RegionMemberProposed] = []
+    for event_id, pid, rid, kind, member, basis, note in rows:
+        key = canon(str(kind), str(member))
+        closed = any(
+            d_pid == pid or (d_event > str(event_id) and d_kind == str(kind) and d_key == key)
+            for d_event, d_kind, d_key, d_pid in decided
         )
-        for pid, rid, kind, member, basis, note in rows
-    ]
+        if not closed:
+            open_ones.append(
+                RegionMemberProposed.model_validate(
+                    {
+                        "proposal_id": pid,
+                        "region_id": rid,
+                        "member_type": kind,
+                        "member": member,
+                        "basis": json.loads(str(basis)),
+                        "note": note,
+                    }
+                )
+            )
+    return open_ones
 
 
 # --- Evaluation and snapshots ---

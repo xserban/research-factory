@@ -418,3 +418,52 @@ async def test_trace_of_region_refs_refused_before_a_pass(
                     "ok": False,
                     "errors": [{"field": "graph", "reason": "not available yet"}],
                 }, (ref, out)
+
+
+@pytest.mark.anyio
+async def test_every_region_tool_is_unavailable_before_a_pass(
+    settings: Settings,
+    project: Project,
+    clock: FixedClock,
+    human: Actor,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    install_skill(settings, "rf-regions")
+    region = define_region(
+        project,
+        human,
+        kind=RegionKind.REGION,
+        name="r",
+        definition="d",
+        rules=RuleSet(include=(CorpusRule(outcome="all", stage=ScreeningStage.TITLE_ABSTRACT),)),
+    )
+    _session(monkeypatch, SESSION_I)
+    calls: list[tuple[str, dict[str, Any]]] = [
+        (
+            "region_propose",
+            {"region_name": "x", "kind": "region", "definition": "x", "rules": RULES, **AGENT},
+        ),
+        (
+            "region_propose_member",
+            {
+                "region_id": region,
+                "member_type": "work",
+                "member": "rf:x-00000001",
+                "basis": {"kind": "edge", "edge_id": "e"},
+                **AGENT,
+            },
+        ),
+        ("region_snapshot", {"region_id": region, **AGENT}),
+        ("region_status", {}),
+        ("region_query", {"query": "regions_of", "member_type": "work", "member": "rf:x"}),
+    ]
+    assert [name for name, _ in calls] == list(TOOLS)
+    before = len(region_events(project))
+    async with open_session(settings, clock) as client:
+        for name, args in calls:
+            out = await client.call(name, project="demo", **args)
+            assert out == {
+                "ok": False,
+                "errors": [{"field": "graph", "reason": "not available yet"}],
+            }, (name, out)
+    assert len(region_events(project)) == before

@@ -74,8 +74,9 @@ def concept_users(conn: Connection, concept_id: str) -> list[str]:
 
 
 def use_link(conn: Connection, link_id: str) -> tuple[str, str, str, str] | None:
-    """`(from_node, from_kind, live concept id, status)` of a stated or confirmed concept use, or
-    None for an unknown link or one not (yet) stated or confirmed."""
+    """`(from_node, from_kind, surviving concept id, status)` of a stated or confirmed concept
+    use of a visible concept (source approved, not merged away, review not `wrong`), or None for an
+    unknown link, one not (yet) stated or confirmed, or one of a concept that is not visible."""
     row = conn.execute(
         text(
             "SELECT from_node, from_kind, concept_id, status FROM concept_uses "
@@ -85,4 +86,7 @@ def use_link(conn: Connection, link_id: str) -> tuple[str, str, str, str] | None
     ).first()
     if row is None:
         return None
-    return str(row[0]), str(row[1]), concept_live(conn, str(row[2])), str(row[3])
+    survivor = concept_survivor(conn, str(row[2]))
+    if survivor is None:
+        return None
+    return str(row[0]), str(row[1]), survivor, str(row[3])

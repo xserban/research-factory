@@ -142,3 +142,28 @@ def test_regions_of_uses_index(region_project: RWorld, human: Actor) -> None:
     assert all(m.review_state == "unreviewed" and m.adopted_from is None for m in both)
     assert "rules" in both[0].basis
     assert regions_of(w.project, W, "rf:nowhere-00000000") == []
+
+
+def test_older_definition_reaching_a_barred_purpose_withholds_the_region(
+    region_project: RWorld, human: Actor
+) -> None:
+    from factory.regions.rules import RunRule
+    from factory.services.regions import agent_region_state, region_withheld
+    from tests.region_helpers import add_queries
+
+    w = region_project
+    add_queries(w.project, {"qry_imp": "import"})
+    region = make(w, human, "once barred", RuleSet(include=(RunRule(query_id="qry_imp"),)))
+    snapshot_region(w.project, human, region)
+    define_region(
+        w.project,
+        human,
+        kind=RegionKind.REGION,
+        name="now clean",
+        definition="now clean",
+        rules=RuleSet(include=(FT_INCLUDED,)),
+        region_id=region,
+    )
+    assert region_withheld(w.project, region)
+    state = agent_region_state(w.project, region)
+    assert state.counts_withheld and state.live_counts == {}
