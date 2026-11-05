@@ -378,6 +378,47 @@ def test_an_agent_sentence_folds_with_its_session_and_model(project: Project, dr
     assert (row.author, row.session, row.model) == ("agent", S2, "m-1")
 
 
+def test_an_outline_blob_naming_another_id_is_refused(
+    project: Project, me: Actor, draft: str
+) -> None:
+    with project.index.connect() as conn:
+        ref, blob = conn.execute(text("SELECT outline_ref, outline_blob FROM drafts")).one()
+    data = project.blobs.get_json(str(blob))
+    assert isinstance(data, dict)
+    other = project.blobs.put_json({**data, "outline_id": "OL@11111111"})  # same scope, sections
+    model = DraftOutlineRepinned(draft_id=draft, outline_ref=str(ref), outline_blob=other)
+    inert(project, "draft.outline_repinned", model, me)
+
+
+def test_supersedes_stays_within_the_draft(project: Project, me: Actor, draft: str) -> None:
+    other = create_draft(project, title="Other", kind=DraftKind.OTHER, actor=me)
+    forge(project, "draft.sentence_recorded", sentence(draft, 1), me)
+    inert(project, "draft.sentence_recorded", sentence(other, 2, supersedes=sid(1)), me)
+
+
+def test_a_withdrawn_sentence_is_not_superseded(project: Project, me: Actor, draft: str) -> None:
+    forge(project, "draft.sentence_recorded", sentence(draft, 1), me)
+    forge(
+        project, "draft.sentence_withdrawn", SentenceWithdrawn(sentence_id=sid(1), reason="x"), me
+    )
+    inert(project, "draft.sentence_recorded", sentence(draft, 2, supersedes=sid(1)), me)
+
+
+def test_a_reorder_lists_live_sentences_only(project: Project, me: Actor, draft: str) -> None:
+    forge(project, "draft.sentence_recorded", sentence(draft, 1, order=10), me)
+    forge(project, "draft.sentence_recorded", sentence(draft, 2, order=20), me)
+    forge(project, "draft.sentence_recorded", sentence(draft, 3, order=30, supersedes=sid(1)), me)
+    forge(
+        project, "draft.sentence_withdrawn", SentenceWithdrawn(sentence_id=sid(2), reason="x"), me
+    )
+    forge(project, "draft.sentence_recorded", sentence(draft, 4, order=40), me)
+    for gone in (sid(1), sid(2)):  # a superseded and a withdrawn sentence
+        model = DraftReordered(draft_id=draft, section_id="sec_01", order=[sid(4), sid(3), gone])
+        inert(project, "draft.reordered", model, me)
+    live = DraftReordered(draft_id=draft, section_id="sec_01", order=[sid(4), sid(3)])
+    folds(project, "draft.reordered", live, me)
+
+
 def raw(project: Project, type_: str, model: StrictModel, actor: Actor, **fields: Any) -> None:
     """Append a line the writer would refuse: a payload that no longer validates, as a hand-edited
     log may hold."""

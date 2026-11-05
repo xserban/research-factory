@@ -21,12 +21,20 @@ from typer.testing import CliRunner
 from factory.cli.main import app
 from factory.clock import FixedClock
 from factory.config import Settings
-from factory.events.envelope import Event
+from factory.events.envelope import Actor, Event
 from factory.events.reader import read_all
 from factory.mcp.server import build_server
+from factory.model.drafts import DraftKind, SentenceClass
 from factory.services.context import Project
-from factory.services.drafts import list_drafts, live_sentences
+from factory.services.drafts import (
+    SentenceInput,
+    create_draft,
+    list_drafts,
+    live_sentences,
+    write_sentences,
+)
 from factory.services.outline import build_outline, outline_json
+from factory.services.seeds import SeedRole, all_seeds
 from tests.cli_helpers import _env
 from tests.contribution_helpers import ctr_a, ctr_b, ext_a, screened
 from tests.extraction_helpers import SESSION_A
@@ -34,7 +42,7 @@ from tests.helpers import install_skill, open_session
 from tests.intuition_separation import imports_of, package_dirs, package_modules
 from tests.test_mcp_cards import _session
 from tests.views_b_helpers import ext_b
-from tests.writing_helpers import WWorld, ww
+from tests.writing_helpers import WWorld, audit_above_ceiling, ww
 
 TOOLS = ("writing_outline", "draft_create", "draft_next", "draft_write", "draft_status")
 WRITER = "01JZ9Q3K5M7N8P0R2S4T6V8W1W"
@@ -197,6 +205,55 @@ async def test_tools_are_role_blind_before_a_pass_opens(
             await client.call("draft_status", project="demo", draft_id="drf_x"),
         ]
     assert {(o["ok"], o["errors"][0]["reason"]) for o in outs} == {(False, "not available yet")}
+
+
+@pytest.mark.anyio
+async def test_writing_outline_is_the_agent_variant(
+    settings: Settings,
+    project: Project,
+    clock: FixedClock,
+    ww: WWorld,
+    other_session_human: Actor,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    audit_above_ceiling(project, other_session_human)
+    full = outline_json(build_outline(project, agent=False))
+    assert "audit-above-ceiling" in full  # the control: the researcher's variant says it
+    _session(monkeypatch, WRITER)
+    async with open_session(settings, clock) as client:
+        out = await client.call("writing_outline", project="demo")
+    assert out["ok"] is True
+    assert "audit-above-ceiling" not in json.dumps(out)
+    assert "audit-reported-to-researcher" in json.dumps(out)
+
+
+@pytest.mark.anyio
+async def test_a_held_out_seed_token_does_not_reach_an_agent(
+    settings: Settings,
+    project: Project,
+    clock: FixedClock,
+    ww: WWorld,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    token = next(s.seed_id for s in all_seeds(project) if s.role is SeedRole.HELD_OUT)
+    me = project.human_actor()
+    draft = create_draft(project, title="t", kind=DraftKind.OTHER, actor=me)
+    sentence = SentenceInput(
+        section_id="sec_01", cls=SentenceClass.STRUCTURAL, text=f"The scope names {token} here"
+    )
+    assert write_sentences(project, draft, [sentence], actor=me).written
+    install_skill(settings, "rf-write")
+    _session(monkeypatch, WRITER)
+    async with open_session(settings, clock) as client:
+        outline = await client.call("writing_outline", project="demo", scope_works=[token])
+        slot = await client.call(
+            "draft_next", project="demo", draft_id=draft, section_id="sec_01", **AS
+        )
+        status = await client.call("draft_status", project="demo", draft_id=draft)
+    for out in (outline, slot, status):
+        assert out["ok"] is True, out
+        assert token not in json.dumps(out)
+    assert "[withheld]" in json.dumps(status)  # the writer's own sentence, scrubbed
 
 
 # --- CLI ---

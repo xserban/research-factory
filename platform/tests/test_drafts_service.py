@@ -14,7 +14,7 @@ import factory.services.drafts as drafts_mod
 from factory.errors import FactoryValidationError
 from factory.events.envelope import Actor
 from factory.model.drafts import MAX_ORDER, DraftKind, SentenceClass, SentenceFlag
-from factory.model.task import TaskStatus
+from factory.model.task import INTUITION_TASK_KIND, TaskStatus
 from factory.services.context import Project
 from factory.services.drafts import (
     SentenceInput,
@@ -28,11 +28,11 @@ from factory.services.drafts import (
     withdraw,
     write_sentences,
 )
-from factory.services.outline import OutlineScope
-from factory.services.tasks import get_task
+from factory.services.outline import OutlineScope, build_outline
+from factory.services.tasks import TaskSpec, claim_next, create_tasks, get_task
 from tests.contribution_helpers import ctr_a, ctr_b, ext_a, screened  # noqa: F401
 from tests.views_b_helpers import ext_b  # noqa: F401
-from tests.writing_helpers import WWorld, ww  # noqa: F401
+from tests.writing_helpers import WWorld, audit_above_ceiling, ww  # noqa: F401
 
 W1 = "01JZ9Q3K5M7N8P0R2S4T6V8W11"
 W2 = "01JZ9Q3K5M7N8P0R2S4T6V8W12"
@@ -504,3 +504,103 @@ def test_events_of_a_draft_carry_no_prose_beyond_the_sentence(
     assert len(created) == 1 and set(created[0]["payload"]) == {
         "draft_id", "title", "kind", "outline_ref", "outline_blob", "sections",
     }  # fmt: skip
+
+
+def _limit_notes(project: Project, draft: str) -> list[str]:
+    with project.index.connect() as conn:
+        blob = conn.execute(
+            text("SELECT outline_blob FROM drafts WHERE draft_id = :d"), {"d": draft}
+        ).scalar_one()
+    outline = project.blobs.get_json(str(blob))
+    assert isinstance(outline, dict) and isinstance(outline["sections"], list)
+    return [n for s in outline["sections"] if s["kind"] == "limits" for n in s["notes"]]  # type: ignore[call-overload,index,union-attr]
+
+
+def test_create_pins_the_agent_variant_of_the_outline(
+    project: Project, ww: WWorld, other_session_human: Actor, me: Actor
+) -> None:
+    audit_above_ceiling(project, other_session_human)
+    full = build_outline(project, agent=False)  # the control: the researcher's variant has it
+    assert any("audit-above-ceiling" in s.notes for s in full.sections)
+    draft = create_draft(project, title="t", kind=DraftKind.OTHER, actor=me)
+    notes = _limit_notes(project, draft)
+    assert "audit-above-ceiling" not in notes and "audit-reported-to-researcher" in notes
+
+
+def test_repin_pins_the_agent_variant_of_the_outline(
+    project: Project, ww: WWorld, other_session_human: Actor, draft: str, me: Actor
+) -> None:
+    audit_above_ceiling(project, other_session_human)
+    repin_outline(project, draft, actor=me)
+    notes = _limit_notes(project, draft)
+    assert "audit-above-ceiling" not in notes and "audit-reported-to-researcher" in notes
+
+
+def test_a_task_of_another_kind_is_refused(project: Project, ww: WWorld, draft: str) -> None:
+    made = create_tasks(
+        project,
+        project.system_actor(),
+        [TaskSpec(INTUITION_TASK_KIND, {"draft_id": draft, "target": "x"})],
+    )
+    held = claim_next(project, writer(), INTUITION_TASK_KIND, task_ids=set(made.written))
+    assert held is not None
+    with pytest.raises(FactoryValidationError) as caught:
+        write_sentences(
+            project,
+            draft,
+            [sent("sec_01", STRUCT, "Scope follows")],
+            actor=writer(),
+            task_id=held.task_id,
+        )
+    assert [(i.field, i.reason) for i in caught.value.issues] == [
+        ("task_id", "not a writing slot task")
+    ]
+
+
+def test_supersedes_must_name_a_sentence_of_the_same_section(
+    project: Project, ww: WWorld, draft: str, me: Actor
+) -> None:
+    (old,) = write_sentences(
+        project, draft, [sent("sec_01", STRUCT, "Scope one")], actor=me
+    ).written
+    result = write_sentences(
+        project, draft, [sent("sec_02", STRUCT, "Scope two", supersedes=old)], actor=me
+    )
+    assert result.written == []  # the fold would drop it: it must not be reported as written
+    assert result.rejected[0].issues[0].field == "supersedes"
+    assert [r.sentence_id for r in live_sentences(project, draft)] == [old]
+
+
+def test_one_sentence_superseded_twice_in_a_batch_writes_only_the_first(
+    project: Project, ww: WWorld, draft: str, me: Actor
+) -> None:
+    (old,) = write_sentences(
+        project, draft, [sent("sec_01", STRUCT, "Scope one")], actor=me
+    ).written
+    result = write_sentences(
+        project,
+        draft,
+        [
+            sent("sec_01", STRUCT, "Scope two", supersedes=old),
+            sent("sec_01", STRUCT, "Scope three", supersedes=old),
+        ],
+        actor=me,
+    )
+    assert len(result.written) == 1
+    assert [(r.index, r.issues[0].field) for r in result.rejected] == [(1, "supersedes")]
+    # every sentence reported written is live: nothing was dropped by the fold
+    assert [r.sentence_id for r in live_sentences(project, draft)] == result.written
+
+
+def test_a_sentence_of_the_batch_extends_the_structural_context(
+    project: Project, ww: WWorld, draft: str, me: Actor
+) -> None:
+    sec = section_of(project, draft, "idea:")
+    result = write_sentences(
+        project,
+        draft,
+        [sent(sec, CLAIM, LOREM, ww.cell(0)), sent(sec, STRUCT, "Next we turn to lorem")],
+        actor=me,
+    )
+    assert len(result.written) == 1
+    assert result.rejected[0].issues[0].reason == "structural-method-name"
