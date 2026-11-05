@@ -9,9 +9,14 @@ import pytest
 from factory.events.envelope import Actor
 from factory.model.lineage import DEFAULT_STATUSES, EdgeStatus, LineageDecision, RelationProposal
 from factory.model.references import ReferenceResolutionDecided
-from factory.model.screening import PassLabel
+from factory.model.screening import Channel, PassLabel
 from factory.services.context import Project
-from factory.services.contributions import contribution_next, contribution_record
+from factory.services.contributions import (
+    contribution_agreement,
+    contribution_next,
+    contribution_record,
+    resolve_contribution,
+)
 from factory.services.extraction import ContributionBatch
 from factory.services.protocol import amend_protocol, current_protocol
 from factory.services.references import extract_references
@@ -25,7 +30,16 @@ from factory.services.relations import (
 )
 from tests.contribution_helpers import P2, P4, P5, item
 from tests.document_helpers import StubConverter, make_registry, run_convert
-from tests.lineage_helpers import Lineage, ctr_a, ctr_b, lin, record_both, screened, world
+from tests.lineage_helpers import (
+    Lineage,
+    ctr_a,
+    ctr_b,
+    disputed,
+    lin,
+    record_both,
+    screened,
+    world,
+)
 
 
 def _propose(project: Project, agent: Actor, lin: Lineage, target: str, basis: str | None) -> str:
@@ -227,3 +241,17 @@ def test_list_pages_in_sql_and_filters_by_work(
     assert len(list_relations(project, statuses=every, work_id=lin.target5)) == 1
     assert list_relations(project, statuses=every, work_id="rf:nobody-00000000") == []
     assert list_relations(project, statuses=every, work_id=lin.source, limit=10)
+
+
+def test_inferred_relation_records_its_reference_extraction(
+    project: Project, agent: Actor, other_session_human: Actor, lin: Lineage
+) -> None:  # review fix 2
+    rid = _propose(project, agent, lin, lin.target3, lin.base)  # inferred: target differs
+    view = relation_view(project, rid)
+    assert view is not None
+    assert (view.reference_extraction_id, view.cited_entry) == (lin.rex, 5)
+    decide_relation(project, other_session_human, rid, LineageDecision.CONFIRM, "ok")
+    extract_references(project, agent, [lin.source], sources={})
+    stale = relation_view(project, rid)
+    assert stale is not None and "references-superseded" in stale.stale_reasons
+    assert stale.effective is EdgeStatus.STALE

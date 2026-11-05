@@ -226,7 +226,6 @@ def _write(
         basis, link, proposal.target, target_is_idea=is_idea, target_cited=target_cited
     )
     relation_id = f"rel_{project.ids.ulid()}"
-    stated = result.status == "stated"
     payload = RelationProposed(
         relation_id=relation_id,
         source_work=proposal.source_work,
@@ -237,10 +236,8 @@ def _write(
         status=result.status,
         status_reason=result.reason,
         resolved_target=result.resolved_target,
-        reference_extraction_id=None
-        if cited is None or not stated
-        else cited.reference_extraction_id,
-        cited_entry=None if cited is None or not stated else cited.ordinal,
+        reference_extraction_id=None if cited is None else cited.reference_extraction_id,
+        cited_entry=None if cited is None else cited.ordinal,
         flags=result.flags,
         classifier=CLASSIFIER_VERSION,
         supersedes=supersedes,
