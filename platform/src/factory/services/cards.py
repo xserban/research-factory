@@ -141,6 +141,7 @@ class CardSummary(StrictModel):
 
 
 class CardPropRow(StrictModel):
+    assertion_id: str
     card_id: str
     card_kind: str
     subject: str
@@ -786,12 +787,21 @@ def _family(project: Project, keys: Collection[str]) -> set[str]:
     return wanted | {s for s in sources if resolved_key(project, s) in wanted} | set(keys)
 
 
+def property_family(project: Project, keys: Collection[str]) -> set[str]:
+    """`keys` and every key that merges into one of them (the raw keys `card_props` holds)."""
+    return _family(project, keys)
+
+
 def effective_card_props(
-    project: Project, property_keys: Collection[str], statuses: Collection[str]
+    project: Project,
+    property_keys: Collection[str],
+    statuses: Collection[str],
+    card_ids: Collection[str] | None = None,
 ) -> Iterator[CardPropRow]:
     """Stream the live `card_props` of the given properties (merged keys included, reported under
     the key they resolve to) whose effective status, staleness applied, is in `statuses`, ordered
-    by assertion then value. Pages through SQL; consumed by matching (H-B)."""
+    by assertion then value. `card_ids` restricts the read to those cards (matching reads a batch
+    of candidates at a time). Pages through SQL; consumed by matching (H-B)."""
     project.index.sync()
     family = sorted(_family(project, property_keys))
     if not family:
@@ -799,6 +809,14 @@ def effective_card_props(
     ctx = _Ctx(project)
     marks = ", ".join(f":k{i}" for i in range(len(family)))
     params: dict[str, Any] = {f"k{i}": k for i, k in enumerate(family)}
+    card_clause = ""
+    if card_ids is not None:
+        wanted = sorted(card_ids)
+        if not wanted:
+            return
+        card_marks = ", ".join(f":c{i}" for i in range(len(wanted)))
+        params.update({f"c{i}": c for i, c in enumerate(wanted)})
+        card_clause = f"AND p.card_id IN ({card_marks}) "
     after = ("", "")
     while True:
         with project.index.connect() as conn:
@@ -812,7 +830,8 @@ def effective_card_props(
                         "JOIN card_assertions a ON a.assertion_id = p.assertion_id "
                         "JOIN cards c ON c.card_id = a.card_id "
                         f"WHERE p.property_key IN ({marks}) "
-                        "AND (p.assertion_id > :aa "
+                        + card_clause
+                        + "AND (p.assertion_id > :aa "
                         "OR (p.assertion_id = :aa AND p.value_norm > :av)) "
                         "ORDER BY p.assertion_id, p.value_norm LIMIT :n"
                     ),
@@ -826,6 +845,7 @@ def effective_card_props(
             effective = _effective(str(row["status"]), row["decision"], stale)
             if effective in statuses:
                 yield CardPropRow(
+                    assertion_id=str(row["assertion_id"]),
                     card_id=str(row["card_id"]),
                     card_kind=str(row["card_kind"]),
                     subject=str(row["subject"]),
