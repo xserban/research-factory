@@ -2,8 +2,12 @@
 
 `miners` holds the first registration of each `(name, version)`: a later event naming the same pair
 changes nothing (the service refuses a different digest, so a replayed log only repeats). `retired`
-becomes true on `miner.retired` (M-D). The table is empty for a log without `miner.registered`,
-so it is left out of the state hash then.
+becomes true on `miner.retired` (M-D).
+
+A registration folds only when its `proposer_kind` is its writer's kind (the services write no
+other: an event that fails this is a hand-written one, left unfolded, R-51).
+
+The tables are empty for a log without these events, so they are left out of the state hash then.
 """
 
 from __future__ import annotations
@@ -88,6 +92,8 @@ def miner_tables(metadata: MetaData) -> MinerTables:
 def miner_handlers(t: MinerTables) -> dict[str, Handler]:
     def registered(conn: Connection, event: Event) -> None:
         payload = MinerRegistered.model_validate(event.payload)
+        if payload.proposer_kind != event.actor.kind:
+            return
         conn.execute(
             sqlite_insert(t.miners)
             .values(

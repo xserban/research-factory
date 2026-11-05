@@ -772,3 +772,17 @@ def test_well_formed_snapshot_folds(project: Project, agent: Actor) -> None:
 
 
 # --- Miners: registration and calibration ---
+
+
+
+
+def _registered(project: Project, *, kind: str = "human", version: int = 1) -> MinerRegistered:
+    spec = method_vision(version=version)
+    return MinerRegistered(
+        miner_id=f"mnr_{ulid(version)}",
+        name=spec.name,
+        version=version,
+        digest=miner_digest(spec),
+        spec_blob=project.blobs.put_json(spec_to_json(spec)),
+        proposer_kind=kind,  # type: ignore[arg-type]
+    )
