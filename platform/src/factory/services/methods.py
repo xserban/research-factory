@@ -39,6 +39,7 @@ from factory.services.discovery import supplied_only_included
 from factory.services.evidence_report import evidence_report
 from factory.services.extraction_agreement import agreement_overall
 from factory.services.extraction_audit import extraction_audit_report
+from factory.services.gate_status import GateStatusRow, notable_rows
 from factory.services.prisma import (
     UNCONVERTED,
     PrismaFlow,
@@ -149,6 +150,9 @@ class MethodsReport(StrictModel):
     """The declared stopping rule, stated in words; None while no plan is declared."""
     imports: list[ImportMethods] = Field(default_factory=list)
     """Resolved library imports (slice 3d); empty, and no paragraph, without imports."""
+    gate_policy: list[GateStatusRow] = Field(default_factory=list)
+    """The decision gates the statement reports (slice M, `GateStatusRow.notable`): empty, and no
+    paragraph, while every act was passed by a human under a `human` policy."""
 
 
 def methods_report(project: Project) -> MethodsReport:
@@ -229,6 +233,7 @@ def methods_report(project: Project) -> MethodsReport:
         **references,
         supplied_links=_supplied_links(project),
         imports=_imports(project, agent=False),
+        gate_policy=notable_rows(project),
     )
 
 
@@ -366,7 +371,12 @@ def _agent_values(project: Project, statement: TextClause) -> list[str]:
 WITHHELD_RATES = "withheld from the agent view"
 WITHHELD_RECALL = "not computed (withheld until screening has started)"
 _RATE_FIELDS = frozenset(
-    {"calibration_sensitivity", "audit_false_exclusion_rate", "extraction_error_rate"}
+    {
+        "calibration_sensitivity",
+        "audit_false_exclusion_rate",
+        "extraction_error_rate",
+        "gate_audit",
+    }
 )
 
 
@@ -389,6 +399,7 @@ def agent_methods(project: Project, report: MethodsReport) -> tuple[MethodsRepor
         update["recall_held_out"] = None
         update["recall_held_out_admitted"] = 0
     update["imports"] = _imports(project, agent=True)
+    update["gate_policy"] = [row.agent_view() for row in report.gate_policy]
     return report.model_copy(update=update), frozenset(withheld)
 
 
@@ -417,6 +428,7 @@ def render_methods(report: MethodsReport, *, withheld: frozenset[str] = frozense
         *[_import_paragraph(i) for i in report.imports],
         _seed_recall(report, withheld),
         *([] if report.supplied_links is None else [_supplied(report.supplied_links)]),
+        *([] if not report.gate_policy else [_gate_policy(report, withheld)]),
         _deviations(report),
     ]
     return "\n\n".join(paragraphs) + "\n"
@@ -650,6 +662,33 @@ def _supplied(links: SuppliedLinks) -> str:
         "Supplied works were screened under the same protocol, criteria and passes as every "
         "other record; screeners did not see how a work was found."
     )
+
+
+def _gate_policy(report: MethodsReport, withheld: frozenset[str]) -> str:
+    """Decision gates passed by an agent, or under a protocol policy: who passed what."""
+    parts = [
+        "Decision gates. A gate is passed by a human, or, where its policy is agent_audit, by an "
+        "agent whose acts a human audits on a random sample."
+    ]
+    for row in report.gate_policy:
+        counts = ", ".join(f"{level} {n}" for level, n in row.counts.items())
+        text = f"Gate {row.gate_id}: policy {row.policy} (from the {row.source}); acts {counts}."
+        if row.audit is None:
+            text += " No human audit drawn."
+        elif "gate_audit" in withheld or row.audit.labelled is None:
+            text += " A human audit was drawn; its figures are " + WITHHELD_RATES + "."
+        else:
+            text += (
+                f" Human audit: {row.audit.sample_size} sampled, {row.audit.labelled} labelled, "
+                f"{row.audit.incorrect} incorrect."
+            )
+        if row.below_policy:
+            text += (
+                f" {row.below_policy} act(s) were passed by an agent before the policy "
+                "became human."
+            )
+        parts.append(text)
+    return " ".join(parts)
 
 
 def _deviations(report: MethodsReport) -> str:

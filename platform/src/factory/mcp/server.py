@@ -91,6 +91,7 @@ from factory.services import trace as trace_service
 from factory.services import watch as watch_service
 from factory.services.context import Project, open_project
 from factory.services.extraction import ExtractResult
+from factory.services.gate_status import gates_status
 from factory.services.living_hooks import default_hooks
 from factory.services.results import BatchResult, ItemError
 from factory.services.search import list_works
@@ -247,6 +248,22 @@ def build_server(
             return _withheld(opened, report)
 
         return _reply(project, dedup)
+
+    @server.tool()
+    def gate_status(project: str) -> dict[str, JsonValue]:
+        """Per decision gate: its policy kind and source, the acts passed at each autonomy level,
+        and whether a human audit was drawn. No fraction, minimum, sample size, label or error
+        rate is returned. Read-only. Refused to a session that has joined a pass."""
+
+        def status() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            rows: list[JsonValue] = [
+                row.agent_view().model_dump(mode="json") for row in gates_status(opened)
+            ]
+            return _withheld(opened, {"gates": rows}, include_work_ids=False)
+
+        return _reply(project, status, include_work_ids=False)
 
     @server.tool()
     def watch_status(project: str) -> dict[str, JsonValue]:

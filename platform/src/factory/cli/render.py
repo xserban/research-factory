@@ -35,6 +35,7 @@ from factory.services.finders import ConflictPage, ContradictionView, GapReport
 from factory.services.fulltext import FetchSummary
 from factory.services.fulltext_import import ImportReport
 from factory.services.fulltext_status import FulltextStatus
+from factory.services.gate_status import GateStatusRow
 from factory.services.ideas import IdeaCandidate, IdeaView
 from factory.services.import_admit import AdmissionSummary
 from factory.services.import_attach import AttachReport
@@ -1089,6 +1090,31 @@ def gap_lines(report: GapReport) -> list[str]:
         report.statement,
     ]
     lines += [f"{c.row}  {c.column}" for c in report.empty]
+    return lines
+
+
+def gate_lines(rows: list[GateStatusRow]) -> list[str]:
+    """One block per decision gate: policy and its source, acts per autonomy level, the latest
+    audit and the acts below the current policy."""
+    lines: list[str] = []
+    for row in rows:
+        policy = row.policy
+        if row.fraction is not None and row.minimum is not None:
+            policy += f"({row.fraction:g}, {row.minimum})"
+        counts = ", ".join(f"{level} {n}" for level, n in row.counts.items())
+        lines.append(f"{row.gate_id}: {policy} from the {row.source}, floor {row.floor}")
+        lines.append(f"  acts: {counts}")
+        audit = row.audit
+        if audit is not None and audit.sample_size is not None:
+            rate = "n/a" if audit.error_rate is None else f"{audit.error_rate:.3f}"
+            lines.append(
+                f"  audit {audit.audit_id}: sample {audit.sample_size}, labelled "
+                f"{audit.labelled}, incorrect {audit.incorrect}, error rate {rate}"
+            )
+        elif audit is not None:
+            lines.append(f"  audit {audit.audit_id}")
+        if row.below_policy:
+            lines.append(f"  below policy: {row.below_policy}")
     return lines
 
 

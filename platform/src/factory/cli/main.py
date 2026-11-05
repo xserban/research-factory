@@ -68,6 +68,7 @@ from factory.services import finders as findings_service
 from factory.services import fulltext as fulltext_service
 from factory.services import fulltext_import as fulltext_import_service
 from factory.services import fulltext_status as fulltext_status_service
+from factory.services import gates as gates_service
 from factory.services import ideas as ideas_service
 from factory.services import import_admit as import_admit_service
 from factory.services import import_attach as import_attach_service
@@ -97,6 +98,7 @@ from factory.services import versions as versions_service
 from factory.services import watch as watch_service
 from factory.services.context import Project, list_projects, open_project
 from factory.services.extraction_agreement import Choice
+from factory.services.gate_status import gates_status
 from factory.services.living_hooks import DEFAULT_HOOKS
 from factory.services.modules.listing import module_rows
 from factory.services.project import ScreeningStatus
@@ -163,6 +165,11 @@ search_app = typer.Typer(
 audit_app = typer.Typer(
     name="audit", help="Sample, label and report the audit.", no_args_is_help=True
 )
+gate_app = typer.Typer(name="gate", help="Audit the agent's acts at a gate.", no_args_is_help=True)
+gate_audit_app = typer.Typer(
+    name="audit", help="Sample, label and report a gate audit.", no_args_is_help=True
+)
+gate_app.add_typer(gate_audit_app)
 fulltext_app = typer.Typer(
     name="fulltext",
     help="Full text: fetch, status, restore, and import the researcher's PDFs.",
@@ -305,6 +312,7 @@ app.add_typer(protocol_app)
 app.add_typer(calibrate_app)
 app.add_typer(screen_app)
 app.add_typer(audit_app)
+app.add_typer(gate_app)
 app.add_typer(search_app)
 app.add_typer(fulltext_app)
 app.add_typer(document_app)
@@ -494,6 +502,89 @@ def modules_cmd(
     else:
         for line in render.module_lines(rows):
             typer.echo(line)
+
+
+@app.command("gates")
+def gates_cmd(
+    ctx: typer.Context,
+    as_json: Annotated[bool, typer.Option("--json", help="Print the gate rows as JSON.")] = False,
+) -> None:
+    """Every decision gate: its policy and source, acts per autonomy level, audit, and acts below
+    the current policy. Read-only."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        rows = gates_status(project)
+    if as_json:
+        typer.echo(json.dumps([row.model_dump(mode="json") for row in rows]))
+    else:
+        for line in render.gate_lines(rows):
+            typer.echo(line)
+
+
+@gate_audit_app.command("sample")
+def gate_audit_sample_cmd(
+    ctx: typer.Context,
+    gate: Annotated[str, typer.Argument(help="An agent_audit gate, e.g. reference.link_confirm.")],
+    seed: Annotated[int | None, typer.Option("--seed", help="Random seed; default: fresh.")] = None,
+) -> None:
+    """Draw the human audit sample of the agent acts at a gate."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        drawn = gates_service.gate_audit_sample(
+            project, project.human_actor(), gate, random_seed=seed
+        )
+    typer.echo(
+        f"gate audit {drawn.audit_id}: {len(drawn.act_event_ids)} of {drawn.population} agent acts"
+    )
+    for act in drawn.act_event_ids:
+        typer.echo(act)
+
+
+@gate_audit_app.command("label")
+def gate_audit_label_cmd(
+    ctx: typer.Context,
+    audit_id: Annotated[str, typer.Argument(help="The gate audit being labelled.")],
+    act: Annotated[str, typer.Argument(help="An act event of the audit sample.")],
+    verdict: Annotated[str, typer.Argument(help="correct or incorrect.")],
+    note: Annotated[str | None, typer.Option("--note", help="Why, if incorrect.")] = None,
+) -> None:
+    """A human's label on one sampled agent act."""
+    if verdict not in ("correct", "incorrect"):
+        _fail("verdict: must be correct or incorrect", 2)
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        gates_service.gate_audit_record(
+            project, project.human_actor(), audit_id, act, verdict == "correct", note, Channel.CLI
+        )
+    typer.echo(f"labelled {act} in {audit_id} ({verdict})")
+
+
+@gate_audit_app.command("report")
+def gate_audit_report_cmd(
+    ctx: typer.Context,
+    gate: Annotated[str, typer.Argument(help="The gate.")],
+) -> None:
+    """The latest audit of a gate: labelled count, error rate and the ceiling."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        report = gates_service.gate_audit_report(project, gate)
+    if report is None:
+        typer.echo("no gate audit sampled")
+        return
+    verdict = report.verdict
+    rate = "n/a" if verdict.rate is None else f"{verdict.rate:.3f}"
+    typer.echo(
+        f"gate audit {report.audit_id}: sample {report.sample_size}, labelled {report.labelled}, "
+        f"incorrect {report.incorrect}"
+    )
+    typer.echo(
+        f"error rate {rate} (ceiling {verdict.ceiling:.2f}, above ceiling: "
+        f"{'yes' if verdict.above else 'no'}, enforced: {'yes' if verdict.enforced else 'no'})"
+    )
 
 
 @app.command("portfolio")
