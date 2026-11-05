@@ -1223,6 +1223,8 @@ def diff_lines(
         *(f"+ {kind.value} {member}" for kind, member in added),
         *(f"- {kind.value} {member}" for kind, member in removed),
     ]
+
+
 def lead_lines(views: list[LeadView]) -> list[str]:
     if not views:
         return ["no leads"]

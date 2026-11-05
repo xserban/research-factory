@@ -4065,6 +4065,8 @@ def regions_diff_cmd(
         added, removed = regions_service.snapshot_diff(project, older, newer)
     for line in render.diff_lines(added, removed):
         typer.echo(line)
+
+
 # --- Leads, hypotheses and model cut-offs (slice 6, plan H-C) ------------------------------
 
 
