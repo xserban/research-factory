@@ -51,39 +51,39 @@ def test_floor_refuses_what_is_not_a_ulid() -> None:
         IdGenerator(FixedClock(T0)).floor("ev_not-a-ulid")
 
 
-def test_writing_floors_ids_across_processes(
-    project: Project, settings: Settings, clock: FixedClock
-) -> None:
-    behind = open_project(settings, "demo", session=S2, clock=FixedClock(T0 - timedelta(seconds=5)))
-    with project.writing():
-        last = goal(project)
-        project.record([last])
+def behind_by_five_seconds(project: Project) -> Project:
+    clock = FixedClock(T0 - timedelta(seconds=5))
+    return open_project(project.settings, "demo", session=S2, clock=clock)
+
+
+def test_writing_floors_ids_across_processes(hosted: Project) -> None:
+    behind = behind_by_five_seconds(hosted)
+    with hosted.writing():
+        last = goal(hosted)
+        hosted.record([last])
     with behind.writing():
         minted = goal(behind)
     assert minted.id > last.id
 
 
-def test_the_index_lock_floors_like_writing(
-    project: Project, settings: Settings, clock: FixedClock
-) -> None:
+def test_the_index_lock_floors_like_writing(hosted: Project) -> None:
     """The services take `index.exclusive()`: it is the same context as `writing()`."""
-    behind = open_project(settings, "demo", session=S2, clock=FixedClock(T0 - timedelta(seconds=5)))
-    with project.index.exclusive():
-        last = goal(project)
-        project.record([last])
+    behind = behind_by_five_seconds(hosted)
+    with hosted.index.exclusive():
+        last = goal(hosted)
+        hosted.record([last])
     with behind.index.exclusive():
         minted = goal(behind)
     assert minted.id > last.id
 
 
-def test_writing_sees_an_event_another_session_appended(
-    project: Project, settings: Settings
-) -> None:
+def test_writing_sees_an_event_another_session_appended(hosted: Project) -> None:
     """The floor comes from the log, not from an index synced earlier."""
-    behind = open_project(settings, "demo", session=S2, clock=FixedClock(T0 - timedelta(seconds=5)))
+    behind = behind_by_five_seconds(hosted)
     behind.index.sync()
-    last = goal(project)
-    project.writer.append([last])  # on disk, not yet folded by anyone
+    with hosted.writing():
+        last = goal(hosted)
+    hosted.writer.append([last])  # on disk, not yet folded by anyone
     with behind.writing():
         assert goal(behind).id > last.id
 

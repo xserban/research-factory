@@ -241,8 +241,9 @@ def test_a_hosting_with_no_change_changes_nothing(
     host_project(project, project.human_actor(), "lab1")
     server = as_host(settings, "lab1", clock)
     human = server.human_actor()
-    inert(server, "project.hosted", ProjectHosted(host_id="lab1", previous_host="lab1"), human)
-    inert(server, "project.hosted", ProjectHosted(host_id="lab2"), human)
+    with server.writing():  # a hosted project takes only what is minted under the lock
+        inert(server, "project.hosted", ProjectHosted(host_id="lab1", previous_host="lab1"), human)
+        inert(server, "project.hosted", ProjectHosted(host_id="lab2"), human)
     assert current_host(project) == "lab1"
 
 
@@ -274,6 +275,11 @@ def test_hosting_survives_a_rebuild(project: Project) -> None:
 # --- `host-mismatch` ---
 
 
+def append_goal(project: Project) -> None:
+    with project.writing():
+        project.record([goal(project)])
+
+
 def commit_as(root: Path, author: str) -> None:
     identity = ["-c", f"user.name={author}", "-c", "user.email=a@x"]
     subprocess.run(["git", "-C", str(root), "add", "projects"], check=True)
@@ -295,7 +301,7 @@ def repo_server(settings: Settings, project: Project, clock: FixedClock) -> Proj
 
 
 def test_host_mismatch_flags_foreign_commit(repo_server: Project) -> None:
-    repo_server.record([goal(repo_server)])
+    append_goal(repo_server)
     commit_as(repo_server.settings.root, "someone-else")
     report = check(repo_server)
     hits = [f for f in report.findings if f.code == "host-mismatch"]
@@ -304,13 +310,13 @@ def test_host_mismatch_flags_foreign_commit(repo_server: Project) -> None:
 
 
 def test_the_hosts_own_commit_is_clean(repo_server: Project) -> None:
-    repo_server.record([goal(repo_server)])
+    append_goal(repo_server)
     commit_as(repo_server.settings.root, "factory-server lab1")
     assert "host-mismatch" not in codes(repo_server)
 
 
 def test_an_uncommitted_file_is_not_flagged(repo_server: Project) -> None:
-    repo_server.record([goal(repo_server)])
+    append_goal(repo_server)
     assert "host-mismatch" not in codes(repo_server)
 
 
@@ -325,7 +331,7 @@ def test_a_file_from_before_hosting_is_not_flagged(
 
 
 def test_each_period_answers_to_its_own_host(repo_server: Project, clock: FixedClock) -> None:
-    repo_server.record([goal(repo_server)])
+    append_goal(repo_server)
     commit_as(repo_server.settings.root, "factory-server lab1")
     host_project(repo_server, repo_server.human_actor(), "lab2")
     commit_as(repo_server.settings.root, "factory-server lab1")

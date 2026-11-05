@@ -151,3 +151,9 @@ Minor review findings parked during the v1 build, to address when iterating from
 - W-B: `factory draft release` prints only that the draft was released, not the record (counts, audit, log position).
 - deploy-A: `Index.exclusive()` entered under a shared `connect()` hold is not outermost, so it neither syncs nor floors; no service does this today, nothing pins it (index/index.py).
 - deploy-A: no CLI hosts a project yet; `factory project host` is deploy-C Task 4, so `host_project` is reachable only from code until then.
+- deploy-A: `_reporting_errors` catches validation and not-found errors only, so `OrderingError` or another `FactoryError` reaches the CLI user as a traceback (cli/main.py).
+- deploy-A: `factory commit` now uses plumbing, so no git hook runs on it; decide whether a server wants one (services/commit.py _commit).
+- deploy-A: `_is_text` reads a whole blob with no size cap, and decision 39 says small text blobs (services/commit.py).
+- deploy-A: `server_check` details: a `.gitignore` entry is matched as an exact line, a root the mount table cannot place is an issue, `.mining/` is not yet listed (services/server_check.py).
+- deploy-A: `host_project` runs from any machine for a first hosting, so a laptop can name `lab1` and lock itself out (services/hosting.py).
+- deploy-A: `host-mismatch` trusts `%an`, which any committer can set; only a signature check would prove the author (services/hosting.py).

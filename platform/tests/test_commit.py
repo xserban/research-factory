@@ -11,7 +11,7 @@ from factory.clock import FixedClock
 from factory.config import Settings
 from factory.errors import FactoryValidationError
 from factory.model.question import GoalStated
-from factory.services.commit import commit_hosted, is_private
+from factory.services.commit import PUSH_REMOTES_FILE, commit_hosted, is_private
 from factory.services.context import Project, open_project
 from factory.services.hosting import host_project
 from factory.services.project import init_project
@@ -45,6 +45,11 @@ def hosted(server: Settings) -> Project:
     project = init_project(server, "demo", "pilot", session=SESSION, clock=FixedClock(T0))
     host_project(project, project.human_actor(), "lab1")
     return project
+
+
+def allow(root: Path, url: str) -> None:
+    (root / ".server").mkdir(exist_ok=True)
+    (root / PUSH_REMOTES_FILE).write_text(f"# private remotes\n{url}\n")
 
 
 def tracked(root: Path) -> set[str]:
@@ -155,12 +160,15 @@ def test_a_project_hosted_elsewhere_or_unhosted_is_left_alone(server: Settings) 
     assert plain.paths.events_dir.is_dir()
 
 
-def test_a_deleted_event_file_is_never_committed(server: Settings, hosted: Project) -> None:
+def test_a_deleted_event_file_refuses_the_job(server: Settings, hosted: Project) -> None:
     commit_hosted(server, sign=False, push=None)
     victim = next(hosted.paths.events_dir.rglob("*.jsonl"))
     victim.unlink()
-    report = commit_hosted(server, sign=False, push=None)
-    assert report.commit is None
+    before = commits(server.root)
+    with pytest.raises(FactoryValidationError) as caught:
+        commit_hosted(server, sign=False, push=None)
+    assert caught.value.issues[0].field == "history"
+    assert commits(server.root) == before
     assert victim.relative_to(server.root).as_posix() in tracked(server.root)
 
 
@@ -201,6 +209,7 @@ def test_push_reaches_the_remote(
     remote = tmp_path_factory.mktemp("remote")
     subprocess.run(["git", "init", "-q", "--bare", str(remote)], check=True)
     git(server.root, "remote", "add", "origin", str(remote))
+    allow(server.root, str(remote))
     report = commit_hosted(server, sign=False, push="origin")
     assert report.pushed is True
     head = git(server.root, "rev-parse", "HEAD").strip()
@@ -208,7 +217,10 @@ def test_push_reaches_the_remote(
 
 
 def test_a_failed_push_keeps_the_commit(server: Settings, hosted: Project) -> None:
-    report = commit_hosted(server, sign=False, push="nowhere")
+    missing = str(server.root / "no-such-remote")
+    git(server.root, "remote", "add", "origin", missing)
+    allow(server.root, missing)
+    report = commit_hosted(server, sign=False, push="origin")
     assert report.commit is not None and report.pushed is False
 
 
@@ -243,7 +255,7 @@ def test_a_new_event_is_committed_by_the_next_run(server: Settings, hosted: Proj
 def test_cli_commit_prints_the_report(server: Settings, hosted: Project) -> None:
     result = CliRunner().invoke(
         app,
-        ["--root", str(server.root), "commit"],
+        ["--root", str(server.root), "commit", "--no-sign"],
         env={"FACTORY_HOST_ID": "lab1", "FACTORY_USER": "obd"},
     )
     assert result.exit_code == 0, result.output
@@ -256,7 +268,7 @@ def test_cli_commit_reports_a_refusal(server: Settings, hosted: Project) -> None
     (server.root / "library" / "paper.pdf").write_bytes(b"x")
     result = CliRunner().invoke(
         app,
-        ["--root", str(server.root), "commit"],
+        ["--root", str(server.root), "commit", "--no-sign"],
         env={"FACTORY_HOST_ID": "lab1", "FACTORY_USER": "obd"},
     )
     assert result.exit_code == 1
@@ -265,7 +277,7 @@ def test_cli_commit_reports_a_refusal(server: Settings, hosted: Project) -> None
 def test_cli_commit_exits_nonzero_when_the_push_fails(server: Settings, hosted: Project) -> None:
     result = CliRunner().invoke(
         app,
-        ["--root", str(server.root), "commit", "--push", "nowhere"],
+        ["--root", str(server.root), "commit", "--no-sign", "--push", "nowhere"],
         env={"FACTORY_HOST_ID": "lab1", "FACTORY_USER": "obd"},
     )
     assert result.exit_code == 1
