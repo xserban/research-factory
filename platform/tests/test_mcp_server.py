@@ -123,6 +123,7 @@ async def test_project_status_tool(settings: Settings, project: Project, clock: 
             "view_coverage",
             "view_timeline",
             "view_horizon",
+            "briefing_get",
             "writing_outline",
             "draft_create",
             "draft_next",

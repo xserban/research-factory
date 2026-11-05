@@ -1,5 +1,6 @@
 """The MCP server: one session per process. Tools parse input, call a service and format output."""
 
+import json
 import re
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Annotated, Literal, TypeVar, cast
@@ -58,6 +59,7 @@ from factory.regions.rules import MemberType, RuleSet
 from factory.services import agreement as agreement_service
 from factory.services import audit as audit_service
 from factory.services import benchmark_ledger as ledger_service
+from factory.services import briefing as briefing_service
 from factory.services import calibration as calibration_service
 from factory.services import cards as cards_service
 from factory.services import chase as chase_service
@@ -3013,6 +3015,25 @@ def build_server(
             return _withheld(opened, result.model_dump(mode="json"), include_work_ids=False)
 
         return _reply(project, build, include_work_ids=False)
+
+    @server.tool()
+    def briefing_get(project: str) -> dict[str, JsonValue]:
+        """The context pack for a new agent session: question, protocol, gates passed or not with
+        dates, corpus counts, the reading path, comparability groups with work counts, open issues
+        by code, pending human decisions by count, and released drafts. At most 40000 characters;
+        `truncated` states what was cut. It holds no rate, kappa, label or seed. Before a screening
+        pass has opened the reading path, groups and drafts are empty. The pack is stored and
+        `briefing.served` records that this session received it; the same pack is recorded once.
+        Refused to a session that has joined a pass."""
+
+        def serve() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            blob, pack = briefing_service.serve_pack(opened, session=session)
+            data: dict[str, JsonValue] = {"blob": blob, "pack": json.loads(pack)}
+            return _withheld(opened, data, include_work_ids=False)
+
+        return _reply(project, serve, include_work_ids=False)
 
     # --- Writing from verified material (slice 7b, plan W-A) ---------------------------------
     # Five tools. The outline holds ids only; a slot task shows the verified quotes of its

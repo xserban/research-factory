@@ -60,6 +60,7 @@ from factory.regions.rules import MemberType, RuleSet
 from factory.services import agreement as agreement_service
 from factory.services import audit as audit_service
 from factory.services import benchmark_ledger as ledger_service
+from factory.services import briefing as briefing_service
 from factory.services import calibration as calibration_service
 from factory.services import cards as cards_service
 from factory.services import chase as chase_service
@@ -146,6 +147,7 @@ from factory.services.xrun_accounting import baseline_verdicts
 from factory.sources.fulltext.registry import default_routes
 from factory.sources.registry import default_sources
 from factory.views import render as views_render
+from factory.views.briefing_render import briefing_markdown
 
 
 class StageChoice(StrEnum):
@@ -709,6 +711,35 @@ def gate_audit_report_cmd(
         f"error rate {rate} (ceiling {verdict.ceiling:.2f}, above ceiling: "
         f"{'yes' if verdict.above else 'no'}, enforced: {'yes' if verdict.enforced else 'no'})"
     )
+
+
+@app.command("briefing")
+def briefing_cmd(
+    ctx: typer.Context,
+    agent: Annotated[
+        bool, typer.Option("--agent", help="Print the agent context pack; records nothing.")
+    ] = False,
+    format_: Annotated[
+        str | None, typer.Option("--format", help="md or json; --agent is json only.")
+    ] = None,
+    out: Annotated[Path | None, typer.Option("--out", help="Write to this file.")] = None,
+) -> None:
+    """The project briefing, complete (the researcher's variant): a reading path for a person
+    joining mid-way. Writes no event; only the MCP tool `briefing_get` records a served pack."""
+    state = _state(ctx)
+    with _reporting_errors():
+        chosen = format_ or ("json" if agent else "md")
+        if chosen not in ("md", "json") or (agent and chosen != "json"):
+            raise FactoryValidationError(
+                [ValidationIssue("format", "must be md or json; --agent is json only")]
+            )
+        project = _resolve_project(state)
+        if agent:
+            body = briefing_service.agent_pack(project)
+        else:
+            built = briefing_service.build_briefing(project)
+            body = views_service.to_json(built) if chosen == "json" else briefing_markdown(built)
+        _emit_view(body, out)
 
 
 @app.command("portfolio")
