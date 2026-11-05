@@ -6,9 +6,10 @@ module that writes `draft.verified`.
 Invariants:
 - A unit is one live `claim` or `synthesis` sentence with no verdict whose supports all still
   resolve; a stale sentence is for the writer to revise, its spans are no longer served.
-- A unit shows the sentence, the preceding sentence of its section as context, and what each
-  support says: no writer identity, flag, outline or writer's input (R-51). It is the verifier's
-  `input_blob`, and the verdict's substrings are checked against it.
+- A unit shows the sentence, the preceding sentence of its section as context, what each support
+  says and the flags the platform computed (ruling 11): no writer identity, outline or writer's
+  input (R-51), as a flag is not the writer's reasoning. It is the verifier's `input_blob`, and the
+  verdict's substrings are checked against it.
 - Everyone who recorded a sentence of the draft is refused, at the serving and at the recording; a
   verifier cannot write in the draft (`drafts.write_sentences`). In `systematic` a verifier with
   the writer's model is refused; elsewhere the pair is recorded (the verdict row holds the model).
@@ -29,6 +30,7 @@ from factory.index.drafts import CLAIM_BEARING, VERIFY_SKILL, identities, writer
 from factory.model.base import StrictModel
 from factory.model.drafts import (
     SentenceClass,
+    SentenceFlag,
     SentenceVerified,
     SupportSpan,
     Verdict,
@@ -38,7 +40,7 @@ from factory.model.project import RigorMode
 from factory.model.task import DRAFT_VERIFY_TASK_KIND, Task, TaskCompleted, TaskStatus
 from factory.services.call_memo import entering
 from factory.services.context import Project
-from factory.services.drafts import SentenceRow, require_draft, sentence_rows, stale_reason
+from factory.services.drafts import SentenceRow, live_sentences, require_draft, stale_reason
 from factory.services.gates import rigor_mode
 from factory.services.supports import (
     ResolvedSupport,
@@ -64,6 +66,7 @@ class VerifyUnit(StrictModel):
     cls: SentenceClass
     context_previous: str | None
     supports: list[SupportShown]
+    flags: list[SentenceFlag] = Field(default_factory=list)
 
 
 class VerdictInput(StrictModel):
@@ -105,6 +108,7 @@ def _content(
         "text": row.text,
         "cls": row.cls.value,
         "context_previous": previous,
+        "flags": [f.value for f in row.flags],
         "supports": [support_shown(project, r).model_dump(mode="json") for r in resolved],
     }
 
@@ -171,7 +175,7 @@ def verify_next(project: Project, draft_id: str, *, actor: Actor) -> VerifyUnit 
         tasks = _open_tasks(project, draft_id)
         passed_over = False
         previous: tuple[str, str] | None = None
-        for row in sentence_rows(project, draft_id):
+        for row in live_sentences(project, draft_id):
             before = previous[1] if previous and previous[0] == row.section_id else None
             previous = (row.section_id, row.text)
             if row.cls.value not in CLAIM_BEARING or row.sentence_id in verified:

@@ -3235,8 +3235,9 @@ def build_server(
         project: str, draft_id: str, role: str, model: str, skill: str
     ) -> dict[str, JsonValue]:
         """The next sentence of the draft that needs a verdict, as a task leased to this session:
-        `sentence_id`, `text`, `cls`, `context_previous` (the preceding sentence, context only) and
-        `supports`, each with its `ref`, `kind` and `spans`, the only text you judge from. Returns
+        `sentence_id`, `text`, `cls`, `context_previous` (the preceding sentence, context only),
+        `flags` (what the platform computed, a pointer and never a verdict) and `supports`, each
+        with its `ref`, `kind` and `spans`, the only text you judge from. Returns
         `unit: null` when none is left. Pass `rf-verify` as `skill`. Refused to a session that
         wrote a sentence of the draft or joined a pass; in systematic mode, to the writer's
         model."""
