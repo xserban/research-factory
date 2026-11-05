@@ -4,8 +4,8 @@
 included work can be given a document with a bibliography and in-text markers (`with_references`),
 which gives it a current G1 extraction. Body paragraphs of that document:
 
-    s1.p1  We build on linear attention [[5](#b5)] for vision.
-    s1.p2  Unlike softmax attention [[3](#b3)], our module is linear.
+    s1.p1  We build on linear attention [5] for vision.   (quotes see plain text: markers read [5])
+    s1.p2  Unlike softmax attention [3], our module is linear.
     s1.p3  It reaches 82.4% top-1 on ImageNet.
     s1.p4  A limitation is that very long sequences degrade.
     s1.p5  Plain text with no marker.
@@ -54,8 +54,8 @@ BODY = [
     "A limitation is that very long sequences degrade.",
     "Plain text with no marker.",
 ]
-P1 = ("s1.p1", "We build on linear attention [[5](#b5)] for vision.")
-P2 = ("s1.p2", "Unlike softmax attention [[3](#b3)], our module is linear.")
+P1 = ("s1.p1", "We build on linear attention [5] for vision.")
+P2 = ("s1.p2", "Unlike softmax attention [3], our module is linear.")
 P3 = ("s1.p3", "It reaches 82.4% top-1 on ImageNet.")
 P4 = ("s1.p4", "A limitation is that very long sequences degrade.")
 P5 = ("s1.p5", "Plain text with no marker.")
