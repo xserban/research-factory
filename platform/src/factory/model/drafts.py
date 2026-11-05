@@ -30,6 +30,7 @@ from factory.model.identity import BLOB_REF_RE, ULID_RE
 from factory.model.references import REX_ID_RE
 from factory.model.screening import Channel
 from factory.model.task import TASK_ID_RE
+from factory.modules.contract import PolicyKind
 
 DRAFT_ID_RE = rf"^drf_{ULID_RE}$"
 SENTENCE_ID_RE = rf"^snt_{ULID_RE}$"
@@ -350,3 +351,15 @@ class DraftAuditReport(StrictModel):
     rate: float | None
     above_ceiling: bool | None
     outdated: bool = False
+
+
+class DraftReleased(StrictModel):
+    """A release: the log position it read, the policy of `writing.release` in force, the counts
+    by status, the audit as the researcher reads it, and who released."""
+
+    draft_id: str = Field(pattern=DRAFT_ID_RE)
+    as_of: str = Field(min_length=1)
+    policy: PolicyKind
+    counts: dict[str, int]
+    audit: DraftAuditReport
+    released_by: str = Field(min_length=1)

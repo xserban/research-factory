@@ -4,8 +4,8 @@
 `draft_sentences` every recorded sentence with its author, session and model, `superseded_by` and
 `withdrawn`; `sentence_supports`, `sentence_flags` and `sentence_stats` the supports, the stored
 flags and the stat values read at write time; `sentence_verdicts` the verdicts, `draft_audits` and
-`draft_audit_items` the samples and their labels (plan W-B). Status, staleness and eligibility are
-computed on read, never stored.
+`draft_audit_items` the samples and their labels, `draft_releases` the releases (plan W-B). Status,
+staleness and eligibility are computed on read, never stored.
 
 An act is folded only when it is consistent with what the services enforce; an event that fails
 this stays in the log and changes nothing (no service writes one, so it was written by hand):
@@ -25,6 +25,12 @@ this stays in the log and changes nothing (no service writes one, so it was writ
   substrings of ruling 3 in it (`writing.verdicts`).
 - An audit sample is folded from the system actor when one is due, for the very verdicts the seed
   draws from the population at that point of the log; a label from a human, for a sampled verdict.
+- A release is folded from a human or an agent named in `released_by`, for a draft with live
+  sentences that `counts` adds up to, under the `writing.release` policy in force at that point of
+  the log and the actor it allows. Outside `exploratory` the audit must be drawn after the last
+  verdict and labelled, and `counts` show no stale sentence; in `systematic` the actor is the
+  human reviewer of record, `counts` show nothing flagged or unchecked, and the labels are under
+  the ceiling. Whether a sentence is really stale is computed on read and cannot be known here.
 - A withdrawal is folded for a live sentence; a reorder only when `order` is a permutation of the
   section's live sentences.
 
@@ -34,6 +40,7 @@ Rows are first-write-wins per id.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 
 from sqlalchemy import Column, Index, Integer, MetaData, String, Table, select, text, update
@@ -45,14 +52,18 @@ from factory.errors import FactoryError
 from factory.events.blobs import BlobStore
 from factory.events.envelope import Actor, Event
 from factory.extraction.numbers import numbers_in
+from factory.index.hypotheses import policy_of
 from factory.index.projection import Handler
 from factory.model.drafts import (
     DRAFT_AUDIT_FRACTION,
     DRAFT_AUDIT_MINIMUM,
+    DRAFT_VERIFY_ERROR_CEILING,
+    AuditLabel,
     DraftAuditDrawn,
     DraftAudited,
     DraftCreated,
     DraftOutlineRepinned,
+    DraftReleased,
     DraftReordered,
     OutlineSection,
     SentenceClass,
@@ -64,6 +75,8 @@ from factory.model.drafts import (
     outline_id_of,
 )
 from factory.model.project import RigorMode
+from factory.model.protocol import ProtocolSpec, ReviewerRole
+from factory.modules.contract import PolicyKind
 from factory.quality.stats import audit_size, draw_uniform
 from factory.writing.checks import citation_matches, is_single_sentence
 from factory.writing.verdicts import verdict_issues
@@ -73,6 +86,7 @@ ORDER_STEP = 10
 VERIFY_SKILL = "rf-verify@"
 """An agent's verdict is written under this skill (plan W-B, Global Constraints)."""
 CLAIM_BEARING = (SentenceClass.CLAIM.value, SentenceClass.SYNTHESIS.value)
+RELEASE_GATE = "writing.release"
 
 
 @dataclass(frozen=True)
@@ -86,6 +100,7 @@ class DraftTables:
     verdicts: Table
     audits: Table
     audit_items: Table
+    releases: Table
     protocols: Table
     project: Table
 
@@ -186,6 +201,18 @@ def draft_tables(metadata: MetaData, protocols: Table, project: Table) -> DraftT
         Column("channel", String),
         Column("event_id", String),
     )
+    releases = Table(
+        "draft_releases",
+        metadata,
+        Column("event_id", String, primary_key=True),
+        Column("draft_id", String, nullable=False),
+        Column("as_of", String, nullable=False),
+        Column("policy", String, nullable=False),
+        Column("released_by", String, nullable=False),
+        Column("actor_kind", String, nullable=False),
+        Column("counts", String, nullable=False),
+        Index("ix_draft_releases_draft", "draft_id"),
+    )
     return DraftTables(
         drafts,
         sections,
@@ -196,6 +223,7 @@ def draft_tables(metadata: MetaData, protocols: Table, project: Table) -> DraftT
         verdicts,
         audits,
         audit_items,
+        releases,
         protocols,
         project,
     )
@@ -211,6 +239,7 @@ def draft_handlers(t: DraftTables, blobs: BlobStore | None = None) -> dict[str, 
         "draft.verified": _total(_verified(t, blobs)),
         "draft.audit_drawn": _total(_audit_drawn(t)),
         "draft.audited": _total(_audited(t)),
+        "draft.released": _total(_released(t)),
     }
 
 
@@ -596,6 +625,80 @@ def _audited(t: DraftTables) -> Handler:
         )
 
     return audited
+
+
+def _labels(conn: Connection, draft_id: str) -> list[str | None]:
+    rows = conn.execute(
+        text(
+            "SELECT i.label FROM draft_audit_items i JOIN draft_audits a "
+            "ON a.audit_id = i.audit_id WHERE a.draft_id = :d"
+        ),
+        {"d": draft_id},
+    ).all()
+    return [None if r[0] is None else str(r[0]) for r in rows]
+
+
+def _is_reviewer_of_record(conn: Connection, t: DraftTables, actor: Actor) -> bool:
+    row = conn.execute(
+        select(t.protocols.c.spec).order_by(t.protocols.c.event_id.desc()).limit(1)
+    ).first()
+    if row is None or actor.kind != "human":
+        return False
+    reviewers = ProtocolSpec.model_validate_json(str(row[0])).screening.reviewers
+    return any(r.role is ReviewerRole.REVIEWER_OF_RECORD and r.actor == actor.id for r in reviewers)
+
+
+def _release_holds(conn: Connection, t: DraftTables, event: Event, p: DraftReleased) -> bool:
+    """What a release must satisfy that the log alone can tell (see the module docstring)."""
+    live = conn.execute(
+        text(
+            "SELECT COUNT(*) FROM draft_sentences WHERE draft_id = :d "
+            "AND superseded_by IS NULL AND withdrawn = 0"
+        ),
+        {"d": p.draft_id},
+    ).scalar_one()
+    if not live or sum(p.counts.values()) != live or not p.as_of < event.id:
+        return False
+    policy = policy_of(conn, t.protocols, t.project, RELEASE_GATE)
+    if p.policy is not policy or (policy is PolicyKind.HUMAN and event.actor.kind != "human"):
+        return False
+    mode = _mode(conn, t)
+    if mode is RigorMode.EXPLORATORY:
+        return True
+    labels = _labels(conn, p.draft_id)
+    if not labels or None in labels or audit_due(conn, p.draft_id) or p.counts.get("stale", 0):
+        return False
+    if mode is RigorMode.PILOT:
+        return True
+    wrong = sum(1 for x in labels if x == AuditLabel.INCORRECT.value)
+    return (
+        _is_reviewer_of_record(conn, t, event.actor)
+        and not p.counts.get("flagged", 0)
+        and not p.counts.get("unchecked", 0)
+        and wrong / len(labels) <= DRAFT_VERIFY_ERROR_CEILING
+    )
+
+
+def _released(t: DraftTables) -> Handler:
+    def released(conn: Connection, event: Event) -> None:
+        p = DraftReleased.model_validate(event.payload)
+        if not _writes(event) or p.released_by != event.actor.id:
+            return
+        if not _release_holds(conn, t, event, p):
+            return
+        conn.execute(
+            t.releases.insert().values(
+                event_id=event.id,
+                draft_id=p.draft_id,
+                as_of=p.as_of,
+                policy=p.policy.value,
+                released_by=p.released_by,
+                actor_kind=event.actor.kind,
+                counts=json.dumps(p.counts, sort_keys=True),
+            )
+        )
+
+    return released
 
 
 def _withdrawn(t: DraftTables) -> Handler:

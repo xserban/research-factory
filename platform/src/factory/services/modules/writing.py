@@ -2,8 +2,9 @@
 plan W-A).
 
 Declaration only (slice M, decision 55); behaviour stays in the services. Drafting is a proposal an
-agent or a human makes sentence by sentence; its quality regime (an independent verifier pass) and
-its release gate belong to plan W-B and are declared there."""
+agent or a human makes sentence by sentence; its quality regime is one independent verifier pass
+and a human audit of a sample of positive verdicts, and a draft leaves through the gate
+`writing.release`, whose exploratory and pilot presets are in `modules/presets.py` (plan W-B)."""
 
 from factory.modules.contract import (
     EventFamily,
@@ -12,6 +13,7 @@ from factory.modules.contract import (
     ModuleKind,
     ModuleSpec,
     PolicyKind,
+    QualityRegime,
 )
 from factory.services.modules.base import RuleModule
 from factory.services.modules.task_kinds import default_task_kinds
@@ -25,6 +27,7 @@ SPEC = ModuleSpec(
             "draft.audited",
             "draft.created",
             "draft.outline_repinned",
+            "draft.released",
             "draft.reordered",
             "draft.sentence_recorded",
             "draft.sentence_withdrawn",
@@ -33,6 +36,7 @@ SPEC = ModuleSpec(
         tables=(
             "draft_audit_items",
             "draft_audits",
+            "draft_releases",
             "draft_sections",
             "draft_sentences",
             "drafts",
@@ -43,7 +47,22 @@ SPEC = ModuleSpec(
         ),
     ),
     task_kinds=default_task_kinds().kinds_of("writing"),
+    regime=QualityRegime(
+        1,
+        "session-and-model",
+        "sentence",
+        "none",
+        "gate-sample",
+        ("support-eligibility", "stat-value"),
+    ),
     gates=(
+        GateSpec(
+            "writing.release",
+            GateKind.DECISION,
+            ("draft.released",),
+            PolicyKind.AGENT,
+            ("slice 7b ruling 13", "R-39", "R-130"),
+        ),
         GateSpec(
             "writing.audit_label",
             GateKind.DECISION,

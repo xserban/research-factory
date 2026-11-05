@@ -37,10 +37,12 @@ PRESETS: Mapping[RigorMode, Mapping[str, GatePolicy]] = {
         "hypotheses.register": AGENT,
         "experiments.freeze_unlock": AGENT,
         "mine.resolve": LINK_AUDIT,
+        "writing.release": AGENT,
     },
     RigorMode.PILOT: {
         "reference.link_confirm": LINK_AUDIT,
         "import.resolution_confirm": LINK_AUDIT,
+        "writing.release": AGENT,
     },
     RigorMode.SYSTEMATIC: {},
 }

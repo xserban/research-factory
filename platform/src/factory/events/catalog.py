@@ -22,6 +22,7 @@ from factory.model.drafts import (
     DraftAudited,
     DraftCreated,
     DraftOutlineRepinned,
+    DraftReleased,
     DraftReordered,
     SentenceRecorded,
     SentenceVerified,
@@ -347,4 +348,5 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("draft.verified", SentenceVerified, 1))
     catalog.register(EventType("draft.audit_drawn", DraftAuditDrawn, 1))
     catalog.register(EventType("draft.audited", DraftAudited, 1))
+    catalog.register(EventType("draft.released", DraftReleased, 1))
     return catalog
