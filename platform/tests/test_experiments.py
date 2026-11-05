@@ -406,3 +406,18 @@ def test_a_baseline_verdict_with_a_non_numeric_value_is_skipped(
     inject(project, project.events.make("baseline.evaluated", bad, project.system_actor()))
     project.index.rebuild()
     assert experiment_rows(project) == before
+
+
+def test_a_superseding_design_keeps_the_earlier_designers(explore_project: Project) -> None:
+    # review I7 (R-51): whoever drafted the first design cannot pass the gate for the second
+    project = explore_project
+    hid, _ = draft_hypothesis(project, DRAFTER, make_spec(metric=METRIC))
+    first, _ = design_experiment(project, DRAFTER, design(hid, baselines=[]))
+    second, _ = design_experiment(
+        project, OTHER, design(hid, baselines=[], notes="x"), supersedes=first
+    )
+    with pytest.raises(FactoryValidationError) as err:
+        freeze_experiment(project, DRAFTER, second)
+    assert _fields(err) == [("session", "the proposer cannot pass gate experiments.freeze_unlock")]
+    view = experiment_view(project, second)
+    assert view is not None and set(view.designer_sessions) == {DRAFTER.session, OTHER.session}

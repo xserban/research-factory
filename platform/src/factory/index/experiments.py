@@ -269,6 +269,14 @@ def _designed(t: ExperimentTables) -> Handler:
         else:
             if [str(r[0]) for r in live] != [p.supersedes] or live[0][1] is not None:
                 return
+        designers = {event.actor.session}
+        if p.supersedes is not None:  # whoever drafted the replaced design still proposed this one
+            earlier = conn.execute(
+                select(t.experiments.c.designer_sessions_json).where(
+                    t.experiments.c.experiment_id == p.supersedes
+                )
+            ).scalar_one()
+            designers |= _sessions(earlier)
         inserted = conn.execute(
             sqlite_insert(t.experiments)
             .values(
@@ -276,7 +284,7 @@ def _designed(t: ExperimentTables) -> Handler:
                 hypothesis=p.design.hypothesis,
                 e_version=p.e_version,
                 design_json=canonical_json(p.design.model_dump(mode="json")).decode(),
-                designer_sessions_json=canonical_json([event.actor.session]).decode(),
+                designer_sessions_json=canonical_json(list(sorted(designers))).decode(),
                 supersedes=p.supersedes,
                 event_id=event.id,
             )
