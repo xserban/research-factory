@@ -64,13 +64,14 @@ _GAP_ROW_KEYS = frozenset({"rows_axis", "columns_axis", "filters", "row", "colum
 
 PriorSource = Callable[[Project, Collection[str]], Iterable[str]]
 PRIOR_SOURCES: list[PriorSource] = []
-"""Providers of prior-failure ids beyond leads: hypotheses, and the failed-directions registry
-once plan XP-B registers its rows. Each takes the lead's keys and returns the ids that share at
-least one."""
+"""Providers of prior-failure ids beyond leads: the failed-directions registry, which
+`services.directions` registers at import (`trigger_issues` and `prior_for` import it where they
+read the list, so a surface that never imported it still sees the registry). Each takes the
+lead's keys and returns the ids that share at least one."""
 
 DirectionExists = Callable[[Project, str], bool]
 DIRECTION_RESOLVERS: list[DirectionExists] = []
-"""Resolvers of `dir_` triggers; empty until plan XP-B registers the closed directions."""
+"""Resolvers of `dir_` triggers; `services.directions` registers the closed directions."""
 
 
 class LeadView(StrictModel):
@@ -184,6 +185,8 @@ def _gap_current(project: Project, gap_key: str, stored: dict[str, JsonValue]) -
 
 def trigger_issues(project: Project, triggers: Sequence[Trigger]) -> list[ValidationIssue]:
     """Why a trigger cannot be recorded; empty when every one resolves (see module invariants)."""
+    import factory.services.directions  # noqa: F401  (fills DIRECTION_RESOLVERS; imports this)
+
     issues: list[ValidationIssue] = []
     by_trace = {i: t for i, t in enumerate(triggers) if t.kind in _TRACE_KINDS}
     dangling = set(dangling_refs(project, [t.ref for t in by_trace.values()]))
@@ -256,6 +259,8 @@ def prior_for(
 ) -> tuple[list[str], int]:
     """Ids of the failures and earlier work sharing at least one key: parked and discarded leads,
     then each registered provider's ids; sorted, capped at `PRIOR_CAP`, with the total count."""
+    import factory.services.directions  # noqa: F401  (fills PRIOR_SOURCES; imports this)
+
     project.index.sync()
     found: set[str] = set()
     if keys:

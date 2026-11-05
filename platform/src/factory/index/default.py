@@ -5,6 +5,7 @@ from factory.index.cards import card_handlers, card_tables
 from factory.index.chase import chase_handlers, chase_tables
 from factory.index.conclusions import conclusion_handlers, conclusion_tables
 from factory.index.dedup import dedup_handlers, dedup_tables
+from factory.index.directions import chain_derived, direction_handlers, direction_tables
 from factory.index.document import document_handlers, document_tables
 from factory.index.evaluation import evaluation_handlers, evaluation_tables
 from factory.index.experiments import experiment_handlers, experiment_tables
@@ -82,6 +83,7 @@ def default_projection(blobs: BlobStore | None = None) -> Projection:
         metadata, protocol.protocols, project, hypotheses.hypotheses, hypotheses.registrations
     )
     evaluations = evaluation_tables(metadata)
+    directions = direction_tables(metadata)
     handlers: dict[str, Handler] = {
         "project.created": project_created_handler(project),
         **task_handlers(tasks),
@@ -115,7 +117,10 @@ def default_projection(blobs: BlobStore | None = None) -> Projection:
         **label_handlers(labels),
         **experiment_handlers(experiments),
         **evaluation_handlers(evaluations),
+        **direction_handlers(directions),
     }
+    # A direction fails in the event that decides it: derived after that event's own fold.
+    chain_derived(handlers, directions)
     # The graph projection reads the tables the other handlers of the same event just folded.
     for event_type, handler in graph_handlers().items():
         handlers[event_type] = chain(handlers[event_type], handler)
