@@ -32,9 +32,11 @@ from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
 from factory.model.base import StrictModel
 from factory.model.extraction import (
+    CONTRIBUTION_SCOPE_NAME,
     AuditItemRef,
     ExtractionAuditLabelled,
     ExtractionAuditSampled,
+    Scope,
 )
 from factory.model.project import RigorMode
 from factory.model.screening import Channel
@@ -100,11 +102,23 @@ def _sort_key(item: AuditItemRef) -> tuple[str, str, str]:
 
 
 def _population(project: Project) -> list[tuple[AuditItemRef, str]]:
+    """The agreed values of the evidence scope (see `_scoped_population`)."""
+    return _values(project, Scope.EVIDENCE)
+
+
+def _scoped_population(project: Project, scope: Scope) -> list[tuple[AuditItemRef, str]]:
+    """The agreed values of `scope`. Evidence goes through `_population`, the seam tests patch."""
+    return _population(project) if scope is Scope.EVIDENCE else _values(project, scope)
+
+
+def _values(project: Project, scope: Scope) -> list[tuple[AuditItemRef, str]]:
     """The agreed values with the extraction each came from, sorted. Single-extraction rows are
-    not audited here; a field a human dropped (`neither`) is not a value."""
+    not audited here; a field a human dropped (`neither`) is not a value. Every field of a
+    contribution row is a value, `item_kind` and `absent_kind` too, so a not-stated item is
+    audited."""
     out = [
         (AuditItemRef(work_id=row.work_id, row_key=row.row_key, field=name), f.extraction_id)
-        for row in final_rows(project)
+        for row in final_rows(project, scope=scope)
         if row.status in ("agreed", "resolved")
         for name, f in row.fields.items()
     ]
@@ -122,21 +136,26 @@ def _draw(items: Sequence[AuditItemRef], size: int, seed: int) -> list[AuditItem
     return sorted(random.Random(seed).sample(sorted(items, key=_sort_key), size), key=_sort_key)
 
 
-def agreed_values(project: Project) -> list[AuditItemRef]:
-    """The agreed or resolved field values of aligned dual rows, sorted. Read-only."""
+def agreed_values(project: Project, *, scope: Scope = Scope.EVIDENCE) -> list[AuditItemRef]:
+    """The agreed or resolved field values of aligned dual rows of `scope`, sorted. Read-only."""
     project.index.sync()
-    return [item for item, _ in _population(project)]
+    return [item for item, _ in _scoped_population(project, scope)]
 
 
 def extraction_audit_sample(
-    project: Project, actor: Actor, *, random_seed: int | None = None
+    project: Project,
+    actor: Actor,
+    *,
+    random_seed: int | None = None,
+    scope: Scope = Scope.EVIDENCE,
 ) -> ExtractionAuditSampled:
     """Draw and record an audit sample of the agreed values; return the event payload.
 
     Refused, with nothing written: for an actor that is not human (`actor`); a seed outside
     0..2**32-1 (`random_seed`); the refusals of `extraction_agreement` (a session that extracts,
     unfinished or unopened passes, a missing schema); an unresolved disagreement (`passes`); no
-    agreed value (`passes`); an audit of the current agreed set already open (`passes`).
+    agreed value (`passes`); an audit of the scope's current agreed set already open (`passes`).
+    The event of a contribution audit carries `pack: contribution`.
     """
     seed = secrets.randbits(32) if random_seed is None else random_seed
     with project.index.exclusive():
@@ -148,18 +167,18 @@ def extraction_audit_sample(
             issues.append(ValidationIssue("random_seed", "must be an integer from 0 to 2**32 - 1"))
         if issues:
             raise FactoryValidationError(issues)
-        protocol, schema, _ = require_schema(project)
-        agreement = extraction_agreement(project, actor)
+        protocol, schema, _ = require_schema(project, scope=scope)
+        agreement = extraction_agreement(project, actor, scope=scope)
         if agreement.disagreements:
             raise _refuse(
                 f"{len(agreement.disagreements)} disagreement(s) are unresolved; "
                 "resolve them before the audit"
             )
-        population = _population(project)
+        population = _scoped_population(project, scope)
         if not population:
             raise _refuse("there are no agreed values to audit")
         digest = _digest(population)
-        if _last_digest(project) == digest:
+        if _last_digest(project, scope) == digest:
             raise _refuse("an audit of this agreed set is open; a new one waits for a change to it")
         size = audit_size(len(population), schema.audit_fraction, schema.audit_minimum)
         source = {_sort_key(item): extraction_id for item, extraction_id in population}
@@ -173,6 +192,7 @@ def extraction_audit_sample(
             population=len(population),
             population_digest=digest,
             protocol_id=protocol.protocol_id,
+            pack=_pack_tag(scope),
         )
         project.record([project.events.make("extraction.audit_sampled", payload, actor)])
     return payload
@@ -193,7 +213,8 @@ def _gate(project: Project, actor: Actor, channel: Channel) -> list[ValidationIs
 def audit_evidence(
     project: Project, actor: Actor, audit_id: str, channel: Channel
 ) -> list[AuditEvidence]:
-    """The sampled values of an audit with their cited document elements, sorted. An item whose
+    """The sampled values of an audit with their cited document elements, sorted, from the rows
+    of the audit's scope; a field without an anchor shows `element_text` "". An item whose
     value is no longer in the agreed set, or now comes from another extraction, is left out.
     Gated as `extraction_audit_record`: refused for an agent (`actor`), an MCP relay from a pass
     session (`channel`), an unknown audit (`audit_id`)."""
@@ -203,7 +224,8 @@ def audit_evidence(
         issues.append(ValidationIssue("audit_id", "unknown audit"))
     if issues:
         raise FactoryValidationError(issues)
-    rows = {(r.work_id, r.row_key): r for r in final_rows(project)}
+    scope = _audit_scope(project, audit_id)
+    rows = {(r.work_id, r.row_key): r for r in final_rows(project, scope=scope)}
     manifests: dict[str, dict[str, str]] = {}
     out: list[AuditEvidence] = []
     for item in _items(project, audit_id):
@@ -265,7 +287,7 @@ def extraction_audit_record(
             ]
             if not sampled:
                 issues.append(ValidationIssue("field", "not in this audit sample"))
-            elif _outdated(sampled[0], _current(project)):
+            elif _outdated(sampled[0], _current(project, _audit_scope(project, audit_id))):
                 issues.append(
                     ValidationIssue(
                         "item",
@@ -284,6 +306,7 @@ def extraction_audit_record(
                 correct=correct,
                 note=note,
                 channel=channel,
+                pack=_pack_tag(_audit_scope(project, audit_id)),
             )
         except ValidationError as exc:
             raise FactoryValidationError(
@@ -297,15 +320,21 @@ def extraction_audit_record(
     return event.id
 
 
-def extraction_audit_report(project: Project) -> ExtractionAuditReport | None:
-    """The latest audit's counts and error rate; None when no audit has been sampled. Items not
+def extraction_audit_report(
+    project: Project, *, scope: Scope = Scope.EVIDENCE
+) -> ExtractionAuditReport | None:
+    """The latest audit of `scope`: its counts and error rate; None when it has none. Items not
     yet labelled count in the sample size only. A label on a value whose current extraction
     differs from the sampled one (or that is no longer agreed) is outdated: counted in `outdated`
     and left out of `labelled`, the error rate and `by_group`. Read-only; never raises."""
     project.index.sync()
     with project.index.connect() as conn:
         latest = conn.execute(
-            text("SELECT audit_id FROM extraction_audits ORDER BY audit_id DESC LIMIT 1")
+            text(
+                "SELECT audit_id FROM extraction_audits WHERE scope = :scope "
+                "ORDER BY audit_id DESC LIMIT 1"
+            ),
+            {"scope": scope.value},
         ).one_or_none()
         if latest is None:
             return None
@@ -319,10 +348,10 @@ def extraction_audit_report(project: Project) -> ExtractionAuditReport | None:
             {"a": audit_id},
         ).all()
     try:
-        _, _, pack = require_schema(project)
+        _, _, pack = require_schema(project, scope=scope)
     except FactoryValidationError:
         pack = None
-    current = _current(project)
+    current = _current(project, scope)
     tally: dict[str, list[int]] = {}
     labelled = incorrect = outdated = 0
     for work_id, row_key, name, correct, extraction_id in rows:
@@ -358,23 +387,40 @@ def extraction_audit_report(project: Project) -> ExtractionAuditReport | None:
     )
 
 
-def extraction_audit_outstanding(project: Project) -> bool:
+def extraction_audit_outstanding(project: Project, *, scope: Scope = Scope.EVIDENCE) -> bool:
     """Whether there are agreed values and no audit has sampled the current agreed set. False when
     there is nothing to audit. Read-only; never raises."""
     project.index.sync()
-    population = _population(project)  # final_rows never raises; empty without a schema
+    population = _scoped_population(project, scope)  # never raises; empty without a schema
     if not population:
         return False
-    return _last_digest(project) != _digest(population)
+    return _last_digest(project, scope) != _digest(population)
 
 
 # --- Reading the audit tables ---
 
 
-def _last_digest(project: Project) -> str | None:
+def _pack_tag(scope: Scope) -> str | None:
+    return CONTRIBUTION_SCOPE_NAME if scope is Scope.CONTRIBUTION else None
+
+
+def _audit_scope(project: Project, audit_id: str) -> Scope:
+    """The scope an audit was sampled in (evidence for an audit that is not found)."""
     with project.index.connect() as conn:
         row = conn.execute(
-            text("SELECT population_digest FROM extraction_audits ORDER BY audit_id DESC LIMIT 1")
+            text("SELECT scope FROM extraction_audits WHERE audit_id = :a"), {"a": audit_id}
+        ).one_or_none()
+    return Scope.EVIDENCE if row is None else Scope(str(row[0]))
+
+
+def _last_digest(project: Project, scope: Scope = Scope.EVIDENCE) -> str | None:
+    with project.index.connect() as conn:
+        row = conn.execute(
+            text(
+                "SELECT population_digest FROM extraction_audits WHERE scope = :scope "
+                "ORDER BY audit_id DESC LIMIT 1"
+            ),
+            {"scope": scope.value},
         ).one_or_none()
     return None if row is None else str(row[0])
 
@@ -407,9 +453,11 @@ def _items(project: Project, audit_id: str) -> list[AuditItemRef]:
     ]
 
 
-def _current(project: Project) -> dict[tuple[str, str, str], str]:
-    """The extraction each agreed value currently comes from, by location."""
-    return {_sort_key(item): extraction_id for item, extraction_id in _population(project)}
+def _current(project: Project, scope: Scope = Scope.EVIDENCE) -> dict[tuple[str, str, str], str]:
+    """The extraction each agreed value of `scope` currently comes from, by location."""
+    return {
+        _sort_key(item): extraction_id for item, extraction_id in _scoped_population(project, scope)
+    }
 
 
 def _outdated(item: AuditItemRef, current: Mapping[tuple[str, str, str], str]) -> bool:

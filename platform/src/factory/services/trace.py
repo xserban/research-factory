@@ -679,17 +679,21 @@ class _Walk:
         return _Described(label, str(event_id))
 
     def _extraction(self, ident: str) -> _Described | None:
-        """An extraction row. The label gives its pass and field count, never a value."""
+        """An extraction row. The label gives its pass and field count, never a value; a row of
+        another scope than evidence says so. Rows of every scope are real provenance of their work,
+        so the work, anchor and conversion views list them; only report cells are evidence."""
         rows = self._all(
             "SELECT pass_label, superseded_by, event_id, "
-            "(SELECT COUNT(*) FROM extraction_fields f WHERE f.extraction_id = r.extraction_id) "
-            "FROM extraction_rows r WHERE extraction_id = :e",
+            "(SELECT COUNT(*) FROM extraction_fields f WHERE f.extraction_id = r.extraction_id), "
+            "scope FROM extraction_rows r WHERE extraction_id = :e",
             e=ident,
         )
         if not rows:
             return None
-        pass_label, superseded_by, event_id, fields = rows[0]
+        pass_label, superseded_by, event_id, fields, scope = rows[0]
         label = f"pass {pass_label}, {fields} field(s)"
+        if scope != "evidence":
+            label += f" ({scope})"
         if superseded_by is not None:
             label += " (superseded)"
         return _Described(label, str(event_id))
@@ -716,7 +720,8 @@ class _Walk:
         rows = self._all(
             "SELECT r.work_id, r.event_id FROM extraction_rows r "
             "JOIN extraction_fields f ON f.extraction_id = r.extraction_id "
-            "WHERE r.row_key = :k AND f.field = :f ORDER BY r.event_id LIMIT 1",
+            "WHERE r.row_key = :k AND f.field = :f AND r.scope = 'evidence' "
+            "ORDER BY r.event_id LIMIT 1",
             k=row_key,
             f=field,
         )
@@ -1316,7 +1321,8 @@ class _Walk:
             for e in self._column(
                 "SELECT r.extraction_id FROM extraction_rows r "
                 "JOIN extraction_fields f ON f.extraction_id = r.extraction_id "
-                "WHERE r.row_key = :k AND f.field = :f ORDER BY r.event_id",
+                "WHERE r.row_key = :k AND f.field = :f AND r.scope = 'evidence' "
+                "ORDER BY r.event_id",
                 k=row_key,
                 f=field,
             )
