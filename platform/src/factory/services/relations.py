@@ -92,11 +92,24 @@ def _basis_issues(
     return item, None
 
 
+def known_work(project: Project, work_id: str) -> bool:
+    """Whether `work_id` is a corpus work or the target of a G1 link."""
+    with project.index.connect() as conn:
+        row = conn.execute(
+            text(
+                "SELECT 1 FROM works WHERE work_id = :t "
+                "UNION SELECT 1 FROM reference_links WHERE work_id = :t LIMIT 1"
+            ),
+            {"t": work_id},
+        ).first()
+    return row is not None
+
+
 def _target_known(project: Project, target: str, held: set[str]) -> bool:
     if target in held:
         return False
-    with project.index.connect() as conn:
-        if _IDEA.fullmatch(target):
+    if _IDEA.fullmatch(target):
+        with project.index.connect() as conn:
             row = conn.execute(
                 text(
                     "SELECT 1 FROM ideas WHERE idea_id = :t AND superseded_by IS NULL "
@@ -104,15 +117,8 @@ def _target_known(project: Project, target: str, held: set[str]) -> bool:
                 ),
                 {"t": target},
             ).first()
-            return row is not None
-        row = conn.execute(
-            text(
-                "SELECT 1 FROM works WHERE work_id = :t "
-                "UNION SELECT 1 FROM reference_links WHERE work_id = :t LIMIT 1"
-            ),
-            {"t": target},
-        ).first()
-    return row is not None
+        return row is not None
+    return known_work(project, target)
 
 
 def propose_relation(project: Project, actor: Actor, proposal: RelationProposal) -> ProposeResult:
