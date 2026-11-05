@@ -46,6 +46,7 @@ def project_hosts_table(metadata: MetaData) -> Table:
         Column("event_id", String, primary_key=True),
         Column("host_id", String, nullable=False),
         Column("previous_host", String),
+        Column("hosted_by", String, nullable=False),
     )
 
 
@@ -54,6 +55,20 @@ def latest_host(conn: Connection) -> str | None:
     row = conn.execute(
         text("SELECT host_id FROM project_hosts ORDER BY event_id DESC LIMIT 1")
     ).first()
+    return None if row is None else str(row[0])
+
+
+def latest_hoster(conn: Connection) -> str | None:
+    """The person who wrote the last folded `project.hosted`; None for an unhosted project."""
+    row = conn.execute(
+        text("SELECT hosted_by FROM project_hosts ORDER BY event_id DESC LIMIT 1")
+    ).first()
+    return None if row is None else str(row[0])
+
+
+def project_creator(conn: Connection) -> str | None:
+    """Who wrote the `project.created` that folded; None before it."""
+    row = conn.execute(text("SELECT created_by FROM project LIMIT 1")).first()
     return None if row is None else str(row[0])
 
 
@@ -72,7 +87,10 @@ def project_hosted_handler(table: Table) -> Handler:
             return
         conn.execute(
             insert(table).values(
-                event_id=event.id, host_id=payload.host_id, previous_host=payload.previous_host
+                event_id=event.id,
+                host_id=payload.host_id,
+                previous_host=payload.previous_host,
+                hosted_by=event.actor.id,
             )
         )
 

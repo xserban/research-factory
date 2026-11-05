@@ -549,6 +549,7 @@ def _run_rules(project: Project) -> list[_Hit]:
         _future_dated(project),
         _briefings(project),
         _manuscripts(project),
+        _members(project),
     ]
     flat = [hit for group in groups for hit in group]
     return [replace(hit, seq=seq) for seq, hit in enumerate(flat)]
@@ -719,6 +720,23 @@ def _hosting(project: Project) -> list[_Hit]:
             f"added to git by {f.author}, not by the host ({', '.join(f.expected)})",
         )
         for f in foreign
+    ]
+
+
+def _members(project: Project) -> list[_Hit]:
+    """`member.*` events that changed nothing. The service writes none, so each was written by
+    hand: it stays in the log and is named here."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT id FROM events WHERE type IN ('member.granted', 'member.revoked') "
+                "AND id NOT IN (SELECT event_id FROM member_events) ORDER BY id"
+            )
+        ).all()
+    return [
+        _Hit("member-event-unfolded", (str(row[0]),), "a grant or revoke the fold did not accept")
+        for row in rows
     ]
 
 

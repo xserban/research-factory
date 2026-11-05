@@ -7,8 +7,13 @@ Invariants:
   the log.
 - The first grant names an `owner`: once a grant exists only grants count (plan ruling 2), so any
   other first grant would leave the project with no one able to grant.
+- The first grant comes from a person in their own name, tied to the log: the project's creator,
+  or on a hosted project the person who wrote the `project.hosted` in force. Hosting moves that
+  right, so the creator cannot name the owner of a project someone else hosted.
 - The fold cannot know `Settings.user` or the lab registry, since a rebuild reads this log alone.
   Those two checks (the implicit owner, an active grantee) are the service's.
+- A line written by hand in the name of the entitled person cannot be told from theirs here. It
+  is the host check and the signed history that answer it (slice 5, "Tampering with the log").
 - The last `owner` grant is never revoked (plan ruling 3).
 """
 
@@ -19,6 +24,7 @@ from sqlalchemy import Boolean, Column, MetaData, String, Table, delete, func, i
 from sqlalchemy.engine import Connection
 
 from factory.events.envelope import Actor, Event
+from factory.index.project import latest_host, latest_hoster, project_creator
 from factory.index.projection import Handler
 from factory.model.members import MemberGranted, MemberRevoked, ProjectRole
 
@@ -108,6 +114,14 @@ def is_last_owner(conn: Connection, tables: MemberTables, user: str) -> bool:
     return others == 0
 
 
+def may_first_grant(conn: Connection, actor: Actor) -> bool:
+    """Whether `actor` may write a project's first grant, at this point of the log."""
+    if actor.kind != "human" or actor.id != actor.user:
+        return False
+    entitled = latest_hoster(conn) if latest_host(conn) is not None else project_creator(conn)
+    return actor.id == entitled
+
+
 def _governs(conn: Connection, tables: MemberTables, actor: Actor) -> bool:
     return (
         actor.kind == "human"
@@ -125,7 +139,7 @@ def _granted(tables: MemberTables) -> Handler:
         if any_grant(conn, tables):
             if not _governs(conn, tables, event.actor):
                 return
-        elif event.actor.kind != "human" or payload.role is not ProjectRole.OWNER:
+        elif payload.role is not ProjectRole.OWNER or not may_first_grant(conn, event.actor):
             return
         if payload.role in live_roles(conn, tables, payload.user):
             return

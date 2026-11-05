@@ -9,6 +9,9 @@ Invariants:
   this is the service's check alone.
 - The first grant names an `owner`, and the last `owner` grant is not revoked (plan ruling 3), so
   a project always has someone who can grant.
+- The first grant is the project creator's, or on a hosted project that of the person who hosted
+  it, as the fold requires. A hosted project has no implicit owner, so its way in is
+  `bootstrap_owner`.
 """
 
 from factory.events.envelope import Actor
@@ -61,6 +64,13 @@ def _require_govern(project: Project, actor: Actor, lab: Lab | None) -> None:
     authorize(project, principal, actor.kind, Permission.PROJECT_GOVERN, lab=lab)
 
 
+def _require_lab_admin(project: Project, actor: Actor, lab: Lab) -> None:
+    from factory.services.access import Permission, authorize  # access reads `roles_of` here
+
+    principal = Principal(actor.user, actor.credential, project.principal.channel)
+    authorize(None, principal, actor.kind, Permission.LAB_ADMIN, lab=lab)
+
+
 def _require_active(lab: Lab | None, user: str) -> None:
     if lab is None:
         return
@@ -79,11 +89,35 @@ def grant(project: Project, actor: Actor, user: str, role: ProjectRole, reason: 
         _require_active(lab, user)
         with project.index.connect() as conn:
             first = not member_index.any_grant(conn, MEMBER_TABLES)
+            entitled = member_index.may_first_grant(conn, actor)
             held = member_index.live_roles(conn, MEMBER_TABLES, user)
+        if first and not entitled:
+            raise refuse("permission", "the first grant is the project creator's")
         if first and role is not ProjectRole.OWNER:
             raise refuse("role", "the first grant must name an owner")
         if role in held:
             raise refuse("role", f"{user} already holds {role.value}")
+        project.record([project.events.make("member.granted", payload, actor)])
+
+
+def bootstrap_owner(project: Project, lab: Lab, actor: Actor, user: str, reason: str) -> None:
+    """Name the first owner of a hosted project that has no grant, which nobody could otherwise do.
+    Refused without `lab:admin`, on an unhosted project (`grant` serves it), once any grant has
+    counted, to anyone but the person who hosted the project, and for a user not active in the
+    lab."""
+    payload = payload_of(MemberGranted, user=user, role=ProjectRole.OWNER, reason=reason)
+    with project.writing():
+        _require_lab_admin(project, actor, lab)
+        if not project.is_hosted():
+            raise refuse("project", "not hosted: the first grant is the creator's, through grant")
+        with project.index.connect() as conn:
+            granted = member_index.any_grant(conn, MEMBER_TABLES)
+            entitled = member_index.may_first_grant(conn, actor)
+        if granted:
+            raise refuse("project", "this project has grants: an owner grants through grant")
+        if not entitled:
+            raise refuse("permission", "the first owner is named by the person who hosted it")
+        _require_active(lab, user)
         project.record([project.events.make("member.granted", payload, actor)])
 
 
