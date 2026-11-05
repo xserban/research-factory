@@ -35,6 +35,8 @@ from factory.events.reader import read_all
 from factory.index.chase import admitted_works
 from factory.living.counts import source_counts
 from factory.model.base import StrictModel
+from factory.model.extraction import Scope
+from factory.model.lineage import EdgeStatus, LineageDecision
 from factory.model.notices import NoticeKind, unassessed_notices
 from factory.model.project import RigorMode
 from factory.model.protocol import ProtocolStatus, ScreeningStage
@@ -50,6 +52,11 @@ from factory.services.call_memo import entering
 from factory.services.chase import chase_rounds, forward_chase_rounds
 from factory.services.conclusions import conclusion_diff
 from factory.services.context import Project
+from factory.services.contributions import (
+    contribution_audit_report,
+    contribution_status,
+    live_items,
+)
 from factory.services.dedup import active_merges
 from factory.services.document_read import default_conversion
 from factory.services.evidence_report import evidence_report
@@ -59,6 +66,7 @@ from factory.services.extraction import (
     live_rows,
     pass_config,
     require_schema,
+    scope_population,
     stale_documents,
     stale_extractions,
     unit_states,
@@ -66,6 +74,7 @@ from factory.services.extraction import (
 from factory.services.extraction_agreement import grouped_rows
 from factory.services.extraction_audit import extraction_audit_outstanding, extraction_audit_report
 from factory.services.fulltext_status import fulltext_status
+from factory.services.ideas import list_ideas
 from factory.services.imports import list_imports
 from factory.services.methods import MethodsReport, methods_report
 from factory.services.notices import (
@@ -82,6 +91,7 @@ from factory.services.protocol_rules import (
 )
 from factory.services.reference_resolve import lost_human_decisions
 from factory.services.references import current_extraction, included_works
+from factory.services.relations import RelationView, list_relations
 from factory.services.seeds import SeedRole, _rigor_mode, seed_check
 from factory.services.snowball import recorded_rounds, round_runs
 from factory.services.status_lookup import (
@@ -165,6 +175,17 @@ LEVELS: dict[str, tuple[Severity | None, Severity | None, Severity | None]] = {
     "status-lookup-failed": ("warning", "warning", "warning"),
     "conclusion-changed": ("warning", "warning", "warning"),
     "conclusion-basis-affected": ("warning", "warning", "error"),
+    "contribution-missing-extraction": ("warning", "warning", "error"),
+    "contribution-stale": ("warning", "warning", "warning"),
+    "contribution-schema-missing": (None, "warning", "error"),
+    "contribution-closed-without-items": ("warning", "warning", "warning"),
+    "contribution-error-ceiling": (None, "warning", "error"),
+    "relation-stale": ("warning", "warning", "warning"),
+    "relation-unconfirmed": ("warning", "warning", "warning"),
+    "relation-uncited-base": ("warning", "warning", "warning"),
+    "relation-without-basis": ("error", "error", "error"),
+    "idea-unconfirmed": ("warning", "warning", "warning"),
+    "graph-extraction-missing": ("warning", "warning", "warning"),
 }
 
 _NOTICE_PHRASES: dict[str, str] = {
@@ -240,7 +261,7 @@ _RATE_CODES = {
 """Findings whose message carries a label-derived rate or threshold, and the message an agent
 reads instead (decision 37.14). The finding itself, its code and severity are unchanged."""
 
-_WITHHELD_CODES = frozenset({"extraction-error-high"})
+_WITHHELD_CODES = frozenset({"extraction-error-high", "contribution-error-ceiling"})
 """Findings an agent never reads, because their presence is the extraction audit's ceiling flag
 (decision 52)."""
 
@@ -430,7 +451,194 @@ def _hits(project: Project) -> list[_Hit]:
     hits += _living(project)
     hits += _notices(project, outcomes)
     hits += _conclusions(project)
+    hits += _lineage(project)
     return hits
+
+
+# --- Lineage (slice 3b, plan G2-E) ---
+
+_PAGE = 500
+
+
+def _lineage(project: Project) -> list[_Hit]:
+    """Findings of the contribution items and the lineage graph. Each names works, relations,
+    ideas or audits by identifier and gives counts; none carries a quote, a name or a note.
+    A project that never declares `contribution_schema`, never runs G1 and records no relation or
+    idea has none of them."""
+    hits = _contribution_schema_missing(project)
+    protocol = current_protocol(project)
+    if protocol is None or protocol.spec.contribution_schema is None:
+        return hits + _relation_hits(project)
+    scope = Scope.CONTRIBUTION
+    states = unit_states(project, scope=scope)
+    missing = sorted(
+        {s.work_id for s in states if s.pass_label is PassLabel.A and s.state != "current"}
+    )
+    if missing:
+        hits.append(
+            _Hit(
+                "contribution-missing-extraction",
+                tuple(missing),
+                f"{len(missing)} included work(s) have no current contribution unit",
+            )
+        )
+    not_current = {s.work_id for s in states if s.state != "current"}
+    stale = stale_extractions(project, scope=scope)
+    inside = set(scope_population(project, scope))
+    # A unit read again is current while its old stale rows stay live (nothing supersedes a
+    # stale row), so only a work with a unit not yet current is reported stale.
+    stale_works = sorted(
+        {row.work_id for row in live_rows(project, scope=scope) if row.extraction_id in stale}
+        & inside
+        & not_current
+    )
+    if stale_works:
+        hits.append(
+            _Hit(
+                "contribution-stale",
+                tuple(stale_works),
+                f"{len(stale_works)} work(s) hold contribution items that are stale",
+            )
+        )
+    empty = sorted({u.work_id for u in contribution_status(project).closed_without_items})
+    if empty:
+        hits.append(
+            _Hit(
+                "contribution-closed-without-items",
+                tuple(empty),
+                f"{len(empty)} work(s) have a contribution unit closed with a reason and no "
+                "item; no row exists to audit",
+            )
+        )
+    no_g1 = sorted(
+        {i.work_id for i in live_items(project, include_stale=True)}
+        - {w for w in inside if current_extraction(project, w) is not None}
+    )
+    if no_g1:
+        hits.append(
+            _Hit(
+                "graph-extraction-missing",
+                tuple(no_g1),
+                f"{len(no_g1)} work(s) have contribution items and no current reference extraction",
+            )
+        )
+    audit = contribution_audit_report(project)
+    if audit is not None and audit.above_ceiling:
+        hits.append(
+            _Hit(
+                "contribution-error-ceiling",
+                (audit.audit_id,),
+                "the contribution audit's error rate is above the declared ceiling",
+            )
+        )
+    return hits + _relation_hits(project)
+
+
+def _contribution_schema_missing(project: Project) -> list[_Hit]:
+    """The section is undeclared although G1 has run or a relation or idea exists."""
+    protocol = current_protocol(project)
+    if protocol is not None and protocol.spec.contribution_schema is not None:
+        return []
+    with project.index.connect() as conn:
+        touched = any(
+            conn.execute(text(f"SELECT 1 FROM {table} LIMIT 1")).first() is not None
+            for table in ("reference_extractions", "relations", "ideas")
+        )
+    if not touched:
+        return []
+    return [
+        _Hit(
+            "contribution-schema-missing",
+            (),
+            "references or lineage records exist and the protocol declares no contribution schema",
+        )
+    ]
+
+
+def _all_relations(project: Project) -> list[RelationView]:
+    out: list[RelationView] = []
+    while True:
+        page = list_relations(project, statuses=set(EdgeStatus), limit=_PAGE, offset=len(out))
+        out += page
+        if len(page) < _PAGE:
+            return out
+
+
+def _relation_hits(project: Project) -> list[_Hit]:
+    hits: list[_Hit] = []
+    live = [r for r in _all_relations(project) if r.effective is not EdgeStatus.REJECTED]
+    stale = sorted(r.relation_id for r in live if r.effective is EdgeStatus.STALE)
+    if stale:
+        hits.append(_Hit("relation-stale", tuple(stale), f"{len(stale)} relation(s) are stale"))
+    inferred = sorted(r.relation_id for r in live if r.effective is EdgeStatus.INFERRED)
+    if inferred:
+        hits.append(
+            _Hit(
+                "relation-unconfirmed",
+                tuple(inferred),
+                f"{len(inferred)} inferred relation(s) await a human decision",
+            )
+        )
+    uncited = sorted(r.relation_id for r in live if "uncited-base" in r.flags)
+    if uncited:
+        hits.append(
+            _Hit(
+                "relation-uncited-base",
+                tuple(uncited),
+                f"{len(uncited)} relation(s) name a base the paper does not cite",
+            )
+        )
+    broken = _broken_chains(project, live)
+    if broken:
+        hits.append(
+            _Hit(
+                "relation-without-basis",
+                tuple(broken),
+                f"{len(broken)} stated or confirmed relation(s) have no recorded basis item or "
+                "reference link",
+            )
+        )
+    ideas = sorted(
+        i.idea_id for i in list_ideas(project, include_unconfirmed=True) if i.state == "proposed"
+    )
+    if ideas:
+        hits.append(
+            _Hit("idea-unconfirmed", tuple(ideas), f"{len(ideas)} idea(s) await a human decision")
+        )
+    return hits
+
+
+def _broken_chains(project: Project, live: list[RelationView]) -> list[str]:
+    """Live stated or confirmed relations whose basis row was never recorded, or whose
+    (reference extraction, entry) has no link row. A superseded or stale basis is still recorded:
+    that is `relation-stale`, not a broken chain."""
+    with project.index.connect() as conn:
+        rows = {
+            str(r[0])
+            for r in conn.execute(
+                text("SELECT extraction_id FROM extraction_rows WHERE scope = 'contribution'")
+            )
+        }
+        links = {
+            (str(r[0]), int(r[1]))
+            for r in conn.execute(text("SELECT extraction_id, ordinal FROM reference_links"))
+        }
+    out: list[str] = []
+    for r in live:
+        if r.proposal_status != "stated" and r.decision is not LineageDecision.CONFIRM:
+            continue
+        no_row = r.basis_item is None or r.basis_item not in rows
+        no_link = (
+            r.reference_extraction_id is not None
+            and (
+                r.reference_extraction_id,
+                r.cited_entry,
+            )
+            not in links
+        )
+        if no_row or no_link:
+            out.append(r.relation_id)
+    return sorted(out)
 
 
 # --- Conclusions (slice 4b, living-D) ---

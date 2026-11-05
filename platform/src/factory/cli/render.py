@@ -668,6 +668,11 @@ def contribution_status_lines(status: ContributionStatus) -> list[str]:
     lines += [f"  {work}" for work in status.no_references]
     lines.append(f"other-conversion: {len(status.other_conversion)}")
     lines += [f"  {work}" for work in status.other_conversion]
+    lines.append(f"closed without items: {len(status.closed_without_items)}")
+    lines += [
+        f"  {unit.work_id}  pass {unit.pass_label.value}  reason: {unit.reason or '-'}"
+        for unit in status.closed_without_items
+    ]
     return lines
 
 
