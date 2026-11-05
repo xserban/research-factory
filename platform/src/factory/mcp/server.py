@@ -31,7 +31,7 @@ from factory.model.extraction import ClaimInput, ExtractedRowInput
 from factory.model.fulltext import Route
 from factory.model.identity import IdGenerator
 from factory.model.inbox import Basis
-from factory.model.intuition import InterpretationInput, ReviewState
+from factory.model.intuition import ConceptInput, InterpretationInput, ReviewState, UseBasisInput
 from factory.model.lineage import RelationProposal
 from factory.model.notices import AssessmentDecision
 from factory.model.project import RigorMode
@@ -47,6 +47,7 @@ from factory.services import calibration as calibration_service
 from factory.services import cards as cards_service
 from factory.services import chase as chase_service
 from factory.services import check as check_service
+from factory.services import concepts as concepts_service
 from factory.services import conclusions as conclusions_service
 from factory.services import contributions as contributions_service
 from factory.services import coverage as coverage_service
@@ -1881,6 +1882,96 @@ def build_server(
             )
 
         return _reply(project, listing, include_work_ids=False)
+
+    @server.tool()
+    def concept_propose(
+        project: str,
+        concept_name: str,
+        role: str,
+        model: str,
+        skill: str,
+        aliases: list[str] | None = None,
+        text: str | None = None,
+        source: dict[str, JsonValue] | None = None,
+        quotes: list[dict[str, JsonValue]] | None = None,
+        concept_id: str | None = None,
+        supersedes: str | None = None,
+    ) -> dict[str, JsonValue]:
+        """Propose a background concept named `concept_name`: an outside idea a paper relies on,
+        with an optional
+        `text` (at most 600 characters), a `source` {kind: textbook|survey|corpus-paper|other,
+        citation, work_id?} and verbatim `quotes` of that source's own work (only for a source
+        with a work_id). The concept stays hidden and `unreviewed` until a human approves the
+        source and reviews the text; you cannot approve either. To replace your own definition
+        name `concept_id` and `supersedes` (the live definition's event id). All problems are
+        reported together and nothing is written on any. A concept is not evidence. Refused to a
+        session that has joined a pass."""
+
+        def propose() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            _require_pass_opened(opened)
+            actor = make_agent_actor(settings, session, role, model, skill)
+            entry = parse_input(
+                ConceptInput,
+                {
+                    "name": concept_name,
+                    "aliases": list(aliases or []),
+                    "text": text,
+                    "source": source,
+                    "quotes": [*(quotes or [])],
+                    "concept_id": concept_id,
+                    "supersedes": supersedes,
+                },
+                "concept",
+            )
+            new_id = concepts_service.define_concept(opened, actor, entry)
+            view = concepts_service.concept_view(opened, new_id)
+            assert view is not None
+            return _withheld(
+                opened,
+                {
+                    "concept_id": new_id,
+                    "source_state": view.source_state,
+                    "review_state": view.review_state.value,
+                },
+                include_work_ids=False,
+            )
+
+        return _reply(project, propose, rename=dotted, include_work_ids=False)
+
+    @server.tool()
+    def concept_link(
+        project: str,
+        from_node: str,
+        concept_id: str,
+        role: str,
+        model: str,
+        skill: str,
+        quote: dict[str, JsonValue] | None = None,
+        reference: str | None = None,
+        note: str | None = None,
+    ) -> dict[str, JsonValue]:
+        """Propose that a paper, a confirmed idea or a concept (`from_node`) uses `concept_id`.
+        Basis: a verbatim `quote` source of the from-work ({kind: "quote", role, work_id,
+        conversion_id, anchor, quote}), or a `reference` entry (`rex_...:n`) of its live
+        reference list, or neither with a `note`. The platform decides the status: `stated` when
+        the quote names the concept or the reference cites its approved source, otherwise
+        `inferred`, which waits for a human; you cannot confirm. Returns the link, its status and
+        reason, and whether it already existed. Refused to a session that has joined a pass."""
+
+        def propose() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            _require_pass_opened(opened)
+            actor = make_agent_actor(settings, session, role, model, skill)
+            basis = parse_input(UseBasisInput, {"quote": quote, "reference": reference}, "basis")
+            result = concepts_service.propose_concept_link(
+                opened, actor, from_node, concept_id, basis, note
+            )
+            return _withheld(opened, result.model_dump(mode="json"), include_work_ids=False)
+
+        return _reply(project, propose, rename=dotted, include_work_ids=False)
 
     return server
 

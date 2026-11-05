@@ -41,6 +41,7 @@ from factory.model.intuition import (
     INTERPRETATION_MAX_CHARS,
     INTERPRETATION_MAX_SOURCES,
     Author,
+    ConceptBrief,
     ConceptDefined,
     ConceptHidden,
     ConceptInput,
@@ -448,12 +449,6 @@ class ConceptView(StrictModel):
     visible: bool
     merged_into: str | None
     input_blob: str | None
-
-
-class ConceptBrief(StrictModel):
-    concept_id: str
-    name: str
-    aliases: list[str]
 
 
 class ConceptList(StrictModel):

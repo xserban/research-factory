@@ -38,6 +38,7 @@ __all__ = [
     "VERIFIER_VERSION",
     "Author",
     "CitationSourceInput",
+    "ConceptBrief",
     "ConceptDefined",
     "ConceptHidden",
     "ConceptInput",
@@ -351,3 +352,11 @@ class ConceptHidden(StrictModel):
     merged: int
     links_inferred: int
     links_rejected: int
+
+
+class ConceptBrief(StrictModel):
+    """A visible concept's name and aliases: what a writer needs to link and cite it."""
+
+    concept_id: str
+    name: str
+    aliases: list[str]

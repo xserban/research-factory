@@ -44,6 +44,30 @@ right. The researcher reviews each one on the command line.
 7. Write nothing you cannot ground in a source. A speculation without a source is not recorded;
    keep it in the session, or tell the researcher so it can go to the backlog.
 
+## Concepts
+
+A background concept is an outside idea a paper relies on (a technique, a theorem, a method the
+paper takes as known). Propose one with `concept_propose` only for such an idea, never for a
+claim of the paper itself.
+
+- Give the source the paper itself cites when possible: `source` is a textbook, a survey, a
+  corpus paper or other, with its citation text and, for a corpus paper, its `work_id`.
+  The concept stays hidden until the researcher approves that source: an approved source is a
+  human act, never yours. The `batch` lists the visible concepts (`concepts`); link to those
+  instead of proposing a duplicate (a name or alias already taken is refused with the existing id).
+- Draft the text (at most 600 characters) from the approved source, with `quotes` that are
+  verbatim in that source's own document. Never quote a source without a document: a textbook
+  or any source with no `work_id` takes no quotes and is shown as unverifiable.
+- Propose `uses` links with `concept_link`: a `quote` of the citing paper that names the concept
+  (or one of its aliases), or the citing paper's `reference` entry for the concept's approved
+  source. The platform decides `stated` or `inferred`; an `inferred` link waits for a human.
+  With neither basis give a `note`; it is shown as an agent note and never counted.
+- A drafted definition is shown `unreviewed` until the researcher reviews it. To replace your own
+  definition name `concept_id` and `supersedes`; a redefinition with a different source is hidden
+  again.
+- Never approve a source, review a definition, confirm or reject a link, merge or unmerge
+  concepts, or ask a human to relay your own judgement as any of these.
+
 ## Stopping and human steps
 
 Review, rejection and replacement of a reviewed or human-written interpretation are human steps

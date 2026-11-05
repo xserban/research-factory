@@ -38,6 +38,7 @@ from factory.model.base import StrictModel
 from factory.model.extraction import Scope
 from factory.model.intuition import (
     Author,
+    ConceptBrief,
     HistoryEntry,
     InterpretationHidden,
     InterpretationInput,
@@ -103,6 +104,9 @@ class IntuitionBatch(StrictModel):
     items: list[ServedItem]
     max_chars: int
     max_sources: int
+    concepts: list[ConceptBrief] = Field(default_factory=list)
+    """The visible background concepts (first page), so the writer can link and cite them."""
+    concepts_total: int = 0
     truncated: bool = False
     """True when the target has more final items than `MAX_SERVED_ITEMS`; the first are served."""
 
@@ -241,6 +245,18 @@ def _content(project: Project, target: str) -> dict[str, JsonValue]:
     }
 
 
+def _with_concepts(project: Project, batch: IntuitionBatch) -> IntuitionBatch:
+    # concepts imports this module (target_issue), so it is imported at call time
+    from factory.services.concepts import visible_concept_count, visible_concepts
+
+    return batch.model_copy(
+        update={
+            "concepts": visible_concepts(project),
+            "concepts_total": visible_concept_count(project),
+        }
+    )
+
+
 def _batch(task_id: str, content: dict[str, Any]) -> IntuitionBatch:
     return IntuitionBatch(
         task_id=task_id,
@@ -334,7 +350,7 @@ def intuition_next(
             content = task_content(project, claimed)
             assert isinstance(content, dict)
             return IntuitionNext(
-                batch=_batch(claimed.task_id, content),
+                batch=_with_concepts(project, _batch(claimed.task_id, content)),
                 skipped=_named_only(skipped, wanted),
                 remaining=_remaining(project, wanted, skipped, str(content["target"])),
             )
@@ -360,7 +376,7 @@ def intuition_next(
                 skipped.append(TargetSkip(target=target, reason="task-open"))
                 continue
             return IntuitionNext(
-                batch=_batch(task_id, content),
+                batch=_with_concepts(project, _batch(task_id, content)),
                 skipped=_named_only(skipped, wanted),
                 remaining=_remaining(project, wanted, skipped, target),
             )

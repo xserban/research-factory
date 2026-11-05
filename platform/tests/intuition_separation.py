@@ -20,7 +20,7 @@ from factory.config import Settings
 from factory.events.reader import read_all
 from factory.lineage.graph import GraphFilter
 from factory.living.digest_render import to_json, to_markdown
-from factory.model.intuition import InterpretationReviewed
+from factory.model.intuition import ConceptInput, InterpretationReviewed, UseBasisInput
 from factory.model.screening import Channel
 from factory.services import contributions as contributions_service
 from factory.services import evidence_report as evidence_report_service
@@ -28,6 +28,14 @@ from factory.services import extraction as extraction_service
 from factory.services import extraction_agreement as agreement_service
 from factory.services import ideas as ideas_service
 from factory.services.check import check
+from factory.services.concepts import (
+    decide_concept_link,
+    decide_concept_source,
+    define_concept,
+    merge_concepts,
+    propose_concept_link,
+    review_concept,
+)
 from factory.services.context import Project, open_project
 from factory.services.digest import digest_build
 from factory.services.exports import export_prisma_svg
@@ -193,12 +201,51 @@ def populate_layer(project: Project, iw: IWorld) -> int:
     # an open task: served and claimed, never answered
     held = writer_actor("01JZ9Q3K5M7N8P0R2S4T6V8W5B", "open-task")
     assert intuition_next(project, held, targets=[iw.third]).batch is not None
+    _populate_concepts(project, iw)
     return layer_event_count(project)
+
+
+def _populate_concepts(project: Project, iw: IWorld) -> None:
+    """Three concepts (approved and reviewed, approved and reviewed wrong, unapproved), a stated,
+    an inferred and a rejected link, a concept-to-concept link and a merge."""
+    source = {"kind": "textbook", "citation": "Textbook, chapter 3"}
+
+    def define(name: str, approve: bool) -> str:
+        entry = ConceptInput.model_validate({"name": name, "source": source})
+        cid = define_concept(project, iw.writer, entry)
+        if approve:
+            decide_concept_source(project, iw.human, cid, "approve", "", Channel.CLI)
+        return cid
+
+    good = define("softmax attention", True)
+    review_concept(project, iw.human, good, "reviewed", "", Channel.CLI)
+    bad = define("feature map", True)
+    review_concept(project, iw.human, bad, "wrong", "misstated", Channel.CLI)
+    define("kernel trick", False)
+    twin = define("random features", True)
+    stated = propose_concept_link(
+        project,
+        iw.writer,
+        iw.source,
+        good,
+        UseBasisInput(quote=iw.quote("s1.p2", "Unlike softmax attention")),
+    )
+    assert stated.status == "stated"
+    inferred = propose_concept_link(
+        project, iw.writer, iw.idea1, good, UseBasisInput(), note="reads like it"
+    )
+    rejected = propose_concept_link(
+        project, iw.writer, iw.idea2, twin, UseBasisInput(), note="reads like it"
+    )
+    decide_concept_link(project, iw.human, rejected.link_id, "reject", "no", Channel.CLI)
+    propose_concept_link(project, iw.writer, twin, good, UseBasisInput(), note="builds on")
+    assert inferred.status == "inferred"
+    merge_concepts(project, iw.human, bad, twin, "same idea")
 
 
 def layer_event_count(project: Project) -> int:
     events = read_all(project.paths.events_dir, project.catalog)
-    return len([e for e in events if e.type.startswith("interpretation.")])
+    return len([e for e in events if e.type.startswith(("interpretation.", "concept."))])
 
 
 def _run(fn: Callable[[], Any]) -> str:

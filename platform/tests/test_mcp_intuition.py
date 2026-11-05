@@ -26,7 +26,13 @@ from tests.test_extraction_next import SESSION_A
 
 SESSION_I = "01JZ9Q3K5M7N8P0R2S4T6V8W1K"
 AGENT = {"role": "intuiter", "model": "claude-opus-5-5", "skill": "rf-intuition"}
-TOOLS = ("intuition_next", "interpretation_record", "interpretation_list")
+TOOLS = (
+    "intuition_next",
+    "interpretation_record",
+    "interpretation_list",
+    "concept_propose",
+    "concept_link",
+)
 
 
 def _session(monkeypatch: pytest.MonkeyPatch, session: str) -> None:
