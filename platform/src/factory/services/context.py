@@ -17,6 +17,7 @@ from factory.index.default import default_projection
 from factory.index.index import Index
 from factory.index.project import latest_host
 from factory.model.identity import SLUG_RE, IdGenerator, ulid_time
+from factory.model.lab import LAB_SLUG
 
 MAX_SLUG_LENGTH = 64
 FUTURE_MARGIN = timedelta(minutes=1)
@@ -108,6 +109,13 @@ class Project:
 
 
 def slug_issues(slug: str) -> list[ValidationIssue]:
+    """Why `slug` cannot name a new project. `lab` is the lab log's envelope slug."""
+    if slug == LAB_SLUG:
+        return [ValidationIssue("slug", f"{LAB_SLUG!r} is reserved for the lab registry")]
+    return _format_issues(slug)
+
+
+def _format_issues(slug: str) -> list[ValidationIssue]:
     if re.fullmatch(SLUG_RE, slug) is None:
         return [ValidationIssue("slug", "must be lowercase words joined by single hyphens")]
     if len(slug) > MAX_SLUG_LENGTH:
@@ -170,7 +178,8 @@ def build_project(settings: Settings, slug: str, *, session: str, clock: Clock) 
 
 
 def open_project(settings: Settings, slug: str, *, session: str, clock: Clock) -> Project:
-    if slug_issues(slug):
+    # Format only: a project named `lab` before the slug was reserved stays readable.
+    if _format_issues(slug):
         raise ProjectNotFoundError(f"no project {slug!r}")
     paths = ProjectPaths(settings.root, slug)
     if not paths.events_dir.is_dir():
