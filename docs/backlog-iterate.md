@@ -128,3 +128,10 @@ Minor review findings parked during the v1 build, to address when iterating from
 - W-B: `sentence_status` resolves supports per reference through W-A's `_Reader`, one query each, not the plan's "7 queries" per draft. It is fine at section size; measure at 200 sentences.
 - W-B: a human who verified a sentence can label the audit of that verdict; only the gate's human check applies.
 - W-B: the fold of `draft.audited` accepts `channel = mcp` from any human (as the G3-C note above); only the service refuses a pass session's relay.
+- W-C: author-year citations (`Wang et al. (2021)`) are not found, as the spec and plan list only `\cite`, pandoc and numeric forms; `references/markers.py` has the pattern.
+- W-C: the segmenter does not split at `word." Next` (a closing quote before the space) nor before a sentence opening with `(` or `"`; a Markdown list with no blank lines is one paragraph. A change is a new `SEGMENTER_VERSION`.
+- W-C: `[2020]` in Markdown or plain text reads as a numeric citation and closes as `citation-unresolved`.
+- W-C: `_open_tasks` reads one blob per open task on each `manuscript_verify_next`, as W-B does; measure at a few thousand units.
+- W-C: a refused `manuscript add` can leave its bytes in the library, which is git-ignored and harmless.
+- W-C: a task whose unit closed after it was made stays open in the log; it is not counted and is never served.
+- W-C: `manuscript.segmented` holds every sentence in one event, up to 100000 entries; check the line size against what the reader expects at that end.

@@ -87,8 +87,11 @@ def _bib_format(body: str) -> BibFormat:
 
 def _entries(body: str, fmt: Format) -> list[SentenceEntry]:
     masked = mask(body, fmt)
+    segments = segment(body, fmt)
+    if len(segments) > MAX_SENTENCES:  # before an entry's own bound can refuse it
+        raise _refuse("path", f"at most {MAX_SENTENCES} sentences")
     entries: list[SentenceEntry] = []
-    for s in segment(body, fmt):
+    for s in segments:
         keys = cite_keys(masked[s.start : s.end], fmt)
         if len(keys) > MAX_KEYS:
             raise _refuse("path", f"a sentence holds more than {MAX_KEYS} citation keys")
@@ -134,8 +137,6 @@ def add_manuscript(
     entries = _entries(body, format_of(fmt))
     if not entries:
         raise _refuse("path", "no sentence found")
-    if len(entries) > MAX_SENTENCES:
-        raise _refuse("path", f"at most {MAX_SENTENCES} sentences")
     bib_data: bytes | None = None
     bib_format: BibFormat | None = None
     if bib is not None:
