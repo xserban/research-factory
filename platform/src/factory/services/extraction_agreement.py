@@ -30,7 +30,7 @@ Invariants:
 Everything here is read-only except `resolve_extraction`, which writes one event or nothing.
 """
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Collection, Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -93,10 +93,12 @@ __all__ = [
     "Grouped",
     "IndependenceCounts",
     "agreement_overall",
+    "cell_key",
     "extraction_agreement",
     "field_disagreements",
     "final_field",
     "final_rows",
+    "final_rows_restricted",
     "group_rows",
     "grouped_rows",
     "independence_counts",
@@ -422,15 +424,23 @@ def _identity(scope: ScopeKey, pack: Pack) -> str:
     return VALUE_FIELD if scope is Scope.EVIDENCE else pack.required[0]
 
 
-def _load(project: Project, scope: ScopeKey = Scope.EVIDENCE) -> _State | None:
+def _load(
+    project: Project, scope: ScopeKey = Scope.EVIDENCE, works: Collection[str] | None = None
+) -> _State | None:
     """The state of `scope`, or None without a ready protocol with a known schema and (for
-    evidence) a full-text plan."""
+    evidence) a full-text plan. With `works`, only those works of the population enter: a work's
+    pairs, dual membership and settlement depend on that work alone, so the pairs equal the
+    unrestricted ones for the same works (the per-group accessors of `evidence_groups` rely on
+    it)."""
     project.index.sync()
     try:
         _, schema, pack = require_schema(project, scope=scope)
         population = scope_population(project, scope)
     except FactoryValidationError:
         return None
+    if works is not None:
+        wanted = set(works)
+        population = [w for w in population if w in wanted]
     configs = {label: pass_config(project, label, scope=scope) for label in PassLabel}
     b_config = configs[PassLabel.B]
     known = configs[PassLabel.A] is not None and b_config is not None
@@ -948,6 +958,27 @@ def final_rows(project: Project, *, scope: ScopeKey = Scope.EVIDENCE) -> list[Fi
     if state is None:
         return []
     return [p.final for p in state.pairs if p.final is not None]
+
+
+def final_rows_restricted(
+    project: Project, works: Collection[str], *, scope: ScopeKey = Scope.EVIDENCE
+) -> list[FinalRow]:
+    """`final_rows` of the given works only; equal to the filter of `final_rows` by work."""
+    state = _load(project, scope, works)
+    if state is None:
+        return []
+    return [p.final for p in state.pairs if p.final is not None]
+
+
+def cell_key(
+    definition: FieldDef | None, value: str, unit: str | None, canonical: str | None
+) -> str:
+    """The normalised value a stored key cell contributes to a group key (as `key_value`)."""
+    stored = StoredField(
+        value=value, unit=unit, canonical=canonical, reported_in=ReportedIn.OWN, copy_marker=False
+    )
+    text_value, norm_unit = _normalised(definition, stored)
+    return f"{text_value} {norm_unit}" if norm_unit else text_value
 
 
 def key_value(definition: FieldDef | None, f: FinalField) -> str:

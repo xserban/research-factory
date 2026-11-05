@@ -92,8 +92,10 @@ __all__ = [
     "agent_evidence",
     "assemble_report",
     "evidence_report",
+    "group_direction",
     "group_id",
     "report_inputs",
+    "report_spec",
 ]
 
 REPORT_VERSION = 1
@@ -640,6 +642,11 @@ def _assemble(
     )
 
 
+def report_spec(pack: Pack) -> ReportSpec:
+    """The pack's report spec, or an empty one (no costs, no known directions)."""
+    return _spec(pack)
+
+
 def _spec(pack: Pack) -> ReportSpec:
     if pack.report is not None:
         return pack.report
@@ -767,7 +774,7 @@ def _group(
         works=len(works),
         independent_works=len(independent_works),
     )
-    direction, status = _direction(key, rows, pack, spec)
+    direction, status = group_direction(key, rows, pack, spec)
     statements: list[Limit] = []
     if len(works) == 1:
         statements.append(
@@ -1155,7 +1162,7 @@ def _partition(
     )
 
 
-def _direction(
+def group_direction(
     key: Sequence[tuple[str, str]], rows: Sequence[FinalRow], pack: Pack, spec: ReportSpec
 ) -> tuple[bool | None, DirectionStatus]:
     """Ruling 5: the rows' declared direction, else the pack default for the normalised metric,
