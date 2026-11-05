@@ -99,3 +99,10 @@ Minor review findings parked during the v1 build, to address when iterating from
 - V-B: event-sourced test worlds date every work 2020-01-01; tests that need other years edit `works.data` in the projection (`set_year`) after the events, so rebuild tests run on the 2020 dates.
 - V-B: the ideas matrix and `final_items` read every contribution final item; a SQL read of `result_row` links would scale better.
 
+- XP-A: `check`, `trace` and `report_methods` do not yet cover designs, runs, deviations or verdicts (plan XP-B owns the slice's check and trace); `trace` does not parse `exp_` or `xrn_`.
+- XP-A: `experiment_view` and `xrun_list` rebuild a view per row (several queries each); fine for tens of runs, add one joined query if a design reaches thousands of runs.
+- XP-A: there is no `factory experiments amend` command (agents amend over MCP); add one if the researcher wants to edit a draft by hand.
+- XP-A: the control arm is one cell (treatment plus overrides); XP-B decides how a control outcome pairs with the baseline arm and may need a baseline-plus-overrides arm.
+- XP-A: `ingest_results` evaluates baselines in the same lock after the report is recorded; a crash between the two writes leaves a ready baseline without a verdict until the next reproduction run or `evaluate_baselines` call (there is no CLI for it).
+- XP-A: GPU-hours of a run are checked against the total budget only; the per-run cap is validated against the total at design time but not enforced on reports.
+- XP-A: the unlock nonce lives in the `experiment.unlocked` event of the tracked log; it evidences order only (as the spec says), it is not a secret against someone who can read the repository.

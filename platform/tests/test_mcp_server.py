@@ -123,6 +123,10 @@ async def test_project_status_tool(settings: Settings, project: Project, clock: 
             "view_coverage",
             "view_timeline",
             "view_horizon",
+            "experiment_design",
+            "experiment_view",
+            "xrun_register",
+            "xrun_list",
         ]
         res = await client.call_tool("project_status", {"project": "demo"})
         body = _body(res)

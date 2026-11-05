@@ -12,6 +12,7 @@ SKILLS = (
     "rf-cards",
     "rf-contributions",
     "rf-critic",
+    "rf-experiment",
     "rf-extract",
     "rf-frame",
     "rf-ideate",
@@ -220,3 +221,28 @@ def test_rf_critic_reads_only_the_artefact() -> None:
     for kept in ("## Independence", "## Procedure", "## Tool arguments", "## Done when"):
         assert kept in text
     assert "lead_record" not in text and "hypothesis_draft" not in text
+
+
+def test_rf_experiment_names_its_tools_and_never_types_a_result() -> None:
+    text = (REPO_ROOT / "plugin" / "skills" / "rf-experiment" / "SKILL.md").read_text("utf-8")
+    for tool in ("experiment_design", "experiment_view", "xrun_register", "xrun_list"):
+        assert tool in text, tool
+    lowered = " ".join(text.lower().split())
+    for phrase in (
+        "never type a result",
+        "exploratory",
+        "freeze",
+        "unlock",
+        "baselines",
+        "ablations that each change exactly one",
+        "positive and a negative control",
+        "plan's minimum number of seeds",
+        "primary universe",
+        "budget",
+    ):
+        assert phrase in lowered, phrase
+    for kept in ("## Independence", "## Procedure", "## Tool arguments", "## Done when"):
+        assert kept in text
+    # the skill's tools cannot freeze, unlock, ingest, accept or record, and it names none
+    for absent in ("experiment_freeze", "experiment_unlock", "xrun_record", "baseline_accept"):
+        assert absent not in text

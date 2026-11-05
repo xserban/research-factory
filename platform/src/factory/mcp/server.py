@@ -11,6 +11,7 @@ from factory.clock import Clock, SystemClock
 from factory.config import Settings
 from factory.errors import FactoryValidationError, ProjectNotFoundError, ValidationIssue
 from factory.events.envelope import Actor
+from factory.hypotheses.design import design_version
 from factory.lineage.graph import GraphFilter
 from factory.mcp.conventions import (
     PAGE_LIMIT,
@@ -27,6 +28,7 @@ from factory.mcp.conventions import (
 from factory.model.base import StrictModel
 from factory.model.cards import PropertyDef, QuoteBasis
 from factory.model.chase import ChaseDirection
+from factory.model.experiments import Cell, ExperimentDesign
 from factory.model.extraction import ClaimInput, ExtractedRowInput, MinerScope
 from factory.model.findings import ContradictionInput
 from factory.model.fulltext import Route
@@ -69,6 +71,7 @@ from factory.services import discovery as discovery_service
 from factory.services import document_read as document_read_service
 from factory.services import evidence as evidence_service
 from factory.services import evidence_report as evidence_report_service
+from factory.services import experiments as experiments_service
 from factory.services import exports as exports_service
 from factory.services import extraction as extraction_service
 from factory.services import extraction_agreement as extraction_agreement_service
@@ -112,6 +115,7 @@ from factory.services import terms as terms_service
 from factory.services import trace as trace_service
 from factory.services import view_coverage as view_coverage_service
 from factory.services import watch as watch_service
+from factory.services import xruns as xruns_service
 from factory.services.context import Project, open_project
 from factory.services.extraction import ExtractResult
 from factory.services.gate_status import gates_status
@@ -120,6 +124,7 @@ from factory.services.living_hooks import default_hooks
 from factory.services.results import BatchResult, ItemError
 from factory.services.search import list_works
 from factory.services.seeds import SeedOutcome, SeedRole
+from factory.services.xrun_accounting import baseline_verdicts
 from factory.sources.fulltext.base import FullTextRoute
 from factory.sources.fulltext.registry import default_routes
 from factory.sources.registry import SourceFactory, default_sources
@@ -2989,6 +2994,155 @@ def build_server(
             return _withheld(opened, result.model_dump(mode="json"), include_work_ids=False)
 
         return _reply(project, build, include_work_ids=False)
+
+    # --- Experiment designs and runs (slice 6, plan XP-A) ---------------------------------
+    # Four tools and no more: an agent drafts and amends a design before the freeze and registers
+    # planned runs. Nothing here freezes, unlocks, ingests a result, accepts a baseline or records
+    # a deviation (those are the researcher's, at the command line), and no view carries the
+    # unlock nonce, a metric value or a designer's session. Every tool is refused to a pass session
+    # and, before a pass opens, answers with the neutral message of the other tools of the slice.
+
+    @server.tool()
+    def experiment_design(
+        project: str,
+        design: dict[str, JsonValue],
+        role: str,
+        model: str,
+        skill: str,
+        supersedes: str | None = None,
+        amend_of: str | None = None,
+        reason: str | None = None,
+        semantic: bool = False,
+    ) -> dict[str, JsonValue]:
+        """Draft an experiment design for a registered or drafted experiment hypothesis, or amend
+        one that is not yet frozen (`amend_of` with a `reason`; `semantic` says whether the change
+        alters what is tested). The design names the one factor (key to baseline and treatment
+        value), the fixed configuration, seeds (at least the plan's minimum), multiverse axes with
+        a primary universe, ablations that each change one key, controls, baselines as final
+        evidence rows with a tolerance, datasets with split roles, metrics with one primary,
+        a budget and the code and environment. The platform computes the version `E@`; you never
+        state an id, a version or a configuration map. `supersedes` names an unfrozen design of
+        the same hypothesis that this one replaces. A frozen design cannot be amended. Refused to
+        a session that has joined a pass."""
+
+        def draft() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            _require_pass_opened(opened)
+            actor = make_agent_actor(settings, session, role, model, skill)
+            parsed = parse_input(ExperimentDesign, cast(JsonValue, design), "design")
+            if amend_of is not None and supersedes is not None:
+                raise FactoryValidationError(
+                    [ValidationIssue("amend_of", "give amend_of or supersedes, not both")]
+                )
+            if amend_of is None:
+                experiment_id, version = experiments_service.design_experiment(
+                    opened, actor, parsed, supersedes=supersedes
+                )
+            else:
+                if reason is None:
+                    raise FactoryValidationError(
+                        [ValidationIssue("reason", "an amendment states its reason")]
+                    )
+                experiments_service.amend_experiment(
+                    opened, actor, amend_of, parsed, reason, semantic
+                )
+                experiment_id, version = amend_of, design_version(parsed)
+            data: dict[str, JsonValue] = {
+                "experiment_id": experiment_id,
+                "e_version": version,
+                "issues": [],
+            }
+            return _withheld(opened, data, include_work_ids=False)
+
+        return _reply(project, draft, include_work_ids=False)
+
+    @server.tool()
+    def experiment_view(project: str, experiment_id: str) -> dict[str, JsonValue]:
+        """One experiment design: the design, its version `E@`, its computed state (draft, frozen,
+        unlocked, superseded), deviations, flags, the budget used, the confirmatory reads per
+        primary cell and the state of each baseline (pending, reproduced, not-reproduced,
+        accepted). It carries no unlock nonce and no designer session. Read-only; refused to a
+        session that has joined a pass."""
+
+        def view() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            _require_pass_opened(opened)
+            found = experiments_service.experiment_view(opened, experiment_id)
+            if found is None:
+                raise FactoryValidationError([ValidationIssue("experiment_id", "unknown")])
+            data = found.model_dump(mode="json", exclude={"designer_sessions"})
+            data["baselines"] = cast(JsonValue, dict(baseline_verdicts(opened, experiment_id)))
+            return _withheld(opened, data, include_work_ids=False)
+
+        return _reply(project, view, include_work_ids=False)
+
+    @server.tool()
+    def xrun_register(
+        project: str,
+        experiment_id: str,
+        cell: dict[str, JsonValue],
+        role: str,
+        model: str,
+        skill: str,
+    ) -> dict[str, JsonValue]:
+        """Register a planned run of a frozen design. The `cell` is `{universe, seed, arm, split}`:
+        `universe` the pairs of axis key and value (sorted by key), `arm` one of treatment,
+        baseline, `ablation:<name>`, `control:<name>`, `reproduction:<row_key>`, and `split` dev or
+        confirmatory. The platform computes the run's configuration; sending one is refused. A
+        confirmatory cell needs the researcher's unlock, and a cell the design does not plan is
+        accepted only on the dev split, as exploratory. You never submit a result. Refused to a
+        session that has joined a pass."""
+
+        def register() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            _require_pass_opened(opened)
+            actor = make_agent_actor(settings, session, role, model, skill)
+            parsed = parse_input(Cell, cast(JsonValue, cell), "cell")
+            run_id = xruns_service.register_run(opened, actor, experiment_id, parsed)
+            return _withheld(opened, {"run_id": run_id}, include_work_ids=False)
+
+        return _reply(project, register, include_work_ids=False)
+
+    @server.tool()
+    def xrun_list(
+        project: str,
+        experiment_id: str,
+        arm: str | None = None,
+        split: str | None = None,
+    ) -> dict[str, JsonValue]:
+        """The runs of a design with their cell, configuration hash, state (planned, completed,
+        failed), exploratory mark and flags; no metric value. Read-only; refused to a session that
+        has joined a pass."""
+
+        def listing() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            _require_pass_opened(opened)
+            if experiments_service.experiment_view(opened, experiment_id) is None:
+                raise FactoryValidationError([ValidationIssue("experiment_id", "unknown")])
+            runs = xruns_service.xrun_list(opened, experiment_id, arm=arm, split=split)
+            rows: list[JsonValue] = [
+                r.model_dump(
+                    mode="json",
+                    include={
+                        "run_id",
+                        "cell",
+                        "config_hash",
+                        "state",
+                        "exploratory",
+                        "flags",
+                        "event_id",
+                    },
+                )
+                for r in runs
+            ]
+            return _withheld(opened, {"runs": rows}, include_work_ids=False)
+
+        return _reply(project, listing, include_work_ids=False)
+
 
     return server
 

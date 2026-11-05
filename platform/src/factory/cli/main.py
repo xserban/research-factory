@@ -28,6 +28,7 @@ from factory.mcp.server import run
 from factory.model import lineage as lineage_model
 from factory.model.chase import ChaseDirection
 from factory.model.conclusions import BasisRef, Predicate
+from factory.model.experiments import DeviationKind
 from factory.model.extraction import ExtractedRowInput, MinerScope
 from factory.model.fulltext import Route
 from factory.model.hypotheses import AbandonReason, DiscardReason
@@ -39,6 +40,16 @@ from factory.model.intuition import (
     LinkStatus,
     ReviewState,
     SourceInput,
+)
+experiments_app = typer.Typer(
+    name="experiments",
+    help="Experiment designs: list, show, freeze, unlock, deviation, accept-baseline (human).",
+    no_args_is_help=True,
+)
+runs_app = typer.Typer(
+    name="runs",
+    help="Experiment runs: list and record results from a runner's file (human or runner).",
+    no_args_is_help=True,
 )
 from factory.model.notices import AssessmentDecision
 from factory.model.project import RigorMode
@@ -65,6 +76,7 @@ from factory.services import document_convert as document_convert_service
 from factory.services import document_read as document_read_service
 from factory.services import evidence as evidence_service
 from factory.services import evidence_report as evidence_report_service
+from factory.services import experiments as experiments_service
 from factory.services import exports as exports_service
 from factory.services import extraction as extraction_service
 from factory.services import extraction_agreement as extraction_agreement_service
@@ -114,6 +126,7 @@ from factory.services import versions as versions_service
 from factory.services import view_coverage as view_coverage_service
 from factory.services import views as views_service
 from factory.services import watch as watch_service
+from factory.services import xruns as xruns_service
 from factory.services.context import Project, list_projects, open_project
 from factory.services.extraction_agreement import Choice
 from factory.services.gate_status import gates_status
@@ -121,6 +134,7 @@ from factory.services.living_hooks import DEFAULT_HOOKS
 from factory.services.modules.listing import module_rows
 from factory.services.project import ScreeningStatus
 from factory.services.search import list_works
+from factory.services.xrun_accounting import baseline_verdicts
 from factory.sources.fulltext.registry import default_routes
 from factory.sources.registry import default_sources
 from factory.views import render as views_render
@@ -395,6 +409,8 @@ app.add_typer(contradictions_app)
 app.add_typer(leads_app)
 app.add_typer(hypotheses_app)
 app.add_typer(models_app)
+app.add_typer(experiments_app)
+app.add_typer(runs_app)
 app.add_typer(graph_app)
 app.add_typer(view_app)
 app.add_typer(interpretations_app)
@@ -4721,3 +4737,145 @@ def models_cutoff_cmd(
         project = _resolve_project(state)
         hypotheses_service.declare_cutoff(project, project.human_actor(), model, day, source)
     typer.echo(f"declared {model} {day.isoformat()}")
+
+
+
+# --- Experiment designs and runs (slice 6, plan XP-A) ------------------------------------------
+
+
+@experiments_app.command("list")
+def experiments_list_cmd(ctx: typer.Context) -> None:
+    """Experiment designs with their versions and computed states."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        views = experiments_service.list_experiments(project)
+    for line in render.experiment_lines(views):
+        typer.echo(line)
+
+
+@experiments_app.command("show")
+def experiments_show_cmd(
+    ctx: typer.Context, experiment: Annotated[str, typer.Argument(help="A design id, exp_.")]
+) -> None:
+    """One design: factor, seeds, budget used, confirmatory reads, baselines and deviations. The
+    unlock nonce is not shown; `unlock` prints it once."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        view = experiments_service.experiment_view(project, experiment)
+        verdicts = {} if view is None else baseline_verdicts(project, experiment)
+    if view is None:
+        _fail(f"unknown experiment {experiment}", 1)
+    for line in render.experiment_detail_lines(view, verdicts):
+        typer.echo(line)
+
+
+@experiments_app.command("freeze")
+def experiments_freeze_cmd(
+    ctx: typer.Context, experiment: Annotated[str, typer.Argument(help="A design id, exp_.")]
+) -> None:
+    """Freeze a design (an act at the gate `experiments.freeze_unlock`); `E@` is then fixed."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        experiments_service.freeze_experiment(project, project.human_actor(), experiment)
+        view = experiments_service.experiment_view(project, experiment)
+    typer.echo(f"frozen {experiment} {view.e_version if view else ''}".rstrip())
+
+
+@experiments_app.command("unlock")
+def experiments_unlock_cmd(
+    ctx: typer.Context, experiment: Annotated[str, typer.Argument(help="A design id, exp_.")]
+) -> None:
+    """Unlock confirmatory runs (an act at the gate `experiments.freeze_unlock`). Prints the nonce
+    once: put it in the runner configuration; confirmatory results must carry it."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        experiments_service.unlock_experiment(project, project.human_actor(), experiment)
+        nonce = experiments_service.unlock_nonce(project, experiment)
+    typer.echo(f"unlocked {experiment}")
+    typer.echo(f"nonce {nonce}")
+    typer.echo("This is the only time the nonce is shown; confirmatory results must carry it.")
+
+
+@experiments_app.command("deviation")
+def experiments_deviation_cmd(
+    ctx: typer.Context,
+    experiment: Annotated[str, typer.Argument(help="A design id, exp_.")],
+    kind: Annotated[
+        str,
+        typer.Option("--kind", help="planned-change-after-freeze, environment or other."),
+    ],
+    text_: Annotated[str, typer.Option("--text", help="What departed from the design.")],
+    semantic: Annotated[
+        bool, typer.Option("--semantic", help="Flag the outcome `deviated` after the unlock.")
+    ] = False,
+) -> None:
+    """Record a departure from a frozen design (a human act, R-14)."""
+    if kind not in ("planned-change-after-freeze", "environment", "other"):
+        _fail(f"--kind {kind!r}: expected planned-change-after-freeze, environment or other", 2)
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        experiments_service.record_deviation(
+            project,
+            project.human_actor(),
+            experiment,
+            cast(DeviationKind, kind),
+            text_,
+            semantic,
+        )
+    typer.echo(f"recorded {kind} deviation for {experiment}")
+
+
+@experiments_app.command("accept-baseline")
+def experiments_accept_baseline_cmd(
+    ctx: typer.Context,
+    experiment: Annotated[str, typer.Argument(help="A design id, exp_.")],
+    row_key: Annotated[str, typer.Argument(help="The baseline's evidence row key, rk_.")],
+    rationale: Annotated[str, typer.Option("--rationale", help="Why, in at most 300 characters.")],
+) -> None:
+    """Accept a baseline that did not reproduce (a human act, R-122); every outcome of the design
+    is then flagged `baseline-not-reproduced`."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        experiments_service.accept_baseline(
+            project, project.human_actor(), experiment, row_key, rationale
+        )
+    typer.echo(f"accepted baseline {row_key} of {experiment}")
+
+
+@runs_app.command("list")
+def runs_list_cmd(
+    ctx: typer.Context,
+    experiment: Annotated[str, typer.Argument(help="A design id, exp_.")],
+    arm: Annotated[str | None, typer.Option("--arm", help="Only this arm.")] = None,
+    split: Annotated[str | None, typer.Option("--split", help="dev or confirmatory.")] = None,
+) -> None:
+    """The runs of a design with their state, cell and metrics."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        runs = xruns_service.xrun_list(project, experiment, arm=arm, split=split)
+    for line in render.xrun_lines(runs):
+        typer.echo(line)
+
+
+@runs_app.command("record")
+def runs_record_cmd(
+    ctx: typer.Context,
+    file: Annotated[Path, typer.Argument(help="The runner's results file (JSON, schema 1).")],
+    runner: Annotated[
+        str | None,
+        typer.Option("--runner", help="Record as the system actor runner-NAME (a GPU runner)."),
+    ] = None,
+) -> None:
+    """Ingest a results file for a registered run. Results enter only here (never over MCP)."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        xruns_service.ingest_results(project, project.human_actor(), file, runner=runner)
+    typer.echo(f"recorded {file.name}")

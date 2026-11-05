@@ -27,6 +27,7 @@ from factory.services.coverage import CoverageReport, Ratio
 from factory.services.discovery import DiscoveryReport
 from factory.services.document_convert import ConvertSummary, DocumentStatus
 from factory.services.document_read import DocumentPage
+from factory.services.experiments import ExperimentView
 from factory.services.extraction import UnitState
 from factory.services.extraction_agreement import (
     ExtractionAgreement,
@@ -67,6 +68,7 @@ from factory.services.relations import RelationView
 from factory.services.snowball import Comparison, RoundCandidate, RoundResult
 from factory.services.trace import TraceNode
 from factory.services.watch import CycleSummary, WatchStatus
+from factory.services.xruns import XrunView
 
 
 def prisma_markdown(flow: PrismaFlow) -> str:
@@ -1332,3 +1334,71 @@ def hypothesis_detail_lines(v: HypothesisView) -> list[str]:
     if v.conclusion:
         lines.append(f"  conclusion (interpretation): {v.conclusion}")
     return lines
+
+
+# --- Experiments and runs (slice 6, plan XP-A) -----------------------------------------------
+
+
+def experiment_lines(views: list[ExperimentView]) -> list[str]:
+    if not views:
+        return ["no experiment designs"]
+    return [
+        f"{v.experiment_id}  {v.e_version}  {v.state}  {v.hypothesis}"
+        + (f"  [{', '.join(v.flags)}]" if v.flags else "")
+        for v in views
+    ]
+
+
+def experiment_detail_lines(v: ExperimentView, verdicts: Mapping[str, str]) -> list[str]:
+    """A design in the researcher's view. The unlock nonce is never part of it: it is printed once,
+    by `factory experiments unlock`."""
+    d = v.design
+    factor = ", ".join(f"{k}: {a} -> {b}" for k, (a, b) in sorted(d.factor.items()))
+    lines = [
+        f"{v.experiment_id}  {v.e_version}  {v.state}",
+        f"  hypothesis: {v.hypothesis}",
+        f"  factor: {factor}",
+        f"  seeds: {', '.join(str(s) for s in sorted(d.seeds))}",
+        f"  code: {d.code.uri} @ {d.code.commit}; environment: {d.environment}",
+        f"  budget: {v.budget.gpu_hours_used} of {v.budget.gpu_hours_budget} GPU-hours; "
+        f"{v.budget.runs_registered} of {v.budget.max_runs} runs"
+        + ("  OVER BUDGET" if v.budget.over else ""),
+    ]
+    if v.access_limit is not None:
+        reads = sum(1 for n in v.access.values() if n > 0)
+        lines.append(
+            f"  confirmatory reads: {reads} of {len(v.access)} primary cells; "
+            f"limit {v.access_limit} per cell"
+        )
+    if verdicts:
+        lines.append(
+            "  baselines: " + ", ".join(f"{k} {word}" for k, word in sorted(verdicts.items()))
+        )
+    if v.flags:
+        lines.append(f"  flags: {', '.join(v.flags)}")
+    for dev in v.deviations:
+        lines.append(
+            f"  deviation ({dev.kind}{', semantic' if dev.semantic else ''}"
+            f"{', after unlock' if dev.after_unlock else ''}): {dev.text}"
+        )
+    return lines
+
+
+def xrun_lines(runs: Sequence[XrunView]) -> list[str]:
+    if not runs:
+        return ["no runs"]
+    out: list[str] = []
+    for r in runs:
+        coordinates = ",".join(f"{k}={val}" for k, val in r.cell.universe) or "-"
+        line = (
+            f"{r.run_id}  {r.state}  {r.cell.arm}  seed {r.cell.seed}  {r.cell.split}  "
+            f"[{coordinates}]"
+        )
+        if r.exploratory:
+            line += "  exploratory"
+        if r.flags:
+            line += f"  [{', '.join(r.flags)}]"
+        if r.metrics:
+            line += "  " + ", ".join(f"{k}={val}" for k, val in sorted(r.metrics.items()))
+        out.append(line)
+    return out
