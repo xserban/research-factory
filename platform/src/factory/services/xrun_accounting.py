@@ -167,6 +167,22 @@ def hidden_baselines(project: Project) -> set[tuple[str, str]]:
     }
 
 
+def hidden_acceptances(project: Project) -> int:
+    """How many `hidden_baselines` were accepted. Only `not-reproduced` can be accepted, so an agent
+    path that counts acceptances gives the verdict away unless it leaves these out."""
+    hidden = hidden_baselines(project)
+    if not hidden:
+        return 0
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT experiment_id, row_key FROM baseline_evaluations "
+                "WHERE accepted_event_id IS NOT NULL"
+            )
+        ).all()
+    return sum((str(e), str(k)) in hidden for e, k in rows)
+
+
 def baseline_flags(project: Project, experiment_id: str) -> tuple[str, ...]:
     """`baseline-not-reproduced` when a baseline that did not reproduce was accepted (R-122): it
     flags every outcome that depends on the design."""

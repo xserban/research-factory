@@ -22,7 +22,11 @@ from factory.services.context import Project
 from factory.services.evaluation import latest_evaluation
 from factory.services.hypotheses import list_hypotheses
 from factory.services.leads import list_leads
-from factory.services.xrun_accounting import baseline_verdicts, hidden_baselines
+from factory.services.xrun_accounting import (
+    baseline_verdicts,
+    hidden_acceptances,
+    hidden_baselines,
+)
 
 
 class HypothesisCounts(StrictModel):
@@ -88,7 +92,8 @@ def hypothesis_counts(project: Project) -> HypothesisCounts | None:
 
 def agent_counts(project: Project, counts: HypothesisCounts) -> HypothesisCounts:
     """The counts as an agent reads them: a baseline that reproduces on the confirmatory split
-    counts as `resolved`, with its row and acceptance left out, until the unlock (decision 94)."""
+    counts as `resolved`, with its row and acceptance left out, until the unlock (decision 94). The
+    acceptance of a dev baseline of the same design stays counted."""
     hidden = hidden_baselines(project)
     if not hidden:
         return counts
@@ -97,21 +102,20 @@ def agent_counts(project: Project, counts: HypothesisCounts) -> HypothesisCounts
             str(e) for e in conn.execute(text("SELECT experiment_id FROM experiments")).scalars()
         ]
         rows = {str(d) for d in conn.execute(text("SELECT direction_id FROM directions")).scalars()}
-        deviations = [
-            (str(e), str(k))
-            for e, k in conn.execute(text("SELECT experiment_id, kind FROM experiment_deviations"))
-        ]
     verdicts: list[str] = []
     for e in experiments:
         for key, verdict in baseline_verdicts(project, e).items():
             verdicts.append("resolved" if (e, key) in hidden and verdict != "pending" else verdict)
-    designs = {e for e, _ in hidden}
+    deviations = dict(counts.deviations_by_kind)
+    left = deviations.get("baseline-accepted", 0) - hidden_acceptances(project)
+    if left > 0:
+        deviations["baseline-accepted"] = left
+    else:
+        deviations.pop("baseline-accepted", None)
     return counts.model_copy(
         update={
             "baselines_by_verdict": _count(verdicts),
-            "deviations_by_kind": _count(
-                [k for e, k in deviations if not (e in designs and k == "baseline-accepted")]
-            ),
+            "deviations_by_kind": deviations,
             "registry_rows": counts.registry_rows - len(rows & {f"{e}:{k}" for e, k in hidden}),
         }
     )

@@ -52,7 +52,7 @@ from factory.model.regions import Facet, MemberBasis, RegionKind
 from factory.model.screening import CalibrationLabelled, Channel, PassLabel, ScreeningItem
 from factory.model.search import QueryKind, QueryPurpose, QuerySpec
 from factory.model.seed import SeedSpec
-from factory.modules.contract import PolicyKind
+from factory.modules.contract import Autonomy, PolicyKind
 from factory.regions.rules import MemberType, RuleSet
 from factory.services import agreement as agreement_service
 from factory.services import audit as audit_service
@@ -121,12 +121,13 @@ from factory.services import watch as watch_service
 from factory.services import xruns as xruns_service
 from factory.services.context import Project, open_project
 from factory.services.extraction import ExtractResult
-from factory.services.gate_status import gates_status
+from factory.services.gate_status import GateStatusRow, gates_status
 from factory.services.hypothesis_gates import GateName, gate_policy
 from factory.services.living_hooks import default_hooks
 from factory.services.results import BatchResult, ItemError
 from factory.services.search import list_works
 from factory.services.seeds import SeedOutcome, SeedRole
+from factory.services.xrun_accounting import hidden_acceptances
 from factory.sources.fulltext.base import FullTextRoute
 from factory.sources.fulltext.registry import default_routes
 from factory.sources.registry import SourceFactory, default_sources
@@ -205,7 +206,8 @@ def build_server(
         def status() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
             report = project_service.project_status(opened).model_dump(mode="json")
-            return _withheld(opened, _without_rates(report))
+            hidden = hidden_acceptances(opened)
+            return _withheld(opened, _without_hidden_acts(_without_rates(report), hidden))
 
         return _reply(project, status)
 
@@ -289,8 +291,10 @@ def build_server(
         def status() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
             _refuse_pass_session(opened)
+            hidden = hidden_acceptances(opened)
             rows: list[JsonValue] = [
-                row.agent_view().model_dump(mode="json") for row in gates_status(opened)
+                _without_hidden_acceptances(row, hidden).agent_view().model_dump(mode="json")
+                for row in gates_status(opened)
             ]
             return _withheld(opened, {"gates": rows}, include_work_ids=False)
 
@@ -3410,6 +3414,35 @@ def _without_rates(report: dict[str, JsonValue]) -> dict[str, JsonValue]:
         calibration = screening.get("calibration")
         if isinstance(calibration, dict):
             calibration.pop("per_pass", None)
+    return report
+
+
+def _without_hidden_acceptances(row: GateStatusRow, hidden: int) -> GateStatusRow:
+    """A gate row for an agent, without the acceptances of baselines whose verdict it may not read
+    yet: only `not-reproduced` can be accepted (decision 94). The gate is human in every mode."""
+    if row.gate_id != "experiments.accept_baseline" or not hidden:
+        return row
+    human = Autonomy.HUMAN.value
+    counts = {**row.counts, human: max(0, row.counts[human] - hidden)}
+    return row.model_copy(update={"counts": counts})
+
+
+def _without_hidden_acts(report: dict[str, JsonValue], hidden: int) -> dict[str, JsonValue]:
+    """The event counts for an agent, without the two events of each such acceptance (the acceptance
+    and its deviation; see `_without_hidden_acceptances`)."""
+    by_type, total = report.get("events_by_type"), report.get("events_total")
+    if not hidden or not isinstance(by_type, dict) or not isinstance(total, int):
+        return report
+    for name in ("baseline.accepted", "experiment.deviation_recorded"):
+        count = by_type.get(name)
+        if isinstance(count, int):
+            left = max(0, count - hidden)
+            total -= count - left
+            if left:
+                by_type[name] = left
+            else:
+                del by_type[name]
+    report["events_total"] = total
     return report
 
 
