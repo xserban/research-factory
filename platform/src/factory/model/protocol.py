@@ -21,6 +21,7 @@ from pydantic import Field, JsonValue, StringConstraints, field_validator, model
 from factory.canonical import canonical_json
 from factory.imports.model import ImportFormat, ImportRole
 from factory.model.base import StrictModel
+from factory.model.gates import GatePolicies
 from factory.model.identity import ULID_RE
 from factory.model.question import QUESTION_ID_RE
 from factory.model.search import QueryKind, QuerySpec
@@ -65,6 +66,7 @@ _OMITTED_WHEN_NONE = frozenset(
         "supplied_links",
         "watch_plan",
         "library_sources",
+        "gate_policies",
     }
 )
 """Optional sections left out of every hash while unset, so protocols that predate them keep
@@ -274,6 +276,9 @@ class ProtocolSpec(StrictModel):
     library_sources: tuple[LibrarySource, ...] | None = None
     """The libraries imported as corpus or reference (slice 3d). Absent (None) until declared;
     left out of the hash while unset, so protocols that predate it keep their versions."""
+    gate_policies: GatePolicies | None = None
+    """Who may pass each decision gate (slice M). Absent (None) until declared, so the preset of
+    the project's rigor mode applies; left out of the hash while unset."""
     rationale: str = ""
 
     @model_validator(mode="after")
@@ -303,7 +308,10 @@ def _digest(dump: dict[str, Any], keys: Iterable[str]) -> str:
         items: Any = dump[key]
         if key in _OMITTED_WHEN_NONE and items is None:
             continue
-        if key in _SORT_KEYS:
+        if key == "gate_policies":
+            entries = sorted(items["entries"], key=lambda item: str(item["gate"]))
+            payload[key] = {"entries": [strip_prose(item) for item in entries]}
+        elif key in _SORT_KEYS:
             sort_keys = _SORT_KEYS[key]
             items = sorted(items, key=lambda item: tuple(str(item[k]) for k in sort_keys))
             payload[key] = [strip_prose(item) for item in items]
@@ -332,6 +340,7 @@ AMENDABLE_FIELDS = (
     "supplied_links",
     "watch_plan",
     "library_sources",
+    "gate_policies",
 )
 """Top-level hashed fields other than criteria, which an amendment reports as `other_changes`."""
 

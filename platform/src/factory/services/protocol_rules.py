@@ -49,6 +49,7 @@ from factory.model.protocol import (
 from factory.model.search import QuerySpec
 from factory.model.staleness import DecisionRef as DecisionRef
 from factory.model.staleness import stale_decisions as stale_decisions
+from factory.modules.presets import preset, rank, weaker
 from factory.packs import NON_COMPARABLE_KEYS, get_pack
 from factory.packs.contribution import CONTRIBUTION_PACK
 from factory.services.question import QuestionVersion
@@ -182,7 +183,10 @@ def protocol_issues(
     """
     errors = _errors(spec, question, current_question_id, mode, seeds, known_sources)
     errors.extend(_watch_plan_errors(spec, window_sources))
+    gate_errors, gate_gaps = _gate_policy_issues(spec, mode)
+    errors.extend(gate_errors)
     gaps = _gaps(spec, question, mode, probes)
+    gaps.extend(gate_gaps)
     return ProtocolCheck(errors=errors, gaps=gaps)
 
 
@@ -370,6 +374,45 @@ def _watch_plan_errors(
                 ValidationIssue(f"watch_plan.sources[{i}].mode", "source has no window filter")
             )
     return issues
+
+
+def _gate_policy_issues(
+    spec: ProtocolSpec, mode: RigorMode
+) -> tuple[list[ValidationIssue], list[ValidationIssue]]:
+    """Errors and gaps of `gate_policies` (slice M ruling 8).
+
+    An unknown gate, or a policy below the gate's floor, is an error in every mode. A policy
+    weaker than the mode's preset is an error in `systematic`, a gap in `pilot` and allowed in
+    `exploratory`. Messages name the gate and the mode, never a rate."""
+    from factory.services.modules.default import default_modules  # the registry imports services
+
+    if spec.gate_policies is None:
+        return [], []
+    registry = default_modules()
+    known = {g.gate_id: g for g in registry.gates()}
+    errors: list[ValidationIssue] = []
+    gaps: list[ValidationIssue] = []
+    for i, entry in enumerate(spec.gate_policies.entries):
+        gate = known.get(entry.gate)
+        if gate is None or gate.kind.value != "decision":
+            errors.append(ValidationIssue(f"gate_policies.entries.{i}.gate", "unknown gate"))
+            continue
+        if rank(entry.policy) < rank(gate.floor):
+            errors.append(
+                ValidationIssue(
+                    f"gate_policies.entries.{i}.policy", f"below the floor of {entry.gate}"
+                )
+            )
+        elif weaker(entry.as_policy(), preset(mode, entry.gate)):
+            issue = ValidationIssue(
+                f"gate_policies.entries.{i}.policy",
+                f"weaker than the {mode.value} preset of {entry.gate}",
+            )
+            if mode is RigorMode.SYSTEMATIC:
+                errors.append(issue)
+            elif mode is RigorMode.PILOT:
+                gaps.append(issue)
+    return errors, gaps
 
 
 def _resolves(parent: str, slot_names: set[str], non_goal_ids: set[str]) -> bool:

@@ -32,6 +32,7 @@ SPEC = ModuleSpec(
             "tasks",
         ),
     ),
+    protocol_sections=("gate_policies",),
     checks=(
         CheckRule("broken-link", ("error", "error", "error")),
         CheckRule("missing-provenance", ("error", "error", "error")),
