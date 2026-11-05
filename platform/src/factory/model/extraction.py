@@ -61,6 +61,25 @@ def scope_of_pack(pack: str | None) -> Scope:
     return Scope.CONTRIBUTION if pack == CONTRIBUTION_SCOPE_NAME else Scope.EVIDENCE
 
 
+CARD_SCOPE_NAME = "card"
+"""The pack tag of an audit of card assertions (slice 6); no schema or pack has this name."""
+
+
+class CardScope(StrEnum):
+    """The audit scope of card assertions. Not a `Scope`: a card is no extraction row and has no
+    passes, so the code that walks every `Scope` must not meet it."""
+
+    CARD = "card"
+
+
+AuditScope = Scope | CardScope
+
+
+def audit_scope_of_pack(pack: str | None) -> AuditScope:
+    """Scope of an audit event's optional `pack` (`card` is the audit of card assertions)."""
+    return CardScope.CARD if pack == CARD_SCOPE_NAME else scope_of_pack(pack)
+
+
 def scope_of_schema_ref(ref: str) -> Scope:
     """Scope of a `<name>@<version>` schema reference."""
     return scope_of_pack(ref.split("@", 1)[0])

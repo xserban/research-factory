@@ -92,6 +92,7 @@ def card_tables(metadata: MetaData) -> CardTables:
         Column("card_id", String, nullable=False),
         Column("property", String, nullable=False),
         Column("value_json", String, nullable=False),
+        Column("unit", String),
         Column("canonical", String),
         Column("basis_kind", String, nullable=False),
         Column("basis_json", String),
@@ -246,6 +247,7 @@ def _asserted(t: CardTables) -> Handler:
                 value_json=canonical_json(
                     p.value if not isinstance(p.value, tuple) else list(p.value)
                 ).decode(),
+                unit=p.unit,
                 canonical=p.canonical,
                 basis_kind=p.basis_kind.value,
                 basis_json=None

@@ -286,6 +286,12 @@ def _promoted(project: Project) -> frozenset[str]:
     )
 
 
+def promoted_works(project: Project) -> frozenset[str]:
+    """The works promoted at title/abstract, whose documents a tool may show. Read-only."""
+    project.index.sync()
+    return _promoted(project)
+
+
 def _select(
     project: Project, work_id: str, document_id: str | None, conversion_id: str | None
 ) -> Conversion:

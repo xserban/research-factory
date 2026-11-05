@@ -79,6 +79,13 @@ def conversion_document(project: Project, conversion_id: str) -> str | None:
     return None if found is None else found.document_id
 
 
+def conversion_work(project: Project, conversion_id: str) -> str | None:
+    """The work a conversion belongs to, or None when the conversion is unknown. Read-only; the
+    caller syncs the index."""
+    found = _find(project, "c.conversion_id = :cid", {"cid": conversion_id})
+    return None if found is None else found.work_id
+
+
 def resolve_anchor(project: Project, conversion_id: str, anchor_id: str) -> Anchor:
     """The anchor `anchor_id` of one conversion, exactly as its manifest holds it.
 

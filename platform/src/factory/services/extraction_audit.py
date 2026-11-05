@@ -32,13 +32,17 @@ from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
 from factory.model.base import StrictModel
 from factory.model.extraction import (
+    CARD_SCOPE_NAME,
     CONTRIBUTION_SCOPE_NAME,
     AuditItemRef,
+    AuditScope,
+    CardScope,
     ExtractionAuditLabelled,
     ExtractionAuditSampled,
     Scope,
 )
 from factory.model.project import RigorMode
+from factory.model.protocol import ExtractionSchema
 from factory.model.screening import Channel
 from factory.services.context import Project
 from factory.services.conversions import conversion_manifest
@@ -48,6 +52,7 @@ from factory.services.extraction import (
     screening_session,
 )
 from factory.services.extraction_agreement import extraction_agreement, final_rows
+from factory.services.protocol import ProtocolVersion, current_protocol
 from factory.services.screening_stats import audit_size
 from factory.services.seeds import _rigor_mode
 
@@ -106,16 +111,20 @@ def _population(project: Project) -> list[tuple[AuditItemRef, str]]:
     return _values(project, Scope.EVIDENCE)
 
 
-def _scoped_population(project: Project, scope: Scope) -> list[tuple[AuditItemRef, str]]:
+def _scoped_population(project: Project, scope: AuditScope) -> list[tuple[AuditItemRef, str]]:
     """The agreed values of `scope`. Evidence goes through `_population`, the seam tests patch."""
     return _population(project) if scope is Scope.EVIDENCE else _values(project, scope)
 
 
-def _values(project: Project, scope: Scope) -> list[tuple[AuditItemRef, str]]:
+def _values(project: Project, scope: AuditScope) -> list[tuple[AuditItemRef, str]]:
     """The agreed values with the extraction each came from, sorted. Single-extraction rows are
     not audited here; a field a human dropped (`neither`) is not a value. Every field of a
     contribution row is a value, `item_kind` and `absent_kind` too, so a not-stated item is
-    audited."""
+    audited. The card scope's values are the stated quote assertions of live cards."""
+    if scope is CardScope.CARD:
+        from factory.services.cards import card_audit_population  # cards import this module
+
+        return card_audit_population(project)
     out = [
         (AuditItemRef(work_id=row.work_id, row_key=row.row_key, field=name), f.extraction_id)
         for row in final_rows(project, scope=scope)
@@ -136,7 +145,7 @@ def _draw(items: Sequence[AuditItemRef], size: int, seed: int) -> list[AuditItem
     return sorted(random.Random(seed).sample(sorted(items, key=_sort_key), size), key=_sort_key)
 
 
-def agreed_values(project: Project, *, scope: Scope = Scope.EVIDENCE) -> list[AuditItemRef]:
+def agreed_values(project: Project, *, scope: AuditScope = Scope.EVIDENCE) -> list[AuditItemRef]:
     """The agreed or resolved field values of aligned dual rows of `scope`, sorted. Read-only."""
     project.index.sync()
     return [item for item, _ in _scoped_population(project, scope)]
@@ -147,7 +156,7 @@ def extraction_audit_sample(
     actor: Actor,
     *,
     random_seed: int | None = None,
-    scope: Scope = Scope.EVIDENCE,
+    scope: AuditScope = Scope.EVIDENCE,
 ) -> ExtractionAuditSampled:
     """Draw and record an audit sample of the agreed values; return the event payload.
 
@@ -167,20 +176,24 @@ def extraction_audit_sample(
             issues.append(ValidationIssue("random_seed", "must be an integer from 0 to 2**32 - 1"))
         if issues:
             raise FactoryValidationError(issues)
-        protocol, schema, _ = require_schema(project, scope=scope)
-        agreement = extraction_agreement(project, actor, scope=scope)
-        if agreement.disagreements:
-            raise _refuse(
-                f"{len(agreement.disagreements)} disagreement(s) are unresolved; "
-                "resolve them before the audit"
-            )
+        if scope is CardScope.CARD:
+            protocol, fraction, minimum = _card_parameters(project)
+        else:
+            protocol, schema, _ = require_schema(project, scope=scope)
+            agreement = extraction_agreement(project, actor, scope=scope)
+            if agreement.disagreements:
+                raise _refuse(
+                    f"{len(agreement.disagreements)} disagreement(s) are unresolved; "
+                    "resolve them before the audit"
+                )
+            fraction, minimum = schema.audit_fraction, schema.audit_minimum
         population = _scoped_population(project, scope)
         if not population:
             raise _refuse("there are no agreed values to audit")
         digest = _digest(population)
         if _last_digest(project, scope) == digest:
             raise _refuse("an audit of this agreed set is open; a new one waits for a change to it")
-        size = audit_size(len(population), schema.audit_fraction, schema.audit_minimum)
+        size = audit_size(len(population), fraction, minimum)
         source = {_sort_key(item): extraction_id for item, extraction_id in population}
         drawn = _draw([item for item, _ in population], size, seed)
         payload = ExtractionAuditSampled(
@@ -210,6 +223,19 @@ def _gate(project: Project, actor: Actor, channel: Channel) -> list[ValidationIs
     return issues
 
 
+def _card_parameters(project: Project) -> tuple[ProtocolVersion, float, int]:
+    """The protocol and the sampling size rule for an audit of card assertions: the evidence
+    schema's `audit_fraction` and `audit_minimum` when declared, else the schema defaults."""
+    protocol = current_protocol(project)
+    if protocol is None:
+        raise _refuse("record a protocol first")
+    declared = protocol.spec.extraction_schema
+    defaults = ExtractionSchema.model_fields
+    fraction = defaults["audit_fraction"].default if declared is None else declared.audit_fraction
+    minimum = defaults["audit_minimum"].default if declared is None else declared.audit_minimum
+    return protocol, float(fraction), int(minimum)
+
+
 def audit_evidence(
     project: Project, actor: Actor, audit_id: str, channel: Channel
 ) -> list[AuditEvidence]:
@@ -225,6 +251,10 @@ def audit_evidence(
     if issues:
         raise FactoryValidationError(issues)
     scope = _audit_scope(project, audit_id)
+    if scope is CardScope.CARD:
+        from factory.services.cards import card_audit_evidence  # cards import this module
+
+        return card_audit_evidence(project, _items(project, audit_id))
     rows = {(r.work_id, r.row_key): r for r in final_rows(project, scope=scope)}
     manifests: dict[str, dict[str, str]] = {}
     out: list[AuditEvidence] = []
@@ -321,7 +351,7 @@ def extraction_audit_record(
 
 
 def extraction_audit_report(
-    project: Project, *, scope: Scope = Scope.EVIDENCE
+    project: Project, *, scope: AuditScope = Scope.EVIDENCE
 ) -> ExtractionAuditReport | None:
     """The latest audit of `scope`: its counts and error rate; None when it has none. Items not
     yet labelled count in the sample size only. A label on a value whose current extraction
@@ -348,7 +378,7 @@ def extraction_audit_report(
             {"a": audit_id},
         ).all()
     try:
-        _, _, pack = require_schema(project, scope=scope)
+        pack = None if scope is CardScope.CARD else require_schema(project, scope=scope)[2]
     except FactoryValidationError:
         pack = None
     current = _current(project, scope)
@@ -387,7 +417,7 @@ def extraction_audit_report(
     )
 
 
-def extraction_audit_outstanding(project: Project, *, scope: Scope = Scope.EVIDENCE) -> bool:
+def extraction_audit_outstanding(project: Project, *, scope: AuditScope = Scope.EVIDENCE) -> bool:
     """Whether there are agreed values and no audit has sampled the current agreed set. False when
     there is nothing to audit. Read-only; never raises."""
     project.index.sync()
@@ -400,20 +430,24 @@ def extraction_audit_outstanding(project: Project, *, scope: Scope = Scope.EVIDE
 # --- Reading the audit tables ---
 
 
-def _pack_tag(scope: Scope) -> str | None:
+def _pack_tag(scope: AuditScope) -> str | None:
+    if scope is CardScope.CARD:
+        return CARD_SCOPE_NAME
     return CONTRIBUTION_SCOPE_NAME if scope is Scope.CONTRIBUTION else None
 
 
-def _audit_scope(project: Project, audit_id: str) -> Scope:
+def _audit_scope(project: Project, audit_id: str) -> AuditScope:
     """The scope an audit was sampled in (evidence for an audit that is not found)."""
     with project.index.connect() as conn:
         row = conn.execute(
             text("SELECT scope FROM extraction_audits WHERE audit_id = :a"), {"a": audit_id}
         ).one_or_none()
-    return Scope.EVIDENCE if row is None else Scope(str(row[0]))
+    if row is None:
+        return Scope.EVIDENCE
+    return CardScope.CARD if str(row[0]) == CardScope.CARD.value else Scope(str(row[0]))
 
 
-def _last_digest(project: Project, scope: Scope = Scope.EVIDENCE) -> str | None:
+def _last_digest(project: Project, scope: AuditScope = Scope.EVIDENCE) -> str | None:
     with project.index.connect() as conn:
         row = conn.execute(
             text(
@@ -453,7 +487,9 @@ def _items(project: Project, audit_id: str) -> list[AuditItemRef]:
     ]
 
 
-def _current(project: Project, scope: Scope = Scope.EVIDENCE) -> dict[tuple[str, str, str], str]:
+def _current(
+    project: Project, scope: AuditScope = Scope.EVIDENCE
+) -> dict[tuple[str, str, str], str]:
     """The extraction each agreed value of `scope` currently comes from, by location."""
     return {
         _sort_key(item): extraction_id for item, extraction_id in _scoped_population(project, scope)

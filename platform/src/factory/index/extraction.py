@@ -33,6 +33,7 @@ from factory.model.extraction import (
     ExtractionRecorded,
     ExtractionResolved,
     Scope,
+    audit_scope_of_pack,
     scope_of_pack,
     scope_of_schema_ref,
 )
@@ -387,7 +388,7 @@ def _audit_sampled(t: ExtractionTables) -> Handler:
             sqlite_insert(t.audits)
             .values(
                 audit_id=payload.audit_id,
-                scope=scope_of_pack(payload.pack).value,
+                scope=audit_scope_of_pack(payload.pack).value,
                 random_seed=payload.random_seed,
                 population=payload.population,
                 population_digest=payload.population_digest,
@@ -403,7 +404,7 @@ def _audit_sampled(t: ExtractionTables) -> Handler:
                 sqlite_insert(t.audit_items)
                 .values(
                     audit_id=payload.audit_id,
-                    scope=scope_of_pack(payload.pack).value,
+                    scope=audit_scope_of_pack(payload.pack).value,
                     work_id=item.work_id,
                     row_key=item.row_key,
                     field=item.field,
