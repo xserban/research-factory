@@ -41,8 +41,16 @@ from factory.model.regions import (
     RegionReviewed,
     RegionSnapshotTaken,
 )
+from factory.regions.concept_use import concept_exists
 from factory.regions.evaluate import Evaluation, Member, evaluate, read_members_blob
-from factory.regions.rules import ImportRule, MemberType, RuleSet
+from factory.regions.rules import (
+    CitesRule,
+    ImportRule,
+    MemberType,
+    RegionRule,
+    RuleSet,
+    RunRule,
+)
 from factory.regions.version import (
     canonical_rules,
     compress,
@@ -170,7 +178,72 @@ def _focus_issues(project: Project, facet: Facet, region_id: str | None) -> list
     return []
 
 
-def _rule_issues(actor: Actor, rules: RuleSet) -> list[ValidationIssue]:
+_HELD_OUT_REASON = "agents may name the development part"
+_BARRED_PURPOSES = ("import", "probe", "seed")
+_WALK_LIMIT = 200
+
+
+def _snapshot_rules(project: Project, version: str) -> RuleSet | None:
+    """The rules of the definition a version was pinned under, or None for an unknown version."""
+    snapshot = _snapshot_of(project, version)
+    if snapshot is None:
+        return None
+    with project.index.connect() as conn:
+        stored = conn.execute(
+            text("SELECT rules FROM region_definitions WHERE event_id = :e"),
+            {"e": snapshot["definition_event"]},
+        ).scalar_one_or_none()
+    return None if stored is None else RuleSet.model_validate_json(str(stored))
+
+
+def _rules_of_set(rules: RuleSet) -> list[Any]:
+    return [*rules.include, *rules.exclude, *([rules.within] if rules.within else [])]
+
+
+def _reaches_all(project: Project, rules: RuleSet, seen: set[str]) -> bool:
+    """Whether the rules name an import's `all` part directly or through pinned versions (a
+    `region` rule or the base of a `cites` rule), nested to any depth."""
+    for rule in _rules_of_set(rules):
+        if isinstance(rule, ImportRule) and rule.part == "all":
+            return True
+        version = (
+            rule.version
+            if isinstance(rule, RegionRule)
+            else rule.base
+            if isinstance(rule, CitesRule)
+            else None
+        )
+        if version is None or version in seen or len(seen) > _WALK_LIMIT:
+            continue
+        seen.add(version)
+        nested = _snapshot_rules(project, version)
+        if nested is not None and _reaches_all(project, nested, seen):
+            return True
+    return False
+
+
+def _purpose_of(project: Project, rule: RunRule) -> str | None:
+    with project.index.connect() as conn:
+        query: str | None = rule.query_id
+        if query is None:
+            via_run = conn.execute(
+                text("SELECT query_id FROM runs WHERE run_id = :r"), {"r": rule.run_id}
+            ).scalar_one_or_none()
+            query = None if via_run is None else str(via_run)
+        if query is None:
+            return None
+        found = conn.execute(
+            text("SELECT purpose FROM queries WHERE query_id = :q"), {"q": query}
+        ).scalar_one_or_none()
+    return None if found is None else str(found)
+
+
+def _rule_issues(project: Project, actor: Actor, rules: RuleSet) -> list[ValidationIssue]:
+    """Role-blind guard for an agent author (decision 37 item 9): a rule that would reach the
+    held-out part of an import, or select by a query of purpose import, seed or probe, is refused
+    as a whole; no work is ever filtered. A human is not restricted."""
+    if actor.kind == "human":
+        return []
     issues: list[ValidationIssue] = []
     labelled = [
         *((f"rules.include[{i}]", r) for i, r in enumerate(rules.include)),
@@ -178,8 +251,13 @@ def _rule_issues(actor: Actor, rules: RuleSet) -> list[ValidationIssue]:
         *((("rules.within", rules.within),) if rules.within is not None else ()),
     ]
     for field, rule in labelled:
-        if isinstance(rule, ImportRule) and rule.part == "all" and actor.kind != "human":
-            issues.append(ValidationIssue(f"{field}.part", "agents may name the development part"))
+        single = RuleSet(include=(rule,))
+        if isinstance(rule, ImportRule) and rule.part == "all":
+            issues.append(ValidationIssue(f"{field}.part", _HELD_OUT_REASON))
+        elif isinstance(rule, RegionRule | CitesRule) and _reaches_all(project, single, set()):
+            issues.append(ValidationIssue(field, _HELD_OUT_REASON))
+        elif isinstance(rule, RunRule) and _purpose_of(project, rule) in _BARRED_PURPOSES:
+            issues.append(ValidationIssue(field, "agents may not select by this query purpose"))
     return issues
 
 
@@ -227,7 +305,7 @@ def define_region(
             issues.append(ValidationIssue("facet", "a region takes no facet"))
         elif facet is not None and previous is None:
             issues += _focus_issues(project, facet, region_id)
-        issues += _rule_issues(actor, rules)
+        issues += _rule_issues(project, actor, rules)
         if issues:
             raise _refuse(*issues)
         new_id = region_id or f"reg_{project.ids.ulid()}"
@@ -268,6 +346,37 @@ def define_region(
 # --- Member decisions ---
 
 
+_MEMBER_TABLES = {
+    MemberType.WORK: ("works", "work_id"),
+    MemberType.IDEA: ("ideas", "idea_id"),
+}
+_PREFIXES = {MemberType.IDEA: "ida_", MemberType.CONCEPT: "cpt_"}
+
+
+def _member_issues(project: Project, member_type: MemberType, member: str) -> list[ValidationIssue]:
+    """The id must be one line of printable, non-space characters (the projection folds the
+    member blob line by line, and an event can never be corrected), carry the prefix of its
+    type, and name a recorded work, idea or concept."""
+    if not member or not member.isprintable() or any(ch.isspace() for ch in member):
+        return [ValidationIssue("member", "member-invalid")]
+    prefix = _PREFIXES.get(member_type)
+    other = tuple(p for t, p in _PREFIXES.items() if t is not member_type)
+    if (prefix is not None and not member.startswith(prefix)) or member.startswith(other):
+        return [ValidationIssue("member", "member-type-mismatch")]
+    with project.index.connect() as conn:
+        if member_type is MemberType.CONCEPT:
+            return (
+                []
+                if concept_exists(conn, member)
+                else [ValidationIssue("member", "member-unknown")]
+            )
+        table, column = _MEMBER_TABLES[member_type]
+        found = conn.execute(
+            text(f"SELECT 1 FROM {table} WHERE {column} = :m"), {"m": member}
+        ).first()
+    return [] if found is not None else [ValidationIssue("member", "member-unknown")]
+
+
 def decide_member(
     project: Project,
     actor: Actor,
@@ -286,8 +395,7 @@ def decide_member(
             issues = issues or [ValidationIssue("actor", "only a human decides a member")]
         if _definition(project, region_id) is None:
             issues.append(ValidationIssue("region_id", "region-unknown"))
-        if not member.strip():
-            issues.append(ValidationIssue("member", "a member id"))
+        issues += _member_issues(project, member_type, member)
         if issues:
             raise _refuse(*issues)
         event = project.events.make(

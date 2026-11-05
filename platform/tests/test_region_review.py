@@ -70,7 +70,7 @@ def test_second_human_must_review(region_project: RWorld, human: Actor) -> None:
     w = region_project
     region, version = make(w, human)
     ann = Actor(kind="human", id="ann", user="ann", session=SESSION)
-    decide_member(w.project, ann, region, MemberType.WORK, "rf:x-00000001", "add")
+    decide_member(w.project, ann, region, MemberType.WORK, w.extra, "add")
     with pytest.raises(FactoryValidationError) as caught:
         review_region(w.project, human, version, "reviewed")
     assert caught.value.issues[0].field == "reviewer"
@@ -91,7 +91,7 @@ def test_new_snapshot_supersedes_old_version_state(region_project: RWorld, human
     w = region_project
     region, first = make(w, human)
     review_region(w.project, human, first, "reviewed")
-    decide_member(w.project, human, region, MemberType.WORK, "rf:added-00000001", "add")
+    decide_member(w.project, human, region, MemberType.WORK, w.extra, "add")
     second = snapshot_region(w.project, human, region)
     assert review_state(w.project, first) == "superseded"
     assert review_state(w.project, second) == "unreviewed"

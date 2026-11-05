@@ -85,6 +85,6 @@ class RegionMemberDecided(StrictModel):
 
     region_id: str = Field(pattern=REGION_ID_RE)
     member_type: MemberType
-    member: str = Field(min_length=1)
+    member: str = Field(pattern=r"^[^\s]+$")
     decision: Literal["add", "remove"]
     note: str | None = Field(default=None, max_length=REVIEW_NOTE_MAX_CHARS)
