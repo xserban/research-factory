@@ -356,7 +356,7 @@ def test_duplicate_merge_from_refused_and_a_logged_duplicate_rebuilds(cw: CW) ->
     assert not events_of(project, "label.merged", "consolidation.decided")
     # a hand-written log with two merges of one key still folds and rebuilds
     one = merge_labels(project, cw.w.human, row.members[0], row.members[1], "same")
-    twin = [e for e in events_of(project, "label.merged") if e.id == one][0]
+    twin = next(e for e in events_of(project, "label.merged") if e.id == one)
     again = twin.model_copy(
         update={
             "id": project.events.make("label.merged", LabelMerged(**twin.payload), cw.w.human).id

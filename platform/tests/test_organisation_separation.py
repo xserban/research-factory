@@ -427,3 +427,35 @@ async def test_skill_hash_recorded_and_roundtrip(
         assert e.input_blob is not None
     assert "score" not in json.dumps(served["data"])
     assert served["data"]["task"]["pass_id"] == pass_id
+
+
+def import_tag(project: Project, w: IWorld, text: str, target: str, ref: str) -> str:
+    from factory.services.labels import _apply
+
+    out = _apply(
+        project,
+        w.human,
+        [LabelInput(target_type=W, target=target, text=text)],
+        origin="import-tag",
+        import_refs=[ref],
+    )
+    assert not out.rejected
+    return out.written[0]
+
+
+def test_agent_trace_withholds_import_tags_but_not_works(project: Project, iw: IWorld) -> None:
+    from factory.errors import FactoryValidationError
+    from factory.services.trace import agent_trace
+
+    ref = "imp_01JZ9Q3K5M7N8P0R2S4T6V8W1J:17"
+    tag = import_tag(project, iw, "Performer", iw.source, ref)
+    label(project, iw.human, "performer", iw.other)
+    term = promote_term(project, iw.human, name="performer", definition="d", applies_to=(W,))
+    shown = agent_trace(project, term).model_dump_json()
+    assert ref not in shown and tag not in shown and "from record" not in shown
+    assert "imp_" not in shown
+    with pytest.raises(FactoryValidationError):
+        agent_trace(project, tag)
+    assert ref in trace(project, term).model_dump_json()  # the researcher's trace keeps it
+    # the work still reads as a corpus work through its own trace
+    assert agent_trace(project, iw.source).id == iw.source

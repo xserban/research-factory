@@ -290,6 +290,14 @@ def agent_trace(
             for (r, q) in conn.execute(text("SELECT run_id, query_id FROM runs")).all()
             if str(q) in hidden_queries
         }
+        # Every label applied from an import's tags, whatever its record's part: the tag is
+        # withheld, never the work (decision 43; the part is not read).
+        hidden_runs |= {
+            str(a)
+            for (a,) in conn.execute(
+                text("SELECT application_id FROM labels WHERE origin = 'import-tag'")
+            ).all()
+        }
     if _hidden(tree, hidden_queries, hidden_runs):
         raise FactoryValidationError([ValidationIssue("ref", "unknown id")])
     return _pruned(tree, hidden_queries, hidden_runs)
@@ -354,6 +362,8 @@ def _hidden(node: TraceNode, queries: set[str], runs: set[str]) -> bool:
         return node.id in runs
     if node.kind == "record":
         return node.id.split("/", 1)[0] in runs
+    if node.kind == "label":
+        return node.id in runs  # `runs` also holds the import-tag application ids
     # How a work was supplied is a route; the agent view never shows one (slice 4a ruling 8).
     # An import and its records carry ordinals, which name the held-out part (decision 43).
     return node.kind in ("inbox_item", "import", "import_record")
