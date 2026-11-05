@@ -145,3 +145,7 @@ Minor review findings parked during the v1 build, to address when iterating from
 - W-B: `sentence_status` resolves supports per reference through W-A's `_Reader`, one query each, not the plan's "7 queries" per draft. It is fine at section size; measure at 200 sentences.
 - W-B: a human who verified a sentence can label the audit of that verdict; only the gate's human check applies.
 - W-B: the fold of `draft.audited` accepts `channel = mcp` from any human (as the G3-C note above); only the service refuses a pass session's relay.
+- W-B: `render_closing` points at `factory export bibtex` for the bibliography; it does not list the works.
+- W-B: `verify_record` does not recheck staleness: a support that went stale after the unit was served still takes a verdict, which then reads stale on read.
+- W-B: the open verification tasks of a superseded or withdrawn sentence stay open; nothing closes them, and `verify_record` refuses them as not live.
+- W-B: `factory draft release` prints only that the draft was released, not the record (counts, audit, log position).
