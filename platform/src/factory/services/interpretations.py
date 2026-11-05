@@ -22,32 +22,39 @@ Invariants:
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable, Sequence
-from typing import Any
+from collections.abc import Collection, Iterable, Sequence
+from typing import Any, Literal
 
-from pydantic import JsonValue
+from pydantic import ConfigDict, Field, JsonValue
 from sqlalchemy import text
 
 from factory.clock import format_ts
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor, Event
+from factory.intuition.labels import LAYER_CLASS, interpretation_visible, layer_label
 from factory.intuition.validate import shape_issues
 from factory.lineage.graph import GraphFilter
 from factory.model.base import StrictModel
 from factory.model.extraction import Scope
 from factory.model.intuition import (
     Author,
+    HistoryEntry,
+    InterpretationHidden,
     InterpretationInput,
     InterpretationRecorded,
+    InterpretationReviewed,
     ReviewState,
+    SourceInput,
+    StoredSource,
 )
+from factory.model.screening import Channel
 from factory.model.task import TaskCompleted, TaskStatus
 from factory.services.call_memo import entering
 from factory.services.context import Project
 from factory.services.contributions import final_item
-from factory.services.extraction import live_rows
+from factory.services.extraction import is_extraction_session, live_rows, screening_session
 from factory.services.ideas import idea_view, list_ideas, resolve_idea
-from factory.services.intuition_sources import verify_sources
+from factory.services.intuition_sources import stale_sources, verify_sources
 from factory.services.lineage import graph_node
 from factory.services.search import works_by_ids
 from factory.services.tasks import (
@@ -518,3 +525,341 @@ def _task_issues(
     if not isinstance(content, dict) or content.get("target") != entry.target:
         return [ValidationIssue("task_id", "the task is for another target")]
     return []
+
+
+# --- Review ---
+
+
+def _joined_a_pass(project: Project, session: str) -> bool:
+    return is_extraction_session(project, session) or screening_session(project, session)
+
+
+def _human_users(project: Project) -> int:
+    """How many distinct human users have acted in the project (a count in SQL)."""
+    with project.index.connect() as conn:
+        return int(
+            conn.execute(
+                text("SELECT COUNT(DISTINCT user) FROM events WHERE actor_kind = 'human'")
+            ).scalar_one()
+        )
+
+
+def review_interpretation(
+    project: Project,
+    actor: Actor,
+    interpretation_id: str,
+    state: Literal["reviewed", "wrong"],
+    note: str,
+    channel: Channel,
+) -> str:
+    """Record a human review (`reviewed` or `wrong`) and return its event id; a later review
+    supersedes the earlier. Refused, with nothing written, for a non-human actor or the session
+    that wrote an agent-written interpretation, relay included (`actor`), an MCP relay from a
+    session that joined a pass (`channel`), an unknown or superseded interpretation
+    (`interpretation_id`), a `wrong` without a note (`note`), and the author of a human-written
+    interpretation when more than one human has acted in the project (`reviewer`, ruling A7);
+    with a single human the review is recorded `self_reviewed`."""
+    if actor.kind != "human":
+        raise FactoryValidationError([ValidationIssue("actor", "only a human reviews")])
+    with project.index.exclusive():
+        project.index.sync()
+        row = _row(project, interpretation_id)
+        if row is None:
+            raise FactoryValidationError(
+                [ValidationIssue("interpretation_id", "unknown-interpretation")]
+            )
+        issues: list[ValidationIssue] = []
+        if row["review_state"] == ReviewState.SUPERSEDED.value:
+            issues.append(ValidationIssue("interpretation_id", "superseded"))
+        if row["author"] == Author.AGENT.value and row["writer_session"] == actor.session:
+            issues.append(
+                ValidationIssue(
+                    "actor", "the session that wrote an interpretation cannot review it"
+                )
+            )
+        if channel is Channel.MCP and _joined_a_pass(project, actor.session):
+            issues.append(ValidationIssue("channel", "this session has joined a pass"))
+        if state == "wrong" and not note.strip():
+            issues.append(ValidationIssue("note", "state why the interpretation is wrong"))
+        self_reviewed = row["author"] == Author.HUMAN.value and row["author_user"] == actor.user
+        if self_reviewed and _human_users(project) > 1:
+            issues.append(ValidationIssue("reviewer", "another human reviews this interpretation"))
+        if issues:
+            raise FactoryValidationError(issues)
+        event = project.events.make(
+            "interpretation.reviewed",
+            InterpretationReviewed(
+                interpretation_id=interpretation_id,
+                state=state,
+                note=note,
+                self_reviewed=self_reviewed,
+                channel=channel,
+            ),
+            actor,
+            refs=[interpretation_id],
+        )
+        project.record([event])
+        return event.id
+
+
+def supersede_interpretation(
+    project: Project,
+    actor: Actor,
+    interpretation_id: str,
+    text_: str,
+    sources: Sequence[SourceInput],
+) -> str:
+    """A human writes a replacement for any live interpretation, of the same target, naming the
+    earlier one, which becomes `superseded`; returns the new id. Refusals as
+    `record_interpretation`, and `actor` for a non-human, `interpretation_id` for an unknown one."""
+    if actor.kind != "human":
+        raise FactoryValidationError([ValidationIssue("actor", "only a human supersedes")])
+    project.index.sync()
+    prior = _row(project, interpretation_id)
+    if prior is None:
+        raise FactoryValidationError(
+            [ValidationIssue("interpretation_id", "unknown-interpretation")]
+        )
+    entry = InterpretationInput(
+        target=str(prior["target"]),
+        text=text_,
+        sources=tuple(sources),
+        supersedes=interpretation_id,
+    )
+    return record_interpretation(project, actor, entry)
+
+
+# --- Reads ---
+
+
+class InterpretationView(StrictModel):
+    """An interpretation as the reviewer sees it, labelled; `source_stale` lists the superseded
+    documents of its quote sources (never a change of state). Serialise with `by_alias=True` for
+    the key `class`."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, populate_by_name=True)
+
+    interpretation_id: str
+    class_: str = Field(serialization_alias="class")
+    label: str
+    target: str
+    target_kind: str
+    text: str
+    sources: list[StoredSource]
+    author: str
+    writer: str
+    review_state: str
+    self_reviewed: bool
+    source_stale: list[str]
+    input_blob: str | None
+
+
+class InterpretationList(StrictModel):
+    items: list[InterpretationView]
+    hidden: InterpretationHidden
+    next_cursor: str | None
+
+
+LIST_PAGE = 50
+_VIEW_SQL = (
+    "SELECT i.interpretation_id, i.target, i.target_kind, i.text, i.author, i.review_state, "
+    "i.self_reviewed, i.input_blob, e.actor_id, e.model FROM interpretations i "
+    "JOIN events e ON e.id = i.event_id "
+)
+
+
+def _writer(actor_id: str, model: str | None) -> str:
+    return actor_id if model is None else f"{actor_id} ({model})"
+
+
+def _visible_states() -> list[ReviewState]:
+    return [s for s in ReviewState if interpretation_visible(s)]
+
+
+def list_interpretations(
+    project: Project,
+    *,
+    target: str | None = None,
+    states: Collection[ReviewState] | None = None,
+    cursor: str | None = None,
+    limit: int = LIST_PAGE,
+) -> InterpretationList:
+    """One page of interpretations by id, labelled. Default states are the visible ones
+    (`unreviewed`, `reviewed`; ruling 7); the hidden counts (`wrong`, `superseded`) are always
+    reported, over the same target filter. `next_cursor` continues the listing."""
+    wanted = [s.value for s in (states if states is not None else _visible_states())]
+    project.index.sync()
+    where = "i.review_state IN (SELECT value FROM json_each(:states))"
+    params: dict[str, Any] = {"states": json.dumps(sorted(wanted)), "n": limit + 1}
+    hidden_where = "review_state IN ('wrong', 'superseded')"
+    hidden_params: dict[str, Any] = {}
+    if target is not None:
+        where += " AND i.target = :t"
+        params["t"] = target
+        hidden_where += " AND target = :t"
+        hidden_params["t"] = target
+    if cursor is not None:
+        where += " AND i.interpretation_id > :c"
+        params["c"] = cursor
+    with project.index.connect() as conn:
+        found = (
+            conn.execute(
+                text(f"{_VIEW_SQL} WHERE {where} ORDER BY i.interpretation_id LIMIT :n"), params
+            )
+            .mappings()
+            .all()
+        )
+        counts: dict[Any, Any] = dict(
+            conn.execute(
+                text(
+                    "SELECT review_state, COUNT(*) FROM interpretations "
+                    f"WHERE {hidden_where} GROUP BY review_state"
+                ),
+                hidden_params,
+            ).all()
+        )
+        page = found[:limit]
+        ids = [str(r["interpretation_id"]) for r in page]
+        sources = _sources_of(conn, ids)
+    stale = stale_sources(project, only=ids)
+    items = [
+        InterpretationView(
+            interpretation_id=str(r["interpretation_id"]),
+            class_=LAYER_CLASS,
+            label=layer_label(str(r["review_state"])),
+            target=str(r["target"]),
+            target_kind=str(r["target_kind"]),
+            text=str(r["text"]),
+            sources=sources.get(str(r["interpretation_id"]), []),
+            author=str(r["author"]),
+            writer=_writer(str(r["actor_id"]), r["model"]),
+            review_state=str(r["review_state"]),
+            self_reviewed=bool(r["self_reviewed"]),
+            source_stale=list(stale.get(str(r["interpretation_id"]), ())),
+            input_blob=r["input_blob"],
+        )
+        for r in page
+    ]
+    return InterpretationList(
+        items=items,
+        hidden=InterpretationHidden(
+            wrong=int(counts.get("wrong", 0)), superseded=int(counts.get("superseded", 0))
+        ),
+        next_cursor=ids[-1] if len(found) > limit else None,
+    )
+
+
+def _sources_of(conn: Any, ids: list[str]) -> dict[str, list[StoredSource]]:
+    if not ids:
+        return {}
+    rows = (
+        conn.execute(
+            text(
+                "SELECT interpretation_id, role, kind, work_id, conversion_id, document_id, "
+                "anchor, quote, reference, link_state, resolved_work "
+                "FROM interpretation_sources WHERE interpretation_id IN "
+                "(SELECT value FROM json_each(:ids)) ORDER BY interpretation_id, position"
+            ),
+            {"ids": json.dumps(ids)},
+        )
+        .mappings()
+        .all()
+    )
+    out: dict[str, list[StoredSource]] = {}
+    for r in rows:
+        out.setdefault(str(r["interpretation_id"]), []).append(
+            StoredSource(
+                kind=r["kind"],
+                role=r["role"],
+                work_id=r["work_id"],
+                conversion_id=r["conversion_id"],
+                anchor=r["anchor"],
+                quote=r["quote"],
+                reference=r["reference"],
+                document_id=r["document_id"],
+                link_state=r["link_state"],
+                resolved_work=r["resolved_work"],
+            )
+        )
+    return out
+
+
+def interpretation_history(project: Project, interpretation_id: str) -> list[HistoryEntry]:
+    """Every step of an interpretation in event order: its recording, each review (`reviewed`
+    or `wrong`, with note and self-review flag) and the recording that superseded it. Empty for
+    an unknown id."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        head = conn.execute(
+            text(
+                "SELECT i.event_id, e.actor_id, i.superseded_by FROM interpretations i "
+                "JOIN events e ON e.id = i.event_id WHERE i.interpretation_id = :i"
+            ),
+            {"i": interpretation_id},
+        ).first()
+        if head is None:
+            return []
+        reviews = conn.execute(
+            text(
+                "SELECT r.event_id, r.state, r.note, r.self_reviewed, e.actor_id "
+                "FROM interpretation_reviews r JOIN events e ON e.id = r.event_id "
+                "WHERE r.interpretation_id = :i ORDER BY r.event_id"
+            ),
+            {"i": interpretation_id},
+        ).all()
+        successor = (
+            None
+            if head[2] is None
+            else conn.execute(
+                text(
+                    "SELECT i.event_id, e.actor_id FROM interpretations i "
+                    "JOIN events e ON e.id = i.event_id WHERE i.interpretation_id = :i"
+                ),
+                {"i": str(head[2])},
+            ).first()
+        )
+    history = [
+        HistoryEntry(
+            event_id=str(head[0]),
+            kind="recorded",
+            state=None,
+            actor=str(head[1]),
+            note="",
+            self_reviewed=False,
+        )
+    ]
+    history += [
+        HistoryEntry(
+            event_id=str(r[0]),
+            kind="reviewed",
+            state=str(r[1]),
+            actor=str(r[4]),
+            note=str(r[2]),
+            self_reviewed=bool(r[3]),
+        )
+        for r in reviews
+    ]
+    if successor is not None:
+        history.append(
+            HistoryEntry(
+                event_id=str(successor[0]),
+                kind="superseded-by",
+                state=ReviewState.SUPERSEDED.value,
+                actor=str(successor[1]),
+                note="",
+                self_reviewed=False,
+            )
+        )
+    return sorted(history, key=lambda h: h.event_id)
+
+
+def review_counts(project: Project) -> dict[ReviewState, int]:
+    """Interpretations by live review state, counted in SQL (every state present)."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        found: dict[Any, Any] = dict(
+            conn.execute(
+                text("SELECT review_state, COUNT(*) FROM interpretations GROUP BY review_state")
+            ).all()
+        )
+    return {s: int(found.get(s.value, 0)) for s in ReviewState}

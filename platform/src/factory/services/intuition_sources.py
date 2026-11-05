@@ -16,7 +16,8 @@ This module reads the index and the library and writes nothing.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import json
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 
 from sqlalchemy import text
@@ -154,23 +155,30 @@ def entry_link(project: Project, entry_key: str) -> tuple[str, str | None] | Non
     return entry.link_state.value, entry.link_work
 
 
-def stale_sources(project: Project) -> dict[str, tuple[str, ...]]:
+def stale_sources(
+    project: Project, only: Collection[str] | None = None
+) -> dict[str, tuple[str, ...]]:
     """Interpretation id -> the documents of its quote sources that have since been superseded,
-    for the interpretations that are not themselves superseded. One indexed join."""
+    for the interpretations that are not themselves superseded (`only` limits the ids read). One
+    indexed join."""
     project.index.sync()
+    sql = (
+        "SELECT i.interpretation_id, s.document_id FROM interpretation_sources s "
+        "JOIN interpretations i ON i.interpretation_id = s.interpretation_id "
+        "JOIN fulltext_documents d ON d.document_id = s.document_id "
+        "WHERE i.superseded_by IS NULL AND d.superseded_by IS NOT NULL "
+    )
+    params: dict[str, str] = {}
+    if only is not None:
+        sql += "AND i.interpretation_id IN (SELECT value FROM json_each(:ids)) "
+        params["ids"] = json.dumps(sorted(only))
     with project.index.connect() as conn:
         found = conn.execute(
-            text(
-                "SELECT i.interpretation_id, s.document_id FROM interpretation_sources s "
-                "JOIN interpretations i ON i.interpretation_id = s.interpretation_id "
-                "JOIN fulltext_documents d ON d.document_id = s.document_id "
-                "WHERE i.superseded_by IS NULL AND d.superseded_by IS NOT NULL "
-                "ORDER BY i.interpretation_id, s.document_id"
-            )
+            text(sql + "ORDER BY i.interpretation_id, s.document_id"), params
         ).all()
     out: dict[str, list[str]] = {}
     for interpretation_id, document_id in found:
-        out.setdefault(str(interpretation_id), [])
-        if str(document_id) not in out[str(interpretation_id)]:
-            out[str(interpretation_id)].append(str(document_id))
+        docs = out.setdefault(str(interpretation_id), [])
+        if str(document_id) not in docs:
+            docs.append(str(document_id))
     return {k: tuple(v) for k, v in out.items()}
