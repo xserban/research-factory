@@ -3337,10 +3337,6 @@ def build_server(
             opened = open_project(settings, project, session=session, clock=clock)
             _refuse_pass_session(opened)
             _require_pass_opened(opened, "view")
-            if gates_service.rigor_mode(opened) is RigorMode.SYSTEMATIC:
-                raise FactoryValidationError(
-                    [ValidationIssue("actor", "in this mode a draft is released at the terminal")]
-                )
             actor = make_agent_actor(settings, session, role, model, skill)
             event_id = draft_release_service.release(opened, draft_id, actor=actor)
             return _withheld(opened, {"event_id": event_id}, include_work_ids=False)

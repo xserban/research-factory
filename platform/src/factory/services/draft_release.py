@@ -11,8 +11,8 @@ of record.
 Invariants:
 - A refusal has one issue per blocking condition, counts only, never text. The conditions an
   agent can reach read nothing of an audit's result: the audit rate and the flagged count bind only
-  in `systematic`, where the gate is `human` and refuses an agent first (R-39; a protocol weakening
-  it there is refused when recorded, `protocol_rules`).
+  in `systematic`, where an agent is refused first, before the gate (R-39; a protocol weakening the
+  gate there is refused when recorded, `protocol_rules`).
 - A release writes one event with the log position it was read at, the policy, the counts by status
   and the audit as the researcher reads them. It does not freeze the draft; a later release is a new
   event with new counts.
@@ -88,8 +88,12 @@ def release(project: Project, draft_id: str, *, actor: Actor) -> str:
     with project.index.exclusive(), entering():
         project.index.sync()
         require_draft(project, draft_id)
-        policy = require_gate(project, actor, GATE)
         mode = rigor_mode(project)
+        if mode is RigorMode.SYSTEMATIC and actor.kind != "human":
+            raise FactoryValidationError(
+                [ValidationIssue("actor", "in this mode a draft is released at the terminal")]
+            )
+        policy = require_gate(project, actor, GATE)
         if mode is RigorMode.SYSTEMATIC and actor.id != _reviewer_of_record(project):
             raise FactoryValidationError(
                 [ValidationIssue("actor", "only the reviewer of record releases in this mode")]
