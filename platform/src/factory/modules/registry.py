@@ -131,6 +131,10 @@ class ModuleRegistry:
     def gates(self) -> tuple[GateSpec, ...]:
         return tuple(self._gates.values())
 
+    def read_miners(self) -> frozenset[tuple[str, int]]:
+        """Every registered `(miner, version)` some builder declares it reads."""
+        return frozenset(pair for m in self._modules for pair in m.spec.reads.miners)
+
     def levels(self) -> dict[str, Levels]:
         """Every declared check code with its severities, in declaration order."""
         return {c.code: c.levels for m in self._modules for c in m.spec.checks}

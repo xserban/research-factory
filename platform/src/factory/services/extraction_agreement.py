@@ -63,6 +63,8 @@ from factory.services.document_read import default_conversion
 from factory.services.extraction import (
     ExtractionRow,
     PassConfig,
+    calibration_sessions_of,
+    calibration_task_ids,
     in_dual_sample,
     is_extraction_session,
     live_rows,
@@ -734,13 +736,15 @@ def _refuse(reason: str) -> FactoryValidationError:
 
 def _pass_views(project: Project, state: _State) -> list[ExtractionPassView]:
     with project.index.connect() as conn:
-        joined = conn.execute(
+        found = conn.execute(
             text(
                 "SELECT session, pass_label, model FROM extraction_sessions "
                 "WHERE scope = :scope ORDER BY session"
             ),
             {"scope": state.scope.value},
         ).all()
+    apart = calibration_sessions_of(project, state.scope)
+    joined = [row for row in found if str(row[0]) not in apart]
     views: list[ExtractionPassView] = []
     for label in PassLabel:
         config = state.configs[label]
@@ -767,10 +771,12 @@ def _refuse_shared(
     the other pass's model after joining is caught."""
     joins: dict[PassLabel, set[str]] = {label: set() for label in PassLabel}
     models: dict[PassLabel, set[str]] = {label: set() for label in PassLabel}
+    apart = calibration_sessions_of(project, scope)
+    apart_tasks = calibration_task_ids(project, scope)
     for event in read_all(project.paths.events_dir, project.catalog):
         if event.type == "extraction.pass_joined":
             payload = ExtractionPassJoined.model_validate(event.payload)
-            if scope_of_pack(payload.pack) != scope:
+            if scope_of_pack(payload.pack) != scope or payload.session in apart:
                 continue
             joins[payload.pass_label].add(payload.session)
             models[payload.pass_label].add(payload.model)
@@ -778,6 +784,7 @@ def _refuse_shared(
             event.type == "extraction.recorded"
             and event.actor.model is not None
             and scope_of_schema_ref(str(event.payload["schema_ref"])) == scope
+            and str(event.payload["task_id"]) not in apart_tasks
         ):
             label = PassLabel(str(event.payload["pass_label"]))
             models[label].add(event.actor.model)
@@ -829,6 +836,10 @@ def resolve_extraction(
                 agent_text="disagreements are resolved by a human",
             )
         )
+        if isinstance(scope, MinerScope):
+            from factory.services.miner_independence import resolve_issues  # imports mining
+
+            issues.extend(resolve_issues(project, actor, scope.name, channel))
         if issues:
             raise FactoryValidationError(issues)
         state = _load(project, scope)
@@ -858,7 +869,16 @@ def resolve_extraction(
                     for e in exc.errors()
                 ]
             ) from exc
-        event = project.events.make("extraction.resolved", payload, actor)
+        event = project.events.make(
+            "extraction.resolved",
+            payload,
+            actor,
+            input_blob=(
+                project.blobs.put_json(payload.model_dump(mode="json"))
+                if actor.kind == "agent"
+                else None
+            ),
+        )
         project.record([event])
     return event.id
 

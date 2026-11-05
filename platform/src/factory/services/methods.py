@@ -77,6 +77,27 @@ class ImportMethods(StrictModel):
     """True in the agent view while no screening pass has been opened."""
 
 
+class MinerMethods(StrictModel):
+    """One registered miner version in the statement (R-52): every version is listed, with the
+    state it ended in, so a failed or retired miner stays reported. The score fields are the
+    calibration's; an agent view blanks them (they derive from the human gold labels)."""
+
+    name: str
+    version: int
+    state: str
+    proposer_kind: str
+    listed: bool
+    evidence: bool
+    calibration_units: int | None = None
+    calibration: str | None = None
+    """`passed`, `failed` or `pending`; None while no calibration is drawn. It stays when the
+    miner is retired, so a failed and retired version is reported as both."""
+    recall: float | None = None
+    field_agreement: float | None = None
+    precision: float | None = None
+    verification_rate: float | None = None
+
+
 class MethodsReport(StrictModel):
     rigor_mode: str
     method_profile: str | None
@@ -150,6 +171,8 @@ class MethodsReport(StrictModel):
     """The declared stopping rule, stated in words; None while no plan is declared."""
     imports: list[ImportMethods] = Field(default_factory=list)
     """Resolved library imports (slice 3d); empty, and no paragraph, without imports."""
+    miners: list[MinerMethods] = Field(default_factory=list)
+    """Registered miner versions (slice M, M-D); empty, and no paragraph, without any."""
     gate_policy: list[GateStatusRow] = Field(default_factory=list)
     """The decision gates the statement reports (slice M, `GateStatusRow.notable`): empty, and no
     paragraph, while every act was passed by a human under a `human` policy."""
@@ -234,7 +257,49 @@ def methods_report(project: Project) -> MethodsReport:
         supplied_links=_supplied_links(project),
         imports=_imports(project, agent=False),
         gate_policy=notable_rows(project),
+        miners=_miners(project),
     )
+
+
+def _miners(project: Project) -> list[MinerMethods]:
+    """Every registered miner version with its state, proposer kind, calibration scores and
+    evidence flag (the protocol's)."""
+    from factory.services.miner_report import miner_calibration_report
+    from factory.services.miners import miner_state
+    from factory.services.mining import registered_miners
+
+    protocol = current_protocol(project)
+    uses = {} if protocol is None else {(u.name, u.version): u for u in protocol.spec.miners or ()}
+    out: list[MinerMethods] = []
+    for row in registered_miners(project):
+        use = uses.get((row.name, row.version))
+        report = miner_calibration_report(project, row.name, row.version)
+        result = None if report is None else report.score
+        out.append(
+            MinerMethods(
+                name=row.name,
+                version=row.version,
+                state=miner_state(project, row.name, row.version).value,
+                proposer_kind=row.proposer_kind,
+                listed=use is not None,
+                evidence=use is not None and use.evidence,
+                calibration_units=None if report is None else report.units,
+                calibration=(
+                    None
+                    if report is None
+                    else "pending"
+                    if report.passed is None
+                    else "passed"
+                    if report.passed
+                    else "failed"
+                ),
+                recall=None if result is None else result.recall,
+                field_agreement=None if result is None else result.field_agreement,
+                precision=None if result is None else result.precision,
+                verification_rate=None if result is None else result.verification_rate,
+            )
+        )
+    return out
 
 
 def _imports(project: Project, *, agent: bool) -> list[ImportMethods]:
@@ -380,6 +445,7 @@ _RATE_FIELDS = frozenset(
         "audit_false_exclusion_rate",
         "extraction_error_rate",
         "gate_audit",
+        "miner_scores",
     }
 )
 
@@ -404,6 +470,17 @@ def agent_methods(project: Project, report: MethodsReport) -> tuple[MethodsRepor
         update["recall_held_out_admitted"] = 0
     update["imports"] = _imports(project, agent=True)
     update["gate_policy"] = [row.agent_view() for row in report.gate_policy]
+    update["miners"] = [
+        m.model_copy(
+            update={
+                "recall": None,
+                "field_agreement": None,
+                "precision": None,
+                "verification_rate": None,
+            }
+        )
+        for m in report.miners
+    ]
     return report.model_copy(update=update), frozenset(withheld)
 
 
@@ -432,6 +509,7 @@ def render_methods(report: MethodsReport, *, withheld: frozenset[str] = frozense
         *[_import_paragraph(i) for i in report.imports],
         _seed_recall(report, withheld),
         *([] if report.supplied_links is None else [_supplied(report.supplied_links)]),
+        *([] if not report.miners else [_miners_paragraph(report, withheld)]),
         *([] if not report.gate_policy else [_gate_policy(report, withheld)]),
         _deviations(report),
     ]
@@ -666,6 +744,35 @@ def _supplied(links: SuppliedLinks) -> str:
         "Supplied works were screened under the same protocol, criteria and passes as every "
         "other record; screeners did not see how a work was found."
     )
+
+
+def _miners_paragraph(report: MethodsReport, withheld: frozenset[str]) -> str:
+    """Registered miners: each version, who proposed it, its state and, for the researcher, its
+    calibration scores. Failed and retired versions are listed as such (R-52)."""
+    parts = [
+        "Registered miners. A miner proposed by an agent is exploratory until a calibration "
+        "sample, labelled by a human, passes thresholds at or above the platform floors; the "
+        "proposer never evaluates it."
+    ]
+    for m in report.miners:
+        text = f"Miner {m.name} version {m.version} (proposed by {m.proposer_kind}): {m.state}"
+        if m.state == "retired" and m.calibration in ("passed", "failed"):
+            text += f" (calibration {m.calibration})"
+        text += "."
+        if m.calibration_units is not None:
+            if "miner_scores" in withheld:
+                text += f" Calibration over {m.calibration_units} unit(s): {WITHHELD_RATES}."
+            elif m.recall is None and m.field_agreement is None:
+                text += f" Calibration over {m.calibration_units} unit(s): {NOT_COMPUTED}."
+            else:
+                text += (
+                    f" Calibration over {m.calibration_units} unit(s): record recall "
+                    f"{_fmt(m.recall)}, field agreement {_fmt(m.field_agreement)}, precision "
+                    f"{_fmt(m.precision)}, verification rate {_fmt(m.verification_rate)}."
+                )
+        text += " Admitted as evidence." if m.evidence else " Not admitted as evidence."
+        parts.append(text)
+    return " ".join(parts)
 
 
 def _gate_policy(report: MethodsReport, withheld: frozenset[str]) -> str:

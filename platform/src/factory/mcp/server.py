@@ -27,7 +27,7 @@ from factory.mcp.conventions import (
 from factory.model.base import StrictModel
 from factory.model.cards import PropertyDef, QuoteBasis
 from factory.model.chase import ChaseDirection
-from factory.model.extraction import ClaimInput, ExtractedRowInput
+from factory.model.extraction import ClaimInput, ExtractedRowInput, MinerScope
 from factory.model.findings import ContradictionInput
 from factory.model.fulltext import Route
 from factory.model.hypotheses import (
@@ -78,6 +78,7 @@ from factory.services import fulltext as fulltext_service
 from factory.services import fulltext_status as fulltext_status_service
 from factory.services import hypotheses as hypotheses_service
 from factory.services import hypothesis_review as review_service
+from factory.services import gates as gates_service
 from factory.services import ideas as ideas_service
 from factory.services import inbox as inbox_service
 from factory.services import interpretations as interpretations_service
@@ -1432,6 +1433,78 @@ def build_server(
             return _withheld(opened, data, include_work_ids=False)
 
         return _reply(project, listing, include_work_ids=False)
+
+    @server.tool()
+    def mine_disagreements(
+        project: str, miner: str, role: str, model: str, skill: str
+    ) -> dict[str, JsonValue]:
+        """The unresolved disagreements of a miner's two passes, each with both values, for an
+        agent to resolve where the project's policy for the gate `mine.resolve` lets an agent.
+        Carries no rate. Refused when that gate is human, and to a session that joined a pass."""
+
+        def listing() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _require_pass_opened(opened, "miner")
+            _refuse_pass_session(opened)
+            actor = make_agent_actor(settings, session, role, model, skill)
+            if gates_service.effective_policy(opened, "mine.resolve").kind is PolicyKind.HUMAN:
+                raise FactoryValidationError(
+                    [ValidationIssue("miner", "disagreements are resolved by a human here")]
+                )
+            agreement = extraction_agreement_service.extraction_agreement(
+                opened, actor, scope=MinerScope(miner)
+            )
+            data: dict[str, JsonValue] = {
+                "disagreements": [d.model_dump(mode="json") for d in agreement.disagreements]
+            }
+            return _withheld(opened, data, include_work_ids=False)
+
+        return _reply(project, listing, include_work_ids=False)
+
+    @server.tool()
+    def mine_resolve(
+        project: str,
+        miner: str,
+        work_id: str,
+        row_key: str,
+        choice: str,
+        reason: str,
+        role: str,
+        model: str,
+        skill: str,
+        field: str | None = None,
+    ) -> dict[str, JsonValue]:
+        """Resolve one disagreement of a miner's passes (`a`, `b` or `neither`, with a reason),
+        where the project's policy for the gate `mine.resolve` lets an agent. Refused when that
+        gate is human, to the miner's proposer and to a session that joined a pass."""
+
+        def resolve() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _require_pass_opened(opened, "miner")
+            actor = make_agent_actor(settings, session, role, model, skill)
+            picked: extraction_agreement_service.Choice
+            if choice == "a":
+                picked = "a"
+            elif choice == "b":
+                picked = "b"
+            elif choice == "neither":
+                picked = "neither"
+            else:
+                raise FactoryValidationError([ValidationIssue("choice", "must be a, b or neither")])
+            event_id = extraction_agreement_service.resolve_extraction(
+                opened,
+                actor,
+                work_id,
+                row_key,
+                field,
+                picked,
+                reason,
+                Channel.MCP,
+                scope=MinerScope(miner),
+            )
+            return {"event_id": event_id}
+
+        return _reply(project, resolve, include_work_ids=False)
 
     @server.tool()
     def miner_calibration_label(

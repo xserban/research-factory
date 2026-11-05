@@ -358,6 +358,15 @@ def scope_population(project: Project, scope: ScopeKey) -> list[str]:
     return included_works(project)
 
 
+def calibration_sessions_of(project: Project, scope: ScopeKey) -> set[str]:
+    """The sessions that served calibration tasks of a miner scope; empty for another scope."""
+    if not isinstance(scope, MinerScope):
+        return set()
+    from factory.services.miner_independence import calibration_sessions  # imports mining
+
+    return calibration_sessions(project, scope.name)
+
+
 def calibration_works(project: Project, calibration_id: str) -> list[str]:
     """The works of a drawn calibration's sample, sorted. Read-only; the caller syncs the index."""
     with project.index.connect() as conn:
@@ -511,12 +520,18 @@ def _joined(project: Project, session: str) -> tuple[ScopeKey, PassLabel] | None
 
 
 def _pass_models(project: Project, label: PassLabel, scope: ScopeKey) -> set[str]:
+    """The models of the sessions of the pass; a miner's calibration sessions are not of its
+    production passes and are left out (their independence is `miner_independence`'s)."""
     with project.index.connect() as conn:
         rows = conn.execute(
-            text("SELECT model FROM extraction_sessions WHERE scope = :scope AND pass_label = :l"),
+            text(
+                "SELECT session, model FROM extraction_sessions "
+                "WHERE scope = :scope AND pass_label = :l"
+            ),
             {"scope": scope.value, "l": label.value},
         ).all()
-    return {str(row[0]) for row in rows}
+    apart = calibration_sessions_of(project, scope)
+    return {str(model) for session, model in rows if str(session) not in apart}
 
 
 def screening_session(project: Project, session: str) -> bool:

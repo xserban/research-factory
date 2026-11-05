@@ -55,8 +55,8 @@ SPEC = ModuleSpec(
             "mine.resolve",
             GateKind.DECISION,
             ("extraction.resolved",),
-            PolicyKind.HUMAN,
-            ("decision 51",),
+            PolicyKind.AGENT,
+            ("decision 51", "slice-M ruling 16"),
         ),
     ),
     regime=QualityRegime(
@@ -72,6 +72,7 @@ SPEC = ModuleSpec(
         CheckRule("mine-single", (None, "warning", "error")),
         CheckRule("miner-calibration-failed", ("warning", "warning", "warning")),
         CheckRule("miner-uncalibrated-evidence", ("error", "error", "error")),
+        CheckRule("miner-version-unread", ("warning", "warning", "warning")),
     ),
 )
 

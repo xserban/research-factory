@@ -16,16 +16,18 @@ from sqlalchemy import text
 
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
-from factory.model.screening import PassLabel
+from factory.model.screening import Channel, PassLabel
 from factory.services.context import Project
 from factory.services.mining import registered_row
-from factory.services.passes import memberships
+from factory.services.passes import is_pass_session, memberships
+from factory.services.protocol import current_protocol
 
 __all__ = [
     "calibration_sessions",
     "label_sessions",
     "require_calibration_pass",
     "require_production_pass",
+    "resolve_issues",
 ]
 
 _REFUSED = "this session cannot serve this pass"
@@ -112,3 +114,28 @@ def require_production_pass(project: Project, actor: Actor, name: str) -> None:
     miner `name`."""
     if actor.session in calibration_sessions(project, name):
         raise _refuse("session", _REFUSED)
+
+
+def resolve_issues(
+    project: Project, actor: Actor, name: str, channel: Channel
+) -> list[ValidationIssue]:
+    """Why `actor` may not resolve a disagreement of miner `name` beyond the gate's own policy
+    (gate `mine.resolve`): an agent proposer's session, whether it acts as an agent or relays a
+    human act over MCP, and an agent in any pass. Field `session`, neutral text."""
+    protocol = current_protocol(project)
+    use = None
+    if protocol is not None:
+        use = next((u for u in protocol.spec.miners or () if u.name == name), None)
+    registered = None if use is None else registered_row(project, name, use.version)
+    issues: list[ValidationIssue] = []
+    relayed = actor.kind != "human" or channel is Channel.MCP
+    if (
+        registered is not None
+        and registered.proposer_kind == "agent"
+        and relayed
+        and actor.session == registered.proposer_session
+    ):
+        issues.append(ValidationIssue("session", _REFUSED))
+    if actor.kind != "human" and is_pass_session(project, actor.session):
+        issues.append(ValidationIssue("session", _REFUSED))
+    return issues

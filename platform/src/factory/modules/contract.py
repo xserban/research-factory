@@ -135,6 +135,14 @@ class CheckRule:
 
 
 @dataclass(frozen=True)
+class BuilderReads:
+    """The registered `(miner name, version)` pairs a builder reads (slice M ruling 17). Records of
+    any other version are invisible to it; `check` lists records no builder reads."""
+
+    miners: tuple[tuple[str, int], ...] = ()
+
+
+@dataclass(frozen=True)
 class StrategySpec:
     name: str
     version: str
@@ -154,6 +162,7 @@ class ModuleSpec:
     regime: QualityRegime | None = None
     checks: tuple[CheckRule, ...] = ()
     strategies: tuple[StrategySpec, ...] = ()
+    reads: BuilderReads = field(default_factory=BuilderReads)
 
     def __post_init__(self) -> None:
         problems: list[str] = []

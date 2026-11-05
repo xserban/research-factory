@@ -177,6 +177,7 @@ def protocol_issues(
     known_sources: set[str],
     window_sources: Collection[str] = (),
     registered_miners: Collection[tuple[str, int]] = (),
+    calibrated_miners: Collection[tuple[str, int]] = (),
 ) -> ProtocolCheck:
     """Check a protocol against the current question, its seeds, its probes and its mode.
 
@@ -185,7 +186,7 @@ def protocol_issues(
     """
     errors = _errors(spec, question, current_question_id, mode, seeds, known_sources)
     errors.extend(_watch_plan_errors(spec, window_sources))
-    errors.extend(_miner_errors(spec.miners, registered_miners))
+    errors.extend(_miner_errors(spec.miners, registered_miners, calibrated_miners))
     gate_errors, gate_gaps = _gate_policy_issues(spec, mode)
     errors.extend(gate_errors)
     errors.extend(_hypothesis_plan_errors(spec, mode))
@@ -263,14 +264,20 @@ def _errors(
 
 
 MINERS_SECTION = "miners"
-EVIDENCE_NEEDS_CALIBRATION = "calibrate the miner first: evidence admission waits for M-D"
+EVIDENCE_NEEDS_CALIBRATION = (
+    "calibrate the miner first: evidence admission needs a passed calibration of this version "
+    "in this project"
+)
 
 
 def _miner_errors(
-    uses: Sequence[MinerUse] | None, registered: Collection[tuple[str, int]]
+    uses: Sequence[MinerUse] | None,
+    registered: Collection[tuple[str, int]],
+    calibrated: Collection[tuple[str, int]] = (),
 ) -> list[ValidationIssue]:
     """The `miners` section: each use names a registered `(name, version)`, a name is listed once
-    (one version at a time), and `evidence` is refused until a calibration can admit it (M-D)."""
+    (one version at a time), and `evidence` is refused unless that version's calibration passed
+    in this project (`calibrated`; an imported calibration does not count, ruling 20)."""
     issues: list[ValidationIssue] = []
     seen: set[str] = set()
     for i, use in enumerate(uses or ()):
@@ -284,7 +291,7 @@ def _miner_errors(
         if use.name in seen:
             issues.append(ValidationIssue(f"{where}.name", "a miner is listed once"))
         seen.add(use.name)
-        if use.evidence:
+        if use.evidence and (use.name, use.version) not in calibrated:
             issues.append(ValidationIssue(f"{where}.evidence", EVIDENCE_NEEDS_CALIBRATION))
     return issues
 

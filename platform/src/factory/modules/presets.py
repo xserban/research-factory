@@ -36,6 +36,7 @@ PRESETS: Mapping[RigorMode, Mapping[str, GatePolicy]] = {
         "hypotheses.lead_decide": AGENT,
         "hypotheses.register": AGENT,
         "experiments.freeze_unlock": AGENT,
+        "mine.resolve": LINK_AUDIT,
     },
     RigorMode.PILOT: {
         "reference.link_confirm": LINK_AUDIT,

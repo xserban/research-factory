@@ -4,6 +4,7 @@ Declaration only (slice M, decision 55); behaviour stays in the services."""
 
 from factory.modules.contract import (
     ArtifactKind,
+    BuilderReads,
     CheckRule,
     ModuleKind,
     ModuleSpec,
@@ -15,6 +16,7 @@ SPEC = ModuleSpec(
     kind=ModuleKind.BUILDER,
     inputs=(ArtifactKind.RECORD,),
     outputs=(ArtifactKind.REPORT,),
+    reads=BuilderReads(miners=()),  # the report reads the evidence schema, no registered miner
     checks=(
         CheckRule("evidence-excluded-rows", ("warning", "warning", "warning")),
         CheckRule("evidence-ungrouped", ("warning", "warning", "warning")),

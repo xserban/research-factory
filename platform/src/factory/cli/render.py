@@ -55,6 +55,7 @@ from factory.services.interpretations import InterpretationList, InterpretationV
 from factory.services.leads import LeadView
 from factory.services.lineage import GraphQueryResult, GraphStatus
 from factory.services.matching import MatchPage
+from factory.services.miner_report import MinerCalibrationReport
 from factory.services.mining import MinerListing, MineStatus
 from factory.services.modules.listing import ModuleRow
 from factory.services.prisma import UNCONVERTED, PrismaFlow, SearchReport
@@ -381,6 +382,28 @@ def miner_listing_lines(listing: list[MinerListing]) -> list[str]:
         f"{'listed' if m.listed else 'not listed'}"
         for m in listing
     ]
+
+
+def miner_calibration_lines(report: MinerCalibrationReport) -> list[str]:
+    """The calibration of a miner version as the researcher reads it: units, labels, thresholds
+    in force and, once complete, the scores."""
+    lines = [
+        f"calibration {report.calibration_id}: {report.units} unit(s), {report.labelled} "
+        f"labelled, {report.closed} mined",
+        f"thresholds in force: recall {report.thresholds[0]:.2f}, "
+        f"field agreement {report.thresholds[1]:.2f}",
+    ]
+    if report.score is None:
+        lines.append("score: not computed (waits for every unit to be labelled and mined)")
+        return lines
+    sc = report.score
+    lines.append(f"gold rows {sc.gold_rows}, agent rows {sc.agent_rows}, matched {sc.matched}")
+    lines.append(
+        f"record recall {_rate(sc.recall)}, field agreement {_rate(sc.field_agreement)}, "
+        f"precision {_rate(sc.precision)}, verification rate {_rate(sc.verification_rate)}"
+    )
+    lines.append("result: " + ("passed" if report.passed else "failed"))
+    return lines
 
 
 def mine_status_lines(status: list[MineStatus]) -> list[str]:

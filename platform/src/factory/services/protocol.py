@@ -114,6 +114,22 @@ def miner_extraction_schema(use: MinerUse, fields: tuple[str, ...]) -> Extractio
     )
 
 
+def calibrated_miners(project: Project, spec: ProtocolSpec) -> set[tuple[str, int]]:
+    """The miner versions `spec` lists whose calibration passed in this project and that are not
+    retired (they alone may be admitted as evidence). Computed only for a listed use that asks for
+    evidence."""
+    from factory.services.miners import MinerState, miner_state  # miners imports this module
+
+    known = miner_fields(project)
+    return {
+        (use.name, use.version)
+        for use in spec.miners or ()
+        if use.evidence
+        and (use.name, use.version) in known
+        and miner_state(project, use.name, use.version) is MinerState.CALIBRATED
+    }
+
+
 def miner_stale(project: Project, old: ProtocolSpec, new: ProtocolSpec) -> tuple[MinerStale, ...]:
     """The rows each listed miner's amendment stales, by plan D's `extraction_stale` on the miner's
     schema: a miner left out of the protocol, or listed at another version, stales all its rows;
@@ -162,6 +178,7 @@ def record_protocol(
             known_sources=set(default_sources()),
             window_sources=window_filter_sources(),
             registered_miners=set(miner_fields(project)),
+            calibrated_miners=calibrated_miners(project, spec),
         )
         if check.errors:
             raise FactoryValidationError(check.errors)
@@ -288,6 +305,7 @@ def amend_protocol(
             known_sources=set(default_sources()),
             window_sources=window_filter_sources(),
             registered_miners=set(miner_fields(project)),
+            calibrated_miners=calibrated_miners(project, spec),
         )
         if check.errors or check.gaps:
             raise FactoryValidationError([*check.errors, *check.gaps])

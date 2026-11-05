@@ -28,7 +28,7 @@ from factory.mcp.server import run
 from factory.model import lineage as lineage_model
 from factory.model.chase import ChaseDirection
 from factory.model.conclusions import BasisRef, Predicate
-from factory.model.extraction import ExtractedRowInput
+from factory.model.extraction import ExtractedRowInput, MinerScope
 from factory.model.fulltext import Route
 from factory.model.hypotheses import AbandonReason, DiscardReason
 from factory.model.identity import IdGenerator
@@ -89,6 +89,7 @@ from factory.services import lineage as graph_service
 from factory.services import matching as matching_service
 from factory.services import methods as methods_service
 from factory.services import miner_gold as miner_gold_service
+from factory.services import miner_report as miner_report_service
 from factory.services import miners as miners_service
 from factory.services import mining as mining_service
 from factory.services import notices as notices_service
@@ -211,9 +212,15 @@ miner_calibrate_app = typer.Typer(
 miner_app.add_typer(miner_calibrate_app)
 mine_app = typer.Typer(
     name="mine",
-    help="Mining with registered miners: unit status.",
+    help="Mining with registered miners: unit status, agreement, resolution and the audit.",
     no_args_is_help=True,
 )
+mine_audit_app = typer.Typer(
+    name="audit",
+    help="Audit a registered miner's agreed values: sample, label, report.",
+    no_args_is_help=True,
+)
+mine_app.add_typer(mine_audit_app)
 contributions_app = typer.Typer(
     name="contributions",
     help="Contribution items: status, list, agreement, resolution and the audit.",
@@ -1449,6 +1456,140 @@ def miner_calibrate_label_cmd(
             channel=Channel.CLI,
         )
     typer.echo(f"labelled {work_id}: {'empty' if empty else f'{len(items)} gold row(s)'}")
+
+
+@mine_app.command("agreement")
+def mine_agreement_cmd(
+    ctx: typer.Context, miner: Annotated[str, typer.Argument(help="The miner's name.")]
+) -> None:
+    """The agreement of a miner's two passes and its unresolved disagreements."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        agreement = extraction_agreement_service.extraction_agreement(
+            project, project.human_actor(), scope=MinerScope(miner)
+        )
+    for line in render.agreement_lines(agreement):
+        typer.echo(line)
+
+
+@mine_app.command("resolve")
+def mine_resolve_cmd(
+    ctx: typer.Context,
+    miner: Annotated[str, typer.Argument(help="The miner's name.")],
+    work: Annotated[str, typer.Argument(help="A work with a disagreement.")],
+    row_key: Annotated[str, typer.Argument(help="The disputed row.")],
+    choice: Annotated[ExtractChoice, typer.Option("--choice", help="a, b or neither.")],
+    reason: Annotated[str, typer.Option("--reason", help="Why the human decided.")],
+    field: Annotated[
+        str | None, typer.Option("--field", help="One field; the whole row when omitted.")
+    ] = None,
+) -> None:
+    """The human's choice between a miner's passes on one disagreement."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        extraction_agreement_service.resolve_extraction(
+            project,
+            project.human_actor(),
+            work,
+            row_key,
+            field,
+            _CHOICES[choice],
+            reason,
+            Channel.CLI,
+            scope=MinerScope(miner),
+        )
+    typer.echo(f"resolved {work} {row_key} {field or 'row'} ({choice.value})")
+
+
+@mine_audit_app.command("sample")
+def mine_audit_sample_cmd(
+    ctx: typer.Context, miner: Annotated[str, typer.Argument(help="The miner's name.")]
+) -> None:
+    """Draw a miner's audit sample; each value with its quote and the cited element text."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        human = project.human_actor()
+        drawn = extraction_audit_service.extraction_audit_sample(
+            project, human, scope=MinerScope(miner)
+        )
+        evidence = extraction_audit_service.audit_evidence(
+            project, human, drawn.audit_id, Channel.CLI
+        )
+    typer.echo(f"audit {drawn.audit_id}: {len(drawn.items)} of {drawn.population} agreed values")
+    for item in evidence:
+        for line in render.audit_evidence_lines(item):
+            typer.echo(line)
+
+
+@mine_audit_app.command("label")
+def mine_audit_label_cmd(
+    ctx: typer.Context,
+    audit_id: Annotated[str, typer.Argument(help="The audit being labelled.")],
+    work: Annotated[str, typer.Argument(help="A work of the audit sample.")],
+    row_key: Annotated[str, typer.Argument(help="The sampled row.")],
+    field: Annotated[str, typer.Argument(help="The sampled field.")],
+    correct: Annotated[
+        bool, typer.Option("--correct/--incorrect", help="Whether the value was extracted right.")
+    ],
+    note: Annotated[str, typer.Option("--note", help="An optional note.")] = "",
+) -> None:
+    """A human's label on one sampled miner value."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        extraction_audit_service.extraction_audit_record(
+            project,
+            project.human_actor(),
+            audit_id,
+            work,
+            row_key,
+            field,
+            correct,
+            note,
+            Channel.CLI,
+        )
+    typer.echo(
+        f"labelled {work} {row_key} {field} in {audit_id} ({'correct' if correct else 'incorrect'})"
+    )
+
+
+@mine_audit_app.command("report")
+def mine_audit_report_cmd(
+    ctx: typer.Context, miner: Annotated[str, typer.Argument(help="The miner's name.")]
+) -> None:
+    """The latest audit of a miner: its counts and error rate."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        report = extraction_audit_service.extraction_audit_report(project, scope=MinerScope(miner))
+    if report is None:
+        typer.echo("no audit sampled")
+        return
+    for line in render.audit_report_lines(report):
+        typer.echo(line)
+
+
+@miner_calibrate_app.command("report")
+def miner_calibrate_report_cmd(
+    ctx: typer.Context,
+    name: Annotated[str, typer.Argument(help="The miner's name.")],
+    version: Annotated[int, typer.Argument(help="The version.")],
+) -> None:
+    """The calibration of a miner version: its state, units and scores (the researcher's view)."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        report = miner_report_service.miner_calibration_report(project, name, version)
+        lifecycle = miners_service.miner_state(project, name, version)
+    typer.echo(f"{name} version {version}: {lifecycle.value}")
+    if report is None:
+        typer.echo("no calibration drawn")
+        return
+    for line in render.miner_calibration_lines(report):
+        typer.echo(line)
 
 
 @mine_app.command("status")

@@ -66,6 +66,7 @@ from factory.services.dedup import active_merges
 from factory.services.document_read import default_conversion
 from factory.services.evidence_report import evidence_report
 from factory.services.extraction import (
+    calibration_task_ids,
     extraction_population,
     in_dual_sample,
     live_claims,
@@ -551,6 +552,21 @@ def _mining(project: Project) -> list[_Hit]:
     return hits
 
 
+def _production_rows(project: Project, name: str, version: int) -> int:
+    """Live production rows of one miner version (calibration rows are apart)."""
+    scope = MinerScope(name)
+    apart = calibration_task_ids(project, scope)
+    with project.index.connect() as conn:
+        found = conn.execute(
+            text(
+                "SELECT task_id FROM extraction_rows WHERE scope = :s AND schema_ref = :r "
+                "AND superseded_by IS NULL"
+            ),
+            {"s": name, "r": f"{name}@{version}"},
+        ).all()
+    return sum(1 for (task,) in found if str(task) not in apart)
+
+
 def _miner_lifecycle(project: Project) -> list[_Hit]:
     """Findings of the lifecycle of registered miners (M-D, R-52): a version that failed its
     calibration is reported (retired or not), and a protocol that admits a miner as evidence while
@@ -563,7 +579,16 @@ def _miner_lifecycle(project: Project) -> list[_Hit]:
         else set()
     )
     hits: list[_Hit] = []
+    read = default_modules().read_miners()
     for row in registered_miners(project):
+        if (row.name, row.version) not in read and _production_rows(project, row.name, row.version):
+            hits.append(
+                _Hit(
+                    "miner-version-unread",
+                    (),
+                    f"miner {row.name} version {row.version} has rows no builder reads",
+                )
+            )
         state = miner_state(project, row.name, row.version)
         label = f"miner {row.name} version {row.version}"
         if calibration_passed(project, row.name, row.version) is False:  # even if retired

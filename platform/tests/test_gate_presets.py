@@ -23,6 +23,8 @@ EXPECTED: dict[tuple[str, RigorMode], GatePolicy] = {
     ("hypotheses.register", RigorMode.EXPLORATORY): AGENT,
     ("reference.link_confirm", RigorMode.PILOT): AUDIT,
     ("import.resolution_confirm", RigorMode.PILOT): AUDIT,
+    # slice M, M-D: the one gate whose floor lets an exploratory project loosen it
+    ("mine.resolve", RigorMode.EXPLORATORY): AUDIT,
 }
 DECISION_GATES = sorted(g.gate_id for g in default_modules().gates() if g.kind is GateKind.DECISION)
 
