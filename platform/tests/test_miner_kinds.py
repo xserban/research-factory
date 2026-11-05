@@ -5,8 +5,8 @@ from dataclasses import replace
 from typing import Any
 
 import pytest
+from sqlalchemy import bindparam, text
 from sqlalchemy import event as sa_event
-from sqlalchemy import text
 
 from factory.document.anchors import AnchorKind, Manifest
 from factory.events.envelope import Actor
@@ -37,11 +37,14 @@ from factory.mining.spec import (
     WorkRefKind,
 )
 from factory.model.extraction import FieldInput, StoredField
+from factory.model.seed import SeedKind, SeedSpec
 from factory.services.context import Project
 from factory.services.conversions import conversion_manifest
 from factory.services.document_read import default_conversion
 from factory.services.extraction import UnitPin
 from factory.services.extraction_verify import verify_row_in
+from factory.services.search import list_works
+from factory.services.seeds import add_seeds
 from tests.contribution_helpers import screened, with_references, world  # noqa: F401
 from tests.miner_helpers import vision_result
 
@@ -267,3 +270,60 @@ def test_title_ref_candidate_query_is_bounded(project: Project, world: list[str]
 def test_quote_kind_and_unused_types_are_inert(project: Project, world: list[str]) -> None:
     assert _run(project, world[0], _spec(MinerField("q", "g", QuoteKind())), {}) == {}
     assert isinstance(EnumKind(("a",)), EnumKind)
+
+
+def test_merged_copies_collapse_to_the_primary(project: Project, world: list[str]) -> None:
+    """An arXiv copy and its published copy are one candidate: they resolve, never ambiguous."""
+    from factory.model.dedup import DedupMerged
+    from factory.model.work_ids import normalize_title
+    from tests.extraction_helpers import _record
+
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT work_id, title_norm, year FROM work_title_buckets "
+                "WHERE year IS NOT NULL AND work_id IN :ids ORDER BY work_id"
+            ).bindparams(bindparam("ids", expanding=True)),
+            {"ids": world},
+        ).all()
+    (first, _, year), (second, second_title, second_year) = rows[0], rows[1]
+    assert abs(int(year) - int(second_year)) <= 1
+    primary, absorbed = sorted([str(first), str(second)])
+    _record(
+        project,
+        "dedup.merged",
+        DedupMerged(
+            merge_id="mrg_01HZX3K4M5N6P7Q8R9S0TVWXYZ",
+            primary=primary,
+            absorbed=(absorbed,),
+            rule="test",
+            records=2,
+        ),
+    )
+    lo = min(int(year), int(second_year)) - 1
+    ids = [c.work_id for c in kinds_module.title_candidates(project, lo, lo + 4)]
+    assert absorbed not in ids and primary in ids
+    assert ids.count(primary) <= 2  # one candidate per distinct title of the merge
+    found = title_ref(project, str(second_title), f"cited ({second_year})")
+    assert found is not None and found.work_id == primary
+    assert normalize_title(str(second_title))
+
+
+def test_a_probe_only_work_is_not_a_title_reference(
+    project: Project, agent: Actor, mock_sources: Any
+) -> None:
+    from tests.helpers import openalex_item
+
+    item = openalex_item(
+        title="Seed only paper",
+        author="Ada Zhou",
+        published="2021-01-01",
+        openalex_id="W9",
+        doi="10.1000/seedonly",
+    )
+    seed = SeedSpec(kind=SeedKind.POSITIVE, cite="Zhou 2021", doi="10.1000/seedonly")
+    add_seeds(project, agent, [seed], sources=mock_sources(openalex=[item]))
+    assert list_works(project) == []
+    assert len(list_works(project, include_probe=True)) == 1
+    assert kinds_module.title_candidates(project, 2020, 2022) == []
+    assert title_ref(project, "Seed only paper", "cited in 2021") is None

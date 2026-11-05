@@ -44,6 +44,7 @@ from factory.mining.spec import (
 )
 from factory.model.extraction import CitedEntry, StoredField
 from factory.model.references import Confidence, LinkState
+from factory.model.search import QueryPurpose
 from factory.references.match import Candidate, match_title
 from factory.references.parse import RefFields
 from factory.services.context import Project
@@ -68,6 +69,7 @@ ENUM_NEEDS_QUOTE = "enum-needs-quote"
 
 _YEAR = re.compile(r"\b(1[89]\d{2}|20\d{2})\b")
 YEAR_WINDOW = 1
+_BATCH = 500
 """A title reference is looked for among works this many years either side of its quote's year."""
 
 
@@ -81,20 +83,41 @@ class TitleRef:
 
 
 def title_candidates(project: Project, lo: int, hi: int) -> list[Candidate]:
-    """The works with a year in `[lo, hi]`, by work id (the bounded read of ruling 4)."""
+    """The corpus works with a year in `[lo, hi]`, by work id, as the reference resolver sees the
+    corpus: only works with a non-probe provenance row (a seed or probe-only work is not a
+    candidate and is never revealed), and every active merge collapsed to its primary (an arXiv
+    copy and its published copy are one candidate, so an exact title resolves instead of being
+    ambiguous). A merge's members that differ in title stay as separate candidates for the same
+    primary. The read is streamed in batches, bounded by the year window."""
+    from factory.services.dedup import active_merges  # dedup imports the search services
+
     project.index.sync()
+    primary = {a: m.primary for m in active_merges(project) for a in m.absorbed}
+    found: dict[tuple[str, str], Candidate] = {}
     with project.index.connect() as conn:
-        rows = conn.execute(
+        result = conn.execute(
             text(
                 "SELECT work_id, title_norm, surname, year FROM work_title_buckets "
-                "WHERE year BETWEEN :lo AND :hi ORDER BY work_id"
+                "WHERE year BETWEEN :lo AND :hi AND work_id IN (SELECT work_id FROM provenance "
+                "WHERE query_id NOT IN (SELECT query_id FROM queries WHERE purpose = :probe)) "
+                "ORDER BY work_id"
             ),
-            {"lo": lo, "hi": hi},
-        ).all()
-    return [
-        Candidate(str(w), str(t), str(s) or None, None if y is None else int(y), str(t))
-        for w, t, s, y in rows
-    ]
+            {"lo": lo, "hi": hi, "probe": QueryPurpose.PROBE.value},
+        )
+        while rows := result.fetchmany(_BATCH):
+            for work, title, surname, year in rows:
+                canonical = primary.get(str(work), str(work))
+                found.setdefault(
+                    (canonical, str(title)),
+                    Candidate(
+                        canonical,
+                        str(title),
+                        str(surname) or None,
+                        None if year is None else int(year),
+                        str(title),
+                    ),
+                )
+    return sorted(found.values(), key=lambda c: (c.work_id, c.title))
 
 
 def title_ref(project: Project, title: str, quote: str | None) -> TitleRef | None:
