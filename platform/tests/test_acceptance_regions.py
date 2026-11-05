@@ -5,10 +5,7 @@ Each criterion is covered by the named tests of the plan that built it, imported
 `acceptance` name so that one file lists the criteria; the criteria Regions-C owns also have new
 tests below. The `slow` ones keep their marker (`pytest -m "not network"` runs them).
 
-Criteria that need an interface of plan Regions-B are listed as skipped tests named
-`..._regions_b`; the controller replaces each skip with the test once Regions-B is merged:
-member proposals (4), the `region-focus-slot-missing` finding (5), adoption (6) and the trace of
-a region member (17).
+Adoption (6) is a Later task of Regions-B and stays a skipped test.
 """
 
 from __future__ import annotations
@@ -57,8 +54,6 @@ from tests.test_labels import (
 from tests.test_labels import (
     test_non_verbatim_quote_rejected_batch_partial as test_acceptance_07_non_verbatim_rejected,
 )
-
-# 17. Rebuild and trace
 from tests.test_organisation_separation import (
     populate_organisation,
 )
@@ -75,6 +70,16 @@ from tests.test_organisation_separation import (
 )
 from tests.test_organisation_separation import (
     test_trace_of_organisation_ids as test_acceptance_17_trace_organisation_ids,
+)
+
+# 5. Focus
+from tests.test_region_check_trace import (
+    test_focus_slot_missing_finding as test_acceptance_05_slot_missing_finding,
+)
+
+# 17. Rebuild and trace
+from tests.test_region_check_trace import (
+    test_trace_member_basis as test_acceptance_17_trace_region_member,
 )
 
 # 1. Rule determinism
@@ -107,8 +112,6 @@ from tests.test_region_evaluate import (
 from tests.test_region_evaluate import (
     test_truncated_lineage_refuses as test_acceptance_02_truncated_lineage_refuses,
 )
-
-# 5. Focus
 from tests.test_region_focus import (
     test_focus_needs_existing_slot as test_acceptance_05_focus_needs_existing_slot,
 )
@@ -117,6 +120,14 @@ from tests.test_region_focus import (
 )
 from tests.test_region_focus import (
     test_second_focus_on_slot_refused as test_acceptance_05_second_focus_refused,
+)
+
+# 4 (proposals half, Regions-B)
+from tests.test_region_members import (
+    test_member_quote_must_verify as test_acceptance_04_unverifiable_proposal_rejected,
+)
+from tests.test_region_members import (
+    test_proposal_absent_until_added as test_acceptance_04_undecided_proposal_absent,
 )
 
 # 4. Review (the proposals half is Regions-B)
@@ -170,23 +181,7 @@ def test_acceptance_17_rebuild_with_organisation_gives_identical_state(
 # --- Interfaces of plan Regions-B: the controller replaces each skip once B is merged ---
 
 
-@pytest.mark.skip(reason="controller: needs Regions-B member proposals (region.member_proposed)")
-def test_acceptance_04_unverifiable_proposal_rejected_regions_b() -> None:
-    """A proposed member with an unverifiable basis is rejected; an undecided proposal is absent
-    from snapshots."""
-
-
-@pytest.mark.skip(reason="controller: needs Regions-B check codes (region-focus-slot-missing)")
-def test_acceptance_05_slot_missing_finding_regions_b() -> None:
-    """Dropping the slot in a new `Q@` raises the finding `region-focus-slot-missing`."""
-
-
 @pytest.mark.skip(reason="controller: needs Regions-B adoption (Later task)")
 def test_acceptance_06_adoption_regions_b() -> None:
     """An adopted snapshot's blob hash is verified; adoption changes no corpus count; an
     unreviewed source version is refused."""
-
-
-@pytest.mark.skip(reason="controller: needs Regions-B trace of a region member")
-def test_acceptance_17_trace_region_member_regions_b() -> None:
-    """`trace` from a region member returns its basis and the version's review state."""
