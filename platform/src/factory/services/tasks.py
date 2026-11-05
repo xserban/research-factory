@@ -236,6 +236,23 @@ def task_counts(project: Project) -> TaskCounts:
     return TaskCounts(**counts)
 
 
+def session_in_layer(project: Project, session: str) -> bool:
+    """Whether `session` worked for the intuition layer: it claimed an intuition task, or wrote a
+    `concept.defined` or `concept.link_proposed` event (the concept tools claim no task). One
+    query over `events` by type and session; a session that did so cannot join a pass."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        row = conn.execute(
+            text(
+                "SELECT 1 FROM events e WHERE e.session = :s AND (e.type IN "
+                "('concept.defined', 'concept.link_proposed') OR (e.type = 'task.claimed' AND "
+                "e.input_blob IN (SELECT content_blob FROM tasks WHERE kind = :k))) LIMIT 1"
+            ),
+            {"s": session, "k": INTUITION_TASK_KIND},
+        ).first()
+    return row is not None
+
+
 def session_served_kind(project: Project, session: str, kind: str) -> bool:
     """Whether `session` ever claimed a task of `kind` (read from the claim events and the task's
     kind, so it survives the task's completion)."""

@@ -98,7 +98,7 @@ from factory.model.staleness import (
     stale_rows,
     touches,
 )
-from factory.model.task import INTUITION_TASK_KIND, Task, TaskCompleted, TaskStatus
+from factory.model.task import Task, TaskCompleted, TaskStatus
 from factory.packs import FieldKind, Pack, get_pack
 from factory.services.agreement import Outcome, final_outcomes
 from factory.services.call_memo import memoised
@@ -119,7 +119,7 @@ from factory.services.tasks import (
     claim_next,
     get_task,
     require_holder,
-    session_served_kind,
+    session_in_layer,
     task_content,
 )
 
@@ -473,11 +473,11 @@ def _check_join(project: Project, actor: Actor, label: PassLabel, scope: Scope) 
         raise FactoryValidationError(
             [ValidationIssue("session", "this session joined a screening pass and cannot extract")]
         )
-    if session_served_kind(project, actor.session, INTUITION_TASK_KIND):
+    if session_in_layer(project, actor.session):
         raise FactoryValidationError(
             [
                 ValidationIssue(
-                    "session", "this session was served an intuition task and cannot extract"
+                    "session", "this session worked for the intuition layer and cannot extract"
                 )
             ]
         )
