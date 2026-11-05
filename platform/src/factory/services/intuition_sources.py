@@ -159,8 +159,8 @@ def stale_sources(
     project: Project, only: Collection[str] | None = None
 ) -> dict[str, tuple[str, ...]]:
     """Interpretation id -> the documents of its quote sources that have since been superseded,
-    for the interpretations that are not themselves superseded (`only` limits the ids read). One
-    indexed join."""
+    for the interpretations that are not themselves superseded, and concept id -> the same for the
+    quotes of its live definition (`only` limits the ids read). One indexed join each."""
     project.index.sync()
     sql = (
         "SELECT i.interpretation_id, s.document_id FROM interpretation_sources s "
@@ -172,12 +172,22 @@ def stale_sources(
     if only is not None:
         sql += "AND i.interpretation_id IN (SELECT value FROM json_each(:ids)) "
         params["ids"] = json.dumps(sorted(only))
+    concept_sql = (
+        "SELECT q.concept_id, q.document_id FROM concept_quotes q "
+        "JOIN fulltext_documents d ON d.document_id = q.document_id "
+        "WHERE d.superseded_by IS NOT NULL "
+    )
+    if only is not None:
+        concept_sql += "AND q.concept_id IN (SELECT value FROM json_each(:ids)) "
     with project.index.connect() as conn:
         found = conn.execute(
             text(sql + "ORDER BY i.interpretation_id, s.document_id"), params
         ).all()
+        more = conn.execute(
+            text(concept_sql + "ORDER BY q.concept_id, q.document_id"), params
+        ).all()
     out: dict[str, list[str]] = {}
-    for interpretation_id, document_id in found:
+    for interpretation_id, document_id in [*found, *more]:
         docs = out.setdefault(str(interpretation_id), [])
         if str(document_id) not in docs:
             docs.append(str(document_id))
