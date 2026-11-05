@@ -65,6 +65,10 @@ Scalar = Annotated[str, BeforeValidator(_scalar), Field(min_length=1, max_length
 
 
 class Dataset(StrictModel):
+    """A dataset with its split role and content hash. A dev and a confirmatory dataset may not
+    share a hash, in one design or across the designs of a project. Limit: only equal hashes are
+    detected; a renamed or re-encoded copy cannot be, and a results file carries no dataset hash."""
+
     name: Key
     version: Short
     sha256: Annotated[str, StringConstraints(pattern=SHA256_RE)]

@@ -39,6 +39,7 @@ from factory.hypotheses.design import (
     cell_hash,
     cell_in_design,
     config_hash,
+    cross_design_issues,
     design_version,
     planned_cells,
     run_config,
@@ -254,6 +255,17 @@ def _sessions(raw: object) -> set[str]:
     return {str(s) for s in json.loads(str(raw))}
 
 
+def _others(
+    conn: Connection, t: ExperimentTables, besides: tuple[str | None, ...]
+) -> list[ExperimentDesign]:
+    rows = conn.execute(
+        select(t.experiments.c.experiment_id, t.experiments.c.design_json).where(
+            t.experiments.c.superseded_by.is_(None)
+        )
+    ).all()
+    return [design_of(r[1]) for r in rows if str(r[0]) not in besides]
+
+
 def _designed(t: ExperimentTables) -> Handler:
     def designed(conn: Connection, event: Event) -> None:
         p = ExperimentDesigned.model_validate(event.payload)
@@ -263,6 +275,8 @@ def _designed(t: ExperimentTables) -> Handler:
             select(t.hypotheses.c.kind).where(t.hypotheses.c.hypothesis_id == p.design.hypothesis)
         ).scalar()
         if kind != "experiment":
+            return
+        if cross_design_issues(p.design, _others(conn, t, (p.supersedes,))):
             return
         live = conn.execute(
             select(t.experiments.c.experiment_id, t.experiments.c.frozen_event_id).where(
@@ -323,6 +337,8 @@ def _amended(t: ExperimentTables) -> Handler:
         if row is None or row[1] is not None or row[2] is not None:
             return
         if str(row[0]) != p.design.hypothesis:
+            return
+        if cross_design_issues(p.design, _others(conn, t, (p.experiment_id,))):
             return
         sessions = sorted(_sessions(row[3]) | {event.actor.session})
         conn.execute(

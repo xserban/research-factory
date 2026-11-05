@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import hashlib
 import itertools
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from decimal import Decimal
 from typing import Any
 
@@ -43,6 +43,7 @@ __all__ = [
     "cell_in_design",
     "config_hash",
     "control_cells",
+    "cross_design_issues",
     "data_key",
     "design_issues",
     "design_version",
@@ -157,6 +158,22 @@ def _control_issues(d: ExperimentDesign) -> list[ValidationIssue]:
         if set(c.overrides) & set(d.axes):
             issues.append(ValidationIssue(f"controls.{i}.overrides", "touches-axis"))
     return issues
+
+
+def cross_design_issues(
+    d: ExperimentDesign, others: Iterable[ExperimentDesign]
+) -> list[ValidationIssue]:
+    """A dev dataset of this design that is a confirmatory dataset of another design of the
+    project, and the reverse, by content hash (R-50). Limit: only equal content hashes are
+    detected; a renamed or re-encoded copy of the same data has another hash, and a results file
+    carries no dataset hash, so neither can be told apart."""
+    other_test = {x.sha256 for o in others for x in o.datasets if x.role == "confirmatory"}
+    other_dev = {x.sha256 for o in others for x in o.datasets if x.role == "dev"}
+    return [
+        ValidationIssue(f"datasets.{i}", "shared-with-another-design")
+        for i, x in enumerate(d.datasets)
+        if x.sha256 in (other_test if x.role == "dev" else other_dev)
+    ]
 
 
 def _dataset_issues(d: ExperimentDesign) -> list[ValidationIssue]:

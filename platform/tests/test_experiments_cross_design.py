@@ -107,3 +107,31 @@ def test_another_confirmatory_dataset_is_a_fresh_read(
     run = read(project, human, tmp_path, second, "b.json")
     kept = xrun_view(project, run)
     assert kept is not None and kept.flags == ()
+
+
+def test_dev_data_of_one_design_is_not_confirmatory_data_of_another(
+    project: Project, human: Actor, xw: XW, hw: HW
+) -> None:
+    # re-review 2: the check spans the project (renamed or re-encoded copies cannot be detected)
+    design_experiment(project, DRAFTER, xw.design(baselines=[]))
+    hid2, _ = draft_hypothesis(project, DRAFTER, make_spec(lead=hw.lead, rationale="second"))
+    as_dev = [
+        {"name": "x-dev", "version": "1", "sha256": "b" * 64, "role": "dev"},  # A's confirmatory
+        {"name": "x-test", "version": "1", "sha256": "d" * 64, "role": "confirmatory"},
+    ]
+    with pytest.raises(FactoryValidationError) as err:
+        design_experiment(project, DRAFTER, design(hid2, baselines=[], datasets=as_dev))
+    assert _fields(err) == [("datasets.0", "shared-with-another-design")]
+    as_test = [
+        {"name": "x-dev", "version": "1", "sha256": "e" * 64, "role": "dev"},
+        {"name": "x-test", "version": "1", "sha256": "a" * 64, "role": "confirmatory"},  # A's dev
+    ]
+    with pytest.raises(FactoryValidationError) as err:
+        design_experiment(project, DRAFTER, design(hid2, baselines=[], datasets=as_test))
+    assert _fields(err) == [("datasets.1", "shared-with-another-design")]
+    # the same confirmatory data in two designs is allowed (their reads are counted together)
+    same_test = [
+        {"name": "x-dev", "version": "1", "sha256": "e" * 64, "role": "dev"},
+        {"name": "x-test", "version": "1", "sha256": "b" * 64, "role": "confirmatory"},
+    ]
+    design_experiment(project, DRAFTER, design(hid2, baselines=[], datasets=same_test))

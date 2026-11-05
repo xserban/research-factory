@@ -27,7 +27,7 @@ from sqlalchemy import text
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor, Event
 from factory.extraction.numbers import normalise_text, parse_printed
-from factory.hypotheses.design import design_issues, design_version
+from factory.hypotheses.design import cross_design_issues, design_issues, design_version
 from factory.index.experiments import design_of
 from factory.model.base import StrictModel
 from factory.model.experiments import (
@@ -229,13 +229,25 @@ def _baseline_issues(
     return issues
 
 
-def _design_checks(project: Project, design: ExperimentDesign) -> list[ValidationIssue]:
+def _other_designs(project: Project, *, besides: tuple[str | None, ...]) -> list[ExperimentDesign]:
+    """The designs of the project that are not superseded, less the ones named."""
+    return [
+        v.design
+        for v in list_experiments(project)
+        if v.superseded_by is None and v.experiment_id not in besides
+    ]
+
+
+def _design_checks(
+    project: Project, design: ExperimentDesign, *, besides: tuple[str | None, ...] = ()
+) -> list[ValidationIssue]:
     """Every rule that needs the project: the plan's minimum seeds and access limit, the
     hypothesis (an experiment hypothesis that is not yet evaluated, abandoned or superseded, whose
     metric the primary metric is) and the baselines."""
     plan = effective_plan(project)
     assert plan.min_seeds is not None
     issues = design_issues(design, min_seeds=plan.min_seeds)
+    issues.extend(cross_design_issues(design, _other_designs(project, besides=besides)))
     if design.test_access_limit is not None and design.test_access_limit > plan.test_access_limit:
         issues.append(ValidationIssue("test_access_limit", "above-plan"))
     hypothesis = hypothesis_view(project, design.hypothesis)
@@ -288,7 +300,7 @@ def design_experiment(
     _require_author(actor)
     with project.index.exclusive():
         project.index.sync()
-        issues = _design_checks(project, design)
+        issues = _design_checks(project, design, besides=(supersedes,))
         live = live_experiment(project, design.hypothesis)
         if supersedes is None:
             if live is not None:
@@ -350,7 +362,7 @@ def amend_experiment(
         if not reason.strip() or len(reason) > 300:
             issues.append(ValidationIssue("reason", "between 1 and 300 characters"))
         if not issues:
-            issues.extend(_design_checks(project, design))
+            issues.extend(_design_checks(project, design, besides=(experiment_id,)))
         if issues:
             raise FactoryValidationError(issues)
         payload = ExperimentAmended(
@@ -391,7 +403,7 @@ def freeze_experiment(project: Project, actor: Actor, experiment_id: str) -> str
             raise _refuse("experiment_id", "unknown")
         if view.state != "draft":
             raise _refuse("experiment_id", f"state-{view.state}")
-        issues = _design_checks(project, view.design)
+        issues = _design_checks(project, view.design, besides=(experiment_id,))
         if issues:
             raise FactoryValidationError(issues)
         verdict = may_pass(
