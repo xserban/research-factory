@@ -20,9 +20,12 @@ from factory.services.contributions import (
     contribution_audit_record,
     contribution_audit_report,
     contribution_audit_sample,
+    contribution_item,
     contribution_next,
     contribution_record,
+    final_item,
     final_items,
+    live_items,
     resolve_contribution,
 )
 from factory.services.extraction import pass_config
@@ -198,6 +201,37 @@ def test_human_resolution_chooses_a_b_or_neither(
     items = {i.name: i for i in final_items(project) if i.work_id == refs[0]}
     assert items["linear attention"].cited_entry == 4
     assert items["softmax attention"].cited_entry is None  # dropped by `neither`
+
+
+def test_final_item_names_each_fields_own_source(
+    project: Project, human: Actor, ctr_a: Actor, ctr_b: Actor, refs: list[str]
+) -> None:
+    _drive(project, ctr_a, A, _reading(refs[0]))
+    _drive(project, ctr_b, B, _reading(refs[0], cited=4))
+    (d,) = contribution_agreement(project, human).disagreements
+    resolve_contribution(project, human, d.work_id, d.row_key, "cited_entry", "b", "B", CH)
+    base = next(i for i in final_items(project) if i.name == "linear attention")
+    assert base.cited_entry == 4 and base.cited is not None and base.cited.marker == "mismatch"
+    b_id = base.sources["cited_entry"].extraction_id
+    a_id = base.sources["name"].extraction_id
+    assert b_id != a_id and base.extraction_id == a_id
+    b_row = contribution_item(project, b_id)
+    assert b_row is not None and b_row.pass_label is B and b_row.cited == base.cited
+    assert base.sources["cited_entry"].event_id == b_row.event_id != base.event_id
+    assert base.sources["name"].quote == base.quote
+    # G2-C reads the final view from either pass's row id; the raw row stays raw.
+    assert final_item(project, b_id) == base == final_item(project, a_id)
+    assert contribution_item(project, b_id) != base
+    assert final_item(project, "ext_01JZ9Q3K5M7N8P0R2S4T6V8W0X") is None
+
+
+def test_final_item_is_none_while_the_row_is_open(
+    project: Project, human: Actor, ctr_a: Actor, ctr_b: Actor, refs: list[str]
+) -> None:
+    _drive(project, ctr_a, A, _reading(refs[0]))
+    _drive(project, ctr_b, B, _reading(refs[0], cited=4))
+    open_row = next(i for i in live_items(project) if i.cited_entry == 5)
+    assert final_item(project, open_row.extraction_id) is None
 
 
 def test_audit_includes_not_stated_and_cited_entry(

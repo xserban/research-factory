@@ -33,6 +33,8 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Collection, Mapping, Sequence
 
+from sqlalchemy import text
+
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
 from factory.lineage.cited import item_evidence, marker_check
@@ -103,7 +105,9 @@ __all__ = [
     "OTHER_CONVERSION",
     "RESULT_ROW_UNKNOWN",
     "ContributionStatus",
+    "FieldSource",
     "ItemView",
+    "NoItemUnit",
     "checker_superseding",
     "contribution_agreement",
     "contribution_audit_record",
@@ -115,6 +119,7 @@ __all__ = [
     "contribution_next",
     "contribution_record",
     "contribution_status",
+    "final_item",
     "final_items",
     "live_items",
     "mask_batch",
@@ -387,6 +392,16 @@ def contribution_record(
 # --- Reads ---
 
 
+class FieldSource(StrictModel):
+    """Where one field of an item comes from: the row (extraction), its event, and the field's own
+    anchor and quote. After a resolution the fields of one final item may come from both passes."""
+
+    extraction_id: str
+    event_id: str
+    anchor: str | None
+    quote: str | None
+
+
 class ItemView(StrictModel):
     """A contribution item as the log holds it. `live`: no later row supersedes it; `stale`: its
     document, schema or reference extraction is no longer current. `anchor`/`quote` are the
@@ -414,6 +429,9 @@ class ItemView(StrictModel):
     live: bool
     stale: bool
     event_id: str
+    sources: dict[str, FieldSource]
+    """Each field's own source. The item's `extraction_id` and `event_id` are those of its
+    `item_kind` field; `cited` is that of the `cited_entry` field's row."""
 
 
 def _view(
@@ -424,6 +442,7 @@ def _view(
     cited: CitedEntry | None,
     live: bool,
     stale: bool,
+    sources: Mapping[str, FieldSource],
 ) -> ItemView:
     def text_of(name: str) -> str | None:
         f = fields.get(name)
@@ -460,6 +479,7 @@ def _view(
         live=live,
         stale=stale,
         event_id=row.event_id,
+        sources=dict(sources),
     )
 
 
@@ -471,6 +491,15 @@ def _item_of(row: ExtractionRow, *, live: bool, stale: Collection[str]) -> ItemV
         cited=row.cited,
         live=live,
         stale=row.extraction_id in stale,
+        sources={
+            name: FieldSource(
+                extraction_id=row.extraction_id,
+                event_id=row.event_id,
+                anchor=f.anchor,
+                quote=f.quote,
+            )
+            for name, f in row.fields.items()
+        },
     )
 
 
@@ -502,7 +531,9 @@ def live_items(
 
 def final_items(project: Project) -> list[ItemView]:
     """One item per final row of the contribution scope (agreed, resolved, or single), built from
-    its final fields; `extraction_id` is that of its `item_kind` field."""
+    its final fields, so a field a human resolved to pass B shows B's value, quote and cited
+    entry. `extraction_id` and `event_id` are those of the `item_kind` field; `sources` names each
+    field's own extraction, event, anchor and quote."""
     rows = {r.extraction_id: r for r in live_rows(project, scope=Scope.CONTRIBUTION)}
     stale = stale_extractions(project, scope=Scope.CONTRIBUTION)
     out: list[ItemView] = []
@@ -521,9 +552,29 @@ def final_items(project: Project) -> list[ItemView]:
                 cited=None if source is None else source.cited,
                 live=True,
                 stale=any(f.extraction_id in stale for f in final.fields.values()),
+                sources={
+                    name: FieldSource(
+                        extraction_id=f.extraction_id,
+                        event_id=rows[f.extraction_id].event_id if f.extraction_id in rows else "",
+                        anchor=f.anchor,
+                        quote=f.quote,
+                    )
+                    for name, f in final.fields.items()
+                },
             )
         )
     return out
+
+
+def final_item(project: Project, extraction_id: str) -> ItemView | None:
+    """The final view of the item that row `extraction_id` (from either pass) is a field source
+    of; None when the row is unknown, superseded, or its item is not final (an open
+    disagreement). This is the read for what an item finally says; `contribution_item` is the
+    raw row."""
+    for item in final_items(project):
+        if any(s.extraction_id == extraction_id for s in item.sources.values()):
+            return item
+    return None
 
 
 class ContributionStatus(StrictModel):
@@ -539,6 +590,41 @@ class ContributionStatus(StrictModel):
     markers: dict[str, int]
     no_references: list[str]
     other_conversion: list[str]
+    closed_without_items: list[NoItemUnit]
+    """Current units closed with a reason and no item: no row exists to audit, so a human reads
+    the reasons here."""
+
+
+class NoItemUnit(StrictModel):
+    work_id: str
+    pass_label: PassLabel
+    task_id: str
+    reason: str | None
+
+
+def _closed_without_items(project: Project) -> list[NoItemUnit]:
+    """Zero-row closures of current contribution units that hold no live item."""
+    current = {
+        (s.work_id, s.pass_label)
+        for s in unit_states(project, scope=Scope.CONTRIBUTION)
+        if s.state == "current"
+    }
+    held = {(i.work_id, i.pass_label) for i in live_items(project, include_stale=True)}
+    with project.index.connect() as conn:
+        found = conn.execute(
+            text(
+                "SELECT task_id, work_id, pass_label, reason FROM extraction_closures "
+                "WHERE scope = 'contribution' AND rows = 0 ORDER BY work_id, pass_label, task_id"
+            )
+        ).all()
+    out: dict[tuple[str, PassLabel], NoItemUnit] = {}
+    for task_id, work_id, label, reason in found:
+        key = (str(work_id), PassLabel(str(label)))
+        if key in current and key not in held:
+            out[key] = NoItemUnit(
+                work_id=key[0], pass_label=key[1], task_id=str(task_id), reason=reason
+            )
+    return list(out.values())
 
 
 def contribution_status(project: Project) -> ContributionStatus:
@@ -574,6 +660,7 @@ def contribution_status(project: Project) -> ContributionStatus:
         ),
         no_references=none,
         other_conversion=other,
+        closed_without_items=_closed_without_items(project),
     )
 
 

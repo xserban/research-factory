@@ -26,3 +26,4 @@ Minor review findings parked during the v1 build, to address when iterating from
 - Import-C: agent_import_status runs full coverage and suggest_terms per import per page; methods_report computes imports twice; _import_lookup_runs reads the whole event log per trace walk.
 - G2-B: mask_batch can differ from the stored blob, so task.completed input_blob may not equal what was served (contributions.py:332).
 - G1 final: raw-missing document blocks a snowball round until restored (no event recorded; snowball._has_document).
+- G2-B: units closed with a reason and no item leave no row to audit; G2-E adds a check finding (e.g. `contribution-closed-empty`) listing `contribution_status().closed_without_items` for human reading.

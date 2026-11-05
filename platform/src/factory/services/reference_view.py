@@ -60,7 +60,8 @@ def reference_view_of(project: Project, extraction_id: str) -> ReferenceView | N
             conn.execute(
                 text(
                     "SELECT n.ordinal, n.anchor, n.label, n.title, n.first_author, n.year, "
-                    "n.doi, n.arxiv, l.state, l.work_id, l.confidence, l.base_work_id, l.candidates "
+                    "n.doi, n.arxiv, l.state, l.work_id, l.confidence, l.base_work_id, "
+                    "l.candidates "
                     "FROM reference_entries n LEFT JOIN reference_links l "
                     "ON l.extraction_id = n.extraction_id AND l.ordinal = n.ordinal "
                     "WHERE n.extraction_id = :x ORDER BY n.ordinal"

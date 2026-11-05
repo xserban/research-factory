@@ -148,7 +148,7 @@ def test_next_masks_entries_linked_to_held_out_works(
     batch = contributions.mask_batch(project, _next(project, ctr_a), hidden)
     masked = batch.references.entries[1]
     assert (masked.ordinal, masked.anchor) == (2, "b2")
-    assert masked.title is None and masked.first_author is None and masked.doi is None
+    assert masked.title is None and masked.doi is None and masked.first_author == "Zhou"
     assert batch.references.entries[0].title == "Softmax attention at scale"
 
 
@@ -407,3 +407,11 @@ def test_final_items_one_per_final_row(project: Project, finished: list[str]) ->
     assert live_items(project, kind="not-stated") == [
         i for i in live_items(project) if i.item_kind == "not-stated"
     ]
+
+
+def test_status_lists_units_closed_without_items(project: Project, finished: list[str]) -> None:
+    quiet = contribution_status(project).closed_without_items
+    assert len(quiet) == 2 * (len(finished) - 2)
+    assert {u.work_id for u in quiet} == set(finished[2:])
+    assert {u.reason for u in quiet} == {"no empirical result is reported"}
+    assert {u.pass_label for u in quiet} == {A, B}
