@@ -232,6 +232,11 @@ def _suffix_agrees(family: UnitFamily, unit: str | None, token: NumberToken) -> 
     return False
 
 
+def suffix_agrees(family: UnitFamily, unit: str | None, token: NumberToken) -> bool:
+    """The suffix rule of the number check, for callers outside this module (card assertions)."""
+    return _suffix_agrees(family, unit, token)
+
+
 def _alias(unit: str) -> str:
     return "G" if unit == "B" else unit
 
