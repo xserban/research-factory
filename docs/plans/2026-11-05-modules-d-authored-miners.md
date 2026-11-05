@@ -4,7 +4,7 @@
 
 > **Status: Accepted 2026-11-04 (researcher's instruction: build everything, MVP v1; recommended rulings adopted).**
 
-> **Implemented 2026-11-05 (branch `md`, built unattended).** Rulings added in the build are decision 87 (Proposed); minors are in `docs/backlog-iterate.md` (lines "M-D"). Two deviations from the text below: a calibration unit is never a production unit (not only "until scored"), and the acceptance world has twelve works (five calibrated, seven mined), not thirty.
+> **Implemented 2026-11-05 (branch `md`, built unattended).** Rulings added in the build are decision 91 (Proposed); minors are in `docs/backlog-iterate.md` (lines "M-D"). Two deviations from the text below: a calibration unit is never a production unit (not only "until scored"), and the acceptance world has twelve works (five calibrated, seven mined), not thirty.
 
 > **Reconciled 2026-11-04 (cross-spec reconciliation, decision 75; v1 cut, decision 74).** Task 2 bumps `PROJECTION_VERSION` by one from the value it finds. Task 7's acceptance uses the pilot-shaped synthetic fixture of `tests/miner_helpers.py`, not pilot data; it stays in v1.
 

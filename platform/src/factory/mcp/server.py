@@ -76,9 +76,9 @@ from factory.services import extraction_audit as extraction_audit_service
 from factory.services import finders as findings_service
 from factory.services import fulltext as fulltext_service
 from factory.services import fulltext_status as fulltext_status_service
+from factory.services import gates as gates_service
 from factory.services import hypotheses as hypotheses_service
 from factory.services import hypothesis_review as review_service
-from factory.services import gates as gates_service
 from factory.services import ideas as ideas_service
 from factory.services import inbox as inbox_service
 from factory.services import interpretations as interpretations_service
