@@ -205,7 +205,6 @@ Minor review findings parked during the v1 build, to address when iterating from
 - M-E: a `pending` source row is never flagged in an importer, so a source record that leaves its population is not `source-superseded`.
 - M-E: `kind_checks` reads the importer's current reference list, so `mine-import-unverified` can fire on a `work_ref(entry)` row after the importer replaces that list.
 - M-E: `available_units` has no MCP tool; a relaying agent names units from the researcher's `mine import --list`.
-- teams-A: a refused `--as` leaves no access-log line, since it fails before the acting user is known (services/access_log.py stated_admin).
 - teams-A: `access_log.prune` has no caller yet; deploy-B's server start is the natural place (services/access_log.py).
 - teams-A: `set_lab_roles` has no CLI command; `factory user add --admin` is the only way to name an admin from the command line (cli/admin.py).
 - teams-A: `factory commit` commits project logs only, so the lab log has no git backup (services/commit.py).

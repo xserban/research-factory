@@ -28,6 +28,7 @@ from factory.config import Settings
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.model.base import StrictModel
 from factory.model.identity import ACTOR_ID_RE
+from factory.model.screening import Channel
 from factory.services.context import Principal
 from factory.services.lab import private_server_dir, refuse
 
@@ -38,6 +39,8 @@ _FIELD_RE = r"^[A-Za-z0-9_.\[\]-]{1,200}$"
 _LOG_NAME = re.compile(r"(\d{4}-\d{2}-\d{2})\.jsonl")
 _LOG_MODE = 0o600
 _DIR_MODE = 0o700
+
+_REFUSAL_FIELDS = frozenset({"permission", "as"})
 
 Outcome = Literal["ok", "refused", "error"]
 FieldName = Annotated[str, Field(pattern=_FIELD_RE)]
@@ -156,8 +159,8 @@ def audited(
     project: str | None = None,
     login: str | None = None,
 ) -> Iterator[None]:
-    """Leave one line for the call in the block: `ok`, `refused` when a permission was missing,
-    else `error`. The exception goes on to the caller."""
+    """Leave one line for the call in the block: `ok`, `refused` when a permission was missing or
+    the acting user was not stated, else `error`. The exception goes on to the caller."""
 
     def write(outcome: Outcome, fields: tuple[str, ...] = ()) -> None:
         if not (settings.root / ".server").is_dir():
@@ -180,10 +183,44 @@ def audited(
     try:
         yield
     except FactoryValidationError as exc:
-        refused = any(issue.field == "permission" for issue in exc.issues)
+        refused = any(issue.field in _REFUSAL_FIELDS for issue in exc.issues)
         write("refused" if refused else "error", field_names(exc.issues))
         raise
     except Exception:
         write("error")
         raise
     write("ok")
+
+
+@contextmanager
+def admin_call(
+    settings: Settings,
+    as_user: str | None,
+    *,
+    session: str,
+    clock: Clock,
+    tool: str,
+    project: str | None = None,
+) -> Iterator[tuple[Settings, Principal]]:
+    """The settings and principal of an admin command, audited under the stated user. A refused
+    `--as` leaves its line too, under the configured user: the value given is not logged."""
+    login = os_login()
+    try:
+        stated = stated_admin(settings, as_user)
+    except FactoryValidationError:
+        principal = Principal.local(settings, Channel.CLI)
+        with audited(
+            settings,
+            principal,
+            session=session,
+            clock=clock,
+            tool=tool,
+            project=project,
+            login=login,
+        ):
+            raise
+    principal = Principal.local(stated, Channel.CLI)
+    with audited(
+        stated, principal, session=session, clock=clock, tool=tool, project=project, login=login
+    ):
+        yield stated, principal

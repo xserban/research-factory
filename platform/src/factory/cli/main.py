@@ -142,7 +142,7 @@ from factory.services import view_coverage as view_coverage_service
 from factory.services import views as views_service
 from factory.services import watch as watch_service
 from factory.services import xruns as xruns_service
-from factory.services.access_log import audited, os_login, stated_admin
+from factory.services.access_log import admin_call, audited, os_login
 from factory.services.commit import commit_hosted
 from factory.services.context import Principal, Project, list_projects, open_project
 from factory.services.extraction_agreement import Choice
@@ -487,6 +487,7 @@ app.add_typer(member_app)
 
 _M = TypeVar("_M", bound=BaseModel)
 _JSON = Annotated[bool, typer.Option("--json", help="Print the report model as JSON.")]
+_AS_COMMANDS = frozenset({"server", "user", "token", "member"})
 
 
 @dataclass
@@ -559,10 +560,27 @@ def main(
     clock = SystemClock()
     with _reporting_errors():
         settings = Settings.load(root=root)
+    session = IdGenerator(clock).ulid()
+    if as_user is not None and ctx.invoked_subcommand not in _AS_COMMANDS:
+        # Any other command would act as the configured user, and a human act is permanent.
+        with (
+            _reporting_errors(),
+            audited(
+                settings,
+                Principal.local(settings, Channel.CLI),
+                session=session,
+                clock=clock,
+                tool=f"cli:{ctx.invoked_subcommand}",
+                login=os_login(),
+            ),
+        ):
+            raise FactoryValidationError(
+                [ValidationIssue("as", "--as is for the server, user, token and member commands")]
+            )
     ctx.obj = CliState(
         settings=settings,
         project=project,
-        session=IdGenerator(clock).ulid(),
+        session=session,
         clock=clock,
         as_user=as_user,
     )
@@ -1410,23 +1428,23 @@ def server_init_cmd(
 
     Push URLs are only ever the ones given here: none is read from a git remote."""
     state = _state(ctx)
-    with _reporting_errors():
-        settings = stated_admin(state.settings, state.as_user)
-        with audited(
-            settings,
-            Principal.local(settings, Channel.CLI),
+    with (
+        _reporting_errors(),
+        admin_call(
+            state.settings,
+            state.as_user,
             session=state.session,
             clock=state.clock,
             tool="cli:server init",
-            login=os_login(),
-        ):
-            done = init_server(
-                settings,
-                host_id=host_id,
-                push_urls=push_url or (),
-                session=state.session,
-                clock=state.clock,
-            )
+        ) as (settings, _),
+    ):
+        done = init_server(
+            settings,
+            host_id=host_id,
+            push_urls=push_url or (),
+            session=state.session,
+            clock=state.clock,
+        )
     typer.echo(f"host {done.host_id}")
     if done.admin is not None:
         typer.echo(f"registered {done.admin} as lab admin")

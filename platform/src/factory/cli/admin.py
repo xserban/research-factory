@@ -17,13 +17,12 @@ import typer
 from factory.events.envelope import Actor
 from factory.model.lab import DEFAULT_TOKEN_DAYS, MAX_TOKEN_DAYS, LabRole
 from factory.model.members import ProjectRole
-from factory.model.screening import Channel
 from factory.services import credentials as credentials_service
 from factory.services import lab as lab_service
 from factory.services import members as members_service
 from factory.services.access import TOOL_PERMISSIONS, authorize
-from factory.services.access_log import audited, os_login, stated_admin
-from factory.services.context import Principal, Project, open_project
+from factory.services.access_log import admin_call
+from factory.services.context import Project, open_project
 from factory.services.lab import Lab, lab_exists, open_lab
 
 user_app = typer.Typer(name="user", help="The people of this lab.", no_args_is_help=True)
@@ -41,37 +40,37 @@ def _lab_call(ctx: typer.Context, tool: str) -> Iterator[tuple[Lab, Actor]]:
     from factory.cli import main
 
     state = main._state(ctx)
-    with main._reporting_errors():
-        settings = stated_admin(state.settings, state.as_user)
-        principal = Principal.local(settings, Channel.CLI)
-        with audited(
-            settings,
-            principal,
-            session=state.session,
-            clock=state.clock,
-            tool=tool,
-            login=os_login(),
-        ):
-            lab = open_lab(settings, session=state.session, clock=state.clock)
-            authorize(None, principal, "human", TOOL_PERMISSIONS[tool], lab=lab)
-            yield lab, lab.human_actor()
+    with (
+        main._reporting_errors(),
+        admin_call(
+            state.settings, state.as_user, session=state.session, clock=state.clock, tool=tool
+        ) as (settings, principal),
+    ):
+        lab = open_lab(settings, session=state.session, clock=state.clock)
+        authorize(None, principal, "human", TOOL_PERMISSIONS[tool], lab=lab)
+        yield lab, lab.human_actor()
 
 
 @contextmanager
 def _member_call(ctx: typer.Context, tool: str, slug: str) -> Iterator[Project]:
-    """The project for one command, as the local principal: authorised, and left in the log."""
+    """The project for one command, as the stated user: authorised, and left in the access log."""
     from factory.cli import main
 
     state = main._state(ctx)
-    settings = state.settings
-    principal = Principal.local(settings, Channel.CLI)
     with (
         main._reporting_errors(),
-        audited(
-            settings, principal, session=state.session, clock=state.clock, tool=tool, project=slug
-        ),
+        admin_call(
+            state.settings,
+            state.as_user,
+            session=state.session,
+            clock=state.clock,
+            tool=tool,
+            project=slug,
+        ) as (settings, principal),
     ):
-        project = open_project(settings, slug, session=state.session, clock=state.clock)
+        project = open_project(
+            settings, slug, session=state.session, clock=state.clock, principal=principal
+        )
         lab = (
             open_lab(settings, session=state.session, clock=state.clock)
             if lab_exists(settings)
