@@ -195,14 +195,6 @@ def _require_writer(actor: Actor) -> None:
         raise _refuse("actor", "only a human or an agent writes a draft")
 
 
-def provisional_status(cls: SentenceClass) -> str:
-    """The status a sentence has until the verification plan (W-B) adds verdicts: `structural` and
-    `interpretive` sentences are what they are; a claim or synthesis is `unchecked`."""
-    if cls in (SentenceClass.STRUCTURAL, SentenceClass.INTERPRETIVE):
-        return cls.value
-    return "unchecked"
-
-
 def verifier_sessions(project: Project, draft_id: str) -> frozenset[str]:
     """The `identities` (sessions, and humans by id) with a verdict on a sentence of the draft."""
     project.index.sync()
