@@ -208,7 +208,9 @@ def test_chain_merges_and_bad_pairs_refused(project: Project, iw: IWorld) -> Non
     _refuse(
         lambda: merge_concepts(project, iw.human, c3, ghost, "x"), "from_concept", "concept-unknown"
     )
-    _refuse(lambda: merge_concepts(project, iw.human, c3, make(project, iw, "spare"), " "), "reason")
+    _refuse(
+        lambda: merge_concepts(project, iw.human, c3, make(project, iw, "spare"), " "), "reason"
+    )
     assert _events(project) == 1
 
 
