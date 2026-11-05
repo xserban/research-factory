@@ -7,9 +7,12 @@ Invariants:
 - A path under a location that must stay out of git (`library/`, `.index/`, `.server/`, a project's
   library or index) that git can see, staged or untracked, refuses the whole job before anything is
   staged: a missing `.gitignore` stops the job instead of being trusted.
-- The commit holds exactly the paths this job staged; anything else staged by hand stays out.
-- A file is staged under the project's write lock, so a line half-written never enters history.
-- History only grows. An event file must extend what HEAD holds byte for byte, a blob must hash to
+- The commit is built from bytes read under the project's write lock, in a temporary index: nothing
+  re-reads the working tree afterwards, so a later append cannot leak in, and a torn last line is
+  cut at the last newline and waits for the next run. Anything else staged by hand stays out, and
+  the real index learns the committed paths only, so the next run sees them as committed.
+- History only grows. An event file's complete lines must extend what HEAD holds byte for byte, so
+  a torn tail is not an edit but a change to a committed line is. A blob must hash to
   its own file name, and a deleted file is a refusal: the job never puts the server's name on an
   edit, a truncation or a removal, and stops loudly instead of skipping one.
 - A push goes only to a remote whose every push URL is listed in `.server/push_remotes`, checked
@@ -22,7 +25,10 @@ Invariants:
 import hashlib
 import re
 import subprocess
+import tempfile
+from collections.abc import Mapping, Sequence
 from pathlib import Path
+from typing import NamedTuple
 
 from factory.clock import SystemClock
 from factory.config import Settings
@@ -40,9 +46,15 @@ PUSH_REMOTES_FILE = ".server/push_remotes"
 `git remote get-url --push --all`. Surrounding spaces are stripped; blank lines and lines starting
 with `#` are ignored. Written by `factory server init`."""
 
-_PATHSPEC_STDIN = ("--pathspec-from-file=-", "--pathspec-file-nul")
 _EVENT_FILE_RE = rf"{ACTOR_ID_RE.strip('^$')}/{ULID_RE}\.jsonl"
 _BLOB_FILE_RE = r"sha256/[0-9a-f]{2}/[0-9a-f]{62}"
+
+
+class _Entry(NamedTuple):
+    """A path to commit and the git object holding the bytes read for it under the lock."""
+
+    path: str
+    oid: str
 
 
 class CommitReport(StrictModel):
@@ -71,7 +83,7 @@ def commit_hosted(settings: Settings, *, sign: bool, push: str | None) -> Commit
             [ValidationIssue("paths", f"git can see paths that must stay out of it: {listed}")]
         )
 
-    staged: dict[str, list[str]] = {}
+    staged: dict[str, list[_Entry]] = {}
     refused: list[str] = []
     clock = SystemClock()
     session = IdGenerator(clock).ulid()
@@ -80,15 +92,11 @@ def commit_hosted(settings: Settings, *, sign: bool, push: str | None) -> Commit
         if current_host(project) != host_id:
             continue
         with project.writing():
-            paths, problems = _committable(root, slug, _changes(root))
-            refused += problems
-            if paths and not refused:
-                _run(root, "add", *_PATHSPEC_STDIN, stdin=_nul_joined(paths))
-                staged[slug] = paths
+            entries, problems = _committable(root, slug, _changes(root))
+        refused += problems
+        if entries:
+            staged[slug] = entries
     if refused:
-        done = [path for paths in staged.values() for path in paths]
-        if done:
-            git(root, "reset", "-q", *_PATHSPEC_STDIN, stdin=_nul_joined(done))
         raise FactoryValidationError(
             [ValidationIssue("history", problem) for problem in sorted(refused)]
         )
@@ -99,7 +107,9 @@ def commit_hosted(settings: Settings, *, sign: bool, push: str | None) -> Commit
         _require_shippable_history(root, push)
         pushed = git(root, "push", push, "HEAD").returncode == 0
     return CommitReport(
-        projects={slug: len(paths) for slug, paths in staged.items()}, commit=commit, pushed=pushed
+        projects={slug: len(entries) for slug, entries in staged.items()},
+        commit=commit,
+        pushed=pushed,
     )
 
 
@@ -192,11 +202,12 @@ def _changes(root: Path) -> list[tuple[str, str]]:
 
 def _committable(
     root: Path, slug: str, changes: list[tuple[str, str]]
-) -> tuple[list[str], list[str]]:
-    """The paths of this project to commit, and what refuses the job."""
+) -> tuple[list[_Entry], list[str]]:
+    """What to commit of this project, as git objects, and what refuses the job. Runs under the
+    project's write lock: these reads are the only ones the commit uses."""
     events = f"projects/{slug}/events/"
     blobs = f"projects/{slug}/blobs/"
-    paths: list[str] = []
+    entries: list[_Entry] = []
     refused: list[str] = []
     for path, status in changes:
         event = path.startswith(events) and re.fullmatch(_EVENT_FILE_RE, path[len(events) :])
@@ -207,23 +218,34 @@ def _committable(
             refused.append(f"{path}: deleted")
             continue
         data = (root / path).read_bytes()
-        problem = _event_problem(root, path, status, data) if event else _blob_problem(path, data)
+        if event:
+            content, problem = _event_content(root, path, status, data)
+        else:
+            content, problem = (data if _is_text(data) else None), _blob_problem(path, data)
         if problem is not None:
             refused.append(f"{path}: {problem}")
-        elif event or _is_text(data):
-            paths.append(path)
-    return paths, refused
+        elif content is not None:
+            oid = _run(root, "hash-object", "-w", "--stdin", stdin=content).decode().strip()
+            entries.append(_Entry(path, oid))
+    return entries, refused
 
 
-def _event_problem(root: Path, path: str, status: str, data: bytes) -> str | None:
-    """Why this event file cannot be committed: what HEAD holds must be a prefix of it. A file new
-    to git has nothing to extend."""
-    if status == "??" or status[0] == "A":
-        return None
-    head = git(root, "show", f"HEAD:{path}")
-    if head.returncode != 0:
-        return "cannot read it from HEAD"
-    return None if data.startswith(head.stdout) else "does not extend what HEAD holds"
+def _event_content(
+    root: Path, path: str, status: str, data: bytes
+) -> tuple[bytes | None, str | None]:
+    """The bytes to commit (None when there is nothing new) or why not. Only complete lines count:
+    the tail after the last newline is a write in progress, or a torn one. What HEAD holds must be a
+    prefix of them; a file new to git has nothing to extend."""
+    content = data[: data.rfind(b"\n") + 1]
+    committed = b""
+    if status != "??" and status[0] != "A":
+        head = git(root, "show", f"HEAD:{path}")
+        if head.returncode != 0:
+            return None, "cannot read it from HEAD"
+        committed = head.stdout
+    if not content.startswith(committed):
+        return None, "does not extend what HEAD holds"
+    return (None if content == committed else content), None
 
 
 def _blob_problem(path: str, data: bytes) -> str | None:
@@ -244,41 +266,46 @@ def _is_text(data: bytes) -> bool:
     return True
 
 
-def _commit(root: Path, host_id: str, staged: dict[str, list[str]], sign: bool) -> str:
-    paths = [path for slug_paths in staged.values() for path in slug_paths]
+def _commit(root: Path, host_id: str, staged: Mapping[str, Sequence[_Entry]], sign: bool) -> str:
+    """Commit `staged` on top of HEAD from a temporary index, then tell the real index. The object
+    ids fix the content, so no step here reads the working tree."""
+    entries = [entry for slug_entries in staged.values() for entry in slug_entries]
+    index_info = b"".join(f"100644 {e.oid}\t{e.path}\0".encode() for e in entries)
     author = server_author(host_id)
     email = f"factory-server@{host_id}"
-    env = {
+    identity = {
         "GIT_AUTHOR_NAME": author,
         "GIT_AUTHOR_EMAIL": email,
         "GIT_COMMITTER_NAME": author,
         "GIT_COMMITTER_EMAIL": email,
     }
-    summary = ", ".join(f"{slug} ({len(p)})" for slug, p in sorted(staged.items()))
-    result = git(
-        root,
-        "commit",
-        "-q",
-        "-S" if sign else "--no-gpg-sign",
-        "-m",
-        f"factory commit: {summary}",
-        *_PATHSPEC_STDIN,
-        stdin=_nul_joined(paths),
-        env=env,
-    )
-    if result.returncode != 0:
-        git(root, "reset", "-q", *_PATHSPEC_STDIN, stdin=_nul_joined(paths))
-        reason = result.stderr.decode(errors="replace").strip()
+    summary = ", ".join(f"{slug} ({len(e)})" for slug, e in sorted(staged.items()))
+    head = git(root, "rev-parse", "--verify", "--quiet", "HEAD")
+    parent = head.stdout.decode().strip() if head.returncode == 0 else None
+    with tempfile.TemporaryDirectory() as scratch:
+        scratch_index = {"GIT_INDEX_FILE": str(Path(scratch) / "index")}
+        if parent is not None:
+            _run(root, "read-tree", parent, env=scratch_index)
+        _run(root, "update-index", "-z", "--index-info", stdin=index_info, env=scratch_index)
+        tree = _run(root, "write-tree", env=scratch_index).decode().strip()
+    parents = () if parent is None else ("-p", parent)
+    signing = ("-S",) if sign else ()
+    message = f"factory commit: {summary}"
+    made = git(root, "commit-tree", tree, *parents, *signing, "-m", message, env=identity)
+    if made.returncode != 0:
+        reason = made.stderr.decode(errors="replace").strip()
         raise FactoryValidationError([ValidationIssue("commit", reason or "git commit failed")])
-    return _run(root, "rev-parse", "HEAD").decode().strip()
+    commit = made.stdout.decode().strip()
+    old = () if parent is None else (parent,)
+    _run(root, "update-ref", "-m", message, "HEAD", commit, *old)
+    _run(root, "update-index", "-z", "--index-info", stdin=index_info)
+    return commit
 
 
-def _nul_joined(paths: list[str]) -> bytes:
-    return b"".join(path.encode() + b"\0" for path in paths)
-
-
-def _run(root: Path, *args: str, stdin: bytes | None = None) -> bytes:
-    result: subprocess.CompletedProcess[bytes] = git(root, *args, stdin=stdin)
+def _run(
+    root: Path, *args: str, stdin: bytes | None = None, env: Mapping[str, str] | None = None
+) -> bytes:
+    result: subprocess.CompletedProcess[bytes] = git(root, *args, stdin=stdin, env=env)
     if result.returncode != 0:
         reason = result.stderr.decode(errors="replace").strip()
         raise FactoryValidationError([ValidationIssue("git", reason or f"git {args[0]} failed")])
