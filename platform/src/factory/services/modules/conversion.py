@@ -4,6 +4,7 @@ Declaration only (slice M, decision 55); behaviour stays in the services."""
 
 from factory.modules.contract import (
     ArtifactKind,
+    CheckRule,
     EventFamily,
     ModuleKind,
     ModuleSpec,
@@ -25,6 +26,7 @@ SPEC = ModuleSpec(
             "document_failures",
         ),
     ),
+    checks=(CheckRule("conversion-not-chosen", ("warning", "warning", "warning")),),
 )
 
 MODULE = RuleModule(SPEC)

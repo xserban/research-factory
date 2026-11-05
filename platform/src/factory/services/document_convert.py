@@ -45,7 +45,7 @@ from factory.document.converter import (
     ConverterUnavailable,
     convert,
 )
-from factory.document.registry import ConverterRegistry
+from factory.document.registry import ConverterRegistry, default_converters
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.blobs import BlobIntegrityError, BlobNotFoundError
 from factory.model.base import StrictModel
@@ -341,6 +341,39 @@ def document_status(project: Project) -> DocumentStatus:
     return DocumentStatus(
         documents=entries, converted=converted, not_converted=len(entries) - converted
     )
+
+
+class ConverterCount(StrictModel):
+    """How many live documents read through one converter at one version. `chosen` says decision
+    49 chose that converter; False means the researcher named it."""
+
+    converter: str
+    version: str
+    media_type: str
+    documents: int
+    chosen: bool
+
+
+def conversion_census(project: Project) -> list[ConverterCount]:
+    """The latest conversion of each live document, counted by converter, version and media type
+    and sorted by them. Requires a synced index. Reads no blob."""
+    latest = _latest_conversions(project)
+    counts: Counter[tuple[str, str, str]] = Counter()
+    for doc in _live_documents(project):
+        row = latest.get(doc.document_id)
+        if row is not None:
+            counts[(row[1], row[2], doc.media_type)] += 1
+    chosen = default_converters().names()
+    return [
+        ConverterCount(
+            converter=converter,
+            version=version,
+            media_type=media_type,
+            documents=n,
+            chosen=converter in chosen,
+        )
+        for (converter, version, media_type), n in sorted(counts.items())
+    ]
 
 
 def _latest_conversions(

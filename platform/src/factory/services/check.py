@@ -66,6 +66,7 @@ from factory.services.contributions import (
     live_items,
 )
 from factory.services.dedup import active_merges
+from factory.services.document_convert import conversion_census
 from factory.services.document_read import default_conversion
 from factory.services.draft_audit import audit_report as draft_audit_report
 from factory.services.draft_release import released_drafts
@@ -508,6 +509,7 @@ def _run_rules(project: Project) -> list[_Hit]:
         _checklist(project),
         _merge_conflicts(project, outcomes),
         _fulltext(project),
+        _conversion_choice(project),
         _extraction(project),
         _evidence(project),
         _references(project),
@@ -1820,6 +1822,20 @@ def _merge_conflicts(project: Project, outcomes: dict[str, Outcome]) -> list[_Hi
 
 
 # --- Full text (plan 2A, task 11) ---
+
+
+def _conversion_choice(project: Project) -> list[_Hit]:
+    """Documents read through a converter the researcher named over decision 49's choice."""
+    return [
+        _Hit(
+            "conversion-not-chosen",
+            (count.converter,),
+            f"{count.documents} document(s) read through {count.converter}, "
+            "which decision 49 did not choose",
+        )
+        for count in conversion_census(project)
+        if not count.chosen
+    ]
 
 
 def _fulltext(project: Project) -> list[_Hit]:

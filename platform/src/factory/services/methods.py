@@ -36,6 +36,7 @@ from factory.services.coverage import (
     resolved_import_ids,
 )
 from factory.services.discovery import supplied_only_included
+from factory.services.document_convert import ConverterCount, conversion_census
 from factory.services.evidence_report import evidence_report
 from factory.services.extraction_agreement import agreement_overall
 from factory.services.extraction_audit import extraction_audit_report
@@ -136,6 +137,8 @@ class MethodsReport(StrictModel):
     full_text_kappa: float | None = None
     full_text_sessions: int = 0
     full_text_models: list[str] = Field(default_factory=list)
+    conversions: list[ConverterCount] = Field(default_factory=list)
+    """What each live document reads through; empty when nothing is converted."""
     extraction_pack: str | None = None
     """`name@version` of the declared extraction pack; None (and the fields below empty) when the
     protocol declares no extraction schema."""
@@ -246,6 +249,7 @@ def methods_report(project: Project) -> MethodsReport:
         full_text_kappa=ft_kappa,
         full_text_sessions=len(ft_sessions),
         full_text_models=sorted({model for _, model in ft_sessions}),
+        conversions=conversion_census(project),
         extraction_pack=None if schema is None else f"{schema.pack}@{schema.pack_version}",
         extraction_fields=[] if schema is None else list(schema.fields),
         extraction_passes=0 if schema is None else _extraction_pass_count(project),
@@ -506,7 +510,7 @@ def _screening_started(project: Project) -> bool:
 def render_methods(report: MethodsReport, *, withheld: frozenset[str] = frozenset()) -> str:
     """The methods statement as Markdown paragraphs, separated by blank lines, in the order:
     search, deduplication, screening and automation, agreement and audit, full-text screening,
-    extraction and evidence (when declared), reference lists and snowballing (when run), seed
+    document conversion (when any), extraction and evidence (when declared), reference lists and snowballing (when run), seed
     recall, deviations.
 
     `withheld` names the fields an agent view hides; each is rendered as withheld, not as zero.
@@ -517,6 +521,7 @@ def render_methods(report: MethodsReport, *, withheld: frozenset[str] = frozense
         _screening(report),
         _agreement_and_audit(report, withheld),
         _full_text(report),
+        *([] if not report.conversions else [_conversion_paragraph(report.conversions)]),
         *([] if report.extraction_pack is None else [_extraction(report, withheld)]),
         *([] if report.extraction_pack is None else [_evidence(report)]),
         *([] if report.reference_parser is None else [_references_paragraph(report)]),
@@ -573,6 +578,19 @@ def _references_paragraph(report: MethodsReport) -> str:
 
 _PART_ORDER = {"held-out": 0, "development": 1, "unsplit": 2}
 _PART_TITLE = {"held-out": "Held-out", "development": "Development", "unsplit": "All"}
+
+
+def _conversion_paragraph(counts: list[ConverterCount]) -> str:
+    """Which converter each document reads through (R-01), and what that choice rests on."""
+    listed = "; ".join(
+        f"{c.converter} {c.version} ({c.media_type}): {c.documents} document(s)"
+        + ("" if c.chosen else ", named by the researcher over decision 49's choice")
+        for c in counts
+    )
+    return (
+        f"Document conversion. {listed}. Converters were chosen from automated fidelity scores "
+        "on a fixed corpus; tables were not checked by a person."
+    )
 
 
 def _import_paragraph(entry: ImportMethods) -> str:
