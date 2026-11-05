@@ -6,7 +6,7 @@ item; the platform classifies it (`lineage.classify`), never the proposer. Invar
   read through `_basis`, the one place a relation reads an item, so the read can move to the
   final (post-resolution) view in one line.
 - The source is in the contribution population; the target is a known work or a live, not
-  rejected idea. For an agent, a held-out work is `target-unknown`, exactly as a missing one.
+  rejected idea. A held-out seed's work is an ordinary known work (decided item 37.9).
 - Re-proposing the same (source, target, type) with the same basis writes nothing; with another
   basis it supersedes the live relation (its decision does not carry over) unless a human rejected
   that relation, which refuses the proposal.
@@ -43,7 +43,6 @@ from factory.model.lineage import (
     StatusReason,
 )
 from factory.model.references import LinkState
-from factory.services import seeds
 from factory.services.context import Project
 from factory.services.contributions import ItemView, contribution_item, final_item, final_items
 from factory.services.extraction import scope_population, stale_extractions
@@ -105,9 +104,7 @@ def known_work(project: Project, work_id: str) -> bool:
     return row is not None
 
 
-def _target_known(project: Project, target: str, held: set[str]) -> bool:
-    if target in held:
-        return False
+def _target_known(project: Project, target: str) -> bool:
     if _IDEA.fullmatch(target):
         with project.index.connect() as conn:
             row = conn.execute(
@@ -131,14 +128,11 @@ def propose_relation(project: Project, actor: Actor, proposal: RelationProposal)
         )
     with project.index.exclusive():
         project.index.sync()
-        held = set(seeds.held_out(project).work_ids) if actor.kind == "agent" else set[str]()
         issues: list[ValidationIssue] = []
-        if proposal.source_work in held or proposal.source_work not in set(
-            scope_population(project, Scope.CONTRIBUTION)
-        ):
+        if proposal.source_work not in set(scope_population(project, Scope.CONTRIBUTION)):
             issues.append(ValidationIssue("source_work", "not-in-population"))
         is_idea = _IDEA.fullmatch(proposal.target) is not None
-        if not _target_known(project, proposal.target, held):
+        if not _target_known(project, proposal.target):
             issues.append(ValidationIssue("target", "target-unknown"))
         item, bad = _basis_issues(project, proposal)
         if bad is not None:

@@ -59,9 +59,8 @@ def _refused(project: Project, field: str, reason: str, call: Callable[[], objec
 
 
 def _other(project: Project, world: list[str], lin: Lineage) -> str:
-    """An included work other than the source that an agent may see (not a held-out seed)."""
-    hidden = seeds.held_out(project).work_ids
-    return next(w for w in world if w != lin.source and w not in hidden)
+    """An included work other than the source."""
+    return next(w for w in world if w != lin.source)
 
 
 @pytest.fixture
@@ -313,20 +312,13 @@ def test_event_provenance(project: Project, agent: Actor, lin: Lineage, decider:
     assert proposed.payload["classifier"] == "1"
 
 
-def test_held_out_target_looks_unknown_to_an_agent(
+def test_held_out_work_behaves_as_an_ordinary_work(
     project: Project, agent: Actor, lin: Lineage, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from factory.services import relations
-
-    monkeypatch.setattr(
-        relations.seeds, "held_out", lambda _p: HeldOut(work_ids=frozenset({lin.target5}))
-    )
-    _refused(
-        project,
-        "target",
-        "target-unknown",
-        lambda: propose_relation(project, agent, prop(lin, lin.target5, basis=lin.base)),
-    )
+) -> None:  # decided item 37.9: no special answers for a seed's work
+    hidden = HeldOut(work_ids=frozenset({lin.target5, lin.source}))
+    monkeypatch.setattr(seeds, "held_out", lambda _p: hidden)
+    r = propose_relation(project, agent, prop(lin, lin.target5, basis=lin.base))
+    assert (r.status, r.status_reason, r.written) == ("stated", None, True)
 
 
 def test_unresolved_basis_refused_until_resolved(  # a stated edge rests on the final value

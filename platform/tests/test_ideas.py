@@ -13,6 +13,7 @@ from factory.errors import FactoryValidationError
 from factory.events.envelope import Actor
 from factory.events.reader import read_all
 from factory.model.lineage import LineageDecision, RelationProposal
+from factory.model.seed import HeldOut
 from factory.services import seeds
 from factory.services.context import Project
 from factory.services.ideas import (
@@ -49,12 +50,8 @@ def _refused(project: Project, field: str, reason: str, call: Callable[[], objec
     assert len(_events(project)) == before
 
 
-def _hidden(project: Project) -> set[str]:
-    return set(seeds.held_out(project).work_ids)
-
-
 def _two_ideas(project: Project, agent: Actor, lin: Lineage, world: list[str]) -> tuple[str, str]:
-    other = next(w for w in world if w != lin.source and w not in _hidden(project))
+    other = next(w for w in world if w != lin.source)
     a = propose_idea(project, agent, NAME, lin.source, lin.base, [lin.source])
     b = propose_idea(project, agent, "linear attention", lin.source, lin.base, [lin.source, other])
     return a, b
@@ -63,7 +60,7 @@ def _two_ideas(project: Project, agent: Actor, lin: Lineage, world: list[str]) -
 def test_agent_proposes_idea_with_sorted_members(
     project: Project, agent: Actor, lin: Lineage, world: list[str]
 ) -> None:
-    other = next(w for w in world if w != lin.source and w not in _hidden(project))
+    other = next(w for w in world if w != lin.source)
     idea = propose_idea(project, agent, NAME, lin.source, lin.base, [other, lin.source])
     view = idea_view(project, idea)
     assert view is not None
@@ -96,7 +93,7 @@ def test_human_define_needs_quote_too(project: Project, human: Actor, lin: Linea
 def test_name_item_must_be_a_live_final_item_of_the_origin(
     project: Project, agent: Actor, lin: Lineage, world: list[str]
 ) -> None:
-    other = next(w for w in world if w != lin.source and w not in _hidden(project))
+    other = next(w for w in world if w != lin.source)
     _refused(
         project,
         "name_item",
@@ -204,7 +201,7 @@ def test_merge_and_unmerge_restore_views_exactly(
 def test_chained_merge_and_cycle(  # Review Focus 4
     project: Project, agent: Actor, decider: Actor, lin: Lineage, world: list[str]
 ) -> None:
-    others = [w for w in world if w != lin.source and w not in _hidden(project)]
+    others = [w for w in world if w != lin.source]
     ideas = [
         propose_idea(project, agent, NAME, lin.source, lin.base, sorted([lin.source, w]))
         for w in others[:3]
@@ -283,7 +280,7 @@ def test_candidates_from_names_and_builds_on(
     project: Project, agent: Actor, lin: Lineage, world: list[str]
 ) -> None:
     # The source work's items name "linear attention"; a stated builds-on relation names the origin.
-    other = next(w for w in world if w != lin.source and w not in _hidden(project))
+    other = next(w for w in world if w != lin.source)
     rel = propose_relation(
         project,
         agent,
@@ -298,3 +295,12 @@ def test_candidates_from_names_and_builds_on(
     ]
     assert other not in {c.work_id for c in got}
     assert [c.work_id for c in got] == sorted(c.work_id for c in got)
+
+
+def test_held_out_work_is_an_ordinary_member(
+    project: Project, agent: Actor, lin: Lineage, monkeypatch: pytest.MonkeyPatch
+) -> None:  # decided item 37.9: no special answers for a seed's work
+    hidden = HeldOut(work_ids=frozenset({lin.source, lin.target5}))
+    monkeypatch.setattr(seeds, "held_out", lambda _p: hidden)
+    idea = propose_idea(project, agent, NAME, lin.source, lin.base, [lin.source, lin.target5])
+    assert idea_view(project, idea) is not None

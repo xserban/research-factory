@@ -4,7 +4,7 @@ Invariants:
 - An idea's name occurs in the verified quote of its `name` field in a live, final, non-stale
   contribution item of the origin work (`name_item`); an agent or a human proposes it, only a human
   decides it, and never from the session that proposed it (proposer != evaluator).
-- Members are known works (for an agent, never a held-out one), unique, and include the origin.
+- Members are known works , unique, and include the origin.
 - A superseding proposal replaces the grouping; its decision does not carry over.
 - `idea.merged` / `idea.unmerged` are human, reversible and acyclic: a merged idea is hidden and
   its members join the idea it was merged into (transitively); unmerging restores both exactly.
@@ -32,7 +32,6 @@ from factory.model.lineage import (
     IdeaUnmerged,
     LineageDecision,
 )
-from factory.services import seeds
 from factory.services.context import Project
 from factory.services.contributions import contribution_item, final_item
 from factory.services.extraction import stale_extractions
@@ -83,15 +82,14 @@ def propose_idea(
         )
     with project.index.exclusive():
         project.index.sync()
-        held = set(seeds.held_out(project).work_ids) if actor.kind == "agent" else set[str]()
         issues: list[ValidationIssue] = []
         if not name.strip() or len(name) > MAX_IDEA_NAME:
             issues.append(ValidationIssue("name", f"1 to {MAX_IDEA_NAME} non-blank characters"))
         else:
             issues += _name_issues(project, name, origin, name_item)
-        if origin in held or not known_work(project, origin):
+        if not known_work(project, origin):
             issues.append(ValidationIssue("origin", "unknown-work"))
-        issues += _member_issues(project, origin, members, held)
+        issues += _member_issues(project, origin, members)
         if supersedes is not None and _idea_row(project, supersedes, live=True) is None:
             issues.append(ValidationIssue("supersedes", "idea-not-live"))
         if issues:
@@ -154,7 +152,7 @@ def _name_issues(project: Project, name: str, origin: str, name_item: str) -> li
 
 
 def _member_issues(
-    project: Project, origin: str, members: list[str] | tuple[str, ...], held: set[str]
+    project: Project, origin: str, members: list[str] | tuple[str, ...]
 ) -> list[ValidationIssue]:
     issues: list[ValidationIssue] = []
     if len(set(members)) != len(members):
@@ -163,7 +161,7 @@ def _member_issues(
         issues.append(ValidationIssue("members", "must-include-origin"))
     if not members:
         return issues or [ValidationIssue("members", "must-include-origin")]
-    if any(m in held or not known_work(project, m) for m in set(members)):
+    if any(not known_work(project, m) for m in set(members)):
         issues.append(ValidationIssue("members", "unknown-work"))
     return issues
 
