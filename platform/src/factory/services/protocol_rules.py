@@ -188,7 +188,7 @@ def protocol_issues(
     errors.extend(_miner_errors(spec.miners, registered_miners))
     gate_errors, gate_gaps = _gate_policy_issues(spec, mode)
     errors.extend(gate_errors)
-    errors.extend(_hypothesis_plan_errors(spec))
+    errors.extend(_hypothesis_plan_errors(spec, mode))
     gaps = _gaps(spec, question, mode, probes)
     gaps.extend(gate_gaps)
     return ProtocolCheck(errors=errors, gaps=gaps)
@@ -431,9 +431,11 @@ def gate_policy_gaps(spec: ProtocolSpec, mode: RigorMode) -> list[ValidationIssu
     return gaps
 
 
-def _hypothesis_plan_errors(spec: ProtocolSpec) -> list[ValidationIssue]:
-    """Errors of `hypothesis_plan`: fewer than two seeds cannot give a confidence interval, and
-    the confirmatory split is read at least once."""
+def _hypothesis_plan_errors(spec: ProtocolSpec, mode: RigorMode) -> list[ValidationIssue]:
+    """Errors of `hypothesis_plan`: fewer than two seeds cannot give a confidence interval, the
+    confirmatory split is read at least once, and a stated plan cannot switch off an independence
+    rule the mode requires (a lead outside exploratory mode, a distinct critic model in
+    systematic mode): the proposer would amend its own review away (slice M ruling 8)."""
     plan = spec.hypothesis_plan
     if plan is None:
         return []
@@ -442,6 +444,14 @@ def _hypothesis_plan_errors(spec: ProtocolSpec) -> list[ValidationIssue]:
         issues.append(ValidationIssue("hypothesis_plan.min_seeds", "at least 2 seeds"))
     if plan.test_access_limit < 1:
         issues.append(ValidationIssue("hypothesis_plan.test_access_limit", "at least 1"))
+    if plan.require_lead is False and mode is not RigorMode.EXPLORATORY:
+        issues.append(
+            ValidationIssue("hypothesis_plan.require_lead", f"required in {mode.value} mode")
+        )
+    if plan.critic_distinct_model is False and mode is RigorMode.SYSTEMATIC:
+        issues.append(
+            ValidationIssue("hypothesis_plan.critic_distinct_model", "required in systematic mode")
+        )
     return issues
 
 

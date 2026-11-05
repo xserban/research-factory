@@ -89,7 +89,7 @@ def test_plan_defaults_by_mode(
 def test_stated_plan_fields_are_kept(project: Project, extraction: str, human: Actor) -> None:
     current = current_protocol(project)
     assert current is not None
-    plan = HypothesisPlan(min_seeds=7, require_lead=False, critic_distinct_model=True)
+    plan = HypothesisPlan(min_seeds=7, require_lead=True, critic_distinct_model=True)
     amend_protocol(
         project,
         human,
@@ -99,7 +99,7 @@ def test_stated_plan_fields_are_kept(project: Project, extraction: str, human: A
         effects={},
     )
     got = effective_plan(project)
-    assert (got.min_seeds, got.require_lead, got.critic_distinct_model) == (7, False, True)
+    assert (got.min_seeds, got.require_lead, got.critic_distinct_model) == (7, True, True)
 
 
 def test_systematic_agent_gate_is_refused() -> None:
@@ -150,3 +150,25 @@ def test_amendment_of_plan_stales_nothing(project: Project, extraction: str, hum
     result = amend_protocol(project, human, new, reason="plan", semantic=True, effects={})
     assert result.to_version != result.from_version and result.stale_rules == []
     assert (stale_screening_decisions(project), stale_extractions(project)) == before
+
+
+@pytest.mark.parametrize(
+    ("mode", "plan", "fields"),
+    [
+        (
+            RigorMode.SYSTEMATIC,
+            {"critic_distinct_model": False},
+            ["hypothesis_plan.critic_distinct_model"],
+        ),
+        (RigorMode.SYSTEMATIC, {"require_lead": False}, ["hypothesis_plan.require_lead"]),
+        (RigorMode.PILOT, {"require_lead": False}, ["hypothesis_plan.require_lead"]),
+        (RigorMode.PILOT, {"critic_distinct_model": False}, []),
+        (RigorMode.EXPLORATORY, {"require_lead": False, "critic_distinct_model": False}, []),
+        (RigorMode.SYSTEMATIC, {"require_lead": True, "critic_distinct_model": True}, []),
+    ],
+)
+def test_plan_cannot_switch_off_the_independence_rules(
+    mode: RigorMode, plan: dict[str, bool], fields: list[str]
+) -> None:  # the proposer cannot amend the rules away (slice M ruling 8)
+    check = _check(_spec(hypothesis_plan=HypothesisPlan(**plan)), mode)
+    assert [f for f in _fields(check.errors) if f.startswith("hypothesis_plan")] == fields
