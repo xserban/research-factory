@@ -60,6 +60,7 @@ _TABLE_KINDS: dict[TriggerKind, tuple[str, str]] = {
     TriggerKind.HYPOTHESIS: ("hypotheses", "hypothesis_id"),
 }
 _BUILDER_PAGE = 500
+_GAP_ROW_KEYS = frozenset({"rows_axis", "columns_axis", "filters", "row", "column", "count"})
 
 PriorSource = Callable[[Project, Collection[str]], Iterable[str]]
 PRIOR_SOURCES: list[PriorSource] = []
@@ -156,6 +157,8 @@ def _conflict_current(project: Project, group_id: str, stored: dict[str, JsonVal
 def _gap_current(project: Project, gap_key: str, stored: dict[str, JsonValue]) -> bool:
     from factory.services.finders import find_gaps  # finders import the evidence report
 
+    if set(stored) != _GAP_ROW_KEYS:  # nothing but the builder's own row reaches the critic
+        return False
     filters = stored["filters"]
     report = find_gaps(
         project,

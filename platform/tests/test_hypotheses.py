@@ -298,3 +298,34 @@ def test_event_provenance(project: Project, human: Actor, gw: list[str]) -> None
 
     with pytest.raises(ValidationError):
         HypothesisDrafted(hypothesis_id=hid, spec=spec, h_version="H@00000000")
+
+
+def test_gap_trigger_must_be_exactly_the_builder_row(project: Project, gw: list[str]) -> None:
+    from factory.services.finders import find_gaps
+
+    report = find_gaps(project, rows_axis="method", columns_axis="task")
+    cell = report.empty[0]
+    row: dict[str, object] = {
+        "rows_axis": "method",
+        "columns_axis": "task",
+        "filters": {},
+        "row": cell.row,
+        "column": cell.column,
+        "count": cell.count,
+    }
+
+    def trigger(**extra: object) -> Trigger:
+        return Trigger(kind=TriggerKind.GAP, ref=report.gap_key, row={**row, **extra})  # type: ignore[arg-type]
+
+    assert record_lead(project, LEAD_AUTHOR, lead_input(LEAD_TEXT, trigger()))
+    for extra in ({"why": "free text from the proposer"}, {"count": 3}):
+        with pytest.raises(FactoryValidationError) as err:
+            record_lead(project, LEAD_AUTHOR, lead_input(LEAD_TEXT, trigger(**extra)))
+        assert _fields(err) == [("triggers.0", "trigger-stale")]
+    short = {k: v for k, v in row.items() if k != "filters"}
+    with pytest.raises(FactoryValidationError):
+        record_lead(
+            project,
+            LEAD_AUTHOR,
+            lead_input(LEAD_TEXT, Trigger(kind=TriggerKind.GAP, ref=report.gap_key, row=short)),  # type: ignore[arg-type]
+        )
