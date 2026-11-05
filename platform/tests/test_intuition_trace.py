@@ -70,7 +70,17 @@ def concept(project: Project, iw: IWorld, name: str = "softmax attention", **sou
 
 
 def test_the_layer_kinds_close_the_chain_order() -> None:
-    assert KINDS[-3:] == ("interpretation", "concept", "concept_link")
+    i = KINDS.index("interpretation")  # the region and organisation kinds follow the layer's
+    assert KINDS[i : i + 3] == ("interpretation", "concept", "concept_link")
+    assert KINDS[i + 3 :] == (
+        "region",
+        "region_version",
+        "region_member",
+        "label",
+        "term",
+        "consolidation",
+        "proposal",
+    )
     i = KINDS.index("claim")  # G2's order after claim is unchanged
     assert KINDS[i + 1 : i + 5] == ("relation", "idea", "cites", "quote")
 
