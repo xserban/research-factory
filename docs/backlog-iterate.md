@@ -34,3 +34,4 @@ Minor review findings parked during the v1 build, to address when iterating from
 - G1 re-review: `report_methods` shows unmasked reference counts (`reference_counts` without `held_out`), so its resolved count can differ from `references_status`; reveals how many links are masked, never which.
 - living-C: keep-flagged retraction plus pending correction stays in frontiers (evidence_report.py:507); claims-only works vanish unlisted and an excluded concern reads retracted (:516); multi-page notices cite page 1 blob (status_lookup.py:104); identifier-less works hog the status budget (notices.py:107); aliases unused for Crossref lookups.
 - G2-C: relation_views rebuilds the ledger per call; G2-D per-frontier use multiplies it (unmeasured). CLI sessions are per process, so a human may confirm their own definition.
+- G2-C: relation reads call final_items() per view (whole final set); at 1e5+ items project or page it.
