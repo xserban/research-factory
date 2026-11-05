@@ -10,6 +10,9 @@ Invariants:
 - The commit holds exactly the paths this job staged; anything else staged by hand stays out.
 - A file is staged under the project's write lock, so a line half-written never enters history.
 - A deletion is never committed: events are append-only.
+- A push goes only to a remote whose every push URL is listed in `.server/push_remotes`, checked
+  before anything is committed; with no list, or an empty one, nothing is pushed (ruling 5: the
+  remote is private, and a person vouches for that by listing it).
 """
 
 import re
@@ -27,6 +30,11 @@ from factory.services.hosting import current_host, git, server_author
 _REMOTE_RE = r"[A-Za-z0-9][A-Za-z0-9._-]*"
 _PRIVATE_TOP = frozenset({"library", ".index", ".server"})
 _PRIVATE_IN_PROJECT = frozenset({"library", ".index"})
+PUSH_REMOTES_FILE = ".server/push_remotes"
+"""The allow-list of push URLs: UTF-8 text, one URL per line, compared exactly with the output of
+`git remote get-url --push --all`. Surrounding spaces are stripped; blank lines and lines starting
+with `#` are ignored. Written by `factory server init`."""
+
 _PATHSPEC_STDIN = ("--pathspec-from-file=-", "--pathspec-file-nul")
 _EVENT_FILE_RE = rf"{ACTOR_ID_RE.strip('^$')}/{ULID_RE}\.jsonl"
 _BLOB_FILE_RE = r"sha256/[0-9a-f]{2}/[0-9a-f]{62}"
@@ -48,6 +56,8 @@ def commit_hosted(settings: Settings, *, sign: bool, push: str | None) -> Commit
         raise FactoryValidationError([ValidationIssue("push", "not a remote name")])
     root = settings.root
     _require_repository(root)
+    if push is not None:
+        _require_listed_remote(root, push)
     changes = _changes(root)
     private = sorted(path for path, _ in changes if is_private(path))
     if private:
@@ -98,6 +108,32 @@ def _require_repository(root: Path) -> None:
         raise FactoryValidationError([ValidationIssue("root", "not the root of a git repository")])
 
 
+def allowed_push_urls(root: Path) -> frozenset[str]:
+    """The URLs of `PUSH_REMOTES_FILE`; empty when the file is absent."""
+    path = root / PUSH_REMOTES_FILE
+    if not path.is_file():
+        return frozenset()
+    lines = (line.strip() for line in path.read_text().splitlines())
+    return frozenset(line for line in lines if line and not line.startswith("#"))
+
+
+def _require_listed_remote(root: Path, remote: str) -> None:
+    allowed = allowed_push_urls(root)
+    if not allowed:
+        raise FactoryValidationError(
+            [ValidationIssue("push", f"no remote is allowed: {PUSH_REMOTES_FILE} lists none")]
+        )
+    urls = git(root, "remote", "get-url", "--push", "--all", remote)
+    listed = urls.stdout.decode(errors="replace").split()
+    if urls.returncode != 0 or not listed:
+        raise FactoryValidationError([ValidationIssue("push", f"no remote named {remote}")])
+    unlisted = [url for url in listed if url not in allowed]
+    if unlisted:
+        raise FactoryValidationError(
+            [ValidationIssue("push", f"{remote} is not in {PUSH_REMOTES_FILE}: {unlisted[0]}")]
+        )
+
+
 def _changes(root: Path) -> list[tuple[str, str]]:
     """Every (path, status) git can see, staged or not; ignored files are not listed."""
     listing = _run(root, "status", "--porcelain=v1", "-z", "--no-renames", "--untracked-files=all")
@@ -112,12 +148,10 @@ def _committable(root: Path, slug: str, changes: list[tuple[str, str]]) -> list[
     for path, status in changes:
         if "D" in status:
             continue
-        if path.startswith(events):
-            if re.fullmatch(_EVENT_FILE_RE, path[len(events) :]) is not None:
-                paths.append(path)
-        elif path.startswith(blobs) and re.fullmatch(_BLOB_FILE_RE, path[len(blobs) :]) is not None:
-            if _is_text(root / path):
-                paths.append(path)
+        event = path.startswith(events) and re.fullmatch(_EVENT_FILE_RE, path[len(events) :])
+        blob = path.startswith(blobs) and re.fullmatch(_BLOB_FILE_RE, path[len(blobs) :])
+        if event or (blob and _is_text(root / path)):
+            paths.append(path)
     return paths
 
 

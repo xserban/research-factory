@@ -25,7 +25,6 @@ from factory.model.hosting import ProjectHosted
 from factory.model.identity import ACTOR_ID_RE
 from factory.services.context import Project, hosted_by
 
-
 GIT_TIMEOUT_SECONDS = 300
 # Set by a git hook or a wrapping shell, these would point every command at another repository.
 _INHERITED_GIT = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR")
