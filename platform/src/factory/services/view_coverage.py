@@ -56,7 +56,7 @@ def _build(project: Project) -> CoverageView:
     project.index.sync()
     as_of = project.index.head()  # once, before any read: the view describes this position
     notices: list[ViewNotice] = []
-    groups, merged = _shown_groups(project)
+    groups, merged = coverage_groups(project)
     pack_method = _method_definition(project)
     cells: dict[str, dict[str, _Tally]] = {}
     row_group: dict[tuple[str, str], tuple[str, FinalRow]] = {}
@@ -148,7 +148,7 @@ class _Tally:
         return CoverageCell(independent=self.independent, copied=self.copied, works=len(self.works))
 
 
-def _shown_groups(project: Project) -> tuple[list[tuple[GroupKey, list[FinalRow]]], int]:
+def coverage_groups(project: Project) -> tuple[list[tuple[GroupKey, list[FinalRow]]], int]:
     """The groups of `grouped_rows` restricted to visible rows (`view_rows`: corpus works read as
     their primary, no retraction); a group left without rows is dropped."""
     shown, _, merged = visible_groups(project, sorted(grouped_rows(project).groups.items()))

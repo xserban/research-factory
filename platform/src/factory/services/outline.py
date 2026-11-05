@@ -129,7 +129,7 @@ def _origin_date(project: Project, idea: IdeaView) -> str:
     return (published if isinstance(published, date) else date.max).isoformat()
 
 
-def _lineage_order(project: Project, ideas: Sequence[IdeaView]) -> list[IdeaView]:
+def lineage_order(project: Project, ideas: Sequence[IdeaView]) -> list[IdeaView]:
     """Bases before the ideas that build on or improve on them, ties by origin date then id. The
     edges are the stated and confirmed `builds-on` and `improves-on` edges of the members, read one
     member at a time: the graph derives idea edges from `builds-on` alone. An edge to a member of
@@ -170,7 +170,7 @@ def _idea_sections(
             items_by_work.setdefault(item.work_id, []).append(f"item:{item.extraction_id}")
     claims_by_work = _claims_by_work(project, population)
     sections: list[OutlineSection] = []
-    for idea in _lineage_order(project, ideas):
+    for idea in lineage_order(project, ideas):
         members = sorted(w for w in idea.effective_members if w in population)
         origin_first = ([idea.origin] if idea.origin in members else []) + [
             w for w in members if w != idea.origin
