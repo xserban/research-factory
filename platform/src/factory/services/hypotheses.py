@@ -28,6 +28,7 @@ from sqlalchemy import text
 
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
+from factory.index.hypotheses import plan_in_force
 from factory.model.base import StrictModel
 from factory.model.hypotheses import (
     AbandonReason,
@@ -329,6 +330,16 @@ def _flags_of(project: Project, hypothesis_id: str) -> tuple[str, ...]:
     return cutoff_flags(project, hypothesis_id)
 
 
+def _confidence(project: Project, hypothesis_id: str) -> str:
+    """The level the falsifier states: the one fixed at registration, else the plan's."""
+    with project.index.connect() as conn:
+        pinned = conn.execute(
+            text("SELECT level FROM hypothesis_registrations WHERE hypothesis_id = :h"),
+            {"h": hypothesis_id},
+        ).scalar()
+    return effective_plan(project).confidence if pinned is None else str(pinned)
+
+
 def _view(project: Project, row: Any) -> HypothesisView:
     spec = HypothesisSpec.model_validate(json.loads(str(row.spec_json)))
     hypothesis_id = str(row.hypothesis_id)
@@ -338,7 +349,7 @@ def _view(project: Project, row: Any) -> HypothesisView:
         hypothesis_id=hypothesis_id,
         h_version=str(row.h_version),
         spec=spec,
-        falsifier=falsifier_text(spec, confidence=effective_plan(project).confidence),
+        falsifier=falsifier_text(spec, confidence=_confidence(project, hypothesis_id)),
         state=_state(project, row, reviews, registration),
         reviews=reviews,
         registration=registration,
@@ -541,6 +552,8 @@ def register_hypothesis(project: Project, actor: Actor, hypothesis_id: str) -> s
             proposer_sessions=_proposer_sessions(project, view),
         )
         verdict.raise_if_refused()
+        with project.index.connect() as conn:
+            min_seeds, level = plan_in_force(conn)
         payload = HypothesisRegistered(
             hypothesis_id=hypothesis_id,
             h_version=view.h_version,
@@ -548,6 +561,8 @@ def register_hypothesis(project: Project, actor: Actor, hypothesis_id: str) -> s
             policy=verdict.policy.kind,
             autonomy=verdict.autonomy,
             flags=flags,
+            level=level,
+            min_seeds=min_seeds,
         )
         input_blob = (
             project.blobs.put_json(payload.model_dump(mode="json"))

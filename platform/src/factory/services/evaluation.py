@@ -35,7 +35,7 @@ from factory.hypotheses.evaluate import compute_experiment
 from factory.hypotheses.literature import LitRow, compare_works
 from factory.hypotheses.rules import Favour, apply_literature_rule
 from factory.hypotheses.tquantiles import Level
-from factory.index.evaluation import plan_in_force, read_experiment_inputs
+from factory.index.evaluation import read_experiment_inputs
 from factory.model.base import StrictModel
 from factory.model.hypotheses import (
     EVALUATOR_VERSION,
@@ -161,7 +161,7 @@ def _recompute_literature(project: Project, hypothesis_id: str) -> HypothesisEva
         flags.add("method-unresolved")
     if view.autonomy == "agent":
         flags.add("autonomy:agent")
-    _, level = _plan(project)
+    level = _registered_level(project, hypothesis_id)
     body: dict[str, JsonValue] = {
         "h": view.h_version,
         "rule": rule.model_dump(mode="json"),
@@ -185,9 +185,13 @@ def _recompute_literature(project: Project, hypothesis_id: str) -> HypothesisEva
     )
 
 
-def _plan(project: Project) -> tuple[int, Level]:
+def _registered_level(project: Project, hypothesis_id: str) -> Level:
     with project.index.connect() as conn:
-        return plan_in_force(conn)
+        level: Level = conn.execute(
+            text("SELECT level FROM hypothesis_registrations WHERE hypothesis_id = :h"),
+            {"h": hypothesis_id},
+        ).scalar_one()
+    return level
 
 
 def recompute(project: Project, hypothesis_id: str) -> HypothesisEvaluated | None:

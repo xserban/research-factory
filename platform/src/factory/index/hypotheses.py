@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from sqlalchemy import Column, Index, Integer, MetaData, String, Table, select, update
+from sqlalchemy import Column, Index, Integer, MetaData, String, Table, select, text, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Connection
 
@@ -35,6 +35,7 @@ from factory.model.hypotheses import (
     HypothesisReviewed,
     LeadDecided,
     LeadRecorded,
+    Level,
     ModelCutoffDeclared,
 )
 from factory.model.project import RigorMode
@@ -42,6 +43,8 @@ from factory.model.protocol import ProtocolSpec
 from factory.modules.contract import PolicyKind
 from factory.modules.presets import preset
 
+MIN_SEEDS_BY_MODE = {RigorMode.EXPLORATORY: 2, RigorMode.PILOT: 3, RigorMode.SYSTEMATIC: 5}
+"""The plan defaults of `services.hypothesis_gates.effective_plan`, spelled once for the fold."""
 _STATE = {"promote": "promoted", "park": "parked", "discard": "discarded"}
 
 
@@ -134,6 +137,8 @@ def hypothesis_tables(metadata: MetaData, protocols: Table, project: Table) -> H
         Column("autonomy", String, nullable=False),
         Column("flags_json", String, nullable=False),
         Column("event_id", String, nullable=False),
+        Column("level", String, nullable=False),
+        Column("min_seeds", Integer, nullable=False),
     )
     cutoffs = Table(
         "model_cutoffs",
@@ -159,6 +164,19 @@ def hypothesis_handlers(t: HypothesisTables) -> dict[str, Handler]:
         "hypothesis.registered": _registered(t),
         "model.cutoff_declared": _cutoff(t),
     }
+
+
+def plan_in_force(conn: Connection) -> tuple[int, Level]:
+    """Minimum seeds and confidence level of the latest protocol recorded so far, with the mode's
+    default for a field it leaves open. Read when a hypothesis registers and never again: the
+    registration pins them (R-121)."""
+    mode_raw = conn.execute(text("SELECT rigor_mode FROM project LIMIT 1")).scalar()
+    mode = RigorMode(str(mode_raw)) if mode_raw is not None else RigorMode.PILOT
+    row = conn.execute(text("SELECT spec FROM protocols ORDER BY event_id DESC LIMIT 1")).first()
+    plan = None if row is None else ProtocolSpec.model_validate_json(str(row[0])).hypothesis_plan
+    min_seeds = plan.min_seeds if plan is not None and plan.min_seeds is not None else None
+    level: Level = "0.95" if plan is None else plan.confidence
+    return (min_seeds if min_seeds is not None else MIN_SEEDS_BY_MODE[mode]), level
 
 
 def policy_in_force(conn: Connection, t: HypothesisTables, gate_id: str) -> PolicyKind:
@@ -420,9 +438,14 @@ def _registered(t: HypothesisTables) -> Handler:
             ).first()
             if cited is None or not cited[0]:
                 return
+        min_seeds, level = plan_in_force(conn)
+        if p.level not in (None, level) or p.min_seeds not in (None, min_seeds):
+            return  # the plan a registration states is the one in force
         conn.execute(
             sqlite_insert(t.registrations)
             .values(
+                level=level,
+                min_seeds=min_seeds,
                 hypothesis_id=p.hypothesis_id,
                 h_version=p.h_version,
                 review_event_id=p.review_event_id,

@@ -56,6 +56,7 @@ MAX_CONCLUSION = 1200
 MAX_NOTE = 300
 MAX_METHOD_NAME = 120
 PRIOR_CAP = 50
+Level = Literal["0.90", "0.95", "0.99"]
 
 LeadId = Annotated[str, StringConstraints(pattern=LEAD_ID_RE)]
 HypothesisId = Annotated[str, StringConstraints(pattern=HYP_ID_RE)]
@@ -466,6 +467,11 @@ class HypothesisRegistered(StrictModel):
     policy: PolicyKind
     autonomy: Literal["human", "agent"]
     flags: tuple[str, ...] = ()
+    level: Level | None = None
+    min_seeds: int | None = Field(default=None, ge=1)
+    """The confidence level and minimum seeds in force at registration: the decision rule is
+    judged at these, whatever the protocol says later (R-121). None in a log written before
+    these fields; the fold then pins the plan in force at this point of the log."""
 
 
 class ModelCutoffDeclared(StrictModel):
@@ -481,7 +487,6 @@ class ModelCutoffDeclared(StrictModel):
 EVALUATOR_VERSION = "1"
 EVALUATION_OUTCOMES = ("supported", "refuted", "inconclusive", "incomplete")
 SIGNED_DECIMAL_RE = r"^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$"
-Level = Literal["0.90", "0.95", "0.99"]
 
 
 class HypothesisEvaluated(StrictModel):

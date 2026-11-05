@@ -9,7 +9,7 @@ from decimal import Decimal
 from typing import Any
 
 from factory.hypotheses.literature import LitRow, compare_works
-from factory.index.evaluation import plan_in_force
+from factory.index.hypotheses import plan_in_force
 from factory.services.context import Project
 from factory.services.evaluation import (
     evaluate_hypothesis,

@@ -38,7 +38,6 @@ from factory.hypotheses.evaluate import (
     compute_experiment,
 )
 from factory.hypotheses.rules import apply_literature_rule
-from factory.hypotheses.tquantiles import Level
 from factory.index.experiments import design_of
 from factory.index.projection import Handler
 from factory.model.experiments import Cell
@@ -48,11 +47,6 @@ from factory.model.hypotheses import (
     LiteratureDirection,
     LiteratureTest,
 )
-from factory.model.project import RigorMode
-from factory.model.protocol import ProtocolSpec
-
-MIN_SEEDS_BY_MODE = {RigorMode.EXPLORATORY: 2, RigorMode.PILOT: 3, RigorMode.SYSTEMATIC: 5}
-"""The plan defaults of `services.hypothesis_gates.effective_plan`, spelled once for the fold."""
 
 
 @dataclass(frozen=True)
@@ -76,24 +70,13 @@ def evaluation_tables(metadata: MetaData) -> EvaluationTables:
     return EvaluationTables(evaluations)
 
 
-def plan_in_force(conn: Connection) -> tuple[int, Level]:
-    """Minimum seeds and confidence level of the latest protocol recorded so far, with the mode's
-    default for a field it leaves open."""
-    mode_raw = conn.execute(text("SELECT rigor_mode FROM project LIMIT 1")).scalar()
-    mode = RigorMode(str(mode_raw)) if mode_raw is not None else RigorMode.PILOT
-    row = conn.execute(text("SELECT spec FROM protocols ORDER BY event_id DESC LIMIT 1")).first()
-    plan = None if row is None else ProtocolSpec.model_validate_json(str(row[0])).hypothesis_plan
-    min_seeds = plan.min_seeds if plan is not None and plan.min_seeds is not None else None
-    level: Level = "0.95" if plan is None else plan.confidence
-    return (min_seeds if min_seeds is not None else MIN_SEEDS_BY_MODE[mode]), level
-
-
 def registered_hypothesis(conn: Connection, hypothesis_id: str) -> Any:
     """The hypothesis row and its registration when it is registered, not abandoned and not
     superseded; else None."""
     return conn.execute(
         text(
-            "SELECT h.h_version, h.kind, h.spec_json, r.autonomy FROM hypotheses h "
+            "SELECT h.h_version, h.kind, h.spec_json, r.autonomy, r.level, r.min_seeds "
+            "FROM hypotheses h "
             "JOIN hypothesis_registrations r ON r.hypothesis_id = h.hypothesis_id "
             "WHERE h.hypothesis_id = :h AND h.abandoned_event_id IS NULL "
             "AND h.superseded_by IS NULL"
@@ -164,7 +147,6 @@ def read_experiment_inputs(conn: Connection, hypothesis_id: str) -> ExperimentIn
         ).first()
         is not None
     )
-    min_seeds, level = plan_in_force(conn)
     return ExperimentInputs(
         hypothesis_id=hypothesis_id,
         h_version=str(hyp[0]),
@@ -176,8 +158,8 @@ def read_experiment_inputs(conn: Connection, hypothesis_id: str) -> ExperimentIn
         deviations=deviations,
         baseline_accepted=accepted,
         autonomy=tuple(str(a) for a in (hyp[3], exp[3], exp[4]) if a is not None),
-        min_seeds=min_seeds,
-        level=level,
+        min_seeds=int(hyp[5]),
+        level=hyp[4],
     )
 
 
