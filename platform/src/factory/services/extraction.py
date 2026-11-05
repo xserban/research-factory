@@ -144,6 +144,7 @@ __all__ = [
     "next_unit",
     "pass_config",
     "record_unit",
+    "recorded_row",
     "require_schema",
     "scope_population",
     "screening_session",
@@ -1788,19 +1789,39 @@ def live_rows(
 ) -> list[ExtractionRow]:
     """The rows of `scope` no later row supersedes, optionally of one pass and one work, by
     extraction id. The default scope is evidence: no evidence read sees a contribution row."""
-    project.index.sync()
     where, params = _filters(pass_label, work_id)
-    where += " AND scope = :scope"
+    where += " AND superseded_by IS NULL AND scope = :scope"
     params["scope"] = scope.value
+    return [row for row, _ in _read_rows(project, where, params)]
+
+
+def recorded_row(
+    project: Project, extraction_id: str, *, scope: Scope = Scope.EVIDENCE
+) -> tuple[ExtractionRow, bool] | None:
+    """The row `extraction_id` of `scope`, live or superseded, with whether it is live; None for
+    an unknown id or a row of the other scope."""
+    found = _read_rows(
+        project,
+        " AND scope = :scope AND extraction_id = :ident",
+        {"scope": scope.value, "ident": extraction_id},
+    )
+    return found[0] if found else None
+
+
+def _read_rows(
+    project: Project, where: str, params: Mapping[str, str]
+) -> list[tuple[ExtractionRow, bool]]:
+    """The rows matching `where` (an `AND ...` clause on `extraction_rows`) with their fields, by
+    extraction id, each with whether no later row supersedes it."""
+    project.index.sync()
     with project.index.connect() as conn:
         heads = (
             conn.execute(
                 text(
                     "SELECT extraction_id, work_id, pass_label, task_id, protocol_id, "
-                    "conversion_id, document_id, row_key, schema_ref, event_id, "
+                    "conversion_id, document_id, row_key, schema_ref, event_id, superseded_by, "
                     "cited_extraction_id, cited_ordinal, cited_marker "
-                    f"FROM extraction_rows WHERE superseded_by IS NULL{where} "
-                    "ORDER BY extraction_id"
+                    f"FROM extraction_rows WHERE 1 = 1{where} ORDER BY extraction_id"
                 ),
                 params,
             )
@@ -1820,25 +1841,24 @@ def live_rows(
             )
             for cell in found:
                 cells[str(cell["extraction_id"])].append(dict(cell))
-    out: list[ExtractionRow] = []
+    out: list[tuple[ExtractionRow, bool]] = []
     for head in heads:
         pack = _pack_of(str(head["schema_ref"]))
         ident = str(head["extraction_id"])
-        out.append(
-            ExtractionRow(
-                extraction_id=ident,
-                work_id=str(head["work_id"]),
-                pass_label=PassLabel(str(head["pass_label"])),
-                task_id=str(head["task_id"]),
-                protocol_id=str(head["protocol_id"]),
-                conversion_id=str(head["conversion_id"]),
-                document_id=str(head["document_id"]),
-                row_key=str(head["row_key"]),
-                fields={str(c["field"]): _stored_field(pack, c) for c in cells[ident]},
-                event_id=str(head["event_id"]),
-                cited=_cited(head),
-            )
+        row = ExtractionRow(
+            extraction_id=ident,
+            work_id=str(head["work_id"]),
+            pass_label=PassLabel(str(head["pass_label"])),
+            task_id=str(head["task_id"]),
+            protocol_id=str(head["protocol_id"]),
+            conversion_id=str(head["conversion_id"]),
+            document_id=str(head["document_id"]),
+            row_key=str(head["row_key"]),
+            fields={str(c["field"]): _stored_field(pack, c) for c in cells[ident]},
+            event_id=str(head["event_id"]),
+            cited=_cited(head),
         )
+        out.append((row, head["superseded_by"] is None))
     return out
 
 
