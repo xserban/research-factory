@@ -3,7 +3,8 @@
 Declares: `create_draft`, `repin_outline`, `write_sentences`, `withdraw`, `reorder`, `draft_next`,
 `live_sentences`, `get_draft`, `list_drafts`, `verifier_sessions`, `refuse_verifier`,
 `sentence_status`, `status_counts`, `draft_view`, `draft_works`, `draft_render`, `SentenceInput`,
-`SentenceRow`, `SlotTask`, `StatusRow`, `DraftView`. The writer of the sentence events (the verification, audit and release events have their own services).
+`SentenceRow`, `SlotTask`, `StatusRow`, `DraftView`. The writer of the sentence events (the
+verification, audit and release events have their own services).
 
 Invariants:
 - The platform never writes prose. Sentences are the writer's; the platform checks them
