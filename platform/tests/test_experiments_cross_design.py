@@ -202,3 +202,45 @@ def test_an_agent_cannot_set_the_test_access_limit_by_recording_a_protocol(
     assert agent_admission_issues(OTHER, high, high) == []  # an agent may keep or lower it
     lower = plain.model_copy(update={"hypothesis_plan": HypothesisPlan(test_access_limit=2)})
     assert agent_admission_issues(OTHER, high, lower) == []
+
+
+def test_the_projector_ignores_a_design_or_an_amendment_that_shares_data_across_designs(
+    project: Project, human: Actor, xw: XW, hw: HW
+) -> None:
+    from factory.hypotheses.design import design_version
+    from factory.model.experiments import ExperimentAmended, ExperimentDesigned
+    from tests.experiment_helpers import experiment_rows
+    from tests.hypothesis_helpers import OTHER
+
+    design_experiment(project, DRAFTER, xw.design(baselines=[]))
+    hid2, _ = draft_hypothesis(project, DRAFTER, make_spec(lead=hw.lead, rationale="second"))
+    shared = design(
+        hid2,
+        baselines=[],
+        datasets=[
+            {"name": "x-dev", "version": "1", "sha256": "b" * 64, "role": "dev"},  # A's test data
+            {"name": "x-test", "version": "1", "sha256": "d" * 64, "role": "confirmatory"},
+        ],
+    )
+    before = experiment_rows(project)
+    blob = project.blobs.put_json({})
+    forged = ExperimentDesigned(
+        experiment_id="exp_01JZ9Q3K5M7N8P0R2S4T6V8W91",
+        design=shared,
+        e_version=design_version(shared),
+    )
+    project.record([project.events.make("experiment.designed", forged, OTHER, input_blob=blob)])
+    assert experiment_rows(project) == before
+    own, _ = design_experiment(project, DRAFTER, design(hid2, baselines=[]))
+    before = experiment_rows(project)
+    amended = ExperimentAmended(
+        experiment_id=own,
+        design=shared,
+        e_version=design_version(shared),
+        reason="r",
+        semantic=False,
+    )
+    project.record([project.events.make("experiment.amended", amended, OTHER, input_blob=blob)])
+    assert experiment_rows(project) == before
+    project.index.rebuild()
+    assert experiment_rows(project) == before
