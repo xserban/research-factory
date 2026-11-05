@@ -21,7 +21,7 @@ Invariants:
 import json
 import math
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta
@@ -78,7 +78,7 @@ from factory.services.extraction import (
 from factory.services.extraction_agreement import final_rows, grouped_rows, independence_counts
 from factory.services.extraction_audit import extraction_audit_outstanding, extraction_audit_report
 from factory.services.fulltext_status import fulltext_status
-from factory.services.gates import audit_hits, gate_hits
+from factory.services.gates import audit_hits, gate_hits, labelled_gate_audits
 from factory.services.ideas import list_ideas
 from factory.services.imports import list_imports
 from factory.services.layer_check import (
@@ -237,11 +237,14 @@ _RATE_CODES = {
 """Findings whose message carries a label-derived rate or threshold, and the message an agent
 reads instead (decision 37.14). The finding itself, its code and severity are unchanged."""
 
-_WITHHELD_CODES = frozenset({"extraction-error-high", "contribution-error-ceiling"})
+_WITHHELD_CODES = frozenset(
+    {"extraction-error-high", "contribution-error-ceiling", "gate-audit-error-high"}
+)
 """Findings an agent never reads, because their presence is the extraction audit's ceiling flag
 (decision 52)."""
 
 _AUDIT_REPORTED = "extraction-audit-reported"
+_GATE_AUDIT_REPORTED = "gate-audit-reported"
 
 
 def agent_view(
@@ -249,6 +252,7 @@ def agent_view(
     *,
     labelled_audit: str | None = None,
     labelled_contribution_audit: str | None = None,
+    labelled_gate_audits: Sequence[str] = (),
 ) -> CheckReport:
     """The report as an agent may read it: seed findings by role and count only (R-20), no
     label-derived rate, and no extraction audit ceiling flag.
@@ -301,6 +305,15 @@ def agent_view(
                 message="an extraction audit is labelled; its result is reported to the researcher",
             )
         )
+    if labelled_gate_audits:  # likewise one marker, whatever the error rate
+        findings.append(
+            Finding(
+                code=_GATE_AUDIT_REPORTED,
+                severity="warning",
+                refs=list(labelled_gate_audits),
+                message="a gate audit is labelled; its result is reported to the researcher",
+            )
+        )
     return report.model_copy(update={"findings": findings})
 
 
@@ -316,6 +329,7 @@ def agent_check(project: Project, *, promote_to: RigorMode | None = None) -> Che
         report = agent_view(
             check(project, promote_to=promote_to),
             labelled_audit=labelled,
+            labelled_gate_audits=labelled_gate_audits(project),
             labelled_contribution_audit=(
                 contribution.audit_id
                 if contribution is not None and (contribution.labelled or contribution.outdated)

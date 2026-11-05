@@ -445,6 +445,20 @@ def gate_audit_report(project: Project, gate_id: str) -> GateAuditReport | None:
     return GateAuditReport(str(audit[0]), gate_id, len(rows), len(labelled), incorrect, verdict)
 
 
+def labelled_gate_audits(project: Project) -> list[str]:
+    """The latest audit of each gate that has at least one label (the agent view's neutral
+    marker names these, never a result)."""
+    from factory.services.modules.default import default_modules  # the registry imports services
+
+    found: list[str] = []
+    for gate in default_modules().gates():
+        if gate.kind is GateKind.DECISION:
+            report = gate_audit_report(project, gate.gate_id)
+            if report is not None and report.labelled:
+                found.append(report.audit_id)
+    return found
+
+
 def audit_hits(project: Project) -> list[CheckHit]:
     """`gate-audit-missing` for an `agent_audit` gate with agent acts and no audit drawn, and
     `gate-audit-error-high` for a latest audit above the ceiling. Messages carry counts, never a
