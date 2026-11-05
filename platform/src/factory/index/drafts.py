@@ -3,8 +3,8 @@
 `drafts` keeps one row per draft with the outline it is pinned to; `draft_sections` its sections;
 `draft_sentences` every recorded sentence with its author, session and model, `superseded_by` and
 `withdrawn`; `sentence_supports`, `sentence_flags` and `sentence_stats` the supports, the stored
-flags and the stat values read at write time. Status, staleness and eligibility are computed on
-read, never stored.
+flags and the stat values read at write time; `sentence_verdicts` the verdicts (plan W-B). Status,
+staleness and eligibility are computed on read, never stored.
 
 An act is folded only when it is consistent with what the services enforce; an event that fails
 this stays in the log and changes nothing (no service writes one, so it was written by hand):
@@ -17,6 +17,11 @@ this stays in the log and changes nothing (no service writes one, so it was writ
   structural one no citation), and a `supersedes` that names a live sentence of the same section.
   What the supports are worth (eligibility, numbers, flags) is decided at write time by the
   service and recomputed on read; it cannot be known here.
+- No sentence is folded from a session (or a human) that verified a sentence of the draft.
+- A verdict is folded for a live claim or synthesis sentence that has no verdict, from a human or
+  an agent of the skill `rf-verify`, who wrote no sentence of the draft, with a model other than
+  the writer's in `systematic`, and whose `input_blob` is the unit of that sentence with the
+  substrings of ruling 3 in it (`writing.verdicts`).
 - A withdrawal is folded for a live sentence; a reorder only when `order` is a permutation of the
   section's live sentences.
 
@@ -28,14 +33,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from sqlalchemy import Column, Index, Integer, MetaData, String, Table, select, update
+from sqlalchemy import Column, Index, Integer, MetaData, String, Table, select, text, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import SQLAlchemyError
 
 from factory.errors import FactoryError
 from factory.events.blobs import BlobStore
-from factory.events.envelope import Event
+from factory.events.envelope import Actor, Event
 from factory.extraction.numbers import numbers_in
 from factory.index.projection import Handler
 from factory.model.drafts import (
@@ -45,14 +50,20 @@ from factory.model.drafts import (
     OutlineSection,
     SentenceClass,
     SentenceRecorded,
+    SentenceVerified,
     SentenceWithdrawn,
     SupportKind,
     outline_id_of,
 )
+from factory.model.project import RigorMode
 from factory.writing.checks import citation_matches, is_single_sentence
+from factory.writing.verdicts import verdict_issues
 
 ORDER_STEP = 10
 """Sentences are ordered by an integer with gaps, so a later sentence can slot between two."""
+VERIFY_SKILL = "rf-verify@"
+"""An agent's verdict is written under this skill (plan W-B, Global Constraints)."""
+CLAIM_BEARING = (SentenceClass.CLAIM.value, SentenceClass.SYNTHESIS.value)
 
 
 @dataclass(frozen=True)
@@ -63,9 +74,12 @@ class DraftTables:
     supports: Table
     flags: Table
     stats: Table
+    verdicts: Table
+    protocols: Table
+    project: Table
 
 
-def draft_tables(metadata: MetaData) -> DraftTables:
+def draft_tables(metadata: MetaData, protocols: Table, project: Table) -> DraftTables:
     drafts = Table(
         "drafts",
         metadata,
@@ -129,7 +143,22 @@ def draft_tables(metadata: MetaData) -> DraftTables:
         Column("stat", String, primary_key=True),
         Column("value", Integer, nullable=False),
     )
-    return DraftTables(drafts, sections, sentences, supports, flags, stats)
+    verdicts = Table(
+        "sentence_verdicts",
+        metadata,
+        Column("verdict_id", String, primary_key=True),
+        Column("sentence_id", String, nullable=False),
+        Column("draft_id", String, nullable=False),
+        Column("verdict", String, nullable=False),
+        Column("session", String, nullable=False),
+        Column("model", String),
+        Column("event_id", String, nullable=False),
+        Index("ix_sentence_verdicts_sentence", "sentence_id"),
+        Index("ix_sentence_verdicts_draft", "draft_id"),
+    )
+    return DraftTables(
+        drafts, sections, sentences, supports, flags, stats, verdicts, protocols, project
+    )
 
 
 def draft_handlers(t: DraftTables, blobs: BlobStore | None = None) -> dict[str, Handler]:
@@ -139,6 +168,7 @@ def draft_handlers(t: DraftTables, blobs: BlobStore | None = None) -> dict[str, 
         "draft.sentence_recorded": _total(_recorded(t)),
         "draft.sentence_withdrawn": _total(_withdrawn(t)),
         "draft.reordered": _total(_reordered(t)),
+        "draft.verified": _total(_verified(t, blobs)),
     }
 
 
@@ -164,6 +194,37 @@ def _total(handler: Handler) -> Handler:
             return
 
     return total
+
+
+def identities(actor: Actor) -> frozenset[str]:
+    """What identifies the person or session behind an act: the session and, as a human's sessions
+    change with each command, the human's id."""
+    if actor.kind == "human":
+        return frozenset({actor.session, f"human:{actor.id}"})
+    return frozenset({actor.session})
+
+
+def _acted(conn: Connection, table: str, draft_id: str) -> frozenset[str]:
+    rows = conn.execute(
+        text(
+            "SELECT t.session, e.actor_kind, e.actor_id "
+            f"FROM {table} t JOIN events e ON e.id = t.event_id WHERE t.draft_id = :d"
+        ),
+        {"d": draft_id},
+    ).all()
+    return frozenset(
+        {str(r[0]) for r in rows} | {f"human:{r[2]}" for r in rows if str(r[1]) == "human"}
+    )
+
+
+def writers_of(conn: Connection, draft_id: str) -> frozenset[str]:
+    """The `identities` of everyone who recorded a sentence of the draft, superseded or not."""
+    return _acted(conn, "draft_sentences", draft_id)
+
+
+def verifiers_of(conn: Connection, draft_id: str) -> frozenset[str]:
+    """The `identities` of everyone with a verdict on a sentence of the draft."""
+    return _acted(conn, "sentence_verdicts", draft_id)
 
 
 def _writes(event: Event) -> bool:
@@ -266,6 +327,8 @@ def _recorded(t: DraftTables) -> Handler:
             select(t.sentences.c.sentence_id).where(t.sentences.c.sentence_id == p.sentence_id)
         ).first():
             return
+        if identities(event.actor) & verifiers_of(conn, p.draft_id):
+            return
         if p.supersedes is not None:
             old = conn.execute(
                 select(t.sentences.c.sentence_id).where(
@@ -318,6 +381,100 @@ def _recorded(t: DraftTables) -> Handler:
             conn.execute(t.stats.insert().values(sentence_id=p.sentence_id, stat=stat, value=value))
 
     return recorded
+
+
+def _mode(conn: Connection, t: DraftTables) -> RigorMode:
+    row = conn.execute(select(t.project.c.rigor_mode).limit(1)).first()
+    return RigorMode(str(row[0])) if row else RigorMode.PILOT
+
+
+def _unit_spans(
+    blobs: BlobStore, event: Event, sentence_id: str, sentence: str
+) -> dict[str, list[str]] | None:
+    """The spans by support of the unit the verdict names as its input; None when the event names
+    no unit of this sentence."""
+    if event.input_blob is None:
+        return None
+    try:
+        unit = blobs.get_json(event.input_blob)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(unit, dict):
+        return None
+    if unit.get("sentence_id") != sentence_id or unit.get("text") != sentence:
+        return None
+    supports = unit.get("supports")
+    if not isinstance(supports, list):
+        return None
+    spans: dict[str, list[str]] = {}
+    for support in supports:
+        said = support.get("spans") if isinstance(support, dict) else None
+        if isinstance(support, dict) and isinstance(said, list):
+            spans[str(support["ref"])] = [str(s) for s in said]
+    return spans
+
+
+def _verified(t: DraftTables, blobs: BlobStore | None) -> Handler:
+    def verified(conn: Connection, event: Event) -> None:
+        p = SentenceVerified.model_validate(event.payload)
+        if not _writes(event):
+            return
+        if event.actor.kind == "agent" and not str(event.actor.skill).startswith(VERIFY_SKILL):
+            return
+        sentence = conn.execute(
+            select(
+                t.sentences.c.draft_id,
+                t.sentences.c.cls,
+                t.sentences.c.text,
+                t.sentences.c.model,
+            ).where(
+                t.sentences.c.sentence_id == p.sentence_id,
+                t.sentences.c.superseded_by.is_(None),
+                t.sentences.c.withdrawn == 0,
+            )
+        ).first()
+        if sentence is None or sentence[1] not in CLAIM_BEARING:
+            return
+        draft_id, body, model = str(sentence[0]), str(sentence[2]), sentence[3]
+        if conn.execute(
+            select(t.verdicts.c.verdict_id).where(
+                (t.verdicts.c.sentence_id == p.sentence_id)
+                | (t.verdicts.c.verdict_id == p.verdict_id)
+            )
+        ).first():
+            return
+        if identities(event.actor) & writers_of(conn, draft_id):
+            return
+        if (
+            _mode(conn, t) is RigorMode.SYSTEMATIC
+            and model is not None
+            and model == event.actor.model
+        ):
+            return
+        # Without a blob store (a bare projection) the unit cannot be read: the sentence's own
+        # rules are still checked, a substring against itself.
+        spans = (
+            {s.ref: [s.substring] for s in p.support_spans}
+            if blobs is None
+            else _unit_spans(blobs, event, p.sentence_id, body)
+        )
+        if spans is None or verdict_issues(
+            p.verdict, p.sentence_span, p.support_spans, sentence=body, spans_by_ref=spans
+        ):
+            return
+        conn.execute(
+            t.verdicts.insert().values(
+                verdict_id=p.verdict_id,
+                sentence_id=p.sentence_id,
+                draft_id=draft_id,
+                verdict=p.verdict.value,
+                session=event.actor.session,
+                model=event.actor.model,
+                event_id=event.id,
+            )
+        )
+
+    return verified
 
 
 def _withdrawn(t: DraftTables) -> Handler:

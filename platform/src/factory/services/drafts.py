@@ -13,8 +13,7 @@ Invariants:
   support among valid ones is refused whole; another valid sentence of the same call is written.
 - Every agent-written event carries the call and the task content it was served as its
   `input_blob` (R-04). A human writes without a task.
-- A session that has verified a sentence of a draft cannot write in it (`verifier_sessions`; the
-  verification table is plan W-B's, so the set is empty until then).
+- A session that has verified a sentence of a draft cannot write in it (`verifier_sessions`).
 - A refusal writes nothing and carries positions and fixed codes, never document text.
 """
 
@@ -29,6 +28,7 @@ from sqlalchemy import text
 
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor, Event
+from factory.index.drafts import identities, verifiers_of
 from factory.model.base import StrictModel
 from factory.model.drafts import (
     MAX_ORDER,
@@ -139,8 +139,10 @@ def provisional_status(cls: SentenceClass) -> str:
 
 
 def verifier_sessions(project: Project, draft_id: str) -> frozenset[str]:
-    """The sessions that verified a sentence of the draft: none until plan W-B adds verdicts."""
-    return frozenset()
+    """The `identities` (sessions, and humans by id) with a verdict on a sentence of the draft."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        return verifiers_of(conn, draft_id)
 
 
 # --- Reads ---
@@ -156,7 +158,7 @@ def _draft_row(project: Project, draft_id: str) -> tuple[str, str, str, str] | N
     return None if row is None else (str(row[0]), str(row[1]), str(row[2]), str(row[3]))
 
 
-def _require_draft(project: Project, draft_id: str) -> tuple[str, str, str, str]:
+def require_draft(project: Project, draft_id: str) -> tuple[str, str, str, str]:
     row = _draft_row(project, draft_id)
     if row is None:
         raise _refuse("draft_id", "unknown draft")
@@ -214,7 +216,7 @@ def list_drafts(project: Project) -> list[DraftRow]:
 
 
 def _pinned_outline(project: Project, draft_id: str) -> Outline:
-    _, _, _, blob = _require_draft(project, draft_id)
+    _, _, _, blob = require_draft(project, draft_id)
     return Outline.model_validate(project.blobs.get_json(blob))
 
 
@@ -226,7 +228,7 @@ def _outline_refs(outline: Outline) -> frozenset[str]:
     return frozenset(refs)
 
 
-def _sentence_rows(project: Project, draft_id: str, *, live: bool = True) -> list[SentenceRow]:
+def sentence_rows(project: Project, draft_id: str, *, live: bool = True) -> list[SentenceRow]:
     where = " AND s.superseded_by IS NULL AND s.withdrawn = 0" if live else ""
     with project.index.connect() as conn:
         rows = (
@@ -302,7 +304,7 @@ def live_sentences(project: Project, draft_id: str) -> list[SentenceRow]:
     with entering():
         outline = _pinned_outline(project, draft_id)
         refs = _outline_refs(outline)
-        rows = _sentence_rows(project, draft_id)
+        rows = sentence_rows(project, draft_id)
         parsed = {r.sentence_id: [parse_support(s) for s in r.supports] for r in rows}
         cells = [s for ss in parsed.values() for s in ss if s.kind is SupportKind.CELL]
         groups: dict[str, tuple[str, ...]] = {}
@@ -325,6 +327,19 @@ def _off(support: SupportRef, refs: frozenset[str], groups: dict[str, tuple[str,
         support.kind is SupportKind.CELL
         and any(f"group:{g}" in refs for g in groups.get(support.text, ()))
     )
+
+
+def stale_reason(row: SentenceRow, resolved: Sequence[ResolvedSupport]) -> str | None:
+    """Why the sentence no longer rests on its supports: the closed reason of the first support
+    that stopped being eligible, or `stat-changed` when a stat recomputes to another value."""
+    for support in resolved:
+        if not support.eligible:
+            return support.reason
+    for support in resolved:
+        stored = row.stat_values.get(support.ref.ref)
+        if support.ref.kind is SupportKind.STAT and stored != support.stat_value:
+            return "stat-changed"
+    return None
 
 
 # --- Creating and repinning ---
@@ -480,8 +495,8 @@ def write_sentences(
     _require_writer(actor)
     with project.index.exclusive(), entering():
         project.index.sync()
-        _require_draft(project, draft_id)
-        if actor.session in verifier_sessions(project, draft_id):
+        require_draft(project, draft_id)
+        if identities(actor) & verifier_sessions(project, draft_id):
             raise _refuse("session", "a session that verified this draft cannot write in it")
         task_blob, task_issues = _task_checks(project, actor, draft_id, task_id)
         if task_issues:
@@ -491,7 +506,7 @@ def write_sentences(
             input_blob = project.blobs.put_json({"task_input": task_blob, "call": call})
         sections = {s.section_id for s in _sections(project, draft_id)}
         outline_refs = _outline_refs(_pinned_outline(project, draft_id))
-        existing = _sentence_rows(project, draft_id)
+        existing = sentence_rows(project, draft_id)
         context = _context(project, existing)
         top: dict[str, int] = {}
         for row in existing:
@@ -660,11 +675,11 @@ def reorder(
     event id."""
     _require_writer(actor)
     with project.index.exclusive():
-        _require_draft(project, draft_id)
+        require_draft(project, draft_id)
         if section_id not in {s.section_id for s in _sections(project, draft_id)}:
             raise _refuse("section_id", "unknown section")
         live = {
-            r.sentence_id for r in _sentence_rows(project, draft_id) if r.section_id == section_id
+            r.sentence_id for r in sentence_rows(project, draft_id) if r.section_id == section_id
         }
         if set(order) != live or len(set(order)) != len(order):
             raise _refuse("order", "list exactly the live sentences of the section, once each")
@@ -699,7 +714,7 @@ def _slot_content(project: Project, draft_id: str, section: SectionRow) -> dict[
         "omitted": 0,
         "sentences": [
             {"sentence_id": r.sentence_id, "class": r.cls.value, "text": r.text}
-            for r in _sentence_rows(project, draft_id)
+            for r in sentence_rows(project, draft_id)
             if r.section_id == section.section_id
         ],
     }
@@ -766,11 +781,11 @@ def draft_next(
         raise _refuse("actor", "only an agent is served a task")
     with project.index.exclusive(), entering():
         project.index.sync()
-        _require_draft(project, draft_id)
+        require_draft(project, draft_id)
         sections = _sections(project, draft_id)
         if section_id is not None and section_id not in {s.section_id for s in sections}:
             raise _refuse("section_id", "unknown section")
-        written = {r.section_id for r in _sentence_rows(project, draft_id)}
+        written = {r.section_id for r in sentence_rows(project, draft_id)}
         for section in sections:
             if section_id is not None and section.section_id != section_id:
                 continue

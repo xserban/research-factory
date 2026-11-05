@@ -19,6 +19,7 @@ SPEC = ModuleSpec(
             "draft.reordered",
             "draft.sentence_recorded",
             "draft.sentence_withdrawn",
+            "draft.verified",
         ),
         tables=(
             "draft_sections",
@@ -27,6 +28,7 @@ SPEC = ModuleSpec(
             "sentence_flags",
             "sentence_stats",
             "sentence_supports",
+            "sentence_verdicts",
         ),
     ),
     task_kinds=default_task_kinds().kinds_of("writing"),

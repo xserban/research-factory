@@ -38,7 +38,7 @@ from factory.index.tasks import task_handlers, tasks_table
 from factory.index.watch import run_started_handler, watch_handlers, watch_tables
 
 # Bump on any change to the tables or handlers below; the index is then rebuilt.
-PROJECTION_VERSION = "48"
+PROJECTION_VERSION = "49"
 
 
 def default_projection(blobs: BlobStore | None = None) -> Projection:
@@ -85,7 +85,7 @@ def default_projection(blobs: BlobStore | None = None) -> Projection:
     )
     evaluations = evaluation_tables(metadata)
     directions = direction_tables(metadata)
-    drafts = draft_tables(metadata)
+    drafts = draft_tables(metadata, protocol.protocols, project)
     handlers: dict[str, Handler] = {
         "project.created": project_created_handler(project),
         **task_handlers(tasks),

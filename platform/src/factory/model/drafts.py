@@ -5,8 +5,9 @@ Invariants (validated at the boundary, before any event is written):
   `SENTENCE_MAX_CHARS` characters. A `structural` sentence has no support.
 - A support is a typed reference in the grammar of `parse_support`; the canonical form of a cell
   always names its field (`rk_...` alone means the field `value`).
-- No event carries quote text: supports are ids, and quotes are read from extraction events when a
-  slot is served or a draft rendered. The outline blob holds ids only.
+- No `draft.sentence_recorded` carries quote text: supports are ids, and quotes are read from
+  extraction events when a slot is served or a draft rendered. The outline blob holds ids only. A
+  verdict names the substrings it relies on (spec, Events); they are already in those events.
 - No input model carries a flag, a status or a stat value: the platform computes them.
 
 This module is pure. Services in `factory.services` decide when the events are written.
@@ -44,6 +45,8 @@ MAX_HEADING = 200
 MAX_REASON = 300
 MAX_ORDER = 2**63 - 1
 """The largest sentence order and stat value: what the index's integer columns hold."""
+VERDICT_ID_RE = rf"^svd_{ULID_RE}$"
+NOTE_MAX_CHARS = 300
 _FIELD_RE = r"^[a-z][a-z0-9_]*$"
 _CITES_RE = rf"^cit:{REX_ID_RE[1:-1]}:[1-9][0-9]*$"
 _STAT_RE = r"^[a-z][a-z-]*(?::[A-Za-z0-9_.-]+){0,2}$"
@@ -80,6 +83,14 @@ class SentenceFlag(StrEnum):
     CROSS_GROUP = "cross-group"
     SINGLE_SOURCE_GENERALISATION = "single-source-generalisation"
     OFF_OUTLINE = "off-outline"
+
+
+class Verdict(StrEnum):
+    SUPPORTED = "supported"
+    PARTIAL = "partial"
+    UNSUPPORTED = "unsupported"
+    CONTRADICTED = "contradicted"
+    OVERSTATED = "overstated"
 
 
 def _ref_ok(kind: SupportKind, ref: str) -> bool:
@@ -268,3 +279,22 @@ class DraftReordered(StrictModel):
         ):
             raise ValueError("order lists distinct sentence ids")
         return value
+
+
+class SupportSpan(StrictModel):
+    """The substring of one support's span a verdict relies on; `ref` is the grammar form."""
+
+    ref: str
+    substring: str = Field(min_length=1)
+
+
+class SentenceVerified(StrictModel):
+    """One verdict on one sentence. Every verdict but `supported` names the sentence part it
+    judges; every verdict but `unsupported` names at least one support substring."""
+
+    verdict_id: str = Field(pattern=VERDICT_ID_RE)
+    sentence_id: str = Field(pattern=SENTENCE_ID_RE)
+    verdict: Verdict
+    sentence_span: str | None = None
+    support_spans: list[SupportSpan] = Field(default_factory=list)
+    note: str | None = Field(default=None, max_length=NOTE_MAX_CHARS)
