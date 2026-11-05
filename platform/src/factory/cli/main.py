@@ -18,10 +18,13 @@ from factory.document.registry import default_converters
 from factory.errors import FactoryValidationError, ProjectNotFoundError, ValidationIssue
 from factory.imports.model import ImportFormat, ImportRole
 from factory.lineage.graph import GraphFilter
+from factory.living.digest_render import to_json as digest_json
+from factory.living.digest_render import to_markdown as digest_markdown
 from factory.mcp.conventions import parse_routes
 from factory.mcp.server import run
 from factory.model import lineage as lineage_model
 from factory.model.chase import ChaseDirection
+from factory.model.conclusions import BasisRef, Predicate
 from factory.model.fulltext import Route
 from factory.model.identity import IdGenerator
 from factory.model.notices import AssessmentDecision
@@ -36,8 +39,10 @@ from factory.services import audit as audit_service
 from factory.services import calibration as calibration_service
 from factory.services import chase as chase_service
 from factory.services import check as check_service
+from factory.services import conclusions as conclusions_service
 from factory.services import contributions as contributions_service
 from factory.services import coverage as coverage_service
+from factory.services import digest as digest_service
 from factory.services import discovery as discovery_service
 from factory.services import document_convert as document_convert_service
 from factory.services import document_read as document_read_service
@@ -215,6 +220,11 @@ living_app = typer.Typer(
     help="Living review: snapshots and the PRISMA update flow.",
     no_args_is_help=True,
 )
+conclusions_app = typer.Typer(
+    name="conclusions",
+    help="Registered conclusions: register, retire, their computed state and diffs.",
+    no_args_is_help=True,
+)
 inbox_app = typer.Typer(
     name="inbox",
     help="Supplied links: capture, list, resolve into the corpus, withdraw.",
@@ -233,6 +243,7 @@ app.add_typer(snowball_app)
 app.add_typer(seeds_app)
 app.add_typer(watch_app)
 app.add_typer(living_app)
+app.add_typer(conclusions_app)
 app.add_typer(notices_app)
 app.add_typer(versions_app)
 app.add_typer(inbox_app)
@@ -2026,6 +2037,150 @@ def living_prisma_update_cmd(
         project = _resolve_project(state)
         flow = prisma_update_service.prisma_update(project, since=since, until=until)
     typer.echo(flow.model_dump_json() if as_json else render.update_markdown(flow), nl=as_json)
+
+
+def _basis_refs(items: list[str]) -> list[BasisRef]:
+    """`KIND:REF` options as basis references; a malformed one is exit 2."""
+    refs: list[BasisRef] = []
+    for item in items:
+        kind, _, ref = item.partition(":")
+        try:
+            refs.append(BasisRef.model_validate({"kind": kind, "ref": ref}))
+        except ValueError as exc:
+            _fail(f"basis: {item}: {_first_line(exc)}", 2)
+    return refs
+
+
+def _first_line(exc: Exception) -> str:
+    return str(exc).splitlines()[-1] if str(exc) else type(exc).__name__
+
+
+@conclusions_app.command("register")
+def conclusions_register_cmd(
+    ctx: typer.Context,
+    statement: Annotated[str, typer.Option("--statement", help="The conclusion, in your words.")],
+    basis: Annotated[
+        list[str],
+        typer.Option("--basis", help="KIND:REF (cell, row, group, work or relation); repeatable."),
+    ],
+    predicate: Annotated[
+        str | None, typer.Option("--predicate", help="A fact predicate as JSON.")
+    ] = None,
+) -> None:
+    """Register a conclusion with its basis (human act); every basis reference must resolve."""
+    state = _state(ctx)
+    refs = _basis_refs(basis)
+    parsed: Predicate | None = None
+    if predicate is not None:
+        try:
+            parsed = Predicate.model_validate_json(predicate)
+        except ValueError as exc:
+            _fail(f"predicate: {_first_line(exc)}", 2)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        conclusion_id = conclusions_service.register_conclusion(
+            project, project.human_actor(), statement, refs, parsed
+        )
+    typer.echo(f"registered {conclusion_id}")
+
+
+@conclusions_app.command("retire")
+def conclusions_retire_cmd(
+    ctx: typer.Context,
+    conclusion_id: Annotated[str, typer.Argument(help="The conclusion.")],
+    reason: Annotated[str, typer.Option("--reason", help="Why it is withdrawn.")],
+) -> None:
+    """Withdraw a conclusion from evaluation (human act); the registration stays in the log."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        conclusions_service.retire_conclusion(project, project.human_actor(), conclusion_id, reason)
+    typer.echo(f"retired {conclusion_id}")
+
+
+@conclusions_app.command("status")
+def conclusions_status_cmd(ctx: typer.Context) -> None:
+    """Each active conclusion with your statement and its computed state since the last snapshot."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        statements = {
+            c.conclusion_id: c.statement for c in conclusions_service.conclusions(project)
+        }
+        for diff in conclusions_service.conclusion_diff(project):
+            for line in render.conclusion_lines(diff):
+                typer.echo(line)
+            typer.echo(f"  statement: {statements[diff.conclusion_id]}")
+
+
+@conclusions_app.command("diff")
+def conclusions_diff_cmd(
+    ctx: typer.Context,
+    since: Annotated[
+        str | None, typer.Option("--since", help="Snapshot id to compare with (default: last).")
+    ] = None,
+) -> None:
+    """Computed state of each active conclusion against a snapshot (no statements)."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        for diff in conclusions_service.conclusion_diff(project, since=since):
+            for line in render.conclusion_lines(diff):
+                typer.echo(line)
+
+
+class DigestFormat(StrEnum):
+    MD = "md"
+    JSON = "json"
+    BOTH = "both"
+
+
+@app.command("digest")
+def digest_cmd(
+    ctx: typer.Context,
+    project: Annotated[str | None, typer.Option("--project", help="Project slug.")] = None,
+    all_projects: Annotated[bool, typer.Option("--all", help="Every project.")] = False,
+    since: Annotated[
+        str, typer.Option("--since", help="`last` (default) or an event id.")
+    ] = "last",
+    fmt: Annotated[DigestFormat, typer.Option("--format", help="md, json or both.")] = (
+        DigestFormat.MD
+    ),
+    out: Annotated[Path | None, typer.Option("--out", help="Write files into this directory.")] = (
+        None
+    ),
+    record: Annotated[
+        bool, typer.Option("--record", help="Store the digest and write digest.generated.")
+    ] = False,
+) -> None:
+    """The computed digest since the last one (or an event): print it, or write it to --out."""
+    state = _state(ctx)
+    slugs = _watch_projects(state, project if project is not None else state.project, all_projects)
+    if fmt is DigestFormat.BOTH and out is None:
+        _fail("--format both needs --out", 2)
+    with _reporting_errors():
+        opened = [
+            open_project(state.settings, slug, session=state.session, clock=state.clock)
+            for slug in slugs
+        ]
+        if not opened:
+            _fail("no project; run factory init", 2)
+        built = digest_service.digest_build(opened, since=since)
+        if record:
+            built = built.model_copy(
+                update={"digest_id": digest_service.record_digest(opened, built)}
+            )
+    name = built.digest_id or "digest"
+    wanted = (DigestFormat.MD, DigestFormat.JSON) if fmt is DigestFormat.BOTH else (fmt,)
+    for kind in wanted:
+        text = digest_markdown(built) if kind is DigestFormat.MD else digest_json(built)
+        if out is None:
+            typer.echo(text, nl=False)
+        else:
+            out.mkdir(parents=True, exist_ok=True)
+            (out / f"{name}.{kind.value}").write_text(text, encoding="utf-8")
+    if out is not None and built.digest_id is not None:
+        typer.echo(f"recorded {built.digest_id}")
 
 
 @watch_app.command("status")

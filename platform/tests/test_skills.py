@@ -103,3 +103,15 @@ async def test_tool_records_platform_computed_skill(
     ]
     assert len(registered) == 1
     assert registered[0].actor.skill == skill_ref(settings, "rf-search")
+
+
+def test_skill_ref_for_rf_living() -> None:
+    """The shipped rf-living skill resolves, its hash is that of the file, and it leaves the
+    human acts to the human."""
+    plugin = Path(__file__).resolve().parents[2] / "plugin"
+    settings = Settings(root=Path("/nonexistent"), user="obd", plugin_override=plugin)
+    data = (plugin / "skills" / "rf-living" / "SKILL.md").read_bytes()
+    assert skill_ref(settings, "rf-living") == "rf-living@" + _digest(data)
+    text = data.decode()
+    for human_act in ("assess notices", "prefer documents", "register conclusions"):
+        assert human_act in text

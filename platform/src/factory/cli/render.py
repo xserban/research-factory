@@ -4,6 +4,7 @@ is read from the model, so the CLI and the MCP tools cannot differ (R-05)."""
 from collections.abc import Mapping
 
 from factory.errors import ValidationIssue
+from factory.model.conclusions import ConclusionDiff
 from factory.model.references import Decision, LinkState
 from factory.model.screening import PassLabel
 from factory.services.agreement import DecisionView
@@ -769,4 +770,19 @@ def graph_query_lines(result: GraphQueryResult) -> list[str]:
             lines.extend(f"  {w}" for w in works)
     elif result.query != "path":
         lines.extend(f"node {n['id']} ({n['type']}, {n['scope'] or '-'})" for n in result.nodes)
+    return lines
+
+
+def conclusion_lines(diff: ConclusionDiff) -> list[str]:
+    """One conclusion's computed state: id, state, predicate values, affected basis references and
+    the fact changes of its groups. No statement."""
+    lines = [f"{diff.conclusion_id}  {diff.state}"]
+    if diff.predicate_before is not None or diff.predicate_now is not None:
+        lines.append(f"  predicate: {diff.predicate_before} -> {diff.predicate_now}")
+    lines += [f"  affected: {reference}" for reference in diff.affected]
+    if diff.facts is not None:
+        for group in diff.facts.groups:
+            lines.append(f"  group {group.group_id}: rows {group.rows_delta:+d}")
+            if group.best_changed is not None:
+                lines.append(f"    best row: {group.best_changed[0]} -> {group.best_changed[1]}")
     return lines

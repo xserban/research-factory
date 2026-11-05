@@ -11,3 +11,8 @@ The skills in this plugin adapt the research-factory-old stage documents. Commit
 
 The adaptation replaces the old `rf` commands with the factory MCP tools and CLI steps. The
 rules and thresholds are kept from the source; the procedure is rewritten for the event model.
+
+`rf-living` is written for this platform (slice 4b, plan living-D) and has no counterpart in the
+old stage documents: it describes how a scheduled agent session runs the due watch cycles and
+delivers the computed digest, and which acts remain the researcher's. Its reference is the hash
+computed by the platform from the installed file.

@@ -44,9 +44,11 @@ from factory.services import audit as audit_service
 from factory.services import calibration as calibration_service
 from factory.services import chase as chase_service
 from factory.services import check as check_service
+from factory.services import conclusions as conclusions_service
 from factory.services import contributions as contributions_service
 from factory.services import coverage as coverage_service
 from factory.services import dedup as dedup_service
+from factory.services import digest as digest_service
 from factory.services import discovery as discovery_service
 from factory.services import document_read as document_read_service
 from factory.services import evidence as evidence_service
@@ -295,6 +297,42 @@ def build_server(
             )
 
         return _reply(project, listing, include_work_ids=False)
+
+    @server.tool()
+    def conclusion_status(project: str) -> dict[str, JsonValue]:
+        """The researcher's registered conclusions as computed state: each id, whether it is
+        unchanged, changed, basis-affected or new since the last snapshot, the affected basis
+        references and the fact diff. Never the statement: a human judgement is not evidence.
+        Read-only; a seed's work reads as any corpus work. Refused to a session that has joined a
+        pass."""
+
+        def status() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            diffs = conclusions_service.conclusion_diff(opened)
+            return _withheld(
+                opened,
+                {"conclusions": [d.model_dump(mode="json") for d in diffs]},
+                include_work_ids=False,
+            )
+
+        return _reply(project, status, include_work_ids=False)
+
+    @server.tool()
+    def digest_get(project: str, since: str | None = "last") -> dict[str, JsonValue]:
+        """The computed digest of the project since `since` (`last`: the last recorded digest; an
+        event id; null: the start): new candidates with the queries that returned them, counts of
+        open human decisions, notices, versions, conclusion changes, failed runs, overdue watches
+        and the update flow. No abstract, verdict, conclusion statement or seed information. It
+        never records a digest. Refused to a session that has joined a pass."""
+
+        def get() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            built = digest_service.agent_digest(digest_service.digest_build([opened], since=since))
+            return _withheld(opened, built.model_dump(mode="json"), include_work_ids=False)
+
+        return _reply(project, get, include_work_ids=False)
 
     @server.tool()
     def notice_assess(
