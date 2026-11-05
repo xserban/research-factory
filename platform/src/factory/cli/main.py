@@ -28,6 +28,7 @@ from factory.mcp.server import run
 from factory.model import lineage as lineage_model
 from factory.model.chase import ChaseDirection
 from factory.model.conclusions import BasisRef, Predicate
+from factory.model.extraction import ExtractedRowInput
 from factory.model.fulltext import Route
 from factory.model.hypotheses import AbandonReason, DiscardReason
 from factory.model.identity import IdGenerator
@@ -87,6 +88,8 @@ from factory.services import leads as leads_service
 from factory.services import lineage as graph_service
 from factory.services import matching as matching_service
 from factory.services import methods as methods_service
+from factory.services import miner_gold as miner_gold_service
+from factory.services import miners as miners_service
 from factory.services import mining as mining_service
 from factory.services import notices as notices_service
 from factory.services import organisation_export as organisation_export_service
@@ -200,6 +203,12 @@ miner_app = typer.Typer(
     help="Registered miners: register a specification, list the registered versions.",
     no_args_is_help=True,
 )
+miner_calibrate_app = typer.Typer(
+    name="calibrate",
+    help="Calibrate an agent-authored miner: draw the sample, record the gold labels.",
+    no_args_is_help=True,
+)
+miner_app.add_typer(miner_calibrate_app)
 mine_app = typer.Typer(
     name="mine",
     help="Mining with registered miners: unit status.",
@@ -1370,6 +1379,76 @@ def miner_list_cmd(ctx: typer.Context) -> None:
         listing = mining_service.miner_listing(project)
     for line in render.miner_listing_lines(listing):
         typer.echo(line)
+
+
+@miner_app.command("retire")
+def miner_retire_cmd(
+    ctx: typer.Context,
+    name: Annotated[str, typer.Argument(help="The miner's name.")],
+    version: Annotated[int, typer.Argument(help="The version to retire.")],
+    reason: Annotated[str, typer.Option("--reason", help="Why it is retired.")],
+) -> None:
+    """Retire a miner version: no task is served, its rows stay and are reported."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        miners_service.retire_miner(project, project.human_actor(), name, version, reason)
+    typer.echo(f"retired {name} version {version}")
+
+
+@miner_calibrate_app.command("draw")
+def miner_calibrate_draw_cmd(
+    ctx: typer.Context,
+    name: Annotated[str, typer.Argument(help="The miner's name.")],
+    version: Annotated[int, typer.Argument(help="The version to calibrate.")],
+    seed: Annotated[int | None, typer.Option("--seed", help="A recorded random seed.")] = None,
+) -> None:
+    """Draw the calibration sample of a listed miner version (the researcher's act)."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        drawn = miners_service.draw_miner_calibration(
+            project, project.human_actor(), name, version, random_seed=seed
+        )
+    typer.echo(
+        f"calibration {drawn.calibration_id}: {len(drawn.units)} unit(s) of {drawn.population}, "
+        f"seed {drawn.random_seed}"
+    )
+    for unit in drawn.units:
+        typer.echo(unit.work_id)
+
+
+@miner_calibrate_app.command("label")
+def miner_calibrate_label_cmd(
+    ctx: typer.Context,
+    calibration_id: Annotated[str, typer.Argument(help="The calibration.")],
+    work_id: Annotated[str, typer.Argument(help="A unit of its sample.")],
+    rows: Annotated[
+        Path | None, typer.Argument(help="A JSON file: the list of gold rows of the unit.")
+    ] = None,
+    empty: Annotated[bool, typer.Option("--empty", help="The unit holds no record.")] = False,
+) -> None:
+    """Record the gold label of one unit: its rows (verified like an agent's), or --empty."""
+    state = _state(ctx)
+    items: list[ExtractedRowInput] = []
+    if rows is not None:
+        try:
+            body = json.loads(rows.read_text())
+            items = [ExtractedRowInput.model_validate(item) for item in body]
+        except (OSError, json.JSONDecodeError, PydanticValidationError, TypeError) as exc:
+            _fail(f"{rows}: cannot read gold rows ({exc})", 1)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        miner_gold_service.label_miner_calibration(
+            project,
+            project.human_actor(),
+            calibration_id,
+            work_id,
+            items,
+            empty=empty,
+            channel=Channel.CLI,
+        )
+    typer.echo(f"labelled {work_id}: {'empty' if empty else f'{len(items)} gold row(s)'}")
 
 
 @mine_app.command("status")

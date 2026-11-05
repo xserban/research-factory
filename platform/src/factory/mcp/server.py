@@ -86,6 +86,7 @@ from factory.services import leads as leads_service
 from factory.services import lineage as graph_service
 from factory.services import matching as matching_service
 from factory.services import methods as methods_service
+from factory.services import miner_gold as miner_gold_service
 from factory.services import mining as mining_service
 from factory.services import notices as notices_service
 from factory.services import passes as passes_service
@@ -1420,6 +1421,38 @@ def build_server(
             return _withheld(opened, data, include_work_ids=False)
 
         return _reply(project, listing, include_work_ids=False)
+
+    @server.tool()
+    def miner_calibration_label(
+        project: str,
+        calibration_id: str,
+        work_id: str,
+        rows: list[dict[str, JsonValue]],
+        empty: bool = False,
+    ) -> dict[str, JsonValue]:
+        """The human's gold label of one unit of a miner calibration: the verified rows the unit
+        holds, or `empty`. Each row is verified as an agent's row is. Refused to a session that
+        has joined a pass and to the session that proposed the miner."""
+
+        def label() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            parsed = [
+                parse_input(ExtractedRowInput, row, f"rows.{index}")
+                for index, row in enumerate(rows)
+            ]
+            event_id = miner_gold_service.label_miner_calibration(
+                opened,
+                opened.human_actor(),
+                calibration_id,
+                work_id,
+                parsed,
+                empty=empty,
+                channel=Channel.MCP,
+            )
+            return {"event_id": event_id}
+
+        return _reply(project, label, include_work_ids=False)
 
     @server.tool()
     def import_status(
