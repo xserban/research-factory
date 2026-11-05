@@ -158,6 +158,7 @@ from factory.services import watch as watch_service
 from factory.services import xruns as xruns_service
 from factory.services.access import authorize_command, full_view_allowed
 from factory.services.access_log import admin_call, audited, os_login
+from factory.services.cli_access import authorise_root_command, server_root
 from factory.services.commit import commit_hosted
 from factory.services.context import Principal, Project, list_projects, open_project
 from factory.services.extraction_agreement import Choice
@@ -658,6 +659,7 @@ def init(
     """Create a project."""
     state = _state(ctx)
     with _reporting_errors():
+        authorise_root_command(state.settings, "cli:init", session=state.session, clock=state.clock)
         project_service.init_project(
             state.settings, slug, mode, session=state.session, clock=state.clock
         )
@@ -1528,8 +1530,13 @@ def commit_cmd(
     push: Annotated[str | None, typer.Option("--push", help="Remote to push to.")] = None,
 ) -> None:
     """Commit the new event and text-blob files of the projects hosted here."""
+    state = _state(ctx)
     with _reporting_errors():
-        report = commit_hosted(_state(ctx).settings, sign=not no_sign, push=push)
+        if server_root(state.settings):
+            authorise_root_command(
+                state.settings, "cli:commit", session=state.session, clock=state.clock
+            )
+        report = commit_hosted(state.settings, sign=not no_sign, push=push)
     for slug, files in sorted(report.projects.items()):
         typer.echo(f"{slug}: {files} files")
     typer.echo(report.commit or "nothing to commit")
