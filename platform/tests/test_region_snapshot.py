@@ -21,6 +21,7 @@ from factory.regions.rules import (
     RegionRule,
     RuleSet,
     RunRule,
+    TextRule,
 )
 from factory.services.regions import (
     decide_member,
@@ -31,6 +32,7 @@ from factory.services.regions import (
 )
 from tests.region_helpers import (  # noqa: F401
     RWorld,
+    add_queries,
     definition_event_of,
     region_project,
     screened,
@@ -369,3 +371,107 @@ def test_snapshot_replays_from_the_event_prefix(
             members_hash
         )
     assert again == version
+
+
+def _pinned_human_region(w: RWorld, human: Actor, version: str, rule: object) -> None:
+    region = define(w, human, RuleSet(include=(rule,)))  # type: ignore[arg-type]
+    snapshot_event(w.project, version, region, definition_event_of(w.project, region), [])
+
+
+def test_agent_guard_checks_barred_purposes_through_pinned_versions(
+    region_project: RWorld, human: Actor, agent: Actor
+) -> None:
+    w = region_project
+    add_queries(w.project, {"qry_imp": "import", "qry_seed": "seed", "qry_ok": "search"})
+    held, seeds, ok = "R@" + "d" * 8, "R@" + "e" * 8, "R@" + "f" * 8
+    _pinned_human_region(w, human, held, RunRule(query_id="qry_imp"))
+    _pinned_human_region(w, human, seeds, RegionRule(version=held))  # nested
+    _pinned_human_region(w, human, ok, RunRule(query_id="qry_ok"))
+    for rule in (
+        RegionRule(version=held),
+        RegionRule(version=seeds),
+        CitesRule(base=held, direction="citing"),
+    ):
+        for rules in (
+            RuleSet(include=(rule,)),
+            RuleSet(include=(FT_INCLUDED,), exclude=(rule,)),
+            RuleSet(include=(FT_INCLUDED,), within=rule),
+        ):
+            before = event_count(w)
+            with pytest.raises(FactoryValidationError):
+                define(w, agent, rules)
+            assert event_count(w) == before
+    define(w, agent, RuleSet(include=(RegionRule(version=ok),)))
+    define(w, human, RuleSet(include=(RegionRule(version=held),)))
+
+
+def test_agent_guard_refuses_when_the_walk_is_too_deep(
+    region_project: RWorld, human: Actor, agent: Actor, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from factory.services import regions as regions_module
+
+    w = region_project
+    ok = "R@" + "9" * 8
+    clean = define(w, human)
+    snapshot_event(w.project, ok, clean, definition_event_of(w.project, clean), [])
+    define(w, agent, RuleSet(include=(RegionRule(version=ok),)))
+    monkeypatch.setattr(regions_module, "_WALK_LIMIT", 0)
+    with pytest.raises(FactoryValidationError):
+        define(w, agent, RuleSet(include=(RegionRule(version=ok),)))
+
+
+NOTHING = RuleSet(include=(TextRule(blocks=(("zzzqqq",),)),))
+
+
+def _basis(w: RWorld, member: str) -> str:
+    with w.project.index.connect() as conn:
+        return str(
+            conn.execute(
+                text("SELECT basis FROM region_members WHERE member = :m"), {"m": member}
+            ).scalar_one()
+        )
+
+
+def test_added_work_merged_away_keeps_its_basis(region_project: RWorld, human: Actor) -> None:
+    from tests.region_helpers import merge_works
+
+    w = region_project
+    dup, primary = w.included[0], w.extra
+    region = define(w, human, NOTHING)
+    event = decide_member(w.project, human, region, W, dup, "add")
+    merge_works(w.project, primary, dup)
+    snapshot_region(w.project, human, region)
+    assert f'"decision":"{event}"' in _basis(w, primary)
+
+
+def test_a_later_add_of_the_primary_beats_an_earlier_remove_of_the_absorbed(
+    region_project: RWorld, human: Actor
+) -> None:
+    from tests.region_helpers import merge_works
+
+    w = region_project
+    dup, primary = w.included[0], w.extra
+    region = define(w, human, RuleSet(include=(FT_INCLUDED,)))
+    decide_member(w.project, human, region, W, dup, "remove")
+    merge_works(w.project, primary, dup)
+    add = decide_member(w.project, human, region, W, primary, "add")
+    snapshot_region(w.project, human, region)
+    assert f'"decision":"{add}"' in _basis(w, primary)
+
+
+def test_added_idea_merged_away_keeps_its_basis(region_project: RWorld, human: Actor) -> None:
+    w = region_project
+    gone = "ida_01JZ9Q3K5M7N8P0R2S4T6V8W4I"
+    with w.project.index.connect() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO ideas (idea_id, name, name_item, origin, decision, merged_into, "
+                "event_id) VALUES (:i, 'old', 'itm', 'rf:x', 'confirm', :into, 'ev')"
+            ),
+            {"i": gone, "into": w.idea},
+        )
+        conn.commit()
+    region = define(w, human, NOTHING)
+    event = decide_member(w.project, human, region, MemberType.IDEA, gone, "add")
+    snapshot_region(w.project, human, region)
+    assert f'"decision":"{event}"' in _basis(w, w.idea)

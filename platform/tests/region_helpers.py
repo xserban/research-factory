@@ -199,3 +199,26 @@ def definition_event_of(project: Project, region: str) -> str:
                 {"r": region},
             ).scalar_one()
         )
+
+
+def add_queries(project: Project, purposes: dict[str, str]) -> None:
+    """Queries (and one finished run each, `run_<query>`) of the given purposes, written straight
+    into the index."""
+    with project.index.connect() as conn:
+        for query, purpose in purposes.items():
+            conn.execute(
+                text(
+                    "INSERT INTO queries (query_id, source, kind, text, purpose, filters, "
+                    "interface, registered_at, actor_id) VALUES (:q, 's', 'k', 't', :p, '{}', "
+                    "'i', 'now', 'a')"
+                ),
+                {"q": query, "p": purpose},
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO runs (run_id, query_id, source, status, started_at, pages) "
+                    "VALUES (:r, :q, 's', 'finished', 'now', 0)"
+                ),
+                {"r": f"run_{query}", "q": query},
+            )
+        conn.commit()

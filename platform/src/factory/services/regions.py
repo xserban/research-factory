@@ -41,7 +41,7 @@ from factory.model.regions import (
     RegionReviewed,
     RegionSnapshotTaken,
 )
-from factory.regions.concept_use import concept_exists
+from factory.regions.concept_use import concept_exists, concept_live
 from factory.regions.evaluate import Evaluation, Member, evaluate, read_members_blob
 from factory.regions.rules import (
     CitesRule,
@@ -201,10 +201,14 @@ def _rules_of_set(rules: RuleSet) -> list[Any]:
 
 
 def _reaches_all(project: Project, rules: RuleSet, seen: set[str]) -> bool:
-    """Whether the rules name an import's `all` part directly or through pinned versions (a
-    `region` rule or the base of a `cites` rule), nested to any depth."""
+    """Whether the rules name an import's `all` part or a run of a barred query purpose, directly
+    or through pinned versions (a `region` rule or the base of a `cites` rule), nested to any
+    depth. A walk longer than `_WALK_LIMIT` versions reports True: the guard refuses rather than
+    pass what it could not check."""
     for rule in _rules_of_set(rules):
         if isinstance(rule, ImportRule) and rule.part == "all":
+            return True
+        if isinstance(rule, RunRule) and _purpose_of(project, rule) in _BARRED_PURPOSES:
             return True
         version = (
             rule.version
@@ -213,8 +217,10 @@ def _reaches_all(project: Project, rules: RuleSet, seen: set[str]) -> bool:
             if isinstance(rule, CitesRule)
             else None
         )
-        if version is None or version in seen or len(seen) > _WALK_LIMIT:
+        if version is None or version in seen:
             continue
+        if len(seen) >= _WALK_LIMIT:
+            return True
         seen.add(version)
         nested = _snapshot_rules(project, version)
         if nested is not None and _reaches_all(project, nested, seen):
@@ -414,23 +420,52 @@ def decide_member(
         return event.id
 
 
+def _resolve_member(project: Project, member_type: MemberType, member: str) -> str:
+    """The canonical work id or live (merge-resolved) idea or concept id of a decided member."""
+    with project.index.connect() as conn:
+        if member_type is MemberType.WORK:
+            primary = conn.execute(
+                text(
+                    'SELECT m."primary" FROM merge_members mm JOIN merges m '
+                    "ON m.merge_id = mm.merge_id WHERE mm.work_id = :w AND m.status = 'active'"
+                ),
+                {"w": member},
+            ).scalar_one_or_none()
+            return member if primary is None else str(primary)
+        if member_type is MemberType.CONCEPT:
+            return concept_live(conn, member)
+        current, seen = member, set()
+        while current not in seen:
+            seen.add(current)
+            into = conn.execute(
+                text("SELECT merged_into FROM ideas WHERE idea_id = :i"), {"i": current}
+            ).scalar_one_or_none()
+            if into is None:
+                break
+            current = str(into)
+        return current
+
+
 def _decisions_in_effect(
     project: Project, region_id: str
 ) -> list[tuple[str, MemberType, str, str]]:
-    """`(event id, member type, member, decision)` of the latest decision per member."""
+    """`(event id, member type, member, decision)` of the latest decision per member, with the
+    members resolved to canonical work ids and live idea and concept ids first: the latest
+    decision of a resolved member binds, whichever id it was made under."""
     with project.index.connect() as conn:
         rows = conn.execute(
             text(
-                "SELECT d.event_id, d.member_type, d.member, d.decision "
-                "FROM region_member_decisions d WHERE d.region_id = :r AND d.event_id = ("
-                "SELECT MAX(x.event_id) FROM region_member_decisions x "
-                "WHERE x.region_id = d.region_id AND x.member_type = d.member_type "
-                "AND x.member = d.member) "
-                "ORDER BY d.event_id"
+                "SELECT event_id, member_type, member, decision FROM region_member_decisions "
+                "WHERE region_id = :r ORDER BY event_id"
             ),
             {"r": region_id},
         ).all()
-    return [(str(e), MemberType(str(t)), str(m), str(d)) for e, t, m, d in rows]
+    latest: dict[tuple[MemberType, str], tuple[str, str]] = {}
+    for event_id, kind, member, decision in rows:
+        member_type = MemberType(str(kind))
+        key = (member_type, _resolve_member(project, member_type, str(member)))
+        latest[key] = (str(event_id), str(decision))
+    return sorted(((e, t, m, d) for (t, m), (e, d) in latest.items()), key=lambda x: x[0])
 
 
 # --- Evaluation and snapshots ---
