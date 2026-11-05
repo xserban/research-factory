@@ -4,8 +4,9 @@
 changes nothing (the service refuses a different digest, so a replayed log only repeats). `retired`
 becomes true on `miner.retired` (M-D).
 
-A registration folds only when its `proposer_kind` is its writer's kind (the services write no
-other: an event that fails this is a hand-written one, left unfolded, R-51).
+A registration folds only when its `proposer_kind` is its writer's kind, and a calibration draw
+only from a human and for the digest registered (the services write no other: an event that fails
+this is a hand-written one, left unfolded, R-51).
 
 The tables are empty for a log without these events, so they are left out of the state hash then.
 """
@@ -119,7 +120,16 @@ def miner_handlers(t: MinerTables) -> dict[str, Handler]:
         )
 
     def drawn(conn: Connection, event: Event) -> None:
+        if event.actor.kind != "human":
+            return
         payload = MinerCalibrationDrawn.model_validate(event.payload)
+        registered = conn.execute(
+            select(t.miners.c.digest).where(
+                t.miners.c.name == payload.name, t.miners.c.version == payload.version
+            )
+        ).scalar()
+        if registered != payload.digest:
+            return
         inserted = conn.execute(
             sqlite_insert(t.calibrations)
             .values(

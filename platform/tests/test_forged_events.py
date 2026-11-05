@@ -786,3 +786,37 @@ def _registered(project: Project, *, kind: str = "human", version: int = 1) -> M
         spec_blob=project.blobs.put_json(spec_to_json(spec)),
         proposer_kind=kind,  # type: ignore[arg-type]
     )
+
+
+
+
+def _drawn(project: Project, **over: Any) -> MinerCalibrationDrawn:
+    body: dict[str, Any] = {
+        "calibration_id": f"mcl_{ulid(1)}",
+        "name": method_vision().name,
+        "version": 1,
+        "digest": miner_digest(method_vision()),
+        "units": (
+            CalibrationUnit(work_id="w1", conversion_id=f"cnv_{ulid(1)}"),
+            CalibrationUnit(work_id="w2", conversion_id=f"cnv_{ulid(2)}"),
+        ),
+        "random_seed": 5,
+        "population": 4,
+        "population_digest": "d",
+        "protocol_id": "P@0badcafe",
+    }
+    body.update(over)
+    return MinerCalibrationDrawn(**body)
+
+
+
+
+
+
+def test_a_drawn_sample_the_model_refuses_is_never_logged(project: Project) -> None:
+    from pydantic import ValidationError
+
+    unit = CalibrationUnit(work_id="w1", conversion_id=f"cnv_{ulid(1)}")
+    for units in ((unit, unit), ()):
+        with pytest.raises(ValidationError):
+            _drawn(project, units=units)
