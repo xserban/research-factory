@@ -234,6 +234,8 @@ _SEED_PHRASES = {
 _RATE_CODES = {
     "audit-error-high": "the audit's false-exclusion rate is above the declared ceiling "
     "(figures withheld from the agent view)",
+    "gate-audit-unlabelled": "a gate audit has sampled acts still unlabelled "
+    "(counts withheld from the agent view)",
 }
 """Findings whose message carries a label-derived rate or threshold, and the message an agent
 reads instead (decision 37.14). The finding itself, its code and severity are unchanged."""

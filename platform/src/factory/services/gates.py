@@ -472,8 +472,9 @@ def audit_hits(project: Project) -> list[CheckHit]:
     """For each `agent_audit` gate: `gate-audit-missing` for agent acts outside the population of
     the latest audit (all of them when none was drawn; the population is every agent act recorded
     before the draw), `gate-audit-unlabelled` for a latest sample with unlabelled acts, and
-    `gate-audit-error-high` for a latest audit above the ceiling. Messages carry counts, never a
-    rate (the same shape as `audit.outdated` and `extraction_audit_outstanding`)."""
+    `gate-audit-error-high` for a latest audit above the ceiling. The researcher's messages carry
+    counts, never a rate; the agent view of `check` rewrites `gate-audit-unlabelled` without its
+    count (`check._RATE_CODES`) and drops `gate-audit-error-high` (`check._WITHHELD_CODES`)."""
     from factory.services.modules.default import default_modules  # the registry imports services
 
     hits: list[CheckHit] = []

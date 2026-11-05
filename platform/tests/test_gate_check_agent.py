@@ -43,3 +43,30 @@ def test_no_marker_before_a_label(
     _second_agent_confirms(project, extraction, agent)
     gate_audit_sample(project, human, LINK, random_seed=4)
     assert "gate-audit-reported" not in [c for c, _ in _codes(agent_check(project))]
+
+
+def test_unlabelled_message_for_agents_carries_no_count(
+    project: Project, human: Actor, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from collections.abc import Iterator
+
+    from factory.services import gates
+    from factory.services.gates import GateAct
+
+    seen: list[str] = []
+    for size in (2, 60):
+        acts = [GateAct(LINK, "ev_" + f"{i:026d}", "agent", "S", None) for i in range(size)]
+
+        def fake(project: Project, gate_id: str, acts: list[GateAct] = acts) -> Iterator[GateAct]:
+            if gate_id == LINK:
+                yield from acts
+
+        monkeypatch.setattr(gates, "gate_acts", fake)
+        gate_audit_sample(project, human, LINK, random_seed=size)
+        human_text = [
+            f.message for f in check(project).findings if f.code == "gate-audit-unlabelled"
+        ]
+        assert human_text and any(ch.isdigit() for ch in human_text[0])
+        seen += [m for c, m in _codes(agent_check(project)) if c == "gate-audit-unlabelled"]
+    assert len(seen) == 2 and seen[0] == seen[1]
+    assert not any(ch.isdigit() for ch in seen[0])
