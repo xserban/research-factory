@@ -26,15 +26,7 @@ from factory.services.extraction_audit import (
     extraction_audit_sample,
 )
 from factory.services.protocol import current_protocol
-from tests.test_extraction_agreement import (  # noqa: F401
-    _both,
-    _r,
-    _run,
-    ext_a,
-    ext_b,
-    screened,
-    world,
-)
+from tests.extraction_helpers import _both, _r, _run, ext_a, ext_b, screened, world  # noqa: F401
 
 pytestmark = pytest.mark.slow  # over ~60 s per file: dev runs deselect with -m "not slow"
 

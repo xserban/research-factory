@@ -20,9 +20,9 @@ from factory.events.reader import read_all
 from factory.mcp import server as mcp_server
 from factory.mcp.server import build_server
 from factory.services.context import Project
+from tests.extraction_helpers import SESSION_A
 from tests.helpers import SESSION, install_skill, open_session
 from tests.intuition_helpers import IWorld, ctr_a, ctr_b, iw, lin, screened, world
-from tests.test_extraction_next import SESSION_A
 
 SESSION_I = "01JZ9Q3K5M7N8P0R2S4T6V8W1K"
 AGENT = {"role": "intuiter", "model": "claude-opus-5-5", "skill": "rf-intuition"}

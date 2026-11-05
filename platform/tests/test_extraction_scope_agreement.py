@@ -47,17 +47,17 @@ from factory.services.extraction_audit import (
     extraction_audit_sample,
 )
 from factory.services.methods import methods_report
-from tests.test_extraction_agreement import _both
-from tests.test_extraction_scope import (  # noqa: F401
+from tests.extraction_helpers import (  # noqa: F401
     QUOTE,
+    _both,
     _item,
     add_refs,
     ctr_a,
     ctr_b,
     ext_a,
     ext_b,
+    scope_world,
     screened,
-    world,
 )
 
 C = Scope.CONTRIBUTION

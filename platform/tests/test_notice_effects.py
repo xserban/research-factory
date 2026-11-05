@@ -35,10 +35,9 @@ from factory.services.tasks import complete_task
 from factory.services.versions import prefer_document
 from factory.sources.registry import SourceFactory
 from tests.document_helpers import ARTICLE, make_registry, run_convert
+from tests.extraction_helpers import _declare_latency, _extractor, _row
 from tests.screening_helpers import decide
 from tests.test_acceptance_fulltext_screening import _screened_full_text_world
-from tests.test_extraction_next import _declare, _extractor
-from tests.test_extraction_record import _row
 from tests.test_fulltext_service import StubRoute, always, retrieved
 
 pytestmark = pytest.mark.slow  # over ~60 s per file: dev runs deselect with -m "not slow"
@@ -59,7 +58,7 @@ def world(
 ) -> list[str]:
     """The included works of the full-text world, extraction declared (every work dual)."""
     _screened_full_text_world(project, agent, agent_other, human, mock_sources)
-    _declare(project, agent, 1.0)
+    _declare_latency(project, agent, 1.0)
     return sorted(w for w, o in final_outcomes(project, stage=FT).items() if o is Outcome.INCLUDED)
 
 

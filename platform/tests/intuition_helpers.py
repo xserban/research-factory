@@ -23,9 +23,9 @@ from factory.services.context import Project
 from factory.services.ideas import decide_idea, propose_idea
 from tests.contribution_helpers import ext_a
 from tests.evidence_helpers import claim_input, run_pass
+from tests.extraction_helpers import _r, ext_b
 from tests.helpers import S2, S3
 from tests.lineage_helpers import Lineage, ctr_a, ctr_b, lin, screened, world
-from tests.test_extraction_agreement import _r, ext_b
 
 ULID = "01HZX3K4M5N6P7Q8R9S0T1V2W"
 INT1 = f"int_{ULID}A"

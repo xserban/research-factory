@@ -9,16 +9,8 @@ from factory.events.reader import read_all
 from factory.mcp import server as mcp_server
 from factory.model.extraction import ExtractedRowInput
 from factory.services.context import Project
+from tests.extraction_helpers import SESSION_A, SESSION_B, _both, _r, ext_a, ext_b, screened, world  # noqa: F401
 from tests.helpers import SESSION, install_skill, open_session
-from tests.test_extraction_agreement import (  # noqa: F401
-    _both,
-    _r,
-    ext_a,
-    ext_b,
-    screened,
-    world,
-)
-from tests.test_extraction_next import SESSION_A, SESSION_B
 
 FRESH = "01JZ9Q3K5M7N8P0R2S4T6V8W1C"
 AGENT_A = {"role": "extractor", "model": "claude-opus-5-5", "skill": "rf-extract"}

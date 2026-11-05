@@ -11,8 +11,8 @@ from factory.model.protocol import AMENDABLE_FIELDS, SnowballPlan, protocol_vers
 from factory.services.context import Project
 from factory.services.protocol import amend_protocol, current_protocol, list_amendments
 from factory.services.protocol_rules import SNOWBALL_PLAN_MISSING, snowball_plan_gaps
+from tests.extraction_helpers import PINNED_P_ID
 from tests.helpers import SourcesFor, pilot_protocol_spec, ready_protocol
-from tests.test_extraction_schema import PINNED_P_ID
 from tests.test_protocol_rules import _check, _fields, _spec
 
 PLAN = SnowballPlan(max_backward_rounds=2, max_forward_rounds=1)

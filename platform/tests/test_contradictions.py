@@ -136,7 +136,7 @@ def test_refusals_each_reason(project: Project, agent: Actor, ctrw: CtrWorld) ->
 
 
 def _extractor_of(project: Project) -> Actor:
-    from tests.test_extraction_next import SESSION_A, _extractor
+    from tests.extraction_helpers import SESSION_A, _extractor
 
     return _extractor(SESSION_A, "claude-opus-5-5")
 

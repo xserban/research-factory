@@ -24,8 +24,8 @@ from factory.services.protocol import (
     record_deviation,
     search_authorization,
 )
+from tests.extraction_helpers import PINNED_P_ID
 from tests.helpers import SourcesFor, pilot_protocol_spec, ready_protocol
-from tests.test_extraction_schema import PINNED_P_ID
 
 SUPPLIED_Q = QuerySpec(
     source="openalex",

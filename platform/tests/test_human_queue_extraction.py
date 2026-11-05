@@ -6,7 +6,7 @@ from factory.services.extraction_agreement import extraction_agreement
 from factory.services.extraction_audit import extraction_audit_sample
 from factory.services.human_queue import Gate, human_queue
 from tests import test_extraction_agreement as ea
-from tests.test_extraction_agreement import _both, _r
+from tests.extraction_helpers import _both, _r
 
 # Re-export the fixtures under their own names so pytest finds them in this module.
 ext_a = ea.ext_a

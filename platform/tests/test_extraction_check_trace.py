@@ -45,10 +45,19 @@ from factory.services.methods import agent_methods, methods_report, render_metho
 from factory.services.trace import TraceNode, trace
 from factory.sources.registry import SourceFactory
 from tests.document_helpers import StubConverter, make_registry, run_convert
+from tests.extraction_helpers import (
+    SESSION_A,
+    SESSION_B,
+    _amend_schema,
+    _both,
+    _claim,
+    _declare,
+    _extractor,
+    _r,
+    _run,
+    _same_rows,
+)
 from tests.test_acceptance_fulltext_screening import _screened_full_text_world
-from tests.test_extraction_agreement import _both, _declare, _r, _run, _same_rows
-from tests.test_extraction_next import SESSION_A, SESSION_B, _extractor
-from tests.test_extraction_record import _amend_schema, _claim
 
 pytestmark = pytest.mark.slow  # over ~60 s per file: dev runs deselect with -m "not slow"
 

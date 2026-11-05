@@ -1,4 +1,4 @@
-# ruff: noqa: RUF001
+# ruff: noqa: F811, RUF001
 """Extraction agreement, human resolution, final and grouped rows (plan D, task 8; R-46, ruling 10).
 
 Rows of the two passes align on `row_key`; each declared field of an aligned pair is compared
@@ -10,7 +10,7 @@ The pinned conversion is the synthetic fixture of `test_extraction_record`: tabl
 row `Lorem | 1 | 2` under the header `Low | High`; paragraph `s3.p1` reads "Lorem ipsum dolor sit
 amet."."""
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Sequence
 from decimal import Decimal
 
 import pytest
@@ -27,11 +27,9 @@ from factory.model.extraction import (
     ReportedIn,
     StoredField,
 )
-from factory.model.protocol import ExtractionSchema, ScreeningStage
 from factory.model.screening import Channel, PassLabel
 from factory.packs import ML_BENCHMARK_V1, FieldKind
 from factory.services import extraction
-from factory.services.agreement import Outcome, final_outcomes
 from factory.services.context import Project
 from factory.services.extraction import (
     ExtractionRow,
@@ -57,127 +55,30 @@ from factory.services.extraction_agreement import (
     independence_counts,
     resolve_extraction,
 )
-from factory.services.protocol import amend_protocol, current_protocol
-from factory.sources.registry import SourceFactory
-from tests.test_acceptance_fulltext_screening import _screened_full_text_world
-from tests.test_extraction_next import SESSION_A, SESSION_B, _extractor
-from tests.test_extraction_record import _amend_schema
-from tests.test_extraction_schema import _schema, _with
+from tests.extraction_helpers import (  # noqa: F401
+    FIELDS,
+    KEYS,
+    SESSION_A,
+    SESSION_B,
+    _amend_schema,
+    _both,
+    _declare,
+    _extractor,
+    _r,
+    _run,
+    _same_rows,
+    _schema,
+    _with,
+    ext_a,
+    ext_b,
+    screened,
+    world,
+)
 from tests.test_protocol_rules import _check
-from tests.world_cache import snapshot_world
 
 pytestmark = pytest.mark.slow  # over ~60 s per file: dev runs deselect with -m "not slow"
 
-FT = ScreeningStage.FULL_TEXT
-SourcesFor = Callable[..., Mapping[str, SourceFactory]]
 PACK = ML_BENCHMARK_V1
-FIELDS = ("method_name", "task", "dataset", "split", "metric", "value", "pretraining_data")
-KEYS = ("task", "dataset", "split", "metric")
-RowsFor = Callable[[str], list[ExtractedRowInput]]
-
-
-@pytest.fixture
-def ext_a() -> Actor:
-    return _extractor(SESSION_A, "claude-opus-5-5")
-
-
-@pytest.fixture
-def ext_b() -> Actor:
-    return _extractor(SESSION_B, "claude-sonnet-5-5")
-
-
-@pytest.fixture
-def screened(
-    project: Project, agent: Actor, agent_other: Actor, human: Actor, mock_sources: SourcesFor
-) -> list[str]:
-    _screened_full_text_world(project, agent, agent_other, human, mock_sources)
-    return sorted(w for w, o in final_outcomes(project, stage=FT).items() if o is Outcome.INCLUDED)
-
-
-@snapshot_world
-def _declare(
-    project: Project,
-    agent: Actor,
-    fraction: float | None = 1.0,
-    fields: tuple[str, ...] = FIELDS,
-    keys: tuple[str, ...] = KEYS,
-) -> None:
-    current = current_protocol(project)
-    assert current is not None
-    schema = ExtractionSchema(
-        pack="ml-benchmark",
-        pack_version=1,
-        fields=fields,
-        comparability_keys=keys,
-        dual_extract_sample=fraction,
-    )
-    amend_protocol(
-        project,
-        agent,
-        current.spec.model_copy(update={"extraction_schema": schema}),
-        reason="declare extraction",
-        semantic=True,
-        effects={},
-    )
-
-
-@pytest.fixture
-def world(project: Project, agent: Actor, screened: list[str]) -> list[str]:
-    _declare(project, agent)
-    return screened
-
-
-def _r(
-    value: str = "1",
-    cell: str = "t1.r3.c2",
-    *,
-    unit: str | None = None,
-    task: str = "classification",
-    split: str | None = "val",
-    reported_in: ReportedIn = ReportedIn.OWN,
-    **extra: FieldInput,
-) -> ExtractedRowInput:
-    fields = {
-        "method_name": FieldInput(value="Lorem", anchor="t1.r3.c1", quote="Lorem"),
-        "task": FieldInput(value=task),
-        "dataset": FieldInput(
-            value="Lorem ipsum", anchor="s3.p1", quote="Lorem ipsum dolor sit amet."
-        ),
-        "metric": FieldInput(value="Low", anchor="t1.r2.c2", quote="Low"),
-        "value": FieldInput(
-            value=value, unit=unit, anchor="t1", cell=cell, quote=value, reported_in=reported_in
-        ),
-        **extra,
-    }
-    if split is not None:
-        fields["split"] = FieldInput(value=split)
-    return ExtractedRowInput(fields=fields)
-
-
-def _same_rows(work: str) -> list[ExtractedRowInput]:
-    return [_r()]
-
-
-@snapshot_world
-def _run(project: Project, actor: Actor, label: PassLabel, rows_for: RowsFor) -> None:
-    """Serve every task of the pass and record `rows_for(work)` in it, closing the unit."""
-    for _ in range(100):
-        batch = extract_next(project, actor, label).batch
-        if batch is None:
-            return
-        rows = rows_for(batch.records[0]["work_id"])
-        res = extract_record(
-            project, actor, batch.task_id, rows, finish=True, reason=None if rows else "no result"
-        )
-        assert res.completed, res.rows.rejected
-    raise AssertionError("too many tasks")
-
-
-def _both(
-    project: Project, ext_a: Actor, ext_b: Actor, a: RowsFor = _same_rows, b: RowsFor = _same_rows
-) -> None:
-    _run(project, ext_a, PassLabel.A, a)
-    _run(project, ext_b, PassLabel.B, b)
 
 
 def _events(project: Project) -> list[Event]:

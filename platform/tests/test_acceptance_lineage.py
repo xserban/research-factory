@@ -85,6 +85,7 @@ from tests.contribution_helpers import (
     with_references,
 )
 from tests.document_helpers import StubConverter, make_registry, run_convert
+from tests.extraction_helpers import _both, _r, ext_a, ext_b
 from tests.lineage_helpers import (
     ITEMS,
     Lineage,
@@ -99,7 +100,6 @@ from tests.lineage_helpers import (
 )
 from tests.lineage_payloads import stated
 from tests.test_contribution_agreement import _lorem
-from tests.test_extraction_agreement import _both, _r, ext_a, ext_b
 from tests.test_lineage_check import LINEAGE_CODES, _found, _park_everything
 
 pytestmark = pytest.mark.slow

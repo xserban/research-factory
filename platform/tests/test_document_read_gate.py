@@ -37,9 +37,9 @@ from tests.document_helpers import (
     promoted_works,
     run_convert,
 )
+from tests.extraction_helpers import SESSION_A, SESSION_B, _declare_latency, _extractor
 from tests.helpers import SESSION
 from tests.test_acceptance_fulltext_screening import _screened_full_text_world
-from tests.test_extraction_next import SESSION_A, SESSION_B, _declare, _extractor
 from tests.test_fulltext_eligibility import _convert, _world
 
 FT = ScreeningStage.FULL_TEXT
@@ -295,7 +295,7 @@ def extraction_world(
 ) -> list[str]:
     """Full text screened to the end and an extraction schema declared; the included works."""
     _screened_full_text_world(project, agent, agent_other, human, mock_sources)
-    _declare(project, agent, 1.0)
+    _declare_latency(project, agent, 1.0)
     return sorted(w for w, o in final_outcomes(project, stage=FT).items() if o is Outcome.INCLUDED)
 
 

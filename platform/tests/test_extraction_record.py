@@ -10,16 +10,12 @@ from pydantic import JsonValue, ValidationError
 
 from factory.errors import FactoryValidationError
 from factory.events.envelope import Actor, Event
-from factory.events.reader import read_all
 from factory.model.extraction import (
     CLAIM_STATEMENT_MAX,
     VERIFIER_VERSION,
     ClaimInput,
     ClaimType,
-    EvidenceType,
-    ExtractedRowInput,
     FieldInput,
-    Strength,
 )
 from factory.model.protocol import ScreeningStage
 from factory.model.screening import PassLabel
@@ -38,8 +34,18 @@ from factory.services.extraction import (
 from factory.services.protocol import amend_protocol, current_protocol
 from factory.services.tasks import TaskSpec, claim_next, complete_task, create_tasks, get_task
 from factory.sources.registry import SourceFactory
+from tests.extraction_helpers import (
+    LATENCY_FIELDS,
+    SESSION_A,
+    SESSION_B,
+    _amend_schema,
+    _claim,
+    _declare_latency,
+    _events,
+    _extractor,
+    _row,
+)
 from tests.test_acceptance_fulltext_screening import _screened_full_text_world
-from tests.test_extraction_next import FIELDS, SESSION_A, SESSION_B, _declare, _extractor
 
 FT = ScreeningStage.FULL_TEXT
 SourcesFor = Callable[..., Mapping[str, SourceFactory]]
@@ -60,7 +66,7 @@ def world(
     project: Project, agent: Actor, agent_other: Actor, human: Actor, mock_sources: SourcesFor
 ) -> list[str]:
     _screened_full_text_world(project, agent, agent_other, human, mock_sources)
-    _declare(project, agent, 1.0)
+    _declare_latency(project, agent, 1.0)
     return sorted(w for w, o in final_outcomes(project, stage=FT).items() if o is Outcome.INCLUDED)
 
 
@@ -69,37 +75,6 @@ def task_a(project: Project, ext_a: Actor, world: list[str]) -> ExtractBatch:
     batch = extract_next(project, ext_a, PassLabel.A).batch
     assert batch is not None
     return batch
-
-
-def _row(value: str = "1", cell: str = "t1.r3.c2", **extra: FieldInput) -> ExtractedRowInput:
-    fields = {
-        "method_name": FieldInput(value="Lorem", anchor="t1.r3.c1", quote="Lorem"),
-        "task": FieldInput(value="classification"),
-        "dataset": FieldInput(
-            value="Lorem ipsum", anchor="s3.p1", quote="Lorem ipsum dolor sit amet."
-        ),
-        "metric": FieldInput(value="Low", anchor="t1.r2.c2", quote="Low"),
-        "value": FieldInput(value=value, anchor="t1", cell=cell, quote=value),
-        **extra,
-    }
-    return ExtractedRowInput(fields=fields)
-
-
-def _claim(**over: str) -> ClaimInput:
-    values = {
-        "statement": "The method is described in the method section.",
-        "claim_type": ClaimType.FINDING,
-        "evidence_type": EvidenceType.EXPERIMENT,
-        "strength": Strength.MODERATE,
-        "anchor": "s3.p1",
-        "quote": "Lorem ipsum dolor sit amet.",
-        **over,
-    }
-    return ClaimInput.model_validate(values)
-
-
-def _events(project: Project) -> list[Event]:
-    return read_all(project.paths.events_dir, project.catalog)
 
 
 def _event(project: Project, ident: str) -> Event:
@@ -520,27 +495,10 @@ def test_nothing_written_on_refusal(
     assert len(_events(project)) - before == 2  # the misc task and its claim
 
 
-def _amend_schema(project: Project, agent: Actor, **update: object) -> str:
-    current = current_protocol(project)
-    assert current is not None and current.spec.extraction_schema is not None
-    schema = current.spec.extraction_schema.model_copy(update=update)
-    amend_protocol(
-        project,
-        agent,
-        current.spec.model_copy(update={"extraction_schema": schema}),
-        reason="amend the extraction schema",
-        semantic=True,
-        effects={},
-    )
-    amended = current_protocol(project)
-    assert amended is not None
-    return amended.protocol_id
-
-
 def test_field_set_change_makes_a_task_stale(
     project: Project, agent: Actor, ext_a: Actor, task_a: ExtractBatch
 ) -> None:
-    _amend_schema(project, agent, fields=tuple(f for f in FIELDS if f != "latency"))
+    _amend_schema(project, agent, fields=tuple(f for f in LATENCY_FIELDS if f != "latency"))
     before = len(_events(project))
     with pytest.raises(FactoryValidationError) as e:
         extract_record(project, ext_a, task_a.task_id, [_row()], finish=True)

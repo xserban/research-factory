@@ -31,11 +31,10 @@ from factory.services.finders import GapReport, find_gaps
 from factory.sources.registry import SourceFactory
 from tests.card_helpers import cw
 from tests.evidence_helpers import run_pass
+from tests.extraction_helpers import SESSION_A, SESSION_B, _declare, _extractor, _r
 from tests.finder_helpers import MatchWorld, mw
 from tests.lineage_helpers import ctr_a, ctr_b, lin, screened, world
 from tests.test_acceptance_fulltext_screening import _screened_full_text_world
-from tests.test_extraction_agreement import _declare, _r
-from tests.test_extraction_next import SESSION_A, SESSION_B, _extractor
 
 SourcesFor = Callable[..., Mapping[str, SourceFactory]]
 STATEMENT = (

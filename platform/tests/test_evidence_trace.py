@@ -19,9 +19,8 @@ from factory.services.extraction import live_rows
 from factory.services.trace import _CELL_RE, TraceNode, agent_trace, dangling_refs, trace
 from factory.sources.registry import SourceFactory
 from tests.evidence_helpers import claim_input, run_pass
+from tests.extraction_helpers import FIELDS, SESSION_A, SESSION_B, _declare, _extractor, _r
 from tests.test_acceptance_fulltext_screening import _screened_full_text_world
-from tests.test_extraction_agreement import FIELDS, _declare, _r
-from tests.test_extraction_next import SESSION_A, SESSION_B, _extractor
 
 SourcesFor = Callable[..., Mapping[str, SourceFactory]]
 ABSENT = "rk_" + "0" * 12

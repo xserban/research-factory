@@ -15,34 +15,14 @@ from factory.model.protocol import (
     ExtractionSchema,
     ExtractionStale,
     ProtocolAmended,
-    ProtocolSpec,
     protocol_version,
 )
 from factory.services.context import Project
 from factory.services.protocol import amend_protocol, current_protocol, list_amendments
 from factory.services.protocol_rules import extraction_stale
+from tests.extraction_helpers import PINNED_P_ID, _schema, _with
 from tests.helpers import SourcesFor, pilot_protocol_spec, ready_protocol
-from tests.test_protocol_rules import _check, _fields, _spec
-
-PINNED_P_ID = "P@1e7c316e"  # pilot_protocol_spec("Q@aaaaaaaa", "prb_1") before extraction_schema
-FIELDS = ("method_name", "task", "dataset", "split", "metric", "value", "latency")
-KEYS = ("task", "dataset", "metric")
-
-
-def _schema(**kw: Any) -> ExtractionSchema:
-    base: dict[str, Any] = {
-        "pack": "ml-benchmark",
-        "pack_version": 1,
-        "fields": FIELDS,
-        "comparability_keys": KEYS,
-        "dual_extract_sample": 0.5,
-    }
-    base.update(kw)
-    return ExtractionSchema.model_validate(base)
-
-
-def _with(schema: ExtractionSchema | None) -> ProtocolSpec:
-    return _spec(extraction_schema=schema)
+from tests.test_protocol_rules import _check, _fields
 
 
 def _extraction_fields(fields: list[Any]) -> set[str]:

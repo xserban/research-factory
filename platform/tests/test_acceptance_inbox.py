@@ -36,6 +36,7 @@ from factory.services.search import get_work, register_query, run_query
 from factory.services.seeds import seed_check, seed_recall
 from factory.services.tasks import complete_task
 from factory.services.trace import trace
+from tests.extraction_helpers import PINNED_P_ID
 from tests.helpers import SourcesFor, _setup, pilot_protocol_spec, ready_protocol
 from tests.inbox_helpers import (
     KNOWLEDGE,
@@ -47,7 +48,6 @@ from tests.inbox_helpers import (
     resolve,
 )
 from tests.test_chase_service import _citing, _corpus, _settle
-from tests.test_extraction_schema import PINNED_P_ID
 from tests.test_inbox_screening import NOTE, _n, _search, _seeded, _supply_seed
 from tests.test_screening_next import _draw
 

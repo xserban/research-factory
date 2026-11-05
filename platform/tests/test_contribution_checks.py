@@ -56,7 +56,7 @@ from tests.contribution_helpers import (
     with_references,
     world,
 )
-from tests.test_extraction_record import _row
+from tests.extraction_helpers import _row
 
 
 def _hook(project: Project, base: ExtractBatchContent) -> ExtractBatchContent:

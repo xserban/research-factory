@@ -6,9 +6,7 @@ what the projector writes.
 
 from typing import Any
 
-from sqlalchemy import text
-
-from factory.events.envelope import Actor, Event
+from factory.events.envelope import Event
 from factory.index.default import PROJECTION_VERSION
 from factory.model.extraction import (
     AuditItemRef,
@@ -37,40 +35,7 @@ from factory.model.screening import (
     Verdict,
 )
 from factory.services.context import Project
-
-PROTOCOL = "P@1a2b3c4d"
-WORK = "rf:jones2021-sparse-1e2f3a4b"
-TASK = "tsk_01HZX3K4M5N6P7Q8R9S0TVWXYZ"
-DOC = "doc_01HZX3K4M5N6P7Q8R9S0TVWXYZ"
-CNV = "cnv_01HZX3K4M5N6P7Q8R9S0TVWXYZ"
-ROW = "rk_0123456789ab"
-MODEL = "claude-opus-5-5"
-
-
-def _agent(project: Project) -> Actor:
-    return Actor(
-        kind="agent",
-        id="extractor",
-        user="obd",
-        session=project.session,
-        model=MODEL,
-        skill="rf-extract@1a2b3c4d",
-    )
-
-
-def _record(project: Project, type_: str, payload: Any, *, agent: bool = False) -> Event:
-    if agent:
-        blob = project.blobs.put(b"instruction")
-        event = project.events.make(type_, payload, _agent(project), input_blob=blob)
-    else:
-        event = project.events.make(type_, payload, project.system_actor())
-    project.record([event])
-    return event
-
-
-def _rows(project: Project, sql: str) -> list[tuple[Any, ...]]:
-    with project.index.connect() as conn:
-        return [tuple(row) for row in conn.execute(text(sql)).all()]
+from tests.extraction_helpers import CNV, DOC, PROTOCOL, ROW, TASK, WORK, _record, _rows
 
 
 def _field(value: str, **kw: Any) -> StoredField:

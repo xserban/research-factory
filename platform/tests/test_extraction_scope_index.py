@@ -26,16 +26,7 @@ from factory.model.extraction import (
 )
 from factory.model.screening import Channel, PassLabel
 from factory.services.context import Project
-from tests.test_extraction_index import (
-    CNV,
-    DOC,
-    PROTOCOL,
-    ROW,
-    TASK,
-    WORK,
-    _record,
-    _rows,
-)
+from tests.extraction_helpers import CNV, DOC, PROTOCOL, ROW, TASK, WORK, _record, _rows
 
 REX = "rex_01HZX3K4M5N6P7Q8R9S0TVWXYZ"
 AUD = "xau_01HZX3K4M5N6P7Q8R9S0TVWXYZ"

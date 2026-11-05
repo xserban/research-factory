@@ -24,9 +24,9 @@ from factory.model.protocol import (
 from factory.packs.contribution import CONTRIBUTION_V1
 from factory.services.context import Project
 from factory.services.protocol import amend_protocol, current_protocol, list_amendments
+from tests.extraction_helpers import PINNED_P_ID as PINNED_NO_SCHEMAS
+from tests.extraction_helpers import _schema as _evidence
 from tests.helpers import SourcesFor, pilot_protocol_spec, ready_protocol
-from tests.test_extraction_schema import PINNED_P_ID as PINNED_NO_SCHEMAS
-from tests.test_extraction_schema import _schema as _evidence
 from tests.test_protocol_rules import _check, _fields, _spec
 
 PINNED_P_ID = "P@ac93b512"

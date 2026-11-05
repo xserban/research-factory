@@ -26,8 +26,8 @@ from tests.contribution_helpers import (
     with_references,
     world,
 )
+from tests.extraction_helpers import SESSION_A
 from tests.helpers import SESSION, install_skill, open_session
-from tests.test_extraction_next import SESSION_A
 
 AGENT = {"role": "extractor", "model": "claude-opus-5-5", "skill": "rf-contributions"}
 

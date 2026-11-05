@@ -12,14 +12,7 @@ from factory.events.reader import read_all
 from factory.model.screening import Channel
 from factory.services.context import Project
 from factory.services.extraction_agreement import extraction_agreement, resolve_extraction
-from tests.test_extraction_agreement import (  # noqa: F401
-    _both,
-    _r,
-    ext_a,
-    ext_b,
-    screened,
-    world,
-)
+from tests.extraction_helpers import _both, _r, ext_a, ext_b, screened, world  # noqa: F401
 
 pytestmark = pytest.mark.slow
 

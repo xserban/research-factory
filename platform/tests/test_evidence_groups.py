@@ -41,10 +41,15 @@ from tests.evidence_helpers import (
     pilot_rows,
     run_pass,
 )
+from tests.extraction_helpers import (
+    SESSION_A,
+    SESSION_B,
+    _declare,
+    _extractor,
+    _new_document_version,
+    _r,
+)
 from tests.test_acceptance_fulltext_screening import _screened_full_text_world
-from tests.test_extraction_agreement import _declare, _r
-from tests.test_extraction_next import SESSION_A, SESSION_B, _extractor
-from tests.test_extraction_stale import _new_document_version
 
 FT = ScreeningStage.FULL_TEXT
 SourcesFor = Callable[..., Mapping[str, SourceFactory]]

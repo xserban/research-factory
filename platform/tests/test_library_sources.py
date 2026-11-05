@@ -21,9 +21,9 @@ from factory.model.search import QueryKind, QueryPurpose, QuerySpec
 from factory.model.work import Provenance, ProvenanceMethod, Work
 from factory.services.context import Project
 from factory.services.protocol import amend_protocol, current_protocol, search_authorization
+from tests.extraction_helpers import PINNED_P_ID
 from tests.helpers import T0, SourcesFor, pilot_protocol_spec, ready_protocol
 from tests.import_helpers import bib_entry, import_bib
-from tests.test_extraction_schema import PINNED_P_ID
 
 LIB = LibrarySource(name="default", format=ImportFormat.BIBTEX, role=ImportRole.CORPUS)
 IMPORT_Q = QuerySpec(

@@ -1,6 +1,5 @@
+# ruff: noqa: F811
 """Extraction passes, population, pinned tasks and extract_next (plan D, task 5)."""
-
-from collections.abc import Callable, Mapping
 
 import pytest
 from sqlalchemy import text
@@ -9,7 +8,6 @@ from factory.errors import FactoryValidationError
 from factory.events.envelope import Actor
 from factory.events.reader import read_all
 from factory.model.extraction import ExtractionAuditSampled, ExtractionResolved
-from factory.model.protocol import ExtractionSchema, ScreeningStage
 from factory.model.screening import Channel, PassLabel
 from factory.services import extraction
 from factory.services.agreement import Outcome, final_outcomes
@@ -26,78 +24,29 @@ from factory.services.extraction import (
     require_schema,
     unit_pin,
 )
-from factory.services.protocol import amend_protocol, current_protocol
+from factory.services.protocol import current_protocol
 from factory.services.screening import join_pass, screen_next
 from factory.services.tasks import complete_task
-from factory.sources.registry import SourceFactory
 from tests.document_helpers import StubConverter, make_registry, run_convert
+from tests.extraction_helpers import (  # noqa: F401
+    FT,
+    LATENCY_FIELDS,
+    SESSION_A,
+    SourcesFor,
+    _declare_latency,
+    _extractor,
+    ext_a,
+    ext_b,
+    screened,
+)
 from tests.helpers import SESSION, _setup
-from tests.test_acceptance_fulltext_screening import _screened_full_text_world
-from tests.world_cache import snapshot_world
 
 pytestmark = pytest.mark.slow  # over ~60 s per file: dev runs deselect with -m "not slow"
-
-FT = ScreeningStage.FULL_TEXT
-SourcesFor = Callable[..., Mapping[str, SourceFactory]]
-FIELDS = ("method_name", "task", "dataset", "split", "metric", "value", "latency")
-SESSION_A = "01JZ9Q3K5M7N8P0R2S4T6V8W1A"
-SESSION_B = "01JZ9Q3K5M7N8P0R2S4T6V8W1B"
-
-
-def _extractor(session: str, model: str) -> Actor:
-    return Actor(
-        kind="agent",
-        id="extractor",
-        user="obd",
-        session=session,
-        model=model,
-        skill="rf-extract@1a2b3c4d",
-    )
-
-
-@pytest.fixture
-def ext_a() -> Actor:
-    return _extractor(SESSION_A, "claude-opus-5-5")
-
-
-@pytest.fixture
-def ext_b() -> Actor:
-    return _extractor(SESSION_B, "claude-sonnet-5-5")
-
-
-@snapshot_world
-def _declare(project: Project, agent: Actor, fraction: float | None) -> None:
-    current = current_protocol(project)
-    assert current is not None
-    schema = ExtractionSchema(
-        pack="ml-benchmark",
-        pack_version=1,
-        fields=FIELDS,
-        comparability_keys=("task", "dataset", "metric"),
-        dual_extract_sample=fraction,
-    )
-    amend_protocol(
-        project,
-        agent,
-        current.spec.model_copy(update={"extraction_schema": schema}),
-        reason="declare extraction",
-        semantic=True,
-        effects={},
-    )
-
-
-@pytest.fixture
-def screened(
-    project: Project, agent: Actor, agent_other: Actor, human: Actor, mock_sources: SourcesFor
-) -> list[str]:
-    """Full text screened to the end; returns the works whose full-text outcome is INCLUDED."""
-    _screened_full_text_world(project, agent, agent_other, human, mock_sources)
-    return sorted(w for w, o in final_outcomes(project, stage=FT).items() if o is Outcome.INCLUDED)
 
 
 @pytest.fixture
 def world(project: Project, agent: Actor, screened: list[str]) -> list[str]:
-    _declare(project, agent, 1.0)
+    _declare_latency(project, agent, 1.0)
     return screened
 
 
@@ -145,7 +94,7 @@ def test_refused_without_full_text_plan(
     project: Project, agent: Actor, ext_a: Actor, mock_sources: SourcesFor, human: Actor
 ) -> None:
     _setup(project, agent, human, mock_sources, dual_sample=0.5, random_works=0)
-    _declare(project, agent, 1.0)
+    _declare_latency(project, agent, 1.0)
     before = _event_count(project)
     with pytest.raises(FactoryValidationError) as e:
         extract_next(project, ext_a, PassLabel.A)
@@ -187,7 +136,7 @@ def test_batch_has_one_record_fields_and_instructions(
     assert batch is not None
     assert len(batch.records) == 1
     assert set(batch.records[0]) == {"work_id", "title", "document_id", "conversion_id"}
-    assert [f["name"] for f in batch.fields] == list(FIELDS)
+    assert [f["name"] for f in batch.fields] == list(LATENCY_FIELDS)
     assert batch.schema_ref == "ml-benchmark@1"
     assert "value" in batch.required
     assert "never compute" in batch.instructions.lower()
@@ -278,7 +227,7 @@ def test_dual_sample_is_monotone_and_stable() -> None:
 def test_pass_b_queue_is_the_recorded_sample_only(
     project: Project, agent: Actor, ext_a: Actor, ext_b: Actor, screened: list[str]
 ) -> None:
-    _declare(project, agent, 0.5)
+    _declare_latency(project, agent, 0.5)
     _serve_all(project, ext_a, PassLabel.A)
     first = extract_next(project, ext_b, PassLabel.B)
     config = pass_config(project, PassLabel.B)
@@ -367,7 +316,7 @@ def test_blocked_when_no_work_falls_in_the_dual_sample(
 def test_full_dual_sample_puts_every_work_in_pass_b(
     project: Project, agent: Actor, ext_b: Actor, screened: list[str]
 ) -> None:
-    _declare(project, agent, 1.0)
+    _declare_latency(project, agent, 1.0)
     served = {_work(b) for b in _serve_all(project, ext_b, PassLabel.B)}
     assert served == set(screened)
 

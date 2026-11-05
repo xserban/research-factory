@@ -12,7 +12,6 @@ import pytest
 from factory.errors import FactoryValidationError
 from factory.events.envelope import Actor
 from factory.model.extraction import FieldInput
-from factory.model.fulltext import Route
 from factory.model.protocol import ScreeningStage
 from factory.model.screening import PassLabel
 from factory.services.agreement import Outcome, final_outcomes
@@ -33,16 +32,24 @@ from factory.services.extraction import (
     unit_pin,
     unit_states,
 )
-from factory.services.fulltext import fetch_fulltext
 from factory.services.project import project_status
 from factory.services.tasks import complete_task, get_task, release_task
 from factory.sources.registry import SourceFactory
-from tests.document_helpers import ARTICLE, StubConverter, make_registry, run_convert
+from tests.document_helpers import StubConverter, make_registry, run_convert
+from tests.extraction_helpers import (
+    LATENCY_FIELDS,
+    SESSION_A,
+    SESSION_B,
+    _amend_schema,
+    _claim,
+    _declare_latency,
+    _events,
+    _extractor,
+    _new_document_version,
+    _row,
+)
 from tests.helpers import _setup
 from tests.test_acceptance_fulltext_screening import _screened_full_text_world
-from tests.test_extraction_next import FIELDS, SESSION_A, SESSION_B, _declare, _extractor
-from tests.test_extraction_record import _amend_schema, _claim, _events, _row
-from tests.test_fulltext_service import StubRoute, always, retrieved
 
 pytestmark = pytest.mark.slow  # over ~60 s per file: dev runs deselect with -m "not slow"
 
@@ -71,7 +78,7 @@ def screened(
 
 @pytest.fixture
 def world(project: Project, agent: Actor, screened: list[str]) -> list[str]:
-    _declare(project, agent, 1.0)
+    _declare_latency(project, agent, 1.0)
     return screened
 
 
@@ -121,21 +128,6 @@ def _serve_work(project: Project, actor: Actor, label: PassLabel, work: str) -> 
     raise AssertionError("too many tasks")
 
 
-def _new_document_version(project: Project, work: str) -> str:
-    """Fetch a new arXiv HTML version of `work` (superseding its document) and convert it."""
-    route = StubRoute(
-        Route.ARXIV_HTML,
-        always(retrieved(Route.ARXIV_HTML, ARTICLE + b"<!-- v3 -->", version="v3")),
-    )
-    fetch_fulltext(
-        project, routes={Route.ARXIV_HTML: route}, work_ids=[work], only=[Route.ARXIV_HTML]
-    )
-    run_convert(project, make_registry())
-    current = default_conversion(project, work)
-    assert current is not None
-    return current.document_id
-
-
 # --- Rows made stale by an amendment ---
 
 
@@ -144,7 +136,7 @@ def test_removed_field_stales_only_rows_carrying_it(
 ) -> None:
     _, with_latency = _closed_unit(project, ext_a, task_a)
     assert stale_extractions(project) == set()
-    _amend_schema(project, agent, fields=tuple(f for f in FIELDS if f != "latency"))
+    _amend_schema(project, agent, fields=tuple(f for f in LATENCY_FIELDS if f != "latency"))
     assert stale_extractions(project) == {with_latency}
     state = _state(project, _work(task_a))
     assert (state.state, state.reason) == ("stale", "schema")
@@ -154,7 +146,7 @@ def test_added_field_stales_all_rows(
     project: Project, agent: Actor, ext_a: Actor, task_a: ExtractBatch
 ) -> None:
     rows = set(_closed_unit(project, ext_a, task_a))
-    _amend_schema(project, agent, fields=(*FIELDS, "hardware"))
+    _amend_schema(project, agent, fields=(*LATENCY_FIELDS, "hardware"))
     assert stale_extractions(project) == rows
     assert _state(project, _work(task_a)).state == "stale"
 
@@ -173,7 +165,7 @@ def test_row_recorded_after_amendment_is_not_stale(
     project: Project, agent: Actor, ext_a: Actor, task_a: ExtractBatch
 ) -> None:
     first = extract_record(project, ext_a, task_a.task_id, [_row()], finish=True).rows.written
-    _amend_schema(project, agent, fields=(*FIELDS, "hardware"))
+    _amend_schema(project, agent, fields=(*LATENCY_FIELDS, "hardware"))
     fresh = _serve_work(project, ext_a, PassLabel.A, _work(task_a))
     later = extract_record(project, ext_a, fresh.task_id, [_row()], finish=True).rows.written
     assert stale_extractions(project) == set(first)
@@ -187,7 +179,9 @@ def test_reverted_amendment_keeps_order_semantics(
     work = _work(task_a)
     plain, before = _closed_unit(project, ext_a, task_a)  # under S1; `before` carries latency
     original = task_a.protocol_id
-    _amend_schema(project, agent, fields=tuple(f for f in FIELDS if f != "latency"))  # S1 -> S2
+    _amend_schema(
+        project, agent, fields=tuple(f for f in LATENCY_FIELDS if f != "latency")
+    )  # S1 -> S2
     middle_task = _serve_work(project, ext_a, PassLabel.A, work)
     # `plain` is still valid, so its location is taken; the stale row's location is free again.
     assert extract_record(project, ext_a, middle_task.task_id, [_row()]).rows.rejected
@@ -195,7 +189,7 @@ def test_reverted_amendment_keeps_order_semantics(
         project, ext_a, middle_task.task_id, [_row("2", "t1.r3.c3")], finish=True
     ).rows.written
     assert stale_extractions(project) == {before}
-    reverted = _amend_schema(project, agent, fields=FIELDS)  # S2 -> S1: latency added back
+    reverted = _amend_schema(project, agent, fields=LATENCY_FIELDS)  # S2 -> S1: latency added back
     assert reverted == original
     # Every row was recorded before S2 -> S1, which adds a field; `before` also stays stale by
     # S1 -> S2 although it was recorded under the version now current again.
@@ -214,7 +208,7 @@ def test_stale_unit_is_served_again_and_old_rows_stay_readable(
 ) -> None:
     work = _work(task_a)
     old = set(_closed_unit(project, ext_a, task_a))
-    _amend_schema(project, agent, fields=(*FIELDS, "hardware"))
+    _amend_schema(project, agent, fields=(*LATENCY_FIELDS, "hardware"))
     fresh = _serve_work(project, ext_a, PassLabel.A, work)
     assert fresh.task_id != task_a.task_id
     assert "hardware" in [f["name"] for f in fresh.fields]
@@ -231,7 +225,7 @@ def test_stale_unit_is_served_again_and_old_rows_stay_readable(
 def test_released_stale_task_is_replaced_by_a_fresh_one(
     project: Project, agent: Actor, ext_a: Actor, task_a: ExtractBatch
 ) -> None:
-    _amend_schema(project, agent, fields=tuple(f for f in FIELDS if f != "latency"))
+    _amend_schema(project, agent, fields=tuple(f for f in LATENCY_FIELDS if f != "latency"))
     with pytest.raises(FactoryValidationError) as e:
         extract_record(project, ext_a, task_a.task_id, [_row()], finish=True)
     assert e.value.issues[0].field == "task_id"
@@ -254,7 +248,7 @@ def test_released_stale_task_is_replaced_by_a_fresh_one(
 def test_held_stale_task_is_not_served_again(
     project: Project, agent: Actor, ext_a: Actor, task_a: ExtractBatch
 ) -> None:
-    _amend_schema(project, agent, fields=(*FIELDS, "hardware"))
+    _amend_schema(project, agent, fields=(*LATENCY_FIELDS, "hardware"))
     again = extract_next(project, ext_a, PassLabel.A).batch
     assert again is not None and again.task_id != task_a.task_id
     assert "hardware" in [f["name"] for f in again.fields]
@@ -265,7 +259,7 @@ def test_stale_rows_excluded_from_final_rows(
 ) -> None:
     work = _work(task_a)
     old = set(_closed_unit(project, ext_a, task_a))
-    _amend_schema(project, agent, fields=(*FIELDS, "hardware"))
+    _amend_schema(project, agent, fields=(*LATENCY_FIELDS, "hardware"))
     fresh = _serve_work(project, ext_a, PassLabel.A, work)
     res = extract_record(project, ext_a, fresh.task_id, [_row()], finish=True)
     done = get_task(project, fresh.task_id)
@@ -287,7 +281,7 @@ def test_unit_completed_without_a_closing_uses_its_completion_position(
     project: Project, agent: Actor, ext_a: Actor, world: list[str]
 ) -> None:
     work = world[0]
-    _amend_schema(project, agent, fields=(*FIELDS, "hardware"))  # before the task
+    _amend_schema(project, agent, fields=(*LATENCY_FIELDS, "hardware"))  # before the task
     first = _serve_work(project, ext_a, PassLabel.A, work)
     complete_task(project, ext_a, first.task_id)
     assert _state(project, work).state == "current"
@@ -296,7 +290,7 @@ def test_unit_completed_without_a_closing_uses_its_completion_position(
         assert _work(batch) != work
         complete_task(project, ext_a, batch.task_id)
     assert _state(project, work).state == "current"
-    _amend_schema(project, agent, fields=(*FIELDS, "hardware", "memory"))  # after it
+    _amend_schema(project, agent, fields=(*LATENCY_FIELDS, "hardware", "memory"))  # after it
     state = _state(project, work)
     assert (state.state, state.reason) == ("stale", "schema")
     again = _serve_work(project, ext_a, PassLabel.A, work)
@@ -314,7 +308,7 @@ def test_rows_already_stale_do_not_stale_the_unit(
     extract_record(project, ext_a, fresh.task_id, [], finish=True, reason="nothing reported")
     assert _state(project, work).state == "current"
     # Only the old, document-stale row carries latency: removing it stales nothing current.
-    _amend_schema(project, agent, fields=tuple(f for f in FIELDS if f != "latency"))
+    _amend_schema(project, agent, fields=tuple(f for f in LATENCY_FIELDS if f != "latency"))
     assert _state(project, work).state == "current"
 
 
@@ -322,7 +316,7 @@ def test_schema_amendments_never_stale_claims(
     project: Project, agent: Actor, ext_a: Actor, task_a: ExtractBatch
 ) -> None:
     extract_record(project, ext_a, task_a.task_id, [_row()], [_claim()], finish=True)
-    _amend_schema(project, agent, fields=(*FIELDS, "hardware"))
+    _amend_schema(project, agent, fields=(*LATENCY_FIELDS, "hardware"))
     assert stale_claims(project) == set()
 
 
@@ -446,7 +440,7 @@ def test_unit_states_lists_every_included_work(
 def test_pass_b_units_follow_the_recorded_sample(
     project: Project, agent: Actor, ext_b: Actor, screened: list[str]
 ) -> None:
-    _declare(project, agent, 0.5)
+    _declare_latency(project, agent, 0.5)
     assert {s.pass_label for s in unit_states(project)} == {PassLabel.A}  # sample not drawn yet
     extract_next(project, ext_b, PassLabel.B)
     config = pass_config(project, PassLabel.B)
@@ -469,7 +463,7 @@ def test_unit_states_empty_without_full_text_plan(
     project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
 ) -> None:
     _setup(project, agent, human, mock_sources, dual_sample=0.5, random_works=0)
-    _declare(project, agent, 1.0)
+    _declare_latency(project, agent, 1.0)
     assert unit_states(project) == []
 
 

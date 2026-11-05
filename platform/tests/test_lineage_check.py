@@ -47,6 +47,7 @@ from factory.services.relations import (
     relation_view,
 )
 from tests.contribution_helpers import P1, P2, P3, P4, P5, item, not_stated
+from tests.extraction_helpers import ext_a, ext_b
 from tests.helpers import open_session
 from tests.lineage_helpers import (
     ITEMS,
@@ -61,7 +62,6 @@ from tests.lineage_helpers import (
 )
 from tests.lineage_payloads import REL, stated
 from tests.test_contribution_agreement import _lorem
-from tests.test_extraction_agreement import ext_a, ext_b
 from tests.test_notice_effects import _observe
 
 LINEAGE_CODES = (
@@ -433,7 +433,7 @@ def test_both_audits_fold_into_one_neutral_marker(
     labels; the findings, their order and `ok` do not depend on either ceiling."""
     from factory.services.check import agent_check
     from factory.services.extraction_audit import extraction_audit_record, extraction_audit_sample
-    from tests.test_extraction_agreement import _both, _r
+    from tests.extraction_helpers import _both, _r
 
     monkeypatch.setattr(check_module, "_rigor_mode", lambda project: RigorMode.SYSTEMATIC)
     with_references(project, agent, world[0])

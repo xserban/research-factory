@@ -1,3 +1,4 @@
+# ruff: noqa: F811
 """Scope through passes, tasks, recording, staleness and reads (plan G2-A, task 4).
 
 The pinned conversion is plan D's synthetic LaTeXML fixture: paragraph `s3.p1` reads "Lorem ipsum
@@ -13,17 +14,12 @@ from factory.events.envelope import Actor, Event
 from factory.events.reader import read_all
 from factory.model.extraction import (
     CitedEntry,
-    ExtractedRowInput,
     FieldInput,
     Scope,
     StoredField,
-    UnitReferences,
 )
-from factory.model.protocol import ExtractionSchema, ScreeningStage
 from factory.model.screening import PassLabel
-from factory.packs.contribution import CONTRIBUTION_V1
 from factory.services import extraction
-from factory.services.agreement import Outcome, final_outcomes
 from factory.services.context import Project
 from factory.services.document_read import document_read
 from factory.services.extraction import (
@@ -32,7 +28,6 @@ from factory.services.extraction import (
     ContributionBatch,
     ContributionBatchContent,
     ExtractBatch,
-    ExtractBatchContent,
     ExtractionRow,
     ExtraVerdict,
     UnitPin,
@@ -54,41 +49,29 @@ from factory.services.protocol import amend_protocol, current_protocol
 from factory.services.references import current_extraction, extract_references, included_works
 from factory.services.stages import CONTRIB_KINDS, EXTRACT_KINDS, kinds_for, scope_of_kind
 from factory.services.tasks import TaskSpec, claim_next, create_tasks, get_task, task_content
-from factory.sources.registry import SourceFactory
 from tests.document_helpers import StubConverter, make_registry, run_convert
-from tests.test_acceptance_fulltext_screening import _screened_full_text_world
-from tests.test_extraction_next import FIELDS, SESSION_A, SESSION_B, _declare, _extractor
-from tests.test_extraction_record import _row
-from tests.test_extraction_stale import _new_document_version
+from tests.extraction_helpers import (  # noqa: F401
+    CONTRIB_FIELDS,
+    LATENCY_FIELDS,
+    QUOTE,
+    SESSION_A,
+    SESSION_B,
+    _declare_latency,
+    _extractor,
+    _item,
+    _new_document_version,
+    _row,
+    _schemas,
+    add_refs,
+    ctr_a,
+    ctr_b,
+    ext_a,
+    scope_world,
+    screened,
+)
 
-FT = ScreeningStage.FULL_TEXT
 C = Scope.CONTRIBUTION
-SourcesFor = Callable[..., Mapping[str, SourceFactory]]
-SESSION_C = "01JZ9Q3K5M7N8P0R2S4T6V8W1C"
-SESSION_D = "01JZ9Q3K5M7N8P0R2S4T6V8W1D"
-QUOTE = "Lorem ipsum dolor sit amet."
 REX = "rex_01JZ9Q3K5M7N8P0R2S4T6V8W0X"
-CONTRIB_FIELDS = tuple(f.name for f in CONTRIBUTION_V1.fields)
-
-
-@pytest.fixture
-def ext_a() -> Actor:
-    return _extractor(SESSION_A, "claude-opus-5-5")
-
-
-@pytest.fixture
-def ext_b() -> Actor:
-    return _extractor(SESSION_B, "claude-sonnet-5-5")
-
-
-@pytest.fixture
-def ctr_a() -> Actor:
-    return _extractor(SESSION_C, "claude-opus-5-5")
-
-
-@pytest.fixture
-def ctr_b() -> Actor:
-    return _extractor(SESSION_D, "claude-sonnet-5-5")
 
 
 _CONVERSIONS = iter(range(1, 1000))
@@ -100,40 +83,6 @@ def _extract(project: Project, agent: Actor, work: str) -> None:
     if current_extraction(project, work) is not None:
         run_convert(project, make_registry(StubConverter(version=f"9.9+scope{next(_CONVERSIONS)}")))
     extract_references(project, agent, [work], sources={})
-
-
-def _schemas() -> tuple[ExtractionSchema, ExtractionSchema]:
-    evidence = ExtractionSchema(
-        pack="ml-benchmark",
-        pack_version=1,
-        fields=FIELDS,
-        comparability_keys=("task", "dataset", "metric"),
-        dual_extract_sample=1.0,
-    )
-    contribution = ExtractionSchema(
-        pack="contribution",
-        pack_version=1,
-        fields=CONTRIB_FIELDS,
-        dual_extract_sample=1.0,
-        claims=False,
-    )
-    return evidence, contribution
-
-
-def _declare_both(project: Project, agent: Actor) -> None:
-    current = current_protocol(project)
-    assert current is not None
-    evidence, contribution = _schemas()
-    amend_protocol(
-        project,
-        agent,
-        current.spec.model_copy(
-            update={"extraction_schema": evidence, "contribution_schema": contribution}
-        ),
-        reason="declare both schemas",
-        semantic=True,
-        effects={},
-    )
 
 
 def _amend(project: Project, agent: Actor, section: str, **update: object) -> None:
@@ -151,29 +100,6 @@ def _amend(project: Project, agent: Actor, section: str, **update: object) -> No
     )
 
 
-@pytest.fixture
-def screened(
-    project: Project, agent: Actor, agent_other: Actor, human: Actor, mock_sources: SourcesFor
-) -> list[str]:
-    _screened_full_text_world(project, agent, agent_other, human, mock_sources)
-    return sorted(w for w, o in final_outcomes(project, stage=FT).items() if o is Outcome.INCLUDED)
-
-
-@pytest.fixture
-def world(project: Project, agent: Actor, screened: list[str]) -> list[str]:
-    _declare_both(project, agent)
-    return screened
-
-
-def add_refs(project: Project, content: ExtractBatchContent) -> ExtractBatchContent:
-    """The content hook G2-B supplies: here a fixed reference list and one item rule."""
-    return ContributionBatchContent(
-        **content.model_dump(),
-        references=UnitReferences(status="none", extraction_id=None, entries=[]),
-        item_rules=["a not-stated item names absent_kind and nothing else"],
-    )
-
-
 def _events(project: Project) -> list[Event]:
     return read_all(project.paths.events_dir, project.catalog)
 
@@ -186,19 +112,6 @@ def _contrib(project: Project, actor: Actor, label: PassLabel = PassLabel.A) -> 
 
 def _work(batch: ExtractBatch | ContributionBatch) -> str:
     return batch.records[0]["work_id"]
-
-
-def _item(
-    kind: str = "base-idea", name: str | None = "Lorem", **extra: FieldInput
-) -> ExtractedRowInput:
-    fields: dict[str, FieldInput] = {
-        "item_kind": FieldInput(value=kind),
-        "statement": FieldInput(value=QUOTE, anchor="s3.p1", quote=QUOTE),
-    }
-    if name is not None:
-        fields["name"] = FieldInput(value=name, anchor="s3.p1", quote=QUOTE)
-    fields.update(extra)
-    return ExtractedRowInput(fields=fields)
 
 
 def _cite(rex: str) -> Callable[..., ExtraVerdict]:
@@ -235,7 +148,7 @@ def test_kinds_per_scope() -> None:
 def test_contribution_refused_until_schema_declared(
     project: Project, agent: Actor, ctr_a: Actor, screened: list[str]
 ) -> None:
-    _declare(project, agent, 1.0)  # the evidence schema only
+    _declare_latency(project, agent, 1.0)  # the evidence schema only
     before = len(_events(project))
     with pytest.raises(FactoryValidationError) as e:
         next_unit(project, ctr_a, PassLabel.A, scope=C, content=add_refs)
@@ -544,7 +457,9 @@ def test_contribution_amendment_stales_only_contribution_rows(
     ]
     assert (c_state.state, c_state.reason) == ("stale", "schema")
     assert e_state.state == "current"
-    _amend(project, agent, "extraction_schema", fields=tuple(f for f in FIELDS if f != "split"))
+    _amend(
+        project, agent, "extraction_schema", fields=tuple(f for f in LATENCY_FIELDS if f != "split")
+    )
     assert stale_extractions(project) == {ev}
     assert stale_extractions(project, scope=C) == {ct}
 

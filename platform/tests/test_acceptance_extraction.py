@@ -40,7 +40,7 @@ from factory.services.extraction_audit import (
     extraction_audit_sample,
 )
 from factory.services.trace import TraceNode, trace
-from tests.test_extraction_agreement import (  # noqa: F401
+from tests.extraction_helpers import (  # noqa: F401
     FIELDS,
     _both,
     _declare,

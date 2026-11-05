@@ -29,9 +29,8 @@ from factory.services.extraction_agreement import FinalRow
 from factory.services.methods import methods_report, render_methods
 from factory.sources.registry import SourceFactory
 from tests.evidence_helpers import disagreement, frow, pilot_inputs, pilot_rows, run_pass
+from tests.extraction_helpers import FIELDS, SESSION_A, SESSION_B, _declare, _extractor, _r
 from tests.test_acceptance_fulltext_screening import _screened_full_text_world
-from tests.test_extraction_agreement import FIELDS, _declare, _r
-from tests.test_extraction_next import SESSION_A, SESSION_B, _extractor
 
 FT = ScreeningStage.FULL_TEXT
 SourcesFor = Callable[..., Mapping[str, SourceFactory]]

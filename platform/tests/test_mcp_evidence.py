@@ -15,16 +15,8 @@ from factory.services.context import Project
 from factory.services.evidence_report import EvidenceReport, assemble_report
 from factory.services.extraction_audit import ExtractionAuditReport
 from tests.evidence_helpers import pilot_inputs
+from tests.extraction_helpers import SESSION_A, _both, _r, ext_a, ext_b, screened, world  # noqa: F401
 from tests.helpers import SESSION, open_session
-from tests.test_extraction_agreement import (  # noqa: F401
-    _both,
-    _r,
-    ext_a,
-    ext_b,
-    screened,
-    world,
-)
-from tests.test_extraction_next import SESSION_A
 
 FRESH = "01JZ9Q3K5M7N8P0R2S4T6V8W1C"
 
