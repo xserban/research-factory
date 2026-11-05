@@ -55,6 +55,7 @@ from factory.services.context import Project
 from factory.services.contributions import (
     contribution_audit_report,
     contribution_status,
+    final_items,
     live_items,
 )
 from factory.services.dedup import active_merges
@@ -63,6 +64,7 @@ from factory.services.evidence_report import evidence_report
 from factory.services.extraction import (
     extraction_population,
     in_dual_sample,
+    live_claims,
     live_rows,
     pass_config,
     require_schema,
@@ -71,18 +73,30 @@ from factory.services.extraction import (
     stale_extractions,
     unit_states,
 )
-from factory.services.extraction_agreement import grouped_rows
+from factory.services.extraction_agreement import final_rows, grouped_rows, independence_counts
 from factory.services.extraction_audit import extraction_audit_outstanding, extraction_audit_report
 from factory.services.fulltext_status import fulltext_status
 from factory.services.ideas import list_ideas
 from factory.services.imports import list_imports
+from factory.services.layer_check import (
+    concept_cycles,
+    concepts_without_approved_source,
+    dropped_reviews,
+    inferred_links,
+    layer_present,
+    self_reviewed_items,
+    stale_items,
+    unreviewed_concepts,
+    unreviewed_interpretations,
+)
+from factory.services.lineage import graph_status, iter_graph_export
 from factory.services.methods import MethodsReport, methods_report
 from factory.services.notices import (
     assessments,
     dependent_works,
     observed_notices,
 )
-from factory.services.prisma import search_report
+from factory.services.prisma import prisma_flow, search_report
 from factory.services.protocol import current_protocol
 from factory.services.protocol_rules import (
     library_source_gaps,
@@ -186,7 +200,37 @@ LEVELS: dict[str, tuple[Severity | None, Severity | None, Severity | None]] = {
     "relation-without-basis": ("error", "error", "error"),
     "idea-unconfirmed": ("warning", "warning", "warning"),
     "graph-extraction-missing": ("warning", "warning", "warning"),
+    "interpretation-unreviewed": ("warning", "warning", "error"),
+    "concept-unreviewed": ("warning", "warning", "error"),
+    "interpretation-source-stale": ("warning", "warning", "warning"),
+    "interpretation-self-reviewed": ("warning", "warning", "warning"),
+    "concept-source-missing": ("warning", "warning", "warning"),
+    "concept-link-unconfirmed": ("warning", "warning", "warning"),
+    "layer-review-dropped": ("warning", "warning", "warning"),
+    "layer-leak": ("error", "error", "error"),
+    "concept-cycle": ("error", "error", "error"),
 }
+
+LAYER_CHECK_CODES = frozenset(
+    {
+        "interpretation-unreviewed",
+        "concept-unreviewed",
+        "interpretation-source-stale",
+        "interpretation-self-reviewed",
+        "concept-source-missing",
+        "concept-link-unconfirmed",
+        "layer-review-dropped",
+        "layer-leak",
+        "concept-cycle",
+    }
+)
+"""The findings of the interpretation layer. A project with no interpretation and no concept has
+none of them."""
+
+INTERPRETATION_UNREVIEWED_CEILING = 0
+"""The number of unreviewed interpretations (and of approved, unreviewed concept definitions)
+tolerated before `systematic` calls them an error (plan G3-C, ruling C4). A protocol field is
+deferred until the pilot shows the review burden."""
 
 _NOTICE_PHRASES: dict[str, str] = {
     "included-retracted": "included work(s) with a retraction or withdrawal no human has assessed",
@@ -462,6 +506,7 @@ def _hits(project: Project) -> list[_Hit]:
     hits += _notices(project, outcomes)
     hits += _conclusions(project)
     hits += _lineage(project)
+    hits += _layer(project)
     return hits
 
 
@@ -542,6 +587,135 @@ def _lineage(project: Project) -> list[_Hit]:
             )
         )
     return hits + _relation_hits(project)
+
+
+# --- The interpretation layer (slice 3c, plan G3-C) ---
+
+_LAYER_ID = re.compile(r"\b(?:int|cpt|cul)_[0-9A-HJKMNP-TV-Z]{26}\b")
+_LAYER_EDGE = re.compile(r'"(?:explains|uses):')
+_LAYER_CLASS = re.compile(r'"class"\s*:\s*"interpretation"')
+
+
+def _unreviewed_hit(code: str, noun: str, total: int, refs: list[str]) -> _Hit:
+    """Above the ceiling `systematic` reads the level table (an error); at or below it the
+    finding stays advisory."""
+    return _Hit(
+        code,
+        tuple(refs),
+        f"{total} {noun} not yet reviewed by a human",
+        severity=None if total > INTERPRETATION_UNREVIEWED_CEILING else "warning",
+    )
+
+
+def _layer(project: Project) -> list[_Hit]:
+    """Findings of the interpretation layer: counts and identifiers only, never a quote or text.
+    A project with no interpretation and no concept has none."""
+    if not layer_present(project):
+        return []
+    hits: list[_Hit] = []
+    total, refs = unreviewed_interpretations(project)
+    if total:
+        hits.append(_unreviewed_hit("interpretation-unreviewed", "interpretation(s)", total, refs))
+    total, refs = unreviewed_concepts(project)
+    if total:
+        hits.append(
+            _unreviewed_hit("concept-unreviewed", "approved concept definition(s)", total, refs)
+        )
+    for code, found, phrase in (
+        (
+            "interpretation-source-stale",
+            stale_items(project),
+            "interpretation(s) or concept(s) cite a document that has since been superseded",
+        ),
+        (
+            "interpretation-self-reviewed",
+            self_reviewed_items(project),
+            "interpretation(s) or concept definition(s) reviewed by their own author",
+        ),
+        (
+            "concept-source-missing",
+            concepts_without_approved_source(project),
+            "concept(s) without an approved source",
+        ),
+        (
+            "concept-link-unconfirmed",
+            inferred_links(project),
+            "inferred concept link(s) awaiting a human decision",
+        ),
+        (
+            "layer-review-dropped",
+            dropped_reviews(project),
+            "review(s) did not count (not a human, or the session that wrote the item)",
+        ),
+        (
+            "concept-cycle",
+            concept_cycles(project),
+            "concept(s) on a cycle of concept links",
+        ),
+    ):
+        if found[0]:
+            hits.append(_Hit(code, tuple(found[1]), f"{found[0]} {phrase}"))
+    leaked = _layer_leaks(project)
+    if leaked:
+        hits.append(
+            _Hit(
+                "layer-leak",
+                tuple(leaked),
+                f"{len(leaked)} evidence output(s) mention the interpretation layer",
+            )
+        )
+    return hits
+
+
+def _snapshot_text(value: object) -> str:
+    if hasattr(value, "model_dump_json"):
+        return str(value.model_dump_json())
+    if isinstance(value, (list, tuple)):
+        return "[" + ",".join(_snapshot_text(v) for v in value) + "]"
+    return repr(value)
+
+
+def _attempt(read: Callable[[], object]) -> str:
+    try:
+        return _snapshot_text(read())
+    except FactoryValidationError as error:  # e.g. no schema yet: nothing to scan
+        return "error:" + ";".join(f"{i.field}:{i.reason}" for i in error.issues)
+
+
+def evidence_snapshot(project: Project) -> dict[str, str]:
+    """Each evidence output but the graph exports, serialised by name: the final rows, claims,
+    groups, independence counts, evidence report, PRISMA flow and search report, methods
+    statement, contribution items, ideas and graph counts. `check` is not included (it reads
+    this). The exports are scanned chunk by chunk in `_layer_leaks`."""
+    return {
+        "final_rows": _attempt(lambda: final_rows(project)),
+        "grouped_rows": _attempt(lambda: grouped_rows(project)),
+        "independence": _attempt(lambda: independence_counts(final_rows(project))),
+        "live_claims": _attempt(lambda: live_claims(project)),
+        "evidence_report": _attempt(lambda: evidence_report(project)),
+        "prisma": _attempt(lambda: prisma_flow(project)),
+        "search_report": _attempt(lambda: search_report(project)),
+        "methods": _attempt(lambda: methods_report(project)),
+        "contribution_items": _attempt(lambda: final_items(project)),
+        "ideas": _attempt(lambda: list_ideas(project, include_unconfirmed=True)),
+        "graph_status": _attempt(lambda: graph_status(project)),
+    }
+
+
+def _mentions_layer(text_: str) -> bool:
+    return bool(_LAYER_ID.search(text_) or _LAYER_EDGE.search(text_) or _LAYER_CLASS.search(text_))
+
+
+def _layer_leaks(project: Project) -> list[str]:
+    """Names of the evidence outputs that carry a layer identifier, a layer edge id or the layer
+    class (ruling C5). The graph exports are read in chunks, never held whole."""
+    leaked = [
+        name for name, text_ in sorted(evidence_snapshot(project).items()) if _mentions_layer(text_)
+    ]
+    for fmt in ("json", "dot"):
+        if any(_mentions_layer(chunk) for chunk in iter_graph_export(project, fmt)):
+            leaked.append(f"export:{fmt}")
+    return sorted(leaked)
 
 
 def _contribution_schema_missing(project: Project) -> list[_Hit]:

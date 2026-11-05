@@ -21,13 +21,14 @@ from factory.events.reader import read_all
 from factory.lineage.graph import GraphFilter
 from factory.living.digest_render import to_json, to_markdown
 from factory.model.intuition import ConceptInput, InterpretationReviewed, UseBasisInput
+from factory.model.project import RigorMode
 from factory.model.screening import Channel
 from factory.services import contributions as contributions_service
 from factory.services import evidence_report as evidence_report_service
 from factory.services import extraction as extraction_service
 from factory.services import extraction_agreement as agreement_service
 from factory.services import ideas as ideas_service
-from factory.services.check import check
+from factory.services.check import LAYER_CHECK_CODES, _findings_as
 from factory.services.concepts import (
     decide_concept_link,
     decide_concept_source,
@@ -68,6 +69,8 @@ LAYER_MODULES = frozenset(
         "factory.services.concepts",  # G3-B
         "factory.services.layer_view",  # G3-C
         "factory.intuition.export",  # G3-C
+        "factory.services.layer_check",  # G3-C
+        "factory.services.layer_trace",  # G3-C
     }
 )
 ALLOWED_IMPORTERS = frozenset(
@@ -289,7 +292,7 @@ def evidence_outputs(project: Project, nodes: Iterable[str] = ()) -> dict[str, s
         "search_report": _run(lambda: search_report(project)),
         "methods": _run(lambda: methods_report(project)),
         "methods_text": _run(lambda: render_methods(methods_report(project))),
-        "check": _run(lambda: check(project)),
+        "check": _run(lambda: evidence_findings(project)),
         "contribution_items": _run(lambda: contributions_service.final_items(project)),
         "ideas": _run(lambda: ideas_service.list_ideas(project, include_unconfirmed=True)),
         "graph_status": _run(lambda: graph_status(project)),
@@ -340,6 +343,16 @@ def evidence_outputs(project: Project, nodes: Iterable[str] = ()) -> dict[str, s
                 )
             )
     return out
+
+
+def evidence_findings(project: Project) -> str:
+    """`check` without the layer's own findings (those exist because a layer does; they are the
+    one output allowed to differ), over every mode: the evidence findings stay byte-identical."""
+    out = []
+    for mode in (RigorMode.EXPLORATORY, RigorMode.PILOT, RigorMode.SYSTEMATIC):
+        found = [f for f in _findings_as(project, mode) if f.code not in LAYER_CHECK_CODES]
+        out.append([f.model_dump(mode="json") for f in found])
+    return json.dumps(out, sort_keys=True, default=str)
 
 
 def digest_text(project: Project) -> str:
