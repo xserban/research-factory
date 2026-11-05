@@ -50,6 +50,7 @@ Invariants:
 """
 
 import hashlib
+import json
 import secrets
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -2082,6 +2083,9 @@ def recorded_row(
     return found[0] if found else None
 
 
+_FIELD_BATCH = 5000
+
+
 def _read_rows(
     project: Project, where: str, params: Mapping[str, str]
 ) -> list[tuple[ExtractionRow, bool]]:
@@ -2103,12 +2107,15 @@ def _read_rows(
             .all()
         )
         cells: dict[str, list[Mapping[str, Any]]] = {str(h["extraction_id"]): [] for h in heads}
-        if cells:
-            marks = ", ".join(f":e{i}" for i in range(len(cells)))
-            found = (
+        idents = list(cells)
+        for start in range(0, len(idents), _FIELD_BATCH):  # one statement binds one variable
+            found = (  # per batch, not per row: SQLite refuses more than 32,766 variables
                 conn.execute(
-                    text(f"SELECT * FROM extraction_fields WHERE extraction_id IN ({marks})"),
-                    {f"e{i}": ident for i, ident in enumerate(cells)},
+                    text(
+                        "SELECT * FROM extraction_fields WHERE extraction_id IN "
+                        "(SELECT value FROM json_each(:ids))"
+                    ),
+                    {"ids": json.dumps(idents[start : start + _FIELD_BATCH])},
                 )
                 .mappings()
                 .all()
