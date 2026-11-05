@@ -29,6 +29,7 @@ from factory.model.extraction import (
 )
 from factory.model.findings import ContradictionDecided, ContradictionProposed
 from factory.model.fulltext import Attempted, DocumentAdded, FetchStarted, SourceChanged
+from factory.model.gate_audit import GateAuditLabelled, GateAuditSampled
 from factory.model.imports import (
     ImportAdmissionPlanned,
     ImportAttachmentLinked,
@@ -178,6 +179,8 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("calibration.labelled", CalibrationLabelled, 1))
     catalog.register(EventType("audit.sampled", AuditSampled, 1))
     catalog.register(EventType("audit.labelled", AuditLabelled, 1))
+    catalog.register(EventType("gate.audit_sampled", GateAuditSampled, 1))
+    catalog.register(EventType("gate.audit_labelled", GateAuditLabelled, 1))
     catalog.register(EventType("fulltext.fetch_started", FetchStarted, 1))
     catalog.register(EventType("fulltext.attempted", Attempted, 1))
     catalog.register(EventType("fulltext.document_added", DocumentAdded, 1))

@@ -27,6 +27,7 @@ from sqlalchemy import text
 
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
+from factory.model.gate_audit import GateAuditLabelled, GateAuditSampled
 from factory.model.gates import GatePolicies
 from factory.model.project import RigorMode
 from factory.model.protocol import ProtocolSpec
@@ -39,8 +40,9 @@ from factory.modules.contract import (
     GatePolicy,
     PolicyKind,
 )
-from factory.modules.presets import preset
-from factory.services import passes
+from factory.modules.presets import Enforcement, enforcement, preset
+from factory.quality.stats import audit_size, draw_uniform
+from factory.services import audit_core, passes
 from factory.services.context import Project
 
 _LIVE_DECISIONS = {
@@ -209,9 +211,14 @@ def as_autonomy_acts(project: Project, gate_ids: tuple[str, ...]) -> Iterator[Au
 
 
 def _audited(project: Project, act: GateAct) -> bool:
-    """Whether a drawn gate audit of the act's gate contains the act (filled in by the gate
-    audit; no audit exists yet)."""
-    return False
+    """Whether a gate audit of the act's gate was drawn after the act: its population was every
+    agent act then recorded at the gate, so it contains the act."""
+    with project.index.connect() as conn:
+        row = conn.execute(
+            text("SELECT 1 FROM gate_audits WHERE gate_id = :g AND event_id > :e LIMIT 1"),
+            {"g": act.gate_id, "e": act.event_id},
+        ).first()
+    return row is not None
 
 
 def autonomy_of(project: Project, act: GateAct) -> Autonomy:
@@ -273,4 +280,196 @@ def gate_hits(project: Project) -> list[CheckHit]:
                 "policy became human",
             )
         )
+    return hits
+
+
+# --- Gate audit (ruling 9) ----------------------------------------------------------------
+
+GATE_AUDIT_ERROR_CEILING = 0.05
+"""The error rate of a gate audit above which `gate-audit-error-high` is raised (ruling 9)."""
+
+
+@dataclass(frozen=True)
+class GateAuditReport:
+    audit_id: str
+    gate_id: str
+    sample_size: int
+    labelled: int
+    incorrect: int
+    verdict: audit_core.CeilingVerdict
+
+
+def _population(project: Project, gate_id: str) -> audit_core.AuditPopulation:
+    """The agent acts at the gate, not superseded (ruling 4): human acts are never sampled."""
+    return audit_core.AuditPopulation.of(
+        (a.event_id, a.actor_kind)
+        for a in gate_acts(project, gate_id)
+        if a.actor_kind == "agent" and not a.superseded
+    )
+
+
+def _last_digest(project: Project, gate_id: str) -> str | None:
+    with project.index.connect() as conn:
+        row = conn.execute(
+            text(
+                "SELECT population_digest FROM gate_audits WHERE gate_id = :g "
+                "ORDER BY event_id DESC LIMIT 1"
+            ),
+            {"g": gate_id},
+        ).one_or_none()
+    return None if row is None else str(row[0])
+
+
+def _latest_protocol(project: Project) -> str | None:
+    with project.index.connect() as conn:
+        row = conn.execute(
+            text("SELECT protocol_id FROM protocols ORDER BY event_id DESC LIMIT 1")
+        ).one_or_none()
+    return None if row is None else str(row[0])
+
+
+def gate_audit_sample(
+    project: Project, actor: Actor, gate_id: str, *, random_seed: int | None = None
+) -> GateAuditSampled:
+    """Draw and record a human audit sample of the agent acts at an `agent_audit` gate.
+
+    The size is `audit_size(N, fraction, minimum)` of the gate's current policy over the `N` agent
+    acts (capped at `N`); the draw is uniform from the recorded seed. Refused, with nothing
+    written: for a non-human actor (`actor`), a seed out of range (`random_seed`), a gate that is
+    not a decision gate or is not `agent_audit` now (`gate_id`), no agent act to audit
+    (`gate_id`), or a new draw over the very population of the latest audit (`passes`)."""
+    from factory.services.modules.default import default_modules  # the registry imports services
+
+    seed, seed_issues = audit_core.validate_seed(random_seed)
+    with project.index.exclusive():
+        project.index.sync()
+        issues = audit_core.human_gate(project, actor, Channel.CLI, noun="sample")
+        issues.extend(seed_issues)
+        known = {g.gate_id for g in default_modules().gates() if g.kind is GateKind.DECISION}
+        policy = effective_policy(project, gate_id) if gate_id in known else None
+        if policy is None or policy.kind is not PolicyKind.AGENT_AUDIT:
+            issues.append(ValidationIssue("gate_id", f"gate {gate_id} is not an agent_audit gate"))
+        if issues or policy is None:
+            raise FactoryValidationError(issues)
+        population = _population(project, gate_id)
+        if not len(population):
+            raise FactoryValidationError(
+                [ValidationIssue("gate_id", f"no agent act at gate {gate_id} to audit")]
+            )
+        audit_core.refuse_reopen(_last_digest(project, gate_id), population)
+        size = audit_size(len(population), policy.fraction or 0.0, policy.minimum or 0)
+        drawn = draw_uniform(population.keys, size, seed, key=str)
+        payload = GateAuditSampled(
+            audit_id=project.ids.new("gau"),
+            gate_id=gate_id,
+            act_event_ids=tuple(drawn),
+            random_seed=seed,
+            population=len(population),
+            population_digest=population.digest,
+            protocol_id=_latest_protocol(project),
+        )
+        project.record([project.events.make("gate.audit_sampled", payload, actor)])
+    return payload
+
+
+def gate_audit_record(
+    project: Project,
+    actor: Actor,
+    audit_id: str,
+    act_event_id: str,
+    correct: bool,
+    note: str | None,
+    channel: Channel,
+) -> str:
+    """Record a human's label on one sampled act (`correct`: the agent's act was right) and
+    return the event id. Refused, with nothing written: for a non-human actor (`actor`), an MCP
+    relay from a session in a pass (`channel`), an unknown audit (`audit_id`) or an act outside
+    its sample (`act_event_id`). A later label of the same act replaces the earlier."""
+    with project.index.exclusive():
+        project.index.sync()
+        issues = audit_core.human_gate(project, actor, channel, noun="gate-label")
+        with project.index.connect() as conn:
+            known = conn.execute(
+                text("SELECT 1 FROM gate_audits WHERE audit_id = :a"), {"a": audit_id}
+            ).first()
+            sampled = conn.execute(
+                text("SELECT 1 FROM gate_audit_items WHERE audit_id = :a AND act_event_id = :e"),
+                {"a": audit_id, "e": act_event_id},
+            ).first()
+        if known is None:
+            issues.append(ValidationIssue("audit_id", "unknown gate audit"))
+        elif sampled is None:
+            issues.append(ValidationIssue("act_event_id", "not in this audit sample"))
+        if issues:
+            raise FactoryValidationError(issues)
+        payload = GateAuditLabelled(
+            audit_id=audit_id,
+            act_event_id=act_event_id,
+            correct=correct,
+            note=note or None,
+            channel=channel,
+        )
+        event = project.events.make("gate.audit_labelled", payload, actor)
+        project.record([event])
+    return event.id
+
+
+def gate_audit_report(project: Project, gate_id: str) -> GateAuditReport | None:
+    """The latest audit of `gate_id` with its error rate against the ceiling; None when none was
+    drawn. The rate is undefined (no verdict above) until a sampled act is labelled."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        audit = conn.execute(
+            text("SELECT audit_id FROM gate_audits WHERE gate_id = :g ORDER BY event_id DESC"),
+            {"g": gate_id},
+        ).first()
+        if audit is None:
+            return None
+        rows = conn.execute(
+            text("SELECT correct FROM gate_audit_items WHERE audit_id = :a"),
+            {"a": str(audit[0])},
+        ).all()
+    labelled = [bool(c) for (c,) in rows if c is not None]
+    incorrect = sum(1 for c in labelled if not c)
+    rate = incorrect / len(labelled) if labelled else None
+    verdict = audit_core.ceiling_verdict(
+        rate,
+        GATE_AUDIT_ERROR_CEILING,
+        enforced=enforcement(_rigor_mode(project), "gate.audit_ceiling") is Enforcement.ENFORCED,
+    )
+    return GateAuditReport(str(audit[0]), gate_id, len(rows), len(labelled), incorrect, verdict)
+
+
+def audit_hits(project: Project) -> list[CheckHit]:
+    """`gate-audit-missing` for an `agent_audit` gate with agent acts and no audit drawn, and
+    `gate-audit-error-high` for a latest audit above the ceiling. Messages carry counts, never a
+    rate."""
+    from factory.services.modules.default import default_modules  # the registry imports services
+
+    hits: list[CheckHit] = []
+    for gate in default_modules().gates():
+        if gate.kind is not GateKind.DECISION:
+            continue
+        if effective_policy(project, gate.gate_id).kind is not PolicyKind.AGENT_AUDIT:
+            continue
+        report = gate_audit_report(project, gate.gate_id)
+        if report is None:
+            keys = _population(project, gate.gate_id).keys
+            if keys:
+                hits.append(
+                    CheckHit(
+                        "gate-audit-missing",
+                        keys,
+                        f"{len(keys)} agent act(s) at gate {gate.gate_id} have no human audit",
+                    )
+                )
+        elif report.verdict.above:
+            hits.append(
+                CheckHit(
+                    "gate-audit-error-high",
+                    (report.audit_id,),
+                    f"the human audit of gate {gate.gate_id} found errors above the declared "
+                    "ceiling",
+                )
+            )
     return hits

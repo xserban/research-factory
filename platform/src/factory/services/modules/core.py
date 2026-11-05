@@ -22,10 +22,14 @@ SPEC = ModuleSpec(
             "task.completed",
             "task.created",
             "task.released",
+            "gate.audit_sampled",
+            "gate.audit_labelled",
         ),
         tables=(
             "event_refs",
             "events",
+            "gate_audit_items",
+            "gate_audits",
             "meta",
             "project",
             "sync_state",
@@ -37,6 +41,8 @@ SPEC = ModuleSpec(
         CheckRule("broken-link", ("error", "error", "error")),
         CheckRule("missing-provenance", ("error", "error", "error")),
         CheckRule("gate-below-policy", ("warning", "warning", "error")),
+        CheckRule("gate-audit-missing", (None, "warning", "error")),
+        CheckRule("gate-audit-error-high", (None, "warning", "error")),
     ),
 )
 

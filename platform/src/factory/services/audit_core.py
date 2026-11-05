@@ -25,12 +25,13 @@ from factory.model.screening import Channel
 from factory.services import passes
 from factory.services.context import Project
 
-GateNoun = Literal["sample", "screening-label", "extraction-label"]
+GateNoun = Literal["sample", "screening-label", "extraction-label", "gate-label"]
 
 _ACTOR_TEXT: dict[str, str] = {
     "sample": "audit samples are drawn by a human",
     "screening-label": "audit labels are human acts",
     "extraction-label": "audit labels and evidence are for a human",
+    "gate-label": "gate audit labels are human acts",
 }
 
 
