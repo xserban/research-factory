@@ -15,6 +15,7 @@ from pydantic import Field, field_validator, model_validator
 
 from factory.model.base import StrictModel
 from factory.model.identity import BLOB_REF_RE, ULID_RE
+from factory.model.work_ids import WORK_ID_RE
 
 MANUSCRIPT_ID_RE = rf"^msc_{ULID_RE}$"
 MAX_KEY = 120
@@ -42,6 +43,39 @@ class ManuscriptFormat(StrEnum):
 class BibFormat(StrEnum):
     BIBTEX = "bibtex"
     CSL = "csl"
+
+
+class CitationState(StrEnum):
+    """`proposed` waits for a human and makes no unit (plan ruling 3)."""
+
+    RESOLVED = "resolved"
+    PROPOSED = "proposed"
+    UNRESOLVED = "unresolved"
+
+
+class CitationMethod(StrEnum):
+    """How a key was matched, or why it was not."""
+
+    IDENTIFIER = "identifier"
+    TITLE_EXACT = "title-exact"
+    TITLE_FUZZY = "title-fuzzy"
+    AMBIGUOUS = "ambiguous"
+    NO_MATCH = "no-match"
+    NO_TITLE = "no-title"
+    NO_RECORD = "no-record"
+
+
+class CitationDecision(StrEnum):
+    CONFIRM = "confirm"
+    REJECT = "reject"
+
+
+class CloseReason(StrEnum):
+    """Why the platform closed a unit as `cannot-verify` (plan ruling 4)."""
+
+    CITATION_UNRESOLVED = "citation-unresolved"
+    NO_FULL_TEXT = "no-full-text"
+    SOURCE_NOT_IN_CORPUS = "source-not-in-corpus"
 
 
 # --- Events ---
@@ -107,6 +141,49 @@ class ManuscriptSegmented(StrictModel):
         return self
 
 
+class CitationResolved(StrictModel):
+    """What a key resolves to, computed. A confirmed fuzzy citation keeps `title-fuzzy`; only the
+    fold can tell it from one no human saw."""
+
+    manuscript_id: str = Field(pattern=MANUSCRIPT_ID_RE)
+    key: Key
+    work_id: str | None = Field(default=None, pattern=WORK_ID_RE)
+    method: CitationMethod
+    score: float | None = Field(default=None, ge=0, le=1, allow_inf_nan=False)
+    state: CitationState
+
+    @model_validator(mode="after")
+    def _work_follows_the_state(self) -> Self:
+        if (self.work_id is None) != (self.state is CitationState.UNRESOLVED):
+            raise ValueError("only an unresolved citation has no work")
+        return self
+
+
+class CitationDecided(StrictModel):
+    """A human's decision on a `proposed` citation."""
+
+    manuscript_id: str = Field(pattern=MANUSCRIPT_ID_RE)
+    key: Key
+    decision: CitationDecision
+
+
+class UnitClosed(StrictModel):
+    """A sentence's citation of `key` closed as `cannot-verify`; `work_id` is None exactly when
+    the key is unresolved."""
+
+    manuscript_id: str = Field(pattern=MANUSCRIPT_ID_RE)
+    ordinal: int = Field(ge=1, le=MAX_SENTENCES)
+    key: Key
+    work_id: str | None = Field(default=None, pattern=WORK_ID_RE)
+    reason: CloseReason
+
+    @model_validator(mode="after")
+    def _work_follows_the_reason(self) -> Self:
+        if (self.work_id is None) != (self.reason is CloseReason.CITATION_UNRESOLVED):
+            raise ValueError("only an unresolved key closes without a work")
+        return self
+
+
 # --- Read models ---
 
 
@@ -121,3 +198,46 @@ class ManuscriptRow(StrictModel):
     label: str
     segmenter: int
     sentences: int
+
+
+class SentenceRow(StrictModel):
+    ordinal: int
+    start: int
+    end: int
+    sha256: str
+    keys: list[str]
+
+
+class CitationRow(StrictModel):
+    key: str
+    work_id: str | None
+    method: CitationMethod
+    score: float | None
+    state: CitationState
+    decision: CitationDecision | None
+
+
+class ClosureRow(StrictModel):
+    ordinal: int
+    key: str
+    work_id: str | None
+    reason: CloseReason
+
+
+class UnitRow(StrictModel):
+    """A unit (sentence, cited work), or a sentence's unresolved key closed as `cannot-verify`.
+    `reason` is set exactly when it is closed. A proposed citation makes none."""
+
+    ordinal: int
+    work_id: str | None
+    keys: list[str]
+    reason: CloseReason | None
+
+
+class ResolutionSummary(StrictModel):
+    """Citations by state and the units closed, as they stand after a resolution."""
+
+    resolved: int
+    proposed: int
+    unresolved: int
+    closed: int

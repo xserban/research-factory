@@ -24,6 +24,7 @@ EXPECTED: dict[tuple[str, RigorMode], GatePolicy] = {
     ("experiments.freeze_unlock", RigorMode.EXPLORATORY): AGENT,
     ("reference.link_confirm", RigorMode.PILOT): AUDIT,
     ("import.resolution_confirm", RigorMode.PILOT): AUDIT,
+    ("manuscript.citation_confirm", RigorMode.PILOT): AUDIT,
     # slice M, M-D: the one gate whose floor lets an exploratory project loosen it
     ("mine.resolve", RigorMode.EXPLORATORY): AUDIT,
     # slice 7b: the release gate (reconciliation table; the audit condition is the service's)

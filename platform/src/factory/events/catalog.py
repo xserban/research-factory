@@ -105,7 +105,13 @@ from factory.model.lineage import (
     RelationProposed,
 )
 from factory.model.living import SnapshotRecorded
-from factory.model.manuscripts import ManuscriptAdded, ManuscriptSegmented
+from factory.model.manuscripts import (
+    CitationDecided,
+    CitationResolved,
+    ManuscriptAdded,
+    ManuscriptSegmented,
+    UnitClosed,
+)
 from factory.model.miner_calibration import MinerCalibrationDrawn, MinerCalibrationLabelled
 from factory.model.miners import MinerRegistered, MinerRetired
 from factory.model.notices import NoticeAssessed, NoticeObserved
@@ -352,4 +358,7 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("draft.released", DraftReleased, 1))
     catalog.register(EventType("manuscript.added", ManuscriptAdded, 1))
     catalog.register(EventType("manuscript.segmented", ManuscriptSegmented, 1))
+    catalog.register(EventType("manuscript.citation_resolved", CitationResolved, 1))
+    catalog.register(EventType("manuscript.citation_decided", CitationDecided, 1))
+    catalog.register(EventType("manuscript.unit_closed", UnitClosed, 1))
     return catalog

@@ -42,6 +42,7 @@ PRESETS: Mapping[RigorMode, Mapping[str, GatePolicy]] = {
     RigorMode.PILOT: {
         "reference.link_confirm": LINK_AUDIT,
         "import.resolution_confirm": LINK_AUDIT,
+        "manuscript.citation_confirm": LINK_AUDIT,
         "writing.release": AGENT,
     },
     RigorMode.SYSTEMATIC: {},

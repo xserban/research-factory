@@ -1,8 +1,8 @@
 """External manuscripts: adding, reading and reporting (slice 7b, plan W-C; spec ruling 17).
 
 Declares: `add_manuscript`, `list_manuscripts`, `get_manuscript`, `require_manuscript`,
-`manuscript_text`, `library_text`. The only module that writes `manuscript.added` and
-`manuscript.segmented`.
+`manuscript_text`, `library_text`, `sentence_rows`, `citation_rows`, `closure_rows`, `units`. The
+only module that writes `manuscript.added` and `manuscript.segmented`.
 
 Invariants:
 - A manuscript and its bibliography are copied into the git-ignored library by hash; the original
@@ -13,6 +13,7 @@ Invariants:
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -26,11 +27,16 @@ from factory.model.manuscripts import (
     MAX_MANUSCRIPT_BYTES,
     MAX_SENTENCES,
     BibFormat,
+    CitationRow,
+    CitationState,
+    ClosureRow,
     ManuscriptAdded,
     ManuscriptFormat,
     ManuscriptRow,
     ManuscriptSegmented,
     SentenceEntry,
+    SentenceRow,
+    UnitRow,
 )
 from factory.services.context import Project
 from factory.writing.bibfile import BibFileError, BibRecord, read_bib, read_csl
@@ -212,3 +218,83 @@ def library_text(project: Project, ref: str) -> str:
 
 def manuscript_text(project: Project, row: ManuscriptRow) -> str:
     return library_text(project, row.library_hash)
+
+
+def sentence_rows(project: Project, manuscript_id: str) -> list[SentenceRow]:
+    """The manuscript's sentences in order: positions, hashes and keys, no text."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT ordinal, char_start, char_end, sha256, keys FROM manuscript_sentences "
+                "WHERE manuscript_id = :m ORDER BY ordinal"
+            ),
+            {"m": manuscript_id},
+        ).all()
+    return [
+        SentenceRow(ordinal=r[0], start=r[1], end=r[2], sha256=str(r[3]), keys=json.loads(r[4]))
+        for r in rows
+    ]
+
+
+def citation_rows(project: Project, manuscript_id: str) -> dict[str, CitationRow]:
+    """What each resolved key stands for, by key."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        rows = (
+            conn.execute(
+                text(
+                    "SELECT key, work_id, method, score, state, decision "
+                    "FROM manuscript_citations WHERE manuscript_id = :m ORDER BY key"
+                ),
+                {"m": manuscript_id},
+            )
+            .mappings()
+            .all()
+        )
+    return {str(r["key"]): CitationRow.model_validate(dict(r)) for r in rows}
+
+
+def closure_rows(project: Project, manuscript_id: str) -> dict[tuple[int, str], ClosureRow]:
+    """The closures in force, by (ordinal, key)."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        rows = (
+            conn.execute(
+                text(
+                    "SELECT ordinal, key, work_id, reason FROM manuscript_closures "
+                    "WHERE manuscript_id = :m ORDER BY ordinal, key"
+                ),
+                {"m": manuscript_id},
+            )
+            .mappings()
+            .all()
+        )
+    return {(int(r["ordinal"]), str(r["key"])): ClosureRow.model_validate(dict(r)) for r in rows}
+
+
+def units(project: Project, manuscript_id: str) -> list[UnitRow]:
+    """The units of the manuscript by sentence and work: one per (sentence, resolved cited work),
+    closed or open, and one per unresolved key closed. A key still proposed, or not yet resolved,
+    makes none; keys of one sentence that resolve to one work make one."""
+    citations = citation_rows(project, manuscript_id)
+    closures = closure_rows(project, manuscript_id)
+    found: dict[tuple[int, str], UnitRow] = {}
+    for sentence in sentence_rows(project, manuscript_id):
+        for key in sentence.keys:
+            closure = closures.get((sentence.ordinal, key))
+            citation = citations.get(key)
+            if closure is not None:
+                work, reason = closure.work_id, closure.reason
+            elif citation is not None and citation.state is CitationState.RESOLVED:
+                work, reason = citation.work_id, None
+            else:
+                continue
+            slot = (sentence.ordinal, work or f"key:{key}")
+            if slot in found:
+                found[slot].keys.append(key)
+            else:
+                found[slot] = UnitRow(
+                    ordinal=sentence.ordinal, work_id=work, keys=[key], reason=reason
+                )
+    return [found[slot] for slot in sorted(found)]
