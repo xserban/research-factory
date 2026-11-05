@@ -162,7 +162,10 @@ def _dataset_issues(d: ExperimentDesign) -> list[ValidationIssue]:
     if not any(x.role == "confirmatory" for x in d.datasets):
         issues.append(ValidationIssue("datasets", "no-confirmatory-dataset"))
     seen: set[str] = set()
+    dev_hashes = {x.sha256 for x in d.datasets if x.role == "dev"}
     for i, x in enumerate(d.datasets):
+        if x.role == "confirmatory" and x.sha256 in dev_hashes:
+            issues.append(ValidationIssue(f"datasets.{i}", "shared-hash"))
         if x.role == "confirmatory":
             if x.name in seen:
                 issues.append(ValidationIssue(f"datasets.{i}", "second-confirmatory-dataset"))

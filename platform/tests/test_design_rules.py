@@ -195,3 +195,17 @@ def test_cell_hash_distinguishes_split_and_seed() -> None:
     assert cell_hash(a) != cell_hash(a.model_copy(update={"seed": 2}))
     with pytest.raises(ValidationError):  # coordinates must be sorted
         Cell(universe=(("b", "1"), ("a", "1")), seed=1, arm="treatment", split="dev")
+
+
+def test_dev_and_confirmatory_cannot_be_the_same_data() -> None:
+    # review I6 (R-50): a shared content hash makes the split a label only
+    same = [
+        {"name": "d", "version": "1", "sha256": "b" * 64, "role": "dev"},
+        {"name": "t", "version": "1", "sha256": "b" * 64, "role": "confirmatory"},
+    ]
+    assert ("datasets.1", "shared-hash") in _issues(datasets=same)
+    apart = [
+        {"name": "d", "version": "1", "sha256": "a" * 64, "role": "dev"},
+        {"name": "t", "version": "1", "sha256": "b" * 64, "role": "confirmatory"},
+    ]
+    assert ("datasets.1", "shared-hash") not in _issues(datasets=apart)
