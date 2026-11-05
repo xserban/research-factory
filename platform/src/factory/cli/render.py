@@ -1,6 +1,8 @@
 """Markdown and text renderings of the report models for the CLI. Formatting only: every figure
 is read from the model, so the CLI and the MCP tools cannot differ (R-05)."""
 
+from collections.abc import Mapping
+
 from factory.errors import ValidationIssue
 from factory.model.references import Decision, LinkState
 from factory.model.screening import PassLabel
@@ -22,6 +24,7 @@ from factory.services.extraction_audit import AuditEvidence, ExtractionAuditRepo
 from factory.services.fulltext import FetchSummary
 from factory.services.fulltext_import import ImportReport
 from factory.services.fulltext_status import FulltextStatus
+from factory.services.ideas import IdeaCandidate, IdeaView
 from factory.services.import_admit import AdmissionSummary
 from factory.services.import_attach import AttachReport
 from factory.services.import_resolve import ImportResolutionSummary
@@ -35,6 +38,7 @@ from factory.services.inbox import InboxPage, ResolveOutcome
 from factory.services.prisma import UNCONVERTED, PrismaFlow, SearchReport
 from factory.services.prisma_update import UpdateFlow
 from factory.services.references import ExtractSummary, Page, ReferenceCounts
+from factory.services.relations import RelationView
 from factory.services.snowball import Comparison, RoundCandidate, RoundResult
 from factory.services.trace import TraceNode
 from factory.services.watch import CycleSummary, WatchStatus
@@ -685,3 +689,40 @@ def contribution_item_lines(items: list[ItemView]) -> list[str]:
 
 def _absent(item: ItemView) -> str:
     return f" ({item.absent_kind})" if item.absent_kind else ""
+
+
+def relation_lines(views: list[RelationView], notes: Mapping[str, str]) -> list[str]:
+    """One relation per line with its effective status, reason, staleness and basis; an agent's
+    note, when it gave one, on the next line labelled `agent-note` (it is not evidence)."""
+    if not views:
+        return ["no relations"]
+    lines: list[str] = []
+    for v in views:
+        reason = "" if v.status_reason is None else f" ({v.status_reason.value})"
+        stale = f"  stale: {', '.join(v.stale_reasons)}" if v.stale_reasons else ""
+        flags = f"  flags: {', '.join(v.flags)}" if v.flags else ""
+        basis = v.basis_item or "-"
+        lines.append(
+            f"{v.relation_id}  {v.source_work} {v.edge_type} {v.target}  {v.effective.value}"
+            f"{reason}  basis {basis}{stale}{flags}"
+        )
+        if v.relation_id in notes:
+            lines.append(f"  agent-note: {notes[v.relation_id]}")
+    return lines
+
+
+def idea_lines(views: list[IdeaView]) -> list[str]:
+    if not views:
+        return ["no ideas"]
+    return [
+        f"{v.idea_id}  {v.state}  {v.name}  origin {v.origin}  members {len(v.members)}"
+        f" (effective {len(v.effective_members)})"
+        + (f"  into {v.merged_into}" if v.merged_into else "")
+        for v in views
+    ]
+
+
+def idea_candidate_lines(candidates: list[IdeaCandidate]) -> list[str]:
+    if not candidates:
+        return ["no candidates"]
+    return [f"{c.work_id}  {', '.join(c.reasons)}" for c in candidates]

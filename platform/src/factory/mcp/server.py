@@ -30,6 +30,7 @@ from factory.model.fulltext import Route
 from factory.model.identity import IdGenerator
 from factory.model.inbox import Basis
 from factory.model.notices import AssessmentDecision
+from factory.model.lineage import RelationProposal
 from factory.model.project import RigorMode
 from factory.model.protocol import CriterionEffect, PressFinding, ProtocolSpec, ScreeningStage
 from factory.model.question import QuestionSpec
@@ -55,6 +56,7 @@ from factory.services import extraction_agreement as extraction_agreement_servic
 from factory.services import extraction_audit as extraction_audit_service
 from factory.services import fulltext as fulltext_service
 from factory.services import fulltext_status as fulltext_status_service
+from factory.services import ideas as ideas_service
 from factory.services import inbox as inbox_service
 from factory.services import methods as methods_service
 from factory.services import notices as notices_service
@@ -66,6 +68,7 @@ from factory.services import protocol as protocol_service
 from factory.services import question as question_service
 from factory.services import reference_resolve as reference_resolve_service
 from factory.services import references as references_service
+from factory.services import relations as relations_service
 from factory.services import screening as screening_service
 from factory.services import search as search_service
 from factory.services import seeds as seeds_service
@@ -1464,6 +1467,76 @@ def build_server(
             return _withheld(opened, result.model_dump(mode="json"), include_work_ids=False)
 
         return _reply(project, compare, include_work_ids=False)
+
+    @server.tool()
+    def relation_propose(
+        project: str,
+        source_work: str,
+        target: str,
+        edge_type: str,
+        role: str,
+        model: str,
+        skill: str,
+        basis_item: str | None = None,
+        note: str | None = None,
+        status: str | None = None,
+    ) -> dict[str, JsonValue]:
+        """Propose a `builds-on` or `improves-on` relation from a recorded base-idea or addition
+        item (`basis_item`) of `source_work` to a work or idea `target`. The platform sets the
+        status: `stated` only when the item's cited reference entry resolves to exactly `target`,
+        else `inferred` (reason and flags are returned) and a human decides. Without a basis
+        item a `note` (at most 500 characters, not evidence) is required. No tool confirms a
+        relation. `status` is not an input: giving it is refused. Refused to a session that has
+        joined a pass."""
+
+        def propose() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            if status is not None:
+                raise FactoryValidationError(
+                    [ValidationIssue("status", "the platform sets the status; do not send one")]
+                )
+            actor = make_agent_actor(settings, session, role, model, skill)
+            proposal = parse_input(
+                RelationProposal,
+                {
+                    "source_work": source_work,
+                    "target": target,
+                    "edge_type": edge_type,
+                    "basis_item": basis_item,
+                    "note": note,
+                },
+                "relation",
+            )
+            result = relations_service.propose_relation(opened, actor, proposal)
+            return _withheld(opened, result.model_dump(mode="json"), include_work_ids=False)
+
+        return _reply(project, propose, include_work_ids=False)
+
+    @server.tool()
+    def idea_propose(
+        project: str,
+        name: str,
+        origin: str,
+        name_item: str,
+        members: list[str],
+        role: str,
+        model: str,
+        skill: str,
+    ) -> dict[str, JsonValue]:
+        """Propose a named idea: `origin` is the introducing work, `name_item` a recorded item of
+        it whose `name` quote contains `name`, `members` the works that share it (including the
+        origin). The idea stays unconfirmed, and out of default views, until a human confirms it;
+        no tool merges or confirms ideas. Refused to a session that has joined a pass."""
+
+        def propose() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            actor = make_agent_actor(settings, session, role, model, skill)
+            idea_id = ideas_service.propose_idea(opened, actor, name, origin, name_item, members)
+            return _withheld(opened, {"idea_id": idea_id}, include_work_ids=False)
+
+        return _reply(project, propose, include_work_ids=False)
 
     return server
 

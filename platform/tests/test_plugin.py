@@ -12,6 +12,7 @@ SKILLS = (
     "rf-contributions",
     "rf-extract",
     "rf-frame",
+    "rf-lineage",
     "rf-probe",
     "rf-protocol",
     "rf-references",
@@ -127,3 +128,14 @@ def test_rf_extract_skill_text() -> None:
     assert "different model" in independence
     assert "Do not read the other pass's rows" in independence
     assert "human labels" in independence and "audit" in independence
+
+
+def test_rf_lineage_skill_text() -> None:
+    text = (REPO_ROOT / "plugin" / "skills" / "rf-lineage" / "SKILL.md").read_text("utf-8")
+    for needed in ("relation_propose", "idea_propose", "basis_item", "note", "never confirm"):
+        assert needed in text, needed
+    for kept in ("## Independence", "## Procedure", "## Tool arguments", "## Done when"):
+        assert kept in text
+    lowered = text.lower()
+    assert "never merge" in lowered and "inferred" in lowered
+    assert "the platform sets the status" in lowered

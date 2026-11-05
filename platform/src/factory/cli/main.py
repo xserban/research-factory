@@ -19,6 +19,7 @@ from factory.errors import FactoryValidationError, ProjectNotFoundError, Validat
 from factory.imports.model import ImportFormat, ImportRole
 from factory.mcp.conventions import parse_routes
 from factory.mcp.server import run
+from factory.model import lineage as lineage_model
 from factory.model.chase import ChaseDirection
 from factory.model.fulltext import Route
 from factory.model.identity import IdGenerator
@@ -48,6 +49,7 @@ from factory.services import extraction_audit as extraction_audit_service
 from factory.services import fulltext as fulltext_service
 from factory.services import fulltext_import as fulltext_import_service
 from factory.services import fulltext_status as fulltext_status_service
+from factory.services import ideas as ideas_service
 from factory.services import import_admit as import_admit_service
 from factory.services import import_attach as import_attach_service
 from factory.services import import_resolve as import_resolve_service
@@ -63,6 +65,7 @@ from factory.services import project as project_service
 from factory.services import protocol as protocol_service
 from factory.services import reference_resolve as reference_resolve_service
 from factory.services import references as references_service
+from factory.services import relations as relations_service
 from factory.services import seeds as seeds_service
 from factory.services import snapshots as snapshot_service
 from factory.services import snowball as snowball_service
@@ -160,6 +163,16 @@ contributions_audit_app = typer.Typer(
     name="audit", help="Sample, label and report the contribution audit.", no_args_is_help=True
 )
 contributions_app.add_typer(contributions_audit_app)
+relations_app = typer.Typer(
+    name="relations",
+    help="Lineage relations: list them, confirm or reject an inferred one (human only).",
+    no_args_is_help=True,
+)
+ideas_app = typer.Typer(
+    name="ideas",
+    help="Ideas: define, list, confirm, reject, merge and unmerge (human only).",
+    no_args_is_help=True,
+)
 import_app = typer.Typer(
     name="import",
     help="Import an existing library (BibTeX, CSL JSON, a PDF folder); list and show imports.",
@@ -227,6 +240,8 @@ app.add_typer(fulltext_app)
 app.add_typer(document_app)
 app.add_typer(extract_app)
 app.add_typer(contributions_app)
+app.add_typer(relations_app)
+app.add_typer(ideas_app)
 app.add_typer(import_app)
 
 
@@ -2338,4 +2353,196 @@ def import_attach_cmd(
             err=True,
         )
     for line in render.import_attach_lines(report, researcher=researcher):
+        typer.echo(line)
+
+
+# --- Relations and ideas (slice 3b, G2-C): every decision here is a human act ---
+
+
+@relations_app.command("list")
+def relations_list_cmd(
+    ctx: typer.Context,
+    status: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--status",
+            help="Effective status to show (repeatable): stated, confirmed, inferred, stale or "
+            "rejected. Default: stated and confirmed.",
+        ),
+    ] = None,
+    work: Annotated[str | None, typer.Option("--work", help="Only relations of this work.")] = None,
+    limit: Annotated[int, typer.Option("--limit", min=1, help="Page size.")] = 200,
+    offset: Annotated[int, typer.Option("--offset", min=0, help="Rows to skip.")] = 0,
+) -> None:
+    """Live relations with their effective status, reason and basis."""
+    state = _state(ctx)
+    try:
+        statuses = (
+            lineage_model.DEFAULT_STATUSES
+            if not status
+            else frozenset(lineage_model.EdgeStatus(s) for s in status)
+        )
+    except ValueError as exc:
+        _fail(f"--status: {exc}", 2)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        views = relations_service.list_relations(
+            project, statuses=statuses, work_id=work, limit=limit, offset=offset
+        )
+        notes = relations_service.relation_notes(project, [v.relation_id for v in views])
+    for line in render.relation_lines(views, notes):
+        typer.echo(line)
+
+
+def _decide_relation(
+    ctx: typer.Context,
+    relation: str,
+    decision: lineage_model.LineageDecision,
+    rationale: str,
+) -> None:
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        relations_service.decide_relation(
+            project, project.human_actor(), relation, decision, rationale
+        )
+
+
+@relations_app.command("confirm")
+def relations_confirm_cmd(
+    ctx: typer.Context,
+    relation: Annotated[str, typer.Argument(help="An inferred relation id.")],
+    rationale: Annotated[str, typer.Option("--rationale", help="Why it holds.")],
+) -> None:
+    """Confirm an inferred relation (it then counts in default views)."""
+    _decide_relation(ctx, relation, lineage_model.LineageDecision.CONFIRM, rationale)
+    typer.echo(f"confirmed {relation}")
+
+
+@relations_app.command("reject")
+def relations_reject_cmd(
+    ctx: typer.Context,
+    relation: Annotated[str, typer.Argument(help="A live relation id.")],
+    rationale: Annotated[str, typer.Option("--rationale", help="Why it does not hold.")],
+) -> None:
+    """Reject a relation; it stays in the log and leaves default views."""
+    _decide_relation(ctx, relation, lineage_model.LineageDecision.REJECT, rationale)
+    typer.echo(f"rejected {relation}")
+
+
+@ideas_app.command("list")
+def ideas_list_cmd(
+    ctx: typer.Context,
+    all_: Annotated[
+        bool, typer.Option("--all", help="Also list ideas still only proposed.")
+    ] = False,
+) -> None:
+    """Confirmed ideas (merged ones fold into the idea they were merged into)."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        views = ideas_service.list_ideas(project, include_unconfirmed=all_)
+    for line in render.idea_lines(views):
+        typer.echo(line)
+
+
+@ideas_app.command("define")
+def ideas_define_cmd(
+    ctx: typer.Context,
+    name: Annotated[str, typer.Argument(help="The idea's name, as it occurs in the origin.")],
+    origin: Annotated[str, typer.Option("--origin", help="The introducing work.")],
+    name_item: Annotated[
+        str, typer.Option("--name-item", help="A recorded item of the origin whose quote has it.")
+    ],
+    member: Annotated[
+        list[str] | None,
+        typer.Option("--member", help="A member work (repeatable); the origin is always one."),
+    ] = None,
+) -> None:
+    """Propose an idea as a human; it still needs `ideas confirm`."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        members = sorted({origin, *(member or [])})
+        idea_id = ideas_service.propose_idea(
+            project, project.human_actor(), name, origin, name_item, members
+        )
+    typer.echo(f"defined {idea_id}")
+
+
+def _decide_idea(
+    ctx: typer.Context,
+    idea: str,
+    decision: lineage_model.LineageDecision,
+    rationale: str,
+) -> None:
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        ideas_service.decide_idea(project, project.human_actor(), idea, decision, rationale)
+
+
+@ideas_app.command("confirm")
+def ideas_confirm_cmd(
+    ctx: typer.Context,
+    idea: Annotated[str, typer.Argument(help="An idea id.")],
+    rationale: Annotated[str, typer.Option("--rationale", help="Why it holds.")],
+) -> None:
+    """Confirm an idea and its members."""
+    _decide_idea(ctx, idea, lineage_model.LineageDecision.CONFIRM, rationale)
+    typer.echo(f"confirmed {idea}")
+
+
+@ideas_app.command("reject")
+def ideas_reject_cmd(
+    ctx: typer.Context,
+    idea: Annotated[str, typer.Argument(help="An idea id.")],
+    rationale: Annotated[str, typer.Option("--rationale", help="Why it does not hold.")],
+) -> None:
+    """Reject an idea."""
+    _decide_idea(ctx, idea, lineage_model.LineageDecision.REJECT, rationale)
+    typer.echo(f"rejected {idea}")
+
+
+@ideas_app.command("merge")
+def ideas_merge_cmd(
+    ctx: typer.Context,
+    from_idea: Annotated[str, typer.Argument(help="The idea that is folded away.")],
+    into: Annotated[str, typer.Argument(help="The idea it joins.")],
+    reason: Annotated[str, typer.Option("--reason", help="Why they are one idea.")],
+) -> None:
+    """Merge two naming variants; reversible with `ideas unmerge`."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        ideas_service.merge_ideas(project, project.human_actor(), from_idea, into, reason)
+    typer.echo(f"merged {from_idea} into {into}")
+
+
+@ideas_app.command("unmerge")
+def ideas_unmerge_cmd(
+    ctx: typer.Context,
+    from_idea: Annotated[str, typer.Argument(help="The merged idea to restore.")],
+    reason: Annotated[str, typer.Option("--reason", help="Why the merge is undone.")],
+) -> None:
+    """Undo the latest merge of an idea."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        ideas_service.unmerge_idea(project, project.human_actor(), from_idea, reason)
+    typer.echo(f"unmerged {from_idea}")
+
+
+@ideas_app.command("candidates")
+def ideas_candidates_cmd(
+    ctx: typer.Context,
+    origin: Annotated[str, typer.Option("--origin", help="The introducing work.")],
+    name: Annotated[str, typer.Option("--name", help="The idea's name.")],
+) -> None:
+    """Works that may belong to the idea (listing only; confirm members with `ideas define`)."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        found = ideas_service.idea_candidates(project, origin, name)
+    for line in render.idea_candidate_lines(found):
         typer.echo(line)

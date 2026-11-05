@@ -490,3 +490,20 @@ def relation_counts(project: Project) -> dict[str, dict[str, int]]:
     for edge_type, effective, n in rows:
         counts[str(edge_type)][str(effective)] = int(n)
     return counts
+
+
+def relation_notes(project: Project, relation_ids: Collection[str]) -> dict[str, str]:
+    """The free `note` an agent gave each named relation (those without one are omitted). It is
+    agent text, not evidence: callers label it `agent-note` and never count or export it."""
+    if not relation_ids:
+        return {}
+    project.index.sync()
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT relation_id, note FROM relations WHERE note IS NOT NULL "
+                "AND relation_id IN (SELECT value FROM json_each(:ids))"
+            ),
+            {"ids": json.dumps(sorted(set(relation_ids)))},
+        ).all()
+    return {str(r[0]): str(r[1]) for r in rows}
