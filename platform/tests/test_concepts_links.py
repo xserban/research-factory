@@ -413,5 +413,5 @@ def test_agent_event_provenance(project: Project, iw: IWorld) -> None:  # accept
         for e in read_all(project.paths.events_dir, project.catalog)
         if e.type == "concept.link_proposed"
     ]
-    assert ev.actor.model == "claude-opus-5-5" and ev.actor.skill and ev.input_blob
+    assert ev.actor.model == iw.writer.model and ev.actor.skill and ev.input_blob
     assert ev.payload["status"] == "stated" and ev.payload["basis_kind"] == "quote"
