@@ -31,9 +31,11 @@ from factory.model.hypotheses import (
     HypothesisAbandoned,
     HypothesisConcluded,
     HypothesisDrafted,
+    HypothesisRegistered,
     HypothesisReviewed,
     LeadDecided,
     LeadRecorded,
+    ModelCutoffDeclared,
 )
 from factory.model.project import RigorMode
 from factory.model.protocol import ProtocolSpec
@@ -50,6 +52,8 @@ class HypothesisTables:
     lead_keys: Table
     hypotheses: Table
     reviews: Table
+    registrations: Table
+    cutoffs: Table
     protocols: Table
     project: Table
     """The protocol and project tables the fold reads to know the policy in force."""
@@ -120,7 +124,28 @@ def hypothesis_tables(metadata: MetaData, protocols: Table, project: Table) -> H
         Column("eligible", Integer, nullable=False),
         Index("ix_hypothesis_reviews_hyp", "hypothesis_id"),
     )
-    return HypothesisTables(leads, triggers, keys, hypotheses, reviews, protocols, project)
+    registrations = Table(
+        "hypothesis_registrations",
+        metadata,
+        Column("hypothesis_id", String, primary_key=True),
+        Column("h_version", String, nullable=False),
+        Column("review_event_id", String),
+        Column("policy", String, nullable=False),
+        Column("autonomy", String, nullable=False),
+        Column("flags_json", String, nullable=False),
+        Column("event_id", String, nullable=False),
+    )
+    cutoffs = Table(
+        "model_cutoffs",
+        metadata,
+        Column("model", String, primary_key=True),
+        Column("cutoff", String, nullable=False),
+        Column("source", String, nullable=False),
+        Column("event_id", String, nullable=False),
+    )
+    return HypothesisTables(
+        leads, triggers, keys, hypotheses, reviews, registrations, cutoffs, protocols, project
+    )
 
 
 def hypothesis_handlers(t: HypothesisTables) -> dict[str, Handler]:
@@ -131,6 +156,8 @@ def hypothesis_handlers(t: HypothesisTables) -> dict[str, Handler]:
         "hypothesis.abandoned": _abandoned(t),
         "hypothesis.concluded": _concluded(t),
         "hypothesis.reviewed": _reviewed(t),
+        "hypothesis.registered": _registered(t),
+        "model.cutoff_declared": _cutoff(t),
     }
 
 
@@ -334,3 +361,75 @@ def _reviewed(t: HypothesisTables) -> Handler:
         )
 
     return reviewed
+
+
+def _registered(t: HypothesisTables) -> Handler:
+    """A registration folds only when it is consistent (see the module docstring): the hypothesis
+    and version are the ones drafted, the policy recorded is the one in force and fits the actor,
+    the autonomy label is the actor's, and any review it cites is an eligible review of this
+    version. The first consistent registration wins."""
+
+    def registered(conn: Connection, event: Event) -> None:
+        p = HypothesisRegistered.model_validate(event.payload)
+        row = conn.execute(
+            select(
+                t.hypotheses.c.h_version,
+                t.hypotheses.c.drafter_session,
+                t.hypotheses.c.lead,
+                t.hypotheses.c.abandoned_event_id,
+                t.hypotheses.c.superseded_by,
+            ).where(t.hypotheses.c.hypothesis_id == p.hypothesis_id)
+        ).first()
+        if row is None or str(row[0]) != p.h_version or row[3] is not None or row[4] is not None:
+            return
+        proposers = {str(row[1])}
+        if row[2] is not None:
+            author = conn.execute(
+                select(t.leads.c.author_session).where(t.leads.c.lead_id == str(row[2]))
+            ).scalar()
+            if author is not None:
+                proposers.add(str(author))
+        if p.autonomy != ("human" if event.actor.kind == "human" else "agent"):
+            return
+        if not act_is_consistent(conn, t, event, "hypotheses.register", p.policy, proposers):
+            return
+        if p.review_event_id is not None:
+            cited = conn.execute(
+                select(t.reviews.c.eligible).where(
+                    t.reviews.c.event_id == p.review_event_id,
+                    t.reviews.c.hypothesis_id == p.hypothesis_id,
+                    t.reviews.c.h_version == p.h_version,
+                )
+            ).first()
+            if cited is None or not cited[0]:
+                return
+        conn.execute(
+            sqlite_insert(t.registrations)
+            .values(
+                hypothesis_id=p.hypothesis_id,
+                h_version=p.h_version,
+                review_event_id=p.review_event_id,
+                policy=p.policy.value,
+                autonomy=p.autonomy,
+                flags_json=canonical_json(list(p.flags)).decode(),
+                event_id=event.id,
+            )
+            .on_conflict_do_nothing(index_elements=["hypothesis_id"])
+        )
+
+    return registered
+
+
+def _cutoff(t: HypothesisTables) -> Handler:
+    def declared(conn: Connection, event: Event) -> None:
+        if event.actor.kind != "human":
+            return
+        p = ModelCutoffDeclared.model_validate(event.payload)
+        values = {"cutoff": p.cutoff.isoformat(), "source": p.source, "event_id": event.id}
+        conn.execute(
+            sqlite_insert(t.cutoffs)
+            .values(model=p.model, **values)
+            .on_conflict_do_update(index_elements=["model"], set_=values)
+        )
+
+    return declared

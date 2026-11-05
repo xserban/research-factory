@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Collection
+from datetime import date
 from typing import Any, Literal
 
 from sqlalchemy import text
@@ -32,8 +33,11 @@ from factory.model.hypotheses import (
     HypothesisAbandoned,
     HypothesisConcluded,
     HypothesisDrafted,
+    HypothesisRegistered,
     HypothesisSpec,
+    LiteratureTest,
     MethodRef,
+    ModelCutoffDeclared,
     falsifier_text,
     hypothesis_version,
 )
@@ -41,7 +45,7 @@ from factory.packs import NON_COMPARABLE_KEYS
 from factory.services.context import Project
 from factory.services.extraction import require_schema
 from factory.services.extraction_agreement import final_rows
-from factory.services.hypothesis_gates import effective_plan
+from factory.services.hypothesis_gates import effective_plan, may_pass, project_mode
 from factory.services.ideas import idea_view, resolve_idea
 from factory.services.leads import card_keys, lead_view
 
@@ -264,13 +268,59 @@ def _reviews_of(project: Project, hypothesis_id: str, h_version: str) -> list[st
 
 
 def _registration_of(project: Project, hypothesis_id: str) -> tuple[str | None, Autonomy | None]:
-    """The registration event and its autonomy label (filled in with the registration tables)."""
-    return None, None
+    """The folded registration event of the hypothesis and its autonomy label."""
+    with project.index.connect() as conn:
+        row = conn.execute(
+            text(
+                "SELECT event_id, autonomy FROM hypothesis_registrations WHERE hypothesis_id = :h"
+            ),
+            {"h": hypothesis_id},
+        ).first()
+    if row is None:
+        return None, None
+    return str(row[0]), row[1]
+
+
+def cutoff_flags(project: Project, hypothesis_id: str) -> tuple[str, ...]:
+    """The R-53 flags of a literature hypothesis, computed on read over the drafter's model and
+    every critic's: `cutoff-unknown` when a model has no declared cut-off, `contaminated` when a
+    cut-off is on or after the window start. An experiment hypothesis has none (its evidence is
+    generated after registration)."""
+    with project.index.connect() as conn:
+        row = conn.execute(
+            text("SELECT spec_json, drafter_model FROM hypotheses WHERE hypothesis_id = :h"),
+            {"h": hypothesis_id},
+        ).first()
+        if row is None:
+            return ()
+        spec = HypothesisSpec.model_validate(json.loads(str(row[0])))
+        if not isinstance(spec.test, LiteratureTest):
+            return ()
+        models = {str(row[1])} if row[1] is not None else set()
+        critics = conn.execute(
+            text(
+                "SELECT DISTINCT critic_model FROM hypothesis_reviews "
+                "WHERE hypothesis_id = :h AND critic_model IS NOT NULL"
+            ),
+            {"h": hypothesis_id},
+        ).scalars()
+        models.update(str(m) for m in critics)
+        cutoffs = {
+            str(m): str(c)
+            for m, c in conn.execute(text("SELECT model, cutoff FROM model_cutoffs")).all()
+        }
+    flags: set[str] = set()
+    start = spec.test.window_start.isoformat()
+    for model in models:
+        if model not in cutoffs:
+            flags.add("cutoff-unknown")
+        elif cutoffs[model] >= start:
+            flags.add("contaminated")
+    return tuple(sorted(flags))
 
 
 def _flags_of(project: Project, hypothesis_id: str) -> tuple[str, ...]:
-    """R-53 flags (filled in with the cut-off table)."""
-    return ()
+    return cutoff_flags(project, hypothesis_id)
 
 
 def _view(project: Project, row: Any) -> HypothesisView:
@@ -411,4 +461,99 @@ def conclude_hypothesis(project: Project, actor: Actor, hypothesis_id: str, text
             refs=[hypothesis_id],
         )
         project.record([event])
+    return event.id
+
+
+# --- Registration and cut-offs -------------------------------------------------------------
+
+
+def _proposer_sessions(project: Project, view: HypothesisView) -> set[str]:
+    sessions = {view.drafter_session}
+    lead = None if view.spec.lead is None else lead_view(project, view.spec.lead)
+    if lead is not None:
+        sessions.add(lead.author_session)
+    return sessions
+
+
+def register_hypothesis(project: Project, actor: Actor, hypothesis_id: str) -> str:
+    """Register a draft (the act at the gate `hypotheses.register`) and return the event id. `H@`
+    is then frozen. Refused, with nothing written: an unknown hypothesis or one that is not a
+    draft or reviewed (`hypothesis_id`); no eligible review recommending `register` for the
+    current version, except under the exploratory mode where the review is optional but, if there
+    is one, must not say no (`review`: `review-required`, `not-recommended`); an agent at a `human`
+    gate (`actor`); the proposer's session under an `agent` policy (`session`); and, in systematic
+    mode, a literature hypothesis flagged `cutoff-unknown` or `contaminated`
+    (`test.window_start`)."""
+    from factory.model.project import RigorMode
+
+    with project.index.exclusive():
+        project.index.sync()
+        view = hypothesis_view(project, hypothesis_id)
+        if view is None:
+            raise _refuse("hypothesis_id", "unknown")
+        issues: list[ValidationIssue] = []
+        if view.state not in ("draft", "reviewed"):
+            issues.append(ValidationIssue("hypothesis_id", f"state-{view.state}"))
+        reviews = eligible_reviews(project, hypothesis_id, view.h_version)
+        mode = project_mode(project)
+        review_id: str | None = None
+        if reviews:
+            if reviews[-1].recommend == "register":
+                review_id = str(reviews[-1].event_id)
+            else:
+                issues.append(ValidationIssue("review", "not-recommended"))
+        elif mode is not RigorMode.EXPLORATORY:
+            issues.append(ValidationIssue("review", "review-required"))
+        flags = cutoff_flags(project, hypothesis_id)
+        if mode is RigorMode.SYSTEMATIC:
+            issues.extend(ValidationIssue("test.window_start", flag) for flag in flags)
+        if issues:
+            raise FactoryValidationError(issues)
+        verdict = may_pass(
+            project,
+            actor,
+            "hypotheses.register",
+            proposer_sessions=_proposer_sessions(project, view),
+        )
+        verdict.raise_if_refused()
+        payload = HypothesisRegistered(
+            hypothesis_id=hypothesis_id,
+            h_version=view.h_version,
+            review_event_id=review_id,
+            policy=verdict.policy.kind,
+            autonomy=verdict.autonomy,
+            flags=flags,
+        )
+        input_blob = (
+            project.blobs.put_json(payload.model_dump(mode="json"))
+            if actor.kind == "agent"
+            else None
+        )
+        refs = [hypothesis_id] + ([review_id] if review_id else [])
+        event = project.events.make(
+            "hypothesis.registered", payload, actor, refs=refs, input_blob=input_blob
+        )
+        project.record([event])
+    return event.id
+
+
+def declare_cutoff(project: Project, actor: Actor, model: str, cutoff: date, source: str) -> str:
+    """Record a model's training cut-off (a human act) and return the event id; the latest
+    declaration per model wins. Refused, with nothing written: a non-human actor (`actor`); a blank
+    model or source (`model`, `source`)."""
+    _human_only(actor)
+    issues = [
+        ValidationIssue(name, "must not be blank")
+        for name, value in (("model", model), ("source", source))
+        if not value.strip()
+    ]
+    if issues:
+        raise FactoryValidationError(issues)
+    event = project.events.make(
+        "model.cutoff_declared",
+        ModelCutoffDeclared(model=model.strip(), cutoff=cutoff, source=source.strip()),
+        actor,
+        refs=[],
+    )
+    project.record([event])
     return event.id

@@ -450,3 +450,27 @@ class HypothesisReviewed(StrictModel):
     critic_session: str
     critic_model: str | None = None
     task_id: str
+
+
+# --- Registration and model cut-offs -------------------------------------------------------
+
+
+class HypothesisRegistered(StrictModel):
+    """The act at the gate `hypotheses.register`. `policy` is the gate policy in force and
+    `autonomy` the label of the act: `human`, or `agent` for any agent act. Both are checked by
+    the projector against the log; an event that disagrees is not folded."""
+
+    hypothesis_id: HypothesisId
+    h_version: HVersion
+    review_event_id: str | None = None
+    policy: PolicyKind
+    autonomy: Literal["human", "agent"]
+    flags: tuple[str, ...] = ()
+
+
+class ModelCutoffDeclared(StrictModel):
+    """A human's declaration of a model's training cut-off (R-53); the latest per model wins."""
+
+    model: Annotated[NonBlank, Field(max_length=120)]
+    cutoff: date
+    source: Annotated[NonBlank, Field(max_length=300)]
