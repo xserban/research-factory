@@ -99,7 +99,7 @@ DRAFT_SCOPE = "draft:"
 BibFormat = Literal["bibtex", "csl"]
 PAGE = 500
 _BLOB_REF = re.compile(BLOB_REF_RE)
-_ORCID = re.compile(r"(?:https://orcid\.org/)?(\d{4}-\d{4}-\d{4}-\d{3}[\dX])")
+_ORCID = re.compile(r"(?:https://orcid\.org/)?([0-9]{4}-[0-9]{4}-[0-9]{4}-[0-9]{3}[0-9X])")
 _HASH_PREFIX = "sha256:"
 _BUILD = "build"
 _OLD = "old"
@@ -378,14 +378,25 @@ def _publish_dir(stage: Path, target: Path) -> None:
     shutil.rmtree(old, ignore_errors=True)
 
 
+def _io_issue(project: Project, exc: OSError) -> FactoryValidationError:
+    """An OSError as the refusal it is: reading the project, or else writing at `out`."""
+    name = exc.filename
+    reason = exc.strerror or str(exc)
+    if isinstance(name, str | os.PathLike) and Path(name).resolve().is_relative_to(
+        project.paths.dir.resolve()
+    ):
+        return _issue("project", f"cannot read the project: {reason}")
+    return _issue("out", f"cannot write there: {reason}")
+
+
 @contextmanager
-def _staging(out: Path) -> Iterator[Path]:
+def _staging(project: Project, out: Path) -> Iterator[Path]:
     """A stage beside `out`, removed afterwards unless it holds the only copy of the old `out`."""
     stage = _stage_beside(out)
     try:
         yield stage
     except OSError as exc:
-        raise _issue("out", f"cannot write there: {exc.strerror or exc}") from exc
+        raise _io_issue(project, exc) from exc
     finally:
         if not (stage / _OLD).exists():
             shutil.rmtree(stage, ignore_errors=True)
@@ -485,12 +496,17 @@ def _write_nanopub(stage: Path, ident: str, graphs: Nanopub, *, slug: str, vocab
 
 
 def _write_nanopubs(
-    project: Project, stage: Path, *, edges: bool, with_quotes: bool, vocab: str
+    project: Project,
+    stage: Path,
+    *,
+    edges: bool,
+    with_quotes: bool,
+    vocab: str,
+    creator: IRI | Literal_,
 ) -> NanopubSummary:
     from factory.services.extraction import live_claims
 
     slug = project.paths.slug
-    creator = _creator(project)
     included = set(select_works(project, "included"))
     canonical = _canonical_of(project)
     claims = [
@@ -569,10 +585,16 @@ def export_nanopubs(
     if out.exists() and (not out.is_dir() or any(out.iterdir())):
         raise _issue("out", "must be an empty directory or a new path")
     vocab = _vocab(project)
-    with _staging(out) as stage:
+    creator = _creator(project)
+    with _staging(project, out) as stage:
         mark = _log_mark(project)
         summary = _write_nanopubs(
-            project, _build_dir(stage), edges=edges, with_quotes=with_quotes, vocab=vocab
+            project,
+            _build_dir(stage),
+            edges=edges,
+            with_quotes=with_quotes,
+            vocab=vocab,
+            creator=creator,
         )
         _refuse_if_moved(project, mark)
         _publish_dir(stage, out.resolve())
@@ -905,12 +927,13 @@ def _description(project: Project) -> str:
     return stated[-1].text if stated else f"Research Factory project {project.paths.slug}"
 
 
-def _assemble(project: Project, stage: Path, renderers: CrateRenderers) -> CrateSummary:
+def _assemble(
+    project: Project, stage: Path, renderers: CrateRenderers, orcid: str | None
+) -> CrateSummary:
     """Every crate file under `stage`. Reads events, blobs and the projection, and of the library
     only whether a hash exists."""
     scan = _scan_log(project)
     position = _position(scan)
-    orcid = _orcid_iri(project)
     _copy_events(project, stage)
     binary, left_out = _copy_blobs(project, stage, scan.refs)
     _write_protocol(project, stage)
@@ -976,10 +999,11 @@ def export_crate(
     ruling 20). Byte-identical for the same log and settings. Refuses an `out` under `projects/`
     and, without `force`, one that holds anything. CLI only (spec ruling 22)."""
     _check_crate_target(project, out, zip_=zip_, force=force)
-    with _staging(out) as stage:
+    orcid = _orcid_iri(project)
+    with _staging(project, out) as stage:
         mark = _log_mark(project)
         built = _build_dir(stage)
-        summary = _assemble(project, built, renderers)
+        summary = _assemble(project, built, renderers, orcid)
         _refuse_if_moved(project, mark)
         if zip_:
             _write_zip(built, stage / _ZIP_NAME, out.resolve())

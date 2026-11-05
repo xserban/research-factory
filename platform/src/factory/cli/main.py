@@ -2124,7 +2124,10 @@ def export_nanopub_cmd(
         f"{summary.written} written ({summary.claims} claims, {summary.edges} edges); "
         f"{summary.skipped_no_identifier} skipped without a DOI or arXiv id"
     )
-    typer.echo("unsigned; sign and publish with nanopub tooling")
+    if with_quotes:
+        typer.echo("unsigned; holds quote text, for local use only: do not publish")
+    else:
+        typer.echo("unsigned; sign and publish with nanopub tooling")
 
 
 @report_app.command("search")
