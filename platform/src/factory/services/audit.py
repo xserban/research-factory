@@ -27,23 +27,22 @@ Invariants:
 from __future__ import annotations
 
 import random
-import secrets
 from typing import Literal
 
 from pydantic import Field, ValidationError
 from sqlalchemy import bindparam, text
 from sqlalchemy.engine import Connection
 
-from factory.canonical import population_digest
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
 from factory.model.base import StrictModel
 from factory.model.project import RigorMode
 from factory.model.protocol import ScreeningStage
 from factory.model.screening import AuditLabelled, AuditSampled, Channel, ScreeningPhase
+from factory.services import audit_core
 from factory.services.agreement import AgreedWork, agreed_works, screen_agreement
+from factory.services.audit_core import AuditPopulation
 from factory.services.context import Project
-from factory.services.passes import require_not_pass_session
 from factory.services.protocol import current_protocol
 from factory.services.screening import decision_events, live_decisions
 from factory.services.screening_stats import (
@@ -99,17 +98,15 @@ def audit_sample(
     agreed since.
     """
     require_pass_stage(stage)
-    seed = secrets.randbits(32) if random_seed is None else random_seed
+    seed, seed_issues = audit_core.validate_seed(random_seed)
     with project.index.exclusive():
         project.index.sync()
         issues: list[ValidationIssue] = []
         protocol = current_protocol(project)
         if protocol is not None:
             screening_plan(protocol, stage)  # refuses full text without a declared plan
-        if actor.kind != "human":
-            issues.append(ValidationIssue("actor", "audit samples are drawn by a human"))
-        if not 0 <= seed < 2**32:
-            issues.append(ValidationIssue("random_seed", "must be an integer from 0 to 2**32 - 1"))
+        issues.extend(audit_core.human_gate(project, actor, Channel.CLI, noun="sample"))
+        issues.extend(seed_issues)
         if issues:
             raise FactoryValidationError(issues)
         if not top_up and _living_with_audit(project, stage):
@@ -121,9 +118,8 @@ def audit_sample(
         agreed = agreed_works(project, stage=stage)
         if not agreed:
             raise _refuse("there are no agreed dual-coded works to audit")
-        digest = population_digest((work, item.verdict) for work, item in agreed.items())
-        if not top_up and _last_population_digest(project, stage) == digest:
-            raise _refuse("an audit of this agreed set is open; a new one waits for a change to it")
+        if not top_up:
+            audit_core.refuse_reopen(_last_population_digest(project, stage), _population(agreed))
         if protocol is None:  # unreachable once screen_agreement has passed
             raise _refuse("record a protocol first")
         plan = screening_plan(protocol, stage)
@@ -169,9 +165,7 @@ def audit_record(
     """
     with project.index.exclusive():
         project.index.sync()
-        issues: list[ValidationIssue] = []
-        if actor.kind != "human":
-            issues.append(ValidationIssue("actor", "audit labels are human acts"))
+        issues = audit_core.human_gate(project, actor, channel, noun="screening-label")
         stage = _audit_stage(project, audit_id)
         if stage is None:
             issues.append(ValidationIssue("audit_id", "unknown audit"))
@@ -186,7 +180,6 @@ def audit_record(
                 issues.append(ValidationIssue("criterion", "not a criterion of the protocol"))
             else:
                 qualified = f"{protocol.protocol_id}:{criterion}"
-        issues.extend(require_not_pass_session(project, actor, channel))
         if issues:
             raise FactoryValidationError(issues)
         try:
@@ -247,15 +240,19 @@ def audit_report(
             for c in str(criteria).split(",")
         }
     )
-    rate = rates.false_exclusion
+    verdict = audit_core.ceiling_verdict(
+        rates.false_exclusion,
+        AUDIT_ERROR_CEILING,
+        enforced=_rigor_mode(project) is RigorMode.SYSTEMATIC,
+    )
     return AuditReport(
         audit_id=str(latest[0]),
         sample_size=len(items),
         labelled=rates.labelled,
         rates=rates,
-        ceiling=AUDIT_ERROR_CEILING,
-        above_ceiling=rate is not None and rate > AUDIT_ERROR_CEILING,
-        enforced=_rigor_mode(project) is RigorMode.SYSTEMATIC,
+        ceiling=verdict.ceiling,
+        above_ceiling=verdict.above,
+        enforced=verdict.enforced,
         criteria_implicated=implicated,
         items=[
             AuditItemView(
@@ -290,8 +287,7 @@ def audit_outstanding(
         return False
     if _living_with_audit(project, stage):
         return audit_shortfall(project, stage=stage) > 0
-    digest = population_digest((work, item.verdict) for work, item in agreed.items())
-    return _last_population_digest(project, stage) != digest
+    return _last_population_digest(project, stage) != _population(agreed).digest
 
 
 def audit_shortfall(
@@ -448,6 +444,11 @@ def _sampled(project: Project, audit_id: str, work_id: str) -> bool:
             {"a": audit_id, "w": work_id},
         ).one_or_none()
     return row is not None
+
+
+def _population(agreed: dict[str, AgreedWork]) -> AuditPopulation:
+    """The agreed set of a stage as an audit population: each work with its agreed verdict."""
+    return AuditPopulation.of((work, item.verdict) for work, item in agreed.items())
 
 
 def _refuse(reason: str) -> FactoryValidationError:

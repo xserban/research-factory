@@ -20,13 +20,11 @@ Invariants:
 
 from __future__ import annotations
 
-import secrets
 from collections.abc import Mapping, Sequence
 
 from pydantic import ValidationError
 from sqlalchemy import text
 
-from factory.canonical import population_digest
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
 from factory.model.base import StrictModel
@@ -44,13 +42,14 @@ from factory.model.project import RigorMode
 from factory.model.protocol import ExtractionSchema
 from factory.model.screening import Channel
 from factory.quality.stats import audit_size, draw_uniform
+from factory.services import audit_core
+from factory.services.audit_core import AuditPopulation
 from factory.services.context import Project
 from factory.services.conversions import conversion_manifest
 from factory.services.extraction import (
     require_schema,
 )
 from factory.services.extraction_agreement import extraction_agreement, final_rows
-from factory.services.passes import require_not_pass_session
 from factory.services.protocol import ProtocolVersion, current_protocol
 from factory.services.seeds import _rigor_mode
 
@@ -132,10 +131,14 @@ def _values(project: Project, scope: AuditScope) -> list[tuple[AuditItemRef, str
     return sorted(out, key=lambda pair: _sort_key(pair[0]))
 
 
-def _digest(population: Sequence[tuple[AuditItemRef, str]]) -> str:
-    return population_digest(
+def _audit_population(population: Sequence[tuple[AuditItemRef, str]]) -> AuditPopulation:
+    return AuditPopulation.of(
         ("\x1f".join(_sort_key(item)), extraction_id) for item, extraction_id in population
     )
+
+
+def _digest(population: Sequence[tuple[AuditItemRef, str]]) -> str:
+    return _audit_population(population).digest
 
 
 def _draw(items: Sequence[AuditItemRef], size: int, seed: int) -> list[AuditItemRef]:
@@ -164,14 +167,12 @@ def extraction_audit_sample(
     agreed value (`passes`); an audit of the scope's current agreed set already open (`passes`).
     The event of a contribution audit carries `pack: contribution`.
     """
-    seed = secrets.randbits(32) if random_seed is None else random_seed
+    seed, seed_issues = audit_core.validate_seed(random_seed)
     with project.index.exclusive():
         project.index.sync()
         issues: list[ValidationIssue] = []
-        if actor.kind != "human":
-            issues.append(ValidationIssue("actor", "audit samples are drawn by a human"))
-        if not 0 <= seed < 2**32:
-            issues.append(ValidationIssue("random_seed", "must be an integer from 0 to 2**32 - 1"))
+        issues.extend(audit_core.human_gate(project, actor, Channel.CLI, noun="sample"))
+        issues.extend(seed_issues)
         if issues:
             raise FactoryValidationError(issues)
         if scope is CardScope.CARD:
@@ -189,8 +190,7 @@ def extraction_audit_sample(
         if not population:
             raise _refuse("there are no agreed values to audit")
         digest = _digest(population)
-        if _last_digest(project, scope) == digest:
-            raise _refuse("an audit of this agreed set is open; a new one waits for a change to it")
+        audit_core.refuse_reopen(_last_digest(project, scope), _audit_population(population))
         size = audit_size(len(population), fraction, minimum)
         source = {_sort_key(item): extraction_id for item, extraction_id in population}
         drawn = _draw([item for item, _ in population], size, seed)
@@ -211,11 +211,7 @@ def extraction_audit_sample(
 
 def _gate(project: Project, actor: Actor, channel: Channel) -> list[ValidationIssue]:
     """Human acts only; an MCP relay must not come from a session that joined a pass."""
-    issues: list[ValidationIssue] = []
-    if actor.kind != "human":
-        issues.append(ValidationIssue("actor", "audit labels and evidence are for a human"))
-    issues.extend(require_not_pass_session(project, actor, channel))
-    return issues
+    return audit_core.human_gate(project, actor, channel, noun="extraction-label")
 
 
 def _card_parameters(project: Project) -> tuple[ProtocolVersion, float, int]:
@@ -398,6 +394,11 @@ def extraction_audit_report(
         labelled += 1
         incorrect += not correct
     rate = incorrect / labelled if labelled else None
+    verdict = audit_core.ceiling_verdict(
+        rate,
+        EXTRACTION_ERROR_CEILING,
+        enforced=_rigor_mode(project) is RigorMode.SYSTEMATIC,
+    )
     return ExtractionAuditReport(
         audit_id=audit_id,
         sample_size=len(rows),
@@ -405,9 +406,9 @@ def extraction_audit_report(
         incorrect=incorrect,
         outdated=outdated,
         error_rate=rate,
-        ceiling=EXTRACTION_ERROR_CEILING,
-        above_ceiling=rate is not None and rate > EXTRACTION_ERROR_CEILING,
-        enforced=_rigor_mode(project) is RigorMode.SYSTEMATIC,
+        ceiling=verdict.ceiling,
+        above_ceiling=verdict.above,
+        enforced=verdict.enforced,
         by_group={g: (bad / n if n else None) for g, (n, bad) in sorted(tally.items())},
     )
 
