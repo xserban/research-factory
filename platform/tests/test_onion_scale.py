@@ -14,6 +14,7 @@ import pytest
 from sqlalchemy import text
 
 from factory.model.views import OnionFilter
+from factory.services import onion
 from factory.services.onion import onion_view
 from tests.helpers import Project
 
@@ -29,7 +30,7 @@ def _w(i: int) -> str:
     return f"rf:s{i}-{i:08x}"
 
 
-def test_onion_scale(project: Project) -> None:
+def test_onion_scale(project: Project, monkeypatch: pytest.MonkeyPatch) -> None:
     project.index.sync()
     rng = random.Random(11)
     nodes = [{"n": _w(i)} for i in range(WORKS)]
@@ -66,12 +67,15 @@ def test_onion_scale(project: Project) -> None:
             edges,
         )
         conn.commit()
-    # the default focus on a 10^5-work corpus: outcomes are read from ids, never from records
+    # the default focus (100 included works, standing in for screening) on a 10^5-work corpus:
+    # outcomes are read from ids and the focus through the corpus check, never from records
+    included = [_w(i) for i in range(FOCUS)]
+    monkeypatch.setattr(onion, "included_works", lambda _p: included)
     started = time.perf_counter()
     default = onion_view(project)
     elapsed_default = time.perf_counter() - started
     assert elapsed_default < LIMIT_SECONDS, elapsed_default
-    assert default.rings[0].total == 0
+    assert default.rings[0].total == FOCUS
     # a focus of 100 works, ring 2 over 10^6 edges
     focus = tuple(_w(i) for i in range(FOCUS))
     started = time.perf_counter()

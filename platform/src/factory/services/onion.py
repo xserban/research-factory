@@ -31,6 +31,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from factory.errors import FactoryValidationError, ValidationIssue
+from factory.lineage.graph import DEFAULT_FILTER as GRAPH_DEFAULT_FILTER
 from factory.lineage.graph import GraphFilter
 from factory.model.lineage import EdgeType
 from factory.model.regions import RegionKind
@@ -50,9 +51,11 @@ from factory.services.context import Project
 from factory.services.depth import DEPTH_RANK, DepthIndex, depth_index
 from factory.services.lineage import (
     RING_BATCH,
+    _View,
     cites_expand,
     cites_incident_count,
     confirmed_ideas_of,
+    graph_view,
     has_active_merges,
     paper_nodes,
     ring_step,
@@ -143,24 +146,29 @@ def _build(project: Project, flt: OnionFilter, agent: bool) -> OnionView:
     considered: dict[EdgeType, set[str]] = {EdgeType(t): set() for t in flt.edge_types}
     cites_count = 0
     rings: list[Ring] = []
+    # `cites` is expanded set-based in SQL when no merge is active (the common case); the lineage
+    # types, and every type while a merge is active, by the batched overlay. The overlays are
+    # built (and the index synced) here, not inside the view's read connection.
+    with project.index.connect() as probe:
+        merges_active = has_active_merges(probe)
+    set_based = "cites" in flt.edge_types and not merges_active
+    batched = tuple(EdgeType(t) for t in flt.edge_types if not (set_based and t == "cites"))
+    batched_filter = GraphFilter(
+        include_inferred=flt.include_inferred, edge_types=batched, include_ideas=False
+    )
+    batched_view = graph_view(project, batched_filter)
+    ideas_view = graph_view(project, GRAPH_DEFAULT_FILTER)
     with project.index.connect() as conn:
         conn.execute(text(f"CREATE TEMP TABLE {_SEEN} (work_id TEXT PRIMARY KEY, ring INTEGER)"))
         try:
             _seed(conn, focus)
-            # `cites` is expanded set-based in SQL when no merge is active (the common case); the
-            # lineage types, and every type while a merge is active, by the batched overlay.
-            set_based = "cites" in flt.edge_types and not has_active_merges(conn)
-            batched = tuple(EdgeType(t) for t in flt.edge_types if not (set_based and t == "cites"))
-            batched_filter = GraphFilter(
-                include_inferred=flt.include_inferred, edge_types=batched, include_ideas=False
-            )
             for k in range(1, max_ring + 1):
                 if set_based:
                     cites_expand(conn, _SEEN, k, graph_filter)
                 if not batched:
                     continue
                 frontier = _members(conn, k - 1)
-                step = ring_step(project, conn, frontier, batched_filter)
+                step = ring_step(project, conn, frontier, batched_filter, batched_view)
                 for edge_id, kind in step.edges.items():
                     considered[kind].add(edge_id)
                 if step.neighbours:  # an empty executemany is an error
@@ -171,7 +179,7 @@ def _build(project: Project, flt: OnionFilter, agent: bool) -> OnionView:
             if set_based:
                 cites_count = cites_incident_count(conn, _SEEN, max_ring, graph_filter)
             for k in range(0, max_ring + 1):
-                rings.append(_ring(project, conn, k, depths))
+                rings.append(_ring(project, conn, k, depths, ideas_view))
         finally:
             conn.execute(text(f"DROP TABLE IF EXISTS {_SEEN}"))
             conn.commit()
@@ -205,7 +213,12 @@ def _build(project: Project, flt: OnionFilter, agent: bool) -> OnionView:
 def _focus(project: Project, flt: OnionFilter) -> list[str]:
     """The ring-0 works: `included_works`, or the named `focus`, every one a corpus work."""
     if flt.focus is None:
-        return sorted(set(included_works(project)))
+        # corpus minus absorbed works, as PRISMA counts it; an absorbed work is left out, not
+        # mapped to its primary
+        included = sorted(set(included_works(project)))
+        with project.index.connect() as conn:
+            kept = _corpus_among(conn, included)
+        return [w for w in included if w in kept]
     named = sorted(set(flt.focus))
     with project.index.connect() as conn:
         corpus = _corpus_among(conn, named)
@@ -252,7 +265,9 @@ def _members(conn: Connection, ring: int) -> list[str]:
     return [str(r[0]) for r in rows]
 
 
-def _ring(project: Project, conn: Connection, k: int, depths: DepthIndex) -> Ring:
+def _ring(
+    project: Project, conn: Connection, k: int, depths: DepthIndex, ideas_view: _View
+) -> Ring:
     """One ring from a single ordered pass over its ids: per-depth counts for every member, and
     per depth the first `VIEW_MAX_NODES` ids (enough: the list takes the highest depth first and
     ids in order within a depth)."""
@@ -273,20 +288,24 @@ def _ring(project: Project, conn: Connection, k: int, depths: DepthIndex) -> Rin
         distance=k,
         total=total,
         by_depth=counts,
-        nodes=_nodes(project, conn, listed, depths),
+        nodes=_nodes(project, conn, listed, depths, ideas_view),
         truncated=len(listed) < total,
     )
 
 
 def _nodes(
-    project: Project, conn: Connection, listed: Sequence[str], depths: DepthIndex
+    project: Project,
+    conn: Connection,
+    listed: Sequence[str],
+    depths: DepthIndex,
+    ideas_view: _View,
 ) -> list[OnionNode]:
     if not listed:
         return []
     papers = paper_nodes(conn, listed)
     corpus = _corpus_among(conn, listed)
     years = _years(conn, listed)
-    ideas = confirmed_ideas_of(project, conn, listed)
+    ideas = confirmed_ideas_of(project, conn, listed, ideas_view)
     return [
         OnionNode(
             work_id=w,
@@ -399,14 +418,15 @@ def _region_notices(project: Project, agent: bool) -> list[ViewNotice]:
                 {"k": RegionKind.FOCUS.value},
             )
         ]
-        visible = [r for r in reviewed if not (agent and region_withheld(project, r))]
-        if not visible:
-            return [
-                ViewNotice(
-                    code="regions-none",
-                    text="No reviewed focus region exists here; the regions column is empty.",
-                )
-            ]
+    visible = [r for r in reviewed if not (agent and region_withheld(project, r))]
+    if not visible:
+        return [
+            ViewNotice(
+                code="regions-none",
+                text="No reviewed focus region exists here; the regions column is empty.",
+            )
+        ]
+    with project.index.connect() as conn:
         held = conn.execute(
             text(
                 "SELECT 1 FROM region_members WHERE region_id IN (SELECT value FROM json_each(:r)) "

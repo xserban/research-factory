@@ -517,8 +517,17 @@ class RingStep:
     edges: dict[str, EdgeType]
 
 
+def graph_view(project: Project, flt: GraphFilter) -> _View:
+    """The overlays of `flt`, built (and the index synced) before a caller opens its connection."""
+    return _view(project, flt)
+
+
 def ring_step(
-    project: Project, conn: Connection, frontier: Sequence[str], flt: GraphFilter
+    project: Project,
+    conn: Connection,
+    frontier: Sequence[str],
+    flt: GraphFilter,
+    view: _View | None = None,
 ) -> RingStep:
     """The papers joined to a frontier of papers by an edge `flt` shows, in either direction.
 
@@ -526,7 +535,7 @@ def ring_step(
     what it read, so a rejected, stale or (without `include_inferred`) inferred relation never
     joins two works. Run inside `entering()` so the relation basis is read once. A frontier work
     reads as its merge primary, and an edge stored under an absorbed work is found."""
-    view = _view(project, flt)
+    view = view if view is not None else _view(project, flt)
     names = json.dumps(sorted(t.value for t in flt.edge_types))
     allowed = flt.statuses()
     found: set[str] = set()
@@ -640,11 +649,11 @@ def paper_nodes(conn: Connection, ids: Sequence[str]) -> dict[str, GraphNode]:
 
 
 def confirmed_ideas_of(
-    project: Project, conn: Connection, work_ids: Sequence[str]
+    project: Project, conn: Connection, work_ids: Sequence[str], view: _View | None = None
 ) -> dict[str, list[str]]:
     """For each work that is a member of a confirmed idea, the ids of those ideas (a merged idea
     reads as its survivor), sorted. Works in no confirmed idea are omitted."""
-    view = _view(project, DEFAULT_FILTER)
+    view = view if view is not None else _view(project, DEFAULT_FILTER)
     out: dict[str, set[str]] = {}
     for start in range(0, len(work_ids), RING_BATCH):
         chunk = list(work_ids[start : start + RING_BATCH])
