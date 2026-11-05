@@ -148,6 +148,25 @@ def baseline_verdicts(project: Project, experiment_id: str) -> dict[str, Verdict
     return out
 
 
+def hidden_baselines(project: Project) -> set[tuple[str, str]]:
+    """(experiment, row key) of baselines that reproduce on the confirmatory split in a design not
+    yet unlocked. Their values and verdicts are the one thing agent paths withhold (decision 94):
+    with the declared tolerance they would bound a test-split value before the unlock."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT experiment_id, design_json FROM experiments WHERE unlocked_event_id IS NULL"
+            )
+        ).all()
+    return {
+        (str(experiment_id), b.row_key)
+        for experiment_id, raw in rows
+        for b in design_of(raw).baselines
+        if b.split == "confirmatory"
+    }
+
+
 def baseline_flags(project: Project, experiment_id: str) -> tuple[str, ...]:
     """`baseline-not-reproduced` when a baseline that did not reproduce was accepted (R-122): it
     flags every outcome that depends on the design."""

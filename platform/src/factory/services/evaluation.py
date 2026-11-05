@@ -252,6 +252,15 @@ def recompute(project: Project, hypothesis_id: str) -> HypothesisEvaluated | Non
 # --- Writing --------------------------------------------------------------------------------
 
 
+def _unlocked(project: Project, experiment_id: str) -> bool:
+    with project.index.connect() as conn:
+        found = conn.execute(
+            text("SELECT unlocked_event_id FROM experiments WHERE experiment_id = :e"),
+            {"e": experiment_id},
+        ).scalar()
+    return found is not None
+
+
 def evaluate_hypothesis(
     project: Project, hypothesis_id: str, *, request_incomplete: bool = False
 ) -> str:
@@ -259,7 +268,8 @@ def evaluate_hypothesis(
     The outcome is computed; there is nothing to pass. With unchanged inputs nothing is written.
     Refused, with nothing written: an unknown hypothesis (`hypothesis_id`: `unknown`); one that is
     not registered, or abandoned or superseded (`state`: `not-registered`); an experiment
-    hypothesis with no frozen design (`experiment_id`: `no-frozen-design`); a result that is
+    hypothesis with no frozen design (`experiment_id`: `no-frozen-design`) or not unlocked
+    (`experiment_id`: `not-unlocked`); a result that is
     `incomplete` without `request_incomplete` (`runs`: `incomplete`)."""
     with project.index.exclusive():
         project.index.sync()
@@ -277,6 +287,8 @@ def evaluate_hypothesis(
         payload = recompute(project, hypothesis_id)
         if payload is None:
             raise _refuse("experiment_id", "no-frozen-design")
+        if payload.experiment_id is not None and not _unlocked(project, payload.experiment_id):
+            raise _refuse("experiment_id", "not-unlocked")
         if payload.outcome == "incomplete" and not request_incomplete:
             raise _refuse("runs", "incomplete")
         live = latest_evaluation(project, hypothesis_id)

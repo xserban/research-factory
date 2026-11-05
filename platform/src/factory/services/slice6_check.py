@@ -10,6 +10,8 @@ Invariants:
   (outcome, inputs hash and evaluator version) and lists evaluation events that did not fold (a
   hand-written one, or one of an evaluator no longer known); `xrun-reported-without-registration` is structurally impossible (the
   projector folds a report only for a registered run) and is the broken-chain check.
+- In the agent view a confirmatory baseline's verdict does not show in `baseline-unresolved` before
+  the unlock (decision 94).
 - `card-imported-unverified` is not emitted: cross-project card import is not built (Later).
 """
 
@@ -24,7 +26,8 @@ from factory.services.evaluation import latest_evaluation, recompute
 from factory.services.experiments import list_experiments
 from factory.services.hypotheses import list_hypotheses
 from factory.services.leads import list_leads
-from factory.services.xrun_accounting import baseline_verdicts, budget_view
+from factory.services.region_check import AGENT_VIEW
+from factory.services.xrun_accounting import baseline_verdicts, budget_view, hidden_baselines
 
 _PAGE = 500
 
@@ -126,13 +129,14 @@ def _hypotheses(project: Project) -> list[CheckHit | None]:
 
 def _experiments(project: Project) -> list[CheckHit | None]:
     live = [e for e in list_experiments(project) if e.state != "superseded"]
+    hidden = hidden_baselines(project) if AGENT_VIEW.get() else set()
     unresolved = [
         e.experiment_id
         for e in live
         if e.state == "frozen"
         and any(
-            v in ("pending", "not-reproduced")
-            for v in baseline_verdicts(project, e.experiment_id).values()
+            v == "pending" or (v == "not-reproduced" and (e.experiment_id, k) not in hidden)
+            for k, v in baseline_verdicts(project, e.experiment_id).items()
         )
     ]
     over = [

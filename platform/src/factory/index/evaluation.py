@@ -102,7 +102,8 @@ def read_experiment_inputs(conn: Connection, hypothesis_id: str) -> ExperimentIn
         return None
     exp = conn.execute(
         text(
-            "SELECT experiment_id, e_version, design_json, frozen_autonomy, unlock_autonomy "
+            "SELECT experiment_id, e_version, design_json, frozen_autonomy, unlock_autonomy, "
+            "unlocked_event_id "
             "FROM experiments WHERE hypothesis = :h AND superseded_by IS NULL "
             "AND frozen_event_id IS NOT NULL ORDER BY event_id DESC LIMIT 1"
         ),
@@ -168,6 +169,7 @@ def read_experiment_inputs(conn: Connection, hypothesis_id: str) -> ExperimentIn
         autonomy=tuple(str(a) for a in (hyp[3], exp[3], exp[4]) if a is not None),
         min_seeds=int(hyp[5]),
         level=hyp[4],
+        unlocked=exp[5] is not None,
     )
 
 
@@ -291,7 +293,7 @@ def _evaluated(t: EvaluationTables) -> Handler:
                 return
         elif str(hyp[1]) == "experiment":
             inputs = read_experiment_inputs(conn, p.hypothesis_id)
-            if inputs is None or compute_experiment(inputs) != p:
+            if inputs is None or not inputs.unlocked or compute_experiment(inputs) != p:
                 return
         elif not literature_consistent(conn, p, hyp):
             return

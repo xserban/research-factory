@@ -2695,9 +2695,7 @@ def build_server(
         """One hypothesis: its spec, version, falsifier sentence, computed state, reviews,
         registration, the R-53 flags of a literature hypothesis and the autonomy label of its
         registration. Once the platform has evaluated it, also the computed `evaluation`: the
-        outcome, the number of pairs or works, the level, the counts and the flags, the number of
-        universes of the specification curve with its flags and whether each control passed; no
-        effect size, interval or metric value. The rationale and the lead are shown to the
+        outcome with its statistics and flags, the specification curve, ablations and controls. The rationale and the lead are shown to the
         drafting session only (R-51). Read-only; refused to a session that has joined a pass."""
 
         def view() -> JsonValue:
@@ -2714,9 +2712,8 @@ def build_server(
                 assert isinstance(spec, dict)
                 spec.pop("rationale", None)
                 spec.pop("lead", None)
-            data["evaluation"] = cast(
-                JsonValue, evaluation_view_service.agent_evaluation(opened, hypothesis_id)
-            )
+            detail = evaluation_view_service.evaluation_detail(opened, hypothesis_id)
+            data["evaluation"] = None if detail is None else detail.model_dump(mode="json")
             return _withheld(opened, data, include_work_ids=False)
 
         return _reply(project, view, include_work_ids=False)
@@ -3166,7 +3163,8 @@ def build_server(
         row or `ds:<dataset>`) to find the rows that share one, and `reasons` to narrow them. Each
         row states why it failed and the conditions it failed under (design, datasets, compute,
         models, code commit) in a fixed sentence of ids and names: a row says "failed here", never
-        "impossible", and is never removed. Read-only; refused to a session that has joined a
+        "impossible", and is never removed. A baseline that reproduces on the confirmatory split
+        is left out until the unlock. Read-only; refused to a session that has joined a
         pass."""
 
         def query() -> JsonValue:
@@ -3183,11 +3181,10 @@ def build_server(
     @server.tool()
     def benchmark_ledger_view(project: str, group_id: str | None = None) -> dict[str, JsonValue]:
         """The benchmark ledger: for each evidence group (or the one named), its rows with the
-        reported value, whether a reproduction run reproduced it (`reproduced`, `not-reproduced`,
-        `accepted`, `resolved` while a confirmatory reproduction awaits the unlock, or `none`) and
-        the own results of hypotheses whose conditions the group holds (outcome, number of units,
-        flags). Reproduced values, means and intervals are for the researcher. Own and reproduced
-        results never enter the evidence report. Read-only; refused to a session that has joined
+        reported value, the reproduced value and whether it reproduced (`reproduced`,
+        `not-reproduced`, `accepted`, `none`; `resolved`, with no value, while a confirmatory
+        reproduction awaits the unlock) and the own results of hypotheses whose conditions and
+        metric the group holds. Own and reproduced results never enter the evidence report. Read-only; refused to a session that has joined
         a pass."""
 
         def view() -> JsonValue:

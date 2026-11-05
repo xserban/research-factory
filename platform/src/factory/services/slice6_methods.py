@@ -5,8 +5,8 @@ Invariants:
 - Every figure is computed from the projection: nothing is typed and nothing is a rate derived from
   a label. The counts include every outcome, refuted and inconclusive ones too (R-52), so the
   statement cannot report successes only; a failed direction is counted by the registry.
-- The same counts serve the researcher and an agent: none depends on the held-out part of an
-  import, on a screening label or on a metric value.
+- None depends on the held-out part of an import or on a screening label. An agent reads the same
+  counts except for a confirmatory baseline's verdict before the unlock (`agent_counts`).
 - Without any lead, hypothesis, design or registry row the statement has no such paragraph
   (`hypothesis_counts` returns None).
 """
@@ -22,7 +22,7 @@ from factory.services.context import Project
 from factory.services.evaluation import latest_evaluation
 from factory.services.hypotheses import list_hypotheses
 from factory.services.leads import list_leads
-from factory.services.xrun_accounting import baseline_verdicts
+from factory.services.xrun_accounting import baseline_verdicts, hidden_baselines
 
 
 class HypothesisCounts(StrictModel):
@@ -83,6 +83,37 @@ def hypothesis_counts(project: Project) -> HypothesisCounts | None:
         baselines_by_verdict=_count(verdicts),
         autonomy_agent=sum(1 for v in hypotheses if v.autonomy == "agent"),
         registry_rows=int(rows),
+    )
+
+
+def agent_counts(project: Project, counts: HypothesisCounts) -> HypothesisCounts:
+    """The counts as an agent reads them: a baseline that reproduces on the confirmatory split
+    counts as `resolved`, with its row and acceptance left out, until the unlock (decision 94)."""
+    hidden = hidden_baselines(project)
+    if not hidden:
+        return counts
+    with project.index.connect() as conn:
+        experiments = [
+            str(e) for e in conn.execute(text("SELECT experiment_id FROM experiments")).scalars()
+        ]
+        rows = {str(d) for d in conn.execute(text("SELECT direction_id FROM directions")).scalars()}
+        deviations = [
+            (str(e), str(k))
+            for e, k in conn.execute(text("SELECT experiment_id, kind FROM experiment_deviations"))
+        ]
+    verdicts: list[str] = []
+    for e in experiments:
+        for key, verdict in baseline_verdicts(project, e).items():
+            verdicts.append("resolved" if (e, key) in hidden and verdict != "pending" else verdict)
+    designs = {e for e, _ in hidden}
+    return counts.model_copy(
+        update={
+            "baselines_by_verdict": _count(verdicts),
+            "deviations_by_kind": _count(
+                [k for e, k in deviations if not (e in designs and k == "baseline-accepted")]
+            ),
+            "registry_rows": counts.registry_rows - len(rows & {f"{e}:{k}" for e, k in hidden}),
+        }
     )
 
 

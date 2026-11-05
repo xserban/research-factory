@@ -78,6 +78,7 @@ class ExperimentInputs:
     """The autonomy labels of the registration, the freeze and the unlock."""
     min_seeds: int
     level: Level
+    unlocked: bool = True
 
 
 def inputs_hash(inputs: ExperimentInputs) -> str:

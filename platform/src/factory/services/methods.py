@@ -52,6 +52,7 @@ from factory.services.references import reference_counts
 from factory.services.seeds import _rigor_mode, admitted_seed_count, seed_recall
 from factory.services.slice6_methods import (
     HypothesisCounts,
+    agent_counts,
     hypotheses_paragraph,
     hypothesis_counts,
 )
@@ -480,6 +481,8 @@ def agent_methods(project: Project, report: MethodsReport) -> tuple[MethodsRepor
         update["recall_held_out_admitted"] = 0
     update["imports"] = _imports(project, agent=True)
     update["gate_policy"] = [row.agent_view() for row in report.gate_policy]
+    if report.hypotheses is not None:
+        update["hypotheses"] = agent_counts(project, report.hypotheses)
     update["miners"] = [
         m.model_copy(
             update={

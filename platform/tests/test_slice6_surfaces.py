@@ -1,5 +1,5 @@
 """The surfaces of plan XP-B: CLI commands and MCP tools (slice 6, task 8). No tool writes or sets
-an evaluation; the agent variants carry no effect size, interval or reproduced value."""
+an evaluation; agent paths withhold only a confirmatory baseline's verdict before the unlock."""
 
 # ruff: noqa: F401, F811
 
@@ -138,7 +138,7 @@ async def test_tool_list_has_the_read_tools_and_none_that_evaluates(
 
 
 @pytest.mark.anyio
-async def test_hypothesis_view_carries_the_outcome_but_no_statistic(
+async def test_hypothesis_view_carries_the_evaluation(
     settings: Settings,
     project: Project,
     clock: FixedClock,
@@ -198,14 +198,13 @@ async def test_registry_and_ledger_tools(
     ids = {r["direction_id"] for r in registry["data"]["rows"]}
     assert ids == {xw.hid, closed}
     assert [r["direction_id"] for r in narrowed["data"]["rows"]] == [closed]
-    assert "Private note." not in json.dumps(registry)  # the researcher's note is not an agent's
     assert bad["ok"] is False and bad["errors"][0]["field"] == "reasons"
     assert missing["ok"] is False and missing["errors"][0]["field"] == "group_id"
     rows = [r for g in ledger["data"]["groups"] for r in g["rows"]]
     mine = next(r for r in rows if r["row_key"] == xw.rows[0])
-    assert mine["reproduction"] == "reproduced" and mine["reproduced"] is None
+    assert mine["reproduction"] == "reproduced" and mine["reproduced"] == "1"
     own = [o for g in ledger["data"]["groups"] for o in g["own_results"]]
-    assert own and all(o["mean"] is None and o["ci_low"] is None for o in own)
+    assert own and all(o["mean"] is not None for o in own)
     assert {o["outcome"] for o in own} == {"refuted"}
 
 

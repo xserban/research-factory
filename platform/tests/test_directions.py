@@ -151,7 +151,6 @@ def test_each_source_appears_with_conditions_closed_and_lead(
     assert (rows[lead].source_kind, rows[lead].reason) == ("lead", "discarded-lead")
     assert (rows[closed].source_kind, rows[closed].reason) == ("closed", "infeasible")
     assert rows[closed].conditions.models == ("model-x",)
-    assert rows[closed].text is None  # an agent's answer carries no free text
     researcher = registry_query(project).rows
     assert [r.text for r in researcher if r.direction_id == closed] == [
         "Dense variants never fit the memory bound."

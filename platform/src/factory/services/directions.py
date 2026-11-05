@@ -9,8 +9,10 @@ Invariants:
 - Closing a direction is a human act (`actor`: `human-only`); every key must name something the
   project holds, so a row is searchable by what it is about.
 - `summary` is a fixed template of ids, names and counts: no lead text, rationale, statement or
-  document text. The text a human typed when closing a direction is returned to the researcher
-  only (`agent=False`), as are all other fields.
+  document text.
+- On an agent path (`agent=True`) a row of a baseline that reproduces on the confirmatory split is
+  left out until the design is unlocked, and nothing else is withheld (decision 94). `prior` is
+  stored in events agents read, so it always takes the agent reading.
 - `prior_from_registry` fills `services.leads.PRIOR_SOURCES` and `direction_exists` fills
   `DIRECTION_RESOLVERS` at import; `services.leads` imports this module where it reads either list.
 """
@@ -37,6 +39,7 @@ from factory.services import leads as lead_service
 from factory.services.context import Project
 from factory.services.extraction_agreement import final_rows
 from factory.services.ideas import resolve_idea
+from factory.services.xrun_accounting import hidden_baselines
 
 MAX_LIMIT = 200
 
@@ -50,7 +53,7 @@ class RegistryRow(StrictModel):
     summary: str
     event_id: str
     text: str | None = None
-    """What a human typed when closing a direction; never in an agent's answer."""
+    """What a human typed when closing a direction."""
 
 
 class RegistryPage(StrictModel):
@@ -92,7 +95,7 @@ def _summary(source_kind: str, direction_id: str, reason: str, c: Conditions) ->
     return f"{subject} {verb}{where}."
 
 
-def _row(project: Project, r: object, *, agent: bool) -> RegistryRow:
+def _row(project: Project, r: object) -> RegistryRow:
     m = r._mapping  # type: ignore[attr-defined]
     conditions = Conditions.model_validate(json.loads(str(m["conditions_json"])))
     with project.index.connect() as conn:
@@ -116,7 +119,7 @@ def _row(project: Project, r: object, *, agent: bool) -> RegistryRow:
             conditions,
         ),
         event_id=str(m["event_id"]),
-        text=None if agent or m["text"] is None else str(m["text"]),
+        text=None if m["text"] is None else str(m["text"]),
     )
 
 
@@ -156,12 +159,16 @@ def registry_query(
     if wanted:
         where.append("d.reason IN :reasons")
         params["reasons"] = sorted(wanted)
+    hidden = sorted(f"{e}:{k}" for e, k in hidden_baselines(project)) if agent else []
+    if hidden:
+        where.append("d.direction_id NOT IN :hidden")
+        params["hidden"] = hidden
     clause = " AND ".join(where)
     with project.index.connect() as conn:
 
         def run(sql: str, extra: dict[str, object]) -> object:
             statement = text(sql)
-            for name in ("keys", "reasons"):
+            for name in ("keys", "reasons", "hidden"):
                 if name in params:
                     statement = statement.bindparams(bindparam(name, expanding=True))
             return conn.execute(statement, {**params, **extra})
@@ -174,7 +181,7 @@ def registry_query(
         ).all()
     page = rows[:limit]
     return RegistryPage(
-        rows=[_row(project, r, agent=agent) for r in page],
+        rows=[_row(project, r) for r in page],
         total=int(total),
         next=str(page[-1]._mapping["direction_id"]) if len(rows) > limit else None,
     )
@@ -244,7 +251,7 @@ def prior_from_registry(project: Project, keys: Collection[str]) -> list[str]:
     `services.leads.PRIOR_SOURCES`."""
     if not keys:
         return []
-    return [r.direction_id for r in registry_query(project, keys, limit=MAX_LIMIT).rows]
+    return [r.direction_id for r in registry_query(project, keys, limit=MAX_LIMIT, agent=True).rows]
 
 
 def direction_exists(project: Project, ref: str) -> bool:

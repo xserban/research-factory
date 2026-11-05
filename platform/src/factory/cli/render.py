@@ -29,7 +29,7 @@ from factory.services.directions import RegistryPage
 from factory.services.discovery import DiscoveryReport
 from factory.services.document_convert import ConvertSummary, DocumentStatus
 from factory.services.document_read import DocumentPage
-from factory.services.evaluation_view import ResearcherEvaluation
+from factory.services.evaluation_view import EvaluationDetail
 from factory.services.experiments import ExperimentView
 from factory.services.extraction import UnitState
 from factory.services.extraction_agreement import (
@@ -1410,7 +1410,7 @@ def xrun_lines(runs: Sequence[XrunView]) -> list[str]:
 # --- Evaluation, ledger and registry (slice 6, plan XP-B) --------------------------------------
 
 
-def evaluation_lines(r: "ResearcherEvaluation") -> list[str]:
+def evaluation_lines(r: "EvaluationDetail") -> list[str]:
     p = r.evaluation.payload
     head = f"  evaluation {r.evaluation.event_id}: {p.outcome}, n {p.n}"
     if p.mean is not None:

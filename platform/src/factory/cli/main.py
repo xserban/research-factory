@@ -4673,7 +4673,7 @@ def hypotheses_show_cmd(
     for line in render.hypothesis_detail_lines(view):
         typer.echo(line)
     with _reporting_errors():
-        evaluated = evaluation_view_service.researcher_evaluation(project, hypothesis)
+        evaluated = evaluation_view_service.evaluation_detail(project, hypothesis)
     if evaluated is not None:
         for line in render.evaluation_lines(evaluated):
             typer.echo(line)
@@ -4737,7 +4737,7 @@ def hypotheses_evaluate_cmd(
         event_id = evaluation_service.evaluate_hypothesis(
             project, hypothesis, request_incomplete=incomplete
         )
-        evaluated = evaluation_view_service.researcher_evaluation(project, hypothesis)
+        evaluated = evaluation_view_service.evaluation_detail(project, hypothesis)
     typer.echo(f"evaluated {hypothesis}: {event_id}")
     if evaluated is not None:
         for line in render.evaluation_lines(evaluated):
