@@ -14,7 +14,10 @@ This module is pure. Services in `factory.services` decide when the events are w
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
+from collections.abc import Sequence
 from enum import StrEnum
 from typing import Literal, Self
 
@@ -155,6 +158,7 @@ class OutlineSection(StrictModel):
     section_ref: str
     kind: Literal["idea", "group", "claims", "limits"]
     title_ref: str
+    works: list[str]
     supports: list[str]
     conflicts: list[list[str]]
     notes: list[str]
@@ -165,6 +169,14 @@ class Outline(StrictModel):
     scope: dict[str, JsonValue]
     as_of: str | None
     sections: list[OutlineSection]
+
+
+def outline_id_of(scope: dict[str, JsonValue], sections: Sequence[OutlineSection]) -> str:
+    """`OL@` and the first 8 hex digits of the sha256 of the canonical JSON of the scope and the
+    sections. The log position (`as_of`) is not part of it: an unrelated event leaves the id."""
+    payload = {"scope": scope, "sections": [s.model_dump(mode="json") for s in sections]}
+    blob = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return "OL@" + hashlib.sha256(blob.encode()).hexdigest()[:8]
 
 
 # --- Events ---
