@@ -23,8 +23,8 @@ from factory.services.relations import (
     relation_view,
     relation_views,
 )
-from tests.contribution_helpers import P1, ctr_b, field, item
-from tests.lineage_helpers import Lineage, ctr_a, lin, screened, world
+from tests.contribution_helpers import P2, P4, P5, item
+from tests.lineage_helpers import Lineage, ctr_a, ctr_b, lin, record_both, screened, world
 
 
 def _propose(project: Project, agent: Actor, lin: Lineage, target: str, basis: str | None) -> str:
@@ -59,24 +59,33 @@ def test_fresh_relations_have_proposal_status(project: Project, agent: Actor, li
 
 
 def test_basis_correction_stales_and_reproposal_restores(  # Review Focus 5
-    project: Project, agent: Actor, ctr_a: Actor, lin: Lineage
+    project: Project, agent: Actor, ctr_a: Actor, ctr_b: Actor, lin: Lineage
 ) -> None:
-    rid = _propose(project, agent, lin, lin.target5, lin.base)
-    batch = contribution_next(project, ctr_a, PassLabel.A).batch
-    assert isinstance(batch, ContributionBatch)
-    fixed = item("base-idea", P1, name="linear attention", cited_entry=field(5))
-    res = contribution_record(project, ctr_a, batch.task_id, [fixed], supersedes={0: lin.base})
-    [new_base] = res.rows.written
-    assert _reasons(project, rid) == ("basis-superseded",)
+    # The basis is the base idea that cites nothing, so a new G1 extraction (which re-opens the
+    # unit) does not make it stale; only its correction does.
+    rid = _propose(project, agent, lin, lin.target5, lin.uncited_base)
+    extract_references(project, agent, [lin.source], sources=lin.lookups.sources())
+    fixed = [
+        item("base-idea", P5, name="Plain text", statement="Plain text with no marker"),
+        item("limitation", P4, name="long sequences", statement="very long sequences degrade"),
+        item("addition", P2, name="softmax attention"),
+    ]
+    new_a, _ = record_both(
+        project,
+        ctr_a,
+        ctr_b,
+        lin.source,
+        fixed,
+        supersedes_a={0: lin.uncited_base, 1: lin.limitation},
+        supersedes_b={0: lin.ids_b[2], 1: lin.ids_b[3]},
+    )
     view = relation_view(project, rid)
     assert view is not None and view.effective is EdgeStatus.STALE
-    assert rid not in {r.relation_id for r in list_relations(project)}
-    again = _propose(project, agent, lin, lin.target5, new_base)
+    assert view.stale_reasons == ("basis-superseded",)
+    assert [r.relation_id for r in list_relations(project, statuses={EdgeStatus.STALE})] == [rid]
+    again = _propose(project, agent, lin, lin.target5, new_a[0])
     assert again != rid
-    assert [r.relation_id for r in list_relations(project)] == [again]
-    assert relation_view(project, rid) is None or rid not in {
-        r.relation_id for r in list_relations(project, statuses=set(EdgeStatus))
-    }
+    assert [r.relation_id for r in list_relations(project, statuses=set(EdgeStatus))] == [again]
 
 
 def test_amendment_removing_field_stales_relation(

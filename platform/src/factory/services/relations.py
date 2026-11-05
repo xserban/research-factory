@@ -45,7 +45,7 @@ from factory.model.lineage import (
 from factory.model.references import LinkState
 from factory.services import seeds
 from factory.services.context import Project
-from factory.services.contributions import ItemView, contribution_item
+from factory.services.contributions import ItemView, contribution_item, final_item
 from factory.services.extraction import scope_population, stale_extractions
 from factory.services.reference_view import reference_view, reference_view_of
 
@@ -63,23 +63,28 @@ class ProposeResult(StrictModel):
 
 
 def _basis(project: Project, item_id: str) -> ItemView | None:
-    """The item a relation rests on: the single read of contribution items in this module."""
-    return contribution_item(project, item_id)
+    """The item a relation rests on: its final view (what the item finally says, field by field,
+    after agreement or a human resolution). None while the item is unresolved, superseded or
+    unknown. The single read of contribution items in this module."""
+    return final_item(project, item_id)
 
 
 def _basis_issues(
     project: Project, proposal: RelationProposal
 ) -> tuple[ItemView | None, str | None]:
-    """The basis item and, when it is unusable, the reason."""
+    """The basis item (final view) and, when it is unusable, the reason."""
     if proposal.basis_item is None:
         return None, None
+    raw = contribution_item(project, proposal.basis_item)
+    if raw is None:
+        return None, "basis-unknown"
+    if raw.work_id != proposal.source_work:
+        return None, "basis-other-work"
+    if not raw.live:
+        return None, "basis-not-live"
     item = _basis(project, proposal.basis_item)
     if item is None:
-        return None, "basis-unknown"
-    if item.work_id != proposal.source_work:
-        return item, "basis-other-work"
-    if not item.live:
-        return item, "basis-not-live"
+        return None, "basis-unresolved"
     if item.stale:
         return item, "basis-stale"
     if item.item_kind not in BASIS_KINDS:
@@ -137,6 +142,8 @@ def propose_relation(project: Project, actor: Actor, proposal: RelationProposal)
                 issues.append(ValidationIssue("basis_item", "basis-required-for-idea"))
             elif proposal.note is None or not proposal.note.strip():
                 issues.append(ValidationIssue("note", "note-required-without-basis"))
+        if item is not None:  # the relation is keyed by the item's canonical row
+            proposal = proposal.model_copy(update={"basis_item": item.extraction_id})
         live = _live_relation(project, proposal)
         if live is not None and live[2] == "reject":
             issues.append(ValidationIssue("target", "rejected-by-human"))
@@ -269,7 +276,7 @@ def decide_relation(
         with project.index.connect() as conn:
             row = conn.execute(
                 text(
-                    "SELECT r.status, r.superseded_by, e.session FROM relations r "
+                    "SELECT r.status, r.superseded_by, e.session, r.basis_item FROM relations r "
                     "JOIN events e ON e.id = r.event_id WHERE r.relation_id = :r"
                 ),
                 {"r": relation_id},
@@ -278,6 +285,13 @@ def decide_relation(
             raise FactoryValidationError([ValidationIssue("relation_id", "unknown-relation")])
         if row[1] is not None:
             issues.append(ValidationIssue("relation_id", "superseded-relation"))
+        # An unresolved item confirms nothing.
+        if (
+            decision is LineageDecision.CONFIRM
+            and row[3] is not None
+            and _basis(project, str(row[3])) is None
+        ):
+            issues.append(ValidationIssue("basis_item", "basis-unresolved"))
         if str(row[2]) == actor.session:
             issues.append(
                 ValidationIssue("actor", "the session that proposed a relation cannot decide it")

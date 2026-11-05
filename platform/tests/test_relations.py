@@ -14,11 +14,13 @@ from factory.errors import FactoryValidationError
 from factory.events.envelope import Actor
 from factory.events.reader import read_all
 from factory.model.lineage import IdeaProposed, LineageDecision, RelationProposal
+from factory.model.screening import Channel
 from factory.model.seed import HeldOut
-from factory.services import seeds
+from factory.services import relations, seeds
 from factory.services.context import Project
+from factory.services.contributions import contribution_agreement, resolve_contribution
 from factory.services.relations import decide_relation, propose_relation
-from tests.lineage_helpers import Lineage, ctr_a, lin, screened, world
+from tests.lineage_helpers import Lineage, ctr_a, ctr_b, disputed, lin, screened, world
 from tests.lineage_payloads import IDA
 
 
@@ -324,4 +326,40 @@ def test_held_out_target_looks_unknown_to_an_agent(
         "target",
         "target-unknown",
         lambda: propose_relation(project, agent, prop(lin, lin.target5, basis=lin.base)),
+    )
+
+
+def test_unresolved_basis_refused_until_resolved(  # a stated edge rests on the final value
+    project: Project, agent: Actor, human: Actor, disputed: Lineage
+) -> None:
+    lin = disputed
+    _refused(
+        project,
+        "basis_item",
+        "basis-unresolved",
+        lambda: propose_relation(project, agent, prop(lin, lin.target5, basis=lin.base)),
+    )
+    [d] = contribution_agreement(project, human).disagreements
+    resolve_contribution(
+        project, human, d.work_id, d.row_key, "cited_entry", "b", "entry 3 is right", Channel.CLI
+    )
+    # The final item cites entry 3 (pass B): the edge to entry 5's work is no longer stated.
+    to5 = propose_relation(project, agent, prop(lin, lin.target5, basis=lin.base))
+    assert (to5.status, to5.status_reason) == ("inferred", "target-differs")
+    to3 = propose_relation(project, agent, prop(lin, lin.target3, basis=lin.base))
+    assert (to3.status, to3.status_reason) == ("stated", None)
+    [event] = [e for e in _events(project) if e.payload.get("relation_id") == to3.relation_id]
+    assert event.payload["cited_entry"] == 3
+
+
+def test_confirm_refused_when_basis_no_longer_final(
+    project: Project, agent: Actor, other_session_human: Actor, lin: Lineage, monkeypatch: Any
+) -> None:
+    rid = propose_relation(project, agent, prop(lin, lin.target3, basis=lin.base)).relation_id
+    monkeypatch.setattr(relations, "final_item", lambda _p, _i: None)
+    _refused(
+        project,
+        "basis_item",
+        "basis-unresolved",
+        lambda: decide_relation(project, other_session_human, rid, LineageDecision.CONFIRM, "x"),
     )
