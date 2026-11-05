@@ -51,6 +51,7 @@ from factory.services.inbox import InboxPage, ResolveOutcome
 from factory.services.interpretations import InterpretationList, InterpretationView
 from factory.services.lineage import GraphQueryResult, GraphStatus
 from factory.services.matching import MatchPage
+from factory.services.mining import MinerListing, MineStatus
 from factory.services.modules.listing import ModuleRow
 from factory.services.prisma import UNCONVERTED, PrismaFlow, SearchReport
 from factory.services.prisma_update import UpdateFlow
@@ -365,6 +366,28 @@ def extraction_status_lines(states: list[UnitState]) -> list[str]:
         )
         lines.append(f"pass {label.value}: {counts}")
     return lines
+
+
+def miner_listing_lines(listing: list[MinerListing]) -> list[str]:
+    """One line per registered miner version."""
+    if not listing:
+        return ["no registered miners"]
+    return [
+        f"{m.name} version {m.version} {m.digest} by {m.proposer_kind}, "
+        f"{'listed' if m.listed else 'not listed'}"
+        for m in listing
+    ]
+
+
+def mine_status_lines(status: list[MineStatus]) -> list[str]:
+    """One line per listed miner: its units by state, rows and agreement."""
+    if not status:
+        return ["no listed miners"]
+    return [
+        f"{m.name} version {m.version}: units {m.units} (closed {m.closed}, open {m.open}, "
+        f"stale {m.stale}), rows {m.rows}, agreement {_rate(m.agreement)}"
+        for m in status
+    ]
 
 
 def field_view_lines(label: str, view: FieldView | None) -> list[str]:

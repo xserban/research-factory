@@ -36,7 +36,7 @@ from factory.events.reader import read_all
 from factory.index.chase import admitted_works
 from factory.living.counts import source_counts
 from factory.model.base import StrictModel
-from factory.model.extraction import Scope
+from factory.model.extraction import MinerScope, Scope
 from factory.model.lineage import EdgeStatus, LineageDecision
 from factory.model.notices import NoticeKind, unassessed_notices
 from factory.model.project import RigorMode
@@ -482,9 +482,58 @@ def _run_rules(project: Project) -> list[_Hit]:
         gate_hits(project),
         audit_hits(project),
         _gate_policies(project),
+        _mining(project),
     ]
     flat = [hit for group in groups for hit in group]
     return [replace(hit, seq=seq) for seq, hit in enumerate(flat)]
+
+
+# --- Registered miners (slice M, M-C) ---
+
+
+def _mining(project: Project) -> list[_Hit]:
+    """Findings of the registered miners the protocol lists: units not yet current and works mined
+    once outside the dual sample. Each names works by identifier and gives counts; a miner's
+    values and quotes never appear. A project that lists no miner has none of them."""
+    protocol = current_protocol(project)
+    if protocol is None:
+        return []
+    hits: list[_Hit] = []
+    for use in sorted(protocol.spec.miners or (), key=lambda u: u.name):
+        scope = MinerScope(use.name)
+        try:
+            _, schema, _ = require_schema(project, scope=scope)
+            population = scope_population(project, scope)
+        except FactoryValidationError:
+            continue
+        pending = sorted(
+            {s.work_id for s in unit_states(project, scope=scope) if s.state != "current"}
+        )
+        if pending:
+            hits.append(
+                _Hit(
+                    "mine-pending",
+                    tuple(pending),
+                    f"miner {use.name}: {len(pending)} work(s) have a unit not yet current",
+                )
+            )
+        config = pass_config(project, PassLabel.B, scope=scope)
+        if config is not None:
+            single = sorted(
+                w
+                for w in population
+                if not in_dual_sample(config.seed, w, schema.dual_extract_sample)
+            )
+            if single:
+                hits.append(
+                    _Hit(
+                        "mine-single",
+                        tuple(single),
+                        f"miner {use.name}: {len(single)} work(s) are mined once, outside the "
+                        "dual sample",
+                    )
+                )
+    return hits
 
 
 # --- Lineage (slice 3b, plan G2-E) ---

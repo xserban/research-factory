@@ -56,7 +56,7 @@ from dataclasses import dataclass, field
 from fractions import Fraction
 from typing import Any, Literal
 
-from pydantic import JsonValue, ValidationError
+from pydantic import Field, JsonValue, ValidationError
 from sqlalchemy import RowMapping, text
 
 from factory.clock import format_ts
@@ -229,6 +229,8 @@ class MineBatchContent(ExtractBatchContent):
     digest: str
     anchors: tuple[str, ...]
     calibration_id: str | None = None
+    field_kinds: dict[str, str] = Field(default_factory=dict)
+    descriptions: dict[str, str] = Field(default_factory=dict)
 
 
 class ExtractBatch(ExtractBatchContent):

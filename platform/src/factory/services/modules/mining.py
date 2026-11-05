@@ -6,9 +6,13 @@ rules as their tasks land."""
 
 from factory.modules.contract import (
     ArtifactKind,
+    CheckRule,
     EventFamily,
+    GateKind,
+    GateSpec,
     ModuleKind,
     ModuleSpec,
+    PolicyKind,
     QualityRegime,
 )
 from factory.services.modules.base import RuleModule
@@ -22,10 +26,21 @@ SPEC = ModuleSpec(
     events=EventFamily(
         types=("miner.registered",),
         tables=("miners",),
-        note="registered miners are data; their records are written in the extraction.* family.",
+        note="registered miners are data; their records are written in the extraction.* family"
+        " (the pack on each event is the miner's name); mine.resolve is the gate of the"
+        " extraction.resolved events whose pack is a miner's.",
     ),
     task_kinds=default_task_kinds().kinds_of("mining"),
     protocol_sections=("miners",),
+    gates=(
+        GateSpec(
+            "mine.resolve",
+            GateKind.DECISION,
+            ("extraction.resolved",),
+            PolicyKind.HUMAN,
+            ("decision 51",),
+        ),
+    ),
     regime=QualityRegime(
         2,
         "session-and-model",
@@ -33,6 +48,10 @@ SPEC = ModuleSpec(
         "none",
         "agreed-sample",
         ("amendment", "document-version", "conversion"),
+    ),
+    checks=(
+        CheckRule("mine-pending", ("warning", "warning", "warning")),
+        CheckRule("mine-single", (None, "warning", "error")),
     ),
 )
 

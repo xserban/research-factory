@@ -71,6 +71,7 @@ from factory.services import interpretations as interpretations_service
 from factory.services import lineage as graph_service
 from factory.services import matching as matching_service
 from factory.services import methods as methods_service
+from factory.services import mining as mining_service
 from factory.services import notices as notices_service
 from factory.services import passes as passes_service
 from factory.services import prisma as prisma_service
@@ -1290,6 +1291,119 @@ def build_server(
         return _reply(project, label, include_work_ids=False)
 
     @server.tool()
+    def mine_next(
+        project: str, miner: str, version: int, pass_label: str, role: str, model: str, skill: str
+    ) -> dict[str, JsonValue]:
+        """Serve the next task of pass A or B of a registered miner to this session, or say why
+        none is served. The miner must be registered and listed in the protocol's `miners`
+        section. The batch names the miner's fields and the rule of each kind, the work, the
+        pinned conversion to read with `document_read` and the anchors the miner's selector
+        selects; `blocked` says why ordinary work waits. Joins this session to the miner's pass on
+        its first call."""
+
+        def serve() -> JsonValue:
+            label = _pass_label(pass_label)
+            opened = open_project(settings, project, session=session, clock=clock)
+            _require_pass_opened(opened, "miner")
+            actor = make_agent_actor(settings, session, role, model, skill)
+            served = mining_service.mine_next(opened, actor, miner, version, label)
+            return _withheld(opened, served.model_dump(mode="json"), include_work_ids=False)
+
+        return _reply(project, serve, include_work_ids=False)
+
+    @server.tool()
+    def mine_record(
+        project: str,
+        task_id: str,
+        rows: list[dict[str, JsonValue]],
+        role: str,
+        model: str,
+        skill: str,
+        finish: bool = False,
+        reason: str | None = None,
+        supersedes: dict[str, str] | None = None,
+    ) -> dict[str, JsonValue]:
+        """Record the rows mined from a held miner task. A row is {fields: {name: {value, unit,
+        anchor, cell, quote, reported_in, cited_work}}}. An invalid item is reported by index and
+        the valid ones are written. `supersedes` maps the index of a row of this call (a string
+        key) to the id of the row it corrects. `finish` closes the work once no item is rejected;
+        a work with no records needs a `reason`."""
+
+        def record() -> JsonValue:
+            row_targets = _index_keys("supersedes", supersedes or {})
+            opened = open_project(settings, project, session=session, clock=clock)
+            actor = make_agent_actor(settings, session, role, model, skill)
+            good_rows, bad_rows = _parse_all(ExtractedRowInput, rows, "rows")
+            result = mining_service.mine_record(
+                opened,
+                actor,
+                task_id,
+                [item for _, item in good_rows],
+                finish=finish and not bad_rows,
+                reason=reason,
+                supersedes=_renumbered("supersedes", row_targets, good_rows, len(rows)),
+            )
+            merged = ExtractResult(
+                rows=_merged(result.rows, good_rows, bad_rows),
+                claims=result.claims,
+                completed=result.completed,
+            )
+            return _withheld(opened, merged.model_dump(mode="json"), include_work_ids=False)
+
+        return _reply(project, record, include_work_ids=False)
+
+    @server.tool()
+    def mine_status(project: str) -> dict[str, JsonValue]:
+        """Counts per listed miner and state (units, open, closed, rows, stale). A session that
+        joined a miner pass sees its own miner and its own pass only. Carries no rate. Read-only."""
+
+        def status() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            listed = mining_service.mine_status(
+                opened, session=opened.session, with_agreement=False
+            )
+            data: dict[str, JsonValue] = {
+                "miners": [entry.model_dump(mode="json") for entry in listed]
+            }
+            return _withheld(opened, data, include_work_ids=False)
+
+        return _reply(project, status, include_work_ids=False)
+
+    @server.tool()
+    def miner_register(
+        project: str, spec: dict[str, JsonValue], role: str, model: str, skill: str
+    ) -> dict[str, JsonValue]:
+        """Register a miner from its specification: name (m-...), version, selector, typed
+        fields, row key, evidence rule, procedure skill and regime. The spec is validated and
+        refused with located issues; a field of free text is refused. Registering the same spec
+        again changes nothing; a changed spec needs a new version. A registered miner runs only
+        after the protocol's `miners` section lists it. Refused to a session that has joined a
+        pass."""
+
+        def register() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            actor = make_agent_actor(settings, session, role, model, skill)
+            registered = mining_service.register_miner(opened, actor, spec)
+            return _withheld(opened, registered.model_dump(mode="json"), include_work_ids=False)
+
+        return _reply(project, register, include_work_ids=False)
+
+    @server.tool()
+    def miner_list(project: str) -> dict[str, JsonValue]:
+        """The registered miners: name, version, digest, who proposed it and whether the
+        protocol lists it. Read-only."""
+
+        def listing() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            data: dict[str, JsonValue] = {
+                "miners": [m.model_dump(mode="json") for m in mining_service.miner_listing(opened)]
+            }
+            return _withheld(opened, data, include_work_ids=False)
+
+        return _reply(project, listing, include_work_ids=False)
+
+    @server.tool()
     def import_status(
         project: str, cursor: str | None = None, limit: int = PAGE_LIMIT
     ) -> dict[str, JsonValue]:
@@ -2146,12 +2260,12 @@ def _refuse_pass_session(project: Project) -> None:
         )
 
 
-def _require_pass_opened(project: Project) -> None:
+def _require_pass_opened(project: Project, field: str = "graph") -> None:
     """The graph tools name works, and before a screening pass opens an agent must not be able to
     name a held-out seed's work (decision 43). Role-blind and neutral: the same message for every
     caller, saying nothing of seeds. The CLI is unaffected."""
     if not coverage_service.held_out_visible(project):
-        raise FactoryValidationError([ValidationIssue("graph", "not available yet")])
+        raise FactoryValidationError([ValidationIssue(field, "not available yet")])
 
 
 def _index_keys(name: str, given: Mapping[str, str]) -> dict[int, str]:

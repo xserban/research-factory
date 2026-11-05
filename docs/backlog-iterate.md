@@ -53,3 +53,10 @@ Minor review findings parked during the v1 build, to address when iterating from
 - Regions-A: `regions revise` requires name, definition and rules (no defaulting to the current definition).
 - Regions-A: the `text` rule scans corpus works' title and abstract in Python in a stream; add a normalised-text column if it must serve 100k works repeatedly.
 - Regions-B (must do): `region_propose`/`region_query` must withhold the members and live counts of any region whose rules reach an import's `part="all"` or a `run` of purpose `import`, `seed` or `probe` (directly or through pinned versions) from agents; the Regions-A guard only refuses agent-authored rules, it does not hide a human-authored region.
+- M-C: the CLI has `miner register|list` and `mine status` only; agreement, resolution and the audit of a miner scope are services (`extraction_agreement`, `resolve_extraction`, `extraction_audit_*` take `scope=`) with no CLI command yet.
+- M-C: `regime.passes == 1` and the calibration thresholds (`recall_min`, `field_agreement_min`) are stored and hashed but not enforced; M-D reads them.
+- M-C: a registered miner's `procedure` skill is checked for its name only; no `rf-mine` skill is installed, so the agent's skill reference is whichever installed skill it names.
+- M-C: `TitleRef.state` and `entry_link_state` (stated or inferred) are reads; the row does not store which, so a builder that wants the distinction recomputes it.
+- M-C: `registered_miners` and `miner_listing` read one row per version (N+1 queries); `mine_status` recomputes unit states per miner per call. Fine for a handful of miners.
+- M-C: a title reference needs a year in its quote; a title cited without one is `work-not-found`. Widen the window by the citing work's year if pilot use shows false rejects.
+- M-C: `miner_register` over MCP is refused to pass sessions; `miner_list` is not (it names no work and no result).

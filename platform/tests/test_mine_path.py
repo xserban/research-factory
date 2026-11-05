@@ -4,7 +4,6 @@
 import pytest
 
 from factory.errors import FactoryValidationError
-from factory.index.default import PROJECTION_VERSION
 from factory.model.extraction import (
     ExtractionClosed,
     ExtractionPassJoined,
@@ -198,7 +197,3 @@ def test_model_independence_is_per_miner_scope(project: Project) -> None:
     assert raised.value.issues[0].field == "model"
     join_extraction_pass(project, b_same_model, PassLabel.B, scope=MinerScope("m-other-thing"))
     assert session_scope(project, b_same_model.session) == MinerScope("m-other-thing")
-
-
-def test_projection_version_is_pinned() -> None:
-    assert PROJECTION_VERSION  # bumped once, in task 6; every pin names the same value

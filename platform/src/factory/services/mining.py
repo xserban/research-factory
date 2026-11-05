@@ -10,7 +10,7 @@ Invariants:
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 
 from pydantic import JsonValue
@@ -19,20 +19,62 @@ from sqlalchemy import text
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor, ActorKind
 from factory.mining.compile import compile_miner, miner_digest
-from factory.mining.spec import MinerSpec, Population, Selector, spec_from_json, spec_to_json
+from factory.mining.kinds import close_checks, kind_checks
+from factory.mining.select import selected_anchors
+from factory.mining.spec import (
+    AnchorKindRef,
+    CitationKind,
+    EnumKind,
+    IntegerKind,
+    MinerSpec,
+    NumberKind,
+    Population,
+    QuoteKind,
+    Selector,
+    Unverified,
+    WorkRefKind,
+    spec_from_json,
+    spec_to_json,
+)
 from factory.mining.validate import validate_miner
+from factory.model.base import StrictModel
+from factory.model.extraction import ExtractedRowInput, MinerScope
 from factory.model.miners import MinerRegistered, MinerUse
 from factory.model.protocol import ExtractionSchema, ProtocolStatus, ScreeningStage
+from factory.model.screening import PassLabel
 from factory.model.search import QueryPurpose
 from factory.packs import Pack
 from factory.services.agreement import Outcome, final_outcomes
 from factory.services.context import Project
+from factory.services.conversions import conversion_manifest
 from factory.services.document_read import default_conversion
+from factory.services.extraction import (
+    ExtractBatchContent,
+    ExtractNext,
+    ExtractResult,
+    MineBatchContent,
+    live_rows,
+    next_unit,
+    record_unit,
+    stale_extractions,
+    unit_states,
+)
+from factory.services.extraction_agreement import agreement_overall
+from factory.services.passes import memberships
 from factory.services.protocol import ProtocolVersion, current_protocol, miner_extraction_schema
 from factory.services.references import current_extraction, included_works
+from factory.services.stages import is_mine_kind
+from factory.services.tasks import get_task, task_content
 
 __all__ = [
+    "MINE_INSTRUCTIONS",
+    "MineStatus",
+    "MinerListing",
     "MinerRow",
+    "mine_next",
+    "mine_record",
+    "mine_status",
+    "miner_listing",
     "miner_population",
     "miner_schema",
     "population",
@@ -270,3 +312,203 @@ def miner_population(project: Project, name: str) -> list[str]:
     """The works the listed miner `name` mines, in work-id order (its selector's population)."""
     _, _, spec = _listed(project, name)
     return [work for work, _ in population(project, spec.selector)]
+
+
+# --- The generic mine path ---
+
+MINE_INSTRUCTIONS = (
+    "Mine the records this miner's specification defines from the pinned document. Read it with "
+    "document_read, at the listed anchors first. For every field give the value as printed, its "
+    "anchor and the verbatim quote that contains it; a field of kind enum, citation, anchor or "
+    "work_ref follows the rule listed for it. Never compute, round or convert a value, and leave "
+    "out a field the document does not state."
+)
+
+
+def _kind_note(kind: object) -> str:
+    """The rule an agent follows for one field kind, as a fixed sentence."""
+    if isinstance(kind, NumberKind):
+        units = ", ".join(u or "none" for u in kind.units) or "any"
+        return f"number ({kind.unit_family.value}); unit one of: {units}; the value is in its quote"
+    if isinstance(kind, IntegerKind):
+        return "integer; the value is in its quote"
+    if isinstance(kind, EnumKind):
+        return (
+            "enum: "
+            + " | ".join(kind.values)
+            + "; give a verbatim quote and its anchor as evidence"
+        )
+    if isinstance(kind, CitationKind):
+        return "citation: the text appears in its quote and the quote holds a citation marker"
+    if isinstance(kind, AnchorKindRef):
+        return "anchor: an anchor id of kind " + ", ".join(k.value for k in kind.kinds)
+    if isinstance(kind, WorkRefKind):
+        if kind.by == "entry":
+            return "work_ref: the ordinal of an entry of the work's reference list"
+        return "work_ref: the title of a corpus work; its quote states the year"
+    if isinstance(kind, QuoteKind):
+        return "quote: the text appears in its quote"
+    assert isinstance(kind, Unverified)
+    return "free text"
+
+
+def mine_next(
+    project: Project, actor: Actor, name: str, version: int, label: PassLabel
+) -> ExtractNext:
+    """Serve the next task of pass `label` of the listed miner `(name, version)`: `next_unit` with
+    the miner's scope and a content hook that adds the miner, its digest, the anchors its selector
+    selects in the pinned conversion and the rule of each field kind (ids and fixed sentences, never
+    document text).
+
+    Refused, with nothing written, on field `miners` until the protocol lists that registered
+    version, and as `next_unit` refuses otherwise."""
+    _, _, spec = require_listed(project, name, version)
+    digest = miner_digest(spec)
+    notes = {f.name: _kind_note(f.kind) for f in spec.fields}
+    described = {f.name: f.description for f in spec.fields if f.description}
+
+    def content(proj: Project, base: ExtractBatchContent) -> ExtractBatchContent:
+        conversion = base.records[0]["conversion_id"]
+        anchors = selected_anchors(conversion_manifest(proj, conversion), spec.selector)
+        return MineBatchContent(
+            **{**base.model_dump(), "instructions": MINE_INSTRUCTIONS},
+            miner=name,
+            version=version,
+            digest=digest,
+            anchors=anchors,
+            field_kinds=notes,
+            descriptions=described,
+        )
+
+    return next_unit(project, actor, label, scope=MinerScope(name), content=content)
+
+
+def mine_record(
+    project: Project,
+    actor: Actor,
+    task_id: str,
+    rows: Sequence[ExtractedRowInput],
+    *,
+    finish: bool = False,
+    reason: str | None = None,
+    supersedes: Mapping[int, str] | None = None,
+) -> ExtractResult:
+    """Record rows for a held miner task and close the unit on `finish`: `record_unit` with the
+    compiled pack's verification, the miner's kind checks and its closing rule. Refused on `task_id`
+    for a task that is not a miner task and on `miners` when the protocol no longer lists the
+    miner version the task was served for. Claims are always empty."""
+    task = get_task(project, task_id)
+    content = None if task is None else task_content(project, task)
+    miner = content.get("miner") if isinstance(content, dict) else None
+    version = content.get("version") if isinstance(content, dict) else None
+    if task is None or not is_mine_kind(task.kind) or not isinstance(miner, str):
+        raise FactoryValidationError(
+            [ValidationIssue("task_id", "not a miner task; evidence uses extract_record")]
+        )
+    _, _, spec = require_listed(project, miner, version if isinstance(version, int) else 0)
+    return record_unit(
+        project,
+        actor,
+        task_id,
+        rows,
+        finish=finish,
+        reason=reason,
+        supersedes=supersedes,
+        extra_check=kind_checks(spec),
+        close_check=close_checks(spec),
+    )
+
+
+class MinerListing(StrictModel):
+    """A registered miner version and whether the current protocol lists it."""
+
+    name: str
+    version: int
+    digest: str
+    proposer_kind: str
+    listed: bool
+
+
+def miner_listing(project: Project) -> list[MinerListing]:
+    """Every registered miner version, by name then version, with whether it is listed."""
+    protocol = current_protocol(project)
+    listed = (
+        {(u.name, u.version) for u in protocol.spec.miners or ()} if protocol is not None else set()
+    )
+    return [
+        MinerListing(
+            name=r.name,
+            version=r.version,
+            digest=r.digest,
+            proposer_kind=r.proposer_kind,
+            listed=(r.name, r.version) in listed,
+        )
+        for r in registered_miners(project)
+    ]
+
+
+class MineStatus(StrictModel):
+    """One listed miner's units by state and its live rows. `agreement` is the overall agreement
+    of its two passes (None for agents, before both passes finish, or when nothing is compared)."""
+
+    name: str
+    version: int
+    digest: str
+    units: int
+    open: int
+    closed: int
+    rows: int
+    stale: int
+    agreement: float | None
+
+
+def mine_status(
+    project: Project, *, session: str | None = None, with_agreement: bool = True
+) -> list[MineStatus]:
+    """The status of every miner the current protocol lists, by name. A session that joined a miner
+    pass sees that miner only, and only the units of its own pass; `with_agreement` False leaves
+    the agreement out (agent views carry no rate)."""
+    protocol = current_protocol(project)
+    if protocol is None:
+        return []
+    own: tuple[str, PassLabel] | None = None
+    if session is not None:
+        for member in memberships(project, session):
+            if (
+                member.module == "extraction"
+                and member.scope is not None
+                and member.scope.startswith("m-")
+            ):
+                own = (member.scope, member.label)
+    out: list[MineStatus] = []
+    for use in sorted(protocol.spec.miners or (), key=lambda u: u.name):
+        if own is not None and own[0] != use.name:
+            continue
+        spec = registered_miner(project, use.name, use.version)
+        if spec is None:
+            continue
+        scope = MinerScope(use.name)
+        states = [
+            s for s in unit_states(project, scope=scope) if own is None or s.pass_label == own[1]
+        ]
+        stale = stale_extractions(project, scope=scope)
+        live = [r for r in live_rows(project, scope=scope) if r.extraction_id not in stale]
+        agreement = (
+            agreement_overall(project, scope=scope).overall
+            if with_agreement and own is None
+            else None
+        )
+        out.append(
+            MineStatus(
+                name=use.name,
+                version=use.version,
+                digest=miner_digest(spec),
+                units=len(states),
+                open=sum(s.state in ("open", "queued") for s in states),
+                closed=sum(s.state == "current" for s in states),
+                rows=len([r for r in live if own is None or r.pass_label == own[1]]),
+                stale=sum(s.state == "stale" for s in states),
+                agreement=agreement,
+            )
+        )
+    return out

@@ -82,6 +82,7 @@ from factory.services import interpretations as interpretations_service
 from factory.services import lineage as graph_service
 from factory.services import matching as matching_service
 from factory.services import methods as methods_service
+from factory.services import mining as mining_service
 from factory.services import notices as notices_service
 from factory.services import portfolio as portfolio_service
 from factory.services import prisma as prisma_service
@@ -186,6 +187,16 @@ document_app = typer.Typer(
 extract_app = typer.Typer(
     name="extract",
     help="Extraction: unit status, agreement, resolution and the audit.",
+    no_args_is_help=True,
+)
+miner_app = typer.Typer(
+    name="miner",
+    help="Registered miners: register a specification, list the registered versions.",
+    no_args_is_help=True,
+)
+mine_app = typer.Typer(
+    name="mine",
+    help="Mining with registered miners: unit status.",
     no_args_is_help=True,
 )
 contributions_app = typer.Typer(
@@ -325,6 +336,8 @@ app.add_typer(search_app)
 app.add_typer(fulltext_app)
 app.add_typer(document_app)
 app.add_typer(extract_app)
+app.add_typer(miner_app)
+app.add_typer(mine_app)
 app.add_typer(contributions_app)
 app.add_typer(relations_app)
 app.add_typer(ideas_app)
@@ -1301,6 +1314,45 @@ def extract_status_cmd(ctx: typer.Context) -> None:
         project = _resolve_project(state)
         states = extraction_service.unit_states(project)
     for line in render.extraction_status_lines(states):
+        typer.echo(line)
+
+
+@miner_app.command("register")
+def miner_register_cmd(
+    ctx: typer.Context,
+    spec: Annotated[Path, typer.Argument(help="A miner specification (a JSON file).")],
+) -> None:
+    """Register a miner version from a specification file (the researcher's act)."""
+    state = _state(ctx)
+    try:
+        body = json.loads(spec.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        _fail(f"{spec}: cannot read a JSON specification ({exc})", 1)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        registered = mining_service.register_miner(project, project.human_actor(), body)
+    typer.echo(f"registered {registered.name} version {registered.version} ({registered.digest})")
+
+
+@miner_app.command("list")
+def miner_list_cmd(ctx: typer.Context) -> None:
+    """The registered miners and whether the protocol lists them."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        listing = mining_service.miner_listing(project)
+    for line in render.miner_listing_lines(listing):
+        typer.echo(line)
+
+
+@mine_app.command("status")
+def mine_status_cmd(ctx: typer.Context) -> None:
+    """Units, rows and agreement of each miner the protocol lists."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        status = mining_service.mine_status(project)
+    for line in render.mine_status_lines(status):
         typer.echo(line)
 
 

@@ -20,6 +20,7 @@ Invariants:
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterator
 from dataclasses import dataclass
 
@@ -29,6 +30,7 @@ from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
 from factory.model.gate_audit import GateAuditLabelled, GateAuditSampled
 from factory.model.gates import GatePolicies
+from factory.model.miners import MINER_NAME_RE
 from factory.model.project import RigorMode
 from factory.model.protocol import ProtocolSpec
 from factory.model.screening import Channel
@@ -55,6 +57,32 @@ _LIVE_DECISIONS = {
 """Gates whose acts are the `binding` rows of a decisions table that still bind: a reference
 decision of a superseded extraction does not, and a decision carried to the live extraction is
 the same event, counted once (`DISTINCT`). A new import resolution deletes the earlier rows."""
+
+
+_RESOLUTION_GATES = {"extraction.resolve": False, "mine.resolve": True}
+"""The two gates whose act is `extraction.resolved`, by whether the resolution is a registered
+miner's (its `pack` is in the miner namespace). A gate sees only its own acts."""
+
+
+def _miner_resolutions(project: Project) -> set[str]:
+    """The ids of the `extraction.resolved` events of registered miners, read from the log (the
+    projection keeps the latest resolution per row, not every act). Empty, without reading the log,
+    while no miner pass has opened: no miner resolution can exist then."""
+    from factory.events.reader import read_all  # the reader imports the catalog
+
+    with project.index.connect() as conn:
+        opened = conn.execute(
+            text("SELECT 1 FROM extraction_passes WHERE scope LIKE 'm-%' LIMIT 1")
+        ).first()
+    if opened is None:
+        return set()
+    return {
+        event.id
+        for event in read_all(project.paths.events_dir, project.catalog)
+        if event.type == "extraction.resolved"
+        and isinstance(event.payload.get("pack"), str)
+        and re.fullmatch(MINER_NAME_RE, str(event.payload["pack"])) is not None
+    }
 
 
 @dataclass(frozen=True)
@@ -202,7 +230,13 @@ def gate_acts(project: Project, gate_id: str) -> Iterator[GateAct]:
                 ),
                 {f"t{i}": t for i, t in enumerate(types)},
             ).all()
+    miner_acts = _miner_resolutions(project) if gate_id in _RESOLUTION_GATES else set()
     for event_id, kind, session in rows:
+        if (
+            gate_id in _RESOLUTION_GATES
+            and (str(event_id) in miner_acts) != _RESOLUTION_GATES[gate_id]
+        ):
+            continue
         yield GateAct(
             gate_id, str(event_id), str(kind), str(session), protocol_at(project, str(event_id))
         )
