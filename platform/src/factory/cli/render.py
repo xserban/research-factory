@@ -528,6 +528,9 @@ def import_coverage_lines(report: CoverageReport) -> list[str]:
         lines += [f"  excluded by screening: {w}" for w in part.excluded]
     if report.included_not_in_library is not None:
         lines.append(f"included works absent from the library: {report.included_not_in_library}")
+    if report.autonomy:
+        counts = ", ".join(f"{level} {n}" for level, n in report.autonomy.items())
+        lines.append(f"resolution decisions by autonomy: {counts}")
     lines += [f"suggested term: {s.term} ({s.seeds} works)" for s in report.suggestions]
     return lines
 

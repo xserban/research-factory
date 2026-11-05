@@ -1,6 +1,5 @@
 """The agent view of coverage counts only the visible parts' decisions (M-B re-review, 4)."""
 
-# ruff: noqa: F811
 from pathlib import Path
 
 from factory.events.envelope import Actor
