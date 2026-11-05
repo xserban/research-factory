@@ -16,6 +16,7 @@ from factory.index.inbox import inbox_handlers, inbox_tables
 from factory.index.intuition import intuition_handlers, intuition_tables
 from factory.index.lineage import lineage_handlers, lineage_tables
 from factory.index.living import digest_handlers, digest_tables, living_handlers, living_tables
+from factory.index.miners import miner_handlers, miner_tables
 from factory.index.notices import notice_handlers, notice_tables
 from factory.index.probe import probe_handlers, probe_tables
 from factory.index.project import project_created_handler, project_table
@@ -31,7 +32,7 @@ from factory.index.tasks import task_handlers, tasks_table
 from factory.index.watch import run_started_handler, watch_handlers, watch_tables
 
 # Bump on any change to the tables or handlers below; the index is then rebuilt.
-PROJECTION_VERSION = "40"
+PROJECTION_VERSION = "41"
 
 
 def default_projection(blobs: BlobStore | None = None) -> Projection:
@@ -69,6 +70,7 @@ def default_projection(blobs: BlobStore | None = None) -> Projection:
     findings = finding_tables(metadata)
     gates = gate_tables(metadata)
     regions = region_tables(metadata)
+    miners = miner_tables(metadata)
     handlers: dict[str, Handler] = {
         "project.created": project_created_handler(project),
         **task_handlers(tasks),
@@ -97,6 +99,7 @@ def default_projection(blobs: BlobStore | None = None) -> Projection:
         **finding_handlers(findings),
         **gate_handlers(gates),
         **region_handlers(regions, blobs),
+        **miner_handlers(miners),
     }
     # The graph projection reads the tables the other handlers of the same event just folded.
     for event_type, handler in graph_handlers().items():

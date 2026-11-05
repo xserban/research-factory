@@ -23,6 +23,7 @@ from factory.imports.model import ImportFormat, ImportRole
 from factory.model.base import StrictModel
 from factory.model.gates import GatePolicies
 from factory.model.identity import ULID_RE
+from factory.model.miners import MinerUse
 from factory.model.question import QUESTION_ID_RE
 from factory.model.search import QueryKind, QuerySpec
 from factory.model.watch import WatchPlan
@@ -55,6 +56,7 @@ _SORT_KEYS: dict[str, tuple[str, ...]] = {
     "queries": ("source", "kind", "text"),
     "limits": ("field", "value"),
     "library_sources": ("name", "format", "role"),
+    "miners": ("name", "version"),
 }
 _SEARCH_STRATEGY_KEYS = ("sources", "queries", "limits")
 _OMITTED_WHEN_NONE = frozenset(
@@ -67,6 +69,7 @@ _OMITTED_WHEN_NONE = frozenset(
         "watch_plan",
         "library_sources",
         "gate_policies",
+        "miners",
     }
 )
 """Optional sections left out of every hash while unset, so protocols that predate them keep
@@ -279,6 +282,9 @@ class ProtocolSpec(StrictModel):
     gate_policies: GatePolicies | None = None
     """Who may pass each decision gate (slice M). Absent (None) until declared, so the preset of
     the project's rigor mode applies; left out of the hash while unset."""
+    miners: tuple[MinerUse, ...] | None = None
+    """The registered miners this protocol runs (slice M, M-C). Absent (None) until declared;
+    left out of the hash while unset, and sorted by name and version in it."""
     rationale: str = ""
 
     @model_validator(mode="after")
@@ -341,6 +347,7 @@ AMENDABLE_FIELDS = (
     "watch_plan",
     "library_sources",
     "gate_policies",
+    "miners",
 )
 """Top-level hashed fields other than criteria, which an amendment reports as `other_changes`."""
 
@@ -459,6 +466,13 @@ class ExtractionStale(StrictModel):
     fields: tuple[str, ...] = ()
 
 
+class MinerStale(StrictModel):
+    """The rows of one registered miner an amendment makes stale (`ExtractionStale`)."""
+
+    name: str
+    rule: ExtractionStale
+
+
 class ProtocolAmended(StrictModel):
     """A new version of the current protocol, or a prose-only change when the versions are equal.
 
@@ -480,6 +494,7 @@ class ProtocolAmended(StrictModel):
     other_changes: tuple[str, ...] = ()
     extraction_stale: ExtractionStale | None = None
     contribution_stale: ExtractionStale | None = None
+    miner_stale: tuple[MinerStale, ...] = ()
 
     @model_validator(mode="after")
     def _to_version_matches_spec(self) -> Self:

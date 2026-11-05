@@ -24,6 +24,7 @@ from pydantic import AfterValidator, Field
 from factory.model.base import StrictModel
 from factory.model.fulltext import DOCUMENT_ID_RE
 from factory.model.identity import CONVERSION_ID_RE, ULID_RE
+from factory.model.miners import MINER_NAME_RE as MINER_NAME_RE
 from factory.model.protocol import PROTOCOL_ID_RE
 from factory.model.references import REX_ID_RE
 from factory.model.screening import (
@@ -49,11 +50,6 @@ CLAIM_STATEMENT_MAX = 600
 
 CONTRIBUTION_SCOPE_NAME = "contribution"
 """The pack name (and schema name) of the contribution scope."""
-
-
-MINER_NAME_RE = r"^m-[a-z0-9]+(?:-[a-z0-9]+)*$"
-"""A registered miner's name: a namespace no built-in pack uses, so the scope of an extraction event
-stays a pure function of its `pack` (slice M ruling 11)."""
 
 
 class Scope(StrEnum):

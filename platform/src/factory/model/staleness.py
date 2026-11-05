@@ -103,7 +103,7 @@ def scope_rule(amendment: ProtocolAmended, scope: ScopeKey) -> ExtractionStale |
     `contribution_stale` for contribution, the miner's own entry of `miner_stale` for a registered
     miner. A rule never crosses scopes."""
     if isinstance(scope, MinerScope):
-        return None
+        return next((m.rule for m in amendment.miner_stale if m.name == scope.name), None)
     if scope is Scope.CONTRIBUTION:
         return amendment.contribution_stale
     return amendment.extraction_stale

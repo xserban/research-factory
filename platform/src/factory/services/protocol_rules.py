@@ -26,6 +26,7 @@ from dataclasses import dataclass
 
 from factory.errors import ValidationIssue
 from factory.imports.model import ImportFormat, ImportRole
+from factory.model.miners import MinerUse
 from factory.model.project import RigorMode
 from factory.model.protocol import (
     AMENDABLE_FIELDS,
@@ -175,6 +176,7 @@ def protocol_issues(
     probes: Mapping[str, set[str]],
     known_sources: set[str],
     window_sources: Collection[str] = (),
+    registered_miners: Collection[tuple[str, int]] = (),
 ) -> ProtocolCheck:
     """Check a protocol against the current question, its seeds, its probes and its mode.
 
@@ -183,6 +185,7 @@ def protocol_issues(
     """
     errors = _errors(spec, question, current_question_id, mode, seeds, known_sources)
     errors.extend(_watch_plan_errors(spec, window_sources))
+    errors.extend(_miner_errors(spec.miners, registered_miners))
     gate_errors, gate_gaps = _gate_policy_issues(spec, mode)
     errors.extend(gate_errors)
     gaps = _gaps(spec, question, mode, probes)
@@ -255,6 +258,33 @@ def _errors(
             )
     issues.extend(_extraction_errors(spec.extraction_schema))
     issues.extend(_contribution_errors(spec.contribution_schema))
+    return issues
+
+
+MINERS_SECTION = "miners"
+EVIDENCE_NEEDS_CALIBRATION = "calibrate the miner first: evidence admission waits for M-D"
+
+
+def _miner_errors(
+    uses: Sequence[MinerUse] | None, registered: Collection[tuple[str, int]]
+) -> list[ValidationIssue]:
+    """The `miners` section: each use names a registered `(name, version)`, a name is listed once
+    (one version at a time), and `evidence` is refused until a calibration can admit it (M-D)."""
+    issues: list[ValidationIssue] = []
+    seen: set[str] = set()
+    for i, use in enumerate(uses or ()):
+        where = f"{MINERS_SECTION}.{i}"
+        if (use.name, use.version) not in registered:
+            issues.append(
+                ValidationIssue(
+                    f"{where}.name", "not a registered miner version; register it first"
+                )
+            )
+        if use.name in seen:
+            issues.append(ValidationIssue(f"{where}.name", "a miner is listed once"))
+        seen.add(use.name)
+        if use.evidence:
+            issues.append(ValidationIssue(f"{where}.evidence", EVIDENCE_NEEDS_CALIBRATION))
     return issues
 
 
@@ -472,6 +502,8 @@ def _gaps(
     if mode in (RigorMode.PILOT, RigorMode.SYSTEMATIC):
         gaps.extend(_extraction_gaps(spec.extraction_schema, mode))
         gaps.extend(_sampling_gaps(spec.contribution_schema, mode, CONTRIBUTION_SECTION))
+        for i, use in enumerate(spec.miners or ()):
+            gaps.extend(_sampling_gaps(use, mode, f"{MINERS_SECTION}.{i}"))
     return gaps
 
 
@@ -492,7 +524,7 @@ def _extraction_gaps(schema: ExtractionSchema | None, mode: RigorMode) -> list[V
 
 
 def _sampling_gaps(
-    schema: ExtractionSchema | None, mode: RigorMode, section: str
+    schema: ExtractionSchema | MinerUse | None, mode: RigorMode, section: str
 ) -> list[ValidationIssue]:
     """Plan-D ruling 9: pilot needs a dual-extraction fraction, systematic needs every work;
     both need the audit floors."""

@@ -28,12 +28,15 @@ from factory.events.envelope import Actor
 from factory.index.chase import chase_round_texts, snowball_round_texts
 from factory.living.window import window_spec
 from factory.model.base import StrictModel
+from factory.model.miners import MinerUse
 from factory.model.project import RigorMode
 from factory.model.protocol import (
     ChangeKind,
     CriterionChange,
     CriterionEffect,
     DeviationRecorded,
+    ExtractionSchema,
+    MinerStale,
     PressConfirmed,
     PressFinding,
     PressReviewed,
@@ -82,6 +85,58 @@ class ProtocolVersion(StrictModel):
     press: Literal["none", "reviewed", "confirmed"]
 
 
+def miner_fields(project: Project) -> dict[tuple[str, int], tuple[str, ...]]:
+    """The field names of every registered miner, by `(name, version)` (the `miners` table)."""
+    from factory.mining.spec import spec_from_json  # a leaf module; keeps protocol import-light
+
+    project.index.sync()
+    with project.index.connect() as conn:
+        rows = conn.execute(text("SELECT name, version, spec_blob FROM miners")).all()
+    return {
+        (str(name), int(version)): tuple(
+            f.name for f in spec_from_json(project.blobs.get_json(str(blob))).fields
+        )
+        for name, version, blob in rows
+    }
+
+
+def miner_extraction_schema(use: MinerUse, fields: tuple[str, ...]) -> ExtractionSchema:
+    """The `ExtractionSchema` a listed miner runs under: its pack is the miner, its fields are all
+    the miner's fields, it records no claims and declares no comparability keys."""
+    return ExtractionSchema(
+        pack=use.name,
+        pack_version=use.version,
+        fields=fields,
+        dual_extract_sample=use.dual_extract_sample,
+        audit_fraction=use.audit_fraction,
+        audit_minimum=use.audit_minimum,
+        claims=False,
+    )
+
+
+def miner_stale(project: Project, old: ProtocolSpec, new: ProtocolSpec) -> tuple[MinerStale, ...]:
+    """The rows each listed miner's amendment stales, by plan D's `extraction_stale` on the miner's
+    schema: a miner left out of the protocol, or listed at another version, stales all its rows;
+    sampling and audit settings stale nothing. Computed per miner, so amending one leaves the
+    others' rows alone."""
+    fields = miner_fields(project)
+    new_uses = {u.name: u for u in new.miners or ()}
+    out: list[MinerStale] = []
+    for use in old.miners or ():
+        known = fields.get((use.name, use.version))
+        if known is None:
+            continue
+        after = new_uses.get(use.name)
+        later = None if after is None else fields.get((after.name, after.version))
+        rule = extraction_stale(
+            miner_extraction_schema(use, known),
+            None if after is None or later is None else miner_extraction_schema(after, later),
+        )
+        if rule is not None:
+            out.append(MinerStale(name=use.name, rule=rule))
+    return tuple(sorted(out, key=lambda m: m.name))
+
+
 def record_protocol(
     project: Project, actor: Actor, spec: ProtocolSpec, *, ready: bool
 ) -> ProtocolResult:
@@ -106,6 +161,7 @@ def record_protocol(
             probes=_measured_probes(project),
             known_sources=set(default_sources()),
             window_sources=window_filter_sources(),
+            registered_miners=set(miner_fields(project)),
         )
         if check.errors:
             raise FactoryValidationError(check.errors)
@@ -231,6 +287,7 @@ def amend_protocol(
             probes=_measured_probes(project),
             known_sources=set(default_sources()),
             window_sources=window_filter_sources(),
+            registered_miners=set(miner_fields(project)),
         )
         if check.errors or check.gaps:
             raise FactoryValidationError([*check.errors, *check.gaps])
@@ -296,6 +353,7 @@ def amend_protocol(
             contribution_stale=extraction_stale(
                 current.spec.contribution_schema, spec.contribution_schema
             ),
+            miner_stale=miner_stale(project, current.spec, spec),
         )
         input_blob = (
             project.blobs.put_json(
