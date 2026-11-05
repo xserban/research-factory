@@ -53,6 +53,7 @@ from factory.model.extraction import (
 from factory.model.findings import ContradictionDecided, ContradictionProposed
 from factory.model.fulltext import Attempted, DocumentAdded, FetchStarted, SourceChanged
 from factory.model.gate_audit import GateAuditLabelled, GateAuditSampled
+from factory.model.hosting import ProjectHosted
 from factory.model.hypotheses import (
     HypothesisAbandoned,
     HypothesisConcluded,
@@ -200,6 +201,7 @@ def default_catalog() -> EventCatalog:
     """The production catalog: every event type the platform writes."""
     catalog = EventCatalog()
     catalog.register(EventType("project.created", ProjectCreated, 1))
+    catalog.register(EventType("project.hosted", ProjectHosted, 1))
     catalog.register(EventType("task.created", TaskCreated, 1))
     catalog.register(EventType("task.claimed", TaskClaimed, 1))
     catalog.register(EventType("task.completed", TaskCompleted, 1))

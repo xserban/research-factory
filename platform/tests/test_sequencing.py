@@ -23,6 +23,7 @@ from factory.index.index import Index
 from factory.model.identity import IdGenerator
 from factory.model.question import GoalStated
 from factory.services.context import Project, open_project
+from factory.services.hosting import host_project
 from factory.services.project import init_project
 from factory.services.tasks import TaskSpec, claim_next, create_tasks
 from tests.helpers import S2, T0
@@ -102,9 +103,10 @@ def test_a_new_project_can_be_written_inside_writing(settings: Settings) -> None
 
 
 @pytest.fixture
-def hosted(project: Project, monkeypatch: pytest.MonkeyPatch) -> Project:
-    monkeypatch.setattr(Project, "is_hosted", lambda self: True)
-    return project
+def hosted(project: Project, settings: Settings, clock: FixedClock) -> Project:
+    host_project(project, project.human_actor(), "lab1")
+    server = settings.model_copy(update={"host_id": "lab1"})
+    return open_project(server, "demo", session=S2, clock=clock)
 
 
 def count_events(project: Project) -> int:
@@ -178,7 +180,7 @@ def claim_all(project: Project, actor: Actor) -> list[str]:
 
 
 def test_concurrent_claims_never_rebuild(
-    hosted: Project, settings: Settings, clock: FixedClock, monkeypatch: pytest.MonkeyPatch
+    hosted: Project, clock: FixedClock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Acceptance 6: N sessions on one project, no rebuild, one holder per task, IDs in order."""
     specs = [TaskSpec("demo", {"n": n}) for n in range(THREADS * CLAIMS)]
@@ -197,7 +199,7 @@ def test_concurrent_claims_never_rebuild(
     sessions = [minter.ulid() for _ in range(THREADS)]
 
     def work(session: str) -> list[str]:
-        opened = open_project(settings, "demo", session=session, clock=clock)
+        opened = open_project(hosted.settings, "demo", session=session, clock=clock)
         return claim_all(opened, opened.human_actor())
 
     with ThreadPoolExecutor(THREADS) as pool:

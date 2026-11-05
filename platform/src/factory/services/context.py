@@ -14,6 +14,7 @@ from factory.events.factory import EventFactory
 from factory.events.writer import EventWriter
 from factory.index.default import default_projection
 from factory.index.index import Index
+from factory.index.project import latest_host
 from factory.model.identity import SLUG_RE, IdGenerator
 
 MAX_SLUG_LENGTH = 64
@@ -72,13 +73,15 @@ class Project:
         return self.index.exclusive()
 
     def is_hosted(self) -> bool:
-        return False
+        return hosted_by(self.index) is not None
 
     def record(self, events: Sequence[Event]) -> None:
         """Append and fold under the write lock. On a hosted project, refuse with nothing written a
         batch that does not sort after the log, and append the rest in ID order."""
         with self.writing():
-            if events and self.is_hosted():
+            # A foreign machine is not asked about order: the writer refuses it, naming the host.
+            host = hosted_by(self.index) if events else None
+            if host is not None and host == self.settings.host_id:
                 last = self.index.last_event_id()
                 if last is not None and min(event.id for event in events) <= last:
                     raise OrderingError(f"event minted outside writing(): not after {last}")
@@ -103,6 +106,13 @@ def slug_issues(slug: str) -> list[ValidationIssue]:
     return []
 
 
+def hosted_by(index: Index) -> str | None:
+    """The project's host, as of the log: the outermost lock syncs, and a hold already taken has
+    folded everything, so reading it inside `writing()` costs one query."""
+    with index.exclusive(), index.connect() as conn:
+        return latest_host(conn)
+
+
 def _id_floor(ids: IdGenerator) -> Callable[[str | None], None]:
     def floor(last_event_id: str | None) -> None:
         if last_event_id is not None:
@@ -117,6 +127,13 @@ def build_project(settings: Settings, slug: str, *, session: str, clock: Clock) 
     catalog = default_catalog()
     ids = IdGenerator(clock)
     blobs = BlobStore(paths.blobs_dir)
+    index = Index(
+        paths.index_path,
+        paths.events_dir,
+        catalog,
+        default_projection(blobs),
+        on_exclusive=_id_floor(ids),
+    )
     return Project(
         paths=paths,
         settings=settings,
@@ -127,14 +144,15 @@ def build_project(settings: Settings, slug: str, *, session: str, clock: Clock) 
         blobs=blobs,
         library=BlobStore(paths.library_dir),
         events=EventFactory(slug, catalog, ids),
-        writer=EventWriter(paths.events_dir, project=slug, catalog=catalog, blobs=blobs),
-        index=Index(
-            paths.index_path,
+        writer=EventWriter(
             paths.events_dir,
-            catalog,
-            default_projection(blobs),
-            on_exclusive=_id_floor(ids),
+            project=slug,
+            catalog=catalog,
+            blobs=blobs,
+            host_guard=lambda: hosted_by(index),
+            host_id=settings.host_id,
         ),
+        index=index,
     )
 
 

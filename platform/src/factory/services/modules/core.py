@@ -18,6 +18,7 @@ SPEC = ModuleSpec(
     events=EventFamily(
         types=(
             "project.created",
+            "project.hosted",
             "task.claimed",
             "task.completed",
             "task.created",
@@ -32,6 +33,7 @@ SPEC = ModuleSpec(
             "gate_audits",
             "meta",
             "project",
+            "project_hosts",
             "sync_state",
             "tasks",
         ),

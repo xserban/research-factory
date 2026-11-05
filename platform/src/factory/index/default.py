@@ -25,7 +25,12 @@ from factory.index.living import digest_handlers, digest_tables, living_handlers
 from factory.index.miners import miner_handlers, miner_tables
 from factory.index.notices import notice_handlers, notice_tables
 from factory.index.probe import probe_handlers, probe_tables
-from factory.index.project import project_created_handler, project_table
+from factory.index.project import (
+    project_created_handler,
+    project_hosted_handler,
+    project_hosts_table,
+    project_table,
+)
 from factory.index.projection import Handler, Projection, chain, core_tables
 from factory.index.protocol import protocol_handlers, protocol_tables
 from factory.index.question import question_handlers, question_tables
@@ -38,7 +43,7 @@ from factory.index.tasks import task_handlers, tasks_table
 from factory.index.watch import run_started_handler, watch_handlers, watch_tables
 
 # Bump on any change to the tables or handlers below; the index is then rebuilt.
-PROJECTION_VERSION = "49"
+PROJECTION_VERSION = "50"
 
 
 def default_projection(blobs: BlobStore | None = None) -> Projection:
@@ -50,6 +55,7 @@ def default_projection(blobs: BlobStore | None = None) -> Projection:
     metadata = MetaData()
     core_tables(metadata)
     project = project_table(metadata)
+    project_hosts = project_hosts_table(metadata)
     tasks = tasks_table(metadata)
     search = search_tables(metadata)
     dedup = dedup_tables(metadata)
@@ -88,6 +94,7 @@ def default_projection(blobs: BlobStore | None = None) -> Projection:
     drafts = draft_tables(metadata, protocol.protocols, project)
     handlers: dict[str, Handler] = {
         "project.created": project_created_handler(project),
+        "project.hosted": project_hosted_handler(project_hosts),
         **task_handlers(tasks),
         **search_handlers(search),
         **dedup_handlers(dedup),

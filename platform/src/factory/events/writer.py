@@ -1,5 +1,5 @@
 import os
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from factory.errors import FactoryValidationError, ValidationIssue
@@ -44,7 +44,10 @@ def _drop_unterminated_tail(path: Path) -> None:
 
 
 class EventWriter:
-    """Appends events to `<events_dir>/<actor.id>/<session>.jsonl`. Never edits a line."""
+    """Appends events to `<events_dir>/<actor.id>/<session>.jsonl`. Never edits a line.
+
+    `host_guard` reads the project's host; when there is one and it is not `host_id`, this machine
+    is not the project's writer and nothing is appended (slice 5 ruling 2)."""
 
     def __init__(
         self,
@@ -53,15 +56,24 @@ class EventWriter:
         project: str,
         catalog: EventCatalog,
         blobs: BlobStore,
+        host_guard: Callable[[], str | None] | None = None,
+        host_id: str | None = None,
     ) -> None:
         self._events_dir = events_dir
         self._project = project
         self._catalog = catalog
         self._blobs = blobs
+        self._host_guard = host_guard
+        self._host_id = host_id
 
     def append(self, events: Sequence[Event]) -> None:
         if not events:
             return
+        host = None if self._host_guard is None else self._host_guard()
+        if host is not None and host != self._host_id:
+            raise FactoryValidationError(
+                [ValidationIssue("host", f"host-mismatch: project is hosted by {host}")]
+            )
         issues: list[ValidationIssue] = []
         for index, event in enumerate(events):
             for issue in validate_event(
