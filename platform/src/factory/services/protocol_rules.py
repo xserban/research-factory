@@ -376,6 +376,30 @@ def _watch_plan_errors(
     return issues
 
 
+GATE_POLICY_BELOW_PRESET = "weaker than the preset"
+
+
+def gate_policy_gaps(spec: ProtocolSpec, mode: RigorMode) -> list[ValidationIssue]:
+    """Entries of `gate_policies` weaker than `mode`'s preset: a promotion gap (ruling 8), as
+    `snowball_plan_gaps` is. Unknown gates and entries below the floor are errors elsewhere and
+    are not repeated here."""
+    from factory.services.modules.default import default_modules  # the registry imports services
+
+    if spec.gate_policies is None:
+        return []
+    known = {g.gate_id: g for g in default_modules().gates()}
+    gaps: list[ValidationIssue] = []
+    for i, entry in enumerate(spec.gate_policies.entries):
+        gate = known.get(entry.gate)
+        if gate is None or rank(entry.policy) < rank(gate.floor):
+            continue
+        if weaker(entry.as_policy(), preset(mode, entry.gate)):
+            gaps.append(
+                ValidationIssue(f"gate_policies.entries.{i}.policy", GATE_POLICY_BELOW_PRESET)
+            )
+    return gaps
+
+
 def _gate_policy_issues(
     spec: ProtocolSpec, mode: RigorMode
 ) -> tuple[list[ValidationIssue], list[ValidationIssue]]:

@@ -44,6 +44,8 @@ SPEC = ModuleSpec(
         CheckRule("gate-audit-missing", (None, "warning", "error")),
         CheckRule("gate-audit-error-high", (None, "warning", "error")),
         CheckRule("gate-audit-unlabelled", (None, "warning", "error")),
+        CheckRule("gate-policy-below-pilot-preset", (None, "error", "error")),
+        CheckRule("gate-policy-below-systematic-preset", (None, None, "error")),
     ),
 )
 

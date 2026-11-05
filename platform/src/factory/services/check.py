@@ -104,6 +104,7 @@ from factory.services.prisma import prisma_flow, search_report
 from factory.services.project import project_status
 from factory.services.protocol import current_protocol
 from factory.services.protocol_rules import (
+    gate_policy_gaps,
     library_source_gaps,
     snowball_plan_gaps,
     watch_plan_gaps,
@@ -478,6 +479,7 @@ def _run_rules(project: Project) -> list[_Hit]:
         _layer(project),
         gate_hits(project),
         audit_hits(project),
+        _gate_policies(project),
     ]
     flat = [hit for group in groups for hit in group]
     return [replace(hit, seq=seq) for seq, hit in enumerate(flat)]
@@ -1900,6 +1902,38 @@ def _above_ceiling(project: Project) -> list[str]:
         for x, entries, open_ in rows
         if int(entries) and int(open_) / int(entries) > REFERENCE_UNRESOLVED_CEILING
     ]
+
+
+def _gate_policies(project: Project) -> list[_Hit]:
+    """Gate policies weaker than a stricter mode's preset (ruling 8), as promotion gaps: those
+    weaker than the pilot preset are errors in pilot and systematic, those weaker only than the
+    systematic preset are errors in systematic. Exploratory allows both."""
+    protocol = current_protocol(project)
+    if protocol is None or protocol.spec.gate_policies is None:
+        return []
+    entries = protocol.spec.gate_policies.entries
+    pilot = {g.field for g in gate_policy_gaps(protocol.spec, RigorMode.PILOT)}
+    systematic = {g.field for g in gate_policy_gaps(protocol.spec, RigorMode.SYSTEMATIC)} - pilot
+
+    def gates_of(fields: set[str]) -> tuple[str, ...]:
+        return tuple(
+            e.gate for i, e in enumerate(entries) if f"gate_policies.entries.{i}.policy" in fields
+        )
+
+    hits: list[_Hit] = []
+    for code, fields, mode in (
+        ("gate-policy-below-pilot-preset", pilot, "pilot"),
+        ("gate-policy-below-systematic-preset", systematic, "systematic"),
+    ):
+        if fields:
+            hits.append(
+                _Hit(
+                    code,
+                    gates_of(fields),
+                    f"{len(fields)} gate polic(ies) are weaker than the {mode} preset",
+                )
+            )
+    return hits
 
 
 def _snowball(project: Project, outcomes: dict[str, Outcome]) -> list[_Hit]:
