@@ -272,6 +272,7 @@ def agent_view(
     report: CheckReport,
     *,
     labelled_audit: str | None = None,
+    labelled_contribution_audit: str | None = None,
 ) -> CheckReport:
     """The report as an agent may read it: seed findings by role and count only (R-20), no
     label-derived rate, and no extraction audit ceiling flag.
@@ -314,14 +315,14 @@ def agent_view(
         )
         for item in order
     ]
-    if labelled_audit is not None:
+    labelled = [a for a in (labelled_audit, labelled_contribution_audit) if a is not None]
+    if labelled:  # one marker for both audits, the same above and below either ceiling
         findings.append(
             Finding(
                 code=_AUDIT_REPORTED,
                 severity="warning",
-                refs=[labelled_audit],
-                message="the extraction audit is labelled; its result is reported to the "
-                "researcher",
+                refs=labelled,
+                message="an extraction audit is labelled; its result is reported to the researcher",
             )
         )
     return report.model_copy(update={"findings": findings})
@@ -335,7 +336,16 @@ def agent_check(project: Project, *, promote_to: RigorMode | None = None) -> Che
         labelled = (
             audit.audit_id if audit is not None and (audit.labelled or audit.outdated) else None
         )
-        report = agent_view(check(project, promote_to=promote_to), labelled_audit=labelled)
+        contribution = contribution_audit_report(project)
+        report = agent_view(
+            check(project, promote_to=promote_to),
+            labelled_audit=labelled,
+            labelled_contribution_audit=(
+                contribution.audit_id
+                if contribution is not None and (contribution.labelled or contribution.outdated)
+                else None
+            ),
+        )
         return _development_only(project, report)
 
 
@@ -610,35 +620,29 @@ def _relation_hits(project: Project) -> list[_Hit]:
 
 def _broken_chains(project: Project, live: list[RelationView]) -> list[str]:
     """Live stated or confirmed relations whose basis row was never recorded, or whose
-    (reference extraction, entry) has no link row. A superseded or stale basis is still recorded:
-    that is `relation-stale`, not a broken chain."""
+    (reference extraction, entry) has no link row, found by an anti-join in SQL. A superseded or
+    stale basis is still recorded: that is `relation-stale`, not a broken chain."""
+    wanted = [
+        r.relation_id
+        for r in live
+        if r.proposal_status == "stated" or r.decision is LineageDecision.CONFIRM
+    ]
+    if not wanted:
+        return []
     with project.index.connect() as conn:
-        rows = {
-            str(r[0])
-            for r in conn.execute(
-                text("SELECT extraction_id FROM extraction_rows WHERE scope = 'contribution'")
-            )
-        }
-        links = {
-            (str(r[0]), int(r[1]))
-            for r in conn.execute(text("SELECT extraction_id, ordinal FROM reference_links"))
-        }
-    out: list[str] = []
-    for r in live:
-        if r.proposal_status != "stated" and r.decision is not LineageDecision.CONFIRM:
-            continue
-        no_row = r.basis_item is None or r.basis_item not in rows
-        no_link = (
-            r.reference_extraction_id is not None
-            and (
-                r.reference_extraction_id,
-                r.cited_entry,
-            )
-            not in links
-        )
-        if no_row or no_link:
-            out.append(r.relation_id)
-    return sorted(out)
+        rows = conn.execute(
+            text(
+                "SELECT r.relation_id FROM relations r "
+                "WHERE r.relation_id IN (SELECT value FROM json_each(:ids)) AND ("
+                "r.basis_item IS NULL OR NOT EXISTS (SELECT 1 FROM extraction_rows e "
+                "WHERE e.extraction_id = r.basis_item AND e.scope = 'contribution') "
+                "OR (r.reference_extraction_id IS NOT NULL AND NOT EXISTS ("
+                "SELECT 1 FROM reference_links l WHERE l.extraction_id = r.reference_extraction_id "
+                "AND l.ordinal = r.cited_entry))) ORDER BY r.relation_id"
+            ),
+            {"ids": json.dumps(sorted(wanted))},
+        ).all()
+    return [str(r[0]) for r in rows]
 
 
 # --- Conclusions (slice 4b, living-D) ---

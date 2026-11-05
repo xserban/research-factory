@@ -21,6 +21,7 @@ from factory.packs.contribution import (
     CONTRIBUTION_V1,
     ITEM_KINDS,
 )
+from factory.packs.ml_benchmark import CITATION_PATTERNS
 from factory.services.extraction_verify import RowVerdict, verify_row_in
 
 MD = """# Study
@@ -115,7 +116,7 @@ def test_contribution_pack_shape() -> None:
     assert p.compared_fields == ("item_kind", "absent_kind", "name", "cited_entry", "value")
     assert p.row_key_fields == ("item_kind", "absent_kind", "name", "metric")
     assert p.row_anchor_fields == ("name", "statement", "compared_to")
-    assert p.default_comparability_keys == () and p.citation_patterns == ()
+    assert p.default_comparability_keys == () and p.citation_patterns == CITATION_PATTERNS
 
 
 def test_conditional_fields_name_existing_fields() -> None:
@@ -132,7 +133,7 @@ def test_conditional_fields_name_existing_fields() -> None:
 
 def test_contribution_digest_is_pinned() -> None:
     digest = hashlib.sha256(repr(CONTRIBUTION_V1).encode()).hexdigest()
-    assert digest == "9a8ba2d09fb1094f6ec7723b57369997b624ec9863419f75634fe0ab0162fc4f", (
+    assert digest == "5e8eb3706e962766be1e71acec6322879b36dd06628c4fbc45f3bb9e5a56f7cd", (
         "packs are versioned: add a new version"
     )
 

@@ -173,3 +173,38 @@ async def test_trace_refused_to_pass_session(
     async with open_session(settings, clock) as client:
         out = await client.call("trace", project="demo", ref=rid)
     assert out["ok"] is False and out["errors"][0]["field"] == "session"
+
+
+def test_rejected_cites_edge_reads_rejected_in_trace_and_graph(
+    project: Project, agent: Actor, human: Actor, lin: Lineage
+) -> None:
+    from factory.lineage.graph import GraphFilter
+    from factory.services.lineage import iter_edges
+
+    edge = f"cit:{lin.rex}:5"
+    assert "cites stated" in trace(project, edge).label
+    project.record(
+        [
+            project.events.make(
+                "reference.resolution_decided",
+                ReferenceResolutionDecided.model_validate(
+                    {
+                        "extraction_id": lin.rex,
+                        "ordinal": 5,
+                        "decision": "reject",
+                        "work_id": None,
+                        "rationale": "wrong paper",
+                        "quotes": [],
+                        "confirmed_by": "human",
+                    }
+                ),
+                human,
+            )
+        ]
+    )
+    assert trace(project, edge).label.startswith("cites rejected")
+    shown = {
+        e.edge_id
+        for e in iter_edges(project, GraphFilter(include_inferred=True, include_stale=True))
+    }
+    assert edge not in shown  # the graph hides a rejected link: both read it as rejected

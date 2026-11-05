@@ -21,8 +21,8 @@ from factory.errors import FactoryValidationError
 from factory.events.envelope import Actor
 from factory.events.reader import read_all
 from factory.lineage.graph import GraphFilter
-from factory.model.extraction import ExtractedRowInput, FieldInput
-from factory.model.lineage import EdgeStatus, LineageDecision, RelationProposal
+from factory.model.extraction import ExtractedRowInput, FieldInput, Scope
+from factory.model.lineage import EdgeStatus, LineageDecision, RelationProposal, RelationProposed
 from factory.model.project import RigorMode
 from factory.model.references import ReferenceResolutionDecided
 from factory.model.screening import Channel, PassLabel
@@ -40,7 +40,12 @@ from factory.services.contributions import (
     resolve_contribution,
 )
 from factory.services.evidence_report import evidence_report
-from factory.services.extraction import ContributionBatch, live_claims, stale_extractions
+from factory.services.extraction import (
+    ContributionBatch,
+    live_claims,
+    live_rows,
+    stale_extractions,
+)
 from factory.services.extraction_agreement import final_rows, grouped_rows, independence_counts
 from factory.services.ideas import (
     decide_idea,
@@ -92,6 +97,7 @@ from tests.lineage_helpers import (
     screened,
     world,
 )
+from tests.lineage_payloads import stated
 from tests.test_contribution_agreement import _lorem
 from tests.test_extraction_agreement import _both, _r, ext_a, ext_b
 from tests.test_lineage_check import LINEAGE_CODES, _found, _park_everything
@@ -188,6 +194,35 @@ def test_quote_number_not_stated_and_cited_entry_rules(
         (5, "matched"),
         (4, "mismatch"),
     }  # 5: a marker that maps elsewhere is flagged
+    copied = contribution_record(  # 3: a value read next to a citation marker is flagged (R-44)
+        project,
+        ctr_a,
+        batch.task_id,
+        [
+            item(
+                "result",
+                P2,
+                statement="softmax attention [3]",
+                metric=field("softmax", *P2),
+                value=field("3", *P2),
+            )
+        ],
+    )
+    assert len(copied.rows.written) == 1, copied.rows.rejected
+    row = next(
+        r
+        for r in live_rows(project, scope=Scope.CONTRIBUTION)
+        if r.extraction_id == copied.rows.written[0]
+    )
+    assert row.fields["value"].copy_marker is True
+    assert all(
+        not r.fields["value"].copy_marker
+        for r in [
+            r
+            for r in live_rows(project, scope=Scope.CONTRIBUTION)
+            if "value" in r.fields and r.extraction_id != row.extraction_id
+        ]
+    )
     batch_b = contribution_next(project, ctr_b, PassLabel.B).batch  # a unit of its own
     assert isinstance(batch_b, ContributionBatch)
     ns = contribution_record(
@@ -203,10 +238,59 @@ def test_quote_number_not_stated_and_cited_entry_rules(
         contribution_record(project, ctr_b, batch_b.task_id, [], finish=True)
 
 
+# 4
+def test_closure_rules(project: Project, agent: Actor, ctr_a: Actor, world: list[str]) -> None:
+    with_references(project, agent, world[0])
+    batch = contribution_next(project, ctr_a, PassLabel.A).batch
+    assert isinstance(batch, ContributionBatch)
+    base = item("base-idea", P1, name="linear attention", cited_entry=field(5))
+    addition = item("addition", P2, name="softmax attention")
+    limitation = item(
+        "limitation", P4, name="long sequences", statement="very long sequences degrade"
+    )
+
+    def refused(rows: list[ExtractedRowInput], reason: str | None) -> set[tuple[str, str]]:
+        with pytest.raises(FactoryValidationError) as e:
+            contribution_record(project, ctr_a, batch.task_id, rows, finish=True, reason=reason)
+        return {(i.field, i.reason) for i in e.value.issues}
+
+    assert ("finish", "no-addition") in refused([base, limitation], "no results")
+    assert ("finish", "base-idea-not-covered") in refused([addition, limitation], "no results")
+    assert ("finish", "limitation-not-covered") in refused([base, addition], "no results")
+    assert ("reason", "no-result-needs-reason") in refused([base, addition, limitation], None)
+    assert live_items(project) == []  # every refused close wrote nothing
+    done = contribution_record(
+        project,
+        ctr_a,
+        batch.task_id,
+        [base, addition, limitation],
+        finish=True,
+        reason="no results",
+    )
+    assert done.completed
+
+
+# 6 (independence)
+def test_pass_independence(project: Project, ctr_a: Actor, world: list[str]) -> None:
+    assert contribution_next(project, ctr_a, PassLabel.A).batch is not None
+    same_model = ctr_a.model_copy(update={"session": "01JZ9Q3K5M7N8P0R2S4T6V8W1F"})
+    with pytest.raises(FactoryValidationError) as e:
+        contribution_next(project, same_model, PassLabel.B)
+    assert e.value.issues[0].field == "model"
+    same_session = ctr_a.model_copy(update={"model": "claude-sonnet-5-5"})
+    with pytest.raises(FactoryValidationError):
+        contribution_next(project, same_session, PassLabel.B)
+
+
 # 6
 def test_dual_extraction_agreement_resolution_audit(
     project: Project, human: Actor, disputed: Lineage
 ) -> None:
+    keys = {
+        label: {r.row_key for r in live_rows(project, label, scope=Scope.CONTRIBUTION)}
+        for label in PassLabel
+    }
+    assert keys[PassLabel.A] & keys[PassLabel.B]  # rows align on row_key across the passes
     agreement = contribution_agreement(project, human)
     (d,) = agreement.disagreements
     resolve_contribution(project, human, d.work_id, d.row_key, d.field, "a", "checked", CH)
@@ -370,15 +454,23 @@ def test_staleness_by_superseded_item(
 def test_ideas(
     project: Project, agent: Actor, other_session_human: Actor, lin: Lineage, world: list[str]
 ) -> None:
-    with pytest.raises(FactoryValidationError):  # the name is not in a verified quote
+    before = len(read_all(project.paths.events_dir, project.catalog))
+    with pytest.raises(FactoryValidationError) as refusal:  # the name is not in a verified quote
         propose_idea(project, agent, "Performer", lin.source, lin.base, [lin.source])
+    assert (refusal.value.issues[0].field, refusal.value.issues[0].reason) == (
+        "name",
+        "name-not-in-quote",
+    )
+    assert len(read_all(project.paths.events_dir, project.catalog)) == before  # nothing written
     other = next(w for w in world if w != lin.source)
     a = propose_idea(project, agent, "linear attention", lin.source, lin.base, [lin.source, other])
     b = propose_idea(project, agent, "Linear attention", lin.source, lin.base, [lin.source])
     assert list_ideas(project) == []  # unconfirmed ideas are not drawn
     assert not [n for n in iter_nodes(project) if n.node_id.startswith("ida_")]
+    assert a not in graph_export(project, "json")  # not drawn while unconfirmed
     decide_idea(project, other_session_human, a, LineageDecision.CONFIRM, "ok")
     decide_idea(project, other_session_human, b, LineageDecision.CONFIRM, "ok")
+    assert a in graph_export(project, "json")
     before = graph_export(project, "json", flt=ALL)
     dot_before = graph_export(project, "dot", flt=ALL)
     merge_ideas(project, other_session_human, b, a, "naming variant")
@@ -531,6 +623,62 @@ def test_check_findings(
     text = " ".join(f.message for f in found.values())
     for needle in ("linear attention", "Softmax", "Lorem", "Plain text"):
         assert needle not in text
+
+
+# 17 (the remaining codes)
+def test_check_findings_remaining(
+    project: Project,
+    agent: Actor,
+    human: Actor,
+    ctr_a: Actor,
+    ctr_b: Actor,
+    lin: Lineage,
+) -> None:
+    _park_everything(project, ctr_a, ctr_b)
+    contribution_agreement(project, human)
+    sampled = contribution_audit_sample(project, human, random_seed=11)
+    for s in sampled.items:
+        contribution_audit_record(
+            project, human, sampled.audit_id, s.work_id, s.row_key, s.field, False, "", CH
+        )
+    payload = RelationProposed.model_validate(
+        stated(source_work=lin.source, target=lin.target5, resolved_target=lin.target5)
+    )
+    project.record(
+        [
+            project.events.make(
+                "relation.proposed",
+                payload,
+                agent,
+                refs=[payload.relation_id],
+                input_blob=project.blobs.put_json({"by": "hand"}),
+            )
+        ]
+    )
+    found = _found(project)
+    assert found["contribution-error-ceiling"].refs == [sampled.audit_id]
+    assert found["relation-without-basis"].refs == [payload.relation_id]
+    current = current_protocol(project)
+    assert current is not None and current.spec.contribution_schema is not None
+    schema = current.spec.contribution_schema
+    narrowed = schema.model_copy(
+        update={"fields": tuple(f for f in schema.fields if f != "cited_entry")}
+    )
+    amend_protocol(
+        project,
+        agent,
+        current.spec.model_copy(update={"contribution_schema": narrowed}),
+        reason="narrow",
+        semantic=True,
+        effects={},
+    )
+    assert lin.source in _found(project)["contribution-stale"].refs
+
+
+def test_schema_missing_after_g1(project: Project, agent: Actor, screened: list[str]) -> None:
+    with_references(project, agent, screened[0])
+    assert "contribution-schema-missing" in _found(project, RigorMode.SYSTEMATIC)
+    assert "contribution-schema-missing" not in _found(project, RigorMode.EXPLORATORY)
 
 
 # no literature text outside verified quotes (R-47, Review Focus 5)

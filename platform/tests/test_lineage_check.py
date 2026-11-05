@@ -49,6 +49,7 @@ from factory.services.relations import (
 from tests.contribution_helpers import P1, P2, P3, P4, P5, item, not_stated
 from tests.helpers import open_session
 from tests.lineage_helpers import (
+    ITEMS,
     Lineage,
     ctr_a,
     ctr_b,
@@ -60,6 +61,7 @@ from tests.lineage_helpers import (
 )
 from tests.lineage_payloads import REL, stated
 from tests.test_contribution_agreement import _lorem
+from tests.test_extraction_agreement import ext_a, ext_b
 from tests.test_notice_effects import _observe
 
 LINEAGE_CODES = (
@@ -414,3 +416,55 @@ def test_retracted_basis_leaves_default_views(  # living-C follow-up
     assert "basis-retracted" in view.stale_reasons
     assert list_relations(project) == []
     assert _found(project)["relation-stale"].refs == [rid]
+
+
+def test_both_audits_fold_into_one_neutral_marker(
+    project: Project,
+    agent: Actor,
+    human: Actor,
+    ext_a: Actor,
+    ext_b: Actor,
+    ctr_a: Actor,
+    ctr_b: Actor,
+    world: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Decision 52 for both audits: one `extraction-audit-reported` warning whenever either has
+    labels; the findings, their order and `ok` do not depend on either ceiling."""
+    from factory.services.check import agent_check
+    from factory.services.extraction_audit import extraction_audit_record, extraction_audit_sample
+    from tests.test_extraction_agreement import _both, _r
+
+    monkeypatch.setattr(check_module, "_rigor_mode", lambda project: RigorMode.SYSTEMATIC)
+    with_references(project, agent, world[0])
+
+    def rows_for(work: str) -> list:  # type: ignore[type-arg]
+        return [] if work == world[0] else [_r()]
+
+    _both(project, ext_a, ext_b, rows_for, rows_for)
+    record_both(project, ctr_a, ctr_b, world[0], ITEMS)
+    _park_everything(project, ctr_a, ctr_b)
+    contribution_agreement(project, human)
+    ev = extraction_audit_sample(project, human, random_seed=2)
+    co = contribution_audit_sample(project, human, random_seed=2)
+
+    def label(correct: bool) -> None:
+        for s in ev.items:
+            extraction_audit_record(
+                project, human, ev.audit_id, s.work_id, s.row_key, s.field, correct, "", Channel.CLI
+            )
+        for s in co.items:
+            contribution_audit_record(
+                project, human, co.audit_id, s.work_id, s.row_key, s.field, correct, "", Channel.CLI
+            )
+
+    label(True)
+    below = agent_check(project)
+    label(False)
+    above = agent_check(project)
+    assert [f.model_dump() for f in below.findings] == [f.model_dump() for f in above.findings]
+    assert below.ok == above.ok
+    markers = [f for f in above.findings if f.code == "extraction-audit-reported"]
+    assert len(markers) == 1 and set(markers[0].refs) == {ev.audit_id, co.audit_id}
+    assert not any(c.isdigit() for c in markers[0].message)
+    assert "contribution-error-ceiling" not in {f.code for f in above.findings}

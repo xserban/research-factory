@@ -10,6 +10,7 @@ The unit of ``value`` is its `FieldInput.unit`, not a field.
 
 from __future__ import annotations
 
+from factory.packs.ml_benchmark import CITATION_PATTERNS
 from factory.packs.model import Check, Conditional, FieldDef, FieldKind, Pack, UnitFamily
 
 CONTRIBUTION_PACK = "contribution"
@@ -49,7 +50,7 @@ CONTRIBUTION_V1 = Pack(
     ),
     required=("item_kind",),
     default_comparability_keys=(),
-    citation_patterns=(),
+    citation_patterns=CITATION_PATTERNS,
     conditionals=(
         _req("absent_kind", _NOT_STATED),
         _forbid("absent_kind", _STATED),

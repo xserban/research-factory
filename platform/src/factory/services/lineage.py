@@ -70,6 +70,7 @@ __all__ = [
     "GraphNode",
     "GraphStatus",
     "Neighbours",
+    "cites_status",
     "graph_neighbours",
     "graph_node",
     "graph_status",
@@ -83,6 +84,14 @@ __all__ = [
 GRAPH_PAGE = 1000
 _IDEA_PREFIX = "ida_"
 _REJECTED = EdgeStatus.REJECTED
+
+
+def cites_status(base_status: str, decision: str | None) -> EdgeStatus:
+    """The status a view shows for a `cites` edge: `rejected` after a human rejection of its link,
+    else the projected base status. The one place both the graph overlay and `trace` read it."""
+    return _REJECTED if decision == "reject" else EdgeStatus(base_status)
+
+
 _DERIVED_STATUSES = frozenset({EdgeStatus.STATED, EdgeStatus.CONFIRMED})
 
 
@@ -236,7 +245,7 @@ class _View:
             if edge_type not in types or edge_type not in self.flt.edge_types:
                 continue
             if edge_type is EdgeType.CITES:
-                status = _REJECTED if r["decision"] == "reject" else EdgeStatus(r["base_status"])
+                status = cites_status(r["base_status"], r["decision"])
             else:
                 found = statuses.get(str(r["edge_id"]))
                 if found is None:

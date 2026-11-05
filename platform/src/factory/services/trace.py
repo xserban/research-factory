@@ -55,6 +55,7 @@ from factory.model.work_ids import WORK_ID_RE
 from factory.services.context import Project
 from factory.services.contributions import contribution_item
 from factory.services.ideas import idea_view
+from factory.services.lineage import cites_status
 from factory.services.relations import relation_view
 
 KINDS: tuple[str, ...] = (
@@ -834,13 +835,14 @@ class _Walk:
         """A `cites` edge of the graph projection: its status and whether its extraction is
         the work's current one."""
         rows = self._all(
-            "SELECT e.base_status, e.live, e.event_id FROM graph_edges e WHERE e.edge_id = :i",
+            "SELECT e.base_status, e.decision, e.live, e.event_id FROM graph_edges e "
+            "WHERE e.edge_id = :i",
             i=ident,
         )
         if not rows:
             return None
-        status, live, event_id = rows[0]
-        label = f"cites {status}"
+        base_status, decision, live, event_id = rows[0]
+        label = f"cites {cites_status(str(base_status), decision).value}"
         if not live:
             label += " (superseded extraction)"
         return _Described(label, str(event_id))

@@ -115,7 +115,7 @@ Existing, in scope:
 - **R-43, R-47:** items pin one recorded document version; no literature text leaves the local library except verified quotes.
 - **R-51:** the proposer never confirms.
 
-Proposed (numbering continues slice-3a's R-xx(a)–(d)):
+Proposed (numbering continues slice-3a's R-xx(a)–(d); the rows are R-84 (e), R-85 (f) and R-86 (g) in 01-rigour.md):
 - **R-xx(e) (proposed) Stated versus inferred relations.** An edge is `stated` (verified quote plus a deterministic target) or `inferred`; inferred edges need human confirmation, are labelled wherever shown and are excluded from default views and from every statement of fact. All modes.
 - **R-xx(f) (proposed) Edge basis.** Every edge carries a basis (reference link or live contribution row) and an edge without one cannot be written; `trace` resolves any edge to the question. All modes.
 - **R-xx(g) (proposed) Graph as projection.** Nodes, edges and statistics are rebuildable from events; deleting the index and rebuilding gives identical tables. All modes.
