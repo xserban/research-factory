@@ -111,7 +111,7 @@ def test_docling_version_includes_weights_hash(
     assert DoclingConverter().version() != first
 
 
-def test_available_converters_skips_absent_and_default_stays_unchanged(
+def test_available_converters_skips_absent_and_default_keeps_decision_49(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("FACTORY_PANDOC", raising=False)
@@ -125,8 +125,13 @@ def test_available_converters_skips_absent_and_default_stays_unchanged(
     assert registry.for_media_type("text/html") is None
     assert registry.for_media_type("application/x-eprint-tar") is None
     default = default_converters()
-    for media_type in ("application/pdf", "application/x-eprint-tar"):
-        assert default.for_media_type(media_type) is None
+    for media_type, name in (
+        ("text/html", "latexml-html"),
+        ("application/pdf", "docling"),
+        ("application/x-eprint-tar", "pandoc"),
+    ):
+        converter = default.for_media_type(media_type)
+        assert converter is not None and converter.name == name
 
 
 def test_available_converters_lists_present_pandoc(

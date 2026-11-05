@@ -4,7 +4,7 @@ Docling's layout models are fixed, non-generative weights (decision 40). To keep
 offline and the output reproducible, the weights must already be on disk: set
 `FACTORY_DOCLING_MODELS` to the model directory; Docling is never allowed to download. The
 weights' tree hash is part of the converter version. Docling is an optional extra (`docling`),
-imported lazily. Inactive until decision 49: not in `default_converters`.
+imported lazily. The PDF converter of decision 49, listed in `default_converters`.
 
 Pages are joined with form feeds. Warnings carry no document text.
 """

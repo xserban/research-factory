@@ -1,7 +1,7 @@
 """Optional converters: pandoc, Docling, PyMuPDF4LLM.
 
-NOT ACTIVE until decision 49 chooses a converter per format. None of these is in
-`default_converters`; `available_converters` only reports which of them could run on this
+Decision 49 chose per format; `default_converters` is what conversion uses. This module does not
+route anything: `available_converters` only reports which optional converters could run on this
 machine, so the researcher can try them. Presence is checked without converting anything.
 """
 

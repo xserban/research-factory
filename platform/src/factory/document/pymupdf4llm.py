@@ -1,7 +1,8 @@
 """PyMuPDF4LLM converter: PDF to Markdown, pages joined with form feeds.
 
 Licence: PyMuPDF and PyMuPDF4LLM are AGPL-3.0; they are an optional extra (`pymupdf`), imported
-lazily, never a core dependency. Inactive until decision 49: not in `default_converters`.
+lazily, never a core dependency. Not chosen by decision 49 (Docling is the PDF converter), so
+not in `default_converters`; reachable only through `factory.document.optional`.
 
 Warnings carry no document text. Deterministic for fixed library versions and input bytes.
 """

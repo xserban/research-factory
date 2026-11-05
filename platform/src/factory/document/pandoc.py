@@ -1,8 +1,8 @@
 """pandoc converter: HTML (`-f html`) and arXiv LaTeX e-prints (`-f latex`) to GFM Markdown.
 
 pandoc is GPL: it is run only as a subprocess, never linked or bundled. The binary is taken from
-the `FACTORY_PANDOC` environment variable, else `PATH`. Inactive until decision 49: not in
-`default_converters`; see `factory.document.optional`.
+the `FACTORY_PANDOC` environment variable, else `PATH`. The LaTeX e-print converter of decision
+49, listed in `default_converters` after latexml-html, which keeps HTML.
 
 E-print archives are unpacked in memory (`factory.document.eprint`, with caps and safe names),
 written to a private temporary directory, and the main .tex is converted. Warnings carry counts

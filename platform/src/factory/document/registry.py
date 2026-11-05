@@ -6,13 +6,17 @@ converter accepts gives None; the conversion service records that as `no-convert
 
 Invariants:
 - The registry is read-only after construction and never calls a converter.
-- `default_converters` lists only converters whose tools are part of the platform.
+- `default_converters` holds the choice of decision 49, one converter per format. A listed
+  converter whose tool is absent is not skipped: its `version` raises, and the conversion service
+  records `converter-unavailable`, so a missing extra never falls through to another converter.
 """
 
 from collections.abc import Sequence
 
 from factory.document.converter import Converter
+from factory.document.docling import DoclingConverter
 from factory.document.latexml_html import LatexmlHtmlConverter
+from factory.document.pandoc import PandocConverter
 
 
 class ConverterRegistry:
@@ -27,5 +31,10 @@ class ConverterRegistry:
 
 
 def default_converters() -> ConverterRegistry:
-    """The converters shipped with the platform. Only LaTeXML HTML until later tasks add more."""
-    return ConverterRegistry([LatexmlHtmlConverter()])
+    """The converters of decision 49: HTML latexml-html, PDF Docling, LaTeX e-prints pandoc.
+
+    The order is load-bearing: pandoc also accepts HTML, so latexml-html must come before it.
+    PyMuPDF4LLM is not listed; it stays an optional extra reachable only through
+    `factory.document.optional`.
+    """
+    return ConverterRegistry([LatexmlHtmlConverter(), DoclingConverter(), PandocConverter()])
