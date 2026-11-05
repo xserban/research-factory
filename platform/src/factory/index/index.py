@@ -244,6 +244,12 @@ class Index:
             ).scalar_one_or_none()
         return None if value is None else str(value)
 
+    def head(self) -> str | None:
+        """The id of the last event the projector applied (the sync cursor), after syncing; None
+        for an empty log. Reads one `meta` row, so it is cheap at any size."""
+        self.sync()
+        return self.last_event_id()
+
     def state_hash(self) -> str:
         with self._locked(shared=True):
             return self._state_hash()
