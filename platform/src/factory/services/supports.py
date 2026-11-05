@@ -1,7 +1,8 @@
 """Support resolution: is a typed reference eligible, and what does it say? (slice 7b, plan W-A).
 
-Declares: `ResolvedSupport`, `resolve_supports`, `REASONS`. A reader of the index; it writes nothing
-and reads no library file (R-47): quotes come from the extraction events' projection.
+Declares: `ResolvedSupport`, `SupportShown`, `resolve_supports`, `support_shown`, `REASONS`. A
+reader of the index; it writes nothing and reads no library file (R-47): quotes come from the
+extraction events' projection.
 
 Invariants:
 - A support is eligible only when it rests on verified material that is current: a live pass-A
@@ -24,6 +25,7 @@ from sqlalchemy import text
 
 from factory.errors import FactoryValidationError
 from factory.extraction.numbers import normalise_text, parse_printed
+from factory.model.base import StrictModel
 from factory.model.drafts import SentenceClass, SupportKind, SupportRef
 from factory.model.intuition import ConceptState, ReviewState
 from factory.model.lineage import DEFAULT_STATUSES, EdgeStatus
@@ -54,6 +56,8 @@ REASONS = (
     "unreviewed",
     "class-not-allowed",
 )
+GROUP_SPANS_MAX = 20
+"""The most row values a group support shows; a unit stays a unit on a large group."""
 
 
 @dataclass(frozen=True)
@@ -71,6 +75,19 @@ class ResolvedSupport:
     method_names: tuple[str, ...] = ()
     extra: dict[str, str] = field(default_factory=dict)
     """Read-only facts a slot shows (the field of a cell, the type of a claim)."""
+
+
+class SupportShown(StrictModel):
+    """What one support says. `spans` are what a verdict may quote: the quotes of the support, a
+    cell's value, an item's numbers, a stat's value, a group's row values, an edge's works when it
+    has no basis."""
+
+    ref: str
+    kind: SupportKind
+    spans: list[str]
+    value: str | None = None
+    unit: str | None = None
+    stat_value: int | None = None
 
 
 class _Reader:
@@ -146,6 +163,42 @@ def resolve_supports(
     with entering():
         reader = _Reader(project)
         return [_resolve(reader, ref, cls) for ref in refs]
+
+
+def support_shown(project: Project, r: ResolvedSupport) -> SupportShown:
+    """What an eligible support says now: what a verifier is served, and what a verdict's unit is
+    compared with on read."""
+    spans = list(r.spans)
+    value: str | None = None
+    unit: str | None = None
+    if r.ref.kind is SupportKind.CELL:
+        row_key, _, name = r.ref.ref.partition("/")
+        found = visible_rows_by_group(project).row(row_key)
+        if found is not None:
+            cell = found[0].fields[name]
+            value, unit = str(cell.value), cell.unit
+            spans.append(value)
+    elif r.ref.kind is SupportKind.STAT:
+        spans.append(str(r.stat_value))
+    elif r.ref.kind is SupportKind.GROUP:
+        rows = visible_rows_by_group(project).groups[r.ref.ref][1]
+        cells = [row.fields["value"] for row in rows if "value" in row.fields]
+        said = [c.quote if c.quote is not None else str(c.value) for c in cells]
+        spans.extend(list(dict.fromkeys(said))[:GROUP_SPANS_MAX])
+    elif r.ref.kind is SupportKind.ITEM:
+        spans.extend(str(n) for n in r.numbers)
+    elif not spans and r.ref.kind is SupportKind.EDGE:
+        spans.append(" -> ".join(r.work_ids))
+    elif not spans:
+        spans.extend(str(n) for n in r.numbers)
+    return SupportShown(
+        ref=r.ref.text,
+        kind=r.ref.kind,
+        spans=spans,
+        value=value,
+        unit=unit,
+        stat_value=r.stat_value,
+    )
 
 
 def _resolve(reader: _Reader, ref: SupportRef, cls: SentenceClass) -> ResolvedSupport:

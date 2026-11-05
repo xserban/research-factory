@@ -1,6 +1,6 @@
 """Independent verification of sentences (slice 7b, plan W-B, rulings 1 to 3; spec ruling 12).
 
-Declares: `VerifyUnit`, `SupportShown`, `VerdictInput`, `verify_next`, `verify_record`. The only
+Declares: `VerifyUnit`, `VerdictInput`, `verify_next`, `verify_record`. The only
 module that writes `draft.verified`.
 
 Invariants:
@@ -29,7 +29,6 @@ from factory.model.base import StrictModel
 from factory.model.drafts import (
     SentenceClass,
     SentenceVerified,
-    SupportKind,
     SupportSpan,
     Verdict,
     parse_support,
@@ -40,7 +39,12 @@ from factory.services.call_memo import entering
 from factory.services.context import Project
 from factory.services.drafts import SentenceRow, require_draft, sentence_rows, stale_reason
 from factory.services.gates import rigor_mode
-from factory.services.supports import ResolvedSupport, resolve_supports
+from factory.services.supports import (
+    ResolvedSupport,
+    SupportShown,
+    resolve_supports,
+    support_shown,
+)
 from factory.services.tasks import (
     TaskSpec,
     claim_next,
@@ -48,23 +52,7 @@ from factory.services.tasks import (
     require_holder,
     task_content,
 )
-from factory.services.write_rows import visible_rows_by_group
 from factory.writing.verdicts import verdict_issues
-
-GROUP_SPANS_MAX = 20
-"""The most row values a group support shows; a unit stays a unit on a large group."""
-
-
-class SupportShown(StrictModel):
-    """What one support says. `spans` are what a verdict may quote: the quotes of the support, a
-    cell's value, a stat's value, a group's row values, an edge's works when it has no basis."""
-
-    ref: str
-    kind: SupportKind
-    spans: list[str]
-    value: str | None = None
-    unit: str | None = None
-    stat_value: int | None = None
 
 
 class VerifyUnit(StrictModel):
@@ -104,38 +92,6 @@ def _same_model(mode: RigorMode, actor: Actor, writer_model: str | None) -> bool
     return mode is RigorMode.SYSTEMATIC and writer_model is not None and actor.model == writer_model
 
 
-def _shown(project: Project, r: ResolvedSupport) -> SupportShown:
-    spans = list(r.spans)
-    value: str | None = None
-    unit: str | None = None
-    if r.ref.kind is SupportKind.CELL:
-        row_key, _, name = r.ref.ref.partition("/")
-        found = visible_rows_by_group(project).row(row_key)
-        if found is not None:
-            cell = found[0].fields[name]
-            value, unit = str(cell.value), cell.unit
-            spans.append(value)
-    elif r.ref.kind is SupportKind.STAT:
-        spans.append(str(r.stat_value))
-    elif r.ref.kind is SupportKind.GROUP:
-        rows = visible_rows_by_group(project).groups[r.ref.ref][1]
-        cells = [row.fields["value"] for row in rows if "value" in row.fields]
-        said = [c.quote if c.quote is not None else str(c.value) for c in cells]
-        spans.extend(list(dict.fromkeys(said))[:GROUP_SPANS_MAX])
-    elif not spans and r.ref.kind is SupportKind.EDGE:
-        spans.append(" -> ".join(r.work_ids))
-    elif not spans:
-        spans.extend(str(n) for n in r.numbers)
-    return SupportShown(
-        ref=r.ref.text,
-        kind=r.ref.kind,
-        spans=spans,
-        value=value,
-        unit=unit,
-        stat_value=r.stat_value,
-    )
-
-
 def _content(
     project: Project,
     row: SentenceRow,
@@ -147,7 +103,7 @@ def _content(
         "text": row.text,
         "cls": row.cls.value,
         "context_previous": previous,
-        "supports": [_shown(project, r).model_dump(mode="json") for r in resolved],
+        "supports": [support_shown(project, r).model_dump(mode="json") for r in resolved],
     }
 
 

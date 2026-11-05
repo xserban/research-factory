@@ -19,9 +19,12 @@ Invariants:
 - A refusal writes nothing and carries positions and fixed codes, never document text.
 - Status is computed on read and never stored. `stale` wins over `flagged`, `flagged` over
   `supported`, `supported` over `unchecked`; a `structural` or `interpretive` sentence keeps its
-  name unless it is stale. An audit label is a human's result, so the agent variant of the status
-  leaves it out: a rate would follow from counting the sentences it flags (decision 37.14, as
-  decision 90 item 2 reads it).
+  name unless it is stale. A sentence is stale when a support stopped being eligible, when a stat
+  recomputes to another value (`stat-changed`), or when a cell, item or claim no longer says what
+  the verdict's unit showed (`support-changed`): a value can be replaced under the same row key. A
+  group is left out, as an added row would stale every sentence on it. An audit label is a human's
+  result, so the agent variant of the status leaves it out: a rate would follow from counting the
+  sentences it flags (decision 37.14, as decision 90 item 2 reads it).
 """
 
 from __future__ import annotations
@@ -35,7 +38,7 @@ from typing import Literal
 from pydantic import Field, JsonValue
 from sqlalchemy import text
 
-from factory.errors import FactoryValidationError, ValidationIssue
+from factory.errors import FactoryError, FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor, Event
 from factory.exports.keys import assign_keys
 from factory.index.drafts import identities, verifiers_of
@@ -67,7 +70,12 @@ from factory.services.draft_audit import agent_audit_report, audit_report, incor
 from factory.services.exports import select_works
 from factory.services.outline import DEFAULT_SCOPE, OutlineScope, build_outline, outline_json
 from factory.services.results import BatchResult, ItemError
-from factory.services.supports import ResolvedSupport, resolve_supports
+from factory.services.supports import (
+    ResolvedSupport,
+    SupportShown,
+    resolve_supports,
+    support_shown,
+)
 from factory.services.tasks import (
     TaskSpec,
     claim_next,
@@ -81,6 +89,8 @@ from factory.writing.stats import STATS_VERSION
 
 ORDER_STEP = 10
 MAX_SECTIONS = 99
+COMPARED_KINDS = (SupportKind.CELL, SupportKind.ITEM, SupportKind.CLAIM)
+"""The supports whose words a verdict relied on, compared on read with the unit it was given."""
 
 
 class SentenceInput(StrictModel):
@@ -399,17 +409,52 @@ def stale_reason(row: SentenceRow, resolved: Sequence[ResolvedSupport]) -> str |
     return None
 
 
-def _latest_verdicts(project: Project, draft_id: str) -> dict[str, tuple[str, Verdict]]:
-    """Sentence id to its latest verdict (id, verdict), by log order."""
+def _unit_shown(project: Project, blob: str | None) -> dict[str, SupportShown] | None:
+    """What the verdict's unit showed, by support; None when the unit cannot be read."""
+    if blob is None:
+        return None
+    try:
+        unit = project.blobs.get_json(blob)
+        supports = unit.get("supports") if isinstance(unit, dict) else None
+        if not isinstance(supports, list):
+            return None
+        shown = [SupportShown.model_validate(s) for s in supports]
+    except (FactoryError, OSError, ValueError):
+        return None
+    return {s.ref: s for s in shown}
+
+
+def support_changed(
+    project: Project, resolved: Sequence[ResolvedSupport], blob: str | None
+) -> bool:
+    """Whether an eligible cell, item or claim says something other than the verdict's unit showed.
+    A unit that cannot be read vouches for nothing, so it reads as changed (fail closed)."""
+    shown = _unit_shown(project, blob)
+    if shown is None:
+        return True
+    for support in resolved:
+        if support.ref.kind in COMPARED_KINDS:
+            then, now = shown.get(support.ref.text), support_shown(project, support)
+            if then is None or (then.spans, then.unit) != (now.spans, now.unit):
+                return True
+    return False
+
+
+def _latest_verdicts(project: Project, draft_id: str) -> dict[str, tuple[str, Verdict, str | None]]:
+    """Sentence id to its latest verdict (id, verdict, the unit's blob), by log order."""
     with project.index.connect() as conn:
         rows = conn.execute(
             text(
-                "SELECT sentence_id, verdict_id, verdict FROM sentence_verdicts "
-                "WHERE draft_id = :d ORDER BY event_id"
+                "SELECT v.sentence_id, v.verdict_id, v.verdict, e.input_blob "
+                "FROM sentence_verdicts v JOIN events e ON e.id = v.event_id "
+                "WHERE v.draft_id = :d ORDER BY v.event_id"
             ),
             {"d": draft_id},
         ).all()
-    return {str(r[0]): (str(r[1]), Verdict(str(r[2]))) for r in rows}
+    return {
+        str(r[0]): (str(r[1]), Verdict(str(r[2])), None if r[3] is None else str(r[3]))
+        for r in rows
+    }
 
 
 def _resolved_by_sentence(
@@ -425,12 +470,15 @@ def _resolved_by_sentence(
 
 
 def _status_of(
+    project: Project,
     row: SentenceRow,
     resolved: Sequence[ResolvedSupport],
-    verdict: tuple[str, Verdict] | None,
+    verdict: tuple[str, Verdict, str | None] | None,
     incorrect: frozenset[str],
 ) -> tuple[SentenceStatus, str | None]:
     stale = stale_reason(row, resolved)
+    if stale is None and verdict is not None and support_changed(project, resolved, verdict[2]):
+        stale = "support-changed"
     if stale is not None:
         return "stale", stale
     if row.cls is SentenceClass.STRUCTURAL:
@@ -457,7 +505,7 @@ def sentence_status(project: Project, draft_id: str, *, agent: bool = False) -> 
         out: list[StatusRow] = []
         for row in rows:
             status, reason = _status_of(
-                row, resolved[row.sentence_id], verdicts.get(row.sentence_id), incorrect
+                project, row, resolved[row.sentence_id], verdicts.get(row.sentence_id), incorrect
             )
             out.append(
                 StatusRow(

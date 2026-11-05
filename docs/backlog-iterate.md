@@ -140,7 +140,7 @@ Minor review findings parked during the v1 build, to address when iterating from
 - W-A: titles and withdrawal reasons are truncated silently (200 and 300 characters).
 - W-B: a writer can type `[[/]]`, `[[UNSUPPORTED...` or `[@key]` in a sentence, which would confuse a clean rendering's markers. Refuse those forms at write time (W-A's `check_sentence`).
 - W-B: a verifier session can read `draft_status` or `draft_render` before it judges, so it can see flags and other sentences; the unit itself holds only the sentence and its spans (R-51). Consider refusing those reads to a session holding a verification task.
-- W-B: a task's unit is fixed when the task is created; if a cell's quote changes under the same row key before the unit is claimed, the verifier reads the older span. The sentence is not stale in that case.
+- W-B: a task's unit is fixed when the task is created; if a cell's value or quote changes under the same row key before the unit is claimed, the verifier reads the older span. The verdict then reads stale `support-changed`, so nothing false is released, but the verifier's work is lost; a unit could be rebuilt when it is claimed.
 - W-B: a one-character substring satisfies ruling 3. A minimum length, or a check that the span covers the sentence's numbers, would make a verdict's quote carry more.
 - W-B: `sentence_status` resolves supports per reference through W-A's `_Reader`, one query each, not the plan's "7 queries" per draft. It is fine at section size; measure at 200 sentences.
 - W-B: a human who verified a sentence can label the audit of that verdict; only the gate's human check applies.
