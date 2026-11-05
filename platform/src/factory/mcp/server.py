@@ -998,11 +998,16 @@ def build_server(
         return _reply(project, export, include_work_ids=False)
 
     @server.tool()
-    def trace(project: str, ref: str, direction: str = "back") -> dict[str, JsonValue]:
+    def trace(
+        project: str, ref: str, direction: str = "back", layer: str = "evidence"
+    ) -> dict[str, JsonValue]:
         """The chain from any identifier: `back` to what it was derived from, `forward` to what
         was derived from it. Held-out seed ids are refused as unknown; seed nodes, and the seed
-        and probe lookups that found a work, are not shown. Refused to a session that has joined
-        a pass, since the chain leads to the other pass's decisions, resolutions and audit."""
+        and probe lookups that found a work, are not shown. `layer` is `evidence` (default) or
+        `all`; `all` adds the interpretation items an anchor, work or idea carries, each labelled
+        `interpretation` with its review state (a layer id `int_`, `cpt_` or `cul_` is traced
+        either way). Refused to a session that has joined a pass, since the chain leads to the
+        other pass's decisions, resolutions and audit."""
 
         def walk() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
@@ -1011,7 +1016,11 @@ def build_server(
             withheld = {t.lower() for t in _held_out_tokens(opened, include_work_ids=False)}
             if ref.strip().lower() in withheld:
                 raise FactoryValidationError([ValidationIssue("ref", "unknown id")])
-            tree = trace_service.agent_trace(opened, ref, direction=way)
+            if layer == "all":
+                _require_pass_opened(opened)
+            tree = trace_service.agent_trace(
+                opened, ref, direction=way, layer=cast(trace_service.Layer, layer)
+            )
             return _withheld(opened, tree.model_dump(mode="json"), include_work_ids=False)
 
         return _reply(project, walk, include_work_ids=False)

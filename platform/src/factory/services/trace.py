@@ -52,6 +52,7 @@ from factory.model.screening import AUDIT_ID_RE, DECISION_ID_RE, QUALIFIED_CRITE
 from factory.model.seed import SEED_ID_RE
 from factory.model.work import QUERY_ID_RE, RUN_ID_RE
 from factory.model.work_ids import WORK_ID_RE
+from factory.services import layer_trace
 from factory.services.context import Project
 from factory.services.contributions import contribution_item
 from factory.services.ideas import idea_view
@@ -93,8 +94,12 @@ KINDS: tuple[str, ...] = (
     "notice",
     "version",
     "preference",
+    "interpretation",
+    "concept",
+    "concept_link",
 )
-"""Node kinds in chain order. Sibling nodes are listed in this order (reversed for back traces, so
+"""Node kinds in chain order. The layer's kinds come last (G2's pinned order after `claim` is
+unchanged). Sibling nodes are listed in this order (reversed for back traces, so
 the work branch of a decision comes before its cited criterion)."""
 
 _RANK = {kind: rank for rank, kind in enumerate(KINDS)}
@@ -113,6 +118,7 @@ _PREFERENCE_RE = r"^pref:(rf:\S+)$"
 _CITES_RE = rf"^cit:(rex_{ULID_RE}):([1-9][0-9]*)$"
 _QUOTE_RE = rf"^(ext_{ULID_RE})/quote$"
 _PATTERNS: tuple[tuple[str, str], ...] = (
+    *layer_trace.LAYER_PATTERNS,
     (REL_ID_RE, "relation"),
     (IDEA_ID_RE, "idea"),
     (_CITES_RE, "cites"),
@@ -201,11 +207,15 @@ class _ProtocolRow:
     event_id: str
 
 
+Layer = Literal["evidence", "all"]
+
+
 def trace(
     project: Project,
     ref: str,
     *,
     direction: Literal["back", "forward"] = "back",
+    layer: Layer = "evidence",
 ) -> TraceNode:
     """The chain from `ref`, as a tree rooted at that node.
 
@@ -217,13 +227,20 @@ def trace(
     trace from a decision claims the protocol and the question under the work branch (through the
     query), and the criterion branch may then end at the element. Criteria lead upward to their
     protocol and element, never to queries: queries are downstream of protocols.
+
+    A layer id (`int_...`, `cpt_...`, `cul_...`) is traced like any other and its nodes are
+    labelled `interpretation · <review state>`. With `layer = all` the layer items an anchor, work
+    or idea carries are added below it (forward); by default a trace of an evidence node is
+    unchanged by the layer (plan G3-C).
     """
+    if layer not in ("evidence", "all"):
+        raise FactoryValidationError([ValidationIssue("layer", "must be evidence or all")])
     if direction not in ("back", "forward"):
         raise ValueError(f"direction must be 'back' or 'forward', not {direction!r}")
     key = _parse(ref)
     project.index.sync()
     with project.index.connect() as conn:
-        walk = _Walk(project, conn)
+        walk = _Walk(project, conn, layer)
         described = None if key is None else walk.describe(key)
         if key is None or described is None:
             raise FactoryValidationError([ValidationIssue("ref", "unknown id")])
@@ -235,7 +252,11 @@ _GENERIC_METHODS = ("seed-admission", "hand-search", "supplied")
 
 
 def agent_trace(
-    project: Project, ref: str, *, direction: Literal["back", "forward"] = "back"
+    project: Project,
+    ref: str,
+    *,
+    direction: Literal["back", "forward"] = "back",
+    layer: Layer = "evidence",
 ) -> TraceNode:
     """`trace` as an agent may read it: nothing that marks a work as a seed (R-20).
 
@@ -245,7 +266,7 @@ def agent_trace(
     search is labelled `supplementary`, not by its route. Provenance of probe queries is not in
     any view (the corpus does not count it either).
     """
-    tree = without_seeds(trace(project, ref, direction=direction))
+    tree = without_seeds(trace(project, ref, direction=direction, layer=layer))
     project.index.sync()
     with project.index.connect() as conn:
         hidden_queries = {
@@ -397,9 +418,10 @@ def _build(
 class _Walk:
     """One walk's view of the projection. Caches the rows that many nodes share."""
 
-    def __init__(self, project: Project, conn: Connection) -> None:
+    def __init__(self, project: Project, conn: Connection, layer: Layer = "evidence") -> None:
         self._project = project
         self._conn = conn
+        self._layer = layer
         self._questions: dict[str, _QuestionRow] | None = None
         self._protocols: dict[str, _ProtocolRow] | None = None
         self._scanned: dict[tuple[str, str], str] | None = None
@@ -440,6 +462,9 @@ class _Walk:
             "notice": self._notice,
             "version": self._version,
             "preference": self._preference,
+            "interpretation": self._layer_node,
+            "concept": self._layer_node,
+            "concept_link": self._layer_node,
         }
 
     # --- Rows and events ---
@@ -547,6 +572,11 @@ class _Walk:
     def describe(self, key: Key) -> _Described | None:
         """The label and creating event of a node, or None when no row names it."""
         return self._describers[key[0]](key[1])
+
+    def _layer_node(self, ident: str) -> _Described | None:
+        kind = {"int": "interpretation", "cpt": "concept", "cul": "concept_link"}[ident[:3]]
+        found = layer_trace.describe(self._conn, kind, ident)
+        return None if found is None else _Described(*found)
 
     def _question(self, ident: str) -> _Described | None:
         row = self._question_rows().get(ident)
@@ -1049,8 +1079,12 @@ class _Walk:
         """The upstream and downstream neighbours of a node, as keys. A key may name no row; the
         walk shows such a key as a missing node."""
         kind, ident = key
-        handler = _EDGES[kind]
-        return handler(self, ident)
+        if kind in layer_trace.LAYER_KINDS:
+            return layer_trace.edges(self._conn, kind, ident)
+        up, down = _EDGES[kind](self, ident)
+        if self._layer == "all" and kind in ("anchor", "work", "idea"):
+            down = [*down, *layer_trace.attached(self._conn, kind, ident)]
+        return up, down
 
     def _up_question(self, ident: str) -> tuple[list[Key], list[Key]]:
         up = [
