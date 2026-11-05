@@ -20,3 +20,4 @@ Minor review findings parked during the v1 build, to address when iterating from
 - G1 T10: acceptance 2's `test_parse_quality_report` named in the plan is not on the base (only fixture field tests in test_references_parse.py).
 - G2-A T4: _Ledger._created_at reads the whole event log (once per ledger, only when a citation is old) — project task-created position if it shows up.
 - G1 T9-10: displayed new_works is reduced by held-out works while report_prisma is not; difference reveals that a held-out work was added, never which (low).
+- Import-B: decide_import accepts an agent actor on any ordinal and its error names the state (no agent surface yet); _Plan.unadmittable unused; library-import accepted as seed explain-miss route though not an admission route; re-resolve after admission rewrites live link states of admitted works; a crash after one admission query succeeds needs a manual re-run (document).
