@@ -25,8 +25,9 @@ class QueryKind(StrEnum):
 
 
 class QueryPurpose(StrEnum):
-    """Why a query is being run: a probe, a search, a citation chase, a seed, a supplied link
-    or an imported library."""
+    """Why a query is being run: a probe, a search, a citation chase, a seed, a supplied link,
+    an imported library or a status lookup (notices and versions of known works; it never yields
+    corpus works and is outside every PRISMA count)."""
 
     PROBE = "probe"
     SEARCH = "search"
@@ -34,6 +35,7 @@ class QueryPurpose(StrEnum):
     SEED = "seed"
     SUPPLIED = "supplied"
     IMPORT = "import"
+    STATUS = "status"
 
 
 class RunStatus(StrEnum):

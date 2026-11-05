@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from sqlalchemy import Column, Integer, MetaData, String, Table, func, select, update
+from sqlalchemy import Column, Integer, MetaData, String, Table, func, select, text, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Connection
 
@@ -22,7 +22,7 @@ from factory.canonical import canonical_json
 from factory.clock import format_ts
 from factory.events.envelope import Event
 from factory.index.projection import Handler
-from factory.model.search import SearchRunStarted
+from factory.model.search import QueryPurpose, SearchRunStarted
 from factory.model.watch import CycleStatus, WatchCycleFinished, WatchCycleStarted
 
 CYCLE_REF_PREFIX = "wcy_"
@@ -92,6 +92,11 @@ def run_started_handler(t: WatchTables) -> Handler:
             return
         cycle_id = event.refs[-1]
         payload = SearchRunStarted.model_validate(event.payload)
+        purpose = conn.execute(
+            text("SELECT purpose FROM queries WHERE query_id = :q"), {"q": payload.query_id}
+        ).scalar_one_or_none()
+        if purpose == QueryPurpose.STATUS.value:
+            return  # a status run is named by `status_run_ids`, not a planned query's run
         cycle = conn.execute(
             select(t.cycles.c.status).where(t.cycles.c.cycle_id == cycle_id)
         ).one_or_none()

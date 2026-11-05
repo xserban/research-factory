@@ -47,7 +47,7 @@ from factory.model.protocol import (
     protocol_version,
     search_strategy_hash,
 )
-from factory.model.search import QueryPurpose, QuerySpec
+from factory.model.search import QueryKind, QueryPurpose, QuerySpec
 from factory.model.watch import CycleStatus
 from factory.services.context import Project
 from factory.services.protocol_rules import (
@@ -635,6 +635,7 @@ def search_authorization(
         and not _chase_round_waives(project, spec, pending_round_texts, round_id)
         and not _supplied_waives(current.spec, spec, supplied_by)
         and not _cycle_waives(project, current, spec, cycle_id)
+        and not _status_waives(project, current, spec, cycle_id)
         and not (spec.purpose is QueryPurpose.IMPORT and not import_issues)
     ):
         issues.append(
@@ -707,6 +708,25 @@ def _cycle_waives(
         ):
             return True
     return False
+
+
+def _status_waives(
+    project: Project, current: ProtocolVersion, spec: QuerySpec, cycle_id: str | None
+) -> bool:
+    """Whether `cycle_id` is an open cycle of the current protocol and `spec` a status lookup.
+
+    Gate living.status_lookup: a platform-built identifier lookup is planned by its cycle, as a
+    window query is (slice 4b, living-C)."""
+    if cycle_id is None or spec.purpose is not QueryPurpose.STATUS:
+        return False
+    if spec.kind not in (QueryKind.ID_LIST, QueryKind.FILTER):
+        return False
+    with project.index.connect() as conn:
+        row = conn.execute(
+            text("SELECT status, protocol_id FROM watch_cycles WHERE cycle_id = :c"),
+            {"c": cycle_id},
+        ).one_or_none()
+    return row is not None and row[0] == CycleStatus.OPEN.value and row[1] == current.protocol_id
 
 
 def _supplied_waives(
@@ -828,6 +848,16 @@ def recorded_round(project: Project, round_id: str) -> Literal["chase", "snowbal
         ).one_or_none():
             return "chase"
     return None
+
+
+def is_open_watch_cycle(project: Project, cycle_id: str) -> bool:
+    """Whether `cycle_id` names a watch cycle that has not finished."""
+    with project.index.connect() as conn:
+        row = conn.execute(
+            text("SELECT 1 FROM watch_cycles WHERE cycle_id = :c AND status = :open"),
+            {"c": cycle_id, "open": CycleStatus.OPEN.value},
+        ).one_or_none()
+    return row is not None
 
 
 def is_watch_cycle(project: Project, cycle_id: str) -> bool:

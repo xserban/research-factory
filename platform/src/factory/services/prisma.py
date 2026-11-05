@@ -423,9 +423,10 @@ def search_report(project: Project) -> SearchReport:
             conn.execute(
                 text(
                     'SELECT query_id, source, interface, kind, "text", filters, purpose, '
-                    "registered_at FROM queries WHERE purpose != :probe ORDER BY query_id"
+                    "registered_at FROM queries WHERE purpose NOT IN (:probe, :status) "
+                    "ORDER BY query_id"
                 ),
-                {"probe": QueryPurpose.PROBE.value},
+                {"probe": QueryPurpose.PROBE.value, "status": QueryPurpose.STATUS.value},
             )
             .mappings()
             .all()

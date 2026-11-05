@@ -6,6 +6,7 @@ are parsed, R-03), `search.records_parsed` per page that yielded records, and `s
 The SQLite projection (`factory.index.search`) is the only place these are read back as state.
 """
 
+import dataclasses
 import json
 from collections.abc import Mapping, Sequence
 from typing import Any
@@ -115,6 +116,12 @@ def register_query(
             issues.append(ValidationIssue("cycle_id", "a query names a round or a cycle, not both"))
         elif cycle_id is not None and not protocol_service.is_watch_cycle(project, cycle_id):
             issues.append(ValidationIssue("cycle_id", "not a recorded watch cycle"))
+        if spec.purpose is QueryPurpose.STATUS:
+            # Gate living.status_lookup: only the platform's identifier lookups, inside a cycle.
+            if cycle_id is None or not protocol_service.is_open_watch_cycle(project, cycle_id):
+                issues.append(ValidationIssue("cycle_id", "a status query names an open cycle"))
+            if spec.kind not in (QueryKind.ID_LIST, QueryKind.FILTER):
+                issues.append(ValidationIssue("kind", "a status query is an id_list or a filter"))
         supplied_by = None
         if inbox_item is not None:
             supplied_by = _item_submitter(project, inbox_item, open_only=True)
@@ -305,6 +312,9 @@ def run_query(
             new_works=0,
         )
 
+    if spec.purpose is QueryPurpose.STATUS:
+        # A status lookup never yields corpus works, whatever an adapter returns.
+        result = dataclasses.replace(result, works=[])
     note = result.note
     if resume_run is not None and note is not None:
         note = f"resumed from {resume_run}: {note}"
@@ -416,11 +426,19 @@ def corpus_size(project: Project) -> tuple[int, int]:
 def search_counts(project: Project) -> SearchCounts:
     project.index.sync()
     with project.index.connect() as conn:
-        queries = conn.execute(text("SELECT COUNT(*) FROM queries")).scalar_one()
+        queries = conn.execute(
+            text("SELECT COUNT(*) FROM queries WHERE purpose != :status"),
+            {"status": QueryPurpose.STATUS.value},
+        ).scalar_one()
         by_status = {
             str(status): int(count)
             for status, count in conn.execute(
-                text("SELECT status, COUNT(*) FROM runs GROUP BY status")
+                text(
+                    "SELECT r.status, COUNT(*) FROM runs r "
+                    "JOIN queries q ON q.query_id = r.query_id "
+                    "WHERE q.purpose != :status GROUP BY r.status"
+                ),
+                {"status": QueryPurpose.STATUS.value},
             ).all()
         }
         short = (

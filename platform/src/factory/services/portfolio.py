@@ -131,9 +131,13 @@ def _complete_search_runs(project: Project) -> int:
             conn.execute(
                 text(
                     "SELECT COUNT(*) FROM runs r JOIN queries q ON q.query_id = r.query_id "
-                    "WHERE r.status = :complete AND q.purpose != :probe"
+                    "WHERE r.status = :complete AND q.purpose NOT IN (:probe, :status)"
                 ),
-                {"complete": RunStatus.COMPLETE.value, "probe": QueryPurpose.PROBE.value},
+                {
+                    "complete": RunStatus.COMPLETE.value,
+                    "probe": QueryPurpose.PROBE.value,
+                    "status": QueryPurpose.STATUS.value,
+                },
             ).scalar_one()
         )
 
