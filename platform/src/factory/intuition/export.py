@@ -27,6 +27,7 @@ from factory.model.intuition import LayerEdge, LayerGraph, LayerHidden, LayerNod
 
 __all__ = [
     "LAYER_NOTICE",
+    "hidden_comment",
     "iter_layer_dot",
     "iter_layer_json",
     "layer_dot",
@@ -118,8 +119,23 @@ def _edge_dot(e: LayerEdge) -> str:
     return f"  {_quote(e.source)} -> {_quote(e.target)} [style=dashed, label={_quote(shown)}];\n"
 
 
-def iter_layer_dot(nodes: Iterable[LayerNode], edges: Iterable[LayerEdge]) -> Iterator[str]:
-    """The cluster of layer nodes, then the layer edges (dashed, cross-layer ones included)."""
+def hidden_comment(h: LayerHidden) -> str:
+    """The hidden counts as one DOT comment line (every view reports what it hides)."""
+    i, c = h.interpretations, h.concepts
+    return (
+        f"// hidden: interpretations wrong {i.wrong}, superseded {i.superseded}; "
+        f"concepts unapproved {c.unapproved}, wrong {c.wrong}, merged {c.merged}; "
+        f"links inferred {c.links_inferred}, rejected {c.links_rejected}; "
+        f"edges with a hidden endpoint {h.endpoint_hidden}\n"
+    )
+
+
+def iter_layer_dot(
+    nodes: Iterable[LayerNode], edges: Iterable[LayerEdge], hidden: LayerHidden
+) -> Iterator[str]:
+    """The hidden-count comment, the cluster of layer nodes, then the layer edges (dashed,
+    cross-layer ones included)."""
+    yield hidden_comment(hidden)
     yield "  subgraph cluster_interpretation {\n"
     yield f"    label={_quote(CLUSTER_LABEL)};\n    style=dashed;\n"
     for n in nodes:
@@ -131,7 +147,7 @@ def iter_layer_dot(nodes: Iterable[LayerNode], edges: Iterable[LayerEdge]) -> It
 
 def layer_dot(layer: LayerGraph) -> list[str]:
     """The lines of the cluster and the layer edges."""
-    return list(iter_layer_dot(layer.nodes, layer.edges))
+    return list(iter_layer_dot(layer.nodes, layer.edges, layer.hidden))
 
 
 def with_layer_dot(evidence_dot: str, layer: LayerGraph) -> str:

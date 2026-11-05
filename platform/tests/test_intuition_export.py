@@ -86,6 +86,15 @@ def test_dot_with_layer_dashed_cluster_and_header(project: Project, iw: IWorld) 
     assert evidence_part[: -len("}\n")] in dot
 
 
+def test_dot_reports_the_hidden_counts(project: Project, iw: IWorld) -> None:
+    """Ruling 7 / C2: every view reports what it hides, DOT included."""
+    populate_layer(project, iw)
+    dot = graph_export(project, "dot", layer="all")
+    [line] = [x for x in dot.splitlines() if x.startswith("// hidden:")]
+    assert "interpretations wrong 1, superseded 1" in line and "unapproved 1" in line
+    assert "edges with a hidden endpoint" in line
+
+
 def test_export_deterministic_across_rebuilds(project: Project, iw: IWorld) -> None:
     populate_layer(project, iw)
     first = [graph_export(project, f, layer="all", flt=WIDE) for f in ("json", "dot")]  # type: ignore[arg-type]
@@ -130,7 +139,8 @@ def test_pure_renderers_match_the_service(project: Project, iw: IWorld) -> None:
         project, "dot", layer="all"
     )
     assert json.loads(with_layer_json({}, layer))["interpretation"] == layer_json(layer)
-    assert layer_dot(layer)[0].startswith("  subgraph cluster_interpretation")
+    assert layer_dot(layer)[0].startswith("// hidden:")
+    assert layer_dot(layer)[1].startswith("  subgraph cluster_interpretation")
 
 
 def test_labels_escaped(project: Project, iw: IWorld) -> None:

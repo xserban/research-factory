@@ -1104,8 +1104,8 @@ def _with_layer(
     layer cluster before the closing brace."""
     nodes = iter_layer_nodes(project, attach_to=attach_to, include_inferred=include_inferred)
     edges = iter_layer_edges(project, attach_to=attach_to, include_inferred=include_inferred)
+    hidden = layer_hidden(project, attach_to=attach_to, include_inferred=include_inferred)
     if fmt == "json":
-        hidden = layer_hidden(project, attach_to=attach_to, include_inferred=include_inferred)
         yield '{"evidence":'
         yield from _without_tail(evidence, "\n")
         yield ',"interpretation":'
@@ -1114,7 +1114,7 @@ def _with_layer(
     else:
         yield f"// {LAYER_NOTICE}\n"
         yield from _without_tail(evidence, "}\n")
-        yield from iter_layer_dot(nodes, edges)
+        yield from iter_layer_dot(nodes, edges, hidden)
         yield "}\n"
 
 
