@@ -2399,7 +2399,8 @@ def build_server(
     def hypothesis_view(project: str, hypothesis_id: str) -> dict[str, JsonValue]:
         """One hypothesis: its spec, version, falsifier sentence, computed state, reviews,
         registration, the R-53 flags of a literature hypothesis and the autonomy label of its
-        registration. Read-only; refused to a session that has joined a pass."""
+        registration. The rationale and the lead are shown to the drafting session only (R-51).
+        Read-only; refused to a session that has joined a pass."""
 
         def view() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
@@ -2408,7 +2409,14 @@ def build_server(
             found = hypotheses_service.hypothesis_view(opened, hypothesis_id)
             if found is None:
                 raise FactoryValidationError([ValidationIssue("hypothesis_id", "unknown")])
-            return _withheld(opened, found.model_dump(mode="json"), include_work_ids=False)
+            data = found.model_dump(mode="json")
+            if found.drafter_session != session:
+                # R-51: only the drafter reads its own reasoning and the lead behind it
+                spec = data["spec"]
+                assert isinstance(spec, dict)
+                spec.pop("rationale", None)
+                spec.pop("lead", None)
+            return _withheld(opened, data, include_work_ids=False)
 
         return _reply(project, view, include_work_ids=False)
 

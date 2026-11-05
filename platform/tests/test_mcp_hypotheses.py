@@ -26,7 +26,9 @@ from tests.hypothesis_helpers import (
     DRAFTER,
     HW,
     LEAD_TEXT,
+    RATIONALE,
     STATEMENT,
+    agent_actor,
     exploratory_card,
     hw,
     make_spec,
@@ -294,3 +296,41 @@ async def test_tools_are_role_blind_before_a_pass_opens(
             ),
         ]
     assert {(o["ok"], o["errors"][0]["reason"]) for o in outs} == {(False, "not available yet")}
+
+
+@pytest.mark.anyio
+async def test_hypothesis_view_hides_rationale_and_lead_from_other_sessions(
+    settings: Settings,
+    project: Project,
+    clock: FixedClock,
+    hw: HW,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:  # R-51: the critic must not read the drafter's reasoning
+    install_skill(settings, "rf-critic")
+    second, _ = draft_hypothesis(
+        project,
+        DRAFTER,
+        make_spec(lead=hw.lead, prediction={"direction": "treatment-better", "margin": "9"}),
+    )
+    _session(monkeypatch, SESSION_F)
+    async with open_session(settings, clock) as client:
+        served = await client.call("hypothesis_review_next", project="demo", **CRITIC)
+        task = served["data"]["task"]
+        ids = [task["hypothesis_id"], *task["prior"]]
+        assert second in ids
+        views = [await client.call("hypothesis_view", project="demo", hypothesis_id=i) for i in ids]
+    for out in views:
+        assert out["ok"] is True
+        spec = out["data"]["spec"]
+        assert "rationale" not in spec and "lead" not in spec
+        assert RATIONALE not in str(out) and hw.lead not in str(out)
+    # the drafting session itself still reads its spec whole
+    mine, _ = draft_hypothesis(
+        project,
+        agent_actor(SESSION_E, "claude-opus-5-5", "ideator", "rf-ideate@1a2b3c4d"),
+        make_spec(lead=hw.lead, prediction={"direction": "treatment-better", "margin": "7"}),
+    )
+    _session(monkeypatch, SESSION_E)
+    async with open_session(settings, clock) as client:
+        own = await client.call("hypothesis_view", project="demo", hypothesis_id=mine)
+    assert own["data"]["spec"]["rationale"] == RATIONALE and own["data"]["spec"]["lead"] == hw.lead
