@@ -212,6 +212,26 @@ def test_repin_guards(project: Project, me: Actor, draft: str) -> None:
         ("synthesis without stat or group", {"cls": SentenceClass.SYNTHESIS}),
         ("two sentences", {"text": "It works. It fails."}),
         ("supersedes an unknown sentence", {"supersedes": sid(77)}),
+        (
+            "structural with a claim in it",
+            {
+                "cls": SentenceClass.STRUCTURAL,
+                "supports": [],
+                "text": "Performer reaches 91.5% (Smith, 2021)",
+            },
+        ),
+        (
+            "structural with a citation and no number",
+            {"cls": SentenceClass.STRUCTURAL, "supports": [], "text": "As \\cite{smith} shows"},
+        ),
+        (
+            "interpretive with a number",
+            {
+                "cls": SentenceClass.INTERPRETIVE,
+                "supports": [],
+                "text": "It reaches 91.5 percent",
+            },
+        ),
     ],
 )
 def test_sentence_guards(
@@ -219,6 +239,14 @@ def test_sentence_guards(
 ) -> None:
     body = {"draft_id": draft, **over}
     inert(project, "draft.sentence_recorded", sentence(**body), me)
+
+
+@pytest.mark.parametrize("cls", [SentenceClass.STRUCTURAL, SentenceClass.INTERPRETIVE])
+def test_a_plain_structural_or_interpretive_sentence_folds(
+    project: Project, me: Actor, draft: str, cls: SentenceClass
+) -> None:  # the control of the cases above
+    model = sentence(draft, cls=cls, supports=[], text="Next comes the scope")
+    folds(project, "draft.sentence_recorded", model, me)
 
 
 def test_sentence_by_a_system_actor_and_duplicate_ids(
