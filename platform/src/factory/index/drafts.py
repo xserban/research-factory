@@ -500,7 +500,7 @@ def _unit_spans(
         return None
     try:
         unit = blobs.get_json(event.input_blob)
-    except (OSError, ValueError):
+    except (FactoryError, OSError, ValueError):
         return None
     if not isinstance(unit, dict):
         return None

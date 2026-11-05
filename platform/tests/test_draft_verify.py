@@ -408,6 +408,13 @@ def test_forged_verdict_with_a_foreign_quote_is_inert(
     _inert(project, verifier(), wd.first, blob, support_spans=made_up)
 
 
+def test_forged_verdict_naming_an_unreadable_blob_is_inert(
+    project: Project, ww: WWorld, wd: Written
+) -> None:
+    _, spans = _unit_blob(project, wd, ww)
+    _inert(project, verifier(), wd.first, "sha256:" + "0" * 64, support_spans=spans)
+
+
 def test_forged_verdict_on_another_unit_is_inert(project: Project, ww: WWorld, wd: Written) -> None:
     blob, spans = _unit_blob(project, wd, ww)
     _inert(project, verifier(), wd.second, blob, support_spans=spans)
