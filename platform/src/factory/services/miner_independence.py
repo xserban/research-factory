@@ -16,6 +16,8 @@ from sqlalchemy import text
 
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
+from factory.events.reader import read_all
+from factory.model.extraction import MinerScope
 from factory.model.screening import Channel, PassLabel
 from factory.services.context import Project
 from factory.services.mining import registered_row
@@ -34,36 +36,33 @@ _REFUSED = "this session cannot serve this pass"
 
 
 def calibration_sessions(project: Project, name: str) -> set[str]:
-    """The sessions that claimed a calibration task of miner `name` (any calibration)."""
-    project.index.sync()
-    with project.index.connect() as conn:
-        drawn = conn.execute(
-            text("SELECT 1 FROM miner_calibrations WHERE name = :n LIMIT 1"), {"n": name}
-        ).first()
-        if drawn is None:
-            return set()
-        rows = conn.execute(
-            text("SELECT claim_session, content_blob FROM tasks WHERE claim_session IS NOT NULL")
-        ).all()
-    found: set[str] = set()
-    for session, blob in rows:
-        content = project.blobs.get_json(str(blob))
-        if (
-            isinstance(content, dict)
-            and content.get("miner") == name
-            and content.get("calibration_id") is not None
-        ):
-            found.add(str(session))
-    return found
+    """The sessions that ever claimed a calibration task of miner `name` (any calibration), read
+    from the claims in the log: a task that was released or re-claimed keeps its first claimer
+    here, which the projection (it holds the current claim only) does not."""
+    from factory.services.extraction import calibration_task_ids
+
+    tasks = calibration_task_ids(project, MinerScope(name))
+    if not tasks:
+        return set()
+    return {
+        event.actor.session
+        for event in read_all(project.paths.events_dir, project.catalog)
+        if event.type == "task.claimed" and event.payload.get("task_id") in tasks
+    }
 
 
-def label_sessions(project: Project, calibration_id: str) -> set[str]:
-    """The sessions that recorded a gold label of the calibration (every one, superseded or not)."""
+def label_sessions(project: Project, name: str) -> set[str]:
+    """The sessions that recorded a gold label of any calibration of miner `name`, whatever the
+    version (every label, superseded or not)."""
     project.index.sync()
     with project.index.connect() as conn:
         rows = conn.execute(
-            text("SELECT session FROM miner_calibration_label_sessions WHERE calibration_id = :c"),
-            {"c": calibration_id},
+            text(
+                "SELECT s.session FROM miner_calibration_label_sessions s "
+                "JOIN miner_calibrations c ON c.calibration_id = s.calibration_id "
+                "WHERE c.name = :n"
+            ),
+            {"n": name},
         ).all()
     return {str(row[0]) for row in rows}
 
@@ -102,7 +101,7 @@ def require_calibration_pass(
     own = calibration_sessions(project, name)
     if (
         (registered is not None and session == registered.proposer_session)
-        or session in label_sessions(project, calibration_id)
+        or session in label_sessions(project, name)
         or (_joined_miner(project, session, name) and session not in own)
     ):
         raise _refuse("session", _REFUSED)
@@ -112,7 +111,9 @@ def require_calibration_pass(
 def require_production_pass(project: Project, actor: Actor, name: str) -> None:
     """Refuse (field `session`) a production pass to a session that served calibration tasks of
     miner `name`."""
-    if actor.session in calibration_sessions(project, name):
+    if actor.session in calibration_sessions(project, name) or actor.session in label_sessions(
+        project, name
+    ):
         raise _refuse("session", _REFUSED)
 
 

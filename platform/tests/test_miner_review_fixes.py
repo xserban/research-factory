@@ -122,3 +122,88 @@ def _admit_evidence(project: Project, actor: Actor) -> None:
         semantic=True,
         effects={},
     )
+
+
+# --- 2: gold relayers and judges across versions ---
+
+
+def _relay_gold(project: Project, human: Actor, cal_id: str, work: str, session: str) -> None:
+    relay = human.model_copy(update={"session": session})
+    label_miner_calibration(project, relay, cal_id, work, [mine_row()], channel=Channel.MCP)
+
+
+def test_a_gold_relay_is_an_extraction_label_relay(
+    project: Project, agent: Actor, human: Actor, world: list[str]
+) -> None:
+    cal = calibrated_world(project, agent, human)
+    assert not relayed_extraction_label(project, SESSION_X)
+    _relay_gold(project, human, cal.calibration_id, cal.works[0], SESSION_X)
+    assert relayed_extraction_label(project, SESSION_X)
+
+
+def test_a_gold_relayer_cannot_mine_or_judge_any_version(
+    project: Project, agent: Actor, human: Actor, world: list[str]
+) -> None:
+    cal = calibrated_world(project, agent, human)
+    _relay_gold(project, human, cal.calibration_id, cal.works[0], SESSION_X)
+    relayer = miner_actor(SESSION_X, "claude-haiku-5")
+    with pytest.raises(FactoryValidationError):
+        mine_next(project, relayer, VISION_NAME, 1, A)  # production of the same version
+    _v2(project, agent, cal.spec)
+    with pytest.raises(FactoryValidationError):
+        mine_next(project, relayer, VISION_NAME, 2, A)  # production of the next version
+    draw_miner_calibration(project, human, VISION_NAME, 2, random_seed=11)
+    with pytest.raises(FactoryValidationError) as raised:
+        mine_next(project, relayer, VISION_NAME, 2, A, calibration=True)  # judging the next
+    assert raised.value.issues[0].field == "session"
+
+
+def test_a_label_session_of_an_earlier_version_cannot_judge_or_produce_the_next(
+    project: Project, agent: Actor, human: Actor, world: list[str]
+) -> None:
+    """The independence check reads label sessions by miner name (not only this calibration)."""
+    from factory.services.miner_independence import label_sessions
+
+    cal = calibrated_world(project, agent, human)
+    _relay_gold(project, human, cal.calibration_id, cal.works[0], SESSION_X)
+    _v2(project, agent, cal.spec)
+    assert SESSION_X in label_sessions(project, VISION_NAME)
+    # the independence rules themselves (the pass join refuses the session first, so ask them)
+    from factory.services.miner_independence import (
+        require_calibration_pass,
+        require_production_pass,
+    )
+
+    relayer = miner_actor(SESSION_X, "claude-haiku-5")
+    with pytest.raises(FactoryValidationError):
+        require_production_pass(project, relayer, VISION_NAME)
+    draw_miner_calibration(project, human, VISION_NAME, 2, random_seed=11)
+    with pytest.raises(FactoryValidationError):
+        require_calibration_pass(project, relayer, VISION_NAME, 2, A)
+
+
+def test_a_judge_may_share_a_model_with_pass_b_in_either_order(
+    project: Project, agent: Actor, human: Actor, world: list[str]
+) -> None:
+    calibrated_world(project, agent, human)
+    producer_a = miner_actor(SESSION_Y, "claude-haiku-5")
+    producer_b = miner_actor(SESSION_X, JUDGE.model or "")  # the judge's model, pass B first
+    mine_next(project, producer_a, VISION_NAME, 1, A)
+    mine_next(project, producer_b, VISION_NAME, 1, B)
+    batch = mine_next(project, JUDGE, VISION_NAME, 1, A, calibration=True).batch
+    assert batch is not None
+
+
+def test_a_released_calibration_claim_still_marks_the_session(
+    project: Project, agent: Actor, human: Actor, world: list[str]
+) -> None:
+    from factory.services.miner_independence import calibration_sessions
+    from factory.services.tasks import release_task
+
+    calibrated_world(project, agent, human)
+    batch = mine_next(project, JUDGE, VISION_NAME, 1, A, calibration=True).batch
+    assert batch is not None
+    release_task(project, JUDGE, batch.task_id, "stepping away")
+    assert JUDGE.session in calibration_sessions(project, VISION_NAME)
+    with pytest.raises(FactoryValidationError):
+        mine_next(project, JUDGE, VISION_NAME, 1, A)  # still no production for the judge

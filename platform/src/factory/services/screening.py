@@ -1093,16 +1093,17 @@ def _is_label_session(project: Project, session: str) -> bool:
 
 
 def relayed_extraction_label(project: Project, session: str) -> bool:
-    """Whether `session` relayed an extraction resolution or audit label over MCP, or drew an
-    extraction audit sample (decision 51). Read from the log, as the projection keeps no session
-    for these events."""
+    """Whether `session` relayed an extraction resolution, audit label or miner gold label over
+    MCP, or drew an extraction audit sample (decision 51). Read from the log, as the projection
+    keeps no session for these events."""
     for event in read_all(project.paths.events_dir, project.catalog):
         if event.actor.session != session:
             continue
         if event.type == "extraction.audit_sampled":
             return True
         if (
-            event.type in ("extraction.resolved", "extraction.audit_labelled")
+            event.type
+            in ("extraction.resolved", "extraction.audit_labelled", "miner.calibration_labelled")
             and event.payload.get("channel") == Channel.MCP.value
         ):
             return True

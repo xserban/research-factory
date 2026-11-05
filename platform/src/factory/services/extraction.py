@@ -579,8 +579,11 @@ def _scoped_name(scope: ScopeKey, label: PassLabel) -> str:
     return f"{prefix}pass {label.value}"
 
 
-def _check_join(project: Project, actor: Actor, label: PassLabel, scope: ScopeKey) -> bool:
-    """True when a join must be written; raises on a refusal."""
+def _check_join(
+    project: Project, actor: Actor, label: PassLabel, scope: ScopeKey, *, calibration: bool = False
+) -> bool:
+    """True when a join must be written; raises on a refusal. A calibration session is exempt
+    from the other-pass model rule: its model is not a production pass's (M-D ruling 2)."""
     if actor.kind != "agent" or actor.model is None:
         raise FactoryValidationError(
             [ValidationIssue("actor", "only an agent extractor joins a pass")]
@@ -611,7 +614,7 @@ def _check_join(project: Project, actor: Actor, label: PassLabel, scope: ScopeKe
             [ValidationIssue("pass", f"this session already extracts {_scoped_name(*joined)}")]
         )
     other = _other(label)
-    if actor.model in _pass_models(project, other, scope):
+    if not calibration and actor.model in _pass_models(project, other, scope):
         raise FactoryValidationError(
             [ValidationIssue("model", f"{_scoped_name(scope, other)} already uses this model")]
         )
@@ -698,7 +701,9 @@ def next_unit(
             raise FactoryValidationError(
                 [ValidationIssue("actor", "only an agent extractor joins a pass")]
             )
-        needs_join = _check_join(project, actor, label, scope)
+        needs_join = _check_join(
+            project, actor, label, scope, calibration=calibration_id is not None
+        )
         events: list[Event] = []
         config = pass_config(project, label, scope=scope)
         if config is None:
