@@ -26,11 +26,16 @@ import pytest
 from factory.events.envelope import Actor
 from factory.model.extraction import FieldInput
 from factory.model.lineage import LineageDecision, RelationProposal
-from factory.model.screening import PassLabel
+from factory.model.screening import Channel, PassLabel
 from factory.services.context import Project
 from factory.services.contributions import contribution_next, contribution_record
 from factory.services.extraction import live_claims
 from factory.services.extraction_agreement import final_rows
+from factory.services.extraction_audit import (
+    extraction_audit_record,
+    extraction_audit_report,
+    extraction_audit_sample,
+)
 from factory.services.ideas import decide_idea, propose_idea
 from factory.services.relations import decide_relation, propose_relation
 from tests.contribution_helpers import ctr_a, ctr_b, ext_a, screened
@@ -154,3 +159,22 @@ def confirmed_edge(
     )
     decide_relation(project, human, made.relation_id, LineageDecision.CONFIRM, "ok")
     return made.relation_id
+
+
+def audit_above_ceiling(project: Project, human: Actor) -> None:
+    """A real extraction audit with one wrong label: its rate is above the ceiling."""
+    sampled = extraction_audit_sample(project, human, random_seed=5)
+    item = sampled.items[0]
+    extraction_audit_record(
+        project,
+        human,
+        sampled.audit_id,
+        item.work_id,
+        item.row_key,
+        item.field,
+        False,
+        "wrong",
+        Channel.CLI,
+    )
+    report = extraction_audit_report(project)
+    assert report is not None and report.above_ceiling is True
