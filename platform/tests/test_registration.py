@@ -109,12 +109,42 @@ def test_registered_once_and_h_version_frozen(project: Project, human: Actor, hw
         make_spec(lead=hw.lead, prediction={"direction": "treatment-better", "margin": "3"}),
         supersedes=hw.hid,
     )
+    # an unreviewed draft does not undo the human registration (I2)
     old = hypothesis_view(project, hw.hid)
     assert old is not None and old.h_version == hw.version != new_version
+    assert (old.state, old.superseded_by) == ("registered", None)
     assert (old.registration, old.autonomy) == (before.registration, "human")
-    assert old.state == "superseded"  # superseded before any evidence; it keeps its registration
     fresh = hypothesis_view(project, new)
     assert fresh is not None and fresh.state == "draft" and fresh.registration is None
+    with pytest.raises(FactoryValidationError) as err:  # the replacement needs its own review
+        register_hypothesis(project, human, new)
+    assert _fields(err) == [("review", "review-required")]
+    assert hypothesis_view(project, hw.hid).state == "registered"  # type: ignore[union-attr]
+    _review(project)
+    register_hypothesis(project, human, new)  # through the gate
+    old = hypothesis_view(project, hw.hid)
+    assert old is not None and (old.state, old.superseded_by) == ("superseded", new)
+    assert old.registration == before.registration and old.h_version == hw.version
+
+
+def test_replacement_registration_refused_once_the_old_one_has_evidence(
+    project: Project, human: Actor, hw: HW, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from factory.services import hypotheses as hyp
+
+    _review(project)
+    register_hypothesis(project, human, hw.hid)
+    new, _ = draft_hypothesis(
+        project,
+        DRAFTER,
+        make_spec(lead=hw.lead, prediction={"direction": "treatment-better", "margin": "3"}),
+        supersedes=hw.hid,
+    )
+    _review(project)
+    monkeypatch.setattr(hyp, "EVALUATION_SOURCES", [lambda _p, h: h == hw.hid])
+    with pytest.raises(FactoryValidationError) as err:
+        register_hypothesis(project, human, new)
+    assert _fields(err) == [("supersedes", "evidence-exists")]
 
 
 def test_exploratory_non_drafter_agent_registers_with_autonomy_label(

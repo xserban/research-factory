@@ -258,6 +258,14 @@ def _lead_decided(t: HypothesisTables) -> Handler:
     return decided
 
 
+def _supersede(conn: Connection, t: HypothesisTables, old: str, new: str) -> None:
+    conn.execute(
+        update(t.hypotheses)
+        .where(t.hypotheses.c.hypothesis_id == old, t.hypotheses.c.superseded_by.is_(None))
+        .values(superseded_by=new)
+    )
+
+
 def _drafted(t: HypothesisTables) -> Handler:
     def drafted(conn: Connection, event: Event) -> None:
         p = HypothesisDrafted.model_validate(event.payload)
@@ -277,14 +285,16 @@ def _drafted(t: HypothesisTables) -> Handler:
             .on_conflict_do_nothing(index_elements=["hypothesis_id"])
         )
         if inserted.rowcount and p.supersedes is not None:
-            conn.execute(
-                update(t.hypotheses)
-                .where(
-                    t.hypotheses.c.hypothesis_id == p.supersedes,
-                    t.hypotheses.c.superseded_by.is_(None),
+            # A draft replaces an unregistered draft at once; a registered hypothesis stays
+            # registered until its replacement registers (`_registered`), so that an unreviewed
+            # draft cannot undo a registration.
+            registered = conn.execute(
+                select(t.registrations.c.hypothesis_id).where(
+                    t.registrations.c.hypothesis_id == p.supersedes
                 )
-                .values(superseded_by=p.hypothesis_id)
-            )
+            ).first()
+            if registered is None:
+                _supersede(conn, t, p.supersedes, p.hypothesis_id)
 
     return drafted
 
@@ -378,6 +388,7 @@ def _registered(t: HypothesisTables) -> Handler:
                 t.hypotheses.c.lead,
                 t.hypotheses.c.abandoned_event_id,
                 t.hypotheses.c.superseded_by,
+                t.hypotheses.c.supersedes,
             ).where(t.hypotheses.c.hypothesis_id == p.hypothesis_id)
         ).first()
         if row is None or str(row[0]) != p.h_version or row[3] is not None or row[4] is not None:
@@ -416,6 +427,8 @@ def _registered(t: HypothesisTables) -> Handler:
             )
             .on_conflict_do_nothing(index_elements=["hypothesis_id"])
         )
+        if row[5] is not None:
+            _supersede(conn, t, str(row[5]), p.hypothesis_id)
 
     return registered
 
