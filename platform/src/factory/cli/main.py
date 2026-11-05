@@ -50,6 +50,7 @@ from factory.services import import_attach as import_attach_service
 from factory.services import import_resolve as import_resolve_service
 from factory.services import imports as imports_service
 from factory.services import inbox as inbox_service
+from factory.services import inbox_watch as inbox_watch_service
 from factory.services import methods as methods_service
 from factory.services import portfolio as portfolio_service
 from factory.services import prisma as prisma_service
@@ -602,11 +603,23 @@ def inbox_list(
         str | None, typer.Option("--status", help="open, resolved or withdrawn.")
     ] = None,
     cursor: Annotated[str | None, typer.Option("--cursor", help="Next page offset.")] = None,
+    watch: Annotated[
+        bool, typer.Option("--watch", help="List pending works by discovery route instead.")
+    ] = False,
+    after: Annotated[
+        str | None, typer.Option("--after", help="With --watch: the last work id of the page.")
+    ] = None,
 ) -> None:
     """Inbox items with their status and last resolution outcome."""
     state = _state(ctx)
     with _reporting_errors():
         project = _resolve_project(state)
+        if watch:
+            for entry in inbox_watch_service.inbox_entries(project, after=after):
+                typer.echo(
+                    f"{entry.work_id}  {entry.route}  {entry.route_ref}  {entry.surfaced_at}"
+                )
+            return
         page = inbox_service.list_items(project, status=status, cursor=cursor)
     for line in render.inbox_lines(page):
         typer.echo(line)

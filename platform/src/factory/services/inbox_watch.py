@@ -8,8 +8,9 @@ and its surfacing event id as `route_ref`.
 
 Invariants:
 - Entries are the canonical works whose title/abstract outcome is pending, ordered by
-  `surfaced_at` (an event id, so event order) and then work id; held-out seed works are never
-  listed (R-20).
+  `surfaced_at` (an event id, so event order) and then work id.
+- It is a human view (the CLI) and has no MCP caller. Held-out seed works are listed like any
+  other: leaving them out would tell the human which works are held out (decision 37 item 9).
 - The view reads only. It does not touch the screening queue, whose order stays randomised
   (R-34); no priority is carried.
 """
@@ -22,7 +23,6 @@ from factory.model.base import StrictModel
 from factory.services.agreement import Outcome, final_outcomes
 from factory.services.context import Project
 from factory.services.discovery import discovery
-from factory.services.seeds import held_out_work_ids
 
 WATCH_ROUTE_PREFIX = "database:"
 
@@ -56,7 +56,6 @@ def inbox_entries(
     last entry of the previous page. `route` keeps one route (`database:<source>` for watches)."""
     project.index.sync()
     pending = {w for w, o in final_outcomes(project).items() if o is Outcome.PENDING}
-    pending -= held_out_work_ids(project)
     runs = _watch_runs(project)
     entries: list[InboxEntry] = []
     for record in discovery(project):

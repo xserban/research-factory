@@ -101,3 +101,19 @@ def test_screen_order_unchanged_by_view(ready: Project, agent: Actor) -> None:
     assert _events(ready) == before
     with ready.index.connect() as conn:
         assert conn.execute(text("SELECT * FROM tasks ORDER BY 1")).all() == queue
+
+
+def test_cli_lists_watch_entries(ready: Project) -> None:
+    from typer.testing import CliRunner
+
+    from factory.cli.main import app
+    from tests.test_cli import _env
+
+    cycle_id, new = _cycle(ready)
+    result = CliRunner().invoke(
+        app, ["--project", "demo", "inbox", "list", "--watch"], env=_env(ready.settings.root)
+    )
+    assert result.exit_code == 0, result.stdout
+    lines = result.stdout.strip().splitlines()
+    assert sorted(line.split()[0] for line in lines) == sorted(new)
+    assert all(f"database:openalex  {cycle_id}" in line for line in lines)
