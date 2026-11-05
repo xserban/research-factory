@@ -389,3 +389,32 @@ def test_service_refuses_an_agent_on_a_withheld_region(
     assert caught.value.issues[0].reason == "region-unavailable"
     # a human may snapshot it
     assert snapshot_region(w.project, human, held).startswith("R@")
+
+
+@pytest.mark.anyio
+async def test_trace_of_region_refs_refused_before_a_pass(
+    settings: Settings,
+    project: Project,
+    clock: FixedClock,
+    human: Actor,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    install_skill(settings, "rf-regions")
+    region = define_region(
+        project,
+        human,
+        kind=RegionKind.REGION,
+        name="r",
+        definition="d",
+        rules=RuleSet(include=(CorpusRule(outcome="all", stage=ScreeningStage.TITLE_ABSTRACT),)),
+    )
+    _session(monkeypatch, SESSION_I)
+    refs = [region, "R@12345678", "R@12345678/work/rf:x-00000001", "reg_" + "0" * 26]
+    async with open_session(settings, clock) as client:
+        for ref in refs:
+            for layer in ("evidence", "all"):
+                out = await client.call("trace", project="demo", ref=ref, layer=layer)
+                assert out == {
+                    "ok": False,
+                    "errors": [{"field": "graph", "reason": "not available yet"}],
+                }, (ref, out)

@@ -420,6 +420,13 @@ def _split_cell(ident: str) -> tuple[str, str]:
     return row_key, field or "value"
 
 
+def is_region_ref(ref: str) -> bool:
+    """Whether `ref` has the form of a region, a region version or a region membership. Decided
+    by form alone, so a caller can refuse it without reading the index."""
+    key = _parse(ref.strip())
+    return key is not None and key[0] in region_trace.REGION_KINDS
+
+
 def _parse(ref: str) -> Key | None:
     if re.fullmatch(ENTRY_KEY_RE, ref):
         return ("reference_extraction", ref.rsplit(":", 1)[0])

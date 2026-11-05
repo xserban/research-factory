@@ -1050,7 +1050,7 @@ def build_server(
             withheld = {t.lower() for t in _held_out_tokens(opened, include_work_ids=False)}
             if ref.strip().lower() in withheld:
                 raise FactoryValidationError([ValidationIssue("ref", "unknown id")])
-            if layer == "all":
+            if layer == "all" or trace_service.is_region_ref(ref):
                 _require_pass_opened(opened)
             tree = trace_service.agent_trace(
                 opened, ref, direction=way, layer=cast(trace_service.Layer, layer)
