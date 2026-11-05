@@ -71,8 +71,11 @@ SPEC = ModuleSpec(
         ("amendment", "document-version", "conversion"),
     ),
     checks=(
+        CheckRule("mine-import-unverified", ("error", "error", "error")),
         CheckRule("mine-pending", ("warning", "warning", "warning")),
         CheckRule("mine-single", (None, "warning", "error")),
+        CheckRule("mine-source-superseded", ("warning", "warning", "error")),
+        CheckRule("mine-source-unavailable", ("warning", "warning", "warning")),
         CheckRule("miner-calibration-failed", ("warning", "warning", "warning")),
         CheckRule("miner-uncalibrated-evidence", ("error", "error", "error")),
         CheckRule("miner-version-unread", ("warning", "warning", "warning")),

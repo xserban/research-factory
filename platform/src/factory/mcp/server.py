@@ -1582,7 +1582,10 @@ def build_server(
                 None if units is None else [(unit[0], unit[1]) for unit in units],
                 channel=Channel.MCP,
             )
-            return result.model_dump(mode="json")
+            return {
+                "imported_units": len(result.written),
+                "rejected": [error.model_dump(mode="json") for error in result.rejected],
+            }
 
         return _reply(project, run, include_work_ids=False)
 

@@ -128,3 +128,9 @@ Minor review findings parked during the v1 build, to address when iterating from
 - W-B: `sentence_status` resolves supports per reference through W-A's `_Reader`, one query each, not the plan's "7 queries" per draft. It is fine at section size; measure at 200 sentences.
 - W-B: a human who verified a sentence can label the audit of that verdict; only the gate's human check applies.
 - W-B: the fold of `draft.audited` accepts `channel = mcp` from any human (as the G3-C note above); only the service refuses a pass session's relay.
+- M-E: a project that grew has all its records computed again at sync, since any event can change a status; a sync costs one project's `settled_rows`, which carries decision 92's per-row fold cost.
+- M-E: `source-superseded` is reported by `check` and drives `mine_next`, but `mine_status` and the methods do not show it.
+- M-E: the store does not hold the verifier version of a record (spec ruling 18 "verification results"): the extraction tables do not project it, and every stored row passed verification.
+- M-E: a `pending` source row is never flagged in an importer, so a source record that leaves its population is not `source-superseded`.
+- M-E: `kind_checks` reads the importer's current reference list, so `mine-import-unverified` can fire on a `work_ref(entry)` row after the importer replaces that list.
+- M-E: `available_units` has no MCP tool; a relaying agent names units from the researcher's `mine import --list`.

@@ -439,6 +439,11 @@ def mine_next(
         from factory.services.miner_independence import require_production_pass
 
         require_production_pass(project, actor, name)
+    reopened: frozenset[str] = frozenset()
+    if not calibration:
+        from factory.services.shared_mining import reopened_works  # it imports this module
+
+        reopened = reopened_works(project, name)
     digest = miner_digest(spec)
     notes = {f.name: _kind_note(f.kind) for f in spec.fields}
     described = {f.name: f.description for f in spec.fields if f.description}
@@ -464,6 +469,7 @@ def mine_next(
         scope=MinerScope(name),
         content=content,
         calibration_id=calibration_id,
+        reopened=reopened,
     )
 
 

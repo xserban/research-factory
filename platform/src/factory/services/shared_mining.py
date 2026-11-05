@@ -35,6 +35,7 @@ from sqlalchemy.pool import NullPool
 from factory.canonical import canonical_json
 from factory.clock import Clock, SystemClock
 from factory.config import Settings
+from factory.document.anchors import Manifest
 from factory.errors import (
     FactoryError,
     FactoryValidationError,
@@ -77,14 +78,18 @@ from factory.model.screening import Channel, PassLabel
 from factory.services.context import Project, ProjectPaths, list_projects, open_project
 from factory.services.conversions import conversion_manifest, conversion_of
 from factory.services.extraction import (
+    ExtraCheck,
     ExtractionRow,
+    ExtraVerdict,
     UnitPin,
+    filled_imports,
+    import_items,
     mined_works,
     scope_rows,
     stale_extractions,
 )
 from factory.services.extraction_agreement import SettledRow, settled_rows
-from factory.services.extraction_verify import verify_row_in
+from factory.services.extraction_verify import RowVerdict, verify_row_in
 from factory.services.mining import (
     MinerRow,
     calibration_sample,
@@ -95,6 +100,7 @@ from factory.services.mining import (
     require_listed,
     require_not_retired,
 )
+from factory.services.protocol import current_protocol
 from factory.services.results import BatchResult, ItemError
 from factory.services.search import list_works
 
@@ -104,13 +110,18 @@ __all__ = [
     "SharedStore",
     "SharedSyncResult",
     "SharedUnit",
+    "SourceState",
     "available_units",
     "content_hash",
     "field_digest",
     "held_conversions",
     "mine_import",
     "register_from",
+    "reopened_works",
     "shared_store",
+    "source_state",
+    "source_superseded",
+    "unverified_imports",
 ]
 
 OPT_OUT_FILE = ".no-share"
@@ -713,15 +724,18 @@ def _source_row(
             fields = {}
             break
         fields[name] = stored
-    passes = tuple(
-        ImportedPass(
-            pass_label=PassLabel(recorded[i][0].pass_label),
-            session=recorded[i][1].actor.session,
-            model=recorded[i][1].actor.model,
+    try:
+        passes = tuple(
+            ImportedPass(
+                pass_label=recorded[i][0].pass_label,
+                session=recorded[i][1].actor.session,
+                model=recorded[i][1].actor.model,
+            )
+            for i in settled.extraction_ids
+            if i in recorded
         )
-        for i in settled.extraction_ids
-        if i in recorded
-    )
+    except ValidationError:
+        passes = ()  # the row then fails re-verification
     return _SourceRow(final.row_key, final.status, settled.extraction_ids, fields, passes)
 
 
@@ -815,6 +829,29 @@ class _Importer:
     calibration: frozenset[str]
 
 
+def _reverified(
+    project: Project,
+    spec: MinerSpec,
+    pin: UnitPin,
+    fields: Mapping[str, StoredField],
+    manifest: Manifest,
+    corpus: frozenset[str],
+    extra: ExtraCheck,
+) -> tuple[RowVerdict, ExtraVerdict | None]:
+    """Stored fields judged as a mined row is, against this project's conversion and corpus: what
+    the platform computed is dropped and computed again. The kind checks run only on a verified
+    row, so their verdict is None otherwise."""
+    given = {
+        name: FieldInput(**stored.model_dump(exclude={"canonical", "copy_marker"}))
+        for name, stored in fields.items()
+    }
+    declared = tuple(f.name for f in spec.fields)
+    verdict = verify_row_in(
+        compile_miner(spec), declared, given, pin.conversion_id, manifest, corpus
+    )
+    return verdict, None if verdict.fields is None else extra(project, pin, verdict.fields, ())
+
+
 def _unit_items(
     importer: _Importer, unit: _SourceUnit, import_id: str
 ) -> tuple[list[ImportedItem], list[ValidationIssue]]:
@@ -839,8 +876,6 @@ def _unit_items(
         manifest = conversion_manifest(project, conversion.conversion_id)
     except FactoryValidationError as exc:
         return [], exc.issues
-    pack = compile_miner(spec)
-    declared = tuple(f.name for f in spec.fields)
     extra = kind_checks(spec)
     pin = UnitPin(
         import_id,
@@ -858,24 +893,14 @@ def _unit_items(
         if not row.fields or not row.passes:
             issues.append(ValidationIssue(where, IMPORT_UNVERIFIED))
             continue
-        given = {
-            name: FieldInput(**stored.model_dump(exclude={"canonical", "copy_marker"}))
-            for name, stored in row.fields.items()
-        }
-        verdict = verify_row_in(
-            pack, declared, given, conversion.conversion_id, manifest, importer.corpus
+        verdict, checked = _reverified(
+            project, spec, pin, row.fields, manifest, importer.corpus, extra
         )
-        if verdict.fields is None or verdict.row_key is None:
+        if verdict.fields is None or verdict.row_key is None or checked is None or checked.issues:
+            found = verdict.issues if checked is None else checked.issues
             issues += [
                 ValidationIssue(f"{where}.{i.field}", f"{IMPORT_UNVERIFIED}: {i.reason}")
-                for i in verdict.issues
-            ]
-            continue
-        checked = extra(project, pin, verdict.fields, ())
-        if checked.issues:
-            issues += [
-                ValidationIssue(f"{where}.{i.field}", f"{IMPORT_UNVERIFIED}: {i.reason}")
-                for i in checked.issues
+                for i in found
             ]
             continue
         if verdict.row_key in keys:
@@ -1016,3 +1041,156 @@ def mine_import(
         if events:
             project.record(events)
     return BatchResult[str](written=written, rejected=rejected)
+
+
+# --- Corrections in the source, and imports that do not verify ---
+
+
+@dataclass(frozen=True)
+class SourceState:
+    """What the store says of the imported rows in use, by extraction id. `superseded`: the source
+    record is superseded, stale, dropped or gone. `unavailable`: its source project disappeared,
+    opted out or cannot be read. `store_missing`: there is no store to ask, so nothing is known."""
+
+    superseded: tuple[str, ...]
+    unavailable: tuple[str, ...]
+    store_missing: bool
+
+
+def _rows_in_use(project: Project) -> list[ExtractionRow]:
+    """The imported rows in use, of every miner the protocol lists, by extraction id."""
+    protocol = current_protocol(project)
+    uses = () if protocol is None else protocol.spec.miners or ()
+    rows = [
+        row
+        for use in uses
+        for unit in filled_imports(project, MinerScope(use.name)).values()
+        for row in unit
+    ]
+    return sorted(rows, key=lambda r: r.extraction_id)
+
+
+def source_state(project: Project, store: SharedStore | None = None) -> SourceState:
+    """The state of each imported row's source, read from the store as it stands: nothing is
+    synced and nothing written, in this project or the store. A row of a source the store reads
+    fine and no longer lists counts as superseded. Nothing here changes what the importer holds
+    (ruling 20): only a re-import or re-mining does."""
+    rows = _rows_in_use(project)
+    if not rows:
+        return SourceState((), (), False)
+    shared = shared_store(project.settings, project.clock) if store is None else store
+    if not shared.available():
+        return SourceState((), (), True)
+    items = import_items(project)
+    superseded: list[str] = []
+    unavailable: list[str] = []
+    with shared.connect() as conn:
+        statuses = {
+            str(slug): str(status)
+            for slug, status in conn.execute(text("SELECT slug, status FROM shared_projects"))
+        }
+        for row in rows:
+            item = items.get(row.extraction_id)
+            if item is None:
+                continue
+            events = ProjectPaths(project.settings.root, item.source_project).events_dir
+            if statuses.get(item.source_project) != STATUS_OK or not events.is_dir():
+                unavailable.append(row.extraction_id)
+                continue
+            status = conn.execute(
+                text(
+                    "SELECT status FROM shared_records WHERE miner = :m AND version = :v "
+                    "AND digest = :d AND conversion_id = :c AND project = :p AND row_key = :k"
+                ),
+                {
+                    "m": item.miner,
+                    "v": item.version,
+                    "d": item.digest,
+                    "c": item.source_conversion_id,
+                    "p": item.source_project,
+                    "k": item.source_row_key,
+                },
+            ).scalar_one_or_none()
+            if status is None or status in ("superseded", "stale"):
+                superseded.append(row.extraction_id)
+    return SourceState(tuple(superseded), tuple(unavailable), False)
+
+
+def source_superseded(project: Project, store: SharedStore | None = None) -> list[str]:
+    """The imported extraction ids whose source record is now superseded or stale, or whose source
+    project disappeared. Read-only; empty without a store."""
+    state = source_state(project, store)
+    items = import_items(project) if state.unavailable else {}
+    root = project.settings.root
+    gone = [
+        ident
+        for ident in state.unavailable
+        if not ProjectPaths(root, items[ident].source_project).events_dir.is_dir()
+    ]
+    return sorted([*state.superseded, *gone])
+
+
+def reopened_works(project: Project, name: str) -> frozenset[str]:
+    """The works of miner `name` an import fills whose source was corrected: `mine_next` queues
+    them, which is how a project re-mines instead of re-importing."""
+    filled = filled_imports(project, MinerScope(name))
+    if not filled:
+        return frozenset()
+    flagged = set(source_superseded(project))
+    return frozenset(
+        work for work, rows in filled.items() if any(r.extraction_id in flagged for r in rows)
+    )
+
+
+def _logged_items(project: Project, wanted: set[str]) -> dict[str, ImportedItem]:
+    """The items of `wanted` as this project's log holds them: a value's original type, which the
+    projection's text form loses."""
+    out: dict[str, ImportedItem] = {}
+    for path in event_files(project.paths.events_dir):
+        for event in read_file(path, project.catalog).events:
+            if event.type != "mine.imported":
+                continue
+            try:
+                payload = MineImported.model_validate(event.payload)
+            except ValidationError:
+                continue  # never folded
+            out.update({i.extraction_id: i for i in payload.items if i.extraction_id in wanted})
+    return out
+
+
+def unverified_imports(project: Project) -> list[str]:
+    """The imported rows in use that do not re-verify against this project's own conversion: the
+    tools never write one, so this guards a replayed, hand-edited log, which the projection cannot
+    judge as it reads no library. A conversion that cannot be read counts as not verified."""
+    rows = _rows_in_use(project)
+    if not rows:
+        return []
+    items = import_items(project)
+    logged = _logged_items(project, {row.extraction_id for row in rows})
+    corpus = frozenset(w.id for w in list_works(project))
+    out: list[str] = []
+    for row in rows:
+        item, entry = items.get(row.extraction_id), logged.get(row.extraction_id)
+        spec = None if item is None else registered_miner(project, item.miner, item.version)
+        if entry is None or spec is None:
+            out.append(row.extraction_id)
+            continue
+        pin = UnitPin(
+            row.task_id,
+            row.work_id,
+            PassLabel.A,
+            MinerScope(spec.name),
+            row.document_id,
+            row.conversion_id,
+        )
+        try:
+            manifest = conversion_manifest(project, row.conversion_id)
+            verdict, checked = _reverified(
+                project, spec, pin, entry.fields, manifest, corpus, kind_checks(spec)
+            )
+        except FactoryError:
+            out.append(row.extraction_id)
+            continue
+        if verdict.row_key != row.row_key or checked is None or checked.issues:
+            out.append(row.extraction_id)
+    return out

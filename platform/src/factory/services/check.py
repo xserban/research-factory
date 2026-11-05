@@ -132,6 +132,7 @@ from factory.services.references import current_extraction, included_works
 from factory.services.region_check import AGENT_VIEW, region_findings
 from factory.services.relations import RelationView, list_relations
 from factory.services.seeds import SeedRole, _rigor_mode, seed_check
+from factory.services.shared_mining import source_state, unverified_imports
 from factory.services.snowball import recorded_rounds, round_runs
 from factory.services.status_lookup import (
     crossref_doi,
@@ -524,6 +525,7 @@ def _run_rules(project: Project) -> list[_Hit]:
         _gate_policies(project),
         _mining(project),
         _miner_lifecycle(project),
+        _mine_imports(project),
         _drafts(project),
         _writer_verified(project),
     ]
@@ -696,6 +698,51 @@ def _production_rows(project: Project, name: str, version: int) -> int:
             {"s": name, "r": f"{name}@{version}"},
         ).all()
     return sum(1 for (task,) in found if str(task) not in apart)
+
+
+def _mine_imports(project: Project) -> list[_Hit]:
+    """Findings of imported records (rulings 19, 20): a row that does not re-verify here, a source
+    record since corrected, and a source that cannot be asked. Ids and counts only. Nothing is
+    reported, and the store is not opened, without imported rows in use."""
+    hits: list[_Hit] = []
+    failing = unverified_imports(project)
+    if failing:
+        hits.append(
+            _Hit(
+                "mine-import-unverified",
+                tuple(failing),
+                f"{len(failing)} imported row(s) do not re-verify against this project's "
+                "conversions",
+            )
+        )
+    state = source_state(project)
+    if state.superseded:
+        hits.append(
+            _Hit(
+                "mine-source-superseded",
+                state.superseded,
+                f"{len(state.superseded)} imported row(s) were corrected in their source; "
+                "re-import or re-mine them",
+            )
+        )
+    if state.store_missing:
+        hits.append(
+            _Hit(
+                "mine-source-unavailable",
+                (),
+                "the shared store is not built, so imported rows cannot be compared with their "
+                "source; run `factory shared rebuild`",
+            )
+        )
+    if state.unavailable:
+        hits.append(
+            _Hit(
+                "mine-source-unavailable",
+                state.unavailable,
+                f"the source of {len(state.unavailable)} imported row(s) cannot be read",
+            )
+        )
+    return hits
 
 
 def _miner_lifecycle(project: Project) -> list[_Hit]:
