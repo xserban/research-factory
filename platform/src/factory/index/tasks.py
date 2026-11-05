@@ -1,6 +1,6 @@
 from typing import Any
 
-from pydantic import JsonValue
+from pydantic import JsonValue, ValidationError
 from sqlalchemy import Column, MetaData, String, Table, insert, select, update
 from sqlalchemy.engine import Connection, Row
 
@@ -59,9 +59,36 @@ def _held_by_actor(row: _Current, event: Event) -> bool:
     )
 
 
+def _takes(row: _Current, event: Event) -> bool:
+    """Whether a claim takes the task: it is open, or held on a lease this claim outlasts."""
+    expired = (
+        row.status == TaskStatus.CLAIMED.value
+        and row.lease_until is not None
+        and parse_ts(row.lease_until) <= event.ts
+    )
+    return row.status == TaskStatus.OPEN.value or expired
+
+
+def claim_takes(conn: Connection, table: Table, task_id: str, event: Event) -> str | None:
+    """The kind of the task a `task.claimed` about to fold takes, or None when it takes nothing."""
+    row = _current(conn, table, task_id)
+    if row is None or not _takes(row, event):
+        return None
+    return str(conn.execute(select(table.c.kind).where(table.c.task_id == task_id)).scalar_one())
+
+
+def completion_counts(conn: Connection, table: Table, task_id: str, event: Event) -> bool:
+    """Whether a `task.completed` about to fold completes the task."""
+    row = _current(conn, table, task_id)
+    return row is not None and _held_by_actor(row, event)
+
+
 def _task_created(table: Table) -> Handler:
     def task_created(conn: Connection, event: Event) -> None:
-        payload = TaskCreated.model_validate(event.payload)
+        try:
+            payload = TaskCreated.model_validate(event.payload)
+        except ValidationError:
+            return
         # A task's content is the event's input blob; without one the event does not create a task.
         if event.input_blob is None or _current(conn, table, payload.task_id) is not None:
             return
@@ -85,16 +112,12 @@ def _task_created(table: Table) -> Handler:
 
 def _task_claimed(table: Table) -> Handler:
     def task_claimed(conn: Connection, event: Event) -> None:
-        payload = TaskClaimed.model_validate(event.payload)
-        row = _current(conn, table, payload.task_id)
-        if row is None:
+        try:
+            payload = TaskClaimed.model_validate(event.payload)
+        except ValidationError:
             return
-        expired = (
-            row.status == TaskStatus.CLAIMED.value
-            and row.lease_until is not None
-            and parse_ts(row.lease_until) <= event.ts
-        )
-        if row.status != TaskStatus.OPEN.value and not expired:
+        row = _current(conn, table, payload.task_id)
+        if row is None or not _takes(row, event):
             return
         conn.execute(
             update(table)
@@ -112,7 +135,10 @@ def _task_claimed(table: Table) -> Handler:
 
 def _task_completed(table: Table) -> Handler:
     def task_completed(conn: Connection, event: Event) -> None:
-        payload = TaskCompleted.model_validate(event.payload)
+        try:
+            payload = TaskCompleted.model_validate(event.payload)
+        except ValidationError:
+            return
         row = _current(conn, table, payload.task_id)
         if row is None or not _held_by_actor(row, event):
             return
@@ -127,7 +153,10 @@ def _task_completed(table: Table) -> Handler:
 
 def _task_released(table: Table) -> Handler:
     def task_released(conn: Connection, event: Event) -> None:
-        payload = TaskReleased.model_validate(event.payload)
+        try:
+            payload = TaskReleased.model_validate(event.payload)
+        except ValidationError:
+            return
         row = _current(conn, table, payload.task_id)
         if row is None or not _held_by_actor(row, event):
             return

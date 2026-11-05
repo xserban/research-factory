@@ -32,11 +32,17 @@ NON_STATE_TABLES: frozenset[str] = frozenset(
         "event_refs",
         # The event that recorded each audit sample, derived from the events table.
         "audit_events",
+        # Lookups for budget consumption, derived from events and tasks, which the hash covers.
+        "task_claims",
+        "source_requests",
+        "request_starts",
     }
 )
 OMITTED_WHEN_EMPTY: frozenset[str] = frozenset(
     {
         "ledger_confirmations",
+        "budgets",
+        "task_usage",
         "watch_cycles",
         "gate_audits",
         "gate_audit_items",

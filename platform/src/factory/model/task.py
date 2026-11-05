@@ -1,7 +1,8 @@
 from datetime import datetime, timedelta
 from enum import StrEnum
+from typing import Annotated, Literal
 
-from pydantic import AwareDatetime, Field
+from pydantic import AwareDatetime, Field, SerializerFunctionWrapHandler, model_serializer
 
 from factory.model.base import StrictModel
 from factory.model.identity import ULID_RE
@@ -56,9 +57,29 @@ class TaskClaimed(StrictModel):
     lease_until: AwareDatetime
 
 
+MAX_REPORTED_USAGE = 1e15
+"""The largest figure a report may carry, so that sums stay finite."""
+
+UsageKey = Literal["input_tokens", "output_tokens", "cost_usd"]
+ReportedUsage = dict[
+    UsageKey, Annotated[float, Field(ge=0, le=MAX_REPORTED_USAGE, allow_inf_nan=False)]
+]
+"""Tokens and cost as the agent or its harness stated them. The platform cannot meter them, so they
+are shown, labelled reported, and never enforced (slice 5 ruling 17)."""
+
+
 class TaskCompleted(StrictModel):
     task_id: str = Field(pattern=TASK_ID_RE)
     result_refs: tuple[str, ...] = ()
+    reported_usage: ReportedUsage | None = None
+    """Absent from a line that has none, so old and unreported events read as they were."""
+
+    @model_serializer(mode="wrap")
+    def _omit_absent_usage(self, handler: SerializerFunctionWrapHandler) -> dict[str, object]:
+        data: dict[str, object] = handler(self)
+        if data.get("reported_usage") is None:
+            data.pop("reported_usage", None)
+        return data
 
 
 class TaskReleased(StrictModel):

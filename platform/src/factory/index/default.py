@@ -2,6 +2,12 @@ from sqlalchemy import MetaData
 
 from factory.events.blobs import BlobStore
 from factory.index.briefings import briefing_handlers, briefing_tables
+from factory.index.budgets import (
+    budget_handlers,
+    budget_tables,
+    consumption_after,
+    consumption_before,
+)
 from factory.index.cards import card_handlers, card_tables
 from factory.index.chase import chase_handlers, chase_tables
 from factory.index.conclusions import conclusion_handlers, conclusion_tables
@@ -107,6 +113,7 @@ def default_projection(blobs: BlobStore | None = None) -> Projection:
     drafts = draft_tables(metadata, protocol.protocols, project)
     manuscripts = manuscript_tables(metadata)
     ledger = ledger_tables(metadata)
+    budgets = budget_tables(metadata)
     handlers: dict[str, Handler] = {
         "project.created": project_created_handler(project),
         "project.hosted": project_hosted_handler(project_hosts),
@@ -150,6 +157,7 @@ def default_projection(blobs: BlobStore | None = None) -> Projection:
         **briefing_handlers(briefings, blobs),
         **manuscript_handlers(manuscripts, blobs),
         **ledger_handlers(ledger, members),
+        **budget_handlers(budgets, members),
     }
     # A direction fails in the event that decides it: derived after that event's own fold.
     chain_derived(handlers, directions)
@@ -160,6 +168,12 @@ def default_projection(blobs: BlobStore | None = None) -> Projection:
     handlers["search.run_started"] = chain(
         handlers["search.run_started"], run_started_handler(watch)
     )
+    # Consumption asks what a claim or a completion finds, and what a run's own fold took.
+    for event_type, handler in consumption_before(budgets, tasks).items():
+        handlers[event_type] = chain(handler, handlers[event_type])
+    for event_type, handler in consumption_after(budgets, search).items():
+        own = handlers.get(event_type)  # a probe's page has no fold of its own
+        handlers[event_type] = handler if own is None else chain(own, handler)
     # Last: an event the guards refuse reaches nothing chained after the protocol's own fold.
     handlers.update(protocol_guards(reviews, members, blobs, handlers))
     return Projection(version=PROJECTION_VERSION, metadata=metadata, handlers=handlers)

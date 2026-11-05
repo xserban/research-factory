@@ -2,6 +2,7 @@ import re
 from dataclasses import dataclass
 
 from factory.model.base import StrictModel
+from factory.model.budgets import BudgetSet
 from factory.model.cards import (
     AssertionDecided,
     CardAsserted,
@@ -399,4 +400,5 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("review.requested", ReviewRequested, 1))
     catalog.register(EventType("review.decided", ReviewDecided, 1))
     catalog.register(EventType("ledger.confirmed", LedgerConfirmed, 1))
+    catalog.register(EventType("budget.set", BudgetSet, 1))
     return catalog
