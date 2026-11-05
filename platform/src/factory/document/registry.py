@@ -29,6 +29,21 @@ class ConverterRegistry:
         """The first registered converter that accepts `media_type`, or None if there is none."""
         return next((c for c in self._converters if media_type in c.accepts), None)
 
+    def named(self, name: str, media_type: str) -> Converter | None:
+        """The registered converter of this name, if it accepts `media_type`."""
+        return next(
+            (c for c in self._converters if c.name == name and media_type in c.accepts), None
+        )
+
+    def names(self) -> frozenset[str]:
+        """The names of the registered converters."""
+        return frozenset(c.name for c in self._converters)
+
+    def preferring(self, converter: Converter) -> "ConverterRegistry":
+        """This registry with `converter` first; one of the same name is replaced."""
+        rest = [c for c in self._converters if c.name != converter.name]
+        return ConverterRegistry([converter, *rest])
+
 
 def default_converters() -> ConverterRegistry:
     """The converters of decision 49: HTML latexml-html, PDF Docling, LaTeX e-prints pandoc.

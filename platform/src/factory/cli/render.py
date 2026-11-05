@@ -4,8 +4,10 @@ is read from the model, so the CLI and the MCP tools cannot differ (R-05)."""
 import json
 from collections.abc import Mapping, Sequence
 
+from factory.document.optional import ConverterInfo
 from factory.errors import ValidationIssue
 from factory.model.conclusions import ConclusionDiff
+from factory.model.document import FailureReason
 from factory.model.drafts import DraftAuditReport, Outline
 from factory.model.intuition import (
     HistoryEntry,
@@ -279,6 +281,9 @@ def fulltext_status_lines(status: FulltextStatus) -> list[str]:
     return lines
 
 
+_NEEDS_A_CONVERTER = (FailureReason.NO_CONVERTER, FailureReason.CONVERTER_UNAVAILABLE)
+
+
 def convert_lines(summary: ConvertSummary) -> list[str]:
     """One line per document outcome (document, work, status, reason), then the counts."""
     lines = [
@@ -292,10 +297,22 @@ def convert_lines(summary: ConvertSummary) -> list[str]:
     return lines
 
 
+def converter_lines(infos: list[ConverterInfo]) -> list[str]:
+    """One line per converter: name, whether decision 49 chose it, what it accepts, its licence,
+    then its version or why it cannot run."""
+    lines = []
+    for info in infos:
+        chosen = "default" if info.default else "optional"
+        state = f"ready  {info.version}" if info.available else f"unavailable  {info.reason}"
+        lines.append(f"{info.name}  {chosen}  {' '.join(info.accepts)}  {info.licence}  {state}")
+    return lines
+
+
 def document_status_lines(status: DocumentStatus) -> list[str]:
     """The counts, then each live document: its converter and anchor counts, or not converted.
     Its latest recorded failure follows: `earlier failure` for a converted document, `last failure`
-    for one not converted."""
+    for one not converted. A document held back by a missing converter ends the list with the
+    command that says what is missing."""
     lines = [
         f"documents: {len(status.documents)}",
         f"converted: {status.converted}",
@@ -314,6 +331,8 @@ def document_status_lines(status: DocumentStatus) -> list[str]:
             label = "earlier failure" if doc.converted else "last failure"
             failure = f"  {label}: {doc.latest_failure.value}"
         lines.append(f"{doc.document_id}  {doc.work_id}  {state}{failure}")
+    if any(not d.converted and d.latest_failure in _NEEDS_A_CONVERTER for d in status.documents):
+        lines.append("no converter could run: see `factory document converters`")
     return lines
 
 

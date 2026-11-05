@@ -7,9 +7,12 @@ already done.
 Invariants:
 - Validation is complete before anything is written. A refused request writes nothing.
 - Per document: an already-converted (converter, version) gives `unchanged`, checked first and
-  with no event. Then a missing raw blob gives `raw-missing`, with no event. Then a missing
-  converter or an unavailable tool records one `document.conversion_failed` event. A conversion runs
-  outside the write lock, and its result is recorded under the lock after a re-check.
+  with no event. So does, unless the command named a converter (`override`), a document whose
+  latest conversion this run could not replace: its converter is absent or cannot run here, or
+  the latest conversion comes from another converter, which a plain run must not displace. Then a
+  missing raw blob gives `raw-missing`, with no event. Then a missing converter or an unavailable
+  tool records one `document.conversion_failed` event. A conversion runs outside the write lock,
+  and its result is recorded under the lock after a re-check.
 - Conversion events carry hashes, counts and warnings, never document text. A failure carries the
   exception class name only, never its message.
 - A raw blob that is missing, corrupt or unreadable is `raw-missing` for that document, with no
@@ -115,6 +118,7 @@ def convert_documents(
     *,
     work_ids: Sequence[str] | None = None,
     document_ids: Sequence[str] | None = None,
+    override: bool = False,
 ) -> ConvertSummary:
     """Convert the documents in scope and record each outcome.
 
@@ -123,21 +127,23 @@ def convert_documents(
     limits it to the named documents, which must be live. Both together intersect.
 
     Raises `FactoryValidationError` (issues on `work_ids` or `document_ids`) with nothing written
-    if a named work is not promoted or a named document is unknown or superseded.
+    if a named work is not promoted or a named document is unknown or superseded. `override` says
+    the researcher named the converter of `registry`, so it may add a conversion beside another
+    converter's; see the module invariants.
     """
     with project.index.exclusive():
         project.index.sync()
         targets = _targets(project, work_ids, document_ids)
-    outcomes = [_convert_one(project, registry, doc) for doc in targets]
+    outcomes = [_convert_one(project, registry, doc, override) for doc in targets]
     return _summary(outcomes)
 
 
 def restore_conversions(project: Project, registry: ConverterRegistry) -> ConvertSummary:
     """Regenerate the missing or corrupt Markdown and manifest of every recorded conversion.
 
-    A conversion with both blobs intact is skipped and has no outcome. Otherwise the converter
-    must be the registry's converter for the document's media type, with the recorded name and
-    version (else `failed` / `version-unavailable`). The raw blob must be readable (else
+    A conversion with both blobs intact is skipped and has no outcome. Otherwise the registry must
+    hold the recorded converter for the document's media type, at the recorded version (else
+    `failed` / `version-unavailable`). The raw blob must be readable (else
     `raw-missing`). The conversion is rerun; its Markdown and manifest must hash to the recorded
     references (else `failed` / `hash-differs`, and neither blob is stored). Only then are both
     blobs stored, and the outcome is `restored` with the existing conversion id. No event is
@@ -157,6 +163,7 @@ def convert_or_restore(
     restore: bool,
     work_ids: Sequence[str] | None = None,
     document_ids: Sequence[str] | None = None,
+    override: bool = False,
 ) -> ConvertSummary:
     """Restore damaged conversions, or convert the documents in scope, as one command.
 
@@ -168,7 +175,9 @@ def convert_or_restore(
         raise FactoryValidationError([ValidationIssue("restore", "takes no --work or --document")])
     if restore:
         return restore_conversions(project, registry)
-    return convert_documents(project, registry, work_ids=work_ids, document_ids=document_ids)
+    return convert_documents(
+        project, registry, work_ids=work_ids, document_ids=document_ids, override=override
+    )
 
 
 def _records(project: Project) -> list[_Record]:
@@ -221,13 +230,9 @@ def _restore_one(
     project: Project, registry: ConverterRegistry, record: _Record
 ) -> ConversionOutcome:
     """Reconvert one damaged conversion and store its blobs only if they reproduce its hashes."""
-    converter = registry.for_media_type(record.media_type)
+    converter = registry.named(record.converter, record.media_type)
     version = _version_or_none(converter) if converter is not None else None
-    if (
-        converter is None
-        or converter.name != record.converter
-        or version != record.converter_version
-    ):
+    if converter is None or version != record.converter_version:
         return _restore_outcome(record, "failed", "version-unavailable")
     try:
         raw = project.library.get(record.raw_hash)
@@ -457,7 +462,9 @@ class _Ready:
     raw: bytes
 
 
-def _convert_one(project: Project, registry: ConverterRegistry, doc: _Doc) -> ConversionOutcome:
+def _convert_one(
+    project: Project, registry: ConverterRegistry, doc: _Doc, override: bool
+) -> ConversionOutcome:
     """Decide under the write lock, convert outside it, then re-check and record under it again.
 
     A concurrent identical conversion that lands during the unlocked conversion makes this one
@@ -465,7 +472,7 @@ def _convert_one(project: Project, registry: ConverterRegistry, doc: _Doc) -> Co
     """
     with project.index.exclusive():
         project.index.sync()
-        decided = _decide(project, registry, doc)
+        decided = _decide(project, registry, doc, override)
     if isinstance(decided, ConversionOutcome):
         return decided
 
@@ -488,11 +495,14 @@ def _convert_one(project: Project, registry: ConverterRegistry, doc: _Doc) -> Co
         return _converted(project, doc, result)
 
 
-def _decide(project: Project, registry: ConverterRegistry, doc: _Doc) -> ConversionOutcome | _Ready:
+def _decide(
+    project: Project, registry: ConverterRegistry, doc: _Doc, override: bool
+) -> ConversionOutcome | _Ready:
     """Under the lock, the document's outcome if nothing needs converting, else what to convert.
 
-    Order: already converted at this converter and version gives `unchanged`; a missing raw blob
-    gives `raw-missing` (no event, even when there is no converter or it is unavailable); then the
+    Order: already converted at this converter and version gives `unchanged`, as does a converted
+    document this run may not or cannot replace (the module invariants); a missing raw blob gives
+    `raw-missing` (no event, even when there is no converter or it is unavailable); then the
     no-converter and converter-unavailable failures are recorded.
     """
     converter = registry.for_media_type(doc.media_type)
@@ -501,6 +511,13 @@ def _decide(project: Project, registry: ConverterRegistry, doc: _Doc) -> Convers
         converter is not None
         and version is not None
         and _converted_before(project, doc.document_id, converter, version)
+    ):
+        return _outcome(doc, "unchanged")
+    latest = _latest_converter(project, doc.document_id)
+    if (
+        not override
+        and latest is not None
+        and (converter is None or version is None or latest != converter.name)
     ):
         return _outcome(doc, "unchanged")
     if not project.library.exists(doc.raw_hash):
@@ -522,6 +539,19 @@ def _version_or_none(converter: Converter) -> str | None:
         return converter.version()
     except ConverterUnavailable:
         return None
+
+
+def _latest_converter(project: Project, document_id: str) -> str | None:
+    """The converter of the document's latest conversion, or None when it has none."""
+    with project.index.connect() as conn:
+        row = conn.execute(
+            text(
+                "SELECT converter FROM document_conversions WHERE document_id = :doc "
+                "ORDER BY event_id DESC LIMIT 1"
+            ),
+            {"doc": document_id},
+        ).first()
+    return None if row is None else str(row[0])
 
 
 def _converted_before(

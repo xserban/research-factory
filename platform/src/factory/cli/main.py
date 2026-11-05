@@ -17,6 +17,7 @@ from factory.cli import evidence_render, portfolio_render, render
 from factory.cli.organisation import consolidation_app, labels_app, terms_app
 from factory.clock import Clock, SystemClock
 from factory.config import Settings
+from factory.document.optional import converter_infos, override_registry
 from factory.document.registry import default_converters
 from factory.errors import (
     FactoryError,
@@ -2395,24 +2396,41 @@ def document_convert_cmd(
             help="Regenerate missing or damaged stored conversions. Takes no --work or --document.",
         ),
     ] = False,
+    converter: Annotated[
+        str | None,
+        typer.Option(
+            "--converter",
+            help="Use this converter instead of decision 49's (`factory document converters`).",
+        ),
+    ] = None,
 ) -> None:
     """Convert the retrieved documents of promoted works, as the researcher.
 
     Without --work or --document, converts every live document of a promoted work. A failed
     document is recorded and the rest continue. --restore regenerates the stored Markdown of
-    recorded conversions that are missing or damaged; it writes no event.
+    recorded conversions that are missing or damaged; it writes no event. --converter adds a
+    conversion beside the existing ones, and a later run without it leaves that document alone.
     """
     state = _state(ctx)
     with _reporting_errors():
         project = _resolve_project(state)
+        registry = default_converters() if converter is None else override_registry(converter)
         summary = document_convert_service.convert_or_restore(
             project,
-            default_converters(),
+            registry,
             restore=restore,
             work_ids=work,
             document_ids=document,
+            override=converter is not None,
         )
     for line in render.convert_lines(summary):
+        typer.echo(line)
+
+
+@document_app.command("converters")
+def document_converters_cmd() -> None:
+    """List the converters, which ones decision 49 chose, and whether each can run here."""
+    for line in render.converter_lines(converter_infos()):
         typer.echo(line)
 
 
