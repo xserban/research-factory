@@ -217,6 +217,33 @@ def test_cross_group_flag() -> None:
     assert SentenceFlag.CROSS_GROUP not in run("A is better than B", CLAIM, a).flags
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "A has the highest score of the two",
+        "A has the lowest error of the two",
+        "A is the fastest of the two",
+        "A is the slowest of the two",
+        "A is the strongest of the two",
+        "A is the weakest of the two",
+        "A is stronger than B",
+        "A is weaker than B",
+        "A beats B",
+        "A surpasses B",
+        "A exceeds B",
+        "A is superior to B",
+        "A is inferior to B",
+        "A has the greatest gain",
+        "A has the largest gain",
+        "A has the smallest gain",
+    ],
+)
+def test_cross_group_flag_covers_comparatives_and_superlatives(text: str) -> None:
+    a = sup(SupportKind.CELL, groups=("grp_aaaaaaaaaaaa",))
+    b = sup(SupportKind.CELL, "rk_ffffffffffff/value", groups=("grp_bbbbbbbbbbbb",))
+    assert SentenceFlag.CROSS_GROUP in run(text, CLAIM, a, b).flags
+
+
 def test_single_source_generalisation_flag() -> None:
     group = sup(SupportKind.GROUP, works=("rf:a",))
     assert SentenceFlag.SINGLE_SOURCE_GENERALISATION in run("Works scale", SYNTH, group).flags

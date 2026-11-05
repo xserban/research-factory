@@ -55,6 +55,22 @@ COMPARATIVES: tuple[str, ...] = (
     "slower",
     "best",
     "worst",
+    "highest",
+    "lowest",
+    "fastest",
+    "slowest",
+    "strongest",
+    "weakest",
+    "stronger",
+    "weaker",
+    "greatest",
+    "largest",
+    "smallest",
+    "superior",
+    "inferior",
+    "beat\\w*",
+    "surpass\\w*",
+    "exceed\\w*",
 )
 _QUANTIFIER_RE = re.compile(
     r"(?<![\w-])(?:" + "|".join(re.escape(q) for q in QUANTIFIERS) + r")(?![\w-])", re.IGNORECASE
