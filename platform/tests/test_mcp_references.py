@@ -71,7 +71,8 @@ async def test_tools_registered_and_named_area_verb(settings: Settings, clock: F
     server = build_server(settings, clock=clock)
     async with Client(server) as client:
         names = [t.name for t in (await client.list_tools()).tools]
-    assert names[-len(NEW_TOOLS) :] == NEW_TOOLS
+    start = names.index(NEW_TOOLS[0])  # tools of later plans register after these
+    assert names[start : start + len(NEW_TOOLS)] == NEW_TOOLS
     assert "seed_check" not in names
     assert all(name.split("_")[0] in {"references", "reference", "snowball"} for name in NEW_TOOLS)
 
