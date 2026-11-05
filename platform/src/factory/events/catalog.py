@@ -34,6 +34,7 @@ from factory.model.hypotheses import (
     HypothesisAbandoned,
     HypothesisConcluded,
     HypothesisDrafted,
+    HypothesisReviewed,
     LeadDecided,
     LeadRecorded,
 )
@@ -269,4 +270,5 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("hypothesis.drafted", HypothesisDrafted, 1))
     catalog.register(EventType("hypothesis.abandoned", HypothesisAbandoned, 1))
     catalog.register(EventType("hypothesis.concluded", HypothesisConcluded, 1))
+    catalog.register(EventType("hypothesis.reviewed", HypothesisReviewed, 1))
     return catalog

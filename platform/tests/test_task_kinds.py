@@ -8,7 +8,7 @@ import pytest
 from factory.model.extraction import Scope
 from factory.model.protocol import ScreeningStage
 from factory.model.screening import PassLabel
-from factory.model.task import INTUITION_TASK_KIND
+from factory.model.task import HYPOTHESIS_REVIEW_TASK_KIND, INTUITION_TASK_KIND
 from factory.services import stages
 from factory.services.modules import default_task_kinds
 
@@ -39,6 +39,7 @@ def test_kinds_unchanged() -> None:
         "mine_a",
         "mine_b",
         INTUITION_TASK_KIND,
+        HYPOTHESIS_REVIEW_TASK_KIND,
     )
 
 

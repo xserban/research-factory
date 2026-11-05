@@ -13,6 +13,7 @@ from factory.modules.contract import (
     PolicyKind,
 )
 from factory.services.modules.base import RuleModule
+from factory.services.modules.task_kinds import default_task_kinds
 
 SPEC = ModuleSpec(
     name="hypotheses",
@@ -22,16 +23,19 @@ SPEC = ModuleSpec(
             "hypothesis.abandoned",
             "hypothesis.concluded",
             "hypothesis.drafted",
+            "hypothesis.reviewed",
             "lead.decided",
             "lead.recorded",
         ),
         tables=(
             "hypotheses",
+            "hypothesis_reviews",
             "lead_keys",
             "lead_triggers",
             "leads",
         ),
     ),
+    task_kinds=default_task_kinds().kinds_of("hypotheses"),
     protocol_sections=("hypothesis_plan",),
     gates=(
         GateSpec(

@@ -13,7 +13,7 @@ from functools import lru_cache
 from factory.model.extraction import Scope
 from factory.model.protocol import ScreeningStage
 from factory.model.screening import PassLabel
-from factory.model.task import INTUITION_TASK_KIND
+from factory.model.task import HYPOTHESIS_REVIEW_TASK_KIND, INTUITION_TASK_KIND
 from factory.modules.registry import TaskKindRegistry
 
 _SCREENING: tuple[tuple[str, ScreeningStage, PassLabel], ...] = (
@@ -44,4 +44,5 @@ def default_task_kinds() -> TaskKindRegistry:
     for kind, label in _MINING:
         registry.register(kind, "mining", stage=None, label=label, scope=None)
     registry.register(INTUITION_TASK_KIND, "intuition", stage=None, label=None, scope=None)
+    registry.register(HYPOTHESIS_REVIEW_TASK_KIND, "hypotheses", stage=None, label=None, scope=None)
     return registry

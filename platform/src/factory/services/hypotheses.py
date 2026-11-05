@@ -69,6 +69,7 @@ class HypothesisView(StrictModel):
     supersedes: str | None
     superseded_by: str | None
     drafter_session: str
+    drafter_model: str | None = None
     abandon_reason: str | None = None
     conclusion: str | None = None
 
@@ -240,9 +241,26 @@ def _state(project: Project, row: Any, reviews: list[str], registration: str | N
     return "reviewed" if reviews else "draft"
 
 
+def eligible_reviews(project: Project, hypothesis_id: str, h_version: str) -> list[Any]:
+    """The reviews of this version by a critic independent of the drafter and the lead author
+    (the projector's session test) and, when the plan asks for a distinct critic model, on another
+    model than the drafter's. Oldest first."""
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT r.*, h.drafter_model FROM hypothesis_reviews r JOIN hypotheses h "
+                "ON h.hypothesis_id = r.hypothesis_id WHERE r.hypothesis_id = :h "
+                "AND r.h_version = :v AND r.eligible = 1 ORDER BY r.event_id"
+            ),
+            {"h": hypothesis_id, "v": h_version},
+        ).all()
+    if not effective_plan(project).critic_distinct_model:
+        return list(rows)
+    return [r for r in rows if r.critic_model is None or r.critic_model != r.drafter_model]
+
+
 def _reviews_of(project: Project, hypothesis_id: str, h_version: str) -> list[str]:
-    """Event ids of the reviews of the current version (filled in with the review tables)."""
-    return []
+    return [str(r.event_id) for r in eligible_reviews(project, hypothesis_id, h_version)]
 
 
 def _registration_of(project: Project, hypothesis_id: str) -> tuple[str | None, Autonomy | None]:
@@ -274,6 +292,7 @@ def _view(project: Project, row: Any) -> HypothesisView:
         supersedes=None if row.supersedes is None else str(row.supersedes),
         superseded_by=None if row.superseded_by is None else str(row.superseded_by),
         drafter_session=str(row.drafter_session),
+        drafter_model=None if row.drafter_model is None else str(row.drafter_model),
         abandon_reason=None if row.abandon_reason is None else str(row.abandon_reason),
         conclusion=None if row.conclusion_text is None else str(row.conclusion_text),
     )

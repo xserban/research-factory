@@ -31,6 +31,7 @@ from factory.model.hypotheses import (
     HypothesisAbandoned,
     HypothesisConcluded,
     HypothesisDrafted,
+    HypothesisReviewed,
     LeadDecided,
     LeadRecorded,
 )
@@ -48,6 +49,7 @@ class HypothesisTables:
     lead_triggers: Table
     lead_keys: Table
     hypotheses: Table
+    reviews: Table
     protocols: Table
     project: Table
     """The protocol and project tables the fold reads to know the policy in force."""
@@ -103,7 +105,22 @@ def hypothesis_tables(metadata: MetaData, protocols: Table, project: Table) -> H
         Column("conclusion_text", String),
         Column("conclusion_event_id", String),
     )
-    return HypothesisTables(leads, triggers, keys, hypotheses, protocols, project)
+    reviews = Table(
+        "hypothesis_reviews",
+        metadata,
+        Column("event_id", String, primary_key=True),
+        Column("hypothesis_id", String, nullable=False),
+        Column("h_version", String, nullable=False),
+        Column("recommend", String, nullable=False),
+        Column("items_json", String, nullable=False),
+        Column("notes_json", String, nullable=False),
+        Column("critic_session", String, nullable=False),
+        Column("critic_model", String),
+        Column("task_id", String, nullable=False),
+        Column("eligible", Integer, nullable=False),
+        Index("ix_hypothesis_reviews_hyp", "hypothesis_id"),
+    )
+    return HypothesisTables(leads, triggers, keys, hypotheses, reviews, protocols, project)
 
 
 def hypothesis_handlers(t: HypothesisTables) -> dict[str, Handler]:
@@ -113,6 +130,7 @@ def hypothesis_handlers(t: HypothesisTables) -> dict[str, Handler]:
         "hypothesis.drafted": _drafted(t),
         "hypothesis.abandoned": _abandoned(t),
         "hypothesis.concluded": _concluded(t),
+        "hypothesis.reviewed": _reviewed(t),
     }
 
 
@@ -273,3 +291,46 @@ def _concluded(t: HypothesisTables) -> Handler:
         )
 
     return concluded
+
+
+def _reviewed(t: HypothesisTables) -> Handler:
+    """A review is kept whoever wrote it; `eligible` says whether its critic was independent of
+    the hypothesis by session (R-51): not the drafter's, not the lead author's, and the session the
+    payload names is the one that wrote the event. The model rule needs the plan and is applied on
+    read."""
+
+    def reviewed(conn: Connection, event: Event) -> None:
+        p = HypothesisReviewed.model_validate(event.payload)
+        row = conn.execute(
+            select(t.hypotheses.c.drafter_session, t.hypotheses.c.lead).where(
+                t.hypotheses.c.hypothesis_id == p.hypothesis_id
+            )
+        ).first()
+        if row is None:
+            return
+        proposers = {str(row[0])}
+        if row[1] is not None:
+            author = conn.execute(
+                select(t.leads.c.author_session).where(t.leads.c.lead_id == str(row[1]))
+            ).scalar()
+            if author is not None:
+                proposers.add(str(author))
+        eligible = event.actor.session not in proposers and p.critic_session == event.actor.session
+        conn.execute(
+            sqlite_insert(t.reviews)
+            .values(
+                event_id=event.id,
+                hypothesis_id=p.hypothesis_id,
+                h_version=p.h_version,
+                recommend=p.recommend,
+                items_json=canonical_json({str(k): v for k, v in p.items.items()}).decode(),
+                notes_json=canonical_json({str(k): v for k, v in p.notes.items()}).decode(),
+                critic_session=event.actor.session,
+                critic_model=event.actor.model,
+                task_id=p.task_id,
+                eligible=int(eligible),
+            )
+            .on_conflict_do_nothing(index_elements=["event_id"])
+        )
+
+    return reviewed

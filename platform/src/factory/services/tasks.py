@@ -14,6 +14,7 @@ from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor, Event
 from factory.model.base import StrictModel
 from factory.model.task import (
+    HYPOTHESIS_REVIEW_TASK_KIND,
     INTUITION_TASK_KIND,
     TASK_KIND_RE,
     TASK_LEASE,
@@ -218,8 +219,10 @@ def task_counts(project: Project) -> TaskCounts:
     abandoned = abandoned_task_ids(project)
     with project.index.connect() as conn:
         rows = conn.execute(
-            text("SELECT task_id, status, lease_until FROM tasks WHERE kind != :layer"),
-            {"layer": INTUITION_TASK_KIND},
+            text(
+                "SELECT task_id, status, lease_until FROM tasks WHERE kind NOT IN (:layer, :review)"
+            ),
+            {"layer": INTUITION_TASK_KIND, "review": HYPOTHESIS_REVIEW_TASK_KIND},
         ).all()
     counts = {"open": 0, "claimed": 0, "expired": 0, "completed": 0, "abandoned": 0}
     for task_id, status, lease_until in rows:

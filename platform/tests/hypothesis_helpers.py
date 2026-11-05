@@ -4,11 +4,14 @@ Sessions are distinct on purpose: `DRAFTER` is the default test session, `CRITIC
 are others, and each has its own model so the independence rules can be told apart.
 """
 
-# ruff: noqa: F401
+# ruff: noqa: F401, F811
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
+
+import pytest
 
 from factory.events.envelope import Actor
 from factory.model.hypotheses import (
@@ -22,10 +25,12 @@ from factory.model.screening import PassLabel
 from factory.modules.contract import PolicyKind
 from factory.services.cards import create_card
 from factory.services.context import Project
+from factory.services.hypotheses import draft_hypothesis
 from factory.services.leads import decide_lead, record_lead
 from tests.finder_helpers import MatchWorld, mw
 from tests.helpers import S2, S3, SESSION, record_pilot_question
 from tests.lineage_helpers import ctr_a, ctr_b, lin, screened, world
+from tests.test_finder_gaps import gw
 
 S4 = "01JZ9Q3K5M7N8P0R2S4T6V8W11"
 LEAD_TEXT = "Kernelised attention may keep accuracy while removing the quadratic memory term."
@@ -90,3 +95,21 @@ def promoted_lead(
     lead_id = record_lead(project, author, lead_input(LEAD_TEXT, trigger))
     decide_lead(project, human, lead_id, "promote")
     return lead_id
+
+
+@dataclass
+class HW:
+    """A promoted lead (by `LEAD_AUTHOR`, decided by the human) and a draft (by `DRAFTER`) over
+    the evidence world `gw`: the starting point of the review and registration tests."""
+
+    works: list[str]
+    lead: str
+    hid: str
+    version: str
+
+
+@pytest.fixture
+def hw(project: Project, human: Actor, gw: list[str]) -> HW:
+    lead = promoted_lead(project, human, Trigger(kind=TriggerKind.WORK, ref=gw[0]))
+    hid, version = draft_hypothesis(project, DRAFTER, make_spec(lead=lead))
+    return HW(gw, lead, hid, version)

@@ -372,3 +372,81 @@ class HypothesisAbandoned(StrictModel):
 class HypothesisConcluded(StrictModel):
     hypothesis_id: HypothesisId
     text: Annotated[NonBlank, Field(max_length=MAX_CONCLUSION)]
+
+
+# --- Critic review -------------------------------------------------------------------------
+
+ChecklistItem = Literal[
+    "falsifiable",
+    "measurable",
+    "single-factor",
+    "baselines-named",
+    "rule-complete",
+    "prior-addressed",
+    "conditions-in-evidence",
+]
+CHECKLIST: tuple[ChecklistItem, ...] = (
+    "falsifiable",
+    "measurable",
+    "single-factor",
+    "baselines-named",
+    "rule-complete",
+    "prior-addressed",
+    "conditions-in-evidence",
+)
+ItemResult = Literal["pass", "fail", "n/a"]
+Recommendation = Literal["register", "revise", "reject"]
+ReviewNote = Annotated[str, Field(max_length=MAX_NOTE)]
+
+
+class ReviewTrigger(StrictModel):
+    """A lead trigger as the critic sees it: the reference, the builder row stored with it and,
+    for a claim or a contribution item, the verified quote the platform holds."""
+
+    kind: TriggerKind
+    ref: str
+    row: dict[str, JsonValue] | None = None
+    quote: str | None = None
+
+
+class ReviewTask(StrictModel):
+    """What a critic is served: the artefact and nothing of its proposer. The lead's text, its
+    `input_blob` and the drafter's rationale are never part of it (R-51)."""
+
+    hypothesis_id: HypothesisId
+    h_version: HVersion
+    spec_without_prose: dict[str, JsonValue]
+    statement: str
+    triggers: list[ReviewTrigger]
+    prior: list[str]
+    prior_total: int
+    checklist: list[ChecklistItem]
+
+
+class ReviewInput(StrictModel):
+    """The critic's verdict: every checklist item, a note per item if wanted, a recommendation."""
+
+    items: dict[ChecklistItem, ItemResult]
+    notes: dict[ChecklistItem, ReviewNote] = Field(default_factory=dict)
+    recommend: Recommendation
+
+    @model_validator(mode="after")
+    def _every_item_answered(self) -> Self:
+        missing = [item for item in CHECKLIST if item not in self.items]
+        if missing:
+            raise ValueError(f"answer every checklist item; missing {', '.join(missing)}")
+        stray = [item for item in self.notes if item not in self.items]
+        if stray:
+            raise ValueError("notes name checklist items only")
+        return self
+
+
+class HypothesisReviewed(StrictModel):
+    hypothesis_id: HypothesisId
+    h_version: HVersion
+    items: dict[ChecklistItem, ItemResult]
+    notes: dict[ChecklistItem, ReviewNote] = Field(default_factory=dict)
+    recommend: Recommendation
+    critic_session: str
+    critic_model: str | None = None
+    task_id: str

@@ -228,6 +228,12 @@ def _lookup(project: Project, ref: str) -> _Ref | None:
     return _Ref(work_id=item.work_id, quote=item.quote, live=item.live)
 
 
+def ref_quote(project: Project, ref: str) -> str | None:
+    """The stored, verified quote of a claim or contribution item; None for any other ref."""
+    found = _lookup(project, ref)
+    return None if found is None else found.quote
+
+
 def propose_contradiction(
     project: Project, actor: Actor, item: ContradictionInput
 ) -> tuple[str, bool]:
