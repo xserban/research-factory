@@ -32,6 +32,7 @@ from factory.services.prisma import has_full_text_plan, prisma_flow
 from factory.services.search import load_works
 
 BibScope = Literal["included", "corpus"]
+DRAFT_SCOPE = "draft:"
 BibFormat = Literal["bibtex", "csl"]
 PAGE = 500
 
@@ -88,7 +89,8 @@ def select_works(
 
     `included` is the final outcome INCLUDED at the last declared screening stage: full text when
     the protocol declares a plan, else title/abstract. v1: this scope loads every outcome through
-    `final_outcomes`, so it is not streamed (the corpus scope and `ids` are).
+    `final_outcomes`, so it is not streamed (the corpus scope and `ids` are). `draft:<drf_...>` is
+    the works its rendered sentences cite (spec ruling 18), those of this project.
     """
     if (scope is None) == (not ids):
         raise _issue("scope", "give exactly one of a scope and a list of ids")
@@ -101,6 +103,11 @@ def select_works(
         return sorted(set(ids))
     if scope == "corpus":
         return canonical
+    if isinstance(scope, str) and scope.startswith(DRAFT_SCOPE):
+        from factory.services.drafts import draft_works  # drafts imports this module
+
+        cited = set(draft_works(project, scope.removeprefix(DRAFT_SCOPE)))
+        return [wid for wid in canonical if wid in cited]
     if scope == "included":
         stage = (
             ScreeningStage.FULL_TEXT
@@ -109,7 +116,7 @@ def select_works(
         )
         outcomes = final_outcomes(project, stage=stage)
         return [wid for wid in canonical if outcomes.get(wid) is Outcome.INCLUDED]
-    raise _issue("scope", f"unknown scope {scope!r}; use included or corpus")
+    raise _issue("scope", f"unknown scope {scope!r}; use included, corpus or draft:<drf_...>")
 
 
 def iter_works(project: Project, work_ids: Sequence[str]) -> Iterator[Work]:
