@@ -478,13 +478,14 @@ def _proposer_sessions(project: Project, view: HypothesisView) -> set[str]:
     return sessions
 
 
-def _replacement_issues(project: Project, old_id: str) -> list[ValidationIssue]:
+def _replacement_issues(project: Project, old_id: str, hypothesis_id: str) -> list[ValidationIssue]:
     """Registering a replacement supersedes the hypothesis it names: that one must still be
-    live and must have no evidence (R-52)."""
+    live, must have no evidence (R-52), and must not already be superseded by a rival (a draft
+    names its predecessor at once, so `hypothesis_id` itself does not count as a rival)."""
     old = hypothesis_view(project, old_id)
     if old is None or old.state == "abandoned":
         return [ValidationIssue("supersedes", "abandoned")]
-    if old.superseded_by is not None:
+    if old.superseded_by not in (None, hypothesis_id):
         return [ValidationIssue("supersedes", "already-superseded")]
     if _has_evidence(project, old_id):
         return [ValidationIssue("supersedes", "evidence-exists")]
@@ -511,7 +512,7 @@ def register_hypothesis(project: Project, actor: Actor, hypothesis_id: str) -> s
         if view.state not in ("draft", "reviewed"):
             issues.append(ValidationIssue("hypothesis_id", f"state-{view.state}"))
         if view.supersedes is not None:
-            issues.extend(_replacement_issues(project, view.supersedes))
+            issues.extend(_replacement_issues(project, view.supersedes, hypothesis_id))
         reviews = eligible_reviews(project, hypothesis_id, view.h_version)
         mode = project_mode(project)
         review_id: str | None = None

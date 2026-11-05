@@ -127,6 +127,44 @@ def test_registered_once_and_h_version_frozen(project: Project, human: Actor, hw
     assert old.registration == before.registration and old.h_version == hw.version
 
 
+def test_revised_draft_registers_over_its_unregistered_predecessor(
+    project: Project, human: Actor, hw: HW
+) -> None:
+    # H1 is a draft; H2 supersedes it at once, so H1 already names H2 as `superseded_by`.
+    new, _ = draft_hypothesis(
+        project,
+        DRAFTER,
+        make_spec(lead=hw.lead, prediction={"direction": "treatment-better", "margin": "3"}),
+        supersedes=hw.hid,
+    )
+    old = hypothesis_view(project, hw.hid)
+    assert old is not None and old.superseded_by == new and old.registration is None
+    _review(project)
+    register_hypothesis(project, human, new)  # not refused `already-superseded`
+    fresh = hypothesis_view(project, new)
+    assert fresh is not None and fresh.state == "registered"
+
+
+def test_two_rivals_first_to_register_wins(project: Project, human: Actor, hw: HW) -> None:
+    _review(project)
+    register_hypothesis(project, human, hw.hid)
+    rivals = [
+        draft_hypothesis(
+            project,
+            DRAFTER,
+            make_spec(lead=hw.lead, prediction={"direction": "treatment-better", "margin": margin}),
+            supersedes=hw.hid,
+        )[0]
+        for margin in ("3", "4")
+    ]
+    _review(project)
+    register_hypothesis(project, human, rivals[0])
+    _review(project)
+    with pytest.raises(FactoryValidationError) as err:
+        register_hypothesis(project, human, rivals[1])
+    assert _fields(err) == [("supersedes", "already-superseded")]
+
+
 def test_replacement_registration_refused_once_the_old_one_has_evidence(
     project: Project, human: Actor, hw: HW, monkeypatch: pytest.MonkeyPatch
 ) -> None:
