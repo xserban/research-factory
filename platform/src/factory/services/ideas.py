@@ -19,7 +19,7 @@ from typing import Any, Literal
 from sqlalchemy import text
 
 from factory.errors import FactoryValidationError, ValidationIssue
-from factory.events.envelope import Actor
+from factory.events.envelope import Actor, Event
 from factory.extraction.numbers import normalise_text
 from factory.model.base import StrictModel
 from factory.model.extraction import Scope
@@ -256,35 +256,49 @@ def _chain_reaches(project: Project, start: str, goal: str) -> bool:
     return False
 
 
+def build_idea_merge(
+    project: Project,
+    actor: Actor,
+    from_idea: str,
+    into: str,
+    reason: str,
+    proposal: str | None = None,
+) -> Event:
+    """The `idea.merged` event for a valid merge, not recorded. The caller holds the index lock
+    and has synced. Both ideas must be live and not rejected (`from_idea`, `into`: `unknown-idea`,
+    `idea-not-live`); `from_idea` must not be merged already (`already-merged`); a merge that
+    closes a cycle is `merge-cycle` (`into`); the reason must be stated (`reason`)."""
+    _only_human(actor)
+    issues: list[ValidationIssue] = []
+    for field, ident in (("from_idea", from_idea), ("into", into)):
+        row = _idea_row(project, ident)
+        if row is None:
+            issues.append(ValidationIssue(field, "unknown-idea"))
+        elif row[1] is not None or row[2] == "reject":
+            issues.append(ValidationIssue(field, "idea-not-live"))
+        elif field == "from_idea" and row[3] is not None:
+            issues.append(ValidationIssue(field, "already-merged"))
+    if not reason.strip():
+        issues.append(ValidationIssue("reason", "state the reason"))
+    if not issues and (from_idea == into or _chain_reaches(project, into, from_idea)):
+        issues.append(ValidationIssue("into", "merge-cycle"))
+    if issues:
+        raise FactoryValidationError(issues)
+    return project.events.make(
+        "idea.merged",
+        IdeaMerged(from_idea=from_idea, into=into, reason=reason, proposal=proposal),
+        actor,
+        refs=[from_idea, into],
+    )
+
+
 def merge_ideas(project: Project, actor: Actor, from_idea: str, into: str, reason: str) -> str:
-    """Merge `from_idea` into `into` (human, reversible) and return the event id. Both ideas must
-    be live and not rejected (`from_idea`, `into`: `unknown-idea`, `idea-not-live`); `from_idea`
-    must not be merged already (`already-merged`); a merge that closes a cycle is `merge-cycle`
-    (`into`); the reason must be stated (`reason`)."""
+    """Merge `from_idea` into `into` (human, reversible) and return the event id; refusals as
+    `build_idea_merge`."""
     _only_human(actor)
     with project.index.exclusive():
         project.index.sync()
-        issues: list[ValidationIssue] = []
-        for field, ident in (("from_idea", from_idea), ("into", into)):
-            row = _idea_row(project, ident)
-            if row is None:
-                issues.append(ValidationIssue(field, "unknown-idea"))
-            elif row[1] is not None or row[2] == "reject":
-                issues.append(ValidationIssue(field, "idea-not-live"))
-            elif field == "from_idea" and row[3] is not None:
-                issues.append(ValidationIssue(field, "already-merged"))
-        if not reason.strip():
-            issues.append(ValidationIssue("reason", "state the reason"))
-        if not issues and (from_idea == into or _chain_reaches(project, into, from_idea)):
-            issues.append(ValidationIssue("into", "merge-cycle"))
-        if issues:
-            raise FactoryValidationError(issues)
-        event = project.events.make(
-            "idea.merged",
-            IdeaMerged(from_idea=from_idea, into=into, reason=reason),
-            actor,
-            refs=[from_idea, into],
-        )
+        event = build_idea_merge(project, actor, from_idea, into, reason)
         project.record([event])
         return event.id
 

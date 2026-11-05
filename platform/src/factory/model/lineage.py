@@ -159,6 +159,8 @@ class IdeaMerged(StrictModel):
     from_idea: IdeaId
     into: IdeaId
     reason: Rationale
+    proposal: str | None = None
+    """The consolidation proposal (`cnp_...`) this merge carries out, when it came from one."""
 
     @model_validator(mode="after")
     def _distinct(self) -> Self:

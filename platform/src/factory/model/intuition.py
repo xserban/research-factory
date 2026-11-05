@@ -341,6 +341,8 @@ class ConceptMerged(StrictModel):
     into: _CONCEPT_ID
     from_concept: _CONCEPT_ID
     reason: NonBlank
+    proposal: str | None = None
+    """The consolidation proposal (`cnp_...`) this merge carries out, when it came from one."""
 
 
 class ConceptUnmerged(StrictModel):

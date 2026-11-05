@@ -35,6 +35,17 @@ def concept_exists(conn: Connection, concept_id: str) -> bool:
     return found is not None
 
 
+def concepts_defined_after(conn: Connection, event_id: str) -> int:
+    """How many unmerged concepts were first defined by an event after `event_id` (consolidation
+    counts new nodes with it)."""
+    return int(
+        conn.execute(
+            text("SELECT COUNT(*) FROM concepts WHERE event_id > :e AND merged_into IS NULL"),
+            {"e": event_id},
+        ).scalar_one()
+    )
+
+
 def concept_live(conn: Connection, concept_id: str) -> str:
     """The concept `concept_id` stands for after active merges (itself when unmerged)."""
     return str(conn.execute(text(_SURVIVOR), {"c": concept_id}).scalar_one())

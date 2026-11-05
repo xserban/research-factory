@@ -75,6 +75,7 @@ LAYER_MODULES = frozenset(
 )
 ALLOWED_IMPORTERS = frozenset(
     {
+        "factory.services.consolidation",  # Regions-C: merges concepts and reads their names
         "factory.services.lineage",
         "factory.services.check",
         "factory.services.trace",

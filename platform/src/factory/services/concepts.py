@@ -1213,28 +1213,43 @@ def _merge_issues(project: Project, into: str, from_concept: str) -> list[Valida
     return []
 
 
+def build_concept_merge(
+    project: Project,
+    actor: Actor,
+    into: str,
+    from_concept: str,
+    reason: str,
+    proposal: str | None = None,
+) -> Event:
+    """The `concept.merged` event for a valid merge, not recorded. The caller holds the index
+    lock and has synced. Refused for a non-human actor (`actor`), a blank reason (`reason`) and
+    the cases of `_merge_issues` (`into`, `from_concept`)."""
+    if actor.kind != "human":
+        raise _refuse(ValidationIssue("actor", "only a human merges concepts"))
+    issues = _merge_issues(project, into, from_concept)
+    if not reason.strip():
+        issues.append(ValidationIssue("reason", "state why"))
+    if issues:
+        raise FactoryValidationError(issues)
+    return project.events.make(
+        "concept.merged",
+        ConceptMerged(into=into, from_concept=from_concept, reason=reason, proposal=proposal),
+        actor,
+        refs=[into, from_concept],
+    )
+
+
 def merge_concepts(
     project: Project, actor: Actor, into: str, from_concept: str, reason: str
 ) -> str:
     """Merge `from_concept` into `into` (human only, reversible) and return the event id: the
-    projection re-points `from`'s links and names to `into`; no earlier row changes. Refused,
-    with nothing written, for a non-human actor (`actor`), a blank reason (`reason`) and the
-    cases of `_merge_issues` (`into`, `from_concept`)."""
+    projection re-points `from`'s links and names to `into`; no earlier row changes. Refusals as
+    `build_concept_merge`, with nothing written."""
     if actor.kind != "human":
         raise _refuse(ValidationIssue("actor", "only a human merges concepts"))
     with project.index.exclusive():
         project.index.sync()
-        issues = _merge_issues(project, into, from_concept)
-        if not reason.strip():
-            issues.append(ValidationIssue("reason", "state why"))
-        if issues:
-            raise FactoryValidationError(issues)
-        event = project.events.make(
-            "concept.merged",
-            ConceptMerged(into=into, from_concept=from_concept, reason=reason),
-            actor,
-            refs=[into, from_concept],
-        )
+        event = build_concept_merge(project, actor, into, from_concept, reason)
         project.record([event])
         return event.id
 
