@@ -62,6 +62,7 @@ from factory.services.lineage import (
 )
 from factory.services.references import included_works
 from factory.services.regions import region_withheld
+from factory.services.view_corpus import corpus_among
 from factory.services.views import view_meta
 
 ONION_MAX_RING = 3
@@ -231,23 +232,8 @@ def _focus(project: Project, flt: OnionFilter) -> list[str]:
 
 
 def _corpus_among(conn: Connection, ids: Sequence[str]) -> set[str]:
-    """The ids that are corpus works as `list_works` defines the corpus (a non-probe provenance
-    row) and that no active merge absorbs. Role-blind: a seed's work is an ordinary corpus work."""
-    found: set[str] = set()
-    for start in range(0, len(ids), RING_BATCH):
-        rows = conn.execute(
-            text(
-                "SELECT DISTINCT p.work_id FROM provenance p "
-                "WHERE p.work_id IN (SELECT value FROM json_each(:ids)) "
-                "AND p.query_id NOT IN (SELECT query_id FROM queries WHERE purpose = :probe) "
-                "AND p.work_id NOT IN (SELECT mm.work_id FROM merge_members mm JOIN merges m "
-                "ON m.merge_id = mm.merge_id WHERE m.status = 'active' "
-                'AND mm.work_id != m."primary")'
-            ),
-            {"ids": json.dumps(list(ids[start : start + RING_BATCH])), "probe": _PROBE},
-        )
-        found.update(str(r[0]) for r in rows)
-    return found
+    """The corpus works among `ids` (see `view_corpus.corpus_among`)."""
+    return corpus_among(conn, ids)
 
 
 def _seed(conn: Connection, focus: Sequence[str]) -> None:

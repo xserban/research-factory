@@ -68,3 +68,40 @@ class OnionView(StrictModel):
     meta: ViewMeta
     rings: list[Ring]
     edges_considered: dict[str, int]
+
+
+class GroupSummary(StrictModel):
+    """One comparability group: its id (`grp_` and a hash of the key), the key pairs, and counts.
+    `rows` = `independent` + `copied` + rows without a `value` field; no value appears here."""
+
+    group_id: str
+    key: list[tuple[str, str]]
+    works: int
+    rows: int
+    independent: int
+    copied: int
+
+
+class CoverageCell(StrictModel):
+    """Counts only, never a value (spec ruling 5; decision 41)."""
+
+    independent: int
+    copied: int
+    works: int
+
+
+class CoverageView(StrictModel):
+    """The methods x comparability-group matrix of final evidence rows, and the confirmed ideas x
+    group matrix from contribution `result_row` links. `cells[method][group_id]` is absent where
+    the method has no row in the group. `total_groups` / `total_methods` / `total_ideas` are the
+    complete counts whatever the lists show."""
+
+    meta: ViewMeta
+    groups: list[GroupSummary]
+    methods: list[str]
+    cells: dict[str, dict[str, CoverageCell]]
+    ideas: list[str]
+    idea_cells: dict[str, dict[str, CoverageCell]]
+    total_groups: int
+    total_methods: int
+    total_ideas: int

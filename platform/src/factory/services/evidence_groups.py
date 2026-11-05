@@ -1,6 +1,6 @@
 """Per-group reads of the final evidence rows (slice 7b, plan V-B, task 1).
 
-Declares: `GroupSummary`, `group_index`, `rows_of_group`, `final_rows_for`. A reader of the
+Declares: `group_index`, `rows_of_group`, `final_rows_for`. A reader of the
 index; it writes no event and no table.
 
 Invariants:
@@ -18,14 +18,14 @@ Invariants:
 from __future__ import annotations
 
 import json
-from collections.abc import Collection
+from collections.abc import Collection, Sequence
 from itertools import product
 
 from sqlalchemy import text
 
 from factory.errors import FactoryValidationError, ValidationIssue
-from factory.model.base import StrictModel
 from factory.model.extraction import Scope
+from factory.model.views import GroupSummary
 from factory.services.context import Project
 from factory.services.evidence_report import group_id
 from factory.services.extraction import require_schema
@@ -41,33 +41,23 @@ from factory.services.extraction_agreement import (
 )
 
 
-class GroupSummary(StrictModel):
-    group_id: str
-    key: list[tuple[str, str]]
-    works: int
-    rows: int
-    independent: int
-    copied: int
+def summarise(key: GroupKey, rows: Sequence[FinalRow]) -> GroupSummary:
+    """The summary of one group from its rows (counts as `independence_counts` makes them)."""
+    counts = independence_counts(rows)
+    return GroupSummary(
+        group_id=group_id(key),
+        key=list(key),
+        works=len({r.work_id for r in rows}),
+        rows=len(rows),
+        independent=counts.independent,
+        copied=counts.copied,
+    )
 
 
 def group_index(project: Project) -> list[GroupSummary]:
     """One summary per comparability group, ordered by key. Empty without a schema."""
     grouped = grouped_rows(project)
-    out: list[GroupSummary] = []
-    for key in sorted(grouped.groups):
-        rows = grouped.groups[key]
-        counts = independence_counts(rows)
-        out.append(
-            GroupSummary(
-                group_id=group_id(key),
-                key=list(key),
-                works=len({r.work_id for r in rows}),
-                rows=len(rows),
-                independent=counts.independent,
-                copied=counts.copied,
-            )
-        )
-    return out
+    return [summarise(key, grouped.groups[key]) for key in sorted(grouped.groups)]
 
 
 def final_rows_for(project: Project, work_ids: Collection[str]) -> list[FinalRow]:
@@ -133,3 +123,6 @@ def _candidates(project: Project, keys: list[str], gid: str) -> tuple[GroupKey, 
                 found = key
                 works.add(work)
     return None if found is None else (found, works)
+
+
+__all__ = ["GroupSummary", "final_rows_for", "group_index", "rows_of_group", "summarise"]
