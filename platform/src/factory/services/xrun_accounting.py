@@ -15,7 +15,10 @@ Invariants:
 
 from __future__ import annotations
 
+import json
+from dataclasses import dataclass
 from decimal import Decimal
+from typing import Literal
 
 from sqlalchemy import text
 
@@ -103,3 +106,89 @@ def confirmatory_evidence(project: Project, hypothesis_id: str) -> bool:
             {"h": hypothesis_id},
         ).first()
     return found is not None
+
+
+Verdict = Literal["reproduced", "not-reproduced", "accepted", "pending"]
+
+
+def baseline_verdicts(project: Project, experiment_id: str) -> dict[str, Verdict]:
+    """The state of each declared baseline: `reproduced` or `not-reproduced` once the platform has
+    written its verdict (`no-runs-completed` reads as `not-reproduced`), `accepted` once a human
+    accepted a baseline that did not reproduce, else `pending`."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        raw = conn.execute(
+            text("SELECT design_json FROM experiments WHERE experiment_id = :e"),
+            {"e": experiment_id},
+        ).scalar()
+        if raw is None:
+            return {}
+        rows = {
+            str(r[0]): (str(r[1]), r[2] is not None)
+            for r in conn.execute(
+                text(
+                    "SELECT row_key, verdict, accepted_event_id FROM baseline_evaluations "
+                    "WHERE experiment_id = :e"
+                ),
+                {"e": experiment_id},
+            ).all()
+        }
+    out: dict[str, Verdict] = {}
+    for baseline in design_of(raw).baselines:
+        found = rows.get(baseline.row_key)
+        if found is None:
+            out[baseline.row_key] = "pending"
+        elif found[1]:
+            out[baseline.row_key] = "accepted"
+        else:
+            out[baseline.row_key] = "reproduced" if found[0] == "reproduced" else "not-reproduced"
+    return out
+
+
+def baseline_flags(project: Project, experiment_id: str) -> tuple[str, ...]:
+    """`baseline-not-reproduced` when a baseline that did not reproduce was accepted (R-122): it
+    flags every outcome that depends on the design."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        found = conn.execute(
+            text(
+                "SELECT 1 FROM baseline_evaluations WHERE experiment_id = :e "
+                "AND accepted_event_id IS NOT NULL LIMIT 1"
+            ),
+            {"e": experiment_id},
+        ).first()
+    return () if found is None else ("baseline-not-reproduced",)
+
+
+@dataclass(frozen=True)
+class ReproductionRun:
+    run_id: str
+    seed: int
+    exit_status: int
+    metrics: dict[str, str]
+
+
+def reproduction_runs(project: Project, experiment_id: str, row_key: str) -> list[ReproductionRun]:
+    """The reported, planned (not exploratory) reproduction runs of one baseline, in the order they
+    were reported. A seed may have several (a re-run is a new run)."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT run_id, seed, exit_status, metrics_json FROM xruns "
+                "WHERE experiment_id = :e AND arm = :a AND exploratory = 0 "
+                "AND reported_event_id IS NOT NULL ORDER BY reported_event_id"
+            ),
+            {"e": experiment_id, "a": f"reproduction:{row_key}"},
+        ).all()
+    return [
+        ReproductionRun(
+            run_id=str(r[0]),
+            seed=int(r[1]),
+            exit_status=int(r[2]),
+            metrics={}
+            if r[3] is None
+            else {str(k): str(v) for k, v in json.loads(str(r[3])).items()},
+        )
+        for r in rows
+    ]

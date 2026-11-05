@@ -169,7 +169,7 @@ class Cell(StrictModel):
         return self.split == "confirmatory" and not self.is_reproduction
 
 
-# --- Results file -----------------------------------------------------------------------------
+# --- Results file -------------------------------------------------------------------------------
 
 
 class ResultMetric(StrictModel):
@@ -269,7 +269,7 @@ class ExperimentDeviationRecorded(StrictModel):
     after_unlock: bool
 
 
-# --- Events: runs ---------------------------------------------------------------------------------
+# --- Events: runs -------------------------------------------------------------------------------
 
 
 class XrunRegistered(StrictModel):
@@ -312,3 +312,34 @@ class XrunReported(StrictModel):
     tracker_run: Annotated[NonBlank, Field(max_length=200)] | None = None
     artifacts: tuple[ResultArtifact, ...] = ()
     flags: tuple[str, ...] = ()
+
+
+# --- Events: baseline reproduction --------------------------------------------------------------
+
+BaselineVerdict = Literal["reproduced", "not-reproduced", "no-runs-completed"]
+
+
+class BaselineEvaluated(StrictModel):
+    """The verdict on one baseline, written once by the platform (`system`) when every declared
+    seed has a reported reproduction run (ruling 7)."""
+
+    experiment_id: ExperimentId
+    row_key: Annotated[str, StringConstraints(pattern=ROW_KEY_RE)]
+    reported: str
+    reproduced: str | None
+    runs: tuple[RunId, ...]
+    excluded_runs: tuple[RunId, ...] = ()
+    """Runs of seeds that only failed: left out of the mean and listed."""
+    tolerance: Decimal0
+    tolerance_kind: Literal["absolute", "relative"]
+    verdict: BaselineVerdict
+    evaluator_version: Short
+
+
+class BaselineAccepted(StrictModel):
+    """A human acceptance of a baseline that did not reproduce (an act at the gate
+    `experiments.accept_baseline`). It flags every dependent outcome `baseline-not-reproduced`."""
+
+    experiment_id: ExperimentId
+    row_key: Annotated[str, StringConstraints(pattern=ROW_KEY_RE)]
+    rationale: Reason

@@ -32,6 +32,7 @@ from factory.index.experiments import design_of
 from factory.model.base import StrictModel
 from factory.model.experiments import (
     AUTOMATIC_DEVIATIONS,
+    BaselineAccepted,
     DeviationKind,
     ExperimentAmended,
     ExperimentDesign,
@@ -46,7 +47,13 @@ from factory.services.extraction import require_schema
 from factory.services.extraction_agreement import final_rows, key_value
 from factory.services.hypotheses import hypothesis_view
 from factory.services.hypothesis_gates import effective_plan, may_pass, project_mode
-from factory.services.xrun_accounting import BudgetView, access_counts, budget_view
+from factory.services.xrun_accounting import (
+    BudgetView,
+    access_counts,
+    baseline_flags,
+    baseline_verdicts,
+    budget_view,
+)
 
 ExperimentState = Literal["draft", "frozen", "unlocked", "superseded"]
 
@@ -84,7 +91,7 @@ def _refuse(field: str, reason: str) -> FactoryValidationError:
     return FactoryValidationError([ValidationIssue(field, reason)])
 
 
-# --- Views --------------------------------------------------------------------------------
+# --- Views --------------------------------------------------------------------------------------
 
 
 def _state(row: Any) -> ExperimentState:
@@ -121,7 +128,7 @@ def _view(project: Project, row: Any) -> ExperimentView:
     deviations = _deviations(project, experiment_id)
     budget = budget_view(project, experiment_id)
     assert budget is not None
-    flags: set[str] = set()
+    flags: set[str] = set(baseline_flags(project, experiment_id))
     if any(d.semantic and d.after_unlock for d in deviations):
         flags.add("deviated")
     return ExperimentView(
@@ -171,7 +178,7 @@ def list_experiments(project: Project) -> list[ExperimentView]:
     return [_view(project, r) for r in rows]
 
 
-# --- Validation ---------------------------------------------------------------------------
+# --- Validation ---------------------------------------------------------------------------------
 
 
 def _baseline_issues(
@@ -245,7 +252,7 @@ def _input_blob(project: Project, actor: Actor, body: JsonValue) -> str | None:
     return project.blobs.put_json(body) if actor.kind == "agent" else None
 
 
-# --- Designing and amending -----------------------------------------------------------------
+# --- Designing and amending ---------------------------------------------------------------------
 
 
 def design_experiment(
@@ -345,7 +352,7 @@ def amend_experiment(
     return event.id
 
 
-# --- Freeze and unlock ------------------------------------------------------------------------
+# --- Freeze and unlock --------------------------------------------------------------------------
 
 
 def freeze_experiment(project: Project, actor: Actor, experiment_id: str) -> str:
@@ -389,8 +396,6 @@ def freeze_experiment(project: Project, actor: Actor, experiment_id: str) -> str
 
 
 def _unlock_issues(project: Project, view: ExperimentView) -> list[ValidationIssue]:
-    from factory.services.reproduction import baseline_verdicts  # it reads this module's views
-
     issues: list[ValidationIssue] = []
     hypothesis = hypothesis_view(project, view.hypothesis)
     if hypothesis is None or hypothesis.state != "registered":
@@ -519,3 +524,60 @@ def record_deviation(
         event = make_deviation_event(project, actor, view, kind, note, semantic)
         project.record([event])
     return event.id
+
+
+# --- Accepting a baseline that did not reproduce ------------------------------------------------
+
+
+def accept_baseline(
+    project: Project, actor: Actor, experiment_id: str, row_key: str, rationale: str
+) -> str:
+    """Accept a baseline whose reproduction failed (an act at the gate
+    `experiments.accept_baseline`, human in every mode) and return the event id. It writes the
+    acceptance and a `baseline-accepted` deviation, unblocks the unlock, and flags every outcome of
+    the design `baseline-not-reproduced` (R-122). Refused, with nothing written: an agent
+    (`actor`); an unknown experiment (`experiment_id`) or one that is not frozen; a row that is
+    not a baseline of the design (`row_key`: `not-a-baseline`), has no verdict yet (`pending`),
+    reproduced (`reproduced`) or is already accepted (`accepted`); a blank or long rationale
+    (`rationale`)."""
+    with project.index.exclusive():
+        project.index.sync()
+        view = experiment_view(project, experiment_id)
+        issues: list[ValidationIssue] = []
+        if view is None:
+            raise _refuse("experiment_id", "unknown")
+        if view.state in ("draft", "superseded"):
+            issues.append(ValidationIssue("experiment_id", "not-frozen"))
+        verdict = baseline_verdicts(project, experiment_id).get(row_key)
+        if verdict is None:
+            issues.append(ValidationIssue("row_key", "not-a-baseline"))
+        elif verdict != "not-reproduced":
+            issues.append(ValidationIssue("row_key", verdict))
+        if not rationale.strip() or len(rationale) > 300:
+            issues.append(ValidationIssue("rationale", "between 1 and 300 characters"))
+        if issues:
+            raise FactoryValidationError(issues)
+        may_pass(
+            project,
+            actor,
+            "experiments.accept_baseline",
+            proposer_sessions=set(view.designer_sessions),
+        ).raise_if_refused()
+        accepted = project.events.make(
+            "baseline.accepted",
+            BaselineAccepted(
+                experiment_id=experiment_id, row_key=row_key, rationale=rationale.strip()
+            ),
+            actor,
+            refs=[experiment_id, row_key],
+        )
+        deviation = make_deviation_event(
+            project,
+            actor,
+            view,
+            "baseline-accepted",
+            f"baseline {row_key} accepted without reproduction: {rationale.strip()}"[:600],
+            False,
+        )
+        project.record([accepted, deviation])
+    return accepted.id

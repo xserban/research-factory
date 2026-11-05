@@ -13,7 +13,8 @@ it was written by hand):
 - A freeze and an unlock are folded only when the policy recorded equals the policy in force at
   that point of the log (the `protocols` and `project` tables), a `human` policy has a human actor,
   any other has a session outside the designers', and the autonomy label is the actor's. An unlock
-  also needs a registered hypothesis.
+  also needs a registered hypothesis and every baseline reproduced or accepted. A baseline verdict
+  is folded only when the runs it lists give it (the mean and the verdict are recomputed).
 - A deviation is folded for a frozen design from a human (the kinds people record) or a system
   actor (the kinds the platform records); never from an agent.
 
@@ -40,10 +41,13 @@ from factory.hypotheses.design import (
     planned_cells,
     run_config,
 )
+from factory.hypotheses.reproduction import reproduced_value, reproduction_verdict
 from factory.index.hypotheses import policy_of
 from factory.index.projection import Handler
 from factory.model.experiments import (
     AUTOMATIC_DEVIATIONS,
+    BaselineAccepted,
+    BaselineEvaluated,
     Cell,
     ExperimentAmended,
     ExperimentDesign,
@@ -65,6 +69,7 @@ class ExperimentTables:
     amendments: Table
     deviations: Table
     xruns: Table
+    baselines: Table
     protocols: Table
     project: Table
     hypotheses: Table
@@ -143,8 +148,27 @@ def experiment_tables(
         Column("nonce_ok", Integer),
         Index("ix_xruns_cell", "experiment_id", "cell_hash"),
     )
+    baselines = Table(
+        "baseline_evaluations",
+        metadata,
+        Column("experiment_id", String, primary_key=True),
+        Column("row_key", String, primary_key=True),
+        Column("verdict", String, nullable=False),
+        Column("reproduced", String),
+        Column("reported", String, nullable=False),
+        Column("event_id", String, nullable=False),
+        Column("accepted_event_id", String),
+    )
     return ExperimentTables(
-        experiments, amendments, deviations, xruns, protocols, project, hypotheses, registrations
+        experiments,
+        amendments,
+        deviations,
+        xruns,
+        baselines,
+        protocols,
+        project,
+        hypotheses,
+        registrations,
     )
 
 
@@ -157,6 +181,8 @@ def experiment_handlers(t: ExperimentTables) -> dict[str, Handler]:
         "experiment.deviation_recorded": _deviation(t),
         "xrun.registered": _xrun_registered(t),
         "xrun.reported": _xrun_reported(t),
+        "baseline.evaluated": _baseline_evaluated(t),
+        "baseline.accepted": _baseline_accepted(t),
     }
 
 
@@ -326,6 +352,22 @@ def _unlocked(t: ExperimentTables) -> Handler:
         ).first()
         if registered is None:
             return
+        design = design_of(
+            conn.execute(
+                select(t.experiments.c.design_json).where(
+                    t.experiments.c.experiment_id == p.experiment_id
+                )
+            ).scalar_one()
+        )
+        for baseline in design.baselines:
+            verdict = conn.execute(
+                select(t.baselines.c.verdict, t.baselines.c.accepted_event_id).where(
+                    t.baselines.c.experiment_id == p.experiment_id,
+                    t.baselines.c.row_key == baseline.row_key,
+                )
+            ).first()
+            if verdict is None or (verdict[0] != "reproduced" and verdict[1] is None):
+                return
         if not act_is_consistent(conn, t, event, p.policy, p.autonomy, _sessions(row[5])):
             return
         conn.execute(
@@ -511,6 +553,87 @@ def _xrun_reported(t: ExperimentTables) -> Handler:
         )
 
     return reported
+
+
+def _baseline_evaluated(t: ExperimentTables) -> Handler:
+    """A verdict is folded once per baseline, from a `system` actor, and only if it is the one the
+    runs give: every run it lists is a completed, planned reproduction run of that baseline, and
+    the mean and the verdict recomputed from them equal the ones recorded. A hand-written verdict
+    changes nothing."""
+
+    def evaluated(conn: Connection, event: Event) -> None:
+        p = BaselineEvaluated.model_validate(event.payload)
+        if event.actor.kind != "system":
+            return
+        exp = conn.execute(
+            select(t.experiments.c.design_json, t.experiments.c.frozen_event_id).where(
+                t.experiments.c.experiment_id == p.experiment_id
+            )
+        ).first()
+        if exp is None or exp[1] is None:
+            return
+        design = design_of(exp[0])
+        baseline = next((b for b in design.baselines if b.row_key == p.row_key), None)
+        if baseline is None or (p.tolerance, p.tolerance_kind) != (
+            baseline.tolerance,
+            baseline.tolerance_kind,
+        ):
+            return
+        metric = next(m.name for m in design.metrics if m.primary)
+        values: list[str] = []
+        for run_id in p.runs:
+            run = conn.execute(select(t.xruns).where(t.xruns.c.run_id == run_id)).first()
+            if (
+                run is None
+                or run.experiment_id != p.experiment_id
+                or run.arm != f"reproduction:{p.row_key}"
+                or run.exploratory
+                or run.exit_status != 0
+                or run.metrics_json is None
+            ):
+                return
+            values.append(str(json.loads(str(run.metrics_json))[metric]))
+        reproduced = reproduced_value(values)
+        if reproduced != p.reproduced:
+            return
+        if reproduction_verdict(p.reported, reproduced, p.tolerance, p.tolerance_kind) != p.verdict:
+            return
+        conn.execute(
+            sqlite_insert(t.baselines)
+            .values(
+                experiment_id=p.experiment_id,
+                row_key=p.row_key,
+                verdict=p.verdict,
+                reproduced=p.reproduced,
+                reported=p.reported,
+                event_id=event.id,
+            )
+            .on_conflict_do_nothing(index_elements=["experiment_id", "row_key"])
+        )
+
+    return evaluated
+
+
+def _baseline_accepted(t: ExperimentTables) -> Handler:
+    """An acceptance is a human act on a baseline whose verdict is not `reproduced`; the first
+    one wins. (The gate `experiments.accept_baseline` is `human` in every mode.)"""
+
+    def accepted(conn: Connection, event: Event) -> None:
+        p = BaselineAccepted.model_validate(event.payload)
+        if event.actor.kind != "human":
+            return
+        conn.execute(
+            update(t.baselines)
+            .where(
+                t.baselines.c.experiment_id == p.experiment_id,
+                t.baselines.c.row_key == p.row_key,
+                t.baselines.c.verdict != "reproduced",
+                t.baselines.c.accepted_event_id.is_(None),
+            )
+            .values(accepted_event_id=event.id)
+        )
+
+    return accepted
 
 
 def design_of(raw: object) -> ExperimentDesign:

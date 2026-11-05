@@ -21,6 +21,8 @@ SPEC = ModuleSpec(
     kind=ModuleKind.PROPOSAL,
     events=EventFamily(
         types=(
+            "baseline.accepted",
+            "baseline.evaluated",
             "experiment.amended",
             "experiment.designed",
             "experiment.deviation_recorded",
@@ -30,6 +32,7 @@ SPEC = ModuleSpec(
             "xrun.reported",
         ),
         tables=(
+            "baseline_evaluations",
             "experiment_amendments",
             "experiment_deviations",
             "experiments",
@@ -43,6 +46,13 @@ SPEC = ModuleSpec(
             ("experiment.frozen", "experiment.unlocked"),
             PolicyKind.AGENT,
             ("slice 6 ruling 14", "R-50", "R-51", "R-123"),
+        ),
+        GateSpec(
+            "experiments.accept_baseline",
+            GateKind.DECISION,
+            ("baseline.accepted",),
+            PolicyKind.HUMAN,
+            ("slice 6 ruling 24", "R-122"),
         ),
     ),
 )

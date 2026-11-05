@@ -48,6 +48,7 @@ from factory.model.experiments import (
 )
 from factory.services.context import Project
 from factory.services.experiments import ExperimentView, experiment_view, make_deviation_event
+from factory.services.reproduction import evaluate_baselines
 from factory.services.xrun_accounting import access_counts, budget_view
 
 XrunState = Literal["planned", "completed", "failed"]
@@ -378,4 +379,6 @@ def ingest_results(project: Project, actor: Actor, path: Path, *, runner: str | 
                 )
             )
         project.record(events)
+        if run.cell.is_reproduction:
+            evaluate_baselines(project, run.experiment_id)  # a verdict once every seed is in
     return events[0].id
