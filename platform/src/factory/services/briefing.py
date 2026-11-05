@@ -22,7 +22,9 @@ Invariants:
   So a build costs at least what `check` costs, and a repeat call that records nothing pays it
   again (decision rows 92 and 110).
 - The researcher's output stays complete; the agent form is `briefing_agent_view`.
-- A fresh project gives every section, empty, each with a notice saying why.
+- A fresh project gives every section. The question, protocol, reading path, evidence and drafts
+  sections say why they are empty in a notice, and the corpus horizon has one; gates and pending
+  decisions are simply empty, and `check` findings are what they are.
 
 Invariants of the agent form (plan rulings 2 and 3; spec ruling 24):
 - Each source is read in its agent variant: `agent_check` and `sentence_status(agent=True)`. The
@@ -98,7 +100,7 @@ from factory.services.check import CheckReport, agent_check, check
 from factory.services.context import Project
 from factory.services.contributions import contribution_audit_report
 from factory.services.coverage import held_out_visible
-from factory.services.draft_audit import audit_report as draft_audit_report
+from factory.services.draft_audit import audit_sheet
 from factory.services.draft_release import released_drafts
 from factory.services.drafts import get_draft, list_drafts, sentence_status, status_counts
 from factory.services.evidence_groups import summarise
@@ -539,15 +541,19 @@ def _gates(project: Project, protocol: ProtocolVersion | None) -> list[GateBrief
 def _calibration(
     project: Project, protocol: ProtocolVersion, stage: ScreeningStage
 ) -> list[GateBrief]:
+    """One row per pass. Without a threshold no calibration is required: an undrawn one has no
+    row, and a drawn one shows its figures with `passed` None, neither passed nor failed."""
     status = calibration_status(project, stage=stage)
+    if not status.required and status.drawn == 0:
+        return []
     labels = ["A", "B"] if protocol.spec.screening.passes == 2 else ["A"]
     day = _last_day(project, "calibration.labelled")
     return [
         GateBrief(
             gate="calibration",
             scope=f"{stage.value}/{label}",
-            passed=status.passed.get(label, False),
-            date=day if status.passed.get(label, False) else None,
+            passed=status.passed.get(label, False) if status.required else None,
+            date=day if status.required and status.passed.get(label, False) else None,
             figures=(
                 status.per_pass[label].model_dump(mode="json") if label in status.per_pass else {}
             ),
@@ -890,15 +896,19 @@ def _other_audits(project: Project, base: str) -> list[PendingBrief]:
                 command=f"{base} gate audit label <audit-id> <act> <correct|incorrect>",
             )
         )
-    drafts = {d.draft_id: draft_audit_report(project, d.draft_id) for d in list_drafts(project)}
-    unlabelled = {d: r.drawn - r.labelled for d, r in drafts.items() if r.drawn > r.labelled}
+    unlabelled = [
+        audit_id
+        for draft in list_drafts(project)
+        for audit_id, _, _, label in audit_sheet(project, draft.draft_id)
+        if label is None
+    ]
     if unlabelled:
         out.append(
             PendingBrief(
                 kind="draft-audit",
                 stage=None,
-                count=sum(unlabelled.values()),
-                ids=sorted(unlabelled),
+                count=len(unlabelled),
+                ids=sorted(set(unlabelled)),
                 command=f"{base} draft label <audit-id> <verdict-id> --correct|--incorrect",
             )
         )

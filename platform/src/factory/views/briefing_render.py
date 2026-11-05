@@ -91,6 +91,8 @@ def _protocol(b: Briefing) -> str:
 
 
 def _state(g: GateBrief) -> str:
+    if g.passed is None and g.labelled_complete is None:
+        return "not required"
     if g.passed is None:
         return "labelled-complete" if g.labelled_complete else "labels outstanding"
     state = "passed" if g.passed else "not passed"

@@ -169,3 +169,6 @@ Minor review findings parked during the v1 build, to address when iterating from
 - V-C: gate dates are the last event of the type project-wide, not per stage or pass (services/briefing.py `_last_day`).
 - V-C: `interpretation-unreviewed` ids are capped at `REF_CAP`; the count is complete (services/layer_check.py).
 - V-C: a trace from a session lists its packs, but no event id can be traced to its session's pack directly (services/trace.py).
+- V-C: `passed` for extraction agreement means the agreement could be computed, not that it cleared a bar; there is no floor to read (services/briefing.py `_extraction_agreement`).
+- V-C: `briefing.served` is a marker of the kind decision 37 item 15 called a later candidate; decide whether it should serve that purpose.
+- V-C: whether PRISMA flow counts (`identified_other`, in the pack and in `report_prisma`) expose an import's held-out part before a pass needs its own look.
