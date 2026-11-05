@@ -22,15 +22,17 @@ from dataclasses import dataclass
 
 from sqlalchemy import bindparam, text
 
-from factory.events.envelope import Event
+from factory.errors import FactoryValidationError, ValidationIssue
+from factory.events.envelope import Actor, Event
 from factory.model.base import StrictModel
 from factory.model.dedup_keys import identifier_keys
 from factory.model.fulltext import Route
 from factory.model.search import QueryKind
-from factory.model.versions import VersionLinked, VersionObserved
+from factory.model.versions import DocumentPreferred, VersionLinked, VersionObserved
 from factory.model.work import Identifiers, Work
 from factory.model.work_ids import arxiv_id_from_doi
 from factory.services.context import Project
+from factory.services.document_read import automatic_default_document
 from factory.services.search import works_by_ids
 from factory.services.status_lookup import (
     DATACITE_ARXIV_PREFIX,
@@ -334,3 +336,67 @@ def link_conflicts(project: Project) -> list[LinkConflict]:
         if not _merged_together(project, str(work_id), str(other)):
             out.append(LinkConflict(str(work_id), str(link_key).split(":", 1)[-1], str(other)))
     return out
+
+
+# --- the human's act ---
+
+
+def prefer_document(
+    project: Project, actor: Actor, work_id: str, document_id: str, rationale: str
+) -> str:
+    """Move the extraction basis of a work to one of its live documents; returns the event id.
+
+    Gate living.document_prefer (floor human): refused, writing nothing, for a non-human actor, a
+    document that is not a live document of the work, or a blank rationale. A later preference
+    supersedes the earlier one. Naming the document the automatic route order serves clears an
+    override instead of making one. `default_conversion` then serves the preferred document, and
+    plan-D staleness marks that work's rows only (its rule for a pin on another document).
+    """
+    with project.index.exclusive():
+        project.index.sync()
+        issues: list[ValidationIssue] = []
+        if actor.kind != "human":
+            issues.append(ValidationIssue("actor", "a preferred document is chosen by a human"))
+        with project.index.connect() as conn:
+            row = conn.execute(
+                text(
+                    "SELECT work_id, superseded_by FROM fulltext_documents WHERE document_id = :d"
+                ),
+                {"d": document_id},
+            ).one_or_none()
+        if row is None or str(row[0]) != work_id:
+            issues.append(
+                ValidationIssue("document_id", f"{document_id}: not a document of {work_id}")
+            )
+        elif row[1] is not None:
+            issues.append(ValidationIssue("document_id", f"{document_id}: superseded, not live"))
+        if not rationale.strip():
+            issues.append(ValidationIssue("rationale", "a rationale is required"))
+        if issues:
+            raise FactoryValidationError(issues)
+        payload = DocumentPreferred(
+            work_id=work_id,
+            document_id=document_id,
+            rationale=rationale,
+            automatic=automatic_default_document(project, work_id) == document_id,
+        )
+        event = project.events.make(
+            "document.preferred", payload, actor, refs=(work_id, document_id)
+        )
+        project.record([event])
+        return event.id
+
+
+def preferences(project: Project) -> dict[str, tuple[str, str]]:
+    """The standing preference of each work as (document id, rationale): the latest act, unless
+    it cleared the override by naming the automatic default."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT work_id, document_id, rationale, automatic FROM document_preferences "
+                "ORDER BY event_id"
+            )
+        ).all()
+    latest = {str(w): (str(d), str(r), bool(a)) for w, d, r, a in rows}
+    return {w: (d, r) for w, (d, r, automatic) in sorted(latest.items()) if not automatic}

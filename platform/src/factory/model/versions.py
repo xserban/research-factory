@@ -40,3 +40,15 @@ class VersionLinked(StrictModel):
         if not any(v is not None for v in self.identifiers.model_dump().values()):
             raise ValueError("a link names at least one published identifier")
         return self
+
+
+class DocumentPreferred(StrictModel):
+    """A human moves the extraction basis of a work to one of its live documents.
+
+    `automatic` is set by the service when the named document is the one the automatic route
+    order would serve anyway: the act then clears an earlier override instead of making one."""
+
+    work_id: str = Field(pattern=WORK_ID_RE)
+    document_id: str = Field(min_length=1)
+    rationale: str = Field(min_length=1)
+    automatic: bool = False

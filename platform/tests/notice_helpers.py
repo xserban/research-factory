@@ -259,3 +259,39 @@ def fetch_arxiv_version(project: Project, work_id: str, version: str) -> None:
     fetch_fulltext(
         project, routes={Route.ARXIV_HTML: route}, work_ids=[work_id], only=[Route.ARXIV_HTML]
     )
+
+
+def declare_schema(
+    project: Project,
+    agent: Actor,
+    fields: tuple[str, ...] = (
+        "method_name",
+        "task",
+        "dataset",
+        "split",
+        "metric",
+        "value",
+        "latency",
+    ),
+) -> None:
+    """Amend the protocol to declare an extraction schema over `fields` (no rows are written)."""
+    from factory.model.protocol import ExtractionSchema
+    from factory.services.protocol import amend_protocol, current_protocol
+
+    current = current_protocol(project)
+    assert current is not None
+    schema = ExtractionSchema(
+        pack="ml-benchmark",
+        pack_version=1,
+        fields=fields,
+        comparability_keys=("task", "dataset", "metric"),
+        dual_extract_sample=1.0,
+    )
+    amend_protocol(
+        project,
+        agent,
+        current.spec.model_copy(update={"extraction_schema": schema}),
+        reason="declare extraction",
+        semantic=True,
+        effects={},
+    )

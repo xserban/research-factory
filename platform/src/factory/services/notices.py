@@ -17,13 +17,16 @@ Invariants:
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping, Sequence
+from datetime import date
 
 from sqlalchemy import text
 
-from factory.events.envelope import Event
+from factory.errors import FactoryValidationError, ValidationIssue
+from factory.events.envelope import Actor, Event
 from factory.model.base import StrictModel
-from factory.model.notices import NoticeObserved
+from factory.model.notices import AssessmentDecision, NoticeAssessed, NoticeKind, NoticeObserved
 from factory.model.protocol import ScreeningStage
 from factory.model.search import QueryKind, RunStatus
 from factory.model.work import Work
@@ -191,3 +194,174 @@ def _observation_events(
                 )
             )
     return events
+
+
+# --- reads ---
+
+
+def observed_notices(project: Project) -> list[NoticeObserved]:
+    """Every observed notice, in observation order."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT notice_id, work_id, kind, notice_date, notice_doi, source, run_id, "
+                "raw_blob FROM notices ORDER BY event_id"
+            )
+        ).all()
+    return [
+        NoticeObserved(
+            notice_id=str(n),
+            work_id=str(w),
+            kind=NoticeKind(str(k)),
+            notice_date=None if d is None else date.fromisoformat(str(d)),
+            notice_doi=None if doi is None else str(doi),
+            source=str(src),
+            run_id=str(run),
+            raw_blob=str(blob),
+        )
+        for n, w, k, d, doi, src, run, blob in rows
+    ]
+
+
+def assessments(project: Project) -> list[tuple[str, NoticeAssessed]]:
+    """Every assessment as (event id, payload), in recording order."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT event_id, notice_id, decision, fields, rationale FROM notice_assessments "
+                "ORDER BY event_id"
+            )
+        ).all()
+    return [
+        (
+            str(event_id),
+            NoticeAssessed(
+                notice_id=str(notice),
+                decision=AssessmentDecision(str(decision)),
+                fields=tuple(json.loads(str(fields))),
+                rationale=str(rationale),
+            ),
+        )
+        for event_id, notice, decision, fields, rationale in rows
+    ]
+
+
+class NoticeView(StrictModel):
+    """A notice as a list shows it: what was observed and the latest assessment, if any."""
+
+    notice_id: str
+    work_id: str
+    kind: NoticeKind
+    notice_date: date | None
+    notice_doi: str | None
+    source: str
+    assessment: AssessmentDecision | None
+    fields: tuple[str, ...]
+
+
+def notice_views(
+    project: Project, *, exclude_works: frozenset[str] = frozenset()
+) -> list[NoticeView]:
+    """Observed notices with their latest assessment, leaving out `exclude_works` entirely (an
+    agent-facing list drops the held-out seeds' works, so no notice marks one)."""
+    assessed = current_assessments(project)
+    views: list[NoticeView] = []
+    for notice in observed_notices(project):
+        if notice.work_id in exclude_works:
+            continue
+        current = assessed.get(notice.notice_id)
+        views.append(
+            NoticeView(
+                notice_id=notice.notice_id,
+                work_id=notice.work_id,
+                kind=notice.kind,
+                notice_date=notice.notice_date,
+                notice_doi=notice.notice_doi,
+                source=notice.source,
+                assessment=None if current is None else current[1].decision,
+                fields=() if current is None else current[1].fields,
+            )
+        )
+    return views
+
+
+def current_assessments(project: Project) -> dict[str, tuple[str, NoticeAssessed]]:
+    """The latest assessment of each assessed notice, by notice id, as (event id, payload)."""
+    return {a.notice_id: (event_id, a) for event_id, a in assessments(project)}
+
+
+def declared_fields(project: Project) -> frozenset[str]:
+    """The fields of the protocol's declared schemas, evidence and contribution."""
+    protocol = current_protocol(project)
+    if protocol is None:
+        return frozenset()
+    names: set[str] = set()
+    for schema in (protocol.spec.extraction_schema, protocol.spec.contribution_schema):
+        if schema is not None:
+            names.update(schema.fields)
+    return frozenset(names)
+
+
+# --- the human's act ---
+
+_CORRECTION_DECISIONS = frozenset({AssessmentDecision.AFFECTS, AssessmentDecision.NO_EFFECT})
+
+
+def assess_notice(
+    project: Project,
+    actor: Actor,
+    notice_id: str,
+    decision: AssessmentDecision,
+    *,
+    fields: Sequence[str] = (),
+    rationale: str,
+) -> str:
+    """Record a human's assessment of a notice; a later one supersedes it. Returns the event id.
+
+    Refused, writing nothing, for an actor that is not a human (gate living.notice_assess, floor
+    human), an unknown notice, a reinstatement (no assessment is needed), a decision that does not
+    answer the notice's kind, `fields` that are not exactly the named fields of a declared schema
+    for `affects`, or a blank rationale. Gate: living.notice_assess.
+    """
+    with project.index.exclusive():
+        project.index.sync()
+        issues: list[ValidationIssue] = []
+        if actor.kind != "human":
+            issues.append(ValidationIssue("actor", "a notice is assessed by a human"))
+        notice = next((n for n in observed_notices(project) if n.notice_id == notice_id), None)
+        if notice is None:
+            issues.append(ValidationIssue("notice_id", f"{notice_id}: unknown notice"))
+        elif notice.kind is NoticeKind.REINSTATEMENT:
+            issues.append(ValidationIssue("notice_id", "a reinstatement needs no assessment"))
+        elif (notice.kind is NoticeKind.CORRECTION) != (decision in _CORRECTION_DECISIONS):
+            answers = (
+                "affects or no-effect"
+                if notice.kind is NoticeKind.CORRECTION
+                else ("exclude or keep-flagged")
+            )
+            issues.append(
+                ValidationIssue("decision", f"a {notice.kind.value} is answered by {answers}")
+            )
+        if decision is AssessmentDecision.AFFECTS and not fields:
+            issues.append(ValidationIssue("fields", "name the fields the correction affects"))
+        elif decision is not AssessmentDecision.AFFECTS and fields:
+            issues.append(ValidationIssue("fields", "fields belong to an affects decision"))
+        unknown = sorted(set(fields) - declared_fields(project))
+        if unknown:
+            issues.append(
+                ValidationIssue("fields", f"not fields of a declared schema: {', '.join(unknown)}")
+            )
+        if not rationale.strip():
+            issues.append(ValidationIssue("rationale", "a rationale is required"))
+        if issues or notice is None:
+            raise FactoryValidationError(issues)
+        payload = NoticeAssessed(
+            notice_id=notice_id, decision=decision, fields=tuple(fields), rationale=rationale
+        )
+        event = project.events.make(
+            "notice.assessed", payload, actor, refs=(notice_id, notice.work_id)
+        )
+        project.record([event])
+        return event.id

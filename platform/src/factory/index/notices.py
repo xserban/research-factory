@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from sqlalchemy import Column, Index, MetaData, String, Table
+from sqlalchemy import Column, Index, Integer, MetaData, String, Table
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Connection
 
@@ -27,8 +27,8 @@ from factory.clock import format_ts
 from factory.events.envelope import Event
 from factory.index.projection import Handler
 from factory.model.dedup_keys import identifier_keys
-from factory.model.notices import NoticeObserved
-from factory.model.versions import VersionLinked, VersionObserved
+from factory.model.notices import NoticeAssessed, NoticeObserved
+from factory.model.versions import DocumentPreferred, VersionLinked, VersionObserved
 
 
 @dataclass(frozen=True)
@@ -37,6 +37,8 @@ class NoticeTables:
     version_observations: Table
     version_links: Table
     work_aliases: Table
+    notice_assessments: Table
+    document_preferences: Table
     work_keys: Table
     """The search projection's lookup table, which an applied link adds its identifiers to."""
 
@@ -91,7 +93,31 @@ def notice_tables(metadata: MetaData, work_keys: Table) -> NoticeTables:
         Column("event_id", String, nullable=False),
         Index("ix_work_aliases_work", "work_id"),
     )
-    return NoticeTables(notices, observations, links, aliases, work_keys)
+    assessments = Table(
+        "notice_assessments",
+        metadata,
+        Column("event_id", String, primary_key=True),
+        Column("notice_id", String, nullable=False),
+        Column("decision", String, nullable=False),
+        Column("fields", String, nullable=False),
+        Column("rationale", String, nullable=False),
+        Column("actor_id", String, nullable=False),
+        Column("assessed_at", String, nullable=False),
+        Index("ix_notice_assessments_notice", "notice_id"),
+    )
+    preferences = Table(
+        "document_preferences",
+        metadata,
+        Column("event_id", String, primary_key=True),
+        Column("work_id", String, nullable=False),
+        Column("document_id", String, nullable=False),
+        Column("rationale", String, nullable=False),
+        Column("automatic", Integer, nullable=False),
+        Column("actor_id", String, nullable=False),
+        Column("preferred_at", String, nullable=False),
+        Index("ix_document_preferences_work", "work_id"),
+    )
+    return NoticeTables(notices, observations, links, aliases, assessments, preferences, work_keys)
 
 
 def notice_handlers(t: NoticeTables) -> dict[str, Handler]:
@@ -164,7 +190,41 @@ def notice_handlers(t: NoticeTables) -> dict[str, Handler]:
                 .on_conflict_do_nothing()
             )
 
+    def assessed(conn: Connection, event: Event) -> None:
+        payload = NoticeAssessed.model_validate(event.payload)
+        conn.execute(
+            sqlite_insert(t.notice_assessments)
+            .values(
+                event_id=event.id,
+                notice_id=payload.notice_id,
+                decision=payload.decision.value,
+                fields=canonical_json(list(payload.fields)).decode(),
+                rationale=payload.rationale,
+                actor_id=event.actor.id,
+                assessed_at=format_ts(event.ts),
+            )
+            .on_conflict_do_nothing()
+        )
+
+    def preferred(conn: Connection, event: Event) -> None:
+        payload = DocumentPreferred.model_validate(event.payload)
+        conn.execute(
+            sqlite_insert(t.document_preferences)
+            .values(
+                event_id=event.id,
+                work_id=payload.work_id,
+                document_id=payload.document_id,
+                rationale=payload.rationale,
+                automatic=int(payload.automatic),
+                actor_id=event.actor.id,
+                preferred_at=format_ts(event.ts),
+            )
+            .on_conflict_do_nothing()
+        )
+
     return {
+        "notice.assessed": assessed,
+        "document.preferred": preferred,
         "notice.observed": observed,
         "version.observed": version_observed,
         "version.linked": version_linked,

@@ -30,6 +30,8 @@ async def test_project_status_tool(settings: Settings, project: Project, clock: 
             "dedup_run",
             "watch_status",
             "watch_run",
+            "notice_list",
+            "notice_assess",
             "question_record",
             "seed_add",
             "seed_list",

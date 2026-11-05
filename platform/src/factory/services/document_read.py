@@ -345,6 +345,23 @@ def _default(project: Project, work_id: str) -> Conversion | None:
     live = [c for c in _query(project, "d.work_id = :work", {"work": work_id}) if c.live]
     if not live:
         return None
+    preferred = _preferred_document(project, work_id)
+    if preferred is not None and any(c.document_id == preferred for c in live):
+        return max(
+            (c for c in live if c.document_id == preferred),
+            key=lambda c: c.conversion_event_id,
+        )
+    return _automatic(live)
+
+
+def automatic_default_document(project: Project, work_id: str) -> str | None:
+    """The document the automatic route order would serve for the work, ignoring any preference."""
+    live = [c for c in _query(project, "d.work_id = :work", {"work": work_id}) if c.live]
+    chosen = _automatic(live) if live else None
+    return None if chosen is None else chosen.document_id
+
+
+def _automatic(live: list[Conversion]) -> Conversion:
     first = min(live, key=lambda c: (_route_rank(c.route), c.document_event_id))
     return max(
         (c for c in live if c.document_id == first.document_id),
@@ -358,6 +375,23 @@ class ConversionRef:
 
     document_id: str
     conversion_id: str
+
+
+def _preferred_document(project: Project, work_id: str) -> str | None:
+    """The document a human prefers for the work (living-C), or None: no preference, or the latest
+    act cleared the override by naming the automatic default. Whether the document is live and
+    converted is the caller's check, so a lapsed preference falls back to the route order."""
+    with project.index.connect() as conn:
+        row = conn.execute(
+            text(
+                "SELECT document_id, automatic FROM document_preferences WHERE work_id = :work "
+                "ORDER BY event_id DESC LIMIT 1"
+            ),
+            {"work": work_id},
+        ).first()
+    if row is None or row[1]:
+        return None
+    return str(row[0])
 
 
 def default_conversion(project: Project, work_id: str) -> ConversionRef | None:

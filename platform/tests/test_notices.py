@@ -6,13 +6,19 @@ from datetime import date, timedelta
 
 import pytest
 
+from factory.errors import FactoryValidationError
 from factory.events.envelope import Actor
 from factory.events.reader import read_all
-from factory.model.notices import NoticeKind
+from factory.model.notices import AssessmentDecision, NoticeKind
 from factory.model.work import Identifiers
 from factory.services.context import Project
 from factory.services.living_hooks import make_status_hook
-from factory.services.notices import dependent_works
+from factory.services.notices import (
+    assess_notice,
+    assessments,
+    current_assessments,
+    dependent_works,
+)
 from factory.services.watch import watch_run
 from factory.sources.base import StatusRecord
 from tests.helpers import SourcesFor
@@ -21,6 +27,7 @@ from tests.notice_helpers import (
     StatusScript,
     check_in_cycle,
     crossref_notices,
+    declare_schema,
     dependent_world,
     ids_in,
     notice_record,
@@ -199,3 +206,104 @@ def test_status_hook_runs_in_the_cycle_and_names_its_runs(world: NoticeWorld) ->
     # OpenAlex and Crossref notice batches, then the OpenAlex version lookup (no arxiv adapter).
     assert len(finished.payload["status_run_ids"]) == 3
     assert summary.status.value == "complete"
+
+
+# --- assessments (Task 5) ---
+
+
+def _retraction_and_correction(world: NoticeWorld) -> tuple[str, str]:
+    """Observe a retraction of one work and a correction of another; return their notice ids."""
+    first, second = world.included[0], world.included[1]
+    d1, d2 = world.doi(first), world.doi(second)
+    assert d1 is not None and d2 is not None
+    crossref = StatusScript(
+        "crossref",
+        crossref_notices(
+            {
+                d1: [notice_record(d1, NoticeKind.RETRACTION, "10.2000/r1")],
+                d2: [notice_record(d2, NoticeKind.CORRECTION, "10.2000/c1")],
+            }
+        ),
+    )
+    check_in_cycle(
+        world.project, status_factories(crossref=crossref, openalex=StatusScript("openalex"))
+    )
+    by_kind = {str(n["kind"]): str(n["notice_id"]) for n in _observed(world.project)}
+    return by_kind["retraction"], by_kind["correction"]
+
+
+def test_agent_cannot_assess(world: NoticeWorld, agent: Actor) -> None:
+    retraction, _ = _retraction_and_correction(world)
+    before = len(read_all(world.project.paths.events_dir, world.project.catalog))
+    with pytest.raises(FactoryValidationError) as err:
+        assess_notice(
+            world.project, agent, retraction, AssessmentDecision.EXCLUDE, rationale="retracted"
+        )
+    assert err.value.issues[0].field == "actor"
+    assert len(read_all(world.project.paths.events_dir, world.project.catalog)) == before
+
+
+def test_affects_requires_fields(world: NoticeWorld, agent: Actor) -> None:
+    declare_schema(world.project, agent)
+    human = world.project.human_actor()
+    _, correction = _retraction_and_correction(world)
+    bad: list[dict[str, object]] = [
+        {"decision": AssessmentDecision.AFFECTS, "fields": ()},
+        {"decision": AssessmentDecision.AFFECTS, "fields": ("not_a_field",)},
+        {"decision": AssessmentDecision.NO_EFFECT, "fields": ("value",)},
+        {"decision": AssessmentDecision.EXCLUDE, "fields": ()},  # a correction is not excluded
+    ]
+    before = len(read_all(world.project.paths.events_dir, world.project.catalog))
+    for case in bad:
+        with pytest.raises(FactoryValidationError):
+            assess_notice(
+                world.project,
+                human,
+                correction,
+                case["decision"],  # type: ignore[arg-type]
+                fields=case["fields"],  # type: ignore[arg-type]
+                rationale="checked",
+            )
+    assert len(read_all(world.project.paths.events_dir, world.project.catalog)) == before
+    assess_notice(
+        world.project,
+        human,
+        correction,
+        AssessmentDecision.AFFECTS,
+        fields=("value",),
+        rationale="table 2 corrected",
+    )
+    [(_, assessed)] = assessments(world.project)
+    assert assessed.fields == ("value",) and assessed.decision is AssessmentDecision.AFFECTS
+
+
+def test_decision_must_answer_the_notice_kind(world: NoticeWorld) -> None:
+    human = world.project.human_actor()
+    retraction, _correction = _retraction_and_correction(world)
+    with pytest.raises(FactoryValidationError) as err:
+        assess_notice(
+            world.project, human, retraction, AssessmentDecision.NO_EFFECT, rationale="no"
+        )
+    assert err.value.issues[0].field == "decision"
+    with pytest.raises(FactoryValidationError):
+        assess_notice(
+            world.project, human, "ntc_" + "0" * 26, AssessmentDecision.EXCLUDE, rationale="x"
+        )
+
+
+def test_assessment_supersedes(world: NoticeWorld) -> None:
+    human = world.project.human_actor()
+    retraction, _ = _retraction_and_correction(world)
+    assess_notice(
+        world.project, human, retraction, AssessmentDecision.KEEP_FLAGGED, rationale="first view"
+    )
+    assess_notice(
+        world.project, human, retraction, AssessmentDecision.EXCLUDE, rationale="second view"
+    )
+    pairs = assessments(world.project)
+    assert [a.decision for _, a in pairs] == [
+        AssessmentDecision.KEEP_FLAGGED,
+        AssessmentDecision.EXCLUDE,
+    ]
+    assert current_assessments(world.project)[retraction][1].decision is AssessmentDecision.EXCLUDE
+    assert world.project.index.rebuild() == world.project.index.state_hash()

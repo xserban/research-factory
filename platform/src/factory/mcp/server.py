@@ -29,6 +29,7 @@ from factory.model.extraction import ClaimInput, ExtractedRowInput
 from factory.model.fulltext import Route
 from factory.model.identity import IdGenerator
 from factory.model.inbox import Basis
+from factory.model.notices import AssessmentDecision
 from factory.model.project import RigorMode
 from factory.model.protocol import CriterionEffect, PressFinding, ProtocolSpec, ScreeningStage
 from factory.model.question import QuestionSpec
@@ -56,6 +57,7 @@ from factory.services import fulltext as fulltext_service
 from factory.services import fulltext_status as fulltext_status_service
 from factory.services import inbox as inbox_service
 from factory.services import methods as methods_service
+from factory.services import notices as notices_service
 from factory.services import prisma as prisma_service
 from factory.services import prisma_update as prisma_update_service
 from factory.services import probe as probe_service
@@ -270,6 +272,69 @@ def build_server(
             return _withheld(opened, {"cycle": report})
 
         return _reply(project, run_cycle)
+
+    @server.tool()
+    def notice_list(project: str) -> dict[str, JsonValue]:
+        """Notices of retraction, correction or concern about works the review depends on, with
+        source, date (null when the source states none) and the latest human assessment. Read-only;
+        a notice about a held-out seed's work is not listed. Refused to a session that has joined
+        a pass."""
+
+        def listing() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            hidden = seeds_service.held_out_work_ids(opened)
+            views = notices_service.notice_views(opened, exclude_works=hidden)
+            return _withheld(
+                opened,
+                {"count": len(views), "notices": [v.model_dump(mode="json") for v in views]},
+            )
+
+        return _reply(project, listing)
+
+    @server.tool()
+    def notice_assess(
+        project: str,
+        notice_id: str,
+        decision: str,
+        rationale: str,
+        fields: list[str] | None = None,
+    ) -> dict[str, JsonValue]:
+        """The human's assessment of a notice, relayed (decision 37): `exclude` or `keep-flagged`
+        for a retraction, withdrawal or expression of concern; `no-effect` or `affects` (with the
+        affected `fields`) for a correction. Recorded as the human; a later one supersedes it.
+        Refused to a session that has joined a pass."""
+
+        def assess() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            known = {
+                v.notice_id
+                for v in notices_service.notice_views(
+                    opened, exclude_works=seeds_service.held_out_work_ids(opened)
+                )
+            }
+            if notice_id not in known:
+                raise FactoryValidationError(
+                    [ValidationIssue("notice_id", f"{notice_id}: unknown notice")]
+                )
+            try:
+                chosen = AssessmentDecision(decision)
+            except ValueError:
+                raise FactoryValidationError(
+                    [ValidationIssue("decision", f"must be {_choices(AssessmentDecision)}")]
+                ) from None
+            event_id = notices_service.assess_notice(
+                opened,
+                opened.human_actor(),
+                notice_id,
+                chosen,
+                fields=tuple(fields or ()),
+                rationale=rationale,
+            )
+            return {"event_id": event_id}
+
+        return _reply(project, assess)
 
     @server.tool()
     def question_record(
@@ -1780,7 +1845,7 @@ def _spec(source: str, query: str, kind: str, purpose: str, limit: int | None) -
         ) from exc
 
 
-def _choices(values: Iterable[QueryKind | QueryPurpose]) -> str:
+def _choices(values: Iterable[QueryKind | QueryPurpose | AssessmentDecision]) -> str:
     return ", ".join(str(value.value) for value in values)
 
 

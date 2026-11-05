@@ -15,7 +15,7 @@ from __future__ import annotations
 from datetime import date
 from enum import StrEnum
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from factory.model.base import StrictModel
 from factory.model.identity import BLOB_REF_RE, ULID_RE
@@ -49,3 +49,36 @@ class NoticeObserved(StrictModel):
     def identity(self) -> str:
         """The third part of the notice's identity: its own DOI, else the source that reported."""
         return self.notice_doi or self.source
+
+
+class AssessmentDecision(StrEnum):
+    """A human's reading of a notice. `exclude` and `keep-flagged` answer a retraction,
+    withdrawal or expression of concern; `no-effect` and `affects` answer a correction."""
+
+    EXCLUDE = "exclude"
+    KEEP_FLAGGED = "keep-flagged"
+    NO_EFFECT = "no-effect"
+    AFFECTS = "affects"
+
+
+class NoticeAssessed(StrictModel):
+    """A human assessment of one notice; a later one for the same notice supersedes it.
+
+    `fields` names the extraction fields a correction affects (non-empty exactly for `affects`);
+    that they are fields of a declared schema is checked by the service, which knows the protocol.
+    """
+
+    notice_id: str = Field(pattern=NTC_ID_RE)
+    decision: AssessmentDecision
+    fields: tuple[str, ...] = ()
+    rationale: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _fields_iff_affects(self) -> NoticeAssessed:
+        if (self.decision is AssessmentDecision.AFFECTS) != bool(self.fields):
+            raise ValueError("fields are given exactly when the decision is affects")
+        if len(set(self.fields)) != len(self.fields):
+            raise ValueError("fields must be unique")
+        if not self.rationale.strip():
+            raise ValueError("a rationale is required")
+        return self

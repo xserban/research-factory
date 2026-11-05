@@ -22,6 +22,7 @@ from factory.mcp.server import run
 from factory.model.chase import ChaseDirection
 from factory.model.fulltext import Route
 from factory.model.identity import IdGenerator
+from factory.model.notices import AssessmentDecision
 from factory.model.project import RigorMode
 from factory.model.protocol import ScreeningStage
 from factory.model.references import Decision, Direction, LinkState
@@ -54,6 +55,7 @@ from factory.services import imports as imports_service
 from factory.services import inbox as inbox_service
 from factory.services import inbox_watch as inbox_watch_service
 from factory.services import methods as methods_service
+from factory.services import notices as notices_service
 from factory.services import portfolio as portfolio_service
 from factory.services import prisma as prisma_service
 from factory.services import prisma_update as prisma_update_service
@@ -65,6 +67,7 @@ from factory.services import seeds as seeds_service
 from factory.services import snapshots as snapshot_service
 from factory.services import snowball as snowball_service
 from factory.services import trace as trace_service
+from factory.services import versions as versions_service
 from factory.services import watch as watch_service
 from factory.services.context import Project, list_projects, open_project
 from factory.services.extraction_agreement import Choice
@@ -177,6 +180,16 @@ watch_app = typer.Typer(
     help="Run the due watch cycle, show the watch status and plan.",
     no_args_is_help=True,
 )
+notices_app = typer.Typer(
+    name="notices",
+    help="Notices of retraction, correction or concern about the works the review depends on.",
+    no_args_is_help=True,
+)
+versions_app = typer.Typer(
+    name="versions",
+    help="Newer versions, published-version links and the preferred document of a work.",
+    no_args_is_help=True,
+)
 living_app = typer.Typer(
     name="living",
     help="Living review: snapshots and the PRISMA update flow.",
@@ -200,6 +213,8 @@ app.add_typer(snowball_app)
 app.add_typer(seeds_app)
 app.add_typer(watch_app)
 app.add_typer(living_app)
+app.add_typer(notices_app)
+app.add_typer(versions_app)
 app.add_typer(inbox_app)
 app.add_typer(report_app)
 app.add_typer(export_app)
@@ -1859,6 +1874,98 @@ def _watch_target(state: CliState, project: str | None) -> Project:
     if project is None:
         return _resolve_project(state)
     return open_project(state.settings, project, session=state.session, clock=state.clock)
+
+
+@notices_app.command("list")
+def notices_list_cmd(ctx: typer.Context) -> None:
+    """Every observed notice with its source, date and latest assessment (the human view)."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        assessed = notices_service.current_assessments(project)
+        for notice in notices_service.observed_notices(project):
+            current = assessed.get(notice.notice_id)
+            verdict = "unassessed" if current is None else current[1].decision.value
+            when = (
+                "date not stated by source"
+                if notice.notice_date is None
+                else notice.notice_date.isoformat()
+            )
+            typer.echo(
+                f"{notice.notice_id}  {notice.work_id}  {notice.kind.value}  {when}  "
+                f"{notice.source}  {verdict}"
+            )
+
+
+@notices_app.command("assess")
+def notices_assess_cmd(
+    ctx: typer.Context,
+    notice_id: Annotated[str, typer.Argument(help="The notice (ntc_...).")],
+    decision: Annotated[
+        str, typer.Option("--decision", help="exclude, keep-flagged, no-effect or affects.")
+    ],
+    rationale: Annotated[str, typer.Option("--rationale", help="Why.")],
+    field: Annotated[
+        list[str] | None,
+        typer.Option("--field", help="With affects: a field the correction changes (repeatable)."),
+    ] = None,
+) -> None:
+    """Record your assessment of a notice; a later assessment supersedes it."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        try:
+            chosen = AssessmentDecision(decision)
+        except ValueError:
+            choices = ", ".join(d.value for d in AssessmentDecision)
+            raise FactoryValidationError(
+                [ValidationIssue("decision", f"must be one of {choices}")]
+            ) from None
+        event_id = notices_service.assess_notice(
+            project,
+            project.human_actor(),
+            notice_id,
+            chosen,
+            fields=tuple(field or ()),
+            rationale=rationale,
+        )
+    typer.echo(f"assessed {notice_id}  {event_id}")
+
+
+@versions_app.command("list")
+def versions_list_cmd(ctx: typer.Context) -> None:
+    """Newer versions on a route, published-version links, refused links and preferences."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        for version in versions_service.newer_versions(project):
+            typer.echo(f"newer  {version.work_id}  {version.route.value}  {version.source_version}")
+        for work_id in versions_service.vor_available(project):
+            typer.echo(
+                f"published-version  {work_id}  {versions_service.aliases(project, work_id)}"
+            )
+        for conflict in versions_service.link_conflicts(project):
+            held = conflict.other_work_id
+            typer.echo(f"link-conflict  {conflict.work_id}  {conflict.doi}  held by {held}")
+        for work_id, (document_id, why) in versions_service.preferences(project).items():
+            typer.echo(f"preferred  {work_id}  {document_id}  {why}")
+
+
+@versions_app.command("prefer")
+def versions_prefer_cmd(
+    ctx: typer.Context,
+    work_id: Annotated[str, typer.Argument(help="The work.")],
+    document_id: Annotated[str, typer.Argument(help="A live document of the work.")],
+    rationale: Annotated[str, typer.Option("--rationale", help="Why.")],
+) -> None:
+    """Make a document the one `default_conversion` serves for the work (human act)."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        event_id = versions_service.prefer_document(
+            project, project.human_actor(), work_id, document_id, rationale
+        )
+    typer.echo(f"preferred {document_id} for {work_id}  {event_id}")
 
 
 @living_app.command("snapshot")

@@ -26,7 +26,7 @@ from factory.model.imports import (
 )
 from factory.model.inbox import InboxLinkAdded, InboxLinkResolved, InboxLinkWithdrawn
 from factory.model.living import SnapshotRecorded
-from factory.model.notices import NoticeObserved
+from factory.model.notices import NoticeAssessed, NoticeObserved
 from factory.model.probe import ProbeFailed, ProbeMeasured, ProbePageArchived
 from factory.model.project import ProjectCreated
 from factory.model.protocol import (
@@ -69,7 +69,7 @@ from factory.model.seed import (
     SeedUnresolved,
 )
 from factory.model.task import TaskClaimed, TaskCompleted, TaskCreated, TaskReleased
-from factory.model.versions import VersionLinked, VersionObserved
+from factory.model.versions import DocumentPreferred, VersionLinked, VersionObserved
 from factory.model.watch import WatchCycleFinished, WatchCycleStarted
 
 _NAME_RE = re.compile(r"[a-z][a-z_]*\.[a-z][a-z_]*")
@@ -178,6 +178,8 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("watch.cycle_finished", WatchCycleFinished, 1))
     catalog.register(EventType("living.snapshot_recorded", SnapshotRecorded, 1))
     catalog.register(EventType("notice.observed", NoticeObserved, 1))
+    catalog.register(EventType("notice.assessed", NoticeAssessed, 1))
     catalog.register(EventType("version.observed", VersionObserved, 1))
     catalog.register(EventType("version.linked", VersionLinked, 1))
+    catalog.register(EventType("document.preferred", DocumentPreferred, 1))
     return catalog

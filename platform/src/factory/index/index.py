@@ -50,6 +50,8 @@ OMITTED_WHEN_EMPTY: frozenset[str] = frozenset(
         "version_observations",
         "version_links",
         "work_aliases",
+        "notice_assessments",
+        "document_preferences",
     }
 )
 """Tables added after slice 3: while empty they leave no trace in the hash, so a log without
