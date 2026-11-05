@@ -103,3 +103,27 @@ def test_evidence_report_unchanged(
         rows_of_group(project, s.group_id)
     assert evidence_report(project).model_dump_json() == before
     assert PassLabel.A and run_pass  # imports used by sibling worlds
+
+
+def test_phantom_key_from_cells_of_different_passes_is_unknown(
+    project: Project, ext_a: Actor, ext_b: Actor, declared: list[str]
+) -> None:
+    """Pass A reads task `classification`, pass B `detection`: the scan sees a `detection` key,
+    but no final row has it (the disagreement is open), so no such group exists."""
+    first = declared[0]
+    run_pass(project, ext_a, PassLabel.A, lambda w: [acc("1")] if w == first else [])
+    run_pass(
+        project, ext_b, PassLabel.B, lambda w: [acc("1", task="detection")] if w == first else []
+    )
+    assert group_index(project) == []
+    phantom = group_id(
+        (
+            ("task", "detection"),
+            ("dataset", "lorem ipsum"),
+            ("split", "val"),
+            ("metric", "low"),
+        )
+    )
+    with pytest.raises(FactoryValidationError) as err:
+        rows_of_group(project, phantom)
+    assert err.value.issues[0].field == "group_id"

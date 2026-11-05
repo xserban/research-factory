@@ -86,8 +86,10 @@ def key_and_rows(project: Project, gid: str) -> tuple[GroupKey, list[FinalRow]]:
     if found is None:
         raise _unknown(gid)
     key, works = found
-    rows = final_rows_restricted(project, works)
-    return key, group_rows(rows, pack, keys).groups.get(key, [])
+    rows = group_rows(final_rows_restricted(project, works), pack, keys).groups.get(key)
+    if not rows:  # a key built from cells of different passes that no final row has
+        raise _unknown(gid)
+    return key, rows
 
 
 def _unknown(gid: str) -> FactoryValidationError:
