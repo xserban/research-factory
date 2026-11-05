@@ -123,3 +123,7 @@ Minor review findings parked during the v1 build, to address when iterating from
 - XP-B re-review: `key_known` refuses trigger keys.
 - XP-B re-review: baseline row keys are read from the latest design.
 - XP-B re-review: `_after_baseline` may raise a KeyError.
+- W-A: a repin keeps the draft's sections, so a section the new outline adds has no slot; `draft_next` serves only the sections the draft was created with.
+- W-A: `resolve_supports` builds the visible-rows world (a full evidence fold) once per call; a long batch of cell supports on a large corpus pays it per call, not per sentence.
+- W-A: a session that wrote sentences may still join an extraction or screening pass; only the reverse is refused (pass sessions cannot use the tools).
+- W-A: `provisional_status` (structural, interpretive, unchecked) stands in for the status W-B computes from verdicts; W-B replaces it.
