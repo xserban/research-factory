@@ -43,7 +43,7 @@ from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Literal, get_args
 
-from pydantic import TypeAdapter
+from pydantic import Field, TypeAdapter
 from sqlalchemy import bindparam, text
 
 from factory.imports.limits import outside_limits
@@ -54,9 +54,11 @@ from factory.model.protocol import Limit
 from factory.model.references import LinkState
 from factory.model.search import QueryPurpose
 from factory.model.work import ProvenanceMethod
+from factory.modules.contract import Autonomy
 from factory.services.agreement import Outcome, exclusion_criteria, final_outcomes
 from factory.services.context import Project
 from factory.services.dedup import active_merges
+from factory.services.gates import autonomy_of, gate_acts
 from factory.services.imports import import_row, list_imports
 from factory.services.protocol import ProtocolVersion, current_protocol
 from factory.services.reference_resolve import (
@@ -169,6 +171,9 @@ class CoverageReport(StrictModel):
     protocol_id: str | None
     as_of: str
     """The id of the last event the report reads."""
+    autonomy: dict[str, int] = Field(default_factory=dict)
+    """Binding resolution decisions of the import per autonomy level (slice M, ruling 10); empty
+    while every one was passed by a human."""
 
 
 @dataclass(frozen=True)
@@ -445,7 +450,31 @@ def coverage_report(project: Project, import_id: str) -> CoverageReport:
         suggestions=_suggestions(project, classified, protocol),
         protocol_id=None if protocol is None else protocol.protocol_id,
         as_of=_last_event(project),
+        autonomy=_autonomy(project, import_id),
     )
+
+
+def _autonomy(project: Project, import_id: str) -> dict[str, int]:
+    """Per autonomy level, the binding decisions the import's links rest on; empty unless an
+    agent passed one."""
+    with project.index.connect() as conn:
+        mine = {
+            str(e)
+            for (e,) in conn.execute(
+                text(
+                    "SELECT event_id FROM import_decisions "
+                    "WHERE import_id = :i AND kind = 'binding'"
+                ),
+                {"i": import_id},
+            )
+        }
+    counts = {level: 0 for level in Autonomy}
+    for act in gate_acts(project, "import.resolution_confirm"):
+        if act.event_id in mine:
+            counts[autonomy_of(project, act)] += 1
+    if counts[Autonomy.AGENT] + counts[Autonomy.AUDITED_AGENT] == 0:
+        return {}
+    return {level.value: n for level, n in counts.items()}
 
 
 def _part_coverage(part: Part, classified: Classified) -> PartCoverage:
