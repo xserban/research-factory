@@ -48,6 +48,7 @@ from factory.services.audit_core import AuditPopulation
 from factory.services.context import Project
 from factory.services.conversions import conversion_manifest
 from factory.services.extraction import (
+    imports_policy,
     require_schema,
 )
 from factory.services.extraction_agreement import extraction_agreement, final_rows
@@ -120,15 +121,18 @@ def _values(project: Project, scope: AuditScope) -> list[tuple[AuditItemRef, str
     """The agreed values with the extraction each came from, sorted. Single-extraction rows are
     not audited here; a field a human dropped (`neither`) is not a value. Every field of a
     contribution row is a value, `item_kind` and `absent_kind` too, so a not-stated item is
-    audited. The card scope's values are the stated quote assertions of live cards."""
+    audited. The card scope's values are the stated quote assertions of live cards. An imported
+    value is here only under `imports = "audit"`, and then every one of them, a single-pass one too
+    (ruling 19); otherwise its source's audit is the only one it had."""
     if scope is CardScope.CARD:
         from factory.services.cards import card_audit_population  # cards import this module
 
         return card_audit_population(project)
+    audited = imports_policy(project, scope) == "audit"
     out = [
         (AuditItemRef(work_id=row.work_id, row_key=row.row_key, field=name), f.extraction_id)
         for row in final_rows(project, scope=scope)
-        if row.status in ("agreed", "resolved")
+        if (audited if row.origin == "imported" else row.status in ("agreed", "resolved"))
         for name, f in row.fields.items()
     ]
     return sorted(out, key=lambda pair: _sort_key(pair[0]))

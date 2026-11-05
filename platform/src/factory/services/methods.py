@@ -13,7 +13,7 @@ number of its own. Invariants:
 
 from typing import Any
 
-from pydantic import Field
+from pydantic import Field, SerializerFunctionWrapHandler, model_serializer
 from sqlalchemy import TextClause, text
 
 from factory.model.base import StrictModel
@@ -173,6 +173,20 @@ class MethodsReport(StrictModel):
     """Resolved library imports (slice 3d); empty, and no paragraph, without imports."""
     miners: list[MinerMethods] = Field(default_factory=list)
     """Registered miner versions (slice M, M-D); empty, and no paragraph, without any."""
+    imported_units: int = 0
+    imported_rows: int = 0
+    imported_sources: list[str] = Field(default_factory=list)
+    """Records in use that were imported from other projects (slice M, M-E), counted apart."""
+
+    @model_serializer(mode="wrap")
+    def _no_imports_say_nothing(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        """A report without imports serialises as it did before imports existed."""
+        out: dict[str, Any] = handler(self)
+        if not self.imported_rows:
+            for name in ("imported_units", "imported_rows", "imported_sources"):
+                out.pop(name, None)
+        return out
+
     gate_policy: list[GateStatusRow] = Field(default_factory=list)
     """The decision gates the statement reports (slice M, `GateStatusRow.notable`): empty, and no
     paragraph, while every act was passed by a human under a `human` policy."""
@@ -258,7 +272,30 @@ def methods_report(project: Project) -> MethodsReport:
         imports=_imports(project, agent=False),
         gate_policy=notable_rows(project),
         miners=_miners(project),
+        **_mine_imports(project),
     )
+
+
+def _mine_imports(project: Project) -> dict[str, Any]:
+    """The imported units and rows in use, of every listed miner, and the projects they came from.
+    Empty, so the fields keep their defaults, without any."""
+    from factory.model.extraction import MinerScope
+    from factory.services.extraction import filled_imports, import_items
+
+    protocol = current_protocol(project)
+    uses = () if protocol is None else protocol.spec.miners or ()
+    filled = [filled_imports(project, MinerScope(u.name)) for u in uses]
+    rows = [row for units in filled for unit in units.values() for row in unit]
+    if not rows:
+        return {}
+    items = import_items(project)
+    return {
+        "imported_units": len({(r.work_id, r.conversion_id) for r in rows}),
+        "imported_rows": len(rows),
+        "imported_sources": sorted(
+            {items[r.extraction_id].source_project for r in rows if r.extraction_id in items}
+        ),
+    }
 
 
 def _miners(project: Project) -> list[MinerMethods]:
@@ -512,6 +549,7 @@ def render_methods(report: MethodsReport, *, withheld: frozenset[str] = frozense
         _seed_recall(report, withheld),
         *([] if report.supplied_links is None else [_supplied(report.supplied_links)]),
         *([] if not report.miners else [_miners_paragraph(report, withheld)]),
+        *([] if not report.imported_rows else [_imports_paragraph(report)]),
         *([] if not report.gate_policy else [_gate_policy(report, withheld)]),
         _deviations(report),
     ]
@@ -775,6 +813,16 @@ def _miners_paragraph(report: MethodsReport, withheld: frozenset[str]) -> str:
         text += " Admitted as evidence." if m.evidence else " Not admitted as evidence."
         parts.append(text)
     return " ".join(parts)
+
+
+def _imports_paragraph(report: MethodsReport) -> str:
+    """Imported records: how many, from where, and that they are not this project's own passes."""
+    return (
+        f"Imported records. {report.imported_rows} record(s) of {report.imported_units} unit(s) "
+        f"were imported from {', '.join(report.imported_sources)} and re-verified against this "
+        "project's own conversions. They are counted apart from the records mined here: as dual "
+        "only where the source had two agreeing passes, otherwise as single-pass."
+    )
 
 
 def _gate_policy(report: MethodsReport, withheld: frozenset[str]) -> str:

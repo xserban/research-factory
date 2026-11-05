@@ -53,6 +53,7 @@ from factory.services.extraction import (
     ExtractNext,
     ExtractResult,
     MineBatchContent,
+    filled_imports,
     live_rows,
     next_unit,
     record_unit,
@@ -579,6 +580,7 @@ def mine_status(
         ]
         stale = stale_extractions(project, scope=scope)
         live = [r for r in live_rows(project, scope=scope) if r.extraction_id not in stale]
+        imported = 0 if own is not None else sum(map(len, filled_imports(project, scope).values()))
         agreement = (
             agreement_overall(project, scope=scope).overall
             if with_agreement and own is None
@@ -592,7 +594,7 @@ def mine_status(
                 units=len(states),
                 open=sum(s.state in ("open", "queued") for s in states),
                 closed=sum(s.state == "current" for s in states),
-                rows=len([r for r in live if own is None or r.pass_label == own[1]]),
+                rows=len([r for r in live if own is None or r.pass_label == own[1]]) + imported,
                 stale=sum(s.state == "stale" for s in states),
                 agreement=agreement,
             )

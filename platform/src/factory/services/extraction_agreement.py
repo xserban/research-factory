@@ -27,14 +27,19 @@ Invariants:
   agreement and conversely. A contribution compares the pack's `compared_fields` (statement and
   quote are never compared); grouping and independence are evidence-only.
 
+- Rows imported from another project are accounted apart (ruling 19, R-143). A unit an import fills
+  enters neither the dual nor the single works, nor any pair, so no agreement rate and no dual count
+  moves. Its rows join the final rows with `origin` imported: `agreed` only when the source had two
+  agreeing, independent passes, else `single`, whatever the source called them.
+
 Everything here is read-only except `resolve_extraction`, which writes one event or nothing.
 """
 
-from collections.abc import Collection, Iterable, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import ValidationError
+from pydantic import SerializerFunctionWrapHandler, ValidationError, model_serializer
 from sqlalchemy import text
 
 from factory.errors import FactoryValidationError, ValidationIssue
@@ -65,6 +70,8 @@ from factory.services.extraction import (
     PassConfig,
     calibration_sessions_of,
     calibration_task_ids,
+    filled_imports,
+    import_items,
     in_dual_sample,
     is_extraction_session,
     live_rows,
@@ -217,6 +224,15 @@ class FinalRow(StrictModel):
     status: Literal["agreed", "resolved", "single"]
     fields: dict[str, FinalField]
     independent: bool
+    origin: Literal["local", "imported"] = "local"
+
+    @model_serializer(mode="wrap")
+    def _local_says_nothing(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        """A local row serialises as it did before imports existed."""
+        out: dict[str, Any] = handler(self)
+        if self.origin == "local":
+            out.pop("origin", None)
+        return out
 
 
 GroupKey = tuple[tuple[str, str], ...]
@@ -230,8 +246,22 @@ class Grouped(StrictModel):
 
 
 class IndependenceCounts(StrictModel):
+    """`imported_dual` and `imported_single` count imported rows, which are in neither of the
+    others: an imported row was not mined here, whatever it reports."""
+
     independent: int
     copied: int
+    imported_dual: int = 0
+    imported_single: int = 0
+
+    @model_serializer(mode="wrap")
+    def _no_imports_say_nothing(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        """Counts without imports serialise as they did before imports existed."""
+        out: dict[str, Any] = handler(self)
+        for name in ("imported_dual", "imported_single"):
+            if not out.get(name):
+                out.pop(name, None)
+        return out
 
 
 # --- Pure comparison ---
@@ -412,6 +442,8 @@ class _State:
     single: frozenset[str]
     blocking: bool
     pairs: list[_Pair]
+    imported: list[FinalRow] = field(default_factory=list)
+    """The final rows of the units an import fills, by work then row key; no pair holds them."""
 
 
 def _compared_fields(schema: ExtractionSchema, pack: Pack) -> Sequence[str]:
@@ -443,6 +475,9 @@ def _load(
     if works is not None:
         wanted = set(works)
         population = [w for w in population if w in wanted]
+    filled = filled_imports(project, scope)
+    imported = _imported_finals(project, filled, population, schema, pack)
+    population = [w for w in population if w not in filled]
     configs = {label: pass_config(project, label, scope=scope) for label in PassLabel}
     b_config = configs[PassLabel.B]
     known = configs[PassLabel.A] is not None and b_config is not None
@@ -488,7 +523,54 @@ def _load(
         if pair.aligned:
             pair.compared = _compare(pack, _compared_fields(schema, pack), pair.a[0], pair.b[0])
         _settle(pair, schema, pack, resolutions)
-    return _State(scope, schema, pack, configs, known, dual, single, blocking, pairs)
+    return _State(scope, schema, pack, configs, known, dual, single, blocking, pairs, imported)
+
+
+def _imported_finals(
+    project: Project,
+    filled: Mapping[str, list[ExtractionRow]],
+    population: Sequence[str],
+    schema: ExtractionSchema,
+    pack: Pack,
+) -> list[FinalRow]:
+    """The final rows of the imported units of works in `population`. A row counts as agreed only
+    on the fold's `dual`, computed from the passes the event names; one lacking a field the pack
+    requires is left out, as `_final` leaves out a local one."""
+    if not filled:
+        return []
+    items = import_items(project)
+    out: list[FinalRow] = []
+    for work in population:
+        for row in filled.get(work, ()):
+            item = items.get(row.extraction_id)
+            fields = {
+                name: final_field(row.fields[name], row.extraction_id)
+                for name in schema.fields
+                if name in row.fields
+            }
+            if any(name not in fields for name in pack.required):
+                continue
+            out.append(
+                FinalRow(
+                    work_id=row.work_id,
+                    document_id=row.document_id,
+                    conversion_id=row.conversion_id,
+                    row_key=row.row_key,
+                    status="agreed" if item is not None and item.dual else "single",
+                    fields=fields,
+                    independent=False,
+                    origin="imported",
+                )
+            )
+    return sorted(out, key=lambda r: (r.work_id, r.row_key))
+
+
+def _finals(state: _State) -> list[FinalRow]:
+    """The final rows of `state`, mined and imported, by work then row key."""
+    mined = [p.final for p in state.pairs if p.final is not None]
+    if not state.imported:
+        return mined
+    return sorted([*mined, *state.imported], key=lambda r: (r.work_id, r.row_key))
 
 
 def _eligible_rows(
@@ -957,9 +1039,7 @@ def final_rows(project: Project, *, scope: ScopeKey = Scope.EVIDENCE) -> list[Fi
     pass A rows of single-extraction works. A row with an unresolved disagreement, and every row
     before pass B has opened, is left out. Read-only; empty without a schema."""
     state = _load(project, scope)
-    if state is None:
-        return []
-    return [p.final for p in state.pairs if p.final is not None]
+    return [] if state is None else _finals(state)
 
 
 @dataclass(frozen=True)
@@ -991,9 +1071,7 @@ def final_rows_restricted(
 ) -> list[FinalRow]:
     """`final_rows` of the given works only; equal to the filter of `final_rows` by work."""
     state = _load(project, scope, works)
-    if state is None:
-        return []
-    return [p.final for p in state.pairs if p.final is not None]
+    return [] if state is None else _finals(state)
 
 
 def cell_key(
@@ -1048,17 +1126,28 @@ def grouped_rows(project: Project) -> Grouped:
     if state is None:
         return Grouped(groups={}, ungrouped=[], unresolved=[])
     keys = state.schema.comparability_keys or state.pack.default_comparability_keys
-    grouped = group_rows((p.final for p in state.pairs if p.final is not None), state.pack, keys)
+    grouped = group_rows(_finals(state), state.pack, keys)
     return grouped.model_copy(update={"unresolved": [d for p in state.pairs for d in p.open]})
 
 
 def independence_counts(rows: Iterable[FinalRow]) -> IndependenceCounts:
     """How many rows report an own result and how many a copied one (effectively cited value).
-    A row without a `value` field counts in neither."""
-    independent = copied = 0
+    A row without a `value` field counts in neither. An imported row counts in neither either, but
+    in `imported_dual` when the source had two agreeing passes, else in `imported_single`."""
+    independent = copied = imported_dual = imported_single = 0
     for row in rows:
-        if row.independent:
+        if row.origin == "imported":
+            if row.status == "agreed":
+                imported_dual += 1
+            else:
+                imported_single += 1
+        elif row.independent:
             independent += 1
         elif VALUE_FIELD in row.fields:
             copied += 1
-    return IndependenceCounts(independent=independent, copied=copied)
+    return IndependenceCounts(
+        independent=independent,
+        copied=copied,
+        imported_dual=imported_dual,
+        imported_single=imported_single,
+    )

@@ -72,6 +72,8 @@ from factory.services.evidence_report import evidence_report
 from factory.services.extraction import (
     calibration_task_ids,
     extraction_population,
+    filled_imports,
+    import_items,
     in_dual_sample,
     live_claims,
     live_rows,
@@ -654,21 +656,30 @@ def _mining(project: Project) -> list[_Hit]:
                 )
             )
         config = pass_config(project, PassLabel.B, scope=scope)
+        filled = filled_imports(project, scope)
+        items = import_items(project) if filled else {}
+        single = {
+            work
+            for work, rows in filled.items()
+            if work in population
+            and not all(r.extraction_id in items and items[r.extraction_id].dual for r in rows)
+        }
         if config is not None:
-            single = sorted(
+            single |= {
                 w
                 for w in population
-                if not in_dual_sample(config.seed, w, schema.dual_extract_sample)
-            )
-            if single:
-                hits.append(
-                    _Hit(
-                        "mine-single",
-                        tuple(single),
-                        f"miner {use.name}: {len(single)} work(s) are mined once, outside the "
-                        "dual sample",
-                    )
+                if w not in filled
+                and not in_dual_sample(config.seed, w, schema.dual_extract_sample)
+            }
+        if single:
+            hits.append(
+                _Hit(
+                    "mine-single",
+                    tuple(sorted(single)),
+                    f"miner {use.name}: {len(single)} work(s) are mined once, outside the "
+                    "dual sample",
                 )
+            )
     return hits
 
 
