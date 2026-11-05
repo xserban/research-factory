@@ -111,6 +111,11 @@ def audit_sample(
             issues.append(ValidationIssue("random_seed", "must be an integer from 0 to 2**32 - 1"))
         if issues:
             raise FactoryValidationError(issues)
+        if not top_up and _living_with_audit(project, stage):
+            raise _refuse_top_up(
+                "a cycle has run since the audit: extend it with a top-up (audit sample "
+                "--top-up); a full redraw would drop its labels"
+            )
         screen_agreement(project, actor, stage=stage)
         agreed = agreed_works(project, stage=stage)
         if not agreed:
@@ -274,12 +279,17 @@ def audit_outstanding(
 
     The population is the agreed set's work ids and verdicts (`audit_sample`'s digest). A set that
     changed since the last audit is outstanding again. False when there is nothing to audit.
+
+    Once an audit exists and a watch cycle has run (a living review), it is outstanding only by
+    its shortfall (`audit_shortfall`): a changed agreed set is topped up, never redrawn.
     """
     require_pass_stage(stage)
     project.index.sync()
     agreed = agreed_works(project, stage=stage)
     if not agreed:
         return False
+    if _living_with_audit(project, stage):
+        return audit_shortfall(project, stage=stage) > 0
     digest = population_digest((work, item.verdict) for work, item in agreed.items())
     return _last_population_digest(project, stage) != digest
 
@@ -304,6 +314,14 @@ def audit_shortfall(
 
 
 # --- Top-up ---
+
+
+def _living_with_audit(project: Project, stage: ScreeningStage) -> bool:
+    """Whether `stage` has an audit and a watch cycle has run: audits are then topped up."""
+    if not _audit_ids(project, stage):
+        return False
+    with project.index.connect() as conn:
+        return bool(conn.execute(text("SELECT count(*) FROM watch_cycles")).scalar_one())
 
 
 def _refuse_top_up(reason: str) -> FactoryValidationError:

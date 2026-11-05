@@ -219,3 +219,76 @@ def _agreed(project: Project, audit_id: str, work: str) -> str:
                 {"a": audit_id, "w": work},
             ).scalar_one()
         )
+
+
+def test_living_audit_outstanding_by_shortfall(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    """After a cycle an audit is outstanding only by its shortfall; a full redraw is refused."""
+    from factory.model.project import RigorMode
+    from factory.model.screening import PassLabel
+    from factory.model.watch import WatchPlan, WatchSource
+    from factory.services.audit import audit_outstanding
+    from factory.services.check import _findings_as
+    from factory.services.watch import watch_run
+    from tests.test_calibration import _decide
+    from tests.watch_helpers import ScriptedSource, adapters, by_text, record
+
+    first, ordinary = _audited(project, agent, human, mock_sources)
+    current = current_protocol(project)
+    assert current is not None
+    plan = WatchPlan(sources=(WatchSource(source="openalex", interval_days=7),))
+    amend_protocol(
+        project,
+        agent,
+        current.spec.model_copy(update={"watch_plan": plan}),
+        reason="declare the watch",
+        semantic=True,
+        effects={},
+    )
+    source = ScriptedSource(by_text({"attention": [[record("One more study", author="Zed Q")]]}))
+    assert watch_run(project, sources=adapters(source), trigger="scheduler") is not None
+    # Flip one agreed work: the agreed set changes, its size does not (shortfall stays 0).
+    protocol_id = _protocol_id(project)
+    flipped = next(w for w in ordinary if w not in first.work_ids)
+    with project.index.connect() as conn:
+        old = {
+            str(label): str(did)
+            for label, did in conn.execute(
+                text(
+                    "SELECT pass_label, decision_id FROM decisions WHERE work_id = :w"
+                    " AND superseded_by IS NULL AND phase = 'screening'"
+                ),
+                {"w": flipped},
+            ).all()
+        }
+        verdict = str(
+            conn.execute(
+                text("SELECT verdict FROM decisions WHERE decision_id = :d"),
+                {"d": old["A"]},
+            ).scalar_one()
+        )
+    new_verdict, criterion = ("include", None) if verdict == "exclude" else ("exclude", "EX01")
+    for label in PassLabel:
+        _decide(
+            project,
+            agent,
+            flipped,
+            label.value,
+            "screening",
+            new_verdict,
+            criterion,
+            protocol_id,
+            supersedes=old[label.value],
+        )
+    assert audit_shortfall(project) == 0
+    assert audit_outstanding(project) is False
+    codes = {f.code for f in _findings_as(project, RigorMode.SYSTEMATIC)}
+    assert "audit-missing" not in codes
+    before = len(_of_type(project, "audit.sampled"))
+    with pytest.raises(FactoryValidationError) as exc:
+        audit_sample(project, human, random_seed=3)
+    assert _fields(exc) == ["top_up"] and "top-up" in exc.value.issues[0].reason
+    assert len(_of_type(project, "audit.sampled")) == before
+    report = audit_report(project)
+    assert report is not None and report.labelled == len(first.work_ids)
