@@ -77,10 +77,21 @@ def proposer(project: Project, name: str, version: int) -> MinerProposer:
 
 
 def miner_state(project: Project, name: str, version: int) -> MinerState:
-    """The lifecycle state of a registered version: `retired` once retired, else `registered`
-    until a calibration is drawn (later tasks refine the others)."""
+    """The lifecycle state of a registered version, computed on read: `retired` once retired;
+    else `registered` until a calibration is drawn, `calibrating` until every unit is labelled and
+    closed, then `calibrated` or `failed` by the score against the thresholds in force. A failed
+    version is not recalibrated: a retry is a new version (ruling 5)."""
+    from factory.services.miner_report import calibration_passed  # the report imports this module
+
     row = _registered(project, name, version)
-    return MinerState.RETIRED if row.retired else MinerState.REGISTERED
+    if row.retired:
+        return MinerState.RETIRED
+    if calibration_of(project, name, version) is None:
+        return MinerState.REGISTERED
+    passed = calibration_passed(project, name, version)
+    if passed is None:
+        return MinerState.CALIBRATING
+    return MinerState.CALIBRATED if passed else MinerState.FAILED
 
 
 def retire_miner(project: Project, actor: Actor, name: str, version: int, reason: str) -> None:

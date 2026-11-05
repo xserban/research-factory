@@ -102,6 +102,9 @@ from factory.services.layer_check import (
 )
 from factory.services.lineage import graph_status, iter_graph_export
 from factory.services.methods import MethodsReport, methods_report, render_methods
+from factory.services.miner_report import calibration_passed
+from factory.services.miners import MinerState, miner_state
+from factory.services.mining import registered_miners
 from factory.services.modules import default_modules
 from factory.services.notices import (
     assessments,
@@ -494,6 +497,7 @@ def _run_rules(project: Project) -> list[_Hit]:
         audit_hits(project),
         _gate_policies(project),
         _mining(project),
+        _miner_lifecycle(project),
     ]
     flat = [hit for group in groups for hit in group]
     return [replace(hit, seq=seq) for seq, hit in enumerate(flat)]
@@ -544,6 +548,34 @@ def _mining(project: Project) -> list[_Hit]:
                         "dual sample",
                     )
                 )
+    return hits
+
+
+def _miner_lifecycle(project: Project) -> list[_Hit]:
+    """Findings of the lifecycle of registered miners (M-D, R-52): a version that failed its
+    calibration is reported (retired or not), and a protocol that admits a miner as evidence while
+    it is not calibrated is an error in every mode (it cannot arise through the tools; this guards
+    a replayed, hand-edited log). Each names the miner and version only: no score, no threshold."""
+    protocol = current_protocol(project)
+    admitted = (
+        {(u.name, u.version) for u in (protocol.spec.miners or ()) if u.evidence}
+        if protocol is not None
+        else set()
+    )
+    hits: list[_Hit] = []
+    for row in registered_miners(project):
+        state = miner_state(project, row.name, row.version)
+        label = f"miner {row.name} version {row.version}"
+        if calibration_passed(project, row.name, row.version) is False:  # even if retired
+            hits.append(_Hit("miner-calibration-failed", (), f"{label} failed its calibration"))
+        if (row.name, row.version) in admitted and state is not MinerState.CALIBRATED:
+            hits.append(
+                _Hit(
+                    "miner-uncalibrated-evidence",
+                    (),
+                    f"{label} is admitted as evidence but is {state.value}",
+                )
+            )
     return hits
 
 

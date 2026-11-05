@@ -267,6 +267,11 @@ def _same(definition: FieldDef | None, fa: StoredField, fb: StoredField) -> bool
     )
 
 
+def same_field(definition: FieldDef | None, fa: StoredField, fb: StoredField) -> bool:
+    """Whether two stored fields agree under plan D's rule (also the calibration score's)."""
+    return _same(definition, fa, fb)
+
+
 def _compare(
     pack: Pack, fields: Sequence[str], a: ExtractionRow, b: ExtractionRow
 ) -> list[tuple[str, FieldDisagreement | None]]:
