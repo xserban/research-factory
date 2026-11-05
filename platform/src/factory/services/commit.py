@@ -13,6 +13,8 @@ Invariants:
 - A push goes only to a remote whose every push URL is listed in `.server/push_remotes`, checked
   before anything is committed; with no list, or an empty one, nothing is pushed (ruling 5: the
   remote is private, and a person vouches for that by listing it).
+- A push ships history, not the job's own commit: a private path anywhere in what the remote lacks,
+  or in HEAD or the index, refuses the push. The job's commit stands; only the push is withheld.
 """
 
 import re
@@ -80,7 +82,10 @@ def commit_hosted(settings: Settings, *, sign: bool, push: str | None) -> Commit
                 staged[slug] = paths
 
     commit = _commit(root, host_id, staged, sign) if staged else None
-    pushed = push is not None and git(root, "push", push, "HEAD").returncode == 0
+    pushed = False
+    if push is not None:
+        _require_shippable_history(root, push)
+        pushed = git(root, "push", push, "HEAD").returncode == 0
     return CommitReport(
         projects={slug: len(paths) for slug, paths in staged.items()}, commit=commit, pushed=pushed
     )
@@ -131,6 +136,38 @@ def _require_listed_remote(root: Path, remote: str) -> None:
     if unlisted:
         raise FactoryValidationError(
             [ValidationIssue("push", f"{remote} is not in {PUSH_REMOTES_FILE}: {unlisted[0]}")]
+        )
+
+
+def _require_shippable_history(root: Path, remote: str) -> None:
+    """Refuse a push that would carry a private path, however it entered history (`git add -f`).
+
+    The range is what the remote's tracking ref lacks, or all of HEAD when it has none. Commits are
+    read one by one as well as the end state, so a path added and later removed still counts."""
+    branch = git(root, "symbolic-ref", "--quiet", "--short", "HEAD")
+    ref = f"refs/remotes/{remote}/{branch.stdout.decode().strip()}"
+    tracked = (
+        branch.returncode == 0
+        and git(root, "rev-parse", "--verify", "--quiet", ref).returncode == 0
+    )
+    span = f"{ref}..HEAD" if tracked else "HEAD"
+    listings = [
+        ("ls-files", "-z"),
+        ("ls-tree", "-r", "--name-only", "-z", "HEAD"),
+        ("log", "--format=", "--name-only", "-z", "--no-renames", "-m", span),
+    ]
+    if tracked:
+        listings.append(("diff", "--name-only", "-z", "--no-renames", span))
+    paths = {
+        path
+        for listing in listings
+        for path in _run(root, *listing).decode().replace("\n", "\0").split("\0")
+        if path
+    }
+    private = sorted(path for path in paths if is_private(path))
+    if private:
+        raise FactoryValidationError(
+            [ValidationIssue("paths", f"history holds private paths: {', '.join(private[:5])}")]
         )
 
 
