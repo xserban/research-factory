@@ -19,6 +19,8 @@ SPEC = ModuleSpec(
         types=(
             "project.created",
             "project.hosted",
+            "member.granted",
+            "member.revoked",
             "task.claimed",
             "task.completed",
             "task.created",
@@ -31,6 +33,8 @@ SPEC = ModuleSpec(
             "events",
             "gate_audit_items",
             "gate_audits",
+            "member_events",
+            "members",
             "meta",
             "project",
             "project_hosts",

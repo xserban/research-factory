@@ -25,6 +25,7 @@ from factory.index.lineage import lineage_handlers, lineage_tables
 from factory.index.living import digest_handlers, digest_tables, living_handlers, living_tables
 from factory.index.manuscripts import manuscript_handlers, manuscript_tables
 from factory.index.mine_imports import mine_import_handlers, mine_import_tables
+from factory.index.members import member_handlers, member_tables
 from factory.index.miners import miner_handlers, miner_tables
 from factory.index.notices import notice_handlers, notice_tables
 from factory.index.probe import probe_handlers, probe_tables
@@ -59,6 +60,7 @@ def default_projection(blobs: BlobStore | None = None) -> Projection:
     core_tables(metadata)
     project = project_table(metadata)
     project_hosts = project_hosts_table(metadata)
+    members = member_tables(metadata)
     tasks = tasks_table(metadata)
     search = search_tables(metadata)
     dedup = dedup_tables(metadata)
@@ -101,6 +103,7 @@ def default_projection(blobs: BlobStore | None = None) -> Projection:
     handlers: dict[str, Handler] = {
         "project.created": project_created_handler(project),
         "project.hosted": project_hosted_handler(project_hosts),
+        **member_handlers(members),
         **task_handlers(tasks),
         **search_handlers(search),
         **dedup_handlers(dedup),
