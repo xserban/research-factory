@@ -440,14 +440,16 @@ def search_report(project: Project) -> SearchReport:
             .mappings()
             .all()
         )
-        # A work is new to the run that first found it, counted over every run (probes too), as
-        # `run_query` counts it against the works already stored.
+        # A work is new to the run that first brought it into the corpus, as `run_query` counts
+        # it: a work stored only by a probe lookup is not yet in the corpus.
         first_found = conn.execute(
             text(
                 "SELECT first.run_id, COUNT(*) FROM "
-                "(SELECT work_id, MIN(run_id) AS run_id FROM provenance GROUP BY work_id) AS first "
+                "(SELECT work_id, MIN(run_id) AS run_id FROM provenance WHERE query_id NOT IN "
+                "(SELECT query_id FROM queries WHERE purpose = :probe) GROUP BY work_id) AS first "
                 "GROUP BY first.run_id"
-            )
+            ),
+            {"probe": QueryPurpose.PROBE.value},
         ).all()
         cycle_of = {
             str(run_id): str(cycle_id)

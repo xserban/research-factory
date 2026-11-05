@@ -202,7 +202,7 @@ def run_query(
 
     system = project.system_actor()
     started_by = actor or system
-    known = _known_work_ids(project)
+    known = _known_work_ids(project, spec.purpose)
     run_id = project.ids.new("run")
     # The gate is re-checked at run time: the protocol or question may have changed since the
     # query was registered. The check, the resume check and the run's start are one critical
@@ -581,9 +581,18 @@ def _registered_submitter(project: Project, query_id: str) -> SubmitterKind | No
     return None
 
 
-def _known_work_ids(project: Project) -> set[str]:
+def _known_work_ids(project: Project, purpose: QueryPurpose) -> set[str]:
+    """The works a run of `purpose` does not count as new: for a probe, every stored work; for any
+    other run, the corpus, so a work stored only by a probe lookup is new to the corpus."""
+    sql = "SELECT work_id FROM works"
+    if purpose is not QueryPurpose.PROBE:
+        sql = (
+            "SELECT DISTINCT work_id FROM provenance "
+            "WHERE query_id NOT IN (SELECT query_id FROM queries WHERE purpose = :probe)"
+        )
     with project.index.connect() as conn:
-        return {str(row[0]) for row in conn.execute(text("SELECT work_id FROM works")).all()}
+        rows = conn.execute(text(sql), {"probe": QueryPurpose.PROBE.value}).all()
+    return {str(row[0]) for row in rows}
 
 
 def _records_events(project: Project, run_id: str, works: list[Work]) -> list[Event]:

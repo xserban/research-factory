@@ -176,6 +176,21 @@ def test_search_report_has_round_rows_with_yield(
     assert plain and all(r.via is None and r.new_after_dedup is None for r in plain)
 
 
+def test_run_counts_agree_with_the_round_yield(
+    project: Project, agent: Actor, planned: tuple[str, str]
+) -> None:
+    """The candidates were stored by probe lookups: new to the corpus all the same (R-23)."""
+    result, _ = _backward(project, agent)
+    assert result.round_id is not None
+    assert result.new_works == 3
+    assert [r.new_works for r in result.runs] == [1, 1, 1]
+    yielded = round_yield(project, result.round_id)
+    rows = [r for r in search_report(project).rows if r.round_id == result.round_id]
+    assert sum(run.new_works for row in rows for run in row.runs) == yielded.new_after_dedup == 3
+    for row in rows:
+        assert sum(run.new_works for run in row.runs) == row.new_after_dedup
+
+
 # --- Methods ---
 
 
