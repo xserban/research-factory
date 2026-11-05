@@ -150,6 +150,7 @@ def declared(project: Project, agent: Actor, screened: list[str]) -> list[str]:
 class VbWorld:
     works: list[str]
     idea: str
+    name_item: str
     confirmed_edge: str
     inferred_edge: str
 
@@ -210,4 +211,4 @@ def vb_world(
             source_work=screened[1], target=first, edge_type="builds-on", note="maybe"
         ),
     )
-    return VbWorld(screened, idea, sure.relation_id, maybe.relation_id)
+    return VbWorld(screened, idea, ids_a[0], sure.relation_id, maybe.relation_id)

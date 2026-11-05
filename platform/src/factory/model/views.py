@@ -140,3 +140,23 @@ class TimelineView(StrictModel):
     higher_is_better: bool | None
     units: dict[str, UnitTimeline]
     undated: list[str]
+
+
+class HorizonView(StrictModel):
+    """Activity series by publication year; counts and ids only. `idea_members[idea][year]`:
+    included works of the confirmed idea (merged ideas through their survivor); `new_ideas[year]`:
+    ideas whose origin work is of that year; `new_edges[year]`: stated or confirmed lineage edges
+    by the citing work's year; `group_records[group][year]`: record rows (groups with a timeline
+    only). `undated` counts items without a date, by series. `horizon[source]`: latest finished
+    search or watch run date. No label and no bibliometric score is computed."""
+
+    meta: ViewMeta
+    years: list[int]
+    idea_members: dict[str, dict[int, int]]
+    new_ideas: dict[int, list[str]]
+    new_edges: dict[int, int]
+    group_records: dict[str, dict[int, int]]
+    undated: dict[str, int]
+    horizon: dict[str, str]
+    total_ideas: int
+    total_groups: int

@@ -416,6 +416,19 @@ def list_ideas(
     return _views(project, list(rows))
 
 
+def confirmed_ideas(project: Project) -> list[IdeaView]:
+    """Every confirmed, unmerged, live idea, by id: `list_ideas` read to the end, a page of `PAGE`
+    at a time. A merged idea is not listed; its works are in its survivor's `effective_members`."""
+    found: list[IdeaView] = []
+    offset = 0
+    while True:
+        page = list_ideas(project, limit=PAGE, offset=offset)
+        found.extend(page)
+        if len(page) < PAGE:
+            return found
+        offset += PAGE
+
+
 def resolve_idea(project: Project, idea_id: str) -> str:
     """The idea `idea_id` stands for after following its merges; itself when not merged."""
     project.index.sync()

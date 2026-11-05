@@ -24,8 +24,6 @@ Invariants:
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-
 from factory.errors import FactoryValidationError
 from factory.extraction.numbers import normalise_for, normalise_text
 from factory.model.views import CoverageCell, CoverageView, GroupSummary, ViewNotice
@@ -36,7 +34,7 @@ from factory.services.contributions import final_items
 from factory.services.evidence_groups import summarise
 from factory.services.extraction import require_schema
 from factory.services.extraction_agreement import FinalRow, GroupKey, grouped_rows
-from factory.services.ideas import IdeaView, list_ideas
+from factory.services.ideas import confirmed_ideas
 from factory.services.notices import work_states
 from factory.services.onion import VIEW_MAX_NODES
 from factory.services.view_corpus import corpus_among
@@ -44,7 +42,6 @@ from factory.services.views import view_meta
 
 VIEW_VERSION = 1
 VIEW_MAX_GROUPS = 200
-IDEA_PAGE = 500
 
 
 def coverage_view(project: Project) -> CoverageView:
@@ -192,7 +189,7 @@ def _idea_cells(
     if not links:
         return [], {}
     out: dict[str, dict[str, _Tally]] = {}
-    for idea in _confirmed_ideas(project):
+    for idea in confirmed_ideas(project):
         seen: set[tuple[str, str]] = set()
         for work in idea.effective_members:
             for key in sorted(links.get(work, ())):
@@ -203,17 +200,6 @@ def _idea_cells(
                 gid, row = found
                 out.setdefault(idea.idea_id, {}).setdefault(gid, _Tally()).add(row)
     return sorted(out), out
-
-
-def _confirmed_ideas(project: Project) -> Sequence[IdeaView]:
-    found: list[IdeaView] = []
-    offset = 0
-    while True:
-        page = list_ideas(project, limit=IDEA_PAGE, offset=offset)
-        found.extend(page)
-        if len(page) < IDEA_PAGE:
-            return found
-        offset += IDEA_PAGE
 
 
 __all__ = ["VIEW_MAX_GROUPS", "VIEW_VERSION", "coverage_view"]

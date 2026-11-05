@@ -1,6 +1,6 @@
 """The corpus a view counts: the corpus of PRISMA (slice 7b, plan V-A ruling 7, used by V-B).
 
-Declares: `corpus_among`, `years_of`. Read-only.
+Declares: `corpus_among`, `years_of`, `CORPUS_SQL`, `CORPUS_PARAMS`. Read-only.
 
 Invariant: a work is in the corpus of a view when it has a non-probe provenance row and no active
 merge absorbs it (it is not a merge member other than the primary). The test is role-blind: a
@@ -56,3 +56,15 @@ def years_of(conn: Connection, ids: Sequence[str]) -> dict[str, int]:
         )
         out.update({str(w): int(y) for w, y in rows if y is not None and str(y).isdigit()})
     return out
+
+
+CORPUS_SQL = (
+    "(SELECT DISTINCT p.work_id FROM provenance p WHERE p.query_id NOT IN "
+    "(SELECT query_id FROM queries WHERE purpose = :view_probe) AND p.work_id NOT IN "
+    "(SELECT mm.work_id FROM merge_members mm JOIN merges m ON m.merge_id = mm.merge_id "
+    "WHERE m.status = 'active' AND mm.work_id != m.\"primary\"))"
+)
+"""The corpus as a SQL subquery of work ids, for a query that joins it (parameters `CORPUS_PARAMS`);
+the same set as `corpus_among`."""
+
+CORPUS_PARAMS = {"view_probe": _PROBE}

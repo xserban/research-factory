@@ -49,6 +49,7 @@ from factory.services.contributions import ItemView, contribution_item, final_it
 from factory.services.extraction import scope_population, stale_extractions
 from factory.services.notices import work_states
 from factory.services.reference_view import reference_view, reference_view_of
+from factory.services.view_corpus import CORPUS_PARAMS, CORPUS_SQL
 
 _IDEA = re.compile(IDEA_ID_RE)
 BASIS_KINDS = frozenset({"base-idea", "addition"})
@@ -512,6 +513,31 @@ def list_relations(
         {"limit": limit, "offset": offset},
     )
     return [_view_of(r) for r in rows]
+
+
+def relation_years(
+    project: Project, statuses: Collection[EdgeStatus] = DEFAULT_STATUSES
+) -> dict[str | None, int]:
+    """Live relations whose effective status is in `statuses` and whose source is a corpus work,
+    counted by the publication year of the source work (None: undated), in SQL."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text(
+                f"{_EFFECTIVE_SQL} SELECT substr(json_extract(w.data, '$.dates.published'), 1, 4), "
+                "COUNT(*) FROM shown s LEFT JOIN works w ON w.work_id = s.source_work "
+                "WHERE s.superseded_by IS NULL AND s.effective IN "
+                "(SELECT value FROM json_each(:st)) "
+                f"AND s.source_work IN {CORPUS_SQL} "
+                "GROUP BY 1"
+            ),
+            {
+                **_basis_params(project),
+                "st": json.dumps(sorted(s.value for s in statuses)),
+                **CORPUS_PARAMS,
+            },
+        ).all()
+    return {(str(y) if y is not None and str(y).isdigit() else None): int(n) for y, n in rows}
 
 
 def relation_counts(project: Project) -> dict[str, dict[str, int]]:
