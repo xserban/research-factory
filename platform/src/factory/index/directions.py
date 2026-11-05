@@ -420,19 +420,29 @@ def _after_baseline(t: DirectionTables) -> Handler:
             ),
             Decimal(0),
         )
+        conditions, keys = hypothesis_conditions_and_keys(conn, str(exp[2]))
+        keys |= {p.row_key, p.experiment_id} | {f"ds:{d}" for d in datasets}
+        work = conn.execute(
+            text("SELECT work_id FROM extraction_rows WHERE row_key = :r LIMIT 1"),
+            {"r": p.row_key},
+        ).scalar()
+        if work is not None:
+            keys.add(str(work))
         _put(
             conn,
             t,
             direction_id=f"{p.experiment_id}:{p.row_key}",
             source_kind="baseline",
             reason=DirectionReason.BASELINE_NOT_REPRODUCED,
-            conditions=Conditions(
-                e_version=str(exp[0]),
-                datasets=datasets,
-                gpu_hours_used="0" if used == 0 else format(used.normalize(), "f"),
-                code_commit=design.code.commit,
+            conditions=conditions.model_copy(
+                update={
+                    "e_version": str(exp[0]),
+                    "datasets": datasets,
+                    "gpu_hours_used": "0" if used == 0 else format(used.normalize(), "f"),
+                    "code_commit": design.code.commit,
+                }
             ),
-            keys={p.row_key, p.experiment_id, str(exp[2])} | {f"ds:{d}" for d in datasets},
+            keys=keys,
             event_id=event.id,
         )
 
