@@ -22,7 +22,8 @@ import json
 import math
 import re
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from contextvars import ContextVar
+from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta
 from typing import Literal
 
@@ -45,6 +46,7 @@ from factory.model.screening import PassLabel
 from factory.model.seed import SEED_ID_RE
 from factory.model.watch import CycleStatus
 from factory.model.work import ProvenanceMethod
+from factory.modules.contract import CheckHit
 from factory.services.agreement import Outcome, agreement_summary, final_outcomes, single_pass_works
 from factory.services.audit import audit_outstanding, audit_report, audit_shortfall
 from factory.services.calibration import calibrated_models, calibration_status
@@ -408,15 +410,8 @@ def agent_check(project: Project, *, promote_to: RigorMode | None = None) -> Che
         return _development_only(project, report)
 
 
-@dataclass(frozen=True)
-class _Hit:
-    """One condition found by a rule, before its severity is read for a mode."""
-
-    code: str
-    refs: tuple[str, ...]
-    message: str
-    role: str | None = None
-    severity: Severity | None = None
+_Hit = CheckHit
+"""One condition found by a rule, before its severity is read for a mode."""
 
 
 @dataclass(frozen=True)
@@ -496,33 +491,52 @@ def _finding(hit: _Hit, severity: Severity) -> Finding:
 
 def _hits(project: Project) -> list[_Hit]:
     """Every condition in the project, in rule order. Computed once per check."""
+    return _run_rules(project)
+
+
+_RULE_HITS: ContextVar[tuple[Project, list[_Hit]] | None] = ContextVar("rule_hits", default=None)
+
+
+def segment_hits(project: Project) -> list[_Hit]:
+    """Every rule result for `project`, each stamped with the position of its rule in report
+    order (`seq`). Modules select their own codes from it. Within one `_hits` call the rules run
+    once and every module reads the same list; outside it they run on each call."""
+    cached = _RULE_HITS.get()
+    if cached is not None and cached[0] is project:
+        return cached[1]
+    return _run_rules(project)
+
+
+def _run_rules(project: Project) -> list[_Hit]:
+    """Run each rule once, in report order, and stamp its hits with the rule's position."""
     project.index.sync()
     outcomes = final_outcomes(project)
-    hits: list[_Hit] = []
-    hits += _broken_links(project)
-    hits += _missing_provenance(project)
-    hits += _shortfalls(project)
-    hits += _seeds(project)
-    hits += _protocol_gates(project)
-    hits += _screening(project, outcomes)
-    hits += _calibration_and_agreement(project)
-    hits += _audit(project)
-    hits += _chase(project, outcomes)
-    hits += _checklist(project)
-    hits += _merge_conflicts(project, outcomes)
-    hits += _fulltext(project)
-    hits += _extraction(project)
-    hits += _evidence(project)
-    hits += _references(project)
-    hits += _snowball(project, outcomes)
-    hits += _inbox(project, outcomes)
-    hits += _imports(project)
-    hits += _living(project)
-    hits += _notices(project, outcomes)
-    hits += _conclusions(project)
-    hits += _lineage(project)
-    hits += _layer(project)
-    return hits
+    groups: list[list[_Hit]] = [
+        _broken_links(project),
+        _missing_provenance(project),
+        _shortfalls(project),
+        _seeds(project),
+        _protocol_gates(project),
+        _screening(project, outcomes),
+        _calibration_and_agreement(project),
+        _audit(project),
+        _chase(project, outcomes),
+        _checklist(project),
+        _merge_conflicts(project, outcomes),
+        _fulltext(project),
+        _extraction(project),
+        _evidence(project),
+        _references(project),
+        _snowball(project, outcomes),
+        _inbox(project, outcomes),
+        _imports(project),
+        _living(project),
+        _notices(project, outcomes),
+        _conclusions(project),
+        _lineage(project),
+        _layer(project),
+    ]
+    return [replace(hit, seq=seq) for seq, group in enumerate(groups) for hit in group]
 
 
 # --- Lineage (slice 3b, plan G2-E) ---
