@@ -3131,7 +3131,8 @@ def build_server(
         may cite reviewed interpretations; no numbers) or structural (no supports, no numbers,
         no citation, no author-year, no method name of the draft). `supports` are typed
         references (`claim:clm_...`, `cell:rk_.../<field>`, `item:ext_...`, `edge:rel_...`,
-        `group:grp_...`, `stat:<kind>:<arg>`, `interp:int_...`) shown in the slot. One sentence
+        `group:grp_...`, `stat:<kind>:<arg>`) shown in the slot, or `interp:int_...` from
+        `interpretation_list`, which a slot does not list. One sentence
         per item, at most 400 characters and 6 supports. Each sentence stands or falls alone: the
         result lists those written and those rejected with their issues. Any number in a claim
         or synthesis must appear in a support. Do not type citations: the renderer adds them.
