@@ -90,7 +90,7 @@ def is_single_sentence(text: str) -> bool:
     return _BOUNDARY.search(masked) is None
 
 
-def _citation_matches(text: str) -> list[str]:
+def citation_matches(text: str) -> list[str]:
     found: list[str] = []
     for pattern in _CITATIONS:
         found.extend(m.group(0) for m in pattern.finditer(text))
@@ -137,7 +137,7 @@ def _structural(text: str, context: DraftContext) -> list[ValidationIssue]:
     issues: list[ValidationIssue] = []
     if numbers_in(text):
         issues.append(ValidationIssue("class", "structural-number"))
-    if _citation_matches(text):
+    if citation_matches(text):
         issues.append(ValidationIssue("class", "structural-citation"))
     if _author_year(text, context.first_authors):
         issues.append(ValidationIssue("class", "structural-author-year"))
@@ -179,7 +179,7 @@ def _flags(
 ) -> list[SentenceFlag]:
     flags: list[SentenceFlag] = []
     authors = {a for s in supports for a in s.first_authors}
-    for match in _citation_matches(text):
+    for match in citation_matches(text):
         if not _cited_names(match) & authors:
             flags.append(SentenceFlag.CITATION_MISMATCH)
             break

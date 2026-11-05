@@ -13,9 +13,10 @@ this stays in the log and changes nothing (no service writes one, so it was writ
   a known draft.
 - A sentence is folded for a known draft and section, a fresh id, an `author` equal to the
   actor's kind (human or agent), exactly one sentence, the class's structural rules (a claim has a
-  support, a synthesis a stat or group support), and a `supersedes` that names a live sentence of
-  the same section. What the supports are worth (eligibility, numbers, flags) is decided at write
-  time by the service and recomputed on read; it cannot be known here.
+  support, a synthesis a stat or group support, a structural or interpretive sentence no number, a
+  structural one no citation), and a `supersedes` that names a live sentence of the same section.
+  What the supports are worth (eligibility, numbers, flags) is decided at write time by the
+  service and recomputed on read; it cannot be known here.
 - A withdrawal is folded for a live sentence; a reorder only when `order` is a permutation of the
   section's live sentences.
 
@@ -34,6 +35,7 @@ from sqlalchemy.engine import Connection
 from factory.errors import FactoryError
 from factory.events.blobs import BlobStore
 from factory.events.envelope import Event
+from factory.extraction.numbers import numbers_in
 from factory.index.projection import Handler
 from factory.model.drafts import (
     DraftCreated,
@@ -46,7 +48,7 @@ from factory.model.drafts import (
     SupportKind,
     outline_id_of,
 )
-from factory.writing.checks import is_single_sentence
+from factory.writing.checks import citation_matches, is_single_sentence
 
 ORDER_STEP = 10
 """Sentences are ordered by an integer with gaps, so a later sentence can slot between two."""
@@ -229,6 +231,10 @@ def _structural_ok(p: SentenceRecorded) -> bool:
     if p.cls is SentenceClass.CLAIM and not p.supports:
         return False
     if p.cls is SentenceClass.SYNTHESIS and not kinds & {SupportKind.STAT, SupportKind.GROUP}:
+        return False
+    if p.cls in (SentenceClass.STRUCTURAL, SentenceClass.INTERPRETIVE) and numbers_in(p.text):
+        return False
+    if p.cls is SentenceClass.STRUCTURAL and citation_matches(p.text):
         return False
     return is_single_sentence(p.text)
 
