@@ -174,3 +174,49 @@ def test_methods_models_ignore_organisation_agent_events(project: Project, iw: I
         ]
     )
     assert _models(project) == before
+
+
+def _term_region(project: Project, iw: IWorld, term: str, rules: RuleSet | None = None) -> str:
+    return define_region(
+        project,
+        iw.human,
+        kind=RegionKind.REGION,
+        name="by term",
+        definition="d",
+        rules=rules or RuleSet(include=(TermRule(term_id=term),)),
+    )
+
+
+def test_a_later_tag_withholds_a_region_from_agents_at_read(project: Project, iw: IWorld) -> None:
+    """Guard: the `TermRule` branch of `_reaches_all`, evaluated at read by `region_withheld`."""
+    from factory.services.regions import (
+        agent_region_state,
+        region_withheld,
+        require_agent_visible,
+    )
+
+    label(project, iw.human, "performer", iw.other)
+    term = promote_term(project, iw.human, name="performer", definition="d", applies_to=(W,))
+    direct = _term_region(project, iw, term)
+    version = snapshot_region(project, iw.human, direct)
+    pinned = _term_region(project, iw, term, RuleSet(include=(RegionRule(version=version),)))
+    assert not region_withheld(project, direct) and not region_withheld(project, pinned)
+    import_tag(project, iw, "performer", iw.source, REF)  # a tag arrives after the definitions
+    for region in (direct, pinned):
+        assert region_withheld(project, region)
+        with pytest.raises(FactoryValidationError):
+            require_agent_visible(project, region_id=region)
+    assert agent_region_state(project, direct).latest_version == version  # state shown, no counts
+
+
+def test_a_later_merge_withholds_a_region_from_agents_at_read(project: Project, iw: IWorld) -> None:
+    from factory.services.labels import merge_labels
+    from factory.services.regions import region_withheld
+
+    label(project, iw.human, "performer", iw.other)
+    import_tag(project, iw, "secret key", iw.source, REF)
+    term = promote_term(project, iw.human, name="performer", definition="d", applies_to=(W,))
+    region = _term_region(project, iw, term)
+    assert not region_withheld(project, region)  # the tag key is not the term's yet
+    merge_labels(project, iw.human, "performer", "secret key", "same method")
+    assert region_withheld(project, region)
