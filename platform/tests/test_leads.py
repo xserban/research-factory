@@ -34,6 +34,7 @@ from tests.hypothesis_helpers import (
     exploratory_card,
     lead_input,
 )
+from tests.intuition_helpers import IWorld, iw
 from tests.lineage_helpers import ctr_a, ctr_b, lin, screened, world
 
 LEAD_GATE = "hypotheses.lead_decide"
@@ -223,3 +224,57 @@ def test_event_provenance(project: Project, mw: MatchWorld) -> None:
     assert project.blobs.get_json(event.input_blob) == item.model_dump(mode="json")
     assert event.payload["lead_id"] == lead_id and lead_id in event.refs
     assert lead_view(project, lead_id).framework == "scamper"  # type: ignore[union-attr]
+
+
+def test_interpretation_and_concept_triggers_resolve(project: Project, iw: IWorld) -> None:
+    from factory.model.intuition import ConceptInput
+    from factory.services.concepts import define_concept
+    from factory.services.interpretations import record_interpretation
+
+    interpretation = record_interpretation(project, iw.human, iw.entry())
+    concept = define_concept(
+        project,
+        iw.human,
+        ConceptInput.model_validate(
+            {
+                "name": "random features",
+                "source": {"kind": "textbook", "citation": "Textbook, chapter 3"},
+            }
+        ),
+    )
+    ghost_i = "int_01JZ9Q3K5M7N8P0R2S4T6V8W0X"
+    ghost_c = "cpt_01JZ9Q3K5M7N8P0R2S4T6V8W0X"
+    lead = record_lead(
+        project,
+        LEAD_AUTHOR,
+        lead_input(
+            LEAD_TEXT,
+            Trigger(kind=TriggerKind.INTERPRETATION, ref=interpretation),
+            Trigger(kind=TriggerKind.CONCEPT, ref=concept),
+        ),
+    )
+    assert lead_view(project, lead) is not None
+    with pytest.raises(FactoryValidationError) as err:
+        record_lead(
+            project,
+            LEAD_AUTHOR,
+            lead_input(
+                LEAD_TEXT,
+                Trigger(kind=TriggerKind.INTERPRETATION, ref=ghost_i),
+                Trigger(kind=TriggerKind.CONCEPT, ref=ghost_c),
+            ),
+        )
+    assert [(i.field, i.reason) for i in err.value.issues] == [
+        ("triggers.0", "unknown"),
+        ("triggers.1", "unknown"),
+    ]
+
+
+def test_blank_decision_note_is_a_structured_error(
+    project: Project, human: Actor, mw: MatchWorld
+) -> None:
+    lead_id = _record(project, mw)
+    with pytest.raises(FactoryValidationError) as err:
+        decide_lead(project, human, lead_id, "park", None, "   ")
+    assert [(i.field, i.reason) for i in err.value.issues] == [("note", "must not be blank")]
+    assert lead_view(project, lead_id).state == "open"  # type: ignore[union-attr]

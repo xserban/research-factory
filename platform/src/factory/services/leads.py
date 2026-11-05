@@ -366,7 +366,9 @@ def decide_lead(
             issues.append(ValidationIssue("reason", "only a discard has a reason"))
         elif reason is DiscardReason.OTHER and not (note and note.strip()):
             issues.append(ValidationIssue("note", "the reason `other` needs a note"))
-        if note is not None and len(note) > 300:
+        if note is not None and not note.strip():
+            issues.append(ValidationIssue("note", "must not be blank"))
+        elif note is not None and len(note) > 300:
             issues.append(ValidationIssue("note", "at most 300 characters"))
         if issues:
             raise FactoryValidationError(issues)

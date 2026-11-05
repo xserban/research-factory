@@ -329,3 +329,15 @@ def test_gap_trigger_must_be_exactly_the_builder_row(project: Project, gw: list[
             LEAD_AUTHOR,
             lead_input(LEAD_TEXT, Trigger(kind=TriggerKind.GAP, ref=report.gap_key, row=short)),  # type: ignore[arg-type]
         )
+
+
+def test_abandon_cannot_mask_an_evaluated_outcome(
+    project: Project, human: Actor, gw: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:  # R-52
+    lead = _lead(project, human, gw[0])
+    hid, _ = draft_hypothesis(project, DRAFTER, make_spec(lead=lead))
+    monkeypatch.setattr(hyp, "EVALUATION_SOURCES", [lambda _p, h: h == hid])
+    with pytest.raises(FactoryValidationError) as err:
+        abandon_hypothesis(project, human, hid, AbandonReason.OTHER, "it failed, hide it")
+    assert _fields(err) == [("hypothesis_id", "evaluated")]
+    assert _events(project, "hypothesis.abandoned") == []

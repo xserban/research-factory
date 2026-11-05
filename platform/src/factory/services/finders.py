@@ -51,9 +51,6 @@ from factory.services.properties import resolve_property
 from factory.services.protocol import current_protocol
 from factory.services.references import included_works
 
-CONFLICT_RELATIVE_TOLERANCE = Decimal("0.01")
-"""Relative tolerance against the larger magnitude (ruling 4) when the protocol states none;
-`hypothesis_plan.conflict_tolerance` overrides it (`conflict_tolerance`)."""
 LIMIT_MAX = 500
 _PLACES = Decimal("0.0001")
 
@@ -157,7 +154,7 @@ def find_conflicts(
 
 def conflict_tolerance(project: Project) -> Decimal:
     """The relative tolerance in force: the protocol's `hypothesis_plan.conflict_tolerance`, else
-    the default `CONFLICT_RELATIVE_TOLERANCE`."""
+    the plan's default (0.01)."""
     return Decimal(effective_plan(project).conflict_tolerance)
 
 

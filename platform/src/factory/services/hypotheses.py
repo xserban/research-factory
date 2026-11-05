@@ -422,6 +422,9 @@ def abandon_hypothesis(
             issues.append(ValidationIssue("hypothesis_id", "unknown"))
         elif view.state == "abandoned":
             issues.append(ValidationIssue("hypothesis_id", "already-abandoned"))
+        elif has_evaluation(project, hypothesis_id):
+            # an evaluated outcome stays on record; abandoning would mask it (R-52)
+            issues.append(ValidationIssue("hypothesis_id", "evaluated"))
         if not note.strip() or len(note) > 300:
             issues.append(ValidationIssue("note", "between 1 and 300 characters"))
         if issues:
