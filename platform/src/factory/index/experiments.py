@@ -60,6 +60,7 @@ from factory.model.experiments import (
     XrunRegistered,
     XrunReported,
 )
+from factory.model.project import RigorMode
 from factory.model.protocol import ProtocolSpec
 from factory.modules.contract import PolicyKind
 
@@ -243,6 +244,12 @@ def plan_access_limit(conn: Connection, t: ExperimentTables) -> int:
     return 1 if plan is None else plan.test_access_limit
 
 
+def mode_in_force(conn: Connection, t: ExperimentTables) -> RigorMode:
+    """The rigor mode of the project (the `project` table), pilot if it is not there yet."""
+    row = conn.execute(select(t.project.c.rigor_mode).limit(1)).first()
+    return RigorMode(str(row[0])) if row else RigorMode.PILOT
+
+
 def _sessions(raw: object) -> set[str]:
     return {str(s) for s in json.loads(str(raw))}
 
@@ -410,6 +417,11 @@ def _unlocked(t: ExperimentTables) -> Handler:
                 )
             ).scalar_one()
         )
+        if mode_in_force(conn, t) is RigorMode.SYSTEMATIC and {c.kind for c in design.controls} != {
+            "positive",
+            "negative",
+        }:
+            return  # systematic mode: a positive and a negative control (R-54)
         for baseline in design.baselines:
             verdict = conn.execute(
                 select(t.baselines.c.verdict, t.baselines.c.accepted_event_id).where(
@@ -568,6 +580,8 @@ def _xrun_reported(t: ExperimentTables) -> Handler:
         p = XrunReported.model_validate(event.payload)
         if event.actor.kind not in ("human", "system"):
             return
+        if event.actor.kind == "system" and not event.actor.id.startswith("runner-"):
+            return  # the platform writes verdicts and deviations, never a result
         run = conn.execute(select(t.xruns).where(t.xruns.c.run_id == p.run_id)).first()
         if run is None or run.reported_event_id is not None:
             return
