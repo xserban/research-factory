@@ -1,11 +1,16 @@
-"""Scale of the coverage map's own work (plan V-B, task 2).
+"""Scale of the coverage map and the group accessors on real stored rows (plan V-B, C1c).
 
-The evidence fold (`grouped_rows`, plan D) is linear in the rows and is not under test here: it is
-replaced by 2*10^5 synthetic final rows over 2*10^4 works, 10^3 groups and 10^3 methods. What is
-timed is everything the view adds: the corpus check in SQL over 2*10^4 works with provenance, the
-notice states, the tallies and the cut. The corpus has provenance rows and the view's lists are
-non-empty and cut at their bounds.
+The real screened world and the real extraction passes give every included work two agreed rows
+(pass A and B, through events). The stored rows of each work are then multiplied in the index
+tables (new extraction ids and row keys, identical fields and the same task, document and
+protocol), so everything downstream is the real path: the ledger, staleness, agreement, final rows,
+grouping, the corpus check, the notice states and the view. What is timed is `coverage_view`,
+`group_index` and `horizon_view` on that many rows; the figures are printed and the cost per row is
+extrapolated to 2*10^5 rows (acceptance 17 asks for 5 s; the test bound is the measured order of
+magnitude, not that figure).
 """
+
+# ruff: noqa: F811
 
 from __future__ import annotations
 
@@ -14,81 +19,78 @@ import time
 import pytest
 from sqlalchemy import text
 
-from factory.model.extraction import ReportedIn
-from factory.services import view_coverage
-from factory.services.extraction_agreement import FinalField, FinalRow, Grouped
+from factory.events.envelope import Actor
+from factory.services.context import Project
+from factory.services.evidence_groups import group_index
+from factory.services.extraction_agreement import final_rows
+from factory.services.horizon import horizon_view
 from factory.services.view_coverage import coverage_view
-from tests.helpers import Project
+from tests.contribution_helpers import ctr_a, ctr_b, ext_a  # noqa: F401
+from tests.extraction_helpers import screened  # noqa: F401
+from tests.views_b_helpers import acc, declared, ext_b, run_both  # noqa: F401
 
 pytestmark = pytest.mark.slow
 
-WORKS = 20_000
-ROWS = 200_000
-GROUPS = 1_000
-METHODS = 1_000
-LIMIT_SECONDS = 5.0
+COPIES = 400  # per stored row: 12 works x 2 passes x 400 = 9,600 live rows
+TARGET_ROWS = 200_000
+LIMIT_SECONDS = 120.0
 
 
-def _w(i: int) -> str:
-    return f"rf:s{i}-{i:08x}"
-
-
-def _field(value: str) -> FinalField:
-    return FinalField(
-        value=value,
-        unit=None,
-        canonical=None,
-        anchor=None,
-        cell=None,
-        quote=None,
-        reported_in=ReportedIn.OWN,
-        copy_marker=False,
-        reproduced=False,
-        cited_work=None,
-        extraction_id="ext_1",
-    )
-
-
-def test_coverage_scale(project: Project, monkeypatch: pytest.MonkeyPatch) -> None:
-    project.index.sync()
-    nodes = [{"n": _w(i)} for i in range(WORKS)]
+def _multiply(project: Project, copies: int) -> int:
     with project.index.connect() as conn:
-        conn.execute(
-            text("INSERT INTO works (work_id, data, first_event_id) VALUES (:n, '{}', 'e')"), nodes
-        )
+        heads = conn.execute(text("SELECT * FROM extraction_rows")).mappings().all()
+        fields = conn.execute(text("SELECT * FROM extraction_fields")).mappings().all()
+        by_row: dict[str, list[dict[str, object]]] = {}
+        for f in fields:
+            by_row.setdefault(str(f["extraction_id"]), []).append(dict(f))
+        new_heads: list[dict[str, object]] = []
+        new_fields: list[dict[str, object]] = []
+        for k in range(1, copies + 1):
+            for h in heads:
+                ident = f"{h['extraction_id']}_{k:05d}"
+                new_heads.append(
+                    {**h, "extraction_id": ident, "row_key": f"{h['row_key']}{k:05d}"[-24:]}
+                )
+                new_fields += [
+                    {**f, "extraction_id": ident} for f in by_row[str(h["extraction_id"])]
+                ]
+        cols = list(heads[0].keys())
         conn.execute(
             text(
-                "INSERT INTO provenance (work_id, run_id, query_id, source, method, raw_blob, at) "
-                "VALUES (:n, 'run_x', 'qry_x', 's', 'm', 'b', '2026-01-01T00:00:00+00:00')"
+                f"INSERT INTO extraction_rows ({', '.join(cols)}) "
+                f"VALUES ({', '.join(':' + c for c in cols)})"
             ),
-            nodes,
+            new_heads,
+        )
+        fcols = list(fields[0].keys())
+        conn.execute(
+            text(
+                f"INSERT INTO extraction_fields ({', '.join(fcols)}) "
+                f"VALUES ({', '.join(':' + c for c in fcols)})"
+            ),
+            new_fields,
         )
         conn.commit()
-    groups: dict[tuple[tuple[str, str], ...], list[FinalRow]] = {}
-    for i in range(ROWS):
-        key = (("task", f"t{i % GROUPS}"),)
-        groups.setdefault(key, []).append(
-            FinalRow(
-                work_id=_w(i % WORKS),
-                document_id="doc_1",
-                conversion_id="cnv_1",
-                row_key=f"rk_{i:012x}",
-                status="agreed",
-                fields={"method_name": _field(f"m{i % METHODS}"), "value": _field("1")},
-                independent=i % 5 != 0,
-            )
-        )
-    monkeypatch.setattr(
-        view_coverage,
-        "grouped_rows",
-        lambda _p: Grouped(groups=groups, ungrouped=[], unresolved=[]),
-    )
-    monkeypatch.setattr(view_coverage, "VIEW_MAX_GROUPS", 200)
+        return len(heads) * (copies + 1)
+
+
+def test_real_path_cost(project: Project, ext_a: Actor, ext_b: Actor, declared: list[str]) -> None:
+    run_both(project, ext_a, ext_b, lambda _w: [acc("2")])
+    rows = _multiply(project, COPIES)
+    started = time.perf_counter()
+    groups = group_index(project)
+    t_index = time.perf_counter() - started
     started = time.perf_counter()
     view = coverage_view(project)
-    elapsed = time.perf_counter() - started
-    assert elapsed < LIMIT_SECONDS, elapsed
-    assert view.total_groups == GROUPS and len(view.groups) == 200 and view.meta.truncated
-    assert view.total_methods == METHODS and len(view.methods) == 500
-    total = sum(c.independent + c.copied for by in view.cells.values() for c in by.values())
-    assert total > 0
+    t_cov = time.perf_counter() - started
+    started = time.perf_counter()
+    horizon_view(project)
+    t_hor = time.perf_counter() - started
+    finals = len(final_rows(project))
+    assert finals > 0 and groups and view.cells
+    per_row = max(t_index, t_cov, t_hor) / rows
+    print(
+        f"SCALE rows={rows} final={finals} group_index={t_index:.2f}s coverage={t_cov:.2f}s "
+        f"horizon={t_hor:.2f}s extrapolated_{TARGET_ROWS}_rows={per_row * TARGET_ROWS:.0f}s"
+    )
+    assert max(t_index, t_cov, t_hor) < LIMIT_SECONDS
