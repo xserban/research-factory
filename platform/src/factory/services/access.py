@@ -11,17 +11,21 @@ Invariants:
 - `lab:admin` comes from the lab `admin` role alone, never from a project role, and needs a lab.
 - With a lab given, a principal the registry does not hold as active holds nothing.
 - A refusal writes nothing and is one issue on field `permission`.
+- A project is `governed` once it is hosted or a grant has counted. Before that whoever runs
+  the process is the user, so a service's role check passes (stage 0, acceptance 1).
 """
 
 from collections.abc import Mapping
 from enum import StrEnum
 
 from factory.errors import FactoryValidationError, ValidationIssue
-from factory.events.envelope import ActorKind
+from factory.events.envelope import Actor, ActorKind
+from factory.index import members as member_index
+from factory.index.members import MEMBER_TABLES
 from factory.model.lab import LabRole
 from factory.model.members import ProjectRole
 from factory.services.context import Principal, Project
-from factory.services.lab import Lab, user_record
+from factory.services.lab import Lab, lab_exists, open_lab, user_record
 from factory.services.members import roles_of
 
 
@@ -76,6 +80,8 @@ _MAINTAIN = _CONTRIBUTE | {
     Permission.HUMAN_CONFIRM,
     Permission.REVIEW_DECIDE,
 }
+
+_FULL_VIEW_ROLES = frozenset({ProjectRole.OWNER, ProjectRole.MAINTAINER})
 
 ROLE_PERMISSIONS: Mapping[ProjectRole, frozenset[Permission]] = {
     ProjectRole.OWNER: _MAINTAIN | {Permission.PROJECT_GOVERN},
@@ -416,3 +422,49 @@ def authorize(
     is the `TOOL_PERMISSIONS` key of the call, which the per-tool wrapper passes."""
     if not _holds(project, principal, actor_kind, permission, lab, tool):
         raise FactoryValidationError([ValidationIssue("permission", f"{permission} not held")])
+
+
+def full_view_allowed(project: Project, principal: Principal) -> bool:
+    """Whether `principal` reads the project's full view at the command line (ruling 20): `owner` or
+    `maintainer`, the implicit owner of an unhosted project included. Anyone else reads the agent
+    view, because a person who knows which works are held-out seeds is a contaminated screener."""
+    return bool(roles_of(project, principal.user) & _FULL_VIEW_ROLES)
+
+
+def governed(project: Project) -> bool:
+    """Whether roles bind on this project: it is hosted, or a grant has counted."""
+    if project.is_hosted():
+        return True
+    project.index.sync()
+    with project.index.connect() as conn:
+        return member_index.any_grant(conn, MEMBER_TABLES)
+
+
+def lab_of(project: Project) -> Lab | None:
+    """The lab registry of the project's root, when one exists."""
+    if not lab_exists(project.settings):
+        return None
+    return open_lab(project.settings, session=project.session, clock=project.clock)
+
+
+def principal_of(project: Project, actor: Actor) -> Principal:
+    """The principal `actor` acts for: an agent acts for its delegating user."""
+    return Principal(actor.user, actor.credential, project.principal.channel)
+
+
+def actor_holds(project: Project, actor: Actor, permission: Permission) -> bool:
+    """Whether `actor` holds `permission`, always on a project no role binds yet."""
+    if not governed(project):
+        return True
+    return _holds(project, principal_of(project, actor), actor.kind, permission, lab_of(project))
+
+
+def require_actor(project: Project, actor: Actor, permission: Permission) -> None:
+    """`authorize` for a service: refuse an `actor` who does not hold `permission`."""
+    if not actor_holds(project, actor, permission):
+        raise FactoryValidationError([ValidationIssue("permission", f"{permission} not held")])
+
+
+def role_suffices(roles: frozenset[ProjectRole], required: ProjectRole) -> bool:
+    """Whether `roles` pass a gate of role `required`: an owner holds all a maintainer does."""
+    return required in roles or ProjectRole.OWNER in roles

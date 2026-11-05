@@ -40,6 +40,7 @@ from factory.index.protocol import protocol_handlers, protocol_tables
 from factory.index.question import question_handlers, question_tables
 from factory.index.references import reference_handlers, reference_tables
 from factory.index.regions import region_handlers, region_tables
+from factory.index.reviews import review_handlers, review_tables
 from factory.index.screening import screening_handlers, screening_tables
 from factory.index.search import search_handlers, search_tables
 from factory.index.seeds import seed_handlers, seed_tables
@@ -61,6 +62,7 @@ def default_projection(blobs: BlobStore | None = None) -> Projection:
     project = project_table(metadata)
     project_hosts = project_hosts_table(metadata)
     members = member_tables(metadata)
+    reviews = review_tables(metadata)
     tasks = tasks_table(metadata)
     search = search_tables(metadata)
     dedup = dedup_tables(metadata)
@@ -104,6 +106,7 @@ def default_projection(blobs: BlobStore | None = None) -> Projection:
         "project.created": project_created_handler(project),
         "project.hosted": project_hosted_handler(project_hosts),
         **member_handlers(members),
+        **review_handlers(reviews, members, blobs),
         **task_handlers(tasks),
         **search_handlers(search),
         **dedup_handlers(dedup),

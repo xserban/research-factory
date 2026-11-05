@@ -157,6 +157,7 @@ from factory.model.regions import (
     RegionReviewed,
     RegionSnapshotTaken,
 )
+from factory.model.reviews import ReviewDecided, ReviewRequested
 from factory.model.screening import (
     AuditLabelled,
     AuditSampled,
@@ -393,4 +394,6 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("manuscript.verified", ManuscriptVerified, 1))
     catalog.register(EventType("manuscript.audit_drawn", ManuscriptAuditDrawn, 1))
     catalog.register(EventType("manuscript.audited", ManuscriptAudited, 1))
+    catalog.register(EventType("review.requested", ReviewRequested, 1))
+    catalog.register(EventType("review.decided", ReviewDecided, 1))
     return catalog

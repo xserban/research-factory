@@ -20,7 +20,18 @@ Invariants:
 from dataclasses import dataclass
 
 from pydantic import ValidationError
-from sqlalchemy import Boolean, Column, MetaData, String, Table, delete, func, insert, select
+from sqlalchemy import (
+    Boolean,
+    Column,
+    MetaData,
+    String,
+    Table,
+    delete,
+    func,
+    insert,
+    select,
+    text,
+)
 from sqlalchemy.engine import Connection
 
 from factory.events.envelope import Actor, Event
@@ -120,6 +131,22 @@ def may_first_grant(conn: Connection, actor: Actor) -> bool:
         return False
     entitled = latest_hoster(conn) if latest_host(conn) is not None else project_creator(conn)
     return actor.id == entitled
+
+
+def is_hosted_here(conn: Connection) -> bool:
+    """Whether a `project.hosted` has folded at this point of the log."""
+    return conn.execute(text("SELECT 1 FROM project_hosts LIMIT 1")).first() is not None
+
+
+def holds_here(
+    conn: Connection, tables: MemberTables, user: str, allowed: frozenset[ProjectRole]
+) -> bool:
+    """Whether `user` holds one of `allowed` at this point of the log, for a fold's role guard.
+    Before any grant an unhosted project passes everyone, since a fold cannot read `Settings.user`;
+    a hosted project has no implicit owner, so with no grant it passes no one."""
+    if any_grant(conn, tables):
+        return bool(live_roles(conn, tables, user) & allowed)
+    return not is_hosted_here(conn)
 
 
 def _governs(conn: Connection, tables: MemberTables, actor: Actor) -> bool:

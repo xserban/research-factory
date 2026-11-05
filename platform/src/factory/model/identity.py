@@ -9,6 +9,7 @@ ACTOR_ID_RE = r"^[a-z0-9][a-z0-9._-]{0,63}$"
 SLUG_RE = r"^[a-z0-9]+(-[a-z0-9]+)*$"
 BLOB_REF_RE = r"^sha256:[0-9a-f]{64}$"
 CONVERSION_ID_RE = rf"^cnv_{ULID_RE}$"
+REVIEW_REQUEST_ID_RE = rf"^rrq_{ULID_RE}$"
 
 _ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
