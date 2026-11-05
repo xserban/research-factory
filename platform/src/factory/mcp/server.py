@@ -28,6 +28,7 @@ from factory.mcp.conventions import (
 from factory.model.base import StrictModel
 from factory.model.cards import PropertyDef, QuoteBasis
 from factory.model.chase import ChaseDirection
+from factory.model.drafts import DraftKind
 from factory.model.experiments import Cell, ExperimentDesign
 from factory.model.extraction import ClaimInput, ExtractedRowInput, MinerScope
 from factory.model.findings import ContradictionInput
@@ -71,6 +72,7 @@ from factory.services import digest as digest_service
 from factory.services import directions as directions_service
 from factory.services import discovery as discovery_service
 from factory.services import document_read as document_read_service
+from factory.services import drafts as drafts_service
 from factory.services import evaluation_view as evaluation_view_service
 from factory.services import evidence as evidence_service
 from factory.services import evidence_report as evidence_report_service
@@ -98,6 +100,7 @@ from factory.services import miner_gold as miner_gold_service
 from factory.services import mining as mining_service
 from factory.services import notices as notices_service
 from factory.services import onion as onion_service
+from factory.services import outline as outline_service
 from factory.services import passes as passes_service
 from factory.services import prisma as prisma_service
 from factory.services import prisma_update as prisma_update_service
@@ -3004,6 +3007,211 @@ def build_server(
             return _withheld(opened, result.model_dump(mode="json"), include_work_ids=False)
 
         return _reply(project, build, include_work_ids=False)
+
+    # --- Writing from verified material (slice 7b, plan W-A) ---------------------------------
+    # Five tools. The outline holds ids only; a slot task shows the verified quotes of its
+    # supports; a sentence is checked and recorded or refused alone. Nothing here sets a status,
+    # a flag, a stat value or a citation key. Every tool is refused to a pass session and, before
+    # a pass opens, answers with the neutral message of the other tools of the slice.
+
+    @server.tool()
+    def writing_outline(
+        project: str,
+        scope_works: list[str] | None = None,
+        ideas: list[str] | None = None,
+        groups: list[str] | None = None,
+    ) -> dict[str, JsonValue]:
+        """The outline of verified material to write against, for a scope (default: the included
+        corpus): one section per confirmed idea in lineage order, one per comparability group of
+        at least two works with its method disagreements as slots, one per claim type for live
+        claims no section covers, and the limits (what the corpus does not support). It holds
+        ids and fixed codes only, no quote and no prose, and its id `OL@...` is a hash of its
+        content. `ideas` and `groups` restrict the sections to the ids named. Read-only; refused to
+        a session that has joined a pass, and before a screening pass has opened."""
+
+        def build() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            _require_pass_opened(opened, "view")
+            scope = outline_service.OutlineScope(
+                works="included" if scope_works is None else tuple(scope_works),
+                ideas=None if ideas is None else tuple(ideas),
+                groups=None if groups is None else tuple(groups),
+            )
+            outline = outline_service.build_outline(opened, scope, agent=True)
+            return _withheld(opened, outline.model_dump(mode="json"), include_work_ids=False)
+
+        return _reply(project, build, include_work_ids=False)
+
+    @server.tool()
+    def draft_create(
+        project: str,
+        title: str,
+        kind: str,
+        role: str,
+        model: str,
+        skill: str,
+        scope_works: list[str] | None = None,
+        ideas: list[str] | None = None,
+        groups: list[str] | None = None,
+    ) -> dict[str, JsonValue]:
+        """Create a draft pinned to the outline of a scope (see `writing_outline`). `kind` is
+        related-work, review, grant-background, horizon-note or other. The draft has one section
+        per outline section (`sec_01`, ...). Refused to a session that has joined a pass."""
+
+        def create() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            _require_pass_opened(opened, "view")
+            actor = make_agent_actor(settings, session, role, model, skill)
+            try:
+                draft_kind = DraftKind(kind)
+            except ValueError:
+                raise FactoryValidationError([ValidationIssue("kind", "unknown kind")]) from None
+            scope = outline_service.OutlineScope(
+                works="included" if scope_works is None else tuple(scope_works),
+                ideas=None if ideas is None else tuple(ideas),
+                groups=None if groups is None else tuple(groups),
+            )
+            draft_id = drafts_service.create_draft(
+                opened, title=title, kind=draft_kind, scope=scope, actor=actor
+            )
+            return _withheld(opened, {"draft_id": draft_id}, include_work_ids=False)
+
+        return _reply(project, create, include_work_ids=False)
+
+    @server.tool()
+    def draft_next(
+        project: str,
+        draft_id: str,
+        role: str,
+        model: str,
+        skill: str,
+        section_id: str | None = None,
+    ) -> dict[str, JsonValue]:
+        """The next section of the draft that has no sentence yet (or the named one) as a task:
+        its `content` lists the section's eligible supports (`ref`, works, the verified quotes,
+        numbers, stat values) and method disagreements, and the sentences already there. Cite only
+        supports shown here. Returns `slot: null` when no section is left. The task is leased to
+        this session; pass its `task_id` to `draft_write`. Refused to a session that has joined a
+        pass."""
+
+        def serve() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            _require_pass_opened(opened, "view")
+            actor = make_agent_actor(settings, session, role, model, skill)
+            slot = drafts_service.draft_next(opened, draft_id, section_id=section_id, actor=actor)
+            data: dict[str, JsonValue] = {
+                "slot": None
+                if slot is None
+                else {
+                    "task_id": slot.task_id,
+                    "section_id": slot.section_id,
+                    "content": slot.content,
+                }
+            }
+            return _withheld(opened, data, include_work_ids=False)
+
+        return _reply(project, serve, include_work_ids=False)
+
+    @server.tool()
+    def draft_write(
+        project: str,
+        draft_id: str,
+        sentences: list[dict[str, JsonValue]],
+        role: str,
+        model: str,
+        skill: str,
+        task_id: str | None = None,
+    ) -> dict[str, JsonValue]:
+        """Record sentences, one item per sentence: `{section_id, class, text, supports,
+        supersedes?, order?}`. `class` is claim (about the literature, needs supports),
+        synthesis (an aggregate: needs a stat or group support), interpretive (your reading;
+        may cite reviewed interpretations; no numbers) or structural (no supports, no numbers,
+        no citation, no author-year, no method name of the draft). `supports` are typed
+        references (`claim:clm_...`, `cell:rk_.../<field>`, `item:ext_...`, `edge:rel_...`,
+        `group:grp_...`, `stat:<kind>:<arg>`, `interp:int_...`) shown in the slot. One sentence
+        per item, at most 400 characters and 6 supports. Each sentence stands or falls alone: the
+        result lists those written and those rejected with their issues. Any number in a claim
+        or synthesis must appear in a support. Do not type citations: the renderer adds them.
+        Pass the slot's `task_id`. Refused to a session that has joined a pass."""
+
+        def write() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            _require_pass_opened(opened, "view")
+            actor = make_agent_actor(settings, session, role, model, skill)
+            parsed: list[drafts_service.SentenceInput] = []
+            positions: list[int] = []
+            rejected: dict[int, JsonValue] = {}
+            for index, raw in enumerate(sentences):
+                body = {("cls" if k == "class" else k): v for k, v in raw.items()}
+                try:
+                    parsed.append(drafts_service.SentenceInput.model_validate(body))
+                    positions.append(index)
+                except ValidationError as exc:
+                    issues: list[JsonValue] = [
+                        {
+                            "field": ".".join(
+                                ["sentences", str(index), *(str(x) for x in err["loc"])]
+                            ),
+                            "reason": str(err["msg"]),
+                        }
+                        for err in exc.errors()
+                    ]
+                    rejected[index] = {"index": index, "issues": issues}
+            result = drafts_service.write_sentences(
+                opened, draft_id, parsed, actor=actor, task_id=task_id
+            )
+            for item in result.rejected:
+                rejected[positions[item.index]] = {
+                    "index": positions[item.index],
+                    "issues": [{"field": i.field, "reason": i.reason} for i in item.issues],
+                }
+            data: dict[str, JsonValue] = {
+                "written": list(result.written),
+                "rejected": [rejected[i] for i in sorted(rejected)],
+            }
+            return _withheld(opened, data, include_work_ids=False)
+
+        return _reply(project, write, include_work_ids=False)
+
+    @server.tool()
+    def draft_status(project: str, draft_id: str) -> dict[str, JsonValue]:
+        """The draft's live sentences in order, each with its class, supports, flags the platform
+        computed (citation-mismatch, quantifier-without-statistic, cross-group,
+        single-source-generalisation, off-outline) and its status (`unchecked` until a verifier
+        has judged it; `structural` and `interpretive` are labels). Read-only; refused to a
+        session that has joined a pass."""
+
+        def status() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            _require_pass_opened(opened, "view")
+            found = drafts_service.get_draft(opened, draft_id)
+            if found is None:
+                raise FactoryValidationError([ValidationIssue("draft_id", "unknown draft")])
+            rows = drafts_service.live_sentences(opened, draft_id)
+            data: dict[str, JsonValue] = {
+                "draft": found.model_dump(mode="json"),
+                "sentences": [
+                    {
+                        "sentence_id": r.sentence_id,
+                        "section_id": r.section_id,
+                        "order": r.order,
+                        "class": r.cls.value,
+                        "text": r.text,
+                        "supports": list(r.supports),
+                        "flags": [f.value for f in r.flags],
+                        "status": drafts_service.provisional_status(r.cls),
+                    }
+                    for r in rows
+                ],
+            }
+            return _withheld(opened, data, include_work_ids=False)
+
+        return _reply(project, status, include_work_ids=False)
 
     # --- Experiment designs and runs (slice 6, plan XP-A) ---------------------------------
     # Four tools and no more: an agent drafts and amends a design before the freeze and registers

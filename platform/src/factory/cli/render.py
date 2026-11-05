@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 
 from factory.errors import ValidationIssue
 from factory.model.conclusions import ConclusionDiff
+from factory.model.drafts import Outline
 from factory.model.intuition import (
     HistoryEntry,
     LayerCounts,
@@ -29,6 +30,7 @@ from factory.services.directions import RegistryPage
 from factory.services.discovery import DiscoveryReport
 from factory.services.document_convert import ConvertSummary, DocumentStatus
 from factory.services.document_read import DocumentPage
+from factory.services.drafts import DraftRow, SentenceRow, provisional_status
 from factory.services.evaluation_view import EvaluationDetail
 from factory.services.experiments import ExperimentView
 from factory.services.extraction import UnitState
@@ -1479,4 +1481,48 @@ def registry_lines(page: "RegistryPage") -> list[str]:
             lines.append(f"  note: {r.text}")
     if page.next:
         lines.append(f"more: --after {page.next}")
+    return lines
+
+
+# --- Writing (slice 7b, plan W-A) ---------------------------------------------------------------
+
+
+def outline_lines(outline: Outline) -> list[str]:
+    """The outline as ids and codes, one section per block."""
+    lines = [f"{outline.outline_id}  as of {outline.as_of or 'the empty log'}"]
+    for s in outline.sections:
+        lines.append(
+            f"{s.section_ref}  ({s.kind}; {len(s.works)} works, {len(s.supports)} supports)"
+        )
+        for conflict in s.conflicts:
+            lines.append(f"  disagreement: {', '.join(conflict)}")
+        if s.notes:
+            lines.append(f"  notes: {', '.join(s.notes)}")
+    return lines
+
+
+def draft_list_lines(drafts: list[DraftRow]) -> list[str]:
+    if not drafts:
+        return ["no drafts"]
+    return [
+        f"{d.draft_id}  {d.kind.value}  {d.outline_ref}  {d.sentences} sentences  {d.title}"
+        for d in drafts
+    ]
+
+
+def draft_detail_lines(draft: DraftRow, sentences: list[SentenceRow]) -> list[str]:
+    """A draft with its live sentences, their class, flags and supports. Sentence text is the
+    author's own; no quote appears here."""
+    lines = [f"{draft.draft_id}  {draft.kind.value}  {draft.outline_ref}  {draft.title}"]
+    for section in draft.sections:
+        lines.append(f"{section.section_id}  {section.heading}")
+        for row in (r for r in sentences if r.section_id == section.section_id):
+            flags = f"  [{', '.join(f.value for f in row.flags)}]" if row.flags else ""
+            lines.append(
+                f"  {row.sentence_id}  {row.cls.value}  {provisional_status(row.cls)}"
+                f"  ({row.author}){flags}"
+            )
+            lines.append(f"    {row.text}")
+            if row.supports:
+                lines.append(f"    supports: {', '.join(row.supports)}")
     return lines
