@@ -10,9 +10,10 @@ Invariants:
   the decision rule of the hypothesis is applied to the paired-t interval of the oriented
   per-seed differences at the plan's confidence level.
 - `inputs_hash` covers every fact the computation reads (hypothesis and design versions, rule,
-  margin, level, minimum seeds, every reported run of the design with its event and metrics,
-  the deviations, whether a baseline was accepted and the autonomy labels), so a changed input
-  gives another hash even when the outcome is the same.
+  margin, level, minimum seeds, the reported runs that feed it with their events and metrics,
+  the semantic deviations after the unlock, whether a baseline was accepted and the autonomy
+  labels), so a changed input gives another hash even when the outcome is the same, and an
+  ablation or a reproduction run gives none.
 - Flags (all computed): `test-reused`, `deviated`, `baseline-not-reproduced`, `autonomy:agent`,
   the rule's own (`too-few-pairs`, `below-min-seeds`), `incomplete`, and the multiverse and
   control flags (`hypotheses.multiverse`).
@@ -82,11 +83,24 @@ class ExperimentInputs:
     unlocked: bool = True
 
 
+def _feeds(design: ExperimentDesign, cell: Cell) -> bool:
+    """Whether a run can change the evaluation: the primary test, another universe's curve point,
+    a control or the dev baseline it is read against. An ablation, a reproduction or a dev
+    treatment run of the primary universe cannot."""
+    primary = cell.universe == tuple(sorted(design.primary_universe.items()))
+    kind = cell.arm.partition(":")[0]
+    if kind == "control":
+        return primary and cell.split == "dev"
+    if kind == "treatment":
+        return not primary or cell.split == "confirmatory"
+    return kind == "baseline"
+
+
 def inputs_hash(inputs: ExperimentInputs) -> str:
     reported = sorted(
         [r.run_id, r.reported_event_id, r.exit_status, sorted(map(list, (r.metrics or {}).items()))]
         for r in inputs.runs
-        if r.reported_event_id is not None
+        if r.reported_event_id is not None and _feeds(inputs.design, r.cell)
     )
     body: dict[str, JsonValue] = {
         "h": inputs.h_version,
@@ -97,7 +111,7 @@ def inputs_hash(inputs: ExperimentInputs) -> str:
         "min_seeds": inputs.min_seeds,
         "runs": cast(JsonValue, reported),
         "deviations": cast(
-            JsonValue, sorted([d.kind, d.semantic, d.after_unlock] for d in inputs.deviations)
+            JsonValue, sorted(d.kind for d in inputs.deviations if d.semantic and d.after_unlock)
         ),
         "accepted": inputs.baseline_accepted,
         "autonomy": cast(JsonValue, sorted(set(inputs.autonomy))),
