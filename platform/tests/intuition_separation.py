@@ -284,12 +284,21 @@ def digest_text(project: Project) -> str:
     return to_json(blanked) + to_markdown(blanked)
 
 
+LAYER_EVENT_PREFIXES = ("interpretation.", "concept.", "task.")
+"""Event types whose counts differ with a layer: the layer's own, and `task.*`, which includes the
+layer's tasks (task counts, kind-filtered, are compared in `tasks`)."""
+
+
 def status_without_log_counts(project: Project) -> str:
-    """`project_status` without the per-type event counts and the last-event time, which are
-    counts of the log itself and so change with any event, evidence or not."""
+    """`project_status` with the event counts of the layer's types dropped and the rest kept, so a
+    stray evidence event shows. The last-event time moves with any event and is dropped."""
     status = project_status(project).model_dump(mode="json")
-    for key in ("events_total", "events_by_type", "last_event_at"):
-        status.pop(key, None)
+    kept = {
+        t: n for t, n in status["events_by_type"].items() if not t.startswith(LAYER_EVENT_PREFIXES)
+    }
+    status["events_by_type"] = kept
+    status["events_total"] = sum(kept.values())
+    status.pop("last_event_at")
     return json.dumps(status, sort_keys=True, default=str)
 
 

@@ -46,6 +46,9 @@ from tests.intuition_separation import (
     twin_projects,
 )
 
+TRACE_IDEAS_ARE_NODES = False
+"""True once `trace` resolves idea ids (commit 422b0c0, not on this branch's base)."""
+
 
 def test_no_evidence_module_imports_the_layer() -> None:
     """Acceptance 8."""
@@ -133,6 +136,14 @@ def test_evidence_outputs_byte_identical_with_and_without_layer(
     assert expected["independence"] != "IndependenceCounts(independent=0, copied=0)"
     assert iw.idea1 in expected["ideas"] and expected["contribution_items"] != "[]"
     assert "claude-intuition-only" not in expected["methods_text"]
+    # trace must compare real nodes, not two identical errors
+    for node in (iw.source, iw.other):
+        for direction in ("back", "forward"):
+            assert not expected[f"trace:{node}:{direction}"].startswith("error:"), (node, direction)
+    for direction in ("back", "forward"):
+        is_error = expected[f"trace:{iw.idea1}:{direction}"].startswith("error:")
+        # g3a's base cannot trace an idea id (422b0c0 adds it): flip when the branch is merged
+        assert is_error == (not TRACE_IDEAS_ARE_NODES), "flip TRACE_IDEAS_ARE_NODES"
     got = evidence_outputs(layered, nodes)
     assert [k for k in expected if expected[k] != got[k]] == []
     assert expected == got
