@@ -38,7 +38,12 @@ from factory.model.references import (
 from factory.references.match import MATCHER, MATCHER_VERSION
 from factory.services.context import Project
 from factory.services.imports import import_records, import_row, record_key
-from factory.services.reference_resolve import _rigor_mode, confirmer_ruling, resolve_entries
+from factory.services.reference_resolve import (
+    _rigor_mode,
+    confirmer_ruling,
+    load_corpus,
+    resolve_entries,
+)
 from factory.services.search import get_work
 from factory.sources.registry import SourceFactory
 
@@ -112,7 +117,13 @@ def resolve_import(
     """
     import_row(project, import_id)
     who = actor or project.human_actor()
-    outcome = resolve_entries(project, who, resolvables(project, import_id), sources=sources)
+    outcome = resolve_entries(
+        project,
+        who,
+        resolvables(project, import_id),
+        sources=sources,
+        corpus=load_corpus(project),
+    )
     payload = ImportResolved(
         import_id=import_id,
         resolutions=outcome.resolutions,
