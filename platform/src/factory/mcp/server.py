@@ -204,7 +204,8 @@ def build_server(
         """Chase citations from the included works: the platform builds the queries.
 
         `directions` is `backward` (works the included works cite), `forward` (works citing
-        them) or both. Refused while any work is pending a final outcome, and when no included
+        them) or both. Refused while any work is pending a final outcome, past the `snowball_plan`
+        maximum of forward rounds (a forward chase uses one up), and when no included
         work has an OpenAlex id. Never write chase queries by hand; follow with `dedup_run`."""
 
         def chase() -> JsonValue:

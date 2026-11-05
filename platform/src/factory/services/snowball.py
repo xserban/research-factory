@@ -84,7 +84,15 @@ from factory.model.seed import HeldOut
 from factory.model.work_ids import arxiv_id_from_doi
 from factory.services.agreement import Outcome, final_outcomes
 from factory.services.calibration import calibration_items
-from factory.services.chase import ChaseStart, chase_queries, chase_rounds, run_chase, start_chase
+from factory.services.chase import (
+    ChaseStart,
+    chase_queries,
+    chase_rounds,
+    forward_chase_rounds,
+    round_limit_issue,
+    run_chase,
+    start_chase,
+)
 from factory.services.context import Project
 from factory.services.dedup import active_merges
 from factory.services.document_read import default_conversion
@@ -780,7 +788,9 @@ def plan_round(project: Project, direction: Direction) -> RoundPlan:
     rule = None if protocol is None else protocol.spec.snowball_plan
     mode = _rigor_mode(project)
     previous = [r for r in recorded_rounds(project) if r.direction is direction]
-    round_no = len(previous) + 1
+    # A forward round is a chase round, and a standalone forward chase uses up a round as well.
+    used = len(previous) if direction is Direction.BACKWARD else len(forward_chase_rounds(project))
+    round_no = used + 1
     sources, extraction_ids, unextracted = _scope(project)
     refusals: list[ValidationIssue] = []
     notes: list[str] = []
@@ -797,13 +807,7 @@ def plan_round(project: Project, direction: Direction) -> RoundPlan:
             rule.max_backward_rounds if direction is Direction.BACKWARD else rule.max_forward_rounds
         )
         if round_no > maximum:
-            refusals.append(
-                ValidationIssue(
-                    "round_no",
-                    f"round {round_no} exceeds the plan's maximum of {maximum} "
-                    f"{direction.value} rounds",
-                )
-            )
+            refusals.append(round_limit_issue(round_no, maximum, direction.value))
         if rule.stop_when_no_new_included and previous:
             last = previous[-1]
             incomplete = _incomplete(project, last)

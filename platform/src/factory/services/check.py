@@ -44,7 +44,7 @@ from factory.services.agreement import Outcome, agreement_summary, final_outcome
 from factory.services.audit import audit_outstanding, audit_report, audit_shortfall
 from factory.services.calibration import calibrated_models, calibration_status
 from factory.services.call_memo import entering
-from factory.services.chase import chase_rounds
+from factory.services.chase import chase_rounds, forward_chase_rounds
 from factory.services.context import Project
 from factory.services.dedup import active_merges
 from factory.services.document_read import default_conversion
@@ -829,9 +829,14 @@ def _chase(project: Project, outcomes: dict[str, Outcome]) -> list[_Hit]:
     The proxy is "no chase round after the last `screening.decision_recorded` event", compared by
     ULID order. It is stricter than "after the last agreement", which is not an event in the log:
     any decision recorded after the latest round brings the finding back, even one that changes
-    no agreed outcome.
+    no agreed outcome. A protocol whose `snowball_plan` allows a round governs chasing by that
+    plan, its rounds and its stopping rule, so the finding does not apply.
     """
     if not any(outcome is Outcome.INCLUDED for outcome in outcomes.values()):
+        return []
+    protocol = current_protocol(project)
+    plan = None if protocol is None else protocol.spec.snowball_plan
+    if plan is not None and (plan.max_backward_rounds or plan.max_forward_rounds):
         return []
     rounds = [round_.round_id.split("_", 1)[1] for round_ in chase_rounds(project)]
     last = _last_decision_ulid(project)
@@ -1377,12 +1382,15 @@ def _snowball(project: Project, outcomes: dict[str, Outcome]) -> list[_Hit]:
             Direction.FORWARD: plan.max_forward_rounds,
         }
         over = [r.round_id for r in rounds if r.round_no > limits[r.direction]]
+        delegated = {r.chase_round_id for r in rounds}
+        forward = forward_chase_rounds(project)[plan.max_forward_rounds :]
+        over += [round_id for round_id in forward if round_id not in delegated]
         if over:
             hits.append(
                 _Hit(
                     "snowball-over-plan",
                     tuple(over),
-                    f"{len(over)} snowball round(s) exceed the declared maximum of their direction",
+                    f"{len(over)} round(s) exceed the declared maximum of their direction",
                 )
             )
     unscreened = _unscreened(project, outcomes, [r.round_id for r in rounds])

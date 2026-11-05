@@ -25,7 +25,7 @@ from factory.model.work_ids import work_id
 from factory.services import chase as chase_service
 from factory.services import snowball
 from factory.services.agreement import Outcome, final_outcomes
-from factory.services.chase import chase_rounds
+from factory.services.chase import chase_rounds, search_chase
 from factory.services.context import Project
 from factory.services.fulltext_screening import fulltext_queue
 from factory.services.protocol import amend_protocol, current_protocol, registered_round
@@ -646,6 +646,51 @@ def test_forward_round_delegates_and_obeys_plan(
     with pytest.raises(FactoryValidationError):
         snowball_round(project, agent, Direction.FORWARD, sources=_forward_sources(), dry_run=False)
     assert event_bytes(project) == before
+
+
+def test_search_chase_forward_counts_against_the_plan(
+    project: Project, agent: Actor, planned: tuple[str, str]
+) -> None:
+    """Final review 6: the plan's maximum holds whichever tool runs the forward round."""
+    search_chase(project, agent, [ChaseDirection.FORWARD], sources=_sources())
+    before = event_bytes(project)
+    with pytest.raises(FactoryValidationError) as chased:
+        search_chase(project, agent, [ChaseDirection.FORWARD], sources=_sources())
+    with pytest.raises(FactoryValidationError) as both:
+        search_chase(
+            project,
+            agent,
+            [ChaseDirection.BACKWARD, ChaseDirection.FORWARD],
+            sources=_sources(),
+        )
+    with pytest.raises(FactoryValidationError) as rounded:
+        snowball_round(project, agent, Direction.FORWARD, sources=_sources(), dry_run=False)
+    assert event_bytes(project) == before
+    assert chased.value.issues == both.value.issues
+    [issue] = chased.value.issues
+    assert issue.field == "round_no" and "maximum of 1 forward" in issue.reason
+    assert issue in rounded.value.issues
+    assert plan_round(project, Direction.FORWARD).state.round_no == 2
+
+
+def test_search_chase_forward_is_refused_after_a_forward_round(
+    project: Project, agent: Actor, planned: tuple[str, str]
+) -> None:
+    snowball_round(project, agent, Direction.FORWARD, sources=_sources(), dry_run=False)
+    with pytest.raises(FactoryValidationError) as caught:
+        search_chase(project, agent, [ChaseDirection.FORWARD], sources=_sources())
+    assert [i.field for i in caught.value.issues] == ["round_no"]
+
+
+def test_search_chase_backward_and_planless_chases_are_not_limited(
+    project: Project, agent: Actor, world: tuple[str, str]
+) -> None:
+    for _ in range(2):
+        search_chase(project, agent, [ChaseDirection.FORWARD], sources=_sources())
+    _amend(project, agent, SnowballPlan(max_backward_rounds=0, max_forward_rounds=0))
+    search_chase(project, agent, [ChaseDirection.BACKWARD], sources=_sources())
+    with pytest.raises(FactoryValidationError):
+        search_chase(project, agent, [ChaseDirection.FORWARD], sources=_sources())
 
 
 def test_forward_round_ledger_via_source_metadata(

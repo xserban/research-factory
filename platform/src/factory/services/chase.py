@@ -13,6 +13,11 @@ directions, every query's source fit, and the protocol gate for the first query 
 own texts waived). A refusal writes nothing. Only then is the round recorded, each query
 registered naming the round (its `query.registered` refs end with the `chs_` id, which links the
 runs to the round) and run; a source error in one run does not stop the others.
+
+Under a protocol `snowball_plan` every forward chase round counts against `max_forward_rounds`,
+whichever tool starts it (a forward snowball round delegates to a chase round, so counting the
+chase rounds counts both); past the maximum it is refused as `snowball_round` refuses it. A
+backward chase is a source-metadata comparison (`snowball_compare`) and is not limited.
 """
 
 import json
@@ -30,7 +35,7 @@ from factory.model.search import QueryKind, QueryPurpose, QuerySpec
 from factory.services.agreement import Outcome, final_outcomes
 from factory.services.calibration import calibration_items
 from factory.services.context import Project
-from factory.services.protocol import search_authorization
+from factory.services.protocol import current_protocol, search_authorization
 from factory.services.search import (
     RunSummary,
     corpus_size,
@@ -118,6 +123,32 @@ def chase_rounds(project: Project) -> list[ChaseRoundStarted]:
     ]
 
 
+def forward_chase_rounds(project: Project) -> list[str]:
+    """The ids of the recorded chase rounds with a forward direction, in recording order."""
+    return [r.round_id for r in chase_rounds(project) if ChaseDirection.FORWARD in r.directions]
+
+
+def round_limit_issue(round_no: int, maximum: int, direction: str) -> ValidationIssue:
+    """The refusal of a round past the plan's maximum for its direction."""
+    return ValidationIssue(
+        "round_no", f"round {round_no} exceeds the plan's maximum of {maximum} {direction} rounds"
+    )
+
+
+def _forward_limit_issues(
+    project: Project, directions: Sequence[ChaseDirection]
+) -> list[ValidationIssue]:
+    """One issue when a forward chase would pass the protocol's `max_forward_rounds`."""
+    protocol = current_protocol(project)
+    plan = None if protocol is None else protocol.spec.snowball_plan
+    if plan is None or ChaseDirection.FORWARD not in directions:
+        return []
+    round_no = len(forward_chase_rounds(project)) + 1
+    if round_no <= plan.max_forward_rounds:
+        return []
+    return [round_limit_issue(round_no, plan.max_forward_rounds, ChaseDirection.FORWARD.value)]
+
+
 @dataclass(frozen=True)
 class ChaseStart:
     """A validated chase round, not yet recorded: its payload, its specs (in query order) and
@@ -171,8 +202,9 @@ def start_chase(
     `project.index.exclusive()` and records `event` (with any events of its own).
 
     Refused when the directions are not one or two distinct ones, any ordinary work is pending,
-    no work is chasable, any query does not fit its source, or the protocol does not authorise
-    the first query with the round's texts waived. `from_works`, when given, names the included
+    a forward round would pass the `snowball_plan` maximum, no work is chasable, any query does
+    not fit its source, or the protocol does not authorise the first query with the round's texts
+    waived. `from_works`, when given, names the included
     works to chase from instead of all of them: it must be a non-empty subset of the
     `chase_sources` works; those without an OpenAlex id are listed unchasable.
     """
@@ -181,7 +213,7 @@ def start_chase(
             [ValidationIssue("directions", "name one or two distinct directions")]
         )
     project.index.sync()
-    issues = _pending_issues(project)
+    issues = _pending_issues(project) + _forward_limit_issues(project, directions)
     chasable, unchasable = chase_sources(project)
     if from_works is not None:
         given = set(from_works)

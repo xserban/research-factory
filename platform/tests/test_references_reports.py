@@ -191,6 +191,34 @@ def test_run_counts_agree_with_the_round_yield(
         assert sum(run.new_works for run in row.runs) == row.new_after_dedup
 
 
+def test_chase_missing_is_silent_where_the_snowball_plan_covers_chasing(
+    project: Project, agent: Actor, world: tuple[str, str]
+) -> None:
+    assert "chase-missing" in {f.code for f in _findings_as(project, RigorMode.PILOT)}
+    _amend(project, agent, rounds.PLAN)
+    _backward(project, agent)
+    _include_pending(project, agent)
+    assert "chase-missing" not in {f.code for f in _findings_as(project, RigorMode.PILOT)}
+
+
+def test_chase_missing_still_fires_under_a_plan_of_no_rounds(
+    project: Project, agent: Actor, world: tuple[str, str]
+) -> None:
+    _amend(project, agent, SnowballPlan(max_backward_rounds=0, max_forward_rounds=0))
+    assert "chase-missing" in {f.code for f in _findings_as(project, RigorMode.PILOT)}
+
+
+def test_over_plan_sees_a_standalone_forward_chase(
+    project: Project, agent: Actor, world: tuple[str, str]
+) -> None:
+    summary = search_chase(project, agent, [ChaseDirection.FORWARD], sources=_sources())
+    _amend(project, agent, SnowballPlan(max_backward_rounds=2, max_forward_rounds=0))
+    [finding] = [
+        f for f in _findings_as(project, RigorMode.PILOT) if f.code == "snowball-over-plan"
+    ]
+    assert tuple(finding.refs) == (summary.round_id,)
+
+
 # --- Methods ---
 
 
