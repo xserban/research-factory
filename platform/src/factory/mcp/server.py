@@ -1197,6 +1197,7 @@ def build_server(
 
         return _reply(project, coverage)
 
+    @server.tool()
     def contribution_next(
         project: str, pass_label: str, role: str, model: str, skill: str
     ) -> dict[str, JsonValue]:
