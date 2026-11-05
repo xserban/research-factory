@@ -41,6 +41,7 @@ from factory.services import audit as audit_service
 from factory.services import calibration as calibration_service
 from factory.services import chase as chase_service
 from factory.services import check as check_service
+from factory.services import contributions as contributions_service
 from factory.services import coverage as coverage_service
 from factory.services import dedup as dedup_service
 from factory.services import discovery as discovery_service
@@ -1195,6 +1196,67 @@ def build_server(
             return _withheld(opened, report.model_dump(mode="json"))
 
         return _reply(project, coverage)
+
+    def contribution_next(
+        project: str, pass_label: str, role: str, model: str, skill: str
+    ) -> dict[str, JsonValue]:
+        """Serve the next contribution task of pass A or B to this session, or say why none is
+        served. The batch names the declared fields, the work, the pinned conversion to read with
+        `document_read`, and the reference entries available for `cited_entry` (`references`;
+        status `current`, `none` or `other-conversion`). Joins this session to the contribution
+        pass on its first call."""
+
+        def serve() -> JsonValue:
+            label = _pass_label(pass_label)
+            opened = open_project(settings, project, session=session, clock=clock)
+            actor = make_agent_actor(settings, session, role, model, skill)
+            served = contributions_service.contribution_next(opened, actor, label)
+            return _withheld(opened, served.model_dump(mode="json"), include_work_ids=False)
+
+        return _reply(project, serve, include_work_ids=False)
+
+    @server.tool()
+    def contribution_record(
+        project: str,
+        task_id: str,
+        items: list[dict[str, JsonValue]],
+        role: str,
+        model: str,
+        skill: str,
+        finish: bool = False,
+        reason: str | None = None,
+        supersedes: dict[str, str] | None = None,
+    ) -> dict[str, JsonValue]:
+        """Record the contribution items read from a held task. An item is {fields: {name:
+        {value, unit, anchor, cell, quote}}}; `item_kind` is one of base-idea, addition, result,
+        limitation, not-stated. An invalid item is reported by index and the valid ones are
+        written. `supersedes` maps the index of an item of this call (a string key) to the id of
+        the item it corrects. `finish` closes the work once no item is rejected; the platform
+        refuses it until base idea and limitation are covered and an addition is recorded, and a
+        work with no result needs a `reason`."""
+
+        def record() -> JsonValue:
+            targets = _index_keys("supersedes", supersedes or {})
+            opened = open_project(settings, project, session=session, clock=clock)
+            actor = make_agent_actor(settings, session, role, model, skill)
+            good, bad = _parse_all(ExtractedRowInput, items, "items")
+            result = contributions_service.contribution_record(
+                opened,
+                actor,
+                task_id,
+                [item for _, item in good],
+                finish=finish and not bad,
+                reason=reason,
+                supersedes=_renumbered("supersedes", targets, good, len(items)),
+            )
+            merged = ExtractResult(
+                rows=_merged(result.rows, good, bad),
+                claims=result.claims,
+                completed=result.completed,
+            )
+            return _withheld(opened, merged.model_dump(mode="json"), include_work_ids=False)
+
+        return _reply(project, record, include_work_ids=False)
 
     @server.tool()
     def references_extract(

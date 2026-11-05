@@ -9,6 +9,7 @@ from factory.services.skills import skill_ref
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SKILLS = (
+    "rf-contributions",
     "rf-extract",
     "rf-frame",
     "rf-probe",
@@ -54,6 +55,31 @@ def test_rf_screen_full_text_mode_section() -> None:
     assert "screen_agreement" in section  # named only to forbid it
     for kept in ("## Independence", "## Procedure", "## Tool arguments", "## Done when"):
         assert kept in text
+
+
+def test_rf_contributions_skill_text() -> None:
+    text = (REPO_ROOT / "plugin" / "skills" / "rf-contributions" / "SKILL.md").read_text("utf-8")
+    for tool in ("contribution_next", "contribution_record", "document_read"):
+        assert tool in text
+    for phrase in (
+        "cited_entry",
+        "not-stated",
+        "verbatim",
+        "never infer",
+        "finer anchor",
+        "b<n>",
+        "supersedes",
+        "reason",
+    ):
+        assert phrase in text.lower(), phrase
+    for kept in ("## Independence", "## Procedure", "## Tool arguments", "## Done when"):
+        assert kept in text
+    for wording in ("we build on", "following", "based on", "extends", "unlike", "in contrast to"):
+        assert wording in text.lower(), wording
+    assert "improves" in text.lower()
+    assert "human steps" in text.lower()
+    # the platform never classifies: the skill must say the reading is the agent's own
+    assert "the platform does not classify" in text.lower()
 
 
 def test_rf_references_skill_text() -> None:

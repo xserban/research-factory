@@ -33,6 +33,7 @@ from factory.services import audit as audit_service
 from factory.services import calibration as calibration_service
 from factory.services import chase as chase_service
 from factory.services import check as check_service
+from factory.services import contributions as contributions_service
 from factory.services import coverage as coverage_service
 from factory.services import discovery as discovery_service
 from factory.services import document_convert as document_convert_service
@@ -147,6 +148,15 @@ extract_app = typer.Typer(
     help="Extraction: unit status, agreement, resolution and the audit.",
     no_args_is_help=True,
 )
+contributions_app = typer.Typer(
+    name="contributions",
+    help="Contribution items: status, list, agreement, resolution and the audit.",
+    no_args_is_help=True,
+)
+contributions_audit_app = typer.Typer(
+    name="audit", help="Sample, label and report the contribution audit.", no_args_is_help=True
+)
+contributions_app.add_typer(contributions_audit_app)
 import_app = typer.Typer(
     name="import",
     help="Import an existing library (BibTeX, CSL JSON, a PDF folder); list and show imports.",
@@ -201,6 +211,7 @@ app.add_typer(search_app)
 app.add_typer(fulltext_app)
 app.add_typer(document_app)
 app.add_typer(extract_app)
+app.add_typer(contributions_app)
 app.add_typer(import_app)
 
 
@@ -1160,6 +1171,145 @@ def extract_audit_report_cmd(ctx: typer.Context) -> None:
     with _reporting_errors():
         project = _resolve_project(state)
         report = extraction_audit_service.extraction_audit_report(project)
+    if report is None:
+        typer.echo("no audit sampled")
+        return
+    for line in render.audit_report_lines(report):
+        typer.echo(line)
+
+
+# --- Contributions (slice 3b, G2-B): the plan-D commands with the contribution scope ---
+
+
+@contributions_app.command("status")
+def contributions_status_cmd(ctx: typer.Context) -> None:
+    """Contribution units, items by kind, `not-stated` and marker counts, and the works with no
+    current reference extraction. Every figure is computed from the log."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        status = contributions_service.contribution_status(project)
+    for line in render.contribution_status_lines(status):
+        typer.echo(line)
+
+
+@contributions_app.command("list")
+def contributions_list_cmd(
+    ctx: typer.Context,
+    work: Annotated[str | None, typer.Option("--work", help="Only this work.")] = None,
+    kind: Annotated[
+        str | None, typer.Option("--kind", help="Only this item kind, e.g. base-idea.")
+    ] = None,
+    include_stale: Annotated[
+        bool, typer.Option("--include-stale", help="Also list stale items.")
+    ] = False,
+) -> None:
+    """The live contribution items of both passes, with their quotes and cited entries."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        items = contributions_service.live_items(
+            project, work_id=work, kind=kind, include_stale=include_stale
+        )
+    for line in render.contribution_item_lines(items):
+        typer.echo(line)
+
+
+@contributions_app.command("agreement")
+def contributions_agreement_cmd(ctx: typer.Context) -> None:
+    """The agreement of the two contribution passes and the unresolved disagreements."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        agreement = contributions_service.contribution_agreement(project, project.human_actor())
+    for line in render.agreement_lines(agreement):
+        typer.echo(line)
+
+
+@contributions_app.command("resolve")
+def contributions_resolve_cmd(
+    ctx: typer.Context,
+    work: Annotated[str, typer.Argument(help="A work with a disagreement.")],
+    row_key: Annotated[str, typer.Argument(help="The disputed row.")],
+    choice: Annotated[ExtractChoice, typer.Option("--choice", help="a, b or neither.")],
+    reason: Annotated[str, typer.Option("--reason", help="Why the human decided.")],
+    field: Annotated[
+        str | None, typer.Option("--field", help="One field; the whole row when omitted.")
+    ] = None,
+) -> None:
+    """The human's choice between the passes on one contribution disagreement."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        contributions_service.resolve_contribution(
+            project,
+            project.human_actor(),
+            work,
+            row_key,
+            field,
+            _CHOICES[choice],
+            reason,
+            Channel.CLI,
+        )
+    typer.echo(f"resolved {work} {row_key} {field or 'row'} ({choice.value})")
+
+
+@contributions_audit_app.command("sample")
+def contributions_audit_sample_cmd(ctx: typer.Context) -> None:
+    """Draw the contribution audit sample; each value with its quote and the cited element."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        human = project.human_actor()
+        drawn = contributions_service.contribution_audit_sample(project, human)
+        evidence = extraction_audit_service.audit_evidence(
+            project, human, drawn.audit_id, Channel.CLI
+        )
+    typer.echo(f"audit {drawn.audit_id}: {len(drawn.items)} of {drawn.population} agreed values")
+    for item in evidence:
+        for line in render.audit_evidence_lines(item):
+            typer.echo(line)
+
+
+@contributions_audit_app.command("label")
+def contributions_audit_label_cmd(
+    ctx: typer.Context,
+    audit_id: Annotated[str, typer.Argument(help="The audit being labelled.")],
+    work: Annotated[str, typer.Argument(help="A work of the audit sample.")],
+    row_key: Annotated[str, typer.Argument(help="The sampled row.")],
+    field: Annotated[str, typer.Argument(help="The sampled field.")],
+    correct: Annotated[
+        bool, typer.Option("--correct/--incorrect", help="Whether the value was extracted right.")
+    ],
+    note: Annotated[str, typer.Option("--note", help="An optional note.")] = "",
+) -> None:
+    """A human's label on one sampled contribution value."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        contributions_service.contribution_audit_record(
+            project,
+            project.human_actor(),
+            audit_id,
+            work,
+            row_key,
+            field,
+            correct,
+            note,
+            Channel.CLI,
+        )
+    typer.echo(
+        f"labelled {work} {row_key} {field} in {audit_id} ({'correct' if correct else 'incorrect'})"
+    )
+
+
+@contributions_audit_app.command("report")
+def contributions_audit_report_cmd(ctx: typer.Context) -> None:
+    """The latest contribution audit's counts and error rate."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        report = contributions_service.contribution_audit_report(project)
     if report is None:
         typer.echo("no audit sampled")
         return

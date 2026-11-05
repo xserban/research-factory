@@ -7,6 +7,7 @@ from factory.model.screening import PassLabel
 from factory.services.agreement import DecisionView
 from factory.services.audit import AuditReport
 from factory.services.check import CheckReport
+from factory.services.contributions import ContributionStatus, ItemView
 from factory.services.coverage import CoverageReport, Ratio
 from factory.services.discovery import DiscoveryReport
 from factory.services.document_convert import ConvertSummary, DocumentStatus
@@ -642,3 +643,44 @@ def comparison_lines(comparison: Comparison) -> list[str]:
     ]
     lines += [f"note: {n}" for n in comparison.notes]
     return lines
+
+
+def contribution_status_lines(status: ContributionStatus) -> list[str]:
+    """The contribution counts, one line each; the ids of works without references are listed."""
+
+    def counts(values: dict[str, int]) -> str:
+        return ", ".join(f"{name} {n}" for name, n in values.items()) or "none"
+
+    lines = [
+        f"units: {counts(status.units)}",
+        f"items by kind: {counts(status.items_by_kind)}",
+        f"not-stated: {counts(status.not_stated)}",
+        f"cited-entry markers: {counts(status.markers)}",
+        f"no-references: {len(status.no_references)}",
+    ]
+    lines += [f"  {work}" for work in status.no_references]
+    lines.append(f"other-conversion: {len(status.other_conversion)}")
+    lines += [f"  {work}" for work in status.other_conversion]
+    return lines
+
+
+def contribution_item_lines(items: list[ItemView]) -> list[str]:
+    """One item per two lines: its kind, name, cited entry and marker state, then its quote."""
+    if not items:
+        return ["no items"]
+    lines: list[str] = []
+    for item in items:
+        entry = "-" if item.cited_entry is None else str(item.cited_entry)
+        marker = "" if item.cited is None else f" ({item.cited.marker})"
+        stale = "  [stale]" if item.stale else ""
+        lines.append(
+            f"{item.extraction_id}  {item.work_id}  pass {item.pass_label.value}  "
+            f"{item.item_kind}{_absent(item)}  name {item.name or '-'}  entry {entry}{marker}"
+            f"  anchor {item.anchor or '-'}{stale}"
+        )
+        lines.append(f"  quote: {item.quote or '-'}")
+    return lines
+
+
+def _absent(item: ItemView) -> str:
+    return f" ({item.absent_kind})" if item.absent_kind else ""
