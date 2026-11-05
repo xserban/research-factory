@@ -4,6 +4,10 @@ A session joins a screening pass (table `pass_sessions`, one row per session and
 extraction pass (table `extraction_sessions`, one row per session). Surfaces ask this module
 whether a session belongs to a pass, never the tables.
 
+The users of a screening pass, U(P), are its human screeners and the principals of its agents
+(slice 5 ruling 15). `pass_users` reads them; `require_outside_passes` keeps a member of either
+pass of a stage from labelling, resolving or auditing at that stage of a hosted project.
+
 Invariants:
 - `memberships` and `is_pass_session` only read the index (after a sync); nothing is written.
 - A human act relayed over MCP is refused to a session in any pass of any module (decision 55):
@@ -11,6 +15,8 @@ Invariants:
 - `shared_refusal` is pure: each module collects its own evidence of joins (screening and
   extraction both read the log, as the projection keeps one join per session), and the decision
   is this one function. Its texts are the texts of the modules before the merge.
+- `users` is given to `shared_refusal` for a hosted project only: an unhosted project keeps the
+  slice-1 rule, so one researcher can run both agent passes.
 """
 
 from collections.abc import Mapping
@@ -21,12 +27,14 @@ from sqlalchemy import text
 
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
+from factory.index import screening as screening_index
 from factory.model.protocol import ScreeningStage
 from factory.model.screening import Channel, PassLabel
 from factory.services.context import Project
 from factory.services.stages import require_pass_stage
 
 PassModule = Literal["screening", "extraction"]
+TA = ScreeningStage.TITLE_ABSTRACT
 
 
 @dataclass(frozen=True)
@@ -79,16 +87,66 @@ def is_pass_session(
     return False
 
 
+def pass_users(project: Project, label: PassLabel, stage: ScreeningStage = TA) -> frozenset[str]:
+    """U(P): the humans of pass `label` of `stage` and the principals of its agents."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        return screening_index.pass_users(conn, label.value, require_pass_stage(stage).value)
+
+
+def pass_kinds(project: Project, label: PassLabel, stage: ScreeningStage = TA) -> frozenset[str]:
+    """Who screens pass `label` of `stage`: `agent`, `human`, or nothing yet."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        return screening_index.pass_kinds(conn, label.value, require_pass_stage(stage).value)
+
+
+def human_membership(
+    project: Project, user: str, stage: ScreeningStage = TA
+) -> tuple[PassLabel, str] | None:
+    """The pass `user` screens in person at `stage`, and the session of that join. A person's
+    every act in the pass runs in that session, whichever process makes it, since a CLI process
+    mints its own: the file `events/<user>/<session>.jsonl` is appended under the project lock."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        row = conn.execute(
+            text(
+                "SELECT pass_label, session FROM pass_sessions WHERE user = :user "
+                "AND stage = :stage AND actor_kind = 'human' ORDER BY session LIMIT 1"
+            ),
+            {"user": user, "stage": require_pass_stage(stage).value},
+        ).first()
+    return None if row is None else (PassLabel(str(row[0])), str(row[1]))
+
+
+def require_outside_passes(project: Project, user: str, stage: ScreeningStage = TA) -> None:
+    """Refuse a member of either pass of `stage` on a hosted project (plan teams-C ruling 2): a
+    calibration label, a resolution and an audit are by a person who joined neither."""
+    if not project.is_hosted():
+        return
+    for label in PassLabel:
+        if user in pass_users(project, label, stage):
+            raise FactoryValidationError(
+                [
+                    ValidationIssue(
+                        "user", f"this person screens pass {label.value} of {stage.value}"
+                    )
+                ]
+            )
+
+
 def shared_refusal(
     sessions: Mapping[PassLabel, set[str]],
     models: Mapping[PassLabel, set[str]],
     *,
     noun: Literal["screening", "extraction"],
+    users: Mapping[PassLabel, frozenset[str]] | None = None,
 ) -> FactoryValidationError | None:
     """The refusal for a pass pair that is not independent, or None.
 
     `sessions` and `models` hold, per pass, the sessions that joined it and the models that ran
-    it. A session in both passes is refused first, then a model in both. Field `passes`."""
+    it. A session in both passes is refused first, then a model in both, then, when `users` is
+    given, a person in both. Field `passes`."""
     if sessions[PassLabel.A] & sessions[PassLabel.B]:
         if noun == "screening":
             return _refuse("a session has joined both passes; each pass needs its own session")
@@ -97,6 +155,8 @@ def shared_refusal(
     if shared:
         needs = "each pass needs its own" if noun == "screening" else "each needs its own"
         return _refuse(f"the passes share a model ({', '.join(shared)}); {needs}")
+    if users is not None and users[PassLabel.A] & users[PassLabel.B]:
+        return _refuse("one person screens both passes; each pass needs its own people")
     return None
 
 

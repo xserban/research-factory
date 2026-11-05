@@ -138,7 +138,7 @@ class EventFamily:
 @dataclass(frozen=True)
 class QualityRegime:
     passes: Literal[1, 2]
-    independence: Literal["session-and-model", "none"]
+    independence: Literal["session-and-model", "session-model-and-user", "none"]
     agreement_unit: str
     calibration: Literal["human-labelled", "none"]
     audit: Literal["agreed-sample", "gate-sample", "none"]

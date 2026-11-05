@@ -8,6 +8,13 @@ A session joins one pass per stage. It is refused from the other pass of that st
 session that relayed a human label over MCP, since such a session could read the answer key
 (ruling 1). A refusal raises FactoryValidationError and writes nothing.
 
+A person joins as a human, holding `pass:join-human` (slice 5 ruling 15), once per stage: the pass
+keeps that session, and every later act of theirs in the pass runs in it. `index.screening.
+join_refusal` states who may join: a pass is all human or all agent, one person never screens both
+passes in person, and on a hosted project the passes share no user (in person, a person and their
+agent, or two agents of one person) and a stage's judges join neither. An unhosted project keeps
+the slice-1 rule for agents, so one researcher can still run both agent passes.
+
 Every function takes a keyword `stage` (default title/abstract); `either` is refused on field
 `stage`. At full text the plan is `full_text_screening`, refused on field `full_text_screening`
 until declared (R-13). Task kinds are `screen_a`/`screen_b` and `screen_ft_a`/`screen_ft_b`. The
@@ -46,6 +53,7 @@ from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor, Event
 from factory.events.reader import read_all
 from factory.index.chase import considered_works, extended_works
+from factory.index.screening import join_refusal
 from factory.model.base import StrictModel
 from factory.model.chase import SampleExtended
 from factory.model.project import RigorMode
@@ -64,6 +72,7 @@ from factory.model.seed import SeedKind
 from factory.model.task import Task, TaskStatus
 from factory.model.work import Work
 from factory.services import passes
+from factory.services.access import Permission, authorize
 from factory.services.calibration import (
     CalibrationStatus,
     calibrated_models,
@@ -74,9 +83,11 @@ from factory.services.calibration import (
     stage_population,
     worked_examples,
 )
-from factory.services.context import Project
+from factory.services.context import Principal, Project
 from factory.services.conversions import resolve_anchor
 from factory.services.dedup import dedup_current
+from factory.services.members import _lab_of
+from factory.services.passes import pass_users, require_outside_passes
 from factory.services.protocol import (
     ProtocolVersion,
     amendments_with_events,
@@ -99,6 +110,8 @@ from factory.services.tasks import (
     session_in_layer,
     task_content,
 )
+
+__all__ = ["pass_users", "require_outside_passes"]  # kept with the pass rules in `passes`
 
 SCREEN_BATCH = 10
 TA = ScreeningStage.TITLE_ABSTRACT
@@ -248,10 +261,10 @@ def join_pass(
     project: Project, actor: Actor, label: PassLabel, *, stage: ScreeningStage = TA
 ) -> None:
     """Bind the session to pass `label` of `stage`, once per stage. Refused, with nothing written,
-    when the actor is not an agent, when the session relayed a human label (screening or
-    extraction) or joined an extraction pass, or when it already screens the other pass of the
-    stage or its model already screens the other pass of the stage. Joining the same pass again
-    writes nothing."""
+    for a system actor, a human without `pass:join-human`, when the session relayed a human label
+    (screening or extraction) or joined an extraction pass, when it already screens the other pass
+    of the stage or its model already screens the other pass of the stage, or by `join_refusal`.
+    Joining the same pass again writes nothing."""
     require_pass_stage(stage)
     with project.index.exclusive():
         project.index.sync()
@@ -266,10 +279,80 @@ def _check_join(
     written.
 
     Raises FactoryValidationError on a refusal; writes nothing."""
+    if actor.kind == "human":
+        return _check_human_join(project, actor, label, stage)
     if actor.kind != "agent" or actor.model is None:
         raise FactoryValidationError(
             [ValidationIssue("actor", "only an agent screener joins a pass")]
         )
+    _refuse_tainted_session(project, actor)
+    joined = _joined_pass(project, actor.session, stage)
+    if joined is None:
+        _refuse_join(project, actor, label, stage)
+        if actor.model in _pass_models(project, _other(label), stage):
+            raise FactoryValidationError(
+                [ValidationIssue("model", f"pass {_other(label).value} already uses this model")]
+            )
+        if (
+            _drifted(project, actor.model, label, stage)
+            and _rigor_mode(project) is RigorMode.SYSTEMATIC
+        ):
+            raise FactoryValidationError(
+                [
+                    ValidationIssue(
+                        "model",
+                        "not calibrated for this pass; recalibrate through a "
+                        "criterion-touching protocol amendment",
+                    )
+                ]
+            )
+        return True
+    if joined is label:
+        return False
+    raise FactoryValidationError(
+        [ValidationIssue("pass", f"this session already screens pass {joined.value}")]
+    )
+
+
+def _check_human_join(
+    project: Project, actor: Actor, label: PassLabel, stage: ScreeningStage
+) -> bool:
+    """`_check_join` for a person. One join per person and stage, whichever session asks."""
+    require_human_screener(project, actor)
+    membership = passes.human_membership(project, actor.user, stage)
+    if membership is not None:
+        if membership[0] is label:
+            return False
+        raise FactoryValidationError(
+            [ValidationIssue("pass", f"this person already screens pass {membership[0].value}")]
+        )
+    _refuse_tainted_session(project, actor)
+    if _joined_pass(project, actor.session, stage) is not None:
+        raise FactoryValidationError(
+            [ValidationIssue("session", "this session already screens a pass")]
+        )
+    _refuse_join(project, actor, label, stage)
+    return True
+
+
+def require_human_screener(project: Project, actor: Actor) -> None:
+    """Refuse a person who does not hold `pass:join-human` now, on field `permission`."""
+    principal = Principal(actor.user, actor.credential, Channel.CLI)
+    authorize(project, principal, "human", Permission.PASS_JOIN_HUMAN, lab=_lab_of(project))
+
+
+def _refuse_join(project: Project, actor: Actor, label: PassLabel, stage: ScreeningStage) -> None:
+    kind = "human" if actor.kind == "human" else "agent"
+    with project.index.connect() as conn:
+        refusal = join_refusal(
+            conn, label=label.value, stage=stage.value, kind=kind, user=actor.user
+        )
+    if refusal is not None:
+        raise FactoryValidationError([ValidationIssue(*refusal)])
+
+
+def _refuse_tainted_session(project: Project, actor: Actor) -> None:
+    """Refuse a session that did something a screener may not have done."""
     if _is_label_session(project, actor.session):
         raise FactoryValidationError(
             [ValidationIssue("session", "this session relayed a human label and cannot screen")]
@@ -298,31 +381,6 @@ def _check_join(
         raise FactoryValidationError(
             [ValidationIssue("session", "this session supplied a link and cannot screen")]
         )
-    joined = _joined_pass(project, actor.session, stage)
-    if joined is None:
-        if actor.model in _pass_models(project, _other(label), stage):
-            raise FactoryValidationError(
-                [ValidationIssue("model", f"pass {_other(label).value} already uses this model")]
-            )
-        if (
-            _drifted(project, actor.model, label, stage)
-            and _rigor_mode(project) is RigorMode.SYSTEMATIC
-        ):
-            raise FactoryValidationError(
-                [
-                    ValidationIssue(
-                        "model",
-                        "not calibrated for this pass; recalibrate through a "
-                        "criterion-touching protocol amendment",
-                    )
-                ]
-            )
-        return True
-    if joined is label:
-        return False
-    raise FactoryValidationError(
-        [ValidationIssue("pass", f"this session already screens pass {joined.value}")]
-    )
 
 
 def _drifted(project: Project, model: str, label: PassLabel, stage: ScreeningStage) -> bool:
@@ -340,12 +398,22 @@ def _join_event(
     project: Project, actor: Actor, label: PassLabel, stage: ScreeningStage = TA
 ) -> Event:
     """The `screening.pass_joined` event for a join `_check_join` allowed, not yet recorded."""
-    model = actor.model
-    if model is None:
+    if actor.kind == "human":
+        payload = PassJoined(
+            pass_label=label,
+            session=actor.session,
+            stage=stage,
+            actor_kind="human",
+            user=actor.user,
+        )
+    elif actor.model is None:
         raise FactoryValidationError(
             [ValidationIssue("actor", "only an agent screener joins a pass")]
         )
-    payload = PassJoined(pass_label=label, session=actor.session, model=model, stage=stage)
+    else:
+        payload = PassJoined(
+            pass_label=label, session=actor.session, model=actor.model, stage=stage
+        )
     return project.events.make(
         "screening.pass_joined",
         payload,

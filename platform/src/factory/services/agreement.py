@@ -4,7 +4,8 @@
 `screen_agreement` is read-only. It reports κ and the disagreements only once both passes have
 finished: no open or claimed screening task is left (obsolete tasks aside), and every work in each
 pass's queue has a live, non-stale screening decision under the current protocol. It refuses while
-a session has joined both passes, or the two passes share a model. Only those decisions count;
+a session has joined both passes, the two passes share a model or, on a hosted project, a person
+(in person or through an agent). Only those decisions count;
 calibration works are screened in the calibration phase and are left out.
 
 A work's binary outcome is `promote` (include, cannot-assess) or exclude. `unsure` in either pass,
@@ -70,7 +71,7 @@ from factory.services.context import Project
 from factory.services.conversions import conversion_document
 from factory.services.dedup import absorbed_ids
 from factory.services.gates import gate_issues
-from factory.services.passes import shared_refusal
+from factory.services.passes import pass_users, shared_refusal
 from factory.services.protocol import ProtocolVersion, current_protocol, lineage_through
 from factory.services.screening import (
     live_decisions,
@@ -548,18 +549,28 @@ def _refuse(reason: str) -> FactoryValidationError:
 
 
 def _refuse_shared(project: Project, stage: ScreeningStage = TA) -> None:
-    """Refuse when one session joined both passes of `stage` or the passes share a model. The
-    join events are read from the log: the projection keeps one join per session and stage, so a
-    second join is invisible there. A session in pass A of one stage and pass B of the other is
-    not shared."""
+    """Refuse when one session joined both passes of `stage`, the passes share a model, or, on a
+    hosted project, they share a user. The join events are read from the log: the projection keeps
+    one join per session and stage, so a second join is invisible there. A session in pass A of one
+    stage and pass B of the other is not shared. Users come from the projection, so a join the fold
+    ignored counts for nothing, and a malformed or human line in the log is passed over for the
+    same reason: a human's session is one row of the projection."""
     joins: dict[PassLabel, set[str]] = {label: set() for label in PassLabel}
     for event in read_all(project.paths.events_dir, project.catalog):
         if event.type == "screening.pass_joined":
-            payload = PassJoined.model_validate(event.payload)
-            if payload.stage is stage:
+            try:
+                payload = PassJoined.model_validate(event.payload)
+            except ValidationError:
+                continue
+            if payload.stage is stage and payload.actor_kind == "agent":
                 joins[payload.pass_label].add(payload.session)
     models = {label: _models(project, label, stage) for label in PassLabel}
-    refusal = shared_refusal(joins, models, noun="screening")
+    users = (
+        {label: pass_users(project, label, stage) for label in PassLabel}
+        if project.is_hosted()
+        else None
+    )
+    refusal = shared_refusal(joins, models, noun="screening", users=users)
     if refusal is not None:
         raise refusal
 

@@ -87,7 +87,7 @@ SPEC = ModuleSpec(
     ),
     regime=QualityRegime(
         2,
-        "session-and-model",
+        "session-model-and-user",
         "outcome",
         "human-labelled",
         "agreed-sample",
