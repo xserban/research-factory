@@ -161,12 +161,14 @@ def label_calibration(
     """Record a human's label on one item of the calibration set of `stage`; return the event id.
 
     Refused, with nothing written, when the actor is not human, the work is not in the set, the
-    criterion is not in the current protocol, the verdict or criterion does not fit, or the
-    label is relayed over MCP from a session that has joined a pass.
+    criterion is not in the current protocol, the verdict or criterion does not fit, the label is
+    relayed over MCP from a session that has joined a pass, or, on a hosted project, the person is
+    a member of either pass of the stage.
     """
     require_pass_stage(stage)
     with project.index.exclusive():
         project.index.sync()
+        passes.require_outside_passes(project, actor.user, stage)
         issues: list[ValidationIssue] = []
         issues.extend(
             gate_issues(

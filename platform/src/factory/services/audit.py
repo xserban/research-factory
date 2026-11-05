@@ -39,7 +39,7 @@ from factory.model.base import StrictModel
 from factory.model.protocol import ScreeningStage
 from factory.model.screening import AuditLabelled, AuditSampled, Channel, ScreeningPhase
 from factory.modules.presets import Enforcement, enforcement
-from factory.services import audit_core
+from factory.services import audit_core, passes
 from factory.services.agreement import AgreedWork, agreed_works, screen_agreement
 from factory.services.audit_core import AuditPopulation
 from factory.services.context import Project
@@ -88,8 +88,9 @@ def audit_sample(
     """Draw and record an audit sample of the agreed works of `stage`; return the event payload.
 
     Refused, with nothing written, when the actor is not human, the seed is out of range, the passes
-    do not yet agree (see `screen_agreement`), there is no agreed work, or an audit of the current
-    agreed set is already open.
+    do not yet agree (see `screen_agreement`), there is no agreed work, an audit of the current
+    agreed set is already open, or, on a hosted project, the person is a member of either pass of
+    the stage (the sample shows both passes' decisions).
 
     With `top_up` (a living review's update) the sample instead extends the previous audit of the
     stage: it draws `audit_shortfall` works, 3:1 as always, from the works agreed since that audit
@@ -101,6 +102,7 @@ def audit_sample(
     seed, seed_issues = audit_core.validate_seed(random_seed)
     with project.index.exclusive():
         project.index.sync()
+        passes.require_outside_passes(project, actor.user, stage)
         issues: list[ValidationIssue] = []
         protocol = current_protocol(project)
         if protocol is not None:
@@ -161,7 +163,8 @@ def audit_record(
     The criterion, when given, is a criterion of the current protocol and is stored
     version-qualified; an exclusion needs an EX criterion. Refused, with nothing written, for an
     agent actor, an unknown audit, a work outside the sample, an unknown criterion, an invalid
-    verdict, or an MCP-relayed label from a session that has joined a pass.
+    verdict, an MCP-relayed label from a session that has joined a pass, or, on a hosted project, a
+    member of either pass of the audit's stage.
     """
     with project.index.exclusive():
         project.index.sync()
@@ -171,8 +174,10 @@ def audit_record(
         stage = _audit_stage(project, audit_id)
         if stage is None:
             issues.append(ValidationIssue("audit_id", "unknown audit"))
-        elif not _sampled(project, audit_id, work_id):
-            issues.append(ValidationIssue("work_id", "not in this audit sample"))
+        else:
+            passes.require_outside_passes(project, actor.user, stage)
+            if not _sampled(project, audit_id, work_id):
+                issues.append(ValidationIssue("work_id", "not in this audit sample"))
         protocol = current_protocol(project)
         qualified: str | None = None
         if criterion is not None:

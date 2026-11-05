@@ -41,7 +41,8 @@ event that fails one changes nothing:
 - A human decision comes from the session that joined that pass as a human.
 - A decision without a quote is a human's, and is not an exclusion in `systematic` (R-110).
 - A decision supersedes only a decision of its own pass.
-- On a hosted project a member of either pass of a stage does not label or resolve at that stage.
+- On a hosted project a member of either pass of a stage does not label, resolve or draw an audit
+  at that stage.
 """
 
 from dataclasses import dataclass
@@ -529,6 +530,8 @@ def _calibration_labelled(t: ScreeningTables) -> Handler:
 def _audit_sampled(t: ScreeningTables) -> Handler:
     def audit_sampled(conn: Connection, event: Event) -> None:
         payload = AuditSampled.model_validate(event.payload)
+        if _hosted_member(conn, event, payload.stage.value):
+            return
         agreed = _agreed_by_work(conn, t, _current_protocol_id(conn), payload.stage.value)
         verdicts = [(work, verdict) for work, (verdict, _) in agreed.items()]
         conn.execute(

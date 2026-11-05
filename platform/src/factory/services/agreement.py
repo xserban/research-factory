@@ -71,7 +71,7 @@ from factory.services.context import Project
 from factory.services.conversions import conversion_document
 from factory.services.dedup import absorbed_ids
 from factory.services.gates import gate_issues
-from factory.services.passes import pass_users, shared_refusal
+from factory.services.passes import pass_users, require_outside_passes, shared_refusal
 from factory.services.protocol import ProtocolVersion, current_protocol, lineage_through
 from factory.services.screening import (
     live_decisions,
@@ -229,12 +229,14 @@ def resolve_disagreement(
     The work must be an unresolved disagreement, or an `unsure` single-pass work. The criterion,
     when given, is a criterion of the current protocol and is stored version-qualified; an
     exclusion needs an EX criterion. Refused, with nothing written, for an agent actor, a work
-    that is not open for resolution, an unknown criterion, an invalid verdict or reason, or an
-    MCP-relayed resolution from a session that has joined a pass.
+    that is not open for resolution, an unknown criterion, an invalid verdict or reason, an
+    MCP-relayed resolution from a session that has joined a pass, or, on a hosted project, a member
+    of either pass of the stage.
     """
     require_pass_stage(stage)
     with project.index.exclusive():
         project.index.sync()
+        require_outside_passes(project, actor.user, stage)
         screen = _load(project, stage)
         if screen is None:
             raise FactoryValidationError([ValidationIssue("protocol", "record a protocol first")])
