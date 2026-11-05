@@ -7,8 +7,10 @@ Invariants:
   or command passes one. The projector folds the event only if it equals the recomputation.
 - An experiment hypothesis is evaluated on the confirmatory split of the primary universe
   (`hypotheses.evaluate`); a literature hypothesis on the final independent rows of works published
-  on or after the window start that compare the two methods in a group matching its conditions.
-  The unit of the latter is the work.
+  on or after the window start that compare the two methods in a group meeting its conditions and
+  metric. The unit of the latter is the work. Names and conditions are compared normalised, as the
+  evidence groups hold them. A method no evidence row names is not a result: the evaluation is
+  `incomplete` with the flag `method-unresolved`, never a conclusive `inconclusive`.
 - `evaluate_hypothesis` is idempotent: with unchanged inputs it writes nothing and returns the live
   event; with changed inputs it writes a new event that supersedes the earlier one (none is
   removed). Evaluation is automatic after the ingestion that completes the last primary cell and
@@ -116,14 +118,19 @@ def _forms(pack: Pack | None, key: str, value: str) -> frozenset[str]:
     return frozenset(forms)
 
 
-def group_requirements(project: Project, spec: HypothesisSpec) -> list[Requirement]:
-    """What an evidence group must hold to speak to a hypothesis: its conditions and its metric
-    (ruling 16). `evaluate` and the benchmark ledger read the same requirements."""
+def _pack(project: Project) -> Pack | None:
     try:
         _protocol, _schema, pack = require_schema(project)
     except FactoryValidationError:
-        pack = None
-    required: list[Requirement] = [(k, frozenset({v})) for k, v in spec.conditions.items()]
+        return None
+    return pack
+
+
+def group_requirements(project: Project, spec: HypothesisSpec) -> list[Requirement]:
+    """What an evidence group must hold to speak to a hypothesis: its conditions and its metric
+    (ruling 16). `evaluate` and the benchmark ledger read the same requirements."""
+    pack = _pack(project)
+    required: list[Requirement] = [(k, _forms(pack, k, v)) for k, v in spec.conditions.items()]
     required.append(("metric", _forms(pack, "metric", spec.metric.name)))
     return required
 
@@ -152,18 +159,29 @@ def _recompute_literature(project: Project, hypothesis_id: str) -> HypothesisEva
         return None
     report = evidence_report(project)
     all_rows = [r for g in report.groups for r in g.rows]
-    treatment = _method_name(spec.treatment, all_rows)
-    baseline = _method_name(spec.baseline, all_rows)
-    start = test.window_start.isoformat()
+    pack = _pack(project)
+
+    def name_form(value: str) -> str:
+        definition = None if pack is None else pack.field("method_name")
+        return normalise_text(value if definition is None else normalise_for(definition, value))
+
+    known = {name_form(r.method_name) for r in all_rows if r.method_name is not None}
+    named = (_method_name(spec.treatment, all_rows), _method_name(spec.baseline, all_rows))
+    treatment, baseline = (None if n is None else name_form(n) for n in named)
+    resolved = treatment in known and baseline in known
     compared: dict[str, tuple[str, str, Favour]] = {}
-    if treatment is not None and baseline is not None:
+    if treatment is not None and baseline is not None and resolved:
         compared = compare_works(
             [
                 (
                     g.key,
                     [
                         LitRow(
-                            r.work_id, r.row_key, r.method_name, r.value.canonical, r.independent
+                            r.work_id,
+                            r.row_key,
+                            None if r.method_name is None else name_form(r.method_name),
+                            r.value.canonical,
+                            r.independent,
                         )
                         for r in g.rows
                     ],
@@ -173,14 +191,14 @@ def _recompute_literature(project: Project, hypothesis_id: str) -> HypothesisEva
             treatment=treatment,
             baseline=baseline,
             requirements=group_requirements(project, spec),
-            window_start=start,
+            window_start=test.window_start.isoformat(),
             dates=_published(project, sorted({r.work_id for r in all_rows})),
             direction=spec.metric.direction,
             margin=Decimal(spec.prediction.margin),
         )
     result = apply_literature_rule(rule, [f for _, _, f in compared.values()])
     flags = set(result.flags) | set(hypothesis_service.cutoff_flags(project, hypothesis_id))
-    if treatment is None or baseline is None:
+    if not resolved:
         flags.add("method-unresolved")
     if view.autonomy == "agent":
         flags.add("autonomy:agent")
@@ -193,7 +211,7 @@ def _recompute_literature(project: Project, hypothesis_id: str) -> HypothesisEva
     return HypothesisEvaluated(
         hypothesis_id=hypothesis_id,
         h_version=view.h_version,
-        outcome=result.outcome,
+        outcome=result.outcome if resolved else "incomplete",
         n=len(compared),
         level=level,
         counts=dict(result.counts),

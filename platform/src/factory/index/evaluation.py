@@ -47,12 +47,12 @@ from factory.index.hypotheses import cutoff_flags_of
 from factory.index.projection import Handler
 from factory.model.experiments import Cell
 from factory.model.hypotheses import (
+    RETIRED_EVALUATORS,
     HypothesisEvaluated,
     HypothesisSpec,
     LiteratureComparison,
     LiteratureDirection,
     LiteratureTest,
-    RETIRED_EVALUATORS,
 )
 
 
@@ -242,8 +242,11 @@ def literature_consistent(conn: Connection, p: HypothesisEvaluated, hyp: Any) ->
     if str(hyp[3]) == "agent":
         flags.add("autonomy:agent")
     flags |= set(p.flags) & {"method-unresolved"}
+    unresolved = "method-unresolved" in p.flags
+    if unresolved and p.comparisons:
+        return False
     return (
-        p.outcome == result.outcome
+        p.outcome == ("incomplete" if unresolved else result.outcome)
         and dict(p.counts) == dict(result.counts)
         and p.flags == tuple(sorted(flags))
         and p.inputs_hash == literature_hash(spec, p.h_version, p.comparisons, p.flags)
