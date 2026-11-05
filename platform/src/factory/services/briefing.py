@@ -1,6 +1,7 @@
 """The project briefing: a reading path for a person joining mid-way (slice 7b, plan V-C).
 
-Declares: `build_briefing`, `VIEW_VERSION`. A builder over the projection; it writes nothing.
+Declares: `build_briefing`, `briefing_agent_view`, `agent_pack`, `VIEW_VERSION`,
+`BRIEFING_MAX_CHARS`. A builder over the projection; it writes nothing.
 
 Invariants:
 - Every section is computed from events through the service that owns it (R-05): question,
@@ -16,15 +17,40 @@ Invariants:
   and a second computation would break R-05. Decision row 110 states this exception.
 - The researcher's output stays complete; the agent form is `briefing_agent_view`.
 - A fresh project gives every section, empty, each with a notice saying why.
+
+Invariants of the agent form (plan rulings 2 and 3; spec ruling 24):
+- Each source is read in its agent variant: `agent_check` and `sentence_status(agent=True)`. The
+  pack takes no figure from `methods_report` or `evidence_report`, so `agent_methods` and
+  `agent_evidence` have nothing to remove from it: what those filters guard (rates, kappa, recall,
+  ceilings) sits only in `GateBrief.figures`, which the agent form empties. `passed` reads no
+  audit result, so the ceiling flag an agent may not read (decision 52) does not reach it.
+- Section 8 is counts only. An audit kind counts audits, not items: the size of a sample and the
+  labels on it are withheld from agents (decision 37 item 14, `GateStatusRow.agent_view`).
+- Before a screening pass has opened the sections that name works or read like the views (5, 6 and
+  9) are empty, with one neutral notice for every project: the same role-blind rule as the view
+  and draft tools, which refuse then (decision 43). Nothing is marked and no work is masked.
+- Held-out seed ids and stated identifiers are scrubbed from every string before the pack is
+  stored, since free text (a goal, an amendment reason) may name one; work ids stay.
+- A pack is a function of the log: built at the log position `as_of` with the clock read as that
+  event's time, so `check`'s date-dependent findings do not vary with the day it is run.
+- The JSON is at most `BRIEFING_MAX_CHARS`: cuts run from the end of sections 5 and 8 (members,
+  paths, entries), then 6, 9 and 7; sections 1 to 4 are cut only when they alone exceed the bound
+  (oldest deviations, then oldest amendments). `truncated` states each cut; a pack that still
+  does not fit is refused.
 """
 
 from __future__ import annotations
 
+import dataclasses
+import json
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from datetime import date
 
 from sqlalchemy import bindparam, text
 
+from factory.clock import FixedClock, parse_ts
+from factory.errors import FactoryValidationError, ValidationIssue
 from factory.exports.keys import assign_keys
 from factory.lineage.graph import Direction, GraphEdge, Neighbours
 from factory.lineage.paths import path
@@ -52,9 +78,10 @@ from factory.services.agreement import agreement_summary, screen_agreement
 from factory.services.audit import audit_report
 from factory.services.calibration import calibration_status
 from factory.services.call_memo import entering
-from factory.services.check import CheckReport, check
+from factory.services.check import CheckReport, agent_check, check
 from factory.services.context import Project
 from factory.services.contributions import contribution_audit_report
+from factory.services.coverage import held_out_visible
 from factory.services.draft_audit import audit_report as draft_audit_report
 from factory.services.draft_release import released_drafts
 from factory.services.drafts import get_draft, list_drafts, sentence_status, status_counts
@@ -76,9 +103,11 @@ from factory.services.search import get_work
 from factory.services.view_corpus import horizon_notice, search_horizon
 from factory.services.view_coverage import coverage_groups
 from factory.services.view_rows import merge_notice
-from factory.services.views import view_meta
+from factory.services.views import to_json, view_meta
+from factory.services.withholding import held_out_tokens, withhold
 
 VIEW_VERSION = 1
+BRIEFING_MAX_CHARS = 40000
 MAX_MEMBERS = 5
 """Members of an idea a reading-path entry lists (plan ruling 1)."""
 _PAGE = 500
@@ -99,6 +128,27 @@ def build_briefing(project: Project) -> Briefing:
     """The complete briefing, as the researcher reads it."""
     with entering():
         return compose(project, check(project), draft_counts(project, agent=False))
+
+
+def briefing_agent_view(project: Project) -> Briefing:
+    """The briefing as an agent outside the passes may read it (see the module docstring). It
+    builds from the project, not from a `Briefing`: section 7 must come from `agent_check`."""
+    with entering():
+        at_position = _at_log_position(project)
+        built = compose(
+            at_position, agent_check(at_position), draft_counts(at_position, agent=True)
+        )
+        reduced = _reduced(built, opened=held_out_visible(project))
+        scrubbed = withhold(
+            reduced.model_dump(mode="json"), held_out_tokens(project, include_work_ids=False)
+        )
+        return Briefing.model_validate_json(json.dumps(scrubbed))
+
+
+def agent_pack(project: Project) -> str:
+    """The agent context pack: canonical JSON of the agent view, within `BRIEFING_MAX_CHARS`.
+    Refused (field `briefing`) when sections 1 to 4 alone do not fit; nothing is written."""
+    return to_json(_bounded(briefing_agent_view(project)))
 
 
 def as_of(project: Project) -> str | None:
@@ -165,6 +215,158 @@ def draft_counts(project: Project, *, agent: bool) -> dict[str, dict[str, int]]:
         draft_id: status_counts(sentence_status(project, draft_id, agent=agent))
         for draft_id in sorted(released_drafts(project))
     }
+
+
+# --- The agent form ---
+
+
+def _at_log_position(project: Project) -> Project:
+    """`project` with the clock read as the time of the event `as_of` names."""
+    position = as_of(project)
+    with project.index.connect() as conn:
+        ts = conn.execute(text("SELECT ts FROM events WHERE id = :i"), {"i": position}).scalar()
+    if ts is None:
+        return project
+    return dataclasses.replace(project, clock=FixedClock(parse_ts(str(ts))))
+
+
+_WORK_SECTION_NOTICES = frozenset(
+    {"reading-path-empty", "evidence-empty", "merge-read", "drafts-none"}
+)
+_NOT_YET = ViewNotice(
+    code="sections-not-available-yet",
+    text="The reading path, evidence groups and released drafts are not available yet.",
+)
+
+
+def _reduced(b: Briefing, *, opened: bool) -> Briefing:
+    """`b` without figures and identifiers (ruling 2), and before a pass without the sections that
+    name works."""
+    update: dict[str, object] = {
+        "gates": [g.model_copy(update={"figures": {}}) for g in b.gates],
+        "pending": [_counts_only(p) for p in b.pending],
+    }
+    notices = b.meta.notices
+    if not opened:
+        update |= {"reading_path": [], "evidence": [], "drafts": []}
+        notices = [n for n in notices if n.code not in _WORK_SECTION_NOTICES] + [_NOT_YET]
+    meta = b.meta.model_copy(
+        update={"notices": notices, "filter": {**b.meta.filter, "audience": "agent"}}
+    )
+    return b.model_copy(update={**update, "meta": meta})
+
+
+def _counts_only(item: PendingBrief) -> PendingBrief:
+    count = len(item.ids) if item.kind in AUDIT_KINDS else item.count
+    return item.model_copy(update={"count": count, "ids": []})
+
+
+@dataclass(frozen=True)
+class _Cut:
+    """One step of the bound: `label` names it in `truncated`, `size` counts the units of `b` it
+    can cut, `keep` gives `b` with only the first `n` units left whole."""
+
+    label: str
+    size: Callable[[Briefing], int]
+    keep: Callable[[Briefing, int], Briefing]
+
+
+def _list_cut(name: str) -> _Cut:
+    """A step that drops the tail of the top-level list `name`."""
+
+    def size(b: Briefing) -> int:
+        return len(getattr(b, name))
+
+    def keep(b: Briefing, n: int) -> Briefing:
+        return b.model_copy(update={name: getattr(b, name)[:n]})
+
+    return _Cut(name, size, keep)
+
+
+def _entry_cut(name: str) -> _Cut:
+    """A step that empties `name` of the reading-path entries after the first `n`."""
+
+    def size(b: Briefing) -> int:
+        return len(b.reading_path) if any(getattr(e, name) for e in b.reading_path) else 0
+
+    def keep(b: Briefing, n: int) -> Briefing:
+        entries = [
+            e if i < n else e.model_copy(update={name: []}) for i, e in enumerate(b.reading_path)
+        ]
+        return b.model_copy(update={"reading_path": entries})
+
+    return _Cut(f"reading_path.{name}", size, keep)
+
+
+def _issues_cut() -> _Cut:
+    def keep(b: Briefing, n: int) -> Briefing:
+        return b.model_copy(update={"issues": dict(list(b.issues.items())[:n])})
+
+    return _Cut("issues", lambda b: len(b.issues), keep)
+
+
+def _protocol_cut(name: str) -> _Cut:
+    """A step that drops the oldest entries (the tail) of a list of section 2."""
+
+    def keep(b: Briefing, n: int) -> Briefing:
+        cut = b.protocol.model_copy(update={name: getattr(b.protocol, name)[:n]})
+        return b.model_copy(update={"protocol": cut})
+
+    return _Cut(f"protocol.{name}", lambda b: len(getattr(b.protocol, name)), keep)
+
+
+_CUTS: tuple[_Cut, ...] = (
+    _entry_cut("members"),
+    _entry_cut("paths"),
+    _list_cut("reading_path"),
+    _list_cut("pending"),
+    _list_cut("evidence"),
+    _list_cut("drafts"),
+    _issues_cut(),
+    _protocol_cut("deviations"),
+    _protocol_cut("amendments"),
+)
+
+
+def _fits(b: Briefing) -> bool:
+    return len(to_json(b)) <= BRIEFING_MAX_CHARS
+
+
+def _noted(b: Briefing, cut: _Cut, kept: int) -> Briefing:
+    """`b` with the first `kept` units of `cut` left, and the cut stated."""
+    total = cut.size(b)
+    trimmed = cut.keep(b, kept)
+    return trimmed.model_copy(
+        update={
+            "meta": trimmed.meta.model_copy(update={"truncated": True}),
+            "truncated": [*b.truncated, f"{cut.label}: {total - kept} of {total} cut"],
+        }
+    )
+
+
+def _bounded(b: Briefing) -> Briefing:
+    """`b` within the bound: each step whole until one can stop part way, then the most of that
+    step that fits."""
+    if _fits(b):
+        return b
+    for cut in _CUTS:
+        total = cut.size(b)
+        if total == 0:
+            continue
+        if not _fits(_noted(b, cut, 0)):
+            b = _noted(b, cut, 0)
+            continue
+        low, high = 0, total - 1  # `low` units fit; find the largest that does
+        while low < high:
+            middle = (low + high + 1) // 2
+            if _fits(_noted(b, cut, middle)):
+                low = middle
+            else:
+                high = middle - 1
+        return _noted(b, cut, low)
+    raise FactoryValidationError(
+        [ValidationIssue("briefing", f"sections 1 to 4 exceed {BRIEFING_MAX_CHARS} characters")]
+    )
 
 
 # --- Sections 1 and 2 ---

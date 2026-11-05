@@ -1,7 +1,7 @@
 """Shared conventions for every MCP tool: result shape, pagination, actors, error mapping."""
 
 import re
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Generic, TypeVar
 
@@ -15,6 +15,8 @@ from factory.model.protocol import ProtocolSpec, ScreeningStage
 from factory.model.question import QuestionSpec
 from factory.services.skills import skill_ref
 from factory.services.stages import require_pass_stage
+from factory.services.withholding import WITHHELD as WITHHELD
+from factory.services.withholding import withhold as withhold
 
 PAGE_LIMIT = 50
 
@@ -23,7 +25,6 @@ M = TypeVar("M", bound=BaseModel)
 
 _ACTOR_FIELDS = {"id": "role", "model": "model", "skill": "skill"}
 _SPEC_FIELDS = frozenset(QuestionSpec.model_fields) | frozenset(ProtocolSpec.model_fields)
-WITHHELD = "[withheld]"
 
 
 def ok(data: JsonValue) -> dict[str, JsonValue]:
@@ -112,33 +113,6 @@ def spec_path(field: str) -> str:
     spec, so that `criteria[0].parent` is reported as `spec.criteria.0.parent`."""
     head = re.split(r"[.\[]", field, maxsplit=1)[0]
     return f"spec.{dotted(field)}" if head in _SPEC_FIELDS else dotted(field)
-
-
-def withhold(value: JsonValue, tokens: Iterable[str]) -> JsonValue:
-    """`value` with every whole-identifier occurrence of a token replaced in its strings.
-
-    Tokens match case-insensitively and only as whole identifiers, so `10.1000/p2` does not
-    match inside `10.1000/p21`. An agent-facing response passes through this with the identifiers
-    of every held-out seed (R-20); nothing else is changed.
-    """
-    cleaned = sorted({token for token in tokens if token}, key=len, reverse=True)
-    if not cleaned:
-        return value
-    pattern = re.compile(
-        r"(?<![0-9A-Za-z])(?:" + "|".join(re.escape(t) for t in cleaned) + r")(?![0-9A-Za-z])",
-        re.IGNORECASE,
-    )
-    return _scrub(value, pattern)
-
-
-def _scrub(value: JsonValue, pattern: re.Pattern[str]) -> JsonValue:
-    if isinstance(value, str):
-        return pattern.sub(WITHHELD, value)
-    if isinstance(value, dict):
-        return {key: _scrub(item, pattern) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_scrub(item, pattern) for item in value]
-    return value
 
 
 def parse_routes(values: Sequence[str] | None, field: str) -> list[Route] | None:

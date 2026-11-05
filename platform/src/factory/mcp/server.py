@@ -132,7 +132,8 @@ from factory.services.hypothesis_gates import GateName, gate_policy
 from factory.services.living_hooks import default_hooks
 from factory.services.results import BatchResult, ItemError
 from factory.services.search import list_works
-from factory.services.seeds import SeedOutcome, SeedRole
+from factory.services.seeds import SeedOutcome
+from factory.services.withholding import held_out_tokens
 from factory.services.xrun_accounting import hidden_acceptances
 from factory.sources.fulltext.base import FullTextRoute
 from factory.sources.fulltext.registry import default_routes
@@ -3841,28 +3842,8 @@ def _withheld(project: Project, value: JsonValue, include_work_ids: bool = True)
 
 
 def _held_out_tokens(project: Project, include_work_ids: bool = True) -> set[str]:
-    """The id, and every identifier as stated or normalised, of each held-out seed.
-
-    `include_work_ids` adds `seed.work_id`, for the seed tools and the probe. Any tool that names
-    works leaves it out: a work's id is not a seed's identity, and a `[withheld]`
-    among `rf:` ids would mark the work as a seed (decisions 37 item 9 and 81)."""
-    tokens: set[str] = set()
-    for seed in seeds_service.all_seeds(project):
-        if seed.role is not SeedRole.HELD_OUT:
-            continue
-        stated = SeedSpec(
-            kind=seed.kind,
-            cite=seed.cite,
-            doi=seed.doi,
-            arxiv=seed.arxiv,
-            openalex=seed.openalex,
-        )
-        tokens.add(seed.seed_id)
-        tokens.update(stated.identity_keys().values())
-        tokens.update(value for value in (seed.doi, seed.arxiv, seed.openalex) if value)
-        if include_work_ids and seed.work_id:
-            tokens.add(seed.work_id)
-    return tokens
+    """See `withholding.held_out_tokens`."""
+    return held_out_tokens(project, include_work_ids)
 
 
 def _check_label(work_id: str, verdict: str, criterion: str | None) -> None:
