@@ -30,6 +30,7 @@ from factory.services.context import Project
 from factory.services.drafts import (
     SentenceInput,
     create_draft,
+    get_draft,
     live_sentences,
     repin_outline,
     write_sentences,
@@ -298,6 +299,43 @@ def test_reorder_guards(project: Project, me: Actor, draft: str) -> None:
         me,
     )
     assert [r.sentence_id for r in live_sentences(project, draft)] == both
+
+
+MISSING_BLOB = "sha256:" + "0" * 64
+
+
+def corrupt_blob(project: Project) -> str:
+    """A stored blob whose bytes no longer hash to its ref."""
+    ref = project.blobs.put(b'{"outline_id": "OL@00000000", "scope": {}, "sections": []}')
+    path = project.blobs.path(ref)
+    path.chmod(0o644)
+    path.write_bytes(b"tampered")
+    return ref
+
+
+def test_a_draft_naming_an_unreadable_blob_does_not_break_the_fold(
+    project: Project, me: Actor, draft: str
+) -> None:
+    for n, blob in enumerate((MISSING_BLOB, corrupt_blob(project))):
+        model = DraftCreated(
+            draft_id=f"drf_{ULID}{n + 10:02d}",
+            title="Other",
+            kind=DraftKind.OTHER,
+            outline_ref="OL@00000000",
+            outline_blob=blob,
+            sections=[SectionDef(section_id="sec_01", heading="h")],
+        )
+        inert(project, "draft.created", model, me)
+    assert get_draft(project, draft) is not None  # the index still reads
+
+
+def test_a_repin_naming_an_unreadable_blob_does_not_break_the_fold(
+    project: Project, me: Actor, draft: str
+) -> None:
+    for blob in (MISSING_BLOB, corrupt_blob(project)):
+        model = DraftOutlineRepinned(draft_id=draft, outline_ref="OL@00000000", outline_blob=blob)
+        inert(project, "draft.outline_repinned", model, me)
+    assert get_draft(project, draft) is not None
 
 
 def test_an_agent_sentence_folds_with_its_session_and_model(project: Project, draft: str) -> None:
