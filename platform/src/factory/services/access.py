@@ -179,9 +179,22 @@ TOOL_PERMISSIONS: Mapping[str, Permission] = {
     "extract_audit_record": Permission.HUMAN_LABEL,
     "miner_calibration_label": Permission.HUMAN_LABEL,
     "notice_assess": Permission.HUMAN_CONFIRM,
-    # Mutating CLI commands, as `cli:<group> <command>`. Read-only commands have no row.
+    # Mutating CLI commands, as `cli:<group> <command>`. Read-only commands have no row, but for
+    # the three lists of the admin groups, which are authorised like the rest of those groups.
     "cli:init": Permission.PROJECT_GOVERN,
     "cli:commit": Permission.LAB_ADMIN,
+    "cli:server init": Permission.LAB_ADMIN,
+    "cli:user add": Permission.LAB_ADMIN,
+    "cli:user deactivate": Permission.LAB_ADMIN,
+    "cli:user reactivate": Permission.LAB_ADMIN,
+    "cli:user link": Permission.LAB_ADMIN,
+    "cli:user list": Permission.LAB_ADMIN,
+    "cli:token issue": Permission.LAB_ADMIN,
+    "cli:token revoke": Permission.LAB_ADMIN,
+    "cli:token list": Permission.LAB_ADMIN,
+    "cli:member grant": Permission.PROJECT_GOVERN,
+    "cli:member revoke": Permission.PROJECT_GOVERN,
+    "cli:member list": Permission.PROJECT_READ,
     "cli:inbox add": Permission.WORK_RUN,
     "cli:inbox resolve": Permission.WORK_RUN,
     "cli:inbox withdraw": Permission.WORK_RUN,

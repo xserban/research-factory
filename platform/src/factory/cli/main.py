@@ -15,6 +15,7 @@ from pydantic import ValidationError as PydanticValidationError
 
 from factory.cli import evidence_render, portfolio_render, render
 from factory.cli.manuscripts import manuscript_app
+from factory.cli.admin import member_app, token_app, user_app
 from factory.cli.organisation import consolidation_app, labels_app, terms_app
 from factory.clock import Clock, SystemClock
 from factory.config import Settings
@@ -141,8 +142,9 @@ from factory.services import view_coverage as view_coverage_service
 from factory.services import views as views_service
 from factory.services import watch as watch_service
 from factory.services import xruns as xruns_service
+from factory.services.access_log import audited, os_login, stated_admin
 from factory.services.commit import commit_hosted
-from factory.services.context import Project, list_projects, open_project
+from factory.services.context import Principal, Project, list_projects, open_project
 from factory.services.extraction_agreement import Choice
 from factory.services.gate_status import gates_status
 from factory.services.living_hooks import DEFAULT_HOOKS
@@ -150,6 +152,7 @@ from factory.services.modules.listing import module_rows
 from factory.services.project import ScreeningStatus
 from factory.services.search import list_works
 from factory.services.server_check import server_check
+from factory.services.server_init import init_server
 from factory.services.xrun_accounting import baseline_verdicts
 from factory.sources.fulltext.registry import default_routes
 from factory.sources.registry import default_sources
@@ -477,6 +480,9 @@ app.add_typer(consolidation_app)
 app.add_typer(import_app)
 server_app = typer.Typer(name="server", help="The lab server.", no_args_is_help=True)
 app.add_typer(server_app)
+app.add_typer(user_app)
+app.add_typer(token_app)
+app.add_typer(member_app)
 
 
 _M = TypeVar("_M", bound=BaseModel)
@@ -489,6 +495,7 @@ class CliState:
     project: str | None
     session: str
     clock: Clock
+    as_user: str | None = None
 
 
 def _state(ctx: typer.Context) -> CliState:
@@ -544,6 +551,10 @@ def main(
         str | None,
         typer.Option("--project", help="Project slug.", envvar="FACTORY_PROJECT"),
     ] = None,
+    as_user: Annotated[
+        str | None,
+        typer.Option("--as", help="The lab admin acting, when not the OS login (admin only)."),
+    ] = None,
 ) -> None:
     clock = SystemClock()
     with _reporting_errors():
@@ -553,6 +564,7 @@ def main(
         project=project,
         session=IdGenerator(clock).ulid(),
         clock=clock,
+        as_user=as_user,
     )
 
 
@@ -1381,6 +1393,44 @@ def server_check_cmd(ctx: typer.Context) -> None:
     if issues:
         raise typer.Exit(1)
     typer.echo("ok")
+
+
+@server_app.command("init")
+def server_init_cmd(
+    ctx: typer.Context,
+    host_id: Annotated[
+        str | None, typer.Option("--host-id", help="This machine's host id.")
+    ] = None,
+    push_url: Annotated[
+        list[str] | None,
+        typer.Option("--push-url", help="A URL `factory commit --push` may push to; repeatable."),
+    ] = None,
+) -> None:
+    """Make this root a lab server: the lab registry with you as admin, `.server/`, `.gitignore`.
+
+    Push URLs are only ever the ones given here: none is read from a git remote."""
+    state = _state(ctx)
+    with _reporting_errors():
+        settings = stated_admin(state.settings, state.as_user)
+        with audited(
+            settings,
+            Principal.local(settings, Channel.CLI),
+            session=state.session,
+            clock=state.clock,
+            tool="cli:server init",
+            login=os_login(),
+        ):
+            done = init_server(
+                settings,
+                host_id=host_id,
+                push_urls=push_url or (),
+                session=state.session,
+                clock=state.clock,
+            )
+    typer.echo(f"host {done.host_id}")
+    if done.admin is not None:
+        typer.echo(f"registered {done.admin} as lab admin")
+    typer.echo(f"{done.push_urls} push URL(s) allowed")
 
 
 @app.command("commit")
