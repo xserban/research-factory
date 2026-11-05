@@ -18,10 +18,15 @@ from dataclasses import dataclass
 from typing import Literal
 
 from factory.errors import FactoryValidationError, ValidationIssue
+from sqlalchemy import text
+
 from factory.events.envelope import Actor
+from factory.model.hypothesis_plan import HypothesisPlan
+from factory.model.project import RigorMode
 from factory.modules.contract import GatePolicy, PolicyKind
 from factory.services.context import Project
 from factory.services.gates import effective_policy
+from factory.services.protocol import current_protocol
 
 GateName = Literal[
     "hypotheses.lead_decide",
@@ -54,6 +59,44 @@ class GateVerdict:
 def gate_policy(project: Project, gate: GateName) -> GatePolicy:
     """The policy in force at `gate` (M-B `effective_policy`)."""
     return effective_policy(project, gate)
+
+
+_MIN_SEEDS = {RigorMode.EXPLORATORY: 2, RigorMode.PILOT: 3, RigorMode.SYSTEMATIC: 5}
+
+
+def project_mode(project: Project) -> RigorMode:
+    project.index.sync()
+    with project.index.connect() as conn:
+        value = conn.execute(
+            text("SELECT rigor_mode FROM project WHERE slug = :slug"),
+            {"slug": project.paths.slug},
+        ).scalar_one()
+    return RigorMode(str(value))
+
+
+def effective_plan(project: Project) -> HypothesisPlan:
+    """The protocol's `hypothesis_plan` with every default filled for the project's mode: the
+    minimum seeds (2, 3, 5), a required lead outside exploratory mode and a distinct critic model
+    in systematic mode only. A field the protocol states is kept."""
+    mode = project_mode(project)
+    protocol = current_protocol(project)
+    plan = HypothesisPlan() if protocol is None else protocol.spec.hypothesis_plan
+    plan = plan or HypothesisPlan()
+    return plan.model_copy(
+        update={
+            "min_seeds": plan.min_seeds if plan.min_seeds is not None else _MIN_SEEDS[mode],
+            "require_lead": (
+                plan.require_lead
+                if plan.require_lead is not None
+                else mode is not RigorMode.EXPLORATORY
+            ),
+            "critic_distinct_model": (
+                plan.critic_distinct_model
+                if plan.critic_distinct_model is not None
+                else mode is RigorMode.SYSTEMATIC
+            ),
+        }
+    )
 
 
 def may_pass(

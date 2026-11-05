@@ -28,6 +28,7 @@ SPEC = ModuleSpec(
             "leads",
         ),
     ),
+    protocol_sections=("hypothesis_plan",),
     gates=(
         GateSpec(
             "hypotheses.lead_decide",

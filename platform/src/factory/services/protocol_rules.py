@@ -188,6 +188,7 @@ def protocol_issues(
     errors.extend(_miner_errors(spec.miners, registered_miners))
     gate_errors, gate_gaps = _gate_policy_issues(spec, mode)
     errors.extend(gate_errors)
+    errors.extend(_hypothesis_plan_errors(spec))
     gaps = _gaps(spec, question, mode, probes)
     gaps.extend(gate_gaps)
     return ProtocolCheck(errors=errors, gaps=gaps)
@@ -428,6 +429,20 @@ def gate_policy_gaps(spec: ProtocolSpec, mode: RigorMode) -> list[ValidationIssu
                 ValidationIssue(f"gate_policies.entries.{i}.policy", GATE_POLICY_BELOW_PRESET)
             )
     return gaps
+
+
+def _hypothesis_plan_errors(spec: ProtocolSpec) -> list[ValidationIssue]:
+    """Errors of `hypothesis_plan`: fewer than two seeds cannot give a confidence interval, and
+    the confirmatory split is read at least once."""
+    plan = spec.hypothesis_plan
+    if plan is None:
+        return []
+    issues: list[ValidationIssue] = []
+    if plan.min_seeds is not None and plan.min_seeds < 2:
+        issues.append(ValidationIssue("hypothesis_plan.min_seeds", "at least 2 seeds"))
+    if plan.test_access_limit < 1:
+        issues.append(ValidationIssue("hypothesis_plan.test_access_limit", "at least 1"))
+    return issues
 
 
 def _gate_policy_issues(

@@ -22,6 +22,7 @@ from factory.canonical import canonical_json
 from factory.imports.model import ImportFormat, ImportRole
 from factory.model.base import StrictModel
 from factory.model.gates import GatePolicies
+from factory.model.hypothesis_plan import HypothesisPlan
 from factory.model.identity import ULID_RE
 from factory.model.miners import MinerUse
 from factory.model.question import QUESTION_ID_RE
@@ -70,6 +71,7 @@ _OMITTED_WHEN_NONE = frozenset(
         "library_sources",
         "gate_policies",
         "miners",
+        "hypothesis_plan",
     }
 )
 """Optional sections left out of every hash while unset, so protocols that predate them keep
@@ -285,6 +287,9 @@ class ProtocolSpec(StrictModel):
     miners: tuple[MinerUse, ...] | None = None
     """The registered miners this protocol runs (slice M, M-C). Absent (None) until declared;
     left out of the hash while unset, and sorted by name and version in it."""
+    hypothesis_plan: HypothesisPlan | None = None
+    """Hypothesis defaults (slice 6): minimum seeds, confidence, test-access limit, conflict
+    tolerance. Absent (None) until declared; left out of the hash while unset."""
     rationale: str = ""
 
     @model_validator(mode="after")
@@ -348,6 +353,7 @@ AMENDABLE_FIELDS = (
     "library_sources",
     "gate_policies",
     "miners",
+    "hypothesis_plan",
 )
 """Top-level hashed fields other than criteria, which an amendment reports as `other_changes`."""
 
