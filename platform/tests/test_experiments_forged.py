@@ -457,6 +457,11 @@ def test_forged_baseline_verdicts_and_acceptances_change_nothing(
         s: raw_run(project, human, exp2, cell(f"reproduction:{r}", seed=s, split="dev"))
         for s in seeds
     }
+    # reported first: the "first completed run of a seed" check must not hide the arm check
+    on_other = {
+        s: raw_run(project, human, exp, cell(f"reproduction:{r_other}", seed=s, split="dev"))
+        for s in seeds
+    }
     on_r = {
         s: raw_run(project, human, exp, cell(f"reproduction:{r}", seed=s, split="dev"))
         for s in (1, 2)
@@ -469,10 +474,6 @@ def test_forged_baseline_verdicts_and_acceptances_change_nothing(
     )
     exploratory3 = raw_run(project, human, exp, off_universe)  # post hoc: off the primary universe
     on_r[3] = raw_run(project, human, exp, cell(f"reproduction:{r}", seed=3, split="dev"))
-    on_other = {
-        s: raw_run(project, human, exp, cell(f"reproduction:{r_other}", seed=s, split="dev"))
-        for s in seeds
-    }
     for seed in seeds:  # the third baseline reproduces
         raw_run(
             project, human, exp, cell(f"reproduction:{r_good}", seed=seed, split="dev"), value="1"
@@ -486,7 +487,13 @@ def test_forged_baseline_verdicts_and_acceptances_change_nothing(
         "B5",
         SYSTEM_S3,
         "baseline.evaluated",
-        verdict_payload(exp, r, runs, reproduced="1", verdict="reproduced"),
+        verdict_payload(exp, r, runs, reproduced="1"),  # the verdict is the true one
+    )
+    s.ignored(  # B7: the reported value is the one frozen with the design
+        "B7",
+        SYSTEM_S3,
+        "baseline.evaluated",
+        verdict_payload(exp, r, runs, reported="9"),
     )
     s.ignored(  # B6: the verdict is the one the mean gives
         "B6", SYSTEM_S3, "baseline.evaluated", verdict_payload(exp, r, runs, verdict="reproduced")
@@ -569,3 +576,25 @@ def test_replayed_under_systematic_rules_an_unlock_without_both_controls_is_igno
     assert unlock_nonce(project, exp) is None
     view = experiment_view(project, exp)
     assert view is not None and view.state == "frozen"
+
+
+def test_a_forged_freeze_without_the_baseline_values_is_ignored(
+    project: Project, human: Actor, xw: XW
+) -> None:
+    exp, _ = design_experiment(project, DRAFTER, xw.design())  # one baseline
+    s = Scenario(project)
+    s.ignored("F11-empty", human, "experiment.frozen", frozen_payload(project, exp))
+    s.ignored(
+        "F11-other-row",
+        human,
+        "experiment.frozen",
+        frozen_payload(project, exp, baseline_values={xw.rows[1]: "1"}),
+    )
+    s.rebuilt()
+    forge(
+        project,
+        human,
+        "experiment.frozen",
+        frozen_payload(project, exp, baseline_values={xw.rows[0]: "1"}),
+    )
+    s.accepted()
