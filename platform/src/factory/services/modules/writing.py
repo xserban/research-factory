@@ -7,6 +7,7 @@ and a human audit of a sample of positive verdicts, and a draft leaves through t
 `writing.release`, whose exploratory and pilot presets are in `modules/presets.py` (plan W-B)."""
 
 from factory.modules.contract import (
+    CheckRule,
     EventFamily,
     GateKind,
     GateSpec,
@@ -54,6 +55,14 @@ SPEC = ModuleSpec(
         "none",
         "gate-sample",
         ("support-eligibility", "stat-value"),
+    ),
+    checks=(
+        CheckRule("draft-sentence-unchecked", ("warning", "warning", "error")),
+        CheckRule("draft-sentence-flagged", ("warning", "warning", "error")),
+        CheckRule("draft-sentence-stale", ("warning", "warning", "error")),
+        CheckRule("draft-audit-missing", (None, "warning", "warning")),
+        CheckRule("draft-verify-error-high", ("warning", "warning", "error")),
+        CheckRule("draft-writer-verified", ("error", "error", "error")),
     ),
     gates=(
         GateSpec(

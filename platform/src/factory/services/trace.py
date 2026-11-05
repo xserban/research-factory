@@ -53,7 +53,7 @@ from factory.model.screening import AUDIT_ID_RE, DECISION_ID_RE, QUALIFIED_CRITE
 from factory.model.seed import SEED_ID_RE
 from factory.model.work import QUERY_ID_RE, RUN_ID_RE
 from factory.model.work_ids import WORK_ID_RE
-from factory.services import label_trace, layer_trace, region_trace, slice6_trace
+from factory.services import draft_trace, label_trace, layer_trace, region_trace, slice6_trace
 from factory.services.context import Project
 from factory.services.contributions import contribution_item
 from factory.services.ideas import idea_view
@@ -84,6 +84,11 @@ KINDS: tuple[str, ...] = (
     "cites",
     "quote",
     "cell",
+    "group",
+    "stat",
+    "sentence",
+    "verdict",
+    "draft",
     "resolution",
     "audit",
     "seed",
@@ -131,6 +136,7 @@ _PATTERNS: tuple[tuple[str, str], ...] = (
     *region_trace.REGION_PATTERNS,
     *label_trace.ORGANISATION_PATTERNS,
     *slice6_trace.PATTERNS,
+    *draft_trace.DRAFT_PATTERNS,
     (REL_ID_RE, "relation"),
     (IDEA_ID_RE, "idea"),
     (_CITES_RE, "cites"),
@@ -557,6 +563,7 @@ class _Walk:
         self._chase: tuple[dict[str, str], dict[str, list[str]]] | None = None
         self._lookup_runs: dict[str, tuple[str, ...]] | None = None
         self._describers: dict[str, Callable[[str], _Described | None]] = {
+            **{k: partial(self._draft_node, k) for k in draft_trace.DRAFT_KINDS},
             "question": self._question,
             "element": self._element,
             "criterion": self._criterion,
@@ -737,6 +744,10 @@ class _Walk:
     def _organisation_node(self, ident: str) -> _Described | None:
         kind = {"lbl": "label", "trm": "term", "cns": "consolidation", "cnp": "proposal"}[ident[:3]]
         found = label_trace.describe(self._conn, kind, ident, agent=self._agent)
+        return None if found is None else _Described(*found)
+
+    def _draft_node(self, kind: str, ident: str) -> _Described | None:
+        found = draft_trace.describe(self._conn, kind, ident)
         return None if found is None else _Described(*found)
 
     def _question(self, ident: str) -> _Described | None:
@@ -1242,6 +1253,8 @@ class _Walk:
         kind, ident = key
         if kind in region_trace.REGION_KINDS:
             return region_trace.edges(self._conn, kind, ident)
+        if kind in draft_trace.DRAFT_KINDS:
+            return draft_trace.edges(self._project, self._conn, kind, ident)
         if kind in layer_trace.LAYER_KINDS:
             up, down = layer_trace.edges(self._conn, kind, ident)
         elif kind in label_trace.ORGANISATION_KINDS:
@@ -1256,6 +1269,8 @@ class _Walk:
                 *down,
                 *self._slice6_keys(slice6_trace.attached(self._conn, kind, ident.split("/", 1)[0])),
             ]
+        if kind in draft_trace.CITABLE_KINDS:
+            down = [*down, *draft_trace.citing(self._conn, kind, ident)]
         if self._layer == "all" and kind in ("anchor", "work", "idea"):
             down = [*down, *layer_trace.attached(self._conn, kind, ident)]
         if self._layer == "all" and kind in ("work", "idea", "concept"):

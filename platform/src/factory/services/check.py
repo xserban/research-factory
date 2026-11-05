@@ -35,6 +35,7 @@ from factory.errors import FactoryValidationError
 from factory.events.blobs import BlobIntegrityError
 from factory.events.reader import read_all
 from factory.index.chase import admitted_works
+from factory.index.drafts import identities
 from factory.living.counts import source_counts
 from factory.model.base import StrictModel
 from factory.model.extraction import MinerScope, Scope
@@ -64,6 +65,9 @@ from factory.services.contributions import (
 )
 from factory.services.dedup import active_merges
 from factory.services.document_read import default_conversion
+from factory.services.draft_audit import audit_report as draft_audit_report
+from factory.services.draft_release import released_drafts
+from factory.services.drafts import list_drafts, sentence_status
 from factory.services.evidence_report import evidence_report
 from factory.services.extraction import (
     calibration_task_ids,
@@ -255,13 +259,19 @@ _RATE_CODES = {
 reads instead (decision 37.14). The finding itself, its code and severity are unchanged."""
 
 _WITHHELD_CODES = frozenset(
-    {"extraction-error-high", "contribution-error-ceiling", "gate-audit-error-high"}
+    {
+        "extraction-error-high",
+        "contribution-error-ceiling",
+        "gate-audit-error-high",
+        "draft-verify-error-high",
+    }
 )
-"""Findings an agent never reads, because their presence is the extraction audit's ceiling flag
-(decision 52)."""
+"""Findings an agent never reads, because their presence is an audit's ceiling flag (decision
+52)."""
 
 _AUDIT_REPORTED = "extraction-audit-reported"
 _GATE_AUDIT_REPORTED = "gate-audit-reported"
+_DRAFT_AUDIT_REPORTED = "draft-audit-reported"
 
 
 def agent_view(
@@ -270,6 +280,7 @@ def agent_view(
     labelled_audit: str | None = None,
     labelled_contribution_audit: str | None = None,
     labelled_gate_audits: Sequence[str] = (),
+    labelled_draft_audits: Sequence[str] = (),
 ) -> CheckReport:
     """The report as an agent may read it: seed findings by role and count only (R-20), no
     label-derived rate, and no extraction audit ceiling flag.
@@ -331,6 +342,15 @@ def agent_view(
                 message="a gate audit is labelled; its result is reported to the researcher",
             )
         )
+    if labelled_draft_audits:  # likewise: the drafts with a labelled verdict audit
+        findings.append(
+            Finding(
+                code=_DRAFT_AUDIT_REPORTED,
+                severity="warning",
+                refs=list(labelled_draft_audits),
+                message="a draft's audit is labelled; its result is reported to the researcher",
+            )
+        )
     return report.model_copy(update={"findings": findings})
 
 
@@ -347,6 +367,9 @@ def agent_check(project: Project, *, promote_to: RigorMode | None = None) -> Che
             check(project, promote_to=promote_to),
             labelled_audit=labelled,
             labelled_gate_audits=labelled_gate_audits(project),
+            labelled_draft_audits=[
+                d.draft_id for d in list_drafts(project) if audit_report_of(project, d.draft_id)
+            ],
             labelled_contribution_audit=(
                 contribution.audit_id
                 if contribution is not None and (contribution.labelled or contribution.outdated)
@@ -501,9 +524,106 @@ def _run_rules(project: Project) -> list[_Hit]:
         _mining(project),
         _miner_lifecycle(project),
         slice6_hits(project),
+        _drafts(project),
+        _writer_verified(project),
     ]
     flat = [hit for group in groups for hit in group]
     return [replace(hit, seq=seq) for seq, hit in enumerate(flat)]
+
+
+# --- Drafts (slice 7b, plan W-B) ---
+
+_SENTENCE_CODES = (
+    ("unchecked", "draft-sentence-unchecked"),
+    ("flagged", "draft-sentence-flagged"),
+    ("stale", "draft-sentence-stale"),
+)
+
+
+def audit_report_of(project: Project, draft_id: str) -> int:
+    """How many verdicts of the draft's audit are labelled (the agent view's neutral marker)."""
+    return draft_audit_report(project, draft_id).labelled
+
+
+def _draft_hits(project: Project, draft_id: str, released: bool) -> list[_Hit]:
+    rows = sentence_status(project, draft_id, agent=AGENT_VIEW.get())
+    hits: list[_Hit] = []
+    for status, code in _SENTENCE_CODES:
+        refs = tuple(r.sentence_id for r in rows if r.status == status)
+        if refs:
+            hits.append(
+                _Hit(
+                    code,
+                    (draft_id, *refs),
+                    f"{len(refs)} sentence(s) of a draft are {status}",
+                    severity=None if released else "warning",
+                )
+            )
+    report = draft_audit_report(project, draft_id)
+    supported = any(r.status == "supported" for r in rows)
+    if (report.drawn == 0 and supported) or report.labelled < report.drawn or report.outdated:
+        hits.append(
+            _Hit(
+                "draft-audit-missing",
+                (draft_id,),
+                "a draft's supported verdicts have no complete, current audit",
+            )
+        )
+    if report.above_ceiling:
+        hits.append(
+            _Hit(
+                "draft-verify-error-high",
+                (draft_id,),
+                "the audit of a draft's verdicts found errors above the declared ceiling",
+            )
+        )
+    return hits
+
+
+def _drafts(project: Project) -> list[_Hit]:
+    """The state of each draft: ids and counts only, never a sentence's text. For a released draft
+    the sentence findings read their level by mode (an error in `systematic`); for a draft not
+    released they stay warnings. The agent view reads the status without audit labels."""
+    released = released_drafts(project)
+    return [
+        hit
+        for draft in list_drafts(project)
+        for hit in _draft_hits(project, draft.draft_id, draft.draft_id in released)
+    ]
+
+
+def _writer_verified(project: Project) -> list[_Hit]:
+    """Verdicts in the log by someone who wrote in the same draft, whether or not they were folded
+    (a service refuses them, so the log holds one only by hand), in either order."""
+    with project.index.connect() as conn:
+        present = conn.execute(
+            text("SELECT 1 FROM events WHERE type = 'draft.verified' LIMIT 1")
+        ).first()
+    if present is None:
+        return []
+    writers: dict[str, set[str]] = {}
+    draft_of: dict[str, str] = {}
+    verdicts: list[tuple[str, frozenset[str]]] = []
+    for event in read_all(project.paths.events_dir, project.catalog):
+        if event.type == "draft.sentence_recorded":
+            draft = str(event.payload["draft_id"])
+            draft_of[str(event.payload["sentence_id"])] = draft
+            writers.setdefault(draft, set()).update(identities(event.actor))
+        elif event.type == "draft.verified":
+            verdicts.append((str(event.payload["sentence_id"]), identities(event.actor)))
+    broken: dict[str, list[str]] = {}
+    for sentence, who in verdicts:
+        draft = draft_of.get(sentence, "")
+        if who & writers.get(draft, set()):
+            broken.setdefault(draft, []).append(sentence)
+    return [
+        _Hit(
+            "draft-writer-verified",
+            (draft, *sentences),
+            f"{len(sentences)} verdict(s) of a draft by someone who wrote in it",
+        )
+        for draft, sentences in sorted(broken.items())
+    ]
 
 
 # --- Registered miners (slice M, M-C) ---
