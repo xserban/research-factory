@@ -13,6 +13,9 @@ Invariants:
   (4) the limits: evidence-report limit codes and the works with no stated base.
 - Method disagreement is a slot, never an average: a group section lists each disagreement as a
   list of cells (R-42).
+- It reads the evidence report once, not the per-group accessors of ruling 26: `group_index` runs
+  the same fold, and the limits slot needs the report whatever else is read (decision row W-A,
+  item 3, states this exception for the researcher).
 - `agent=True` (default, and the only form a draft pins) builds from the agent variant of the
   evidence report, which withholds label-derived audit facts (decision 37.14); `agent=False` is the
   researcher's complete form, shown at the command line.
