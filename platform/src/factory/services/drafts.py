@@ -2,7 +2,8 @@
 
 Declares: `create_draft`, `repin_outline`, `write_sentences`, `withdraw`, `reorder`, `draft_next`,
 `live_sentences`, `get_draft`, `list_drafts`, `verifier_sessions`, `sentence_status`,
-`status_counts`, `SentenceInput`, `SentenceRow`, `SlotTask`, `StatusRow`. The writer of the
+`status_counts`, `draft_view`, `draft_works`, `draft_render`, `SentenceInput`, `SentenceRow`,
+`SlotTask`, `StatusRow`, `DraftView`. The writer of the
 sentence events (the verification, audit and release events have their own services).
 
 Invariants:
@@ -35,6 +36,7 @@ from sqlalchemy import text
 
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor, Event
+from factory.exports.keys import assign_keys
 from factory.index.drafts import identities, verifiers_of
 from factory.model.base import StrictModel
 from factory.model.drafts import (
@@ -59,7 +61,9 @@ from factory.model.drafts import (
 from factory.model.task import DRAFT_SLOT_TASK_KIND, Task, TaskCompleted, TaskStatus
 from factory.services.call_memo import entering
 from factory.services.context import Project
-from factory.services.draft_audit import incorrect_verdicts
+from factory.services.dedup import active_merges
+from factory.services.draft_audit import agent_audit_report, audit_report, incorrect_verdicts
+from factory.services.exports import select_works
 from factory.services.outline import DEFAULT_SCOPE, OutlineScope, build_outline, outline_json
 from factory.services.results import BatchResult, ItemError
 from factory.services.supports import ResolvedSupport, resolve_supports
@@ -71,6 +75,7 @@ from factory.services.tasks import (
     task_content,
 )
 from factory.writing.checks import DraftContext, check_sentence
+from factory.writing.render import render_clean, render_closing, render_review
 from factory.writing.stats import STATS_VERSION
 
 ORDER_STEP = 10
@@ -145,6 +150,31 @@ class StatusRow:
     status: SentenceStatus
     reason: str | None
     flags: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class RenderedSentence:
+    sentence_id: str
+    text: str
+    supports: tuple[str, ...]
+    works: tuple[str, ...]
+    """The canonical works of its supports, in support order, de-duplicated."""
+
+
+@dataclass(frozen=True)
+class RenderedSection:
+    section_id: str
+    heading: str
+    sentences: tuple[RenderedSentence, ...]
+
+
+@dataclass(frozen=True)
+class DraftView:
+    """A draft as a rendering reads it: sections in order, each with its live sentences."""
+
+    draft_id: str
+    title: str
+    sections: tuple[RenderedSection, ...]
 
 
 @dataclass(frozen=True)
@@ -453,6 +483,108 @@ def sentence_status(project: Project, draft_id: str, *, agent: bool = False) -> 
 def status_counts(rows: Sequence[StatusRow]) -> dict[str, int]:
     """The count of each status, every status present."""
     return {status: sum(1 for r in rows if r.status == status) for status in STATUSES}
+
+
+def _works_by_sentence(
+    project: Project, resolved: dict[str, list[ResolvedSupport]]
+) -> dict[str, tuple[str, ...]]:
+    primary = {
+        absorbed: merge.primary
+        for merge in active_merges(project)
+        for absorbed in merge.absorbed
+        if absorbed != merge.primary
+    }
+    return {
+        sentence_id: tuple(
+            dict.fromkeys(primary.get(w, w) for support in supports for w in support.work_ids)
+        )
+        for sentence_id, supports in resolved.items()
+    }
+
+
+def draft_works(project: Project, draft_id: str) -> list[str]:
+    """The works of the supports of the draft's live sentences (ruling 8: every sentence that has
+    a support is `supported`, interpretive or rendered with a marker), merges read as the primary;
+    what `draft:<id>` selects before it is limited to the works of the project."""
+    with entering():
+        require_draft(project, draft_id)
+        rows = live_sentences(project, draft_id)
+        works = _works_by_sentence(project, _resolved_by_sentence(project, rows))
+        return list(dict.fromkeys(w for row in rows for w in works[row.sentence_id]))
+
+
+def draft_view(project: Project, draft_id: str) -> DraftView:
+    """The draft's sections with their live sentences and each sentence's cited works."""
+    with entering():
+        title = require_draft(project, draft_id)[0]
+        rows = live_sentences(project, draft_id)
+        works = _works_by_sentence(project, _resolved_by_sentence(project, rows))
+        sections = tuple(
+            RenderedSection(
+                section_id=section.section_id,
+                heading=section.heading,
+                sentences=tuple(
+                    RenderedSentence(
+                        sentence_id=r.sentence_id,
+                        text=r.text,
+                        supports=tuple(r.supports),
+                        works=works[r.sentence_id],
+                    )
+                    for r in rows
+                    if r.section_id == section.section_id
+                ),
+            )
+            for section in _sections(project, draft_id)
+        )
+        return DraftView(draft_id=draft_id, title=title, sections=sections)
+
+
+def _same_model_verdicts(project: Project, draft_id: str) -> int:
+    with project.index.connect() as conn:
+        return int(
+            conn.execute(
+                text(
+                    "SELECT COUNT(*) FROM sentence_verdicts v JOIN draft_sentences s "
+                    "ON s.sentence_id = v.sentence_id WHERE v.draft_id = :d AND v.model = s.model "
+                    "AND s.superseded_by IS NULL AND s.withdrawn = 0"
+                ),
+                {"d": draft_id},
+            ).scalar_one()
+        )
+
+
+def draft_render(
+    project: Project,
+    draft_id: str,
+    mode: Literal["review", "clean"],
+    *,
+    agent: bool = False,
+) -> str:
+    """The draft as Markdown. `review` shows each sentence with its status, flags, supports and
+    quotes; `clean` is the prose with citations and markers, ending with the bibliography note and
+    the methods paragraph. Quotes are read from the extraction events' projection, never from the
+    library. `agent` reads the agent variants of the status and of the audit. Nothing is written:
+    the caller decides where the text goes, and it is never under the project (spec ruling 8)."""
+    with entering():
+        view = draft_view(project, draft_id)
+        statuses = sentence_status(project, draft_id, agent=agent)
+        if mode == "review":
+            rows = live_sentences(project, draft_id)
+            resolved = _resolved_by_sentence(project, rows)
+            spans = {s.ref.text: s.spans for found in resolved.values() for s in found}
+            return render_review(view, statuses, spans)
+        report = audit_report(project, draft_id)
+        keys = assign_keys(select_works(project, f"draft:{draft_id}"))
+        return (
+            render_clean(view, statuses, keys)
+            + "\n"
+            + render_closing(
+                draft_id,
+                statuses,
+                agent_audit_report(report) if agent else report,
+                _same_model_verdicts(project, draft_id),
+            )
+        )
 
 
 # --- Creating and repinning ---
