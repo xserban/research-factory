@@ -454,18 +454,21 @@ def coverage_report(project: Project, import_id: str) -> CoverageReport:
     )
 
 
-def _autonomy(project: Project, import_id: str) -> dict[str, int]:
+def _autonomy(project: Project, import_id: str, *, held_out: bool = True) -> dict[str, int]:
     """Per autonomy level, the binding decisions the import's links rest on; empty unless an
-    agent passed one."""
+    agent passed one. `held_out=False` leaves out the decisions on held-out records, which an
+    agent may not count before a pass opens (ruling 23, decision 81)."""
     with project.index.connect() as conn:
         mine = {
             str(e)
             for (e,) in conn.execute(
                 text(
-                    "SELECT event_id FROM import_decisions "
-                    "WHERE import_id = :i AND kind = 'binding'"
+                    "SELECT d.event_id FROM import_decisions d "
+                    "JOIN import_records r ON r.import_id = d.import_id AND r.ordinal = d.ordinal "
+                    "WHERE d.import_id = :i AND d.kind = 'binding' "
+                    "AND (:held OR r.part != 'held-out')"
                 ),
-                {"i": import_id},
+                {"i": import_id, "held": held_out},
             )
         }
     counts = {level: 0 for level in Autonomy}
@@ -579,6 +582,7 @@ def agent_coverage(project: Project, import_id: str) -> CoverageReport:
         update={
             "parts": parts,
             "included_not_in_library": report.included_not_in_library if visible else None,
+            "autonomy": _autonomy(project, import_id, held_out=visible),
         }
     )
 
