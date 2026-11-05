@@ -14,19 +14,27 @@ from factory.errors import FactoryValidationError, ValidationIssue
 from factory.model.extraction import Scope
 from factory.model.protocol import ScreeningPlan, ScreeningStage
 from factory.model.screening import PassLabel
+from factory.services.modules import default_task_kinds
 from factory.services.protocol import ProtocolVersion
 
-_KINDS: dict[tuple[ScreeningStage, PassLabel], str] = {
-    (ScreeningStage.TITLE_ABSTRACT, PassLabel.A): "screen_a",
-    (ScreeningStage.TITLE_ABSTRACT, PassLabel.B): "screen_b",
-    (ScreeningStage.FULL_TEXT, PassLabel.A): "screen_ft_a",
-    (ScreeningStage.FULL_TEXT, PassLabel.B): "screen_ft_b",
-}
+_REGISTRY = default_task_kinds()
 
-EXTRACT_KINDS: dict[PassLabel, str] = {PassLabel.A: "extract_a", PassLabel.B: "extract_b"}
+
+def _extract_kinds(scope: Scope) -> dict[PassLabel, str]:
+    return {
+        label: _REGISTRY.kind_for(
+            "contributions" if scope is Scope.CONTRIBUTION else "extraction",
+            label=label,
+            scope=scope.value,
+        )
+        for label in PassLabel
+    }
+
+
+EXTRACT_KINDS: dict[PassLabel, str] = _extract_kinds(Scope.EVIDENCE)
 """The task kind of each evidence extraction pass; one task per work per pass."""
 
-CONTRIB_KINDS: dict[PassLabel, str] = {PassLabel.A: "contrib_a", PassLabel.B: "contrib_b"}
+CONTRIB_KINDS: dict[PassLabel, str] = _extract_kinds(Scope.CONTRIBUTION)
 """The task kind of each contribution extraction pass (slice 3b); one task per work per pass."""
 
 
@@ -37,10 +45,10 @@ def kinds_for(scope: Scope) -> dict[PassLabel, str]:
 
 def scope_of_kind(kind: str) -> Scope | None:
     """The scope an extraction task kind belongs to; None for any other kind."""
-    for scope in Scope:
-        if kind in kinds_for(scope).values():
-            return scope
-    return None
+    info = _REGISTRY.describe(kind)
+    if info is None or info.scope is None:
+        return None
+    return Scope(info.scope)
 
 
 def require_pass_stage(stage: ScreeningStage) -> ScreeningStage:
@@ -54,15 +62,15 @@ def require_pass_stage(stage: ScreeningStage) -> ScreeningStage:
 
 def task_kind(stage: ScreeningStage, label: PassLabel) -> str:
     """The task kind of pass `label` at `stage`: `screen_a`/`screen_b` or `screen_ft_a`/`_b`."""
-    return _KINDS[(require_pass_stage(stage), label)]
+    return _REGISTRY.kind_for("screening", stage=require_pass_stage(stage).value, label=label)
 
 
 def stage_of_kind(kind: str) -> ScreeningStage | None:
     """The stage a screening task kind belongs to; None for any other kind."""
-    for (stage, _), known in _KINDS.items():
-        if known == kind:
-            return stage
-    return None
+    info = _REGISTRY.describe(kind)
+    if info is None or info.stage is None:
+        return None
+    return ScreeningStage(info.stage)
 
 
 def screening_plan(protocol: ProtocolVersion, stage: ScreeningStage) -> ScreeningPlan:
