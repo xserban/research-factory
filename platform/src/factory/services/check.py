@@ -290,6 +290,18 @@ class CheckReport(StrictModel):
         """True when no finding is an error."""
         return not any(finding.severity == "error" for finding in self.findings)
 
+    @property
+    def evidence_ok(self) -> bool:
+        """True when no finding about the evidence is an error: every error counts except the
+        interpretation layer's own, a `layer-leak` excepted (it says the evidence is touched).
+        `ok` stays the whole report; a sound project with one unreviewed interpretation is
+        `evidence_ok` and, in `systematic`, not `ok`."""
+        return not any(
+            finding.severity == "error"
+            and (finding.code not in LAYER_CHECK_CODES or finding.code == "layer-leak")
+            for finding in self.findings
+        )
+
 
 _HELD_OUT_POSSIBLE = "held-out-possible"
 _SEED_PHRASES = {

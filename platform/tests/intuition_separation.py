@@ -28,7 +28,7 @@ from factory.services import evidence_report as evidence_report_service
 from factory.services import extraction as extraction_service
 from factory.services import extraction_agreement as agreement_service
 from factory.services import ideas as ideas_service
-from factory.services.check import LAYER_CHECK_CODES, _findings_as
+from factory.services.check import LAYER_CHECK_CODES, CheckReport, _findings_as
 from factory.services.concepts import (
     decide_concept_link,
     decide_concept_source,
@@ -354,8 +354,12 @@ def evidence_findings(project: Project) -> str:
     one output allowed to differ), over every mode: the evidence findings stay byte-identical."""
     out = []
     for mode in (RigorMode.EXPLORATORY, RigorMode.PILOT, RigorMode.SYSTEMATIC):
-        found = [f for f in _findings_as(project, mode) if f.code not in LAYER_CHECK_CODES]
+        every = _findings_as(project, mode)
+        found = [f for f in every if f.code not in LAYER_CHECK_CODES]
         out.append([f.model_dump(mode="json") for f in found])
+        # `ok` moves with the layer's own errors; `evidence_ok` must not
+        whole = CheckReport(mode=mode, evaluated_as=mode, findings=every)
+        out.append({"evidence_ok": whole.evidence_ok})
     return json.dumps(out, sort_keys=True, default=str)
 
 

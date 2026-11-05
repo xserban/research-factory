@@ -97,6 +97,39 @@ def concept(
     return cid
 
 
+def _finding(code: str, severity: str = "error") -> Finding:
+    return Finding(code=code, severity=severity, refs=[], message="m")  # type: ignore[arg-type]
+
+
+def test_evidence_ok_ignores_layer_errors_except_a_leak() -> None:
+    def report(*findings: Finding) -> check_module.CheckReport:
+        return check_module.CheckReport(mode=PILOT, evaluated_as=PILOT, findings=list(findings))
+
+    unreviewed = _finding("interpretation-unreviewed")
+    assert not report(unreviewed).ok and report(unreviewed).evidence_ok
+    assert report(_finding("concept-cycle")).evidence_ok
+    assert not report(_finding("layer-leak")).evidence_ok
+    assert not report(unreviewed, _finding("broken-link")).evidence_ok
+    assert report(_finding("broken-link", "warning")).evidence_ok
+    assert report().evidence_ok and report().ok
+
+
+def test_a_sound_project_with_an_unreviewed_interpretation_is_evidence_ok(
+    project: Project, iw: IWorld
+) -> None:
+    agent_interpretation(project, iw)
+    report = check(project, promote_to=None)
+    layer_errors = [f for f in _findings_as(project, SYSTEMATIC) if f.code in LAYER_CHECK_CODES]
+    assert any(f.severity == "error" for f in layer_errors)  # the spec's systematic error
+    from factory.cli.render import check_lines
+
+    lines = check_lines(report)
+    assert any(line.startswith("interpretation layer (not evidence)") for line in lines)
+    assert report.evidence_ok == (
+        not any(f.severity == "error" and f.code not in LAYER_CHECK_CODES for f in report.findings)
+    )
+
+
 def test_the_severity_table_is_as_specified() -> None:
     assert LEVELS["interpretation-unreviewed"] == ("warning", "warning", "error")
     assert LEVELS["concept-unreviewed"] == ("warning", "warning", "error")

@@ -1040,6 +1040,7 @@ def build_server(
             data: dict[str, JsonValue] = {
                 **report.model_dump(mode="json"),
                 "ok": report.ok,
+                "evidence_ok": report.evidence_ok,
             }
             return _withheld(opened, data, include_work_ids=False)
 

@@ -17,7 +17,7 @@ from factory.model.screening import PassLabel
 from factory.services.agreement import DecisionView
 from factory.services.audit import AuditReport
 from factory.services.cards import CardSummary, CardView
-from factory.services.check import CheckReport
+from factory.services.check import LAYER_CHECK_CODES, CheckReport, Finding
 from factory.services.concepts import ConceptLinkList, ConceptList, ConceptView
 from factory.services.contributions import ContributionStatus, ItemView
 from factory.services.coverage import CoverageReport, Ratio
@@ -205,9 +205,17 @@ def check_lines(report: CheckReport) -> list[str]:
     if not report.findings:
         return [head, "no findings"]
     lines = [head]
-    for finding in report.findings:
+
+    def one(finding: Finding) -> str:
         refs = f"  [{', '.join(finding.refs)}]" if finding.refs else ""
-        lines.append(f"{finding.severity}  {finding.code}  {finding.message}{refs}")
+        return f"{finding.severity}  {finding.code}  {finding.message}{refs}"
+
+    layer = [f for f in report.findings if f.code in LAYER_CHECK_CODES and f.code != "layer-leak"]
+    lines += [one(f) for f in report.findings if f not in layer]
+    if layer:
+        lines.append("interpretation layer (not evidence):")
+        lines += [f"  {one(f)}" for f in layer]
+        lines.append(f"evidence ok: {'yes' if report.evidence_ok else 'no'}")
     return lines
 
 
