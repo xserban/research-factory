@@ -21,8 +21,9 @@ Invariants:
 
 from __future__ import annotations
 
+import hashlib
 import json
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from typing import Any, Literal
 
 from pydantic import ConfigDict, Field
@@ -30,7 +31,7 @@ from sqlalchemy import text
 
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor, Event
-from factory.intuition.classify import fold, source_digest
+from factory.intuition.classify import classify_use, fold, source_digest, would_cycle
 from factory.intuition.labels import LAYER_CLASS, layer_label
 from factory.intuition.validate import text_length
 from factory.model.base import StrictModel
@@ -43,18 +44,31 @@ from factory.model.intuition import (
     ConceptDefined,
     ConceptHidden,
     ConceptInput,
+    ConceptLinkDecided,
+    ConceptLinkProposed,
     ConceptReviewed,
     ConceptSourceDecided,
     ConceptState,
     HistoryEntry,
+    LinkStatus,
     SourceState,
     StoredConceptSource,
     StoredSource,
+    UseBasisInput,
 )
 from factory.model.screening import Channel
 from factory.services.context import Project
 from factory.services.extraction import is_extraction_session, screening_session
-from factory.services.intuition_sources import stale_sources, verify_sources
+from factory.services.ideas import idea_view
+from factory.services.interpretations import target_issue
+from factory.services.intuition_sources import (
+    ENTRY_UNKNOWN,
+    EXTRACTION_NOT_LIVE,
+    entry_link,
+    stale_sources,
+    verify_sources,
+)
+from factory.services.reference_view import is_live_reference_extraction, reference_view_of
 from factory.services.search import works_by_ids
 
 LIST_PAGE = 50
@@ -740,3 +754,429 @@ def concept_review_counts(project: Project) -> dict[ConceptState, int]:
             ).all()
         )
     return {s: int(found.get(s.value, 0)) for s in ConceptState}
+
+
+# --- `uses` links ---
+
+
+class LinkResult(StrictModel):
+    link_id: str
+    status: Literal["stated", "inferred"]
+    status_reason: str
+    existing: bool
+
+
+def _concept_names(project: Project, concept_id: str) -> list[str]:
+    """The names and aliases of a concept and of the concepts merged into it (ruling B4)."""
+    with project.index.connect() as conn:
+        names = [
+            str(r[0])
+            for r in conn.execute(
+                text("SELECT name FROM concepts WHERE concept_id = :c OR merged_into = :c"),
+                {"c": concept_id},
+            ).all()
+        ]
+        names += [
+            str(r[0])
+            for r in conn.execute(
+                text(
+                    "SELECT alias FROM concept_aliases WHERE concept_id IN "
+                    "(SELECT concept_id FROM concepts WHERE concept_id = :c OR merged_into = :c)"
+                ),
+                {"c": concept_id},
+            ).all()
+        ]
+    return names
+
+
+def effective_concept(project: Project, concept_id: str) -> str:
+    """The concept `concept_id` stands for: the one it is merged into, else itself (one level,
+    ruling B9)."""
+    project.index.sync()
+    row = _row(project, concept_id)
+    if row is None or row["merged_into"] is None:
+        return concept_id
+    return str(row["merged_into"])
+
+
+def _reachable_edges(project: Project, start: str) -> set[tuple[str, str]]:
+    """The `uses` edges between concepts, not rejected and merge-resolved, reachable from
+    `start`: one recursive query that visits each concept once, never the whole table."""
+    with project.index.connect() as conn:
+        found = conn.execute(
+            text(
+                "WITH RECURSIVE reach(n) AS (SELECT :s UNION SELECT e.target FROM layer_edges e "
+                "JOIN reach r ON e.source = r.n WHERE e.edge_type = 'uses' "
+                "AND e.review_state != 'rejected' AND e.source LIKE 'cpt\\_%' ESCAPE '\\') "
+                "SELECT e.source, e.target FROM layer_edges e WHERE e.edge_type = 'uses' "
+                "AND e.review_state != 'rejected' AND e.source IN (SELECT n FROM reach)"
+            ),
+            {"s": start},
+        ).all()
+    return {(str(a), str(b)) for a, b in found}
+
+
+def concept_path_issues(project: Project, source: str, target: str) -> list[ValidationIssue]:
+    """Ruling B8: whether a link `source` -> `target` between (effective) concepts is a
+    self-link or would close a cycle (gate L-cycle)."""
+    if source == target:
+        return [ValidationIssue("concept_id", "self-link")]
+    if would_cycle(_reachable_edges(project, target), (source, target)):
+        return [ValidationIssue("concept_id", "cycle")]
+    return []
+
+
+def _basis_digest(basis: UseBasisInput, stored: StoredSource | None) -> str:
+    if stored is not None:
+        canonical: dict[str, str | None] = {
+            "k": "quote",
+            "c": stored.conversion_id,
+            "a": stored.anchor,
+            "q": fold(stored.quote or ""),
+        }
+    elif basis.reference is not None:
+        canonical = {"k": "citation", "r": basis.reference}
+    else:
+        canonical = {"k": "none"}
+    blob = json.dumps(canonical, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return "bas_" + hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
+
+
+def _from_works(project: Project, from_node: str, from_kind: str) -> list[str]:
+    if from_kind == "idea":
+        view = idea_view(project, from_node)
+        return [] if view is None else list(view.effective_members)
+    return [from_node]
+
+
+def propose_concept_link(
+    project: Project,
+    actor: Actor,
+    from_node: str,
+    concept_id: str,
+    basis: UseBasisInput,
+    note: str | None = None,
+) -> LinkResult:
+    """Propose that `from_node` (a corpus paper, a confirmed idea or a live concept) uses
+    `concept_id`, and return the link with its computed status (`stated` or `inferred`, ruling
+    B6); a human's proposal is also only stated or inferred, and a human confirms it separately.
+    A proposal equal to a non-rejected link of the same computed status returns that link and
+    writes nothing (ruling B7). Refused, with nothing written and every issue reported, for an
+    unknown or merged concept (`concept_id`), an ineligible from-node (`from_node`), a quote or
+    reference that is not of the from-node's work or does not verify (`basis.quote.<attr>`,
+    `basis.reference`, reason `not-from-work`), no basis and no note (`note`) and a self-link or
+    cycle (`concept_id`, reasons `self-link`, `cycle`)."""
+    if actor.kind not in ("agent", "human"):
+        raise _refuse(ValidationIssue("actor", "only an agent or a human proposes a link"))
+    with project.index.exclusive():
+        project.index.sync()
+        issues: list[ValidationIssue] = []
+        concept = _row(project, concept_id)
+        if concept is None:
+            issues.append(ValidationIssue("concept_id", CONCEPT_UNKNOWN))
+        elif concept["merged_into"] is not None:
+            issues.append(ValidationIssue("concept_id", f"merged:{concept['merged_into']}"))
+        from_kind = "concept" if from_node.startswith("cpt_") else _kind_of(from_node)
+        if from_kind == "concept":
+            source_row = _row(project, from_node)
+            if source_row is None:
+                issues.append(ValidationIssue("from_node", CONCEPT_UNKNOWN))
+            elif source_row["merged_into"] is not None:
+                issues.append(ValidationIssue("from_node", f"merged:{source_row['merged_into']}"))
+        else:
+            problem = target_issue(project, from_node)
+            if problem is not None:
+                issues.append(ValidationIssue("from_node", problem.reason))
+        if issues:
+            raise FactoryValidationError(issues)
+        assert concept is not None
+        stored_quote: StoredSource | None = None
+        cited_work: str | None = None
+        link_resolved: bool | None = None
+        works = _from_works(project, from_node, from_kind)
+        if basis.quote is not None:
+            if from_kind == "concept":
+                issues.append(ValidationIssue("basis.quote", "not-from-work"))
+            elif basis.quote.work_id not in works:
+                issues.append(ValidationIssue("basis.quote.work_id", "not-from-work"))
+            else:
+                verdict = verify_sources(project, [basis.quote], field="basis.quote")
+                issues += [
+                    ValidationIssue(i.field.replace("basis.quote[0]", "basis.quote"), i.reason)
+                    for i in verdict.issues
+                ]
+                stored_quote = verdict.stored[0] if verdict.stored else None
+        elif basis.reference is not None:
+            issues += _reference_issues(project, basis.reference, from_kind, works)
+            if not issues:
+                state_work = entry_link(project, basis.reference)
+                assert state_work is not None
+                link_resolved = state_work[0] == "resolved"
+                cited_work = state_work[1]
+        elif note is None or not note.strip():
+            issues.append(ValidationIssue("note", "a link with no basis needs a note"))
+        if from_kind == "concept":
+            issues += concept_path_issues(
+                project,
+                effective_concept(project, from_node),
+                effective_concept(project, concept_id),
+            )
+        if issues:
+            raise FactoryValidationError(issues)
+        status, reason = classify_use(
+            from_kind=from_kind,
+            names=_concept_names(project, concept_id),
+            quote=None if stored_quote is None else stored_quote.quote,
+            cited_work=cited_work,
+            link_resolved=link_resolved,
+            source_work=concept["source_work"],
+            source_approved=concept["source_state"] == "approved",
+        )
+        digest = _basis_digest(basis, stored_quote)
+        with project.index.connect() as conn:
+            existing = conn.execute(
+                text(
+                    "SELECT link_id FROM concept_uses WHERE from_node = :f AND concept_id = :c "
+                    "AND basis_digest = :d AND proposed_status = :s AND status != 'rejected' "
+                    "ORDER BY link_id LIMIT 1"
+                ),
+                {"f": from_node, "c": concept_id, "d": digest, "s": status},
+            ).scalar()
+        if existing is not None:
+            return LinkResult(
+                link_id=str(existing), status=status, status_reason=reason, existing=True
+            )
+        link_id = f"cul_{project.ids.ulid()}"
+        payload = ConceptLinkProposed(
+            link_id=link_id,
+            from_node=from_node,
+            from_kind=from_kind,
+            concept_id=concept_id,
+            basis_kind="quote" if stored_quote else ("citation" if basis.reference else "none"),
+            quote=stored_quote,
+            reference=basis.reference,
+            cited_work=cited_work,
+            basis_digest=digest,
+            status=status,
+            status_reason=reason,
+            note=note,
+        )
+        input_blob = project.blobs.put_json(
+            {
+                "call": {
+                    "from_node": from_node,
+                    "concept_id": concept_id,
+                    "basis": basis.model_dump(mode="json"),
+                    "note": note,
+                }
+            }
+        )
+        event = project.events.make(
+            "concept.link_proposed",
+            payload,
+            actor,
+            refs=[link_id, from_node, concept_id],
+            input_blob=input_blob,
+        )
+        project.record([event])
+        return LinkResult(link_id=link_id, status=status, status_reason=reason, existing=False)
+
+
+def _kind_of(node: str) -> str:
+    return "idea" if node.startswith("ida_") else "paper"
+
+
+def _reference_issues(
+    project: Project, reference: str, from_kind: str, works: Sequence[str]
+) -> list[ValidationIssue]:
+    field = "basis.reference"
+    if from_kind == "concept":
+        return [ValidationIssue(field, "not-from-work")]
+    extraction_id = reference.rpartition(":")[0]
+    if not is_live_reference_extraction(project, extraction_id):
+        return [ValidationIssue(field, EXTRACTION_NOT_LIVE)]
+    view = reference_view_of(project, extraction_id)
+    if view is None or view.work_id not in works:
+        return [ValidationIssue(field, "not-from-work")]
+    if entry_link(project, reference) is None:
+        return [ValidationIssue(field, ENTRY_UNKNOWN)]
+    return []
+
+
+def decide_concept_link(
+    project: Project,
+    actor: Actor,
+    link_id: str,
+    decision: Literal["confirm", "reject"],
+    rationale: str,
+    channel: Channel,
+) -> str:
+    """Confirm an `inferred` link or reject a link that is not already rejected, and return the
+    event id; the latest decision wins. Human only (`actor`); the session that proposed an
+    agent-written link is refused, relay included (`actor`); a relay from a pass session is
+    refused (`channel`); an unknown link (`link_id`); a blank rationale (`rationale`); a confirm
+    of a link that is not inferred and a reject of a rejected one (`decision`, reasons
+    `not-inferred`, `already-rejected`)."""
+    if actor.kind != "human":
+        raise _refuse(ValidationIssue("actor", "only a human decides a link"))
+    with project.index.exclusive():
+        project.index.sync()
+        with project.index.connect() as conn:
+            row = (
+                conn.execute(
+                    text(
+                        "SELECT status, proposer_kind, proposer_session FROM concept_uses "
+                        "WHERE link_id = :l"
+                    ),
+                    {"l": link_id},
+                )
+                .mappings()
+                .first()
+            )
+        if row is None:
+            raise _refuse(ValidationIssue("link_id", "link-unknown"))
+        issues: list[ValidationIssue] = []
+        if row["proposer_kind"] == "agent" and row["proposer_session"] == actor.session:
+            issues.append(
+                ValidationIssue("actor", "the session that proposed a link cannot decide it")
+            )
+        if channel is Channel.MCP and _joined_a_pass(project, actor.session):
+            issues.append(ValidationIssue("channel", "this session has joined a pass"))
+        if not rationale.strip():
+            issues.append(ValidationIssue("rationale", "state why"))
+        if decision == "confirm" and row["status"] != LinkStatus.INFERRED.value:
+            issues.append(ValidationIssue("decision", "not-inferred"))
+        if decision == "reject" and row["status"] == LinkStatus.REJECTED.value:
+            issues.append(ValidationIssue("decision", "already-rejected"))
+        if issues:
+            raise FactoryValidationError(issues)
+        event = project.events.make(
+            "concept.link_decided",
+            ConceptLinkDecided(
+                link_id=link_id, decision=decision, rationale=rationale, channel=channel
+            ),
+            actor,
+            refs=[link_id],
+        )
+        project.record([event])
+        return event.id
+
+
+class ConceptLinkView(StrictModel):
+    """A `uses` link as the reviewer sees it, labelled. `concept_id` is the effective concept
+    (after merges), `raw_concept_id` the one the link names. Serialise with `by_alias=True` for
+    the key `class`."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, populate_by_name=True)
+
+    link_id: str
+    class_: str = Field(serialization_alias="class")
+    label: str
+    from_node: str
+    from_kind: str
+    concept_id: str
+    raw_concept_id: str
+    basis_kind: str
+    quote: StoredSource | None
+    reference: str | None
+    status: LinkStatus
+    status_reason: str
+    note: str | None
+    note_label: str | None
+    decided_by: str | None
+
+
+class ConceptLinkList(StrictModel):
+    items: list[ConceptLinkView]
+    hidden: ConceptHidden
+    next_cursor: str | None
+
+
+_LINK_SQL = (
+    "SELECT u.link_id, u.from_node, u.from_kind, u.concept_id, u.basis_kind, u.basis_work, "
+    "u.basis_conversion, u.basis_document, u.basis_anchor, u.basis_quote, u.reference, "
+    "u.status, u.status_reason, u.note, u.decided_by, "
+    "COALESCE(c.merged_into, u.concept_id) AS effective FROM concept_uses u "
+    "LEFT JOIN concepts c ON c.concept_id = u.concept_id "
+)
+_ENDPOINT_VISIBLE = (
+    "AND EXISTS (SELECT 1 FROM concepts ce WHERE ce.concept_id = COALESCE(c.merged_into, "
+    "u.concept_id) AND ce.source_state = 'approved' AND ce.merged_into IS NULL "
+    "AND ce.review_state IN ('unreviewed', 'reviewed')) "
+    "AND (u.from_kind != 'concept' OR EXISTS (SELECT 1 FROM concepts cf WHERE "
+    "cf.concept_id = COALESCE((SELECT m.merged_into FROM concepts m WHERE "
+    "m.concept_id = u.from_node), u.from_node) AND cf.source_state = 'approved' "
+    "AND cf.merged_into IS NULL AND cf.review_state IN ('unreviewed', 'reviewed'))) "
+)
+
+
+def list_concept_links(
+    project: Project,
+    *,
+    statuses: Collection[LinkStatus] | None = None,
+    concept_id: str | None = None,
+    include_hidden: bool = False,
+    cursor: str | None = None,
+    limit: int = LIST_PAGE,
+) -> ConceptLinkList:
+    """One page of `uses` links by id, labelled. By default the `stated` and `confirmed` links
+    whose concept endpoints are visible; `statuses` widens the states, `include_hidden` the
+    endpoints, `concept_id` limits to one effective concept. The hidden counts are always
+    reported. `next_cursor` continues the listing."""
+    wanted = [s.value for s in (statuses or (LinkStatus.STATED, LinkStatus.CONFIRMED))]
+    project.index.sync()
+    where = "u.status IN (SELECT value FROM json_each(:states)) "
+    params: dict[str, Any] = {"states": json.dumps(sorted(wanted)), "n": limit + 1}
+    if not include_hidden:
+        where += _ENDPOINT_VISIBLE
+    if concept_id is not None:
+        where += "AND COALESCE(c.merged_into, u.concept_id) = :cid "
+        params["cid"] = concept_id
+    if cursor is not None:
+        where += "AND u.link_id > :cur "
+        params["cur"] = cursor
+    with project.index.connect() as conn:
+        found = (
+            conn.execute(text(f"{_LINK_SQL} WHERE {where} ORDER BY u.link_id LIMIT :n"), params)
+            .mappings()
+            .all()
+        )
+    page = found[:limit]
+    items = [_link_view(r) for r in page]
+    return ConceptLinkList(
+        items=items,
+        hidden=concept_hidden(project),
+        next_cursor=items[-1].link_id if len(found) > limit else None,
+    )
+
+
+def _link_view(r: Any) -> ConceptLinkView:
+    quote: StoredSource | None = None
+    if r["basis_kind"] == "quote":
+        quote = StoredSource(
+            kind="quote",
+            role="supports",
+            work_id=r["basis_work"],
+            conversion_id=r["basis_conversion"],
+            document_id=r["basis_document"],
+            anchor=r["basis_anchor"],
+            quote=r["basis_quote"],
+        )
+    status = LinkStatus(str(r["status"]))
+    return ConceptLinkView(
+        link_id=str(r["link_id"]),
+        class_=LAYER_CLASS,
+        label=layer_label(status.value),
+        from_node=str(r["from_node"]),
+        from_kind=str(r["from_kind"]),
+        concept_id=str(r["effective"]),
+        raw_concept_id=str(r["concept_id"]),
+        basis_kind=str(r["basis_kind"]),
+        quote=quote,
+        reference=r["reference"],
+        status=status,
+        status_reason=str(r["status_reason"]),
+        note=r["note"],
+        note_label="agent-note" if r["basis_kind"] == "none" and r["note"] else None,
+        decided_by=r["decided_by"],
+    )
