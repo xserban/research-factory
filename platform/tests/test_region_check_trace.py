@@ -176,15 +176,51 @@ def test_findings_carry_no_text(region_project: RWorld, human: Actor, agent: Act
         assert "definition" not in f.message
 
 
-def test_withheld_region_has_no_drift_in_any_report(region_project: RWorld, human: Actor) -> None:
-    w = region_project
+def withheld_world(w: RWorld, human: Actor) -> tuple[str, str]:
+    """A withheld region and a clean one, each drifted by one added member, and a subregion link
+    from the clean region's version into the withheld region's version that no longer holds."""
     barred_queries(w, {"qry_imp": "import"})
     held = make(w, human, "held", RuleSet(include=(FT, RunRule(query_id="qry_imp"))))
-    snapshot_region(w.project, human, held)
+    fine = make(w, human, "fine")
+    held_v = snapshot_region(w.project, human, held)
+    fine_v = snapshot_region(w.project, human, fine)
+    link_regions(w.project, human, "subregion-of", fine_v, held_v)
     decide_member(w.project, human, held, W, w.extra, "add")
-    for report in (check(w.project), agent_check(w.project)):
-        assert "region-drift" not in {f.code for f in report.findings}
-        assert held in next(f for f in report.findings if f.code == "region-unreviewed").refs
+    decide_member(w.project, human, fine, W, w.extra, "add")
+    decide_member(w.project, human, held, W, w.included[0], "remove")
+    snapshot_region(w.project, human, held)
+    return held, fine
+
+
+def by_code(report: object, code: str) -> object:
+    return next(f for f in report.findings if f.code == code)  # type: ignore[attr-defined]
+
+
+def test_researcher_check_reports_withheld_regions(region_project: RWorld, human: Actor) -> None:
+    w = region_project
+    held, fine = withheld_world(w, human)
+    drift = by_code(check(w.project), "region-drift")
+    assert sorted(drift.refs) == [fine]  # type: ignore[attr-defined]
+    # the held region was snapshotted after its change; add one more so it drifts too
+    decide_member(w.project, human, held, W, w.included[1], "remove")
+    both = by_code(check(w.project), "region-drift")
+    assert sorted(both.refs) == sorted([held, fine])  # type: ignore[attr-defined]
+    assert "1 member(s) added, 1 removed" in both.message  # type: ignore[attr-defined]
+    assert by_code(check(w.project), "region-subregion-violated").refs  # type: ignore[attr-defined]
+
+
+def test_agent_check_withholds_regions_and_recomputes_counts(
+    region_project: RWorld, human: Actor
+) -> None:
+    w = region_project
+    held, fine = withheld_world(w, human)
+    decide_member(w.project, human, held, W, w.included[1], "remove")
+    report = agent_check(w.project)
+    drift = by_code(report, "region-drift")
+    assert drift.refs == [fine]  # type: ignore[attr-defined]
+    assert "1 member(s) added, 0 removed" in drift.message  # type: ignore[attr-defined]
+    assert "region-subregion-violated" not in {f.code for f in report.findings}
+    assert held in by_code(report, "region-unreviewed").refs  # type: ignore[attr-defined]
 
 
 # --- Trace ---

@@ -21,7 +21,8 @@ Invariants:
 import json
 import math
 import re
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta
@@ -111,7 +112,7 @@ from factory.services.protocol_rules import (
 )
 from factory.services.reference_resolve import lost_human_decisions
 from factory.services.references import current_extraction, included_works
-from factory.services.region_check import region_findings
+from factory.services.region_check import AGENT_VIEW, region_findings
 from factory.services.relations import RelationView, list_relations
 from factory.services.seeds import SeedRole, _rigor_mode, seed_check
 from factory.services.snowball import recorded_rounds, round_runs
@@ -324,7 +325,7 @@ def agent_view(
 def agent_check(project: Project, *, promote_to: RigorMode | None = None) -> CheckReport:
     """`check` as an agent may read it (`agent_view`), with the neutral statement of the latest
     extraction audit when it has labels. Read-only."""
-    with entering():
+    with entering(), _region_agent_view():
         audit = extraction_audit_report(project)
         labelled = (
             audit.audit_id if audit is not None and (audit.labelled or audit.outdated) else None
@@ -702,6 +703,16 @@ def _layer(project: Project) -> list[_Hit]:
             )
         )
     return hits
+
+
+@contextmanager
+def _region_agent_view() -> Iterator[None]:
+    """Region findings are computed for an agent (withheld regions left out) inside this block."""
+    token = AGENT_VIEW.set(True)
+    try:
+        yield
+    finally:
+        AGENT_VIEW.reset(token)
 
 
 def _regions(project: Project) -> list[_Hit]:

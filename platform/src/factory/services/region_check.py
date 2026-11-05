@@ -4,14 +4,16 @@ A region selects and asserts nothing about any paper, so every finding is adviso
 every rigour mode). Findings carry ids and counts only, never a name, a rule or document text.
 
 Invariants:
-- A region withheld from agents (it reaches an import's `all` part or a barred query purpose) is
-  never evaluated here and contributes no drift or link finding, so a report that an agent reads
-  carries no live count of it.
+- The researcher's report (the default) covers every region. In the agent view (`AGENT_VIEW`, set
+  by `agent_check`) a region withheld from agents (it reaches an import's `all` part or a barred
+  query purpose) is never evaluated and contributes no drift or link finding, and the drift
+  totals are computed without it, so an agent reads no live count of it (decision 43).
 - A project with no region has no finding.
 """
 
 from __future__ import annotations
 
+from contextvars import ContextVar
 from dataclasses import dataclass
 
 from factory.services.context import Project
@@ -20,11 +22,14 @@ from factory.services.regions import (
     focus_slot_missing,
     pending_proposals,
     region_ids,
+    region_state,
     region_withheld,
     subregion_violations,
 )
 
-__all__ = ["RegionFinding", "region_findings"]
+__all__ = ["AGENT_VIEW", "RegionFinding", "region_findings"]
+
+AGENT_VIEW: ContextVar[bool] = ContextVar("region_check_agent_view", default=False)
 
 
 @dataclass(frozen=True)
@@ -41,7 +46,10 @@ def region_findings(project: Project) -> list[RegionFinding]:
     if not ids:
         return []
     found: list[RegionFinding] = []
-    states = [agent_region_state(project, rid) for rid in ids]
+    agent = AGENT_VIEW.get()
+    states = [
+        agent_region_state(project, rid) if agent else region_state(project, rid) for rid in ids
+    ]
     unreviewed = [s.region_id for s in states if s.review_state == "unreviewed"]
     if unreviewed:
         found.append(
@@ -63,7 +71,7 @@ def region_findings(project: Project) -> list[RegionFinding]:
                 f"({added} member(s) added, {removed} removed since the snapshots)",
             )
         )
-    withheld = {rid for rid in ids if region_withheld(project, rid)}
+    withheld = {rid for rid in ids if region_withheld(project, rid)} if agent else set()
     violated = [
         (link, child)
         for link, child, parent in subregion_violations(project)
