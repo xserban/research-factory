@@ -30,8 +30,8 @@ from factory.model.extraction import ClaimInput, ExtractedRowInput
 from factory.model.fulltext import Route
 from factory.model.identity import IdGenerator
 from factory.model.inbox import Basis
-from factory.model.notices import AssessmentDecision
 from factory.model.lineage import RelationProposal
+from factory.model.notices import AssessmentDecision
 from factory.model.project import RigorMode
 from factory.model.protocol import CriterionEffect, PressFinding, ProtocolSpec, ScreeningStage
 from factory.model.question import QuestionSpec
