@@ -133,6 +133,13 @@ Numbering continues by blocks of ten per slice so that no two drafts' provisiona
 | R-85 (proposed) | **Edge basis.** Every edge carries a basis (a reference link or a live contribution row); an edge without one cannot be written as stated, and `trace` resolves any edge to the question | all |
 | R-86 (proposed) | **Graph as projection.** Nodes, edges and every graph statistic are rebuildable from events; deleting the index and rebuilding gives identical tables, and a merge and its reversal restore the previous graph exactly | all |
 
+**Interpretation layer (slice 3c; proposed rows, built by plans G3-A to G3-C; numbering confirmed at merge)**
+| ID | Requirement | Modes |
+| --- | --- | --- |
+| R-87 (proposed) | **Interpretation is not evidence.** Interpretations and concepts have their own events, tables and services; they never enter a count, a table of results, a PRISMA figure, a rate, a frontier or a report. Every layer item is labelled `interpretation` with its review state wherever it is shown, a layer export carries a notice, and `check` scans the evidence outputs for any layer identifier | all |
+| R-88 (proposed) | **Reviewable interpretation.** An interpretation is bound to one to five verified sources, carries its writer's model, skill and input, and is reviewed only by a human other than the writing session; a review by its own author is flagged, `wrong` and `superseded` items are hidden and counted, and a source that drifts is flagged `stale` without changing the review state | all |
+| R-89 (proposed) | **Concept sources.** A concept is shown only with a human-approved source (the approval bound to the source's digest) and counts as reviewed only by a human review of its definition; an unverifiable source is labelled; a `uses` link is `stated` only when a verified quote or an approved source's citation says so, every other link is `inferred` and needs a human decision, and a cycle of concept links is refused | all |
+
 ### K. Organisation and imported libraries ([slice 3d](slice-3d-regions-import.md))
 | ID | Requirement | Modes |
 | --- | --- | --- |
