@@ -10,8 +10,9 @@ Invariants:
 - Every refusal is a FactoryValidationError raised before the first character is produced.
 - Exactly one of `scope` and `ids` selects works; an unknown or absorbed id is refused.
 - Files go only to the path the researcher names, never under `projects/`. They are built in a
-  staging directory beside it and appear only when complete; a refusal or a failure leaves the
-  path as it was.
+  staging directory beside it and reach the path by renames of the whole, so a refusal or a failure
+  leaves the path as it was. If restoring the old directory itself fails, the error names where it
+  is kept; it is never deleted.
 - Assembly takes no lock: appending to the log takes none, so a lock would not stop the log moving,
   and it would block every other session. An export over a log that moved is refused instead.
 - These file exports are the researcher's (CLI only, spec ruling 22), so nothing here is withheld.
@@ -26,10 +27,12 @@ import json
 import os
 import re
 import shutil
+import stat
 import tempfile
 import zipfile
 from collections import Counter
 from collections.abc import Callable, Collection, Iterable, Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
@@ -99,6 +102,8 @@ PAGE = 500
 _BLOB_REF = re.compile(BLOB_REF_RE)
 _ORCID = re.compile(r"(?:https://orcid\.org/)?(\d{4}-\d{4}-\d{4}-\d{3}[\dX])")
 _HASH_PREFIX = "sha256:"
+_BUILD = "build"
+_OLD = "old"
 
 
 def _issue(field: str, reason: str) -> FactoryValidationError:
@@ -342,11 +347,49 @@ def _put(stage: Path, path: str, content: Iterable[str] | bytes) -> None:
         handle.writelines(content)
 
 
-def _move_children(stage: Path, target: Path) -> None:
-    """Move what `stage` holds into `target`, which is created if absent."""
-    target.mkdir(parents=True, exist_ok=True)
-    for child in sorted(stage.iterdir()):
-        os.replace(child, target / child.name)
+def _build_dir(stage: Path) -> Path:
+    """The directory an export is built in. Not the stage itself, whose mode is 0700: this one has
+    the mode the umask gives, as the published directory should."""
+    built = stage / _BUILD
+    built.mkdir()
+    return built
+
+
+def _publish_dir(stage: Path, target: Path) -> None:
+    """Put the built directory at `target` by renames, so `target` is at every moment the old
+    directory or the new one, whole. A new or empty `target` takes one rename. A full one moves
+    aside into the stage first, and back if the new one cannot follow. An existing `target` keeps
+    its mode. If moving back fails too, the old directory stays at `<stage>/old`, the error names
+    it, and `_staging` leaves the stage in place."""
+    built, old = stage / _BUILD, stage / _OLD
+    if target.exists():
+        os.chmod(built, stat.S_IMODE(target.stat().st_mode))
+    if not target.exists() or not any(target.iterdir()):
+        os.replace(built, target)
+        return
+    os.rename(target, old)
+    try:
+        os.rename(built, target)
+    except OSError:
+        try:
+            os.rename(old, target)
+        except OSError as exc:
+            raise _issue("out", f"the previous contents are kept at {old}") from exc
+        raise
+    shutil.rmtree(old, ignore_errors=True)
+
+
+@contextmanager
+def _staging(out: Path) -> Iterator[Path]:
+    """A stage beside `out`, removed afterwards unless it holds the only copy of the old `out`."""
+    stage = _stage_beside(out)
+    try:
+        yield stage
+    except OSError as exc:
+        raise _issue("out", f"cannot write there: {exc.strerror or exc}") from exc
+    finally:
+        if not (stage / _OLD).exists():
+            shutil.rmtree(stage, ignore_errors=True)
 
 
 # --- Nanopublications ---
@@ -531,17 +574,14 @@ def export_nanopubs(
     if out.exists() and (not out.is_dir() or any(out.iterdir())):
         raise _issue("out", "must be an empty directory or a new path")
     vocab = _vocab(project)
-    stage = _stage_beside(out)
-    try:
+    with _staging(out) as stage:
         mark = _log_mark(project)
-        summary = _write_nanopubs(project, stage, edges=edges, with_quotes=with_quotes, vocab=vocab)
+        summary = _write_nanopubs(
+            project, _build_dir(stage), edges=edges, with_quotes=with_quotes, vocab=vocab
+        )
         _refuse_if_moved(project, mark)
-        _move_children(stage, out)
+        _publish_dir(stage, out.resolve())
         return summary
-    except OSError as exc:
-        raise _issue("out", f"cannot write there: {exc.strerror or exc}") from exc
-    finally:
-        shutil.rmtree(stage, ignore_errors=True)
 
 
 # --- The RO-Crate ---
@@ -912,32 +952,18 @@ def _assemble(project: Project, stage: Path, renderers: CrateRenderers) -> Crate
     )
 
 
-def _write_zip(stage: Path, target: Path) -> None:
-    """`target` holds the staged files: sorted, fixed timestamps, `ZIP_DEFLATED` level 9, so the
-    same files give the same bytes."""
-    paths = _staged_files(stage)
-    built = stage / _ZIP_NAME
+def _write_zip(source: Path, built: Path, target: Path) -> None:
+    """The files under `source` zipped at `built`, then moved to `target` in one step: sorted,
+    fixed timestamps, `ZIP_DEFLATED` level 9, so the same files give the same bytes."""
     with zipfile.ZipFile(built, "w") as archive:
-        for path in paths:
-            info = zipfile.ZipInfo(path.relative_to(stage).as_posix(), date_time=_ZIP_DATE)
+        for path in _staged_files(source):
+            info = zipfile.ZipInfo(path.relative_to(source).as_posix(), date_time=_ZIP_DATE)
             info.create_system = 3
             info.external_attr = 0o644 << 16
             archive.writestr(
                 info, path.read_bytes(), compress_type=zipfile.ZIP_DEFLATED, compresslevel=9
             )
     os.replace(built, target)
-
-
-def _replace_crate(stage: Path, target: Path) -> None:
-    """Move the staged crate into `target`, first removing a crate's entries there, and only
-    those (`_check_crate_target` has refused anything else)."""
-    for name in sorted(_CRATE_TOP):
-        old = target / name
-        if old.is_dir() and not old.is_symlink():
-            shutil.rmtree(old)
-        else:
-            old.unlink(missing_ok=True)
-    _move_children(stage, target)
 
 
 def export_crate(
@@ -955,20 +981,16 @@ def export_crate(
     ruling 20). Byte-identical for the same log and settings. Refuses an `out` under `projects/`
     and, without `force`, one that holds anything. CLI only (spec ruling 22)."""
     _check_crate_target(project, out, zip_=zip_, force=force)
-    stage = _stage_beside(out)
-    try:
+    with _staging(out) as stage:
         mark = _log_mark(project)
-        summary = _assemble(project, stage, renderers)
+        built = _build_dir(stage)
+        summary = _assemble(project, built, renderers)
         _refuse_if_moved(project, mark)
         if zip_:
-            _write_zip(stage, out.resolve())
+            _write_zip(built, stage / _ZIP_NAME, out.resolve())
         else:
-            _replace_crate(stage, out.resolve())
+            _publish_dir(stage, out.resolve())
         return summary
-    except OSError as exc:
-        raise _issue("out", f"cannot write there: {exc.strerror or exc}") from exc
-    finally:
-        shutil.rmtree(stage, ignore_errors=True)
 
 
 __all__ = [
