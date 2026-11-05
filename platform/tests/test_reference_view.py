@@ -18,7 +18,7 @@ from factory.services.reference_view import (
     reference_view,
     reference_view_of,
 )
-from factory.services.references import current_extraction, extract_references
+from factory.services.references import current_extraction
 from tests.contribution_helpers import ENTRIES, screened, with_references, world  # noqa: F401
 from tests.references_service_helpers import Lookups, oa_item
 
@@ -87,9 +87,8 @@ def test_replaced_extraction_is_readable_but_not_live(
 ) -> None:
     work = world[0]
     first = with_references(project, agent, work)
-    extract_references(project, agent, [work], sources={})
-    second = current_extraction(project, work)
-    assert second not in (None, first)
+    second = with_references(project, agent, work, version="v4")
+    assert second == current_extraction(project, work) != first
     assert not is_live_reference_extraction(project, first)
     assert reference_view_of(project, first) is not None
     live = reference_view(project, work)

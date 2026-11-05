@@ -55,6 +55,7 @@ from factory.services.references import current_extraction, extract_references, 
 from factory.services.stages import CONTRIB_KINDS, EXTRACT_KINDS, kinds_for, scope_of_kind
 from factory.services.tasks import TaskSpec, claim_next, create_tasks, get_task, task_content
 from factory.sources.registry import SourceFactory
+from tests.document_helpers import StubConverter, make_registry, run_convert
 from tests.test_acceptance_fulltext_screening import _screened_full_text_world
 from tests.test_extraction_next import FIELDS, SESSION_A, SESSION_B, _declare, _extractor
 from tests.test_extraction_record import _row
@@ -88,6 +89,17 @@ def ctr_a() -> Actor:
 @pytest.fixture
 def ctr_b() -> Actor:
     return _extractor(SESSION_D, "claude-sonnet-5-5")
+
+
+_CONVERSIONS = iter(range(1, 1000))
+
+
+def _extract(project: Project, agent: Actor, work: str) -> None:
+    """Extract the references of `work`; a re-extraction first converts the document anew, since
+    one on the same conversion is refused (a genuine replacement needs a new conversion)."""
+    if current_extraction(project, work) is not None:
+        run_convert(project, make_registry(StubConverter(version=f"9.9+scope{next(_CONVERSIONS)}")))
+    extract_references(project, agent, [work], sources={})
 
 
 def _schemas() -> tuple[ExtractionSchema, ExtractionSchema]:
@@ -581,7 +593,7 @@ def test_cited_row_stale_when_g1_extraction_replaced(
 ) -> None:
     batch = _contrib(project, ctr_a)
     work = _work(batch)
-    extract_references(project, agent, [work], sources={})
+    _extract(project, agent, work)
     first = current_extraction(project, work)
     assert first is not None
     res = record_unit(
@@ -595,7 +607,7 @@ def test_cited_row_stale_when_g1_extraction_replaced(
     assert res.completed
     (row_id,) = res.rows.written
     assert stale_extractions(project, scope=C) == set()
-    extract_references(project, agent, [work], sources={})
+    _extract(project, agent, work)
     assert current_extraction(project, work) not in (None, first)
     assert stale_extractions(project, scope=C) == {row_id}
     (state,) = [
@@ -627,7 +639,7 @@ def test_cited_row_stale_when_g1_extraction_replaced(
     assert _serve_until(project, ctr_a, work) is None
     assert _state_of(project, work) == ("current", None)
     # A later replacement stales the unit again: only rows stale at the closing are discounted.
-    extract_references(project, agent, [work], sources={})
+    _extract(project, agent, work)
     assert _state_of(project, work) == ("stale", "references")
     assert stale_extractions(project, scope=C) == {row_id, new_id}
 
@@ -637,13 +649,13 @@ def test_references_replaced_during_an_open_task_reoffer_the_unit_once(
 ) -> None:
     batch = _contrib(project, ctr_a)
     work = _work(batch)
-    extract_references(project, agent, [work], sources={})
+    _extract(project, agent, work)
     first = current_extraction(project, work)
     assert first is not None
     rows = [_item(cited_entry=FieldInput(value=1)), _item(name="ipsum")]
     written = record_unit(project, ctr_a, batch.task_id, rows, extra_check=_cite(first))
     assert len(written.rows.written) == 2
-    extract_references(project, agent, [work], sources={})  # no agent has seen this extraction
+    _extract(project, agent, work)  # no agent has seen this extraction
     second = current_extraction(project, work)
     assert second is not None
     assert record_unit(project, ctr_a, batch.task_id, [], finish=True).completed
@@ -668,7 +680,7 @@ def test_requeued_task_may_close_with_a_reason_and_keep_the_stale_row_visible(
 ) -> None:
     batch = _contrib(project, ctr_a)
     work = _work(batch)
-    extract_references(project, agent, [work], sources={})
+    _extract(project, agent, work)
     first = current_extraction(project, work)
     assert first is not None
     res = record_unit(
@@ -680,7 +692,7 @@ def test_requeued_task_may_close_with_a_reason_and_keep_the_stale_row_visible(
         extra_check=_cite(first),
     )
     (row_id,) = res.rows.written
-    extract_references(project, agent, [work], sources={})
+    _extract(project, agent, work)
     served = _serve_until(project, ctr_a, work)
     assert served is not None
     reason = "the new reference list no longer holds the entry"

@@ -297,7 +297,7 @@ def test_unit_reserved_after_g1_change(
     )
     old_ids = done.rows.written
     cited_id = old_ids[0]
-    extract_references(project, agent, [work], sources={})
+    with_references(project, agent, work, version="v4")  # a new document version
     stale = stale_extractions(project, scope=C)
     assert cited_id in stale
     served = _next(project, ctr_a)
