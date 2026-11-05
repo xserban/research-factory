@@ -54,7 +54,7 @@ from factory.model.labels import (
 )
 from factory.model.task import CONSOLIDATE_TASK_KIND
 from factory.regions.concept_use import concept_users
-from factory.services.concepts import build_concept_merge, visible_concepts
+from factory.services.concepts import build_concept_merge, merge_group_issues, visible_concepts
 from factory.services.consolidation_due import (
     CONSOLIDATION_DUE_LABELS,
     CONSOLIDATION_DUE_NODES,
@@ -567,6 +567,9 @@ def decide_cluster(
                 or len(set(sources)) != len(sources)
             ):
                 issues.append(ValidationIssue("merge_from", "not-members-of-the-cluster"))
+            if not issues and found["kind"] == "concept":
+                assert into is not None
+                issues += merge_group_issues(project, into, sources)
             if not issues:
                 assert into is not None
                 merges = [

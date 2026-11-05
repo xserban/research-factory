@@ -366,3 +366,26 @@ def test_duplicate_merge_from_refused_and_a_logged_duplicate_rebuilds(cw: CW) ->
     project.index.sync()
     state = project.index.rebuild()
     assert project.index.rebuild() == state
+
+
+def test_concept_batch_merge_is_validated_cumulatively(cw: CW) -> None:
+    from factory.model.intuition import UseBasisInput
+    from factory.services.concepts import propose_concept_link
+
+    project, human = cw.project, cw.w.human
+    a = concept(project, human, "gradient flow")
+    b = concept(project, human, "gradient-flow")
+    c = concept(project, human, "gradient flows")
+    propose_concept_link(project, cw.w.writer, b, c, UseBasisInput(), note="builds on")
+    pass_id = start_pass(project, human)
+    [row] = [
+        r
+        for r in list_clusters(project, pass_id)
+        if r.kind == "concept" and {a, b, c} <= set(r.members)
+    ]
+    with pytest.raises(FactoryValidationError) as caught:
+        decide_cluster(
+            project, human, pass_id, row.index, "merge", into=a, merge_from=[b, c], reason="same"
+        )
+    assert caught.value.issues[0].reason == "self-link"
+    assert not events_of(project, "concept.merged", "consolidation.decided")

@@ -819,6 +819,36 @@ def concept_path_issues(project: Project, source: str, target: str) -> list[Vali
     return []
 
 
+def merge_group_issues(
+    project: Project, into: str, sources: Sequence[str]
+) -> list[ValidationIssue]:
+    """Whether merging every concept of `sources` into `into` at once makes a self-link or a cycle
+    among the `uses` links (decision 83): the group is collapsed to one node, so a link between
+    two members becomes a self-link and a path out of the group and back a cycle. Each pairwise
+    merge can pass `_merge_issues` while the batch does not."""
+    group = {into, *sources}
+    edges: set[tuple[str, str]] = set()
+    for member in sorted(group):
+        edges |= _reachable_edges(project, member)
+    whole = "\x00group"
+    collapsed = {(whole if a in group else a, whole if b in group else b) for a, b in edges}
+    if (whole, whole) in collapsed:
+        return [ValidationIssue("from_concept", "self-link")]
+    adjacent: dict[str, list[str]] = {}
+    for a, b in collapsed:
+        adjacent.setdefault(a, []).append(b)
+    seen: set[str] = set()
+    stack = list(adjacent.get(whole, ()))
+    while stack:
+        node = stack.pop()
+        if node == whole:
+            return [ValidationIssue("from_concept", "cycle")]
+        if node not in seen:
+            seen.add(node)
+            stack.extend(adjacent.get(node, ()))
+    return []
+
+
 def _basis_digest(basis: UseBasisInput, stored: StoredSource | None) -> str:
     if stored is not None:
         canonical: dict[str, str | None] = {
