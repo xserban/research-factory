@@ -6,7 +6,8 @@ Invariants:
   both completed (exit status zero, a metric value) and not `environment-differs`.
 - Of several completed runs of one cell the earliest reported is used and the others are listed in
   `extra_runs` (no best-of-n). A failed run is excluded with the reason `failed`, a run whose
-  environment differs with `environment-differs`, a run with no completed partner of its seed with
+  primary value is beyond the statistics' range with `out-of-range`, a run whose environment
+  differs with `environment-differs`, a run with no completed partner of its seed with
   `missing-partner`; nothing is dropped silently.
 - Two runs of one seed form a pair only if their configurations differ in exactly `differing_keys`
   (the factor keys, for the treatment and baseline arms); otherwise the pair is `confounded` and
@@ -21,7 +22,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 
 from factory.hypotheses.stats import Direction, oriented
-from factory.model.experiments import Cell, SplitRole
+from factory.model.experiments import METRIC_OUT_OF_RANGE, Cell, SplitRole
 
 
 @dataclass(frozen=True)
@@ -72,7 +73,9 @@ def pair_runs(
     chosen: dict[tuple[str, int], RunFact] = {}
     for f in relevant:
         reasons: list[str] = []
-        if "failed" in f.flags or f.value is None:
+        if METRIC_OUT_OF_RANGE in f.flags:
+            reasons.append("out-of-range")
+        elif "failed" in f.flags or f.value is None:
             reasons.append("failed")
         if "environment-differs" in f.flags:
             reasons.append("environment-differs")

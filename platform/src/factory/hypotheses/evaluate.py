@@ -6,15 +6,19 @@ Invariants:
   result is the full `HypothesisEvaluated` payload. Nothing here takes an outcome from anyone.
 - Pairs are formed on the confirmatory split of the primary universe (`hypotheses.pairing`). The
   evaluation is `incomplete` while a primary cell (arm and seed) has no completed run (a run whose
-  environment differs is completed, and excluded from pairing); otherwise the decision rule of the
-  hypothesis is applied to the paired-t interval of the oriented per-seed differences at the
-  confidence level fixed at registration.
+  environment differs is completed, and excluded from pairing) or no pair is left; otherwise the
+  decision rule of the hypothesis is applied to the paired-t interval of the oriented per-seed
+  differences at the confidence level fixed at registration.
+- A primary value at or beyond `MAX_METRIC_MAGNITUDE` is no value: the run is flagged, excluded from
+  pairing with the reason `out-of-range`, and its cell has no completed run. Secondary metrics are
+  not read here and not bounded.
 - `inputs_hash` covers every fact the computation reads (hypothesis and design versions, rule,
   margin, level, minimum seeds, the reported runs that feed it with their events and metrics,
   the semantic deviations after the unlock, whether a baseline was accepted and the autonomy
   labels), so a changed input gives another hash even when the outcome is the same, and an
   ablation or a reproduction run gives none.
-- Flags (all computed): `test-reused`, `deviated`, `baseline-not-reproduced`, `autonomy:agent`,
+- Flags (all computed): `test-reused`, `metric-out-of-range`, `deviated`,
+  `baseline-not-reproduced`, `autonomy:agent`,
   the rule's own (`too-few-pairs`, `below-min-seeds`), `incomplete`, and the multiverse and
   control flags (`hypotheses.multiverse`).
 """
@@ -36,7 +40,12 @@ from factory.hypotheses.pairing import RunFact, pair_runs
 from factory.hypotheses.rules import RuleResult, apply_experiment_rule
 from factory.hypotheses.stats import paired_summary, plain
 from factory.hypotheses.tquantiles import Level
-from factory.model.experiments import Cell, ExperimentDesign
+from factory.model.experiments import (
+    MAX_METRIC_MAGNITUDE,
+    METRIC_OUT_OF_RANGE,
+    Cell,
+    ExperimentDesign,
+)
 from factory.model.hypotheses import (
     EVALUATOR_VERSION,
     HypothesisEvaluated,
@@ -121,7 +130,8 @@ def inputs_hash(inputs: ExperimentInputs) -> str:
 
 def facts_of(inputs: ExperimentInputs) -> list[RunFact]:
     """The reported runs as pairing facts, in the order they were reported. The configuration is
-    recomputed from the design and the cell, as the registration did."""
+    recomputed from the design and the cell, as the registration did. A primary value beyond the
+    statistics' range is no value, and the fact carries `metric-out-of-range`."""
     metric = primary_metric(inputs.design).name
     reported = sorted(
         (r for r in inputs.runs if r.reported_event_id is not None),
@@ -130,15 +140,18 @@ def facts_of(inputs: ExperimentInputs) -> list[RunFact]:
     facts: list[RunFact] = []
     for order, r in enumerate(reported):
         value: Decimal | None = None
+        flags = r.flags
         if r.exit_status == 0 and r.metrics is not None and metric in r.metrics:
             value = Decimal(r.metrics[metric])
+            if abs(value) >= MAX_METRIC_MAGNITUDE:
+                value, flags = None, flags | {METRIC_OUT_OF_RANGE}
         facts.append(
             RunFact(
                 run_id=r.run_id,
                 cell=r.cell,
                 config=run_config(inputs.design, r.cell),
                 value=value,
-                flags=r.flags,
+                flags=flags,
                 reported_order=order,
             )
         )
@@ -155,8 +168,8 @@ def compute_experiment(inputs: ExperimentInputs) -> HypothesisEvaluated:
         split="confirmatory",
         direction=spec.metric.direction,
     )
-    complete = _primary_complete(design, facts)
     diffs = [d for _, _, d in pairing.pairs]
+    complete = _primary_complete(design, facts) and bool(diffs)
     rule = spec.decision_rule
     assert isinstance(rule, Superiority | NonInferiority)  # an experiment hypothesis (H-C)
     margin = Decimal(spec.prediction.margin)
@@ -206,7 +219,8 @@ def compute_experiment(inputs: ExperimentInputs) -> HypothesisEvaluated:
 
 def _primary_complete(design: ExperimentDesign, facts: Sequence[RunFact]) -> bool:
     """Every primary cell has a completed run. A run whose environment differs is completed: it is
-    excluded from pairing and listed, and the evaluation goes ahead on the remaining pairs."""
+    excluded from pairing and listed, and the evaluation goes ahead on the remaining pairs (with
+    none left it stays `incomplete`, see `compute_experiment`)."""
     universe = tuple(sorted(design.primary_universe.items()))
     done = {
         (f.cell.arm, f.cell.seed)
@@ -222,12 +236,11 @@ def _primary_complete(design: ExperimentDesign, facts: Sequence[RunFact]) -> boo
 def _evidence_flags(inputs: ExperimentInputs, facts: Sequence[RunFact]) -> set[str]:
     flags: set[str] = set()
     universe = tuple(sorted(inputs.design.primary_universe.items()))
-    if any(
-        "test-reused" in f.flags
-        for f in facts
-        if f.cell.split == "confirmatory" and f.cell.universe == universe
-    ):
+    primary = [f for f in facts if f.cell.split == "confirmatory" and f.cell.universe == universe]
+    if any("test-reused" in f.flags for f in primary):
         flags.add("test-reused")
+    if any(METRIC_OUT_OF_RANGE in f.flags for f in primary):
+        flags.add(METRIC_OUT_OF_RANGE)
     if any(d.semantic and d.after_unlock for d in inputs.deviations):
         flags.add("deviated")
     if inputs.baseline_accepted:

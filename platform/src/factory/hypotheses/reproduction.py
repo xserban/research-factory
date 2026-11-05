@@ -8,13 +8,14 @@ Invariants:
   difference is at most the tolerance, which is absolute (in the metric unit) or relative to the
   magnitude of the reported value. Equality with the tolerance is `reproduced`. The sign and the
   direction of the metric do not matter: only the distance does.
-- No completed run gives `no-runs-completed` and no reproduced value.
+- No completed run gives `no-runs-completed` and no reproduced value; so does a mean too large to
+  round to six places (a diverged run is recorded, not refused).
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
-from decimal import ROUND_HALF_EVEN, Context, Decimal
+from decimal import ROUND_HALF_EVEN, Context, Decimal, InvalidOperation
 from typing import Literal
 
 EVALUATOR_VERSION = "baseline-eval@1"
@@ -29,12 +30,15 @@ def _plain(value: Decimal) -> str:
 
 
 def reproduced_value(values: Sequence[str]) -> str | None:
-    """The mean of `values` to six places; None for no values."""
+    """The mean of `values` to six places; None for no values or a mean too large to round."""
     if not values:
         return None
     total = sum((Decimal(v) for v in values), Decimal(0))
     mean = _CTX.divide(total, Decimal(len(values)))
-    return _plain(mean.quantize(PLACES, rounding=ROUND_HALF_EVEN, context=_CTX))
+    try:
+        return _plain(mean.quantize(PLACES, rounding=ROUND_HALF_EVEN, context=_CTX))
+    except InvalidOperation:
+        return None
 
 
 def reproduction_verdict(

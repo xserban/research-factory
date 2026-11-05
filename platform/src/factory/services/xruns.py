@@ -39,7 +39,6 @@ from factory.hypotheses.design import (
 from factory.index.experiments import report_flags
 from factory.model.base import StrictModel
 from factory.model.experiments import (
-    MAX_METRIC_MAGNITUDE,
     MAX_RESULTS_BYTES,
     CanonicalMetric,
     Cell,
@@ -298,9 +297,6 @@ def _canonical_metrics(
             value = canonical(printed, got.unit, metric.unit_family)
         except ValueError:
             issues.append(ValidationIssue(f"metrics.{name}", "unit-invalid"))
-            continue
-        if abs(Decimal(value)) >= MAX_METRIC_MAGNITUDE:
-            issues.append(ValidationIssue(f"metrics.{name}", "out-of-range"))
             continue
         out[name] = CanonicalMetric(printed=got.value, unit=got.unit, value=value)
     return out, issues
