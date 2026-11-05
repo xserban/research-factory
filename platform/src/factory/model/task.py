@@ -15,6 +15,9 @@ tasks they are not part of the work the project counts."""
 INTUITION_TASK_KIND = "intuition"
 """The kind of the intuition layer's tasks. Pass joins and task counts name it by value, as the
 layer's modules may not be imported by them."""
+DRAFT_SLOT_TASK_KIND = "draft_slot"
+"""The kind of the writing slot tasks (one outline section of a draft). Like the intuition layer's
+tasks they are not part of the work the project counts."""
 CONSOLIDATE_TASK_KIND = "consolidate"
 """The kind of the consolidation tasks (one per candidate cluster)."""
 

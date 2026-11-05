@@ -60,6 +60,20 @@ class OutlineScope:
     ideas: tuple[str, ...] | None = None
     groups: tuple[str, ...] | None = None
 
+    @classmethod
+    def from_json(cls, raw: dict[str, JsonValue]) -> OutlineScope:
+        """The scope an outline recorded (`as_json` read back)."""
+        works, ideas, groups = raw.get("works", "included"), raw.get("ideas"), raw.get("groups")
+
+        def names(value: JsonValue) -> tuple[str, ...] | None:
+            return tuple(str(v) for v in value) if isinstance(value, list) else None
+
+        return cls(
+            works=works if isinstance(works, str) else (names(works) or ()),
+            ideas=names(ideas),
+            groups=names(groups),
+        )
+
     def as_json(self) -> dict[str, JsonValue]:
         works: JsonValue = self.works if isinstance(self.works, str) else list(sorted(self.works))
         ideas: JsonValue = None if self.ideas is None else list(sorted(self.ideas))

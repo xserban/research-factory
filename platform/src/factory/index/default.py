@@ -7,6 +7,7 @@ from factory.index.conclusions import conclusion_handlers, conclusion_tables
 from factory.index.dedup import dedup_handlers, dedup_tables
 from factory.index.directions import chain_derived, direction_handlers, direction_tables
 from factory.index.document import document_handlers, document_tables
+from factory.index.drafts import draft_handlers, draft_tables
 from factory.index.evaluation import evaluation_handlers, evaluation_tables
 from factory.index.experiments import experiment_handlers, experiment_tables
 from factory.index.extraction import extraction_handlers, extraction_tables
@@ -37,7 +38,7 @@ from factory.index.tasks import task_handlers, tasks_table
 from factory.index.watch import run_started_handler, watch_handlers, watch_tables
 
 # Bump on any change to the tables or handlers below; the index is then rebuilt.
-PROJECTION_VERSION = "47"
+PROJECTION_VERSION = "48"
 
 
 def default_projection(blobs: BlobStore | None = None) -> Projection:
@@ -84,6 +85,7 @@ def default_projection(blobs: BlobStore | None = None) -> Projection:
     )
     evaluations = evaluation_tables(metadata)
     directions = direction_tables(metadata)
+    drafts = draft_tables(metadata)
     handlers: dict[str, Handler] = {
         "project.created": project_created_handler(project),
         **task_handlers(tasks),
@@ -118,6 +120,7 @@ def default_projection(blobs: BlobStore | None = None) -> Projection:
         **experiment_handlers(experiments),
         **evaluation_handlers(evaluations),
         **direction_handlers(directions),
+        **draft_handlers(drafts, blobs),
     }
     # A direction fails in the event that decides it: derived after that event's own fold.
     chain_derived(handlers, directions)

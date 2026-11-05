@@ -7,6 +7,7 @@ its release gate belong to plan W-B and are declared there."""
 
 from factory.modules.contract import EventFamily, ModuleKind, ModuleSpec
 from factory.services.modules.base import RuleModule
+from factory.services.modules.task_kinds import default_task_kinds
 
 SPEC = ModuleSpec(
     name="writing",
@@ -19,7 +20,16 @@ SPEC = ModuleSpec(
             "draft.sentence_recorded",
             "draft.sentence_withdrawn",
         ),
+        tables=(
+            "draft_sections",
+            "draft_sentences",
+            "drafts",
+            "sentence_flags",
+            "sentence_stats",
+            "sentence_supports",
+        ),
     ),
+    task_kinds=default_task_kinds().kinds_of("writing"),
 )
 
 MODULE = RuleModule(SPEC)

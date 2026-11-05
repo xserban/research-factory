@@ -1,0 +1,309 @@
+"""The draft projection: tables, rebuild and hand-written events (slice 7b, plan W-A, task 5).
+
+A hand-written event that fails a projector guard stays in the log and changes nothing, on rebuild
+too (as `tests/test_forged_events.py`); each case has a control where the same event, right, folds.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+import pytest
+from sqlalchemy import text
+
+from factory.events.envelope import Actor
+from factory.index.default import default_projection
+from factory.index.index import OMITTED_WHEN_EMPTY
+from factory.model.base import StrictModel
+from factory.model.drafts import (
+    DraftCreated,
+    DraftKind,
+    DraftOutlineRepinned,
+    DraftReordered,
+    SectionDef,
+    SentenceClass,
+    SentenceRecorded,
+    SentenceWithdrawn,
+    parse_support,
+)
+from factory.services.context import Project
+from factory.services.drafts import (
+    SentenceInput,
+    create_draft,
+    live_sentences,
+    repin_outline,
+    write_sentences,
+)
+from factory.services.outline import OutlineScope
+from tests.helpers import S2
+
+SKIP = {"events", "event_refs", "meta", "sync_state"}
+ULID = "01JZ9Q3K5M7N8P0R2S4T6V8W"
+CLAIM = f"claim:clm_{ULID}00"
+DRAFT_TABLES = (
+    "drafts",
+    "draft_sections",
+    "draft_sentences",
+    "sentence_supports",
+    "sentence_flags",
+    "sentence_stats",
+)
+
+
+def sid(n: int) -> str:
+    return f"snt_{ULID}{n:02d}"
+
+
+def state(project: Project) -> dict[str, list[str]]:
+    project.index.sync()
+    with project.index.connect() as conn:
+        return {
+            n: sorted(repr(tuple(r)) for r in conn.execute(text(f'SELECT * FROM "{n}"')))
+            for n in DRAFT_TABLES
+        }
+
+
+def forge(project: Project, type_: str, model: StrictModel, actor: Actor) -> None:
+    blob = None if actor.kind == "human" else project.blobs.put_json({"forged": True})
+    project.record([project.events.make(type_, model, actor, input_blob=blob)])
+
+
+def inert(project: Project, type_: str, model: StrictModel, actor: Actor) -> None:
+    before = state(project)
+    forge(project, type_, model, actor)
+    assert state(project) == before, f"{type_} by {actor.kind} folded"
+    synced = project.index.state_hash()
+    assert project.index.rebuild() == synced
+    assert state(project) == before
+
+
+def folds(project: Project, type_: str, model: StrictModel, actor: Actor) -> None:
+    before = state(project)
+    forge(project, type_, model, actor)
+    assert state(project) != before, f"{type_} by {actor.kind} did not fold"
+    synced = project.index.state_hash()
+    assert project.index.rebuild() == synced
+
+
+@pytest.fixture
+def me(project: Project) -> Actor:
+    return project.human_actor()
+
+
+@pytest.fixture
+def draft(project: Project, me: Actor) -> str:
+    return create_draft(project, title="Notes", kind=DraftKind.OTHER, actor=me)
+
+
+def sentence(draft_id: str, n: int = 1, **over: Any) -> SentenceRecorded:
+    body: dict[str, Any] = {
+        "sentence_id": sid(n),
+        "draft_id": draft_id,
+        "section_id": "sec_01",
+        "order": 10,
+        "cls": SentenceClass.CLAIM,
+        "text": "Lorem is described in the method section.",
+        "supports": [parse_support(CLAIM)],
+        "stats_version": 1,
+        "author": "human",
+    }
+    body.update(over)
+    return SentenceRecorded.model_validate(body)
+
+
+def test_tables_are_omitted_when_empty_and_version_is_bumped() -> None:
+    from factory.index.default import PROJECTION_VERSION
+
+    assert set(DRAFT_TABLES) <= OMITTED_WHEN_EMPTY
+    assert PROJECTION_VERSION == "48"
+    assert set(DRAFT_TABLES) <= set(default_projection().metadata.tables)
+
+
+def test_a_log_without_drafts_keeps_its_state_hash(project: Project) -> None:
+    project.index.sync()
+    assert project.index.state_hash() == project.index.rebuild()
+
+
+def test_create_projects_draft_and_sections(project: Project, draft: str) -> None:
+    project.index.sync()
+    with project.index.connect() as conn:
+        row = conn.execute(
+            text("SELECT title, kind, creator_kind FROM drafts WHERE draft_id = :d"), {"d": draft}
+        ).one()
+        sections = conn.execute(
+            text("SELECT section_id, outline_section FROM draft_sections WHERE draft_id = :d"),
+            {"d": draft},
+        ).all()
+    assert tuple(row) == ("Notes", "other", "human")
+    assert [tuple(s) for s in sections] == [("sec_01", "limits")]  # a fresh project: limits only
+
+
+def test_rebuild_identical_tables(project: Project, draft: str, me: Actor) -> None:
+    write_sentences(
+        project,
+        draft,
+        [SentenceInput(section_id="sec_01", cls=SentenceClass.STRUCTURAL, text="Scope follows")],
+        actor=me,
+    )
+    before = state(project)
+    assert any(before[t] for t in DRAFT_TABLES[:3])
+    synced = project.index.state_hash()
+    assert project.index.rebuild() == synced
+    assert state(project) == before
+    assert [r.text for r in live_sentences(project, draft)] == ["Scope follows"]
+
+
+# --- Hand-written events ---
+
+
+def test_draft_created_guards(project: Project, me: Actor, draft: str) -> None:
+    with project.index.connect() as conn:
+        ref, blob = conn.execute(text("SELECT outline_ref, outline_blob FROM drafts")).one()
+    system = project.system_actor()
+    body = {
+        "title": "Other",
+        "kind": DraftKind.OTHER,
+        "outline_ref": ref,
+        "outline_blob": blob,
+        "sections": [SectionDef(section_id="sec_01", heading="h")],
+    }
+    inert(project, "draft.created", DraftCreated(draft_id=f"drf_{ULID}01", **body), system)
+    inert(project, "draft.created", DraftCreated(draft_id=draft, **body), me)  # duplicate id
+    wrong = {**body, "outline_ref": "OL@00000000"}  # the blob does not hash to it
+    inert(project, "draft.created", DraftCreated(draft_id=f"drf_{ULID}02", **wrong), me)
+    folds(project, "draft.created", DraftCreated(draft_id=f"drf_{ULID}03", **body), me)
+
+
+def test_repin_guards(project: Project, me: Actor, draft: str) -> None:
+    with project.index.connect() as conn:
+        ref, blob = conn.execute(text("SELECT outline_ref, outline_blob FROM drafts")).one()
+    inert(
+        project,
+        "draft.outline_repinned",
+        DraftOutlineRepinned(draft_id=draft, outline_ref="OL@00000000", outline_blob=blob),
+        me,
+    )
+    inert(
+        project,
+        "draft.outline_repinned",
+        DraftOutlineRepinned(draft_id=draft, outline_ref=ref, outline_blob=blob),
+        project.system_actor(),
+    )
+    other = project.blobs.put_json({"outline_id": "OL@11111111", "scope": {}, "sections": []})
+    inert(  # an empty outline does not hash to 11111111
+        project,
+        "draft.outline_repinned",
+        DraftOutlineRepinned(draft_id=draft, outline_ref="OL@11111111", outline_blob=other),
+        me,
+    )
+    before = state(project)  # control: the service pins a true outline
+    repin_outline(project, draft, OutlineScope(ideas=(), groups=()), actor=me)
+    assert state(project) != before
+
+
+@pytest.mark.parametrize(
+    ("label", "over"),
+    [
+        ("unknown draft", {"draft_id": f"drf_{ULID}99"}),
+        ("unknown section", {"section_id": "sec_09"}),
+        ("author is not the actor's kind", {"author": "agent"}),
+        ("claim without support", {"supports": []}),
+        ("synthesis without stat or group", {"cls": SentenceClass.SYNTHESIS}),
+        ("two sentences", {"text": "It works. It fails."}),
+        ("supersedes an unknown sentence", {"supersedes": sid(77)}),
+    ],
+)
+def test_sentence_guards(
+    project: Project, me: Actor, draft: str, label: str, over: dict[str, Any]
+) -> None:
+    body = {"draft_id": draft, **over}
+    inert(project, "draft.sentence_recorded", sentence(**body), me)
+
+
+def test_sentence_by_a_system_actor_and_duplicate_ids(
+    project: Project, me: Actor, draft: str
+) -> None:
+    inert(project, "draft.sentence_recorded", sentence(draft), project.system_actor())
+    folds(project, "draft.sentence_recorded", sentence(draft), me)  # control
+    inert(project, "draft.sentence_recorded", sentence(draft), me)  # the same id again
+
+
+def test_supersession_guards(project: Project, me: Actor, draft: str) -> None:
+    forge(project, "draft.sentence_recorded", sentence(draft, 1), me)
+    inert(
+        project,
+        "draft.sentence_recorded",
+        sentence(draft, 2, section_id="sec_09", supersedes=sid(1)),
+        me,
+    )
+    folds(project, "draft.sentence_recorded", sentence(draft, 2, supersedes=sid(1)), me)
+    # sentence 1 is superseded now: it cannot be superseded again, nor withdrawn
+    inert(project, "draft.sentence_recorded", sentence(draft, 3, supersedes=sid(1)), me)
+    inert(
+        project, "draft.sentence_withdrawn", SentenceWithdrawn(sentence_id=sid(1), reason="x"), me
+    )
+
+
+def test_withdraw_guards(project: Project, me: Actor, draft: str) -> None:
+    forge(project, "draft.sentence_recorded", sentence(draft, 1), me)
+    inert(
+        project, "draft.sentence_withdrawn", SentenceWithdrawn(sentence_id=sid(9), reason="x"), me
+    )
+    inert(
+        project,
+        "draft.sentence_withdrawn",
+        SentenceWithdrawn(sentence_id=sid(1), reason="x"),
+        project.system_actor(),
+    )
+    folds(
+        project, "draft.sentence_withdrawn", SentenceWithdrawn(sentence_id=sid(1), reason="x"), me
+    )
+    inert(
+        project, "draft.sentence_withdrawn", SentenceWithdrawn(sentence_id=sid(1), reason="y"), me
+    )
+
+
+def test_reorder_guards(project: Project, me: Actor, draft: str) -> None:
+    forge(project, "draft.sentence_recorded", sentence(draft, 1, order=10), me)
+    forge(project, "draft.sentence_recorded", sentence(draft, 2, order=20), me)
+    both = [sid(2), sid(1)]
+    inert(
+        project,
+        "draft.reordered",
+        DraftReordered(draft_id=draft, section_id="sec_01", order=[sid(1)]),
+        me,
+    )
+    inert(
+        project,
+        "draft.reordered",
+        DraftReordered(draft_id=draft, section_id="sec_01", order=[sid(1), sid(2), sid(3)]),
+        me,
+    )
+    inert(
+        project,
+        "draft.reordered",
+        DraftReordered(draft_id=draft, section_id="sec_09", order=both),
+        me,
+    )
+    inert(
+        project,
+        "draft.reordered",
+        DraftReordered(draft_id=draft, section_id="sec_01", order=both),
+        project.system_actor(),
+    )
+    folds(
+        project,
+        "draft.reordered",
+        DraftReordered(draft_id=draft, section_id="sec_01", order=both),
+        me,
+    )
+    assert [r.sentence_id for r in live_sentences(project, draft)] == both
+
+
+def test_an_agent_sentence_folds_with_its_session_and_model(project: Project, draft: str) -> None:
+    agent = Actor(
+        kind="agent", id="writer", user="obd", session=S2, model="m-1", skill="rf-write@1a2b3c4d"
+    )
+    folds(project, "draft.sentence_recorded", sentence(draft, 1, author="agent"), agent)
+    (row,) = live_sentences(project, draft)
+    assert (row.author, row.session, row.model) == ("agent", S2, "m-1")

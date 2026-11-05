@@ -61,7 +61,7 @@ def _dump(project: Project, tables: tuple[str, ...]) -> dict[str, list[tuple[obj
 
 
 def test_projection_version_bumped() -> None:
-    assert PROJECTION_VERSION == "47"
+    assert PROJECTION_VERSION == "48"
 
 
 def test_concept_tables_are_omitted_when_empty() -> None:
