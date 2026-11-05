@@ -185,13 +185,16 @@ def live_key_of(conn: Connection, key: str) -> str:
     current, seen = key, set()
     while current not in seen:
         seen.add(current)
-        into = conn.execute(
-            text("SELECT into_key FROM label_merges WHERE from_key = :k AND active = 1"),
+        found = conn.execute(
+            text(
+                "SELECT into_key FROM label_merges WHERE from_key = :k AND active = 1 "
+                "ORDER BY event_id LIMIT 1"
+            ),
             {"k": current},
-        ).scalar_one_or_none()
-        if into is None:
+        ).first()
+        if found is None:
             break
-        current = str(into)
+        current = str(found[0])
     return current
 
 
@@ -283,6 +286,12 @@ def _merged(t: LabelTables) -> Handler:
         if event.actor.kind != "human":
             return
         p = LabelMerged.model_validate(event.payload)
+        # Total over any logged event: a key already merged away keeps its first merge, and a
+        # later one for the same key is recorded inactive (an event can never be removed).
+        taken = conn.execute(
+            text("SELECT 1 FROM label_merges WHERE from_key = :k AND active = 1 LIMIT 1"),
+            {"k": p.from_key},
+        ).first()
         conn.execute(
             sqlite_insert(t.merges)
             .values(
@@ -291,7 +300,7 @@ def _merged(t: LabelTables) -> Handler:
                 from_key=p.from_key,
                 reason=p.reason,
                 proposal_id=p.proposal_id,
-                active=1,
+                active=0 if taken is not None else 1,
             )
             .on_conflict_do_nothing(index_elements=["event_id"])
         )

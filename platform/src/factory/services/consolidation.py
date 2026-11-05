@@ -529,7 +529,12 @@ def decide_cluster(
             if into is None or into not in members:
                 issues.append(ValidationIssue("into", "into-not-a-member"))
             sources = [m for m in members if m != into] if merge_from is None else list(merge_from)
-            if not set(sources) <= set(members) or into in sources or not sources:
+            if (
+                not set(sources) <= set(members)
+                or into in sources
+                or not sources
+                or len(set(sources)) != len(sources)
+            ):
                 issues.append(ValidationIssue("merge_from", "not-members-of-the-cluster"))
             if not issues:
                 assert into is not None

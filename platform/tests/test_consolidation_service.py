@@ -14,6 +14,7 @@ from factory.errors import FactoryValidationError
 from factory.events.envelope import Actor
 from factory.events.reader import read_all
 from factory.model.intuition import ConceptInput
+from factory.model.labels import LabelMerged
 from factory.model.lineage import IdeaMerged, LineageDecision
 from factory.regions.rules import MemberType
 from factory.services.concepts import define_concept, unmerge_concepts
@@ -335,3 +336,33 @@ def test_old_idea_merge_events_replay_identically(cw: CW) -> None:
     project.index.sync()
     found = rows(project, f"SELECT merged_into FROM ideas WHERE idea_id = '{cw.twin}'")
     assert found == [(cw.w.idea1,)]
+
+
+def test_duplicate_merge_from_refused_and_a_logged_duplicate_rebuilds(cw: CW) -> None:
+    project = cw.project
+    pass_id, index, row = first(project, "label")
+    with pytest.raises(FactoryValidationError) as caught:
+        decide_cluster(
+            project,
+            cw.w.human,
+            pass_id,
+            index,
+            "merge",
+            into=row.members[0],
+            merge_from=[row.members[1], row.members[1]],
+            reason="same",
+        )
+    assert caught.value.issues[0].field == "merge_from"
+    assert not events_of(project, "label.merged", "consolidation.decided")
+    # a hand-written log with two merges of one key still folds and rebuilds
+    one = merge_labels(project, cw.w.human, row.members[0], row.members[1], "same")
+    twin = [e for e in events_of(project, "label.merged") if e.id == one][0]
+    again = twin.model_copy(
+        update={
+            "id": project.events.make("label.merged", LabelMerged(**twin.payload), cw.w.human).id
+        }
+    )
+    project.writer.append([again])
+    project.index.sync()
+    state = project.index.rebuild()
+    assert project.index.rebuild() == state
