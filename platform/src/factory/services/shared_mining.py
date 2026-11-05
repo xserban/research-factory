@@ -24,6 +24,7 @@ from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from sqlalchemy import Engine, MetaData, create_engine, select, text
 from sqlalchemy.engine import Connection
@@ -33,7 +34,7 @@ from sqlalchemy.pool import NullPool
 from factory.canonical import canonical_json
 from factory.clock import Clock, SystemClock
 from factory.config import Settings
-from factory.errors import FactoryError
+from factory.errors import FactoryError, FactoryValidationError, ValidationIssue
 from factory.events.reader import event_files, read_file, relative_name
 from factory.index.shared import (
     NON_STATE_TABLES,
@@ -59,8 +60,11 @@ __all__ = [
     "SharedProject",
     "SharedStore",
     "SharedSyncResult",
+    "SharedUnit",
+    "available_units",
     "content_hash",
     "field_digest",
+    "held_conversions",
     "shared_store",
 ]
 
@@ -450,3 +454,128 @@ class SharedStore:
 def shared_store(settings: Settings, clock: Clock | None = None) -> SharedStore:
     """The store of `settings`; nothing is created until it is synced."""
     return SharedStore(settings, SystemClock() if clock is None else clock)
+
+
+# --- Lookup ---
+
+MAX_PAGE_SIZE = 1000
+
+
+@dataclass(frozen=True)
+class SharedUnit:
+    """An importable unit: the source's `(work_id, conversion_id)` of one miner version, and the
+    importer's own copy of that conversion. `status` is its final rows' common status, `mixed` when
+    they differ; `dual` says every row is agreed by two passes."""
+
+    project: str
+    miner: str
+    version: int
+    digest: str
+    work_id: str
+    conversion_id: str
+    local_conversion_id: str
+    status: Literal["agreed", "resolved", "single", "mixed"]
+    rows: int
+    dual: bool
+
+
+def held_conversions(project: Project) -> dict[str, str]:
+    """The conversions `project` holds, content hash to conversion id: those of a live document
+    whose Markdown and manifest are in its own library. Of two with one hash, the newest."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT c.conversion_id, c.markdown_hash, c.manifest_hash "
+                "FROM document_conversions c JOIN fulltext_documents d "
+                "ON d.document_id = c.document_id WHERE d.superseded_by IS NULL "
+                "ORDER BY c.event_id"
+            )
+        ).all()
+    return {
+        content_hash(str(markdown), str(manifest)): str(conversion)
+        for conversion, markdown, manifest in rows
+        if project.library.exists(str(markdown)) and project.library.exists(str(manifest))
+    }
+
+
+_UNITS_SQL = """
+SELECT r.project, r.work_id, r.conversion_id, c.content_hash,
+       SUM(r.status = 'agreed'), SUM(r.status = 'resolved'), SUM(r.status = 'single')
+FROM shared_records r
+JOIN shared_conversions c ON c.project = r.project AND c.conversion_id = r.conversion_id
+JOIN shared_projects p ON p.slug = r.project
+WHERE r.miner = :miner AND r.version = :version AND r.digest = :digest
+  AND p.status = :ok AND r.project != :importer AND (:source IS NULL OR r.project = :source)
+  AND c.content_hash IN (SELECT value FROM json_each(:hashes))
+GROUP BY r.project, r.work_id, r.conversion_id, c.content_hash
+HAVING SUM(r.status IN ('stale', 'pending')) = 0
+   AND SUM(r.status IN ('agreed', 'resolved', 'single')) > 0
+ORDER BY r.project, r.work_id, r.conversion_id
+LIMIT :limit OFFSET :offset
+"""
+
+
+def _unit_status(
+    agreed: int, resolved: int, single: int
+) -> Literal["agreed", "resolved", "single", "mixed"]:
+    if resolved == 0 and single == 0:
+        return "agreed"
+    if agreed == 0 and single == 0:
+        return "resolved"
+    return "single" if agreed == 0 and resolved == 0 else "mixed"
+
+
+def available_units(
+    store: SharedStore,
+    importer: Project,
+    miner: str,
+    version: int,
+    digest: str,
+    *,
+    source: str | None = None,
+    page: int = 0,
+    page_size: int = 200,
+) -> list[SharedUnit]:
+    """One page of the units of `(miner, version, digest)` that `importer` could import, by source,
+    work and conversion: of another project, on a conversion the importer's library holds, every
+    live record final. A superseded record is history and does not count; a stale or pending one
+    keeps its unit out, since a unit is imported whole. Empty when the store is not built. Reads
+    the store as it stands: the caller syncs it. Raises on `page` and `page_size` out of range."""
+    if page < 0 or not 1 <= page_size <= MAX_PAGE_SIZE:
+        raise FactoryValidationError(
+            [ValidationIssue("page_size", f"page >= 0 and page_size in 1..{MAX_PAGE_SIZE}")]
+        )
+    held = held_conversions(importer)
+    if not held or not store.available():
+        return []
+    with store.connect() as conn:
+        rows = conn.execute(
+            text(_UNITS_SQL),
+            {
+                "miner": miner,
+                "version": version,
+                "digest": digest,
+                "ok": STATUS_OK,
+                "importer": importer.paths.slug,
+                "source": source,
+                "hashes": json.dumps(sorted(held)),
+                "limit": page_size,
+                "offset": page * page_size,
+            },
+        ).all()
+    return [
+        SharedUnit(
+            project=str(slug),
+            miner=miner,
+            version=version,
+            digest=digest,
+            work_id=str(work),
+            conversion_id=str(conversion),
+            local_conversion_id=held[str(hashed)],
+            status=_unit_status(int(agreed), int(resolved), int(single)),
+            rows=int(agreed) + int(resolved) + int(single),
+            dual=int(resolved) == 0 and int(single) == 0,
+        )
+        for slug, work, conversion, hashed, agreed, resolved, single in rows
+    ]

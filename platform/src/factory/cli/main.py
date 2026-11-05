@@ -1537,6 +1537,47 @@ def shared_status_cmd(ctx: typer.Context) -> None:
         typer.echo(line)
 
 
+def _miner_ref(ref: str) -> tuple[str, int]:
+    """`<name>@<version>` as a name and a version; refused on `miner` otherwise."""
+    name, _, version = ref.rpartition("@")
+    if not name or not version.isdigit():
+        raise FactoryValidationError(
+            [ValidationIssue("miner", "give the miner as <name>@<version>")]
+        )
+    return name, int(version)
+
+
+@mine_app.command("import")
+def mine_import_cmd(
+    ctx: typer.Context,
+    miner: Annotated[str, typer.Option("--miner", help="The miner, as <name>@<version>.")],
+    source: Annotated[str | None, typer.Option("--from", help="The source project's slug.")] = None,
+    list_units: Annotated[
+        bool, typer.Option("--list", help="List the importable units; import nothing.")
+    ] = False,
+    page: Annotated[int, typer.Option("--page", help="The page of the listing.")] = 0,
+) -> None:
+    """List the units of a miner that other projects hold on conversions this project holds."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        name, version = _miner_ref(miner)
+        row = mining_service.registered_row(project, name, version)
+        if row is None:
+            raise FactoryValidationError(
+                [ValidationIssue("miner", f"{miner} is not registered in this project")]
+            )
+        store = shared_mining_service.shared_store(state.settings, state.clock)
+        store.sync()
+        units = shared_mining_service.available_units(
+            store, project, name, version, row.digest, source=source, page=page
+        )
+    if not list_units:
+        _fail("give --list", 2)
+    for line in render.shared_unit_lines(units):
+        typer.echo(line)
+
+
 @mine_app.command("agreement")
 def mine_agreement_cmd(
     ctx: typer.Context, miner: Annotated[str, typer.Argument(help="The miner's name.")]

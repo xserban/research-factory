@@ -67,7 +67,7 @@ from factory.services.properties import PropertyView
 from factory.services.references import ExtractSummary, Page, ReferenceCounts
 from factory.services.regions import ExportRow, RegionState, VersionInfo
 from factory.services.relations import RelationView
-from factory.services.shared_mining import SharedProject
+from factory.services.shared_mining import SharedProject, SharedUnit
 from factory.services.snowball import Comparison, RoundCandidate, RoundResult
 from factory.services.trace import TraceNode
 from factory.services.watch import CycleSummary, WatchStatus
@@ -1491,3 +1491,14 @@ def shared_status_lines(projects: Sequence[SharedProject]) -> list[str]:
     if not projects:
         return ["the shared store holds no project"]
     return [f"{p.slug}: {p.status}, {p.records} record(s)" for p in projects]
+
+
+def shared_unit_lines(units: Sequence[SharedUnit]) -> list[str]:
+    """One line per importable unit, or a notice when there is none."""
+    if not units:
+        return ["no importable unit"]
+    return [
+        f"{u.project} {u.work_id} {u.conversion_id}: {u.status}, {u.rows} row(s)"
+        + (", dual" if u.dual else "")
+        for u in units
+    ]
