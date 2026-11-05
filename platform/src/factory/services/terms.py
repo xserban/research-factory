@@ -22,6 +22,7 @@ from typing import Any
 
 from pydantic import ConfigDict, Field, ValidationError
 from sqlalchemy import text
+from sqlalchemy.engine import Connection
 
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
@@ -278,6 +279,23 @@ def term_applications(
     return [a for a in found if status is None or a.status in status]
 
 
+def _visible_keys(conn: Connection, keys: list[str], agent: bool) -> tuple[str, ...]:
+    """The keys, minus those only an import's tag gives when the view is an agent's."""
+    if not agent:
+        return tuple(keys)
+    return tuple(
+        k
+        for k in keys
+        if conn.execute(
+            text(
+                "SELECT 1 FROM labels WHERE key = :k AND origin != 'import-tag' "
+                "AND withdrawn = 0 LIMIT 1"
+            ),
+            {"k": k},
+        ).first()
+    )
+
+
 def list_terms(
     project: Project,
     *,
@@ -313,7 +331,7 @@ def list_terms(
                     definition=str(r[3]),
                     applies_to=tuple(MemberType(t) for t in json.loads(str(r[4]))),
                     refers_to=None if r[5] is None else str(r[5]),
-                    from_keys=tuple(json.loads(str(r[6]))),
+                    from_keys=_visible_keys(conn, json.loads(str(r[6])), exclude_import_tags),
                     retired=bool(r[7]),
                     version=int(r[8]),
                     counts=counts,

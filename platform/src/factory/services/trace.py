@@ -261,7 +261,7 @@ def _trace(
     key = _parse(ref)
     project.index.sync()
     with project.index.connect() as conn:
-        walk = _Walk(project, conn, layer)
+        walk = _Walk(project, conn, layer, agent=skip is not None)
         described = None if key is None else walk.describe(key)
         if key is None or described is None:
             raise FactoryValidationError([ValidationIssue("ref", "unknown id")])
@@ -541,7 +541,10 @@ def _build(
 class _Walk:
     """One walk's view of the projection. Caches the rows that many nodes share."""
 
-    def __init__(self, project: Project, conn: Connection, layer: Layer = "evidence") -> None:
+    def __init__(
+        self, project: Project, conn: Connection, layer: Layer = "evidence", agent: bool = False
+    ) -> None:
+        self._agent = agent
         self._project = project
         self._conn = conn
         self._layer = layer
@@ -721,7 +724,7 @@ class _Walk:
 
     def _organisation_node(self, ident: str) -> _Described | None:
         kind = {"lbl": "label", "trm": "term", "cns": "consolidation", "cnp": "proposal"}[ident[:3]]
-        found = label_trace.describe(self._conn, kind, ident)
+        found = label_trace.describe(self._conn, kind, ident, agent=self._agent)
         return None if found is None else _Described(*found)
 
     def _question(self, ident: str) -> _Described | None:

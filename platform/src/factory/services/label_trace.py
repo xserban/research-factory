@@ -52,10 +52,10 @@ def _writer(conn: Connection, event_id: object) -> str:
     return f"writer {actor}; model {model or '-'}; skill {skill or '-'}; input_blob {blob or '-'}"
 
 
-def describe(conn: Connection, kind: str, ident: str) -> Described | None:
+def describe(conn: Connection, kind: str, ident: str, *, agent: bool = False) -> Described | None:
     """`(label, event_id)` of an organisation node, or None when no row defines it."""
     if kind == "label":
-        return _label(conn, ident)
+        return _label(conn, ident, agent)
     if kind == "term":
         return _term(conn, ident)
     if kind == "consolidation":
@@ -63,7 +63,7 @@ def describe(conn: Connection, kind: str, ident: str) -> Described | None:
     return _proposal(conn, ident)
 
 
-def _label(conn: Connection, ident: str) -> Described | None:
+def _label(conn: Connection, ident: str, agent: bool = False) -> Described | None:
     found = _rows(
         conn,
         "SELECT target_type, target, text, key, live_key, status, origin, quote, quote_text, "
@@ -82,7 +82,13 @@ def _label(conn: Connection, ident: str) -> Described | None:
         if decision == "reject"
         else ("confirmed" if decision == "confirm" else status)
     )
-    merged = "" if live == key else f", read as {live}"
+    # An agent is not told a merged-into key that only an import tag gives (decision 43).
+    tag_only = agent and not _rows(
+        conn,
+        "SELECT 1 FROM labels WHERE key = :k AND origin != 'import-tag' AND withdrawn = 0 LIMIT 1",
+        k=live,
+    )
+    merged = "" if live == key or tag_only else f", read as {live}"
     anchor = ""
     if quote is not None:
         basis = json.loads(str(quote))

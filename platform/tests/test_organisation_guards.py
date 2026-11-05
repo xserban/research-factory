@@ -22,6 +22,7 @@ from factory.services.labels import LabelInput, apply_labels
 from factory.services.methods import methods_report
 from factory.services.regions import define_region, snapshot_region
 from factory.services.terms import promote_term
+from factory.services.trace import trace
 from tests.helpers import install_skill, open_session
 from tests.intuition_helpers import IWorld, ctr_a, ctr_b, iw, lin, screened, world
 from tests.test_mcp_intuition import SESSION_I, _session
@@ -220,3 +221,40 @@ def test_a_later_merge_withholds_a_region_from_agents_at_read(project: Project, 
     assert not region_withheld(project, region)  # the tag key is not the term's yet
     merge_labels(project, iw.human, "performer", "secret key", "same method")
     assert region_withheld(project, region)
+
+
+def test_a_cluster_merge_into_a_tag_key_does_not_name_it_in_an_agent_trace(
+    project: Project, iw: IWorld
+) -> None:
+    from factory.services.consolidation import decide_cluster, list_clusters, start_pass
+    from factory.services.trace import agent_trace
+
+    ids = []
+    for t in (iw.source, iw.other, iw.third):
+        ids.append(label(project, iw.human, "Performer", t))
+        import_tag(project, iw, "Secret Tag", t, REF)
+    pass_id = start_pass(project, iw.human)
+    [row] = [c for c in list_clusters(project, pass_id) if c.kind == "label"]
+    assert set(row.members) == {"performer", "secret tag"}
+    decide_cluster(
+        project, iw.human, pass_id, row.index, "merge", into="secret tag", reason="same method"
+    )
+    assert "secret tag" in trace(project, ids[0]).model_dump_json()  # the researcher sees it
+    assert "secret tag" not in agent_trace(project, ids[0]).model_dump_json().lower()
+
+
+def test_term_list_names_no_tag_only_key_in_from_keys(project: Project, iw: IWorld) -> None:
+    from factory.services.terms import list_terms
+
+    label(project, iw.human, "performer", iw.source)
+    import_tag(project, iw, "Secret Tag", iw.source, REF)
+    promote_term(
+        project,
+        iw.human,
+        name="performer",
+        definition="d",
+        applies_to=(W,),
+        from_keys=("secret tag", "performer"),
+    )
+    assert [v.from_keys for v in list_terms(project)] == [("secret tag", "performer")]
+    assert [v.from_keys for v in list_terms(project, exclude_import_tags=True)] == [("performer",)]
