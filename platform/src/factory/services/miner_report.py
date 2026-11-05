@@ -4,6 +4,8 @@ Invariants:
 - Nothing is stored: the score is a function of the gold labels, the calibration pass's rows and
   the pack; the thresholds are the declared ones raised to the platform floors of the project's
   rigor mode.
+- The score reads the calibration's own tasks and rows, never the schema the miner is listed under
+  now and never staleness: a version's result is fixed once every unit is labelled and closed.
 - A score exists only when every unit of the sample is labelled and its calibration task is
   closed; before that the report counts units and nothing else.
 - A calibration with no gold row or no matched row has an undefined rate and does not pass
@@ -23,10 +25,9 @@ from factory.model.extraction import MinerScope
 from factory.services.context import Project
 from factory.services.extraction import (
     ExtractionRow,
+    calibration_closed_works,
     calibration_task_ids,
     live_rows,
-    stale_extractions,
-    unit_states,
 )
 from factory.services.gates import rigor_mode
 from factory.services.miner_gold import calibration_labels
@@ -75,8 +76,7 @@ def miner_calibration_report(
         return None
     scope = MinerScope(name)
     labels = calibration_labels(project, calibration.calibration_id)
-    states = unit_states(project, scope=scope, calibration_id=calibration.calibration_id)
-    closed = sum(1 for s in states if s.state == "current")
+    closed = len(calibration_closed_works(project, scope, calibration.calibration_id))
     units = len(calibration.units)
     limits = thresholds(rigor_mode(project), spec.regime)
     complete = len(labels) == units and closed == units
@@ -85,10 +85,9 @@ def miner_calibration_report(
             calibration.calibration_id, units, len(labels), closed, None, limits, None
         )
     tasks = calibration_task_ids(project, scope, calibration.calibration_id)
-    stale = stale_extractions(project, scope=scope, calibration_id=calibration.calibration_id)
     agent: dict[str, list[ExtractionRow]] = {}
     for row in live_rows(project, scope=scope, calibration=True):
-        if row.task_id in tasks and row.extraction_id not in stale:
+        if row.task_id in tasks:
             agent.setdefault(row.work_id, []).append(row)
     verified, submitted = _submitted(project, tasks)
     result = score(labels, agent, compile_miner(spec), verified=verified, submitted=submitted)

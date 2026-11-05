@@ -367,6 +367,18 @@ def calibration_sessions_of(project: Project, scope: ScopeKey) -> set[str]:
     return calibration_sessions(project, scope.name)
 
 
+def calibration_closed_works(project: Project, scope: ScopeKey, calibration_id: str) -> set[str]:
+    """The works of a calibration whose latest calibration task is completed. It reads the
+    calibration's own tasks only, never the schema the miner's scope is listed under now, so a
+    version's result does not depend on which version is listed or on later staleness."""
+    latest: dict[str, tuple[str, str]] = {}
+    for task_id, status, content in _kind_tasks(project, scope, calibration_id):
+        work = content.records[0]["work_id"]
+        if work not in latest or task_id > latest[work][0]:
+            latest[work] = (task_id, status)
+    return {w for w, (_, status) in latest.items() if status == TaskStatus.COMPLETED.value}
+
+
 def calibration_works(project: Project, calibration_id: str) -> list[str]:
     """The works of a drawn calibration's sample, sorted. Read-only; the caller syncs the index."""
     with project.index.connect() as conn:

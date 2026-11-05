@@ -148,3 +148,47 @@ def test_a_failed_miner_is_retired_and_still_reported(
     head = f"Miner {VISION_NAME} version 1 (proposed by agent)"
     assert f"{head}: retired (calibration failed)." in text
     assert "record recall 0.400" in text and "Not admitted as evidence." in text
+
+
+def test_a_second_version_fails_is_retired_and_both_are_reported(
+    project: Project, agent: Actor, human: Actor, world: list[str]
+) -> None:
+    from dataclasses import replace
+
+    from factory.mining.spec import spec_to_json
+    from factory.services.miner_gold import label_miner_calibration
+    from factory.services.miners import draw_miner_calibration
+    from factory.services.mining import register_miner
+    from tests.miner_helpers import use
+
+    cal = calibrated_world(project, agent, human)
+    run_calibration(project)
+    assert miner_state(project, VISION_NAME, 1) is MinerState.CALIBRATED
+    v2 = replace(cal.spec, version=2)  # a new version with a deliberately weak miner behind it
+    register_miner(project, PROPOSER, spec_to_json(v2))
+    current = current_protocol(project)
+    assert current is not None
+    amend_protocol(
+        project,
+        human,
+        current.spec.model_copy(update={"miners": (use(v2),)}),
+        reason="list version 2",
+        semantic=True,
+        effects={},
+    )
+    drawn = draw_miner_calibration(project, human, VISION_NAME, 2, random_seed=5)
+    for unit in drawn.units:
+        label_miner_calibration(
+            project, human, drawn.calibration_id, unit.work_id, [mine_row()], channel=Channel.CLI
+        )
+    run_calibration(project, miss=tuple(u.work_id for u in drawn.units[:3]), version=2)
+    assert miner_state(project, VISION_NAME, 2) is MinerState.FAILED
+    retire_miner(project, agent, VISION_NAME, 2, "recall below the floor")
+    # listing version 2 did not touch the result of version 1
+    assert miner_state(project, VISION_NAME, 1) is MinerState.CALIBRATED
+    found = [f for f in check(project).findings if f.code == "miner-calibration-failed"]
+    assert len(found) == 1 and found[0].message.startswith(f"miner {VISION_NAME} version 2")
+    text = render_methods(methods_report(project))
+    head = f"Miner {VISION_NAME} version"
+    assert f"{head} 1 (proposed by agent): calibrated." in text
+    assert f"{head} 2 (proposed by agent): retired (calibration failed)." in text

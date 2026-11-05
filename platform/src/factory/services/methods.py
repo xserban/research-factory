@@ -273,16 +273,17 @@ def _miners(project: Project) -> list[MinerMethods]:
     out: list[MinerMethods] = []
     for row in registered_miners(project):
         use = uses.get((row.name, row.version))
+        state = miner_state(project, row.name, row.version)
         report = miner_calibration_report(project, row.name, row.version)
         result = None if report is None else report.score
         out.append(
             MinerMethods(
                 name=row.name,
                 version=row.version,
-                state=miner_state(project, row.name, row.version).value,
+                state=state.value,
                 proposer_kind=row.proposer_kind,
                 listed=use is not None,
-                evidence=use is not None and use.evidence,
+                evidence=use is not None and use.evidence and state.value != "retired",
                 calibration_units=None if report is None else report.units,
                 calibration=(
                     None
