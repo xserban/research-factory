@@ -19,10 +19,14 @@ SPEC = ModuleSpec(
     kind=ModuleKind.PROPOSAL,
     events=EventFamily(
         types=(
+            "hypothesis.abandoned",
+            "hypothesis.concluded",
+            "hypothesis.drafted",
             "lead.decided",
             "lead.recorded",
         ),
         tables=(
+            "hypotheses",
             "lead_keys",
             "lead_triggers",
             "leads",

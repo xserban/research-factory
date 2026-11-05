@@ -57,6 +57,7 @@ _TABLE_KINDS: dict[TriggerKind, tuple[str, str]] = {
     TriggerKind.CARD: ("cards", "card_id"),
     TriggerKind.CONTRADICTION: ("contradictions", "contradiction_id"),
     TriggerKind.LEAD: ("leads", "lead_id"),
+    TriggerKind.HYPOTHESIS: ("hypotheses", "hypothesis_id"),
 }
 _BUILDER_PAGE = 500
 
@@ -195,7 +196,7 @@ def trigger_issues(project: Project, triggers: Sequence[Trigger]) -> list[Valida
 # --- Keys and prior -----------------------------------------------------------------------
 
 
-def _card_keys(project: Project, card_id: str) -> set[str]:
+def card_keys(project: Project, card_id: str) -> set[str]:
     """The card, its subject (a work or the idea, with the idea it resolves to) and the property
     keys it asserts: what is reachable from a card in one step."""
     from factory.services.ideas import resolve_idea  # ideas import the lineage services
@@ -225,12 +226,18 @@ def lead_keys(project: Project, triggers: Sequence[Trigger]) -> tuple[str, ...]:
         keys.add(trigger.ref)
         row = trigger.row or {}
         if trigger.kind is TriggerKind.CARD:
-            keys |= _card_keys(project, trigger.ref)
+            keys |= card_keys(project, trigger.ref)
         elif trigger.kind is TriggerKind.MATCH and isinstance(row.get("card_id"), str):
-            keys |= _card_keys(project, str(row["card_id"]))
+            keys |= card_keys(project, str(row["card_id"]))
         elif trigger.kind is TriggerKind.CONFLICT:
             keys.update(str(row[k]) for k in ("row_a", "row_b") if k in row)
     return tuple(sorted(keys))
+
+
+def _hypothesis_prior(project: Project, keys: Collection[str]) -> list[str]:
+    from factory.services.hypotheses import hypothesis_prior  # hypotheses import this module
+
+    return hypothesis_prior(project, keys)
 
 
 def prior_for(
@@ -252,6 +259,7 @@ def prior_for(
                 {f"k{i}": k for i, k in enumerate(sorted(keys))},
             ).scalars()
             found.update(str(r) for r in rows)
+        found.update(_hypothesis_prior(project, keys))
         for source in PRIOR_SOURCES:
             found.update(source(project, keys))
     found.discard(exclude or "")

@@ -17,9 +17,9 @@ from collections.abc import Collection
 from dataclasses import dataclass
 from typing import Literal
 
-from factory.errors import FactoryValidationError, ValidationIssue
 from sqlalchemy import text
 
+from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
 from factory.model.hypothesis_plan import HypothesisPlan
 from factory.model.project import RigorMode

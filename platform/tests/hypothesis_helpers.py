@@ -11,11 +11,18 @@ from __future__ import annotations
 from typing import Any
 
 from factory.events.envelope import Actor
-from factory.model.hypotheses import LeadInput, Trigger, TriggerKind
+from factory.model.hypotheses import (
+    HypothesisSpec,
+    LeadInput,
+    MethodRef,
+    Trigger,
+    TriggerKind,
+)
 from factory.model.screening import PassLabel
 from factory.modules.contract import PolicyKind
 from factory.services.cards import create_card
 from factory.services.context import Project
+from factory.services.leads import decide_lead, record_lead
 from tests.finder_helpers import MatchWorld, mw
 from tests.helpers import S2, S3, SESSION, record_pilot_question
 from tests.lineage_helpers import ctr_a, ctr_b, lin, screened, world
@@ -51,3 +58,35 @@ def exploratory_card(project: Project, human: Actor) -> str:
     cheap resolvable trigger that needs no corpus."""
     record_pilot_question(project, human)
     return create_card(project, DRAFTER, "problem", "Dense prediction under a memory bound", "obd")
+
+
+def make_spec(**over: Any) -> HypothesisSpec:
+    """An experiment hypothesis over two named methods, with a margin stated up front."""
+    body: dict[str, Any] = {
+        "kind": "experiment",
+        "statement": STATEMENT,
+        "treatment": {"name": "Lorem"},
+        "baseline": {"name": "Low"},
+        "metric": {
+            "name": "top-1 accuracy",
+            "direction": "higher",
+            "unit_family": "score",
+            "unit": "points",
+        },
+        "conditions": {},
+        "prediction": {"direction": "treatment-better", "margin": "0.5", "unit": "points"},
+        "decision_rule": {"rule": "superiority"},
+        "test": {"kind": "experiment"},
+        "rationale": RATIONALE,
+    }
+    body.update(over)
+    return HypothesisSpec.model_validate(body)
+
+
+def promoted_lead(
+    project: Project, human: Actor, trigger: Trigger, author: Actor = LEAD_AUTHOR
+) -> str:
+    """A lead by `author` that a human promoted."""
+    lead_id = record_lead(project, author, lead_input(LEAD_TEXT, trigger))
+    decide_lead(project, human, lead_id, "promote")
+    return lead_id

@@ -27,7 +27,13 @@ from sqlalchemy.engine import Connection
 from factory.canonical import canonical_json
 from factory.events.envelope import Event
 from factory.index.projection import Handler
-from factory.model.hypotheses import LeadDecided, LeadRecorded
+from factory.model.hypotheses import (
+    HypothesisAbandoned,
+    HypothesisConcluded,
+    HypothesisDrafted,
+    LeadDecided,
+    LeadRecorded,
+)
 from factory.model.project import RigorMode
 from factory.model.protocol import ProtocolSpec
 from factory.modules.contract import PolicyKind
@@ -41,6 +47,7 @@ class HypothesisTables:
     leads: Table
     lead_triggers: Table
     lead_keys: Table
+    hypotheses: Table
     protocols: Table
     project: Table
     """The protocol and project tables the fold reads to know the policy in force."""
@@ -78,13 +85,34 @@ def hypothesis_tables(metadata: MetaData, protocols: Table, project: Table) -> H
         Column("key", String, primary_key=True),
         Index("ix_lead_keys_key", "key"),
     )
-    return HypothesisTables(leads, triggers, keys, protocols, project)
+    hypotheses = Table(
+        "hypotheses",
+        metadata,
+        Column("hypothesis_id", String, primary_key=True),
+        Column("h_version", String, nullable=False),
+        Column("kind", String, nullable=False),
+        Column("lead", String),
+        Column("spec_json", String, nullable=False),
+        Column("supersedes", String),
+        Column("superseded_by", String),
+        Column("drafter_session", String, nullable=False),
+        Column("drafter_model", String),
+        Column("event_id", String, nullable=False),
+        Column("abandon_reason", String),
+        Column("abandoned_event_id", String),
+        Column("conclusion_text", String),
+        Column("conclusion_event_id", String),
+    )
+    return HypothesisTables(leads, triggers, keys, hypotheses, protocols, project)
 
 
 def hypothesis_handlers(t: HypothesisTables) -> dict[str, Handler]:
     return {
         "lead.recorded": _lead_recorded(t),
         "lead.decided": _lead_decided(t),
+        "hypothesis.drafted": _drafted(t),
+        "hypothesis.abandoned": _abandoned(t),
+        "hypothesis.concluded": _concluded(t),
     }
 
 
@@ -183,3 +211,65 @@ def _lead_decided(t: HypothesisTables) -> Handler:
         )
 
     return decided
+
+
+def _drafted(t: HypothesisTables) -> Handler:
+    def drafted(conn: Connection, event: Event) -> None:
+        p = HypothesisDrafted.model_validate(event.payload)
+        inserted = conn.execute(
+            sqlite_insert(t.hypotheses)
+            .values(
+                hypothesis_id=p.hypothesis_id,
+                h_version=p.h_version,
+                kind=p.spec.kind,
+                lead=p.spec.lead,
+                spec_json=canonical_json(p.spec.model_dump(mode="json")).decode(),
+                supersedes=p.supersedes,
+                drafter_session=event.actor.session,
+                drafter_model=event.actor.model,
+                event_id=event.id,
+            )
+            .on_conflict_do_nothing(index_elements=["hypothesis_id"])
+        )
+        if inserted.rowcount and p.supersedes is not None:
+            conn.execute(
+                update(t.hypotheses)
+                .where(
+                    t.hypotheses.c.hypothesis_id == p.supersedes,
+                    t.hypotheses.c.superseded_by.is_(None),
+                )
+                .values(superseded_by=p.hypothesis_id)
+            )
+
+    return drafted
+
+
+def _abandoned(t: HypothesisTables) -> Handler:
+    def abandoned(conn: Connection, event: Event) -> None:
+        if event.actor.kind != "human":
+            return
+        p = HypothesisAbandoned.model_validate(event.payload)
+        conn.execute(
+            update(t.hypotheses)
+            .where(
+                t.hypotheses.c.hypothesis_id == p.hypothesis_id,
+                t.hypotheses.c.abandoned_event_id.is_(None),
+            )
+            .values(abandon_reason=p.reason.value, abandoned_event_id=event.id)
+        )
+
+    return abandoned
+
+
+def _concluded(t: HypothesisTables) -> Handler:
+    def concluded(conn: Connection, event: Event) -> None:
+        if event.actor.kind != "human":
+            return
+        p = HypothesisConcluded.model_validate(event.payload)
+        conn.execute(
+            update(t.hypotheses)
+            .where(t.hypotheses.c.hypothesis_id == p.hypothesis_id)
+            .values(conclusion_text=p.text, conclusion_event_id=event.id)
+        )
+
+    return concluded

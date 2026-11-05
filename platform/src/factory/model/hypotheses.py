@@ -335,3 +335,40 @@ def falsifier_text(spec: HypothesisSpec, *, confidence: str = "0.95") -> str:
         f"Refuted if at least {_percent(rule.q)} of at least {rule.n_min} later-literature "
         f"comparisons of treatment and baseline on {metric}{scope} favour the baseline."
     )
+
+
+# --- Drafting, abandonment, conclusion -----------------------------------------------------
+
+
+class HypothesisDrafted(StrictModel):
+    hypothesis_id: HypothesisId
+    spec: HypothesisSpec
+    h_version: HVersion
+    supersedes: HypothesisId | None = None
+
+    @model_validator(mode="after")
+    def _version_is_computed(self) -> Self:
+        if self.h_version != hypothesis_version(self.spec):
+            raise ValueError("h_version is the hash of the spec; it is computed, not stated")
+        if self.supersedes == self.hypothesis_id:
+            raise ValueError("a hypothesis cannot supersede itself")
+        return self
+
+
+class AbandonReason(StrEnum):
+    NO_RUNNABLE_CODE = "no-runnable-code"
+    BUDGET_EXHAUSTED = "budget-exhausted"
+    INFEASIBLE = "infeasible"
+    DATA_UNAVAILABLE = "data-unavailable"
+    OTHER = "other"
+
+
+class HypothesisAbandoned(StrictModel):
+    hypothesis_id: HypothesisId
+    reason: AbandonReason
+    note: Annotated[NonBlank, Field(max_length=MAX_NOTE)]
+
+
+class HypothesisConcluded(StrictModel):
+    hypothesis_id: HypothesisId
+    text: Annotated[NonBlank, Field(max_length=MAX_CONCLUSION)]
