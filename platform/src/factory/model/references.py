@@ -107,9 +107,12 @@ class Decision(StrEnum):
     REJECT = "reject"
     PROPOSE_CONFIRM = "propose-confirm"
     PROPOSE_REJECT = "propose-reject"
+    CLEAR = "clear"
+    """A human withdraws the human decision on an entry: the recorded link stands again and
+    nothing carries to later extractions."""
 
 
-BINDING_DECISIONS = frozenset({Decision.CONFIRM, Decision.REJECT})
+BINDING_DECISIONS = frozenset({Decision.CONFIRM, Decision.REJECT, Decision.CLEAR})
 
 
 class Direction(StrEnum):
@@ -309,8 +312,8 @@ class CarriedDecision(StrictModel):
 
     @model_validator(mode="after")
     def _binding(self) -> Self:
-        if self.decision not in BINDING_DECISIONS:
-            raise ValueError("only a binding decision carries")
+        if self.decision not in (Decision.CONFIRM, Decision.REJECT):
+            raise ValueError("only a confirmation or a rejection carries")
         if self.decision is Decision.CONFIRM and self.work_id is None:
             raise ValueError("a carried confirmation names its work")
         return self

@@ -10,7 +10,8 @@ resolution as recorded, and `state`, `work_id` and `confidence` fold the latest 
 never changes the state. `reference_decisions` keeps the latest decision per entry and kind, so a
 decision recorded before its link is folded when the link arrives. A `reference.resolved` event's
 `carried` decisions enter `reference_decisions` as the binding decisions of the new extraction,
-under the human's own event id.
+under the human's own event id. A `clear` is the latest binding decision of its entry and folds
+to none: the link reads as recorded.
 
 `reason` is the recorded resolution's reason and is not folded: an unresolved link made so by a
 `reject` keeps the reason of its base resolution, which is NULL when the base was not unresolved.
@@ -383,7 +384,7 @@ def _fold(conn: Connection, t: ReferenceTables, extraction_id: str, ordinal: int
     state, work_id, confidence = link[0], link[1], link[2]
     decision = confirmed_by = None
     binding = by_kind.get(BINDING)
-    if binding is not None:
+    if binding is not None and binding[1] != Decision.CLEAR.value:
         decision, confirmed_by = binding[1], binding[3]
         if decision == Decision.CONFIRM.value:
             state, work_id = LinkState.RESOLVED.value, binding[2]

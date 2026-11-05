@@ -1344,7 +1344,8 @@ def build_server(
         """Propose or record a decision on an unconfirmed or ambiguous reference link.
         `decision` is `propose-confirm` or `propose-reject`; `confirm` and `reject` are binding
         and a human's (a second agent may only confirm in pilot mode, a recorded proposal of
-        another session). `quotes` is exactly two strings: a verbatim part of the entry, and a
+        another session); `clear` is a human's alone. `quotes` is exactly two strings: a verbatim
+        part of the entry, and a
         verbatim part of the candidate's title or author line. `work_id` names the candidate for
         an ambiguous link. Refused to a session that has joined a pass."""
 

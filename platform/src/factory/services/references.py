@@ -27,7 +27,7 @@ Invariants:
 - Held-out mask (R-20): an agent never sees a link that touches a held-out seed. Such an entry
   reads as a genuine unresolved link with nothing parsed: reason `no-identifier-no-title`, the only
   reason whose real links have no method, title or identifier, so its shape marks nothing.
-  `first_author`, `year` and the anchor stay, since the document shows them. `_HIDDEN_LINK` is the
+  `first_author`, `year` and the anchor stay, since the document shows them. `HIDDEN_LINK` is the
   one definition of "touches"; the list, the counts, the extraction summary and the agent `trace`
   all read it.
 """
@@ -83,10 +83,13 @@ from factory.services.conversions import conversion_manifest
 from factory.services.document_read import ConversionRef, default_conversion
 from factory.services.protocol import current_protocol
 from factory.services.reference_resolve import (
+    HELD_WORK,
+    HIDDEN_LINK,
     Corpus,
     carried_decisions,
     entry_digest,
     entry_raw,
+    held_params,
     load_corpus,
     resolve_entries,
 )
@@ -466,30 +469,13 @@ def _extract_one(
 # --- Counts and listing ---
 
 _LIVE = "JOIN reference_extractions x ON x.extraction_id = {t}.extraction_id AND x.live = 1"
-_HELD_WORK = "IN (SELECT value FROM json_each(:held_works))"
-_HELD_KEY = "IN (SELECT value FROM json_each(:held_keys))"
-_HIDDEN_LINK = (
-    f"COALESCE(l.work_id {_HELD_WORK} OR l.base_work_id {_HELD_WORK} OR n.doi {_HELD_KEY} "
-    f"OR n.arxiv {_HELD_KEY} OR EXISTS (SELECT 1 FROM json_each(l.candidates) c "
-    f"WHERE json_extract(c.value, '$.work_id') {_HELD_WORK}), 0)"
-)
-"""Whether a link (`l`, entry `n`) touches a held-out seed's work: its linked, base or candidate
-work, or an identifier the entry states. Agrees with `link_touches_held_out`. COALESCE because a
-NULL field gives NULL, and `NOT NULL` would drop the link."""
 _ENTRY_LINK = (
     "JOIN reference_links l ON l.extraction_id = n.extraction_id AND l.ordinal = n.ordinal"
 )
 _ENTRIES = f"FROM reference_entries n {_LIVE.format(t='n')} {_ENTRY_LINK}"
 """The entries of the live extractions (`n`, extraction `x`) with their links (`l`)."""
-_SHOWN_CITING = f"x.work_id NOT {_HELD_WORK}"
-_SHOWN_STATE = f"CASE WHEN {_HIDDEN_LINK} THEN :unresolved ELSE l.state END"
-
-
-def _held_params(held: HeldOut | None) -> dict[str, str]:
-    """The bind parameters of `_HIDDEN_LINK`."""
-    works = sorted(held.work_ids) if held is not None else []
-    keys = sorted(held.keys) if held is not None else []
-    return {"held_works": json.dumps(works), "held_keys": json.dumps(keys)}
+_SHOWN_CITING = f"x.work_id NOT {HELD_WORK}"
+_SHOWN_STATE = f"CASE WHEN {HIDDEN_LINK} THEN :unresolved ELSE l.state END"
 
 
 def _agent_states(project: Project, extraction_id: str, held: HeldOut) -> dict[LinkState, int]:
@@ -498,13 +484,13 @@ def _agent_states(project: Project, extraction_id: str, held: HeldOut) -> dict[L
     with project.index.connect() as conn:
         rows = conn.execute(
             text(
-                f"SELECT CASE WHEN {_HIDDEN_LINK} THEN :unresolved ELSE l.state END, COUNT(*) "
+                f"SELECT CASE WHEN {HIDDEN_LINK} THEN :unresolved ELSE l.state END, COUNT(*) "
                 f"FROM reference_entries n {_ENTRY_LINK} WHERE n.extraction_id = :x GROUP BY 1"
             ),
             {
                 "x": extraction_id,
                 "unresolved": LinkState.UNRESOLVED.value,
-                **_held_params(held),
+                **held_params(held),
             },
         ).all()
     for state, count in rows:
@@ -548,9 +534,9 @@ def masked_anchors(project: Project, held: HeldOut) -> frozenset[str]:
             text(
                 "SELECT DISTINCT x.conversion_id, n.anchor FROM reference_entries n "
                 "JOIN reference_extractions x ON x.extraction_id = n.extraction_id "
-                f"{_ENTRY_LINK} WHERE x.work_id {_HELD_WORK} OR {_HIDDEN_LINK}"
+                f"{_ENTRY_LINK} WHERE x.work_id {HELD_WORK} OR {HIDDEN_LINK}"
             ),
-            _held_params(held),
+            held_params(held),
         ).all()
     return frozenset(f"{conversion}/{anchor}" for conversion, anchor in rows)
 
@@ -586,14 +572,14 @@ def reference_counts(project: Project, held_out: HeldOut | None = None) -> Refer
     as unresolved, as `list_references` shows it."""
     project.index.sync()
     params = {
-        **_held_params(held_out),
+        **held_params(held_out),
         "unresolved": LinkState.UNRESOLVED.value,
         "resolved": LinkState.RESOLVED.value,
         "probe": QueryPurpose.PROBE.value,
     }
     resolved = (
         f"{_ENTRIES} WHERE {_SHOWN_CITING} AND l.state = :resolved AND l.work_id IS NOT NULL "
-        f"AND NOT {_HIDDEN_LINK}"
+        f"AND NOT {HIDDEN_LINK}"
     )
     with project.index.connect() as conn:
         extractions = conn.execute(
@@ -690,7 +676,7 @@ def list_references(
         f"AND (:state IS NULL OR {_SHOWN_STATE} = :state)"
     )
     params: dict[str, object] = {
-        **_held_params(held_out),
+        **held_params(held_out),
         "unresolved": LinkState.UNRESOLVED.value,
         "work": work_id,
         "state": None if state is None else state.value,
@@ -704,7 +690,7 @@ def list_references(
                     "n.label, n.title, n.first_author, n.year, n.doi, n.arxiv, l.state, "
                     "l.work_id, l.confidence, l.method, l.score, l.candidates, l.reason, "
                     "l.base_state, l.base_work_id, l.decision, l.confirmed_by, l.proposal, "
-                    f"l.no_source_record, {_HIDDEN_LINK} AS hidden {scope} "
+                    f"l.no_source_record, {HIDDEN_LINK} AS hidden {scope} "
                     "ORDER BY x.work_id, n.extraction_id, n.ordinal LIMIT :limit OFFSET :after"
                 ),
                 {**params, "limit": limit, "after": after},

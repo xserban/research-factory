@@ -125,6 +125,7 @@ def test_vocabularies() -> None:
         "reject",
         "propose-confirm",
         "propose-reject",
+        "clear",
     }
     assert {d.value for d in Direction} == {"backward", "forward"}
     assert {v.value for v in Via} == {"document-reference-list", "source-metadata"}

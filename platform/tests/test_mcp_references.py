@@ -4,6 +4,7 @@ default, nothing about held-out seeds or the seed route (slice 3a, ruling 3; R-2
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 import pytest
@@ -445,3 +446,108 @@ async def test_document_read_keeps_the_scrub_until_decision_78_is_settled(
     assert body["ok"] is True, body
     assert _leaks(json.dumps(body), {doi}) == []
     assert "[withheld]" in body["data"]["segments"][0]["text"]
+
+
+# --- Probing a masked entry by ordinal (re-review 1) ---
+
+
+def _ordinal_free(body: dict[str, Any], ordinal: int, anchor: str) -> str:
+    """The exact response with only the ordinal or anchor the caller named taken out."""
+    text_ = json.dumps(body, sort_keys=True)
+    return re.sub(rf"(:{ordinal}\b|\b{anchor}\b)", "<entry>", text_)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "decision", ["propose-confirm", "propose-reject", "confirm", "reject", "clear"]
+)
+async def test_a_masked_entry_refuses_a_decision_as_a_genuine_unresolved_one(
+    settings: Settings,
+    project: Project,
+    clock: FixedClock,
+    masked_world: tuple[str, str, str],
+    decision: str,
+) -> None:
+    citing, _, _ = masked_world
+    async with open_session(settings, clock, _lookups().sources()) as session:
+        await _extracted(session)
+        listed = await session.call("references_list", project="demo", work_id=citing, limit=100)
+        items = listed["data"]["items"]
+        masked, genuine = items[0], items[-1]
+        rex = masked["extraction_id"]
+        before = _count(project)
+        bodies = [
+            await session.call(
+                "reference_decide",
+                project="demo",
+                extraction_id=rex,
+                ordinal=item["ordinal"],
+                decision=decision,
+                rationale="Same paper.",
+                quotes=["x", "y"],
+                **AGENT,
+            )
+            for item in (masked, genuine)
+        ]
+    assert bodies[0]["ok"] is False and _count(project) == before
+    assert _ordinal_free(bodies[0], masked["ordinal"], "b1") == _ordinal_free(
+        bodies[1], genuine["ordinal"], genuine["anchor"]
+    )
+
+
+@pytest.mark.anyio
+async def test_naming_a_held_out_work_in_a_decision_marks_nothing(
+    settings: Settings,
+    project: Project,
+    clock: FixedClock,
+    masked_world: tuple[str, str, str],
+) -> None:
+    """The refusal does not echo the work, so the scrub cannot flag it as held out."""
+    citing, target, _ = masked_world
+    async with open_session(settings, clock, _lookups().sources()) as session:
+        await _extracted(session)
+        listed = await session.call("references_list", project="demo", work_id=citing, limit=100)
+        item = listed["data"]["items"][-1]
+        body = await session.call(
+            "reference_decide",
+            project="demo",
+            extraction_id=item["extraction_id"],
+            ordinal=item["ordinal"],
+            decision="propose-confirm",
+            rationale="Same paper.",
+            quotes=["x", "y"],
+            work_id=target,
+            **AGENT,
+        )
+    assert body["ok"] is False and "[withheld]" not in json.dumps(body)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("direction", ["forward", "back"])
+async def test_a_masked_anchor_traces_as_a_genuine_unresolved_one(
+    settings: Settings,
+    project: Project,
+    clock: FixedClock,
+    masked_world: tuple[str, str, str],
+    direction: str,
+) -> None:
+    citing, _, _ = masked_world
+    async with open_session(settings, clock, _lookups().sources()) as session:
+        await _extracted(session)
+        listed = await session.call("references_list", project="demo", work_id=citing, limit=100)
+        items = listed["data"]["items"]
+        rex = items[0]["extraction_id"]
+        conversion = _conversion_of(project, rex)
+        masked = await session.call(
+            "trace", project="demo", ref=f"{conversion}/b1", direction=direction
+        )
+        genuine = await session.call(
+            "trace", project="demo", ref=f"{conversion}/{items[-1]['anchor']}", direction=direction
+        )
+        entries = [
+            await session.call("trace", project="demo", ref=f"{rex}:{i['ordinal']}")
+            for i in (items[0], items[-1])
+        ]
+    assert masked["ok"] is True
+    assert _ordinal_free(masked, 0, "b1") == _ordinal_free(genuine, 0, items[-1]["anchor"])
+    assert entries[0] == entries[1]

@@ -454,3 +454,86 @@ def test_a_lost_human_decision_is_a_finding_naming_the_extraction(
 
 def _codes(project: Project, mode: RigorMode) -> set[str]:
     return {f.code for f in _findings_as(project, mode)}
+
+
+# --- Clearing a human decision (re-review 2) ---
+
+
+def _reextract_nothing_found(project: Project, agent: Actor, version: str) -> str:
+    """A re-extraction whose lookups return nothing: the link's base is unresolved."""
+    run_convert(project, make_registry(StubConverter(version=version)))
+    summary = extract_references(project, agent, None, sources=Lookups().sources())
+    return summary.extractions[0].extraction_id
+
+
+def _clear(project: Project, actor: Actor, rex: str, ordinal: int = 1) -> None:
+    decide_reference(
+        project, actor, rex, ordinal, Decision.CLEAR, rationale="Decided in error.", quotes=("", "")
+    )
+
+
+def test_a_human_clears_a_carried_confirmation_on_an_unresolved_base(
+    project: Project, extraction: str, human: Actor, agent: Actor
+) -> None:
+    """The reviewer's case: the lookup returned nothing, so the link has no candidate at all."""
+    _decide(project, human, extraction, 1, Decision.CONFIRM)
+    rex = _reextract_nothing_found(project, agent, "2.0+stub")
+    item = _item(project, 1)
+    assert item.base_state is LinkState.UNRESOLVED and item.candidates == []
+    assert item.state is LinkState.RESOLVED and item.confirmed_by == "human"
+    before = len(_decisions(project))
+    _clear(project, human, rex)
+    assert len(_decisions(project)) == before + 1
+    assert _decisions(project)[-1]["decision"] == "clear"
+    item = _item(project, 1)
+    assert item.state is LinkState.UNRESOLVED and item.work_id is None
+    assert item.decision is None and item.confirmed_by is None
+    _reextract_nothing_found(project, agent, "3.0+stub")
+    assert events_of_type(project, "reference.resolved")[-1].payload["carried"] == []
+    assert _item(project, 1).decision is None
+    assert project.index.rebuild() == project.index.rebuild()
+    assert _item(project, 1).decision is None
+
+
+def test_a_cleared_rejection_restores_the_recorded_link(
+    project: Project, extraction: str, human: Actor, agent: Actor
+) -> None:
+    _decide(project, human, extraction, 1, Decision.REJECT)
+    rex = _reextract(project, agent)
+    _clear(project, human, rex)
+    item = _item(project, 1)
+    assert item.state is LinkState.UNCONFIRMED and item.work_id == item.base_work_id
+    _reextract(project, agent, "3.0+stub")
+    assert _item(project, 1).state is LinkState.UNCONFIRMED
+
+
+def test_a_cleared_decision_is_not_reported_lost(
+    project: Project,
+    extraction: str,
+    human: Actor,
+    agent: Actor,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _decide(project, human, extraction, 1, Decision.CONFIRM)
+    rex = _reextract(project, agent)
+    _clear(project, human, rex)
+    real = references_service.entry_digest
+    monkeypatch.setattr(
+        references_service,
+        "entry_digest",
+        lambda raw: real(raw + " changed") if "Efficient reed" in raw else real(raw),
+    )
+    _reextract(project, agent, "3.0+stub")
+    assert "references-decision-lost" not in _codes(project, RigorMode.SYSTEMATIC)
+
+
+def test_only_a_human_clears_and_only_a_human_decision(
+    project: Project, extraction: str, human: Actor, agent: Actor
+) -> None:
+    with pytest.raises(FactoryValidationError):
+        _clear(project, human, extraction)  # nothing to clear
+    _decide(project, human, extraction, 1, Decision.CONFIRM)
+    before = event_bytes(project)
+    with pytest.raises(FactoryValidationError):
+        _clear(project, agent, extraction)
+    assert event_bytes(project) == before

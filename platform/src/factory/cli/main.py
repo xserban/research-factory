@@ -793,6 +793,9 @@ def references_decide_cmd(
     ordinal: Annotated[int, typer.Argument(help="The entry's ordinal.")],
     confirm: Annotated[bool, typer.Option("--confirm", help="Confirm the link.")] = False,
     reject: Annotated[bool, typer.Option("--reject", help="Reject the link.")] = False,
+    clear: Annotated[
+        bool, typer.Option("--clear", help="Withdraw the human decision on the entry.")
+    ] = False,
     rationale: Annotated[str, typer.Option("--rationale", help="Why.")] = "",
     entry_quote: Annotated[
         str, typer.Option("--entry-quote", help="Verbatim from the entry.")
@@ -802,10 +805,11 @@ def references_decide_cmd(
     ] = "",
     work: Annotated[str | None, typer.Option("--work", help="The candidate work.")] = None,
 ) -> None:
-    """The human's binding decision on an unconfirmed or ambiguous link."""
+    """The human's binding decision on an unconfirmed or ambiguous link, or its withdrawal."""
     state = _state(ctx)
-    if confirm == reject:
-        _fail("give exactly one of --confirm and --reject", 2)
+    if confirm + reject + clear != 1:
+        _fail("give exactly one of --confirm, --reject and --clear", 2)
+    decision = Decision.CONFIRM if confirm else Decision.REJECT if reject else Decision.CLEAR
     with _reporting_errors():
         project = _resolve_project(state)
         reference_resolve_service.decide_reference(
@@ -813,12 +817,13 @@ def references_decide_cmd(
             project.human_actor(),
             extraction,
             ordinal,
-            Decision.CONFIRM if confirm else Decision.REJECT,
+            decision,
             rationale=rationale,
             quotes=(entry_quote, candidate_quote),
             work_id=work,
         )
-    typer.echo(f"{'confirmed' if confirm else 'rejected'} {extraction}:{ordinal}")
+    done = {Decision.CONFIRM: "confirmed", Decision.REJECT: "rejected", Decision.CLEAR: "cleared"}
+    typer.echo(f"{done[decision]} {extraction}:{ordinal}")
 
 
 def _round_direction(value: str) -> Direction:

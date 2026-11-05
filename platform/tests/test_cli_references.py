@@ -143,6 +143,20 @@ def test_decide_confirm_as_human_writes_event(
     )
     assert code == 2 and "--confirm" in err
 
+    code, out, _ = _cli(
+        settings.root,
+        "references",
+        "decide",
+        item.extraction_id,
+        str(item.ordinal),
+        "--clear",
+        "--rationale",
+        "decided in error",
+        "--project",
+        "demo",
+    )
+    assert code == 0 and "cleared" in out
+
 
 def test_snowball_plan_output_lists_candidates_ranked(
     extracted: Project, agent: Actor, settings: Settings, monkeypatch: pytest.MonkeyPatch
