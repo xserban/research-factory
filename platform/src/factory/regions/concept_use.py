@@ -27,14 +27,31 @@ _TREE = (
 )
 
 
+def concept_exists(conn: Connection, concept_id: str) -> bool:
+    """Whether a concept with this id was ever defined."""
+    found = conn.execute(
+        text("SELECT 1 FROM concepts WHERE concept_id = :c"), {"c": concept_id}
+    ).first()
+    return found is not None
+
+
+def concept_live(conn: Connection, concept_id: str) -> str:
+    """The concept `concept_id` stands for after active merges (itself when unmerged)."""
+    return str(conn.execute(text(_SURVIVOR), {"c": concept_id}).scalar_one())
+
+
 def concept_survivor(conn: Connection, concept_id: str) -> str | None:
-    """The concept `concept_id` stands for after merges when it is source-approved, else None."""
-    survivor = conn.execute(text(_SURVIVOR), {"c": concept_id}).scalar_one()
-    approved = conn.execute(
-        text("SELECT 1 FROM concepts WHERE concept_id = :c AND source_state = 'approved'"),
+    """The concept `concept_id` stands for after merges when it is visible, else None. Visible is
+    the concept views' rule: source approved, not merged away, review not `wrong`."""
+    survivor = concept_live(conn, concept_id)
+    visible = conn.execute(
+        text(
+            "SELECT 1 FROM concepts WHERE concept_id = :c AND source_state = 'approved' "
+            "AND merged_into IS NULL AND review_state IN ('unreviewed', 'reviewed')"
+        ),
         {"c": survivor},
     ).first()
-    return str(survivor) if approved is not None else None
+    return survivor if visible is not None else None
 
 
 def concept_users(conn: Connection, concept_id: str) -> list[str]:

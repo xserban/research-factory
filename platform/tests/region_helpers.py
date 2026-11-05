@@ -8,6 +8,7 @@ without events, so a test that rebuilds the index must not rely on them.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 
 import pytest
@@ -31,6 +32,8 @@ class RWorld:
     concept: str
     outside: str
     """A work id outside the corpus that the graph names."""
+    extra: str
+    """A corpus work that is not full-text included (a valid target for a human add)."""
 
     def works(self, *ids: str) -> list[Member]:
         return [(MemberType.WORK, i) for i in ids]
@@ -128,4 +131,71 @@ def region_project(project: Project, screened: list[str]) -> RWorld:  # noqa: F8
         conn.commit()
     outcomes = final_outcomes(project)
     assert Outcome.INCLUDED in outcomes.values()
-    return RWorld(project, included, corpus, idea, concept, outside)
+    extra = next(w for w in corpus if w not in included)
+    return RWorld(project, included, corpus, idea, concept, outside, extra)
+
+
+def merge_works(project: Project, primary: str, *absorbed: str, merge_id: str = "mrg_1") -> None:
+    """An active dedup merge written straight into the index (the evaluator reads the lookups)."""
+    members = [primary, *absorbed]
+    with project.index.connect() as conn:
+        conn.execute(
+            text(
+                'INSERT INTO merges (merge_id, "primary", absorbed, rule, records, status) '
+                "VALUES (:m, :p, :a, 'x', :n, 'active')"
+            ),
+            {"m": merge_id, "p": primary, "a": json.dumps(list(absorbed)), "n": len(members)},
+        )
+        conn.execute(
+            text("INSERT INTO merge_members (merge_id, work_id) VALUES (:m, :w)"),
+            [{"m": merge_id, "w": w} for w in members],
+        )
+        conn.commit()
+
+
+def cite(project: Project, source: str, target: str, key: str) -> None:
+    """A live stated `cites` edge written straight into the index."""
+    with project.index.connect() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO graph_edges (edge_id, edge_type, source, target, base_status, live, "
+                "flags, event_id) VALUES (:id, 'cites', :s, :t, 'stated', 1, '[]', 'ev')"
+            ),
+            {"id": f"cit:rex_{key:0>26}:1", "s": source, "t": target},
+        )
+        conn.commit()
+
+
+def snapshot_event(
+    project: Project, version: str, region: str, definition_event: str, members: list[Member]
+) -> None:
+    """Record a `region.snapshot_taken` for `version` under a given definition event, without
+    evaluating (the guards read the definition a version was pinned under)."""
+    from factory.model.regions import RegionSnapshotTaken
+    from factory.regions.version import compress, members_text
+
+    payload = RegionSnapshotTaken(
+        region_id=region,
+        version=version,
+        definition_event=definition_event,
+        rules_hash="0" * 64,
+        members_blob=project.blobs.put(compress(members_text(members))),
+        members_hash="1" * 64,
+        basis_blob=project.blobs.put_json({}),
+        counts={MemberType.WORK: len(members)},
+        as_of=definition_event,
+    )
+    project.record([project.events.make("region.snapshot_taken", payload, project.system_actor())])
+
+
+def definition_event_of(project: Project, region: str) -> str:
+    with project.index.connect() as conn:
+        return str(
+            conn.execute(
+                text(
+                    "SELECT event_id FROM region_definitions WHERE region_id = :r "
+                    "ORDER BY event_id DESC LIMIT 1"
+                ),
+                {"r": region},
+            ).scalar_one()
+        )

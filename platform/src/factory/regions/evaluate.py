@@ -34,7 +34,7 @@ from factory.extraction.numbers import normalise_text
 from factory.lineage.graph import GraphFilter
 from factory.lineage.paths import LINEAGE_TYPES, ancestors, descendants
 from factory.model.lineage import EdgeType
-from factory.regions.concept_use import concept_survivor, concept_users
+from factory.regions.concept_use import concept_live, concept_survivor, concept_users
 from factory.regions.rules import (
     CitesRule,
     ConceptRule,
@@ -57,6 +57,7 @@ from factory.services.lineage import index_neighbours, require_node
 
 REGION_MAX_MEMBERS = 200_000
 IDEA_PREFIX = "ida_"
+CONCEPT_PREFIX = "cpt_"
 _CHUNK = 5_000
 
 Member = tuple[MemberType, str]
@@ -165,19 +166,55 @@ class _Eval:
             dict(params or {}),
         )
 
-    def add_nodes(self, target: str, ids: Sequence[str]) -> None:
-        """Insert graph node ids: ideas as ideas, everything else as canonical works."""
-        ideas = [i for i in ids if i.startswith(IDEA_PREFIX)]
-        works = self.stage(i for i in ids if not i.startswith(IDEA_PREFIX))
-        self.add_works(target, f"SELECT id FROM {works}")
-        for batch in _chunks((i,) for i in ideas):
-            self.conn.execute(
-                text(f"INSERT OR IGNORE INTO {target} VALUES ('idea', :i)"),
-                [{"i": b[0]} for b in batch],
-            )
+    def live_idea(self, idea_id: str) -> str:
+        """The idea `idea_id` stands for after merges (itself when unmerged or unknown)."""
+        current, seen = idea_id, set()
+        while current not in seen:
+            seen.add(current)
+            into = self.conn.execute(
+                text("SELECT merged_into FROM ideas WHERE idea_id = :i"), {"i": current}
+            ).scalar_one_or_none()
+            if into is None:
+                break
+            current = str(into)
+        return current
 
-    def add_members(self, target: str, members: Iterable[Member]) -> None:
-        for batch in _chunks(members):
+    def add_nodes(self, target: str, ids: Iterable[str]) -> None:
+        """Insert graph node ids by kind: ideas and concepts as their live (merge-resolved) ids,
+        everything else as canonical works."""
+        ideas: set[str] = set()
+        concepts: set[str] = set()
+        works: list[str] = []
+        for node in ids:
+            if node.startswith(IDEA_PREFIX):
+                ideas.add(self.live_idea(node))
+            elif node.startswith(CONCEPT_PREFIX):
+                concepts.add(concept_live(self.conn, node))
+            else:
+                works.append(node)
+        self.add_works(target, f"SELECT id FROM {self.stage(works)}")
+        self.add_members(target, [(MemberType.IDEA, i) for i in sorted(ideas)], resolved=True)
+        self.add_members(target, [(MemberType.CONCEPT, c) for c in sorted(concepts)], resolved=True)
+
+    def add_members(
+        self, target: str, members: Iterable[Member], *, resolved: bool = False
+    ) -> None:
+        """Insert members; work ids are mapped to canonical ids and idea and concept ids to live
+        ids (a decision or a pinned set may predate a merge) unless `resolved`."""
+        kept: list[Member] = []
+        works: list[str] = []
+        for kind, member in members:
+            if resolved:
+                kept.append((kind, member))
+            elif kind is MemberType.WORK:
+                works.append(member)
+            elif kind is MemberType.IDEA:
+                kept.append((kind, self.live_idea(member)))
+            else:
+                kept.append((kind, concept_live(self.conn, member)))
+        if works:
+            self.add_works(target, f"SELECT id FROM {self.stage(works)}")
+        for batch in _chunks(kept):
             self.conn.execute(
                 text(f"INSERT OR IGNORE INTO {target} VALUES (:t, :m)"),
                 [{"t": t.value, "m": m} for t, m in batch],
@@ -264,21 +301,44 @@ def _pinned(ev: _Eval, version: str, field: str) -> list[Member]:
 
 
 def _cites(ev: _Eval, rule: CitesRule, target: str, field: str) -> None:
-    base = ev.stage(m for t, m in _pinned(ev, rule.base, f"{field}.base") if t is MemberType.WORK)
+    pinned = _pinned(ev, rule.base, f"{field}.base")
+    base = ev.stage(m for t, m in pinned if t is MemberType.WORK)
+    # The base read as canonical works, then widened with the ids merged into them, so the join
+    # below stays on the edge indexes while both ends of each edge are grouped as canonical works.
+    canonical = ev.new_table("cb", "id TEXT PRIMARY KEY")
+    ev.conn.execute(
+        text(
+            f"INSERT OR IGNORE INTO {canonical} SELECT COALESCE(c.primary_id, b.id) "
+            f"FROM {base} b LEFT JOIN {ev.canon} c ON c.work_id = b.id"
+        )
+    )
+    expanded = ev.new_table("bx", "id TEXT PRIMARY KEY")
+    ev.conn.execute(
+        text(
+            f"INSERT OR IGNORE INTO {expanded} SELECT id FROM {canonical} UNION "
+            f"SELECT c.work_id FROM {ev.canon} c JOIN {canonical} b ON b.id = c.primary_id"
+        )
+    )
     # A stated or confirmed link of a live extraction; a human rejection removes it.
     live = (
         "e.edge_type = 'cites' AND e.live = 1 AND e.base_status IN ('stated', 'confirmed') "
         "AND COALESCE(e.decision, '') != 'reject'"
     )
+    cs = "COALESCE(cs.primary_id, e.source)"
+    ct = "COALESCE(ct.primary_id, e.target)"
+    joins = (
+        f"LEFT JOIN {ev.canon} cs ON cs.work_id = e.source "
+        f"LEFT JOIN {ev.canon} ct ON ct.work_id = e.target"
+    )
     if rule.direction == "citing":
         sql = (
-            f"SELECT e.source AS id FROM graph_edges e JOIN {base} b ON b.id = e.target "
-            f"WHERE {live} GROUP BY e.source HAVING COUNT(DISTINCT e.target) >= :k"
+            f"SELECT {cs} AS id FROM graph_edges e JOIN {expanded} b ON b.id = e.target {joins} "
+            f"WHERE {live} GROUP BY {cs} HAVING COUNT(DISTINCT {ct}) >= :k"
         )
     else:
         sql = (
-            f"SELECT e.target AS id FROM graph_edges e JOIN {base} b ON b.id = e.source "
-            f"WHERE {live} GROUP BY e.target HAVING COUNT(DISTINCT e.source) >= :k"
+            f"SELECT {ct} AS id FROM graph_edges e JOIN {expanded} b ON b.id = e.source {joins} "
+            f"WHERE {live} GROUP BY {ct} HAVING COUNT(DISTINCT {cs}) >= :k"
         )
     ev.add_works(target, sql, {"k": rule.min_k})
 

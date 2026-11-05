@@ -24,7 +24,13 @@ from factory.regions.rules import (
     TextRule,
 )
 from factory.regions.version import compress, members_text
-from tests.region_helpers import RWorld, region_project, screened  # noqa: F401
+from tests.region_helpers import (  # noqa: F401
+    RWorld,
+    cite,
+    merge_works,
+    region_project,
+    screened,
+)
 
 W = MemberType.WORK
 FT_INCLUDED = CorpusRule(outcome="included", stage=ScreeningStage.FULL_TEXT)
@@ -279,3 +285,123 @@ def test_no_seed_tables_read(region_project: RWorld, monkeypatch: pytest.MonkeyP
     joined = " ".join(seen).lower()
     for table in ("seeds", "seed_split", "seed_explanations", "passes", "pass_sessions"):
         assert f" {table} " not in joined.replace("\n", " ").replace("(", " ").replace(")", " ")
+
+
+def test_cites_maps_merged_works_at_the_join(region_project: RWorld) -> None:
+    w = region_project
+    a, a2, m1, m2, x = (*w.included[:2], *w.included[2:4], w.extra)
+    merge_works(w.project, a, a2)  # a2 is absorbed into a
+    # X cites the absorbed a2, while the base holds the primary a
+    cite(w.project, x, a2, "x1")
+    base = "R@" + "7" * 8
+    pin(w, w.works(a), base, REG)
+    citing = run(w, RuleSet(include=(CitesRule(base=base, direction="citing"),)))
+    assert x in ids(citing)
+    # a cites m1 and the absorbed a2 cites m2: with min_k = 2 the merged work cites both
+    cite(w.project, a, m1, "x2")
+    cite(w.project, a2, m2, "x3")
+    pair = "R@" + "8" * 8
+    pin(w, w.works(m1, m2), pair, "reg_01JZ9Q3K5M7N8P0R2S4T6V8W2R")
+    two = run(w, RuleSet(include=(CitesRule(base=pair, direction="citing", min_k=2),)))
+    assert a in ids(two) and a2 not in ids(two)
+    # the other direction: works cited by at least two members of a base holding a and a2
+    both = "R@" + "9" * 8
+    pin(w, w.works(a, a2), both, "reg_01JZ9Q3K5M7N8P0R2S4T6V8W3R")
+    cite(w.project, a, w.outside, "x4")
+    cite(w.project, a2, w.outside, "x5")
+    cited = run(w, RuleSet(include=(CitesRule(base=both, direction="cited", min_k=2),)))
+    assert w.outside not in ids(cited)  # one merged work cites it, not two
+
+
+def test_human_remove_holds_after_the_work_is_absorbed(region_project: RWorld) -> None:
+    w = region_project
+    a, b = w.included[:2]
+    merge_works(w.project, a, b)
+    ev = run(w, RuleSet(include=(FT_INCLUDED,)), removes=[(W, b)])
+    assert a not in ids(ev) and b not in ids(ev)
+    added = run(w, RuleSet(include=(FT_INCLUDED,)), removes=[(W, a)], adds=[(W, b)])
+    assert a not in ids(added)  # the remove of the primary also covers the absorbed add
+
+
+def test_pinned_member_absorbed_later_still_matches(region_project: RWorld) -> None:
+    w = region_project
+    a, b = w.included[:2]
+    version = "R@" + "6" * 8
+    pin(w, w.works(b), version, REG)
+    merge_works(w.project, a, b)  # b is absorbed after the pin
+    inside = run(w, RuleSet(include=(FT_INCLUDED,), within=RegionRule(version=version)))
+    assert ids(inside) == [a]
+    outside = run(w, RuleSet(include=(FT_INCLUDED,), exclude=(RegionRule(version=version),)))
+    assert a not in ids(outside) and b not in ids(outside)
+
+
+def _add_concept_user(w: RWorld, link: str, node: str, kind: str) -> None:
+    from sqlalchemy import text
+
+    with w.project.index.connect() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO concept_uses (link_id, from_node, from_kind, concept_id, basis_kind, "
+                "basis_digest, proposed_status, status, status_reason, proposer_kind, "
+                "proposer_session, event_id) VALUES (:l, :n, :k, :c, 'quote', 'd', 'stated', "
+                "'stated', 'x', 'human', 's', 'ev')"
+            ),
+            {"l": link, "n": node, "k": kind, "c": w.concept},
+        )
+        conn.commit()
+
+
+def test_concept_nodes_are_typed_as_concepts(region_project: RWorld) -> None:
+    other = "cpt_01JZ9Q3K5M7N8P0R2S4T6V8W2K"
+    _add_concept_user(region_project, "lnk_9", other, "concept")
+    ev = run(region_project, RuleSet(include=(ConceptRule(concept_id=region_project.concept),)))
+    assert ids(ev, MemberType.CONCEPT) == [other]
+    assert other not in ids(ev)
+
+
+def test_concept_rule_respects_review_and_merges(region_project: RWorld) -> None:
+    from sqlalchemy import text
+
+    w = region_project
+    rule = RuleSet(include=(ConceptRule(concept_id=w.concept),))
+    with w.project.index.connect() as conn:
+        conn.execute(
+            text("UPDATE concepts SET review_state = 'wrong' WHERE concept_id = :c"),
+            {"c": w.concept},
+        )
+        conn.commit()
+    with pytest.raises(FactoryValidationError) as caught:
+        run(w, rule)
+    assert caught.value.issues[0].reason == "concept-not-visible"
+
+
+def test_merged_ideas_and_concepts_resolve_to_live_ids(region_project: RWorld) -> None:
+    from sqlalchemy import text
+
+    w = region_project
+    gone_idea = "ida_01JZ9Q3K5M7N8P0R2S4T6V8W3I"
+    gone_concept = "cpt_01JZ9Q3K5M7N8P0R2S4T6V8W3K"
+    with w.project.index.connect() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO ideas (idea_id, name, name_item, origin, decision, merged_into, "
+                "event_id) VALUES (:i, 'old', 'itm', 'rf:x', 'confirm', :into, 'ev')"
+            ),
+            {"i": gone_idea, "into": w.idea},
+        )
+        conn.execute(
+            text(
+                "INSERT INTO concept_merges (from_concept, into_concept, active, merge_event) "
+                "VALUES (:f, :t, 1, 'ev')"
+            ),
+            {"f": gone_concept, "t": w.concept},
+        )
+        conn.commit()
+    _add_concept_user(w, "lnk_8", gone_idea, "idea")
+    _add_concept_user(w, "lnk_7", gone_concept, "concept")
+    ev = run(w, RuleSet(include=(ConceptRule(concept_id=w.concept),)))
+    assert gone_idea not in ids(ev, MemberType.IDEA) and w.idea in ids(ev, MemberType.IDEA)
+    assert ids(ev, MemberType.CONCEPT) == [w.concept]
+    # a human add of the merged idea reads as its survivor
+    added = run(w, RuleSet(include=(FT_INCLUDED,)), adds=[(MemberType.IDEA, gone_idea)])
+    assert ids(added, MemberType.IDEA) == [w.idea]
