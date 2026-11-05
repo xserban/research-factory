@@ -16,26 +16,39 @@ Computed candidates for a reader to weigh, never conclusions (decision 68). Inva
 
 from __future__ import annotations
 
+import hashlib
 import itertools
-from collections.abc import Collection
+from collections import Counter
+from collections.abc import Collection, Iterator, Mapping, Sequence
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any, Literal
 
+from pydantic import JsonValue
 from sqlalchemy import text
 
+from factory.canonical import canonical_json
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
 from factory.extraction.numbers import normalise_text, parse_printed
 from factory.model.base import StrictModel
+from factory.model.cards import PropertyKind
 from factory.model.findings import (
     MAX_RATIONALE,
     ContradictionDecided,
     ContradictionInput,
     ContradictionProposed,
 )
+from factory.packs import NON_COMPARABLE_KEYS
+from factory.services.cards import effective_card_props, property_family
 from factory.services.context import Project
 from factory.services.contributions import contribution_item
 from factory.services.evidence_report import EvidenceRow, evidence_report
+from factory.services.extraction import require_schema
+from factory.services.extraction_agreement import final_rows, key_value
+from factory.services.matching import subject_works
+from factory.services.properties import resolve_property
+from factory.services.protocol import current_protocol
+from factory.services.references import included_works
 
 CONFLICT_RELATIVE_TOLERANCE = Decimal("0.01")
 """Relative tolerance against the larger magnitude (ruling 4); `hypothesis_plan.conflict_tolerance`
@@ -376,3 +389,304 @@ def list_contradictions(
                     return out
         if len(rows) < PAGE:
             return out
+
+
+# --- Gaps ---
+
+GAP_MAX_CELLS = 10_000
+GAP_BUILDER_VERSION = "1"
+GAP_STATEMENT = (
+    "Not found in this corpus (protocol {protocol}, {works} included works, last search "
+    "{search}); absence here is not absence in the literature."
+)
+GapAxis = str
+
+
+class GapCell(StrictModel):
+    row: str
+    column: str
+    count: int
+
+
+class CorpusDefinition(StrictModel):
+    protocol_id: str | None
+    last_search: str | None
+    included_works: int
+
+
+class GapReport(StrictModel):
+    rows_axis: str
+    columns_axis: str
+    filters: dict[str, str]
+    cells: int
+    empty: list[GapCell]
+    filled: int
+    corpus: CorpusDefinition
+    statement: str
+    gap_key: str
+
+
+def _corpus(project: Project) -> CorpusDefinition:
+    protocol = current_protocol(project)
+    with project.index.connect() as conn:
+        last = conn.execute(
+            text("SELECT max(coalesce(finished_at, started_at)) FROM runs")
+        ).scalar()
+    return CorpusDefinition(
+        protocol_id=None if protocol is None else protocol.protocol_id,
+        last_search=None if last is None else str(last)[:10],
+        included_works=len(included_works(project)),
+    )
+
+
+def _grid_refusal(size: int) -> FactoryValidationError:
+    return _refuse("filters", f"grid-too-large ({size} cells, limit {GAP_MAX_CELLS}); add a filter")
+
+
+def _evidence_filter_sql(filters: Mapping[str, str]) -> tuple[str, dict[str, str]]:
+    """An `AND EXISTS ...` clause per filter, on the raw case-folded stored value (an upper-bound
+    approximation of the normalised comparison the aggregation makes)."""
+    sql, params = "", {}
+    for i, (name, value) in enumerate(sorted(filters.items())):
+        sql += (
+            " AND EXISTS (SELECT 1 FROM extraction_fields g WHERE g.extraction_id = "
+            f"r.extraction_id AND g.field = :fk{i} AND lower(g.value) = lower(:fv{i}))"
+        )
+        params[f"fk{i}"], params[f"fv{i}"] = name, value
+    return sql, params
+
+
+def _distinct_evidence(project: Project, field_name: str, filters: Mapping[str, str]) -> int:
+    clause, params = _evidence_filter_sql(filters)
+    with project.index.connect() as conn:
+        return int(
+            conn.execute(
+                text(
+                    "SELECT COUNT(DISTINCT lower(f.value)) FROM extraction_fields f "
+                    "JOIN extraction_rows r ON r.extraction_id = f.extraction_id "
+                    "WHERE r.scope = 'evidence' AND r.superseded_by IS NULL AND f.field = :field"
+                    + clause
+                ),
+                {"field": field_name, **params},
+            ).scalar()
+            or 0
+        )
+
+
+def _count_method_cards(project: Project) -> int:
+    with project.index.connect() as conn:
+        return int(
+            conn.execute(text("SELECT COUNT(*) FROM cards WHERE kind = 'method'")).scalar() or 0
+        )
+
+
+def _distinct_values(project: Project, keys: Collection[str]) -> int:
+    marks = ", ".join(f":k{i}" for i in range(len(keys)))
+    with project.index.connect() as conn:
+        return int(
+            conn.execute(
+                text(
+                    "SELECT COUNT(DISTINCT value_norm) FROM card_props "
+                    f"WHERE property_key IN ({marks})"
+                ),
+                {f"k{i}": k for i, k in enumerate(sorted(keys))},
+            ).scalar()
+            or 0
+        )
+
+
+def _method_cards(project: Project) -> Iterator[str]:
+    after = ""
+    while True:
+        with project.index.connect() as conn:
+            ids = [
+                str(r[0])
+                for r in conn.execute(
+                    text(
+                        "SELECT card_id FROM cards WHERE kind = 'method' AND card_id > :a "
+                        "ORDER BY card_id LIMIT :n"
+                    ),
+                    {"a": after, "n": PAGE},
+                )
+            ]
+        yield from ids
+        if len(ids) < PAGE:
+            return
+        after = ids[-1]
+
+
+def find_gaps(
+    project: Project,
+    *,
+    rows_axis: GapAxis,
+    columns_axis: str,
+    filters: Mapping[str, str] | None = None,
+) -> GapReport:
+    """Empty cells of a method x condition grid: a computed candidate, never a conclusion.
+
+    Rows are normalised method names of the final rows (`method`) or method cards (`card`).
+    Columns are one declared comparability key of the evidence schema, or (for cards) a property
+    key. A cell counts final independent rows (a copied row fills nothing), or the effective
+    stated or confirmed assertions of a card on a value. The grid size is bounded by
+    `GAP_MAX_CELLS` and checked, from SQL distinct counts, before any row is read. Refused, with
+    nothing written: an axis that is not one of these (`rows_axis`, `columns_axis`); a filter on
+    a key that is not a declared comparability key, or with a property column (`filters`); a
+    grid above the bound (`filters`: `grid-too-large`)."""
+    wanted = dict(filters or {})
+    if rows_axis not in ("method", "card"):
+        raise _refuse("rows_axis", "unknown-axis")
+    if columns_axis.startswith("pr:"):
+        return _card_gaps(project, rows_axis, columns_axis, wanted)
+    protocol, schema, pack = require_schema(project)
+    keys = [
+        k
+        for k in (schema.comparability_keys or pack.default_comparability_keys)
+        if k not in NON_COMPARABLE_KEYS
+    ]
+    if columns_axis not in keys:
+        raise _refuse("columns_axis", "unknown-axis")
+    for name in wanted:
+        if name not in keys:
+            raise _refuse("filters", f"{name}: not-a-comparability-key")
+    cards = _count_method_cards(project) if rows_axis == "card" else None
+    row_count = cards if cards is not None else _distinct_evidence(project, "method_name", wanted)
+    size = row_count * _distinct_evidence(project, columns_axis, wanted)
+    if size > GAP_MAX_CELLS:
+        raise _grid_refusal(size)
+    column_def = pack.field(columns_axis)
+    owner: dict[str, list[str]] = {}
+    if rows_axis == "card":
+        for card_id, subject in _method_card_subjects(project):
+            for work in subject_works(project, subject):
+                owner.setdefault(work, []).append(card_id)
+    universe_rows: set[str] = set()
+    universe_cols: set[str] = set()
+    counts: Counter[tuple[str, str]] = Counter()
+    for row in final_rows(project):
+        if columns_axis not in row.fields or (
+            rows_axis == "method" and "method_name" not in row.fields
+        ):
+            continue
+        if any(
+            name not in row.fields
+            or normalise_text(key_value(pack.field(name), row.fields[name]))
+            != normalise_text(value)
+            for name, value in wanted.items()
+        ):
+            continue
+        column = key_value(column_def, row.fields[columns_axis])
+        names = (
+            [normalise_text(str(row.fields["method_name"].value))]
+            if rows_axis == "method"
+            else owner.get(row.work_id, [])
+        )
+        universe_cols.add(column)
+        for name in names:
+            universe_rows.add(name)
+            if row.independent:
+                counts[(name, column)] += 1
+    if rows_axis == "card":
+        universe_rows = {c for c, _ in _method_card_subjects(project)}
+    return _report(
+        project,
+        protocol.protocol_id,
+        rows_axis,
+        columns_axis,
+        wanted,
+        sorted(universe_rows),
+        sorted(universe_cols),
+        counts,
+    )
+
+
+def _method_card_subjects(project: Project) -> Iterator[tuple[str, str]]:
+    for card_id in _method_cards(project):
+        with project.index.connect() as conn:
+            row = conn.execute(
+                text("SELECT subject FROM cards WHERE card_id = :c"), {"c": card_id}
+            ).first()
+        assert row is not None
+        yield card_id, str(row[0])
+
+
+def _card_gaps(project: Project, rows_axis: str, key: str, filters: Mapping[str, str]) -> GapReport:
+    defn = resolve_property(project, key)
+    if rows_axis != "card" or defn is None:
+        raise _refuse("columns_axis", "unknown-axis")
+    if filters:
+        raise _refuse("filters", "not-applicable-to-a-property-column")
+    cards = _count_method_cards(project)
+    listed = (
+        list(defn.allowed)
+        if defn.allowed
+        else (["false", "true"] if defn.kind is PropertyKind.BOOL else None)
+    )
+    values = (
+        len(listed)
+        if listed is not None
+        else _distinct_values(project, property_family(project, [key]))
+    )
+    if cards * values > GAP_MAX_CELLS:
+        raise _grid_refusal(cards * values)
+    counts: Counter[tuple[str, str]] = Counter()
+    seen: set[str] = set()
+    for prop in effective_card_props(project, [key], ["stated", "confirmed"]):
+        if prop.card_kind == "method":
+            counts[(prop.card_id, prop.value_norm)] += 1
+            seen.add(prop.value_norm)
+    columns = sorted(listed if listed is not None else seen)
+    protocol = current_protocol(project)
+    return _report(
+        project,
+        None if protocol is None else protocol.protocol_id,
+        rows_axis,
+        key,
+        {},
+        sorted(c for c, _ in _method_card_subjects(project)),
+        columns,
+        counts,
+    )
+
+
+def _report(
+    project: Project,
+    protocol_id: str | None,
+    rows_axis: str,
+    columns_axis: str,
+    filters: Mapping[str, str],
+    rows: Sequence[str],
+    columns: Sequence[str],
+    counts: Mapping[tuple[str, str], int],
+) -> GapReport:
+    size = len(rows) * len(columns)
+    if size > GAP_MAX_CELLS:
+        raise _grid_refusal(size)
+    empty = [
+        GapCell(row=r, column=c, count=0) for r in rows for c in columns if (r, c) not in counts
+    ]
+    corpus = _corpus(project)
+    body: JsonValue = {
+        "builder": GAP_BUILDER_VERSION,
+        "axes": [rows_axis, columns_axis],
+        "filters": dict(sorted(filters.items())),
+        "protocol": protocol_id,
+        "last_search": corpus.last_search,
+        "included": corpus.included_works,
+        "empty": [[c.row, c.column] for c in empty],
+        "filled": size - len(empty),
+    }
+    return GapReport(
+        rows_axis=rows_axis,
+        columns_axis=columns_axis,
+        filters=dict(filters),
+        cells=size,
+        empty=empty,
+        filled=size - len(empty),
+        corpus=corpus.model_copy(update={"protocol_id": protocol_id}),
+        statement=GAP_STATEMENT.format(
+            protocol=protocol_id or "none",
+            works=corpus.included_works,
+            search=corpus.last_search or "none",
+        ),
+        gap_key=hashlib.sha256(canonical_json(body)).hexdigest()[:16],
+    )

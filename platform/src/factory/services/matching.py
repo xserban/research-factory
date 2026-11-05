@@ -200,7 +200,8 @@ def _candidates(
     return found
 
 
-def _members(project: Project, subject: str) -> list[str]:
+def subject_works(project: Project, subject: str) -> list[str]:
+    """The member works of a card's subject: the work itself, or an idea's effective members."""
     if _IDEA.fullmatch(subject):
         view = idea_view(project, resolve_idea(project, subject))
         return [] if view is None else sorted(view.effective_members)
@@ -239,7 +240,7 @@ def match(
 
     def member_works(c: _Candidate) -> list[str]:
         if c.subject not in members:
-            members[c.subject] = _members(project, c.subject)
+            members[c.subject] = subject_works(project, c.subject)
         return members[c.subject]
 
     shown = sorted(candidates, key=_Candidate.order)
