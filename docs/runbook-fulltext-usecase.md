@@ -92,7 +92,7 @@ factory fulltext status
 ```
 Default selection: promoted works with no document and no attempt yet; `--limit` is 1 to 200 (default 20), so repeat for more. Without `--route`, routes are tried in order `arxiv-html`, `arxiv-source`, `oa-pdf`; for this use case `--route arxiv-html` restricts to the HTML route. Each attempt records route, URL, status, version, licence and raw hash; the raw HTML goes to `library/`. Failures are recorded with per-route reasons (never an error); `--refresh` or `--work` retries them. The agent equivalent is `fulltext_fetch(work_ids, routes, refresh, limit)` and `fulltext_status(work_ids)`, from a session that has not joined a pass.
 
-Papers without an arXiv HTML rendering: supply PDFs with `factory fulltext import <folder>` (they match by identifiers; the report lists matched, unmatched and ambiguous files). Imported PDFs are retrieved but **cannot be converted yet** (section 4).
+Papers without an arXiv HTML rendering: supply PDFs with `factory fulltext import <folder>` (they match by identifiers; the report lists matched, unmatched and ambiguous files). Imported PDFs convert with Docling once it is set up (section 4).
 
 ### Step 10. Convert to Markdown [H]
 ```
@@ -180,10 +180,11 @@ Spot checks: read three converted documents (`factory document read`) and compar
 
 ## 4. Known limits and gotchas
 
+Conversion by format (decision 49): HTML uses `latexml-html` and needs nothing. PDF (`oa-pdf` and researcher-supplied) uses Docling: install the extra (`uv sync --extra docling`), download the layout and TableFormer models once (`docling-tools models download layout tableformer -o <dir>`), and set `FACTORY_DOCLING_MODELS=<dir>`. LaTeX source (`arxiv-source`) uses pandoc: put pandoc 2.15 or later on `PATH` or set `FACTORY_PANDOC`. A missing tool records `converter-unavailable`; rerun `factory document convert` after fixing it. OCR is off, so a scanned PDF has no text to convert.
+
 NOT YET BUILT (needed by the slice-2 goal, absent from the code):
 - Extraction: `extract_next`, `extract_record`, `extract_agreement`, `extract_audit_sample`, `extract_audit_record`, the extraction schema and `ml-benchmark` domain pack in the protocol, dual extraction (plan D), and the `rf-extract` skill.
 - Evidence report: `report_evidence` and `trace` extensions to cells and claims (plan E).
-- Converters for LaTeX source (`arxiv-source` route) and PDF (`oa-pdf` and researcher-supplied PDFs): pending decision 49, which is not yet recorded in `docs/decisions.md`. Only the LaTeXML-HTML converter is registered (`default_converters()`).
 - Reference snowballing from full text (extracting citations from the converted document). `search_chase` uses OpenAlex citation links only.
 - Appraisal (deferred, IDEA-21); PubMed Central route (deferred).
 - Decision 50 (decisions carry along the protocol lineage) is implemented but still Proposed until you confirm it. Declaring `full_text_screening` before screening begins remains the simpler route.

@@ -4,7 +4,7 @@
 
 **Goal:** Turn every retrieved document into canonical Markdown plus manifest in the project library, record it as an event, and let agents read it by anchor (`document_read`), with the quote primitive that plans C and D need.
 
-**Architecture:** B1 delivered `factory/document/` (anchors, anchoriser, `Converter`, `convert`, our LaTeXML-HTML converter). B2 adds the event model and projection (`document.converted`, `document.conversion_failed`), a converter registry, a conversion service that stores Markdown and manifest as library blobs, a read service with the gate and pagination, a verbatim quote check, `check` integration, a CLI group and one MCP tool. The choice of converters for LaTeX and PDF depends on decision 49, so wiring them is the last task and everything before it runs without it.
+**Architecture:** B1 delivered `factory/document/` (anchors, anchoriser, `Converter`, `convert`, our LaTeXML-HTML converter). B2 adds the event model and projection (`document.converted`, `document.conversion_failed`), a converter registry, a conversion service that stores Markdown and manifest as library blobs, a read service with the gate and pagination, a verbatim quote check, `check` integration, a CLI group and one MCP tool. The choice of converters for LaTeX and PDF depends on decision 49, so wiring them is the last task and everything before it runs without it. Decision 49 was decided on 2026-11-05 and Task 8 wired the choice.
 
 **Tech Stack:** as plan B1. No new dependencies until Task 8 (optional extras).
 
@@ -153,9 +153,9 @@
 - [ ] **Step 2:** Run; expect PASS or fix. **Step 3:** Docs. **Step 4:** Full `uv run pytest -m "not network"`, `mypy --strict` on changed files, ruff.
 - [ ] **Step 5:** Commit `test(document): plan 2B acceptance; docs`.
 
-### Task 8 (gated on decision 49): Register the chosen converters
+### Task 8 (decision 49 decided 2026-11-05): Register the chosen converters
 
-Do not start until decision 49 names the converter per format. Inputs from decision 49: converter, pinned version and licence per format (LaTeX source, PDF; HTML if pandoc beat `latexml-html`).
+Status: the adapters are ported and `default_converters` lists `latexml-html`, docling and pandoc, in that order; pymupdf4llm is not listed. Step 1's two named tests are not written (testing was paused on 2026-11-05). Inputs from decision 49: converter, pinned version and licence per format (LaTeX source, PDF; HTML if pandoc beat `latexml-html`).
 
 **Files:** Create `document/pandoc.py` and/or `document/docling.py` / `document/pymupdf4llm.py` (per the decision) as ports of `experiments/converter-bakeoff/adapters/*`; modify `document/registry.py`, `platform/pyproject.toml` (optional extras, never core dependencies; AGPL/GPL tools only as subprocess or extra, per the licence notes in decision 49); Tests `tests/document/test_<tool>.py` (skip when the tool is absent) using `assert_converter_contract`.
 

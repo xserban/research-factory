@@ -165,7 +165,7 @@ Built as specified (events, tables, parser, matcher, snowball rounds, PRISMA, ch
 ## Sub-plan
 | Plan | Content |
 | --- | --- |
-| G1 (`docs/plans/2026-11-04-references-snowballing.md`) | All of the above, in 10 tasks. Depends on plans B2 (conversion, anchors) and C (full-text screening); decision 49 pending: parsing reads only the manifest and Markdown, so it works on any converted document. |
+| G1 (`docs/plans/2026-11-04-references-snowballing.md`) | All of the above, in 10 tasks. Depends on plans B2 (conversion, anchors) and C (full-text screening); whatever decision 49 chose: parsing reads only the manifest and Markdown, so it works on any converted document. |
 
 ## Open questions
 1. The matcher thresholds (ruling 16) and the unresolved ceiling (ruling 17) are provisional until measured on the hand-checked set and the pilot.

@@ -95,7 +95,7 @@ Plus **atomic claims** (R-40): statement, type (finding / mechanism / limitation
 
 *Implemented in plan 2A:* `fulltext_fetch` (an agent act, with `routes` as the route filter) and `fulltext_status` (MCP); `factory fulltext import|fetch|status|restore` (CLI; `fetch` and `restore` are the researcher's acts). The MCP tools refuse a session that has joined a pass, as `check` and `report` do.
 
-*Implemented in plan 2B2:* `document_read` (MCP; read-only, refused to a session that has joined a pass (narrowed for full-text screeners in plan 2C)); `factory document convert|status|read` (CLI; `convert` is the researcher's act); events `document.converted` and `document.conversion_failed`; one conversion per (document, converter, version). The LaTeXML-HTML converter is registered; the LaTeX and PDF converters are registered after decision 49.
+*Implemented in plan 2B2:* `document_read` (MCP; read-only, refused to a session that has joined a pass (narrowed for full-text screeners in plan 2C)); `factory document convert|status|read` (CLI; `convert` is the researcher's act); events `document.converted` and `document.conversion_failed`; one conversion per (document, converter, version). The converters of decision 49 are registered: `latexml-html` for HTML, docling for PDF, pandoc for LaTeX e-prints.
 
 *Implemented in plan 2C:* stage-aware screening (`stage` on passes, sessions, calibration, agreement, audit, resolutions and decisions); full-text decisions cite an anchor of the pinned conversion and are verified against it; `screen_next`, `screen_agreement`, `audit_sample` and `calibration_label` take `stage`; CLI `--stage`; `document_read` for full-text screeners is limited to their own queue and pinned conversion; PRISMA full-text boxes; the `fulltext-decision-stale-document` check finding; protocol field `full_text_screening` (omitted from the version hash when absent); decision 50 (Decided 2026-11-04; reconciled with decisions.md) on decisions carrying along the protocol lineage.
 
@@ -136,6 +136,6 @@ Appraisal (deferred, IDEA-21); PubMed search and PMC route (first biomedical pro
 | E | Evidence report, trace extensions (the `ml-benchmark` pack was built in plan D; reconciled 2026-11-04) |
 
 ## Open questions
-1. **Converters:** which tool per input format (LaTeXML HTML, LaTeX source, PDF: deterministic parser such as PyMuPDF vs. layout-model tools such as Docling or GROBID) to reach Markdown. Criteria: determinism, table fidelity, offline, licence. Decided by a bake-off on a fixed off-topic ML test set (plan B, decision 47); re-checked on the pilot's included works in the end-to-end run.
+1. **Converters:** which tool per input format (LaTeXML HTML, LaTeX source, PDF: deterministic parser such as PyMuPDF vs. layout-model tools such as Docling or GROBID) to reach Markdown. Criteria: determinism, table fidelity, offline, licence. Decided by a bake-off on a fixed off-topic ML test set (plan B, decision 47); re-checked on the pilot's included works in the end-to-end run. Closed by decision 49 (from the automated results; the re-check stays with the pilot).
 
 Settled: version rule (latest available version), throughput (within-paper ratios only), storage (local library, no literature in git), appraisal (deferred), PubMed/PMC (moved to the first biomedical project), copied-result consistency check (later). See decisions 39–42, 44.

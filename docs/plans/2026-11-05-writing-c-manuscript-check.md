@@ -6,7 +6,7 @@
 
 > **Reconciled 2026-11-04 (cross-spec reconciliation, decision 75; v1 cut, decision 74).** The whole plan is Later (spec v1 scope). Its gates are `manuscript.citation_confirm` (presets as `reference.link_confirm`) and `manuscript.audit_label` (floor `human`).
 
-> **Dependencies.** W-B merged (verdict vocabulary `Verdict`, audit rule and ceiling, independence pattern). G1 merged (`references/markers.py`, `references/parse.py`, `references/match.py`, resolution thresholds and the human confirmation rule of slice-3a ruling 3). Plans B/C (`document_read`, pinned conversions, `quote_in_element`). PDF manuscripts wait for decision 49; this plan accepts Markdown, LaTeX and plain text.
+> **Dependencies.** W-B merged (verdict vocabulary `Verdict`, audit rule and ceiling, independence pattern). G1 merged (`references/markers.py`, `references/parse.py`, `references/match.py`, resolution thresholds and the human confirmation rule of slice-3a ruling 3). Plans B/C (`document_read`, pinned conversions, `quote_in_element`). PDF manuscripts are out of this plan (decision 49 now names docling); this plan accepts Markdown, LaTeX and plain text.
 
 **Goal:** Check each cited sentence of a manuscript the factory did not write (a paper, grant or review) against the cited source in the corpus, with verdicts anchored to verbatim quotes of the source, while the manuscript's text never enters git.
 
@@ -43,7 +43,7 @@
 - Tests: `tests/test_segment.py`, `tests/test_bibfile.py`, `tests/test_cites.py`, `tests/test_manuscripts_add.py`, `tests/test_manuscripts_resolve.py`, `tests/test_manuscripts_verify.py`, `tests/test_manuscripts_report.py`.
 
 ## Self-review notes
-- PDF manuscripts: add `fmt = "pdf"` after decision 49 by converting with the chosen converter into canonical Markdown (stored in the library) and segmenting that; no change to events beyond a `conversion` reference.
+- PDF manuscripts: add `fmt = "pdf"` by converting with the chosen converter into canonical Markdown (stored in the library) and segmenting that; no change to events beyond a `conversion` reference.
 - `uncited-claim` flags are advisory and never enter counts of verdicts.
 
 ## Later (not v1)
