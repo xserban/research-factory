@@ -94,15 +94,18 @@ class ExperimentInputs:
 
 def _feeds(design: ExperimentDesign, cell: Cell) -> bool:
     """Whether a run can change the evaluation: the primary test, another universe's curve point,
-    a control or the dev baseline it is read against. An ablation, a reproduction or a dev
-    treatment run of the primary universe cannot."""
+    a control or the dev baseline it is read against. An ablation, a reproduction, a dev
+    treatment run of the primary universe or, in a design with no control, a dev baseline run of
+    it cannot."""
     primary = cell.universe == tuple(sorted(design.primary_universe.items()))
     kind = cell.arm.partition(":")[0]
     if kind == "control":
         return primary and cell.split == "dev"
-    if kind == "treatment":
-        return not primary or cell.split == "confirmatory"
-    return kind == "baseline"
+    if kind not in ("treatment", "baseline"):
+        return False
+    if not primary or cell.split == "confirmatory":
+        return True
+    return kind == "baseline" and bool(design.controls)
 
 
 def inputs_hash(inputs: ExperimentInputs) -> str:
