@@ -20,6 +20,7 @@ Minor review findings parked during the v1 build, to address when iterating from
 - G1 T10: acceptance 2's `test_parse_quality_report` named in the plan is not on the base (only fixture field tests in test_references_parse.py).
 - G2-A T4: _Ledger._created_at reads the whole event log (once per ledger, only when a citation is old) — project task-created position if it shows up.
 - G1 T9-10: displayed new_works is reduced by held-out works while report_prisma is not; difference reveals that a held-out work was added, never which (low).
+<<<<<<< HEAD
 - Import-B: decide_import accepts an agent actor on any ordinal and its error names the state (no agent surface yet); _Plan.unadmittable unused; library-import accepted as seed explain-miss route though not an admission route; re-resolve after admission rewrites live link states of admitted works; a crash after one admission query succeeds needs a manual re-run (document).
 - living-B: shortfall and drift findings in check cover title/abstract only (check.py:400); extend to full-text later.
 - living-B: audit-missing and update-audit-outstanding both fire when shortfall > 0 in a living review (duplicate warning, check.py:400,778).
@@ -27,3 +28,9 @@ Minor review findings parked during the v1 build, to address when iterating from
 - G2-B: mask_batch can differ from the stored blob, so task.completed input_blob may not equal what was served (contributions.py:332).
 - G1 final: raw-missing document blocks a snowball round until restored (no event recorded; snowball._has_document).
 - G2-B: units closed with a reason and no item leave no row to audit; G2-E adds a check finding (e.g. `contribution-closed-empty`) listing `contribution_status().closed_without_items` for human reading.
+=======
+- G1 final fix: trace still shows an unretrieved no-source work as "no such row" (review minor 9; more than the one line allowed: `_work` needs a fallback to `reference_links`).
+- G1 final fix: with no-op re-extraction refused, `source-error` links and a new `MATCHER_VERSION` have no retry until a new conversion or parser; wants a re-resolve path that keeps the extraction id.
+- G1 final fix: a masked entry's listing can be contradicted by the document (no DOI or title listed, both printed); open with decision 78. A carried rejection applies whatever work the new link names. Not checked: `trace(snw, forward)` query labels of a held-out candidate, and held-out source works in `trace(snw)`.
+- G1 final fix: chase-missing is silent under a plan that allows a round even if no round has run; no finding says a declared round was never run.
+>>>>>>> bed31e3 (docs: record the G1 final-review rulings; park what is left)
