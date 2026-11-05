@@ -20,6 +20,7 @@ SKILLS = (
     "rf-probe",
     "rf-protocol",
     "rf-references",
+    "rf-regions",
     "rf-screen",
     "rf-search",
 )

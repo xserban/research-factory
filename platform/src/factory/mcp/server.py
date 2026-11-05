@@ -5,7 +5,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Annotated, Literal, TypeVar, cast
 
 from mcp.server.mcpserver import MCPServer
-from pydantic import Field, JsonValue, StringConstraints, ValidationError
+from pydantic import Field, JsonValue, StringConstraints, TypeAdapter, ValidationError
 
 from factory.clock import Clock, SystemClock
 from factory.config import Settings
@@ -46,10 +46,12 @@ from factory.model.project import RigorMode
 from factory.model.protocol import CriterionEffect, PressFinding, ProtocolSpec, ScreeningStage
 from factory.model.question import QuestionSpec
 from factory.model.references import Decision, Direction, LinkState
+from factory.model.regions import Facet, MemberBasis, RegionKind
 from factory.model.screening import CalibrationLabelled, Channel, PassLabel, ScreeningItem
 from factory.model.search import QueryKind, QueryPurpose, QuerySpec
 from factory.model.seed import SeedSpec
 from factory.modules.contract import PolicyKind
+from factory.regions.rules import MemberType, RuleSet
 from factory.services import agreement as agreement_service
 from factory.services import audit as audit_service
 from factory.services import calibration as calibration_service
@@ -94,6 +96,7 @@ from factory.services import protocol as protocol_service
 from factory.services import question as question_service
 from factory.services import reference_resolve as reference_resolve_service
 from factory.services import references as references_service
+from factory.services import regions as regions_service
 from factory.services import relations as relations_service
 from factory.services import screening as screening_service
 from factory.services import search as search_service
@@ -2260,6 +2263,168 @@ def build_server(
 
         return _reply(project, propose, include_work_ids=False)
 
+    @server.tool()
+    def region_propose(
+        project: str,
+        region_name: str,
+        kind: str,
+        definition: str,
+        rules: dict[str, JsonValue],
+        role: str,
+        model: str,
+        skill: str,
+        facet: dict[str, JsonValue] | None = None,
+        region_id: str | None = None,
+    ) -> dict[str, JsonValue]:
+        """Define a region (`kind` `region`) or a focus (`kind` `focus`, with `facet`
+        {question_id, slot}): a `region_name`, a `definition` of at most 600 characters and typed
+        `rules` {include: [...], exclude: [...], within: rule or null}. To replace a definition name
+        `region_id`; its kind and facet stay. The region stays `unreviewed` until a human reviews a
+        pinned version; you cannot review. A region selects and asserts nothing. A rule that
+        would reach the held-out part of an import, or a run of an import, seed or probe query, is
+        refused as a whole. Returns the region and its live state. Refused to a session that has
+        joined a pass."""
+
+        def propose() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            _require_pass_opened(opened)
+            actor = make_agent_actor(settings, session, role, model, skill)
+            region_kind = _region_kind(kind)
+            rule_set = parse_input(RuleSet, rules, "rules")
+            bound = None if facet is None else parse_input(Facet, facet, "facet")
+            if region_id is not None:
+                regions_service.require_agent_visible(opened, region_id=region_id)
+            new_id = regions_service.define_region(
+                opened,
+                actor,
+                kind=region_kind,
+                name=region_name,
+                definition=definition,
+                rules=rule_set,
+                facet=bound,
+                region_id=region_id,
+            )
+            state = regions_service.agent_region_state(opened, new_id)
+            return _withheld(opened, state.model_dump(mode="json"), include_work_ids=False)
+
+        return _reply(project, propose, rename=dotted, include_work_ids=False)
+
+    @server.tool()
+    def region_propose_member(
+        project: str,
+        region_id: str,
+        member_type: str,
+        member: str,
+        basis: dict[str, JsonValue],
+        role: str,
+        model: str,
+        skill: str,
+        note: str | None = None,
+    ) -> dict[str, JsonValue]:
+        """Propose one member (`member_type` work, idea or concept) of a region with exactly one
+        verified `basis`: {kind: "quote", work_id, conversion_id, anchor, quote}, a verbatim quote
+        of the candidate work in that anchored element of its conversion (work members only), or
+        {kind: "edge", edge_id}, a live graph edge or a stated or confirmed concept use (`lnk_`)
+        that touches the candidate and a current member of the region. `note` is at most 300
+        characters and is never counted. The proposal never enters a version until a human adds the
+        member; you cannot add, remove or reject. An identical open proposal is returned, not
+        duplicated. All problems are reported together and nothing is written on any. Refused to
+        a session that has joined a pass."""
+
+        def propose() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            _require_pass_opened(opened)
+            actor = make_agent_actor(settings, session, role, model, skill)
+            kind = _member_type(member_type)
+            parsed = _parse_basis(basis)
+            regions_service.require_agent_visible(opened, region_id=region_id)
+            proposal = regions_service.propose_member(
+                opened, actor, region_id, kind, member, parsed, note
+            )
+            return _withheld(opened, {"proposal_id": proposal}, include_work_ids=False)
+
+        return _reply(project, propose, rename=dotted, include_work_ids=False)
+
+    @server.tool()
+    def region_snapshot(
+        project: str, region_id: str, role: str, model: str, skill: str
+    ) -> dict[str, JsonValue]:
+        """Evaluate the region's rules now and pin the member set as a version `R@xxxxxxxx`. An
+        unchanged evaluation returns the latest version and writes nothing. Returns the version,
+        its counts by member type and its review state. A region that reaches the held-out part
+        of an import or a run of an import, seed or probe query is refused as a whole. Refused to
+        a session that has joined a pass."""
+
+        def snapshot() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            _require_pass_opened(opened)
+            actor = make_agent_actor(settings, session, role, model, skill)
+            regions_service.require_agent_visible(opened, region_id=region_id)
+            version = regions_service.snapshot_region(opened, actor, region_id)
+            info = regions_service.version_info(opened, version)
+            assert info is not None
+            return _withheld(opened, info.model_dump(mode="json"), include_work_ids=False)
+
+        return _reply(project, snapshot, rename=dotted, include_work_ids=False)
+
+    @server.tool()
+    def region_status(
+        project: str, region_id: str | None = None, limit: int = 100, after: str | None = None
+    ) -> dict[str, JsonValue]:
+        """One region (`region_id`) or every region, one page: live counts by member type, drift
+        from the latest version, latest version, review state and the author of its definition. A
+        region that reaches the held-out part of an import or a run of an import, seed or probe
+        query is listed without counts (`counts_withheld`). Page with `after`. Read-only; refused
+        to a session that has joined a pass."""
+
+        def status() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            _require_pass_opened(opened)
+            ids = [region_id] if region_id is not None else regions_service.region_ids(opened)
+            page = paginate(ids, after, limit)
+            states: list[JsonValue] = [
+                regions_service.agent_region_state(opened, rid).model_dump(mode="json")
+                for rid in page.items
+            ]
+            data: JsonValue = {"regions": states, "next": page.next_cursor}
+            return _withheld(opened, data, include_work_ids=False)
+
+        return _reply(project, status, include_work_ids=False)
+
+    @server.tool()
+    def region_query(
+        project: str,
+        query: Literal["members", "regions_of", "overlap", "diff"],
+        version: str | None = None,
+        member_type: str | None = None,
+        member: str | None = None,
+        a: str | None = None,
+        b: str | None = None,
+        offset: int = 0,
+        limit: int = 500,
+    ) -> dict[str, JsonValue]:
+        """Read pinned regions. `members` (`version`): one page of at most 500 members, by type and
+        id, from `offset`. `regions_of` (`member_type`, `member`): at most 100 regions whose latest
+        version holds the member, with the basis. `overlap` (`a`, `b` versions): shared and
+        exclusive counts by member type and the Jaccard index. `diff` (`a`, `b`): members added
+        and removed going from `a` to `b`, paged like `members`. A region that reaches the
+        held-out part of an import or a run of an import, seed or probe query is refused (or, for
+        `regions_of`, left out) as a whole. Read-only; refused to a session that has joined a
+        pass."""
+
+        def read() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            _require_pass_opened(opened)
+            data = _region_read(opened, query, version, member_type, member, a, b, offset, limit)
+            return _withheld(opened, data, include_work_ids=False)
+
+        return _reply(project, read, include_work_ids=False)
+
     # --- Leads and hypotheses (slice 6, plan H-C) -----------------------------------------
     # Every tool is refused to a pass session and, before a pass opens, answers with the same
     # neutral message as the finders. The decision tools exist for the gates an agent may pass:
@@ -2499,6 +2664,111 @@ def _refuse_pass_session(project: Project) -> None:
         raise FactoryValidationError(
             [ValidationIssue("session", "this session has joined a pass and cannot use this tool")]
         )
+
+
+REGION_PAGE_LIMIT = 500
+"""The most members one `region_query` page returns."""
+REGIONS_OF_LIMIT = 100
+"""The most regions one `regions_of` answer returns."""
+
+
+def _region_kind(value: str) -> RegionKind:
+    try:
+        return RegionKind(value)
+    except ValueError:
+        raise FactoryValidationError([ValidationIssue("kind", "must be focus or region")]) from None
+
+
+def _member_type(value: str) -> MemberType:
+    try:
+        return MemberType(value)
+    except ValueError:
+        raise FactoryValidationError(
+            [ValidationIssue("member_type", "must be work, idea or concept")]
+        ) from None
+
+
+def _parse_basis(data: JsonValue) -> MemberBasis:
+    try:
+        return TypeAdapter(MemberBasis).validate_python(data)
+    except ValidationError as exc:
+        issues = [
+            ValidationIssue(".".join(["basis", *(str(p) for p in err["loc"])]), str(err["msg"]))
+            for err in exc.errors()
+        ]
+        raise FactoryValidationError(issues) from exc
+
+
+def _need(**fields: str | None) -> None:
+    missing = [ValidationIssue(name, "required") for name, value in fields.items() if not value]
+    if missing:
+        raise FactoryValidationError(missing)
+
+
+def _member_page(members: Sequence[tuple[MemberType, str]]) -> list[JsonValue]:
+    return [{"type": kind.value, "id": ident} for kind, ident in members]
+
+
+def _region_read(
+    project: Project,
+    query: str,
+    version: str | None,
+    member_type: str | None,
+    member: str | None,
+    a: str | None,
+    b: str | None,
+    offset: int,
+    limit: int,
+) -> JsonValue:
+    """The four reads of `region_query`. A region withheld from agents is refused whole (versions)
+    or left out (`regions_of`); no member is ever filtered."""
+    page_size = min(max(limit, 1), REGION_PAGE_LIMIT)
+    if offset < 0:
+        raise FactoryValidationError([ValidationIssue("offset", "must not be negative")])
+    if query == "members":
+        _need(version=version)
+        assert version is not None
+        regions_service.require_agent_visible(project, version=version)
+        info = regions_service.version_info(project, version)
+        if info is None:
+            raise FactoryValidationError([ValidationIssue("version", "version-unknown")])
+        rows = regions_service.region_members(project, version, offset=offset, limit=page_size)
+        end = offset + len(rows)
+        total = sum(info.counts.values())
+        return {
+            "version": version,
+            "members": _member_page(rows),
+            "next_offset": end if end < total else None,
+            "counts": dict(info.counts),
+        }
+    if query == "regions_of":
+        _need(member_type=member_type, member=member)
+        assert member_type is not None and member is not None
+        found = regions_service.regions_of(project, _member_type(member_type), member)
+        shown = [m for m in found if not regions_service.region_withheld(project, m.region_id)]
+        window = shown[offset : offset + REGIONS_OF_LIMIT]
+        end = offset + len(window)
+        return {
+            "regions": [m.model_dump(mode="json") for m in window],
+            "next_offset": end if end < len(shown) else None,
+        }
+    _need(a=a, b=b)
+    assert a is not None and b is not None
+    regions_service.require_agent_visible(project, version=a)
+    regions_service.require_agent_visible(project, version=b)
+    if query == "overlap":
+        return regions_service.overlap(project, a, b).model_dump(mode="json")
+    page = regions_service.diff(project, a, b, offset=offset, limit=page_size)
+    end = offset + len(page.added) + len(page.removed)
+    return {
+        "a": a,
+        "b": b,
+        "added": _member_page(page.added),
+        "removed": _member_page(page.removed),
+        "total_added": page.total_added,
+        "total_removed": page.total_removed,
+        "next_offset": end if end < page.total_added + page.total_removed else None,
+    }
 
 
 def _require_pass_opened(project: Project, field: str = "graph") -> None:

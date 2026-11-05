@@ -24,6 +24,11 @@ Invariants:
   verified when it is written and re-read against the latest version of each region by
   `subregion_violations`; `related` is not verified. Overlap and diff are computed from the
   version blobs and never stored.
+- Agent views withhold, never filter: a region whose rules reach an import's `all` part or a run
+  of a barred purpose, directly or through pinned versions, in any of its definitions, is refused
+  to an agent as a whole (`region-unavailable`), and its live counts and members are never
+  returned (`region_withheld`, `require_agent_visible`, `agent_region_state`). The walk is the
+  one `define_region` uses for an agent author.
 - Basis positions in a snapshot refer to the canonical (sorted, de-duplicated) include list.
 - Every refusal reports all its issues together and writes nothing.
 """
@@ -609,6 +614,8 @@ def propose_member(
     with project.index.exclusive():
         project.index.sync()
         row = _definition(project, region_id)
+        if row is not None and actor.kind == "agent":
+            require_agent_visible(project, region_id=region_id)
         issues: list[ValidationIssue] = []
         if row is None:
             issues.append(ValidationIssue("region_id", "region-unknown"))
@@ -709,12 +716,15 @@ def snapshot_region(project: Project, actor: Actor, region_id: str) -> str:
     """Evaluate the region and pin the result; return its version `R@`. Any actor may snapshot
     (the step is deterministic bookkeeping); an agent's carries provenance. An unchanged
     evaluation returns the latest version and writes nothing. Refused (fields `region_id`,
-    `rules...`) for an unknown region, an over-bound rule or a rule kind not yet available."""
+    `rules...`) for an unknown region, an over-bound rule or a rule kind not yet available; an
+    agent is refused a withheld region (`region-unavailable`) before anything is evaluated."""
     with project.index.exclusive():
         project.index.sync()
         row = _definition(project, region_id)
         if row is None:
             raise _refuse(ValidationIssue("region_id", "region-unknown"))
+        if actor.kind == "agent":
+            require_agent_visible(project, region_id=region_id)
         result, decision_ids = _evaluate(project, region_id, row)
         rules = _rules_of(row)
         text_bytes = members_text(result.members)
@@ -867,6 +877,8 @@ class RegionState(StrictModel):
     drift_removed: int
     live_error: str | None
     definition_author: str
+    counts_withheld: bool = False
+    """True when the region may not be evaluated for an agent: the counts above are empty."""
 
 
 def _snapshot_members(project: Project, region_id: str) -> set[Member]:
@@ -1011,6 +1023,68 @@ def snapshot_diff(project: Project, older: str, newer: str) -> tuple[list[Member
         sets.append(set(read_members_blob(project.blobs.get(str(snapshot["members_blob"])))))
     key = lambda m: (m[0].value, m[1])  # noqa: E731
     return sorted(sets[1] - sets[0], key=key), sorted(sets[0] - sets[1], key=key)
+
+
+# --- Agent views ---
+
+_UNAVAILABLE = "region-unavailable"
+
+
+def region_withheld(project: Project, region_id: str) -> bool:
+    """Whether the region reaches an import's `all` part or a run of purpose `import`, `seed` or
+    `probe`, directly or through pinned versions, in any definition it ever had (an older version
+    was pinned under older rules). Such a region is never shown to an agent as members or counts.
+    An unknown region is not withheld."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        stored = [
+            str(r[0])
+            for r in conn.execute(
+                text("SELECT rules FROM region_definitions WHERE region_id = :r"), {"r": region_id}
+            )
+        ]
+    return any(_reaches_all(project, RuleSet.model_validate_json(r), set()) for r in stored)
+
+
+def require_agent_visible(
+    project: Project, *, region_id: str | None = None, version: str | None = None
+) -> None:
+    """Refuse (field `region_id` or `version`, reason `region-unavailable`) a region, or the region
+    of a version, that is withheld from agents. The refusal is of the region as a whole; no member
+    is ever filtered. A version unknown to the index is not refused here."""
+    project.index.sync()
+    if version is not None:
+        snapshot = _snapshot_of(project, version)
+        if snapshot is not None and region_withheld(project, str(snapshot["region_id"])):
+            raise _refuse(ValidationIssue("version", _UNAVAILABLE))
+    if region_id is not None and region_withheld(project, region_id):
+        raise _refuse(ValidationIssue("region_id", _UNAVAILABLE))
+
+
+def agent_region_state(project: Project, region_id: str) -> RegionState:
+    """`region_state` as an agent may read it: a withheld region is not evaluated, and its counts
+    and drift are empty (`counts_withheld`)."""
+    if not region_withheld(project, region_id):
+        return region_state(project, region_id)
+    row = _definition(project, region_id)
+    if row is None:  # pragma: no cover - a withheld region has a definition
+        raise _refuse(ValidationIssue("region_id", "region-unknown"))
+    latest = _latest_snapshot(project, region_id)
+    version = None if latest is None else str(latest["version"])
+    return RegionState(
+        region_id=region_id,
+        kind=RegionKind(str(row["kind"])),
+        facet=_facet_of(row),
+        name=str(row["name"]),
+        latest_version=version,
+        review_state="unreviewed" if version is None else review_state(project, version),
+        live_counts={},
+        drift_added=0,
+        drift_removed=0,
+        live_error=None,
+        definition_author=str(row["author"]),
+        counts_withheld=True,
+    )
 
 
 # --- Links, overlap, diff and membership ---
@@ -1208,6 +1282,7 @@ __all__: Sequence[str] = [
     "RegionMembership",
     "RegionState",
     "VersionInfo",
+    "agent_region_state",
     "decide_member",
     "define_region",
     "diff",
@@ -1220,7 +1295,9 @@ __all__: Sequence[str] = [
     "region_ids",
     "region_members",
     "region_state",
+    "region_withheld",
     "regions_of",
+    "require_agent_visible",
     "review_region",
     "review_state",
     "snapshot_diff",
