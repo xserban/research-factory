@@ -165,3 +165,7 @@ Minor review findings parked during the v1 build, to address when iterating from
 - X-B: parent directories `_stage_beside` creates for `--out` stay after a failed export (services/exports.py).
 - X-B: `library-manifest.json` lists full-text documents only, not import archives in the library (BibTeX, CSL, PDF folders), which are not "documents" of the full-text events; decide whether a reader needs them (services/exports.py `_manifest_entries`).
 - X-B, for the researcher: `FACTORY_LICENCE` applies to the whole crate, but the crate holds third-party abstracts (in raw search responses and task payloads) and verified quotes. A licence on the root dataset must not read as covering those; decide the wording or a per-part licence.
+- V-C: import record keys (`imp_<ULID>:<n>`) are not scrubbed from free text in the agent pack; only structured refs are kept out (services/briefing.py; `_without_record_keys` stays in mcp/server.py).
+- V-C: gate dates are the last event of the type project-wide, not per stage or pass (services/briefing.py `_last_day`).
+- V-C: `interpretation-unreviewed` ids are capped at `REF_CAP`; the count is complete (services/layer_check.py).
+- V-C: a trace from a session lists its packs, but no event id can be traced to its session's pack directly (services/trace.py).
