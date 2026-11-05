@@ -18,7 +18,7 @@ from __future__ import annotations
 import functools
 import heapq
 import json
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Collection, Iterator, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal, ParamSpec, TypeVar, get_args
 
@@ -27,6 +27,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from factory.errors import FactoryValidationError, ValidationIssue
+from factory.intuition.export import LAYER_NOTICE, iter_layer_dot, iter_layer_json
 from factory.lineage.export import iter_dot, iter_json
 from factory.lineage.graph import (
     DEFAULT_FILTER,
@@ -59,7 +60,13 @@ from factory.services.context import Project
 from factory.services.contributions import final_items
 from factory.services.extraction import scope_population, unit_states
 from factory.services.ideas import _EFFECTIVE_MEMBERS
-from factory.services.layer_view import layer_counts, layer_graph
+from factory.services.layer_view import (
+    iter_layer_edges,
+    iter_layer_nodes,
+    layer_counts,
+    layer_graph,
+    layer_hidden,
+)
 from factory.services.references import current_extraction
 from factory.services.relations import _EFFECTIVE_SQL, _basis_params, relation_counts
 
@@ -1071,6 +1078,46 @@ def export_edge_count(project: Project, flt: GraphFilter = DEFAULT_FILTER) -> in
     return total + sum(1 for _ in _derived_edges(project, view))
 
 
+def _without_tail(chunks: Iterator[str], tail: str) -> Iterator[str]:
+    """`chunks` with `tail` removed from the end of the last one (the stream is held back by one
+    chunk)."""
+    held: str | None = None
+    for chunk in chunks:
+        if held is not None:
+            yield held
+        held = chunk
+    if held is not None:
+        if not held.endswith(tail):
+            raise ValueError("unexpected end of export")
+        yield held[: -len(tail)]
+
+
+def _with_layer(
+    project: Project,
+    fmt: ExportFormat,
+    evidence: Iterator[str],
+    attach_to: Collection[str] | None,
+    include_inferred: bool,
+) -> Iterator[str]:
+    """The evidence stream with the layer part streamed beside it (plan G3-C, ruling C3): JSON
+    `{"evidence": ..., "interpretation": ..., "notice": ...}`; DOT with the notice first and the
+    layer cluster before the closing brace."""
+    nodes = iter_layer_nodes(project, attach_to=attach_to, include_inferred=include_inferred)
+    edges = iter_layer_edges(project, attach_to=attach_to, include_inferred=include_inferred)
+    if fmt == "json":
+        hidden = layer_hidden(project, attach_to=attach_to, include_inferred=include_inferred)
+        yield '{"evidence":'
+        yield from _without_tail(evidence, "\n")
+        yield ',"interpretation":'
+        yield from iter_layer_json(nodes, edges, hidden)
+        yield ',"notice":' + json.dumps(LAYER_NOTICE) + "}\n"
+    else:
+        yield f"// {LAYER_NOTICE}\n"
+        yield from _without_tail(evidence, "}\n")
+        yield from iter_layer_dot(nodes, edges)
+        yield "}\n"
+
+
 @_scoped
 def iter_graph_export(
     project: Project,
@@ -1082,26 +1129,35 @@ def iter_graph_export(
     depth: int = 3,
     k: int = 2,
     flt: GraphFilter = DEFAULT_FILTER,
+    layer: Layer = "evidence",
 ) -> Iterator[str]:
     """The export in chunks. The whole filtered view is streamed from `iter_nodes` / `iter_edges`
     when `query` is None; else it is the query's subgraph (bounded). Arguments are validated
-    before the first chunk is produced."""
+    before the first chunk is produced. With `layer = all` the layer is streamed beside it
+    (`factory.intuition.export`); without, the text is the evidence export unchanged."""
+    _check_layer(layer)
     if fmt not in ("json", "dot"):
         raise FactoryValidationError([ValidationIssue("format", "must be json or dot")])
     render = iter_json if fmt == "json" else iter_dot
     if query is None:
-        return render(flt, iter_nodes(project, flt), iter_edges(project, flt))
-    kind = _validate(project, query, node, target, depth, k, flt)
-    edges: list[GraphEdge] = []
-    if kind in ("ancestors", "descendants", "path", "improvements_on"):
-        assert node is not None
-        result, seen = _traverse(project, kind, node, target, depth, flt)
-        edges = [seen[i] for i in result.edges]
-        ids = {node, *result.nodes}
+        chunks = render(flt, iter_nodes(project, flt), iter_edges(project, flt))
+        attach: set[str] | None = None
     else:
-        ids = {str(n["id"]) for n in graph_query(project, kind, k=k, flt=flt).nodes}
-    nodes = [n for n in (graph_node(project, i, flt) for i in sorted(ids)) if n is not None]
-    return render(flt, nodes, sorted(edges, key=GraphEdge.sort_key))
+        kind = _validate(project, query, node, target, depth, k, flt)
+        edges: list[GraphEdge] = []
+        if kind in ("ancestors", "descendants", "path", "improvements_on"):
+            assert node is not None
+            result, seen = _traverse(project, kind, node, target, depth, flt)
+            edges = [seen[i] for i in result.edges]
+            ids = {node, *result.nodes}
+        else:
+            ids = {str(n["id"]) for n in _graph_query(project, kind, None, None, 3, k, flt).nodes}
+        nodes = [n for n in (graph_node(project, i, flt) for i in sorted(ids)) if n is not None]
+        chunks = render(flt, nodes, sorted(edges, key=GraphEdge.sort_key))
+        attach = ids
+    if layer == "evidence":
+        return chunks
+    return _with_layer(project, fmt, chunks, attach, flt.include_inferred)
 
 
 @_scoped
@@ -1116,13 +1172,24 @@ def graph_export(
     k: int = 2,
     flt: GraphFilter = DEFAULT_FILTER,
     max_edges: int | None = None,
+    layer: Layer = "evidence",
 ) -> str:
     """`iter_graph_export` as one string. With `max_edges`, a whole-view export of more edges is
-    refused on field `query` before anything is rendered (ruling 9)."""
+    refused on field `query` before anything is rendered (ruling 9); the cap counts evidence
+    edges only."""
+    _check_layer(layer)
     if query is None and max_edges is not None and export_edge_count(project, flt) > max_edges:
         raise FactoryValidationError([ValidationIssue("query", _TOO_LARGE)])
     return "".join(
         iter_graph_export(
-            project, fmt, query=query, node=node, target=target, depth=depth, k=k, flt=flt
+            project,
+            fmt,
+            query=query,
+            node=node,
+            target=target,
+            depth=depth,
+            k=k,
+            flt=flt,
+            layer=layer,
         )
     )

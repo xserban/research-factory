@@ -1658,11 +1658,13 @@ def build_server(
         k: int = 2,
         include_inferred: bool = False,
         include_stale: bool = False,
+        layer: str = "evidence",
     ) -> dict[str, JsonValue]:
         """The graph (or, with `query`, a query's subgraph) as JSON or Graphviz DOT text, in a
         deterministic order, naming its filter; ids, statuses and bibliographic titles only. A
-        whole-graph export of more than 2000 edges is refused: use a query or the CLI. Refused to
-        a session that has joined a pass."""
+        whole-graph export of more than 2000 edges is refused: use a query or the CLI. `layer`
+        is `evidence` (default) or `all`; `all` adds the interpretation layer as a separate,
+        labelled part with a notice. Refused to a session that has joined a pass."""
 
         def export() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
@@ -1680,6 +1682,7 @@ def build_server(
                 k=k,
                 flt=GraphFilter(include_inferred=include_inferred, include_stale=include_stale),
                 max_edges=graph_service.MCP_EXPORT_MAX_EDGES,
+                layer=cast(graph_service.Layer, layer),
             )
             return _withheld(opened, text, include_work_ids=False)
 

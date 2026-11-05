@@ -67,6 +67,7 @@ LAYER_MODULES = frozenset(
         "factory.services.interpretations",
         "factory.services.concepts",  # G3-B
         "factory.services.layer_view",  # G3-C
+        "factory.intuition.export",  # G3-C
     }
 )
 ALLOWED_IMPORTERS = frozenset(
@@ -292,6 +293,7 @@ def evidence_outputs(project: Project, nodes: Iterable[str] = ()) -> dict[str, s
         "contribution_items": _run(lambda: contributions_service.final_items(project)),
         "ideas": _run(lambda: ideas_service.list_ideas(project, include_unconfirmed=True)),
         "graph_status": _run(lambda: graph_status(project)),
+        "graph_status_layer_evidence": _run(lambda: graph_status(project, layer="evidence")),
         "digest": _run(lambda: digest_text(project)),
         "status": _run(lambda: status_without_log_counts(project)),
     }
@@ -325,6 +327,17 @@ def evidence_outputs(project: Project, nodes: Iterable[str] = ()) -> dict[str, s
         for fmt in ("json", "dot"):
             out[f"export:{fmt}:{label}"] = _run(
                 lambda m=fmt, f=flt: graph_export(project, m, flt=f)  # type: ignore[arg-type]
+            )
+            out[f"export_layer_evidence:{fmt}:{label}"] = _run(
+                lambda m=fmt, f=flt: graph_export(  # type: ignore[arg-type]
+                    project, m, flt=f, layer="evidence"
+                )
+            )
+        for node in nodes:
+            out[f"descendants_layer_evidence:{node}:{label}"] = _run(
+                lambda n=node, f=flt: graph_query(
+                    project, "descendants", node=n, flt=f, layer="evidence"
+                )
             )
     return out
 
