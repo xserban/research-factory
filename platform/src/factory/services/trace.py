@@ -19,6 +19,11 @@ Invariants:
   queries are those whose `query.registered` refs name it, or, forward, its chase round.
 - A reference that names no row is shown as a node with an empty `event_id`, so a broken link is
   visible rather than hidden.
+- A context pack (`briefing`, named by its blob ref) leads to each `briefing.served` event of it
+  (`served`) and on to the session that received it (`session`, named by its id), so a session's
+  agent events, which carry that id, lead back to what the agent was told. Blob refs and session
+  ids are told apart by the served table, in `_Walk.served_key`, never in `_parse`: `dangling_refs`
+  must not judge them.
 - An identifier that names no row raises `FactoryValidationError([ValidationIssue("ref",
   "unknown id")])`; nothing is written.
 """
@@ -111,6 +116,9 @@ KINDS: tuple[str, ...] = (
     "consolidation",
     "proposal",
     *slice6_trace.KINDS,
+    "briefing",
+    "served",
+    "session",
 )
 """Node kinds in chain order. The layer's kinds come last (G2's pinned order after `claim` is
 unchanged). Sibling nodes are listed in this order (reversed for back traces, so
@@ -267,10 +275,10 @@ def _trace(
         raise FactoryValidationError([ValidationIssue("layer", "must be evidence or all")])
     if direction not in ("back", "forward"):
         raise ValueError(f"direction must be 'back' or 'forward', not {direction!r}")
-    key = _parse(ref)
     project.index.sync()
     with project.index.connect() as conn:
         walk = _Walk(project, conn, layer, agent=skip is not None)
+        key = walk.served_key(ref) or _parse(ref)
         described = None if key is None else walk.describe(key)
         if key is None or described is None:
             raise FactoryValidationError([ValidationIssue("ref", "unknown id")])
@@ -624,6 +632,9 @@ class _Walk:
             "term": self._organisation_node,
             "consolidation": self._organisation_node,
             "proposal": self._organisation_node,
+            "briefing": self._briefing,
+            "served": self._served,
+            "session": self._session,
         }
         self._describers.update({k: partial(self._slice6_node, k) for k in slice6_trace.KINDS})
 
@@ -830,6 +841,49 @@ class _Walk:
         return _Described(
             f"status {status}; {count}", self._event_of_ref("search.run_started", ident)
         )
+
+    def served_key(self, ref: str) -> Key | None:
+        """The key of `ref` when it names a served pack or a session that received one."""
+        rows = self._all(
+            "SELECT blob = :r FROM briefings_served WHERE blob = :r OR session = :r LIMIT 1", r=ref
+        )
+        if not rows:
+            return None
+        return ("briefing" if rows[0][0] else "session", ref)
+
+    def _briefing(self, ident: str) -> _Described | None:
+        rows = self._all(
+            "SELECT COUNT(*), MIN(event_id) FROM briefings_served WHERE blob = :b", b=ident
+        )
+        if not rows or not rows[0][0]:
+            return None
+        return _Described(f"context pack served to {rows[0][0]} session(s)", str(rows[0][1]))
+
+    def _served(self, ident: str) -> _Described | None:
+        rows = self._all("SELECT session, as_of FROM briefings_served WHERE event_id = :e", e=ident)
+        if not rows:
+            return None
+        return _Described(f"briefing.served to {rows[0][0]} as of {rows[0][1]}", ident)
+
+    def _session(self, ident: str) -> _Described | None:
+        rows = self._all(
+            "SELECT COUNT(*), MIN(event_id) FROM briefings_served WHERE session = :s", s=ident
+        )
+        if not rows or not rows[0][0]:
+            return None
+        return _Described(f"session {ident}, {rows[0][0]} context pack(s)", str(rows[0][1]))
+
+    def _edges_briefing(self, ident: str) -> tuple[list[Key], list[Key]]:
+        served = self._column("SELECT event_id FROM briefings_served WHERE blob = :b", b=ident)
+        return [], [("served", e) for e in served]
+
+    def _edges_served(self, ident: str) -> tuple[list[Key], list[Key]]:
+        rows = self._all("SELECT blob, session FROM briefings_served WHERE event_id = :e", e=ident)
+        return [("briefing", str(b)) for b, _ in rows], [("session", str(s)) for _, s in rows]
+
+    def _edges_session(self, ident: str) -> tuple[list[Key], list[Key]]:
+        served = self._column("SELECT event_id FROM briefings_served WHERE session = :s", s=ident)
+        return [("served", e) for e in served], []
 
     def _page(self, ident: str) -> _Described | None:
         rows = self._all(
@@ -2190,4 +2244,7 @@ _EDGES: dict[str, Callable[[_Walk, str], tuple[list[Key], list[Key]]]] = {
     "notice": _Walk._edges_notice,
     "version": _Walk._edges_version,
     "preference": _Walk._edges_preference,
+    "briefing": _Walk._edges_briefing,
+    "served": _Walk._edges_served,
+    "session": _Walk._edges_session,
 }

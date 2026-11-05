@@ -14,6 +14,7 @@ from factory.index.default import default_projection
 from factory.modules.registry import ModuleRegistry
 from factory.services.modules import (
     benchmark_ledger,
+    briefing,
     cards,
     contradictions,
     contributions,
@@ -61,7 +62,7 @@ def default_modules() -> ModuleRegistry:
         contributions, cards, evidence, references, imports, inbox, living, snapshots, lineage,
         intuition, vocabulary, contradictions, discovery, coverage, finders, matching, exports,
         portfolio, regions, mining, hypotheses, labels, views, experiments,
-        evaluation, benchmark_ledger, directions, writing,
+        evaluation, benchmark_ledger, directions, writing, briefing,
     ]  # fmt: skip
     return ModuleRegistry(
         [m.MODULE for m in modules],

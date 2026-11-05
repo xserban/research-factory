@@ -15,6 +15,7 @@ from typing import Literal
 from pydantic import Field, JsonValue
 
 from factory.model.base import StrictModel
+from factory.model.identity import BLOB_REF_RE, ULID_RE
 
 ProcessingDepth = Literal["indexed", "screened", "extracted", "verified"]
 OnionEdgeType = Literal["cites", "builds-on", "improves-on"]
@@ -290,3 +291,23 @@ class Briefing(StrictModel):
     pending: list[PendingBrief]
     drafts: list[DraftBrief]
     truncated: list[str] = Field(default_factory=list)
+
+
+class BriefingServed(StrictModel):
+    """A context pack given to a session (system): `blob` holds the pack as served, `as_of` the log
+    position it describes."""
+
+    session: str = Field(pattern=rf"^{ULID_RE}$")
+    audience: Literal["agent", "human"]
+    blob: str = Field(pattern=BLOB_REF_RE)
+    as_of: str = Field(pattern=rf"^ev_{ULID_RE}$")
+
+
+class ServedRow(StrictModel):
+    """One pack a session received, as `briefings_served` keeps it."""
+
+    session: str
+    blob: str
+    audience: str
+    as_of: str
+    event_id: str

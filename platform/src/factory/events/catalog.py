@@ -162,6 +162,7 @@ from factory.model.seed import (
 )
 from factory.model.task import TaskClaimed, TaskCompleted, TaskCreated, TaskReleased
 from factory.model.versions import DocumentPreferred, VersionLinked, VersionObserved
+from factory.model.views import BriefingServed
 from factory.model.watch import WatchCycleFinished, WatchCycleStarted
 
 _NAME_RE = re.compile(r"[a-z][a-z_]*\.[a-z][a-z_]*")
@@ -352,6 +353,7 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("draft.sentence_withdrawn", SentenceWithdrawn, 1))
     catalog.register(EventType("draft.reordered", DraftReordered, 1))
     catalog.register(EventType("draft.verified", SentenceVerified, 1))
+    catalog.register(EventType("briefing.served", BriefingServed, 1))
     catalog.register(EventType("draft.audit_drawn", DraftAuditDrawn, 1))
     catalog.register(EventType("draft.audited", DraftAudited, 1))
     catalog.register(EventType("draft.released", DraftReleased, 1))

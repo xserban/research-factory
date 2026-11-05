@@ -123,7 +123,7 @@ def test_tables_are_omitted_when_empty_and_version_is_bumped() -> None:
     from factory.index.default import PROJECTION_VERSION
 
     assert set(DRAFT_TABLES) <= OMITTED_WHEN_EMPTY
-    assert PROJECTION_VERSION == "50"
+    assert PROJECTION_VERSION == "51"
     assert set(DRAFT_TABLES) <= set(default_projection().metadata.tables)
 
 

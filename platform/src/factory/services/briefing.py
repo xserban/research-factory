@@ -1,7 +1,8 @@
 """The project briefing: a reading path for a person joining mid-way (slice 7b, plan V-C).
 
-Declares: `build_briefing`, `briefing_agent_view`, `agent_pack`, `VIEW_VERSION`,
-`BRIEFING_MAX_CHARS`. A builder over the projection; it writes nothing.
+Declares: `build_briefing`, `briefing_agent_view`, `agent_pack`, `serve_pack`, `VIEW_VERSION`,
+`BRIEFING_MAX_CHARS`. A builder over the projection; it writes nothing except `briefing.served`,
+through `serve_pack`.
 
 Invariants:
 - Every section is computed from events through the service that owns it (R-05): question,
@@ -33,6 +34,9 @@ Invariants of the agent form (plan rulings 2 and 3; spec ruling 24):
   stored, since free text (a goal, an amendment reason) may name one; work ids stay.
 - A pack is a function of the log: built at the log position `as_of` with the clock read as that
   event's time, so `check`'s date-dependent findings do not vary with the day it is run.
+- `serve_pack` is refused to a session that joined a pass, and records nothing new when the session
+  already holds that very pack: the blob is the identity, and `as_of` ignores the servings, so the
+  second call builds the same bytes.
 - The JSON is at most `BRIEFING_MAX_CHARS`: cuts run from the end of sections 5 and 8 (members,
   paths, entries), then 6, 9 and 7; sections 1 to 4 are cut only when they alone exceed the bound
   (oldest deviations, then oldest amendments). `truncated` states each cut; a pack that still
@@ -59,6 +63,7 @@ from factory.model.protocol import ScreeningStage
 from factory.model.views import (
     AmendmentBrief,
     Briefing,
+    BriefingServed,
     CorpusBrief,
     DeviationBrief,
     DraftBrief,
@@ -76,6 +81,7 @@ from factory.model.views import (
 from factory.model.work import Work
 from factory.services.agreement import agreement_summary, screen_agreement
 from factory.services.audit import audit_report
+from factory.services.briefing_served import served_for
 from factory.services.calibration import calibration_status
 from factory.services.call_memo import entering
 from factory.services.check import CheckReport, agent_check, check
@@ -95,6 +101,7 @@ from factory.services.ideas import IdeaView, confirmed_ideas, list_ideas
 from factory.services.layer_check import unreviewed_interpretations
 from factory.services.lineage import index_neighbours
 from factory.services.outline import lineage_order
+from factory.services.passes import is_pass_session
 from factory.services.prisma import has_full_text_plan, prisma_flow
 from factory.services.protocol import ProtocolVersion, amendments_with_events, current_protocol
 from factory.services.question import current_question, goals
@@ -149,6 +156,26 @@ def agent_pack(project: Project) -> str:
     """The agent context pack: canonical JSON of the agent view, within `BRIEFING_MAX_CHARS`.
     Refused (field `briefing`) when sections 1 to 4 alone do not fit; nothing is written."""
     return to_json(_bounded(briefing_agent_view(project)))
+
+
+def serve_pack(project: Project, *, session: str) -> tuple[str, str]:
+    """Store the agent pack as a blob and record that `session` received it; returns the blob ref
+    and the pack. Refused (field `session`), with nothing written, to a session that has joined a
+    pass (decisions 43, 48)."""
+    if is_pass_session(project, session):
+        raise FactoryValidationError(
+            [ValidationIssue("session", "this session has joined a pass and cannot use this tool")]
+        )
+    built = _bounded(briefing_agent_view(project))
+    pack = to_json(built)
+    blob = project.blobs.put(pack.encode())
+    position = built.meta.as_of
+    if position is None or any(row.blob == blob for row in served_for(project, session)):
+        return blob, pack
+    payload = BriefingServed(session=session, audience="agent", blob=blob, as_of=position)
+    actor = project.system_actor().model_copy(update={"session": session})
+    project.record([project.events.make("briefing.served", payload, actor)])
+    return blob, pack
 
 
 def as_of(project: Project) -> str | None:

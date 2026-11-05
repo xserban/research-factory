@@ -52,6 +52,7 @@ from factory.model.work import ProvenanceMethod
 from factory.modules.contract import CheckHit
 from factory.services.agreement import Outcome, agreement_summary, final_outcomes, single_pass_works
 from factory.services.audit import audit_outstanding, audit_report, audit_shortfall
+from factory.services.briefing_served import stale_sessions
 from factory.services.calibration import calibrated_models, calibration_status
 from factory.services.call_memo import entering
 from factory.services.chase import chase_rounds, forward_chase_rounds
@@ -530,6 +531,7 @@ def _run_rules(project: Project) -> list[_Hit]:
         _writer_verified(project),
         _hosting(project),
         _future_dated(project),
+        _briefings(project),
     ]
     flat = [hit for group in groups for hit in group]
     return [replace(hit, seq=seq) for seq, hit in enumerate(flat)]
@@ -960,6 +962,20 @@ def _region_agent_view() -> Iterator[None]:
 def _regions(project: Project) -> list[_Hit]:
     """Findings of regions (plan Regions-B): ids and counts only, advisory in every mode."""
     return [_Hit(f.code, f.refs, f.message) for f in region_findings(project)]
+
+
+def _briefings(project: Project) -> list[_Hit]:
+    """Sessions working from a context pack that predates a change (advisory; plan V-C ruling 4)."""
+    stale = stale_sessions(project)
+    if not stale:
+        return []
+    return [
+        _Hit(
+            "briefing-stale",
+            tuple(stale),
+            f"{len(stale)} session(s) wrote events after a change their context pack predates",
+        )
+    ]
 
 
 def _organisation(project: Project) -> list[_Hit]:
