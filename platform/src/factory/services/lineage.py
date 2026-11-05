@@ -504,6 +504,90 @@ def index_neighbours(project: Project, flt: GraphFilter = DEFAULT_FILTER) -> Nei
     return neighbours
 
 
+RING_BATCH = 900
+"""The most frontier works one ring-expansion read names."""
+
+
+@dataclass(frozen=True)
+class RingStep:
+    """The works one hop from a frontier: `neighbours` (canonical paper ids, ideas left out) and
+    the shown edges read to find them, by id, with their type."""
+
+    neighbours: frozenset[str]
+    edges: dict[str, EdgeType]
+
+
+def ring_step(
+    project: Project, conn: Connection, frontier: Sequence[str], flt: GraphFilter
+) -> RingStep:
+    """The papers joined to a frontier of papers by an edge `flt` shows, in either direction.
+
+    Reads only the edges incident to the frontier (indexed, in batches), then the overlays of
+    what it read, so a rejected, stale or (without `include_inferred`) inferred relation never
+    joins two works. Run inside `entering()` so the relation basis is read once. A frontier work
+    reads as its merge primary, and an edge stored under an absorbed work is found."""
+    view = _view(project, flt)
+    types = frozenset(flt.edge_types)
+    names = json.dumps(sorted(t.value for t in types))
+    found: set[str] = set()
+    edges: dict[str, EdgeType] = {}
+    for start in range(0, len(frontier), RING_BATCH):
+        chunk = set(frontier[start : start + RING_BATCH])
+        ends = view.group(conn, sorted(chunk))
+        rows = (
+            conn.execute(
+                text(
+                    "SELECT * FROM graph_edges WHERE edge_type IN (SELECT value FROM "
+                    "json_each(:types)) AND live = 1 AND (source IN (SELECT value FROM "
+                    "json_each(:ends)) OR target IN (SELECT value FROM json_each(:ends)))"
+                ),
+                {"ends": json.dumps(ends), "types": names},
+            )
+            .mappings()
+            .all()
+        )
+        for edge in view.overlay(conn, rows, types):
+            if _is_idea(edge.source) or _is_idea(edge.target):
+                continue
+            hit = False
+            if edge.source in chunk:
+                found.add(edge.target)
+                hit = True
+            if edge.target in chunk:
+                found.add(edge.source)
+                hit = True
+            if hit:
+                edges[edge.edge_id] = edge.edge_type
+    return RingStep(frozenset(found), edges)
+
+
+def paper_nodes(conn: Connection, ids: Sequence[str]) -> dict[str, GraphNode]:
+    """Paper nodes for `ids` (title, corpus or external); see `_paper_nodes`."""
+    return _paper_nodes(conn, ids)
+
+
+def confirmed_ideas_of(
+    project: Project, conn: Connection, work_ids: Sequence[str]
+) -> dict[str, list[str]]:
+    """For each work that is a member of a confirmed idea, the ids of those ideas (a merged idea
+    reads as its survivor), sorted. Works in no confirmed idea are omitted."""
+    view = _view(project, DEFAULT_FILTER)
+    out: dict[str, set[str]] = {}
+    for start in range(0, len(work_ids), RING_BATCH):
+        rows = conn.execute(
+            text(
+                "SELECT work_id, idea_id FROM idea_members "
+                "WHERE work_id IN (SELECT value FROM json_each(:w))"
+            ),
+            {"w": json.dumps(list(work_ids[start : start + RING_BATCH]))},
+        ).all()
+        for work, idea in rows:
+            shown = view.shown_idea(conn, str(idea))
+            if shown is not None:
+                out.setdefault(str(work), set()).add(shown)
+    return {w: sorted(ideas) for w, ideas in out.items()}
+
+
 def iter_nodes(project: Project, flt: GraphFilter = DEFAULT_FILTER) -> Iterator[GraphNode]:
     """Every node the view shows, by id, in pages of `GRAPH_PAGE` rows."""
     view = _view(project, flt)

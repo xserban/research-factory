@@ -18,7 +18,6 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Literal
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
@@ -26,12 +25,11 @@ from sqlalchemy.engine import Connection
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.model.extraction import Scope
 from factory.model.protocol import ScreeningStage
+from factory.model.views import ProcessingDepth
 from factory.services.agreement import Outcome, final_outcomes
 from factory.services.context import Project
 from factory.services.extraction import unit_states
 from factory.services.extraction_agreement import final_rows
-
-ProcessingDepth = Literal["indexed", "screened", "extracted", "verified"]
 
 DEPTH_RANK: Mapping[ProcessingDepth, int] = {
     "indexed": 0,
