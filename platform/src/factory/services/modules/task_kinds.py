@@ -16,6 +16,7 @@ from factory.model.screening import PassLabel
 from factory.model.task import (
     CONSOLIDATE_TASK_KIND,
     DRAFT_SLOT_TASK_KIND,
+    DRAFT_VERIFY_TASK_KIND,
     HYPOTHESIS_REVIEW_TASK_KIND,
     INTUITION_TASK_KIND,
 )
@@ -52,4 +53,5 @@ def default_task_kinds() -> TaskKindRegistry:
     registry.register(HYPOTHESIS_REVIEW_TASK_KIND, "hypotheses", stage=None, label=None, scope=None)
     registry.register(CONSOLIDATE_TASK_KIND, "labels", stage=None, label=None, scope=None)
     registry.register(DRAFT_SLOT_TASK_KIND, "writing", stage=None, label=None, scope=None)
+    registry.register(DRAFT_VERIFY_TASK_KIND, "writing", stage="verify", label=None, scope=None)
     return registry

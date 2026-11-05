@@ -42,6 +42,7 @@ def test_kinds_unchanged() -> None:
         HYPOTHESIS_REVIEW_TASK_KIND,
         "consolidate",
         "draft_slot",
+        "draft_verify",
     )
 
 

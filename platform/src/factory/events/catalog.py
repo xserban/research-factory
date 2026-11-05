@@ -22,6 +22,7 @@ from factory.model.drafts import (
     DraftOutlineRepinned,
     DraftReordered,
     SentenceRecorded,
+    SentenceVerified,
     SentenceWithdrawn,
 )
 from factory.model.experiments import (
@@ -341,4 +342,5 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("draft.sentence_recorded", SentenceRecorded, 1))
     catalog.register(EventType("draft.sentence_withdrawn", SentenceWithdrawn, 1))
     catalog.register(EventType("draft.reordered", DraftReordered, 1))
+    catalog.register(EventType("draft.verified", SentenceVerified, 1))
     return catalog

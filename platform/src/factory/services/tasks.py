@@ -16,6 +16,7 @@ from factory.model.base import StrictModel
 from factory.model.task import (
     CONSOLIDATE_TASK_KIND,
     DRAFT_SLOT_TASK_KIND,
+    DRAFT_VERIFY_TASK_KIND,
     HYPOTHESIS_REVIEW_TASK_KIND,
     INTUITION_TASK_KIND,
     TASK_KIND_RE,
@@ -223,13 +224,14 @@ def task_counts(project: Project) -> TaskCounts:
         rows = conn.execute(
             text(
                 "SELECT task_id, status, lease_until FROM tasks "
-                "WHERE kind NOT IN (:layer, :review, :org, :slot)"
+                "WHERE kind NOT IN (:layer, :review, :org, :slot, :verify)"
             ),
             {
                 "layer": INTUITION_TASK_KIND,
                 "review": HYPOTHESIS_REVIEW_TASK_KIND,
                 "org": CONSOLIDATE_TASK_KIND,
                 "slot": DRAFT_SLOT_TASK_KIND,
+                "verify": DRAFT_VERIFY_TASK_KIND,
             },
         ).all()
     counts = {"open": 0, "claimed": 0, "expired": 0, "completed": 0, "abandoned": 0}
