@@ -140,6 +140,7 @@ from factory.services.living_hooks import DEFAULT_HOOKS
 from factory.services.modules.listing import module_rows
 from factory.services.project import ScreeningStatus
 from factory.services.search import list_works
+from factory.services.server_check import server_check
 from factory.services.xrun_accounting import baseline_verdicts
 from factory.sources.fulltext.registry import default_routes
 from factory.sources.registry import default_sources
@@ -449,6 +450,8 @@ app.add_typer(labels_app)
 app.add_typer(terms_app)
 app.add_typer(consolidation_app)
 app.add_typer(import_app)
+server_app = typer.Typer(name="server", help="The lab server.", no_args_is_help=True)
+app.add_typer(server_app)
 
 
 _M = TypeVar("_M", bound=BaseModel)
@@ -1215,6 +1218,17 @@ def snowball_compare_cmd(
         comparison = snowball_service.snowball_compare(project, round_id)
     for line in render.comparison_lines(comparison):
         typer.echo(line)
+
+
+@server_app.command("check")
+def server_check_cmd(ctx: typer.Context) -> None:
+    """Check that this root can host projects; exit 1 when it cannot."""
+    issues = server_check(_state(ctx).settings)
+    for issue in issues:
+        typer.echo(f"{issue.field}: {issue.reason}", err=True)
+    if issues:
+        raise typer.Exit(1)
+    typer.echo("ok")
 
 
 @app.command()

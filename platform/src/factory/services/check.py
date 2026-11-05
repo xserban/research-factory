@@ -86,6 +86,7 @@ from factory.services.extraction_agreement import final_rows, grouped_rows, inde
 from factory.services.extraction_audit import extraction_audit_outstanding, extraction_audit_report
 from factory.services.fulltext_status import fulltext_status
 from factory.services.gates import audit_hits, gate_hits, labelled_gate_audits
+from factory.services.hosting import foreign_event_files
 from factory.services.ideas import list_ideas
 from factory.services.imports import list_imports
 from factory.services.label_check import (
@@ -526,6 +527,7 @@ def _run_rules(project: Project) -> list[_Hit]:
         slice6_hits(project),
         _drafts(project),
         _writer_verified(project),
+        _hosting(project),
     ]
     flat = [hit for group in groups for hit in group]
     return [replace(hit, seq=seq) for seq, hit in enumerate(flat)]
@@ -627,6 +629,33 @@ def _writer_verified(project: Project) -> list[_Hit]:
             f"{len(sentences)} verdict(s) of a draft by someone who wrote in it",
         )
         for draft, sentences in sorted(broken.items())
+    ]
+
+
+# --- Hosting (slice 5) ---
+
+
+def _hosting(project: Project) -> list[_Hit]:
+    """Event files of a hosted project that the host did not commit. An unhosted project is not
+    looked at, so it runs no git."""
+    if not project.is_hosted():
+        return []
+    foreign = foreign_event_files(project)
+    if foreign is None:
+        return [
+            _Hit(
+                "host-mismatch-unchecked",
+                (),
+                "no readable git history at the root: event authorship was not checked",
+            )
+        ]
+    return [
+        _Hit(
+            "host-mismatch",
+            (f.path,),
+            f"added to git by {f.author}, not by the host ({', '.join(f.expected)})",
+        )
+        for f in foreign
     ]
 
 

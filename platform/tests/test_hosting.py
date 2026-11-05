@@ -2,6 +2,7 @@
 
 import json
 import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -14,8 +15,10 @@ from factory.events.envelope import Actor, Event
 from factory.index.index import OMITTED_WHEN_EMPTY
 from factory.model.hosting import ProjectHosted
 from factory.model.question import GoalStated
+from factory.services.check import check
 from factory.services.context import Project, open_project
 from factory.services.hosting import current_host, host_project
+from factory.services.server_check import linux_filesystem, mac_filesystem, server_check
 from tests.helpers import S2, SESSION, T0
 from tests.test_forged_events import fold_state, folds, inert
 from tests.test_old_log_replay import BASE_STATE_HASH, FIXTURE
@@ -266,3 +269,117 @@ def test_hosting_survives_a_rebuild(project: Project) -> None:
     synced = project.index.state_hash()
     assert project.index.rebuild() == synced
     assert current_host(project) == "lab1"
+
+
+# --- `host-mismatch` ---
+
+
+def commit_as(root: Path, author: str) -> None:
+    identity = ["-c", f"user.name={author}", "-c", "user.email=a@x"]
+    subprocess.run(["git", "-C", str(root), "add", "projects"], check=True)
+    subprocess.run(["git", "-C", str(root), *identity, "commit", "-qm", "c"], check=True)
+
+
+def codes(project: Project) -> set[str]:
+    return {finding.code for finding in check(project).findings}
+
+
+@pytest.fixture
+def repo_server(settings: Settings, project: Project, clock: FixedClock) -> Project:
+    """A hosted project in a git root, its history so far committed by the host."""
+    (settings.root / ".gitignore").write_text("projects/*/.index/\n")
+    subprocess.run(["git", "init", "-q", str(settings.root)], check=True)
+    host_project(project, project.human_actor(), "lab1")
+    commit_as(settings.root, "factory-server lab1")
+    return as_host(settings, "lab1", clock)
+
+
+def test_host_mismatch_flags_foreign_commit(repo_server: Project) -> None:
+    repo_server.record([goal(repo_server)])
+    commit_as(repo_server.settings.root, "someone-else")
+    report = check(repo_server)
+    hits = [f for f in report.findings if f.code == "host-mismatch"]
+    assert len(hits) == 1 and hits[0].severity == "error"
+    assert "someone-else" in hits[0].message and "lab1" in hits[0].message
+
+
+def test_the_hosts_own_commit_is_clean(repo_server: Project) -> None:
+    repo_server.record([goal(repo_server)])
+    commit_as(repo_server.settings.root, "factory-server lab1")
+    assert "host-mismatch" not in codes(repo_server)
+
+
+def test_an_uncommitted_file_is_not_flagged(repo_server: Project) -> None:
+    repo_server.record([goal(repo_server)])
+    assert "host-mismatch" not in codes(repo_server)
+
+
+def test_a_file_from_before_hosting_is_not_flagged(
+    settings: Settings, project: Project, clock: FixedClock
+) -> None:
+    subprocess.run(["git", "init", "-q", str(settings.root)], check=True)
+    (settings.root / ".gitignore").write_text("projects/*/.index/\n")
+    commit_as(settings.root, "a-researcher")
+    host_project(project, project.human_actor(), "lab1")
+    assert "host-mismatch" not in codes(as_host(settings, "lab1", clock))
+
+
+def test_each_period_answers_to_its_own_host(repo_server: Project, clock: FixedClock) -> None:
+    repo_server.record([goal(repo_server)])
+    commit_as(repo_server.settings.root, "factory-server lab1")
+    host_project(repo_server, repo_server.human_actor(), "lab2")
+    commit_as(repo_server.settings.root, "factory-server lab1")
+    assert "host-mismatch" not in codes(repo_server)
+
+
+def test_without_git_the_check_says_it_was_skipped(
+    settings: Settings, project: Project, clock: FixedClock
+) -> None:
+    host_project(project, project.human_actor(), "lab1")
+    report = check(as_host(settings, "lab1", clock))
+    hits = [f for f in report.findings if f.code == "host-mismatch-unchecked"]
+    assert len(hits) == 1 and hits[0].severity == "warning" and report.ok is not None
+
+
+def test_an_unhosted_project_runs_no_git(project: Project, monkeypatch: pytest.MonkeyPatch) -> None:
+    def refuse(*args: object, **kwargs: object) -> None:
+        raise AssertionError("git was run")
+
+    monkeypatch.setattr("factory.services.hosting.git", refuse)
+    assert not {"host-mismatch", "host-mismatch-unchecked"} & codes(project)
+
+
+# --- `factory server check` ---
+
+
+def fit_root(root: Path) -> None:
+    (root / ".gitignore").write_text("library/\n.index/\n.server/\n")
+
+
+def test_a_fit_root_passes(tmp_path: Path) -> None:
+    fit_root(tmp_path)
+    assert server_check(Settings(root=tmp_path, user="obd")) == []
+
+
+def test_server_check_flags_missing_gitignore(tmp_path: Path) -> None:
+    issues = server_check(Settings(root=tmp_path, user="obd"))
+    assert sum(issue.field == "gitignore" for issue in issues) == 3
+
+
+def test_server_check_flock_probe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    fit_root(tmp_path)
+    monkeypatch.setattr("factory.services.server_check._PROBE", "import sys; sys.exit(1)")
+    issues = server_check(Settings(root=tmp_path, user="obd"))
+    assert [issue.field for issue in issues] == ["lock"]
+
+
+def test_the_deepest_mount_decides() -> None:
+    mounts = "/dev/a / ext4 rw 0 0\nsrv:/x /mnt/lab nfs4 rw 0 0\n"
+    assert linux_filesystem(Path("/mnt/lab/root"), mounts) == "nfs4"
+    assert linux_filesystem(Path("/home/obd"), mounts) == "ext4"
+
+
+def test_the_mac_mount_table() -> None:
+    mounts = "/dev/disk1 on / (apfs, local)\nsrv:/x on /Volumes/lab (nfs, nodev)\n"
+    assert mac_filesystem(Path("/Volumes/lab/root"), mounts) == "nfs"
+    assert mac_filesystem(Path("/Users/obd"), mounts) == "apfs"
