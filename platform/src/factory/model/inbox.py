@@ -39,7 +39,9 @@ class InboxRoute(StrEnum):
 class Basis(StrictModel):
     """Why an agent proposes a link: a citing span it read, or outside knowledge.
 
-    `document_id` and `anchor` are both set exactly when `kind` is `document`.
+    `document_id` and `anchor` are both set exactly when `kind` is `document`. `anchor` is a
+    locator of the citing span (a section or anchor name), not a quote: the span is read from
+    the document, and no check treats this text as what the document says.
     """
 
     kind: Literal["document", "knowledge"]
@@ -76,11 +78,17 @@ class InboxLinkAdded(StrictModel):
     route: InboxRoute
     link: NonBlank = Field(max_length=MAX_LINK)
     identifier_kind: IdentifierKind
-    identifier_value: str = Field(min_length=1)
+    identifier_value: str = Field(min_length=1, max_length=MAX_LINK)
     identifier_version: str | None = Field(default=None, pattern=r"^v\d+$")
     note: str | None = Field(default=None, max_length=MAX_NOTE)
     basis: Basis | None = None
     channel: Channel
+
+    @model_validator(mode="after")
+    def _version_is_arxiv(self) -> Self:
+        if self.identifier_version is not None and self.identifier_kind != IdentifierKind.ARXIV:
+            raise ValueError("identifier_version is set for arXiv identifiers only")
+        return self
 
 
 class InboxLinkWithdrawn(StrictModel):

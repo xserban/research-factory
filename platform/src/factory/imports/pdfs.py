@@ -37,6 +37,7 @@ from factory.imports.model import (
     outcome_of,
 )
 from factory.model.work_ids import (
+    TRAILING_PUNCTUATION,
     arxiv_id_from_doi,
     normalize_arxiv,
     normalize_doi,
@@ -66,7 +67,6 @@ _FILE_ARXIV = re.compile(r"(?<![\d.])(\d{4}\.\d{4,5})(?:v\d+)?(?!\d)", re.IGNORE
 _FILE_DOI = re.compile(r"(?<![\w.])10\.\d{4,9}_\S+")
 _TEXT_ARXIV = re.compile(r"arXiv:\s*(\d{4}\.\d{4,5})(?:v\d+)?(?!\d)", re.IGNORECASE)
 _TEXT_DOI = re.compile(r"(?<![\w.])10\.\d{4,9}/[^\s\"<>]+")
-_TRAILING_PUNCTUATION = ".,;:)]}"
 _ARXIV_KEY = "arxiv:"
 _DOI_KEY = "doi:"
 
@@ -234,7 +234,7 @@ def _identifiers_in(
     for match in arxiv.finditer(text):
         found.add(f"{_ARXIV_KEY}{normalize_arxiv(match.group(1))}")
     for match in doi.finditer(text):
-        raw = match.group(0).rstrip(_TRAILING_PUNCTUATION)
+        raw = match.group(0).rstrip(TRAILING_PUNCTUATION)
         found.add(canonical_doi_key(raw.replace("_", "/") if underscore else raw))
     return found
 

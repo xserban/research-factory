@@ -12,6 +12,8 @@ import re
 import unicodedata
 
 WORK_ID_RE = r"^rf:\S+-[0-9a-f]{8}$"
+TRAILING_PUNCTUATION = ".,;:)]}"
+"""Characters that end a sentence around an identifier rather than the identifier itself."""
 _PUNCT = re.compile(r"[^\w\s]", re.UNICODE)
 _WS = re.compile(r"\s+")
 _DOI_PREFIX = re.compile(r"^(?:https?://(?:dx\.)?doi\.org/|doi:)", re.IGNORECASE)

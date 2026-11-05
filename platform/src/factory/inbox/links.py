@@ -12,6 +12,12 @@ arXiv id it denotes; an arXiv version suffix is kept separately and dropped from
 Every pattern is anchored (`fullmatch`; the one `search` looks for a DOI inside a URL path
 already matched whole) and has no nested unbounded quantifiers, and input longer than
 `MAX_LINK` is refused before any matching.
+
+A `?query` or `#fragment` tail never carries an identifier, in any form, and is dropped before
+percent-decoding, so `%3F` and `%23` stay part of a DOI (some Wiley DOIs end in `#`, and can
+only be given encoded). The text is percent-decoded exactly once; bytes that are not UTF-8 are
+unsupported. An old-style arXiv id must name a known archive, so a path such as `a/1234567` is
+not one. A closing bracket that pairs with an opener inside the DOI is part of the DOI.
 """
 
 from __future__ import annotations
@@ -19,13 +25,26 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from enum import StrEnum
+from urllib.parse import unquote
 
-from factory.model.work_ids import arxiv_id_from_doi, normalize_arxiv, normalize_doi
+from factory.model.work_ids import (
+    TRAILING_PUNCTUATION,
+    arxiv_id_from_doi,
+    normalize_arxiv,
+    normalize_doi,
+)
 
 MAX_LINK = 500
 
 _NEW_ARXIV = r"\d{4}\.\d{4,5}"
-_OLD_ARXIV = r"[a-z][a-z-]*(?:\.[a-z]{2})?/\d{7}"
+# Every archive that ever issued an old-style (pre-2007) identifier.
+_OLD_ARCHIVES = (
+    "acc-phys|adap-org|alg-geom|ao-sci|astro-ph|atom-ph|bayes-an|chao-dyn|chem-ph|cmp-lg|"
+    "comp-gas|cond-mat|cs|dg-ga|funct-an|gr-qc|hep-ex|hep-lat|hep-ph|hep-th|math|math-ph|"
+    "mtrl-th|nlin|nucl-ex|nucl-th|patt-sol|physics|plasm-ph|q-alg|q-bio|q-fin|quant-ph|"
+    "solv-int|stat|supr-con"
+)
+_OLD_ARXIV = rf"(?:{_OLD_ARCHIVES})(?:\.[a-z]{{2}})?/\d{{7}}"
 _ARXIV_ID = rf"(?P<id>{_NEW_ARXIV}|{_OLD_ARXIV})(?P<version>v\d+)?"
 
 _ARXIV_BARE = re.compile(rf"(?:arxiv:)?{_ARXIV_ID}", re.IGNORECASE)
@@ -43,6 +62,7 @@ _OPENALEX_URL = re.compile(
     r"(?:https?://)?(?:api\.)?openalex\.org/(?:works/)?(?P<id>w\d+)/?", re.IGNORECASE
 )
 _QUERY_OR_FRAGMENT = re.compile(r"[?#].*$")
+_BRACKET_PAIRS = {")": "(", "]": "[", "}": "{"}
 
 
 class IdentifierKind(StrEnum):
@@ -69,8 +89,18 @@ def _arxiv(match: re.Match[str]) -> LinkIdentifier:
     )
 
 
+def _trim_doi(doi: str) -> str:
+    """Drop trailing punctuation and slashes, keeping a bracket the DOI itself opened."""
+    while doi and (doi[-1] == "/" or doi[-1] in TRAILING_PUNCTUATION):
+        opener = _BRACKET_PAIRS.get(doi[-1])
+        if opener is not None and doi.count(opener) >= doi.count(doi[-1]):
+            break
+        doi = doi[:-1]
+    return doi
+
+
 def _doi(raw: str) -> LinkIdentifier:
-    doi = normalize_doi(raw).rstrip("/.")
+    doi = _trim_doi(normalize_doi(raw))
     bridged = arxiv_id_from_doi(doi)
     if bridged is not None:
         return LinkIdentifier(kind=IdentifierKind.ARXIV, value=bridged, version=None)
@@ -83,11 +113,19 @@ def _openalex(match: re.Match[str]) -> LinkIdentifier:
     )
 
 
+def stored_link(link: str) -> str:
+    """The link as an item keeps it: stripped, without a query or fragment tail."""
+    return _QUERY_OR_FRAGMENT.sub("", link.strip())
+
+
 def parse_link(link: str) -> LinkIdentifier | None:
     """Return the link's identifier, or `None` when the form is unsupported."""
     if len(link) > MAX_LINK:
         return None
-    text = link.strip()
+    try:
+        text = unquote(stored_link(link), errors="strict")
+    except UnicodeDecodeError:
+        return None
     if not text:
         return None
     if m := _ARXIV_BARE.fullmatch(text):
@@ -96,12 +134,10 @@ def parse_link(link: str) -> LinkIdentifier | None:
         return _openalex(m)
     if m := _DOI_BARE.fullmatch(text):
         return _doi(m.group("doi"))
-    # Only URLs remain. The query and fragment never carry the identifier we accept.
-    url = _QUERY_OR_FRAGMENT.sub("", text)
-    if m := _ARXIV_URL.fullmatch(url):
+    if m := _ARXIV_URL.fullmatch(text):
         return _arxiv(m)
-    if m := _OPENALEX_URL.fullmatch(url):
+    if m := _OPENALEX_URL.fullmatch(text):
         return _openalex(m)
-    if (u := _URL.fullmatch(url)) and (d := _DOI_IN_PATH.search(u.group("path"))):
+    if (u := _URL.fullmatch(text)) and (d := _DOI_IN_PATH.search(u.group("path"))):
         return _doi(d.group("doi"))
     return None

@@ -27,7 +27,7 @@ from sqlalchemy import text
 
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
-from factory.inbox.links import IdentifierKind, LinkIdentifier, parse_link
+from factory.inbox.links import IdentifierKind, LinkIdentifier, parse_link, stored_link
 from factory.model.base import StrictModel
 from factory.model.inbox import (
     MAX_NOTE,
@@ -199,7 +199,7 @@ def add_links(
             payload = InboxLinkAdded(
                 item_id=item_id,
                 route=InboxRoute.LINK,
-                link=item.link.strip(),
+                link=stored_link(item.link),
                 identifier_kind=identifier.kind,
                 identifier_value=identifier.value,
                 identifier_version=identifier.version,
