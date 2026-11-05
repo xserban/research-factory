@@ -1,6 +1,6 @@
 """The corpus a view counts: the corpus of PRISMA (slice 7b, plan V-A ruling 7, used by V-B).
 
-Declares: `corpus_among`. Read-only.
+Declares: `corpus_among`, `years_of`. Read-only.
 
 Invariant: a work is in the corpus of a view when it has a non-probe provenance row and no active
 merge absorbs it (it is not a merge member other than the primary). The test is role-blind: a
@@ -40,3 +40,19 @@ def corpus_among(conn: Connection, ids: Sequence[str]) -> set[str]:
         )
         found.update(str(r[0]) for r in rows)
     return found
+
+
+def years_of(conn: Connection, ids: Sequence[str]) -> dict[str, int]:
+    """The publication year of each work in `ids` that has a dated record (`dates.published`
+    starting with four digits); undated works are omitted, never guessed."""
+    out: dict[str, int] = {}
+    for start in range(0, len(ids), BATCH):
+        rows = conn.execute(
+            text(
+                "SELECT work_id, substr(json_extract(data, '$.dates.published'), 1, 4) "
+                "FROM works WHERE work_id IN (SELECT value FROM json_each(:w))"
+            ),
+            {"w": json.dumps(list(ids[start : start + BATCH]))},
+        )
+        out.update({str(w): int(y) for w, y in rows if y is not None and str(y).isdigit()})
+    return out

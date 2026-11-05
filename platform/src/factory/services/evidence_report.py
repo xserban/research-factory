@@ -91,9 +91,13 @@ __all__ = [
     "ReportInputs",
     "agent_evidence",
     "assemble_report",
+    "cost_value",
     "evidence_report",
     "group_direction",
     "group_id",
+    "metric_of",
+    "numeric_value",
+    "plain_decimal",
     "report_inputs",
     "report_spec",
 ]
@@ -867,6 +871,26 @@ def _decimal(f: FinalField) -> Decimal | None:
     except InvalidOperation:
         return None
     return d if d is not None and d.is_finite() else None
+
+
+def numeric_value(f: FinalField) -> Decimal | None:
+    """The finite canonical (else printed) number of a final field, or None."""
+    return _decimal(f)
+
+
+def cost_value(f: FinalField, family: UnitFamily) -> Decimal | None:
+    """A cost field's finite canonical number, or None (as the frontiers read it)."""
+    return _cost_decimal(f, family)
+
+
+def plain_decimal(d: Decimal) -> str:
+    """A decimal in plain notation, as the report prints metrics and costs."""
+    return _plain(d)
+
+
+def metric_of(row: FinalRow, pack: Pack) -> str:
+    """The row's normalised metric as a group key would hold it; "" when absent."""
+    return _metric_of(row, pack)
 
 
 def _cost_decimal(f: FinalField, family: UnitFamily) -> Decimal | None:

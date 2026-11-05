@@ -67,6 +67,11 @@ def final_rows_for(project: Project, work_ids: Collection[str]) -> list[FinalRow
 
 def rows_of_group(project: Project, gid: str) -> list[FinalRow]:
     """Exactly the rows `grouped_rows` puts in group `gid`; unknown id -> field `group_id`."""
+    return key_and_rows(project, gid)[1]
+
+
+def key_and_rows(project: Project, gid: str) -> tuple[GroupKey, list[FinalRow]]:
+    """The key of group `gid` and its rows (see `rows_of_group`)."""
     project.index.sync()
     try:
         _, schema, pack = require_schema(project)
@@ -82,7 +87,7 @@ def rows_of_group(project: Project, gid: str) -> list[FinalRow]:
         raise _unknown(gid)
     key, works = found
     rows = final_rows_restricted(project, works)
-    return group_rows(rows, pack, keys).groups.get(key, [])
+    return key, group_rows(rows, pack, keys).groups.get(key, [])
 
 
 def _unknown(gid: str) -> FactoryValidationError:
@@ -125,4 +130,11 @@ def _candidates(project: Project, keys: list[str], gid: str) -> tuple[GroupKey, 
     return None if found is None else (found, works)
 
 
-__all__ = ["GroupSummary", "final_rows_for", "group_index", "rows_of_group", "summarise"]
+__all__ = [
+    "GroupSummary",
+    "final_rows_for",
+    "group_index",
+    "key_and_rows",
+    "rows_of_group",
+    "summarise",
+]

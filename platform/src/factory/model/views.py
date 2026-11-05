@@ -105,3 +105,38 @@ class CoverageView(StrictModel):
     total_groups: int
     total_methods: int
     total_ideas: int
+
+
+class RecordPoint(StrictModel):
+    """A record row of one group and unit: its trace id (`rk_.../value`), work, year and value."""
+
+    trace_id: str
+    work_id: str
+    row_key: str
+    year: int
+    value: str
+
+
+class UnitTimeline(StrictModel):
+    """The records and per-year frontiers of one value unit (and, when the group key does not fix
+    them, one metric and one input resolution). `frontiers[year][axis]` lists trace ids."""
+
+    unit: str | None
+    metric: str | None
+    resolution: str | None
+    records: list[RecordPoint]
+    frontiers: dict[int, dict[str, list[str]]]
+
+
+class TimelineView(StrictModel):
+    """The timeline of one comparability group; no value crosses groups or units. `direction` is
+    the evidence report's direction status; `units` is empty unless it is `declared` or
+    `pack-default`. `undated` lists the works of rows without a publication date."""
+
+    meta: ViewMeta
+    group_id: str
+    key: list[tuple[str, str]]
+    direction: str
+    higher_is_better: bool | None
+    units: dict[str, UnitTimeline]
+    undated: list[str]

@@ -62,7 +62,7 @@ from factory.services.lineage import (
 )
 from factory.services.references import included_works
 from factory.services.regions import region_withheld
-from factory.services.view_corpus import corpus_among
+from factory.services.view_corpus import corpus_among, years_of
 from factory.services.views import view_meta
 
 ONION_MAX_RING = 3
@@ -306,17 +306,7 @@ def _nodes(
 
 
 def _years(conn: Connection, ids: Sequence[str]) -> dict[str, int]:
-    out: dict[str, int] = {}
-    for start in range(0, len(ids), RING_BATCH):
-        rows = conn.execute(
-            text(
-                "SELECT work_id, substr(json_extract(data, '$.dates.published'), 1, 4) "
-                "FROM works WHERE work_id IN (SELECT value FROM json_each(:w))"
-            ),
-            {"w": json.dumps(list(ids[start : start + RING_BATCH]))},
-        )
-        out.update({str(w): int(y) for w, y in rows if y is not None and str(y).isdigit()})
-    return out
+    return years_of(conn, ids)
 
 
 # --- the regions overlay ---
