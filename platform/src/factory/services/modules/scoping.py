@@ -2,6 +2,7 @@
 
 Declaration only (slice M, decision 55); behaviour stays in the services."""
 
+from factory.model.members import ProjectRole
 from factory.modules.contract import (
     ArtifactKind,
     CheckRule,
@@ -11,6 +12,7 @@ from factory.modules.contract import (
     ModuleKind,
     ModuleSpec,
     PolicyKind,
+    RoleGate,
     StrategySpec,
 )
 from factory.services.modules.base import RuleModule
@@ -68,6 +70,11 @@ SPEC = ModuleSpec(
             PolicyKind.HUMAN,
             ("R-61",),
         ),
+    ),
+    role_gates=(
+        RoleGate("protocol.record", ProjectRole.MAINTAINER),
+        RoleGate("protocol.amend", ProjectRole.MAINTAINER),
+        RoleGate("protocol.deviation", ProjectRole.MAINTAINER),
     ),
     checks=(
         CheckRule("seed-missing", ("warning", "error", "error")),

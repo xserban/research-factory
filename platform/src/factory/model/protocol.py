@@ -16,14 +16,22 @@ from collections.abc import Iterable
 from enum import StrEnum
 from typing import Annotated, Any, Literal, Self
 
-from pydantic import Field, JsonValue, StringConstraints, field_validator, model_validator
+from pydantic import (
+    Field,
+    JsonValue,
+    SerializerFunctionWrapHandler,
+    StringConstraints,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 from factory.canonical import canonical_json
 from factory.imports.model import ImportFormat, ImportRole
 from factory.model.base import StrictModel
 from factory.model.gates import GatePolicies
 from factory.model.hypothesis_plan import HypothesisPlan
-from factory.model.identity import ULID_RE
+from factory.model.identity import REVIEW_REQUEST_ID_RE, ULID_RE
 from factory.model.miners import MinerUse
 from factory.model.question import QUESTION_ID_RE
 from factory.model.search import QueryKind, QuerySpec
@@ -377,12 +385,26 @@ def criterion_ref(protocol_id: str, cid: str) -> str:
 # `factory.index.protocol`. `protocol_id` must be the version hash of `spec`.
 
 
+class ReviewLinked(StrictModel):
+    """A protocol change that may consume an approved review request. The id is left out of the
+    payload when absent, so an event without a request reads and hashes as it always has."""
+
+    review_request_id: str | None = Field(default=None, pattern=REVIEW_REQUEST_ID_RE)
+
+    @model_serializer(mode="wrap")
+    def _omit_absent_review(self, handler: SerializerFunctionWrapHandler) -> dict[str, object]:
+        data: dict[str, object] = handler(self)
+        if self.review_request_id is None:
+            del data["review_request_id"]
+        return data
+
+
 class ProtocolStatus(StrEnum):
     DRAFT = "draft"
     READY = "ready"
 
 
-class ProtocolRecorded(StrictModel):
+class ProtocolRecorded(ReviewLinked):
     protocol_id: str = Field(pattern=PROTOCOL_ID_RE)
     status: ProtocolStatus
     spec: ProtocolSpec
@@ -454,7 +476,7 @@ class StaleRule(StrictModel):
     stage: ScreeningStage
 
 
-class DeviationRecorded(StrictModel):
+class DeviationRecorded(ReviewLinked):
     deviation_id: str = Field(pattern=DEVIATION_ID_RE)
     protocol_id: str = Field(pattern=PROTOCOL_ID_RE)
     description: str = Field(min_length=1)
@@ -479,7 +501,7 @@ class MinerStale(StrictModel):
     rule: ExtractionStale
 
 
-class ProtocolAmended(StrictModel):
+class ProtocolAmended(ReviewLinked):
     """A new version of the current protocol, or a prose-only change when the versions are equal.
 
     `spec` is the amended protocol; `to_version` must be its version hash. `changes` lists the

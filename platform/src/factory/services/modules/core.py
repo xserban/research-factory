@@ -2,12 +2,14 @@
 
 Declaration only (slice M, decision 55); behaviour stays in the services."""
 
+from factory.model.members import ProjectRole
 from factory.modules.contract import (
     ArtifactKind,
     CheckRule,
     EventFamily,
     ModuleKind,
     ModuleSpec,
+    RoleGate,
 )
 from factory.services.modules.base import RuleModule
 
@@ -46,6 +48,10 @@ SPEC = ModuleSpec(
         ),
     ),
     protocol_sections=("gate_policies",),
+    role_gates=(
+        RoleGate("member.grant", ProjectRole.OWNER),
+        RoleGate("budget.set", ProjectRole.OWNER),
+    ),
     checks=(
         CheckRule("broken-link", ("error", "error", "error")),
         CheckRule("missing-provenance", ("error", "error", "error")),

@@ -8,15 +8,21 @@ Invariants:
 - The first decision counts. A requester never approves or rejects their own request, and only
   the requester withdraws one (R-51, plan ruling 4). Compared by user, never by session.
 - An approval needs the protocol the request was filed on to be current still (plan ruling 2).
+- A protocol event that names a review counts only if it consumes that review: approved, of its
+  kind, not consumed, not stale, and carrying the approved proposal. Otherwise, and for a protocol
+  event by someone who may not change the protocol at that point of the log, it changes nothing.
+  `protocol_guards` wraps the handlers of the events that change the protocol, so the protocol's
+  own fold stays as it was.
 - The fold cannot know `Settings.user` or the lab: on an unhosted project with no grant in the log
   every person passes the role guards, as `index/members.py` says of the first grant. So a log
   written before slice 5 replays unchanged.
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from pydantic import JsonValue, ValidationError
+from pydantic import BaseModel, JsonValue, ValidationError
 from sqlalchemy import Column, MetaData, String, Table, insert, select, text, update
 from sqlalchemy.engine import Connection, Row
 
@@ -24,19 +30,29 @@ from factory.clock import format_ts
 from factory.errors import FactoryError
 from factory.events.blobs import BlobStore
 from factory.events.envelope import Actor, Event
-from factory.index.members import MemberTables, holds_here
+from factory.index.members import MemberTables, holds_here, is_hosted_here
 from factory.index.projection import Handler
 from factory.model.members import ProjectRole
-from factory.model.protocol import ProtocolStatus
+from factory.model.protocol import (
+    ChangeKind,
+    DeviationRecorded,
+    ProtocolAmended,
+    ProtocolRecorded,
+    ProtocolStatus,
+)
 from factory.model.reviews import (
     PROPOSAL_MODELS,
+    DeviationProposal,
     Proposal,
+    ProtocolAmendProposal,
+    ProtocolRecordProposal,
     ReviewDecided,
     ReviewKind,
     ReviewRequested,
 )
 
 _CONTRIBUTORS = frozenset({ProjectRole.OWNER, ProjectRole.MAINTAINER, ProjectRole.CONTRIBUTOR})
+_DECIDERS = frozenset({ProjectRole.OWNER, ProjectRole.MAINTAINER})
 
 
 @dataclass(frozen=True)
@@ -218,4 +234,136 @@ def review_handlers(
     return {
         "review.requested": _requested(tables, members, blobs),
         "review.decided": _decided(tables, members),
+    }
+
+
+# --- Consumption ---------------------------------------------------------------------------------
+
+
+def _amend_matches(payload: BaseModel, proposal: Proposal) -> bool:
+    if not isinstance(payload, ProtocolAmended) or not isinstance(proposal, ProtocolAmendProposal):
+        return False
+    effects = {c.cid: c.effect for c in payload.changes if c.change is ChangeKind.CHANGED}
+    return (
+        payload.spec == proposal.spec
+        and payload.reason == proposal.reason.strip()
+        and payload.semantic == proposal.semantic
+        and effects == proposal.effects
+    )
+
+
+def _record_matches(payload: BaseModel, proposal: Proposal) -> bool:
+    if not isinstance(payload, ProtocolRecorded) or not isinstance(
+        proposal, ProtocolRecordProposal
+    ):
+        return False
+    status = ProtocolStatus.READY if proposal.ready else ProtocolStatus.DRAFT
+    return payload.spec == proposal.spec and payload.status is status
+
+
+def _deviation_matches(payload: BaseModel, proposal: Proposal) -> bool:
+    if not isinstance(payload, DeviationRecorded) or not isinstance(proposal, DeviationProposal):
+        return False
+    return (
+        payload.description == proposal.description
+        and payload.reason == proposal.reason
+        and payload.affects == proposal.affects
+    )
+
+
+_MATCHERS = {
+    ReviewKind.PROTOCOL_AMEND: _amend_matches,
+    ReviewKind.PROTOCOL_RECORD: _record_matches,
+    ReviewKind.DEVIATION: _deviation_matches,
+}
+
+
+def _consumable(
+    conn: Connection,
+    t: ReviewTables,
+    blobs: BlobStore | None,
+    kind: ReviewKind,
+    review_request_id: str,
+    payload: BaseModel,
+) -> bool:
+    row = review_row(conn, t, review_request_id)
+    if row is None or row.kind != kind.value or row.decision != "approve":
+        return False
+    if row.consumed_event is not None or row.target_version != current_version(conn):
+        return False
+    proposal = _proposal(blobs, kind, str(row.proposal_blob))
+    return proposal is not None and _MATCHERS[kind](payload, proposal)
+
+
+def _may_change_protocol(conn: Connection, members: MemberTables, actor: Actor) -> bool:
+    """A person or agent holding the role here. On a hosted project an agent proposes only."""
+    if actor.kind != "human" and is_hosted_here(conn):
+        return False
+    return holds_here(conn, members, actor.user, _DECIDERS)
+
+
+def _guarded(
+    t: ReviewTables,
+    members: MemberTables,
+    blobs: BlobStore | None,
+    kind: ReviewKind,
+    model: type[ProtocolAmended | ProtocolRecorded | DeviationRecorded],
+    handler: Handler,
+) -> Handler:
+    def fold(conn: Connection, event: Event) -> None:
+        try:
+            payload = model.model_validate(event.payload)
+        except ValidationError:
+            return
+        if not _may_change_protocol(conn, members, event.actor):
+            return
+        request = payload.review_request_id
+        if request is None:
+            handler(conn, event)
+            return
+        if not _consumable(conn, t, blobs, kind, request, payload):
+            return
+        handler(conn, event)
+        conn.execute(
+            update(t.reviews)
+            .where(t.reviews.c.review_request_id == request)
+            .values(consumed_event=event.id)
+        )
+
+    return fold
+
+
+def protocol_guards(
+    t: ReviewTables,
+    members: MemberTables,
+    blobs: BlobStore | None,
+    handlers: Mapping[str, Handler],
+) -> dict[str, Handler]:
+    """The handlers of the three events that change the protocol, behind the guards above. Applied
+    last, so a refused event reaches nothing that is chained after the protocol's own fold."""
+    return {
+        "protocol.recorded": _guarded(
+            t,
+            members,
+            blobs,
+            ReviewKind.PROTOCOL_RECORD,
+            ProtocolRecorded,
+            handlers["protocol.recorded"],
+        ),
+        "protocol.amended": _guarded(
+            t,
+            members,
+            blobs,
+            ReviewKind.PROTOCOL_AMEND,
+            ProtocolAmended,
+            handlers["protocol.amended"],
+        ),
+        "protocol.deviation_recorded": _guarded(
+            t,
+            members,
+            blobs,
+            ReviewKind.DEVIATION,
+            DeviationRecorded,
+            handlers["protocol.deviation_recorded"],
+        ),
     }

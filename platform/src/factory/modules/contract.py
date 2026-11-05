@@ -19,6 +19,8 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import TYPE_CHECKING, Literal, Protocol
 
+from factory.model.members import ProjectRole
+
 if TYPE_CHECKING:
     from factory.services.context import Project
 
@@ -96,13 +98,28 @@ class GatePolicy:
 
 @dataclass(frozen=True)
 class GateSpec:
-    """A gate named `<namespace>.<act>`; the namespace need not be a module name."""
+    """A gate named `<namespace>.<act>`; the namespace need not be a module name.
+
+    `required_role` is the project role of a person who passes it (slice 5, reconciliation item
+    1). It binds people: the gate policy says when an agent may pass."""
 
     gate_id: str
     kind: GateKind
     act_events: tuple[str, ...]
     floor: PolicyKind
     rigour: tuple[str, ...]
+    required_role: ProjectRole = ProjectRole.MAINTAINER
+
+
+@dataclass(frozen=True)
+class RoleGate:
+    """A team gate with a role and no autonomy policy (slice 5, reconciliation item 1). Protocol
+    change, membership, visibility and budgets are not slice-M decision gates: agents write some of
+    them on an unhosted project and a policy over them would add findings to old logs, so they stay
+    out of `gates()` and only `TEAM_GATES` reads them."""
+
+    gate_id: str
+    required_role: ProjectRole
 
 
 @dataclass(frozen=True)
@@ -159,6 +176,7 @@ class ModuleSpec:
     task_kinds: tuple[str, ...] = ()
     protocol_sections: tuple[str, ...] = ()
     gates: tuple[GateSpec, ...] = ()
+    role_gates: tuple[RoleGate, ...] = ()
     regime: QualityRegime | None = None
     checks: tuple[CheckRule, ...] = ()
     strategies: tuple[StrategySpec, ...] = ()

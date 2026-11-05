@@ -45,6 +45,7 @@ from factory.modules.contract import (
 from factory.modules.presets import Enforcement, enforcement, preset
 from factory.quality.stats import audit_size, draw_uniform
 from factory.services import audit_core, passes
+from factory.services.access import gate_role_issues
 from factory.services.context import Project
 
 _LIVE_DECISIONS = {
@@ -173,11 +174,12 @@ def gate_issues(
 ) -> list[ValidationIssue]:
     """Why `actor` may not pass `gate_id` now; empty when the policy permits.
 
-    An agent is refused (field `actor`) at a `human` gate; the proposer's own session is refused
-    (field `session`); a human act relayed over MCP (`channel`) from a session in a pass is
-    refused (field `channel`). `agent_text` replaces the generic text of the actor refusal."""
+    An agent is refused (field `actor`) at a `human` gate; a person without the gate's role is
+    refused (field `permission`); the proposer's own session is refused (field `session`); a human
+    act relayed over MCP (`channel`) from a session in a pass is refused (field `channel`).
+    `agent_text` replaces the generic text of the actor refusal."""
     policy = effective_policy(project, gate_id)
-    issues: list[ValidationIssue] = []
+    issues = gate_role_issues(project, actor, gate_id)
     if actor.kind != "human" and policy.kind is PolicyKind.HUMAN:
         issues.append(
             ValidationIssue(

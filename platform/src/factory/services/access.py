@@ -15,8 +15,9 @@ Invariants:
   the process is the user, so a service's role check passes (stage 0, acceptance 1).
 """
 
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from enum import StrEnum
+from functools import cache
 
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor, ActorKind
@@ -370,6 +371,31 @@ TOOL_PERMISSIONS: Mapping[str, Permission] = {
 tool the server refuses to start with."""
 
 
+@cache
+def _team_gates() -> dict[str, ProjectRole]:
+    from factory.services.modules.default import default_modules  # the registry imports services
+
+    return default_modules().team_gates()
+
+
+class _TeamGates(Mapping[str, ProjectRole]):
+    """Read from the registry on first use, because the registry imports services."""
+
+    def __getitem__(self, gate_id: str) -> ProjectRole:
+        return _team_gates()[gate_id]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(_team_gates())
+
+    def __len__(self) -> int:
+        return len(_team_gates())
+
+
+TEAM_GATES: Mapping[str, ProjectRole] = _TeamGates()
+"""The project role each gate needs, computed from the module registry (slice 5, reconciliation
+item 1): `GateSpec.required_role` of every decision gate, and every `RoleGate`."""
+
+
 def _holds(
     project: Project | None,
     principal: Principal,
@@ -422,6 +448,27 @@ def authorize(
     is the `TOOL_PERMISSIONS` key of the call, which the per-tool wrapper passes."""
     if not _holds(project, principal, actor_kind, permission, lab, tool):
         raise FactoryValidationError([ValidationIssue("permission", f"{permission} not held")])
+
+
+def authorize_command(project: Project, principal: Principal, tool: str) -> None:
+    """Authorise a command by its `TOOL_PERMISSIONS` row, as a person (ruling 10). Every gate's
+    command has a row whose permission only the gate's role holds. A command with no row reads, and
+    on a project no role binds yet every command runs, as it always has (acceptance 1)."""
+    permission = TOOL_PERMISSIONS.get(tool)
+    if permission is None or not governed(project):
+        return
+    authorize(project, principal, "human", permission, lab=lab_of(project))
+
+
+def gate_role_issues(project: Project, actor: Actor, gate_id: str) -> list[ValidationIssue]:
+    """Why a person may not pass `gate_id`: they lack its role. Only a person: the gate policy says
+    when an agent may pass, and an agent holds no more than its principal's permissions."""
+    if actor.kind != "human" or not governed(project):
+        return []
+    required = TEAM_GATES.get(gate_id, ProjectRole.MAINTAINER)
+    if role_suffices(roles_of(project, actor.user), required):
+        return []
+    return [ValidationIssue("permission", f"gate {gate_id} needs {required.value}")]
 
 
 def full_view_allowed(project: Project, principal: Principal) -> bool:

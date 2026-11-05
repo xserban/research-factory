@@ -40,7 +40,7 @@ from factory.index.protocol import protocol_handlers, protocol_tables
 from factory.index.question import question_handlers, question_tables
 from factory.index.references import reference_handlers, reference_tables
 from factory.index.regions import region_handlers, region_tables
-from factory.index.reviews import review_handlers, review_tables
+from factory.index.reviews import protocol_guards, review_handlers, review_tables
 from factory.index.screening import screening_handlers, screening_tables
 from factory.index.search import search_handlers, search_tables
 from factory.index.seeds import seed_handlers, seed_tables
@@ -153,4 +153,6 @@ def default_projection(blobs: BlobStore | None = None) -> Projection:
     handlers["search.run_started"] = chain(
         handlers["search.run_started"], run_started_handler(watch)
     )
+    # Last: an event the guards refuse reaches nothing chained after the protocol's own fold.
+    handlers.update(protocol_guards(reviews, members, blobs, handlers))
     return Projection(version=PROJECTION_VERSION, metadata=metadata, handlers=handlers)

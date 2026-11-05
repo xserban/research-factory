@@ -14,8 +14,11 @@ Invariants:
 - A refusal writes nothing. The fold repeats each guard, for a hand-written event.
 """
 
+from collections.abc import Mapping
+
 from pydantic import JsonValue, ValidationError
 
+from factory.canonical import canonical_json
 from factory.errors import FactoryError, FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
 from factory.index.reviews import (
@@ -31,6 +34,7 @@ from factory.model.members import ProjectRole
 from factory.model.protocol import ProtocolStatus
 from factory.model.reviews import (
     PROPOSAL_MODELS,
+    REVIEW_GATES,
     Proposal,
     ReviewDecided,
     ReviewDecision,
@@ -40,7 +44,14 @@ from factory.model.reviews import (
 )
 from factory.model.screening import Channel
 from factory.services import passes
-from factory.services.access import Permission, governed, require_actor, role_suffices
+from factory.services.access import (
+    TEAM_GATES,
+    Permission,
+    actor_holds,
+    governed,
+    require_actor,
+    role_suffices,
+)
 from factory.services.context import Project
 from factory.services.lab import payload_of, refuse
 from factory.services.members import roles_of
@@ -175,7 +186,7 @@ def request_review(
             target=target,
             target_version=version,
             proposal_blob=blob,
-            required_role=ProjectRole.MAINTAINER,
+            required_role=TEAM_GATES[REVIEW_GATES[kind]],
             reason=reason,
         )
         refs = (review_request_id,) if version is None else (review_request_id, version)
@@ -240,3 +251,41 @@ def decide_review(
         project.record(
             [project.events.make("review.decided", payload, actor, refs=(review_request_id,))]
         )
+
+
+def _agrees(project: Project, view: ReviewView, call: Mapping[str, JsonValue]) -> bool:
+    """Whether the call's arguments are the approved proposal, as canonical JSON."""
+    try:
+        filed = project.blobs.get_json(view.proposal_blob)
+    except FactoryError:
+        return False
+    return canonical_json(filed) == canonical_json(dict(call))
+
+
+def require_protocol_change(
+    project: Project,
+    actor: Actor,
+    kind: ReviewKind,
+    review_request_id: str | None,
+    call: Mapping[str, JsonValue],
+) -> None:
+    """Refuse a protocol change `actor` may not make. Called under the write lock.
+
+    Without a request the actor holds `protocol:change`. With one, the request is approved, of
+    this kind, not stale, not consumed, and `call` is its proposal, and the actor still holds the
+    gate's role: the approver or another holder, who may not be an agent on a hosted project."""
+    if review_request_id is None:
+        if not actor_holds(project, actor, Permission.PROTOCOL_CHANGE):
+            raise refuse("permission", "protocol:change not held; file a review request")
+        return
+    view = review(project, review_request_id)
+    if view.kind is not kind:
+        raise refuse("review_request_id", f"this request is for {view.kind.value}")
+    if view.state is not ReviewState.APPROVED:
+        raise refuse("review_request_id", f"the request is {view.state.value}, not approved")
+    if not _agrees(project, view, call):
+        raise refuse("review_request_id", "the call differs from the approved proposal")
+    if not actor_holds(project, actor, Permission.PROTOCOL_CHANGE):
+        raise refuse("permission", "protocol:change not held")
+    if governed(project) and not role_suffices(roles_of(project, actor.user), view.required_role):
+        raise refuse("permission", f"needs {view.required_role.value}")

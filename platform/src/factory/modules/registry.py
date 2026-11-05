@@ -16,6 +16,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
+from factory.model.members import ProjectRole
 from factory.model.screening import PassLabel
 from factory.modules.contract import GateSpec, Levels, StageModule
 
@@ -60,7 +61,16 @@ class ModuleRegistry:
         )
         self._gates_owner = self._own(
             "gate id",
-            ((m.spec.name, tuple(g.gate_id for g in m.spec.gates)) for m in self._modules),
+            (
+                (
+                    m.spec.name,
+                    (
+                        *(g.gate_id for g in m.spec.gates),
+                        *(g.gate_id for g in m.spec.role_gates),
+                    ),
+                )
+                for m in self._modules
+            ),
             problems,
         )
         names = [m.spec.name for m in self._modules]
@@ -130,6 +140,14 @@ class ModuleRegistry:
 
     def gates(self) -> tuple[GateSpec, ...]:
         return tuple(self._gates.values())
+
+    def team_gates(self) -> dict[str, ProjectRole]:
+        """The project role each gate needs: every decision gate of every module, and the role
+        gates (slice 5, reconciliation item 1)."""
+        table = {gate.gate_id: gate.required_role for gate in self._gates.values()}
+        for module in self._modules:
+            table.update({g.gate_id: g.required_role for g in module.spec.role_gates})
+        return table
 
     def read_miners(self) -> frozenset[tuple[str, int]]:
         """Every registered `(miner, version)` some builder declares it reads."""

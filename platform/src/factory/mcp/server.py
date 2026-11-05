@@ -571,15 +571,19 @@ def build_server(
         model: str,
         skill: str,
         ready: bool = False,
+        review_request_id: str | None = None,
     ) -> dict[str, JsonValue]:
         """Record the protocol as a draft, or as ready when `ready` is true. Gaps are returned
-        whether or not the protocol was written. A ready protocol changes only by protocol_amend."""
+        whether or not the protocol was written. A ready protocol changes only by protocol_amend.
+        `review_request_id` consumes an approved request whose proposal is this call."""
 
         def record() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
             actor = make_agent_actor(settings, session, role, model, skill)
             parsed = parse_input(ProtocolSpec, spec, "spec")
-            result = protocol_service.record_protocol(opened, actor, parsed, ready=ready)
+            result = protocol_service.record_protocol(
+                opened, actor, parsed, ready=ready, review_request_id=review_request_id
+            )
             data = result.model_dump(mode="json")
             data["gaps"] = [
                 {"field": spec_path(gap.field), "reason": gap.reason} for gap in result.gaps
@@ -621,9 +625,11 @@ def build_server(
         role: str,
         model: str,
         skill: str,
+        review_request_id: str | None = None,
     ) -> dict[str, JsonValue]:
         """Amend the ready protocol. `effects` names each changed criterion as loosened,
-        tightened or clarified; `semantic` is false only for prose and clarifications."""
+        tightened or clarified; `semantic` is false only for prose and clarifications.
+        `review_request_id` consumes an approved request whose proposal is this call."""
 
         def amend() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
@@ -631,7 +637,13 @@ def build_server(
             parsed = parse_input(ProtocolSpec, spec, "spec")
             declared = _effects(effects)
             result = protocol_service.amend_protocol(
-                opened, actor, parsed, reason=reason, semantic=semantic, effects=declared
+                opened,
+                actor,
+                parsed,
+                reason=reason,
+                semantic=semantic,
+                effects=declared,
+                review_request_id=review_request_id,
             )
             return _withheld(opened, result.model_dump(mode="json"))
 
@@ -836,15 +848,22 @@ def build_server(
         model: str,
         skill: str,
         affects: list[str] | None = None,
+        review_request_id: str | None = None,
     ) -> dict[str, JsonValue]:
         """Record a deviation from the current protocol. A search the protocol does not plan
-        needs the returned `deviation_id`."""
+        needs the returned `deviation_id`. `review_request_id` consumes an approved request whose
+        proposal is this call."""
 
         def deviate() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
             actor = make_agent_actor(settings, session, role, model, skill)
             deviation_id = protocol_service.record_deviation(
-                opened, actor, description=description, reason=reason, affects=affects or ()
+                opened,
+                actor,
+                description=description,
+                reason=reason,
+                affects=affects or (),
+                review_request_id=review_request_id,
             )
             return {"deviation_id": deviation_id}
 

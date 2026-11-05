@@ -50,6 +50,7 @@ from factory.model.protocol import (
     protocol_version,
     search_strategy_hash,
 )
+from factory.model.reviews import ReviewKind
 from factory.model.search import QueryKind, QueryPurpose, QuerySpec
 from factory.model.watch import CycleStatus
 from factory.modules.presets import Enforcement, enforcement
@@ -63,6 +64,7 @@ from factory.services.protocol_rules import (
     stale_rules,
 )
 from factory.services.question import current_question, get_question
+from factory.services.reviews import require_protocol_change
 from factory.services.seeds import all_seeds
 from factory.sources.registry import default_sources, window_filter_sources
 
@@ -183,11 +185,25 @@ def miner_stale(project: Project, old: ProtocolSpec, new: ProtocolSpec) -> tuple
 
 
 def record_protocol(
-    project: Project, actor: Actor, spec: ProtocolSpec, *, ready: bool
+    project: Project,
+    actor: Actor,
+    spec: ProtocolSpec,
+    *,
+    ready: bool,
+    review_request_id: str | None = None,
 ) -> ProtocolResult:
-    """Record the protocol as a draft or as ready. Writes nothing if the spec does not fit."""
+    """Record the protocol as a draft or as ready. Writes nothing if the spec does not fit.
+
+    `review_request_id` consumes an approved request whose proposal is this call."""
     with project.index.exclusive():
         project.index.sync()
+        require_protocol_change(
+            project,
+            actor,
+            ReviewKind.PROTOCOL_RECORD,
+            review_request_id,
+            {"spec": spec.model_dump(mode="json"), "ready": ready},
+        )
         question = current_question(project)
         if question is None:
             raise FactoryValidationError(
@@ -230,7 +246,12 @@ def record_protocol(
         if ready and check.gaps:
             raise FactoryValidationError(check.gaps)
 
-        payload = ProtocolRecorded(protocol_id=protocol_id, status=status, spec=spec)
+        payload = ProtocolRecorded(
+            protocol_id=protocol_id,
+            status=status,
+            spec=spec,
+            review_request_id=review_request_id,
+        )
         input_blob = (
             project.blobs.put_json({"spec": spec.model_dump(mode="json"), "status": status.value})
             if actor.kind == "agent"
@@ -304,17 +325,31 @@ def amend_protocol(
     reason: str,
     semantic: bool,
     effects: Mapping[str, CriterionEffect],
+    review_request_id: str | None = None,
 ) -> AmendResult:
     """Record the current ready protocol as amended to `spec`, or refuse and write nothing.
 
     `effects` must name exactly the changed criteria. `semantic` must be false if and only if
     nothing but clarifications and prose changed. The amended protocol must stay ready, so
-    errors and gaps both refuse it. `spec.question_id` must be the current question."""
+    errors and gaps both refuse it. `spec.question_id` must be the current question.
+    `review_request_id` consumes an approved request whose proposal is this call."""
     issues: list[ValidationIssue] = []
     if not reason.strip():
         issues.append(ValidationIssue("reason", "must not be empty"))
     with project.index.exclusive():
         project.index.sync()
+        require_protocol_change(
+            project,
+            actor,
+            ReviewKind.PROTOCOL_AMEND,
+            review_request_id,
+            {
+                "spec": spec.model_dump(mode="json"),
+                "reason": reason,
+                "semantic": semantic,
+                "effects": {cid: effect.value for cid, effect in effects.items()},
+            },
+        )
         current = current_protocol(project)
         question = current_question(project)
         if current is None or current.status is not ProtocolStatus.READY:
@@ -408,6 +443,7 @@ def amend_protocol(
                 current.spec.contribution_schema, spec.contribution_schema
             ),
             miner_stale=miner_stale(project, current.spec, spec),
+            review_request_id=review_request_id,
         )
         input_blob = (
             project.blobs.put_json(
@@ -678,8 +714,10 @@ def record_deviation(
     description: str,
     reason: str,
     affects: Sequence[str] = (),
+    review_request_id: str | None = None,
 ) -> str:
-    """Record a deviation from the current protocol, and return its id."""
+    """Record a deviation from the current protocol, and return its id. `review_request_id`
+    consumes an approved request whose proposal is this call."""
     issues: list[ValidationIssue] = []
     if not description.strip():
         issues.append(ValidationIssue("description", "must not be empty"))
@@ -687,6 +725,13 @@ def record_deviation(
         issues.append(ValidationIssue("reason", "must not be empty"))
     with project.index.exclusive():
         project.index.sync()
+        require_protocol_change(
+            project,
+            actor,
+            ReviewKind.DEVIATION,
+            review_request_id,
+            {"description": description, "reason": reason, "affects": list(affects)},
+        )
         current = current_protocol(project)
         if current is None:
             issues.append(ValidationIssue("protocol", "record a protocol before a deviation"))
@@ -699,6 +744,7 @@ def record_deviation(
             description=description,
             reason=reason,
             affects=tuple(affects),
+            review_request_id=review_request_id,
         )
         input_blob = (
             project.blobs.put_json(

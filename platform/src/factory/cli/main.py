@@ -142,6 +142,7 @@ from factory.services import view_coverage as view_coverage_service
 from factory.services import views as views_service
 from factory.services import watch as watch_service
 from factory.services import xruns as xruns_service
+from factory.services.access import authorize_command
 from factory.services.access_log import admin_call, audited, os_login
 from factory.services.commit import commit_hosted
 from factory.services.context import Principal, Project, list_projects, open_project
@@ -497,12 +498,20 @@ class CliState:
     session: str
     clock: Clock
     as_user: str | None = None
+    tool: str = ""
+    """The running command as `TOOL_PERMISSIONS` names it, as `cli:<group> <command>`."""
 
 
 def _state(ctx: typer.Context) -> CliState:
     state = ctx.obj
     if not isinstance(state, CliState):
         raise RuntimeError("CLI state missing; the root callback did not run")
+    names: list[str] = []
+    current: Any = ctx
+    while current.parent is not None:
+        names.append(str(current.info_name))
+        current = current.parent
+    state.tool = "cli:" + " ".join(reversed(names))
     return state
 
 
@@ -524,7 +533,29 @@ def _reporting_errors() -> Iterator[None]:
         _fail(str(exc), 1)
 
 
+def _authorized(state: CliState, project: Project) -> Project:
+    """`project`, once the running command is allowed on it (slice 5 ruling 10)."""
+    with (
+        _reporting_errors(),
+        audited(
+            state.settings,
+            project.principal,
+            session=state.session,
+            clock=state.clock,
+            tool=state.tool,
+            project=project.paths.slug,
+        ),
+    ):
+        authorize_command(project, project.principal, state.tool)
+    return project
+
+
 def _resolve_project(state: CliState) -> Project:
+    """The project of this command, authorised."""
+    return _authorized(state, _selected_project(state))
+
+
+def _selected_project(state: CliState) -> Project:
     """Open the `--project` slug, or the only project under the root. Ambiguity is exit 2."""
     if state.project is not None:
         try:
@@ -2865,6 +2896,7 @@ def _watch_one(
     """Run, or preview, one project's cycle. Returns its exit code, JSON and text lines."""
     try:
         project = open_project(state.settings, slug, session=state.session, clock=state.clock)
+        authorize_command(project, project.principal, state.tool)
         status = watch_service.watch_status(project)
         if not status.has_plan and skip_unplanned:
             return 0, {"project": slug, "result": "no watch_plan"}, [f"{slug}: no watch_plan"]
@@ -2937,7 +2969,8 @@ def watch_run_cmd(
 def _watch_target(state: CliState, project: str | None) -> Project:
     if project is None:
         return _resolve_project(state)
-    return open_project(state.settings, project, session=state.session, clock=state.clock)
+    opened = open_project(state.settings, project, session=state.session, clock=state.clock)
+    return _authorized(state, opened)
 
 
 @notices_app.command("list")
@@ -3187,7 +3220,10 @@ def digest_cmd(
         _fail("--format both needs --out", 2)
     with _reporting_errors():
         opened = [
-            open_project(state.settings, slug, session=state.session, clock=state.clock)
+            _authorized(
+                state,
+                open_project(state.settings, slug, session=state.session, clock=state.clock),
+            )
             for slug in slugs
         ]
         if not opened:
