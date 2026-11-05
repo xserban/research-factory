@@ -48,6 +48,7 @@ from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
 from factory.model.base import StrictModel
 from factory.model.lineage import EdgeType
+from factory.model.project import RigorMode
 from factory.model.regions import (
     PROPOSAL_NOTE_MAX_CHARS,
     REGION_DEFINITION_MAX_CHARS,
@@ -72,7 +73,9 @@ from factory.regions.rules import (
     RegionRule,
     RuleSet,
     RunRule,
+    TermRule,
 )
+from factory.regions.term_use import term_has_import_tags
 from factory.regions.version import (
     canonical_rules,
     compress,
@@ -81,6 +84,7 @@ from factory.regions.version import (
     region_version,
     rules_hash,
 )
+from factory.services.consolidation_due import consolidation_due
 from factory.services.context import Project
 from factory.services.conversions import conversion_manifest, conversion_of, conversion_work
 from factory.services.document_read import promoted_works
@@ -88,6 +92,7 @@ from factory.services.fulltext import document_superseded
 from factory.services.gates import gate_issues
 from factory.services.lineage import index_neighbours
 from factory.services.question import current_question, get_question
+from factory.services.seeds import _rigor_mode as rigor_mode
 
 ReviewState = Literal["unreviewed", "reviewed", "wrong", "superseded"]
 
@@ -236,6 +241,8 @@ def _reaches_all(project: Project, rules: RuleSet, seen: set[str]) -> bool:
             return True
         if isinstance(rule, RunRule) and _purpose_of(project, rule) in _BARRED_PURPOSES:
             return True
+        if isinstance(rule, TermRule) and _term_from_import_tags(project, rule):
+            return True
         version = (
             rule.version
             if isinstance(rule, RegionRule)
@@ -252,6 +259,13 @@ def _reaches_all(project: Project, rules: RuleSet, seen: set[str]) -> bool:
         if nested is not None and _reaches_all(project, nested, seen):
             return True
     return False
+
+
+def _term_from_import_tags(project: Project, rule: TermRule) -> bool:
+    """Whether any live application of the term came from an import's tags: such tags may sit on
+    a record of the import's held-out part, so an agent may not select by the term."""
+    with project.index.connect() as conn:
+        return term_has_import_tags(conn, rule.term_id)
 
 
 def _purpose_of(project: Project, rule: RunRule) -> str | None:
@@ -290,6 +304,8 @@ def _rule_issues(project: Project, actor: Actor, rules: RuleSet) -> list[Validat
             issues.append(ValidationIssue(field, _HELD_OUT_REASON))
         elif isinstance(rule, RunRule) and _purpose_of(project, rule) in _BARRED_PURPOSES:
             issues.append(ValidationIssue(field, "agents may not select by this query purpose"))
+        elif isinstance(rule, TermRule) and _term_from_import_tags(project, rule):
+            issues.append(ValidationIssue(field, _HELD_OUT_REASON))
     return issues
 
 
@@ -754,6 +770,12 @@ def snapshot_region(project: Project, actor: Actor, region_id: str) -> str:
             raise _refuse(ValidationIssue("region_id", "region-unknown"))
         if actor.kind == "agent":
             require_agent_visible(project, region_id=region_id)
+        if (
+            any(isinstance(r, TermRule) for r in _rules_of_set(_rules_of(row)))
+            and rigor_mode(project) is RigorMode.SYSTEMATIC
+            and consolidation_due(project).due
+        ):
+            raise _refuse(ValidationIssue("rules", "consolidation-due"))
         result, decision_ids = _evaluate(project, region_id, row)
         rules = _rules_of(row)
         text_bytes = members_text(result.members)

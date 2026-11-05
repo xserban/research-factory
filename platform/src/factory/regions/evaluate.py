@@ -50,6 +50,7 @@ from factory.regions.rules import (
     TermRule,
     TextRule,
 )
+from factory.regions.term_use import term_row, term_targets
 from factory.services.agreement import Outcome, final_outcomes
 from factory.services.context import Project
 from factory.services.ideas import _EFFECTIVE_MEMBERS
@@ -369,7 +370,16 @@ def _concept(ev: _Eval, rule: ConceptRule, target: str, field: str) -> None:
 
 
 def _term(ev: _Eval, rule: TermRule, target: str, field: str) -> None:
-    raise _refuse(field, "term-rules-unavailable")
+    """Targets with a stated or confirmed application of the term; inferred ones never select
+    (R-91). A retired or unknown term refuses."""
+    row = term_row(ev.conn, rule.term_id)
+    if row is None:
+        raise _refuse(f"{field}.term_id", "term-unknown")
+    if row.retired:
+        raise _refuse(f"{field}.term_id", "term-retired")
+    ev.add_members(
+        target, [(MemberType(kind), member) for kind, member in term_targets(ev.conn, rule.term_id)]
+    )
 
 
 def _region(ev: _Eval, rule: RegionRule, target: str, field: str) -> None:

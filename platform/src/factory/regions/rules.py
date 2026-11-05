@@ -89,7 +89,7 @@ class ConceptRule(StrictModel):
 
 
 class TermRule(StrictModel):
-    """Accepted by the model; evaluation refuses it until Regions-C."""
+    """Targets with a stated or confirmed application of a promoted term (slice 3d, Regions-C)."""
 
     kind: Literal["term"] = "term"
     term_id: str

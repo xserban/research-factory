@@ -245,11 +245,11 @@ def test_basis_lists_rule_indices(region_project: RWorld) -> None:
     assert ev.basis[(W, a)] == (0,)
 
 
-def test_term_rule_refused_until_regions_c(region_project: RWorld) -> None:
+def test_term_rule_unknown_term_refused(region_project: RWorld) -> None:
     with pytest.raises(FactoryValidationError) as caught:
         run(region_project, RuleSet(include=(TermRule(term_id="trm_x"),)))
-    assert caught.value.issues[0].field == "rules.include[0]"
-    assert caught.value.issues[0].reason == "term-rules-unavailable"
+    assert caught.value.issues[0].field == "rules.include[0].term_id"
+    assert caught.value.issues[0].reason == "term-unknown"
 
 
 def test_no_seed_tables_read(region_project: RWorld, monkeypatch: pytest.MonkeyPatch) -> None:
