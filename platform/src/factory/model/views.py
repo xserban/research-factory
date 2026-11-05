@@ -213,15 +213,19 @@ class ProtocolBrief(StrictModel):
 
 
 class GateBrief(StrictModel):
-    """Section 3: one gate of one scope (stage, pass, audit scope). `passed` never reads an audit's
-    result: an audit gate is passed when its sample is fully labelled, and whether the rate is
-    above its ceiling is a figure, so `passed` is what an agent may read whatever the labels say.
-    `figures` holds the rates, kappa and ceilings; it is empty in the agent view."""
+    """Section 3: one gate of one scope (stage, pass, audit scope). An audit gate is passed when
+    its sample is fully labelled and its rate is not above a ceiling enforced in this mode
+    (decision 37 item 4); `labelled_complete` is the first half alone, and is None for other
+    gates. In the agent view an extraction, contribution or gate audit has `passed` None and
+    keeps only `labelled_complete`, which reads no label (decision 52). `passed` is None too for a
+    calibration no threshold requires. `figures` holds the rates, kappa and ceilings; it is empty
+    in the agent view."""
 
     gate: str
     scope: str | None
-    passed: bool
+    passed: bool | None
     date: str | None
+    labelled_complete: bool | None = None
     figures: dict[str, JsonValue] = Field(default_factory=dict)
 
 

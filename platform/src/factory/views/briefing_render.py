@@ -90,9 +90,16 @@ def _protocol(b: Briefing) -> str:
     return "\n\n".join(lines)
 
 
+def _state(g: GateBrief) -> str:
+    if g.passed is None:
+        return "labelled-complete" if g.labelled_complete else "labels outstanding"
+    state = "passed" if g.passed else "not passed"
+    return f"{state}, above ceiling" if g.figures.get("above_ceiling") is True else state
+
+
 def _gate(g: GateBrief) -> str:
     scope = "" if g.scope is None else f" ({g.scope})"
-    state = "passed" if g.passed else "not passed"
+    state = _state(g)
     day = "" if g.date is None else f", {g.date}"
     figures = "" if not g.figures else f": {json.dumps(g.figures, sort_keys=True)}"
     return f"- {g.gate}{scope}: {state}{day}{figures}"
@@ -100,7 +107,10 @@ def _gate(g: GateBrief) -> str:
 
 def _gates(b: Briefing) -> str:
     body = "\n".join(_gate(g) for g in b.gates) or _NONE
-    note = "An audit is passed when its sample is fully labelled; its rate is in its figures."
+    note = (
+        "An audit is passed when its sample is fully labelled and its rate is not above a ceiling "
+        "enforced in this rigour mode."
+    )
     return f"## Gates\n\n{body}\n\n{note}"
 
 

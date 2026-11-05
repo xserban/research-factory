@@ -24,8 +24,10 @@ Invariants of the agent form (plan rulings 2 and 3; spec ruling 24):
 - Each source is read in its agent variant: `agent_check` and `sentence_status(agent=True)`. The
   pack takes no figure from `methods_report` or `evidence_report`, so `agent_methods` and
   `agent_evidence` have nothing to remove from it: what those filters guard (rates, kappa, recall,
-  ceilings) sits only in `GateBrief.figures`, which the agent form empties. `passed` reads no
-  audit result, so the ceiling flag an agent may not read (decision 52) does not reach it.
+  ceilings) sits only in `GateBrief.figures`, which the agent form empties. The researcher's
+  `passed` of an audit reads the enforced ceiling, so an extraction, contribution or gate audit
+  shows an agent only the rate-blind `labelled_complete` (decision 52). A screening audit keeps
+  `passed`: `agent_check` already gives an agent that flag as `audit-error-high`.
 - Section 8 is counts only. An audit kind counts audits, not items: the size of a sample and the
   labels on it are withheld from agents (decision 37 item 14, `GateStatusRow.agent_view`).
 - Before a screening pass has opened the sections that name works or read like the views (5, 6 and
@@ -262,6 +264,7 @@ def _at_log_position(project: Project) -> Project:
     return dataclasses.replace(project, clock=FixedClock(parse_ts(str(ts))))
 
 
+_CEILING_WITHHELD = frozenset({"extraction-audit", "gate-audit"})
 _WORK_SECTION_NOTICES = frozenset(
     {"reading-path-empty", "evidence-empty", "merge-read", "drafts-none"}
 )
@@ -275,7 +278,7 @@ def _reduced(b: Briefing, *, opened: bool) -> Briefing:
     """`b` without figures and identifiers (ruling 2), and before a pass without the sections that
     name works."""
     update: dict[str, object] = {
-        "gates": [g.model_copy(update={"figures": {}}) for g in b.gates],
+        "gates": [_rate_blind(g) for g in b.gates],
         "issues": {code: n for code, n in b.issues.items() if code != _READS_SERVINGS},
         "pending": [_counts_only(p) for p in b.pending],
     }
@@ -287,6 +290,12 @@ def _reduced(b: Briefing, *, opened: bool) -> Briefing:
         update={"notices": notices, "filter": {**b.meta.filter, "audience": "agent"}}
     )
     return b.model_copy(update={**update, "meta": meta})
+
+
+def _rate_blind(gate: GateBrief) -> GateBrief:
+    """`gate` as an agent reads it: no figures, and no `passed` where it holds a withheld flag."""
+    hidden = gate.gate in _CEILING_WITHHELD
+    return gate.model_copy(update={"figures": {}, "passed": None if hidden else gate.passed})
 
 
 def _counts_only(item: PendingBrief) -> PendingBrief:
@@ -560,15 +569,22 @@ def _agreement(project: Project, stage: ScreeningStage) -> GateBrief:
     )
 
 
+def _audit_passed(complete: bool, above_ceiling: bool | None, enforced: bool | None) -> bool:
+    """An audit is passed when fully labelled and not above a ceiling enforced in this mode."""
+    return complete and not (above_ceiling and enforced)
+
+
 def _screening_audit(project: Project, stage: ScreeningStage) -> list[GateBrief]:
     report = audit_report(project, stage=stage)
     if report is None:
         return []
+    complete = report.labelled >= report.sample_size
     return [
         GateBrief(
             gate="audit",
             scope=stage.value,
-            passed=report.labelled >= report.sample_size,
+            passed=_audit_passed(complete, report.above_ceiling, report.enforced),
+            labelled_complete=complete,
             date=_last_day(project, "audit.labelled"),
             figures={
                 "audit_id": report.audit_id,
@@ -577,6 +593,7 @@ def _screening_audit(project: Project, stage: ScreeningStage) -> list[GateBrief]
                 "false_exclusion": report.rates.false_exclusion,
                 "ceiling": report.ceiling,
                 "above_ceiling": report.above_ceiling,
+                "enforced": report.enforced,
             },
         )
     ]
@@ -594,10 +611,12 @@ def _extraction_agreement(project: Project) -> GateBrief:
 
 
 def _extraction_audit(project: Project, scope: str, report: ExtractionAuditReport) -> GateBrief:
+    complete = report.labelled >= report.sample_size
     return GateBrief(
         gate="extraction-audit",
         scope=scope,
-        passed=report.labelled >= report.sample_size,
+        passed=_audit_passed(complete, report.above_ceiling, report.enforced),
+        labelled_complete=complete,
         date=_last_day(project, "extraction.audit_labelled"),
         figures={
             "audit_id": report.audit_id,
@@ -606,6 +625,7 @@ def _extraction_audit(project: Project, scope: str, report: ExtractionAuditRepor
             "error_rate": report.error_rate,
             "ceiling": report.ceiling,
             "above_ceiling": report.above_ceiling,
+            "enforced": report.enforced,
         },
     )
 
@@ -616,7 +636,12 @@ def _gate_audits(project: Project) -> list[GateBrief]:
         GateBrief(
             gate="gate-audit",
             scope=row.gate_id,
-            passed=(row.audit.labelled or 0) >= (row.audit.sample_size or 0),
+            passed=_audit_passed(
+                (row.audit.labelled or 0) >= (row.audit.sample_size or 0),
+                row.audit.above_ceiling,
+                row.audit.enforced,
+            ),
+            labelled_complete=(row.audit.labelled or 0) >= (row.audit.sample_size or 0),
             date=day,
             figures={
                 "audit_id": row.audit.audit_id,
@@ -624,6 +649,7 @@ def _gate_audits(project: Project) -> list[GateBrief]:
                 "labelled": row.audit.labelled,
                 "error_rate": row.audit.error_rate,
                 "above_ceiling": row.audit.above_ceiling,
+                "enforced": row.audit.enforced,
             },
         )
         for row in gates_status(project)
