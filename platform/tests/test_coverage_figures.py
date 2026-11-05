@@ -213,3 +213,15 @@ def test_agent_methods_withholds_held_out_until_pass(
         assert "Held-out part: withheld until screening has started." in paragraph
         assert "Held-out part: 0" not in paragraph and "resolved records" in paragraph
         assert paragraph.count("resolved records") == 1  # the development part only
+
+
+def test_suggestions_read_a_bounded_pool(
+    pre_search: Project, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from factory.services import coverage
+
+    monkeypatch.setattr(coverage, "SUGGESTION_POOL", 2)
+    import_id, _ = _split_import(pre_search, tmp_path)
+    report = coverage_report(pre_search, import_id)
+    holders = {h for s in report.suggestions for h in s.holders}
+    assert report.suggestions and len(holders) <= 2

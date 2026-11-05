@@ -71,6 +71,9 @@ from factory.services.vocabulary import suggest_terms
 from factory.sources.importlist import NAME as IMPORTLIST
 
 CHUNK = 2_000
+SUGGESTION_POOL = 200
+"""Term suggestions read at most this many development query-miss works, the first by work id:
+`suggest_terms` compares every term with every work, which is quadratic."""
 _ID_CHUNK = 500
 _OPENALEX = "openalex"
 _ARXIV = "arxiv"
@@ -489,7 +492,11 @@ def _suggestions(
         for r in classified.records
         if r.bucket is Bucket.QUERY_MISS and r.part != "held-out"
     ]
-    missed = [w for wid in missed_ids if (w := get_work(project, wid)) is not None]
+    missed = [
+        w
+        for wid in sorted(missed_ids)[:SUGGESTION_POOL]
+        if (w := get_work(project, wid)) is not None
+    ]
     query = " ".join(q.text for q in protocol.spec.queries)
     return suggest_terms(missed, missed, query)
 
