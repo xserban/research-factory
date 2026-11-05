@@ -46,7 +46,7 @@ from tests.intuition_separation import (
     twin_projects,
 )
 
-TRACE_IDEAS_ARE_NODES = False
+TRACE_IDEAS_ARE_NODES = True
 """True once `trace` resolves idea ids (commit 422b0c0, not on this branch's base)."""
 
 
