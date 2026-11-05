@@ -51,6 +51,8 @@ class SnapshotBlob(StrictModel):
     included_ids: tuple[str, ...]
     conclusion_facts: JsonValue | None = None
     conclusions: JsonValue | None = None
+    update: JsonValue | None = None
+    """The `UpdateFlow` this snapshot closes (pinned; None on a snapshot taken before pinning)."""
 
 
 def snapshot(
@@ -83,10 +85,13 @@ def snapshot(
         if protocol is None:
             raise FactoryValidationError([ValidationIssue("protocol", "record a protocol first")])
         cutoff = _last_event(project)
-        blob = build_snapshot_blob(project, cutoff_event=cutoff, extra=extra)
+        snapshot_id = project.ids.new("snp")
+        blob = build_snapshot_blob(
+            project, cutoff_event=cutoff, extra=extra, snapshot_id=snapshot_id
+        )
         ref = project.blobs.put_json(blob.model_dump(mode="json"))
         payload = SnapshotRecorded(
-            snapshot_id=project.ids.new("snp"),
+            snapshot_id=snapshot_id,
             cutoff_event=cutoff,
             protocol_id=protocol.protocol_id,
             blob=ref,
@@ -101,16 +106,25 @@ def snapshot(
 
 
 def build_snapshot_blob(
-    project: Project, *, cutoff_event: str, extra: Sequence[SnapshotSection] = ()
+    project: Project,
+    *,
+    cutoff_event: str,
+    extra: Sequence[SnapshotSection] = (),
+    snapshot_id: str | None = None,
 ) -> SnapshotBlob:
     """The blob of the review as the events stand now, labelled with `cutoff_event`.
 
     The caller supplies the last event id of the log it computes over (`snapshot` reads it under
     the index lock); recomputing later with the same id gives the same blob while no earlier
     event changes."""
+    from factory.services.prisma_update import pin_update  # prisma_update reads snapshots
+
     project.index.sync()
     flow = prisma_flow(project)
     protocol = current_protocol(project)
+    update = None
+    if snapshot_id is not None:
+        update = pin_update(project, snapshot_id, cutoff_event).model_dump(mode="json")
     slots: dict[str, JsonValue] = {}
     for section in extra:
         name, value = section(project)
@@ -124,6 +138,7 @@ def build_snapshot_blob(
         included_ids=included_work_ids(project, flow),
         conclusion_facts=slots.get("conclusion_facts"),
         conclusions=slots.get("conclusions"),
+        update=update,
     )
 
 

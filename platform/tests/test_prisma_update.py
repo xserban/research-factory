@@ -11,6 +11,7 @@ from factory.clock import FixedClock
 from factory.config import Settings
 from factory.errors import FactoryValidationError
 from factory.events.envelope import Actor
+from factory.model.inbox import ResolveStatus
 from factory.services.context import Project
 from factory.services.dedup import canonical_works
 from factory.services.prisma import prisma_flow, search_report
@@ -210,3 +211,63 @@ async def test_mcp_prisma_update_for_an_outside_session(
     assert body["ok"] is True, body
     assert body["data"]["update"]["screened"] == 1
     assert "update" not in plain["data"] and "flow" in plain["data"]
+
+
+def test_closed_update_is_pinned(ready: Project, agent: Actor, human: Actor) -> None:
+    """A closed update is served from its snapshot: later decisions and cycles do not move it."""
+    _cycle(ready, filler(40))
+    protocol_id, calibration = start_screening(ready, agent)
+    first = snapshot(ready, human, trigger="human")
+    second = _cycle(ready, [*filler(5, first=40), C])
+    closed = snapshot(ready, human, trigger="human")
+    before = prisma_update(ready, until=closed.snapshot_id)
+    assert before.screened == 6 and before.provisional
+    pending = sorted(w for w in second.new_work_ids if w not in calibration)
+    agree(ready, agent, pending[0], protocol_id, "include")
+    agree(ready, agent, pending[1], protocol_id, "exclude")
+    _cycle(ready, [C2, *filler(2, first=50)])  # a later cycle merges a record into C
+    after = prisma_update(ready, until=closed.snapshot_id)
+    assert after.model_dump_json() == before.model_dump_json()
+    explicit = prisma_update(ready, since=first.snapshot_id, until=closed.snapshot_id)
+    assert explicit == before
+
+
+def test_changed_previous_for_a_past_window(ready: Project, agent: Actor, human: Actor) -> None:
+    first = _cycle(ready, filler(40))
+    protocol_id, calibration = start_screening(ready, agent)
+    target = next(w for w in sorted(first.new_work_ids) if w not in calibration)
+    ids = agree(ready, agent, target, protocol_id, "include")
+    snapshot(ready, human, trigger="human")
+    _cycle(ready, filler(3, first=40))
+    excluded = agree(ready, agent, target, protocol_id, "exclude", supersedes=ids)
+    closed = snapshot(ready, human, trigger="human")
+    assert prisma_update(ready, until=closed.snapshot_id).changed_previous == (target,)
+    agree(ready, agent, target, protocol_id, "include", supersedes=excluded)  # included again
+    past = prisma_update(ready, until=closed.snapshot_id)
+    assert past.changed_previous == (target,) and past.total_included == 0
+    assert prisma_update(ready).changed_previous == (target,)  # the open window sees it now
+
+
+def test_update_flow_database_precedence(
+    ready: Project, human: Actor, other_session_human: Actor
+) -> None:
+    """A work found by a supplied link and a database search in the update counts under
+    databases; a supplied-only work counts under other methods (decision 38 item 6)."""
+    from factory.services.protocol import record_deviation
+    from tests.inbox_helpers import Keyed, capture, link_item, resolve
+
+    _cycle(ready, [A])
+    snapshot(ready, human, trigger="human")
+    capture(ready, other_session_human, "10.2000/s1", "10.2000/s2")
+    deviation = record_deviation(ready, human, description="Supplied", reason="Colleague.")
+    other = link_item(2, title="Quantum annealing for protein folding")
+    keyed = Keyed(openalex={"doi:10.2000/s1": [link_item(1)], "doi:10.2000/s2": [other]})
+    outcomes = resolve(ready, other_session_human, keyed, deviation_id=deviation)
+    assert [o.status for o in outcomes] == [ResolveStatus.NEW, ResolveStatus.NEW]
+    both = record("Linked paper 1", author="Cy Park", year=2021, doi="10.2000/s1")
+    _cycle(ready, [both])
+    update = prisma_update(ready)
+    assert update.screened == 2
+    assert update.identified_other["supplied"] == 1  # the second link only
+    assert update.identified_databases == {"fake": 1}
+    assert update.duplicates_removed == 0

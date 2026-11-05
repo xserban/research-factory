@@ -25,6 +25,11 @@ Boxes (identities as `PrismaFlow`, over the update's new works):
 `previous_included + included` (an earlier work may have changed), and `changed_previous` lists
 the works outside the update whose inclusion differs from the previous snapshot.
 
+A closed update (the window between two consecutive snapshots) is pinned in the closing
+snapshot's blob when it is taken and read back from it, so later decisions, merges and cycles
+cannot rewrite it; only the open window, and a window spanning several snapshots, are computed
+from the events as they stand.
+
 Invariants: a window is one snapshot pair, `since < until`; unknown snapshot ids are refused
 (fields `since`, `until`) and nothing is written. The agent view drops held-out works from
 `changed_previous` (`agent_update`).
@@ -139,8 +144,55 @@ def prisma_update(
     project.index.sync()
     recorded = snapshots(project)
     start, end = _window(recorded, since, until, whole_log)
+    if end is not None and not whole_log and _consecutive(recorded, start, end):
+        pinned = _blob(project, end).update
+        if pinned is not None:
+            return UpdateFlow.model_validate(pinned)
+    return compute_update(
+        project,
+        start,
+        None if end is None else end.cutoff_event,
+        None if end is None else end.snapshot_id,
+    )
+
+
+def pin_update(project: Project, snapshot_id: str, cutoff_event: str) -> UpdateFlow:
+    """The update a snapshot closes, computed as the events stand at its cut-off: the window from
+    the previous snapshot (the one before `snapshot_id` if recorded, else the last) to it. A
+    snapshot stores this in its blob, so the closed update is read back, never recomputed."""
+    recorded = snapshots(project)
+    ids = [item.snapshot_id for item in recorded]
+    if snapshot_id in ids:
+        index = ids.index(snapshot_id)
+        start = recorded[index - 1] if index > 0 else None
+    else:
+        start = recorded[-1] if recorded else None
+    return compute_update(project, start, cutoff_event, snapshot_id)
+
+
+def _consecutive(
+    recorded: Sequence[SnapshotRecorded], start: SnapshotRecorded | None, end: SnapshotRecorded
+) -> bool:
+    """Whether the window is exactly the update `end` closed (a pinned one)."""
+    ids = [item.snapshot_id for item in recorded]
+    index = ids.index(end.snapshot_id)
+    return (
+        (start is None)
+        if index == 0
+        else (start is not None and start.snapshot_id == ids[index - 1])
+    )
+
+
+def compute_update(
+    project: Project,
+    start: SnapshotRecorded | None,
+    until_event: str | None,
+    until_snapshot: str | None,
+) -> UpdateFlow:
+    """The update flow of the window from snapshot `start` to `until_event`, from current events.
+    Identification counts are as of `until_event`; outcomes are those of now, so a window that is
+    closed is read from its pinned blob and only the open window comes here."""
     since_event = None if start is None else start.cutoff_event
-    until_event = None if end is None else end.cutoff_event
     facts = _facts(project, since_event, until_event)
     new = facts.works
     outcomes = final_outcomes(project)
@@ -166,7 +218,7 @@ def prisma_update(
     changed = sorted((previous_ids - current) | ((current - new) - previous_ids))
     return UpdateFlow(
         since_snapshot=None if start is None else start.snapshot_id,
-        until_snapshot=None if end is None else end.snapshot_id,
+        until_snapshot=until_snapshot,
         since_event=since_event,
         until_event=until_event,
         previous_included=_included_count(previous_blob),

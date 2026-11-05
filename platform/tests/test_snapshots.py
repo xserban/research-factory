@@ -104,7 +104,9 @@ def test_snapshot_blob_deterministic(
     _cycle(project)
     recorded = snapshot(project, human, trigger="human")
     project.index.rebuild()
-    again = build_snapshot_blob(project, cutoff_event=recorded.cutoff_event)
+    again = build_snapshot_blob(
+        project, cutoff_event=recorded.cutoff_event, snapshot_id=recorded.snapshot_id
+    )
     assert project.blobs.put_json(again.model_dump(mode="json")) == recorded.blob
     assert snapshot_blob(project, recorded.snapshot_id) == again
 
