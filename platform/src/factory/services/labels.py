@@ -192,7 +192,7 @@ def _row(project: Project, application_id: str) -> Any | None:
 
 
 def _item_issues(
-    project: Project, item: LabelInput, seen: set[tuple[str, str, str]]
+    project: Project, item: LabelInput, seen: set[tuple[str, str, str]], *, agent: bool = False
 ) -> list[ValidationIssue]:
     problem = key_problem(item.text)
     if problem is not None:
@@ -211,9 +211,9 @@ def _item_issues(
         live = conn.execute(
             text(
                 f"SELECT 1 FROM labels WHERE target_type = :t AND target = :x AND key = :k "
-                f"AND {_LIVE} LIMIT 1"
+                f"AND {_LIVE} AND (:agent = 0 OR origin != 'import-tag') LIMIT 1"
             ),
-            {"t": item.target_type.value, "x": item.target, "k": key},
+            {"t": item.target_type.value, "x": item.target, "k": key, "agent": int(agent)},
         ).first()
     if live is not None:
         return [ValidationIssue("text", "duplicate-application")]
@@ -247,7 +247,7 @@ def _apply(
             else None
         )
         for index, item in enumerate(items):
-            issues = _item_issues(project, item, seen)
+            issues = _item_issues(project, item, seen, agent=actor.kind == "agent")
             if issues:
                 rejected.append(ItemError(index=index, issues=issues))
                 continue

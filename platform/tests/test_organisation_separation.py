@@ -459,3 +459,20 @@ def test_agent_trace_withholds_import_tags_but_not_works(project: Project, iw: I
     assert ref in trace(project, term).model_dump_json()  # the researcher's trace keeps it
     # the work still reads as a corpus work through its own trace
     assert agent_trace(project, iw.source).id == iw.source
+
+
+def test_label_apply_is_no_oracle_for_import_tags(project: Project, iw: IWorld) -> None:
+    import_tag(project, iw, "Performer", iw.source, "imp_01JZ9Q3K5M7N8P0R2S4T6V8W1J:3")
+    out = apply_labels(
+        project,
+        iw.writer,
+        [
+            LabelInput(target_type=W, target=iw.source, text="performer"),
+            LabelInput(target_type=W, target=iw.other, text="performer"),
+        ],
+    )
+    assert out.rejected == [] and len(out.written) == 2  # same answer for both works
+    again = apply_labels(
+        project, iw.writer, [LabelInput(target_type=W, target=iw.other, text="performer")]
+    )
+    assert again.rejected[0].issues[0].reason == "duplicate-application"  # its own, visible
