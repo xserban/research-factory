@@ -18,6 +18,13 @@ from factory.model.dedup import DedupMerged, DedupReverted
 from factory.model.digest import DigestGenerated
 from factory.model.directions import DirectionClosed
 from factory.model.document import ConversionFailed, Converted
+from factory.model.drafts import (
+    DraftCreated,
+    DraftOutlineRepinned,
+    DraftReordered,
+    SentenceRecorded,
+    SentenceWithdrawn,
+)
 from factory.model.experiments import (
     BaselineAccepted,
     BaselineEvaluated,
@@ -333,4 +340,9 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("xrun.reported", XrunReported, 1))
     catalog.register(EventType("baseline.evaluated", BaselineEvaluated, 1))
     catalog.register(EventType("baseline.accepted", BaselineAccepted, 1))
+    catalog.register(EventType("draft.created", DraftCreated, 1))
+    catalog.register(EventType("draft.outline_repinned", DraftOutlineRepinned, 1))
+    catalog.register(EventType("draft.sentence_recorded", SentenceRecorded, 1))
+    catalog.register(EventType("draft.sentence_withdrawn", SentenceWithdrawn, 1))
+    catalog.register(EventType("draft.reordered", DraftReordered, 1))
     return catalog
