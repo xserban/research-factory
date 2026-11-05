@@ -120,6 +120,125 @@ def reviewed(
     }
 
 
+CPT1 = f"cpt_{ULID}A"
+CPT2 = f"cpt_{ULID}B"
+CPT3 = f"cpt_{ULID}C"
+CUL1 = f"cul_{ULID}A"
+CUL2 = f"cul_{ULID}B"
+CUL3 = f"cul_{ULID}C"
+
+
+def concept_source(
+    kind: str = "textbook", citation: str = "Textbook, chapter 3", work_id: str | None = None
+) -> dict[str, Any]:
+    """A stored concept source (digest and verifiability computed as the service does)."""
+    from factory.intuition.classify import source_digest
+    from factory.model.intuition import ConceptSourceInput
+
+    digest = source_digest(
+        ConceptSourceInput.model_validate({"kind": kind, "citation": citation, "work_id": work_id})
+    )
+    return {
+        "kind": kind,
+        "citation": citation,
+        "work_id": work_id,
+        "digest": digest,
+        "verifiable": work_id is not None,
+    }
+
+
+def defined(
+    concept_id: str = CPT1,
+    *,
+    name: str = "random features",
+    aliases: tuple[str, ...] = (),
+    text_: str | None = "A map that approximates a kernel.",
+    source: dict[str, Any] | None = None,
+    quotes: list[dict[str, Any]] | None = None,
+    author: str = "agent",
+    supersedes: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "concept_id": concept_id,
+        "name": name,
+        "aliases": list(aliases),
+        "text": text_,
+        "source": source,
+        "quotes": [stored(q) for q in (quotes or [])],
+        "author": author,
+        "supersedes": supersedes,
+    }
+
+
+def source_decided(
+    concept_id: str, decision: str, digest: str, *, note: str = "", channel: str = "cli"
+) -> dict[str, Any]:
+    return {
+        "concept_id": concept_id,
+        "decision": decision,
+        "source_digest": digest,
+        "note": note,
+        "channel": channel,
+    }
+
+
+def concept_reviewed(
+    concept_id: str,
+    definition: str,
+    state: str = "reviewed",
+    *,
+    note: str = "",
+    self_reviewed: bool = False,
+    channel: str = "cli",
+) -> dict[str, Any]:
+    return {
+        "concept_id": concept_id,
+        "definition": definition,
+        "state": state,
+        "note": note,
+        "self_reviewed": self_reviewed,
+        "channel": channel,
+    }
+
+
+def link_proposed(
+    link_id: str = CUL1,
+    *,
+    from_node: str = IDEA1,
+    from_kind: str = "idea",
+    concept: str = CPT1,
+    status: str = "inferred",
+    reason: str = "no-basis",
+    quote: dict[str, Any] | None = None,
+    reference: str | None = None,
+    cited_work: str | None = None,
+    note: str | None = "no basis",
+    basis_digest: str = "bd1",
+) -> dict[str, Any]:
+    return {
+        "link_id": link_id,
+        "from_node": from_node,
+        "from_kind": from_kind,
+        "concept_id": concept,
+        "basis_kind": "quote" if quote else ("citation" if reference else "none"),
+        "quote": None if quote is None else stored(quote),
+        "reference": reference,
+        "cited_work": cited_work,
+        "basis_digest": basis_digest,
+        "status": status,
+        "status_reason": reason,
+        "note": note,
+    }
+
+
+def link_decided(link_id: str, decision: str, rationale: str = "checked") -> dict[str, Any]:
+    return {"link_id": link_id, "decision": decision, "rationale": rationale, "channel": "cli"}
+
+
+def merged(into: str, from_concept: str, reason: str = "same idea") -> dict[str, Any]:
+    return {"into": into, "from_concept": from_concept, "reason": reason}
+
+
 def reviewer(project: Project, user: str | None = None) -> Actor:
     """A human in a session other than the (agent) fixtures'; `user` names another human."""
     base = project.human_actor()

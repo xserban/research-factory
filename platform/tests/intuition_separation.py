@@ -79,6 +79,14 @@ LAYER_TABLES = (
     "layer_nodes",
     "layer_edges",
     "layer_hidden",
+    "concepts",  # G3-B
+    "concept_aliases",
+    "concept_definitions",
+    "concept_reviews",
+    "concept_quotes",
+    "concept_source_decisions",
+    "concept_uses",
+    "concept_merges",
 )
 G2_TABLES = ("graph_nodes", "graph_edges")
 TABLE_READERS = frozenset(
