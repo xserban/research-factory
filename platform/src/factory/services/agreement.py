@@ -567,7 +567,10 @@ def _refuse_shared(project: Project, stage: ScreeningStage = TA) -> None:
 def _models(project: Project, label: PassLabel, stage: ScreeningStage = TA) -> set[str]:
     with project.index.connect() as conn:
         rows = conn.execute(
-            text("SELECT model FROM pass_sessions WHERE pass_label = :label AND stage = :stage"),
+            text(
+                "SELECT model FROM pass_sessions WHERE pass_label = :label AND stage = :stage "
+                "AND model IS NOT NULL"
+            ),
             {"label": label.value, "stage": stage.value},
         ).all()
     return {str(row[0]) for row in rows}
@@ -698,7 +701,7 @@ def _pass_config(project: Project, label: PassLabel, stage: ScreeningStage = TA)
             "criterion_order": str(order),
             "random_seed": int(seed),
             "sessions": [str(session) for session, _ in joined],
-            "models": sorted({str(model) for _, model in joined}),
+            "models": sorted({str(model) for _, model in joined if model is not None}),
         }
     )
 

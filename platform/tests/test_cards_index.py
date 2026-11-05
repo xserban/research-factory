@@ -76,7 +76,7 @@ def _card(project: Project) -> None:
 
 
 def test_projection_version_bumped() -> None:
-    assert PROJECTION_VERSION == "59"
+    assert PROJECTION_VERSION == "60"
 
 
 def test_new_tables_are_omitted_when_empty() -> None:

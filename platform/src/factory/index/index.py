@@ -48,6 +48,7 @@ OMITTED_WHEN_EMPTY: frozenset[str] = frozenset(
         "import_attachments",
         "import_descriptions",
         "audit_top_ups",
+        "stage_judges",
         "snapshots",
         "notices",
         "version_observations",

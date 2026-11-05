@@ -6,7 +6,9 @@ well as by their own key, so the two stages never share a row; `audits` keeps th
 sample. Slice-1 rows have stage `title-abstract`.
 
 `passes` keeps each opened pass (its framing, criterion order, recorded seed and sample; the sample
-is canonical JSON, or NULL). `pass_sessions` keeps the session that joined each pass, once.
+is canonical JSON, or NULL). `pass_sessions` keeps the session that joined each pass, once, with
+who it is: `actor_kind` (`agent` for a line that does not say), `user` (the event's `actor.user`)
+and `model` (NULL for a human).
 `decisions` keeps every recorded verdict, with the `anchor` and `conversion_id` of a full-text
 decision (NULL at title/abstract); a decision that a later one supersedes gets `superseded_by`
 set, so a live decision is one with `superseded_by` NULL.
@@ -20,22 +22,42 @@ the protocol then current: `include` when both promote, `exclude` when both do n
 `unsure`, NULL otherwise. Each sample also keeps `population_digest`, the digest of the whole agreed
 set of its stage at that time, which the audit service compares to refuse a second open audit.
 `label_sessions` keeps every session that relayed a human label over MCP, at either stage; a pass
-at either stage may not be joined from one of them.
+at either stage may not be joined from one of them. `stage_judges` keeps each user who labelled a
+calibration or audit item or resolved a disagreement at a stage, so a judge of a hosted stage does
+not join its passes afterwards.
 
 Handlers are total: an event naming an unknown work or pass is stored, not refused. A second
 pass, join or sample with the same key changes nothing (first write wins); a second label or
 resolution replaces the earlier one (last write wins).
+
+The rules of slice 5 ruling 15 hold on rebuild too, each at its point of the log. A hand-written
+event that fails one changes nothing:
+- `join_refusal` is the one statement of who may join a pass; the service asks it as well. A pass
+  is all human or all agent. On a hosted project the two passes share no user, and a stage's
+  judges join neither. Anywhere, one person does not screen both passes in person, and a human
+  join needs a role holding `pass:join-human` (an unhosted project with no grant cannot be asked:
+  the fold does not know `Settings.user`, so that check is the service's).
+- A human join is written by that human, in that session.
+- A human decision comes from the session that joined that pass as a human.
+- A decision without a quote is a human's, and is not an exclusion in `systematic` (R-110).
+- A decision supersedes only a decision of its own pass.
+- On a hosted project a member of either pass of a stage does not label or resolve at that stage.
 """
 
 from dataclasses import dataclass
 
+from pydantic import ValidationError
 from sqlalchemy import Column, Integer, MetaData, String, Table, select, text, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Connection
 
 from factory.canonical import canonical_json, population_digest
 from factory.events.envelope import Event
+from factory.index.members import MEMBER_TABLES, any_grant, live_roles
+from factory.index.project import latest_host
 from factory.index.projection import Handler
+from factory.model.members import HUMAN_PASS_ROLES
+from factory.model.project import RigorMode
 from factory.model.protocol import ProtocolAmended, ScreeningStage
 from factory.model.screening import (
     AuditLabelled,
@@ -66,6 +88,7 @@ class ScreeningTables:
     label_sessions: Table
     audit_top_ups: Table
     audit_events: Table
+    stage_judges: Table
 
 
 TITLE_ABSTRACT = ScreeningStage.TITLE_ABSTRACT.value
@@ -93,7 +116,9 @@ def screening_tables(metadata: MetaData) -> ScreeningTables:
         _stage(key=True),
         Column("session", String, primary_key=True),
         Column("pass_label", String, nullable=False),
-        Column("model", String, nullable=False),
+        Column("model", String),
+        Column("actor_kind", String, nullable=False, server_default="agent"),
+        Column("user", String),
     )
     decisions = Table(
         "decisions",
@@ -189,6 +214,12 @@ def screening_tables(metadata: MetaData) -> ScreeningTables:
         Column("audit_id", String, primary_key=True),
         Column("event_id", String, nullable=False),
     )
+    stage_judges = Table(
+        "stage_judges",
+        metadata,
+        _stage(key=True),
+        Column("user", String, primary_key=True),
+    )
     return ScreeningTables(
         passes=passes,
         pass_sessions=pass_sessions,
@@ -202,6 +233,7 @@ def screening_tables(metadata: MetaData) -> ScreeningTables:
         label_sessions=label_sessions,
         audit_top_ups=audit_top_ups,
         audit_events=audit_events,
+        stage_judges=stage_judges,
     )
 
 
@@ -242,7 +274,26 @@ def _pass_opened(t: ScreeningTables) -> Handler:
 
 def _pass_joined(t: ScreeningTables) -> Handler:
     def pass_joined(conn: Connection, event: Event) -> None:
-        payload = PassJoined.model_validate(event.payload)
+        try:
+            payload = PassJoined.model_validate(event.payload)
+        except ValidationError:
+            return
+        actor = event.actor
+        if payload.user is not None and payload.user != actor.user:
+            return
+        if (payload.actor_kind == "human") != (actor.kind == "human"):
+            return
+        if payload.actor_kind == "human" and payload.session != actor.session:
+            return
+        refusal = join_refusal(
+            conn,
+            label=payload.pass_label.value,
+            stage=payload.stage.value,
+            kind=payload.actor_kind,
+            user=actor.user,
+        )
+        if refusal is not None:
+            return
         conn.execute(
             sqlite_insert(t.pass_sessions)
             .values(
@@ -250,6 +301,8 @@ def _pass_joined(t: ScreeningTables) -> Handler:
                 pass_label=payload.pass_label.value,
                 model=payload.model,
                 stage=payload.stage.value,
+                actor_kind=payload.actor_kind,
+                user=actor.user,
             )
             .on_conflict_do_nothing(index_elements=["stage", "session"])
         )
@@ -257,9 +310,118 @@ def _pass_joined(t: ScreeningTables) -> Handler:
     return pass_joined
 
 
+def _other(label: str) -> str:
+    return "B" if label == "A" else "A"
+
+
+def pass_users(conn: Connection, label: str, stage: str) -> frozenset[str]:
+    """U(P): the humans of pass `label` at `stage` and the principals of its agents."""
+    rows = conn.execute(
+        text(
+            "SELECT DISTINCT user FROM pass_sessions WHERE pass_label = :label AND stage = :stage "
+            "AND user IS NOT NULL"
+        ),
+        {"label": label, "stage": stage},
+    ).all()
+    return frozenset(str(row[0]) for row in rows)
+
+
+def pass_kinds(conn: Connection, label: str, stage: str) -> frozenset[str]:
+    """Who screens pass `label` at `stage`: `agent`, `human`, or nothing yet. One kind at most,
+    save on a log written before the rule."""
+    rows = conn.execute(
+        text(
+            "SELECT DISTINCT actor_kind FROM pass_sessions "
+            "WHERE pass_label = :label AND stage = :stage"
+        ),
+        {"label": label, "stage": stage},
+    ).all()
+    return frozenset(str(row[0]) for row in rows)
+
+
+def is_stage_judge(conn: Connection, user: str, stage: str) -> bool:
+    """Whether `user` has labelled or resolved at `stage`."""
+    row = conn.execute(
+        text("SELECT 1 FROM stage_judges WHERE stage = :stage AND user = :user"),
+        {"stage": stage, "user": user},
+    ).first()
+    return row is not None
+
+
+def _may_join_human(conn: Connection, user: str, *, hosted: bool) -> bool:
+    if any_grant(conn, MEMBER_TABLES):
+        return bool(live_roles(conn, MEMBER_TABLES, user) & HUMAN_PASS_ROLES)
+    return not hosted
+
+
+def join_refusal(
+    conn: Connection, *, label: str, stage: str, kind: str, user: str
+) -> tuple[str, str] | None:
+    """Why `user`, as `kind`, may not join pass `label` of `stage`, as (field, reason); None when
+    they may. Reads the log as folded so far, so a rebuild rules as the service did."""
+    kinds = pass_kinds(conn, label, stage)
+    if kinds and kind not in kinds:
+        return "pass", f"pass {label} is screened by {sorted(kinds)[0]}s; a pass is not mixed"
+    if kind == "human" and user in pass_users(conn, label, stage):
+        return "pass", f"this person already screens pass {label}"
+    hosted = latest_host(conn) is not None
+    other = _other(label)
+    if user in pass_users(conn, other, stage) and (
+        hosted or (kind == "human" and "human" in pass_kinds(conn, other, stage))
+    ):
+        return "user", f"this person already screens pass {other}"
+    if hosted and is_stage_judge(conn, user, stage):
+        return "user", f"this person labelled or resolved at {stage} and cannot screen it"
+    if kind == "human" and not _may_join_human(conn, user, hosted=hosted):
+        return "permission", "pass:join-human not held"
+    return None
+
+
+def _pass_member(conn: Connection, user: str, stage: str) -> bool:
+    return user in pass_users(conn, "A", stage) | pass_users(conn, "B", stage)
+
+
+def _hosted_member(conn: Connection, event: Event, stage: str) -> bool:
+    """Whether a label or resolution comes from a member of a pass of `stage`, on a hosted project.
+    Such an act is refused by `passes.require_outside_passes`, so the fold ignores it."""
+    return latest_host(conn) is not None and _pass_member(conn, event.actor.user, stage)
+
+
+def _note_judge(conn: Connection, t: ScreeningTables, event: Event, stage: str) -> None:
+    conn.execute(
+        sqlite_insert(t.stage_judges)
+        .values(stage=stage, user=event.actor.user)
+        .on_conflict_do_nothing(index_elements=["stage", "user"])
+    )
+
+
+def _decision_counts(conn: Connection, event: Event, payload: DecisionRecorded) -> bool:
+    """Whether a decision folds: the guards a human decision and a quoteless one must meet. An
+    agent decision with a quote is not asked, as it never was."""
+    actor = event.actor
+    if actor.kind == "human":
+        row = conn.execute(
+            text(
+                "SELECT pass_label, actor_kind FROM pass_sessions "
+                "WHERE session = :session AND stage = :stage"
+            ),
+            {"session": actor.session, "stage": payload.stage.value},
+        ).first()
+        if row is None or (str(row[0]), str(row[1])) != (payload.pass_label.value, "human"):
+            return False
+    if payload.quote:
+        return True
+    if actor.kind != "human":
+        return False
+    mode = conn.execute(text("SELECT rigor_mode FROM project LIMIT 1")).scalar_one_or_none()
+    return not (payload.verdict is Verdict.EXCLUDE and mode == RigorMode.SYSTEMATIC.value)
+
+
 def _decision(t: ScreeningTables) -> Handler:
     def decision(conn: Connection, event: Event) -> None:
         payload = DecisionRecorded.model_validate(event.payload)
+        if not _decision_counts(conn, event, payload):
+            return
         conn.execute(
             sqlite_insert(t.decisions)
             .values(
@@ -286,6 +448,7 @@ def _decision(t: ScreeningTables) -> Handler:
             conn.execute(
                 update(t.decisions)
                 .where(t.decisions.c.decision_id == payload.supersedes)
+                .where(t.decisions.c.pass_label == payload.pass_label.value)
                 .where(t.decisions.c.superseded_by.is_(None))
                 .values(superseded_by=payload.decision_id)
             )
@@ -296,6 +459,8 @@ def _decision(t: ScreeningTables) -> Handler:
 def _resolution(t: ScreeningTables) -> Handler:
     def resolution(conn: Connection, event: Event) -> None:
         payload = DisagreementResolved.model_validate(event.payload)
+        if _hosted_member(conn, event, payload.stage.value):
+            return
         values = {
             "stage": payload.stage.value,
             "work_id": payload.work_id,
@@ -310,6 +475,7 @@ def _resolution(t: ScreeningTables) -> Handler:
             .values(**values)
             .on_conflict_do_update(index_elements=["stage", "work_id"], set_=values)
         )
+        _note_judge(conn, t, event, payload.stage.value)
 
     return resolution
 
@@ -339,6 +505,8 @@ def _calibration_drawn(t: ScreeningTables) -> Handler:
 def _calibration_labelled(t: ScreeningTables) -> Handler:
     def calibration_labelled(conn: Connection, event: Event) -> None:
         payload = CalibrationLabelled.model_validate(event.payload)
+        if _hosted_member(conn, event, payload.stage.value):
+            return
         values = {
             "stage": payload.stage.value,
             "work_id": payload.work_id,
@@ -353,6 +521,7 @@ def _calibration_labelled(t: ScreeningTables) -> Handler:
             .on_conflict_do_update(index_elements=["stage", "work_id"], set_=values)
         )
         _note_label_session(conn, t, event, payload.channel)
+        _note_judge(conn, t, event, payload.stage.value)
 
     return calibration_labelled
 
@@ -409,6 +578,12 @@ def _audit_sampled(t: ScreeningTables) -> Handler:
 def _audit_labelled(t: ScreeningTables) -> Handler:
     def audit_labelled(conn: Connection, event: Event) -> None:
         payload = AuditLabelled.model_validate(event.payload)
+        drawn_at = conn.execute(
+            select(t.audits.c.stage).where(t.audits.c.audit_id == payload.audit_id)
+        ).scalar_one_or_none()
+        stage = payload.stage.value if drawn_at is None else str(drawn_at)
+        if _hosted_member(conn, event, stage):
+            return
         conn.execute(
             update(t.audit_items)
             .where(t.audit_items.c.audit_id == payload.audit_id)
@@ -416,6 +591,7 @@ def _audit_labelled(t: ScreeningTables) -> Handler:
             .values(human_verdict=payload.verdict, criterion=payload.criterion)
         )
         _note_label_session(conn, t, event, payload.channel)
+        _note_judge(conn, t, event, stage)
 
     return audit_labelled
 

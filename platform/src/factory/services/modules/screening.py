@@ -49,6 +49,7 @@ SPEC = ModuleSpec(
             "pass_sessions",
             "passes",
             "resolutions",
+            "stage_judges",
         ),
         note=(
             "label_sessions is also written by the notice projection (a "

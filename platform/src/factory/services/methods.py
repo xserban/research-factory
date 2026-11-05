@@ -277,7 +277,7 @@ def methods_report(project: Project) -> MethodsReport:
         full_text_audit_minimum=None if full_text is None else full_text.audit_minimum,
         full_text_kappa=ft_kappa,
         full_text_sessions=len(ft_sessions),
-        full_text_models=sorted({model for _, model in ft_sessions}),
+        full_text_models=sorted({model for _, model in ft_sessions if model is not None}),
         library_only=library_import_only(project),
         conversions=conversion_census(project),
         extraction_pack=None if schema is None else f"{schema.pack}@{schema.pack_version}",
@@ -466,14 +466,15 @@ def _extraction_pass_count(project: Project) -> int:
         )
 
 
-def _full_text_sessions(project: Project) -> list[tuple[str, str]]:
-    """(session, model) of every session bound to a full-text pass, as the sessions reported."""
+def _full_text_sessions(project: Project) -> list[tuple[str, str | None]]:
+    """(session, model) of every session bound to a full-text pass, as the sessions reported. A
+    human's session has no model."""
     with project.index.connect() as conn:
         rows = conn.execute(
             text("SELECT session, model FROM pass_sessions WHERE stage = :stage ORDER BY session"),
             {"stage": ScreeningStage.FULL_TEXT.value},
         ).all()
-    return [(str(session), str(model)) for session, model in rows]
+    return [(str(session), None if model is None else str(model)) for session, model in rows]
 
 
 # The statement describes the evidence pipeline, so the models and skills it names are read from

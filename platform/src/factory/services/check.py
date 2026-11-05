@@ -1618,7 +1618,7 @@ def _model_drift(project: Project) -> list[_Hit]:
             rows = conn.execute(
                 text(
                     "SELECT DISTINCT model FROM pass_sessions WHERE pass_label = :label"
-                    " AND stage = 'title-abstract' ORDER BY model"
+                    " AND stage = 'title-abstract' AND model IS NOT NULL ORDER BY model"
                 ),
                 {"label": label.value},
             ).all()

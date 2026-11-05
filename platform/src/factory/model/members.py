@@ -18,6 +18,11 @@ class ProjectRole(StrEnum):
     OBSERVER = "observer"
 
 
+HUMAN_PASS_ROLES = frozenset({ProjectRole.OWNER, ProjectRole.MAINTAINER, ProjectRole.SCREENER})
+"""The roles that hold `pass:join-human`. `services/access.py` decides; the fold cannot import a
+service, so it reads this set, and `ROLE_PERMISSIONS` must agree with it."""
+
+
 class MemberGranted(StrictModel):
     user: UserId
     role: ProjectRole

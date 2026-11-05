@@ -196,6 +196,16 @@ class ScreeningPlan(StrictModel):
     audit_fraction: float = Field(default=0.02, ge=0, le=1)
     audit_minimum: int = Field(default=50, ge=0)
     reviewers: tuple[Reviewer, ...]
+    calibrate_humans: bool = False
+    """Whether a human pass passes the same calibration gate as an agent pass (slice 5, "Human
+    screening passes"). Left out of every dump, so of every hash, while false."""
+
+    @model_serializer(mode="wrap")
+    def _omit_calibrate_humans(self, handler: SerializerFunctionWrapHandler) -> dict[str, object]:
+        data: dict[str, object] = handler(self)
+        if not data.get("calibrate_humans"):
+            data.pop("calibrate_humans", None)
+        return data
 
 
 class ExtractionSchema(StrictModel):

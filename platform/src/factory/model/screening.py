@@ -7,6 +7,9 @@ Invariants enforced here (validated at the boundary, before any event is written
   `unsure` needs a rationale. Text fields must not be blank after stripping.
 - A decision's criterion is version-qualified (`P@<hash>:EX03`), so a decision stays
   interpretable after a protocol amendment.
+- A pass join is an agent's (with its model) or a human's (with the user, without a model); a
+  line written before human passes reads as an agent's, and an agent's join is written as it was.
+- A quote is never blank. Only a human decision may have none (`""`, slice 5 ruling 15, R-110).
 
 This module is pure. Services in `factory.services` decide when these events are written.
 """
@@ -17,11 +20,17 @@ import re
 from enum import StrEnum
 from typing import Annotated, Literal, Self
 
-from pydantic import AfterValidator, Field, model_validator
+from pydantic import (
+    AfterValidator,
+    Field,
+    SerializerFunctionWrapHandler,
+    model_serializer,
+    model_validator,
+)
 
 from factory.document.anchors import ANCHOR_RE
 from factory.model.base import StrictModel
-from factory.model.identity import CONVERSION_ID_RE, ULID_RE
+from factory.model.identity import ACTOR_ID_RE, CONVERSION_ID_RE, ULID_RE
 from factory.model.protocol import CRITERION_ID_RE, PROTOCOL_ID_RE, ScreeningStage
 
 DECISION_ID_RE = rf"^dec_{ULID_RE}$"
@@ -72,6 +81,17 @@ def _non_blank(value: str) -> str:
 
 NonBlank = Annotated[str, AfterValidator(_non_blank)]
 
+
+def _quote_or_none(value: str) -> str:
+    """Empty, for a human decision with no quote, or a real quote; never only whitespace."""
+    return value if value == "" else _non_blank(value)
+
+
+OptionalQuote = Annotated[str, AfterValidator(_quote_or_none)]
+
+PassActorKind = Literal["agent", "human"]
+"""Who screens a pass. A pass is all one or all the other (plan teams-C ruling 5)."""
+
 RunStage = Literal[ScreeningStage.TITLE_ABSTRACT, ScreeningStage.FULL_TEXT]
 """The stage of a screening run, decision or event. `either` names a criterion's reach only."""
 
@@ -111,13 +131,10 @@ def _check_verdict_fields(verdict: Verdict, criterion: str | None, rationale: st
         raise ValueError("unsure needs a rationale")
 
 
-class ScreeningItem(StrictModel):
-    """One verdict as a screener returns it, before it becomes a decision event."""
-
+class _ItemFields(StrictModel):
     work_id: str = Field(min_length=1)
     verdict: Verdict
     criterion: str | None = Field(default=None, pattern=CRITERION_ID_RE)
-    quote: NonBlank
     rationale: str = ""
     anchor: Anchor = None
 
@@ -125,6 +142,19 @@ class ScreeningItem(StrictModel):
     def _verdict_has_its_fields(self) -> Self:
         _check_verdict_fields(self.verdict, self.criterion, self.rationale)
         return self
+
+
+class ScreeningItem(_ItemFields):
+    """One verdict as an agent returns it, before it becomes a decision event."""
+
+    quote: NonBlank
+
+
+class HumanScreeningItem(_ItemFields):
+    """One verdict as a human returns it. The quote may be left out, except that the service
+    requires it for an exclusion in `systematic` (R-110); one that is given is verified."""
+
+    quote: OptionalQuote = ""
 
 
 class PassOpened(StrictModel):
@@ -137,10 +167,33 @@ class PassOpened(StrictModel):
 
 
 class PassJoined(StrictModel):
+    """A session joins a pass. `user` names the human of a human join; an agent's user is the
+    event's `actor.user`, so an agent's line is byte for byte what it was before human passes."""
+
     pass_label: PassLabel
     session: str = Field(min_length=1)
-    model: str = Field(min_length=1)
+    model: str | None = Field(default=None, min_length=1)
     stage: RunStage = ScreeningStage.TITLE_ABSTRACT
+    actor_kind: PassActorKind = "agent"
+    user: str | None = Field(default=None, pattern=ACTOR_ID_RE)
+
+    @model_serializer(mode="wrap")
+    def _omit_agent_defaults(self, handler: SerializerFunctionWrapHandler) -> dict[str, object]:
+        data: dict[str, object] = handler(self)
+        if data.get("actor_kind") == "agent":
+            del data["actor_kind"]
+        for key in ("model", "user"):
+            if data.get(key) is None:
+                data.pop(key, None)
+        return data
+
+    @model_validator(mode="after")
+    def _fields_follow_kind(self) -> Self:
+        if self.actor_kind == "agent" and self.model is None:
+            raise ValueError("an agent join names its model")
+        if self.actor_kind == "human" and (self.user is None or self.model is not None):
+            raise ValueError("a human join names its user and no model")
+        return self
 
 
 class DecisionRecorded(StrictModel):
@@ -151,7 +204,7 @@ class DecisionRecorded(StrictModel):
     stage: RunStage
     verdict: Verdict
     criterion: str | None = Field(pattern=QUALIFIED_CRITERION_RE)
-    quote: NonBlank
+    quote: OptionalQuote
     rationale: str
     protocol_id: str = Field(pattern=PROTOCOL_ID_RE)
     task_id: str = Field(min_length=1)

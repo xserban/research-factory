@@ -1091,7 +1091,10 @@ def _other(label: PassLabel) -> PassLabel:
 def _pass_models(project: Project, label: PassLabel, stage: ScreeningStage = TA) -> set[str]:
     with project.index.connect() as conn:
         rows = conn.execute(
-            text("SELECT model FROM pass_sessions WHERE pass_label = :label AND stage = :stage"),
+            text(
+                "SELECT model FROM pass_sessions WHERE pass_label = :label AND stage = :stage "
+                "AND model IS NOT NULL"
+            ),
             {"label": label.value, "stage": stage.value},
         ).all()
     return {str(row[0]) for row in rows}
