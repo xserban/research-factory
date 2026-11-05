@@ -172,4 +172,5 @@ async def test_mcp_has_no_snapshot_tool(settings: Settings, clock: FixedClock) -
     server = build_server(settings, clock=clock)
     async with Client(server) as client:
         names = [t.name for t in (await client.list_tools()).tools]
-    assert names and not [n for n in names if "snapshot" in n]
+    # `region_snapshot` pins a region version (Regions-B); it is not a project snapshot.
+    assert names and not [n for n in names if "snapshot" in n and n != "region_snapshot"]

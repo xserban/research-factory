@@ -40,6 +40,7 @@ def test_kinds_unchanged() -> None:
         "mine_b",
         INTUITION_TASK_KIND,
         HYPOTHESIS_REVIEW_TASK_KIND,
+        "consolidate",
     )
 
 
