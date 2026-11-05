@@ -28,6 +28,7 @@ from factory.model.extraction import FieldInput
 from factory.model.lineage import LineageDecision, RelationProposal
 from factory.model.screening import PassLabel
 from factory.services.context import Project
+from factory.services.contributions import contribution_next, contribution_record
 from factory.services.extraction import live_claims
 from factory.services.extraction_agreement import final_rows
 from factory.services.ideas import decide_idea, propose_idea
@@ -117,3 +118,39 @@ def ww(
         claims={c.work_id: c.claim_id for c in live_claims(project, PassLabel.A)},
         rows={w: r.row_key for w, r in final.items()},
     )
+
+
+def item_per_work(project: Project, ctr_a: Actor, ctr_b: Actor, works: list[str]) -> dict[str, str]:
+    """Both contribution passes record one base-idea item for each of `works` and close every
+    other unit. Returns work -> its pass-A item."""
+    ids: dict[str, str] = {}
+    for actor, label in ((ctr_a, PassLabel.A), (ctr_b, PassLabel.B)):
+        while (served := contribution_next(project, actor, label).batch) is not None:
+            work = str(served.records[0]["work_id"])
+            rows = (
+                [_item(k) for k in ("base-idea", "addition", "limitation")] if work in works else []
+            )
+            res = contribution_record(
+                project, actor, served.task_id, rows, finish=True, reason="no results"
+            )
+            if rows and label is PassLabel.A:
+                ids[work] = res.rows.written[0]
+    return ids
+
+
+def confirmed_idea(project: Project, agent: Actor, human: Actor, work: str, item: str) -> str:
+    idea = propose_idea(project, agent, "Lorem", work, item, [work])
+    decide_idea(project, human, idea, LineageDecision.CONFIRM, "named")
+    return idea
+
+
+def confirmed_edge(
+    project: Project, agent: Actor, human: Actor, source: str, target: str, edge_type: str
+) -> str:
+    made = propose_relation(
+        project,
+        agent,
+        RelationProposal(source_work=source, target=target, edge_type=edge_type, note="stated"),
+    )
+    decide_relation(project, human, made.relation_id, LineageDecision.CONFIRM, "ok")
+    return made.relation_id

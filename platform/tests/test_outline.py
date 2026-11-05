@@ -4,21 +4,25 @@
 
 from __future__ import annotations
 
-from datetime import date
-from types import SimpleNamespace
-
 import pytest
 
 import factory.services.outline as outline_mod
 from factory.events.envelope import Actor
 from factory.model.drafts import Outline
+from factory.model.lineage import RelationProposal
 from factory.services.context import Project
-from factory.services.ideas import IdeaView
 from factory.services.outline import OutlineScope, build_outline, outline_json
+from factory.services.relations import propose_relation
 from tests.contribution_helpers import ctr_a, ctr_b, ext_a, screened  # noqa: F401
 from tests.intuition_helpers import record_event, recorded
-from tests.views_b_helpers import ext_b  # noqa: F401
-from tests.writing_helpers import WWorld, ww  # noqa: F401
+from tests.views_b_helpers import declare_evidence, ext_b, set_year  # noqa: F401
+from tests.writing_helpers import (  # noqa: F401
+    WWorld,
+    confirmed_edge,
+    confirmed_idea,
+    item_per_work,
+    ww,
+)
 
 
 def section(outline: Outline, ref: str):  # type: ignore[no-untyped-def]
@@ -48,65 +52,93 @@ def test_idea_section_lists_members_items_edges_and_claims(project: Project, ww:
     assert not any(s.startswith("claim:") and s == ww.claim(2) for s in idea.supports)
 
 
-def _view(idea_id: str, origin: str) -> IdeaView:
-    return IdeaView(
-        idea_id=idea_id,
-        name="n",
-        origin=origin,
-        name_item="ext_x",
-        members=(origin,),
-        effective_members=(origin,),
-        state="confirmed",
-        merged_into=None,
-        event_id="ev_x",
-    )
-
-
-def _edge(source: str, target: str) -> SimpleNamespace:
-    return SimpleNamespace(source=source, target=target)
-
-
-def test_idea_sections_in_lineage_order(project: Project, monkeypatch: pytest.MonkeyPatch) -> None:
-    # c builds on b, b builds on a; a is newest, so the dates cannot be what orders them
-    ideas = [_view("ida_c", "w3"), _view("ida_a", "w1"), _view("ida_b", "w2"), _view("ida_d", "w0")]
-    out_edges = {"ida_c": ["ida_b"], "ida_b": ["ida_a"]}
-    monkeypatch.setattr(
-        outline_mod,
-        "index_neighbours",
-        lambda _p: lambda node, _d, _t: [_edge(node, t) for t in out_edges.get(node, [])],
-    )
-    dates = {
-        "w0": date(2018, 1, 1),
-        "w1": date(2021, 1, 1),
-        "w2": date(2020, 1, 1),
-        "w3": date(2019, 1, 1),
+@pytest.fixture
+def ideas_of(
+    project: Project,
+    agent: Actor,
+    other_session_human: Actor,
+    ctr_a: Actor,
+    ctr_b: Actor,
+    screened: list[str],
+) -> dict[str, str]:
+    """Works 0, 1 and 2 each carry one confirmed one-member idea, made in the order 2, 1, 0, so
+    that idea ids (the last tie-break) run against the lineage the tests build."""
+    declare_evidence(project, agent, contribution=True)
+    works = screened[:3]
+    items = item_per_work(project, ctr_a, ctr_b, works)
+    return {
+        w: confirmed_idea(project, agent, other_session_human, w, items[w]) for w in reversed(works)
     }
-    monkeypatch.setattr(
-        outline_mod,
-        "get_work",
-        lambda _p, w: SimpleNamespace(dates=SimpleNamespace(published=dates[w])),
-    )
-    order = [i.idea_id for i in outline_mod._lineage_order(project, ideas)]
-    # d (oldest origin, no edges) is ready first; then the chain a, b, c
-    assert order == ["ida_d", "ida_a", "ida_b", "ida_c"]
 
 
-def test_cycle_in_idea_edges_broken_by_id(
-    project: Project, monkeypatch: pytest.MonkeyPatch
+def idea_order(project: Project) -> list[str]:
+    return [s.title_ref for s in build_outline(project).sections if s.kind == "idea"]
+
+
+def test_idea_sections_in_lineage_order(
+    project: Project,
+    agent: Actor,
+    other_session_human: Actor,
+    screened: list[str],
+    ideas_of: dict[str, str],
 ) -> None:
-    ideas = [_view("ida_b", "w1"), _view("ida_a", "w1")]
-    out_edges = {"ida_a": ["ida_b"], "ida_b": ["ida_a"]}
-    monkeypatch.setattr(
-        outline_mod,
-        "index_neighbours",
-        lambda _p: lambda node, _d, _t: [_edge(node, t) for t in out_edges.get(node, [])],
+    a, b, c = screened[:3]
+    assert idea_order(project) == [ideas_of[c], ideas_of[b], ideas_of[a]]  # no edge yet: by id
+    confirmed_edge(project, agent, other_session_human, b, a, "builds-on")
+    confirmed_edge(project, agent, other_session_human, c, b, "improves-on")
+    assert idea_order(project) == [ideas_of[a], ideas_of[b], ideas_of[c]]
+
+
+def test_improves_on_alone_orders_ideas(
+    project: Project,
+    agent: Actor,
+    other_session_human: Actor,
+    screened: list[str],
+    ideas_of: dict[str, str],
+) -> None:
+    a, _, c = screened[:3]
+    confirmed_edge(project, agent, other_session_human, c, a, "improves-on")
+    order = idea_order(project)
+    assert order.index(ideas_of[a]) < order.index(ideas_of[c])
+
+
+def test_an_unconfirmed_edge_does_not_order_ideas(
+    project: Project,
+    agent: Actor,
+    screened: list[str],
+    ideas_of: dict[str, str],
+) -> None:
+    a, b, c = screened[:3]
+    propose_relation(
+        project,
+        agent,
+        RelationProposal(source_work=c, target=a, edge_type="builds-on", note="maybe"),
     )
-    monkeypatch.setattr(
-        outline_mod,
-        "get_work",
-        lambda _p, w: SimpleNamespace(dates=SimpleNamespace(published=None)),
-    )
-    assert [i.idea_id for i in outline_mod._lineage_order(project, ideas)] == ["ida_a", "ida_b"]
+    assert idea_order(project) == [ideas_of[c], ideas_of[b], ideas_of[a]]
+
+
+def test_ties_are_broken_by_origin_date_then_id(
+    project: Project, screened: list[str], ideas_of: dict[str, str]
+) -> None:
+    a, b, c = screened[:3]
+    set_year(project, b, "2001-06-01")
+    set_year(project, a, "2005-06-01")  # c keeps 2020
+    assert idea_order(project) == [ideas_of[b], ideas_of[a], ideas_of[c]]
+
+
+def test_cycle_in_idea_edges_broken_by_the_same_key(
+    project: Project,
+    agent: Actor,
+    other_session_human: Actor,
+    screened: list[str],
+    ideas_of: dict[str, str],
+) -> None:
+    a, b, _ = screened[:3]
+    confirmed_edge(project, agent, other_session_human, a, b, "builds-on")
+    confirmed_edge(project, agent, other_session_human, b, a, "improves-on")
+    order = idea_order(project)
+    assert order.index(ideas_of[b]) < order.index(ideas_of[a])  # the lower id goes first
+    assert len(order) == 3
 
 
 def test_group_sections_need_two_works(project: Project, ww: WWorld) -> None:
