@@ -78,7 +78,6 @@ from factory.regions.rules import (
 from factory.regions.term_use import term_has_import_tags
 from factory.regions.version import (
     canonical_rules,
-    compress,
     members_hash,
     members_text,
     region_version,
@@ -803,7 +802,7 @@ def snapshot_region(project: Project, actor: Actor, region_id: str) -> str:
             definition_event=str(row["event_id"]),
             rules_hash=rh,
             decisions=tuple(sorted(decision_ids)),
-            members_blob=project.blobs.put(compress(text_bytes)),
+            members_blob=project.blobs.put(text_bytes),
             members_hash=mh,
             basis_blob=project.blobs.put_json(basis),
             counts=dict(result.counts),

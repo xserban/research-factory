@@ -17,7 +17,6 @@ without a blob store raises.
 
 from __future__ import annotations
 
-import gzip
 import json
 import zlib
 from dataclasses import dataclass
@@ -39,7 +38,7 @@ from factory.model.regions import (
     RegionReviewed,
 )
 from factory.model.regions import RegionSnapshotTaken as Snapshot
-from factory.regions.version import canonical_rules
+from factory.regions.version import canonical_rules, member_lines
 
 
 @dataclass(frozen=True)
@@ -214,7 +213,7 @@ def _member_rows(blobs: BlobStore, p: Snapshot) -> list[tuple[str, str, str]] | 
     missing or corrupt, a line has no type, a member repeats or the basis is not an object (the
     event is then unfolded: a logged event can never be removed, so the fold must not raise)."""
     try:
-        lines = gzip.decompress(blobs.get(p.members_blob)).decode().splitlines()
+        lines = member_lines(blobs.get(p.members_blob))
         basis = blobs.get_json(p.basis_blob)
     except (FactoryError, OSError, EOFError, ValueError, zlib.error):
         return None

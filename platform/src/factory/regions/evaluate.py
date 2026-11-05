@@ -19,7 +19,6 @@ Invariants:
 
 from __future__ import annotations
 
-import gzip
 import itertools
 import json
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
@@ -51,6 +50,7 @@ from factory.regions.rules import (
     TextRule,
 )
 from factory.regions.term_use import term_row, term_targets
+from factory.regions.version import member_lines
 from factory.services.agreement import Outcome, final_outcomes
 from factory.services.context import Project
 from factory.services.ideas import _EFFECTIVE_MEMBERS
@@ -75,9 +75,9 @@ class Evaluation:
 
 
 def read_members_blob(blob: bytes) -> list[Member]:
-    """The members of a snapshot's (gzip) member blob, in blob order."""
+    """The members of a snapshot's member blob, in blob order."""
     members: list[Member] = []
-    for line in gzip.decompress(blob).decode().splitlines():
+    for line in member_lines(blob):
         kind, member = line.split("\t", 1)
         members.append((MemberType(kind), member))
     return members

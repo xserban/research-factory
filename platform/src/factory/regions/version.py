@@ -5,7 +5,8 @@ Invariants:
   include and exclude lists by canonical text and removes duplicates, so reordering rules never
   changes `rules_hash`.
 - `region_version` takes no definition text, name or author: they never reach `R@`.
-- `compress` is byte-deterministic (gzip level 9, `mtime = 0`).
+- `compress` is byte-deterministic (gzip level 9, `mtime = 0`). New member blobs are plain text, so
+  they reach a clone through `factory commit`; `member_lines` reads both, so old logs still fold.
 """
 
 from __future__ import annotations
@@ -19,6 +20,8 @@ from pydantic import JsonValue
 from factory.canonical import canonical_json
 from factory.model.regions import Facet
 from factory.regions.rules import MemberType, Rule, RuleSet
+
+_GZIP_MAGIC = b"\x1f\x8b"
 
 
 def canonical_rule(rule: Rule) -> JsonValue:
@@ -50,6 +53,12 @@ def members_text(members: Iterable[tuple[MemberType, str]]) -> bytes:
 
 def members_hash(text: bytes) -> str:
     return hashlib.sha256(text).hexdigest()
+
+
+def member_lines(blob: bytes) -> list[str]:
+    """The lines of a snapshot's member blob: plain text, or gzip in a log written before."""
+    data = gzip.decompress(blob) if blob.startswith(_GZIP_MAGIC) else blob
+    return data.decode().splitlines()
 
 
 def compress(text: bytes) -> bytes:
