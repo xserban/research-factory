@@ -30,6 +30,7 @@ from factory.model.extraction import (
 from factory.model.findings import ContradictionDecided, ContradictionProposed
 from factory.model.fulltext import Attempted, DocumentAdded, FetchStarted, SourceChanged
 from factory.model.gate_audit import GateAuditLabelled, GateAuditSampled
+from factory.model.hypotheses import LeadDecided, LeadRecorded
 from factory.model.imports import (
     ImportAdmissionPlanned,
     ImportAttachmentLinked,
@@ -257,4 +258,6 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("region.snapshot_taken", RegionSnapshotTaken, 1))
     catalog.register(EventType("region.reviewed", RegionReviewed, 1))
     catalog.register(EventType("region.member_decided", RegionMemberDecided, 1))
+    catalog.register(EventType("lead.recorded", LeadRecorded, 1))
+    catalog.register(EventType("lead.decided", LeadDecided, 1))
     return catalog

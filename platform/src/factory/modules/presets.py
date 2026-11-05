@@ -22,6 +22,7 @@ from factory.modules.contract import GatePolicy, PolicyKind
 
 HUMAN = GatePolicy(PolicyKind.HUMAN)
 LINK_AUDIT = GatePolicy(PolicyKind.AGENT_AUDIT, 0.1, 20)
+AGENT = GatePolicy(PolicyKind.AGENT)
 
 
 class Enforcement(StrEnum):
@@ -31,7 +32,11 @@ class Enforcement(StrEnum):
 
 
 PRESETS: Mapping[RigorMode, Mapping[str, GatePolicy]] = {
-    RigorMode.EXPLORATORY: {},
+    RigorMode.EXPLORATORY: {
+        "hypotheses.lead_decide": AGENT,
+        "hypotheses.register": AGENT,
+        "experiments.freeze_unlock": AGENT,
+    },
     RigorMode.PILOT: {
         "reference.link_confirm": LINK_AUDIT,
         "import.resolution_confirm": LINK_AUDIT,

@@ -17,7 +17,10 @@ AUDIT = GatePolicy(PolicyKind.AGENT_AUDIT, 0.1, 20)
 
 # Recorded from the code at base: only the second-agent link confirmation of slice-3a ruling 3
 # lets an agent pass a decision gate, and only in pilot.
+AGENT = GatePolicy(PolicyKind.AGENT)
 EXPECTED: dict[tuple[str, RigorMode], GatePolicy] = {
+    ("hypotheses.lead_decide", RigorMode.EXPLORATORY): AGENT,
+    ("hypotheses.register", RigorMode.EXPLORATORY): AGENT,
     ("reference.link_confirm", RigorMode.PILOT): AUDIT,
     ("import.resolution_confirm", RigorMode.PILOT): AUDIT,
 }
