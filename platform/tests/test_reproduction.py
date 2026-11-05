@@ -331,3 +331,69 @@ def test_projector_ignores_a_verdict_the_runs_do_not_give(
         [project.events.make("baseline.evaluated", other_design_run, project.system_actor())]
     )
     assert baseline_verdicts(project, exp) == {rk: "pending"}
+
+
+def _lie(exp: str, rk: str, runs: tuple[str, ...], **over: object) -> BaselineEvaluated:
+    body: dict[str, object] = {
+        "experiment_id": exp,
+        "row_key": rk,
+        "reported": "1",
+        "reproduced": "1",
+        "runs": runs,
+        "tolerance": "0.01",
+        "tolerance_kind": "relative",
+        "verdict": "reproduced",
+        "evaluator_version": "baseline-eval@1",
+    }
+    body.update(over)
+    return BaselineEvaluated.model_validate(body)
+
+
+def test_projector_ignores_a_verdict_that_leaves_a_seed_out(
+    project: Project, human: Actor, xw: XW, tmp_path: Path
+) -> None:
+    # review I4: the runs listed must cover every declared seed
+    exp = frozen_design(project, human, xw)
+    rk = xw.rows[0]
+    runs = _repro(project, human, tmp_path, exp, rk, {1: "1", 2: "9"})  # seed 3 not run yet
+    project.record(
+        [
+            project.events.make(
+                "baseline.evaluated", _lie(exp, rk, (runs[1],)), project.system_actor()
+            )
+        ]
+    )
+    assert baseline_verdicts(project, exp) == {rk: "pending"}
+    with pytest.raises(FactoryValidationError):
+        unlock_experiment(project, human, exp)
+
+
+def test_projector_ignores_a_verdict_with_a_reported_value_the_row_does_not_have(
+    project: Project, human: Actor, xw: XW, tmp_path: Path
+) -> None:
+    exp = frozen_design(project, human, xw)
+    rk = xw.rows[0]
+    runs = _repro(project, human, tmp_path, exp, rk, {1: "9", 2: "9"})
+    lie = _lie(exp, rk, tuple(runs.values()), reported="9", reproduced="9")
+    project.record([project.events.make("baseline.evaluated", lie, project.system_actor())])
+    assert baseline_verdicts(project, exp) == {rk: "pending"}  # the row reports 1, frozen with it
+
+
+def test_a_baseline_row_without_a_number_is_refused_at_design_time(
+    project: Project, human: Actor, xw: XW
+) -> None:
+    from factory.services.experiments import design_experiment
+    from factory.services.extraction_agreement import final_rows
+
+    row = final_rows(project)[0]
+    assert row.fields["value"].canonical is not None  # the world's rows have one
+    # a row that is not a final row has no value either way: refused with the existing reason
+    with pytest.raises(FactoryValidationError) as err:
+        design_experiment(
+            project,
+            DRAFTER,
+            xw.design(baselines=[{"row_key": "rk_000000000000", "tolerance": "1"}]),
+        )
+    assert [(i.field, i.reason) for i in err.value.issues] == [
+        ("baselines.0.row_key", "not-a-final-row")
+    ]

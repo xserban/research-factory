@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from typing import Any
 
 from sqlalchemy import Column, Index, Integer, MetaData, String, Table, func, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
@@ -101,6 +102,7 @@ def experiment_tables(
         Column("frozen_policy", String),
         Column("frozen_autonomy", String),
         Column("access_limit", Integer),
+        Column("baseline_values_json", String),
         Column("unlocked_event_id", String),
         Column("nonce", String),
         Column("unlock_policy", String),
@@ -329,9 +331,10 @@ def _frozen(t: ExperimentTables) -> Handler:
         if row is None or row[1] is not None or row[2] is not None or str(row[0]) != p.e_version:
             return
         # the allowance is the design's or the plan's at this point of the log, never the payload's
-        if p.test_access_limit != (
-            design_of(row[4]).test_access_limit or plan_access_limit(conn, t)
-        ):
+        frozen_design = design_of(row[4])
+        if p.test_access_limit != (frozen_design.test_access_limit or plan_access_limit(conn, t)):
+            return
+        if set(p.baseline_values) != {b.row_key for b in frozen_design.baselines}:
             return
         if not act_is_consistent(conn, t, event, p.policy, p.autonomy, _sessions(row[3])):
             return
@@ -343,6 +346,7 @@ def _frozen(t: ExperimentTables) -> Handler:
                 frozen_policy=p.policy.value,
                 frozen_autonomy=p.autonomy,
                 access_limit=p.test_access_limit,
+                baseline_values_json=canonical_json(dict(p.baseline_values)).decode(),
             )
         )
 
@@ -587,6 +591,22 @@ def _xrun_reported(t: ExperimentTables) -> Handler:
     return reported
 
 
+def _reproduction_run(
+    conn: Connection, t: ExperimentTables, p: BaselineEvaluated, run_id: str
+) -> Any:
+    """A reported, planned reproduction run of the baseline in `p`, else None."""
+    run = conn.execute(select(t.xruns).where(t.xruns.c.run_id == run_id)).first()
+    if (
+        run is None
+        or run.experiment_id != p.experiment_id
+        or run.arm != f"reproduction:{p.row_key}"
+        or run.exploratory
+        or run.reported_event_id is None
+    ):
+        return None
+    return run
+
+
 def _baseline_evaluated(t: ExperimentTables) -> Handler:
     """A verdict is folded once per baseline, from a `system` actor, and only if it is the one the
     runs give: every run it lists is a completed, planned reproduction run of that baseline, and
@@ -598,13 +618,17 @@ def _baseline_evaluated(t: ExperimentTables) -> Handler:
         if event.actor.kind != "system":
             return
         exp = conn.execute(
-            select(t.experiments.c.design_json, t.experiments.c.frozen_event_id).where(
-                t.experiments.c.experiment_id == p.experiment_id
-            )
+            select(
+                t.experiments.c.design_json,
+                t.experiments.c.frozen_event_id,
+                t.experiments.c.baseline_values_json,
+            ).where(t.experiments.c.experiment_id == p.experiment_id)
         ).first()
         if exp is None or exp[1] is None:
             return
         design = design_of(exp[0])
+        if json.loads(str(exp[2])).get(p.row_key) != p.reported:
+            return  # the reported value is the one frozen with the design
         baseline = next((b for b in design.baselines if b.row_key == p.row_key), None)
         if baseline is None or (p.tolerance, p.tolerance_kind) != (
             baseline.tolerance,
@@ -613,18 +637,35 @@ def _baseline_evaluated(t: ExperimentTables) -> Handler:
             return
         metric = next(m.name for m in design.metrics if m.primary)
         values: list[str] = []
+        used: set[int] = set()
         for run_id in p.runs:
-            run = conn.execute(select(t.xruns).where(t.xruns.c.run_id == run_id)).first()
-            if (
-                run is None
-                or run.experiment_id != p.experiment_id
-                or run.arm != f"reproduction:{p.row_key}"
-                or run.exploratory
-                or run.exit_status != 0
-                or run.metrics_json is None
-            ):
+            run = _reproduction_run(conn, t, p, run_id)
+            if run is None or run.exit_status != 0 or run.metrics_json is None or run.seed in used:
                 return
+            earlier = conn.execute(
+                select(func.count())
+                .select_from(t.xruns)
+                .where(
+                    t.xruns.c.experiment_id == p.experiment_id,
+                    t.xruns.c.arm == f"reproduction:{p.row_key}",
+                    t.xruns.c.exploratory == 0,
+                    t.xruns.c.seed == run.seed,
+                    t.xruns.c.exit_status == 0,
+                    t.xruns.c.reported_event_id < run.reported_event_id,
+                )
+            ).scalar_one()
+            if int(earlier):  # the first completed run of a seed is the one used (no best-of-n)
+                return
+            used.add(int(run.seed))
             values.append(str(json.loads(str(run.metrics_json))[metric]))
+        left_out: set[int] = set()
+        for run_id in p.excluded_runs:
+            run = _reproduction_run(conn, t, p, run_id)
+            if run is None or run.exit_status == 0:
+                return
+            left_out.add(int(run.seed))
+        if used & left_out or used | left_out != set(design.seeds):
+            return  # every declared seed is either in the mean or a seed that only failed
         reproduced = reproduced_value(values)
         if reproduced != p.reproduced:
             return

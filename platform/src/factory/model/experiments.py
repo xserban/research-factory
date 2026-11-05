@@ -34,6 +34,8 @@ ARM_RE = (
     r"^(?:treatment|baseline|(?:ablation|control):[a-z0-9_.-]{1,64}|reproduction:rk_[0-9a-f]{12})$"
 )
 SHA256_RE = r"^[0-9a-f]{64}$"
+CANONICAL_RE = r"^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$"
+"""A plain decimal as `extraction.numbers.canonical` writes it."""
 MAX_RESULTS_BYTES = 64 * 1024
 MAX_UNIVERSES = 256
 MAX_REASON = 300
@@ -252,6 +254,12 @@ class ExperimentFrozen(StrictModel):
     policy: PolicyKind
     autonomy: Autonomy
     test_access_limit: int = Field(ge=1)
+    baseline_values: dict[
+        Annotated[str, StringConstraints(pattern=ROW_KEY_RE)],
+        Annotated[str, StringConstraints(pattern=CANONICAL_RE)],
+    ] = Field(default_factory=dict)
+    """The reported value of each baseline row when the design froze: a baseline verdict compares
+    with this value, never with one it states itself."""
     """The confirmatory reads per primary cell in force when the design froze: a later protocol
     amendment does not change it."""
 

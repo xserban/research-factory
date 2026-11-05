@@ -26,7 +26,7 @@ from sqlalchemy import text
 
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor, Event
-from factory.extraction.numbers import normalise_text
+from factory.extraction.numbers import normalise_text, parse_printed
 from factory.hypotheses.design import design_issues, design_version
 from factory.index.experiments import design_of
 from factory.model.base import StrictModel
@@ -44,7 +44,7 @@ from factory.model.experiments import (
 from factory.model.project import RigorMode
 from factory.services.context import Project
 from factory.services.extraction import require_schema
-from factory.services.extraction_agreement import final_rows, key_value
+from factory.services.extraction_agreement import FinalRow, final_rows, key_value
 from factory.services.hypotheses import hypothesis_view
 from factory.services.hypothesis_gates import effective_plan, may_pass, project_mode
 from factory.services.xrun_accounting import (
@@ -181,6 +181,19 @@ def list_experiments(project: Project) -> list[ExperimentView]:
 # --- Validation ---------------------------------------------------------------------------------
 
 
+def reported_value(row: FinalRow | None) -> str | None:
+    """The canonical reported value of an evidence row's `value` field, if it has a number."""
+    field = None if row is None else row.fields.get("value")
+    if field is None:
+        return None
+    if field.canonical is not None:
+        return field.canonical
+    printed = parse_printed(str(field.value))
+    if printed is None:
+        return None
+    return "0" if printed == 0 else format(printed.normalize(), "f")
+
+
 def _baseline_issues(
     project: Project, design: ExperimentDesign, conditions: dict[str, str]
 ) -> list[ValidationIssue]:
@@ -198,6 +211,9 @@ def _baseline_issues(
         row = rows.get(baseline.row_key)
         if row is None:
             issues.append(ValidationIssue(f"baselines.{i}.row_key", "not-a-final-row"))
+            continue
+        if reported_value(row) is None:
+            issues.append(ValidationIssue(f"baselines.{i}.row_key", "no-reported-value"))
             continue
         for key, wanted in conditions.items():
             field = row.fields.get(key)
@@ -355,6 +371,12 @@ def amend_experiment(
 # --- Freeze and unlock --------------------------------------------------------------------------
 
 
+def _baseline_values(project: Project, design: ExperimentDesign) -> dict[str, str]:
+    rows = {r.row_key: r for r in final_rows(project)}
+    values = {b.row_key: reported_value(rows.get(b.row_key)) for b in design.baselines}
+    return {key: value for key, value in values.items() if value is not None}
+
+
 def freeze_experiment(project: Project, actor: Actor, experiment_id: str) -> str:
     """Freeze the design (an act at the gate `experiments.freeze_unlock`) and return the event id.
     `E@` is then fixed and records the confirmatory reads per primary cell then allowed. Refused,
@@ -386,6 +408,7 @@ def freeze_experiment(project: Project, actor: Actor, experiment_id: str) -> str
             policy=verdict.policy.kind,
             autonomy=verdict.autonomy,
             test_access_limit=limit,
+            baseline_values=_baseline_values(project, view.design),
         )
         blob = _input_blob(project, actor, payload.model_dump(mode="json"))
         event = project.events.make(

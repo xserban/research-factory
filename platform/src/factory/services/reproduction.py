@@ -16,7 +16,6 @@ Invariants:
 from __future__ import annotations
 
 from factory.events.envelope import Event
-from factory.extraction.numbers import parse_printed
 from factory.hypotheses.reproduction import (
     EVALUATOR_VERSION,
     reproduced_value,
@@ -24,8 +23,8 @@ from factory.hypotheses.reproduction import (
 )
 from factory.model.experiments import BaselineEvaluated
 from factory.services.context import Project
-from factory.services.experiments import ExperimentView, experiment_view
-from factory.services.extraction_agreement import FinalRow, final_rows
+from factory.services.experiments import ExperimentView, experiment_view, reported_value
+from factory.services.extraction_agreement import final_rows
 from factory.services.xrun_accounting import (
     ReproductionRun,
     Verdict,
@@ -34,19 +33,6 @@ from factory.services.xrun_accounting import (
 )
 
 __all__ = ["Verdict", "baseline_verdicts", "evaluate_baselines"]
-
-
-def _reported(row: FinalRow | None) -> str | None:
-    """The canonical reported value of an evidence row's `value` field, if it has a number."""
-    field = None if row is None else row.fields.get("value")
-    if field is None:
-        return None
-    if field.canonical is not None:
-        return field.canonical
-    printed = parse_printed(str(field.value))
-    if printed is None:
-        return None
-    return "0" if printed == 0 else format(printed.normalize(), "f")
 
 
 def _used_runs(
@@ -83,7 +69,7 @@ def _evaluate(project: Project, view: ExperimentView) -> list[Event]:
         used = _used_runs(
             view.design.seeds, reproduction_runs(project, view.experiment_id, baseline.row_key)
         )
-        reported = _reported(rows.get(baseline.row_key))
+        reported = reported_value(rows.get(baseline.row_key))
         if used is None or reported is None:
             continue
         included, excluded = used
