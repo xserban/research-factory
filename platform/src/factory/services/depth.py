@@ -23,13 +23,14 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from factory.errors import FactoryValidationError, ValidationIssue
-from factory.model.extraction import Scope
+from factory.model.extraction import AuditItemRef, Scope
 from factory.model.protocol import ScreeningStage
 from factory.model.views import ProcessingDepth
 from factory.services.agreement import Outcome, final_outcomes
 from factory.services.context import Project
 from factory.services.extraction import unit_states
 from factory.services.extraction_agreement import final_rows
+from factory.services.extraction_audit import audit_current, audit_outdated
 
 DEPTH_RANK: Mapping[ProcessingDepth, int] = {
     "indexed": 0,
@@ -84,21 +85,50 @@ def depth_index(project: Project, *, agent: bool = False) -> DepthIndex:
             if r.status in ("agreed", "resolved")
         )
     if not agent:
-        with project.index.connect() as conn:
-            verified.update(
-                str(r[0])
-                for r in conn.execute(
-                    text(
-                        "SELECT DISTINCT work_id FROM extraction_audit_items "
-                        "WHERE correct IS NOT NULL"
-                    )
-                )
-            )
+        verified.update(_audited(project))
     return DepthIndex(
         screened=frozenset(screened),
         extracted=frozenset(extracted),
         verified=frozenset(verified),
     )
+
+
+def _audited(project: Project) -> set[str]:
+    """The works with an item the researcher labelled correct in the latest audit of an extraction
+    scope (evidence or contribution), the value unchanged since it was sampled. Read as
+    `extraction_audit_report` reads an audit: latest audit only, outdated labels left out."""
+    out: set[str] = set()
+    for scope in _SCOPES:
+        with project.index.connect() as conn:
+            latest = conn.execute(
+                text(
+                    "SELECT audit_id FROM extraction_audits WHERE scope = :s "
+                    "ORDER BY audit_id DESC LIMIT 1"
+                ),
+                {"s": scope.value},
+            ).one_or_none()
+            if latest is None:
+                continue
+            rows = conn.execute(
+                text(
+                    "SELECT work_id, row_key, field, extraction_id FROM extraction_audit_items "
+                    "WHERE audit_id = :a AND correct = 1"
+                ),
+                {"a": str(latest[0])},
+            ).all()
+        if not rows:
+            continue
+        current = audit_current(project, scope)
+        for work, row_key, name, extraction_id in rows:
+            item = AuditItemRef(
+                work_id=str(work),
+                row_key=str(row_key),
+                field=str(name),
+                extraction_id=None if extraction_id is None else str(extraction_id),
+            )
+            if not audit_outdated(item, current):
+                out.add(item.work_id)
+    return out
 
 
 def _known(conn: Connection, ids: Sequence[str]) -> set[str]:

@@ -59,7 +59,9 @@ __all__ = [
     "AuditEvidence",
     "ExtractionAuditReport",
     "agreed_values",
+    "audit_current",
     "audit_evidence",
+    "audit_outdated",
     "extraction_audit_outstanding",
     "extraction_audit_record",
     "extraction_audit_report",
@@ -505,3 +507,9 @@ def _outdated(item: AuditItemRef, current: Mapping[tuple[str, str, str], str]) -
 
 def _refuse(reason: str) -> FactoryValidationError:
     return FactoryValidationError([ValidationIssue("passes", reason)])
+
+
+audit_current = _current
+"""The extraction each agreed value of a scope currently comes from (for readers of audits)."""
+audit_outdated = _outdated
+"""Whether a sampled value changed since the sample."""

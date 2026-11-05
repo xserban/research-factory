@@ -127,8 +127,15 @@ def test_agent_depth_counts_ignore_audit_labels(region_project: RWorld) -> None:
     with w.project.index.connect() as conn:
         conn.execute(
             text(
+                "INSERT INTO extraction_audits (audit_id, scope, random_seed, population, "
+                "population_digest, protocol_id, event_id) VALUES ('xau_1', 'evidence', 1, 1, "
+                "'d', 'P@x', 'ev')"
+            )
+        )
+        conn.execute(
+            text(
                 "INSERT INTO extraction_audit_items (audit_id, work_id, row_key, field, scope, "
-                "correct, note) VALUES ('xau_1', :w, 'rk_1', 'value', 'evidence', 0, '')"
+                "correct, note) VALUES ('xau_1', :w, 'rk_0123456789ab', 'value', 'evidence', 1, '')"
             ),
             {"w": w.included[0]},
         )
