@@ -19,7 +19,7 @@ import heapq
 import json
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal, get_args
 
 from pydantic import JsonValue
 from sqlalchemy import text
@@ -37,6 +37,16 @@ from factory.lineage.graph import (
     Neighbours,
     graph_neighbours,
     load_fixture,
+)
+from factory.lineage.paths import (
+    LINEAGE_TYPES,
+    MAX_DEPTH,
+    MAX_RESULTS,
+    QueryResult,
+    ancestors,
+    descendants,
+    improvements_on,
+    path,
 )
 from factory.model.base import StrictModel
 from factory.model.extraction import Scope
@@ -585,4 +595,229 @@ def graph_status(project: Project) -> GraphStatus:
         no_references=[w for w in population if current_extraction(project, w) is None],
         not_stated=sum(1 for i in items if i.item_kind == "not-stated"),
         uncited_base=sum(1 for i in items if i.item_kind == "base-idea" and i.cited_entry is None),
+    )
+
+
+# --- Queries ---
+
+QueryKind = Literal[
+    "ancestors", "descendants", "path", "no_stated_base", "improvements_on", "cited_by_at_least"
+]
+_NEEDS_NODE = frozenset({"ancestors", "descendants", "path", "improvements_on"})
+_KINDS = frozenset(get_args(QueryKind))
+
+
+class NoStatedBase(StrictModel):
+    """Population works with no live `builds-on` (or `improves-on`) edge in the filter, in exactly
+    one category each (ruling 6): `unextracted` (no current contribution unit), `not-stated` (a
+    final base-idea item recorded as not stated), `target-outside-corpus` (a final base-idea item
+    citing an entry that resolves to a work outside the corpus), `no-relation` (all others)."""
+
+    filter: dict[str, JsonValue]
+    unextracted: list[str]
+    not_stated: list[str]
+    target_outside_corpus: list[str]
+    no_relation: list[str]
+
+
+def no_stated_base(project: Project, flt: GraphFilter = DEFAULT_FILTER) -> NoStatedBase:
+    view = _view(project, flt)
+    population = _population(project)
+    with project.index.connect() as conn:
+        rows = (
+            conn.execute(
+                text(
+                    "SELECT * FROM graph_edges WHERE source IN (SELECT value FROM json_each(:p)) "
+                    "AND edge_type IN ('builds-on', 'improves-on') AND live = 1"
+                ),
+                {"p": json.dumps(population)},
+            )
+            .mappings()
+            .all()
+        )
+        based = {e.source for e in view.overlay(conn, rows, LINEAGE_TYPES)}
+        rest = [w for w in population if w not in based]
+        current = {
+            s.work_id
+            for s in unit_states(project, scope=Scope.CONTRIBUTION)
+            if s.state == "current"
+        }
+        items = [i for i in final_items(project) if i.work_id in set(rest)]
+        absent = {
+            i.work_id for i in items if i.item_kind == "not-stated" and i.absent_kind == "base-idea"
+        }
+        cited = [i for i in items if i.item_kind == "base-idea" and i.cited is not None]
+        outside: set[str] = set()
+        if cited:
+            links = {
+                (str(r[0]), int(r[1])): str(r[2])
+                for r in conn.execute(
+                    text(
+                        "SELECT extraction_id, ordinal, work_id FROM reference_links "
+                        "WHERE state = 'resolved' AND work_id IS NOT NULL"
+                    )
+                ).all()
+                if (str(r[0]), int(r[1]))
+                in {(i.cited.reference_extraction_id, i.cited.ordinal) for i in cited if i.cited}
+            }
+            scopes = _paper_nodes(conn, sorted(set(links.values())))
+            for i in cited:
+                assert i.cited is not None
+                found = links.get((i.cited.reference_extraction_id, i.cited.ordinal))
+                if found is not None and scopes[found].scope == "external":
+                    outside.add(i.work_id)
+    unextracted = [w for w in rest if w not in current]
+    out: dict[str, list[str]] = {"u": [], "n": [], "o": [], "r": []}
+    for w in rest:
+        key = "u" if w not in current else "n" if w in absent else "o" if w in outside else "r"
+        out[key].append(w)
+    assert len(unextracted) == len(out["u"])
+    return NoStatedBase(
+        filter=flt.as_dict(),
+        unextracted=sorted(out["u"]),
+        not_stated=sorted(out["n"]),
+        target_outside_corpus=sorted(out["o"]),
+        no_relation=sorted(out["r"]),
+    )
+
+
+class GraphQueryResult(StrictModel):
+    """A query's answer: ids and statuses only, never prose. `depth` is the depth used and
+    `depth_clamped` says the requested one was larger than `MAX_DEPTH`."""
+
+    query: QueryKind
+    filter: dict[str, JsonValue]
+    nodes: list[dict[str, JsonValue]]
+    edges: list[dict[str, JsonValue]]
+    truncated: bool
+    depth: int | None
+    depth_clamped: bool = False
+    categories: dict[str, list[str]] | None = None
+
+
+def _node_rows(project: Project, ids: Sequence[str]) -> list[dict[str, JsonValue]]:
+    """`{id, type, scope}` for each id, in the order given."""
+    with project.index.connect() as conn:
+        papers = _paper_nodes(conn, [i for i in ids if not _is_idea(i)])
+    out: list[dict[str, JsonValue]] = []
+    for ident in ids:
+        if _is_idea(ident):
+            out.append({"id": ident, "type": "idea", "scope": None})
+        else:
+            scope = papers[ident].scope if ident in papers else "external"
+            out.append({"id": ident, "type": "paper", "scope": scope})
+    return out
+
+
+def _edge_rows(edges: Sequence[GraphEdge]) -> list[dict[str, JsonValue]]:
+    return [
+        {
+            "id": e.edge_id,
+            "type": e.edge_type.value,
+            "source": e.source,
+            "target": e.target,
+            "status": e.status
+            if isinstance(e.status, str) and e.status == DERIVED
+            else e.status.value,
+        }
+        for e in sorted(edges, key=GraphEdge.sort_key)
+    ]
+
+
+def graph_query(
+    project: Project,
+    query: str,
+    *,
+    node: str | None = None,
+    target: str | None = None,
+    depth: int = 3,
+    k: int = 2,
+    flt: GraphFilter = DEFAULT_FILTER,
+) -> GraphQueryResult:
+    """Run a bounded query; invalid arguments raise `FactoryValidationError` and read nothing."""
+    if query not in _KINDS:
+        raise FactoryValidationError([ValidationIssue("query", "unknown query")])
+    kind: QueryKind = query  # type: ignore[assignment]
+    issues: list[ValidationIssue] = []
+    if kind in _NEEDS_NODE and node is None:
+        issues.append(ValidationIssue("node", "required"))
+    if kind == "path" and target is None:
+        issues.append(ValidationIssue("target", "required"))
+    if kind in ("ancestors", "descendants") and depth < 1:
+        issues.append(ValidationIssue("depth", "must be at least 1"))
+    if kind == "cited_by_at_least" and k < 1:
+        issues.append(ValidationIssue("k", "must be at least 1"))
+    if issues:
+        raise FactoryValidationError(issues)
+    if kind in _NEEDS_NODE:
+        assert node is not None
+        require_node(project, node, "node", flt)
+    if kind == "path":
+        assert target is not None
+        require_node(project, target, "target", flt)
+    if kind == "no_stated_base":
+        base = no_stated_base(project, flt)
+        categories = {
+            "unextracted": base.unextracted,
+            "not-stated": base.not_stated,
+            "target-outside-corpus": base.target_outside_corpus,
+            "no-relation": base.no_relation,
+        }
+        flat = sorted(w for ws in categories.values() for w in ws)
+        return GraphQueryResult(
+            query=kind,
+            filter=flt.as_dict(),
+            nodes=_node_rows(project, flat),
+            edges=[],
+            truncated=False,
+            depth=None,
+            categories=categories,
+        )
+    if kind == "cited_by_at_least":
+        with project.index.connect() as conn:
+            project.index.sync()
+            rows = conn.execute(
+                text(
+                    "SELECT target FROM graph_edges WHERE edge_type = 'cites' AND live = 1 "
+                    "AND (decision IS NULL OR decision != 'reject') GROUP BY target "
+                    "HAVING COUNT(DISTINCT source) >= :k ORDER BY target LIMIT :n"
+                ),
+                {"k": k, "n": MAX_RESULTS + 1},
+            ).all()
+        ids = [str(r[0]) for r in rows]
+        return GraphQueryResult(
+            query=kind,
+            filter=flt.as_dict(),
+            nodes=_node_rows(project, ids[:MAX_RESULTS]),
+            edges=[],
+            truncated=len(ids) > MAX_RESULTS,
+            depth=None,
+        )
+    seen: dict[str, GraphEdge] = {}
+    lookup = index_neighbours(project, flt)
+
+    def recording(n: str, d: Direction, types: frozenset[EdgeType]) -> Sequence[GraphEdge]:
+        found = lookup(n, d, types)
+        seen.update((e.edge_id, e) for e in found)
+        return found
+
+    assert node is not None
+    result: QueryResult
+    if kind == "ancestors":
+        result = ancestors(recording, node, depth)
+    elif kind == "descendants":
+        result = descendants(recording, node, depth)
+    elif kind == "path":
+        assert target is not None
+        result = path(recording, node, target)
+    else:
+        result = improvements_on(recording, node)
+    return GraphQueryResult(
+        query=kind,
+        filter=flt.as_dict(),
+        nodes=_node_rows(project, result.nodes),
+        edges=_edge_rows([seen[i] for i in result.edges]),
+        truncated=result.truncated,
+        depth=result.depth,
+        depth_clamped=kind in ("ancestors", "descendants") and depth > MAX_DEPTH,
     )
