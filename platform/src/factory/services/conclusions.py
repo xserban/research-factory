@@ -19,19 +19,22 @@ from __future__ import annotations
 
 import importlib.util
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
+from pydantic import JsonValue
 from sqlalchemy import text
 
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
-from factory.living.facts import ConclusionFacts, conclusion_facts
+from factory.living.facts import ConclusionFacts, FactsDiff, conclusion_facts, facts_diff
 from factory.model.conclusions import (
     CCL_ID_RE,
     BasisRef,
+    ConclusionDiff,
     ConclusionRecord,
     ConclusionRegistered,
     ConclusionRetired,
+    ConclusionSnapshot,
     Predicate,
 )
 from factory.services.context import Project
@@ -40,7 +43,12 @@ from factory.services.extraction import live_rows, stale_extractions
 from factory.services.extraction_agreement import final_rows
 from factory.services.notices import work_states
 from factory.services.prisma import prisma_flow
-from factory.services.snapshots import included_work_ids
+from factory.services.snapshots import (
+    included_work_ids,
+    last_snapshot_event,
+    snapshot_blob,
+    snapshots,
+)
 from factory.services.trace import trace
 
 # Module kind (slice M): a builder; its human input event is conclusion.registered.
@@ -221,6 +229,102 @@ def basis_state(
     return tuple(sorted(affected))
 
 
+def conclusion_section(project: Project) -> Mapping[str, JsonValue]:
+    """The snapshot section of the conclusions (a living-B `SnapshotSection`): the conclusion
+    facts and each active conclusion's predicate value and basis state, as computed now.
+
+    Empty while no conclusion is active, so a snapshot of a review without conclusions is
+    unchanged. No statement is stored in the blob."""
+    active = conclusions(project)
+    if not active:
+        return {}
+    facts = current_facts(project)
+    states = [
+        ConclusionSnapshot(
+            conclusion_id=c.conclusion_id,
+            predicate_value=None if c.predicate is None else predicate_value(facts, c.predicate),
+            affected=basis_state(project, c.basis, facts=facts),
+        )
+        for c in active
+    ]
+    return {
+        "conclusion_facts": facts.model_dump(mode="json"),
+        "conclusions": [s.model_dump(mode="json") for s in states],
+    }
+
+
+def conclusion_diff(project: Project, *, since: str | None = None) -> list[ConclusionDiff]:
+    """How each active conclusion stands against snapshot `since` (default: the last).
+
+    `new` for a conclusion the snapshot does not hold (registered after it, or no snapshot at
+    all); `basis-affected` when a basis reference is affected that was not at the snapshot;
+    `changed` when the predicate's value differs from the snapshot's; else `unchanged`. Computed,
+    never stored; refused (field `since`) for an unknown snapshot. Read-only."""
+    active = conclusions(project)
+    if not active:
+        return []
+    facts = current_facts(project)
+    old_facts: ConclusionFacts | None = None
+    old: dict[str, ConclusionSnapshot] = {}
+    if since is not None or last_snapshot_event(project) is not None:
+        named = since or snapshots(project)[-1].snapshot_id
+        try:
+            blob = snapshot_blob(project, named)
+        except FactoryValidationError:
+            raise FactoryValidationError([ValidationIssue("since", "unknown snapshot")]) from None
+        old_facts = blob.conclusion_facts
+        old = {c.conclusion_id: c for c in blob.conclusions or ()}
+    diffs: list[ConclusionDiff] = []
+    for c in active:
+        now = None if c.predicate is None else predicate_value(facts, c.predicate)
+        affected = basis_state(project, c.basis, facts=facts)
+        before = old.get(c.conclusion_id)
+        if before is None:
+            diffs.append(
+                ConclusionDiff(
+                    conclusion_id=c.conclusion_id,
+                    state="new",
+                    predicate_before=None,
+                    predicate_now=now,
+                    affected=affected,
+                    facts=None,
+                )
+            )
+            continue
+        if set(affected) - set(before.affected):
+            state = "basis-affected"
+        elif before.predicate_value != now:
+            state = "changed"
+        else:
+            state = "unchanged"
+        diffs.append(
+            ConclusionDiff(
+                conclusion_id=c.conclusion_id,
+                state=state,
+                predicate_before=before.predicate_value,
+                predicate_now=now,
+                affected=affected,
+                facts=None if old_facts is None else _scoped(facts_diff(old_facts, facts), c),
+            )
+        )
+    return diffs
+
+
+def _scoped(diff: FactsDiff, conclusion: ConclusionRecord) -> FactsDiff | None:
+    """The part of `diff` that concerns the groups the conclusion names (None if it names none)."""
+    names = {b.ref for b in conclusion.basis if b.kind == "group"}
+    if conclusion.predicate is not None and conclusion.predicate.group_id is not None:
+        names.add(conclusion.predicate.group_id)
+    if not names:
+        return None
+    return FactsDiff(
+        groups_added=tuple(g for g in diff.groups_added if g in names),
+        groups_removed=tuple(g for g in diff.groups_removed if g in names),
+        groups=tuple(g for g in diff.groups if g.group_id in names),
+        included_delta=diff.included_delta,
+    )
+
+
 def _resolves(project: Project, ref: str) -> bool:
     try:
         trace(project, ref)
@@ -272,6 +376,8 @@ def _predicate_issues(
 __all__ = [
     "CCL_ID_RE",
     "basis_state",
+    "conclusion_diff",
+    "conclusion_section",
     "conclusions",
     "current_facts",
     "lineage_available",

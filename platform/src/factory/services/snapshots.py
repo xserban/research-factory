@@ -12,12 +12,14 @@ Invariants:
 - `cutoff_event` is the last event of the log when the snapshot is taken, under the index lock,
   so the blob is a function of the events up to it: rebuilding the index and recomputing with the
   same cut-off gives the same blob (same hash).
-- `conclusion_facts` and `conclusions` stay None until living-D registers sections for them.
+- `conclusion_facts` and `conclusions` are filled by `services.conclusions.conclusion_section`
+  when a conclusion is registered, and stay None otherwise (a log without conclusions keeps its
+  blobs unchanged).
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Literal
 
 from pydantic import JsonValue
@@ -26,7 +28,9 @@ from sqlalchemy import text
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
 from factory.index.default import PROJECTION_VERSION
+from factory.living.facts import ConclusionFacts
 from factory.model.base import StrictModel
+from factory.model.conclusions import ConclusionSnapshot
 from factory.model.living import SnapshotRecorded
 from factory.model.protocol import ScreeningStage
 from factory.services.agreement import Outcome, final_outcomes
@@ -35,8 +39,9 @@ from factory.services.dedup import canonical_works
 from factory.services.prisma import PrismaFlow, prisma_flow
 from factory.services.protocol import current_protocol
 
-SnapshotSection = Callable[[Project], tuple[str, JsonValue]]
-"""Fills one slot of the blob: returns (`conclusion_facts` | `conclusions`, value)."""
+SnapshotSection = Callable[[Project], tuple[str, JsonValue] | Mapping[str, JsonValue]]
+"""Fills slots of the blob: returns (`conclusion_facts` | `conclusions`, value) or a mapping of
+such slots to values."""
 
 SECTION_SLOTS = ("conclusion_facts", "conclusions")
 
@@ -49,8 +54,10 @@ class SnapshotBlob(StrictModel):
     cutoff_event: str
     prisma: PrismaFlow
     included_ids: tuple[str, ...]
-    conclusion_facts: JsonValue | None = None
-    conclusions: JsonValue | None = None
+    conclusion_facts: ConclusionFacts | None = None
+    """The conclusion facts when a conclusion was registered (living-D); else None."""
+    conclusions: tuple[ConclusionSnapshot, ...] | None = None
+    """Each registered conclusion's predicate value and basis state; else None."""
     update: JsonValue | None = None
     """The `UpdateFlow` this snapshot closes (pinned; None on a snapshot taken before pinning)."""
 
@@ -125,20 +132,24 @@ def build_snapshot_blob(
     update = None
     if snapshot_id is not None:
         update = pin_update(project, snapshot_id, cutoff_event).model_dump(mode="json")
+    from factory.services.conclusions import conclusion_section  # conclusions read snapshots
+
     slots: dict[str, JsonValue] = {}
-    for section in extra:
-        name, value = section(project)
-        if name not in SECTION_SLOTS:
-            raise ValueError(f"unknown snapshot section {name!r}")
-        slots[name] = value
-    return SnapshotBlob(
-        protocol_id="" if protocol is None else protocol.protocol_id,
-        cutoff_event=cutoff_event,
-        prisma=flow,
-        included_ids=included_work_ids(project, flow),
-        conclusion_facts=slots.get("conclusion_facts"),
-        conclusions=slots.get("conclusions"),
-        update=update,
+    for section in (*extra, conclusion_section):
+        filled = section(project)
+        for name, value in (dict([filled]) if isinstance(filled, tuple) else filled).items():
+            if name not in SECTION_SLOTS:
+                raise ValueError(f"unknown snapshot section {name!r}")
+            slots[name] = value
+    return SnapshotBlob.model_validate(
+        {
+            "protocol_id": "" if protocol is None else protocol.protocol_id,
+            "cutoff_event": cutoff_event,
+            "prisma": flow,
+            "included_ids": included_work_ids(project, flow),
+            "update": update,
+            **slots,
+        }
     )
 
 

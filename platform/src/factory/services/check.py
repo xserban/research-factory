@@ -48,6 +48,7 @@ from factory.services.audit import audit_outstanding, audit_report, audit_shortf
 from factory.services.calibration import calibrated_models, calibration_status
 from factory.services.call_memo import entering
 from factory.services.chase import chase_rounds, forward_chase_rounds
+from factory.services.conclusions import conclusion_diff
 from factory.services.context import Project
 from factory.services.dedup import active_merges
 from factory.services.document_read import default_conversion
@@ -162,6 +163,8 @@ LEVELS: dict[str, tuple[Severity | None, Severity | None, Severity | None]] = {
     "version-of-record-available": ("warning", "warning", "warning"),
     "version-link-conflict": ("warning", "warning", "warning"),
     "status-lookup-failed": ("warning", "warning", "warning"),
+    "conclusion-changed": ("warning", "warning", "warning"),
+    "conclusion-basis-affected": ("warning", "warning", "error"),
 }
 
 _NOTICE_PHRASES: dict[str, str] = {
@@ -426,6 +429,39 @@ def _hits(project: Project) -> list[_Hit]:
     hits += _imports(project)
     hits += _living(project)
     hits += _notices(project, outcomes)
+    hits += _conclusions(project)
+    return hits
+
+
+# --- Conclusions (slice 4b, living-D) ---
+
+
+def _conclusions(project: Project) -> list[_Hit]:
+    """`conclusion-changed` (advisory) and `conclusion-basis-affected` (error in systematic) over
+    the active conclusions, from `conclusion_diff` against the last snapshot. Refs are conclusion
+    ids; no statement is read."""
+    diffs = conclusion_diff(project)
+    changed = [
+        d.conclusion_id for d in diffs if d.state != "new" and d.predicate_before != d.predicate_now
+    ]
+    affected = [d.conclusion_id for d in diffs if d.affected]
+    hits: list[_Hit] = []
+    if changed:
+        hits.append(
+            _Hit(
+                "conclusion-changed",
+                tuple(changed),
+                f"{len(changed)} conclusion(s) whose predicate differs from the last snapshot",
+            )
+        )
+    if affected:
+        hits.append(
+            _Hit(
+                "conclusion-basis-affected",
+                tuple(affected),
+                f"{len(affected)} conclusion(s) with an affected basis",
+            )
+        )
     return hits
 
 

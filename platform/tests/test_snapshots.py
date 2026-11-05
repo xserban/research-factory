@@ -13,6 +13,7 @@ from factory.config import Settings
 from factory.errors import FactoryValidationError
 from factory.events.envelope import Actor
 from factory.events.reader import read_all
+from factory.living.facts import ConclusionFacts
 from factory.mcp.server import build_server
 from factory.services.context import Project
 from factory.services.living_hooks import DEFAULT_HOOKS, snapshot_hook
@@ -117,11 +118,12 @@ def test_snapshot_sections_fill_the_living_d_slots(
     _ready(project, agent, human, mock_sources)
 
     def facts(_project: Project) -> tuple[str, JsonValue]:
-        return "conclusion_facts", {"n": 1}
+        return "conclusion_facts", {"included": 1, "groups": []}
 
     recorded = snapshot(project, human, trigger="human", extra=(facts,))
     blob = snapshot_blob(project, recorded.snapshot_id)
-    assert blob.conclusion_facts == {"n": 1} and blob.conclusions is None
+    assert blob.conclusion_facts == ConclusionFacts(included=1, groups=())
+    assert blob.conclusions is None
 
 
 def test_snapshot_hook_every_n_cycles(
