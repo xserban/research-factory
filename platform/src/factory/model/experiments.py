@@ -37,6 +37,9 @@ SHA256_RE = r"^[0-9a-f]{64}$"
 CANONICAL_RE = r"^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$"
 """A plain decimal as `extraction.numbers.canonical` writes it."""
 MAX_RESULTS_BYTES = 64 * 1024
+MAX_METRIC_MAGNITUDE = 10**15
+"""A metric at or beyond this is refused at ingestion: the six-place statistics are exact within
+28 digits, and a value that overflows them must not reach a recorded run."""
 MAX_UNIVERSES = 256
 MAX_REASON = 300
 MAX_DEVIATION_TEXT = 600

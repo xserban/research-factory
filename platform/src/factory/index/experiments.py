@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import Column, Index, Integer, MetaData, String, Table, func, select, update
@@ -49,6 +50,7 @@ from factory.index.hypotheses import policy_of
 from factory.index.projection import Handler
 from factory.model.experiments import (
     AUTOMATIC_DEVIATIONS,
+    MAX_METRIC_MAGNITUDE,
     BaselineAccepted,
     BaselineEvaluated,
     Cell,
@@ -613,6 +615,8 @@ def _xrun_reported(t: ExperimentTables) -> Handler:
         cell = run_cell(run)
         wanted = {m.name for m in design.metrics}
         if not set(p.metrics) <= wanted or (p.exit_status == 0 and set(p.metrics) != wanted):
+            return
+        if any(abs(Decimal(m.value)) >= MAX_METRIC_MAGNITUDE for m in p.metrics.values()):
             return
         if cell.needs_unlock and (exp[1] is None or p.nonce != str(exp[1])):
             return
