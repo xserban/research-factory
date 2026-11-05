@@ -93,10 +93,19 @@ def _describe_interpretation(conn: Connection, ident: str) -> Described | None:
     if not found:
         return None
     state, self_reviewed, body, event_id, _sup, actor, model, skill, blob, stale = found[0]
+    quotes = "".join(
+        f' source "{r[0]}" at {r[1]}/{r[2]};'
+        for r in _rows(
+            conn,
+            "SELECT quote, conversion_id, anchor FROM interpretation_sources "
+            "WHERE interpretation_id = :i AND kind = 'quote' ORDER BY position",
+            i=ident,
+        )
+    )
     label = (
         f"interpretation {ident} · {layer_label(str(state))}"
         f"{_flags((bool(stale), 'source-stale'), (bool(self_reviewed), 'self-reviewed'))}: "
-        f"{body} ({_writer(actor, model, skill, blob)})"
+        f"{body} ({quotes.strip() + ' ' if quotes else ''}{_writer(actor, model, skill, blob)})"
     )
     return label, str(event_id)
 
@@ -132,17 +141,18 @@ def _describe_concept(conn: Connection, ident: str) -> Described | None:
 def _describe_link(conn: Connection, ident: str) -> Described | None:
     found = _rows(
         conn,
-        "SELECT status, status_reason, from_kind, from_node, concept_id, decided_by, event_id "
-        "FROM concept_uses WHERE link_id = :l",
+        "SELECT status, status_reason, from_kind, from_node, concept_id, decided_by, event_id, "
+        "basis_quote FROM concept_uses WHERE link_id = :l",
         l=ident,
     )
     if not found:
         return None
-    status, reason, from_kind, from_node, concept_id, decided_by, event_id = found[0]
+    status, reason, from_kind, from_node, concept_id, decided_by, event_id, quote = found[0]
     decided = "" if decided_by is None else f"; decided by {decided_by}"
+    basis = "" if quote is None else f'; basis "{quote}"'
     label = (
         f"concept_link {ident} · {layer_label(str(status))}: {from_kind} {from_node} uses "
-        f"{concept_id} ({reason}{decided})"
+        f"{concept_id} ({reason}{decided}{basis})"
     )
     return label, str(event_id)
 

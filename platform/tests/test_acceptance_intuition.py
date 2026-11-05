@@ -357,8 +357,10 @@ def test_rebuild_identical_layer_tables_and_state_hash(project: Project, iw: IWo
 def test_trace_interpretation_and_concept(project: Project, iw: IWorld) -> None:
     """13: an interpretation traces back to the question; a concept to its source and links."""
     ident = agent_interpretation(project, iw)
-    kinds = {n.kind for n in _walk(trace(project, ident))}
+    tree = trace(project, ident)
+    kinds = {n.kind for n in _walk(tree)}
     assert {"anchor", "conversion", "document", "attempt", "work", "protocol", "question"} <= kinds
+    assert "very long sequences degrade" in tree.label  # the source quote, as stored
     cid = concept(project, iw, "softmax attention")
     link = propose_concept_link(
         project,
@@ -368,6 +370,7 @@ def test_trace_interpretation_and_concept(project: Project, iw: IWorld) -> None:
         UseBasisInput(quote=iw.quote("s1.p2", "Unlike softmax attention")),
     )
     assert link.link_id in {n.id for n in _walk(trace(project, cid, direction="forward"))}
+    assert "Unlike softmax attention" in trace(project, link.link_id).label  # the basis quote
     assert cid in {n.id for n in _walk(trace(project, link.link_id))}
 
 
