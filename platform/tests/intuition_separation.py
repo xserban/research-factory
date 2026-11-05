@@ -53,6 +53,7 @@ LAYER_MODULES = frozenset(
         "factory.intuition",
         "factory.intuition.validate",
         "factory.intuition.labels",
+        "factory.intuition.classify",  # G3-B
         "factory.index.intuition",
         "factory.services.intuition_sources",
         "factory.services.interpretations",

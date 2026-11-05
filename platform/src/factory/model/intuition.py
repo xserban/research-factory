@@ -29,6 +29,8 @@ from factory.model.work_ids import WORK_ID_RE
 __all__ = [
     "CONCEPT_ID_RE",
     "CONCEPT_LINK_ID_RE",
+    "CONCEPT_MAX_ALIASES",
+    "CONCEPT_NAME_MAX",
     "ENTRY_KEY_RE",
     "INTERPRETATION_ID_RE",
     "INTERPRETATION_MAX_CHARS",
@@ -36,17 +38,33 @@ __all__ = [
     "VERIFIER_VERSION",
     "Author",
     "CitationSourceInput",
+    "ConceptDefined",
+    "ConceptHidden",
+    "ConceptInput",
+    "ConceptLinkDecided",
+    "ConceptLinkProposed",
+    "ConceptMerged",
+    "ConceptReviewed",
+    "ConceptSourceDecided",
+    "ConceptSourceInput",
+    "ConceptSourceKind",
+    "ConceptState",
+    "ConceptUnmerged",
     "HistoryEntry",
     "InterpretationHidden",
     "InterpretationInput",
     "InterpretationRecorded",
     "InterpretationReviewed",
     "LayerClass",
+    "LinkStatus",
     "QuoteSourceInput",
     "ReviewState",
     "SourceInput",
     "SourceRole",
+    "SourceState",
+    "StoredConceptSource",
     "StoredSource",
+    "UseBasisInput",
 ]
 
 INTERPRETATION_ID_RE = rf"^int_{ULID_RE}$"
@@ -54,6 +72,9 @@ CONCEPT_ID_RE = rf"^cpt_{ULID_RE}$"
 CONCEPT_LINK_ID_RE = rf"^cul_{ULID_RE}$"
 INTERPRETATION_MAX_CHARS = 600
 INTERPRETATION_MAX_SOURCES = 5
+CONCEPT_NAME_MAX = 120
+CONCEPT_MAX_ALIASES = 10
+CONCEPT_CITATION_MAX = 500
 VERIFIER_VERSION = 1
 """Bumped when the source checks change, so a stored verdict names the rules that made it."""
 
@@ -166,7 +187,7 @@ class HistoryEntry(StrictModel):
     """One step of an item's history (interpretation or concept definition)."""
 
     event_id: str
-    kind: Literal["recorded", "reviewed", "superseded-by"]
+    kind: Literal["recorded", "reviewed", "superseded-by", "source-decided"]
     state: str | None
     actor: str
     note: str
@@ -174,3 +195,159 @@ class HistoryEntry(StrictModel):
     folded: bool = True
     """False for a review the fold dropped (not a human, or the writer's own session): kept in the
     history, never counted in the state."""
+
+
+# --- Background concepts (plan G3-B) ---
+
+
+class ConceptSourceKind(StrEnum):
+    TEXTBOOK = "textbook"
+    SURVEY = "survey"
+    CORPUS_PAPER = "corpus-paper"
+    OTHER = "other"
+
+
+class LinkStatus(StrEnum):
+    STATED = "stated"
+    INFERRED = "inferred"
+    CONFIRMED = "confirmed"
+    REJECTED = "rejected"
+
+
+class ConceptState(StrEnum):
+    UNREVIEWED = "unreviewed"
+    REVIEWED = "reviewed"
+    WRONG = "wrong"
+    MERGED = "merged"
+
+
+SourceState = Literal["none", "proposed", "approved", "rejected"]
+_CONCEPT_ID = Annotated[str, StringConstraints(pattern=CONCEPT_ID_RE)]
+_LINK_ID = Annotated[str, StringConstraints(pattern=CONCEPT_LINK_ID_RE)]
+
+
+class ConceptSourceInput(StrictModel):
+    """The first source of a concept as a human or an agent names it: kind, citation text and,
+    when the source is a corpus work, its work id (required for `corpus-paper`)."""
+
+    kind: ConceptSourceKind
+    citation: Annotated[NonBlank, StringConstraints(max_length=CONCEPT_CITATION_MAX)]
+    work_id: Annotated[str, StringConstraints(pattern=WORK_ID_RE)] | None = None
+
+    @model_validator(mode="after")
+    def _corpus_paper_has_work(self) -> Self:
+        if self.kind is ConceptSourceKind.CORPUS_PAPER and self.work_id is None:
+            raise ValueError("a corpus-paper source names its work_id")
+        return self
+
+
+class StoredConceptSource(ConceptSourceInput):
+    """A concept source as the event stores it: `digest` binds an approval to it (ruling B1);
+    `verifiable` is false without a work id (ruling B3)."""
+
+    digest: str
+    verifiable: bool
+
+
+class ConceptInput(StrictModel):
+    """A concept as an agent or a human states it; it cannot set a source or review state."""
+
+    name: NonBlank
+    aliases: tuple[NonBlank, ...] = ()
+    text: str | None = None
+    source: ConceptSourceInput | None = None
+    quotes: tuple[QuoteSourceInput, ...] = ()
+    concept_id: _CONCEPT_ID | None = None
+    supersedes: str | None = None
+
+
+class UseBasisInput(StrictModel):
+    """The basis of a `uses` link: a quote of the citing work, or a reference entry, or neither."""
+
+    quote: QuoteSourceInput | None = None
+    reference: Annotated[str, StringConstraints(pattern=ENTRY_KEY_RE)] | None = None
+
+    @model_validator(mode="after")
+    def _at_most_one(self) -> Self:
+        if self.quote is not None and self.reference is not None:
+            raise ValueError("name at most one of quote and reference")
+        return self
+
+
+class ConceptDefined(StrictModel):
+    concept_id: _CONCEPT_ID
+    name: str
+    aliases: tuple[str, ...]
+    text: str | None
+    source: StoredConceptSource | None
+    quotes: tuple[StoredSource, ...]
+    author: Author
+    supersedes: str | None = None
+
+
+class ConceptSourceDecided(StrictModel):
+    concept_id: _CONCEPT_ID
+    decision: Literal["approve", "reject"]
+    source_digest: str
+    note: str
+    channel: Channel = Channel.CLI
+
+
+class ConceptReviewed(StrictModel):
+    concept_id: _CONCEPT_ID
+    definition: str
+    """The event id of the `concept.defined` that was reviewed."""
+    state: Literal["reviewed", "wrong"]
+    note: str
+    self_reviewed: bool
+    channel: Channel = Channel.CLI
+
+    @model_validator(mode="after")
+    def _wrong_needs_note(self) -> Self:
+        if self.state == "wrong" and not self.note.strip():
+            raise ValueError("a wrong review needs a note")
+        return self
+
+
+class ConceptLinkProposed(StrictModel):
+    link_id: _LINK_ID
+    from_node: str
+    from_kind: Literal["paper", "idea", "concept"]
+    concept_id: _CONCEPT_ID
+    basis_kind: Literal["quote", "citation", "none"]
+    quote: StoredSource | None = None
+    reference: str | None = None
+    cited_work: str | None = None
+    basis_digest: str
+    status: Literal["stated", "inferred"]
+    status_reason: str
+    note: str | None = None
+
+
+class ConceptLinkDecided(StrictModel):
+    link_id: _LINK_ID
+    decision: Literal["confirm", "reject"]
+    rationale: NonBlank
+    channel: Channel = Channel.CLI
+
+
+class ConceptMerged(StrictModel):
+    into: _CONCEPT_ID
+    from_concept: _CONCEPT_ID
+    reason: NonBlank
+
+
+class ConceptUnmerged(StrictModel):
+    into: _CONCEPT_ID
+    from_concept: _CONCEPT_ID
+    reason: NonBlank
+
+
+class ConceptHidden(StrictModel):
+    """Concept items the default views hide, counted (spec ruling 7)."""
+
+    unapproved: int
+    wrong: int
+    merged: int
+    links_inferred: int
+    links_rejected: int
