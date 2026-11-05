@@ -41,6 +41,14 @@ class IdGenerator:
         self._last = value
         return _encode(value)
 
+    def floor(self, ulid: str) -> None:
+        """Make every later `ulid()` strictly greater than `ulid`, whatever the clock says. Never
+        lowers the generator: the floor of a session that minted higher is a no-op."""
+        if not re.fullmatch(ULID_RE, ulid):
+            raise ValueError(f"not a ULID: {ulid!r}")
+        value = _decode(ulid)
+        self._last = value if self._last is None else max(self._last, value)
+
     def new(self, prefix: str) -> str:
         return f"{prefix}_{self.ulid()}"
 

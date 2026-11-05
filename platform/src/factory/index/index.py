@@ -1,7 +1,7 @@
 import fcntl
 import hashlib
 import os
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -150,6 +150,8 @@ class Index:
         events_dir: Path,
         catalog: EventCatalog,
         projection: Projection,
+        *,
+        on_exclusive: Callable[[str | None], None] | None = None,
     ) -> None:
         self._db_path = db_path
         self._events_dir = events_dir
@@ -158,6 +160,7 @@ class Index:
         self._engine = _make_engine(db_path)
         self._identity = _file_identity(db_path)
         self._holding = False
+        self._on_exclusive = on_exclusive
 
     def sync(self) -> SyncResult:
         """Apply new events incrementally, or rebuild when the index can't be trusted."""
@@ -169,8 +172,14 @@ class Index:
         """Hold the write lock across several reads and writes, so none can interleave.
 
         Re-entrant: the sync and reads made inside the block do not wait on the lock they hold.
+        With `on_exclusive`, the outermost hold syncs first and hands it the last applied event id,
+        so whatever the block mints sorts after everything already in the log (slice 5 ruling 3).
         """
+        outermost = not self._holding
         with self._locked():
+            if outermost and self._on_exclusive is not None:
+                self._sync()
+                self._on_exclusive(self.last_event_id())
             yield
 
     def rebuild(self) -> str:

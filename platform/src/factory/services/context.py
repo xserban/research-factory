@@ -1,5 +1,6 @@
 import re
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -61,6 +62,15 @@ class Project:
     writer: EventWriter
     index: Index
 
+    def writing(self) -> AbstractContextManager[None]:
+        """The project write context: holds the lock, syncs, and floors `ids` above the last
+        applied event, so an event minted inside sorts after the whole log and append order equals
+        ID order across sessions and processes (slice 5 ruling 3). Re-entrant.
+
+        It is `index.exclusive()`: `build_project` wires the floor into the lock, so the services
+        that take the lock directly mint under the same guarantee."""
+        return self.index.exclusive()
+
     def record(self, events: Sequence[Event]) -> None:
         self.writer.append(events)
         self.index.sync()
@@ -82,6 +92,14 @@ def slug_issues(slug: str) -> list[ValidationIssue]:
     return []
 
 
+def _id_floor(ids: IdGenerator) -> Callable[[str | None], None]:
+    def floor(last_event_id: str | None) -> None:
+        if last_event_id is not None:
+            ids.floor(last_event_id.removeprefix("ev_"))
+
+    return floor
+
+
 def build_project(settings: Settings, slug: str, *, session: str, clock: Clock) -> Project:
     """Wire the storage layers for one project. Creates no directories."""
     paths = ProjectPaths(settings.root, slug)
@@ -99,7 +117,13 @@ def build_project(settings: Settings, slug: str, *, session: str, clock: Clock) 
         library=BlobStore(paths.library_dir),
         events=EventFactory(slug, catalog, ids),
         writer=EventWriter(paths.events_dir, project=slug, catalog=catalog, blobs=blobs),
-        index=Index(paths.index_path, paths.events_dir, catalog, default_projection(blobs)),
+        index=Index(
+            paths.index_path,
+            paths.events_dir,
+            catalog,
+            default_projection(blobs),
+            on_exclusive=_id_floor(ids),
+        ),
     )
 
 
