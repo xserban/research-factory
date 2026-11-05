@@ -116,6 +116,11 @@ def render_closing(
             f"verdicts and found {audit.incorrect} incorrect"
         )
         summary += "." if audit.rate is None else f" (error rate {audit.rate:.3f})."
+    if audit.all_rate is not None:
+        summary += (
+            f" Every sample, revised sentences included: {audit.all_incorrect} of "
+            f"{audit.all_labelled} labelled verdicts incorrect (error rate {audit.all_rate:.3f})."
+        )
     lines = [
         "## Bibliography",
         "",

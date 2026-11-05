@@ -542,7 +542,7 @@ _SENTENCE_CODES = (
 
 def audit_report_of(project: Project, draft_id: str) -> int:
     """How many verdicts of the draft's audit are labelled (the agent view's neutral marker)."""
-    return draft_audit_report(project, draft_id).labelled
+    return draft_audit_report(project, draft_id).all_labelled
 
 
 def _draft_hits(project: Project, draft_id: str, released: bool) -> list[_Hit]:

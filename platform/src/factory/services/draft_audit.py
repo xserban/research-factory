@@ -11,6 +11,9 @@ Invariants:
   cannot be drawn again until an easy one comes up.
 - A label is a human act at the gate `writing.audit_label`; a later label of a verdict replaces the
   earlier.
+- The report's rate reads the verdicts still live, as the gate does: a sentence revised after a
+  sample leaves it, or a small draft could never get back under the ceiling. The rate of every
+  sample is reported beside it.
 - The error rate, the count behind it and the ceiling flag are for the researcher: the agent
   variant carries none of them (decisions 37.14 and 52). The drawn and labelled counts say how far
   the audit has gone and nothing about its result.
@@ -18,11 +21,13 @@ Invariants:
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from sqlalchemy import text
 
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
-from factory.index.drafts import audit_due, audit_population
+from factory.index.drafts import audit_due, audit_labels, audit_population
 from factory.model.drafts import (
     DRAFT_AUDIT_FRACTION,
     DRAFT_AUDIT_MINIMUM,
@@ -136,39 +141,50 @@ def record_audit(
         return event.id
 
 
-def audit_report(project: Project, draft_id: str) -> DraftAuditReport:
-    """Every sample of the draft read together. The rate is incorrect / labelled, undefined until a
-    verdict is labelled; `outdated` says a verdict is newer than the last draw."""
-    project.index.sync()
-    with project.index.connect() as conn:
-        labels = [
-            None if r[0] is None else str(r[0])
-            for r in conn.execute(
-                text(
-                    "SELECT i.label FROM draft_audit_items i JOIN draft_audits a "
-                    "ON a.audit_id = i.audit_id WHERE a.draft_id = :d"
-                ),
-                {"d": draft_id},
-            )
-        ]
-        outdated = bool(labels) and audit_due(conn, draft_id)
+def _tally(labels: Sequence[str | None]) -> tuple[int, int, float | None]:
+    """Labelled, incorrect and their rate."""
     labelled = [x for x in labels if x is not None]
     incorrect = sum(1 for x in labelled if x == AuditLabel.INCORRECT.value)
-    rate = incorrect / len(labelled) if labelled else None
+    return len(labelled), incorrect, incorrect / len(labelled) if labelled else None
+
+
+def audit_report(project: Project, draft_id: str) -> DraftAuditReport:
+    """Every sample of the draft read together. A rate is incorrect / labelled, undefined until a
+    verdict is labelled; the gate's reads the verdicts still live, `all_rate` every sample.
+    `outdated` says a verdict is newer than the last draw."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        live = audit_labels(conn, draft_id, live=True)
+        every = audit_labels(conn, draft_id)
+        outdated = bool(every) and audit_due(conn, draft_id)
+    labelled, incorrect, rate = _tally(live)
+    all_labelled, all_incorrect, all_rate = _tally(every)
     return DraftAuditReport(
-        drawn=len(labels),
-        labelled=len(labelled),
+        drawn=len(live),
+        labelled=labelled,
         incorrect=incorrect,
         rate=rate,
         above_ceiling=None if rate is None else rate > DRAFT_VERIFY_ERROR_CEILING,
         outdated=outdated,
+        all_drawn=len(every),
+        all_labelled=all_labelled,
+        all_incorrect=all_incorrect,
+        all_rate=all_rate,
     )
 
 
 def agent_audit_report(report: DraftAuditReport) -> DraftAuditReport:
     """The report an agent may read: no rate, no ceiling flag, and no count of incorrect labels,
     from which the rate follows."""
-    return report.model_copy(update={"incorrect": None, "rate": None, "above_ceiling": None})
+    return report.model_copy(
+        update={
+            "incorrect": None,
+            "rate": None,
+            "above_ceiling": None,
+            "all_incorrect": None,
+            "all_rate": None,
+        }
+    )
 
 
 def incorrect_verdicts(project: Project, draft_id: str) -> frozenset[str]:

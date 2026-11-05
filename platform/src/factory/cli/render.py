@@ -1526,14 +1526,15 @@ def draft_status_lines(
     for row in rows:
         reason = f"  {row.reason}" if row.reason else ""
         lines.append(f"  {row.sentence_id}  {row.cls.value}  {row.status}{reason}")
-    if audit.drawn == 0:
+    if audit.drawn == 0 and audit.all_drawn == 0:
         return [*lines, "audit: none drawn"]
     rate = "undefined" if audit.rate is None else f"{audit.rate:.3f}"
     above = "  above the ceiling" if audit.above_ceiling else ""
     outdated = "  a verdict is newer than the last draw" if audit.outdated else ""
+    every = "" if audit.all_rate is None else f"  (every sample: rate {audit.all_rate:.3f})"
     lines.append(
         f"audit: {audit.labelled}/{audit.drawn} labelled, {audit.incorrect} incorrect, "
-        f"rate {rate}{above}{outdated}"
+        f"rate {rate}{every}{above}{outdated}"
     )
     lines += [
         f"  {audit_id}  {verdict}  {sentence}  {label or 'unlabelled'}"

@@ -346,8 +346,10 @@ SENTENCE_STATUSES = ("structural", "interpretive", "unchecked", "supported", "fl
 
 
 class DraftAuditReport(StrictModel):
-    """Every sample of a draft read together. `incorrect`, `rate` and `above_ceiling` are None in
-    the agent variant; `rate` and `above_ceiling` also until a verdict is labelled."""
+    """Every sample of a draft read together. `drawn` to `above_ceiling` read the verdicts still
+    live, which is what the gate reads; the `all_` figures read every sample, sentences revised
+    since included. `incorrect`, `rate`, `above_ceiling`, `all_incorrect` and `all_rate` are None
+    in the agent variant; the rates and `above_ceiling` also until a verdict is labelled."""
 
     drawn: int
     labelled: int
@@ -355,6 +357,10 @@ class DraftAuditReport(StrictModel):
     rate: float | None
     above_ceiling: bool | None
     outdated: bool = False
+    all_drawn: int = 0
+    all_labelled: int = 0
+    all_incorrect: int | None = None
+    all_rate: float | None = None
 
 
 class DraftReleased(StrictModel):
