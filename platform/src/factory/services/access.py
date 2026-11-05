@@ -6,6 +6,8 @@ Invariants:
 - Deny by default: a role not listed holds nothing, and a principal with no role holds nothing.
 - An agent acts for its principal and holds at most the principal's permissions, minus
   `HUMAN_ONLY`, whatever the role. A `system` actor is held to the same limit.
+- `GATED_AGENT_ACTS` lifts that subtraction for an agent on those tools alone, never the cap: the
+  principal's role must still hold the permission, so an agent never does what its person cannot.
 - `lab:admin` comes from the lab `admin` role alone, never from a project role, and needs a lab.
 - With a lab given, a principal the registry does not hold as active holds nothing.
 - A refusal writes nothing and is one issue on field `permission`.
@@ -50,6 +52,12 @@ HUMAN_ONLY: frozenset[Permission] = frozenset(
 AGENT_PROPOSES_ONLY: frozenset[Permission] = frozenset({Permission.PROTOCOL_CHANGE})
 """The spec's table gives an agent `protocol:change` as "proposes only", so on a hosted project an
 agent is refused it. Unhosted, it keeps the protocol tools it has always had (acceptance 1)."""
+
+GATED_AGENT_ACTS: frozenset[str] = frozenset(
+    {"mine_resolve", "reference_decide", "lead_decide", "hypothesis_register", "miner_register"}
+)
+"""Tools through which an agent acts at a decision gate of slices 6 and M: the gate policy says when
+it may, so the human permission is not subtracted. The caller names the tool to `authorize`."""
 
 _READ = frozenset({Permission.PROJECT_READ})
 _CONTRIBUTE = _READ | {Permission.WORK_RUN}
@@ -117,8 +125,7 @@ TOOL_PERMISSIONS: Mapping[str, Permission] = {
     "view_horizon": Permission.PROJECT_READ,
     "experiment_view": Permission.PROJECT_READ,
     "xrun_list": Permission.PROJECT_READ,
-    # MCP tools that run work. A tool an agent acts through at a gate is here too, a decision
-    # included: the gate policy, not this table, says when an agent may pass it.
+    # MCP tools that run work.
     "search_run": Permission.WORK_RUN,
     "search_chase": Permission.WORK_RUN,
     "dedup_run": Permission.WORK_RUN,
@@ -136,12 +143,9 @@ TOOL_PERMISSIONS: Mapping[str, Permission] = {
     "extract_record": Permission.WORK_RUN,
     "mine_next": Permission.WORK_RUN,
     "mine_record": Permission.WORK_RUN,
-    "miner_register": Permission.WORK_RUN,
-    "mine_resolve": Permission.WORK_RUN,
     "contribution_next": Permission.WORK_RUN,
     "contribution_record": Permission.WORK_RUN,
     "references_extract": Permission.WORK_RUN,
-    "reference_decide": Permission.WORK_RUN,
     "snowball_round": Permission.WORK_RUN,
     "relation_propose": Permission.WORK_RUN,
     "idea_propose": Permission.WORK_RUN,
@@ -157,16 +161,20 @@ TOOL_PERMISSIONS: Mapping[str, Permission] = {
     "region_propose_member": Permission.WORK_RUN,
     "region_snapshot": Permission.WORK_RUN,
     "lead_record": Permission.WORK_RUN,
-    "lead_decide": Permission.WORK_RUN,
     "hypothesis_draft": Permission.WORK_RUN,
     "hypothesis_review_next": Permission.WORK_RUN,
     "hypothesis_review": Permission.WORK_RUN,
-    "hypothesis_register": Permission.WORK_RUN,
     "label_apply": Permission.WORK_RUN,
     "consolidation_next": Permission.WORK_RUN,
     "consolidation_propose": Permission.WORK_RUN,
     "experiment_design": Permission.WORK_RUN,
     "xrun_register": Permission.WORK_RUN,
+    # `GATED_AGENT_ACTS`: the person's permission, which an agent needs its principal to hold.
+    "mine_resolve": Permission.HUMAN_LABEL,
+    "reference_decide": Permission.HUMAN_CONFIRM,
+    "lead_decide": Permission.HUMAN_CONFIRM,
+    "hypothesis_register": Permission.HUMAN_CONFIRM,
+    "miner_register": Permission.PROTOCOL_CHANGE,
     # Refused to an agent on a hosted project (`AGENT_PROPOSES_ONLY`).
     "protocol_record": Permission.PROTOCOL_CHANGE,
     "protocol_amend": Permission.PROTOCOL_CHANGE,
@@ -318,8 +326,14 @@ def _holds(
     actor_kind: ActorKind,
     permission: Permission,
     lab: Lab | None,
+    tool: str | None,
 ) -> bool:
-    if actor_kind != "human" and permission in HUMAN_ONLY:
+    gated = (
+        actor_kind == "agent"
+        and tool in GATED_AGENT_ACTS
+        and TOOL_PERMISSIONS.get(tool or "") == permission
+    )
+    if actor_kind != "human" and permission in HUMAN_ONLY and not gated:
         return False
     lab_roles: tuple[LabRole, ...] = ()
     if lab is not None:
@@ -331,7 +345,12 @@ def _holds(
         return LabRole.ADMIN in lab_roles
     if project is None:
         return False
-    if actor_kind != "human" and permission in AGENT_PROPOSES_ONLY and project.is_hosted():
+    if (
+        actor_kind != "human"
+        and permission in AGENT_PROPOSES_ONLY
+        and not gated
+        and project.is_hosted()
+    ):
         return False
     return any(permission in ROLE_PERMISSIONS[role] for role in roles_of(project, principal.user))
 
@@ -343,7 +362,9 @@ def authorize(
     permission: Permission,
     *,
     lab: Lab | None = None,
+    tool: str | None = None,
 ) -> None:
-    """Return when the principal, acting as `actor_kind`, holds `permission`; else refuse."""
-    if not _holds(project, principal, actor_kind, permission, lab):
+    """Return when the principal, acting as `actor_kind`, holds `permission`; else refuse. `tool`
+    is the `TOOL_PERMISSIONS` key of the call, which the per-tool wrapper passes."""
+    if not _holds(project, principal, actor_kind, permission, lab, tool):
         raise FactoryValidationError([ValidationIssue("permission", f"{permission} not held")])
