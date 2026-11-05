@@ -8,13 +8,17 @@ about which works could match.
 
 from __future__ import annotations
 
-from factory.model.work import Work
+from factory.model.work import Identifiers, Work
 from factory.model.work_ids import arxiv_id_from_doi, normalize_title
 
 
 def strong_keys(work: Work) -> list[tuple[str, str]]:
     """Exact-match keys, strongest first. A shared key is conclusive."""
-    ids = work.identifiers
+    return identifier_keys(work.identifiers)
+
+
+def identifier_keys(ids: Identifiers) -> list[tuple[str, str]]:
+    """The exact-match keys of a set of identifiers; also the keys of a work's published aliases."""
     keys: list[tuple[str, str]] = []
 
     # An arXiv DOI and a bare arXiv id denote the same preprint; fold them into one key so

@@ -24,6 +24,7 @@ from factory.services.notices import notice_check
 from factory.services.protocol import current_protocol
 from factory.services.screening import extend_sample
 from factory.services.snapshots import last_snapshot_event, snapshot
+from factory.services.versions import version_check
 from factory.services.watch import CycleHook
 from factory.sources.registry import SourceFactory, status_sources
 
@@ -83,7 +84,13 @@ def make_status_hook(sources: Mapping[str, SourceFactory] | None = None) -> Cycl
             budget=plan.notice_budget,
             notice_sources=plan.notices,
         )
-        return summary.run_ids
+        run_ids = summary.run_ids
+        if plan.track_versions and summary.work_ids:
+            versions = version_check(
+                project, cycle_id, sources=factories, work_ids=summary.work_ids
+            )
+            run_ids += versions.run_ids
+        return run_ids
 
     return status_hook
 

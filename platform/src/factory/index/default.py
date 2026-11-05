@@ -61,7 +61,7 @@ def default_projection(blobs: BlobStore | None = None) -> Projection:
     inbox = inbox_tables(metadata)
     watch = watch_tables(metadata, search.runs)
     snapshots = living_tables(metadata)
-    notices = notice_tables(metadata)
+    notices = notice_tables(metadata, search.work_keys)
     handlers: dict[str, Handler] = {
         "project.created": project_created_handler(project),
         **task_handlers(tasks),

@@ -7,8 +7,9 @@ A reversal is final: its blocked pairs keep the cascade from rebuilding the merg
 """
 
 import json
+from collections.abc import Sequence
 
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor, Event
@@ -43,7 +44,11 @@ def dedup_run(project: Project) -> DedupSummary:
 
 def _reconcile(project: Project) -> DedupSummary:
     works = list_works(project)
-    result = dedup(works, blocked=blocked_pairs(project))
+    result = dedup(
+        works,
+        blocked=blocked_pairs(project),
+        aliases=alias_keys(project, [w.id for w in works]),
+    )
     # Identity collapses (several records sharing one id) absorb nothing: they are not merges.
     groups = [group for group in result.merges if group.absorbed]
     active = active_merges(project)
@@ -173,6 +178,23 @@ def canonical_works(project: Project) -> list[Work]:
     covered = {wid for ids in members for wid in ids}
     rest = [work for wid, work in works.items() if wid not in covered]
     return sorted([*merged, *rest], key=lambda work: work.id)
+
+
+def alias_keys(project: Project, work_ids: Sequence[str]) -> dict[str, list[tuple[str, str]]]:
+    """The published identifiers linked to each of `work_ids` (version links), as exact-match keys.
+
+    Read in chunks by work id; a work with no link is absent."""
+    project.index.sync()
+    found: dict[str, list[tuple[str, str]]] = {}
+    statement = text(
+        "SELECT work_id, kind, value FROM work_aliases WHERE work_id IN :ids ORDER BY kind, value"
+    ).bindparams(bindparam("ids", expanding=True))
+    ids = sorted(set(work_ids))
+    with project.index.connect() as conn:
+        for start in range(0, len(ids), 500):
+            for work_id, kind, value in conn.execute(statement, {"ids": ids[start : start + 500]}):
+                found.setdefault(str(work_id), []).append((str(kind), str(value)))
+    return found
 
 
 def blocked_pairs(project: Project) -> frozenset[frozenset[str]]:

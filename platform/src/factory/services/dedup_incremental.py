@@ -27,6 +27,7 @@ from factory.model.work import Work
 from factory.services.context import Project
 from factory.services.dedup import (
     DedupSummary,
+    alias_keys,
     blocked_pairs,
     matching_merge,
     write_reconciliation,
@@ -93,7 +94,11 @@ def _reconcile_batch(project: Project, batch: Sequence[str]) -> DedupSummary:
     if not new:
         return DedupSummary(created=[], reverted=[], unchanged=0, records=0, works=0, canonical=0)
     works, active = _considered(project, new, new_ids)
-    result = dedup(works, blocked=blocked_pairs(project))
+    result = dedup(
+        works,
+        blocked=blocked_pairs(project),
+        aliases=alias_keys(project, [w.id for w in works]),
+    )
     # Only groups that contain a new work are ours to reconcile; identity collapses absorb nothing.
     groups = [g for g in result.merges if g.absorbed and new_ids & {g.primary, *g.absorbed}]
     touched = new_ids | {m for g in groups for m in (g.primary, *g.absorbed)}
@@ -131,11 +136,28 @@ def _considered(
     return works, touching
 
 
+def alias_map(conn: Connection, work_ids: Sequence[str]) -> dict[str, list[tuple[str, str]]]:
+    statement = text(
+        "SELECT work_id, kind, value FROM work_aliases WHERE work_id IN :ids"
+    ).bindparams(bindparam("ids", expanding=True))
+    found: dict[str, list[tuple[str, str]]] = {}
+    ids = sorted(set(work_ids))
+    for start in range(0, len(ids), _ID_CHUNK):
+        for work_id, kind, value in conn.execute(
+            statement, {"ids": ids[start : start + _ID_CHUNK]}
+        ):
+            found.setdefault(str(work_id), []).append((str(kind), str(value)))
+    return found
+
+
 def _key_candidates(conn: Connection, new: Sequence[Work]) -> set[str]:
     found: set[str] = set()
     statement = text("SELECT work_id FROM work_keys WHERE kind = :kind AND value = :value")
+    aliases = alias_map(conn, [w.id for w in new])
     for work in new:
-        for kind, value in strong_keys(work):
+        # A linked work's published identifiers are in `work_keys` under it, so a new work finds
+        # it by them; its own aliases find the works that carry those identifiers.
+        for kind, value in [*strong_keys(work), *aliases.get(work.id, ())]:
             found.update(str(r[0]) for r in conn.execute(statement, {"kind": kind, "value": value}))
     return found
 

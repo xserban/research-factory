@@ -16,6 +16,7 @@ So this module is deliberately tuned to prefer the error screening will catch.
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 
 from rapidfuzz import fuzz
@@ -174,12 +175,20 @@ def merge_works(group: list[Work]) -> Work:
     )
 
 
-def dedup(works: list[Work], *, blocked: frozenset[frozenset[str]] = frozenset()) -> DedupResult:
+def dedup(
+    works: list[Work],
+    *,
+    blocked: frozenset[frozenset[str]] = frozenset(),
+    aliases: Mapping[str, Sequence[tuple[str, str]]] | None = None,
+) -> DedupResult:
     """Merge duplicates across the corpus, returning the survivors and a reversible map.
 
     `blocked` holds pairs of work ids that must never end up in the same group, e.g. a merge a
     human reverted. The block holds even when the pair is reachable through a third record.
+    `aliases` maps a work id to extra exact-match keys (the published identifiers a version link
+    attached to it), which join works by identifier like their own keys.
     """
+    extra = aliases or {}
     union = _Union(blocked)
     by_id = {w.id: w for w in works}
     for work in works:
@@ -188,7 +197,7 @@ def dedup(works: list[Work], *, blocked: frozenset[frozenset[str]] = frozenset()
     # Stage 1-2: exact identifier matches.
     by_key: dict[tuple[str, str], list[str]] = defaultdict(list)
     for work in works:
-        for key in strong_keys(work):
+        for key in [*strong_keys(work), *extra.get(work.id, ())]:
             by_key[key].append(work.id)
     for (kind, _), ids in by_key.items():
         for other in ids[1:]:

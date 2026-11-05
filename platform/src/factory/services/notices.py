@@ -23,7 +23,6 @@ from sqlalchemy import text
 
 from factory.events.envelope import Event
 from factory.model.base import StrictModel
-from factory.model.chase import CHASE_CHUNK
 from factory.model.notices import NoticeObserved
 from factory.model.protocol import ScreeningStage
 from factory.model.search import QueryKind, RunStatus
@@ -37,8 +36,9 @@ from factory.services.status_lookup import (
     StatusBatch,
     StatusOutcome,
     crossref_doi,
+    groups,
     last_checked,
-    openalex_handle,
+    openalex_batches,
     run_batches,
 )
 from factory.sources.registry import SourceFactory
@@ -53,6 +53,8 @@ class NoticeCheckSummary(StrictModel):
     unchecked_crossref: tuple[str, ...]
     """Selected works Crossref cannot be asked about (no DOI of its own)."""
     run_ids: tuple[str, ...]
+    work_ids: tuple[str, ...] = ()
+    """The works selected for this cycle's lookups, which the version check covers too."""
 
 
 def dependent_works(project: Project) -> list[str]:
@@ -100,7 +102,7 @@ def notice_check(
     batches: list[StatusBatch] = []
     unchecked: list[str] = []
     if "openalex" in notice_sources:
-        batches += _openalex_batches(works)
+        batches += openalex_batches(works)
     if "crossref" in notice_sources:
         crossref_batches, unchecked = _crossref_batches(works)
         batches += crossref_batches
@@ -116,27 +118,8 @@ def notice_check(
         new_notices=len(events),
         unchecked_crossref=tuple(sorted(unchecked)),
         run_ids=tuple(o.run_id for o in outcomes),
+        work_ids=tuple(selected),
     )
-
-
-def _openalex_batches(works: Sequence[Work]) -> list[StatusBatch]:
-    by_kind: dict[str, list[tuple[str, str]]] = {"openalex": [], "doi": []}
-    for work in works:
-        handle = openalex_handle(work)
-        if handle is not None:
-            by_kind[handle[0]].append((work.id, handle[1]))
-    batches: list[StatusBatch] = []
-    for kind, pairs in by_kind.items():
-        for group in _groups(pairs):
-            batches.append(
-                StatusBatch(
-                    source="openalex",
-                    kind=QueryKind.FILTER,
-                    text=f"{kind}:{'|'.join(value for _, value in group)}",
-                    work_ids=tuple(work_id for work_id, _ in group),
-                )
-            )
-    return batches
 
 
 def _crossref_batches(works: Sequence[Work]) -> tuple[list[StatusBatch], list[str]]:
@@ -156,14 +139,9 @@ def _crossref_batches(works: Sequence[Work]) -> tuple[list[StatusBatch], list[st
             text=",".join(f"updates:{doi}" for _, doi in group),
             work_ids=tuple(work_id for work_id, _ in group),
         )
-        for group in _groups(pairs)
+        for group in groups(pairs)
     ]
     return batches, unchecked
-
-
-def _groups(pairs: list[tuple[str, str]]) -> list[list[tuple[str, str]]]:
-    """`pairs` in lookup batches of at most `CHASE_CHUNK`."""
-    return [pairs[i : i + CHASE_CHUNK] for i in range(0, len(pairs), CHASE_CHUNK)]
 
 
 def _known_identities(project: Project) -> set[tuple[str, str, str]]:

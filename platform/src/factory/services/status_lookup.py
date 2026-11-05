@@ -142,7 +142,7 @@ def last_checked(project: Project, work_ids: Sequence[str]) -> dict[str, str]:
     return found
 
 
-def identifier_keys(ids: Identifiers) -> list[tuple[str, str]]:
+def match_keys(ids: Identifiers) -> list[tuple[str, str]]:
     """The (kind, value) pairs a record or work is matched by."""
     keys: list[tuple[str, str]] = []
     if ids.doi:
@@ -160,12 +160,12 @@ class Resolver:
     def __init__(self, works: Iterable[Work]) -> None:
         self._index: dict[tuple[str, str], set[str]] = {}
         for work in works:
-            for key in identifier_keys(work.identifiers):
+            for key in match_keys(work.identifiers):
                 self._index.setdefault(key, set()).add(work.id)
 
     def work_for(self, target: Identifiers) -> str | None:
         found: set[str] = set()
-        for key in identifier_keys(target):
+        for key in match_keys(target):
             found |= self._index.get(key, set())
         return next(iter(found)) if len(found) == 1 else None
 
@@ -188,3 +188,27 @@ def openalex_handle(work: Work) -> tuple[str, str] | None:
     if ids.arxiv:
         return ("doi", f"{DATACITE_ARXIV_PREFIX}arxiv.{ids.arxiv}")
     return None
+
+
+def groups(pairs: list[tuple[str, str]]) -> list[list[tuple[str, str]]]:
+    """`pairs` in lookup batches of at most `CHASE_CHUNK`."""
+    return [pairs[i : i + CHASE_CHUNK] for i in range(0, len(pairs), CHASE_CHUNK)]
+
+
+def openalex_batches(works: Sequence[Work]) -> list[StatusBatch]:
+    """OpenAlex lookups of `works`: `openalex:` ids and `doi:` values, batched."""
+    by_kind: dict[str, list[tuple[str, str]]] = {"openalex": [], "doi": []}
+    for work in works:
+        handle = openalex_handle(work)
+        if handle is not None:
+            by_kind[handle[0]].append((work.id, handle[1]))
+    return [
+        StatusBatch(
+            source="openalex",
+            kind=QueryKind.FILTER,
+            text=f"{kind}:{'|'.join(value for _, value in group)}",
+            work_ids=tuple(work_id for work_id, _ in group),
+        )
+        for kind, pairs in by_kind.items()
+        for group in groups(pairs)
+    ]

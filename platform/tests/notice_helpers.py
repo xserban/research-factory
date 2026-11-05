@@ -19,6 +19,7 @@ from factory.model.work import Identifiers
 from factory.services.context import Project
 from factory.services.notices import NoticeCheckSummary, notice_check
 from factory.services.search import list_works
+from factory.services.versions import VersionCheckSummary, version_check
 from factory.services.watch import CycleHook, CycleSummary, watch_run
 from factory.sources.base import PageSink, RawPage, SearchResult, StatusRecord
 from factory.sources.registry import SourceFactory
@@ -200,8 +201,61 @@ def check_in_cycle(
     return cycle, out[0]
 
 
-def _cycle(project: Project, hook: CycleHook) -> CycleSummary:
-    source = ScriptedSource(by_text({"attention": [[]]}))
+def _cycle(
+    project: Project, hook: CycleHook, records: list[dict[str, Any]] | None = None
+) -> CycleSummary:
+    source = ScriptedSource(by_text({"attention": [records or []]}))
     summary = watch_run(project, sources=adapters(source), trigger="scheduler", after_runs=(hook,))
     assert summary is not None
     return summary
+
+
+def version_record(
+    arxiv: str | None = None,
+    *,
+    latest: int | None = None,
+    doi: str | None = None,
+    linked_doi: str | None = None,
+    venue: str | None = None,
+) -> StatusRecord:
+    """A version status record: the latest arXiv version and/or a published version's DOI."""
+    return StatusRecord(
+        target=Identifiers(arxiv=arxiv, doi=doi),
+        kind="version",
+        source_version=None if arxiv is None or latest is None else f"{arxiv}v{latest}",
+        linked=None if linked_doi is None else Identifiers(doi=linked_doi),
+        venue=venue,
+    )
+
+
+def version_in_cycle(
+    project: Project,
+    factories: Mapping[str, SourceFactory],
+    work_ids: list[str],
+    *,
+    advance_days: int = 8,
+    records: list[dict[str, Any]] | None = None,
+) -> tuple[CycleSummary, VersionCheckSummary]:
+    """Run an (empty) watch cycle whose hook calls `version_check` over `work_ids`."""
+    out: list[VersionCheckSummary] = []
+
+    def hook(p: Project, cycle_id: str, _w: tuple[str, ...]) -> tuple[str, ...]:
+        summary = version_check(p, cycle_id, sources=factories, work_ids=work_ids)
+        out.append(summary)
+        return summary.run_ids
+
+    project.clock.advance(timedelta(days=advance_days))  # type: ignore[attr-defined]
+    return _cycle(project, hook, records), out[0]
+
+
+def fetch_arxiv_version(project: Project, work_id: str, version: str) -> None:
+    """Fetch an arXiv HTML document of `work_id` at `version` through a stub route."""
+    from factory.model.fulltext import Route
+    from factory.services.fulltext import fetch_fulltext
+    from tests.test_fulltext_service import StubRoute, always, retrieved
+
+    body = f"<html><body>{work_id} {version}</body></html>".encode()
+    route = StubRoute(Route.ARXIV_HTML, always(retrieved(Route.ARXIV_HTML, body, version=version)))
+    fetch_fulltext(
+        project, routes={Route.ARXIV_HTML: route}, work_ids=[work_id], only=[Route.ARXIV_HTML]
+    )

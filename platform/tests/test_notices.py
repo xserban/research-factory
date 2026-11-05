@@ -196,5 +196,6 @@ def test_status_hook_runs_in_the_cycle_and_names_its_runs(world: NoticeWorld) ->
         for e in read_all(world.project.paths.events_dir, world.project.catalog)
         if e.type == "watch.cycle_finished" and e.refs[0] == summary.cycle_id
     ]
-    assert len(finished.payload["status_run_ids"]) == 2  # one OpenAlex and one Crossref batch
+    # OpenAlex and Crossref notice batches, then the OpenAlex version lookup (no arxiv adapter).
+    assert len(finished.payload["status_run_ids"]) == 3
     assert summary.status.value == "complete"

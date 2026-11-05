@@ -69,6 +69,7 @@ from factory.model.seed import (
     SeedUnresolved,
 )
 from factory.model.task import TaskClaimed, TaskCompleted, TaskCreated, TaskReleased
+from factory.model.versions import VersionLinked, VersionObserved
 from factory.model.watch import WatchCycleFinished, WatchCycleStarted
 
 _NAME_RE = re.compile(r"[a-z][a-z_]*\.[a-z][a-z_]*")
@@ -177,4 +178,6 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("watch.cycle_finished", WatchCycleFinished, 1))
     catalog.register(EventType("living.snapshot_recorded", SnapshotRecorded, 1))
     catalog.register(EventType("notice.observed", NoticeObserved, 1))
+    catalog.register(EventType("version.observed", VersionObserved, 1))
+    catalog.register(EventType("version.linked", VersionLinked, 1))
     return catalog
