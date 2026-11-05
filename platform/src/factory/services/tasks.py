@@ -206,6 +206,25 @@ def get_task(project: Project, task_id: str) -> Task | None:
     )
 
 
+def held_refs(project: Project, session: str, kind: str) -> list[list[str]]:
+    """The refs of each task of `kind` this session holds a live claim on."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT refs FROM tasks WHERE kind = :kind AND status = :claimed "
+                "AND claim_session = :session AND lease_until > :now"
+            ),
+            {
+                "kind": kind,
+                "claimed": TaskStatus.CLAIMED.value,
+                "session": session,
+                "now": format_ts(_now(project)),
+            },
+        ).all()
+    return [[str(ref) for ref in json.loads(str(r[0]))] for r in rows]
+
+
 def task_content(project: Project, task: Task) -> JsonValue:
     return project.blobs.get_json(task.content_blob)
 

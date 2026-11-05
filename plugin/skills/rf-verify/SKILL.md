@@ -18,7 +18,8 @@ judge the sentence as written, not as its writer may have meant it.
 - Once you have recorded a verdict on a draft you cannot write in it.
 - In systematic mode the writer's model cannot verify; use another model when one is available.
 - Do not read the draft's rendering or the writer's outline before you judge: the unit holds all
-  you need.
+  you need. `draft_status` and `draft_render` are refused once you hold a unit or have recorded a
+  verdict on the draft.
 - Do not read or ask for the held-out seeds, the audit samples or the answer key.
 
 ## Procedure

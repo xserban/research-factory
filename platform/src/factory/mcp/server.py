@@ -3192,7 +3192,7 @@ def build_server(
         `structural` and `interpretive`, which are labels. No verifier's note is shown. Once any
         verdict is labelled, `audit_note` says that these statuses exclude the human audit and the
         researcher's rendering is authoritative; otherwise it is null. Read-only; refused to a
-        session that has joined a pass."""
+        session that has joined a pass or that is verifying this draft."""
 
         def status() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
@@ -3201,11 +3201,13 @@ def build_server(
             found = drafts_service.get_draft(opened, draft_id)
             if found is None:
                 raise FactoryValidationError([ValidationIssue("draft_id", "unknown draft")])
-            rows = drafts_service.live_sentences(opened, draft_id)
             statuses = {
                 s.sentence_id: s
-                for s in drafts_service.sentence_status(opened, draft_id, agent=True)
+                for s in drafts_service.sentence_status(
+                    opened, draft_id, agent=True, session=opened.session
+                )
             }
+            rows = drafts_service.live_sentences(opened, draft_id)
             report = draft_audit_service.audit_report(opened, draft_id)
             data: dict[str, JsonValue] = {
                 "draft": found.model_dump(mode="json"),
@@ -3302,7 +3304,8 @@ def build_server(
         supports and their quotes; `clean` the prose with citation keys, `[[UNSUPPORTED: ...]]`
         and `[[INTERPRETATION]]` markers, the counts and the methods paragraph. An audit's result
         is the researcher's and is not stated; once any verdict is labelled a line under the title
-        says so. Read-only; refused to a session that has joined a pass."""
+        says so. Read-only; refused to a session that has joined a pass or that is verifying this
+        draft."""
 
         def render() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
@@ -3311,7 +3314,11 @@ def build_server(
             if mode not in ("review", "clean"):
                 raise FactoryValidationError([ValidationIssue("mode", "must be review or clean")])
             body = drafts_service.draft_render(
-                opened, draft_id, "review" if mode == "review" else "clean", agent=True
+                opened,
+                draft_id,
+                "review" if mode == "review" else "clean",
+                agent=True,
+                session=opened.session,
             )
             return _withheld(opened, {"text": body}, include_work_ids=False)
 

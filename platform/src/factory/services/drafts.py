@@ -1,10 +1,9 @@
 """Drafts, slots and sentence recording (slice 7b, plan W-A, task 5).
 
 Declares: `create_draft`, `repin_outline`, `write_sentences`, `withdraw`, `reorder`, `draft_next`,
-`live_sentences`, `get_draft`, `list_drafts`, `verifier_sessions`, `sentence_status`,
-`status_counts`, `draft_view`, `draft_works`, `draft_render`, `SentenceInput`, `SentenceRow`,
-`SlotTask`, `StatusRow`, `DraftView`. The writer of the
-sentence events (the verification, audit and release events have their own services).
+`live_sentences`, `get_draft`, `list_drafts`, `verifier_sessions`, `refuse_verifier`,
+`sentence_status`, `status_counts`, `draft_view`, `draft_works`, `draft_render`, `SentenceInput`,
+`SentenceRow`, `SlotTask`, `StatusRow`, `DraftView`. The writer of the sentence events (the verification, audit and release events have their own services).
 
 Invariants:
 - The platform never writes prose. Sentences are the writer's; the platform checks them
@@ -15,7 +14,9 @@ Invariants:
   support among valid ones is refused whole; another valid sentence of the same call is written.
 - Every agent-written event carries the call and the task content it was served as its
   `input_blob` (R-04). A human writes without a task.
-- A session that has verified a sentence of a draft cannot write in it (`verifier_sessions`).
+- A session that has verified a sentence of a draft cannot write in it (`verifier_sessions`). A
+  session with a verdict on a draft, or a live claim on one of its units, cannot read an agent's
+  status or rendering of it (`refuse_verifier`; ruling 12, R-131): a unit is all it judges from.
 - A refusal writes nothing and carries positions and fixed codes, never document text.
 - Status is computed on read and never stored. `stale` wins over `flagged`, `flagged` over
   `supported`, `supported` over `unchecked`; a `structural` or `interpretive` sentence keeps its
@@ -63,7 +64,13 @@ from factory.model.drafts import (
     Verdict,
     parse_support,
 )
-from factory.model.task import DRAFT_SLOT_TASK_KIND, Task, TaskCompleted, TaskStatus
+from factory.model.task import (
+    DRAFT_SLOT_TASK_KIND,
+    DRAFT_VERIFY_TASK_KIND,
+    Task,
+    TaskCompleted,
+    TaskStatus,
+)
 from factory.services.call_memo import entering
 from factory.services.context import Project
 from factory.services.dedup import active_merges
@@ -86,6 +93,7 @@ from factory.services.tasks import (
     TaskSpec,
     claim_next,
     create_tasks,
+    held_refs,
     require_holder,
     task_content,
 )
@@ -208,6 +216,13 @@ def verifier_sessions(project: Project, draft_id: str) -> frozenset[str]:
     project.index.sync()
     with project.index.connect() as conn:
         return verifiers_of(conn, draft_id)
+
+
+def refuse_verifier(project: Project, draft_id: str, session: str) -> None:
+    """Refuse a session that has a verdict on the draft or a live claim on one of its units."""
+    held = any(draft_id in refs for refs in held_refs(project, session, DRAFT_VERIFY_TASK_KIND))
+    if held or session in verifier_sessions(project, draft_id):
+        raise _refuse("session", "a session verifying this draft cannot read it")
 
 
 # --- Reads ---
@@ -492,10 +507,15 @@ def _status_of(
     return "supported", None
 
 
-def sentence_status(project: Project, draft_id: str, *, agent: bool = False) -> list[StatusRow]:
+def sentence_status(
+    project: Project, draft_id: str, *, agent: bool = False, session: str | None = None
+) -> list[StatusRow]:
     """The status of each live sentence of the draft, in order. `agent` leaves the audit labels
-    out (see the module invariants); the researcher's variant reads them."""
+    out (see the module invariants); the researcher's variant reads them. `session`, the reader an
+    agent's tool names, is refused when it is verifying the draft."""
     with entering():
+        if session is not None:
+            refuse_verifier(project, draft_id, session)
         rows = live_sentences(project, draft_id)
         resolved = _resolved_by_sentence(project, rows)
         verdicts = _latest_verdicts(project, draft_id)
@@ -598,14 +618,18 @@ def draft_render(
     mode: Literal["review", "clean"],
     *,
     agent: bool = False,
+    session: str | None = None,
 ) -> str:
     """The draft as Markdown. `review` shows each sentence with its status, flags, supports and
     quotes; `clean` is the prose with citations and markers, ending with the bibliography note and
     the methods paragraph. Quotes are read from the extraction events' projection, never from the
     library. `agent` reads the agent variants of the status and of the audit, and says so under the
-    title once any verdict is labelled. Nothing is written: the caller decides where the text goes,
-    and it is never under the project (spec ruling 8)."""
+    title once any verdict is labelled. `session`, as in `sentence_status`, is refused when it is
+    verifying the draft. Nothing is written: the caller decides where the text goes, and it is
+    never under the project (spec ruling 8)."""
     with entering():
+        if session is not None:
+            refuse_verifier(project, draft_id, session)
         view = draft_view(project, draft_id)
         statuses = sentence_status(project, draft_id, agent=agent)
         report = audit_report(project, draft_id)
