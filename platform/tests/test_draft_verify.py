@@ -301,6 +301,19 @@ def test_a_superseded_sentence_cannot_be_recorded(
     refused("sentence_id", verify_record, project, unit.task_id, verdict_on(unit), actor=verifier())
 
 
+def test_a_stale_sentence_is_not_served(project: Project, ww: WWorld, wd: Written) -> None:
+    """Its spans no longer resolve; its writer revises it."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        conn.execute(
+            text("UPDATE extraction_claims SET superseded_by = 'clm_X' WHERE claim_id = :c"),
+            {"c": ww.claims[ww.works[0]]},
+        )
+        conn.commit()
+    unit = verify_next(project, wd.draft, actor=verifier())
+    assert unit is not None and unit.sentence_id == wd.second
+
+
 def test_a_verdict_needs_the_verify_skill(project: Project, wd: Written) -> None:
     unit = verify_next(project, wd.draft, actor=verifier())
     assert unit is not None
@@ -383,7 +396,8 @@ def test_forged_verdict_control_folds(project: Project, ww: WWorld, wd: Written)
 
 def test_forged_verdict_by_the_writer_is_inert(project: Project, ww: WWorld, wd: Written) -> None:
     blob, spans = _unit_blob(project, wd, ww)
-    _inert(project, writer(), wd.first, blob, support_spans=spans)
+    same = writer().model_copy(update={"skill": "rf-verify@1a2b3c4d"})  # past the skill guard
+    _inert(project, same, wd.first, blob, support_spans=spans)
 
 
 def test_forged_verdict_with_a_foreign_quote_is_inert(
@@ -402,7 +416,13 @@ def test_forged_verdict_on_another_unit_is_inert(project: Project, ww: WWorld, w
 def test_forged_verdict_on_a_structural_sentence_is_inert(
     project: Project, ww: WWorld, wd: Written
 ) -> None:
-    blob, spans = _unit_blob(project, wd, ww)
+    _, spans = _unit_blob(project, wd, ww)
+    unit = {
+        "sentence_id": wd.structural,
+        "text": "The next paragraph states the scope",
+        "supports": [{"ref": spans[0].ref, "spans": [QUOTE]}],
+    }
+    blob = project.blobs.put_json(unit)  # a unit of that sentence: past the unit guard
     _inert(project, verifier(), wd.structural, blob, support_spans=spans)
 
 

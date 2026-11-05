@@ -278,13 +278,19 @@ def state(project: Project) -> list[tuple[Any, ...]]:
 
 
 def forge_draw(
-    project: Project, draft: str, actor: Actor, verdicts: list[str], seed: int, n: int = 1
+    project: Project,
+    draft: str,
+    actor: Actor,
+    verdicts: list[str],
+    seed: int,
+    n: int = 1,
+    population: int | None = None,
 ) -> None:
     payload = DraftAuditDrawn(
         audit_id=f"dau_{ULID}{n:02d}",
         draft_id=draft,
         seed=seed,
-        population=len(verdict_ids(project, draft)),
+        population=population or len(verdict_ids(project, draft)),
         verdict_ids=verdicts,
     )
     blob = None if actor.kind != "agent" else project.blobs.put_json({"forged": True})
@@ -327,7 +333,8 @@ def test_forged_second_draw_is_inert(project: Project) -> None:
     draw_audit(project, draft)
     before = state(project)
     rest = sorted(set(verdict_ids(project, draft)) - set(items_of(before)))
-    forge_draw(project, draft, project.system_actor(), rest[:1], 5, n=3)
+    # the true draw over what remains, so only the wait for a newer verdict refuses it
+    forge_draw(project, draft, project.system_actor(), rest, 5, n=3, population=len(rest))
     assert state(project) == before
 
 
