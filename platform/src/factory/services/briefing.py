@@ -13,10 +13,14 @@ Invariants:
 - `as_of` is the last event other than `briefing.served`, so recording a pack does not change the
   position the next build says it describes (ruling 4's idempotence). The researcher's briefing
   does read servings, through `briefing-stale`; the pack does not (below).
-- Scale (spec ruling 26). Evidence groups come through the coverage view's reading of
-  `grouped_rows` (one fold, summaries kept; `methods_report` and `evidence_report` are not called).
-  `prisma_flow` and `check` read every work: they are the only definitions of sections 4 and 7,
-  and a second computation would break R-05. Decision row 110 states this exception.
+- Scale. Spec ruling 26 names views, outlines and exports, not briefings, but its aim is kept
+  where it can be: `methods_report` and `evidence_report` are not called, and evidence groups
+  keep summaries only. A build is not one fold: `check`, `human_queue` and the gates each read
+  the extraction state, which is shared within a build (`_load` is memoised for a whole scope),
+  while the final rows are settled again by each caller. `prisma_flow` and `check` read every work:
+  they are the only definitions of sections 4 and 7, and a second computation would break R-05.
+  So a build costs at least what `check` costs, and a repeat call that records nothing pays it
+  again (decision rows 92 and 110).
 - The researcher's output stays complete; the agent form is `briefing_agent_view`.
 - A fresh project gives every section, empty, each with a notice saying why.
 

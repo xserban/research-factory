@@ -58,6 +58,7 @@ from factory.model.extraction import (
 from factory.model.protocol import ExtractionSchema
 from factory.model.screening import Channel, PassLabel
 from factory.packs import NON_COMPARABLE_KEYS, FieldDef, FieldKind, Pack, UnitFamily
+from factory.services.call_memo import memoised
 from factory.services.context import Project
 from factory.services.document_read import default_conversion
 from factory.services.extraction import (
@@ -427,6 +428,17 @@ def _identity(scope: ScopeKey, pack: Pack) -> str:
 def _load(
     project: Project, scope: ScopeKey = Scope.EVIDENCE, works: Collection[str] | None = None
 ) -> _State | None:
+    """`_read_state`, kept for the call when it reads the whole scope. The state is frozen and no
+    reader changes its lists; a restricted read is not kept, as its `works` need not hash."""
+    return _whole_state(project, scope) if works is None else _read_state(project, scope, works)
+
+
+@memoised
+def _whole_state(project: Project, scope: ScopeKey) -> _State | None:
+    return _read_state(project, scope, None)
+
+
+def _read_state(project: Project, scope: ScopeKey, works: Collection[str] | None) -> _State | None:
     """The state of `scope`, or None without a ready protocol with a known schema and (for
     evidence) a full-text plan. With `works`, only those works of the population enter: a work's
     pairs, dual membership and settlement depend on that work alone, so the pairs equal the
