@@ -7,6 +7,7 @@ from factory.model.screening import PassLabel
 from factory.services.agreement import DecisionView
 from factory.services.audit import AuditReport
 from factory.services.check import CheckReport
+from factory.services.coverage import CoverageReport, Ratio
 from factory.services.discovery import DiscoveryReport
 from factory.services.document_convert import ConvertSummary, DocumentStatus
 from factory.services.document_read import DocumentPage
@@ -465,6 +466,39 @@ def import_admit_lines(summary: AdmissionSummary) -> list[str]:
         f"failed runs: {summary.failed_runs}",
     ]
     lines += [f"gap: {g.field}: {g.reason}" for g in summary.gaps]
+    return lines
+
+
+def _ratio(name: str, ratio: Ratio | None) -> str:
+    if ratio is None:
+        return f"{name}: not computed (no denominator)"
+    return f"{name}: {ratio.numerator}/{ratio.denominator} = {ratio.value:.3f}"
+
+
+def import_coverage_lines(report: CoverageReport) -> list[str]:
+    """A coverage report in full: every part, bucket, figure, outcome and suggestion. The
+    researcher's view; held-out figures are included, so it must not be shown to agents."""
+    lines = [
+        f"import: {report.import_id}",
+        f"label: {report.label}",
+        f"protocol: {report.protocol_id or '-'}",
+    ]
+    for part in report.parts:
+        lines.append(f"part: {part.part}")
+        lines += [f"  {bucket.value}: {n}" for bucket, n in part.counts.items()]
+        lines += [
+            f"  resolved: {part.resolved}",
+            f"  unresolved: {part.unresolved}",
+            f"  unconfirmed: {part.unconfirmed}",
+            f"  {_ratio('search sensitivity', part.sensitivity)}",
+            f"  {_ratio('corpus coverage', part.coverage)}",
+            "  outcomes of found records: "
+            + ", ".join(f"{name} {n}" for name, n in part.outcomes.items()),
+        ]
+        lines += [f"  excluded by screening: {w}" for w in part.excluded]
+    if report.included_not_in_library is not None:
+        lines.append(f"included works absent from the library: {report.included_not_in_library}")
+    lines += [f"suggested term: {s.term} ({s.seeds} works)" for s in report.suggestions]
     return lines
 
 

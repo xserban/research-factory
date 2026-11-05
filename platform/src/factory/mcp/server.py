@@ -41,6 +41,7 @@ from factory.services import audit as audit_service
 from factory.services import calibration as calibration_service
 from factory.services import chase as chase_service
 from factory.services import check as check_service
+from factory.services import coverage as coverage_service
 from factory.services import dedup as dedup_service
 from factory.services import discovery as discovery_service
 from factory.services import document_read as document_read_service
@@ -1151,6 +1152,46 @@ def build_server(
             return {"event_id": event_id}
 
         return _reply(project, label, include_work_ids=False)
+
+    @server.tool()
+    def import_status(
+        project: str, cursor: str | None = None, limit: int = PAGE_LIMIT
+    ) -> dict[str, JsonValue]:
+        """Imported libraries, oldest first, one page at a time: each import's format, role,
+        coverage label, records by resolution state and by coverage bucket. Development part
+        only: no ordinals, no record total, no held-out figure (decision 43). Read-only. Refused
+        to a session that has joined a pass."""
+
+        def status() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            page = paginate(coverage_service.agent_import_status(opened), cursor, limit)
+            return _withheld(
+                opened,
+                {
+                    "items": [row.model_dump(mode="json") for row in page.items],
+                    "next_cursor": page.next_cursor,
+                },
+            )
+
+        return _reply(project, status)
+
+    @server.tool()
+    def import_coverage(project: str, import_id: str) -> dict[str, JsonValue]:
+        """How far the systematic search reached an imported library: counts per bucket
+        (found-database, found-supplementary, outside-limits, not-in-sources, source-unchecked,
+        query-miss), search sensitivity and corpus coverage with numerators and denominators,
+        and term suggestions for the misses. The development part is always shown; the held-out
+        part appears only once a screening pass has been opened (decision 43), as figures
+        without records. Read-only. Refused to a session that has joined a pass."""
+
+        def coverage() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            report = coverage_service.agent_coverage(opened, import_id)
+            return _withheld(opened, report.model_dump(mode="json"))
+
+        return _reply(project, coverage)
 
     @server.tool()
     def references_extract(

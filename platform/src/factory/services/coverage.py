@@ -47,7 +47,7 @@ from pydantic import TypeAdapter
 from sqlalchemy import bindparam, text
 
 from factory.imports.limits import outside_limits
-from factory.imports.model import ImportFields, ParseOutcome, RecordType
+from factory.imports.model import ImportFields, ImportFormat, ImportRole, ParseOutcome, RecordType
 from factory.model.base import StrictModel
 from factory.model.probe import TermSuggestion
 from factory.model.protocol import Limit
@@ -57,7 +57,7 @@ from factory.model.work import ProvenanceMethod
 from factory.services.agreement import Outcome, exclusion_criteria, final_outcomes
 from factory.services.context import Project
 from factory.services.dedup import active_merges
-from factory.services.imports import import_row
+from factory.services.imports import import_row, list_imports
 from factory.services.protocol import ProtocolVersion, current_protocol
 from factory.services.reference_resolve import (
     LOOKUP_IDENTIFIER,
@@ -66,6 +66,7 @@ from factory.services.reference_resolve import (
     _keys,
 )
 from factory.services.search import get_work
+from factory.services.seeds import held_out_work_ids
 from factory.services.vocabulary import suggest_terms
 from factory.sources.importlist import NAME as IMPORTLIST
 
@@ -522,8 +523,6 @@ def agent_coverage(
     (R-20). Before a pass is opened `included_not_in_library` is None, since it counts the whole
     library, held-out part included.
     """
-    from factory.services.seeds import held_out_work_ids
-
     exclude = held_out_work_ids(project) if held_out_works is None else held_out_works
     report = coverage_report(project, import_id, exclude_works=exclude)
     visible = held_out_visible(project)
@@ -538,6 +537,54 @@ def agent_coverage(
             "included_not_in_library": report.included_not_in_library if visible else None,
         }
     )
+
+
+class ImportStatusRow(StrictModel):
+    """One import as an agent may see it: the development (or unsplit) part only, no ordinal and
+    no record total (a total would let a reader subtract and recover the held-out count)."""
+
+    import_id: str
+    format: ImportFormat
+    role: ImportRole
+    collection: str | None
+    label: CoverageLabel | None
+    """None while the import is unresolved."""
+    states: dict[str, int] | None
+    """Records by resolution state (`resolved`, `unconfirmed`, `unresolved`); None if unresolved."""
+    buckets: dict[Bucket, int] | None
+
+
+def agent_import_status(project: Project) -> list[ImportStatusRow]:
+    """Every import, oldest first, as `ImportStatusRow`s (decision 43, spec ruling 23)."""
+    resolved = set(resolved_import_ids(project))
+    held = held_out_work_ids(project)
+    rows: list[ImportStatusRow] = []
+    for listing in list_imports(project):
+        info = listing.row
+        label: CoverageLabel | None = None
+        states: dict[str, int] | None = None
+        buckets: dict[Bucket, int] | None = None
+        if info.import_id in resolved:
+            report = agent_coverage(project, info.import_id, held_out_works=held)
+            [part] = [p for p in report.parts if p.part != "held-out"]
+            label, buckets = report.label, part.counts
+            states = {
+                "resolved": part.resolved,
+                "unconfirmed": part.unconfirmed,
+                "unresolved": part.unresolved,
+            }
+        rows.append(
+            ImportStatusRow(
+                import_id=info.import_id,
+                format=info.format,
+                role=info.role,
+                collection=info.collection,
+                label=label,
+                states=states,
+                buckets=buckets,
+            )
+        )
+    return rows
 
 
 def resolved_import_ids(project: Project) -> list[str]:

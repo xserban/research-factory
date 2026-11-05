@@ -62,6 +62,8 @@ async def test_project_status_tool(settings: Settings, project: Project, clock: 
             "extract_agreement",
             "extract_audit_sample",
             "extract_audit_record",
+            "import_status",
+            "import_coverage",
             "references_extract",
             "references_status",
             "references_list",

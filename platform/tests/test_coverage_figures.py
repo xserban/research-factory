@@ -171,3 +171,45 @@ def test_methods_sentence(project: Project, corpus: None, tmp_path: Path) -> Non
     assert "post-search" in sentence
     assert "sensitivity 2/3" in sentence and "coverage 2/3" in sentence
     assert Outcome.INCLUDED.value  # outcomes are counted, not typed
+
+
+def test_agent_view_leaves_out_held_out_seed_works(
+    project: Project, corpus: None, tmp_path: Path
+) -> None:
+    from factory.services.coverage import agent_coverage
+    from factory.services.seeds import held_out_work_ids
+
+    held = held_out_work_ids(project)
+    assert held
+    entries = [found_database(n) for n in range(1, 7)]
+    cov = build(project, tmp_path, entries, Lookups())
+    full = coverage_report(project, cov.import_id)
+    agent_view = agent_coverage(project, cov.import_id)
+    listed = {r.work_id for r in record_coverage(project, cov.import_id)}
+    dropped = len(listed & held)
+    assert dropped > 0
+    assert agent_view.parts[0].resolved == full.parts[0].resolved - dropped
+    assert not set(agent_view.parts[0].excluded) & held
+
+
+@pytest.mark.parametrize("started", [False, True])
+def test_agent_methods_withholds_held_out_until_pass(
+    pre_search: Project, agent: Actor, tmp_path: Path, started: bool
+) -> None:
+    from factory.model.screening import PassLabel
+    from factory.services.methods import agent_methods
+    from factory.services.screening import open_pass
+
+    import_id, _ = _split_import(pre_search, tmp_path)
+    if started:
+        open_pass(pre_search, agent, PassLabel.A)
+    report, withheld = agent_methods(pre_search, methods_report(pre_search))
+    text = render_methods(report, withheld=withheld)
+    [paragraph] = [p for p in text.split("\n\n") if p.startswith("Library import")]
+    assert import_id in paragraph
+    if started:
+        assert "withheld" not in paragraph and "Held-out part: " in paragraph
+    else:
+        assert "Held-out part: withheld until screening has started." in paragraph
+        assert "Held-out part: 0" not in paragraph and "resolved records" in paragraph
+        assert paragraph.count("resolved records") == 1  # the development part only

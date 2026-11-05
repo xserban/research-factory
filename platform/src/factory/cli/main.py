@@ -33,6 +33,7 @@ from factory.services import audit as audit_service
 from factory.services import calibration as calibration_service
 from factory.services import chase as chase_service
 from factory.services import check as check_service
+from factory.services import coverage as coverage_service
 from factory.services import discovery as discovery_service
 from factory.services import document_convert as document_convert_service
 from factory.services import document_read as document_read_service
@@ -2017,6 +2018,31 @@ def import_admit_cmd(
             project, import_id, sources=dict(default_sources())
         )
     for line in render.import_admit_lines(summary):
+        typer.echo(line)
+
+
+@import_app.command("coverage")
+def import_coverage_cmd(
+    ctx: typer.Context,
+    import_id: Annotated[str, typer.Argument(help="An import id (imp_...).")],
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Print the report model as JSON.")
+    ] = False,
+) -> None:
+    """How far the search reached the imported library, every part included (the researcher's
+    view): counts per bucket, search sensitivity, corpus coverage, term suggestions."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        report = coverage_service.coverage_report(project, import_id)
+    typer.echo(
+        "warning: researcher view with held-out figures; this output must not be shown to agents",
+        err=True,
+    )
+    if as_json:
+        typer.echo(report.model_dump_json())
+        return
+    for line in render.import_coverage_lines(report):
         typer.echo(line)
 
 
