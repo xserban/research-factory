@@ -48,7 +48,7 @@ from factory.services.imports import (
     record_import,
 )
 from factory.services.prisma import prisma_flow, search_report
-from factory.services.reference_resolve import resolve_entries
+from factory.services.reference_resolve import load_corpus, resolve_entries
 from factory.services.screening import open_pass
 from factory.services.search import corpus_size, list_works, register_query, run_query
 from factory.services.trace import trace
@@ -183,7 +183,9 @@ def test_c12_resolution_parity_fuzzy_and_unresolved(
 
     as_references = [AsReference(**vars(e)) for e in entries if isinstance(e, ImportResolvable)]
     sources = lookups.sources()
-    by_reference = resolve_entries(project, project.human_actor(), as_references, sources=sources)
+    by_reference = resolve_entries(
+        project, project.human_actor(), as_references, corpus=load_corpus(project), sources=sources
+    )
     resolve_import(project, imp, sources=sources)
     states = record_states(project, imp)
     assert {r.ordinal: r.state for r in by_reference.resolutions} == states

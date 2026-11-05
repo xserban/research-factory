@@ -20,7 +20,7 @@ from factory.services.import_resolve import (
     resolvables,
     resolve_import,
 )
-from factory.services.reference_resolve import resolve_entries
+from factory.services.reference_resolve import load_corpus, resolve_entries
 from factory.services.search import corpus_size
 from tests.document_helpers import events_of_type
 from tests.import_helpers import bib_entry, import_bib
@@ -73,8 +73,16 @@ def test_resolver_parity(project: Project, corpus: None, lookups: Lookups, case:
     """The same fields as a reference entry and as an import record resolve identically."""
     fields = FIELDS[case]
     actor = project.human_actor()
-    by_entry = resolve_entries(project, actor, [_entry(**fields)], sources=lookups.sources())
-    by_record = resolve_entries(project, actor, [_resolvable(**fields)], sources=lookups.sources())
+    by_entry = resolve_entries(
+        project, actor, [_entry(**fields)], corpus=load_corpus(project), sources=lookups.sources()
+    )
+    by_record = resolve_entries(
+        project,
+        actor,
+        [_resolvable(**fields)],
+        corpus=load_corpus(project),
+        sources=lookups.sources(),
+    )
     assert by_entry.resolutions == by_record.resolutions
     assert len(by_entry.lookup_runs) == len(by_record.lookup_runs)
 
