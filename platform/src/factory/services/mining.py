@@ -480,6 +480,8 @@ def mine_status(
                 and member.scope.startswith("m-")
             ):
                 own = (member.scope, member.label)
+    if session is not None and own is None and memberships(project, session):
+        return []  # a screening or evidence pass session sees no miner's status
     out: list[MineStatus] = []
     for use in sorted(protocol.spec.miners or (), key=lambda u: u.name):
         if own is not None and own[0] != use.name:

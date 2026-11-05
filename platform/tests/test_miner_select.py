@@ -3,17 +3,23 @@
 # ruff: noqa: F811
 import inspect
 from dataclasses import replace
+from typing import Any
 
 import pytest
 
 from factory.document.anchorise import anchorise
 from factory.document.anchors import AnchorKind, Manifest, parse_manifest
+from factory.events.envelope import Actor
 from factory.mining.select import selected_anchors
 from factory.mining.spec import Population, Selector
+from factory.model.seed import SeedKind, SeedSpec
 from factory.services.context import Project
 from factory.services.document_read import default_conversion
-from factory.services.mining import population
-from tests.contribution_helpers import screened, world  # noqa: F401
+from factory.services.mining import population, population_works
+from factory.services.search import list_works
+from factory.services.seeds import add_seeds
+from tests.contribution_helpers import screened, with_references, world  # noqa: F401
+from tests.helpers import openalex_item
 
 DOC_V1 = """# 1 Introduction
 
@@ -106,10 +112,38 @@ def test_population_names(project: Project, world: list[str], which: Population)
         assert set(works) <= set(world) and works
 
 
-def test_population_ta_and_references(project: Project, world: list[str]) -> None:
-    ta = {w for w, _ in population(project, Selector(Population.INCLUDED_TA))}
-    assert set(world) <= ta | set(world)
+def test_population_ta_corpus_and_references_are_not_empty(
+    project: Project, agent: Actor, world: list[str]
+) -> None:
+    ta = set(population_works(project, Population.INCLUDED_TA))
+    assert ta and set(world) <= ta  # a work included at full text was included at title/abstract
+    corpus = set(population_works(project, Population.CORPUS))
+    assert corpus and ta <= corpus
     assert list(population(project, Selector(Population.WITH_REFERENCES))) == []
+    with_references(project, agent, world[0])
+    cited = list(population(project, Selector(Population.WITH_REFERENCES)))
+    assert [w for w, _ in cited] == [world[0]]
+    assert cited[0][1] == default_conversion(project, world[0]).conversion_id  # type: ignore[union-attr]
+
+
+def test_corpus_excludes_a_probe_only_work(
+    project: Project, agent: Actor, world: list[str], mock_sources: Any
+) -> None:
+    item = openalex_item(
+        title="Seed only paper",
+        author="Ada Zhou",
+        published="2021-01-01",
+        openalex_id="W9",
+        doi="10.1000/seedonly",
+    )
+    seed = SeedSpec(kind=SeedKind.POSITIVE, cite="Zhou 2021", doi="10.1000/seedonly")
+    add_seeds(project, agent, [seed], sources=mock_sources(openalex=[item]))
+    hidden = {w.id for w in list_works(project, include_probe=True)} - {
+        w.id for w in list_works(project)
+    }
+    assert hidden
+    corpus = set(population_works(project, Population.CORPUS))
+    assert corpus and not hidden & corpus
 
 
 def test_population_streams(project: Project, world: list[str]) -> None:

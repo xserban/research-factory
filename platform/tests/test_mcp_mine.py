@@ -2,6 +2,7 @@
 
 # ruff: noqa: F811
 import json
+from typing import Any
 
 import pytest
 
@@ -11,18 +12,23 @@ from factory.events.envelope import Actor
 from factory.events.reader import read_all
 from factory.mcp import server as mcp_server
 from factory.mining.spec import spec_to_json
+from factory.model.screening import PassLabel
 from factory.services.context import Project
-from tests.extraction_helpers import screened, world  # noqa: F401
-from tests.helpers import install_skill, open_session
+from tests.extraction_helpers import ext_a, screened, world  # noqa: F401
+from tests.helpers import SourcesFor, install_skill, open_session, ready_protocol
 from tests.miner_helpers import (
     SESSION_M1,
+    SESSION_M2,
     VISION_NAME,
     list_miner,
     method_vision,
+    mine_pass,
     mine_row,
+    miner_actor,
     vision_result,
 )
 
+A, B = PassLabel.A, PassLabel.B
 AGENT = {"role": "miner", "model": "claude-opus-5-5", "skill": "rf-extract"}
 
 
@@ -131,3 +137,78 @@ async def test_mcp_mine_tools_refuse_invalid_input_and_write_nothing(
         assert out["ok"] is False and out["errors"][0]["field"] == "supersedes.first"
     assert _count(project) == before
     del agent
+
+
+@pytest.mark.anyio
+async def test_mine_next_is_refused_before_a_screening_pass_opens(
+    settings: Settings,
+    project: Project,
+    agent: Actor,
+    human: Actor,
+    mock_sources: SourcesFor,
+    clock: FixedClock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ready_protocol(project, agent, human, mock_sources)
+    list_miner(project, agent)
+    install_skill(settings, "rf-extract")
+    _session(monkeypatch, SESSION_M1)
+    before = _count(project)
+    async with open_session(settings, clock) as client:
+        out = await client.call(
+            "mine_next", project="demo", miner=VISION_NAME, version=1, pass_label="A", **AGENT
+        )
+    assert out == {"ok": False, "errors": [{"field": "miner", "reason": "not available yet"}]}
+    assert _count(project) == before
+
+
+async def _status(
+    settings: Settings, clock: FixedClock, monkeypatch: pytest.MonkeyPatch, session: str
+) -> dict[str, Any]:
+    _session(monkeypatch, session)
+    async with open_session(settings, clock) as client:
+        out = await client.call("mine_status", project="demo")
+    assert out["ok"] is True, out
+    return out
+
+
+@pytest.mark.anyio
+async def test_mine_status_carries_no_agreement_and_pass_sessions_see_their_own_pass(
+    settings: Settings,
+    project: Project,
+    agent: Actor,
+    clock: FixedClock,
+    world: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    list_miner(project, agent)
+    worked = mine_pass(
+        project, miner_actor(SESSION_M1, "claude-opus-5-5"), A, lambda w: [mine_row()]
+    )
+    mine_pass(project, miner_actor(SESSION_M2, "claude-sonnet-5-5"), B, lambda w: [mine_row()])
+    n = len(worked)
+    outside = await _status(settings, clock, monkeypatch, "01JZ9Q3K5M7N8P0R2S4T6V8W2Z")
+    [entry] = outside["data"]["miners"]
+    assert entry["units"] == 2 * n and entry["agreement"] is None
+    own = await _status(settings, clock, monkeypatch, SESSION_M1)
+    [mine] = own["data"]["miners"]
+    assert mine["units"] == n and mine["rows"] == n and mine["agreement"] is None
+
+
+@pytest.mark.anyio
+async def test_a_screening_or_evidence_pass_session_sees_no_miner_status(
+    settings: Settings,
+    project: Project,
+    agent: Actor,
+    clock: FixedClock,
+    world: list[str],
+    ext_a: Actor,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from factory.model.screening import PassLabel
+    from factory.services.extraction import extract_next
+
+    list_miner(project, agent)
+    extract_next(project, ext_a, PassLabel.A)  # SESSION_A joins an evidence pass
+    out = await _status(settings, clock, monkeypatch, ext_a.session)
+    assert out["data"]["miners"] == []
