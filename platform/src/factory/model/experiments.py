@@ -23,6 +23,7 @@ from factory.model.cards import ROW_KEY_RE
 from factory.model.hypotheses import HYP_ID_RE, Decimal0
 from factory.model.identity import ULID_RE
 from factory.model.screening import NonBlank
+from factory.modules.contract import PolicyKind
 from factory.packs import UnitFamily
 
 EXP_ID_RE = rf"^exp_{ULID_RE}$"
@@ -35,6 +36,8 @@ ARM_RE = (
 SHA256_RE = r"^[0-9a-f]{64}$"
 MAX_RESULTS_BYTES = 64 * 1024
 MAX_UNIVERSES = 256
+MAX_REASON = 300
+MAX_DEVIATION_TEXT = 600
 
 SplitRole = Literal["dev", "confirmatory"]
 ExperimentId = Annotated[str, StringConstraints(pattern=EXP_ID_RE)]
@@ -155,6 +158,16 @@ class Cell(StrictModel):
             raise ValueError("universe coordinates are sorted by key and unique")
         return self
 
+    @property
+    def is_reproduction(self) -> bool:
+        return self.arm.startswith("reproduction:")
+
+    @property
+    def needs_unlock(self) -> bool:
+        """A confirmatory-split run needs the unlock and its nonce, except a baseline
+        reproduction: those run first, by design, and are not test accesses (ruling 8)."""
+        return self.split == "confirmatory" and not self.is_reproduction
+
 
 # --- Results file -----------------------------------------------------------------------------
 
@@ -191,3 +204,84 @@ class ResultsFile(StrictModel):
     nonce: Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{32}$")] | None = None
     tracker_run: Annotated[NonBlank, Field(max_length=200)] | None = None
     artifacts: tuple[ResultArtifact, ...] = ()
+
+
+# --- Events: designs, freeze, unlock and deviations ---------------------------------------------
+
+Autonomy = Literal["human", "agent"]
+DeviationKind = Literal[
+    "planned-change-after-freeze",
+    "budget-overrun",
+    "test-reuse",
+    "baseline-accepted",
+    "environment",
+    "other",
+]
+AUTOMATIC_DEVIATIONS: frozenset[str] = frozenset({"budget-overrun", "test-reuse"})
+"""Kinds the platform writes itself (a `system` actor); no one types them."""
+Reason = Annotated[NonBlank, Field(max_length=MAX_REASON)]
+
+
+class ExperimentDesigned(StrictModel):
+    experiment_id: ExperimentId
+    design: ExperimentDesign
+    e_version: EVersion
+    supersedes: ExperimentId | None = None
+
+    @model_validator(mode="after")
+    def _not_self(self) -> Self:
+        if self.supersedes == self.experiment_id:
+            raise ValueError("a design cannot supersede itself")
+        return self
+
+
+class ExperimentAmended(StrictModel):
+    experiment_id: ExperimentId
+    design: ExperimentDesign
+    e_version: EVersion
+    reason: Reason
+    semantic: bool
+
+
+class ExperimentFrozen(StrictModel):
+    experiment_id: ExperimentId
+    e_version: EVersion
+    policy: PolicyKind
+    autonomy: Autonomy
+    test_access_limit: int = Field(ge=1)
+    """The confirmatory reads per primary cell in force when the design froze: a later protocol
+    amendment does not change it."""
+
+
+class ExperimentUnlocked(StrictModel):
+    experiment_id: ExperimentId
+    e_version: EVersion
+    nonce: Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{32}$")]
+    policy: PolicyKind
+    autonomy: Autonomy
+
+
+class ExperimentDeviationRecorded(StrictModel):
+    experiment_id: ExperimentId
+    kind: DeviationKind
+    text: Annotated[NonBlank, Field(max_length=MAX_DEVIATION_TEXT)]
+    semantic: bool
+    after_unlock: bool
+
+
+# --- Events: runs ---------------------------------------------------------------------------------
+
+
+class XrunRegistered(StrictModel):
+    """A planned run. The configuration, its hash and the cell hash are computed by the platform
+    from the frozen design and the cell (ruling 1); the projector recomputes and compares them."""
+
+    run_id: RunId
+    experiment_id: ExperimentId
+    e_version: EVersion
+    cell: Cell
+    cell_hash: Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{16}$")]
+    config: dict[str, str]
+    config_hash: Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{16}$")]
+    exploratory: bool
+    """True for a cell outside the design's planned cells (a post hoc run, on the dev split)."""

@@ -164,8 +164,14 @@ def hypothesis_handlers(t: HypothesisTables) -> dict[str, Handler]:
 def policy_in_force(conn: Connection, t: HypothesisTables, gate_id: str) -> PolicyKind:
     """The effective policy kind of `gate_id` at this point of the log (fold order): the latest
     protocol recorded so far, else the rigor mode's preset (slice M ruling 2, read by the fold)."""
+    return policy_of(conn, t.protocols, t.project, gate_id)
+
+
+def policy_of(conn: Connection, protocols: Table, project: Table, gate_id: str) -> PolicyKind:
+    """`policy_in_force` over the protocol and project tables, for folds that do not hold
+    `HypothesisTables` (the experiment gates use it too)."""
     row = conn.execute(
-        select(t.protocols.c.spec).order_by(t.protocols.c.event_id.desc()).limit(1)
+        select(protocols.c.spec).order_by(protocols.c.event_id.desc()).limit(1)
     ).first()
     if row is not None:
         policies = ProtocolSpec.model_validate_json(str(row[0])).gate_policies
@@ -173,7 +179,7 @@ def policy_in_force(conn: Connection, t: HypothesisTables, gate_id: str) -> Poli
             for entry in policies.entries:
                 if entry.gate == gate_id:
                     return entry.policy
-    mode = conn.execute(select(t.project.c.rigor_mode).limit(1)).first()
+    mode = conn.execute(select(project.c.rigor_mode).limit(1)).first()
     return preset(RigorMode(str(mode[0])) if mode else RigorMode.PILOT, gate_id).kind
 
 

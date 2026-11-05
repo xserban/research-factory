@@ -17,6 +17,14 @@ from factory.model.conclusions import ConclusionRegistered, ConclusionRetired
 from factory.model.dedup import DedupMerged, DedupReverted
 from factory.model.digest import DigestGenerated
 from factory.model.document import ConversionFailed, Converted
+from factory.model.experiments import (
+    ExperimentAmended,
+    ExperimentDesigned,
+    ExperimentDeviationRecorded,
+    ExperimentFrozen,
+    ExperimentUnlocked,
+    XrunRegistered,
+)
 from factory.model.extraction import (
     ClaimRecorded,
     ExtractionAuditLabelled,
@@ -309,4 +317,10 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("consolidation.proposed", ConsolidationProposed, 1))
     catalog.register(EventType("consolidation.decided", ConsolidationDecided, 1))
     catalog.register(EventType("consolidation.pass_completed", ConsolidationPassCompleted, 1))
+    catalog.register(EventType("experiment.designed", ExperimentDesigned, 1))
+    catalog.register(EventType("experiment.amended", ExperimentAmended, 1))
+    catalog.register(EventType("experiment.frozen", ExperimentFrozen, 1))
+    catalog.register(EventType("experiment.unlocked", ExperimentUnlocked, 1))
+    catalog.register(EventType("experiment.deviation_recorded", ExperimentDeviationRecorded, 1))
+    catalog.register(EventType("xrun.registered", XrunRegistered, 1))
     return catalog

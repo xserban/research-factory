@@ -38,6 +38,7 @@ __all__ = [
     "MAX_UNIVERSES",
     "ablation_cells",
     "cell_hash",
+    "cell_in_design",
     "config_hash",
     "control_cells",
     "design_issues",
@@ -244,6 +245,23 @@ def control_cells(d: ExperimentDesign) -> list[Cell]:
         for c in d.controls
         for seed in sorted(set(d.seeds))
     ]
+
+
+def cell_in_design(d: ExperimentDesign, cell: Cell) -> bool:
+    """Whether a cell is a point the design can run at all: its universe is a point of the
+    multiverse and its arm names the factor or something the design declares. A post hoc run
+    (exploratory) must still be one."""
+    coordinates = dict(cell.universe)
+    if set(coordinates) != set(d.axes) or any(coordinates[k] not in d.axes[k] for k in coordinates):
+        return False
+    kind, _, name = cell.arm.partition(":")
+    if kind == "ablation":
+        return any(a.name == name for a in d.ablations)
+    if kind == "control":
+        return any(c.name == name for c in d.controls)
+    if kind == "reproduction":
+        return any(b.row_key == name for b in d.baselines)
+    return True
 
 
 def planned_cells(d: ExperimentDesign) -> list[Cell]:

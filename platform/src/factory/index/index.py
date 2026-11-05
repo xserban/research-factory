@@ -108,6 +108,10 @@ OMITTED_WHEN_EMPTY: frozenset[str] = frozenset(
         "miner_calibration_units",
         "miner_calibration_labels",
         "miner_calibration_label_sessions",
+        "experiments",
+        "experiment_amendments",
+        "experiment_deviations",
+        "xruns",
     }
 )
 """Tables added after slice 3: while empty they leave no trace in the hash, so a log without

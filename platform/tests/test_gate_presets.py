@@ -21,6 +21,7 @@ AGENT = GatePolicy(PolicyKind.AGENT)
 EXPECTED: dict[tuple[str, RigorMode], GatePolicy] = {
     ("hypotheses.lead_decide", RigorMode.EXPLORATORY): AGENT,
     ("hypotheses.register", RigorMode.EXPLORATORY): AGENT,
+    ("experiments.freeze_unlock", RigorMode.EXPLORATORY): AGENT,
     ("reference.link_confirm", RigorMode.PILOT): AUDIT,
     ("import.resolution_confirm", RigorMode.PILOT): AUDIT,
     # slice M, M-D: the one gate whose floor lets an exploratory project loosen it
