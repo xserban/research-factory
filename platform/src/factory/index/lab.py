@@ -13,6 +13,7 @@ Invariants:
 """
 
 from collections.abc import Mapping, Sequence
+from datetime import timedelta
 from typing import TypeVar
 
 from pydantic import ValidationError
@@ -36,6 +37,9 @@ from factory.events.envelope import Actor, Event
 from factory.index.projection import Handler, Projection, core_tables
 from factory.model.base import StrictModel
 from factory.model.lab import (
+    MAX_TOKEN_DAYS,
+    CredentialIssued,
+    CredentialRevoked,
     IdentityLinked,
     LabRole,
     LabRoleSet,
@@ -58,6 +62,8 @@ def lab_catalog() -> EventCatalog:
     catalog.register(EventType("user.deactivated", UserDeactivated, 1))
     catalog.register(EventType("user.reactivated", UserReactivated, 1))
     catalog.register(EventType("user.lab_role_set", LabRoleSet, 1))
+    catalog.register(EventType("credential.issued", CredentialIssued, 1))
+    catalog.register(EventType("credential.revoked", CredentialRevoked, 1))
     return catalog
 
 
@@ -84,6 +90,16 @@ def lab_tables(metadata: MetaData) -> dict[str, Table]:
             metadata,
             Column("user", String, primary_key=True),
             Column("role", String, primary_key=True),
+        ),
+        "credentials": Table(
+            "credentials",
+            metadata,
+            Column("credential_id", String, primary_key=True),
+            Column("user", String, nullable=False),
+            Column("kind", String, nullable=False),
+            Column("issued_at", String, nullable=False),
+            Column("expires", String, nullable=False),
+            Column("revoked_at", String),
         ),
     }
 
@@ -257,6 +273,63 @@ def _lab_role_set(tables: Mapping[str, Table]) -> Handler:
     return fold
 
 
+def credential_exists(conn: Connection, tables: Mapping[str, Table], credential_id: str) -> bool:
+    credentials = tables["credentials"]
+    query = select(credentials.c.credential_id).where(credentials.c.credential_id == credential_id)
+    return conn.execute(query).first() is not None
+
+
+def is_revoked(conn: Connection, tables: Mapping[str, Table], credential_id: str) -> bool:
+    credentials = tables["credentials"]
+    query = select(credentials.c.revoked_at).where(credentials.c.credential_id == credential_id)
+    return conn.execute(query).scalar() is not None
+
+
+def _credential_issued(tables: Mapping[str, Table]) -> Handler:
+    def fold(conn: Connection, event: Event) -> None:
+        """Folds a credential an admin issued to an active user, for a term the platform allows."""
+        payload = _parsed(CredentialIssued, event)
+        if payload is None or not actor_is_admin(conn, tables, event.actor):
+            return
+        if not is_active(conn, tables, payload.user):
+            return
+        if credential_exists(conn, tables, payload.credential_id):
+            return
+        if not timedelta(0) < payload.expires - event.ts <= timedelta(days=MAX_TOKEN_DAYS):
+            return
+        conn.execute(
+            insert(tables["credentials"]).values(
+                credential_id=payload.credential_id,
+                user=payload.user,
+                kind=payload.kind,
+                issued_at=format_ts(event.ts),
+                expires=format_ts(payload.expires),
+                revoked_at=None,
+            )
+        )
+
+    return fold
+
+
+def _credential_revoked(tables: Mapping[str, Table]) -> Handler:
+    def fold(conn: Connection, event: Event) -> None:
+        payload = _parsed(CredentialRevoked, event)
+        if payload is None or not actor_is_admin(conn, tables, event.actor):
+            return
+        if not credential_exists(conn, tables, payload.credential_id):
+            return
+        if is_revoked(conn, tables, payload.credential_id):
+            return
+        credentials = tables["credentials"]
+        conn.execute(
+            update(credentials)
+            .where(credentials.c.credential_id == payload.credential_id)
+            .values(revoked_at=format_ts(event.ts))
+        )
+
+    return fold
+
+
 def lab_projection() -> tuple[Projection, dict[str, Table]]:
     """The lab projection and its tables by name, which the services read through."""
     metadata = MetaData()
@@ -268,6 +341,8 @@ def lab_projection() -> tuple[Projection, dict[str, Table]]:
         "user.deactivated": _user_deactivated(tables),
         "user.reactivated": _user_reactivated(tables),
         "user.lab_role_set": _lab_role_set(tables),
+        "credential.issued": _credential_issued(tables),
+        "credential.revoked": _credential_revoked(tables),
     }
     projection = Projection(version=LAB_PROJECTION_VERSION, metadata=metadata, handlers=handlers)
     return projection, tables

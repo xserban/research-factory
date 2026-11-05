@@ -9,13 +9,14 @@ Invariants:
 - `lab_roles` is never empty and never repeats a role.
 """
 
+from datetime import datetime, timedelta
 from enum import StrEnum
-from typing import Annotated
+from typing import Annotated, Literal
 
-from pydantic import AfterValidator, Field
+from pydantic import AfterValidator, Field, field_validator
 
 from factory.model.base import StrictModel
-from factory.model.identity import ACTOR_ID_RE
+from factory.model.identity import ACTOR_ID_RE, ULID_RE
 
 LAB_SLUG = "lab"
 """The envelope `project` of the lab log, so no project may take this slug (plan ruling 1)."""
@@ -24,6 +25,9 @@ MAX_NAME_LENGTH = 200
 MAX_REASON_LENGTH = 2000
 MAX_IDENTITY_LENGTH = 512
 SHA256_HEX_RE = r"^[0-9a-f]{64}$"
+CREDENTIAL_ID_RE = rf"^crd_{ULID_RE}$"
+DEFAULT_TOKEN_DAYS = 90
+MAX_TOKEN_DAYS = 365
 
 
 class LabRole(StrEnum):
@@ -71,3 +75,24 @@ class UserReactivated(StrictModel):
 class LabRoleSet(StrictModel):
     user: UserId
     lab_roles: LabRoles
+
+
+class CredentialIssued(StrictModel):
+    """A credential exists. It carries no secret and no hash: those stay in the secret store."""
+
+    credential_id: str = Field(pattern=CREDENTIAL_ID_RE)
+    user: UserId
+    kind: Literal["token"]
+    expires: datetime
+
+    @field_validator("expires")
+    @classmethod
+    def _expires_is_utc(cls, value: datetime) -> datetime:
+        if value.utcoffset() != timedelta(0):
+            raise ValueError("expires must be a UTC timestamp")
+        return value
+
+
+class CredentialRevoked(StrictModel):
+    credential_id: str = Field(pattern=CREDENTIAL_ID_RE)
+    reason: Reason
