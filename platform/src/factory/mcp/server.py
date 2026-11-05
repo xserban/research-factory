@@ -28,6 +28,7 @@ from factory.model.base import StrictModel
 from factory.model.cards import PropertyDef
 from factory.model.chase import ChaseDirection
 from factory.model.extraction import ClaimInput, ExtractedRowInput
+from factory.model.findings import ContradictionInput
 from factory.model.fulltext import Route
 from factory.model.identity import IdGenerator
 from factory.model.inbox import Basis
@@ -61,12 +62,14 @@ from factory.services import exports as exports_service
 from factory.services import extraction as extraction_service
 from factory.services import extraction_agreement as extraction_agreement_service
 from factory.services import extraction_audit as extraction_audit_service
+from factory.services import finders as findings_service
 from factory.services import fulltext as fulltext_service
 from factory.services import fulltext_status as fulltext_status_service
 from factory.services import ideas as ideas_service
 from factory.services import inbox as inbox_service
 from factory.services import interpretations as interpretations_service
 from factory.services import lineage as graph_service
+from factory.services import matching as matching_service
 from factory.services import methods as methods_service
 from factory.services import notices as notices_service
 from factory.services import prisma as prisma_service
@@ -1960,6 +1963,105 @@ def build_server(
         `inferred`, which waits for a human; you cannot confirm. Returns the link, its status and
         reason, and whether it already existed. Refused to a session that has joined a pass."""
 
+    @server.tool()
+    def match_query(
+        project: str,
+        problem_id: str,
+        include_inferred: bool = False,
+        transfer_only: bool = False,
+        limit: int = 50,
+        after: str | None = None,
+    ) -> dict[str, JsonValue]:
+        """Method cards matched against a problem description (`pbd_`), one page: per card the
+        satisfied, conflicting and unknown properties, ordered by fewest conflicts, most
+        satisfied, fewest unknown, then id. `transfer` is True when no member work of the card's
+        subject is included in this project. A computed candidate list, not a conclusion; only
+        stated and confirmed assertions count unless `include_inferred`. `match_key` names the
+        inputs. Page with `after`. Read-only; refused to a session that has joined a pass."""
+
+        def query() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            _require_pass_opened(opened)
+            page = matching_service.match(
+                opened,
+                problem_id,
+                include_inferred=include_inferred,
+                transfer_only=transfer_only,
+                limit=limit,
+                after=after,
+            )
+            return _withheld(opened, page.model_dump(mode="json"), include_work_ids=False)
+
+        return _reply(project, query, include_work_ids=False)
+
+    @server.tool()
+    def finder_contradictions(
+        project: str, group_id: str | None = None, limit: int = 50, after: str | None = None
+    ) -> dict[str, JsonValue]:
+        """Numeric conflicts inside comparability groups: two independent rows of one method
+        from different works whose values differ beyond the tolerance, with the regime fields
+        that differ. Copied rows never conflict. `claims` lists the human-confirmed claim
+        contradictions. Computed candidates; nothing is compared across groups. Page with
+        `after`. Read-only; refused to a session that has joined a pass."""
+
+        def find() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            _require_pass_opened(opened)
+            page = findings_service.find_conflicts(
+                opened, group_id=group_id, limit=limit, after=after
+            )
+            data = page.model_dump(mode="json")
+            data["claims"] = [
+                v.model_dump(mode="json") for v in findings_service.list_contradictions(opened)
+            ]
+            return _withheld(opened, data, include_work_ids=False)
+
+        return _reply(project, find, include_work_ids=False)
+
+    @server.tool()
+    def finder_gaps(
+        project: str,
+        rows_axis: str,
+        columns_axis: str,
+        filters: dict[str, str] | None = None,
+    ) -> dict[str, JsonValue]:
+        """Empty cells of a grid: methods (`method`, from final evidence rows) or method cards
+        (`card`) by one declared comparability key of the evidence schema, or by a property key
+        (`pr:`, cards only). Each report carries the corpus definition and the sentence "not
+        found in this corpus". A grid above 10,000 cells is refused: add a filter (a
+        comparability key and a value). Read-only; refused to a session that has joined a
+        pass."""
+
+        def find() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            _require_pass_opened(opened)
+            report = findings_service.find_gaps(
+                opened, rows_axis=rows_axis, columns_axis=columns_axis, filters=filters
+            )
+            return _withheld(opened, report.model_dump(mode="json"), include_work_ids=False)
+
+        return _reply(project, find, include_work_ids=False)
+
+    @server.tool()
+    def contradiction_propose(
+        project: str,
+        ref_a: str,
+        ref_b: str,
+        note: str,
+        role: str,
+        model: str,
+        skill: str,
+        decision: str | None = None,
+    ) -> dict[str, JsonValue]:
+        """Propose that two live claims (`clm_`) or contribution items (`ext_`) of different
+        works contradict each other, with a note of at most 500 characters. The platform stores
+        both quotes. A proposal stays inferred until the researcher confirms it; `decision` is
+        not an input and giving it is refused. The same pair proposed twice is written once.
+        Refused to a session that has joined a pass."""
+
         def propose() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
             _refuse_pass_session(opened)
@@ -1972,6 +2074,22 @@ def build_server(
             return _withheld(opened, result.model_dump(mode="json"), include_work_ids=False)
 
         return _reply(project, propose, rename=dotted, include_work_ids=False)
+
+    @server.tool()
+            if decision is not None:
+                raise FactoryValidationError(
+                    [ValidationIssue("decision", "only the researcher decides; do not send one")]
+                )
+            actor = make_agent_actor(settings, session, role, model, skill)
+            item = parse_input(
+                ContradictionInput, {"ref_a": ref_a, "ref_b": ref_b, "note": note}, "item"
+            )
+            ident, written = findings_service.propose_contradiction(opened, actor, item)
+            return _withheld(
+                opened, {"contradiction_id": ident, "written": written}, include_work_ids=False
+            )
+
+        return _reply(project, propose, include_work_ids=False)
 
     return server
 

@@ -23,6 +23,7 @@ from factory.services.extraction_agreement import (
     FieldView,
 )
 from factory.services.extraction_audit import AuditEvidence, ExtractionAuditReport
+from factory.services.finders import ConflictPage, ContradictionView, GapReport
 from factory.services.fulltext import FetchSummary
 from factory.services.fulltext_import import ImportReport
 from factory.services.fulltext_status import FulltextStatus
@@ -38,6 +39,7 @@ from factory.services.imports import (
 )
 from factory.services.inbox import InboxPage, ResolveOutcome
 from factory.services.lineage import GraphQueryResult, GraphStatus
+from factory.services.matching import MatchPage
 from factory.services.prisma import UNCONVERTED, PrismaFlow, SearchReport
 from factory.services.prisma_update import UpdateFlow
 from factory.services.properties import PropertyView
@@ -838,3 +840,64 @@ def conclusion_lines(diff: ConclusionDiff) -> list[str]:
             if group.best_changed is not None:
                 lines.append(f"    best row: {group.best_changed[0]} -> {group.best_changed[1]}")
     return lines
+
+
+# --- Matching and finders (slice 6, H-B): computed candidates, never conclusions ---
+
+
+def match_lines(page: MatchPage) -> list[str]:
+    lines = [
+        f"match {page.problem_id}  match_key {page.match_key}  vocabulary {page.vocabulary_version}"
+        f"  statuses {', '.join(page.statuses)}  candidates {page.candidates}"
+    ]
+    if not page.rows:
+        lines.append("no cards")
+    for r in page.rows:
+        flag = "  transfer" if r.transfer else ""
+        lines.append(
+            f"{r.card_id}  {r.subject}  satisfied {len(r.satisfied)}  "
+            f"conflicting {len(r.conflicting)}  unknown {len(r.unknown)}{flag}"
+        )
+        for label, keys in (("conflicting", r.conflicting), ("unknown", r.unknown)):
+            if keys:
+                lines.append(f"  {label} {', '.join(keys)}")
+        if r.evidence_groups:
+            lines.append(f"  groups {', '.join(r.evidence_groups)}")
+    if page.next_after is not None:
+        lines.append(f"more: --after {page.next_after}")
+    return lines
+
+
+def conflict_lines(page: ConflictPage) -> list[str]:
+    if not page.conflicts:
+        return ["no conflicts"]
+    lines = []
+    for c in page.conflicts:
+        differs = ", ".join(c.differs_in) if c.differs_in else "-"
+        lines.append(
+            f"{c.group_id}  {c.method}{'' if c.variant is None else ' / ' + c.variant}  "
+            f"{c.row_a} {c.value_a} ({c.work_a})  vs  {c.row_b} {c.value_b} ({c.work_b})  "
+            f"difference {c.relative_difference}  differs_in {differs}"
+        )
+    if page.next_after is not None:
+        lines.append(f"more: --after {page.next_after}")
+    return lines
+
+
+def gap_lines(report: GapReport) -> list[str]:
+    lines = [
+        f"gaps {report.rows_axis} x {report.columns_axis}  cells {report.cells}  "
+        f"filled {report.filled}  empty {len(report.empty)}  gap_key {report.gap_key}",
+        report.statement,
+    ]
+    lines += [f"{c.row}  {c.column}" for c in report.empty]
+    return lines
+
+
+def contradiction_lines(views: list[ContradictionView]) -> list[str]:
+    if not views:
+        return ["no contradictions"]
+    return [
+        f"{v.contradiction_id}  {v.state}  {v.ref_a} ({v.work_a})  vs  {v.ref_b} ({v.work_b})"
+        for v in views
+    ]

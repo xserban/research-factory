@@ -17,7 +17,7 @@ A computed candidate list, never a conclusion (decision 68). Invariants:
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Literal
@@ -93,7 +93,9 @@ def _refuse(field_name: str, reason: str) -> FactoryValidationError:
 
 
 def _values(
-    project: Project, rows: Sequence[CardPropRow], assertions: dict[str, str]
+    define: Callable[[str], PropertyDef | None],
+    rows: Sequence[CardPropRow],
+    assertions: dict[str, str],
 ) -> dict[str, tuple[PropertyDef, Value]]:
     """One value per property key from effective rows: the latest assertion's. Number values
     are canonical decimals; `assertions` collects the assertion id kept per key."""
@@ -103,7 +105,7 @@ def _values(
             latest[row.property_key] = row.assertion_id
     out: dict[str, tuple[PropertyDef, Value]] = {}
     for key, aid in latest.items():
-        defn = resolve_property(project, key)
+        defn = define(key)
         if defn is None:
             continue
         mine = [r for r in rows if r.assertion_id == aid]
@@ -139,7 +141,7 @@ def _problem(
         ]
     rows = list(effective_card_props(project, keys, statuses, card_ids=[problem_id]))
     kept: dict[str, str] = {}
-    values = _values(project, rows, kept)
+    values = _values(lambda k: resolve_property(project, k), rows, kept)
     required = {k: v for k, v in values.items() if v[0].applies_to in ("problem", "both")}
     return required, sorted(kept[k] for k in required)
 
@@ -188,7 +190,9 @@ def _candidates(
         subjects = _subjects(project, list(by_card)) if by_card else {}
         for card_id in sorted(by_card):
             kept: dict[str, str] = {}
-            have = _values(project, by_card[card_id], kept)
+            have = _values(
+                lambda k: required[k][0] if k in required else None, by_card[card_id], kept
+            )
             candidate = _Candidate(card_id, subjects[card_id], sorted(kept.values()))
             for key, (defn, wanted) in sorted(required.items()):
                 found_value = have.get(key)

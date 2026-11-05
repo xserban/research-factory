@@ -53,6 +53,7 @@ from factory.services import exports as exports_service
 from factory.services import extraction as extraction_service
 from factory.services import extraction_agreement as extraction_agreement_service
 from factory.services import extraction_audit as extraction_audit_service
+from factory.services import finders as findings_service
 from factory.services import fulltext as fulltext_service
 from factory.services import fulltext_import as fulltext_import_service
 from factory.services import fulltext_status as fulltext_status_service
@@ -64,6 +65,7 @@ from factory.services import imports as imports_service
 from factory.services import inbox as inbox_service
 from factory.services import inbox_watch as inbox_watch_service
 from factory.services import lineage as graph_service
+from factory.services import matching as matching_service
 from factory.services import methods as methods_service
 from factory.services import notices as notices_service
 from factory.services import portfolio as portfolio_service
@@ -192,6 +194,16 @@ cards_app = typer.Typer(
     help="Method cards and problem descriptions: list, show, assert, confirm and reject.",
     no_args_is_help=True,
 )
+finders_app = typer.Typer(
+    name="finders",
+    help="Computed candidates: numeric conflicts and gaps. Not conclusions.",
+    no_args_is_help=True,
+)
+contradictions_app = typer.Typer(
+    name="contradictions",
+    help="Claim contradictions: list, confirm and reject (human only).",
+    no_args_is_help=True,
+)
 graph_app = typer.Typer(
     name="graph",
     help="The lineage graph: build, status, bounded queries and JSON or DOT export.",
@@ -274,6 +286,8 @@ app.add_typer(relations_app)
 app.add_typer(ideas_app)
 app.add_typer(vocabulary_app)
 app.add_typer(cards_app)
+app.add_typer(finders_app)
+app.add_typer(contradictions_app)
 app.add_typer(graph_app)
 app.add_typer(import_app)
 
@@ -3018,3 +3032,131 @@ def graph_export_cmd(
                 for chunk in chunks:
                     handle.write(chunk)
             typer.echo(f"wrote {out}")
+
+
+# --- Matching, finders and contradictions (slice 6, H-B) ---
+
+
+@app.command("match")
+def match_cmd(
+    ctx: typer.Context,
+    problem: Annotated[str, typer.Argument(help="A problem description id, pbd_.")],
+    inferred: Annotated[
+        bool, typer.Option("--inferred", help="Also count inferred assertions, labelled.")
+    ] = False,
+    transfer: Annotated[
+        bool, typer.Option("--transfer", help="Only cards with no member work in this project.")
+    ] = False,
+    limit: Annotated[int, typer.Option("--limit", help="Rows per page.")] = 50,
+    after: Annotated[str | None, typer.Option("--after", help="Cursor from a page.")] = None,
+) -> None:
+    """Method cards matched against a problem description: a computed candidate list."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        page = matching_service.match(
+            project,
+            problem,
+            include_inferred=inferred,
+            transfer_only=transfer,
+            limit=limit,
+            after=after,
+        )
+    for line in render.match_lines(page):
+        typer.echo(line)
+
+
+@finders_app.command("conflicts")
+def finders_conflicts_cmd(
+    ctx: typer.Context,
+    group: Annotated[str | None, typer.Option("--group", help="One group id, grp_.")] = None,
+    limit: Annotated[int, typer.Option("--limit", help="Pairs per page.")] = 50,
+    after: Annotated[str | None, typer.Option("--after", help="Cursor from a page.")] = None,
+) -> None:
+    """Numeric conflicts inside comparability groups, with the conditions that differ."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        page = findings_service.find_conflicts(project, group_id=group, limit=limit, after=after)
+    for line in render.conflict_lines(page):
+        typer.echo(line)
+
+
+@finders_app.command("gaps")
+def finders_gaps_cmd(
+    ctx: typer.Context,
+    rows: Annotated[str, typer.Option("--rows", help="method or card.")],
+    columns: Annotated[
+        str, typer.Option("--columns", help="A comparability key, or a pr: property key.")
+    ],
+    filter_: Annotated[
+        list[str] | None, typer.Option("--filter", help="KEY=VALUE; repeat for more.")
+    ] = None,
+) -> None:
+    """Empty cells of a method x condition grid, with the corpus definition."""
+    filters: dict[str, str] = {}
+    for item in filter_ or []:
+        key, sep, value = item.partition("=")
+        if not sep or not key:
+            _fail(f"--filter {item!r}: expected KEY=VALUE", 2)
+        filters[key] = value
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        report = findings_service.find_gaps(
+            project, rows_axis=rows, columns_axis=columns, filters=filters
+        )
+    for line in render.gap_lines(report):
+        typer.echo(line)
+
+
+@contradictions_app.command("list")
+def contradictions_list_cmd(
+    ctx: typer.Context,
+    state_: Annotated[
+        list[str] | None,
+        typer.Option("--state", help="inferred, confirmed, rejected or stale; repeat for more."),
+    ] = None,
+) -> None:
+    """Claim contradictions; the default shows the confirmed ones."""
+    chosen = state_ or ["confirmed"]
+    for name in chosen:
+        if name not in ("inferred", "confirmed", "rejected", "stale"):
+            _fail(f"--state {name!r}: expected inferred, confirmed, rejected or stale", 2)
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        views = findings_service.list_contradictions(project, states=chosen)
+    for line in render.contradiction_lines(views):
+        typer.echo(line)
+
+
+def _decide_contradiction(
+    ctx: typer.Context, ident: str, decision: Literal["confirm", "reject"], why: str
+) -> None:
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        findings_service.decide_contradiction(project, project.human_actor(), ident, decision, why)
+
+
+@contradictions_app.command("confirm")
+def contradictions_confirm_cmd(
+    ctx: typer.Context,
+    contradiction: Annotated[str, typer.Argument(help="A contradiction id, ctr_.")],
+    rationale: Annotated[str, typer.Option("--rationale", help="Why the two refs contradict.")],
+) -> None:
+    """Confirm a proposed contradiction (a human act, not from the proposing session)."""
+    _decide_contradiction(ctx, contradiction, "confirm", rationale)
+    typer.echo(f"confirmed {contradiction}")
+
+
+@contradictions_app.command("reject")
+def contradictions_reject_cmd(
+    ctx: typer.Context,
+    contradiction: Annotated[str, typer.Argument(help="A contradiction id, ctr_.")],
+    rationale: Annotated[str, typer.Option("--rationale", help="Why they do not.")],
+) -> None:
+    """Reject a proposed contradiction; it stays in the log."""
+    _decide_contradiction(ctx, contradiction, "reject", rationale)
+    typer.echo(f"rejected {contradiction}")

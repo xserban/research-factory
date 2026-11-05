@@ -90,6 +90,10 @@ async def test_project_status_tool(settings: Settings, project: Project, clock: 
             "interpretation_list",
             "concept_propose",
             "concept_link",
+            "match_query",
+            "finder_contradictions",
+            "finder_gaps",
+            "contradiction_propose",
         ]
         res = await client.call_tool("project_status", {"project": "demo"})
         body = _body(res)
