@@ -24,19 +24,15 @@ Invariants:
   takes over the human decisions on its entries, recorded in `reference.resolved` (`carried`).
 - Counts are computed from the live extractions, in SQL; the link states sum to the entry count.
 - Listing is paged in SQL with a fixed cap (`MAX_PAGE`).
-- Held-out mask (R-20): an agent never sees a link that touches a held-out seed. Such an entry
-  reads as a genuine unresolved link with nothing parsed: reason `no-identifier-no-title`, the only
-  reason whose real links have no method, title or identifier, so its shape marks nothing.
-  `first_author`, `year` and the anchor stay, since the document shows them. `HIDDEN_LINK` is the
-  one definition of "touches"; the list, the counts, the extraction summary and the agent `trace`
-  all read it.
+- Nothing here knows the seeds: a held-out seed's work reads as any corpus work in every link,
+  count and list (decisions 37 item 9, 81). The MCP layer scrubs seed ids and stated identifiers.
 """
 
 from __future__ import annotations
 
 import json
 import re
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from typing import Literal
 
 from sqlalchemy import RowMapping, text
@@ -62,10 +58,8 @@ from factory.model.references import (
     ReferenceEntry,
     ReferenceExtracted,
     ReferenceResolved,
-    UnresolvedReason,
 )
 from factory.model.search import QueryPurpose
-from factory.model.seed import HeldOut
 from factory.model.work_ids import WORK_ID_RE
 from factory.references.bbl import align, read_bbl
 from factory.references.markers import completeness_flags, find_contexts
@@ -83,20 +77,16 @@ from factory.services.conversions import conversion_manifest
 from factory.services.document_read import ConversionRef, default_conversion
 from factory.services.protocol import current_protocol
 from factory.services.reference_resolve import (
-    HELD_WORK,
-    HIDDEN_LINK,
     Corpus,
     carried_decisions,
     entry_digest,
     entry_raw,
-    held_params,
     load_corpus,
     resolve_entries,
 )
 from factory.sources.registry import SourceFactory
 
 MAX_PAGE = 100
-MASKED_REASON: UnresolvedReason = "no-identifier-no-title"
 
 SkipReason = Literal["not-included", "no-conversion", "library-missing"]
 
@@ -474,124 +464,18 @@ _ENTRY_LINK = (
 )
 _ENTRIES = f"FROM reference_entries n {_LIVE.format(t='n')} {_ENTRY_LINK}"
 """The entries of the live extractions (`n`, extraction `x`) with their links (`l`)."""
-_SHOWN_CITING = f"x.work_id NOT {HELD_WORK}"
-_SHOWN_STATE = f"CASE WHEN {HIDDEN_LINK} THEN :unresolved ELSE l.state END"
 
 
-def _agent_states(project: Project, extraction_id: str, held: HeldOut) -> dict[LinkState, int]:
-    """The extraction's states as `list_references` shows them to an agent."""
-    states = {state: 0 for state in LinkState}
-    with project.index.connect() as conn:
-        rows = conn.execute(
-            text(
-                f"SELECT CASE WHEN {HIDDEN_LINK} THEN :unresolved ELSE l.state END, COUNT(*) "
-                f"FROM reference_entries n {_ENTRY_LINK} WHERE n.extraction_id = :x GROUP BY 1"
-            ),
-            {
-                "x": extraction_id,
-                "unresolved": LinkState.UNRESOLVED.value,
-                **held_params(held),
-            },
-        ).all()
-    for state, count in rows:
-        states[LinkState(str(state))] = int(count)
-    return states
-
-
-def agent_extract_view(
-    project: Project, summary: ExtractSummary, held_out: HeldOut
-) -> ExtractSummary:
-    """`summary` without the extractions and skips of held-out works, its states counted as
-    `list_references` shows them (R-20)."""
+def reference_counts(project: Project) -> ReferenceCounts:
+    """Counts over the live extractions, in SQL; the four states sum to `entries`."""
     project.index.sync()
-    return ExtractSummary(
-        extractions=[
-            e.model_copy(update={"states": _agent_states(project, e.extraction_id, held_out)})
-            for e in summary.extractions
-            if not held_out.hides(e.work_id)
-        ],
-        skipped=[k for k in summary.skipped if not held_out.hides(k.work_id)],
-    )
-
-
-def link_touches_held_out(
-    held: HeldOut,
-    works: Iterable[str | None],
-    doi: str | None,
-    arxiv: str | None,
-) -> bool:
-    """Whether a link touches a held-out seed's work: any of `works` (its linked, base or
-    candidate work), or an identifier the entry states (R-20)."""
-    return any(held.hides(w) for w in works) or held.hides(None, doi, arxiv)
-
-
-def masked_anchors(project: Project, held: HeldOut) -> frozenset[str]:
-    """`<conversion_id>/<anchor>` of every entry `list_references` hides from an agent, in any
-    extraction: its link touches a held-out work, or the citing work is held out."""
-    project.index.sync()
-    with project.index.connect() as conn:
-        rows = conn.execute(
-            text(
-                "SELECT DISTINCT x.conversion_id, n.anchor FROM reference_entries n "
-                "JOIN reference_extractions x ON x.extraction_id = n.extraction_id "
-                f"{_ENTRY_LINK} WHERE x.work_id {HELD_WORK} OR {HIDDEN_LINK}"
-            ),
-            held_params(held),
-        ).all()
-    return frozenset(f"{conversion}/{anchor}" for conversion, anchor in rows)
-
-
-def _masked(item: ReferenceItem) -> ReferenceItem:
-    """The item as a genuine unresolved entry with nothing parsed: no linked work, no identifier,
-    no title (R-20)."""
-    return item.model_copy(
-        update={
-            "state": LinkState.UNRESOLVED,
-            "work_id": None,
-            "confidence": None,
-            "method": None,
-            "score": None,
-            "candidates": [],
-            "reason": MASKED_REASON,
-            "base_state": LinkState.UNRESOLVED,
-            "base_work_id": None,
-            "decision": None,
-            "confirmed_by": None,
-            "proposal": None,
-            "no_source_record": False,
-            "doi": None,
-            "arxiv": None,
-            "title": None,
-        }
-    )
-
-
-def reference_counts(project: Project, held_out: HeldOut | None = None) -> ReferenceCounts:
-    """Counts over the live extractions, in SQL; the four states sum to `entries`. With `held_out`,
-    a held-out work's extraction is left out and a link that touches a held-out seed's work counts
-    as unresolved, as `list_references` shows it."""
-    project.index.sync()
-    params = {
-        **held_params(held_out),
-        "unresolved": LinkState.UNRESOLVED.value,
-        "resolved": LinkState.RESOLVED.value,
-        "probe": QueryPurpose.PROBE.value,
-    }
-    resolved = (
-        f"{_ENTRIES} WHERE {_SHOWN_CITING} AND l.state = :resolved AND l.work_id IS NOT NULL "
-        f"AND NOT {HIDDEN_LINK}"
-    )
+    params = {"resolved": LinkState.RESOLVED.value, "probe": QueryPurpose.PROBE.value}
+    resolved = f"{_ENTRIES} WHERE l.state = :resolved AND l.work_id IS NOT NULL"
     with project.index.connect() as conn:
         extractions = conn.execute(
-            text(
-                f"SELECT COUNT(*) FROM reference_extractions x WHERE live = 1 AND {_SHOWN_CITING}"
-            ),
-            params,
+            text("SELECT COUNT(*) FROM reference_extractions x WHERE live = 1")
         ).scalar_one()
-        by_state = conn.execute(
-            text(f"SELECT {_SHOWN_STATE}, COUNT(*) {_ENTRIES} WHERE {_SHOWN_CITING} GROUP BY 1"),
-            params,
-        ).all()
+        by_state = conn.execute(text(f"SELECT l.state, COUNT(*) {_ENTRIES} GROUP BY 1")).all()
         no_source = conn.execute(
             text(f"SELECT COUNT(*) {resolved} AND l.no_source_record = 1"), params
         ).scalar_one()
@@ -620,7 +504,7 @@ def reference_counts(project: Project, held_out: HeldOut | None = None) -> Refer
 
 
 def _item(row: RowMapping) -> ReferenceItem:
-    item = ReferenceItem(
+    return ReferenceItem(
         extraction_id=str(row["extraction_id"]),
         citing_work=str(row["citing_work"]),
         ordinal=int(row["ordinal"]),
@@ -645,7 +529,6 @@ def _item(row: RowMapping) -> ReferenceItem:
         proposal=row["proposal"],
         no_source_record=bool(row["no_source_record"]),
     )
-    return _masked(item) if row["hidden"] else item
 
 
 def list_references(
@@ -655,13 +538,11 @@ def list_references(
     work_id: str | None,
     after: int,
     limit: int,
-    held_out: HeldOut | None = None,
 ) -> Page:
     """Entries of the live extractions with their links, by citing work, extraction and ordinal.
 
     `after` is the number of matching items already seen; `limit` is 1..`MAX_PAGE`. The page and
-    the total are taken in SQL, so only the page's items are built. With `held_out` (agent views)
-    the held-out works are hidden before filtering and counting.
+    the total are taken in SQL, so only the page's items are built.
     """
     issues: list[ValidationIssue] = []
     if not 1 <= limit <= MAX_PAGE:
@@ -672,12 +553,10 @@ def list_references(
         raise FactoryValidationError(issues)
     project.index.sync()
     scope = (
-        f"{_ENTRIES} WHERE {_SHOWN_CITING} AND (:work IS NULL OR x.work_id = :work) "
-        f"AND (:state IS NULL OR {_SHOWN_STATE} = :state)"
+        f"{_ENTRIES} WHERE (:work IS NULL OR x.work_id = :work) "
+        "AND (:state IS NULL OR l.state = :state)"
     )
     params: dict[str, object] = {
-        **held_params(held_out),
-        "unresolved": LinkState.UNRESOLVED.value,
         "work": work_id,
         "state": None if state is None else state.value,
     }
@@ -690,7 +569,7 @@ def list_references(
                     "n.label, n.title, n.first_author, n.year, n.doi, n.arxiv, l.state, "
                     "l.work_id, l.confidence, l.method, l.score, l.candidates, l.reason, "
                     "l.base_state, l.base_work_id, l.decision, l.confirmed_by, l.proposal, "
-                    f"l.no_source_record, {HIDDEN_LINK} AS hidden {scope} "
+                    f"l.no_source_record {scope} "
                     "ORDER BY x.work_id, n.extraction_id, n.ordinal LIMIT :limit OFFSET :after"
                 ),
                 {**params, "limit": limit, "after": after},

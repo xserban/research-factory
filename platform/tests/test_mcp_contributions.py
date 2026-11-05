@@ -11,6 +11,7 @@ from factory.config import Settings
 from factory.events.envelope import Actor, Event
 from factory.events.reader import read_all
 from factory.mcp import server as mcp_server
+from factory.mcp.conventions import WITHHELD
 from factory.services.context import Project
 from factory.services.seeds import SeedRole, all_seeds
 from tests.contribution_helpers import (
@@ -204,7 +205,7 @@ async def test_a_refused_close_writes_nothing(
 
 
 @pytest.mark.anyio
-async def test_held_out_entries_are_masked(
+async def test_an_entry_citing_a_held_out_work_reads_as_any_entry(
     settings: Settings,
     project: Project,
     clock: FixedClock,
@@ -222,11 +223,12 @@ async def test_held_out_entries_are_masked(
         served = await client.call("contribution_next", project="demo", pass_label="A", **AGENT)
     assert served["ok"] is True, served
     listed = served["data"]["batch"]["references"]["entries"]
-    masked = next(e for e in listed if e["ordinal"] == 3)
-    assert masked["title"] is None and masked["doi"] is None and masked["arxiv"] is None
-    assert masked["first_author"] == "Zhou" and masked["year"] == 2020
+    cited = next(e for e in listed if e["ordinal"] == 3)
+    assert cited["title"] == "A held paper"
+    assert cited["first_author"] == "Zhou" and cited["year"] == 2020
+    assert cited["doi"] == WITHHELD  # the stated identifier; decisions 37 item 9, 78 and 81
     text = json.dumps(served)
-    assert held.doi not in text and "held paper" not in text
+    assert held.doi not in text and held.seed_id not in text
     assert next(e for e in listed if e["ordinal"] == 5)["title"] == "Linear attention with kernels"
 
 

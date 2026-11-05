@@ -37,9 +37,7 @@ confirm it (`_deciding_sessions`). A human decision whose entry no longer exists
 extraction is reported by `lost_human_decisions`. A human withdraws a human decision, on any base,
 with `clear`: an event like any other, after which the entry's decision neither folds nor carries.
 
-To an agent, an entry `references_list` masks (R-20) is decided as a genuine unresolved link
-with nothing recorded (`_as_agent_sees`): the same issues, fields and text, so no ordinal can be
-probed. No refusal echoes a named work, since the identifier scrub would flag a held-out one.
+No refusal echoes a named work.
 """
 
 from __future__ import annotations
@@ -47,7 +45,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from typing import Protocol
 
 from sqlalchemy import text
@@ -73,7 +71,6 @@ from factory.model.references import (
     UnresolvedReason,
 )
 from factory.model.search import QueryKind, QueryPurpose, QuerySpec, RunStatus
-from factory.model.seed import HeldOut
 from factory.model.work import Work
 from factory.model.work_ids import arxiv_id_from_doi, normalize_title, work_id
 from factory.references.match import Candidate, Match, match_title
@@ -82,19 +79,7 @@ from factory.services.context import Project
 from factory.services.conversions import conversion_manifest
 from factory.services.dedup import active_merges, canonical_works
 from factory.services.search import get_work, list_works, register_query, run_query
-from factory.services.seeds import held_out
 from factory.sources.registry import SourceFactory
-
-HELD_WORK = "IN (SELECT value FROM json_each(:held_works))"
-_HELD_KEY = "IN (SELECT value FROM json_each(:held_keys))"
-HIDDEN_LINK = (
-    f"COALESCE(l.work_id {HELD_WORK} OR l.base_work_id {HELD_WORK} OR n.doi {_HELD_KEY} "
-    f"OR n.arxiv {_HELD_KEY} OR EXISTS (SELECT 1 FROM json_each(l.candidates) c "
-    f"WHERE json_extract(c.value, '$.work_id') {HELD_WORK}), 0)"
-)
-"""Whether a link (`l`, entry `n`) touches a held-out seed's work: its linked, base or candidate
-work, or an identifier the entry states. Agrees with `link_touches_held_out`. COALESCE because a
-NULL field gives NULL, and `NOT NULL` would drop the link."""
 
 LOOKUP_CHUNK = 50
 TITLE_SEARCH_LIMIT = 10
@@ -130,13 +115,6 @@ class Resolvable(Protocol):
     def title(self) -> str | None: ...
     @property
     def venue(self) -> str | None: ...
-
-
-def held_params(held: HeldOut | None) -> dict[str, str]:
-    """The bind parameters of `HIDDEN_LINK`."""
-    works = sorted(held.work_ids) if held is not None else []
-    keys = sorted(held.keys) if held is not None else []
-    return {"held_works": json.dumps(works), "held_keys": json.dumps(keys)}
 
 
 def entry_raw(anchor_text: str) -> str:
@@ -513,8 +491,6 @@ class _Link:
     candidates: tuple[str, ...]
     confirmed_by: str | None
     """Who made the current binding decision (`human`, `second-agent`), None when there is none."""
-    masked: bool = False
-    """Shown to an agent as a genuine unresolved link: nothing about it may differ."""
 
 
 def _link(project: Project, extraction_id: str, ordinal: int) -> _Link | None:
@@ -537,30 +513,6 @@ def _link(project: Project, extraction_id: str, ordinal: int) -> _Link | None:
         base_work_id=None if row[2] is None else str(row[2]),
         candidates=listed,
         confirmed_by=None if row[4] is None else str(row[4]),
-    )
-
-
-def _as_agent_sees(project: Project, extraction_id: str, ordinal: int, link: _Link) -> _Link:
-    """`link`, or, when the entry is masked from agents, a genuine unresolved link's view of it."""
-    with project.index.connect() as conn:
-        masked = conn.execute(
-            text(
-                f"SELECT x.work_id {HELD_WORK} OR {HIDDEN_LINK} FROM reference_entries n "
-                "JOIN reference_extractions x ON x.extraction_id = n.extraction_id "
-                "JOIN reference_links l ON l.extraction_id = n.extraction_id "
-                "AND l.ordinal = n.ordinal WHERE n.extraction_id = :rex AND n.ordinal = :ordinal"
-            ),
-            {"rex": extraction_id, "ordinal": ordinal, **held_params(held_out(project))},
-        ).scalar_one()
-    if not masked:
-        return link
-    return replace(
-        link,
-        base_state=LinkState.UNRESOLVED,
-        base_work_id=None,
-        candidates=(),
-        confirmed_by=None,
-        masked=True,
     )
 
 
@@ -720,7 +672,7 @@ def _confirmer(
     project: Project, actor: Actor, extraction_id: str, ordinal: int, link: _Link
 ) -> tuple[ConfirmedBy | None, list[ValidationIssue]]:
     """`confirmer_ruling` for a reference link."""
-    has_proposal = not link.masked and _has_proposal(project, extraction_id, ordinal)
+    has_proposal = _has_proposal(project, extraction_id, ordinal)
     return confirmer_ruling(
         actor,
         mode=_rigor_mode(project),
@@ -800,8 +752,6 @@ def decide_reference(
         if link is None:
             issues.append(ValidationIssue("ordinal", f"{extraction_id}:{ordinal}: no such link"))
             raise FactoryValidationError(issues)
-        if actor.kind == "agent":
-            link = _as_agent_sees(project, extraction_id, ordinal, link)
         if not link.live:
             issues.append(
                 ValidationIssue("extraction_id", f"{extraction_id}: superseded by a later one")

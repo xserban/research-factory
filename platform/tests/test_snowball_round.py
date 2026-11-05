@@ -20,7 +20,6 @@ from factory.model.protocol import ScreeningPlan, ScreeningStage, SnowballPlan
 from factory.model.references import Direction, LinkState, SnowballRoundStarted, Via
 from factory.model.screening import PassLabel
 from factory.model.search import QueryKind, QueryPurpose, QuerySpec, RunStatus
-from factory.model.seed import HeldOut
 from factory.model.work import ProvenanceMethod, WorkType
 from factory.model.work_ids import work_id
 from factory.services import chase as chase_service
@@ -32,7 +31,6 @@ from factory.services.context import Project
 from factory.services.fulltext_screening import fulltext_queue
 from factory.services.protocol import amend_protocol, current_protocol, registered_round
 from factory.services.references import (
-    MASKED_REASON,
     extract_references,
     included_works,
     list_references,
@@ -565,11 +563,11 @@ def _built(monkeypatch: pytest.MonkeyPatch) -> list[int]:
     return made
 
 
-def _all_pages(project: Project, held: HeldOut | None, **kw: Any) -> list[Any]:
+def _all_pages(project: Project, **kw: Any) -> list[Any]:
     out: list[Any] = []
     after: int | None = 0
     while after is not None:
-        page = list_references(project, after=after, limit=2, held_out=held, **kw)
+        page = list_references(project, after=after, limit=2, **kw)
         out += page.items
         after = page.next_after
     return out
@@ -584,45 +582,30 @@ def test_a_page_builds_only_its_own_items(
     assert page.total == 5 and page.next_after == 3
 
 
-def test_paged_held_out_list_filters_on_the_shown_state(
-    project: Project, planned: tuple[str, str]
-) -> None:
-    """A held-out link is masked before the state filter and the total, and a held-out citing
-    work's entries are gone."""
-    work_a, work_b = planned
-    lattice = _lattice(project)
-    held = HeldOut(work_ids=frozenset({lattice, work_b}), keys=frozenset({"10.5555/jim.4"}))
-    everything = _all_pages(project, held, state=None, work_id=None)
-    assert {i.citing_work for i in everything} == {work_a}
-    assert len(everything) == 4
-    assert sum(i.reason == MASKED_REASON for i in everything) == 2
-    resolved = _all_pages(project, held, state=LinkState.RESOLVED, work_id=None)
-    assert all(lattice != i.work_id for i in resolved)
-    unresolved = _all_pages(project, held, state=LinkState.UNRESOLVED, work_id=None)
-    assert len(resolved) + len(unresolved) == 4
-    assert list_references(
-        project, state=LinkState.UNRESOLVED, work_id=None, after=0, limit=1, held_out=held
-    ).total == len(unresolved)
+def test_paged_list_filters_on_the_state(project: Project, planned: tuple[str, str]) -> None:
+    everything = _all_pages(project, state=None, work_id=None)
+    assert len(everything) == 5
+    by_state = {s: _all_pages(project, state=s, work_id=None) for s in LinkState}
+    assert sum(len(items) for items in by_state.values()) == 5
+    for state, items in by_state.items():
+        assert all(i.state is state for i in items)
+        total = list_references(project, state=state, work_id=None, after=0, limit=1).total
+        assert total == len(items)
 
 
-def test_held_out_counts_come_from_sql_and_match_the_list(
+def test_counts_come_from_sql_and_match_the_list(
     project: Project, planned: tuple[str, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _, work_b = planned
-    lattice = _lattice(project)
-    held = HeldOut(work_ids=frozenset({lattice, work_b}), keys=frozenset({"10.5555/jim.4"}))
-    shown = _all_pages(project, held, state=None, work_id=None)
+    shown = _all_pages(project, state=None, work_id=None)
     made = _built(monkeypatch)
-    counts = reference_counts(project, held)
+    counts = reference_counts(project)
     assert made == []
-    assert counts.extractions == 1 and counts.entries == len(shown)
+    assert counts.extractions == 2 and counts.entries == len(shown)
     for state in LinkState:
         assert getattr(counts, state.value) == sum(i.state is state for i in shown)
-    assert counts.no_source_record == 0
-    assert counts.new_candidates == 1  # the reed work; lattice and the DOI entry are masked
 
 
-def test_counts_without_held_out_are_unchanged(project: Project, planned: tuple[str, str]) -> None:
+def test_counts_of_the_live_extractions(project: Project, planned: tuple[str, str]) -> None:
     counts = reference_counts(project)
     assert (counts.extractions, counts.entries) == (2, 5)
     assert counts.resolved + counts.unconfirmed + counts.ambiguous + counts.unresolved == 5
@@ -744,14 +727,12 @@ def test_promoted_work_with_a_convertible_document_still_blocks(
     assert snowball._settled_included(project, {third}) is None
 
 
-def test_dry_run_reports_the_no_document_count_and_hides_held_out(
+def test_dry_run_reports_the_no_document_count(
     project: Project, agent: Actor, planned: tuple[str, str]
 ) -> None:
     result = snowball_round(project, agent, Direction.BACKWARD, sources=_sources())
     others = sorted(set(promoted_works(project)) - set(planned))
     assert result.no_document == len(others)
-    view = snowball.agent_round_view(project, result, HeldOut(work_ids=frozenset(others[:1])))
-    assert view.no_document == len(others) - 1
 
 
 # --- Forward rounds (delegated to search_chase) ---

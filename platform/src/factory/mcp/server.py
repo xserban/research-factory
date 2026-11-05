@@ -1328,12 +1328,9 @@ def build_server(
             summary = references_service.extract_references(
                 opened, actor, work_ids, sources=adapters
             )
-            summary = references_service.agent_extract_view(
-                opened, summary, seeds_service.held_out(opened)
-            )
-            return _withheld(opened, summary.model_dump(mode="json"))
+            return _withheld(opened, summary.model_dump(mode="json"), include_work_ids=False)
 
-        return _reply(project, extract)
+        return _reply(project, extract, include_work_ids=False)
 
     @server.tool()
     def references_status(project: str) -> dict[str, JsonValue]:
@@ -1344,10 +1341,10 @@ def build_server(
         def status() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
             _refuse_pass_session(opened)
-            counts = references_service.reference_counts(opened, seeds_service.held_out(opened))
-            return _withheld(opened, counts.model_dump(mode="json"))
+            counts = references_service.reference_counts(opened)
+            return _withheld(opened, counts.model_dump(mode="json"), include_work_ids=False)
 
-        return _reply(project, status)
+        return _reply(project, status, include_work_ids=False)
 
     @server.tool()
     def references_list(
@@ -1372,11 +1369,10 @@ def build_server(
                 work_id=work_id,
                 after=after,
                 limit=limit,
-                held_out=seeds_service.held_out(opened),
             )
-            return _withheld(opened, page.model_dump(mode="json"))
+            return _withheld(opened, page.model_dump(mode="json"), include_work_ids=False)
 
-        return _reply(project, listing)
+        return _reply(project, listing, include_work_ids=False)
 
     @server.tool()
     def reference_decide(
@@ -1424,7 +1420,7 @@ def build_server(
             )
             return {"extraction_id": extraction_id, "ordinal": ordinal, "decision": parsed.value}
 
-        return _reply(project, decide)
+        return _reply(project, decide, include_work_ids=False)
 
     @server.tool()
     def snowball_round(
@@ -1449,12 +1445,9 @@ def build_server(
             result = snowball_service.snowball_round(
                 opened, actor, parsed, sources=adapters, dry_run=dry_run
             )
-            result = snowball_service.agent_round_view(
-                opened, result, seeds_service.held_out(opened)
-            )
-            return _withheld(opened, result.model_dump(mode="json"))
+            return _withheld(opened, result.model_dump(mode="json"), include_work_ids=False)
 
-        return _reply(project, round_)
+        return _reply(project, round_, include_work_ids=False)
 
     @server.tool()
     def snowball_compare(project: str, round_id: str) -> dict[str, JsonValue]:
@@ -1465,12 +1458,10 @@ def build_server(
         def compare() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
             _refuse_pass_session(opened)
-            result = snowball_service.snowball_compare(
-                opened, round_id, seeds_service.held_out(opened)
-            )
-            return _withheld(opened, result.model_dump(mode="json"))
+            result = snowball_service.snowball_compare(opened, round_id)
+            return _withheld(opened, result.model_dump(mode="json"), include_work_ids=False)
 
-        return _reply(project, compare)
+        return _reply(project, compare, include_work_ids=False)
 
     return server
 

@@ -127,31 +127,6 @@ def test_next_marks_no_references_and_other_conversion(
     assert b_second.references.entries == []
 
 
-def test_next_masks_entries_linked_to_held_out_works(
-    project: Project, agent: Actor, ctr_a: Actor, world: list[str]
-) -> None:
-    from factory.model.seed import HeldOut
-    from factory.services import contributions
-
-    entries = [
-        "A. Alpha. Softmax attention at scale. Conf One, 2017.",
-        "A. Zhou. Paper 2. Journal of Tests, 2020. doi:10.1000/p2.",
-    ]
-    with_references(project, agent, world[0], entries=entries)
-    from factory.services.reference_view import reference_view
-
-    view = reference_view(project, world[0])
-    assert view is not None
-    linked = view.entry(2)
-    assert linked is not None and linked.link_work is not None
-    hidden = HeldOut(work_ids=frozenset({linked.link_work}))
-    batch = contributions.mask_batch(project, _next(project, ctr_a), hidden)
-    masked = batch.references.entries[1]
-    assert (masked.ordinal, masked.anchor) == (2, "b2")
-    assert masked.title is None and masked.doi is None and masked.first_author == "Zhou"
-    assert batch.references.entries[0].title == "Softmax attention at scale"
-
-
 # --- contribution_record ---
 
 

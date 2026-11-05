@@ -1,10 +1,12 @@
 """The reference and snowball MCP tools: pass sessions refused, agents only propose, dry run by
-default, nothing about held-out seeds or the seed route (slice 3a, ruling 3; R-20)."""
+default, no seed id, stated identifier or seed route, and a held-out seed's work read as any
+corpus work (slice 3a, ruling 3; R-20; decisions 37 item 9 and 81)."""
 
 from __future__ import annotations
 
 import json
 import re
+from dataclasses import dataclass
 from typing import Any
 
 import pytest
@@ -15,6 +17,7 @@ from factory.clock import FixedClock
 from factory.config import Settings
 from factory.events.envelope import Actor
 from factory.events.reader import read_all
+from factory.mcp.conventions import WITHHELD
 from factory.mcp.server import build_server
 from factory.model.work_ids import work_id
 from factory.services.context import Project
@@ -228,7 +231,7 @@ async def test_pass_session_refused_for_each_tool(
 
 
 @pytest.mark.anyio
-async def test_mcp_views_hide_seed_route_and_held_out(
+async def test_mcp_views_hide_seed_route_and_seed_identifiers(
     settings: Settings, project: Project, agent: Actor, clock: FixedClock, corpus: None
 ) -> None:
     [held, *_] = [s for s in all_seeds(project) if s.role is SeedRole.HELD_OUT]
@@ -238,7 +241,7 @@ async def test_mcp_views_hide_seed_route_and_held_out(
     fetched_document(project, work_a, bib_html(entries, BODY_A))
     run_convert(project, make_registry())
     _amend(project, agent, PLAN)
-    forms = {held.seed_id, held.work_id, held.doi}
+    forms = {held.seed_id, held.doi}
     async with open_session(settings, clock, _lookups().sources()) as session:
         bodies = [await _extracted(session)]
         bodies.append(await session.call("references_status", project="demo"))
@@ -251,157 +254,58 @@ async def test_mcp_views_hide_seed_route_and_held_out(
     assert "found_by" not in text
 
 
-@pytest.mark.anyio
-async def test_held_out_work_matched_by_search_is_absent_from_every_view(
-    settings: Settings,
-    project: Project,
-    agent: Actor,
-    clock: FixedClock,
-    corpus: None,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """R-20 with `seed.work_id` unset: the held-out seed is matched to its corpus work by DOI
-    only. The work is cited (by DOI) from one document and has a document of its own."""
-    from factory.services import seeds as seeds_service
-    from factory.services.search import get_work
-
-    real = seeds_service._load_seeds
-    monkeypatch.setattr(
-        seeds_service,
-        "_load_seeds",
-        lambda p: [s.model_copy(update={"work_id": None}) for s in real(p)],
-    )
-    [held, *_] = [s for s in all_seeds(project) if s.role is SeedRole.HELD_OUT]
-    assert held.work_id is None and held.doi is not None
-    [target] = seeds_service.held_out_work_ids(project)
-    work = get_work(project, target)
-    assert work is not None
-    others = [w for w in promoted_works(project) if w != target]
-    entries = [f"A. Zhou. A held paper. Journal of Tests, 2020. doi:{held.doi}.", *ENTRIES_A[1:]]
-    fetched_document(project, others[0], bib_html(entries, BODY_A))
-    fetched_document(project, target, bib_html(ENTRIES_B, BODY_B))
-    run_convert(project, make_registry())
-    _amend(project, agent, PLAN)
-    async with open_session(settings, clock, _lookups().sources()) as session:
-        bodies = [await _extracted(session)]
-        bodies.append(await session.call("references_status", project="demo"))
-        listed = await session.call("references_list", project="demo", limit=100)
-        bodies.append(listed)
-        bodies.append(
-            await session.call("snowball_round", project="demo", direction="backward", **AGENT)
-        )
-        real_round = await session.call(
-            "snowball_round", project="demo", direction="backward", dry_run=False, **AGENT
-        )
-        assert real_round["ok"] is True, real_round
-        bodies.append(real_round)
-        bodies.append(
-            await session.call(
-                "snowball_compare", project="demo", round_id=real_round["data"]["round_id"]
-            )
-        )
-    text = json.dumps(bodies)
-    assert _leaks(text, {target, held.doi, held.seed_id}) == []
-    at = text.find("[withheld]")
-    assert at < 0, text[max(at - 300, 0) : at + 100]
-    at = text.find(work.title)
-    assert at < 0, (work.title, text[max(at - 200, 0) : at + 100])
-    assert all(i["work_id"] != target for i in listed["data"]["items"])
-    masked = [
-        i for i in listed["data"]["items"] if i["ordinal"] == 1 and i["citing_work"] == others[0]
-    ]
-    assert [(i["state"], i["work_id"], i["doi"]) for i in masked] == [("unresolved", None, None)]
+# --- A held-out seed's work reads as any corpus work (decisions 37 item 9, 43 and 81) ---
 
 
-# --- The held-out mask (final review 2 and 8) ---
+@dataclass(frozen=True)
+class SeededWorld:
+    """`citing`'s list cites `target`, a held-out seed's work matched by search alone, by DOI
+    (`b1`) and `ordinary`, any other corpus work, by DOI (`b2`). `target` has a document of its
+    own."""
 
-BARE_ENTRY = "Zhou, 2020."
-"""An entry from which nothing but a year parses: a genuine `no-identifier-no-title` link."""
+    citing: str
+    target: str
+    ordinary: str
+    seed_id: str
+    doi: str
+    title: str
 
 
 @pytest.fixture
-def masked_world(
+def seeded_world(
     project: Project, agent: Actor, corpus: None, monkeypatch: pytest.MonkeyPatch
-) -> tuple[str, str, str]:
-    """(citing work, held-out corpus work, held DOI): the first entry cites the held-out work by
-    DOI and the last is the genuine bare entry. The held-out work has a document of its own."""
+) -> SeededWorld:
     from factory.services import seeds as seeds_service
+    from factory.services.search import get_work
 
+    [held, *_] = [s for s in all_seeds(project) if s.role is SeedRole.HELD_OUT]
+    assert held.work_id is not None and held.doi is not None
+    target = held.work_id
     real = seeds_service._load_seeds
     monkeypatch.setattr(
         seeds_service,
         "_load_seeds",
         lambda p: [s.model_copy(update={"work_id": None}) for s in real(p)],
     )
-    [held, *_] = [s for s in all_seeds(project) if s.role is SeedRole.HELD_OUT]
-    assert held.doi is not None
-    [target] = seeds_service.held_out_work_ids(project)
-    citing = next(w for w in promoted_works(project) if w != target)
+    citing, ordinary = [w for w in promoted_works(project) if w != target][:2]
+    held_work, other = get_work(project, target), get_work(project, ordinary)
+    assert held_work is not None and other is not None
     entries = [
-        f"A. Zhou. A held paper. Journal of Tests, 2020. doi:{held.doi}.",
+        f"A. Zhou. A cited paper. Journal of Tests, 2020. doi:{held.doi}.",
+        f"A. Zhou. A cited paper. Journal of Tests, 2020. doi:{other.identifiers.doi}.",
         *ENTRIES_A[1:],
-        BARE_ENTRY,
     ]
     fetched_document(project, citing, bib_html(entries, BODY_A))
     fetched_document(project, target, bib_html(ENTRIES_B, BODY_B))
     run_convert(project, make_registry())
     _amend(project, agent, PLAN)
-    return citing, target, held.doi
+    return SeededWorld(citing, target, ordinary, held.seed_id, held.doi, held_work.title)
 
 
 def _shape(item: dict[str, Any]) -> dict[str, Any]:
-    """What a reader can tell about a link: every field but the entry's position and the fields
-    the document shows anyway, nulls as nulls."""
-    kept = set(item) - {"extraction_id", "citing_work", "ordinal", "anchor", "label"}
-    return {key: item[key] for key in kept - {"first_author", "year"}}
-
-
-@pytest.mark.anyio
-async def test_masked_entry_reads_as_a_genuine_unresolved_link(
-    settings: Settings,
-    project: Project,
-    clock: FixedClock,
-    masked_world: tuple[str, str, str],
-) -> None:
-    citing, _, _ = masked_world
-    async with open_session(settings, clock, _lookups().sources()) as session:
-        await _extracted(session)
-        listed = await session.call("references_list", project="demo", work_id=citing, limit=100)
-    items = listed["data"]["items"]
-    masked, genuine = items[0], items[-1]
-    assert genuine["reason"] == "no-identifier-no-title"
-    assert _shape(masked) == _shape(genuine)
-
-
-@pytest.mark.anyio
-async def test_agent_trace_applies_the_mask_on_both_paths(
-    settings: Settings,
-    project: Project,
-    clock: FixedClock,
-    masked_world: tuple[str, str, str],
-) -> None:
-    from factory.services.search import get_work
-
-    citing, target, _ = masked_world
-    work = get_work(project, target)
-    assert work is not None
-    async with open_session(settings, clock, _lookups().sources()) as session:
-        await _extracted(session)
-        listed = await session.call("references_list", project="demo", work_id=citing, limit=100)
-        rex = listed["data"]["items"][0]["extraction_id"]
-        forward = await session.call("trace", project="demo", ref=rex, direction="forward")
-        conversion = _conversion_of(project, rex)
-        entry = await session.call(
-            "trace", project="demo", ref=f"{conversion}/b1", direction="forward"
-        )
-        cited = await session.call("trace", project="demo", ref=target, direction="back")
-    assert forward["ok"] and entry["ok"] and cited["ok"]
-    for body in (forward, entry):
-        text = json.dumps(body)
-        assert _leaks(text, {target}) == [] and work.title not in text
-    assert f"{conversion}/b1" not in json.dumps(forward)
-    assert f"{conversion}/b2" in json.dumps(forward)  # a link the list shows stays traced
-    assert f"{conversion}/b1" not in json.dumps(cited)
+    """What a reader can tell about a link apart from which entry and which work it is."""
+    named = {"extraction_id", "citing_work", "ordinal", "anchor", "work_id", "base_work_id", "doi"}
+    return {key: value for key, value in item.items() if key not in named}
 
 
 def _conversion_of(project: Project, rex: str) -> str:
@@ -413,14 +317,99 @@ def _conversion_of(project: Project, rex: str) -> str:
     return str(row)
 
 
+def _ordinal_free(body: dict[str, Any], ordinal: int, anchor: str) -> str:
+    """The exact response with only the ordinal or anchor the caller named taken out."""
+    text_ = json.dumps(body, sort_keys=True)
+    return re.sub(rf"(:{ordinal}\b|\b{anchor}\b)", "<entry>", text_)
+
+
+@pytest.mark.anyio
+async def test_a_held_out_work_reads_as_any_work_in_every_reference_view(
+    settings: Settings, project: Project, clock: FixedClock, seeded_world: SeededWorld
+) -> None:
+    world = seeded_world
+    async with open_session(settings, clock, _lookups().sources()) as session:
+        extracted = await _extracted(session)
+        status = await session.call("references_status", project="demo")
+        listed = await session.call("references_list", project="demo", limit=100)
+        dry = await session.call("snowball_round", project="demo", direction="backward", **AGENT)
+        real = await session.call(
+            "snowball_round", project="demo", direction="backward", dry_run=False, **AGENT
+        )
+        assert real["ok"] is True, real
+        compared = await session.call(
+            "snowball_compare", project="demo", round_id=real["data"]["round_id"]
+        )
+    items = listed["data"]["items"]
+    # Its own extraction is counted and listed like the others.
+    assert world.target in {e["work_id"] for e in extracted["data"]["extractions"]}
+    assert world.target in {i["citing_work"] for i in items}
+    assert status["data"]["extractions"] == len(extracted["data"]["extractions"])
+    assert status["data"]["entries"] == listed["data"]["total"] == len(items)
+    for state in ("resolved", "unconfirmed", "ambiguous", "unresolved"):
+        assert status["data"][state] == sum(i["state"] == state for i in items)
+    # The link to it is a link like the one to any other corpus work.
+    cited = [i for i in items if i["citing_work"] == world.citing]
+    assert (cited[0]["work_id"], cited[1]["work_id"]) == (world.target, world.ordinary)
+    assert _shape(cited[0]) == _shape(cited[1])
+    # A round takes it as a source, and a comparison counts the link to it.
+    assert world.target in dry["data"]["sources"] and world.target in real["data"]["sources"]
+    assert world.target in compared["data"]["document_only"] + compared["data"]["both"]
+    bodies = json.dumps([extracted, status, listed, dry, real, compared])
+    assert _leaks(bodies, {world.seed_id, world.doi}) == []
+    assert "found_by" not in bodies
+
+
+@pytest.mark.anyio
+async def test_seed_identifiers_stay_withheld_where_an_entry_states_them(
+    settings: Settings, project: Project, clock: FixedClock, seeded_world: SeededWorld
+) -> None:
+    """The stated DOI is scrubbed, as decision 37 item 9 asks. The placeholder beside the link to
+    the work is the residual marking of decisions 78 and 81; this pins it until they are ruled."""
+    world = seeded_world
+    async with open_session(settings, clock, _lookups().sources()) as session:
+        await _extracted(session)
+        listed = await session.call(
+            "references_list", project="demo", work_id=world.citing, limit=100
+        )
+    assert listed["data"]["items"][0]["doi"] == WITHHELD
+    assert listed["data"]["items"][1]["doi"] != WITHHELD
+
+
+@pytest.mark.anyio
+async def test_agent_trace_walks_a_held_out_link_as_any_link(
+    settings: Settings, project: Project, clock: FixedClock, seeded_world: SeededWorld
+) -> None:
+    world = seeded_world
+    async with open_session(settings, clock, _lookups().sources()) as session:
+        await _extracted(session)
+        listed = await session.call(
+            "references_list", project="demo", work_id=world.citing, limit=100
+        )
+        rex = listed["data"]["items"][0]["extraction_id"]
+        conversion = _conversion_of(project, rex)
+        forward = await session.call("trace", project="demo", ref=rex, direction="forward")
+        held = await session.call(
+            "trace", project="demo", ref=f"{conversion}/b1", direction="forward"
+        )
+        ordinary = await session.call(
+            "trace", project="demo", ref=f"{conversion}/b2", direction="forward"
+        )
+        cited = await session.call("trace", project="demo", ref=world.target, direction="back")
+    assert forward["ok"] and held["ok"] and ordinary["ok"] and cited["ok"]
+    assert f"{conversion}/b1" in json.dumps(forward)
+    assert f"{conversion}/b2" in json.dumps(forward)
+    assert world.target in json.dumps(held) and world.title in json.dumps(held)
+    assert world.ordinary in json.dumps(ordinary)
+    assert f"{conversion}/b1" in json.dumps(cited)
+    assert _leaks(json.dumps([forward, held, cited]), {world.seed_id, world.doi}) == []
+
+
 @pytest.mark.anyio
 async def test_agent_extract_states_agree_with_the_list(
-    settings: Settings,
-    project: Project,
-    clock: FixedClock,
-    masked_world: tuple[str, str, str],
+    settings: Settings, project: Project, clock: FixedClock, seeded_world: SeededWorld
 ) -> None:
-    citing, _, _ = masked_world
+    citing = seeded_world.citing
     async with open_session(settings, clock, _lookups().sources()) as session:
         extracted = await _extracted(session)
         listed = await session.call("references_list", project="demo", work_id=citing, limit=100)
@@ -433,121 +422,78 @@ async def test_agent_extract_states_agree_with_the_list(
 
 @pytest.mark.anyio
 async def test_document_read_keeps_the_scrub_until_decision_78_is_settled(
-    settings: Settings,
-    project: Project,
-    clock: FixedClock,
-    masked_world: tuple[str, str, str],
+    settings: Settings, project: Project, clock: FixedClock, seeded_world: SeededWorld
 ) -> None:
     """Decided entry 37 item 9 has tools withhold seed identifiers, so the scrub stays; the
     placeholder this leaves in document text is the open question of decision 78."""
-    citing, _, doi = masked_world
+    world = seeded_world
     async with open_session(settings, clock, _lookups().sources()) as session:
-        body = await session.call("document_read", project="demo", work_id=citing, anchor="b1")
+        body = await session.call(
+            "document_read", project="demo", work_id=world.citing, anchor="b1"
+        )
     assert body["ok"] is True, body
-    assert _leaks(json.dumps(body), {doi}) == []
-    assert "[withheld]" in body["data"]["segments"][0]["text"]
-
-
-# --- Probing a masked entry by ordinal (re-review 1) ---
-
-
-def _ordinal_free(body: dict[str, Any], ordinal: int, anchor: str) -> str:
-    """The exact response with only the ordinal or anchor the caller named taken out."""
-    text_ = json.dumps(body, sort_keys=True)
-    return re.sub(rf"(:{ordinal}\b|\b{anchor}\b)", "<entry>", text_)
+    assert _leaks(json.dumps(body), {world.doi}) == []
+    assert WITHHELD in body["data"]["segments"][0]["text"]
 
 
 @pytest.mark.anyio
 @pytest.mark.parametrize(
     "decision", ["propose-confirm", "propose-reject", "confirm", "reject", "clear"]
 )
-async def test_a_masked_entry_refuses_a_decision_as_a_genuine_unresolved_one(
+async def test_a_decision_on_a_held_out_link_refuses_as_on_any_link(
     settings: Settings,
     project: Project,
     clock: FixedClock,
-    masked_world: tuple[str, str, str],
+    seeded_world: SeededWorld,
     decision: str,
 ) -> None:
-    citing, _, _ = masked_world
+    citing = seeded_world.citing
     async with open_session(settings, clock, _lookups().sources()) as session:
         await _extracted(session)
         listed = await session.call("references_list", project="demo", work_id=citing, limit=100)
         items = listed["data"]["items"]
-        masked, genuine = items[0], items[-1]
-        rex = masked["extraction_id"]
         before = _count(project)
         bodies = [
             await session.call(
                 "reference_decide",
                 project="demo",
-                extraction_id=rex,
+                extraction_id=item["extraction_id"],
                 ordinal=item["ordinal"],
                 decision=decision,
                 rationale="Same paper.",
                 quotes=["x", "y"],
                 **AGENT,
             )
-            for item in (masked, genuine)
+            for item in items[:2]
         ]
     assert bodies[0]["ok"] is False and _count(project) == before
-    assert _ordinal_free(bodies[0], masked["ordinal"], "b1") == _ordinal_free(
-        bodies[1], genuine["ordinal"], genuine["anchor"]
-    )
+    assert _ordinal_free(bodies[0], 1, "b1") == _ordinal_free(bodies[1], 2, "b2")
 
 
 @pytest.mark.anyio
 async def test_naming_a_held_out_work_in_a_decision_marks_nothing(
-    settings: Settings,
-    project: Project,
-    clock: FixedClock,
-    masked_world: tuple[str, str, str],
+    settings: Settings, project: Project, clock: FixedClock, seeded_world: SeededWorld
 ) -> None:
-    """The refusal does not echo the work, so the scrub cannot flag it as held out."""
-    citing, target, _ = masked_world
+    world = seeded_world
     async with open_session(settings, clock, _lookups().sources()) as session:
         await _extracted(session)
-        listed = await session.call("references_list", project="demo", work_id=citing, limit=100)
+        listed = await session.call(
+            "references_list", project="demo", work_id=world.citing, limit=100
+        )
         item = listed["data"]["items"][-1]
-        body = await session.call(
-            "reference_decide",
-            project="demo",
-            extraction_id=item["extraction_id"],
-            ordinal=item["ordinal"],
-            decision="propose-confirm",
-            rationale="Same paper.",
-            quotes=["x", "y"],
-            work_id=target,
-            **AGENT,
-        )
-    assert body["ok"] is False and "[withheld]" not in json.dumps(body)
-
-
-@pytest.mark.anyio
-@pytest.mark.parametrize("direction", ["forward", "back"])
-async def test_a_masked_anchor_traces_as_a_genuine_unresolved_one(
-    settings: Settings,
-    project: Project,
-    clock: FixedClock,
-    masked_world: tuple[str, str, str],
-    direction: str,
-) -> None:
-    citing, _, _ = masked_world
-    async with open_session(settings, clock, _lookups().sources()) as session:
-        await _extracted(session)
-        listed = await session.call("references_list", project="demo", work_id=citing, limit=100)
-        items = listed["data"]["items"]
-        rex = items[0]["extraction_id"]
-        conversion = _conversion_of(project, rex)
-        masked = await session.call(
-            "trace", project="demo", ref=f"{conversion}/b1", direction=direction
-        )
-        genuine = await session.call(
-            "trace", project="demo", ref=f"{conversion}/{items[-1]['anchor']}", direction=direction
-        )
-        entries = [
-            await session.call("trace", project="demo", ref=f"{rex}:{i['ordinal']}")
-            for i in (items[0], items[-1])
+        bodies = [
+            await session.call(
+                "reference_decide",
+                project="demo",
+                extraction_id=item["extraction_id"],
+                ordinal=item["ordinal"],
+                decision="propose-confirm",
+                rationale="Same paper.",
+                quotes=["x", "y"],
+                work_id=work,
+                **AGENT,
+            )
+            for work in (world.target, world.ordinary)
         ]
-    assert masked["ok"] is True
-    assert _ordinal_free(masked, 0, "b1") == _ordinal_free(genuine, 0, items[-1]["anchor"])
-    assert entries[0] == entries[1]
+    assert bodies[0] == bodies[1] and bodies[0]["ok"] is False
+    assert WITHHELD not in json.dumps(bodies)

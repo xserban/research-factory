@@ -26,10 +26,6 @@ class EntryView:
     link_state: LinkState
     link_work: str | None
     confidence: Confidence | None
-    base_work: str | None = None
-    """The work of the matcher's own resolution, kept when a decision rejected it."""
-    candidate_works: tuple[str, ...] = ()
-    """The works of an ambiguous link's candidates."""
 
 
 @dataclass(frozen=True)

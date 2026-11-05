@@ -6,7 +6,7 @@ A thin parameterisation of `services.extraction`: this module supplies the hooks
 Serving (`contribution_next`) attaches the unit's reference list (`UnitReferences`): `current`
 (the work's current G1 extraction is pinned to the unit's conversion; its entries are listed, as
 metadata only), `none` (no current extraction: `cited_entry` is unavailable) or `other-conversion`
-(treated as `none`). Entries linked to, or identifying, a held-out seed's work are masked (R-20).
+(treated as `none`).
 Reads (`live_items`, `final_items`, `contribution_status`) derive every count from the log's rows;
 nothing is typed.
 
@@ -49,12 +49,9 @@ from factory.model.extraction import (
     UnitReferences,
 )
 from factory.model.screening import Channel, PassLabel
-from factory.model.seed import HeldOut
-from factory.services import seeds as seeds_service
 from factory.services.context import Project
 from factory.services.extraction import (
     DUPLICATE_ITEM,
-    ContributionBatch,
     ContributionBatchContent,
     ExtraCheck,
     ExtractBatchContent,
@@ -122,7 +119,6 @@ __all__ = [
     "final_item",
     "final_items",
     "live_items",
-    "mask_batch",
     "resolve_contribution",
 ]
 
@@ -311,50 +307,29 @@ ITEM_RULES = [
 """The pack's conditional rules as the sentences served with each task."""
 
 
-def _references(
-    project: Project, work_id: str, conversion_id: str, held_out: HeldOut
-) -> UnitReferences:
+def _references(project: Project, work_id: str, conversion_id: str) -> UnitReferences:
     extraction = current_extraction(project, work_id)
     view = None if extraction is None else reference_view_of(project, extraction)
     if view is None:
         return UnitReferences(status="none", extraction_id=None, entries=[])
     if view.conversion_id != conversion_id:
         return UnitReferences(status="other-conversion", extraction_id=None, entries=[])
-    return UnitReferences(
-        status="current", extraction_id=view.extraction_id, entries=briefs(view, held_out)
-    )
-
-
-def mask_batch(project: Project, batch: ContributionBatch, held_out: HeldOut) -> ContributionBatch:
-    """`batch` with the entries of its reference list that touch a held-out seed masked (R-20),
-    whatever the list was when the task was created."""
-    references = batch.references
-    if references.status != "current" or references.extraction_id is None:
-        return batch
-    view = reference_view_of(project, references.extraction_id)
-    if view is None:
-        return batch
-    masked = references.model_copy(update={"entries": briefs(view, held_out)})
-    return batch.model_copy(update={"references": masked})
+    return UnitReferences(status="current", extraction_id=view.extraction_id, entries=briefs(view))
 
 
 def contribution_next(project: Project, actor: Actor, label: PassLabel) -> ExtractNext:
     """Serve the next contribution unit of pass `label`: `next_unit` with scope contribution and
     a content hook attaching the unit's reference list and the item rules."""
-    held_out = seeds_service.held_out(project)
 
     def content(proj: Project, base: ExtractBatchContent) -> ExtractBatchContent:
         record = base.records[0]
         return ContributionBatchContent(
             **{**base.model_dump(), "instructions": CONTRIBUTION_INSTRUCTIONS},
-            references=_references(proj, record["work_id"], record["conversion_id"], held_out),
+            references=_references(proj, record["work_id"], record["conversion_id"]),
             item_rules=list(ITEM_RULES),
         )
 
-    served = next_unit(project, actor, label, scope=Scope.CONTRIBUTION, content=content)
-    if isinstance(served.batch, ContributionBatch):
-        return served.model_copy(update={"batch": mask_batch(project, served.batch, held_out)})
-    return served
+    return next_unit(project, actor, label, scope=Scope.CONTRIBUTION, content=content)
 
 
 def contribution_record(
