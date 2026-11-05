@@ -56,12 +56,17 @@ def concept_survivor(conn: Connection, concept_id: str) -> str | None:
 
 def concept_users(conn: Connection, concept_id: str) -> list[str]:
     """The sorted `from_node` ids with a stated or confirmed use of the concept or of any concept
-    merged into it. `concept_id` must be a survivor."""
+    merged into it; a concept user must itself be visible (the concept views' endpoint rule).
+    `concept_id` must be a survivor."""
     rows = conn.execute(
         text(
-            "SELECT DISTINCT from_node FROM concept_uses "
-            f"WHERE status IN ('stated', 'confirmed') AND concept_id IN ({_TREE}) "
-            "ORDER BY from_node"
+            "SELECT DISTINCT u.from_node FROM concept_uses u "
+            f"WHERE u.status IN ('stated', 'confirmed') AND u.concept_id IN ({_TREE}) "
+            "AND (u.from_kind != 'concept' OR EXISTS (SELECT 1 FROM concepts cf WHERE "
+            "cf.concept_id = COALESCE((SELECT m.merged_into FROM concepts m WHERE "
+            "m.concept_id = u.from_node), u.from_node) AND cf.source_state = 'approved' "
+            "AND cf.merged_into IS NULL AND cf.review_state IN ('unreviewed', 'reviewed'))) "
+            "ORDER BY u.from_node"
         ),
         {"c": concept_id},
     ).all()

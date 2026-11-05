@@ -351,8 +351,27 @@ def _add_concept_user(w: RWorld, link: str, node: str, kind: str) -> None:
         conn.commit()
 
 
+def _add_concept(
+    w: RWorld, cid: str, source: str = "approved", review: str = "reviewed", into: str | None = None
+) -> None:
+    from sqlalchemy import text
+
+    with w.project.index.connect() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO concepts (concept_id, name, name_folded, author, author_user, "
+                "writer_session, definition_event, source_state, review_state, self_reviewed, "
+                "merged_into, event_id) VALUES (:c, :c, :c, 'human', 'obd', 's', 'ev', :s, :r, "
+                "0, :i, 'ev')"
+            ),
+            {"c": cid, "s": source, "r": review, "i": into},
+        )
+        conn.commit()
+
+
 def test_concept_nodes_are_typed_as_concepts(region_project: RWorld) -> None:
     other = "cpt_01JZ9Q3K5M7N8P0R2S4T6V8W2K"
+    _add_concept(region_project, other)
     _add_concept_user(region_project, "lnk_9", other, "concept")
     ev = run(region_project, RuleSet(include=(ConceptRule(concept_id=region_project.concept),)))
     assert ids(ev, MemberType.CONCEPT) == [other]
@@ -397,6 +416,7 @@ def test_merged_ideas_and_concepts_resolve_to_live_ids(region_project: RWorld) -
             {"f": gone_concept, "t": w.concept},
         )
         conn.commit()
+    _add_concept(w, gone_concept, into=w.concept)
     _add_concept_user(w, "lnk_8", gone_idea, "idea")
     _add_concept_user(w, "lnk_7", gone_concept, "concept")
     ev = run(w, RuleSet(include=(ConceptRule(concept_id=w.concept),)))
@@ -405,3 +425,30 @@ def test_merged_ideas_and_concepts_resolve_to_live_ids(region_project: RWorld) -
     # a human add of the merged idea reads as its survivor
     added = run(w, RuleSet(include=(FT_INCLUDED,)), adds=[(MemberType.IDEA, gone_idea)])
     assert ids(added, MemberType.IDEA) == [w.idea]
+
+
+def test_concept_users_must_themselves_be_visible(region_project: RWorld) -> None:
+    from sqlalchemy import text
+
+    w = region_project
+    wrong, unapproved, fine = (f"cpt_01JZ9Q3K5M7N8P0R2S4T6V8W{c}K" for c in "456")
+    with w.project.index.connect() as conn:
+        for cid, source, review in (
+            (wrong, "approved", "wrong"),
+            (unapproved, "pending", "unreviewed"),
+            (fine, "approved", "reviewed"),
+        ):
+            conn.execute(
+                text(
+                    "INSERT INTO concepts (concept_id, name, name_folded, author, author_user, "
+                    "writer_session, definition_event, source_state, review_state, "
+                    "self_reviewed, event_id) VALUES (:c, :c, :c, 'human', 'obd', 's', 'ev', "
+                    ":s, :r, 0, 'ev')"
+                ),
+                {"c": cid, "s": source, "r": review},
+            )
+        conn.commit()
+    for n, node in enumerate((wrong, unapproved, fine)):
+        _add_concept_user(w, f"lnk_c{n}", node, "concept")
+    ev = run(w, RuleSet(include=(ConceptRule(concept_id=w.concept),)))
+    assert ids(ev, MemberType.CONCEPT) == [fine]
