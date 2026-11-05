@@ -1,13 +1,12 @@
 from sqlalchemy import MetaData
-from sqlalchemy.engine import Connection
 
 from factory.events.blobs import BlobStore
-from factory.events.envelope import Event
 from factory.index.chase import chase_handlers, chase_tables
 from factory.index.dedup import dedup_handlers, dedup_tables
 from factory.index.document import document_handlers, document_tables
 from factory.index.extraction import extraction_handlers, extraction_tables
 from factory.index.fulltext import fulltext_handlers, fulltext_tables
+from factory.index.graph import graph_handlers, graph_tables
 from factory.index.imports import import_handlers, import_tables
 from factory.index.inbox import inbox_handlers, inbox_tables
 from factory.index.lineage import lineage_handlers, lineage_tables
@@ -15,7 +14,7 @@ from factory.index.living import living_handlers, living_tables
 from factory.index.notices import notice_handlers, notice_tables
 from factory.index.probe import probe_handlers, probe_tables
 from factory.index.project import project_created_handler, project_table
-from factory.index.projection import Handler, Projection, core_tables
+from factory.index.projection import Handler, Projection, chain, core_tables
 from factory.index.protocol import protocol_handlers, protocol_tables
 from factory.index.question import question_handlers, question_tables
 from factory.index.references import reference_handlers, reference_tables
@@ -26,21 +25,13 @@ from factory.index.tasks import task_handlers, tasks_table
 from factory.index.watch import run_started_handler, watch_handlers, watch_tables
 
 # Bump on any change to the tables or handlers below; the index is then rebuilt.
-PROJECTION_VERSION = "31"
-
-
-def _chain(first: Handler, second: Handler) -> Handler:
-    def both(conn: Connection, event: Event) -> None:
-        first(conn, event)
-        second(conn, event)
-
-    return both
+PROJECTION_VERSION = "32"
 
 
 def default_projection(blobs: BlobStore | None = None) -> Projection:
     """A fresh projection: core tables plus the project, task, search, dedup, question, seed,
     probe, protocol, screening, chase, full-text, extraction, document, reference, import, inbox
-    watch, relation and idea tables. `blobs` is the project's blob store, which the import
+    watch, relation, idea and graph tables. `blobs` is the project's blob store, which the import
     handlers read records from; without it, folding an import event raises."""
     metadata = MetaData()
     core_tables(metadata)
@@ -64,6 +55,7 @@ def default_projection(blobs: BlobStore | None = None) -> Projection:
     snapshots = living_tables(metadata)
     notices = notice_tables(metadata, search.work_keys, screening.label_sessions)
     lineage = lineage_tables(metadata)
+    graph_tables(metadata)
     handlers: dict[str, Handler] = {
         "project.created": project_created_handler(project),
         **task_handlers(tasks),
@@ -86,8 +78,11 @@ def default_projection(blobs: BlobStore | None = None) -> Projection:
         **notice_handlers(notices),
         **lineage_handlers(lineage),
     }
+    # The graph projection reads the tables the other handlers of the same event just folded.
+    for event_type, handler in graph_handlers().items():
+        handlers[event_type] = chain(handlers[event_type], handler)
     # A run's start is folded by the search projection first, then linked to its watch cycle.
-    handlers["search.run_started"] = _chain(
+    handlers["search.run_started"] = chain(
         handlers["search.run_started"], run_started_handler(watch)
     )
     return Projection(version=PROJECTION_VERSION, metadata=metadata, handlers=handlers)

@@ -60,3 +60,13 @@ def core_tables(metadata: MetaData) -> None:
         Column("type", String, nullable=False),
     )
     Index("ix_event_refs_ref", refs.c.ref)
+
+
+def chain(*handlers: Handler) -> Handler:
+    """A handler that calls each of `handlers` in order on the same connection and event."""
+
+    def run(conn: Connection, event: Event) -> None:
+        for handler in handlers:
+            handler(conn, event)
+
+    return run
