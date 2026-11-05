@@ -13,7 +13,7 @@ from factory.services.depth import DepthIndex
 from factory.services.onion import ONION_MAX_RING, VIEW_MAX_NODES, onion_view
 from factory.services.views import to_json
 from tests.onion_helpers import A, B, F, write_graph
-from tests.region_helpers import add_queries
+from tests.region_helpers import add_queries, merge_works
 
 
 @pytest.fixture
@@ -117,6 +117,33 @@ def test_explicit_focus_and_unknown_focus_error(g: Project) -> None:
         with pytest.raises(FactoryValidationError) as err:
             onion_view(g, OnionFilter(focus=(bad,)))
         assert err.value.issues[0].field == "focus"
+
+
+@pytest.mark.parametrize(
+    "flt",
+    [
+        OnionFilter(),
+        OnionFilter(include_inferred=True),
+        OnionFilter(edge_types=("cites",), max_ring=3),
+        OnionFilter(edge_types=("builds-on", "improves-on")),
+        OnionFilter(max_ring=1, focus=(A[0], B[0])),
+    ],
+)
+def test_set_based_cites_path_agrees_with_the_batched_path(
+    g: Project, monkeypatch: pytest.MonkeyPatch, flt: OnionFilter
+) -> None:
+    fast = to_json(onion_view(g, flt))
+    monkeypatch.setattr(onion, "has_active_merges", lambda _conn: True)
+    assert to_json(onion_view(g, flt)) == fast
+
+
+def test_an_active_merge_reads_as_its_primary(g: Project) -> None:
+    before = onion_view(g)
+    merge_works(g, B[0], B[1])  # B2 is absorbed into B1
+    after = onion_view(g)
+    assert [r.total for r in after.rings] == [3, 4, 4]
+    assert B[1] not in _ids(after.rings[2]) and B[0] in _ids(after.rings[2])
+    assert before.rings[2].total == 5
 
 
 PROBE_ONLY = "rf:p0-000000a0"

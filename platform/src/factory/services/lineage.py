@@ -527,38 +527,111 @@ def ring_step(
     joins two works. Run inside `entering()` so the relation basis is read once. A frontier work
     reads as its merge primary, and an edge stored under an absorbed work is found."""
     view = _view(project, flt)
-    types = frozenset(flt.edge_types)
-    names = json.dumps(sorted(t.value for t in types))
+    names = json.dumps(sorted(t.value for t in flt.edge_types))
+    allowed = flt.statuses()
     found: set[str] = set()
     edges: dict[str, EdgeType] = {}
     for start in range(0, len(frontier), RING_BATCH):
         chunk = set(frontier[start : start + RING_BATCH])
-        ends = view.group(conn, sorted(chunk))
-        rows = (
-            conn.execute(
+        ends = json.dumps(view.group(conn, sorted(chunk)))
+        rows: dict[str, tuple[str, str, str, str, str | None]] = {}
+        for column in ("source", "target"):  # one indexed read per direction
+            for row in conn.execute(
                 text(
-                    "SELECT * FROM graph_edges WHERE edge_type IN (SELECT value FROM "
-                    "json_each(:types)) AND live = 1 AND (source IN (SELECT value FROM "
-                    "json_each(:ends)) OR target IN (SELECT value FROM json_each(:ends)))"
+                    "SELECT edge_id, edge_type, source, target, base_status, decision "
+                    "FROM graph_edges WHERE edge_type IN (SELECT value FROM json_each(:types)) "
+                    f"AND live = 1 AND {column} IN (SELECT value FROM json_each(:ends))"
                 ),
-                {"ends": json.dumps(ends), "types": names},
-            )
-            .mappings()
-            .all()
-        )
-        for edge in view.overlay(conn, rows, types):
-            if _is_idea(edge.source) or _is_idea(edge.target):
+                {"ends": ends, "types": names},
+            ):
+                rows[str(row[0])] = (
+                    str(row[1]),
+                    str(row[2]),
+                    str(row[3]),
+                    str(row[4]),
+                    None if row[5] is None else str(row[5]),
+                )
+        lineage_ids = [i for i, r in rows.items() if r[0] != EdgeType.CITES.value]
+        effective = view.relation_statuses(conn, lineage_ids)
+        merged = view.canon(conn, sorted({e for r in rows.values() for e in (r[1], r[2])}))
+        for edge_id, (kind, source, target, base, decision) in rows.items():
+            if kind == EdgeType.CITES.value:
+                status = cites_status(base, decision)
+            elif edge_id in effective:
+                status = effective[edge_id]
+            else:
+                continue  # a relation with no effective row is not shown
+            if status not in allowed:
+                continue
+            source, target = merged.get(source, source), merged.get(target, target)
+            if _is_idea(source) or _is_idea(target):
                 continue
             hit = False
-            if edge.source in chunk:
-                found.add(edge.target)
+            if source in chunk:
+                found.add(target)
                 hit = True
-            if edge.target in chunk:
-                found.add(edge.source)
+            if target in chunk:
+                found.add(source)
                 hit = True
             if hit:
-                edges[edge.edge_id] = edge.edge_type
+                edges[edge_id] = EdgeType(kind)
     return RingStep(frozenset(found), edges)
+
+
+def has_active_merges(conn: Connection) -> bool:
+    """Whether any dedup merge is active (then stored edge ends may be absorbed ids)."""
+    row = conn.execute(text("SELECT 1 FROM merges WHERE status = 'active' LIMIT 1")).first()
+    return row is not None
+
+
+def _cites_where(flt: GraphFilter) -> str:
+    """The shown `cites` edges as a SQL condition on `e`: live, the base status in the filter's
+    statuses (enum values, never input) and the link not rejected by a human (`cites_status`).
+    A `cites` edge joins two papers, never an idea."""
+    statuses = ", ".join(f"'{s.value}'" for s in sorted(flt.statuses(), key=lambda s: s.value))
+    return (
+        "e.edge_type = 'cites' AND e.live = 1 AND e.base_status IN (" + statuses + ") "
+        "AND (e.decision IS NULL OR e.decision <> 'reject')"
+    )
+
+
+def cites_expand(conn: Connection, table: str, ring: int, flt: GraphFilter) -> None:
+    """Add to the connection-local `table` (`work_id`, `ring`) the papers one `cites` edge from a
+    work of ring `ring - 1`, in either direction, as ring `ring`; a work already in the table
+    keeps its ring. Set-based and indexed, for the case without active merges."""
+    where = _cites_where(flt)
+    for near, far in (("source", "target"), ("target", "source")):
+        conn.execute(
+            text(
+                f"INSERT OR IGNORE INTO {table} (work_id, ring) SELECT e.{far}, :k "
+                f"FROM {table} s CROSS JOIN graph_edges e ON e.{near} = s.work_id "
+                f"WHERE s.ring = :p AND {where}"
+            ),
+            {"k": ring, "p": ring - 1},
+        )
+
+
+def cites_incident_count(conn: Connection, table: str, below: int, flt: GraphFilter) -> int:
+    """How many distinct shown `cites` edges have an end in a work of `table` whose ring is
+    below `below` (the frontiers a view expanded); counted in SQL without sorting ids:
+    edges by source end + edges by target end - edges with both ends in the set."""
+    where = _cites_where(flt)
+    inside = f"(SELECT work_id FROM {table} WHERE ring < :b)"
+    total = 0
+    for near, extra in (
+        ("source", ""),
+        ("target", ""),
+        ("source", f" AND e.target IN {inside}"),
+    ):
+        count = conn.execute(
+            text(
+                f"SELECT COUNT(*) FROM {table} s CROSS JOIN graph_edges e "
+                f"ON e.{near} = s.work_id WHERE s.ring < :b AND {where}{extra}"
+            ),
+            {"b": below},
+        ).scalar_one()
+        total += int(count) * (-1 if extra else 1)
+    return total
 
 
 def paper_nodes(conn: Connection, ids: Sequence[str]) -> dict[str, GraphNode]:

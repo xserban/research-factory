@@ -63,6 +63,20 @@ def test_researcher_sees_every_reviewed_focus_region(region_project: RWorld, hum
     assert all(sorted(r) == sorted([held, fine]) for r in ring0.values())
 
 
+def test_regions_column_agrees_with_regions_of(region_project: RWorld, human: Actor) -> None:
+    from factory.regions.rules import MemberType
+    from factory.services.regions import regions_of
+
+    held, fine = _two_foci(region_project, human)
+    for node in onion_view(region_project.project).rings[0].nodes:
+        expected = [
+            m.region_id
+            for m in regions_of(region_project.project, MemberType.WORK, node.work_id)
+            if m.review_state == "reviewed"
+        ]
+        assert node.regions == expected == sorted([held, fine])
+
+
 def test_agent_view_leaves_out_a_withheld_region(region_project: RWorld, human: Actor) -> None:
     held, fine = _two_foci(region_project, human)
     ring0 = _regions(onion_view(region_project.project, agent=True).rings[0])

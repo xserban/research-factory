@@ -47,15 +47,18 @@ from factory.model.views import (
 from factory.regions.rules import MemberType
 from factory.services.call_memo import entering
 from factory.services.context import Project
-from factory.services.depth import DEPTH_RANK, DepthIndex, depth_counts, depth_index
+from factory.services.depth import DEPTH_RANK, DepthIndex, depth_index
 from factory.services.lineage import (
     RING_BATCH,
+    cites_expand,
+    cites_incident_count,
     confirmed_ideas_of,
+    has_active_merges,
     paper_nodes,
     ring_step,
 )
 from factory.services.references import included_works
-from factory.services.regions import region_withheld, regions_of
+from factory.services.regions import region_withheld
 from factory.services.views import view_meta
 
 ONION_MAX_RING = 3
@@ -138,14 +141,26 @@ def _build(project: Project, flt: OnionFilter, agent: bool) -> OnionView:
         )
     depths = depth_index(project, agent=agent)
     considered: dict[EdgeType, set[str]] = {EdgeType(t): set() for t in flt.edge_types}
+    cites_count = 0
     rings: list[Ring] = []
     with project.index.connect() as conn:
         conn.execute(text(f"CREATE TEMP TABLE {_SEEN} (work_id TEXT PRIMARY KEY, ring INTEGER)"))
         try:
             _seed(conn, focus)
+            # `cites` is expanded set-based in SQL when no merge is active (the common case); the
+            # lineage types, and every type while a merge is active, by the batched overlay.
+            set_based = "cites" in flt.edge_types and not has_active_merges(conn)
+            batched = tuple(EdgeType(t) for t in flt.edge_types if not (set_based and t == "cites"))
+            batched_filter = GraphFilter(
+                include_inferred=flt.include_inferred, edge_types=batched, include_ideas=False
+            )
             for k in range(1, max_ring + 1):
+                if set_based:
+                    cites_expand(conn, _SEEN, k, graph_filter)
+                if not batched:
+                    continue
                 frontier = _members(conn, k - 1)
-                step = ring_step(project, conn, frontier, graph_filter)
+                step = ring_step(project, conn, frontier, batched_filter)
                 for edge_id, kind in step.edges.items():
                     considered[kind].add(edge_id)
                 if step.neighbours:  # an empty executemany is an error
@@ -153,6 +168,8 @@ def _build(project: Project, flt: OnionFilter, agent: bool) -> OnionView:
                         text(f"INSERT OR IGNORE INTO {_SEEN} (work_id, ring) VALUES (:w, :k)"),
                         [{"w": w, "k": k} for w in sorted(step.neighbours)],
                     )
+            if set_based:
+                cites_count = cites_incident_count(conn, _SEEN, max_ring, graph_filter)
             for k in range(0, max_ring + 1):
                 rings.append(_ring(project, conn, k, depths))
         finally:
@@ -183,7 +200,10 @@ def _build(project: Project, flt: OnionFilter, agent: bool) -> OnionView:
             notices=notices,
         ),
         rings=rings,
-        edges_considered={t.value: len(ids) for t, ids in sorted(considered.items())},
+        edges_considered={
+            t.value: len(ids) + (cites_count if t is EdgeType.CITES else 0)
+            for t, ids in sorted(considered.items())
+        },
     )
 
 
@@ -238,18 +258,28 @@ def _members(conn: Connection, ring: int) -> list[str]:
 
 
 def _ring(project: Project, conn: Connection, k: int, depths: DepthIndex) -> Ring:
-    members = _members(conn, k)
-    counts = depth_counts(
-        project, f"SELECT work_id FROM {_SEEN} WHERE ring = :k", {"k": k}, conn=conn, index=depths
+    """One ring from a single ordered pass over its ids: per-depth counts for every member, and
+    per depth the first `VIEW_MAX_NODES` ids (enough: the list takes the highest depth first and
+    ids in order within a depth)."""
+    counts: dict[str, int] = dict.fromkeys(DEPTH_RANK, 0)
+    first: dict[str, list[str]] = {d: [] for d in DEPTH_RANK}
+    rows = conn.execute(
+        text(f"SELECT work_id FROM {_SEEN} WHERE ring = :k ORDER BY work_id"), {"k": k}
     )
-    ordered = sorted(members, key=lambda w: (-DEPTH_RANK[depths.of(w)], w))
-    listed = ordered[:VIEW_MAX_NODES]
+    for (work,) in rows:
+        depth = depths.of(str(work))
+        counts[depth] += 1
+        if len(first[depth]) < VIEW_MAX_NODES:
+            first[depth].append(str(work))
+    total = sum(counts.values())
+    by_rank = sorted(DEPTH_RANK, key=lambda d: -DEPTH_RANK[d])
+    listed = [w for d in by_rank for w in first[d]][:VIEW_MAX_NODES]
     return Ring(
         distance=k,
-        total=len(members),
-        by_depth={d: counts[d] for d in DEPTH_RANK},
+        total=total,
+        by_depth=counts,
         nodes=_nodes(project, conn, listed, depths),
-        truncated=len(listed) < len(members),
+        truncated=len(listed) < total,
     )
 
 
@@ -315,23 +345,45 @@ def _with_regions(project: Project, rings: list[Ring], agent: bool) -> list[Ring
             withheld[region_id] = region_withheld(project, region_id)
         return not withheld[region_id]
 
+    listed = sorted({n.work_id for ring in rings for n in ring.nodes})
+    held = _focus_members(project, listed)
     out: list[Ring] = []
     for ring in rings:
         nodes = [
             node.model_copy(
                 update={
-                    "regions": [
-                        m.region_id
-                        for m in regions_of(project, MemberType.WORK, node.work_id)
-                        if m.review_state == "reviewed"
-                        and m.region_id in focus
-                        and shown(m.region_id)
-                    ]
+                    "regions": [r for r in held.get(node.work_id, []) if r in focus and shown(r)]
                 }
             )
             for node in ring.nodes
         ]
         out.append(ring.model_copy(update={"nodes": nodes}))
+    return out
+
+
+def _focus_members(project: Project, work_ids: Sequence[str]) -> dict[str, list[str]]:
+    """For each listed work, the regions whose latest version holds it and is reviewed, by region
+    id: the read of `regions_of` for a batch of canonical work ids (one indexed read per batch
+    instead of one per work)."""
+    out: dict[str, list[str]] = {}
+    with project.index.connect() as conn:
+        for start in range(0, len(work_ids), RING_BATCH):
+            rows = conn.execute(
+                text(
+                    "SELECT m.member, m.region_id FROM region_members m "
+                    "WHERE m.member_type = :t AND m.member IN (SELECT value FROM json_each(:ids)) "
+                    "AND COALESCE((SELECT r.state FROM region_reviews r "
+                    "WHERE r.version = m.version ORDER BY r.event_id DESC LIMIT 1), "
+                    "'unreviewed') = 'reviewed' "
+                    "ORDER BY m.region_id"
+                ),
+                {
+                    "t": MemberType.WORK.value,
+                    "ids": json.dumps(list(work_ids[start : start + RING_BATCH])),
+                },
+            )
+            for member, region in rows:
+                out.setdefault(str(member), []).append(str(region))
     return out
 
 
