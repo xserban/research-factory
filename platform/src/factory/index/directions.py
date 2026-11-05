@@ -16,7 +16,8 @@ makes no row):
 - `lead.decided` with `discard`: source `lead`, reason `discarded-lead`.
 - `baseline.evaluated` with a verdict other than `reproduced`: source `baseline`, id
   `<experiment>:<row key>`.
-- `direction.closed` from a human: source `closed`, id the `dir_` id.
+- `direction.closed` from a human, once per `dir_` id and only with keys that name something the
+  project holds: source `closed`, id the `dir_` id.
 
 Handlers are total: an event that does not validate or names something unknown changes nothing.
 """
@@ -245,6 +246,43 @@ def hypothesis_conditions_and_keys(
     return conditions, keys
 
 
+_ID_TABLES: dict[str, tuple[str, str]] = {
+    "mcd_": ("cards", "card_id"),
+    "pbd_": ("cards", "card_id"),
+    "ida_": ("ideas", "idea_id"),
+    "led_": ("leads", "lead_id"),
+    "hyp_": ("hypotheses", "hypothesis_id"),
+    "exp_": ("experiments", "experiment_id"),
+    "rf:": ("works", "work_id"),
+    "dir_": ("directions", "direction_id"),
+    "rk_": ("extraction_rows", "row_key"),
+}
+
+
+def key_known(conn: Connection, key: str) -> bool:
+    """Whether a key names something the project holds: an id of a card, idea, lead, hypothesis,
+    design, work or direction, an extracted row, a vocabulary property, or `ds:<name>` of a
+    design's dataset. Read by the fold and the service alike."""
+    for prefix, (table, column) in _ID_TABLES.items():
+        if key.startswith(prefix):
+            sql = f"SELECT 1 FROM {table} WHERE {column} = :k LIMIT 1"
+            return conn.execute(text(sql), {"k": key}).first() is not None
+    if key.startswith("ds:"):
+        found = conn.execute(
+            text(
+                "SELECT 1 FROM experiments WHERE EXISTS (SELECT 1 FROM "
+                "json_each(json_extract(design_json, '$.datasets')) "
+                "WHERE json_extract(value, '$.name') = :n) LIMIT 1"
+            ),
+            {"n": key[3:]},
+        ).first()
+        return found is not None
+    found = conn.execute(
+        text("SELECT 1 FROM properties WHERE key = :k LIMIT 1"), {"k": key}
+    ).first()
+    return found is not None
+
+
 # --- Handlers ---------------------------------------------------------------------------------
 
 
@@ -406,6 +444,11 @@ def _closed(t: DirectionTables) -> Handler:
         p = DirectionClosed.model_validate(event.payload)
         if event.actor.kind != "human":
             return
+        taken = conn.execute(
+            text("SELECT 1 FROM directions WHERE direction_id = :d"), {"d": p.direction_id}
+        ).first()
+        if taken is not None or not all(key_known(conn, k) for k in p.keys):
+            return  # a dir_ id is written once; every key names something the project holds
         _put(
             conn,
             t,

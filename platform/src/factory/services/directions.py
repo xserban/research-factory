@@ -25,6 +25,7 @@ from sqlalchemy import bindparam, text
 
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
+from factory.index.directions import key_known
 from factory.model.base import StrictModel
 from factory.model.directions import (
     DIR_ID_RE,
@@ -38,16 +39,6 @@ from factory.services.extraction_agreement import final_rows
 from factory.services.ideas import resolve_idea
 
 MAX_LIMIT = 200
-_ID_TABLES: dict[str, tuple[str, str]] = {
-    "mcd_": ("cards", "card_id"),
-    "pbd_": ("cards", "card_id"),
-    "ida_": ("ideas", "idea_id"),
-    "led_": ("leads", "lead_id"),
-    "hyp_": ("hypotheses", "hypothesis_id"),
-    "exp_": ("experiments", "experiment_id"),
-    "rf:": ("works", "work_id"),
-    "dir_": ("directions", "direction_id"),
-}
 
 
 class RegistryRow(StrictModel):
@@ -193,38 +184,12 @@ def registry_query(
 
 
 def key_resolves(project: Project, key: str) -> bool:
-    """Whether a key names something the project holds: an id of a card, idea, lead, hypothesis,
-    design, work or closed direction, a final evidence row, a vocabulary property, or `ds:<name>`
-    of a design's dataset."""
+    """Whether a key names something the project holds (`index.directions.key_known`); an evidence
+    row must be a final one here, where the fold can only ask that it was extracted."""
+    if key.startswith("rk_"):
+        return any(r.row_key == key for r in final_rows(project))
     with project.index.connect() as conn:
-        for prefix, (table, column) in _ID_TABLES.items():
-            if key.startswith(prefix):
-                return (
-                    conn.execute(
-                        text(f"SELECT 1 FROM {table} WHERE {column} = :k"), {"k": key}
-                    ).first()
-                    is not None
-                )
-        if key.startswith("ds:"):
-            return (
-                conn.execute(
-                    text(
-                        "SELECT 1 FROM experiments WHERE EXISTS (SELECT 1 FROM "
-                        "json_each(json_extract(design_json, '$.datasets')) "
-                        "WHERE json_extract(value, '$.name') = :n) LIMIT 1"
-                    ),
-                    {"n": key[3:]},
-                ).first()
-                is not None
-            )
-        if key.startswith("rk_"):
-            return any(r.row_key == key for r in final_rows(project))
-        return (
-            conn.execute(
-                text("SELECT 1 FROM properties WHERE key = :k LIMIT 1"), {"k": key}
-            ).first()
-            is not None
-        )
+        return key_known(conn, key)
 
 
 def close_direction(
