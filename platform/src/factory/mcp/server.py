@@ -31,6 +31,7 @@ from factory.model.extraction import ClaimInput, ExtractedRowInput
 from factory.model.fulltext import Route
 from factory.model.identity import IdGenerator
 from factory.model.inbox import Basis
+from factory.model.intuition import InterpretationInput, ReviewState
 from factory.model.lineage import RelationProposal
 from factory.model.notices import AssessmentDecision
 from factory.model.project import RigorMode
@@ -63,6 +64,7 @@ from factory.services import fulltext as fulltext_service
 from factory.services import fulltext_status as fulltext_status_service
 from factory.services import ideas as ideas_service
 from factory.services import inbox as inbox_service
+from factory.services import interpretations as interpretations_service
 from factory.services import lineage as graph_service
 from factory.services import methods as methods_service
 from factory.services import notices as notices_service
@@ -1778,6 +1780,108 @@ def build_server(
 
         return _reply(project, view, include_work_ids=False)
 
+    @server.tool()
+    def intuition_next(
+        project: str,
+        role: str,
+        model: str,
+        skill: str,
+        targets: list[str] | None = None,
+    ) -> dict[str, JsonValue]:
+        """Serve the next idea (or a named paper) to interpret, as a task claimed by this session:
+        its member works and their recorded contribution items with verified quotes, and the
+        limits (600 characters, 1 to 5 sources). Without `targets` the confirmed ideas are served
+        in id order; papers only when named. Targets that cannot be served are listed with the
+        reason. A null `batch` means nothing is left. An interpretation is not evidence. Refused to
+        a session that has joined a pass."""
+
+        def serve() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            _require_pass_opened(opened)
+            actor = make_agent_actor(settings, session, role, model, skill)
+            served = interpretations_service.intuition_next(
+                opened, actor, targets=list(targets) if targets else None
+            )
+            return _withheld(opened, served.model_dump(mode="json"), include_work_ids=False)
+
+        return _reply(project, serve, include_work_ids=False)
+
+    @server.tool()
+    def interpretation_record(
+        project: str,
+        task_id: str,
+        target: str,
+        text: str,
+        sources: list[dict[str, JsonValue]],
+        role: str,
+        model: str,
+        skill: str,
+        supersedes: str | None = None,
+    ) -> dict[str, JsonValue]:
+        """Record an interpretation of the task's `target` (at most 600 characters) with 1 to 5
+        sources. A source is {kind: "quote", role, work_id, conversion_id, anchor, quote}, the
+        quote verbatim in that anchor of that conversion, or {kind: "citation", role, reference:
+        "rex_...:n"} or {kind: "citation", role, work_id}; `role` is `supports` or `background`.
+        All problems are reported together and nothing is written on any. `supersedes` may name
+        only your project's unreviewed or wrong agent-written interpretation of the same target;
+        reviewing, or replacing a reviewed or human-written one, is a human step. Refused to a
+        session that has joined a pass."""
+
+        def record() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            _require_pass_opened(opened)
+            actor = make_agent_actor(settings, session, role, model, skill)
+            items: list[JsonValue] = [*sources]
+            entry = parse_input(
+                InterpretationInput,
+                {"target": target, "text": text, "sources": items, "supersedes": supersedes},
+                "interpretation",
+            )
+            interpretation_id = interpretations_service.record_interpretation(
+                opened, actor, entry, task_id=task_id
+            )
+            return _withheld(
+                opened, {"interpretation_id": interpretation_id}, include_work_ids=False
+            )
+
+        return _reply(project, record, rename=dotted, include_work_ids=False)
+
+    @server.tool()
+    def interpretation_list(
+        project: str,
+        target: str | None = None,
+        states: list[str] | None = None,
+        cursor: str | None = None,
+    ) -> dict[str, JsonValue]:
+        """Interpretations of an idea or paper, by id, one page: each with `class`
+        (`interpretation`, never evidence), `label`, review state, text, sources, writer and
+        `source_stale`. By default the unreviewed and reviewed ones; `states` widens it to `wrong`
+        and `superseded`. The hidden counts are always reported. `next_cursor` continues the
+        listing. Read-only; refused to a session that has joined a pass."""
+
+        def listing() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            _require_pass_opened(opened)
+            chosen: list[ReviewState] | None = None
+            if states:
+                try:
+                    chosen = [ReviewState(s) for s in states]
+                except ValueError:
+                    raise FactoryValidationError(
+                        [ValidationIssue("states", f"must be among {_choices_of(ReviewState)}")]
+                    ) from None
+            result = interpretations_service.list_interpretations(
+                opened, target=target, states=chosen, cursor=cursor
+            )
+            return _withheld(
+                opened, result.model_dump(mode="json", by_alias=True), include_work_ids=False
+            )
+
+        return _reply(project, listing, include_work_ids=False)
+
     return server
 
 
@@ -2141,6 +2245,10 @@ def _spec(source: str, query: str, kind: str, purpose: str, limit: int | None) -
                 for err in exc.errors()
             ]
         ) from exc
+
+
+def _choices_of(values: type[ReviewState]) -> str:
+    return ", ".join(v.value for v in values)
 
 
 def _choices(values: Iterable[QueryKind | QueryPurpose | AssessmentDecision]) -> str:

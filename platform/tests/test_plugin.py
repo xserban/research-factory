@@ -13,6 +13,7 @@ SKILLS = (
     "rf-contributions",
     "rf-extract",
     "rf-frame",
+    "rf-intuition",
     "rf-lineage",
     "rf-probe",
     "rf-protocol",
@@ -156,3 +157,15 @@ def test_rf_cards_skill_text() -> None:
         assert needed in text, needed
     for kept in ("## Independence", "## Procedure", "## Tool arguments", "## Done when"):
         assert kept in text
+
+
+def test_rf_intuition_skill_text() -> None:
+    text = (REPO_ROOT / "plugin" / "skills" / "rf-intuition" / "SKILL.md").read_text("utf-8")
+    for needed in ("intuition_next", "interpretation_record", "interpretation_list", "600"):
+        assert needed in text, needed
+    for kept in ("## Independence", "## Procedure", "## Tool arguments", "## Done when"):
+        assert kept in text
+    lowered = " ".join(text.lower().split())
+    assert "not evidence" in lowered and "verbatim" in lowered
+    assert "never review" in lowered and "never supersede a reviewed" in lowered
+    assert "background" in lowered and "supports" in lowered
