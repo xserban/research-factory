@@ -24,6 +24,7 @@ SPEC = ModuleSpec(
     ),
     checks=(
         CheckRule("evaluation-stale", ("error", "error", "error")),
+        CheckRule("evaluation-event-foreign", ("warning", "warning", "warning")),
         CheckRule("hypothesis-evaluated-unconcluded", ("warning", "warning", "warning")),
     ),
 )

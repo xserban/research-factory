@@ -118,3 +118,8 @@ Minor review findings parked during the v1 build, to address when iterating from
 - XP-B review: the minimum seeds by mode are spelled twice (`hypothesis_gates._MIN_SEEDS`, `index.hypotheses.MIN_SEEDS_BY_MODE`).
 - XP-B review: the spec's advisory findings map to `warning`; the level table has no advisory level.
 - XP-B review: the researcher's trace label could carry the hypothesis statement; it is left out for both readers.
+- XP-B re-review: `_structurally_sound` with `RETIRED_EVALUATORS` checks structure only, and the set is empty today.
+- XP-B re-review: comparability keys may omit `metric`; such a group then meets no metric requirement.
+- XP-B re-review: `key_known` refuses trigger keys.
+- XP-B re-review: baseline row keys are read from the latest design.
+- XP-B re-review: `_after_baseline` may raise a KeyError.
