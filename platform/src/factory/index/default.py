@@ -2,6 +2,7 @@ from sqlalchemy import MetaData
 
 from factory.events.blobs import BlobStore
 from factory.index.chase import chase_handlers, chase_tables
+from factory.index.conclusions import conclusion_handlers, conclusion_tables
 from factory.index.dedup import dedup_handlers, dedup_tables
 from factory.index.document import document_handlers, document_tables
 from factory.index.extraction import extraction_handlers, extraction_tables
@@ -56,6 +57,7 @@ def default_projection(blobs: BlobStore | None = None) -> Projection:
     notices = notice_tables(metadata, search.work_keys, screening.label_sessions)
     lineage = lineage_tables(metadata)
     graph_tables(metadata)
+    conclusions = conclusion_tables(metadata)
     handlers: dict[str, Handler] = {
         "project.created": project_created_handler(project),
         **task_handlers(tasks),
@@ -77,6 +79,7 @@ def default_projection(blobs: BlobStore | None = None) -> Projection:
         **living_handlers(snapshots),
         **notice_handlers(notices),
         **lineage_handlers(lineage),
+        **conclusion_handlers(conclusions),
     }
     # The graph projection reads the tables the other handlers of the same event just folded.
     for event_type, handler in graph_handlers().items():
