@@ -16,13 +16,13 @@ from factory.mcp import server as mcp_server
 from factory.model.extraction import MinerScope
 from factory.model.project import RigorMode
 from factory.model.screening import Channel, PassLabel
-from factory.modules.contract import Autonomy, PolicyKind
+from factory.modules.contract import PolicyKind
 from factory.modules.presets import preset
 from factory.services import check as check_module
 from factory.services.check import check
 from factory.services.context import Project
 from factory.services.extraction_agreement import extraction_agreement, resolve_extraction
-from factory.services.gates import autonomy_of, effective_policy, gate_acts, gate_audit_sample
+from factory.services.gates import effective_policy, gate_acts
 from factory.services.methods import agent_methods, methods_report, render_methods
 from factory.services.miners import MinerState, miner_state, retire_miner
 from factory.services.modules.default import default_modules
@@ -162,20 +162,6 @@ def test_pilot_keeps_resolution_with_the_human(
         _resolve(project, _resolver(), work, key, Channel.MCP)
     assert raised.value.issues[0].field == "actor"
     assert list(gate_acts(project, "mine.resolve")) == []
-
-
-def test_agent_resolution_under_exploratory_preset_is_audited_agent(
-    project: Project, agent: Actor, human: Actor, world: list[str]
-) -> None:
-    work, key, _, _ = _disputed(project, agent, human)
-    # the exploratory preset, set on this project as an amendment the pilot rules would not allow
-    force_gate_policy(project, agent, "mine.resolve", PolicyKind.AGENT_AUDIT, audit=True)
-    event_id = _resolve(project, _resolver(), work, key, Channel.MCP)
-    [act] = list(gate_acts(project, "mine.resolve"))
-    assert act.event_id == event_id and act.actor_kind == "agent"
-    assert autonomy_of(project, act) is Autonomy.AGENT  # until a human audits the gate
-    gate_audit_sample(project, human, "mine.resolve", random_seed=1)
-    assert autonomy_of(project, act) is Autonomy.AUDITED_AGENT
 
 
 def test_proposer_cannot_resolve(

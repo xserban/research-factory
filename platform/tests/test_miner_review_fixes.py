@@ -1,7 +1,7 @@
 """Review fixes of M-D: a version's result survives a newer listing, the independence of the
 sessions across versions, agent admission, and the sample floor."""
 
-# ruff: noqa: F811, F401
+# ruff: noqa: F811
 from dataclasses import replace
 
 import pytest
@@ -24,7 +24,7 @@ from factory.services.miners import (
 from factory.services.mining import mine_next, mine_record, register_miner
 from factory.services.protocol import amend_protocol, current_protocol
 from factory.services.screening import relayed_extraction_label
-from tests.extraction_helpers import (
+from tests.extraction_helpers import (  # noqa: F401
     _both,
     _new_document_version,
     ext_a,
