@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
+from typing import cast, get_args
 
 from pydantic import JsonValue
 from sqlalchemy import text
@@ -34,6 +35,7 @@ from factory.lineage.graph import GraphFilter
 from factory.model.lineage import EdgeType
 from factory.model.regions import RegionKind
 from factory.model.views import (
+    OnionEdgeType,
     OnionFilter,
     OnionNode,
     OnionView,
@@ -63,6 +65,36 @@ _SEEN = "onion_seen"
 
 
 DEFAULT_FILTER = OnionFilter()
+_EDGE_TYPES = get_args(OnionEdgeType)
+
+
+def parse_filter(
+    max_ring: int,
+    edge_types: Sequence[str] | None,
+    include_inferred: bool,
+    focus: Sequence[str] | None,
+) -> OnionFilter:
+    """The filter a tool or a command names, or a refusal (field `edge_types`) writing nothing.
+    `edge_types` None means every type; an unknown or repeated-empty list is refused."""
+    if edge_types is None:
+        chosen = DEFAULT_FILTER.edge_types
+    else:
+        bad = [t for t in edge_types if t not in _EDGE_TYPES]
+        if bad or not edge_types:
+            raise FactoryValidationError(
+                [
+                    ValidationIssue(
+                        "edge_types", f"must name one or more of {', '.join(_EDGE_TYPES)}"
+                    )
+                ]
+            )
+        chosen = cast(tuple[OnionEdgeType, ...], tuple(dict.fromkeys(edge_types)))
+    return OnionFilter(
+        max_ring=max_ring,
+        edge_types=chosen,
+        include_inferred=include_inferred,
+        focus=None if not focus else tuple(focus),
+    )
 
 
 def onion_view(
@@ -287,4 +319,4 @@ def _any_visible_region(project: Project, agent: bool) -> bool:
     return any(not (agent and region_withheld(project, str(r[0]))) for r in rows)
 
 
-__all__ = ["ONION_MAX_RING", "VIEW_MAX_NODES", "ProcessingDepth", "onion_view"]
+__all__ = ["ONION_MAX_RING", "VIEW_MAX_NODES", "ProcessingDepth", "onion_view", "parse_filter"]

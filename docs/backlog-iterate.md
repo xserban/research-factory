@@ -89,3 +89,8 @@ Minor review findings parked during the v1 build, to address when iterating from
 - M-D: `evidence: true` admits a miner by protocol and gates the amendment; the evidence report still reads the evidence schema only (`BuilderReads(miners=())`), so no miner row reaches an evidence group. A builder that reads a miner declares the pair and the report filters by it.
 - M-D: the MCP `mine_disagreements` and `mine_resolve` tools exist for the `mine.resolve` policies `agent` and `agent_audit`; they are refused while the gate is `human` (pilot, systematic). An agent resolving is unaudited until a human draws a gate audit.
 - M-D: the calibration pass shares pass A of the miner with production (one `pass_opened`, one field order); a separate calibration pass identity (own seed and order) would need an event field.
+- V-A: depth `verified` and `extracted` are computed from the full unit and final-row reads (`unit_states`, `final_rows`) once per call, not by per-id SQL; the cost is proportional to extraction rows, not to ring size. A SQL path per work batch would help a corpus with very many extraction rows.
+- V-A: `ring_step` expands an absorbed (merged) work through `group()` per batch; a frontier of 10^5 works is read in batches of 900, each with one `json_each` join. Measure before tuning.
+- V-A: the DOT output joins every listed node to the focus node; it draws no edges between works, as the view carries none. Add listed edges if a presenter needs them.
+- V-A: `OnionNode.title` is an empty string for an external work whose record the project does not hold.
+- V-A: tests/test_mcp_server.py pins the tool list in order; later view tools (V-B, V-C) add theirs to the same list.

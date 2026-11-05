@@ -90,6 +90,7 @@ from factory.services import methods as methods_service
 from factory.services import miner_gold as miner_gold_service
 from factory.services import mining as mining_service
 from factory.services import notices as notices_service
+from factory.services import onion as onion_service
 from factory.services import passes as passes_service
 from factory.services import prisma as prisma_service
 from factory.services import prisma_update as prisma_update_service
@@ -2900,6 +2901,34 @@ def build_server(
             return _withheld(opened, {"terms": body}, include_work_ids=False)
 
         return _reply(project, listing, include_work_ids=False)
+
+    @server.tool()
+    def view_onion(
+        project: str,
+        max_ring: int = 2,
+        edge_types: list[str] | None = None,
+        include_inferred: bool = False,
+        focus: list[str] | None = None,
+    ) -> dict[str, JsonValue]:
+        """The onion view: rings of works at hop distance 0 to `max_ring` (at most 3) from the
+        included corpus, or from the corpus works named in `focus`, over `edge_types` (any of
+        `cites`, `builds-on`, `improves-on`; default all) in the default status filter (stated and
+        confirmed edges; `include_inferred` widens it, stated in the filter). Each ring has
+        complete counts (total and per processing depth) and at most 500 listed works, ordered
+        by depth then id; `truncated` says when a list is cut. A work lists the confirmed ideas
+        it belongs to and the reviewed focus regions that an agent may read. The result names its
+        filter and `as_of`; it carries ids, bibliographic titles and years only. Read-only;
+        refused to a session that has joined a pass, and before a screening pass has opened."""
+
+        def build() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            _require_pass_opened(opened, "view")
+            flt = onion_service.parse_filter(max_ring, edge_types, include_inferred, focus)
+            result = onion_service.onion_view(opened, flt, agent=True)
+            return _withheld(opened, result.model_dump(mode="json"), include_work_ids=False)
+
+        return _reply(project, build, include_work_ids=False)
 
     return server
 

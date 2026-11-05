@@ -94,6 +94,7 @@ from factory.services import miners as miners_service
 from factory.services import mining as mining_service
 from factory.services import notices as notices_service
 from factory.services import organisation_export as organisation_export_service
+from factory.services import onion as onion_service
 from factory.services import portfolio as portfolio_service
 from factory.services import prisma as prisma_service
 from factory.services import prisma_update as prisma_update_service
@@ -109,6 +110,7 @@ from factory.services import snapshots as snapshot_service
 from factory.services import snowball as snowball_service
 from factory.services import trace as trace_service
 from factory.services import versions as versions_service
+from factory.services import views as views_service
 from factory.services import watch as watch_service
 from factory.services.context import Project, list_projects, open_project
 from factory.services.extraction_agreement import Choice
@@ -119,6 +121,7 @@ from factory.services.project import ScreeningStatus
 from factory.services.search import list_works
 from factory.sources.fulltext.registry import default_routes
 from factory.sources.registry import default_sources
+from factory.views import render as views_render
 
 
 class StageChoice(StrEnum):
@@ -300,6 +303,11 @@ graph_app = typer.Typer(
     help="The lineage graph: build, status, bounded queries and JSON or DOT export.",
     no_args_is_help=True,
 )
+view_app = typer.Typer(
+    name="view",
+    help="Read-only views over the log: the onion view of rings around the included corpus.",
+    no_args_is_help=True,
+)
 import_app = typer.Typer(
     name="import",
     help="Import an existing library (BibTeX, CSL JSON, a PDF folder); list and show imports.",
@@ -386,6 +394,7 @@ app.add_typer(leads_app)
 app.add_typer(hypotheses_app)
 app.add_typer(models_app)
 app.add_typer(graph_app)
+app.add_typer(view_app)
 app.add_typer(interpretations_app)
 app.add_typer(concepts_app)
 app.add_typer(concept_links_app)
@@ -3980,6 +3989,47 @@ def graph_export_cmd(
             with out.open("w", encoding="utf-8") as handle:
                 for chunk in chunks:
                     handle.write(chunk)
+            typer.echo(f"wrote {out}")
+
+
+# --- Views (slice 7b, V-A) ---
+
+
+@view_app.command("onion")
+def view_onion_cmd(
+    ctx: typer.Context,
+    max_ring: Annotated[int, typer.Option("--max-ring", help="Rings to show (at most 3).")] = 2,
+    edge_type: Annotated[
+        list[str] | None,
+        typer.Option("--edge-type", help="cites, builds-on or improves-on; repeat for several."),
+    ] = None,
+    include_inferred: Annotated[bool, _INCLUDE_INFERRED] = False,
+    focus: Annotated[
+        list[str] | None, typer.Option("--focus", help="A corpus work id; repeat for several.")
+    ] = None,
+    format_: Annotated[str, typer.Option("--format", help="md, json or dot.")] = "md",
+    out: Annotated[Path | None, typer.Option("--out", help="Write to this file.")] = None,
+) -> None:
+    """The onion view, complete (the researcher's variant): rings of works around the included
+    corpus with their processing depth."""
+    state = _state(ctx)
+    with _reporting_errors():
+        if format_ not in ("md", "json", "dot"):
+            raise FactoryValidationError([ValidationIssue("format", "must be md, json or dot")])
+        project = _resolve_project(state)
+        flt = onion_service.parse_filter(max_ring, edge_type, include_inferred, focus)
+        view = onion_service.onion_view(project, flt)
+        body = (
+            views_service.to_json(view)
+            if format_ == "json"
+            else views_render.onion_dot(view)
+            if format_ == "dot"
+            else views_render.onion_markdown(view)
+        )
+        if out is None:
+            typer.echo(body, nl=False)
+        else:
+            out.write_text(body, encoding="utf-8")
             typer.echo(f"wrote {out}")
 
 
