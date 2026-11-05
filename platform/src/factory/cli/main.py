@@ -14,6 +14,7 @@ from pydantic import BaseModel, TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
 
 from factory.cli import evidence_render, portfolio_render, render
+from factory.cli.manuscripts import manuscript_app
 from factory.cli.organisation import consolidation_app, labels_app, terms_app
 from factory.clock import Clock, SystemClock
 from factory.config import Settings
@@ -423,6 +424,7 @@ app.add_typer(models_app)
 app.add_typer(experiments_app)
 app.add_typer(runs_app)
 app.add_typer(draft_app)
+app.add_typer(manuscript_app)
 app.add_typer(graph_app)
 app.add_typer(view_app)
 app.add_typer(interpretations_app)

@@ -53,7 +53,13 @@ from factory.model.screening import AUDIT_ID_RE, DECISION_ID_RE, QUALIFIED_CRITE
 from factory.model.seed import SEED_ID_RE
 from factory.model.work import QUERY_ID_RE, RUN_ID_RE
 from factory.model.work_ids import WORK_ID_RE
-from factory.services import draft_trace, label_trace, layer_trace, region_trace
+from factory.services import (
+    draft_trace,
+    label_trace,
+    layer_trace,
+    manuscript_trace,
+    region_trace,
+)
 from factory.services.context import Project
 from factory.services.contributions import contribution_item
 from factory.services.ideas import idea_view
@@ -89,6 +95,8 @@ KINDS: tuple[str, ...] = (
     "sentence",
     "verdict",
     "draft",
+    "manuscript_unit",
+    "manuscript_verdict",
     "resolution",
     "audit",
     "seed",
@@ -135,6 +143,7 @@ _PATTERNS: tuple[tuple[str, str], ...] = (
     *region_trace.REGION_PATTERNS,
     *label_trace.ORGANISATION_PATTERNS,
     *draft_trace.DRAFT_PATTERNS,
+    *manuscript_trace.MANUSCRIPT_PATTERNS,
     (REL_ID_RE, "relation"),
     (IDEA_ID_RE, "idea"),
     (_CITES_RE, "cites"),
@@ -562,6 +571,7 @@ class _Walk:
         self._lookup_runs: dict[str, tuple[str, ...]] | None = None
         self._describers: dict[str, Callable[[str], _Described | None]] = {
             **{k: partial(self._draft_node, k) for k in draft_trace.DRAFT_KINDS},
+            **{k: partial(self._manuscript_node, k) for k in manuscript_trace.MANUSCRIPT_KINDS},
             "question": self._question,
             "element": self._element,
             "criterion": self._criterion,
@@ -737,6 +747,10 @@ class _Walk:
 
     def _draft_node(self, kind: str, ident: str) -> _Described | None:
         found = draft_trace.describe(self._conn, kind, ident)
+        return None if found is None else _Described(*found)
+
+    def _manuscript_node(self, kind: str, ident: str) -> _Described | None:
+        found = manuscript_trace.describe(self._conn, kind, ident)
         return None if found is None else _Described(*found)
 
     def _question(self, ident: str) -> _Described | None:
@@ -1244,6 +1258,8 @@ class _Walk:
             return region_trace.edges(self._conn, kind, ident)
         if kind in draft_trace.DRAFT_KINDS:
             return draft_trace.edges(self._project, self._conn, kind, ident)
+        if kind in manuscript_trace.MANUSCRIPT_KINDS:
+            return manuscript_trace.edges(self._conn, kind, ident)
         if kind in layer_trace.LAYER_KINDS:
             up, down = layer_trace.edges(self._conn, kind, ident)
         elif kind in label_trace.ORGANISATION_KINDS:

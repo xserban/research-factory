@@ -9,12 +9,12 @@ Invariants:
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Annotated, Self
+from typing import Annotated, Literal, Self
 
 from pydantic import Field, field_validator, model_validator
 
 from factory.model.base import StrictModel
-from factory.model.drafts import NOTE_MAX_CHARS, AuditLabel, Verdict
+from factory.model.drafts import NOTE_MAX_CHARS, AuditLabel, DraftAuditReport, Verdict
 from factory.model.identity import BLOB_REF_RE, CONVERSION_ID_RE, ULID_RE
 from factory.model.references import MAX_QUOTE
 from factory.model.screening import Channel
@@ -361,3 +361,52 @@ class VerdictRow(StrictModel):
     quote: str | None
     conversion_id: str
     note: str | None
+
+
+class ReportUnit(StrictModel):
+    """A unit as reported. `detached`: a verdict whose citation has changed since; never counted."""
+
+    work_id: str | None
+    keys: list[str]
+    state: Literal["open", "judged", "closed", "detached"]
+    reason: CloseReason | None
+    verdict: VerdictRow | None
+
+
+class ReportSentence(StrictModel):
+    """A cited or flagged sentence, by ordinal. `waiting` lists keys with no unit yet."""
+
+    ordinal: int
+    keys: list[str]
+    waiting: list[str]
+    units: list[ReportUnit]
+    uncited_flag: bool
+
+
+class ManuscriptReport(StrictModel):
+    """The verdicts of a manuscript with derived counts; no text of it. For the researcher: `audit`
+    holds the rate."""
+
+    manuscript_id: str
+    label: str
+    sentences: int
+    cited: int
+    verdicts: dict[str, int]
+    closed: dict[str, int]
+    open_units: int
+    waiting: int
+    flags: int
+    audit: DraftAuditReport
+    rows: list[ReportSentence]
+
+
+class ManuscriptStatus(StrictModel):
+    manuscript_id: str
+    label: str
+    sentences: int
+    cited: int
+    citations: dict[str, int]
+    verdicts: dict[str, int]
+    closed: dict[str, int]
+    open_units: int
+    flags: int

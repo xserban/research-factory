@@ -6,6 +6,7 @@ the writer is outside the factory, so no session or model has to be kept apart f
 ruling 6)."""
 
 from factory.modules.contract import (
+    CheckRule,
     EventFamily,
     GateKind,
     GateSpec,
@@ -44,6 +45,10 @@ SPEC = ModuleSpec(
     ),
     task_kinds=default_task_kinds().kinds_of("manuscripts"),
     regime=QualityRegime(1, "none", "unit", "none", "gate-sample", ()),
+    checks=(
+        CheckRule("manuscript-citation-unresolved", ("warning", "warning", "warning")),
+        CheckRule("manuscript-unverified", ("warning", "warning", "warning")),
+    ),
     gates=(
         GateSpec(
             "manuscript.citation_confirm",

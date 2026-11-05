@@ -45,6 +45,29 @@ judge the sentence as written, not as its writer may have meant it.
 A refusal names the field and a fixed reason. Fix what you quoted and record again; do not change
 the verdict to get past a refusal.
 
+## External manuscripts
+
+A manuscript the factory did not write is checked the same way, one cited work at a time. The
+researcher gives you its `msc_` id.
+
+1. Pull a unit with `manuscript_verify_next`: ids only, `ordinal`, `work_id`, `conversion_id`.
+2. Read the sentence with `manuscript_read`; its neighbours are context. Read the source with
+   `document_read`, naming that `work_id` and `conversion_id`. Here you read the source itself, so
+   judge from what it says, not from what you recall of it.
+3. Record it with `manuscript_verify_record`, with the unit's `task_id` and one of the same five
+   verdicts. `quote` is verbatim from the source and `anchor` is the anchor it is in; only
+   `unsupported` may leave them out, when you read the source and found nothing. `sentence_span`
+   is `[start, end]`, character offsets inside the sentence, not its text; only `supported` may
+   leave it out.
+4. Never copy the manuscript's text into a `note`: it is the researcher's, it stays out of the
+   log, and such a note is refused.
+5. Pull the next unit until `unit` is null.
+
+A sentence that states something and cites nothing is not a unit. You may flag it with
+`manuscript_verify_record`, giving `manuscript_id` and `uncited_ordinal` and no task: the flag is
+advisory and is never a verdict. A citation the platform cannot follow is closed by it, as
+`cannot-verify`; you never close a unit, and a fuzzy citation waits for the researcher.
+
 ## Tool arguments
 
 Every tool call also takes `project` (the project slug), `role`, and `model` (your own model
