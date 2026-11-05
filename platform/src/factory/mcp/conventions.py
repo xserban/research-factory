@@ -13,6 +13,8 @@ from factory.events.envelope import Actor
 from factory.model.fulltext import ROUTE_ORDER, Route
 from factory.model.protocol import ProtocolSpec, ScreeningStage
 from factory.model.question import QuestionSpec
+from factory.model.screening import Channel
+from factory.services.context import Principal
 from factory.services.skills import skill_ref
 from factory.services.stages import require_pass_stage
 from factory.services.withholding import WITHHELD as WITHHELD
@@ -55,8 +57,17 @@ def paginate(items: Sequence[T], cursor: str | None, limit: int = PAGE_LIMIT) ->
     return Page(items=list(items[start:end]), next_cursor=next_cursor)
 
 
-def make_agent_actor(settings: Settings, session: str, role: str, model: str, skill: str) -> Actor:
-    """An agent's actor, with its skill resolved to the reference of the installed file."""
+def make_agent_actor(
+    settings: Settings,
+    session: str,
+    role: str,
+    model: str,
+    skill: str,
+    principal: Principal | None = None,
+) -> Actor:
+    """An agent's actor, with its skill resolved to the reference of the installed file. It acts
+    for `principal`, by default the local user."""
+    delegator = principal or Principal.local(settings, Channel.MCP)
     if not model:
         raise FactoryValidationError([ValidationIssue("model", "must not be empty")])
     ref = skill_ref(settings, skill)
@@ -64,10 +75,11 @@ def make_agent_actor(settings: Settings, session: str, role: str, model: str, sk
         return Actor(
             kind="agent",
             id=role,
-            user=settings.user,
+            user=delegator.user,
             session=session,
             model=model,
             skill=ref,
+            credential=delegator.credential,
         )
     except ValidationError as exc:
         issues = [

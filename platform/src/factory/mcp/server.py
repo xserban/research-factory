@@ -139,7 +139,8 @@ from factory.services import trace as trace_service
 from factory.services import view_coverage as view_coverage_service
 from factory.services import watch as watch_service
 from factory.services import xruns as xruns_service
-from factory.services.context import Project, open_project
+from factory.services.context import Principal, Project
+from factory.services.context import open_project as open_as
 from factory.services.extraction import ExtractResult
 from factory.services.gate_status import GateStatusRow, gates_status
 from factory.services.hypothesis_gates import GateName, gate_policy
@@ -194,6 +195,11 @@ def build_server(
     session = IdGenerator(clock).ulid()
     adapters = dict(default_sources() if sources is None else sources)
     server = MCPServer("factory")
+    principal = Principal.local(settings, Channel.MCP)
+
+    def open_project(settings: Settings, slug: str, *, session: str, clock: Clock) -> Project:
+        """Every tool opens a project as this server's principal."""
+        return open_as(settings, slug, session=session, clock=clock, principal=principal)
 
     def _fetch_routes() -> Mapping[Route, FullTextRoute]:
         return default_routes(settings) if fulltext_routes is None else fulltext_routes()

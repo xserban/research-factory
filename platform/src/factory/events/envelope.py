@@ -5,8 +5,10 @@ from pydantic import (
     ConfigDict,
     Field,
     JsonValue,
+    SerializerFunctionWrapHandler,
     field_serializer,
     field_validator,
+    model_serializer,
     model_validator,
 )
 
@@ -15,6 +17,7 @@ from factory.clock import format_ts
 from factory.events.blobs import BLOB_REF_RE
 from factory.model.base import StrictModel
 from factory.model.identity import ACTOR_ID_RE, SLUG_RE, ULID_RE, ulid_time
+from factory.model.lab import CREDENTIAL_ID_RE
 
 ActorKind = Literal["human", "agent", "system"]
 
@@ -30,6 +33,16 @@ class Actor(StrictModel):
     session: str = Field(pattern=rf"^{ULID_RE}$")
     model: str | None = None
     skill: str | None = Field(default=None, pattern=SKILL_RE)
+    credential: str | None = Field(default=None, pattern=CREDENTIAL_ID_RE)
+    """The `crd_` id, never the secret, on an authenticated channel (slice 5 ruling 12). Absent
+    from a line that has none, so stage-0 events are byte for byte what they were."""
+
+    @model_serializer(mode="wrap")
+    def _omit_absent_credential(self, handler: SerializerFunctionWrapHandler) -> dict[str, object]:
+        data: dict[str, object] = handler(self)
+        if data.get("credential") is None:
+            data.pop("credential", None)
+        return data
 
     @model_validator(mode="after")
     def _model_and_skill_follow_kind(self) -> Self:

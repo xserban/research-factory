@@ -237,8 +237,9 @@ def _ingest_actor(project: Project, actor: Actor, runner: str | None) -> Actor:
         return Actor(
             kind="system",
             id=f"runner-{runner}",
-            user=project.settings.user,
+            user=project.principal.user,
             session=project.session,
+            credential=project.principal.credential,
         )
     if actor.kind == "human" or (actor.kind == "system" and actor.id.startswith("runner-")):
         return actor

@@ -4,6 +4,7 @@ from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Self
 
 from factory.clock import Clock
 from factory.config import Settings
@@ -18,11 +19,26 @@ from factory.index.index import Index
 from factory.index.project import latest_host
 from factory.model.identity import SLUG_RE, IdGenerator, ulid_time
 from factory.model.lab import LAB_SLUG
+from factory.model.screening import Channel
 
 MAX_SLUG_LENGTH = 64
 FUTURE_MARGIN = timedelta(minutes=1)
 """How far past the clock an event may be dated and still set the ID floor. A later one (a logged
 event can never be removed) would otherwise push every later `ts` past it for good."""
+
+
+@dataclass(frozen=True)
+class Principal:
+    """Who is acting (slice 5, "Principal and actor"): the source of every actor. On stdio and the
+    local CLI it is `Settings.user` with no credential, so stage 0 behaves as before."""
+
+    user: str
+    credential: str | None
+    channel: Channel
+
+    @classmethod
+    def local(cls, settings: Settings, channel: Channel) -> Self:
+        return cls(user=settings.user, credential=None, channel=channel)
 
 
 @dataclass(frozen=True)
@@ -67,6 +83,7 @@ class Project:
     events: EventFactory
     writer: EventWriter
     index: Index
+    principal: Principal
 
     def writing(self) -> AbstractContextManager[None]:
         """The project write context: holds the lock and syncs. On a hosted project it also floors
@@ -101,11 +118,21 @@ class Project:
 
     def human_actor(self) -> Actor:
         return Actor(
-            kind="human", id=self.settings.user, user=self.settings.user, session=self.session
+            kind="human",
+            id=self.principal.user,
+            user=self.principal.user,
+            session=self.session,
+            credential=self.principal.credential,
         )
 
     def system_actor(self) -> Actor:
-        return Actor(kind="system", id="factory", user=self.settings.user, session=self.session)
+        return Actor(
+            kind="system",
+            id="factory",
+            user=self.principal.user,
+            session=self.session,
+            credential=self.principal.credential,
+        )
 
 
 def slug_issues(slug: str) -> list[ValidationIssue]:
@@ -135,8 +162,16 @@ def future_dated(event_id: str, now: datetime) -> bool:
     return ulid_time(event_id.removeprefix("ev_")) > now + FUTURE_MARGIN
 
 
-def build_project(settings: Settings, slug: str, *, session: str, clock: Clock) -> Project:
-    """Wire the storage layers for one project. Creates no directories."""
+def build_project(
+    settings: Settings,
+    slug: str,
+    *,
+    session: str,
+    clock: Clock,
+    principal: Principal | None = None,
+) -> Project:
+    """Wire the storage layers for one project. Creates no directories. The principal defaults to
+    the local user at the command line."""
     paths = ProjectPaths(settings.root, slug)
     catalog = default_catalog()
     ids = IdGenerator(clock)
@@ -174,17 +209,25 @@ def build_project(settings: Settings, slug: str, *, session: str, clock: Clock) 
             host_id=settings.host_id,
         ),
         index=index,
+        principal=principal or Principal.local(settings, Channel.CLI),
     )
 
 
-def open_project(settings: Settings, slug: str, *, session: str, clock: Clock) -> Project:
+def open_project(
+    settings: Settings,
+    slug: str,
+    *,
+    session: str,
+    clock: Clock,
+    principal: Principal | None = None,
+) -> Project:
     # Format only: a project named `lab` before the slug was reserved stays readable.
     if _format_issues(slug):
         raise ProjectNotFoundError(f"no project {slug!r}")
     paths = ProjectPaths(settings.root, slug)
     if not paths.events_dir.is_dir():
         raise ProjectNotFoundError(f"no project {slug!r}")
-    return build_project(settings, slug, session=session, clock=clock)
+    return build_project(settings, slug, session=session, clock=clock, principal=principal)
 
 
 def list_projects(settings: Settings) -> list[str]:
