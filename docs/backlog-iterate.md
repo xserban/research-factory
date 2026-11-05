@@ -156,3 +156,8 @@ Minor review findings parked during the v1 build, to address when iterating from
 - deploy-A: `server_check` details: a `.gitignore` entry is matched as an exact line, a root the mount table cannot place is an issue, `.mining/` is not yet listed (services/server_check.py).
 - deploy-A: `host_project` runs from any machine for a first hosting, so a laptop can name `lab1` and lock itself out (services/hosting.py).
 - deploy-A: `host-mismatch` trusts `%an`, which any committer can set; only a signature check would prove the author (services/hosting.py).
+- X-B: `export_nanopubs` exports every live pass A claim of an included work, as spec ruling 21 says; `report_inputs` leaves out stale claims and the evidence report leaves out works a notice excludes, so a nanopublication can exist for a claim the report does not show (services/exports.py `_write_nanopubs`).
+- X-B: a referenced blob that is missing cannot be told from a library hash when the library is absent, so `_copy_blobs` counts neither; only an input_blob could be told apart (services/exports.py).
+- X-B: binary blobs (compressed region member lists) stay out of the crate as "text blobs" only, so a reader cannot audit region snapshots from the crate alone; the crate does not record the count, only the CLI summary does (services/exports.py `_copy_blobs`).
+- X-B: `rdflib>=7` (the plan's test-only dependency) is not added: it needs a lock update and tests are paused. Add it to the dev group with the tests; a JSON-LD parse of the crate also needs the RO-Crate context offline.
+- X-B: `--force` on the crate removes a crate's own top-level entries and then moves the staged crate in; a failure between the two leaves the directory without a crate (services/exports.py `_replace_crate`).

@@ -1,5 +1,5 @@
-"""Exports from events only: the bibliography of a scope of works, the PRISMA flow as SVG, and the
-nanopublications of claims and stated edges.
+"""Exports from events only: the bibliography of a scope of works, the PRISMA flow as SVG, the
+nanopublications of claims and stated edges, and the RO-Crate of the project.
 
 Read-only and byte-deterministic: works are selected by id, sorted by id, read from the
 projection in pages of `PAGE` and serialised as they stream; nothing here touches the library
@@ -17,16 +17,21 @@ Invariants:
 Services imported inside a function are those that may reach `drafts`, which imports this module.
 """
 
+from __future__ import annotations
+
 import hashlib
+import json
 import os
 import re
 import shutil
 import tempfile
+import zipfile
 from collections import Counter
-from collections.abc import Collection, Iterable, Iterator, Sequence
+from collections.abc import Callable, Collection, Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal, cast
 from urllib.parse import quote
 
 from pydantic import JsonValue
@@ -34,9 +39,19 @@ from sqlalchemy import text
 
 from factory.clock import format_ts
 from factory.errors import FactoryValidationError, ValidationIssue
-from factory.events.blobs import BLOB_REF_RE
-from factory.events.reader import event_files, read_file
+from factory.events.blobs import BLOB_REF_RE, BlobIntegrityError, BlobNotFoundError
+from factory.events.reader import event_files, read_file, relative_name
 from factory.exports.bibtex import bibtex
+from factory.exports.crate import (
+    DESCRIPTOR,
+    MANIFEST,
+    AgentEntry,
+    ConversionEntry,
+    CrateFile,
+    ManifestEntry,
+    crate_metadata,
+    manifest_json,
+)
 from factory.exports.csl import csl_json
 from factory.exports.keys import assign_keys
 from factory.exports.nanopub import (
@@ -62,8 +77,17 @@ from factory.services.context import Project
 from factory.services.coverage import held_out_visible
 from factory.services.dedup import active_merges
 from factory.services.dedup_cascade import merge_works
-from factory.services.prisma import has_full_text_plan, prisma_flow
+from factory.services.prisma import (
+    PrismaFlow,
+    SearchReport,
+    has_full_text_plan,
+    prisma_flow,
+    search_report,
+)
 from factory.services.search import load_works
+
+if TYPE_CHECKING:
+    from factory.services.evidence_report import EvidenceReport
 
 BibScope = Literal["included", "corpus"]
 DRAFT_SCOPE = "draft:"
@@ -299,7 +323,7 @@ def _put(stage: Path, path: str, content: Iterable[str] | bytes) -> None:
     if isinstance(content, bytes):
         target.write_bytes(content)
         return
-    with target.open("w", encoding="utf-8", newline="") as handle:
+    with target.open("w", encoding="utf-8", errors="replace", newline="") as handle:
         handle.writelines(content)
 
 
@@ -506,12 +530,405 @@ def export_nanopubs(
         shutil.rmtree(stage, ignore_errors=True)
 
 
+# --- The RO-Crate ---
+
+
+class CrateSummary(StrictModel):
+    """What `export_crate` wrote. `files` and `bytes` count the descriptor too. A referenced blob
+    that is not text is left out (`blobs_binary`), and so is one that no longer matches its hash
+    or whose hash the library also holds (`blobs_left_out`)."""
+
+    files: int
+    bytes: int
+    documents_listed: int
+    drafts: int
+    blobs_binary: int
+    blobs_left_out: int
+
+
+@dataclass(frozen=True)
+class CrateRenderers:
+    """The report renderers, which live with the CLI's formatting. Passed in so that a service
+    does not import `cli/`."""
+
+    prisma_markdown: Callable[[PrismaFlow], str]
+    search_markdown: Callable[[SearchReport], str]
+    evidence_markdown: Callable[[EvidenceReport], str]
+    evidence_rows_csv: Callable[[EvidenceReport], str]
+    evidence_points_csv: Callable[[EvidenceReport], str]
+
+
+_CRATE_TOP = frozenset(
+    {DESCRIPTOR, MANIFEST, "bibliography", "blobs", "events", "protocol", "reports"}
+)
+_FORMATS = {
+    ".bib": "application/x-bibtex",
+    ".csv": "text/csv",
+    ".json": "application/json",
+    ".jsonl": "application/x-ndjson",
+    ".md": "text/markdown",
+    ".svg": "image/svg+xml",
+}
+_GENERATED = ("bibliography/", "reports/")
+_ZIP_DATE = (1980, 1, 1, 0, 0, 0)
+_ZIP_NAME = ".crate.zip"
+
+
+def _bytes(value: str) -> bytes:
+    """UTF-8; a lone surrogate from a hand-written event cannot stop the export."""
+    return value.encode("utf-8", "replace")
+
+
+def _json(value: JsonValue) -> bytes:
+    return _bytes(json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
+
+
+def _check_crate_target(project: Project, out: Path, *, zip_: bool, force: bool) -> None:
+    """Refuse a path under `projects/` and, without `force`, one that holds anything. Even with
+    `force` nothing but a crate's own entries is ever replaced, because a stray file would be a
+    member `hasPart` does not list."""
+    _refuse_under_projects(project, out)
+    if zip_:
+        if out.is_dir():
+            raise _issue("out", "is a directory; a zip crate needs a file path")
+        if out.exists() and not force:
+            raise _issue("out", "already exists; --force replaces it")
+        return
+    if not out.exists():
+        return
+    if not out.is_dir():
+        raise _issue("out", "is a file; a crate needs a directory, or --zip")
+    held = {child.name for child in out.iterdir()}
+    if held and not force:
+        raise _issue("out", "is not empty; --force replaces a crate there")
+    if held - _CRATE_TOP:
+        raise _issue("out", "holds files that are not part of a crate")
+
+
+def _copy_events(project: Project, stage: Path) -> None:
+    """The event files as they are, without a torn last line, which is not part of the log."""
+    events_dir = project.paths.events_dir
+    for path in event_files(events_dir):
+        data = path.read_bytes()
+        _put(stage, f"events/{relative_name(path, events_dir)}", data[: data.rfind(b"\n") + 1])
+
+
+def _copy_blobs(project: Project, stage: Path, refs: Iterable[str]) -> tuple[int, int]:
+    """The text blobs among `refs`, at the store's own layout; `(binary, left out)` counts.
+
+    A ref in a payload may name the library. The blob store holds none of that, but a blob with
+    the same hash as a library entry is its content, so it stays out whatever the store says
+    (R-47). `project.library` is asked only whether the hash exists; its content is never read."""
+    binary = left_out = 0
+    for ref in sorted(refs):
+        if project.library.exists(ref):
+            left_out += int(project.blobs.exists(ref))
+            continue
+        try:
+            data = project.blobs.get(ref)
+        except BlobNotFoundError:
+            continue  # library hashes have the same form, and their files are not in this store
+        except BlobIntegrityError:
+            left_out += 1
+            continue
+        try:
+            data.decode("utf-8")
+        except UnicodeDecodeError:
+            binary += 1
+            continue
+        digest = ref.removeprefix(_HASH_PREFIX)
+        _put(stage, f"blobs/sha256/{digest[:2]}/{digest[2:]}", data)
+    return binary, left_out
+
+
+def _write_protocol(project: Project, stage: Path) -> None:
+    from factory.services.protocol import current_protocol, list_amendments
+
+    protocol = current_protocol(project)
+    if protocol is None:
+        return
+    amendments = [a.model_dump(mode="json") for a in list_amendments(project)]
+    body: dict[str, JsonValue] = {
+        "amendments": cast(JsonValue, amendments),
+        "protocol": protocol.model_dump(mode="json"),
+    }
+    _put(stage, "protocol/protocol.json", _json(body))
+
+
+def _graph_exists(project: Project) -> bool:
+    with project.index.connect() as conn:
+        return conn.execute(text("SELECT 1 FROM graph_nodes LIMIT 1")).first() is not None
+
+
+def _write_reports(project: Project, stage: Path, renderers: CrateRenderers) -> None:
+    """Each report as the researcher's own service gives it: complete, nothing withheld."""
+    from factory.services.evidence_report import evidence_report
+    from factory.services.lineage import iter_graph_export
+    from factory.services.methods import methods_report, render_methods
+
+    flow = prisma_flow(project)
+    evidence = evidence_report(project)
+    _put(stage, "reports/prisma.md", _bytes(renderers.prisma_markdown(flow)))
+    _put(stage, "reports/prisma.svg", _bytes(prisma_svg(flow)))
+    _put(stage, "reports/search.md", _bytes(renderers.search_markdown(search_report(project))))
+    _put(stage, "reports/methods.md", _bytes(render_methods(methods_report(project))))
+    _put(stage, "reports/evidence.md", _bytes(renderers.evidence_markdown(evidence)))
+    _put(stage, "reports/evidence-rows.csv", _bytes(renderers.evidence_rows_csv(evidence)))
+    _put(stage, "reports/evidence-points.csv", _bytes(renderers.evidence_points_csv(evidence)))
+    if _graph_exists(project):
+        with entering():
+            _put(stage, "reports/lineage.json", iter_graph_export(project, "json"))
+
+
+def _release_rows(project: Project, draft_id: str) -> list[dict[str, JsonValue]]:
+    with project.index.connect() as conn:
+        rows = (
+            conn.execute(
+                text(
+                    "SELECT event_id, as_of, policy, released_by, actor_kind, counts "
+                    "FROM draft_releases WHERE draft_id = :d ORDER BY event_id"
+                ),
+                {"d": draft_id},
+            )
+            .mappings()
+            .all()
+        )
+    return [{**dict(row), "counts": json.loads(str(row["counts"]))} for row in rows]
+
+
+def _write_drafts(project: Project, stage: Path) -> int:
+    """Each released draft in clean form, rendered from the current log, with its release records
+    and the current status counts beside it, so a draft gone stale since shows the difference."""
+    from factory.services.draft_release import released_drafts
+    from factory.services.drafts import draft_render, sentence_status, status_counts
+
+    released = sorted(released_drafts(project))
+    for draft_id in released:
+        clean = draft_render(project, draft_id, "clean")
+        _put(stage, f"reports/drafts/{draft_id}.md", _bytes(clean))
+        record: dict[str, JsonValue] = {
+            "current_counts": cast(JsonValue, status_counts(sentence_status(project, draft_id))),
+            "draft_id": draft_id,
+            "releases": cast(JsonValue, _release_rows(project, draft_id)),
+        }
+        _put(stage, f"reports/drafts/{draft_id}.release.json", _json(record))
+    return len(released)
+
+
+def _write_bibliography(project: Project, stage: Path) -> None:
+    included = select_works(project, "included")
+    _put(stage, "bibliography/included.bib", render_bibliography(project, "bibtex", included))
+    _put(stage, "bibliography/included.csl.json", render_bibliography(project, "csl", included))
+
+
+def _manifest_entries(project: Project) -> list[ManifestEntry]:
+    """One entry per document of the full-text events, from the projection: metadata only."""
+    with project.index.connect() as conn:
+        documents = (
+            conn.execute(
+                text(
+                    "SELECT d.document_id, d.work_id, d.raw_hash, d.route, d.source_version, "
+                    "a.url, a.licence, a.licence_status, a.retrieved_at "
+                    "FROM fulltext_documents d "
+                    "LEFT JOIN fulltext_attempts a ON a.attempt_id = d.attempt_id "
+                    "ORDER BY d.document_id"
+                )
+            )
+            .mappings()
+            .all()
+        )
+        conversions = (
+            conn.execute(
+                text(
+                    "SELECT document_id, conversion_id, converter, converter_version, "
+                    "markdown_hash, manifest_hash FROM document_conversions "
+                    "ORDER BY conversion_id"
+                )
+            )
+            .mappings()
+            .all()
+        )
+    by_document: dict[str, list[ConversionEntry]] = {}
+    for row in conversions:
+        by_document.setdefault(str(row["document_id"]), []).append(
+            ConversionEntry(
+                conversion_id=str(row["conversion_id"]),
+                converter=str(row["converter"]),
+                converter_version=str(row["converter_version"]),
+                markdown_sha256=str(row["markdown_hash"]).removeprefix(_HASH_PREFIX),
+                manifest_sha256=str(row["manifest_hash"]).removeprefix(_HASH_PREFIX),
+            )
+        )
+    return [
+        ManifestEntry(
+            document_id=str(row["document_id"]),
+            work_id=str(row["work_id"]),
+            sha256=str(row["raw_hash"]).removeprefix(_HASH_PREFIX),
+            route=str(row["route"]),
+            url=row["url"],
+            source_version=str(row["source_version"]),
+            licence=row["licence"],
+            licence_status=row["licence_status"],
+            retrieved_at=row["retrieved_at"],
+            conversions=tuple(by_document.get(str(row["document_id"]), ())),
+        )
+        for row in documents
+    ]
+
+
+def _staged_files(stage: Path) -> list[Path]:
+    """Every staged file, by POSIX path relative to `stage`."""
+    return sorted(
+        (path for path in stage.rglob("*") if path.is_file()),
+        key=lambda path: path.relative_to(stage).as_posix(),
+    )
+
+
+def _members(project: Project, stage: Path) -> list[CrateFile]:
+    """The crate's files with their hashes. The last line of defence for R-47: a file whose hash
+    the library holds stops the export, whatever put it there."""
+    members: list[CrateFile] = []
+    for path in _staged_files(stage):
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        if project.library.exists(f"{_HASH_PREFIX}{digest}"):
+            raise _issue("library", "a crate file equals a library file; nothing was written")
+        name = path.relative_to(stage).as_posix()
+        generated = name.startswith(_GENERATED)
+        members.append(
+            CrateFile(
+                path=name,
+                sha256=digest,
+                encoding_format=_FORMATS.get(path.suffix, "text/plain"),
+                produced_by=f"Generate {name}" if generated else None,
+            )
+        )
+    return members
+
+
+def _factory_version() -> str:
+    try:
+        return version("factory")
+    except PackageNotFoundError:
+        return "unknown"
+
+
+def _description(project: Project) -> str:
+    """The latest raw goal: the researcher's own text, not literature."""
+    from factory.services.question import goals
+
+    stated = goals(project)
+    return stated[-1].text if stated else f"Research Factory project {project.paths.slug}"
+
+
+def _assemble(project: Project, stage: Path, renderers: CrateRenderers) -> CrateSummary:
+    """Every crate file under `stage`. Reads events, blobs and the projection, and of the library
+    only whether a hash exists."""
+    scan = _scan_log(project)
+    position = _position(scan)
+    orcid = _orcid_iri(project)
+    _copy_events(project, stage)
+    binary, left_out = _copy_blobs(project, stage, scan.refs)
+    _write_protocol(project, stage)
+    _write_reports(project, stage, renderers)
+    drafts = _write_drafts(project, stage)
+    _write_bibliography(project, stage)
+    entries = _manifest_entries(project)
+    _put(stage, MANIFEST, _bytes(manifest_json(entries)))
+    members = _members(project, stage)
+    metadata = crate_metadata(
+        slug=project.paths.slug,
+        description=_description(project),
+        last_event=position,
+        last_ts=scan.last_ts,
+        licence=project.settings.licence,
+        person=project.settings.user,
+        orcid=orcid,
+        factory_version=_factory_version(),
+        files=members,
+        agents=[
+            AgentEntry(model=model, skill=skill, events=count)
+            for (model, skill), count in sorted(scan.agents.items())
+        ],
+    )
+    _put(stage, DESCRIPTOR, _bytes(metadata))
+    paths = _staged_files(stage)
+    return CrateSummary(
+        files=len(paths),
+        bytes=sum(path.stat().st_size for path in paths),
+        documents_listed=len(entries),
+        drafts=drafts,
+        blobs_binary=binary,
+        blobs_left_out=left_out,
+    )
+
+
+def _write_zip(stage: Path, target: Path) -> None:
+    """`target` holds the staged files: sorted, fixed timestamps, `ZIP_DEFLATED` level 9, so the
+    same files give the same bytes."""
+    paths = _staged_files(stage)
+    built = stage / _ZIP_NAME
+    with zipfile.ZipFile(built, "w") as archive:
+        for path in paths:
+            info = zipfile.ZipInfo(path.relative_to(stage).as_posix(), date_time=_ZIP_DATE)
+            info.create_system = 3
+            info.external_attr = 0o644 << 16
+            archive.writestr(
+                info, path.read_bytes(), compress_type=zipfile.ZIP_DEFLATED, compresslevel=9
+            )
+    os.replace(built, target)
+
+
+def _replace_crate(stage: Path, target: Path) -> None:
+    """Move the staged crate into `target`, first removing a crate's entries there, and only
+    those (`_check_crate_target` has refused anything else)."""
+    for name in sorted(_CRATE_TOP):
+        old = target / name
+        if old.is_dir() and not old.is_symlink():
+            shutil.rmtree(old)
+        else:
+            old.unlink(missing_ok=True)
+    _move_children(stage, target)
+
+
+def export_crate(
+    project: Project,
+    out: Path,
+    renderers: CrateRenderers,
+    *,
+    zip_: bool = False,
+    force: bool = False,
+) -> CrateSummary:
+    """The project as an RO-Crate 1.1 at `out`: a directory, or a zip file with `zip_`.
+
+    Holds the log, the text blobs the events reference, the protocol, the reports, the released
+    drafts, the bibliography and a manifest of library documents without their content (spec
+    ruling 20). Byte-identical for the same log and settings. Refuses an `out` under `projects/`
+    and, without `force`, one that holds anything. CLI only (spec ruling 22)."""
+    _check_crate_target(project, out, zip_=zip_, force=force)
+    stage = _stage_beside(out)
+    try:
+        with project.index.exclusive():
+            summary = _assemble(project, stage, renderers)
+        if zip_:
+            _write_zip(stage, out.resolve())
+        else:
+            _replace_crate(stage, out.resolve())
+        return summary
+    except OSError as exc:
+        raise _issue("out", f"cannot write there: {exc.strerror or exc}") from exc
+    finally:
+        shutil.rmtree(stage, ignore_errors=True)
+
+
 __all__ = [
     "PAGE",
     "BibFormat",
     "BibScope",
+    "CrateRenderers",
+    "CrateSummary",
     "NanopubSummary",
     "export_bibliography",
+    "export_crate",
     "export_nanopubs",
     "export_prisma_svg",
     "iter_works",

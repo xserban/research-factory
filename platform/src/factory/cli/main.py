@@ -364,7 +364,7 @@ report_app = typer.Typer(
 )
 export_app = typer.Typer(
     name="export",
-    help="Bibliography (BibTeX, CSL-JSON) and the PRISMA diagram (SVG), from the events.",
+    help="Bibliography, PRISMA diagram, RO-Crate and nanopublications, from the events.",
     no_args_is_help=True,
 )
 watch_app = typer.Typer(
@@ -2073,6 +2073,58 @@ def export_prisma(ctx: typer.Context, out: _OUT = None) -> None:
         project = _resolve_project(state)
         svg = exports_service.export_prisma_svg(project)
         _emit([svg], out)
+
+
+@export_app.command("crate")
+def export_crate_cmd(
+    ctx: typer.Context,
+    out: Annotated[Path, typer.Option("--out", help="A directory, or a file with --zip.")],
+    zip_: Annotated[bool, typer.Option("--zip", help="Write one zip file.")] = False,
+    force: Annotated[bool, typer.Option("--force", help="Replace a crate at --out.")] = False,
+) -> None:
+    """The project as an RO-Crate 1.1, without library content; prints what was written."""
+    state = _state(ctx)
+    renderers = exports_service.CrateRenderers(
+        prisma_markdown=render.prisma_markdown,
+        search_markdown=render.search_markdown,
+        evidence_markdown=evidence_render.evidence_markdown,
+        evidence_rows_csv=evidence_render.rows_csv,
+        evidence_points_csv=evidence_render.points_csv,
+    )
+    with _reporting_errors():
+        project = _resolve_project(state)
+        summary = exports_service.export_crate(project, out, renderers, zip_=zip_, force=force)
+    typer.echo(
+        f"{summary.files} files, {summary.bytes} bytes; {summary.documents_listed} library "
+        f"documents listed; {summary.drafts} released drafts"
+    )
+    if summary.blobs_binary or summary.blobs_left_out:
+        typer.echo(f"blobs left out: {summary.blobs_binary} binary, {summary.blobs_left_out} other")
+
+
+@export_app.command("nanopub")
+def export_nanopub_cmd(
+    ctx: typer.Context,
+    out: Annotated[Path, typer.Option("--out", help="A new or empty directory.")],
+    edges: Annotated[
+        bool, typer.Option("--edges", help="Add stated and confirmed lineage edges.")
+    ] = False,
+    with_quotes: Annotated[
+        bool, typer.Option("--with-quotes", help="Add quote text, for local use.")
+    ] = False,
+) -> None:
+    """Claims and, with --edges, lineage edges as nanopublications in TriG, one file each."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        summary = exports_service.export_nanopubs(
+            project, out, edges=edges, with_quotes=with_quotes
+        )
+    typer.echo(
+        f"{summary.written} written ({summary.claims} claims, {summary.edges} edges); "
+        f"{summary.skipped_no_identifier} skipped without a DOI or arXiv id"
+    )
+    typer.echo("unsigned; sign and publish with nanopub tooling")
 
 
 @report_app.command("search")
