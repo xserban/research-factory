@@ -150,6 +150,8 @@ def test_records_units_and_undated_through_events(project: Project, vb_world: Vb
     view = timeline_view(project, gid)
     assert view.direction == "declared" and view.higher_is_better is True
     assert view.undated == [w[3]]
+    missing = [n for n in view.meta.notices if n.code == "resolution-missing"]
+    assert len(missing) == 1 and "3 independent row" in missing[0].text  # as the report notes it
     (unit,) = view.units.values()  # one value unit: never mixed with another
     assert unit.unit == "%"
     # w0 (2018, 2) is the first independent dated row; w1 (2019, 1) is worse; w2 is copied

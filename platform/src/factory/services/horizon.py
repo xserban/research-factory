@@ -103,12 +103,22 @@ def _timeline(project: Project, group_id: str) -> TimelineView:
         with project.index.connect() as conn:
             years = years_of(conn, sorted({r.work_id for r in rows}))
         undated = sorted({r.work_id for r in rows if r.work_id not in years})
-        units, skipped = _units(rows, pending, years, dict(key), pack, spec, axes, direction)
+        units, skipped, no_resolution = _units(
+            rows, pending, years, dict(key), pack, spec, axes, direction
+        )
         if skipped:
             notices.append(
                 ViewNotice(
                     code="value-not-numeric",
                     text=f"{skipped} independent row(s) have no numeric value and are not plotted.",
+                )
+            )
+        if no_resolution:
+            notices.append(
+                ViewNotice(
+                    code="resolution-missing",
+                    text=f"{no_resolution} independent row(s) report no input resolution; they "
+                    "are timed with rows of no resolution, as the evidence report partitions them.",
                 )
             )
     notices.append(horizon_notice(search_horizon(project)))
@@ -147,11 +157,12 @@ def _units(
     spec: ReportSpec,
     axes: Sequence[str],
     higher_is_better: bool,
-) -> tuple[dict[str, UnitTimeline], int]:
+) -> tuple[dict[str, UnitTimeline], int, int]:
     by_metric = "metric" not in key
     by_resolution = "input_resolution" not in key
     buckets: dict[str, tuple[str | None, str | None, str | None, list[DatedPoint]]] = {}
     skipped = 0
+    no_resolution = 0
     for row in rows:
         if not row.independent or row.work_id in pending:
             continue
@@ -167,6 +178,8 @@ def _units(
             if by_resolution and res_field is not None
             else None
         )
+        if by_resolution and res_field is None:
+            no_resolution += 1
         label = _label(field.unit, metric, resolution)
         point = DatedPoint(
             trace_id=f"{row.row_key}/{spec.value_field}",
@@ -198,7 +211,7 @@ def _units(
             ],
             frontiers=yearly_frontiers(points, higher_is_better, axes),
         )
-    return units, skipped
+    return units, skipped, no_resolution
 
 
 def _label(unit: str | None, metric: str | None, resolution: str | None) -> str:
@@ -334,7 +347,7 @@ def _group_records(
         direction, status = group_direction(key, rows, pack, spec)
         if not rows or status not in ("declared", "pack-default") or direction is None:
             continue
-        units, _ = _units(rows, pending, years, dict(key), pack, spec, [], direction)
+        units, _, _ = _units(rows, pending, years, dict(key), pack, spec, [], direction)
         per_year: dict[int, int] = {}
         for unit in units.values():
             for record in unit.records:
