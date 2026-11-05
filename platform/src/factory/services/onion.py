@@ -127,6 +127,13 @@ def _build(project: Project, flt: OnionFilter, agent: bool) -> OnionView:
     )
     project.index.sync()
     focus = _focus(project, flt)
+    if not focus:
+        notices.append(
+            ViewNotice(
+                code="focus-empty",
+                text="No work is included yet (or the named focus is empty); every ring is empty.",
+            )
+        )
     depths = depth_index(project, agent=agent)
     considered: dict[EdgeType, set[str]] = {EdgeType(t): set() for t in flt.edge_types}
     rings: list[Ring] = []
@@ -139,10 +146,11 @@ def _build(project: Project, flt: OnionFilter, agent: bool) -> OnionView:
                 step = ring_step(project, conn, frontier, graph_filter)
                 for edge_id, kind in step.edges.items():
                     considered[kind].add(edge_id)
-                conn.execute(
-                    text(f"INSERT OR IGNORE INTO {_SEEN} (work_id, ring) VALUES (:w, :k)"),
-                    [{"w": w, "k": k} for w in sorted(step.neighbours)],
-                )
+                if step.neighbours:  # an empty executemany is an error
+                    conn.execute(
+                        text(f"INSERT OR IGNORE INTO {_SEEN} (work_id, ring) VALUES (:w, :k)"),
+                        [{"w": w, "k": k} for w in sorted(step.neighbours)],
+                    )
             for k in range(0, max_ring + 1):
                 rings.append(_ring(project, conn, k, depths))
         finally:
