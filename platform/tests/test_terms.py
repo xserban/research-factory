@@ -254,3 +254,14 @@ def test_agent_term_rule_refused_when_applied_from_import_tags(
             rules=rules,
         )
     assert caught.value.issues[0].field == "rules.include[0]"
+
+
+def test_merged_key_quote_makes_stated(iw: IWorld, project: Project) -> None:
+    from factory.services.labels import merge_labels
+
+    label(project, iw.writer, "long sequences", iw.source, quote(iw))  # quote has its own key
+    label(project, iw.human, "quadratic cost", iw.other)
+    merge_labels(project, iw.human, "quadratic cost", "long sequences", "same")
+    term = promote_term(project, iw.human, name="quadratic cost", definition="d", applies_to=(W,))
+    found = {a.key: a.status for a in term_applications(project, term, status=None)}
+    assert found == {"long sequences": "stated", "quadratic cost": "confirmed"}

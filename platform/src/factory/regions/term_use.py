@@ -87,7 +87,7 @@ def term_applications(conn: Connection, term_id: str) -> list[TermApplication]:
         status: Status
         if decision == "confirm" or str(origin) in _HUMAN_ORIGINS:
             status = "confirmed"
-        elif quote is not None and any(k in label_key(str(quote)) for k in row.keys):
+        elif quote is not None and any(k in label_key(str(quote)) for k in {str(key), *row.keys}):
             status = "stated"
         else:
             status = "inferred"
