@@ -445,6 +445,14 @@ def _row(project: Project, interpretation_id: str) -> Any | None:
         )
 
 
+def interpretation_state(project: Project, interpretation_id: str) -> ReviewState | None:
+    """The review state of one interpretation; None for an unknown id. The one read a writing
+    support makes of the layer (slice 7b, plan W-A)."""
+    project.index.sync()
+    row = _row(project, interpretation_id)
+    return None if row is None else ReviewState(row["review_state"])
+
+
 def _supersedes_issues(
     project: Project, actor: Actor, entry: InterpretationInput
 ) -> list[ValidationIssue]:

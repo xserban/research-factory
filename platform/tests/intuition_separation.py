@@ -77,6 +77,7 @@ ALLOWED_IMPORTERS = frozenset(
     {
         "factory.services.consolidation",  # Regions-C: merges concepts and reads their names
         "factory.services.lineage",
+        "factory.services.supports",  # W-A: the reviewed state of an interpretation or concept
         "factory.services.check",
         "factory.services.trace",
         "factory.index.default",
