@@ -34,3 +34,4 @@ Minor review findings parked during the v1 build, to address when iterating from
 - G2-C: relation_views rebuilds the ledger per call; G2-D per-frontier use multiplies it (unmeasured). CLI sessions are per process, so a human may confirm their own definition.
 - G2-C: relation reads call final_items() per view (whole final set); at 1e5+ items project or page it.
 - G2-D: _basis_params reads final_items per call; per-item scaling unmeasured (could not build 4000 items); project a table if it shows up. sync-inside-connection fix has no test.
+- G2-E: check._all_relations pages with offset (recomputes CTE per page); check line ~514 and live_rows/unit_states load all items.
