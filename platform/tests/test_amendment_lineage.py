@@ -42,16 +42,16 @@ from factory.services.screening import (
     screen_record,
     stale_screening_decisions,
 )
-from tests.helpers import _setup
-from tests.test_screening_next import (
-    SourcesFor,
+from tests.fulltext_helpers import _loosen, _staged_world
+from tests.helpers import SourcesFor, _setup
+from tests.screening_helpers import (
+    _batch,
     _draw,
+    _item,
     _loosen_ex01,
     _pass_calibration_under,
     _queued,
 )
-from tests.test_screening_record import _batch, _item
-from tests.test_stage_services import _loosen, _world
 
 TA = ScreeningStage.TITLE_ABSTRACT
 FT = ScreeningStage.FULL_TEXT
@@ -103,7 +103,7 @@ def test_non_criterion_amendment_keeps_title_abstract_outcomes(
     mock_sources: SourcesFor,
     change: Callable[[ProtocolSpec], ProtocolSpec],
 ) -> None:
-    _world(project, agent, human, mock_sources)
+    _staged_world(project, agent, human, mock_sources)
     before = _snapshot(project)
     assert before["flow"]["pending"] == 0
     assert before["agreed"][TA]  # not vacuous
@@ -116,7 +116,7 @@ def test_non_criterion_amendment_keeps_title_abstract_outcomes(
 def test_criterion_amendment_requeues_only_stale_decisions(
     project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
 ) -> None:
-    world = _world(project, agent, human, mock_sources)
+    world = _staged_world(project, agent, human, mock_sources)
     citing = {
         d.decision_id: d
         for d in live_decisions(project, stage=TA)
@@ -141,7 +141,7 @@ def test_criterion_amendment_requeues_only_stale_decisions(
 def test_clarification_stales_nothing(
     project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
 ) -> None:
-    _world(project, agent, human, mock_sources)
+    _staged_world(project, agent, human, mock_sources)
     before = _snapshot(project)
     current = current_protocol(project)
     assert current is not None
@@ -167,7 +167,7 @@ def test_clarification_stales_nothing(
 def test_per_criterion_kappa_spans_versions(
     project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
 ) -> None:
-    _world(project, agent, human, mock_sources)
+    _staged_world(project, agent, human, mock_sources)
     before = agreement_summary(project)
     assert before is not None and before.kappa_by_criterion.get("EX01") is not None
 
@@ -184,7 +184,7 @@ def test_per_criterion_kappa_spans_versions(
 def test_audit_digest_stable_across_non_criterion_amendment(
     project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
 ) -> None:
-    _world(project, agent, human, mock_sources)
+    _staged_world(project, agent, human, mock_sources)
     audit_sample(project, human, random_seed=1)
     assert not audit_outstanding(project)
 
@@ -205,7 +205,7 @@ def test_audit_digest_stable_across_non_criterion_amendment(
 def test_calibration_gate_survives_non_criterion_amendment(
     project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
 ) -> None:
-    _world(project, agent, human, mock_sources)
+    _staged_world(project, agent, human, mock_sources)
     before = calibration_status(project)
     _amend(project, agent, _limits)
     assert calibration_status(project) == before
@@ -228,7 +228,7 @@ def test_new_decisions_still_need_current_protocol(
 def test_revert_amendment_keeps_decisions(
     project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
 ) -> None:
-    _world(project, agent, human, mock_sources)
+    _staged_world(project, agent, human, mock_sources)
     before = _snapshot(project)
     original = current_protocol(project)
     assert original is not None
@@ -247,7 +247,7 @@ def test_revert_amendment_keeps_decisions(
 def test_revert_of_criterion_amendment_stales_per_rules(
     project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
 ) -> None:
-    _world(project, agent, human, mock_sources)
+    _staged_world(project, agent, human, mock_sources)
     original = current_protocol(project)
     assert original is not None
     ta = live_decisions(project, stage=TA)
@@ -298,7 +298,7 @@ def test_revert_of_criterion_amendment_stales_per_rules(
 def test_three_amendment_lineage_back_to_the_first_spec_keeps_every_decision(
     project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
 ) -> None:
-    _world(project, agent, human, mock_sources)
+    _staged_world(project, agent, human, mock_sources)
     before = _snapshot(project)
     decisions = {d.decision_id for d in live_decisions(project, stage=None)}
     original = current_protocol(project)
@@ -316,7 +316,7 @@ def test_three_amendment_lineage_back_to_the_first_spec_keeps_every_decision(
 def test_lineage_through_a_criterion_change_stales_only_by_the_rules(
     project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
 ) -> None:
-    _world(project, agent, human, mock_sources)
+    _staged_world(project, agent, human, mock_sources)
     original = current_protocol(project)
     assert original is not None
     ta = live_decisions(project, stage=TA)
@@ -347,7 +347,7 @@ def test_lineage_through_a_criterion_change_stales_only_by_the_rules(
 
 
 def _decide_b(project: Project, agent: Actor, work: str, protocol_id: str) -> str:
-    from tests.test_stage_services import _decide_at
+    from tests.fulltext_helpers import _decide_at
 
     return _decide_at(project, agent, TA, work, "A", "exclude", "EX01", protocol_id)
 
@@ -358,7 +358,7 @@ def _decide_b(project: Project, agent: Actor, work: str, protocol_id: str) -> st
 def test_tightening_requeues_inclusions_only(
     project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
 ) -> None:
-    _world(project, agent, human, mock_sources)
+    _staged_world(project, agent, human, mock_sources)
     includes = {d.decision_id for d in live_decisions(project, stage=TA) if d.verdict.promotes}
     current = current_protocol(project)
     assert current is not None
@@ -382,7 +382,7 @@ def test_tightening_requeues_inclusions_only(
 def test_added_criterion_requeues_everything_untested(
     project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
 ) -> None:
-    _world(project, agent, human, mock_sources)
+    _staged_world(project, agent, human, mock_sources)
     everything = {d.decision_id for d in live_decisions(project, stage=TA)}
     current = current_protocol(project)
     assert current is not None
@@ -413,7 +413,7 @@ def test_added_criterion_requeues_everything_untested(
 def test_audit_digest_ignores_stale_decisions_in_both(
     project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
 ) -> None:
-    world = _world(project, agent, human, mock_sources)
+    world = _staged_world(project, agent, human, mock_sources)
     new_id = _loosen(project, agent, "EX01")
     assert stale_screening_decisions(project, stage=TA)
 

@@ -37,12 +37,10 @@ from factory.services.seeds import add_seeds, admit_seed, explain_seed_miss
 from factory.sources.base import RawPage, SearchResult
 from factory.sources.registry import INTERFACES, SourceFactory
 from tests.helpers import T0, _positive_item, _protocol, _seed_item, openalex_item
-from tests.test_chase_service import _citing, _corpus, _ordinary, _settle
-from tests.test_screening_next import _decide
+from tests.screening_helpers import _citing, _corpus, _decide, _merge_items, _ordinary, _settle
 
 SourcesFor = Callable[..., Mapping[str, SourceFactory]]
 FULL_TEXT = "not assessed in this review stage"
-MERGE_TITLE = "Linear attention in transformers"
 
 
 def _assert_identities(flow: PrismaFlow) -> None:
@@ -50,23 +48,6 @@ def _assert_identities(flow: PrismaFlow) -> None:
     identified = sum(flow.identified_databases.values()) + sum(flow.identified_other.values())
     assert identified - flow.duplicates_removed == flow.screened
     assert sum(flow.excluded.values()) + flow.pending + flow.included == flow.screened
-
-
-def _merge_items() -> list[dict[str, Any]]:
-    """Two records of one paper: one with a DOI, one without. The cascade merges them by title,
-    first author and year."""
-    return [
-        openalex_item(
-            title=MERGE_TITLE,
-            author="Ada Zhou",
-            published="2021-06-01",
-            openalex_id="W500",
-            doi="10.1000/merge",
-        ),
-        openalex_item(
-            title=MERGE_TITLE, author="Ada Zhou", published="2021-06-01", openalex_id="W501"
-        ),
-    ]
 
 
 def test_prisma_identities_hold(

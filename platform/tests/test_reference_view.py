@@ -1,6 +1,5 @@
-"""G1 reference view for the contribution checks (plan G2-B, task 1)."""
-
 # ruff: noqa: F811
+"""G1 reference view for the contribution checks (plan G2-B, task 1)."""
 
 import pytest
 

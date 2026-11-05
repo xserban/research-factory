@@ -1,6 +1,5 @@
-"""Relation proposals, classification and human decisions (slice 3b, plan G2-C, task 3)."""
-
 # ruff: noqa: F401, F811
+"""Relation proposals, classification and human decisions (slice 3b, plan G2-C, task 3)."""
 
 from __future__ import annotations
 

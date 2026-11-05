@@ -34,7 +34,7 @@ from tests.document_helpers import (
     run_convert,
 )
 from tests.references_service_helpers import Lookups, converted_work, corpus_works, oa_item
-from tests.test_fulltext_service import StubRoute, always, retrieved
+from tests.route_helpers import StubRoute, always, retrieved
 
 ENTRIES = [
     "A. Zhou. Paper 2. Journal of Tests, 2020. doi:10.1000/p2.",

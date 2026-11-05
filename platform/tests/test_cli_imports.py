@@ -11,8 +11,8 @@ from factory.imports.model import ImportFormat
 from factory.model.imports import ImportRole
 from factory.services.context import Project
 from factory.services.imports import import_part, import_records, list_imports, record_import
+from tests.cli_helpers import _cli_env, runner
 from tests.helpers import _of_type
-from tests.test_cli import _cli_env, runner
 
 BIB = (
     "\n".join(

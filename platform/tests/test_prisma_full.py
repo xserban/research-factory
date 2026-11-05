@@ -1,104 +1,27 @@
 """Full PRISMA with full-text boxes, check, trace, methods and status (plan 2C, task 7)."""
 
 import json
-from collections.abc import Callable, Mapping
-from dataclasses import dataclass
 
 from sqlalchemy import text
 
 from factory.events.envelope import Actor
-from factory.model.fulltext import AttemptOutcome, Route
-from factory.model.protocol import ScreeningStage
-from factory.model.screening import Channel, DecisionRecorded, PassLabel, ScreeningPhase, Verdict
+from factory.model.screening import DecisionRecorded, PassLabel, ScreeningPhase, Verdict
 from factory.services.agreement import Outcome, final_outcomes
-from factory.services.calibration import calibration_items, draw_calibration, label_calibration
 from factory.services.check import check
 from factory.services.context import Project
-from factory.services.fulltext import fetch_fulltext
 from factory.services.fulltext_screening import fulltext_queue
 from factory.services.methods import methods_report, render_methods
 from factory.services.prisma import prisma_flow
 from factory.services.project import project_status
-from factory.services.screening import open_pass
-from factory.services.search import list_works
 from factory.services.trace import TraceNode, trace
-from factory.sources.fulltext.base import not_retrieved
-from factory.sources.registry import SourceFactory
 from tests.document_helpers import (
-    ARTICLE,
     StubConverter,
-    fetched_document,
     make_registry,
     promoted_works,
     run_convert,
 )
-from tests.helpers import _setup
-from tests.test_fulltext_service import StubRoute, always
-from tests.test_screening_next import _draw
-from tests.test_stage_services import _both, _decide_at, _declare_full_text
-
-FT = ScreeningStage.FULL_TEXT
-TA = ScreeningStage.TITLE_ABSTRACT
-SourcesFor = Callable[..., Mapping[str, SourceFactory]]
-
-
-@dataclass
-class World:
-    protocol_id: str
-    eligible: list[str]
-    failed: str
-    fetched_only: str
-    unsought: str
-
-
-def _failing_routes() -> dict[Route, StubRoute]:
-    return {
-        route: StubRoute(route, always(not_retrieved(route, AttemptOutcome.NOT_AVAILABLE, why)))
-        for route, why in (
-            (Route.ARXIV_HTML, "no html"),
-            (Route.ARXIV_SOURCE, "no src"),
-            (Route.OA_PDF, "paywalled"),
-        )
-    }
-
-
-def _ta_world(project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor) -> World:
-    """Title/abstract screening done and promoted; documents prepared; no full-text decision."""
-    _setup(project, agent, human, mock_sources, dual_sample=0.5, random_works=6)
-    pid = _declare_full_text(project, agent)
-    _draw(project)
-    for item in calibration_items(project):
-        label_calibration(project, human, item, "include", None, Channel.CLI)
-    open_pass(project, agent, PassLabel.A)
-    open_pass(project, agent, PassLabel.B)
-    cal = set(calibration_items(project))
-    for work in sorted(w.id for w in list_works(project) if w.id not in cal):
-        _both(project, agent, TA, work, ("include", None), ("include", None), pid)
-    promoted = promoted_works(project)
-    assert len(promoted) >= 8
-    *rest, failed, fetched_only, unsought = promoted
-    for work in rest:
-        fetched_document(project, work, ARTICLE)
-    run_convert(project, make_registry(StubConverter()))
-    fetch_fulltext(project, routes=_failing_routes(), work_ids=[failed])
-    fetched_document(project, fetched_only, ARTICLE)  # live document, never converted
-    return World(pid, rest, failed, fetched_only, unsought)
-
-
-def _ft_world(project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor) -> World:
-    """Add full-text screening: one exclusion under EX04, one under EX05, one pending, rest in."""
-    world = _ta_world(project, agent, human, mock_sources)
-    draw_calibration(project, project.system_actor(), random_seed=5, stage=FT)
-    open_pass(project, agent, PassLabel.A, stage=FT)
-    open_pass(project, agent, PassLabel.B, stage=FT)
-    first, second, third, *rest = world.eligible
-    pid = world.protocol_id
-    _both(project, agent, FT, first, ("exclude", "EX04"), ("exclude", "EX04"), pid)
-    _both(project, agent, FT, second, ("exclude", "EX05"), ("exclude", "EX05"), pid)
-    _decide_at(project, agent, FT, third, "A", "include", None, pid)  # B missing: pending
-    for work in rest:
-        _both(project, agent, FT, work, ("include", None), ("include", None), pid)
-    return world
+from tests.fulltext_helpers import FT, _ft_world, _ta_world
+from tests.helpers import SourcesFor, _setup
 
 
 def test_boxes_sum_and_are_derived(

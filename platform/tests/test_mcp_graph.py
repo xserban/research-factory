@@ -1,6 +1,5 @@
-"""The `graph_*` MCP tools (plan G2-D, task 5): reads only, refused to pass sessions."""
-
 # ruff: noqa: F401, F811
+"""The `graph_*` MCP tools (plan G2-D, task 5): reads only, refused to pass sessions."""
 
 from __future__ import annotations
 

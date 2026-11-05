@@ -1,6 +1,5 @@
-"""`uses` links: proposal, classification, cycles, human decisions (slice 3c, G3-B, task 4)."""
-
 # ruff: noqa: F401, F811
+"""`uses` links: proposal, classification, cycles, human decisions (slice 3c, G3-B, task 4)."""
 
 from __future__ import annotations
 

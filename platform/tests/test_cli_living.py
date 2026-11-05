@@ -17,9 +17,9 @@ from factory.services.context import Project
 from factory.services.project import init_project
 from factory.services.search import list_works
 from factory.services.watch import watch_run
+from tests.cli_helpers import _env
 from tests.helpers import SESSION, SourcesFor
 from tests.living_helpers import filler, screening_watch_setup
-from tests.test_cli import _env
 from tests.watch_helpers import ScriptedSource, adapters, by_text
 
 runner = CliRunner()

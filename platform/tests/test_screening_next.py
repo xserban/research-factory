@@ -3,40 +3,25 @@
 import math
 import re
 import secrets
-from collections.abc import Callable, Mapping
-from typing import Any, cast
+from typing import cast
 
 import pytest
 
 from factory.clock import FixedClock
 from factory.config import Settings
 from factory.errors import FactoryValidationError, ValidationIssue
-from factory.events.envelope import Actor, Event
-from factory.events.reader import read_all
+from factory.events.envelope import Actor
 from factory.index.chase import extended_works
-from factory.model.protocol import (
-    Criterion,
-    CriterionEffect,
-    ScreeningStage,
-    protocol_version,
-)
 from factory.model.screening import (
     Channel,
-    DecisionRecorded,
     Framing,
     PassLabel,
     ScreeningPhase,
-    Verdict,
 )
-from factory.model.search import QueryKind, QuerySpec
 from factory.model.seed import SeedKind
-from factory.services.calibration import calibration_items, draw_calibration, label_calibration
+from factory.services.calibration import calibration_items, label_calibration
 from factory.services.context import Project
 from factory.services.project import init_project
-from factory.services.protocol import (
-    amend_protocol,
-    current_protocol,
-)
 from factory.services.screening import (
     SCREEN_BATCH,
     _extend_sample,
@@ -47,83 +32,26 @@ from factory.services.screening import (
     pass_b_sample,
     screen_next,
 )
-from factory.services.search import list_works, register_query, run_query
+from factory.services.search import list_works
 from factory.services.seeds import SeedRole, all_seeds
-from factory.services.tasks import complete_task, task_counts
-from factory.sources.registry import SourceFactory
+from factory.services.tasks import task_counts
 from tests.helpers import (
     SESSION,
+    SourcesFor,
     _of_type,
     _protocol,
-    _random_item,
     _setup,
 )
-
-SourcesFor = Callable[..., Mapping[str, SourceFactory]]
-
-
-def _draw(project: Project) -> list[str]:
-    return draw_calibration(project, project.system_actor(), random_seed=11)
-
-
-def _events(project: Project) -> list[Event]:
-    return read_all(project.paths.events_dir, project.catalog)
-
-
-def _decide(
-    project: Project,
-    agent: Actor,
-    work_id: str,
-    pass_label: str,
-    phase: str,
-    verdict: str,
-    criterion: str | None,
-    protocol_id: str,
-) -> str:
-    """Write one decision event directly (screen_record arrives in a later task)."""
-    decision_id = f"dec_{project.ids.ulid()}"
-    payload = DecisionRecorded(
-        decision_id=decision_id,
-        work_id=work_id,
-        pass_label=PassLabel(pass_label),
-        phase=ScreeningPhase(phase),
-        stage=ScreeningStage.TITLE_ABSTRACT,
-        verdict=Verdict(verdict),
-        criterion=None if criterion is None else f"{protocol_id}:{criterion}",
-        quote="Paper",
-        rationale="rationale",
-        protocol_id=protocol_id,
-        task_id="tsk_test",
-        supersedes=None,
-    )
-    blob = project.blobs.put_json({"work_id": work_id, "verdict": verdict})
-    project.record(
-        [
-            project.events.make(
-                "screening.decision_recorded", payload, agent, refs=(decision_id,), input_blob=blob
-            )
-        ]
-    )
-    return decision_id
-
-
-def _serve_calibration(project: Project, agent: Actor, count: int) -> list[Any]:
-    """Claim and complete `count` calibration batches, as a screener would."""
-    batches = []
-    for _ in range(count):
-        result = screen_next(project, agent, PassLabel.A)
-        assert result.batch is not None
-        assert result.batch.phase is ScreeningPhase.CALIBRATION
-        complete_task(project, agent, result.batch.task_id)
-        batches.append(result.batch)
-    return batches
-
-
-def _late(project: Project, human: Actor, mock_sources: SourcesFor, first: int, count: int) -> None:
-    """Add `count` works to the corpus after the passes are open, through a new query."""
-    sources = mock_sources(openalex=[_random_item(k) for k in range(first, first + count)])
-    query = QuerySpec(source="openalex", kind=QueryKind.KEYWORD, text="attention")
-    run_query(project, register_query(project, human, query, sources=sources), sources=sources)
+from tests.screening_helpers import (
+    _decide,
+    _draw,
+    _events,
+    _late,
+    _loosen_ex01,
+    _pass_calibration_under,
+    _queued,
+    _serve_calibration,
+)
 
 
 def test_open_does_not_redraw_unsampled_works(
@@ -431,57 +359,6 @@ def test_calibration_items_are_public(
     assert calibration_items(project) == []
     items = _draw(project)
     assert calibration_items(project) == items
-
-
-def _queued(project: Project, protocol_id: str) -> set[str]:
-    """Every work id named in a task created under one protocol version."""
-    works: set[str] = set()
-    for event in _of_type(project, "task.created"):
-        assert event.input_blob is not None
-        content: Any = project.blobs.get_json(event.input_blob)
-        if content.get("protocol_id") == protocol_id:
-            works.update(record["work_id"] for record in content["records"])
-    return works
-
-
-def _loosen_ex01(project: Project, agent: Actor) -> str:
-    """Amend the current protocol so that EX01 is loosened; returns the new version id."""
-    current = current_protocol(project)
-    assert current is not None
-    criteria = tuple(
-        Criterion(
-            id="EX01",
-            parent="NG01",
-            statement="not topic 1",
-            rule="exclude only severe topic one",
-            applies_at=ScreeningStage.TITLE_ABSTRACT,
-            priority=1,
-        )
-        if c.id == "EX01"
-        else c
-        for c in current.spec.criteria
-    )
-    loosened = current.spec.model_copy(update={"criteria": criteria})
-    amend_protocol(
-        project,
-        agent,
-        loosened,
-        reason="loosen EX01",
-        semantic=True,
-        effects={"EX01": CriterionEffect.LOOSENED},
-    )
-    return protocol_version(loosened)
-
-
-def _pass_calibration_under(
-    project: Project, agent: Actor, human: Actor, protocol_id: str
-) -> list[str]:
-    """Label every calibration item include and decide it include under `protocol_id`."""
-    items = calibration_items(project)
-    for item in items:
-        label_calibration(project, human, item, "include", None, Channel.CLI)
-        _decide(project, agent, item, "A", "calibration", "include", None, protocol_id)
-    return items
 
 
 def test_sensitivity_below_threshold_is_named_in_blocked(

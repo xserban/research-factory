@@ -23,8 +23,8 @@ from factory.services.evidence_report import (
 )
 from factory.services.extraction_agreement import FinalField, FinalRow
 from factory.services.trace import TraceNode, dangling_refs, trace
+from tests.cli_helpers import _env
 from tests.evidence_helpers import ff, frow, pilot_inputs
-from tests.test_cli import _env
 from tests.test_evidence_trace import ext_a, ext_b, world  # noqa: F401
 
 pytestmark = pytest.mark.slow  # acceptance suite: dev runs deselect with -m "not slow"

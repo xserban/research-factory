@@ -30,7 +30,7 @@ from factory.services.snowball import (
 )
 from tests import test_snowball_round as rounds
 from tests.references_service_helpers import oa_item
-from tests.test_screening_next import _decide
+from tests.screening_helpers import _decide
 from tests.test_snowball_round import NO_SOURCE, _lookups, _sources
 
 world = rounds.world

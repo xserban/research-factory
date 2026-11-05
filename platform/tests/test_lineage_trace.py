@@ -1,6 +1,5 @@
-"""`trace` from relations, ideas, cites edges and items (slice 3b, plan G2-E, task 2)."""
-
 # ruff: noqa: F401, F811
+"""`trace` from relations, ideas, cites edges and items (slice 3b, plan G2-E, task 2)."""
 
 from __future__ import annotations
 

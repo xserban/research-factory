@@ -16,8 +16,7 @@ from factory.services.prisma import PrismaFlow, prisma_flow
 from factory.services.seeds import SeedRole, all_seeds
 from factory.sources.registry import SourceFactory
 from tests.helpers import _protocol
-from tests.test_chase_service import _corpus, _ordinary, _settle
-from tests.test_screening_next import _decide
+from tests.screening_helpers import _corpus, _decide, _ordinary, _settle
 
 SourcesFor = Callable[..., Mapping[str, SourceFactory]]
 

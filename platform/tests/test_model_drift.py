@@ -17,7 +17,7 @@ from factory.services.screening import join_pass
 from factory.services.watch import watch_run
 from tests.helpers import SourcesFor
 from tests.living_helpers import filler, screening_watch_setup, start_screening
-from tests.test_check import _calibrate
+from tests.screening_helpers import _calibrate
 from tests.watch_helpers import ScriptedSource, adapters, by_text
 
 NEW_MODEL = "claude-sonnet-5-5"
@@ -102,7 +102,7 @@ def test_recalibration_route_after_drift(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Refusal, then a criterion-touching amendment, then the new model calibrates."""
-    from tests.test_screening_next import _loosen_ex01
+    from tests.screening_helpers import _loosen_ex01
 
     _calibrated(project, agent, human, mock_sources)
     _cycle(project)

@@ -1,6 +1,5 @@
-"""The card MCP tools (slice 6, plan H-A, task 5): propose and assert only; no tool decides."""
-
 # ruff: noqa: F401, F811
+"""The card MCP tools (slice 6, plan H-A, task 5): propose and assert only; no tool decides."""
 
 from __future__ import annotations
 

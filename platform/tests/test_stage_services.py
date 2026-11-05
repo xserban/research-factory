@@ -11,7 +11,6 @@ Designed roles in the world (ordinary works `o` of the title/abstract stage, sor
 """
 
 from collections.abc import Callable
-from dataclasses import dataclass
 from typing import Any
 
 import pytest
@@ -21,17 +20,12 @@ from factory.errors import FactoryValidationError
 from factory.events.envelope import Actor
 from factory.index.screening import _agreed_by_work, screening_tables
 from factory.model.protocol import (
-    Criterion,
-    CriterionEffect,
-    ScreeningPlan,
     ScreeningStage,
 )
 from factory.model.screening import (
     Channel,
-    DecisionRecorded,
     PassJoined,
     PassLabel,
-    ScreeningPhase,
     Verdict,
 )
 from factory.services.agreement import (
@@ -55,7 +49,7 @@ from factory.services.calibration import (
     label_calibration,
 )
 from factory.services.context import Project
-from factory.services.protocol import amend_protocol, current_protocol
+from factory.services.protocol import current_protocol
 from factory.services.screening import (
     join_pass,
     live_decisions,
@@ -66,182 +60,20 @@ from factory.services.screening import (
 )
 from factory.services.search import list_works
 from factory.services.stages import stage_of_kind, task_kind
-from tests.document_helpers import ARTICLE, fetched_document, make_registry, run_convert
-from tests.helpers import SESSION, _of_type, _setup
-from tests.test_screening_next import SourcesFor, _decide, _draw, _events
+from tests.fulltext_helpers import (
+    EITHER,
+    FT,
+    TA,
+    _decide_at,
+    _declare_full_text,
+    _loosen,
+    _staged_world,
+)
+from tests.helpers import SESSION, SourcesFor, _of_type, _setup
+from tests.screening_helpers import _decide, _draw, _events
 
-TA = ScreeningStage.TITLE_ABSTRACT
-FT = ScreeningStage.FULL_TEXT
-EITHER = ScreeningStage.EITHER
 S_X = "01JZ9Q3K5M7N8P0R2S4T6V8W0X"
 S_Y = "01JZ9Q3K5M7N8P0R2S4T6V8W0Y"
-
-
-def _criterion(
-    cid: str, stage: ScreeningStage, priority: int, rule: str = "exclude it"
-) -> Criterion:
-    return Criterion(
-        id=cid,
-        parent="NG03",
-        statement=f"statement {cid}",
-        rule=rule,
-        applies_at=stage,
-        priority=priority,
-    )
-
-
-def _declare_full_text(project: Project, agent: Actor, *, plan: bool = True) -> str:
-    """Amend the ready protocol: a small, single-coverage plan at both stages, a full-text-only
-    criterion EX04 and an `either` criterion EX05. Returns the new version id."""
-    current = current_protocol(project)
-    assert current is not None
-    reviewers = current.spec.screening.reviewers
-    ta_plan = ScreeningPlan(
-        passes=2, dual_sample=1.0, kappa_floor=0.7, calibration_size=0, reviewers=reviewers
-    )
-    spec = current.spec.model_copy(
-        update={
-            "criteria": (
-                *current.spec.criteria,
-                _criterion("EX04", FT, 4),
-                _criterion("EX05", EITHER, 5),
-            ),
-            "screening": ta_plan,
-            "full_text_screening": ta_plan if plan else None,
-        }
-    )
-    amend_protocol(project, agent, spec, reason="declare full text", semantic=True, effects={})
-    result = current_protocol(project)
-    assert result is not None
-    return result.protocol_id
-
-
-def _loosen(project: Project, agent: Actor, cid: str) -> str:
-    current = current_protocol(project)
-    assert current is not None
-    criteria = tuple(
-        c.model_copy(update={"rule": "a looser rule"}) if c.id == cid else c
-        for c in current.spec.criteria
-    )
-    amend_protocol(
-        project,
-        agent,
-        current.spec.model_copy(update={"criteria": criteria}),
-        reason=f"loosen {cid}",
-        semantic=True,
-        effects={cid: CriterionEffect.LOOSENED},
-    )
-    result = current_protocol(project)
-    assert result is not None
-    return result.protocol_id
-
-
-def _decide_at(
-    project: Project,
-    agent: Actor,
-    stage: ScreeningStage,
-    work: str,
-    label: str,
-    verdict: str,
-    criterion: str | None,
-    protocol_id: str,
-    phase: str = "screening",
-) -> str:
-    """Write one decision event at `stage`; a full-text one carries an anchor and a conversion."""
-    if stage is TA:
-        return _decide(project, agent, work, label, phase, verdict, criterion, protocol_id)
-    decision_id = f"dec_{project.ids.ulid()}"
-    payload = DecisionRecorded(
-        decision_id=decision_id,
-        work_id=work,
-        pass_label=PassLabel(label),
-        phase=ScreeningPhase(phase),
-        stage=stage,
-        verdict=Verdict(verdict),
-        criterion=None if criterion is None else f"{protocol_id}:{criterion}",
-        quote="a quote",
-        rationale="rationale",
-        protocol_id=protocol_id,
-        task_id="tsk_test",
-        supersedes=None,
-        anchor="p1",
-        conversion_id=f"cnv_{project.ids.ulid()}",
-    )
-    blob = project.blobs.put_json({"work_id": work, "verdict": verdict})
-    project.record(
-        [
-            project.events.make(
-                "screening.decision_recorded", payload, agent, refs=(decision_id,), input_blob=blob
-            )
-        ]
-    )
-    return decision_id
-
-
-def _both(
-    project: Project,
-    agent: Actor,
-    stage: ScreeningStage,
-    work: str,
-    a: tuple[str, str | None],
-    b: tuple[str, str | None],
-    protocol_id: str,
-) -> None:
-    _decide_at(project, agent, stage, work, "A", a[0], a[1], protocol_id)
-    _decide_at(project, agent, stage, work, "B", b[0], b[1], protocol_id)
-
-
-@dataclass
-class World:
-    protocol_id: str
-    ta_ordinary: list[str]
-    ft_ordinary: list[str]
-    x: str
-    gone: str
-    dis: str
-
-
-def _world(project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor) -> World:
-    """Both stages screened and agreed, the disagreement resolved at each stage."""
-    _setup(project, agent, human, mock_sources, dual_sample=0.5, random_works=0)
-    pid = _declare_full_text(project, agent)
-    _draw(project)
-    for item in calibration_items(project):
-        label_calibration(project, human, item, "include", None, Channel.CLI)
-    open_pass(project, agent, PassLabel.A)
-    open_pass(project, agent, PassLabel.B)
-    cal = set(calibration_items(project))
-    ordinary = sorted(w.id for w in list_works(project) if w.id not in cal)
-    assert len(ordinary) >= 4
-    x, gone, dis, *rest = ordinary
-    _both(project, agent, TA, x, ("include", None), ("include", None), pid)
-    _both(project, agent, TA, gone, ("exclude", "EX01"), ("exclude", "EX01"), pid)
-    _both(project, agent, TA, dis, ("include", None), ("exclude", "EX01"), pid)
-    for work in rest:
-        _both(project, agent, TA, work, ("include", None), ("include", None), pid)
-    resolve_disagreement(project, human, dis, "include", None, "adjudicated", Channel.CLI)
-
-    # Full text screens promoted works that have a converted document (plan 2C task 4).
-    for work in sorted(w for w, o in final_outcomes(project).items() if o.value == "included"):
-        fetched_document(project, work, ARTICLE)
-    run_convert(project, make_registry())
-
-    ft_items = draw_calibration(project, project.system_actor(), random_seed=5, stage=FT)
-    for item in ft_items:
-        label_calibration(project, human, item, "include", None, Channel.CLI, stage=FT)
-    open_pass(project, agent, PassLabel.A, stage=FT)
-    open_pass(project, agent, PassLabel.B, stage=FT)
-    ft_ordinary = sorted(w for w, o in final_outcomes(project).items() if o.value == "included")
-    ft_ordinary = [w for w in ft_ordinary if w not in set(ft_items)]
-    assert {x, dis, *rest} == set(ft_ordinary)
-    _both(project, agent, FT, x, ("exclude", "EX04"), ("exclude", "EX04"), pid)
-    _both(project, agent, FT, dis, ("include", None), ("exclude", "EX04"), pid)
-    for work in rest:
-        _both(project, agent, FT, work, ("include", None), ("include", None), pid)
-    resolve_disagreement(
-        project, human, dis, "exclude", "EX04", "adjudicated", Channel.CLI, stage=FT
-    )
-    return World(pid, ordinary, ft_ordinary, x, gone, dis)
 
 
 def _fields(exc: pytest.ExceptionInfo[FactoryValidationError]) -> list[str]:
@@ -254,7 +86,7 @@ def _fields(exc: pytest.ExceptionInfo[FactoryValidationError]) -> list[str]:
 def test_stage_defaults_leave_slice1_unchanged(
     project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
 ) -> None:
-    world = _world(project, agent, human, mock_sources)
+    world = _staged_world(project, agent, human, mock_sources)
     sampled = audit_sample(project, human, random_seed=3)
     audit_record(
         project, human, sampled.audit_id, sampled.work_ids[0], "include", None, Channel.CLI
@@ -501,7 +333,7 @@ def test_either_stage_rejected(
 def test_audit_population_per_stage(
     project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
 ) -> None:
-    world = _world(project, agent, human, mock_sources)
+    world = _staged_world(project, agent, human, mock_sources)
     ta_agreed = agreed_works(project)
     ft_agreed = agreed_works(project, stage=FT)
     assert world.dis not in ta_agreed and world.dis not in ft_agreed
@@ -555,7 +387,7 @@ def test_audit_population_per_stage(
 def test_same_work_in_both_stages_does_not_collide(
     project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
 ) -> None:
-    world = _world(project, agent, human, mock_sources)
+    world = _staged_world(project, agent, human, mock_sources)
     ta_live = {d.work_id: d for d in live_decisions(project, PassLabel.A)}
     ft_live = {d.work_id: d for d in live_decisions(project, PassLabel.A, stage=FT)}
     assert world.x in ta_live and world.x in ft_live
@@ -602,7 +434,7 @@ def test_same_work_in_both_stages_does_not_collide(
 def test_agreed_works_matches_projector_per_stage(
     project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
 ) -> None:
-    world = _world(project, agent, human, mock_sources)
+    world = _staged_world(project, agent, human, mock_sources)
     protocol_id = current_protocol(project)
     assert protocol_id is not None
     tables = screening_tables(MetaData())
@@ -632,7 +464,7 @@ def test_trace_resolution_keys_are_per_stage(
 ) -> None:
     from factory.services.trace import dangling_refs, trace
 
-    world = _world(project, agent, human, mock_sources)
+    world = _staged_world(project, agent, human, mock_sources)
     ta_key, ft_key = f"res:{world.dis}", f"res:full-text:{world.dis}"
     ta_nodes = _flatten(trace(project, ta_key))
     ft_nodes = _flatten(trace(project, ft_key))
@@ -651,7 +483,7 @@ def test_trace_resolution_keys_are_per_stage(
 def test_full_text_screen_next_serves_its_own_task_kind(
     project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
 ) -> None:
-    world = _world(project, agent, human, mock_sources)
+    world = _staged_world(project, agent, human, mock_sources)
     del world
     result = screen_next(project, agent, PassLabel.A, stage=FT)
     # The full-text calibration set is labelled but not yet decided: ordinary batches wait.

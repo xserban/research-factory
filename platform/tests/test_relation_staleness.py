@@ -1,6 +1,5 @@
-"""Effective relation status, staleness and default views (slice 3b, plan G2-C, task 4)."""
-
 # ruff: noqa: F401, F811
+"""Effective relation status, staleness and default views (slice 3b, plan G2-C, task 4)."""
 
 from __future__ import annotations
 

@@ -1,6 +1,5 @@
-"""intuition_next and recording of interpretations (slice 3c, plan G3-A, task 4)."""
-
 # ruff: noqa: F401, F811
+"""intuition_next and recording of interpretations (slice 3c, plan G3-A, task 4)."""
 
 from __future__ import annotations
 

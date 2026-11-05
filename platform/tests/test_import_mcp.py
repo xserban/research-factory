@@ -27,11 +27,11 @@ from factory.services.dedup import canonical_works
 from factory.services.import_resolve import resolve_import
 from factory.services.imports import list_import_records, record_import
 from factory.services.screening import open_pass
+from tests.cli_helpers import _cli_env, runner
 from tests.helpers import SourcesFor, _setup, open_session, ready_protocol
 from tests.import_helpers import bib_entry, import_bib
 from tests.references_service_helpers import Lookups, oa_item
-from tests.test_cli import _cli_env, runner
-from tests.test_screening_next import _draw
+from tests.screening_helpers import _draw
 
 AGENT = {"role": "referencer", "model": "claude-sonnet-5-5", "skill": "rf-screen"}
 N = 12

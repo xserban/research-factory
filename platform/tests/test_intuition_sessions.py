@@ -1,6 +1,5 @@
-"""An intuition session cannot join a pass; task counts; truncation (G3-A fix round 1)."""
-
 # ruff: noqa: F401, F811
+"""An intuition session cannot join a pass; task counts; truncation (G3-A fix round 1)."""
 
 from __future__ import annotations
 

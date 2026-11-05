@@ -1,7 +1,6 @@
 """Full-text eligibility, pinned batches and the staged pass-B sample (plan 2C, task 4)."""
 
 import math
-from collections.abc import Callable, Mapping
 from typing import Any
 
 from sqlalchemy import text
@@ -9,7 +8,7 @@ from sqlalchemy import text
 from factory.events.envelope import Actor, Event
 from factory.index.chase import extended_works
 from factory.model.chase import SampleExtended
-from factory.model.protocol import ScreeningPlan, ScreeningStage
+from factory.model.protocol import ScreeningStage
 from factory.model.screening import PassLabel
 from factory.services.calibration import (
     calibration_drawn,
@@ -19,7 +18,6 @@ from factory.services.calibration import (
 )
 from factory.services.context import Project
 from factory.services.fulltext_screening import fulltext_queue
-from factory.services.protocol import amend_protocol, current_protocol
 from factory.services.screening import (
     _extend_sample,
     _kind_tasks,
@@ -28,7 +26,6 @@ from factory.services.screening import (
     screen_next,
 )
 from factory.services.search import list_works
-from factory.sources.registry import SourceFactory
 from tests.document_helpers import (
     ARTICLE,
     StubConverter,
@@ -38,58 +35,12 @@ from tests.document_helpers import (
     promoted_works,
     run_convert,
 )
-from tests.helpers import _of_type, _setup
-from tests.test_fulltext_service import _include_all
-from tests.test_screening_next import _draw, _late
+from tests.fulltext_helpers import _convert, _world
+from tests.helpers import SourcesFor, _of_type
+from tests.screening_helpers import _late
 
 TA = ScreeningStage.TITLE_ABSTRACT
 FT = ScreeningStage.FULL_TEXT
-
-
-SourcesFor = Callable[..., Mapping[str, SourceFactory]]
-
-
-def _world(
-    project: Project,
-    agent: Actor,
-    human: Actor,
-    mock_sources: SourcesFor,
-    *,
-    dual_sample: float = 1.0,
-    calibration: int = 0,
-) -> None:
-    """The `corpus` fixture with a full-text plan declared first: the plan is a semantic
-    amendment, so it precedes the title/abstract decisions that must stay current."""
-    _setup(project, agent, human, mock_sources, dual_sample=0.5, random_works=0)
-    current = current_protocol(project)
-    assert current is not None
-    plan = ScreeningPlan(
-        passes=2,
-        dual_sample=dual_sample,
-        kappa_floor=0.7,
-        calibration_size=calibration,
-        reviewers=current.spec.screening.reviewers,
-    )
-    amend_protocol(
-        project,
-        agent,
-        current.spec.model_copy(update={"full_text_screening": plan}),
-        reason="declare full text",
-        semantic=True,
-        effects={},
-    )
-    amended = current_protocol(project)
-    assert amended is not None
-    _draw(project)
-    open_pass(project, agent, PassLabel.A)
-    open_pass(project, agent, PassLabel.B)
-    _include_all(project, agent, human, amended.protocol_id)
-
-
-def _convert(project: Project, works: list[str], version: str = "1.0+a") -> None:
-    for work in works:
-        fetched_document(project, work, ARTICLE)
-    run_convert(project, make_registry(StubConverter(version=version)))
 
 
 def _ft_records(project: Project, label: str = "A") -> list[dict[str, Any]]:

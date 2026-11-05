@@ -24,6 +24,7 @@ from factory.services.import_attach import attach_import
 from factory.services.import_resolve import decide_import, resolve_import
 from factory.services.imports import list_import_records, record_import
 from factory.services.trace import TraceNode, agent_trace, trace
+from tests.fulltext_helpers import _pdf
 from tests.helpers import SourcesFor, ready_protocol
 from tests.import_helpers import (
     admission_records,
@@ -33,7 +34,6 @@ from tests.import_helpers import (
     import_bib,
 )
 from tests.references_service_helpers import Lookups, oa_item
-from tests.test_fulltext_import import _pdf
 from tests.test_import_admit import _corpus_doi
 
 CODES = (

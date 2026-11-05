@@ -1,6 +1,5 @@
-"""The `factory relations` and `factory ideas` commands (plan G2-C, task 6): human acts, CLI."""
-
 # ruff: noqa: F401, F811
+"""The `factory relations` and `factory ideas` commands (plan G2-C, task 6): human acts, CLI."""
 
 from __future__ import annotations
 
@@ -16,8 +15,8 @@ from factory.model.lineage import RelationProposal
 from factory.services.context import Project
 from factory.services.ideas import propose_idea
 from factory.services.relations import propose_relation
+from tests.cli_helpers import _env
 from tests.lineage_helpers import Lineage, ctr_a, ctr_b, lin, screened, world
-from tests.test_cli import _env
 
 runner = CliRunner()
 

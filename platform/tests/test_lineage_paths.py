@@ -1,6 +1,5 @@
-"""Bounded lineage queries and their service wrappers (slice 3b, plan G2-D Task 3)."""
-
 # ruff: noqa: F811
+"""Bounded lineage queries and their service wrappers (slice 3b, plan G2-D Task 3)."""
 
 from __future__ import annotations
 

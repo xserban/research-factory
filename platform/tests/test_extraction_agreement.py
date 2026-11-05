@@ -74,7 +74,7 @@ from tests.extraction_helpers import (  # noqa: F401
     screened,
     world,
 )
-from tests.test_protocol_rules import _check
+from tests.screening_helpers import _check
 
 pytestmark = pytest.mark.slow  # over ~60 s per file: dev runs deselect with -m "not slow"
 

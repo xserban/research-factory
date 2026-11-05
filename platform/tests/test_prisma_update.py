@@ -180,7 +180,7 @@ async def test_mcp_prisma_update_refused_to_pass_session(
     mock_sources: SourcesFor,
 ) -> None:
     screening_watch_setup(project, agent, human, mock_sources)
-    from tests.test_screening_next import _draw
+    from tests.screening_helpers import _draw
 
     _draw(project)
     agent_args = {"role": "screener", "model": "claude-sonnet-5-5", "skill": "rf-screen"}

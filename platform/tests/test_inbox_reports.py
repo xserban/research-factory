@@ -20,7 +20,7 @@ from factory.services.protocol import record_deviation
 from factory.services.trace import TraceNode, agent_trace, trace
 from tests.helpers import SourcesFor, ready_protocol
 from tests.inbox_helpers import Keyed, accept_supplied, capture, link_item, resolve
-from tests.test_chase_service import _citing, _corpus, _settle
+from tests.screening_helpers import _citing, _corpus, _settle
 
 
 def _codes(project: Project) -> set[str]:

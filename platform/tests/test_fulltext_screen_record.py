@@ -34,10 +34,10 @@ from tests.document_helpers import (
     promoted_works,
     run_convert,
 )
+from tests.fulltext_helpers import _include_all
 from tests.helpers import _of_type, _setup
-from tests.test_fulltext_service import _include_all
-from tests.test_screening_next import _decide, _draw
-from tests.test_screening_record import _batch as ta_batch
+from tests.screening_helpers import _batch as ta_batch
+from tests.screening_helpers import _decide, _draw
 
 FT = ScreeningStage.FULL_TEXT
 TA = ScreeningStage.TITLE_ABSTRACT

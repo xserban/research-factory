@@ -24,8 +24,7 @@ from factory.services.screening_stats import AUDIT_ERROR_CEILING
 from factory.services.search import list_works
 from factory.sources.registry import SourceFactory
 from tests.helpers import SESSION, _setup
-from tests.test_calibration import _decide
-from tests.test_screening_next import _draw, _events
+from tests.screening_helpers import _decide, _draw, _events
 
 SourcesFor = Callable[..., Mapping[str, SourceFactory]]
 

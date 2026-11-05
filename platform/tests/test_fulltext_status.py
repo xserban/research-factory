@@ -19,9 +19,10 @@ from factory.services.fulltext import fetch_fulltext
 from factory.services.fulltext_status import fulltext_status
 from factory.services.screening import open_pass
 from factory.sources.fulltext.base import RouteResult, not_retrieved
+from tests.fulltext_helpers import _include_all
 from tests.helpers import _setup
-from tests.test_fulltext_service import StubRoute, _include_all
-from tests.test_screening_next import _draw
+from tests.route_helpers import StubRoute
+from tests.screening_helpers import _draw
 
 
 @pytest.fixture

@@ -1,6 +1,5 @@
-"""Labelled JSON and DOT export of the layer (slice 3c, plan G3-C, task 2)."""
-
 # ruff: noqa: F401, F811
+"""Labelled JSON and DOT export of the layer (slice 3c, plan G3-C, task 2)."""
 
 from __future__ import annotations
 

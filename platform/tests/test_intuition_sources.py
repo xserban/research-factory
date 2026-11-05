@@ -1,6 +1,5 @@
-"""Quote and citation source verification, stale sources (slice 3c, plan G3-A, task 3)."""
-
 # ruff: noqa: F401, F811
+"""Quote and citation source verification, stale sources (slice 3c, plan G3-A, task 3)."""
 
 from __future__ import annotations
 

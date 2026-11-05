@@ -13,7 +13,7 @@ from factory.imports.bibtex import parse_bibtex
 from factory.imports.model import NOT_PDF, ImportFormat, ImportFormatError, ParseOutcome
 from factory.imports.pdfs import parse_pdf_folder
 from factory.imports.registry import PARSERS, parse
-from tests.test_fulltext_import import _pdf
+from tests.fulltext_helpers import _pdf
 
 
 def _titled(path: Path, title: str) -> Path:

@@ -56,6 +56,7 @@ from factory.sources.base import PageSink, RawPage, SearchResult
 from factory.sources.registry import SourceFactory
 from tests.coverage_helpers import found_database, miss_item, query_miss, set_limits
 from tests.document_helpers import events_of_type
+from tests.fulltext_helpers import _pdf
 from tests.helpers import T0, SourcesFor, _seed_item, open_session, ready_protocol
 from tests.import_helpers import (
     admission_records,
@@ -65,7 +66,6 @@ from tests.import_helpers import (
     import_bib,
 )
 from tests.references_service_helpers import Lookups, oa_item
-from tests.test_fulltext_import import _pdf
 from tests.test_import_admit import _corpus_doi
 
 pytestmark = pytest.mark.slow

@@ -1,6 +1,5 @@
-"""Review of concept definitions (slice 3c, plan G3-B, task 3; ruling B2)."""
-
 # ruff: noqa: F401, F811
+"""Review of concept definitions (slice 3c, plan G3-B, task 3; ruling B2)."""
 
 from __future__ import annotations
 

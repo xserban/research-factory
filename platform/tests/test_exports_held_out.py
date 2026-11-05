@@ -23,8 +23,7 @@ from factory.services.search import get_work
 from factory.services.seeds import SeedRole, all_seeds
 from factory.sources.registry import SourceFactory
 from tests.helpers import _leaks, _setup, open_session
-from tests.test_chase_service import _corpus, _settle
-from tests.test_screening_next import _draw
+from tests.screening_helpers import _corpus, _draw, _settle
 
 SourcesFor = Callable[..., Mapping[str, SourceFactory]]
 

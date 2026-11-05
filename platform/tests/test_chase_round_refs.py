@@ -15,7 +15,7 @@ from factory.services.search import list_works, register_query
 from factory.services.trace import trace
 from tests.document_helpers import events_of_type
 from tests.helpers import SourcesFor, _setup
-from tests.test_chase_service import _citing, _corpus, _settle
+from tests.screening_helpers import _citing, _corpus, _settle
 
 TEXT = "cited_by:W1|W2"
 

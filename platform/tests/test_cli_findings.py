@@ -1,6 +1,5 @@
-"""The `factory match`, `finders` and `contradictions` commands (slice 6, plan H-B, task 6)."""
-
 # ruff: noqa: F401, F811
+"""The `factory match`, `finders` and `contradictions` commands (slice 6, plan H-B, task 6)."""
 
 from __future__ import annotations
 
@@ -19,11 +18,11 @@ from factory.services.context import Project
 from factory.services.evidence_report import assemble_report
 from factory.services.finders import list_contradictions, propose_contradiction
 from tests.card_helpers import cw
+from tests.cli_helpers import _env
 from tests.contribution_helpers import ext_a
 from tests.evidence_helpers import ff, frow, pilot_inputs
 from tests.finder_helpers import MatchWorld, mw
 from tests.lineage_helpers import ctr_a, ctr_b, lin, screened, world
-from tests.test_cli import _env
 from tests.test_contradictions import CtrWorld, ctrw
 
 runner = CliRunner()

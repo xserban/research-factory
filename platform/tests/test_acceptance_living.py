@@ -73,9 +73,9 @@ from tests.notice_helpers import (
     numbered_records,
     status_factories,
 )
+from tests.screening_helpers import _spec
 from tests.test_conclusion_diff import AXIS, NEW, OLD, facts, register, retract
 from tests.test_notice_effects import _extract_work, _observe, _second_document, ext_a, world
-from tests.test_protocol_rules import _spec
 from tests.test_versions import PRE, _answer_by_arxiv
 from tests.test_watch_plan import KNOWN_P_ID, PLAN, REQUIRED, _check, _pairs
 from tests.watch_helpers import QUERIES, ScriptedSource, adapters, by_text, watch_ready, window_plan

@@ -15,8 +15,8 @@ from factory.services.dedup import active_merges, dedup_run, revert_merge
 from factory.services.dedup_incremental import DEDUP_BATCH, considered_works, dedup_new
 from factory.services.search import list_works
 from factory.sources.registry import SourceFactory
-from tests.helpers import SESSION, _work
-from tests.test_dedup_service import OPENALEX_COPY, PREPRINT, PUBLISHED, _ingest, _of_type
+from tests.helpers import SESSION, _of_type, _work
+from tests.screening_helpers import OPENALEX_COPY, PREPRINT, PUBLISHED, _ingest
 
 SourcesFor = Callable[..., Mapping[str, SourceFactory]]
 

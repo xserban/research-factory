@@ -19,7 +19,7 @@ from factory.services.snapshots import snapshot
 from factory.services.watch import watch_run
 from tests.helpers import SourcesFor, open_session
 from tests.living_helpers import agree, filler, screening_watch_setup, start_screening
-from tests.test_screening_next import _draw
+from tests.screening_helpers import _draw
 from tests.watch_helpers import ScriptedSource, adapters, by_text
 
 AGENT = {"role": "screener", "model": "claude-sonnet-5-5", "skill": "rf-screen"}

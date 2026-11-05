@@ -31,14 +31,8 @@ from factory.services.screening import (
 from factory.services.screening_stats import cohen_kappa
 from factory.services.search import list_works
 from factory.services.tasks import TaskSpec, create_tasks
-from tests.helpers import _of_type, _setup
-from tests.test_screening_next import (
-    SourcesFor,
-    _decide,
-    _draw,
-    _events,
-    _late,
-)
+from tests.helpers import SourcesFor, _of_type, _setup
+from tests.screening_helpers import _decide, _draw, _events, _late
 
 
 def _ready(

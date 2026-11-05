@@ -37,9 +37,9 @@ from factory.services.seeds import add_seeds, agent_seeds, seed_check
 from factory.services.snowball import round_yield, snowball_round
 from factory.services.trace import KINDS, TraceNode, trace
 from tests import test_snowball_round as rounds
+from tests.cli_helpers import _env
 from tests.document_helpers import fetched_document, make_registry, promoted_works, run_convert
 from tests.references_service_helpers import bib_html
-from tests.test_cli import _env
 from tests.test_snowball_compare import CHASED, CITING, REED, _backward, _pending, _screen
 from tests.test_snowball_round import ENTRIES_A, _amend, _lookups, _sources
 

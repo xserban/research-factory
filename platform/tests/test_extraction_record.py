@@ -45,7 +45,7 @@ from tests.extraction_helpers import (
     _extractor,
     _row,
 )
-from tests.test_acceptance_fulltext_screening import _screened_full_text_world
+from tests.fulltext_helpers import _screened_full_text_world
 
 FT = ScreeningStage.FULL_TEXT
 SourcesFor = Callable[..., Mapping[str, SourceFactory]]

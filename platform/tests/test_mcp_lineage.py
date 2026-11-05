@@ -1,6 +1,5 @@
-"""The lineage MCP tools (plan G2-C, task 6): propose only; no tool decides, confirms or merges."""
-
 # ruff: noqa: F401, F811
+"""The lineage MCP tools (plan G2-C, task 6): propose only; no tool decides, confirms or merges."""
 
 from __future__ import annotations
 

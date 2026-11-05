@@ -11,8 +11,8 @@ from factory.events.envelope import Actor, Event
 from factory.events.reader import read_all
 from factory.services.context import Project
 from factory.services.extraction_agreement import extraction_agreement
+from tests.cli_helpers import _env
 from tests.extraction_helpers import _both, _r, ext_a, ext_b, screened, world  # noqa: F401
-from tests.test_cli import _env
 
 pytestmark = pytest.mark.slow  # over ~60 s per file: dev runs deselect with -m "not slow"
 

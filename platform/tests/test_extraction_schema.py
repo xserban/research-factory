@@ -22,7 +22,7 @@ from factory.services.protocol import amend_protocol, current_protocol, list_ame
 from factory.services.protocol_rules import extraction_stale
 from tests.extraction_helpers import PINNED_P_ID, _schema, _with
 from tests.helpers import SourcesFor, pilot_protocol_spec, ready_protocol
-from tests.test_protocol_rules import _check, _fields
+from tests.screening_helpers import _check, _fields
 
 
 def _extraction_fields(fields: list[Any]) -> set[str]:

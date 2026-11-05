@@ -33,8 +33,8 @@ from tests.card_helpers import cw
 from tests.evidence_helpers import run_pass
 from tests.extraction_helpers import SESSION_A, SESSION_B, _declare, _extractor, _r
 from tests.finder_helpers import MatchWorld, mw
+from tests.fulltext_helpers import _screened_full_text_world
 from tests.lineage_helpers import ctr_a, ctr_b, lin, screened, world
-from tests.test_acceptance_fulltext_screening import _screened_full_text_world
 
 SourcesFor = Callable[..., Mapping[str, SourceFactory]]
 STATEMENT = (

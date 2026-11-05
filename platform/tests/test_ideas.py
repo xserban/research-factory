@@ -1,6 +1,5 @@
-"""Ideas: proposal, definition, decision, reversible merge and candidates (plan G2-C, task 5)."""
-
 # ruff: noqa: F401, F811
+"""Ideas: proposal, definition, decision, reversible merge and candidates (plan G2-C, task 5)."""
 
 from __future__ import annotations
 

@@ -24,6 +24,7 @@ from factory.sources.http import PoliteClient
 from factory.sources.openalex import OpenAlexSource
 from factory.sources.registry import SourceFactory
 from tests import world_cache
+from tests.fulltext_helpers import _promoted_corpus
 from tests.helpers import (
     FAKE_PAGES,
     S2,
@@ -34,7 +35,6 @@ from tests.helpers import (
     arxiv_atom,
     install_skill,
 )
-from tests.test_fulltext_service import _promoted_corpus
 
 
 @pytest.fixture

@@ -1,6 +1,5 @@
-"""A session that wrote a concept or a `uses` link cannot join a pass (decision 37 item 15)."""
-
 # ruff: noqa: F401, F811
+"""A session that wrote a concept or a `uses` link cannot join a pass (decision 37 item 15)."""
 
 from __future__ import annotations
 

@@ -29,7 +29,7 @@ from factory.services.protocol import (
 )
 from factory.services.protocol_rules import ProtocolCheck, protocol_issues, watch_plan_gaps
 from tests.helpers import SourcesFor, pilot_protocol_spec, ready_protocol, record_pilot_question
-from tests.test_protocol_rules import KNOWN_SOURCES, PROBES, QID, QUESTION, _spec
+from tests.screening_helpers import KNOWN_SOURCES, PROBES, QID, QUESTION, _spec
 
 KNOWN_P_ID = "P@1e7c316e"
 """pilot_protocol_spec("Q@aaaaaaaa", "prb_1"): fixed before `watch_plan` existed."""

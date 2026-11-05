@@ -17,10 +17,10 @@ from factory.services.project import init_project
 from factory.sources.registry import SourceFactory
 from tests import conftest
 from tests.extraction_helpers import SESSION_A, SESSION_B, _both, _declare, _extractor
+from tests.fulltext_helpers import _screened_full_text_world
 from tests.helpers import SESSION, T0, install_skill
-from tests.test_acceptance_fulltext_screening import _screened_full_text_world
+from tests.screening_helpers import _decide
 from tests.test_agreement import _decide_four, _ordinary, _ready
-from tests.test_screening_next import _decide
 
 SourcesFor = Callable[..., Mapping[str, SourceFactory]]
 

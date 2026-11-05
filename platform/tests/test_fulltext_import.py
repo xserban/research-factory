@@ -10,8 +10,6 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 
 import pytest
-from pypdf import PdfWriter
-from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 
 from factory.errors import FactoryValidationError
 from factory.events.envelope import Actor, Event
@@ -25,39 +23,14 @@ from factory.services.fulltext_import import ImportReport, import_folder, sniff_
 from factory.services.screening import open_pass
 from factory.services.search import list_works
 from factory.sources.registry import SourceFactory
+from tests.fulltext_helpers import _include_all, _pdf
 from tests.helpers import _setup, openalex_item
-from tests.test_fulltext_service import _include_all
-from tests.test_screening_next import _draw
+from tests.screening_helpers import _draw
 
 ARXIV_DOI = "10.48550/arXiv.2301.01234"
 ARXIV_ID = "2301.01234"
 POSITIVE_DOI = "10.1000/p4"
 SourcesFor = Callable[..., Mapping[str, SourceFactory]]
-
-
-def _pdf(path: Path, *lines: str) -> Path:
-    """A one-page PDF whose page 1 shows each line in Helvetica (extractable text)."""
-    writer = PdfWriter()
-    writer.add_blank_page(width=612, height=792)
-    font = writer._add_object(
-        DictionaryObject(
-            {
-                NameObject("/Type"): NameObject("/Font"),
-                NameObject("/Subtype"): NameObject("/Type1"),
-                NameObject("/BaseFont"): NameObject("/Helvetica"),
-            }
-        )
-    )
-    resources = DictionaryObject({NameObject("/Font"): DictionaryObject({NameObject("/F1"): font})})
-    shown = " ".join(f"({line}) Tj 0 -16 Td" for line in lines)
-    stream = DecodedStreamObject()
-    stream.set_data(f"BT /F1 12 Tf 72 720 Td {shown} ET".encode())
-    page = writer.pages[0]
-    page[NameObject("/Resources")] = resources
-    page[NameObject("/Contents")] = writer._add_object(stream)
-    with path.open("wb") as handle:
-        writer.write(handle)
-    return path
 
 
 def _work_with_doi(project: Project, doi: str) -> Work:

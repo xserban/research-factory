@@ -7,7 +7,6 @@ from a mock transport.
 """
 
 import json
-from collections.abc import Callable, Mapping
 
 import pytest
 
@@ -17,7 +16,7 @@ from factory.config import Settings
 from factory.events.envelope import Actor
 from factory.model.chase import ChaseDirection
 from factory.model.screening import PassLabel
-from factory.model.search import QueryKind, QuerySpec
+from factory.model.search import QueryKind
 from factory.model.seed import SeedKind, SeedSpec
 from factory.model.work import ProvenanceMethod
 from factory.services.agreement import Outcome, final_outcomes, screen_agreement
@@ -26,38 +25,40 @@ from factory.services.chase import chase_rounds, search_chase
 from factory.services.context import Project
 from factory.services.dedup import dedup_run
 from factory.services.protocol import record_deviation
-from factory.services.screening import open_pass, pass_b_sample, screen_next
-from factory.services.search import get_work, list_works, register_query, run_query
+from factory.services.screening import pass_b_sample, screen_next
+from factory.services.search import get_work, list_works
 from factory.services.seeds import (
-    SeedRole,
     add_seeds,
-    all_seeds,
     explain_seed_miss,
     seed_check,
 )
 from factory.services.tasks import complete_task
 from factory.sources.base import SourceError
 from factory.sources.registry import SourceFactory
+from tests.cli_helpers import _cli_env, runner
 from tests.helpers import (
     FakeSource,
+    SourcesFor,
     _leaks,
-    _negative_item,
-    _positive_item,
-    _protocol,
-    _random_item,
+    _of_type,
     _seed_item,
     install_skill,
     open_session,
     openalex_item,
 )
-from tests.test_chase_service import _citing, _corpus, _of_type, _ordinary, _settle
-from tests.test_cli import _cli_env, runner
-from tests.test_screening_next import _decide, _draw
+from tests.screening_helpers import (
+    _citing,
+    _corpus,
+    _corpus_missing_held_out,
+    _decide,
+    _held_out_tokens,
+    _ordinary,
+    _settle,
+)
 
 pytestmark = pytest.mark.slow  # acceptance suite: dev runs deselect with -m "not slow"
 
 ARGS = {"role": "searcher", "model": "claude-opus-5-5", "skill": "rf-search"}
-SourcesFor = Callable[..., Mapping[str, SourceFactory]]
 
 
 def _screen_new(project: Project, agent: Actor, label: PassLabel, protocol_id: str) -> list[str]:
@@ -168,42 +169,6 @@ def test_chased_duplicate_is_merged_not_rescreened(
     assert not any(p.method is ProvenanceMethod.CITATION_CHASE for p in first.provenance)
     served = _screen_new(project, agent, PassLabel.A, protocol_id)
     assert len(served) == 1  # the new work only; the merged duplicate is not queued
-
-
-def _held_out_tokens(project: Project) -> set[str]:
-    """The seed id and every stated or normalised identifier of each held-out seed."""
-    tokens: set[str] = set()
-    for seed in all_seeds(project):
-        if seed.role is not SeedRole.HELD_OUT:
-            continue
-        stated = SeedSpec(kind=seed.kind, cite=seed.cite, doi=seed.doi, arxiv=seed.arxiv)
-        tokens.add(seed.seed_id)
-        tokens.update(stated.identity_keys().values())
-        tokens.update(v for v in (seed.doi, seed.arxiv, seed.openalex) if v)
-    return tokens
-
-
-def _corpus_missing_held_out(
-    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
-) -> tuple[str, str, int]:
-    """A pilot corpus whose base search lacks one held-out positive seed, resolved by lookup.
-
-    Returns the protocol id, the held-out seed's id and its paper number. The seed's work is
-    stored by the seed lookup only (a probe), so it is not in the corpus: `seed_check` says
-    `missing` until something else retrieves it."""
-    protocol_id = _protocol(project, agent, human, mock_sources, dual_sample=0.5)
-    [held] = [s for s in all_seeds(project) if s.role is SeedRole.HELD_OUT]
-    number = int(held.cite.split()[-1])
-    items = [_positive_item(n) for n in (1, 2, 3) if n != number]
-    items += [_negative_item(k) for k in range(1, 4)]
-    items += [_random_item(k) for k in range(1, 5)]
-    query = QuerySpec(source="openalex", kind=QueryKind.KEYWORD, text="attention")
-    sources = mock_sources(openalex=items)
-    run_query(project, register_query(project, human, query, sources=sources), sources=sources)
-    _draw(project)
-    open_pass(project, agent, PassLabel.A)
-    open_pass(project, agent, PassLabel.B)
-    return protocol_id, held.seed_id, number
 
 
 @pytest.mark.anyio

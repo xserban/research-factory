@@ -1,6 +1,5 @@
-"""The matching builder with the transfer flag (slice 6, plan H-B, task 2; acceptance 5)."""
-
 # ruff: noqa: F401, F811
+"""The matching builder with the transfer flag (slice 6, plan H-B, task 2; acceptance 5)."""
 
 from __future__ import annotations
 

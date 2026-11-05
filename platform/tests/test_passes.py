@@ -24,11 +24,10 @@ from factory.services.passes import (
 )
 from factory.sources.registry import SourceFactory
 from tests.helpers import SESSION
+from tests.screening_helpers import _calibration_setup, _draw
 from tests.test_agreement import _decide_four
 from tests.test_agreement import _ready as _agreement_ready
 from tests.test_audit import _agree, _population
-from tests.test_calibration import _draw
-from tests.test_calibration import _setup as _calibration_setup
 
 SourcesFor = Callable[..., Mapping[str, SourceFactory]]
 A, B = PassLabel.A, PassLabel.B

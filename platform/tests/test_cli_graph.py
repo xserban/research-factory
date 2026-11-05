@@ -12,8 +12,8 @@ from factory.config import Settings
 from factory.events.envelope import Actor
 from factory.services.context import Project
 from factory.services.lineage import graph_export
+from tests.cli_helpers import _env
 from tests.lineage_graph_helpers import stand_in_basis, write_fixture
-from tests.test_cli import _env
 
 runner = CliRunner()
 P9, P1 = "rf:p9-00000009", "rf:p1-00000001"

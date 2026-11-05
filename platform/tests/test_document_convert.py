@@ -36,7 +36,7 @@ from tests.document_helpers import (
     promoted_works,
     run_convert,
 )
-from tests.test_fulltext_service import StubRoute, always, retrieved
+from tests.route_helpers import StubRoute, always, retrieved
 
 SENTENCE = b"Ut enim ad minim veniam"
 MARKER = b"FAIL-ME"

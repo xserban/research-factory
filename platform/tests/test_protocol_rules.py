@@ -1,47 +1,15 @@
-from collections.abc import Sequence
-from datetime import UTC, datetime
-
-from factory.errors import ValidationIssue
 from factory.model.project import RigorMode
 from factory.model.protocol import (
-    Criterion,
     CriterionExamples,
-    Limit,
-    MethodProfile,
     PlannedQuery,
-    ProtocolSpec,
-    Reviewer,
-    ScreeningPlan,
-    ScreeningStage,
     SourcePlan,
     search_strategy_hash,
 )
-from factory.model.question import NonGoal, QuestionSpec, Slot, question_version
 from factory.model.search import QueryKind
 from factory.model.seed import SeedKind
-from factory.services.protocol_rules import ProtocolCheck, other_changes, protocol_issues
-from factory.services.question import QuestionVersion
+from factory.services.protocol_rules import other_changes
 from factory.services.seeds import SeedRecord, SeedRole
-
-QUESTION_SPEC = QuestionSpec(
-    scheme="PICO",
-    primary_question="Do remote workers report higher focus?",
-    slots=(
-        Slot(name="population", value="knowledge workers"),
-        Slot(name="setting", open="?", resolve_in="stage 2"),
-    ),
-    non_goals=(NonGoal(id="NG01", text="gig platforms"), NonGoal(id="NG02", text="teams")),
-)
-QID = question_version(QUESTION_SPEC)
-QUESTION = QuestionVersion(
-    question_id=QID,
-    spec=QUESTION_SPEC,
-    supersedes=None,
-    reason=None,
-    recorded_at=datetime(2026, 1, 1, tzinfo=UTC),
-)
-PROBES: dict[str, set[str]] = {"prb_1": {"openalex"}}
-KNOWN_SOURCES = {"openalex", "arxiv"}
+from tests.screening_helpers import _check, _ex, _fields, _in, _reviewer, _screening, _spec
 
 
 def _seed(seed_id: str, role: SeedRole) -> SeedRecord:
@@ -60,82 +28,6 @@ def _seed(seed_id: str, role: SeedRole) -> SeedRecord:
 
 
 SEEDS = [_seed("SEED01", SeedRole.DEVELOPMENT), _seed("SEED02", SeedRole.HELD_OUT)]
-
-
-def _in(cid: str = "IN01", parent: str | None = "slot:population", **kw: object) -> Criterion:
-    base: dict[str, object] = {
-        "id": cid,
-        "parent": parent,
-        "statement": "adults",
-        "rule": "include adults",
-        "applies_at": ScreeningStage.TITLE_ABSTRACT,
-    }
-    base.update(kw)
-    return Criterion.model_validate(base)
-
-
-def _ex(cid: str = "EX01", parent: str | None = "NG01", priority: int = 1) -> Criterion:
-    return Criterion.model_validate(
-        {
-            "id": cid,
-            "parent": parent,
-            "statement": "gig work",
-            "rule": "exclude gig work",
-            "applies_at": ScreeningStage.TITLE_ABSTRACT,
-            "priority": priority,
-        }
-    )
-
-
-def _reviewer(role: str = "reviewer-of-record", kind: str = "human") -> Reviewer:
-    return Reviewer.model_validate({"role": role, "actor": "ana", "kind": kind})
-
-
-def _screening(**kw: object) -> ScreeningPlan:
-    base: dict[str, object] = {
-        "passes": 2,
-        "dual_sample": 0.5,
-        "kappa_floor": 0.7,
-        "reviewers": (_reviewer(),),
-    }
-    base.update(kw)
-    return ScreeningPlan.model_validate(base)
-
-
-def _spec(**kw: object) -> ProtocolSpec:
-    base: dict[str, object] = {
-        "question_id": QID,
-        "method_profile": MethodProfile.SYSTEMATIC_REVIEW,
-        "criteria": (_in(), _ex(), _ex("EX02", "NG02", priority=2)),
-        "sources": (SourcePlan(name="openalex", included=True, probe_id="prb_1"),),
-        "queries": (PlannedQuery(source="openalex", kind=QueryKind.KEYWORD, text="remote focus"),),
-        "limits": (Limit(field="year", value="2015"),),
-        "screening": _screening(),
-    }
-    base.update(kw)
-    return ProtocolSpec.model_validate(base)
-
-
-def _check(
-    spec: ProtocolSpec,
-    mode: RigorMode = RigorMode.PILOT,
-    *,
-    seeds: Sequence[SeedRecord] = (),
-    current: str = QID,
-) -> ProtocolCheck:
-    return protocol_issues(
-        spec,
-        question=QUESTION,
-        current_question_id=current,
-        mode=mode,
-        seeds=list(seeds),
-        probes=PROBES,
-        known_sources=KNOWN_SOURCES,
-    )
-
-
-def _fields(issues: list[ValidationIssue]) -> list[str]:
-    return [issue.field for issue in issues]
 
 
 def test_ready_pilot_protocol_has_no_errors_or_gaps() -> None:

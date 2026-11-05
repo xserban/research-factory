@@ -42,10 +42,10 @@ from factory.services.extraction import (
 from factory.services.fulltext import fetch_fulltext
 from factory.services.protocol import amend_protocol, current_protocol
 from tests.document_helpers import ARTICLE, make_registry, run_convert
+from tests.fulltext_helpers import _screened_full_text_world
 from tests.helpers import SourcesFor
-from tests.test_acceptance_fulltext_screening import _screened_full_text_world
-from tests.test_fulltext_service import StubRoute, always, retrieved
-from tests.test_protocol_rules import _spec
+from tests.route_helpers import StubRoute, always, retrieved
+from tests.screening_helpers import _spec
 from tests.world_cache import snapshot_world
 
 FT = ScreeningStage.FULL_TEXT

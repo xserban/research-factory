@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
-from typer.testing import CliRunner
 
 from factory.cli.main import app
 from factory.clock import FixedClock
@@ -30,6 +29,8 @@ from factory.services.screening import screen_next, screen_record
 from factory.services.search import list_works, register_query, run_query
 from factory.services.seeds import add_seeds, explain_seed_miss, split_seeds
 from factory.sources.registry import SourceFactory
+from tests.cli_helpers import _cli_env, _env, runner
+from tests.fulltext_helpers import _build, _pdf, _promoted, _routes
 from tests.helpers import (
     FAKE_PAGES,
     S2,
@@ -41,15 +42,6 @@ from tests.helpers import (
     ready_protocol,
     record_pilot_question,
 )
-from tests.test_acceptance_fulltext import _build, _promoted, _routes
-from tests.test_fulltext_import import _pdf
-
-runner = CliRunner()
-
-
-def _env(root: Path) -> dict[str, str | None]:
-    # FACTORY_PROJECT is cleared so a developer's shell cannot leak into the test.
-    return {"FACTORY_ROOT": str(root), "FACTORY_USER": "obd", "FACTORY_PROJECT": None}
 
 
 def test_init_status_rebuild(tmp_path: Path) -> None:
@@ -179,10 +171,6 @@ def test_serve_is_registered(tmp_path: Path) -> None:
 
 
 # --- Question, seeds, protocol: the human CLI (held-out roles are shown here only) ---
-
-
-def _cli_env(root: Path) -> dict[str, str | None]:
-    return {"FACTORY_ROOT": str(root), "FACTORY_USER": "obd", "FACTORY_PROJECT": None}
 
 
 def _seed_one(project: Project, agent: Actor, sources: Any, n: int, kind: SeedKind) -> None:

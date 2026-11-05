@@ -47,9 +47,8 @@ from tests.inbox_helpers import (
     raising_sources,
     resolve,
 )
-from tests.test_chase_service import _citing, _corpus, _settle
+from tests.screening_helpers import _citing, _corpus, _draw, _settle
 from tests.test_inbox_screening import NOTE, _n, _search, _seeded, _supply_seed
-from tests.test_screening_next import _draw
 
 pytestmark = pytest.mark.slow  # acceptance suite: dev runs deselect with -m "not slow"
 

@@ -25,7 +25,7 @@ from tests.document_helpers import (
     promoted_works,
 )
 from tests.helpers import _setup, open_session
-from tests.test_screening_next import _draw
+from tests.screening_helpers import _draw
 
 AGENT = {"role": "screener-a", "model": "claude-sonnet-5-5", "skill": "rf-screen"}
 SENTENCE = "Ut enim ad minim veniam"

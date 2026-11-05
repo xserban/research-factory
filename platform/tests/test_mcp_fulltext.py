@@ -19,13 +19,9 @@ from factory.services.context import Project
 from factory.sources.fulltext.base import RouteResult, not_retrieved
 
 # The `corpus` fixture (promoted works) is registered by importing its module's fixture.
-from tests.test_acceptance_fulltext import (
-    _events,
-    _of_type,
-    _promoted,
-    corpus,  # noqa: F401
-)
-from tests.test_fulltext_service import StubRoute, always, retrieved
+from tests.fulltext_helpers import _events, _promoted, corpus  # noqa: F401
+from tests.helpers import _of_type
+from tests.route_helpers import StubRoute, always, retrieved
 
 AGENT = {"role": "screener-a", "model": "claude-opus-5-5", "skill": "rf-screen"}
 ROUTE_NAMES = ["arxiv-html", "arxiv-source", "oa-pdf", "researcher-supplied"]

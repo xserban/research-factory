@@ -1,6 +1,5 @@
-"""`check` findings of the interpretation layer (slice 3c, plan G3-C, task 3)."""
-
 # ruff: noqa: F401, F811
+"""`check` findings of the interpretation layer (slice 3c, plan G3-C, task 3)."""
 
 from __future__ import annotations
 

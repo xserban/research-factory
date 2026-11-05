@@ -48,8 +48,8 @@ from tests.extraction_helpers import (
     _new_document_version,
     _row,
 )
+from tests.fulltext_helpers import _screened_full_text_world
 from tests.helpers import _setup
-from tests.test_acceptance_fulltext_screening import _screened_full_text_world
 
 pytestmark = pytest.mark.slow  # over ~60 s per file: dev runs deselect with -m "not slow"
 

@@ -1,6 +1,5 @@
-"""The contribution MCP tools (plan G2-B, task 5): parse, call a service, reply; nothing else."""
-
 # ruff: noqa: F401, F811
+"""The contribution MCP tools (plan G2-B, task 5): parse, call a service, reply; nothing else."""
 
 import json
 

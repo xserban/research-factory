@@ -1,6 +1,5 @@
-"""contribution_next, contribution_record, item reads and status (plan G2-B, task 3)."""
-
 # ruff: noqa: F401, F811
+"""contribution_next, contribution_record, item reads and status (plan G2-B, task 3)."""
 
 import pytest
 

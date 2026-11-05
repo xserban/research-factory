@@ -1,6 +1,5 @@
-"""Reversible concept merge and unmerge (slice 3c, plan G3-B, task 5)."""
-
 # ruff: noqa: F401, F811
+"""Reversible concept merge and unmerge (slice 3c, plan G3-B, task 5)."""
 
 from __future__ import annotations
 

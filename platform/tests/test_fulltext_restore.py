@@ -19,9 +19,10 @@ from factory.services.context import Project
 from factory.services.fulltext import fetch_fulltext, restore_document
 from factory.services.screening import open_pass
 from factory.sources.fulltext.base import not_retrieved
+from tests.fulltext_helpers import _include_all
 from tests.helpers import _setup
-from tests.test_fulltext_service import _include_all, always, missing, retrieved, routes_for
-from tests.test_screening_next import _draw
+from tests.route_helpers import always, missing, retrieved, routes_for
+from tests.screening_helpers import _draw
 
 
 @pytest.fixture

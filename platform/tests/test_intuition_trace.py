@@ -1,6 +1,5 @@
-"""`trace` from and to interpretations, concepts and links (slice 3c, plan G3-C, task 4)."""
-
 # ruff: noqa: F401, F811
+"""`trace` from and to interpretations, concepts and links (slice 3c, plan G3-C, task 4)."""
 
 from __future__ import annotations
 

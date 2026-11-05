@@ -1,7 +1,6 @@
+# ruff: noqa: F401, F811
 """Fix round 1 of G2-D: dedup merges on read, `no_stated_base` reads, one basis read per call,
 `cited_by_at_least` honouring the filter."""
-
-# ruff: noqa: F401, F811
 
 from __future__ import annotations
 

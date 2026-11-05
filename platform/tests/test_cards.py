@@ -1,6 +1,5 @@
-"""Cards and verified property assertions (slice 6, plan H-A, task 4)."""
-
 # ruff: noqa: F401, F811
+"""Cards and verified property assertions (slice 6, plan H-A, task 4)."""
 
 from __future__ import annotations
 

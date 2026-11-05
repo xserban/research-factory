@@ -58,11 +58,10 @@ from tests.document_helpers import (
     promoted_works,
     run_convert,
 )
+from tests.fulltext_helpers import _include_all, _screened_full_text_world
 from tests.helpers import SourcesFor, _setup
 from tests.references_service_helpers import Lookups, bib_html, oa_item
-from tests.test_acceptance_fulltext_screening import _screened_full_text_world
-from tests.test_fulltext_service import _include_all
-from tests.test_screening_next import _decide, _draw
+from tests.screening_helpers import _decide, _draw
 
 PLAN = SnowballPlan(max_backward_rounds=2, max_forward_rounds=1)
 LATTICE = ("A lattice is worth sixteen tokens", 2020, "Ana Quillfeather")

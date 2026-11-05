@@ -27,7 +27,7 @@ from factory.services.seeds import SeedRole, all_seeds
 from tests.document_helpers import fetched_document, make_registry, promoted_works, run_convert
 from tests.helpers import SourcesFor, _leaks, _setup, open_session
 from tests.references_service_helpers import Lookups, bib_html, oa_item
-from tests.test_screening_next import _draw
+from tests.screening_helpers import _draw
 from tests.test_snowball_round import BODY_A, BODY_B, ENTRIES_A, ENTRIES_B, PLAN, _amend, _lookups
 
 AGENT = {"role": "referencer", "model": "claude-sonnet-5-5", "skill": "rf-screen"}

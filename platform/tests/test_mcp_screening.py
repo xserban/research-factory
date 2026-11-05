@@ -18,7 +18,7 @@ from factory.services.calibration import calibration_items, calibration_labels, 
 from factory.services.context import Project
 from factory.services.seeds import SeedRole, all_seeds
 from tests.helpers import _leaks, _of_type, _setup, open_session
-from tests.test_screening_next import _draw
+from tests.screening_helpers import _draw
 
 AGENT = {"role": "screener-a", "model": "claude-sonnet-5-5", "skill": "rf-screen"}
 

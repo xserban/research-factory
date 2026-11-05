@@ -38,9 +38,8 @@ from tests.document_helpers import (
     run_convert,
 )
 from tests.extraction_helpers import SESSION_A, SESSION_B, _declare_latency, _extractor
+from tests.fulltext_helpers import _convert, _screened_full_text_world, _world
 from tests.helpers import SESSION
-from tests.test_acceptance_fulltext_screening import _screened_full_text_world
-from tests.test_fulltext_eligibility import _convert, _world
 
 FT = ScreeningStage.FULL_TEXT
 SourcesFor = Callable[..., Mapping[str, SourceFactory]]

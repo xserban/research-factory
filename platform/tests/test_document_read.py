@@ -28,7 +28,7 @@ from factory.services.document_read import (
 )
 from factory.services.fulltext import fetch_fulltext, record_supplied_document
 from tests.document_helpers import excluded_after_conversion, fetched_document
-from tests.test_fulltext_service import StubRoute, always, retrieved
+from tests.route_helpers import StubRoute, always, retrieved
 
 MD = b"""# Study
 

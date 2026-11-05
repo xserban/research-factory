@@ -12,7 +12,7 @@ from factory.services.context import open_project
 from factory.services.project import init_project, project_status
 from factory.services.tasks import TaskSpec, create_tasks
 from tests.helpers import S2, SESSION
-from tests.test_index import make_index
+from tests.screening_helpers import make_index
 
 WORKERS = 4
 ITERATIONS = 15

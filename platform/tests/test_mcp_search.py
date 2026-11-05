@@ -19,7 +19,7 @@ from factory.services.dedup import dedup_run
 from factory.services.search import register_query, run_query
 from factory.sources.registry import SourceFactory
 from tests.helpers import arxiv_atom, install_skill, open_session, openalex_item, ready_protocol
-from tests.test_chase_service import _citing, _corpus, _settle
+from tests.screening_helpers import _citing, _corpus, _settle
 
 AGENT = {"role": "screener-a", "model": "claude-opus-5-5", "skill": "rf-screen"}
 

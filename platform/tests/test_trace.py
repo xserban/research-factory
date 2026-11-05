@@ -31,11 +31,20 @@ from factory.services.search import get_work, list_works
 from factory.services.seeds import all_seeds
 from factory.services.trace import TraceNode, _event_index, _lookup_key, trace
 from factory.sources.registry import SourceFactory
+from tests.fulltext_helpers import _include_all
 from tests.helpers import _setup
-from tests.test_chase_service import _citing, _corpus, _ordinary, _settle
-from tests.test_dedup_service import PREPRINT, PUBLISHED, _ingest
-from tests.test_fulltext_service import _include_all, always, retrieved, routes_for
-from tests.test_screening_next import _decide, _draw
+from tests.route_helpers import always, retrieved, routes_for
+from tests.screening_helpers import (
+    PREPRINT,
+    PUBLISHED,
+    _citing,
+    _corpus,
+    _decide,
+    _draw,
+    _ingest,
+    _ordinary,
+    _settle,
+)
 
 SourcesFor = Callable[..., Mapping[str, SourceFactory]]
 

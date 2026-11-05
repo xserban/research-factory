@@ -17,8 +17,8 @@ from factory.services.document_convert import ConvertSummary, convert_documents
 from factory.services.fulltext import fetch_fulltext
 from factory.services.protocol import current_protocol
 from factory.sources.fulltext.base import not_retrieved
-from tests.test_fulltext_service import StubRoute, always, retrieved
-from tests.test_screening_next import _decide
+from tests.route_helpers import StubRoute, always, retrieved
+from tests.screening_helpers import _decide
 
 ARTICLE = (Path(__file__).parent / "fixtures" / "document" / "latexml_article.html").read_bytes()
 

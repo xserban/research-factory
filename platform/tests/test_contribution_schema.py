@@ -27,7 +27,7 @@ from factory.services.protocol import amend_protocol, current_protocol, list_ame
 from tests.extraction_helpers import PINNED_P_ID as PINNED_NO_SCHEMAS
 from tests.extraction_helpers import _schema as _evidence
 from tests.helpers import SourcesFor, pilot_protocol_spec, ready_protocol
-from tests.test_protocol_rules import _check, _fields, _spec
+from tests.screening_helpers import _check, _fields, _spec
 
 PINNED_P_ID = "P@ac93b512"
 """pilot_protocol_spec("Q@aaaaaaaa", "prb_1") with the evidence schema only, computed before

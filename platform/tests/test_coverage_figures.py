@@ -37,7 +37,7 @@ from tests.coverage_helpers import (
 from tests.helpers import SourcesFor, ready_protocol
 from tests.import_helpers import bib_entry
 from tests.references_service_helpers import Lookups, oa_item
-from tests.test_screening_next import _decide
+from tests.screening_helpers import _decide
 
 
 def _counts(report: CoverageReport) -> dict[str, int]:

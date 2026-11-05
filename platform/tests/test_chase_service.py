@@ -1,20 +1,14 @@
 """Citation chase rounds: refusals, the round record, runs, resumption and provenance (plan 5a)."""
 
-from collections.abc import Callable, Mapping, Sequence
-from typing import Any
-
 import httpx
 import pytest
 
 from factory.errors import FactoryValidationError
-from factory.events.envelope import Actor, Event
-from factory.events.reader import read_all
+from factory.events.envelope import Actor
 from factory.model.chase import CHASE_CHUNK, ChaseDirection
-from factory.model.screening import Channel, PassLabel
 from factory.model.search import QueryKind, QueryPurpose, QuerySpec, RunStatus
 from factory.model.seed import SeedKind, SeedSpec
 from factory.model.work import ProvenanceMethod
-from factory.services.calibration import calibration_items, label_calibration
 from factory.services.chase import (
     chase_queries,
     chase_rounds,
@@ -22,87 +16,13 @@ from factory.services.chase import (
     search_chase,
 )
 from factory.services.context import Project
-from factory.services.screening import open_pass
 from factory.services.search import get_work, list_works, register_query, run_query
 from factory.services.seeds import add_seeds, seed_check
 from factory.sources.http import PoliteClient
 from factory.sources.openalex import OpenAlexSource
 from factory.sources.registry import SourceFactory
-from tests.helpers import _setup, openalex_item
-from tests.test_screening_next import _decide, _draw
-
-SourcesFor = Callable[..., Mapping[str, SourceFactory]]
-
-
-def _events(project: Project) -> list[Event]:
-    return read_all(project.paths.events_dir, project.catalog)
-
-
-def _of_type(project: Project, name: str) -> list[Event]:
-    return [e for e in _events(project) if e.type == name]
-
-
-def _citing(n: int) -> dict[str, Any]:
-    return openalex_item(
-        title=f"Citing {n}",
-        author="Cai Wu",
-        published="2024-01-01",
-        openalex_id=f"W{n}",
-        doi=f"10.1000/c{n}",
-    )
-
-
-def _corpus(
-    project: Project,
-    agent: Actor,
-    human: Actor,
-    mock_sources: SourcesFor,
-    *,
-    extra: Sequence[dict[str, Any]] = (),
-) -> str:
-    """A ready pilot protocol, its seeded corpus, the calibration set and both passes opened.
-
-    `extra` records are added to the corpus through the planned query before the draw.
-    """
-    protocol_id = _setup(project, agent, human, mock_sources, dual_sample=0.5, random_works=0)
-    if extra:
-        spec = QuerySpec(source="openalex", kind=QueryKind.KEYWORD, text="attention")
-        query_id = register_query(project, human, spec, sources=mock_sources(openalex=list(extra)))
-        run_query(project, query_id, sources=mock_sources(openalex=list(extra)))
-    _draw(project)
-    open_pass(project, agent, PassLabel.A)
-    open_pass(project, agent, PassLabel.B)
-    return protocol_id
-
-
-def _settle(
-    project: Project,
-    agent: Actor,
-    human: Actor,
-    protocol_id: str,
-    *,
-    verdict: str = "include",
-    leave: str | None = None,
-) -> None:
-    """Decide every corpus work the same way in both passes, and label every calibration work.
-
-    `leave` names one ordinary work to leave undecided.
-    """
-    calibration = set(calibration_items(project))
-    criterion = "EX01" if verdict == "exclude" else None
-    for work in sorted(w.id for w in list_works(project)):
-        if work == leave:
-            continue
-        if work in calibration:
-            label_calibration(project, human, work, verdict, criterion, Channel.CLI)
-            continue
-        _decide(project, agent, work, "A", "screening", verdict, criterion, protocol_id)
-        _decide(project, agent, work, "B", "screening", verdict, criterion, protocol_id)
-
-
-def _ordinary(project: Project) -> list[str]:
-    calibration = set(calibration_items(project))
-    return sorted(w.id for w in list_works(project) if w.id not in calibration)
+from tests.helpers import SourcesFor, _of_type, openalex_item
+from tests.screening_helpers import _citing, _corpus, _events, _ordinary, _settle
 
 
 def _flaky_openalex() -> dict[str, SourceFactory]:

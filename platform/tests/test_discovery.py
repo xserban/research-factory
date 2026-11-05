@@ -25,7 +25,7 @@ from factory.services.protocol import record_deviation
 from factory.services.search import register_query, run_query
 from tests.helpers import SourcesFor, openalex_item, record_pilot_question
 from tests.inbox_helpers import Keyed, capture, link_item, resolve
-from tests.test_chase_service import _citing, _corpus, _settle
+from tests.screening_helpers import _citing, _corpus, _settle
 
 DOI = "10.1000/x1"
 

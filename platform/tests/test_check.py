@@ -4,7 +4,6 @@ Each row's severity is asserted per mode through `_findings_as`, which gives the
 emits over the same events. Each assertion names the code, the severity and the refs.
 """
 
-from collections.abc import Callable, Mapping
 from typing import Any
 
 import pytest
@@ -30,7 +29,7 @@ from factory.model.search import (
     SearchRunFinished,
     SearchRunStarted,
 )
-from factory.model.seed import SeedKind, SeedSpec
+from factory.model.seed import SeedKind
 from factory.model.work import ProvenanceMethod
 from factory.services import check as check_module
 from factory.services.agreement import Outcome, final_outcomes
@@ -47,24 +46,31 @@ from factory.services.screening import open_pass, pass_b_sample
 from factory.services.search import list_works, register_query, run_query
 from factory.services.seeds import (
     SeedRole,
-    add_seeds,
     all_seeds,
     explain_seed_miss,
     split_is_drawn,
 )
-from factory.sources.registry import SourceFactory
 from tests import helpers
-from tests.helpers import _protocol, _seed_item, _setup
-from tests.test_chase_service import _citing, _corpus, _ordinary, _settle
-from tests.test_fulltext_service import _include_all, always, retrieved, routes_for
-from tests.test_prisma import _merge_items
-from tests.test_screening_next import _decide, _draw
+from tests.fulltext_helpers import _include_all
+from tests.helpers import SourcesFor, _protocol, _seed_item, _setup
+from tests.route_helpers import always, retrieved, routes_for
+from tests.screening_helpers import (
+    _calibrate,
+    _citing,
+    _corpus,
+    _decide,
+    _draw,
+    _merge_items,
+    _ordinary,
+    _partial_corpus,
+    _screen_ordinary,
+    _settle,
+    _unfound_seed,
+)
 
 pytestmark = pytest.mark.slow  # over ~60 s per file: dev runs deselect with -m "not slow"
 
-SourcesFor = Callable[..., Mapping[str, SourceFactory]]
 MODES = (RigorMode.EXPLORATORY, RigorMode.PILOT, RigorMode.SYSTEMATIC)
-SEED_DOI = "10.1000/p7"
 REVERTED_MERGE_NOTE = "gone"
 
 
@@ -103,59 +109,10 @@ def _errors(findings: list[Finding]) -> set[str]:
     return {f.code for f in findings if f.severity == "error"}
 
 
-def _calibrate(project: Project, agent: Actor, human: Actor, protocol_id: str) -> None:
-    """Label every calibration work and decide it the same way in both passes (sensitivity 1)."""
-    for work in calibration_items(project):
-        label_calibration(project, human, work, "include", None, Channel.CLI)
-        _decide(project, agent, work, "A", "calibration", "include", None, protocol_id)
-        _decide(project, agent, work, "B", "calibration", "include", None, protocol_id)
-
-
-def _screen_ordinary(
-    project: Project,
-    agent: Actor,
-    protocol_id: str,
-    *,
-    pass_a: str = "include",
-    pass_b: str = "include",
-    b_sample_only: bool = False,
-) -> None:
-    """Decide the ordinary works in pass A, and in pass B: all of them, or its sample only."""
-    sample = set(pass_b_sample(project) or ())
-    for work in _ordinary(project):
-        _decide(project, agent, work, "A", "screening", pass_a, _cite(pass_a), protocol_id)
-        if b_sample_only and work not in sample:
-            continue
-        _decide(project, agent, work, "B", "screening", pass_b, _cite(pass_b), protocol_id)
-
-
-def _partial_corpus(project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor) -> str:
-    """As `test_chase_service._corpus`, with a dual sample of 0.3: pass B screens a part of the
-    ordinary works, so some works are decided by pass A alone (and some by both)."""
-    protocol_id = _setup(project, agent, human, mock_sources, dual_sample=0.3, random_works=0)
-    _draw(project)
-    open_pass(project, agent, PassLabel.A)
-    open_pass(project, agent, PassLabel.B)
-    return protocol_id
-
-
-def _cite(verdict: str) -> str | None:
-    """The criterion an exclusion must name; no criterion for any other verdict."""
-    return "EX01" if verdict == "exclude" else None
-
-
 def _single_pass_works(project: Project) -> list[str]:
     """The ordinary works pass B did not screen: the ones pass A decides alone."""
     sample = set(pass_b_sample(project) or ())
     return sorted(work for work in _ordinary(project) if work not in sample)
-
-
-def _unfound_seed(project: Project, agent: Actor, mock_sources: SourcesFor) -> str:
-    """Add a positive seed whose lookup finds no work; returns its id."""
-    spec = SeedSpec(kind=SeedKind.POSITIVE, cite="Paper 7", doi=SEED_DOI)
-    result = add_seeds(project, agent, [spec], sources=mock_sources(openalex=[]))
-    [outcome] = result.written
-    return outcome.seed_id
 
 
 def _dangling_merge_event(project: Project, human: Actor) -> str:

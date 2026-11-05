@@ -107,7 +107,7 @@ def test_cli_lists_watch_entries(ready: Project) -> None:
     from typer.testing import CliRunner
 
     from factory.cli.main import app
-    from tests.test_cli import _env
+    from tests.cli_helpers import _env
 
     cycle_id, new = _cycle(ready)
     result = CliRunner().invoke(

@@ -1,6 +1,5 @@
-"""The methods statement reads events, not skill names (G3-A fix round 2)."""
-
 # ruff: noqa: F401, F811
+"""The methods statement reads events, not skill names (G3-A fix round 2)."""
 
 from __future__ import annotations
 

@@ -19,8 +19,8 @@ from factory.services.context import Project
 from factory.services.screening import live_decisions, screen_next, screen_record
 from factory.sources.registry import SourceFactory
 from tests.document_helpers import promoted_works
+from tests.fulltext_helpers import _convert, _world
 from tests.helpers import SESSION, _setup, open_session
-from tests.test_fulltext_eligibility import _convert, _world
 
 FT = ScreeningStage.FULL_TEXT
 SourcesFor = Callable[..., Mapping[str, SourceFactory]]

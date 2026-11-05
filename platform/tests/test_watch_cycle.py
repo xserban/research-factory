@@ -22,7 +22,7 @@ from factory.services.dedup import active_merges, dedup_run
 from factory.services.search import list_works
 from factory.services.watch import CycleSummary, cycles, watch_run, watch_status
 from tests.helpers import SESSION, SourcesFor
-from tests.test_dedup_service import PREPRINT, PUBLISHED
+from tests.screening_helpers import PREPRINT, PUBLISHED
 from tests.watch_helpers import ScriptedSource, adapters, by_text, record, watch_ready
 
 A = [record("Alpha methods for sparse graphs", author="Ana Li", year=2021)]

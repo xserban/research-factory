@@ -28,9 +28,9 @@ from factory.services.references import current_extraction, extract_references
 from factory.sources.registry import SourceFactory
 from tests.document_helpers import make_registry, run_convert
 from tests.extraction_helpers import LATENCY_FIELDS, SESSION_A, _extractor
+from tests.fulltext_helpers import _screened_full_text_world
 from tests.references_service_helpers import bib_html
-from tests.test_acceptance_fulltext_screening import _screened_full_text_world
-from tests.test_fulltext_service import StubRoute, always, retrieved
+from tests.route_helpers import StubRoute, always, retrieved
 
 C = Scope.CONTRIBUTION
 FT = ScreeningStage.FULL_TEXT

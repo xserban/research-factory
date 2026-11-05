@@ -19,8 +19,8 @@ from factory.services import watch as watch_service
 from factory.services.context import Project
 from factory.services.project import init_project
 from factory.sources.registry import SourceFactory
+from tests.cli_helpers import _env
 from tests.helpers import SESSION, SourcesFor, ready_protocol
-from tests.test_cli import _env
 from tests.watch_helpers import ScriptedSource, adapters, by_text, record, watch_ready
 
 runner = CliRunner()

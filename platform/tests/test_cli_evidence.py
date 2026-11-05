@@ -11,8 +11,8 @@ from factory.cli.main import app
 from factory.config import Settings
 from factory.services.context import Project
 from factory.services.evidence_report import EvidenceReport, assemble_report
+from tests.cli_helpers import _env
 from tests.evidence_helpers import pilot_inputs
-from tests.test_cli import _env
 
 runner = CliRunner()
 

@@ -28,7 +28,7 @@ from factory.services.seeds import (
 from factory.services.tasks import complete_task
 from tests.helpers import SourcesFor, _seed_item, _setup
 from tests.inbox_helpers import Keyed, capture, link_item, resolve
-from tests.test_screening_next import _draw
+from tests.screening_helpers import _draw
 
 NOTE = "Ana says this one is central"
 

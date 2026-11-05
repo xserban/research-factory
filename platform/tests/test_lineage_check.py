@@ -1,6 +1,5 @@
-"""`check` findings of the lineage (slice 3b, plan G2-E, task 1)."""
-
 # ruff: noqa: F401, F811
+"""`check` findings of the lineage (slice 3b, plan G2-E, task 1)."""
 
 from __future__ import annotations
 

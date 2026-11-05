@@ -15,6 +15,7 @@ from factory.events.envelope import Actor
 from factory.events.reader import read_all
 from factory.model.notices import NoticeKind
 from factory.services.context import Project
+from tests.cli_helpers import _env
 from tests.helpers import SourcesFor, open_session
 from tests.notice_helpers import (
     NoticeWorld,
@@ -27,7 +28,6 @@ from tests.notice_helpers import (
     numbered_records,
     status_factories,
 )
-from tests.test_cli import _env
 from tests.watch_helpers import ScriptedSource, adapters, by_text
 
 runner = CliRunner()

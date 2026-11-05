@@ -19,7 +19,7 @@ from factory.services.screening import join_pass, open_pass
 from factory.services.seeds import SeedRole, all_seeds
 from tests.helpers import SESSION, SourcesFor, _setup, install_skill, open_session
 from tests.inbox_helpers import Keyed, link_item
-from tests.test_screening_next import _draw
+from tests.screening_helpers import _draw
 
 AGENT = {"role": "searcher", "model": "claude-opus-5-5", "skill": "rf-search"}
 DOI = "https://doi.org/10.2000/s1"

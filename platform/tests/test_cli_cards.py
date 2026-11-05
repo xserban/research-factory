@@ -1,6 +1,5 @@
-"""The `factory vocabulary` and `factory cards` commands (slice 6, plan H-A, task 5): human acts."""
-
 # ruff: noqa: F401, F811
+"""The `factory vocabulary` and `factory cards` commands (slice 6, plan H-A, task 5): human acts."""
 
 from __future__ import annotations
 
@@ -17,8 +16,8 @@ from factory.services.context import Project
 from factory.services.properties import decide_property, propose_property
 from factory.services.question import current_question
 from tests.card_helpers import CardWorld, cw, prop, quote_basis
+from tests.cli_helpers import _env
 from tests.lineage_helpers import ctr_a, ctr_b, lin, screened, world
-from tests.test_cli import _env
 
 runner = CliRunner()
 

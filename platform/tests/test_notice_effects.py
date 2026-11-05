@@ -36,9 +36,9 @@ from factory.services.versions import prefer_document
 from factory.sources.registry import SourceFactory
 from tests.document_helpers import ARTICLE, make_registry, run_convert
 from tests.extraction_helpers import _declare_latency, _extractor, _row
+from tests.fulltext_helpers import _screened_full_text_world
+from tests.route_helpers import StubRoute, always, retrieved
 from tests.screening_helpers import decide
-from tests.test_acceptance_fulltext_screening import _screened_full_text_world
-from tests.test_fulltext_service import StubRoute, always, retrieved
 
 pytestmark = pytest.mark.slow  # over ~60 s per file: dev runs deselect with -m "not slow"
 

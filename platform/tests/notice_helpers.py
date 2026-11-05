@@ -260,7 +260,7 @@ def fetch_arxiv_version(project: Project, work_id: str, version: str) -> None:
     """Fetch an arXiv HTML document of `work_id` at `version` through a stub route."""
     from factory.model.fulltext import Route
     from factory.services.fulltext import fetch_fulltext
-    from tests.test_fulltext_service import StubRoute, always, retrieved
+    from tests.route_helpers import StubRoute, always, retrieved
 
     body = f"<html><body>{work_id} {version}</body></html>".encode()
     route = StubRoute(Route.ARXIV_HTML, always(retrieved(Route.ARXIV_HTML, body, version=version)))

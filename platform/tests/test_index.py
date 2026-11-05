@@ -4,13 +4,12 @@ from datetime import timedelta
 from pathlib import Path
 
 import pytest
-from sqlalchemy import Column, Integer, MetaData, String, Table, text
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy import MetaData, text
 from sqlalchemy.engine import Connection
 
 from factory.clock import FixedClock
 from factory.events.blobs import BlobStore
-from factory.events.catalog import EventCatalog, EventType
+from factory.events.catalog import EventCatalog
 from factory.events.envelope import Actor, Event
 from factory.events.factory import EventFactory
 from factory.events.writer import EventWriter
@@ -18,45 +17,7 @@ from factory.index.index import Index, SyncResult
 from factory.index.projection import Projection, core_tables
 from factory.model.identity import IdGenerator
 from tests.helpers import S2, SESSION, T0, Demo
-
-
-def demo_catalog() -> EventCatalog:
-    catalog = EventCatalog()
-    catalog.register(EventType("demo.recorded", Demo, 1))
-    # Registered without a handler: its events must still get an `events` row.
-    catalog.register(EventType("demo.noted", Demo, 1))
-    return catalog
-
-
-def demo_projection(version: str = "t1") -> Projection:
-    metadata = MetaData()
-    core_tables(metadata)
-    totals = Table(
-        "demo_totals",
-        metadata,
-        Column("key", String, primary_key=True),
-        Column("total", Integer, nullable=False),
-    )
-
-    def record(conn: Connection, event: Event) -> None:
-        n = event.payload["n"]
-        assert isinstance(n, int)
-        conn.execute(
-            sqlite_insert(totals)
-            .values(key="all", total=n)
-            .on_conflict_do_update(index_elements=["key"], set_={"total": totals.c.total + n})
-        )
-
-    return Projection(version=version, metadata=metadata, handlers={"demo.recorded": record})
-
-
-def make_index(project_dir: Path, version: str = "t1") -> Index:
-    return Index(
-        project_dir / ".index" / "factory.sqlite",
-        project_dir / "events",
-        demo_catalog(),
-        demo_projection(version),
-    )
+from tests.screening_helpers import demo_catalog, make_index
 
 
 def total(index: Index) -> int:

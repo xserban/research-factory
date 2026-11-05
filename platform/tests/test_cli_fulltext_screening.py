@@ -19,10 +19,9 @@ from factory.services.document_read import default_conversion
 from factory.services.evidence import work_evidence
 from factory.services.screening import open_pass
 from factory.sources.registry import SourceFactory
+from tests.cli_helpers import _env
+from tests.fulltext_helpers import _both, _ta_world
 from tests.helpers import _setup
-from tests.test_cli import _env
-from tests.test_prisma_full import _ta_world
-from tests.test_stage_services import _both
 
 FT = ScreeningStage.FULL_TEXT
 TA = ScreeningStage.TITLE_ABSTRACT

@@ -23,9 +23,9 @@ from factory.services.import_resolve import decide_import, record_states, resolv
 from factory.services.imports import record_import
 from factory.services.search import get_work
 from tests.document_helpers import events_of_type
+from tests.fulltext_helpers import _pdf
 from tests.import_helpers import import_bib
 from tests.references_service_helpers import Lookups
-from tests.test_fulltext_import import _pdf
 
 MARKER = "ZEBRAXQ"
 

@@ -5,7 +5,7 @@ fixtures reuse the pilot corpus helpers; a work is promoted once both passes inc
 """
 
 import json
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -18,39 +18,13 @@ from factory.model.fulltext import (
     AttemptOutcome,
     Route,
 )
-from factory.model.screening import Channel, PassLabel
-from factory.model.work import Work
 from factory.services.agreement import Outcome, final_outcomes
-from factory.services.calibration import calibration_items, label_calibration
 from factory.services.context import Project
 from factory.services.fulltext import fetch_fulltext
-from factory.services.screening import open_pass
-from factory.services.search import list_works
 from factory.sources.fulltext.base import RouteResult, not_retrieved, transport_failure
-from factory.sources.registry import SourceFactory
-from tests.helpers import _setup
-from tests.test_screening_next import _decide, _draw
-from tests.world_cache import snapshot_world
-
-SourcesFor = Callable[..., Mapping[str, SourceFactory]]
-Answer = Callable[[Work], RouteResult]
-
-
-class StubRoute:
-    """A route whose answer for each work comes from `answer`. `calls` lists the works asked."""
-
-    def __init__(self, route: Route, answer: Answer) -> None:
-        self.route = route
-        self._answer = answer
-        self.calls: list[str] = []
-
-    def fetch(self, work: Work, *, version: str | None = None) -> RouteResult:
-        self.calls.append(work.id)
-        return self._answer(work)
-
-
-def always(result: RouteResult) -> Answer:
-    return lambda _work: result
+from tests.fulltext_helpers import _ordinary_pending, _promoted_corpus
+from tests.helpers import SourcesFor
+from tests.route_helpers import Answer, always, missing, retrieved, routes_for
 
 
 def answers(*results: RouteResult) -> Answer:
@@ -59,62 +33,12 @@ def answers(*results: RouteResult) -> Answer:
     return lambda _work: queue.pop(0)
 
 
-def retrieved(
-    route: Route,
-    content: bytes,
-    *,
-    version: str | None = "v2",
-    licence: str | None = None,
-    url: str | None = None,
-    media_type: str | None = "text/html",
-    metadata: bytes | None = None,
-) -> RouteResult:
-    return RouteResult(
-        route=route,
-        outcome=AttemptOutcome.RETRIEVED,
-        url=url or f"https://arxiv.org/html/2101.00001{version or ''}",
-        http_status=200,
-        content=content,
-        media_type=media_type,
-        source_version=version,
-        licence=licence,
-        metadata=metadata,
-    )
-
-
-def missing(route: Route, reason: str) -> RouteResult:
-    return not_retrieved(route, AttemptOutcome.NOT_AVAILABLE, reason)
-
-
-def routes_for(**answering: Answer) -> dict[Route, StubRoute]:
-    """One stub per automatic route, keyed by route, with the answers given by route value."""
-    return {
-        route: StubRoute(route, answering.get(route.name.lower(), always(missing(route, "none"))))
-        for route in (Route.ARXIV_HTML, Route.ARXIV_SOURCE, Route.OA_PDF)
-    }
-
-
 def _events(project: Project) -> list[Event]:
     return read_all(project.paths.events_dir, project.catalog)
 
 
 def _of_type(project: Project, type_: str) -> list[Event]:
     return [event for event in _events(project) if event.type == type_]
-
-
-def _include_all(
-    project: Project, agent: Actor, human: Actor, protocol_id: str, *, leave: str | None = None
-) -> None:
-    """Both passes include every ordinary work and the human labels every calibration work."""
-    calibration = set(calibration_items(project))
-    for work in sorted(w.id for w in list_works(project)):
-        if work == leave:
-            continue
-        if work in calibration:
-            label_calibration(project, human, work, "include", None, Channel.CLI)
-            continue
-        _decide(project, agent, work, "A", "screening", "include", None, protocol_id)
-        _decide(project, agent, work, "B", "screening", "include", None, protocol_id)
 
 
 @pytest.fixture
@@ -135,37 +59,10 @@ def screened(
     return build
 
 
-@snapshot_world
-def _promoted_corpus(
-    project: Project,
-    agent: Actor,
-    human: Actor,
-    mock_sources: SourcesFor,
-    *,
-    leave_one: bool = False,
-) -> tuple[str, str | None]:
-    """A corpus with both passes opened and every ordinary work included; with `leave_one`, the
-    first ordinary work is left undecided, so it is not promoted. Returns the protocol id and
-    the work left undecided."""
-    protocol_id = _setup(project, agent, human, mock_sources, dual_sample=0.5, random_works=0)
-    _draw(project)
-    open_pass(project, agent, PassLabel.A)
-    open_pass(project, agent, PassLabel.B)
-    leave = _ordinary_pending(project) if leave_one else None
-    _include_all(project, agent, human, protocol_id, leave=leave)
-    return protocol_id, leave
-
-
 def _promoted(project: Project) -> list[str]:
     return sorted(
         w for w, outcome in final_outcomes(project).items() if outcome is Outcome.INCLUDED
     )
-
-
-def _ordinary_pending(project: Project) -> str:
-    """An ordinary (non-calibration) corpus work, to be left undecided."""
-    calibration = set(calibration_items(project))
-    return sorted(w.id for w in list_works(project) if w.id not in calibration)[0]
 
 
 def _files(root: Path) -> list[Path]:

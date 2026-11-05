@@ -1,3 +1,4 @@
+# ruff: noqa: F811
 """Acceptance for full-text acquisition (plan 2A): AC 1, 14 and 15, offline on stub routes.
 
 A corpus is built from the slice-1 helpers, so the works are promoted through both passes. The
@@ -7,27 +8,21 @@ live arXiv check is the single `network` test at the end; it is deselected by de
 import re
 import shutil
 import subprocess
-from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import Any
 
 import pytest
 
 from factory.clock import FixedClock
 from factory.config import Settings
-from factory.events.envelope import Actor, Event
-from factory.events.reader import read_all
+from factory.events.envelope import Actor
 from factory.model.fulltext import AttemptOutcome, Route
-from factory.model.screening import PassLabel
 from factory.model.work import Identifiers, Provenance, Work
 from factory.services import check as check_service
-from factory.services.agreement import Outcome, final_outcomes
 from factory.services.context import Project
 from factory.services.fulltext import fetch_fulltext, restore_document
 from factory.services.fulltext_import import import_folder
 from factory.services.fulltext_status import fulltext_status
 from factory.services.project import init_project
-from factory.services.screening import open_pass
 from factory.services.search import list_works
 from factory.services.trace import trace
 from factory.sources.fulltext.arxiv import (
@@ -35,73 +30,14 @@ from factory.sources.fulltext.arxiv import (
     ArxivSourceRoute,
     arxiv_version_lookup,
 )
-from factory.sources.fulltext.base import RouteResult, not_retrieved
 from factory.sources.http import default_http
-from factory.sources.registry import SourceFactory
-from tests.helpers import SESSION, T0, _setup, install_skill
-from tests.test_fulltext_import import _pdf
-from tests.test_fulltext_service import StubRoute, _include_all, retrieved
-from tests.test_screening_next import _draw
+from tests.fulltext_helpers import CONTENT, _build, _pdf, _promoted, _routes, corpus  # noqa: F401
+from tests.helpers import SESSION, T0, SourcesFor, _of_type, install_skill
 
 pytestmark = pytest.mark.slow  # acceptance suite: dev runs deselect with -m "not slow"
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SourcesFor = Callable[..., Mapping[str, SourceFactory]]
-CONTENT = b"LITERATURE-MARKER full text of a promoted work"
 ARXIV_LIVE = "1706.03762"
-
-
-def _build(project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor) -> None:
-    """Both passes include every ordinary work, so the corpus is promoted, and calibration is
-    labelled by the human."""
-    protocol_id = _setup(project, agent, human, mock_sources, dual_sample=0.5, random_works=0)
-    _draw(project)
-    open_pass(project, agent, PassLabel.A)
-    open_pass(project, agent, PassLabel.B)
-    _include_all(project, agent, human, protocol_id)
-
-
-def _promoted(project: Project) -> list[str]:
-    return sorted(
-        w for w, outcome in final_outcomes(project).items() if outcome is Outcome.INCLUDED
-    )
-
-
-def _events(project: Project) -> list[Event]:
-    return read_all(project.paths.events_dir, project.catalog)
-
-
-def _of_type(project: Project, type_: str) -> list[Event]:
-    return [event for event in _events(project) if event.type == type_]
-
-
-def _stub(route: Route, retrieve: set[str], content: bytes = CONTENT) -> StubRoute:
-    """A route that retrieves for the works in `retrieve` (the set may change between passes)
-    and otherwise gives its own fixed reason. The fixed reason is the route's name."""
-
-    def answer(work: Any) -> RouteResult:
-        if work.id in retrieve:
-            media = "application/pdf" if route is Route.OA_PDF else "text/html"
-            return retrieved(route, content, media_type=media)
-        return not_retrieved(route, AttemptOutcome.NOT_AVAILABLE, f"no {route.value}")
-
-    return StubRoute(route, answer)
-
-
-def _routes(
-    html: set[str] | None = None, source: set[str] | None = None, pdf: set[str] | None = None
-) -> dict[Route, StubRoute]:
-    return {
-        Route.ARXIV_HTML: _stub(Route.ARXIV_HTML, html or set()),
-        Route.ARXIV_SOURCE: _stub(Route.ARXIV_SOURCE, source or set()),
-        Route.OA_PDF: _stub(Route.OA_PDF, pdf or set()),
-    }
-
-
-@pytest.fixture
-def corpus(project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor) -> list[str]:
-    _build(project, agent, human, mock_sources)
-    return _promoted(project)
 
 
 # --- AC 1: every promoted work has attempts and records ---

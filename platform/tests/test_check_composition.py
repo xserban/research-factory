@@ -13,9 +13,8 @@ from factory.services import check as check_module
 from factory.services.agreement import final_outcomes
 from factory.services.context import Project
 from factory.services.modules import default_modules
-from tests.helpers import _setup
-from tests.test_chase_service import _corpus
-from tests.test_check import SourcesFor, _calibrate, _partial_corpus, _screen_ordinary
+from tests.helpers import SourcesFor, _setup
+from tests.screening_helpers import _calibrate, _corpus, _partial_corpus, _screen_ordinary
 
 
 def _legacy_hits(project: Project) -> list[CheckHit]:

@@ -20,9 +20,8 @@ from factory.services.exports import (
 from factory.services.prisma import prisma_flow
 from factory.services.search import list_works
 from factory.sources.registry import SourceFactory
-from tests.test_chase_service import _corpus, _settle
-from tests.test_prisma import MERGE_TITLE, _merge_items
-from tests.test_prisma_full import FT, _ft_world
+from tests.fulltext_helpers import FT, _ft_world
+from tests.screening_helpers import MERGE_TITLE, _corpus, _merge_items, _settle
 
 SourcesFor = Callable[..., Mapping[str, SourceFactory]]
 

@@ -1,7 +1,5 @@
 """screen_record: boundary validation, supersession, task completion and staleness (R-16, R-30)."""
 
-import math
-from collections.abc import Mapping
 from typing import Any
 
 import pytest
@@ -15,8 +13,6 @@ from factory.services.context import Project
 from factory.services.protocol import amend_protocol, current_protocol
 from factory.services.screening import (
     INSTRUCTIONS,
-    SCREEN_BATCH,
-    ScreenBatch,
     ScreenBatchContent,
     join_pass,
     live_decisions,
@@ -26,43 +22,8 @@ from factory.services.screening import (
 )
 from factory.services.search import list_works
 from factory.services.tasks import TaskSpec, claim_next, create_tasks, get_task, task_content
-from tests.helpers import _of_type, _setup
-from tests.test_screening_next import (
-    SourcesFor,
-    _draw,
-    _events,
-    _pass_calibration_under,
-    _queued,
-    _serve_calibration,
-)
-
-
-def _batch(project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor) -> ScreenBatch:
-    """An ordinary pass A batch held by the agent, served once the calibration gate has passed."""
-    protocol_id = _setup(project, agent, human, mock_sources)
-    items = _draw(project)
-    _serve_calibration(project, agent, math.ceil(len(items) / SCREEN_BATCH))
-    _pass_calibration_under(project, agent, human, protocol_id)
-    batch = screen_next(project, agent, PassLabel.A).batch
-    assert batch is not None
-    assert batch.phase is ScreeningPhase.SCREENING
-    assert len(batch.records) >= 3
-    return batch
-
-
-def _item(
-    record: Mapping[str, Any],
-    verdict: Verdict = Verdict.INCLUDE,
-    criterion: str | None = None,
-    quote: str | None = None,
-) -> ScreeningItem:
-    return ScreeningItem(
-        work_id=str(record["work_id"]),
-        verdict=verdict,
-        criterion=criterion,
-        quote=str(record["title"]) if quote is None else quote,
-        rationale="it fits",
-    )
+from tests.helpers import SourcesFor, _of_type, _setup
+from tests.screening_helpers import _batch, _events, _item, _pass_calibration_under, _queued
 
 
 def _decisions_of(project: Project, task_id: str) -> list[Event]:

@@ -23,127 +23,44 @@ from factory.config import Settings
 from factory.document.quotes import quote_in_element
 from factory.events.envelope import Actor
 from factory.events.reader import read_all
-from factory.model.fulltext import AttemptOutcome, Route
-from factory.model.protocol import Criterion, ScreeningPlan, ScreeningStage
-from factory.model.screening import Channel, PassLabel, ScreeningItem, Verdict
+from factory.model.protocol import ScreeningPlan, ScreeningStage
+from factory.model.screening import PassLabel
 from factory.services.agreement import Outcome, final_outcomes
-from factory.services.calibration import calibration_items, draw_calibration, label_calibration
+from factory.services.calibration import draw_calibration
 from factory.services.context import Project, open_project
 from factory.services.document_read import resolve_anchor
-from factory.services.fulltext import fetch_fulltext
 from factory.services.fulltext_screening import fulltext_queue
 from factory.services.prisma import prisma_flow
 from factory.services.protocol import amend_protocol, current_protocol
-from factory.services.screening import live_decisions, open_pass, screen_next, screen_record
-from factory.sources.fulltext.base import not_retrieved
-from factory.sources.registry import SourceFactory
+from factory.services.screening import live_decisions, open_pass
 from tests.document_helpers import (
-    ARTICLE,
-    StubConverter,
-    fetched_document,
-    make_registry,
     promoted_works,
-    run_convert,
 )
-from tests.helpers import SESSION, _setup, open_session
-from tests.test_fulltext_service import StubRoute, _include_all, always
-from tests.test_screening_next import _draw
-from tests.world_cache import snapshot_world
+from tests.fulltext_helpers import (
+    FT,
+    PARAGRAPH_ANCHOR,
+    PARAGRAPH_QUOTE,
+    _declare_and_screen_title_abstract,
+    _eligible_ids,
+    _include_all,
+    _label_calibration_as_include,
+    _prepare_documents,
+    _ready_for_full_text,
+    _screened_full_text_world,
+)
+from tests.helpers import SESSION, SourcesFor, _setup, open_session
+from tests.screening_helpers import _draw
 
 pytestmark = pytest.mark.slow  # acceptance suite: dev runs deselect with -m "not slow"
 
-FT = ScreeningStage.FULL_TEXT
 TA = ScreeningStage.TITLE_ABSTRACT
-SourcesFor = Callable[..., Mapping[str, SourceFactory]]
 Script = Callable[[dict[str, Any], str], dict[str, Any]]
 
-PARAGRAPH_ANCHOR = "s3.p1"
-PARAGRAPH_QUOTE = "Lorem ipsum dolor sit amet."
 PASS_A = {"role": "screener-a", "model": "claude-sonnet-5-5", "skill": "rf-screen"}
 PASS_B = {"role": "screener-b", "model": "claude-haiku-5-5", "skill": "rf-screen"}
 
 
 # --- Worlds ---
-
-
-@snapshot_world
-def _declare_and_screen_title_abstract(
-    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
-) -> None:
-    """Title/abstract screening to the end under a declared full-text plan, with EX04 (full text
-    only). Both passes include every ordinary work; the human labels the title/abstract set."""
-    _setup(project, agent, human, mock_sources, dual_sample=0.5, random_works=6)
-    current = current_protocol(project)
-    assert current is not None
-    plan = ScreeningPlan(
-        passes=2,
-        dual_sample=1.0,
-        kappa_floor=0.7,
-        calibration_size=3,
-        reviewers=current.spec.screening.reviewers,
-    )
-    criterion = Criterion(
-        id="EX04",
-        parent="NG03",
-        statement="The full text is outside the question.",
-        rule="exclude it",
-        applies_at=FT,
-        priority=4,
-    )
-    spec = current.spec.model_copy(
-        update={
-            "full_text_screening": plan,
-            "criteria": (*current.spec.criteria, criterion),
-        }
-    )
-    amend_protocol(project, agent, spec, reason="declare full text", semantic=True, effects={})
-    amended = current_protocol(project)
-    assert amended is not None
-    _draw(project)
-    open_pass(project, agent, PassLabel.A)
-    open_pass(project, agent, PassLabel.B)
-    _include_all(project, agent, human, amended.protocol_id)
-
-
-def _prepare_documents(project: Project) -> str:
-    """Every promoted work but the last gets a converted document; the last one's routes all fail,
-    so it is not retrieved. Returns the failed work's id."""
-    *converted, failed = sorted(promoted_works(project))
-    for work in converted:
-        fetched_document(project, work, ARTICLE)
-    run_convert(project, make_registry(StubConverter()))
-    failing = {
-        route: StubRoute(route, always(not_retrieved(route, AttemptOutcome.NOT_AVAILABLE, why)))
-        for route, why in (
-            (Route.ARXIV_HTML, "no html"),
-            (Route.ARXIV_SOURCE, "no src"),
-            (Route.OA_PDF, "paywalled"),
-        )
-    }
-    fetch_fulltext(project, routes=failing, work_ids=[failed])
-    return failed
-
-
-@snapshot_world
-def _ready_for_full_text(
-    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
-) -> str:
-    """Title/abstract done, documents prepared, full-text calibration not yet drawn."""
-    _declare_and_screen_title_abstract(project, agent, human, mock_sources)
-    return _prepare_documents(project)
-
-
-def _eligible_ids(project: Project) -> list[str]:
-    return sorted(entry.work_id for entry in fulltext_queue(project).eligible)
-
-
-def _label_calibration_as_include(project: Project, human: Actor) -> list[str]:
-    """Service-level full-text calibration: the drawn set, all labelled include."""
-    draw_calibration(project, project.system_actor(), random_seed=3, stage=FT)
-    items = calibration_items(project, stage=FT)
-    for item in items:
-        label_calibration(project, human, item, "include", None, Channel.CLI, stage=FT)
-    return items
 
 
 @dataclass(frozen=True)
@@ -209,60 +126,6 @@ async def _screen_to_end(
         assert written["ok"] is True and written["data"]["rejected"] == [], written
     assert last["data"]["blocked"] == [] and last["data"]["remaining"] == 0, last
     return served
-
-
-def _service_screen_to_end(
-    project: Project, actor: Actor, label: PassLabel, verdict_for: Callable[[str], str | None]
-) -> None:
-    """Screen a full-text pass to the end at service level. `verdict_for` gives the EX04 exclusion
-    of a work, or None to include it."""
-    while True:
-        batch = screen_next(project, actor, label, stage=FT).batch
-        if batch is None:
-            return
-        items: list[ScreeningItem] = []
-        for record in batch.records:
-            work = str(record["work_id"])
-            excluded = verdict_for(work) is not None
-            items.append(
-                ScreeningItem(
-                    work_id=work,
-                    verdict=Verdict.EXCLUDE if excluded else Verdict.INCLUDE,
-                    criterion="EX04" if excluded else None,
-                    quote=PARAGRAPH_QUOTE,
-                    rationale="fits" if not excluded else "outside the question",
-                    anchor=PARAGRAPH_ANCHOR,
-                )
-            )
-        result = screen_record(project, actor, batch.task_id, items)
-        assert result.rejected == [], result.rejected
-
-
-@snapshot_world
-def _screened_full_text_world(
-    project: Project,
-    agent: Actor,
-    agent_other: Actor,
-    human: Actor,
-    mock_sources: SourcesFor,
-) -> tuple[list[str], set[str]]:
-    """Full text screened to the end by both passes, every eligible work dual-coded, both passes
-    agreeing. Returns the ordinary eligible works and the two EX04 exclusions (both passes)."""
-    failed = _ready_for_full_text(project, agent, human, mock_sources)
-    assert failed not in _eligible_ids(project)
-    calibration = set(_label_calibration_as_include(project, human))
-    ordinary = [w for w in _eligible_ids(project) if w not in calibration]
-    assert len(ordinary) >= 4
-    excluded = {ordinary[0], ordinary[1]}
-
-    def verdict_for(work: str) -> str | None:
-        return "EX04" if work in excluded else None
-
-    _service_screen_to_end(project, agent, PassLabel.A, verdict_for)
-    # Pass B is another session and another model (pass A is the opus fixture).
-    other_model = agent_other.model_copy(update={"model": "claude-sonnet-5-5"})
-    _service_screen_to_end(project, other_model, PassLabel.B, verdict_for)
-    return ordinary, excluded
 
 
 # --- Acceptance 4 and the two-pass agreement path ---

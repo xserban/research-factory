@@ -1,6 +1,5 @@
-"""The `factory contributions` commands (plan G2-B, task 5): human acts on the CLI channel."""
-
 # ruff: noqa: F401, F811
+"""The `factory contributions` commands (plan G2-B, task 5): human acts on the CLI channel."""
 
 from pathlib import Path
 
@@ -14,8 +13,8 @@ from factory.events.reader import read_all
 from factory.model.screening import PassLabel
 from factory.services.context import Project
 from factory.services.contributions import contribution_agreement
+from tests.cli_helpers import _env
 from tests.contribution_helpers import ctr_a, ctr_b, screened, with_references, world
-from tests.test_cli import _env
 from tests.test_contribution_agreement import _drive, _reading, refs
 
 runner = CliRunner()

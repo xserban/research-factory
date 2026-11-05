@@ -1,6 +1,5 @@
-"""Review lifecycle, human supersession, listing and history (slice 3c, plan G3-A, task 5)."""
-
 # ruff: noqa: F401, F811
+"""Review lifecycle, human supersession, listing and history (slice 3c, plan G3-A, task 5)."""
 
 from __future__ import annotations
 

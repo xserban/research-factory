@@ -24,7 +24,7 @@ from factory.services.versions import prefer_document
 from tests.document_helpers import ARTICLE, make_registry, run_convert
 from tests.helpers import SourcesFor
 from tests.notice_helpers import NoticeWorld, dependent_world, numbered_records
-from tests.test_fulltext_service import StubRoute, always, retrieved
+from tests.route_helpers import StubRoute, always, retrieved
 
 
 @pytest.fixture

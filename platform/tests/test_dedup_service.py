@@ -1,5 +1,4 @@
 import threading
-from collections.abc import Callable, Mapping
 from typing import Any
 
 import pydantic
@@ -9,8 +8,7 @@ from sqlalchemy import text
 from factory.clock import SystemClock
 from factory.config import Settings
 from factory.errors import FactoryValidationError
-from factory.events.envelope import Actor, Event
-from factory.events.reader import read_all
+from factory.events.envelope import Actor
 from factory.model.dedup import DedupMerged, DedupReverted
 from factory.model.search import QueryKind, QuerySpec
 from factory.services.context import Project, open_project
@@ -22,44 +20,8 @@ from factory.services.dedup import (
 )
 from factory.services.project import project_status
 from factory.services.search import list_works, register_query, run_query
-from factory.sources.registry import SourceFactory
-from tests.helpers import SESSION
-
-SourcesFor = Callable[..., Mapping[str, SourceFactory]]
-
-# The same paper, published and as a preprint: one cascade merge (title + first author + year).
-PUBLISHED: dict[str, Any] = {
-    "title": "Linear attention in transformers",
-    "authors": ["Ada Zhou"],
-    "year": 2024,
-    "doi": "10.1000/x",
-    "type": "journal-article",
-}
-PREPRINT: dict[str, Any] = {
-    "title": "Linear attention in transformers",
-    "authors": ["Ada Zhou"],
-    "year": 2024,
-    "arxiv": "2301.00001",
-    "type": "preprint",
-}
-# A third record of the same paper, under an OpenAlex id only.
-OPENALEX_COPY: dict[str, Any] = {
-    "title": "Linear attention in transformers",
-    "authors": ["Ada Zhou"],
-    "year": 2024,
-    "openalex": "W2001",
-}
-
-
-def _ingest(project: Project, fake_sources: SourcesFor, pages: list[list[dict[str, Any]]]) -> None:
-    sources = fake_sources(pages=pages)
-    spec = QuerySpec(source="fake", kind=QueryKind.KEYWORD, text="linear attention")
-    qid = register_query(project, project.human_actor(), spec, sources=sources)
-    run_query(project, qid, sources=sources)
-
-
-def _of_type(project: Project, name: str) -> list[Event]:
-    return [e for e in read_all(project.paths.events_dir, project.catalog) if e.type == name]
+from tests.helpers import SESSION, SourcesFor, _of_type
+from tests.screening_helpers import OPENALEX_COPY, PREPRINT, PUBLISHED, _ingest
 
 
 def _work_id(project: Project, *, doi: str | None = None, arxiv: str | None = None) -> str:

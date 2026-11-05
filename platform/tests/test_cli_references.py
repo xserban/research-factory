@@ -16,9 +16,9 @@ from factory.model.protocol import SnowballPlan
 from factory.services.context import Project
 from factory.services.references import extract_references, list_references
 from factory.sources.registry import SourceFactory
+from tests.cli_helpers import _env
 from tests.document_helpers import fetched_document, make_registry, promoted_works, run_convert
 from tests.references_service_helpers import Lookups, bib_html, oa_item
-from tests.test_cli import _env
 from tests.test_snowball_round import BODY_A, BODY_B, ENTRIES_A, ENTRIES_B, PLAN, _amend, _lookups
 
 runner = CliRunner()

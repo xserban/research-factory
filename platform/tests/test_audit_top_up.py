@@ -17,8 +17,8 @@ from factory.services.screening_stats import audit_size
 from factory.services.search import list_works
 from factory.sources.registry import SourceFactory
 from tests.helpers import _of_type
+from tests.screening_helpers import _late
 from tests.test_audit import ACCEPTANCE_RANDOM_WORKS, _agree, _fields, _population, _split_160
-from tests.test_screening_next import _late
 
 SourcesFor = Callable[..., Mapping[str, SourceFactory]]
 
@@ -231,7 +231,7 @@ def test_living_audit_outstanding_by_shortfall(
     from factory.services.audit import audit_outstanding
     from factory.services.check import _findings_as
     from factory.services.watch import watch_run
-    from tests.test_calibration import _decide
+    from tests.screening_helpers import _decide
     from tests.watch_helpers import ScriptedSource, adapters, by_text, record
 
     first, ordinary = _audited(project, agent, human, mock_sources)

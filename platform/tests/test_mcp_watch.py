@@ -12,7 +12,7 @@ from factory.events.envelope import Actor
 from factory.events.reader import read_all
 from factory.services.context import Project
 from tests.helpers import SourcesFor, _setup, open_session
-from tests.test_screening_next import _draw
+from tests.screening_helpers import _draw
 from tests.watch_helpers import ScriptedSource, adapters, by_text, record, watch_ready
 
 AGENT = {"role": "watcher", "model": "claude-sonnet-5-5", "skill": "rf-screen"}

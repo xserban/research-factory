@@ -30,6 +30,7 @@ from factory.services.interpretations import (
     record_interpretation,
     review_interpretation,
 )
+from tests.cli_helpers import _env
 from tests.intuition_helpers import (
     WRITER_MODEL,
     IWorld,
@@ -41,7 +42,6 @@ from tests.intuition_helpers import (
     world,
 )
 from tests.intuition_separation import populate_layer
-from tests.test_cli import _env
 
 runner = CliRunner()
 

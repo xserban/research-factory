@@ -1,6 +1,5 @@
-"""Row-basis scoping, definition caching and merge/support staleness of cards (H-A fix round 1)."""
-
 # ruff: noqa: F401, F811
+"""Row-basis scoping, definition caching and merge/support staleness of cards (H-A fix round 1)."""
 
 from __future__ import annotations
 
@@ -30,8 +29,8 @@ from factory.sources.registry import SourceFactory
 from tests.card_helpers import TOP1, CardWorld, approve, cw, quote_basis
 from tests.evidence_helpers import frow, run_pass
 from tests.extraction_helpers import SESSION_A, SESSION_B, _declare, _extractor, _r
+from tests.fulltext_helpers import _screened_full_text_world
 from tests.lineage_helpers import ctr_a, ctr_b, lin, screened, world
-from tests.test_acceptance_fulltext_screening import _screened_full_text_world
 
 SourcesFor = Callable[..., Mapping[str, SourceFactory]]
 KEY = "rk_0123456789ab"

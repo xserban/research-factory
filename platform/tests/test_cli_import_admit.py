@@ -13,7 +13,9 @@ from factory.model.references import LinkState
 from factory.services.context import Project
 from factory.services.dedup import canonical_works
 from factory.services.import_resolve import record_states, resolve_import
+from tests.cli_helpers import _cli_env, runner
 from tests.document_helpers import events_of_type
+from tests.fulltext_helpers import _pdf
 from tests.import_helpers import (
     admission_records,
     admit_lookups,
@@ -22,8 +24,6 @@ from tests.import_helpers import (
     import_bib,
 )
 from tests.references_service_helpers import Lookups, oa_item
-from tests.test_cli import _cli_env, runner
-from tests.test_fulltext_import import _pdf
 
 
 def _invoke(settings: Settings, *args: str):  # type: ignore[no-untyped-def]
