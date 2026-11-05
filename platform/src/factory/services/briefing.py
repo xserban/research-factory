@@ -10,8 +10,9 @@ Invariants:
   lineage `path`, the visible groups of the coverage view, `check`, `human_queue`, released drafts.
 - No library read and no document text: titles and bibliographic metadata only. Idea names and
   amendment reasons are what a person recorded, not text of a document.
-- `as_of` is the last event other than `briefing.served`: serving a pack changes no section, so
-  recording it must not change what the next build says it describes (ruling 4's idempotence).
+- `as_of` is the last event other than `briefing.served`, so recording a pack does not change the
+  position the next build says it describes (ruling 4's idempotence). The researcher's briefing
+  does read servings, through `briefing-stale`; the pack does not (below).
 - Scale (spec ruling 26). Evidence groups come through the coverage view's reading of
   `grouped_rows` (one fold, summaries kept; `methods_report` and `evidence_report` are not called).
   `prisma_flow` and `check` read every work: they are the only definitions of sections 4 and 7,
@@ -34,9 +35,12 @@ Invariants of the agent form (plan rulings 2 and 3; spec ruling 24):
   stored, since free text (a goal, an amendment reason) may name one; work ids stay.
 - A pack is a function of the log: built at the log position `as_of` with the clock read as that
   event's time, so `check`'s date-dependent findings do not vary with the day it is run.
+- No part of the pack reads a serving: `as_of` skips them and `issues` leaves out `briefing-stale`,
+  the one finding that does, or a serving could change the next pack at the same `as_of`. The
+  `check` tool keeps the finding.
 - `serve_pack` is refused to a session that joined a pass, and records nothing new when the session
-  already holds that very pack: the blob is the identity, and `as_of` ignores the servings, so the
-  second call builds the same bytes.
+  already holds that very pack: the blob is the identity, and the second call builds the same
+  bytes.
 - The JSON is at most `BRIEFING_MAX_CHARS`: cuts run from the end of sections 5 and 8 (members,
   paths, entries), then 6, 9 and 7; sections 1 to 4 are cut only when they alone exceed the bound
   (oldest deviations, then oldest amendments). `truncated` states each cut; a pack that still
@@ -119,6 +123,7 @@ MAX_MEMBERS = 5
 """Members of an idea a reading-path entry lists (plan ruling 1)."""
 _PAGE = 500
 _SERVED = "briefing.served"
+_READS_SERVINGS = "briefing-stale"
 AUDIT_KINDS = frozenset(
     {
         Gate.SCREENING_AUDIT.value,
@@ -271,6 +276,7 @@ def _reduced(b: Briefing, *, opened: bool) -> Briefing:
     name works."""
     update: dict[str, object] = {
         "gates": [g.model_copy(update={"figures": {}}) for g in b.gates],
+        "issues": {code: n for code, n in b.issues.items() if code != _READS_SERVINGS},
         "pending": [_counts_only(p) for p in b.pending],
     }
     notices = b.meta.notices
