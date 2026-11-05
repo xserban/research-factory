@@ -34,6 +34,7 @@ from factory.services.modules import (
     labels,
     lineage,
     living,
+    manuscripts,
     matching,
     mining,
     portfolio,
@@ -58,7 +59,7 @@ def default_modules() -> ModuleRegistry:
         contributions, cards, evidence, references, imports, inbox, living, snapshots, lineage,
         intuition, vocabulary, contradictions, discovery, coverage, finders, matching, exports,
         portfolio, regions, mining, hypotheses, labels, views, experiments,
-        writing,
+        writing, manuscripts,
     ]  # fmt: skip
     return ModuleRegistry(
         [m.MODULE for m in modules],

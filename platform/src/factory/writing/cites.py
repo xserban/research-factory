@@ -1,6 +1,6 @@
 """Citation keys of one manuscript sentence (slice 7b, plan W-C ruling 2). Pure.
 
-Declares: `MAX_KEY`, `cite_keys`.
+Declares: `cite_keys`.
 
 Forms: LaTeX `\\cite`, `\\citep`, `\\citet`, `\\parencite`, `\\textcite`, `\\autocite` with their
 capitalised and starred forms, keys split on `,`, in every format; pandoc `[@key]` and `@key`, and
@@ -20,10 +20,9 @@ import hashlib
 import re
 import unicodedata
 
+from factory.model.manuscripts import MAX_KEY
 from factory.references.markers import bracket_numbers
 from factory.writing.segment import Format
-
-MAX_KEY = 120
 
 _LATEX = re.compile(
     r"\\(?:[Cc]ite[pt]?|[Pp]arencite|[Tt]extcite|[Aa]utocite)\*?"
