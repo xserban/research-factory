@@ -355,11 +355,11 @@ def create_draft(
     _require_writer(actor)
     if not title.strip():
         raise _refuse("title", "a draft needs a title")
+    outline = build_outline(project, scope)  # a long read: outside the write lock
+    if len(outline.sections) > MAX_SECTIONS:
+        raise _refuse("scope", f"the outline has more than {MAX_SECTIONS} sections; narrow it")
+    blob = project.blobs.put(outline_json(outline).encode())
     with project.index.exclusive():
-        outline = build_outline(project, scope)
-        if len(outline.sections) > MAX_SECTIONS:
-            raise _refuse("scope", f"the outline has more than {MAX_SECTIONS} sections; narrow it")
-        blob = project.blobs.put(outline_json(outline).encode())
         draft_id = project.ids.new("drf")
         payload = DraftCreated(
             draft_id=draft_id,
@@ -397,12 +397,12 @@ def repin_outline(
     """Pin the draft to a new outline (the same scope unless `scope` is given). Sentences whose
     supports are not in it read as `off-outline`; nothing is rewritten. Returns the event id."""
     _require_writer(actor)
+    current = _pinned_outline(project, draft_id)
+    if scope is None:
+        scope = OutlineScope.from_json(current.scope)
+    outline = build_outline(project, scope)  # a long read: outside the write lock
+    blob = project.blobs.put(outline_json(outline).encode())
     with project.index.exclusive():
-        current = _pinned_outline(project, draft_id)
-        if scope is None:
-            scope = OutlineScope.from_json(current.scope)
-        outline = build_outline(project, scope)
-        blob = project.blobs.put(outline_json(outline).encode())
         event = project.events.make(
             "draft.outline_repinned",
             DraftOutlineRepinned(
