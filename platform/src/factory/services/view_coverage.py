@@ -37,7 +37,7 @@ from factory.services.extraction_agreement import FinalRow, GroupKey, grouped_ro
 from factory.services.ideas import confirmed_ideas
 from factory.services.notices import work_states
 from factory.services.onion import VIEW_MAX_NODES
-from factory.services.view_corpus import corpus_among
+from factory.services.view_corpus import corpus_among, horizon_notice, search_horizon
 from factory.services.views import view_meta
 
 VIEW_VERSION = 1
@@ -66,6 +66,7 @@ def _build(project: Project) -> CoverageView:
             row_group[(row.work_id, row.row_key)] = (summary.group_id, row)
             method = _method(row, pack_method)
             cells.setdefault(method, {}).setdefault(summary.group_id, _Tally()).add(row)
+    notices.append(horizon_notice(search_horizon(project)))
     if not summaries:
         notices.append(
             ViewNotice(

@@ -20,8 +20,6 @@ from __future__ import annotations
 from collections.abc import Sequence
 from decimal import Decimal
 
-from sqlalchemy import text
-
 from factory.model.views import (
     HorizonView,
     RecordPoint,
@@ -48,7 +46,12 @@ from factory.services.ideas import confirmed_ideas
 from factory.services.notices import work_states
 from factory.services.references import included_works
 from factory.services.relations import relation_years
-from factory.services.view_corpus import corpus_among, years_of
+from factory.services.view_corpus import (
+    corpus_among,
+    horizon_notice,
+    search_horizon,
+    years_of,
+)
 from factory.services.views import view_meta
 from factory.views.timeline import DatedPoint, records, yearly_frontiers
 
@@ -108,6 +111,7 @@ def _timeline(project: Project, group_id: str) -> TimelineView:
                     text=f"{skipped} independent row(s) have no numeric value and are not plotted.",
                 )
             )
+    notices.append(horizon_notice(search_horizon(project)))
     if pending:
         notices.append(
             ViewNotice(
@@ -289,8 +293,8 @@ def _horizon(project: Project) -> HorizonView:
     group_records = _group_records(project, shown_groups, years)
     keys = [set(per) for per in idea_members.values()] + [set(new_ideas), set(new_edges)]
     keys += [set(per) for per in group_records.values()]
-    horizon = _search_horizon(project)
-    notices.append(_horizon_notice(horizon))
+    horizon = search_horizon(project)
+    notices.append(horizon_notice(horizon))
     if not ideas and not new_edges and not group_records:
         notices.append(
             ViewNotice(
@@ -350,32 +354,3 @@ def _group_records(
         if per_year:
             out[group_id(key)] = dict(sorted(per_year.items()))
     return dict(sorted(out.items()))
-
-
-def _search_horizon(project: Project) -> dict[str, str]:
-    """The latest finished search or chase run (complete or partial) per source, as a date."""
-    with project.index.connect() as conn:
-        rows = conn.execute(
-            text(
-                "SELECT r.source, MAX(substr(r.finished_at, 1, 10)) FROM runs r "
-                "JOIN queries q ON q.query_id = r.query_id "
-                "WHERE r.finished_at IS NOT NULL AND r.status IN ('complete', 'partial') "
-                "AND q.purpose IN ('search', 'chase') GROUP BY r.source ORDER BY r.source"
-            )
-        ).all()
-    return {str(s): str(d) for s, d in rows}
-
-
-def _horizon_notice(horizon: dict[str, str]) -> ViewNotice:
-    if not horizon:
-        return ViewNotice(
-            code="corpus-horizon",
-            text="No finished search run is recorded, so the corpus horizon is unknown; works "
-            "published after the last search are not in the corpus.",
-        )
-    latest = "; ".join(f"{source}: {date}" for source, date in horizon.items())
-    return ViewNotice(
-        code="corpus-horizon",
-        text=f"Latest search or watch run per source: {latest}. Works published after these "
-        "dates are not in the corpus.",
-    )

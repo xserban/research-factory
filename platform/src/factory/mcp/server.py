@@ -77,6 +77,7 @@ from factory.services import finders as findings_service
 from factory.services import fulltext as fulltext_service
 from factory.services import fulltext_status as fulltext_status_service
 from factory.services import gates as gates_service
+from factory.services import horizon as horizon_service
 from factory.services import hypotheses as hypotheses_service
 from factory.services import hypothesis_review as review_service
 from factory.services import ideas as ideas_service
@@ -109,6 +110,7 @@ from factory.services import seeds as seeds_service
 from factory.services import snowball as snowball_service
 from factory.services import terms as terms_service
 from factory.services import trace as trace_service
+from factory.services import view_coverage as view_coverage_service
 from factory.services import watch as watch_service
 from factory.services.context import Project, open_project
 from factory.services.extraction import ExtractResult
@@ -2926,6 +2928,64 @@ def build_server(
             _require_pass_opened(opened, "view")
             flt = onion_service.parse_filter(max_ring, edge_types, include_inferred, focus)
             result = onion_service.onion_view(opened, flt, agent=True)
+            return _withheld(opened, result.model_dump(mode="json"), include_work_ids=False)
+
+        return _reply(project, build, include_work_ids=False)
+
+    @server.tool()
+    def view_coverage(project: str) -> dict[str, JsonValue]:
+        """The coverage map: which normalised methods have final evidence rows in which
+        comparability groups, as counts only (own rows, copied rows, works; never a value), and the
+        same counts per confirmed idea (ids) from result items linked to evidence rows. Rows are
+        those of corpus works as PRISMA counts them. Complete totals; lists are cut at 200 groups
+        and 500 methods or ideas and `truncated` says so. The result names its filter, `as_of`
+        and the corpus horizon (latest search date per source). Counts are activity, not quality.
+        Read-only; refused to a session that has joined a pass, and before a screening pass has
+        opened."""
+
+        def build() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            _require_pass_opened(opened, "view")
+            result = view_coverage_service.coverage_view(opened)
+            return _withheld(opened, result.model_dump(mode="json"), include_work_ids=False)
+
+        return _reply(project, build, include_work_ids=False)
+
+    @server.tool()
+    def view_timeline(project: str, group_id: str) -> dict[str, JsonValue]:
+        """The record timeline of one comparability group (`grp_...`, from `report_evidence` or
+        `view_coverage`): per value unit, the records (independent rows whose value is strictly
+        better than every earlier-dated row's; dated by the work's publication year) and, per year
+        and declared cost axis, the Pareto frontier of rows dated up to that year, as trace ids.
+        A group with an unknown or conflicting metric direction has no timeline and a notice;
+        undated works are listed. Nothing crosses groups or units. Read-only; refused to a session
+        that has joined a pass, and before a screening pass has opened."""
+
+        def build() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            _require_pass_opened(opened, "view")
+            result = horizon_service.timeline_view(opened, group_id)
+            return _withheld(opened, result.model_dump(mode="json"), include_work_ids=False)
+
+        return _reply(project, build, include_work_ids=False)
+
+    @server.tool()
+    def view_horizon(project: str) -> dict[str, JsonValue]:
+        """Activity per publication year: included works per confirmed idea, new confirmed ideas
+        (by origin work), new stated or confirmed builds-on or improves-on edges (by citing work),
+        and record counts per comparability group; undated items counted apart. It computes no
+        label such as "emerging" and no citation score. States the corpus horizon: the latest
+        finished search or watch run per source, and that later work is absent. Lists at most 200
+        ideas and 200 groups (`truncated`). Read-only; refused to a session that has joined a
+        pass, and before a screening pass has opened."""
+
+        def build() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            _require_pass_opened(opened, "view")
+            result = horizon_service.horizon_view(opened)
             return _withheld(opened, result.model_dump(mode="json"), include_work_ids=False)
 
         return _reply(project, build, include_work_ids=False)

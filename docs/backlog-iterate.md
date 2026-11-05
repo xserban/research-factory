@@ -94,3 +94,8 @@ Minor review findings parked during the v1 build, to address when iterating from
 - V-A: the DOT output joins every listed node to the focus node; it draws no edges between works, as the view carries none. Add listed edges if a presenter needs them.
 - V-A: `OnionNode.title` is an empty string for an external work whose record the project does not hold.
 - V-A: tests/test_mcp_server.py pins the tool list in order; later view tools (V-B, V-C) add theirs to the same list.
+- V-B: the group accessors fold the extraction ledger once per call (`_load` restricted to a work set saves only the pairing), so `group_index`, the coverage map and the horizon cost rows of extraction; the 2*10^5-row scale test replaces `grouped_rows` by synthetic rows and times the view's own work. A per-group SQL path over key cells would remove the fold.
+- V-B: the plan names `services/coverage.py` and `tests/test_evidence_groups.py`, both taken; the builders are `services/view_coverage.py` and the tests `test_group_accessors.py`, `test_view_coverage.py`.
+- V-B: event-sourced test worlds date every work 2020-01-01; tests that need other years edit `works.data` in the projection (`set_year`) after the events, so rebuild tests run on the 2020 dates.
+- V-B: the ideas matrix and `final_items` read every contribution final item; a SQL read of `result_row` links would scale better.
+

@@ -74,6 +74,7 @@ from factory.services import fulltext as fulltext_service
 from factory.services import fulltext_import as fulltext_import_service
 from factory.services import fulltext_status as fulltext_status_service
 from factory.services import gates as gates_service
+from factory.services import horizon as horizon_service
 from factory.services import hypotheses as hypotheses_service
 from factory.services import ideas as ideas_service
 from factory.services import import_admit as import_admit_service
@@ -110,6 +111,7 @@ from factory.services import snapshots as snapshot_service
 from factory.services import snowball as snowball_service
 from factory.services import trace as trace_service
 from factory.services import versions as versions_service
+from factory.services import view_coverage as view_coverage_service
 from factory.services import views as views_service
 from factory.services import watch as watch_service
 from factory.services.context import Project, list_projects, open_project
@@ -305,7 +307,7 @@ graph_app = typer.Typer(
 )
 view_app = typer.Typer(
     name="view",
-    help="Read-only views over the log: the onion view of rings around the included corpus.",
+    help="Read-only views over the log: onion rings, coverage map, group timeline and horizon.",
     no_args_is_help=True,
 )
 import_app = typer.Typer(
@@ -4031,6 +4033,84 @@ def view_onion_cmd(
         else:
             out.write_text(body, encoding="utf-8")
             typer.echo(f"wrote {out}")
+
+
+def _emit_view(body: str, out: Path | None) -> None:
+    if out is None:
+        typer.echo(body, nl=False)
+    else:
+        out.write_text(body, encoding="utf-8")
+        typer.echo(f"wrote {out}")
+
+
+def _view_format(format_: str) -> None:
+    if format_ not in ("md", "json", "csv"):
+        raise FactoryValidationError([ValidationIssue("format", "must be md, json or csv")])
+
+
+@view_app.command("coverage")
+def view_coverage_cmd(
+    ctx: typer.Context,
+    format_: Annotated[str, typer.Option("--format", help="md, json or csv.")] = "md",
+    out: Annotated[Path | None, typer.Option("--out", help="Write to this file.")] = None,
+) -> None:
+    """The coverage map, complete: methods and confirmed ideas by comparability group, counts
+    only."""
+    state = _state(ctx)
+    with _reporting_errors():
+        _view_format(format_)
+        view = view_coverage_service.coverage_view(_resolve_project(state))
+        body = (
+            views_service.to_json(view)
+            if format_ == "json"
+            else views_render.coverage_csv(view)
+            if format_ == "csv"
+            else views_render.coverage_markdown(view)
+        )
+        _emit_view(body, out)
+
+
+@view_app.command("timeline")
+def view_timeline_cmd(
+    ctx: typer.Context,
+    group_id: Annotated[str, typer.Argument(help="A comparability group id, grp_.")],
+    format_: Annotated[str, typer.Option("--format", help="md, json or csv.")] = "md",
+    out: Annotated[Path | None, typer.Option("--out", help="Write to this file.")] = None,
+) -> None:
+    """The record timeline and per-year frontiers of one comparability group."""
+    state = _state(ctx)
+    with _reporting_errors():
+        _view_format(format_)
+        view = horizon_service.timeline_view(_resolve_project(state), group_id)
+        body = (
+            views_service.to_json(view)
+            if format_ == "json"
+            else views_render.timeline_csv(view)
+            if format_ == "csv"
+            else views_render.timeline_markdown(view)
+        )
+        _emit_view(body, out)
+
+
+@view_app.command("horizon")
+def view_horizon_cmd(
+    ctx: typer.Context,
+    format_: Annotated[str, typer.Option("--format", help="md, json or csv.")] = "md",
+    out: Annotated[Path | None, typer.Option("--out", help="Write to this file.")] = None,
+) -> None:
+    """Activity per year: ideas, lineage edges and record counts, with the corpus horizon."""
+    state = _state(ctx)
+    with _reporting_errors():
+        _view_format(format_)
+        view = horizon_service.horizon_view(_resolve_project(state))
+        body = (
+            views_service.to_json(view)
+            if format_ == "json"
+            else views_render.horizon_csv(view)
+            if format_ == "csv"
+            else views_render.horizon_markdown(view)
+        )
+        _emit_view(body, out)
 
 
 # --- Matching, finders and contradictions (slice 6, H-B) ---

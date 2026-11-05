@@ -114,7 +114,7 @@ def _group(project: Project, task: str) -> str:
 def test_unknown_direction_no_timeline(project: Project, vb_world: VbWorld) -> None:
     view = timeline_view(project, _group(project, "detection"))
     assert view.units == {} and view.direction == "unknown" and view.higher_is_better is None
-    assert [n.code for n in view.meta.notices] == ["direction-unknown"]
+    assert "direction-unknown" in [n.code for n in view.meta.notices]
 
 
 def test_unknown_group_is_a_structured_error(project: Project, vb_world: VbWorld) -> None:
