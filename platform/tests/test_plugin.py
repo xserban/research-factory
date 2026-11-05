@@ -24,6 +24,7 @@ SKILLS = (
     "rf-regions",
     "rf-screen",
     "rf-search",
+    "rf-write",
 )
 
 
@@ -245,4 +246,26 @@ def test_rf_experiment_names_its_tools_and_never_types_a_result() -> None:
         assert kept in text
     # the skill's tools cannot freeze, unlock, ingest, accept or record, and it names none
     for absent in ("experiment_freeze", "experiment_unlock", "xrun_record", "baseline_accept"):
+        assert absent not in text
+
+
+def test_rf_write_names_its_tools_and_never_types_a_citation_or_number() -> None:
+    text = (REPO_ROOT / "plugin" / "skills" / "rf-write" / "SKILL.md").read_text("utf-8")
+    for tool in ("writing_outline", "draft_create", "draft_next", "draft_write", "draft_status"):
+        assert tool in text, tool
+    lowered = " ".join(text.lower().split())
+    for phrase in (
+        "cite only supports shown in the slot",
+        "never type a citation or a number",
+        "synthesis",
+        "stat",
+        "disagreement",
+        "the corpus does not support",
+        "cross-group",
+        "supersedes",
+    ):
+        assert phrase in lowered, phrase
+    for kept in ("## Independence", "## Procedure", "## Tool arguments", "## Done when"):
+        assert kept in text
+    for absent in ("draft_verify", "draft_release", "draft_render"):
         assert absent not in text

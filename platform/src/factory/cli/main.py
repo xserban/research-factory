@@ -28,6 +28,7 @@ from factory.mcp.server import run
 from factory.model import lineage as lineage_model
 from factory.model.chase import ChaseDirection
 from factory.model.conclusions import BasisRef, Predicate
+from factory.model.drafts import DraftKind, SentenceClass
 from factory.model.experiments import DeviationKind
 from factory.model.extraction import ExtractedRowInput, MinerScope
 from factory.model.fulltext import Route
@@ -64,6 +65,7 @@ from factory.services import digest as digest_service
 from factory.services import discovery as discovery_service
 from factory.services import document_convert as document_convert_service
 from factory.services import document_read as document_read_service
+from factory.services import drafts as drafts_service
 from factory.services import evidence as evidence_service
 from factory.services import evidence_report as evidence_report_service
 from factory.services import experiments as experiments_service
@@ -98,6 +100,7 @@ from factory.services import mining as mining_service
 from factory.services import notices as notices_service
 from factory.services import onion as onion_service
 from factory.services import organisation_export as organisation_export_service
+from factory.services import outline as outline_service
 from factory.services import portfolio as portfolio_service
 from factory.services import prisma as prisma_service
 from factory.services import prisma_update as prisma_update_service
@@ -289,6 +292,11 @@ runs_app = typer.Typer(
     help="Experiment runs: list and record results from a runner's file (human or runner).",
     no_args_is_help=True,
 )
+draft_app = typer.Typer(
+    name="draft",
+    help="Drafts written from verified material: create, list, show, write, withdraw.",
+    no_args_is_help=True,
+)
 models_app = typer.Typer(
     name="models",
     help="Model facts the platform cannot know: training cut-offs (human).",
@@ -411,6 +419,7 @@ app.add_typer(hypotheses_app)
 app.add_typer(models_app)
 app.add_typer(experiments_app)
 app.add_typer(runs_app)
+app.add_typer(draft_app)
 app.add_typer(graph_app)
 app.add_typer(view_app)
 app.add_typer(interpretations_app)
@@ -4878,3 +4887,159 @@ def runs_record_cmd(
         project = _resolve_project(state)
         xruns_service.ingest_results(project, project.human_actor(), file, runner=runner)
     typer.echo(f"recorded {file.name}")
+
+
+# --- Writing from verified material (slice 7b, plan W-A) ---------------------------------------
+
+
+def _scope(
+    ideas: list[str] | None, groups: list[str] | None, works: list[str] | None
+) -> outline_service.OutlineScope:
+    return outline_service.OutlineScope(
+        works="included" if not works else tuple(works),
+        ideas=None if not ideas else tuple(ideas),
+        groups=None if not groups else tuple(groups),
+    )
+
+
+_IDEA_OPT = typer.Option("--idea", help="Restrict to this confirmed idea; repeat for several.")
+_GROUP_OPT = typer.Option("--group", help="Restrict to this comparability group; repeat.")
+_WORK_OPT = typer.Option("--work", help="Restrict to this included work; repeat for several.")
+
+
+@app.command("outline")
+def outline_cmd(
+    ctx: typer.Context,
+    json_: Annotated[bool, typer.Option("--json", help="Print the canonical JSON.")] = False,
+    idea: Annotated[list[str] | None, _IDEA_OPT] = None,
+    group: Annotated[list[str] | None, _GROUP_OPT] = None,
+    work: Annotated[list[str] | None, _WORK_OPT] = None,
+) -> None:
+    """The outline of verified material to write against, complete (the researcher's variant):
+    ids and codes only. A draft pins the agent variant, which withholds label-derived limits."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        outline = outline_service.build_outline(project, _scope(idea, group, work), agent=False)
+    if json_:
+        typer.echo(outline_service.outline_json(outline), nl=False)
+        return
+    for line in render.outline_lines(outline):
+        typer.echo(line)
+
+
+@draft_app.command("create")
+def draft_create_cmd(
+    ctx: typer.Context,
+    title: Annotated[str, typer.Option("--title", help="The draft's title.")],
+    kind: Annotated[
+        str,
+        typer.Option("--kind", help="related-work, review, grant-background, horizon-note, other."),
+    ],
+    idea: Annotated[list[str] | None, _IDEA_OPT] = None,
+    group: Annotated[list[str] | None, _GROUP_OPT] = None,
+    work: Annotated[list[str] | None, _WORK_OPT] = None,
+) -> None:
+    """Create a draft pinned to the outline of the scope."""
+    state = _state(ctx)
+    with _reporting_errors():
+        try:
+            draft_kind = DraftKind(kind)
+        except ValueError:
+            raise FactoryValidationError([ValidationIssue("kind", "unknown kind")]) from None
+        project = _resolve_project(state)
+        draft_id = drafts_service.create_draft(
+            project,
+            title=title,
+            kind=draft_kind,
+            scope=_scope(idea, group, work),
+            actor=project.human_actor(),
+        )
+    typer.echo(f"created {draft_id}")
+
+
+@draft_app.command("list")
+def draft_list_cmd(ctx: typer.Context) -> None:
+    """The drafts with their pinned outline and the number of live sentences."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        drafts = drafts_service.list_drafts(project)
+    for line in render.draft_list_lines(drafts):
+        typer.echo(line)
+
+
+@draft_app.command("show")
+def draft_show_cmd(
+    ctx: typer.Context, draft: Annotated[str, typer.Argument(help="A draft id, drf_.")]
+) -> None:
+    """One draft: sections and live sentences with class, status, flags and supports."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        found = drafts_service.get_draft(project, draft)
+        sentences = [] if found is None else drafts_service.live_sentences(project, draft)
+    if found is None:
+        _fail(f"unknown draft {draft}", 1)
+    for line in render.draft_detail_lines(found, sentences):
+        typer.echo(line)
+
+
+@draft_app.command("write")
+def draft_write_cmd(
+    ctx: typer.Context,
+    draft: Annotated[str, typer.Argument(help="A draft id, drf_.")],
+    section: Annotated[str, typer.Option("--section", help="A section id, sec_01.")],
+    class_: Annotated[
+        str, typer.Option("--class", help="claim, synthesis, interpretive or structural.")
+    ],
+    text: Annotated[str, typer.Option("--text", help="One sentence.")],
+    support: Annotated[
+        list[str] | None, typer.Option("--support", help="A support, <kind>:<ref>; repeat.")
+    ] = None,
+    supersedes: Annotated[
+        str | None, typer.Option("--supersedes", help="A live sentence this one replaces.")
+    ] = None,
+) -> None:
+    """Write one sentence as the researcher (author human). It passes the same checks as an
+    agent's; a refusal prints each issue and writes nothing."""
+    state = _state(ctx)
+    with _reporting_errors():
+        try:
+            cls = SentenceClass(class_)
+        except ValueError:
+            raise FactoryValidationError([ValidationIssue("class", "unknown class")]) from None
+        project = _resolve_project(state)
+        result = drafts_service.write_sentences(
+            project,
+            draft,
+            [
+                drafts_service.SentenceInput(
+                    section_id=section,
+                    cls=cls,
+                    text=text,
+                    supports=list(support or []),
+                    supersedes=supersedes,
+                )
+            ],
+            actor=project.human_actor(),
+        )
+    if result.rejected:
+        for issue in result.rejected[0].issues:
+            typer.echo(f"{issue.field}: {issue.reason}", err=True)
+        raise typer.Exit(1)
+    typer.echo(f"wrote {result.written[0]}")
+
+
+@draft_app.command("withdraw")
+def draft_withdraw_cmd(
+    ctx: typer.Context,
+    sentence: Annotated[str, typer.Argument(help="A sentence id, snt_.")],
+    reason: Annotated[str, typer.Option("--reason", help="Why it is withdrawn.")],
+) -> None:
+    """Withdraw a live sentence; it stays in the log."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        drafts_service.withdraw(project, sentence, reason, actor=project.human_actor())
+    typer.echo(f"withdrew {sentence}")
