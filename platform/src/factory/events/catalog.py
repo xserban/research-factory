@@ -27,6 +27,14 @@ from factory.model.imports import (
 from factory.model.inbox import InboxLinkAdded, InboxLinkResolved, InboxLinkWithdrawn
 from factory.model.living import SnapshotRecorded
 from factory.model.notices import NoticeAssessed, NoticeObserved
+from factory.model.lineage import (
+    IdeaDecided,
+    IdeaMerged,
+    IdeaProposed,
+    IdeaUnmerged,
+    RelationDecided,
+    RelationProposed,
+)
 from factory.model.probe import ProbeFailed, ProbeMeasured, ProbePageArchived
 from factory.model.project import ProjectCreated
 from factory.model.protocol import (
@@ -174,6 +182,12 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("inbox.link_added", InboxLinkAdded, 1))
     catalog.register(EventType("inbox.link_withdrawn", InboxLinkWithdrawn, 1))
     catalog.register(EventType("inbox.link_resolved", InboxLinkResolved, 1))
+    catalog.register(EventType("relation.proposed", RelationProposed, 1))
+    catalog.register(EventType("relation.decided", RelationDecided, 1))
+    catalog.register(EventType("idea.proposed", IdeaProposed, 1))
+    catalog.register(EventType("idea.decided", IdeaDecided, 1))
+    catalog.register(EventType("idea.merged", IdeaMerged, 1))
+    catalog.register(EventType("idea.unmerged", IdeaUnmerged, 1))
     catalog.register(EventType("watch.cycle_started", WatchCycleStarted, 1))
     catalog.register(EventType("watch.cycle_finished", WatchCycleFinished, 1))
     catalog.register(EventType("living.snapshot_recorded", SnapshotRecorded, 1))

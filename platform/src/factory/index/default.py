@@ -12,6 +12,7 @@ from factory.index.imports import import_handlers, import_tables
 from factory.index.inbox import inbox_handlers, inbox_tables
 from factory.index.living import living_handlers, living_tables
 from factory.index.notices import notice_handlers, notice_tables
+from factory.index.lineage import lineage_handlers, lineage_tables
 from factory.index.probe import probe_handlers, probe_tables
 from factory.index.project import project_created_handler, project_table
 from factory.index.projection import Handler, Projection, core_tables
@@ -39,8 +40,8 @@ def _chain(first: Handler, second: Handler) -> Handler:
 def default_projection(blobs: BlobStore | None = None) -> Projection:
     """A fresh projection: core tables plus the project, task, search, dedup, question, seed,
     probe, protocol, screening, chase, full-text, extraction, document, reference, import, inbox
-    and watch tables. `blobs` is the project's blob store, which the import handlers read records
-    from; without it, folding an import event raises."""
+    watch, relation and idea tables. `blobs` is the project's blob store, which the import
+    handlers read records from; without it, folding an import event raises."""
     metadata = MetaData()
     core_tables(metadata)
     project = project_table(metadata)
@@ -62,6 +63,7 @@ def default_projection(blobs: BlobStore | None = None) -> Projection:
     watch = watch_tables(metadata, search.runs)
     snapshots = living_tables(metadata)
     notices = notice_tables(metadata, search.work_keys, screening.label_sessions)
+    lineage = lineage_tables(metadata)
     handlers: dict[str, Handler] = {
         "project.created": project_created_handler(project),
         **task_handlers(tasks),
@@ -82,6 +84,7 @@ def default_projection(blobs: BlobStore | None = None) -> Projection:
         **watch_handlers(watch),
         **living_handlers(snapshots),
         **notice_handlers(notices),
+        **lineage_handlers(lineage),
     }
     # A run's start is folded by the search projection first, then linked to its watch cycle.
     handlers["search.run_started"] = _chain(
