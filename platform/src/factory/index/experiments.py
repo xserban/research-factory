@@ -35,7 +35,7 @@ from sqlalchemy.engine import Connection
 from factory.canonical import canonical_json
 from factory.events.envelope import Event
 from factory.hypotheses.design import (
-    access_hash,
+    access_key,
     cell_hash,
     cell_in_design,
     config_hash,
@@ -153,7 +153,7 @@ def experiment_tables(
         Column("env_differs", Integer),
         Column("nonce_ok", Integer),
         Index("ix_xruns_cell", "experiment_id", "cell_hash"),
-        Index("ix_xruns_access", "experiment_id", "access_hash"),
+        Index("ix_xruns_access", "access_hash"),
     )
     baselines = Table(
         "baseline_evaluations",
@@ -533,7 +533,7 @@ def _xrun_registered(t: ExperimentTables) -> Handler:
                 experiment_id=p.experiment_id,
                 e_version=p.e_version,
                 cell_hash=p.cell_hash,
-                access_hash=access_hash(p.cell),
+                access_hash=access_key(design, p.cell),
                 arm=p.cell.arm,
                 split=p.cell.split,
                 seed=p.cell.seed,
@@ -605,7 +605,6 @@ def _xrun_reported(t: ExperimentTables) -> Handler:
                 select(func.count())
                 .select_from(t.xruns)
                 .where(
-                    t.xruns.c.experiment_id == run.experiment_id,
                     t.xruns.c.access_hash == run.access_hash,
                     t.xruns.c.reported_event_id.is_not(None),
                     t.xruns.c.metrics_json.is_not(None),

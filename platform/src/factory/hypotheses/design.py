@@ -38,10 +38,12 @@ __all__ = [
     "MAX_UNIVERSES",
     "ablation_cells",
     "access_hash",
+    "access_key",
     "cell_hash",
     "cell_in_design",
     "config_hash",
     "control_cells",
+    "data_key",
     "design_issues",
     "design_version",
     "full_config",
@@ -223,6 +225,21 @@ def access_hash(cell: Cell) -> str | None:
     if cell.is_reproduction:
         return cell_hash(cell.model_copy(update={"arm": "baseline"}))
     return cell_hash(cell)
+
+
+def data_key(d: ExperimentDesign) -> str:
+    """A key of the confirmatory data of a design: the hash of its sorted confirmatory dataset
+    content hashes. Two designs with the same key read the same test data."""
+    hashes = sorted(x.sha256 for x in d.datasets if x.role == "confirmatory")
+    return hashlib.sha256(canonical_json(list(hashes))).hexdigest()[:16]
+
+
+def access_key(d: ExperimentDesign, cell: Cell) -> str | None:
+    """What a run reads on the confirmatory split: the confirmatory data of its design and the
+    primary cell (`access_hash`). Reads are counted per key across the whole project, so a new
+    design on the same data does not start at zero; None for a run on another split."""
+    plain = access_hash(cell)
+    return None if plain is None else f"{data_key(d)}:{plain}"
 
 
 def primary_cells(d: ExperimentDesign) -> list[Cell]:

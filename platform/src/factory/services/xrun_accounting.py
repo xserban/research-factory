@@ -22,7 +22,7 @@ from typing import Literal
 
 from sqlalchemy import text
 
-from factory.hypotheses.design import cell_hash, primary_cells
+from factory.hypotheses.design import access_key, cell_hash, primary_cells
 from factory.index.experiments import design_of
 from factory.model.base import StrictModel
 from factory.services.context import Project
@@ -69,8 +69,10 @@ def budget_view(project: Project, experiment_id: str) -> BudgetView | None:
 
 def access_counts(project: Project, experiment_id: str) -> dict[str, int]:
     """Primary cell hash to the number of reports that read it on the confirmatory split: the
-    primary runs of that cell and the confirmatory baseline reproductions of its seed. A report
-    that carries a metric value counts, a failed run too (ruling 18: it has read the split)."""
+    primary runs of that cell and the confirmatory baseline reproductions of its seed, in this
+    design and in every design of the project on the same confirmatory data (a new design does
+    not start at zero). A report that carries a metric value counts, a failed run too (ruling
+    18: it has read the split)."""
     project.index.sync()
     with project.index.connect() as conn:
         raw = conn.execute(
@@ -79,21 +81,18 @@ def access_counts(project: Project, experiment_id: str) -> dict[str, int]:
         ).scalar()
         if raw is None:
             return {}
-        counts = {cell_hash(c): 0 for c in primary_cells(design_of(raw))}
+        design = design_of(raw)
+        keys = {cell_hash(c): access_key(design, c) for c in primary_cells(design)}
         rows = conn.execute(
             text(
-                "SELECT access_hash, COUNT(*) FROM xruns WHERE experiment_id = :e "
-                "AND access_hash IS NOT NULL "
+                "SELECT access_hash, COUNT(*) FROM xruns WHERE access_hash IS NOT NULL "
                 "AND reported_event_id IS NOT NULL AND metrics_json IS NOT NULL "
                 "AND metrics_json != '{}' "
                 "GROUP BY access_hash"
             ),
-            {"e": experiment_id},
         ).all()
-    for key, count in rows:
-        if str(key) in counts:
-            counts[str(key)] = int(count)
-    return counts
+    read = {str(key): int(count) for key, count in rows}
+    return {plain: read.get(str(key), 0) for plain, key in keys.items()}
 
 
 def confirmatory_evidence(project: Project, hypothesis_id: str) -> bool:

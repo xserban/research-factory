@@ -29,6 +29,7 @@ from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor, Event
 from factory.extraction.numbers import canonical, parse_printed
 from factory.hypotheses.design import (
+    access_hash,
     cell_hash,
     cell_in_design,
     config_hash,
@@ -341,7 +342,7 @@ def ingest_results(project: Project, actor: Actor, path: Path, *, runner: str | 
         reused = False
         if run.access_hash is not None and metrics:
             counts = access_counts(project, run.experiment_id)
-            reused = counts.get(run.access_hash, 0) >= (view.access_limit or 1)
+            reused = counts.get(access_hash(run.cell) or "", 0) >= (view.access_limit or 1)
         payload = XrunReported(
             run_id=results.run,
             results_blob=project.blobs.put(raw),
