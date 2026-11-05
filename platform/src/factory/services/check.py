@@ -78,6 +78,7 @@ from factory.services.extraction import (
 from factory.services.extraction_agreement import final_rows, grouped_rows, independence_counts
 from factory.services.extraction_audit import extraction_audit_outstanding, extraction_audit_report
 from factory.services.fulltext_status import fulltext_status
+from factory.services.gates import gate_hits
 from factory.services.ideas import list_ideas
 from factory.services.imports import list_imports
 from factory.services.layer_check import (
@@ -461,6 +462,7 @@ def _run_rules(project: Project) -> list[_Hit]:
         _conclusions(project),
         _lineage(project),
         _layer(project),
+        gate_hits(project),
     ]
     flat = [hit for group in groups for hit in group]
     return [replace(hit, seq=seq) for seq, hit in enumerate(flat)]

@@ -36,6 +36,7 @@ SPEC = ModuleSpec(
     checks=(
         CheckRule("broken-link", ("error", "error", "error")),
         CheckRule("missing-provenance", ("error", "error", "error")),
+        CheckRule("gate-below-policy", ("warning", "warning", "error")),
     ),
 )
 

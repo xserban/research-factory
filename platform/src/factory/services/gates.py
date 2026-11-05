@@ -31,7 +31,14 @@ from factory.model.gates import GatePolicies
 from factory.model.project import RigorMode
 from factory.model.protocol import ProtocolSpec
 from factory.model.screening import Channel
-from factory.modules.contract import Autonomy, AutonomyAct, GatePolicy, PolicyKind
+from factory.modules.contract import (
+    Autonomy,
+    AutonomyAct,
+    CheckHit,
+    GateKind,
+    GatePolicy,
+    PolicyKind,
+)
 from factory.modules.presets import preset
 from factory.services import passes
 from factory.services.context import Project
@@ -229,3 +236,41 @@ def weakest(levels: list[Autonomy]) -> Autonomy:
     """The weakest autonomy of a basis: agent < audited-agent < human (ruling 10)."""
     order = [Autonomy.AGENT, Autonomy.AUDITED_AGENT, Autonomy.HUMAN]
     return min(levels, key=order.index, default=Autonomy.HUMAN)
+
+
+# --- Tightening blast radius (ruling 7) -------------------------------------------------
+
+
+def below_policy(project: Project) -> list[GateAct]:
+    """Agent acts at a gate whose *current* effective policy is `human`: earlier acts that a
+    tightening amendment would no longer accept. Computed on read; nothing is staled (decision
+    50). An agent act at a gate now `agent_audit` is not below policy; it enters the audit
+    population. Loosening lists nothing."""
+    from factory.services.modules.default import default_modules  # the registry imports services
+
+    found: list[GateAct] = []
+    for gate in default_modules().gates():
+        if gate.kind is not GateKind.DECISION:
+            continue
+        if effective_policy(project, gate.gate_id).kind is not PolicyKind.HUMAN:
+            continue
+        found.extend(a for a in gate_acts(project, gate.gate_id) if a.actor_kind == "agent")
+    return found
+
+
+def gate_hits(project: Project) -> list[CheckHit]:
+    """The `gate-*` findings, one hit per gate; none for a project whose acts all meet policy."""
+    hits: list[CheckHit] = []
+    by_gate: dict[str, list[str]] = {}
+    for act in below_policy(project):
+        by_gate.setdefault(act.gate_id, []).append(act.event_id)
+    for gate_id, refs in by_gate.items():
+        hits.append(
+            CheckHit(
+                "gate-below-policy",
+                tuple(refs),
+                f"{len(refs)} act(s) at gate {gate_id} were passed by an agent before the "
+                "policy became human",
+            )
+        )
+    return hits
