@@ -62,10 +62,15 @@ from factory.services.extraction import (
 from factory.services.extraction_agreement import grouped_rows
 from factory.services.extraction_audit import extraction_audit_outstanding, extraction_audit_report
 from factory.services.fulltext_status import fulltext_status
+from factory.services.imports import list_imports
 from factory.services.methods import MethodsReport, methods_report
 from factory.services.prisma import search_report
 from factory.services.protocol import current_protocol
-from factory.services.protocol_rules import snowball_plan_gaps, watch_plan_gaps
+from factory.services.protocol_rules import (
+    library_source_gaps,
+    snowball_plan_gaps,
+    watch_plan_gaps,
+)
 from factory.services.references import current_extraction, included_works
 from factory.services.seeds import SeedRole, _rigor_mode, seed_check
 from factory.services.snowball import recorded_rounds, round_runs
@@ -127,6 +132,12 @@ LEVELS: dict[str, tuple[Severity | None, Severity | None, Severity | None]] = {
     "window-misses": ("warning", "warning", "warning"),
     "update-audit-outstanding": (None, "warning", "error"),
     "calibration-model-drift": (None, "warning", "error"),
+    "import-unresolved": ("warning", "warning", "warning"),
+    "import-unconfirmed": ("warning", "warning", "warning"),
+    "import-attachment-missing": ("warning", "warning", "warning"),
+    "import-identity-unchecked": ("warning", "warning", "warning"),
+    "import-undeclared": ("warning", "error", "error"),
+    "import-coverage-optimistic": ("warning", "warning", "warning"),
 }
 
 REFERENCE_UNRESOLVED_CEILING = 0.30
@@ -259,7 +270,8 @@ def agent_check(project: Project, *, promote_to: RigorMode | None = None) -> Che
         labelled = (
             audit.audit_id if audit is not None and (audit.labelled or audit.outdated) else None
         )
-        return agent_view(check(project, promote_to=promote_to), labelled_audit=labelled)
+        report = agent_view(check(project, promote_to=promote_to), labelled_audit=labelled)
+        return _development_only(project, report)
 
 
 @dataclass(frozen=True)
@@ -370,6 +382,7 @@ def _hits(project: Project) -> list[_Hit]:
     hits += _references(project)
     hits += _snowball(project, outcomes)
     hits += _inbox(project, outcomes)
+    hits += _imports(project)
     hits += _living(project)
     return hits
 
@@ -1397,3 +1410,89 @@ def _unscreened(project: Project, outcomes: dict[str, Outcome], rounds: list[str
             ).all()
         }
     return sorted(w for w in found if outcomes.get(w) is Outcome.INCLUDED and w not in decided)
+
+
+# --- Imported libraries (slice 3d) ---
+
+_IMPORT_COUNTS: dict[str, str] = {
+    "import-unresolved": "record(s) unresolved",
+    "import-unconfirmed": "record(s) await confirmation of a fuzzy or ambiguous match",
+    "import-attachment-missing": "record(s) name a file that was not readable at import",
+    "import-identity-unchecked": "PDF record(s) neither attached nor confirmed by a human",
+}
+"""The count findings of an import and the phrase after the count. Messages carry the count and
+no record, title or ordinal."""
+
+_COUNT_SQL = """
+SELECT
+  COALESCE(SUM(CASE WHEN r.link_state IS NULL OR r.link_state = 'unresolved'
+               THEN 1 ELSE 0 END), 0),
+  COALESCE(SUM(CASE WHEN r.link_state IN ('unconfirmed', 'ambiguous') THEN 1 ELSE 0 END), 0),
+  COALESCE(SUM(CASE WHEN r.attachment_path_sha256 IS NOT NULL
+               AND r.attachment_content_sha256 IS NULL THEN 1 ELSE 0 END), 0),
+  COALESCE(SUM(CASE WHEN i.format = 'pdfs' AND r.link_state = 'resolved'
+               AND r.attachment_content_sha256 IS NOT NULL
+               AND (r.decision IS NULL OR r.decision != 'confirm')
+               AND NOT EXISTS (SELECT 1 FROM import_attachments a
+                               WHERE a.import_id = r.import_id AND a.ordinal = r.ordinal)
+               THEN 1 ELSE 0 END), 0)
+FROM import_records r JOIN imports i ON i.import_id = r.import_id
+WHERE r.import_id = :i AND r.outcome != 'malformed'
+"""
+
+
+def _import_counts(project: Project, import_id: str, *, development_only: bool) -> dict[str, int]:
+    """The four count findings of one import; `development_only` leaves the held-out part out
+    (the agent view, decision 43)."""
+    sql = _COUNT_SQL + (" AND r.part != 'held-out'" if development_only else "")
+    with project.index.connect() as conn:
+        row = conn.execute(text(sql), {"i": import_id}).one()
+    return dict(zip(_IMPORT_COUNTS, (int(n) for n in row), strict=True))
+
+
+def _imports(project: Project) -> list[_Hit]:
+    """Findings of the imported libraries: records left unresolved, unconfirmed or without their
+    file, PDF identities nobody checked, a corpus import the protocol does not declare (a
+    promotion gap) and a pre-search import whose split was declined."""
+    protocol = current_protocol(project)
+    hits: list[_Hit] = []
+    for listing in list_imports(project):
+        row = listing.row
+        counts = _import_counts(project, row.import_id, development_only=False)
+        for code, phrase in _IMPORT_COUNTS.items():
+            if counts[code]:
+                hits.append(_Hit(code, (row.import_id,), f"{counts[code]} {phrase}"))
+        if row.role.value == "corpus" and (
+            protocol is None or library_source_gaps(protocol.spec, row.collection, row.format)
+        ):
+            hits.append(
+                _Hit(
+                    "import-undeclared",
+                    (row.import_id,),
+                    "a corpus import without a library_sources entry in the protocol",
+                )
+            )
+        if row.split_mode == "declined":
+            hits.append(
+                _Hit(
+                    "import-coverage-optimistic",
+                    (row.import_id,),
+                    "the split of a pre-search import was declined; its coverage is optimistic",
+                )
+            )
+    return hits
+
+
+def _development_only(project: Project, report: CheckReport) -> CheckReport:
+    """`report` with each import count finding recounted over the development part, and dropped
+    when that count is zero: the held-out part's counts stay out of the agent view."""
+    findings: list[Finding] = []
+    for finding in report.findings:
+        if finding.code not in _IMPORT_COUNTS:
+            findings.append(finding)
+            continue
+        count = _import_counts(project, finding.refs[0], development_only=True)[finding.code]
+        if count:
+            message = f"{count} {_IMPORT_COUNTS[finding.code]}"
+            findings.append(finding.model_copy(update={"message": message}))
+    return report.model_copy(update={"findings": findings})

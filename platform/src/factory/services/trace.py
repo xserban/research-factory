@@ -41,6 +41,7 @@ from factory.model.dedup import MERGE_ID_RE
 from factory.model.extraction import CLAIM_ID_RE, EXTRACTION_ID_RE
 from factory.model.fulltext import ATTEMPT_ID_RE, DOCUMENT_ID_RE
 from factory.model.identity import BLOB_REF_RE, CONVERSION_ID_RE, ULID_RE
+from factory.model.imports import IMPORT_ID_RE
 from factory.model.inbox import INBOX_ID_RE
 from factory.model.protocol import PROTOCOL_ID_RE, ProtocolSpec
 from factory.model.question import QUESTION_ID_RE, QuestionSpec
@@ -77,6 +78,8 @@ KINDS: tuple[str, ...] = (
     "chase_round",
     "reference_extraction",
     "snowball_round",
+    "import",
+    "import_record",
 )
 """Node kinds in chain order. Sibling nodes are listed in this order (reversed for back traces, so
 the work branch of a decision comes before its cited criterion)."""
@@ -90,6 +93,7 @@ _RECORD_RE = rf"^(run_{ULID_RE})/(rf:.+)$"
 _AUDIT_ITEM_RE = rf"^(aud_{ULID_RE})/(rf:.+)$"
 _ANCHOR_RE = rf"^(cnv_{ULID_RE})/([^/\s]+)$"
 _RESOLUTION_RE = r"^res:(?:full-text:)?(rf:.+)$"
+_IMPORT_RECORD_RE = rf"^(imp_{ULID_RE})\:([1-9][0-9]*)$"
 _CELL_RE = r"^rk_[0-9a-f]{12}(?:/(?!\*$)\S+)?$"
 _PATTERNS: tuple[tuple[str, str], ...] = (
     (QUESTION_ID_RE, "question"),
@@ -108,6 +112,8 @@ _PATTERNS: tuple[tuple[str, str], ...] = (
     (CHASE_ROUND_ID_RE, "chase_round"),
     (REX_ID_RE, "reference_extraction"),
     (SNW_ID_RE, "snowball_round"),
+    (IMPORT_ID_RE, "import"),
+    (_IMPORT_RECORD_RE, "import_record"),
     (INBOX_ID_RE, "inbox_item"),
     (SEED_ID_RE, "seed"),
     (BLOB_REF_RE, "page"),
@@ -218,7 +224,7 @@ def agent_trace(
         hidden_queries = {
             str(q)
             for (q,) in conn.execute(
-                text("SELECT query_id FROM queries WHERE purpose IN ('seed', 'probe')")
+                text("SELECT query_id FROM queries WHERE purpose IN ('seed', 'probe', 'import')")
             ).all()
         }
         hidden_runs = {
@@ -254,7 +260,8 @@ def _hidden(node: TraceNode, queries: set[str], runs: set[str]) -> bool:
     if node.kind == "record":
         return node.id.split("/", 1)[0] in runs
     # How a work was supplied is a route; the agent view never shows one (slice 4a ruling 8).
-    return node.kind == "inbox_item"
+    # An import and its records carry ordinals, which name the held-out part (decision 43).
+    return node.kind in ("inbox_item", "import", "import_record")
 
 
 def without_seeds(node: TraceNode) -> TraceNode:
@@ -370,6 +377,7 @@ class _Walk:
         self._protocols: dict[str, _ProtocolRow] | None = None
         self._scanned: dict[tuple[str, str], str] | None = None
         self._chase: tuple[dict[str, str], dict[str, list[str]]] | None = None
+        self._lookup_runs: dict[str, tuple[str, ...]] | None = None
         self._describers: dict[str, Callable[[str], _Described | None]] = {
             "question": self._question,
             "element": self._element,
@@ -396,6 +404,8 @@ class _Walk:
             "reference_extraction": self._reference_extraction,
             "snowball_round": self._snowball_round,
             "inbox_item": self._inbox_item,
+            "import": self._import,
+            "import_record": self._import_record,
         }
 
     # --- Rows and events ---
@@ -578,6 +588,51 @@ class _Walk:
             return None
         label = f"archived raw page, ordinal {rows[0][0]}"
         return _Described(label, self._event_for("search.page_archived", ident))
+
+    def _import(self, ident: str) -> _Described | None:
+        rows = self._all(
+            "SELECT format, role, file_hash, parser, parser_version, split_mode, event_id "
+            "FROM imports WHERE import_id = :i",
+            i=ident,
+        )
+        if not rows:
+            return None
+        fmt, role, file_hash, parser, version, split, event_id = rows[0]
+        label = f"{fmt} import, role {role}; file {file_hash}; parser {parser} {version}"
+        return _Described(label + f"; split {split or 'none'}", str(event_id))
+
+    def _import_record(self, ident: str) -> _Described | None:
+        """A record of an import by hash, resolution and decision; never its title or fields."""
+        import_id, ordinal = ident.rsplit(":", 1)
+        rows = self._all(
+            "SELECT r.outcome, r.record_sha256, r.link_state, r.method, r.decision, i.event_id "
+            "FROM import_records r JOIN imports i ON i.import_id = r.import_id "
+            "WHERE r.import_id = :i AND r.ordinal = :o",
+            i=import_id,
+            o=int(ordinal),
+        )
+        if not rows:
+            return None
+        outcome, sha, state, method, decision, event_id = rows[0]
+        label = f"record {sha}; {outcome}"
+        if state is not None:
+            label += f"; {state} by {method or 'decision'}"
+        if decision is not None:
+            label += f"; decision {decision}"
+        return _Described(label, str(event_id))
+
+    def _import_lookup_runs(self) -> dict[str, tuple[str, ...]]:
+        """The lookup runs of each import's latest resolution, from the log (the index keeps the
+        resolutions, not the runs). Read once per walk."""
+        if self._lookup_runs is None:
+            found: dict[str, tuple[str, ...]] = {}
+            for event in read_all(self._project.paths.events_dir, self._project.catalog):
+                if event.type == "import.resolved":
+                    runs = event.payload["lookup_runs"]
+                    assert isinstance(runs, list)
+                    found[str(event.payload["import_id"])] = tuple(str(r) for r in runs)
+            self._lookup_runs = found
+        return self._lookup_runs
 
     def _record(self, ident: str) -> _Described | None:
         run_id, work_id = ident.split("/", 1)
@@ -982,6 +1037,15 @@ class _Walk:
                 q=ident,
             )
         ]
+        up += [
+            ("import", i)
+            for i in self._column(
+                "SELECT j.value FROM events e, json_each(e.refs) j "
+                "WHERE e.type = 'query.registered' AND json_extract(e.refs, '$[0]') = :q "
+                "AND substr(j.value, 1, 4) = 'imp_'",
+                q=ident,
+            )
+        ]
         down: list[Key] = [
             ("run", r) for r in self._column("SELECT run_id FROM runs WHERE query_id = :q", q=ident)
         ]
@@ -992,6 +1056,7 @@ class _Walk:
             ("query", q)
             for q in self._column("SELECT query_id FROM runs WHERE run_id = :r", r=ident)
         ]
+        up += [("import", imp) for imp, runs in self._import_lookup_runs().items() if ident in runs]
         down: list[Key] = [
             ("page", b)
             for b in self._column("SELECT DISTINCT raw_blob FROM pages WHERE run_id = :r", r=ident)
@@ -1053,6 +1118,14 @@ class _Walk:
             for r in self._column(
                 "SELECT run_id FROM provenance WHERE work_id = :w AND query_id NOT IN "
                 "(SELECT query_id FROM queries WHERE purpose = 'probe')",
+                w=ident,
+            )
+        ]
+        up += [
+            ("import_record", f"{i}:{o}")
+            for i, o in self._all(
+                "SELECT import_id, ordinal FROM import_records "
+                "WHERE work_id = :w AND link_state = 'resolved'",
                 w=ident,
             )
         ]
@@ -1518,6 +1591,33 @@ class _Walk:
         ]
         return up, down
 
+    def _edges_import(self, ident: str) -> tuple[list[Key], list[Key]]:
+        down: list[Key] = [
+            ("query", q)
+            for q in self._column(
+                "SELECT json_extract(e.refs, '$[0]') FROM events e "
+                "WHERE e.type = 'query.registered' "
+                "AND EXISTS (SELECT 1 FROM json_each(e.refs) j WHERE j.value = :i)",
+                i=ident,
+            )
+        ]
+        down += [("run", r) for r in self._import_lookup_runs().get(ident, ())]
+        return [], down
+
+    def _edges_import_record(self, ident: str) -> tuple[list[Key], list[Key]]:
+        import_id, ordinal = ident.rsplit(":", 1)
+        up: list[Key] = [("import", import_id)]
+        down: list[Key] = [
+            ("work", w)
+            for w in self._column(
+                "SELECT work_id FROM import_records WHERE import_id = :i AND ordinal = :o "
+                "AND link_state = 'resolved' AND work_id IS NOT NULL",
+                i=import_id,
+                o=int(ordinal),
+            )
+        ]
+        return up, down
+
 
 _EDGES: dict[str, Callable[[_Walk, str], tuple[list[Key], list[Key]]]] = {
     "question": _Walk._up_question,
@@ -1545,4 +1645,6 @@ _EDGES: dict[str, Callable[[_Walk, str], tuple[list[Key], list[Key]]]] = {
     "reference_extraction": _Walk._edges_reference_extraction,
     "snowball_round": _Walk._edges_snowball_round,
     "inbox_item": _Walk._edges_inbox_item,
+    "import": _Walk._edges_import,
+    "import_record": _Walk._edges_import_record,
 }
