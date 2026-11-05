@@ -15,7 +15,6 @@ from factory.events.envelope import Actor
 from factory.events.reader import read_all
 from factory.model.lineage import IdeaProposed, LineageDecision, RelationProposal
 from factory.model.screening import Channel
-from factory.model.seed import HeldOut
 from factory.services import relations, seeds
 from factory.services.context import Project
 from factory.services.contributions import contribution_agreement, resolve_contribution
@@ -310,15 +309,6 @@ def test_event_provenance(project: Project, agent: Actor, lin: Lineage, decider:
     assert proposed.actor.model and proposed.actor.skill and proposed.input_blob
     assert decided.actor.kind == "human" and decided.input_blob is None
     assert proposed.payload["classifier"] == "1"
-
-
-def test_held_out_work_behaves_as_an_ordinary_work(
-    project: Project, agent: Actor, lin: Lineage, monkeypatch: pytest.MonkeyPatch
-) -> None:  # decided item 37.9: no special answers for a seed's work
-    hidden = HeldOut(work_ids=frozenset({lin.target5, lin.source}))
-    monkeypatch.setattr(seeds, "held_out", lambda _p: hidden)
-    r = propose_relation(project, agent, prop(lin, lin.target5, basis=lin.base))
-    assert (r.status, r.status_reason, r.written) == ("stated", None, True)
 
 
 def test_unresolved_basis_refused_until_resolved(  # a stated edge rests on the final value

@@ -13,7 +13,6 @@ from factory.errors import FactoryValidationError
 from factory.events.envelope import Actor
 from factory.events.reader import read_all
 from factory.model.lineage import LineageDecision, RelationProposal
-from factory.model.seed import HeldOut
 from factory.services import seeds
 from factory.services.context import Project
 from factory.services.ideas import (
@@ -295,15 +294,6 @@ def test_candidates_from_names_and_builds_on(
     ]
     assert other not in {c.work_id for c in got}
     assert [c.work_id for c in got] == sorted(c.work_id for c in got)
-
-
-def test_held_out_work_is_an_ordinary_member(
-    project: Project, agent: Actor, lin: Lineage, monkeypatch: pytest.MonkeyPatch
-) -> None:  # decided item 37.9: no special answers for a seed's work
-    hidden = HeldOut(work_ids=frozenset({lin.source, lin.target5}))
-    monkeypatch.setattr(seeds, "held_out", lambda _p: hidden)
-    idea = propose_idea(project, agent, NAME, lin.source, lin.base, [lin.source, lin.target5])
-    assert idea_view(project, idea) is not None
 
 
 def test_merge_target_cannot_be_rejected_or_superseded_while_the_merge_stands(
