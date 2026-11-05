@@ -10,6 +10,9 @@ from factory.errors import FactoryValidationError, ValidationIssue
 from factory.model.base import StrictModel
 from factory.model.identity import ACTOR_ID_RE
 
+DEFAULT_VOCAB = "https://w3id.org/research-factory/vocab#"
+"""A placeholder namespace until the researcher registers one (plan X-B, ruling 4)."""
+
 
 class Settings(StrictModel):
     """Where the factory lives, which plugin installs its skills, and who is acting.
@@ -17,7 +20,9 @@ class Settings(StrictModel):
     Built from arguments, then env, then defaults. `plugin_dir` holds `skills/<name>/SKILL.md`
     and is `plugin_override` when one was given, else `root / "plugin"`. `host_id` names this
     machine as a host of projects (slice 5 ruling 2): from the argument, `FACTORY_HOST_ID` or
-    `<root>/.server/host_id`; None on a personal machine.
+    `<root>/.server/host_id`; None on a personal machine. `orcid`, `licence` and `vocab` name the
+    researcher, the project's licence and the RDF vocabulary in exports (plan X-B); they come from
+    the environment and the export that uses them checks them.
     """
 
     root: Path
@@ -25,6 +30,9 @@ class Settings(StrictModel):
     mailto: str | None = None
     plugin_override: Path | None = None
     host_id: str | None = Field(default=None, pattern=ACTOR_ID_RE)
+    orcid: str | None = None
+    licence: str | None = None
+    vocab: str = DEFAULT_VOCAB
 
     @property
     def plugin_dir(self) -> Path:
@@ -64,6 +72,9 @@ class Settings(StrictModel):
             mailto=mailto or None,
             plugin_override=plugin_dir,
             host_id=host_id,
+            orcid=os.environ.get("FACTORY_ORCID") or None,
+            licence=os.environ.get("FACTORY_LICENCE") or None,
+            vocab=os.environ.get("FACTORY_VOCAB") or DEFAULT_VOCAB,
         )
 
 
