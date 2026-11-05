@@ -242,6 +242,18 @@ def trace(
     or idea carries are added below it (forward); by default a trace of an evidence node is
     unchanged by the layer (plan G3-C).
     """
+    return _trace(project, ref, direction, layer, None)
+
+
+def _trace(
+    project: Project,
+    ref: str,
+    direction: Literal["back", "forward"],
+    layer: Layer,
+    skip: Callable[[Key], bool] | None,
+) -> TraceNode:
+    """`trace`, with `skip`: keys the walk never reaches. A skipped node is not entered in the
+    visited set either, so it can never claim a node a visible branch shows (an agent view)."""
     if layer not in ("evidence", "all"):
         raise FactoryValidationError([ValidationIssue("layer", "must be evidence or all")])
     if direction not in ("back", "forward"):
@@ -253,7 +265,7 @@ def trace(
         described = None if key is None else walk.describe(key)
         if key is None or described is None:
             raise FactoryValidationError([ValidationIssue("ref", "unknown id")])
-        return _build(walk, key, described, direction, {key})
+        return _build(walk, key, described, direction, {key}, skip)
 
 
 _HIDDEN_PURPOSES = ("seed", "probe")
@@ -275,8 +287,6 @@ def agent_trace(
     search is labelled `supplementary`, not by its route. Provenance of probe queries is not in
     any view (the corpus does not count it either).
     """
-    tree = without_seeds(trace(project, ref, direction=direction, layer=layer))
-    tree = _without_withheld_regions(project, tree)
     project.index.sync()
     with project.index.connect() as conn:
         hidden_queries = {
@@ -298,9 +308,51 @@ def agent_trace(
                 text("SELECT application_id FROM labels WHERE origin = 'import-tag'")
             ).all()
         }
+    skip = _agent_skip(project, hidden_queries, hidden_runs)
+    tree = without_seeds(_trace(project, ref, direction, layer, skip))
+    tree = _without_withheld_regions(project, tree)
     if _hidden(tree, hidden_queries, hidden_runs):
         raise FactoryValidationError([ValidationIssue("ref", "unknown id")])
     return _pruned(tree, hidden_queries, hidden_runs)
+
+
+def _agent_skip(project: Project, queries: set[str], runs: set[str]) -> Callable[[Key], bool]:
+    """The keys an agent's walk never reaches, for every hidden kind: hidden queries, runs and
+    their records, import tags, imports and their records, inbox items, and regions withheld
+    from agents with their versions and members."""
+    from factory.services.regions import region_ids, region_withheld
+
+    withheld = {rid for rid in region_ids(project) if region_withheld(project, rid)}
+    versions: set[str] = set()
+    if withheld:
+        with project.index.connect() as conn:
+            versions = {
+                str(v)
+                for (v,) in conn.execute(
+                    text(
+                        "SELECT DISTINCT version FROM region_snapshots WHERE region_id IN :r"
+                    ).bindparams(bindparam("r", expanding=True)),
+                    {"r": sorted(withheld)},
+                )
+            }
+
+    def skip(key: Key) -> bool:
+        kind, ident = key
+        if kind == "query":
+            return ident in queries
+        if kind in ("run", "label"):
+            return ident in runs
+        if kind == "record":
+            return ident.split("/", 1)[0] in runs
+        if kind in ("inbox_item", "import", "import_record"):
+            return True
+        if kind == "region":
+            return ident in withheld
+        if kind == "region_version":
+            return ident in versions
+        return kind == "region_member" and region_trace.split_member(ident)[0] in versions
+
+    return skip
 
 
 def _without_withheld_regions(project: Project, tree: TraceNode) -> TraceNode:
@@ -452,7 +504,12 @@ def _parse(ref: str) -> Key | None:
 
 
 def _build(
-    walk: "_Walk", key: Key, described: _Described | None, direction: str, visited: set[Key]
+    walk: "_Walk",
+    key: Key,
+    described: _Described | None,
+    direction: str,
+    visited: set[Key],
+    skip: Callable[[Key], bool] | None = None,
 ) -> TraceNode:
     """The subtree of `key`. A reference that names no row is a leaf with no event."""
     children: list[TraceNode] = []
@@ -465,10 +522,12 @@ def _build(
             reverse=direction == "back",
         )
         for neighbour in ordered:
-            if neighbour in visited:
+            if neighbour in visited or (skip is not None and skip(neighbour)):
                 continue
             visited.add(neighbour)
-            children.append(_build(walk, neighbour, walk.describe(neighbour), direction, visited))
+            children.append(
+                _build(walk, neighbour, walk.describe(neighbour), direction, visited, skip)
+            )
     shown = described or _Described(_MISSING, _NO_EVENT)
     return TraceNode(
         id=key[1],

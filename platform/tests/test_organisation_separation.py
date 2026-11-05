@@ -533,3 +533,35 @@ def test_term_trace_skips_rejected_applications(project: Project, iw: IWorld) ->
     term = promote_term(project, iw.human, name="performer", definition="d", applies_to=(W,))
     ids = {c.id for c in trace(project, term).children}
     assert keep in ids and drop not in ids
+
+
+def test_agent_trace_shape_is_the_same_for_a_tagged_and_an_untagged_work(
+    project: Project, iw: IWorld
+) -> None:
+    """A hidden tag label is skipped during the walk, so it cannot claim a work node that a
+    visible label then lacks."""
+    from factory.services.trace import agent_trace
+
+    s_label = label(project, iw.writer, "performer", iw.source)
+    o_label = label(project, iw.writer, "performer", iw.other)
+    term = promote_term(
+        project,
+        iw.human,
+        name="performer",
+        aliases=("performers",),
+        definition="d",
+        applies_to=(W,),
+    )
+    import_tag(project, iw, "performers", iw.source, "imp_01JZ9Q3K5M7N8P0R2S4T6V8W1J:9")
+    tree = agent_trace(project, term)
+    by_id = {c.id: c for c in tree.children}
+    assert set(by_id) == {s_label, o_label}  # the tag label is not shown
+    shapes = {
+        key: sorted((g.kind, g.id) for g in by_id[key].children) for key in (s_label, o_label)
+    }
+    assert [k for k, _ in shapes[s_label]] == [k for k, _ in shapes[o_label]] == ["work"]
+    assert shapes[s_label] == [("work", iw.source)]
+    assert shapes[o_label] == [("work", iw.other)]
+    # the researcher's own trace is unchanged: the tag label claims the work first
+    shown = {c.id: [g.kind for g in c.children] for c in trace(project, term).children}
+    assert len(shown) == 3 and sum("work" in v for v in shown.values()) == 2
