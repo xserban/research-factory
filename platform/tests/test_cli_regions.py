@@ -107,16 +107,16 @@ def test_cli_diff_counts(settings: Settings, region_project: RWorld, tmp_path: P
     region = _define(settings, tmp_path)
     _, out, _ = _run(settings.root, "regions", "snapshot", region)
     first = out.split()[-1]
-    code, _, err = _run(settings.root, "regions", "add", region, "rf:added-00000001")
+    code, _, err = _run(settings.root, "regions", "add", region, region_project.extra)
     assert code == 0, err
     removed = region_project.included[0]
-    assert _run(settings.root, "regions", "add", region, removed, "--remove")[0] == 0
+    assert _run(settings.root, "regions", "remove", region, removed)[0] == 0
     _, out, _ = _run(settings.root, "regions", "snapshot", region)
     second = out.split()[-1]
     assert first != second
     code, out, err = _run(settings.root, "regions", "diff", first, second)
     assert code == 0, err
     assert out.splitlines()[0] == "added 1  removed 1"
-    assert "+ work rf:added-00000001" in out and f"- work {removed}" in out
+    assert f"+ work {region_project.extra}" in out and f"- work {removed}" in out
     code, _, err = _run(settings.root, "regions", "diff", first, "R@" + "0" * 8)
     assert code == 1 and "version-unknown" in err

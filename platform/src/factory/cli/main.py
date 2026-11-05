@@ -3892,29 +3892,46 @@ def regions_review_cmd(
     typer.echo(f"{'wrong' if wrong else 'reviewed'} {version}")
 
 
+def _decide_region_member(
+    ctx: typer.Context,
+    region: str,
+    member: str,
+    member_type: MemberType,
+    decision: Literal["add", "remove"],
+) -> None:
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        regions_service.decide_member(
+            project, project.human_actor(), region, member_type, member, decision
+        )
+    typer.echo(f"{decision} {member}")
+
+
 @regions_app.command("add")
 def regions_add_cmd(
     ctx: typer.Context,
     region: Annotated[str, typer.Argument(help="A region id, reg_.")],
     member: Annotated[str, typer.Argument(help="A work, idea or concept id.")],
-    member_type: Annotated[MemberType, typer.Option("--type", help="work, idea or concept.")] = (
-        MemberType.WORK
-    ),
-    remove: Annotated[bool, typer.Option("--remove", help="Remove instead of add.")] = False,
+    member_type: Annotated[
+        MemberType, typer.Option("--type", help="work, idea or concept.")
+    ] = MemberType.WORK,
 ) -> None:
-    """Add a member to a region, or remove one, by a human decision; it enters the next snapshot."""
-    state = _state(ctx)
-    with _reporting_errors():
-        project = _resolve_project(state)
-        regions_service.decide_member(
-            project,
-            project.human_actor(),
-            region,
-            member_type,
-            member,
-            "remove" if remove else "add",
-        )
-    typer.echo(f"{'removed' if remove else 'added'} {member}")
+    """Add a member to a region by a human decision; it enters the next snapshot."""
+    _decide_region_member(ctx, region, member, member_type, "add")
+
+
+@regions_app.command("remove")
+def regions_remove_cmd(
+    ctx: typer.Context,
+    region: Annotated[str, typer.Argument(help="A region id, reg_.")],
+    member: Annotated[str, typer.Argument(help="A work, idea or concept id.")],
+    member_type: Annotated[
+        MemberType, typer.Option("--type", help="work, idea or concept.")
+    ] = MemberType.WORK,
+) -> None:
+    """Remove a member from a region by a human decision; it leaves the next snapshot."""
+    _decide_region_member(ctx, region, member, member_type, "remove")
 
 
 @regions_app.command("list")
