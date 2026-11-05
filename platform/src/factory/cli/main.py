@@ -133,6 +133,7 @@ from factory.services import view_coverage as view_coverage_service
 from factory.services import views as views_service
 from factory.services import watch as watch_service
 from factory.services import xruns as xruns_service
+from factory.services.commit import commit_hosted
 from factory.services.context import Project, list_projects, open_project
 from factory.services.extraction_agreement import Choice
 from factory.services.gate_status import gates_status
@@ -1229,6 +1230,24 @@ def server_check_cmd(ctx: typer.Context) -> None:
     if issues:
         raise typer.Exit(1)
     typer.echo("ok")
+
+
+@app.command("commit")
+def commit_cmd(
+    ctx: typer.Context,
+    sign: Annotated[
+        bool, typer.Option("--sign", help="Sign the commit with the server key.")
+    ] = False,
+    push: Annotated[str | None, typer.Option("--push", help="Remote to push to.")] = None,
+) -> None:
+    """Commit the new event and text-blob files of the projects hosted here."""
+    with _reporting_errors():
+        report = commit_hosted(_state(ctx).settings, sign=sign, push=push)
+    for slug, files in sorted(report.projects.items()):
+        typer.echo(f"{slug}: {files} files")
+    typer.echo(report.commit or "nothing to commit")
+    if push is not None and not report.pushed:
+        _fail(f"push to {push} failed", 1)
 
 
 @app.command()

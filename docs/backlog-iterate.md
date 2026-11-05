@@ -149,3 +149,6 @@ Minor review findings parked during the v1 build, to address when iterating from
 - W-B: `verify_record` does not recheck staleness: a support that went stale after the unit was served still takes a verdict, which then reads stale on read.
 - W-B: the open verification tasks of a superseded or withdrawn sentence stay open; nothing closes them, and `verify_record` refuses them as not live.
 - W-B: `factory draft release` prints only that the draft was released, not the record (counts, audit, log position).
+- deploy-A: a hand-written event with a far-future ID floors every later ID and `ts` there, which would break leases; consider refusing to floor past the clock by a margin (model/identity.py floor).
+- deploy-A: `Index.exclusive()` entered under a shared `connect()` hold is not outermost, so it neither syncs nor floors; no service does this today, nothing pins it (index/index.py).
+- deploy-A: no CLI hosts a project yet; `factory project host` is deploy-C Task 4, so `host_project` is reachable only from code until then.
