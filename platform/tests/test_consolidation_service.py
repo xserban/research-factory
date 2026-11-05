@@ -389,3 +389,32 @@ def test_concept_batch_merge_is_validated_cumulatively(cw: CW) -> None:
         )
     assert caught.value.issues[0].reason == "self-link"
     assert not events_of(project, "concept.merged", "consolidation.decided")
+
+
+def test_decided_clusters_and_completed_passes_serve_no_task(cw: CW) -> None:
+    project, human = cw.project, cw.w.human
+    pass_id = start_pass(project, human)
+    rows_ = list_clusters(project, pass_id)
+    decide_cluster(project, human, pass_id, rows_[0].index, "keep", reason="distinct")
+    served = []
+    while (task := consolidation_next(project, cw.w.writer)) is not None:
+        served.append(task.cluster_index)
+    assert rows_[0].index not in served and set(served) == {r.index for r in rows_[1:]}
+    for r in rows_[1:]:
+        decide_cluster(project, human, pass_id, r.index, "skip", reason="later")
+    complete_pass(project, human, pass_id)
+    other = cw.w.writer.model_copy(update={"session": "01JZ9Q3K5M7N8P0R2S4T6V8W9Z"})
+    assert consolidation_next(project, other) is None
+
+
+def test_proposal_for_a_decided_cluster_refused(cw: CW) -> None:
+    project, human = cw.project, cw.w.human
+    pass_id, index, row = first(project, "label")
+    task = consolidation_next(project, cw.w.writer)
+    while task is not None and task.kind != "label":
+        task = consolidation_next(project, cw.w.writer)
+    assert task is not None
+    decide_cluster(project, human, pass_id, index, "keep", reason="distinct")
+    with pytest.raises(FactoryValidationError) as caught:
+        propose(project, cw.w.writer, task.task_id, action="keep", members=row.members, reason="r")
+    assert caught.value.issues[0].reason == "cluster-decided"

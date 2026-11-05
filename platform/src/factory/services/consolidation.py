@@ -400,9 +400,26 @@ class ClusterTask(StrictModel):
     signals: list[dict[str, Any]]
 
 
+def _still_open(project: Project, content: JsonValue) -> bool:
+    """Whether the cluster a task serves is undecided in a pass not yet completed."""
+    assert isinstance(content, dict)
+    pass_id, index = str(content["pass_id"]), int(str(content["cluster_index"]))
+    row = _pass_row(project, pass_id)
+    if row is None or row[2] is not None:
+        return False
+    with project.index.connect() as conn:
+        decided = conn.execute(
+            text("SELECT 1 FROM consolidation_decisions WHERE pass_id = :p AND cluster_index = :i"),
+            {"p": pass_id, "i": index},
+        ).first()
+    return decided is None
+
+
 def consolidation_next(project: Project, actor: Actor) -> ClusterTask | None:
     """Claim the next open cluster task (a lease, 00-system section 8), or None."""
-    task = claim_next(project, actor, CONSOLIDATE_TASK_KIND)
+    task = claim_next(
+        project, actor, CONSOLIDATE_TASK_KIND, accept=lambda c: _still_open(project, c)
+    )
     if task is None:
         return None
     content = task_content(project, task)
@@ -443,6 +460,8 @@ def propose(
     assert isinstance(content, dict)
     cluster = {str(m["id"]) for m in cast(list[dict[str, Any]], content["members"])}
     issues: list[ValidationIssue] = []
+    if not _still_open(project, content):
+        issues.append(ValidationIssue("task_id", "cluster-decided"))
     unknown = sorted(set(members) - cluster)
     if unknown or not members:
         issues.append(ValidationIssue("members", "not-in-cluster" if unknown else "none-named"))
