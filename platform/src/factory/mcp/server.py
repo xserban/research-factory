@@ -676,7 +676,9 @@ def build_server(
                 flow = prisma_update_service.prisma_update(opened, until=until)
                 shown = prisma_update_service.agent_update(opened, flow)
                 data["update"] = shown.model_dump(mode="json")
-            return _withheld(opened, data, include_work_ids=update is not None)
+            return _without_record_keys(
+                _withheld(opened, data, include_work_ids=update is not None)
+            )
 
         return _reply(project, report, include_work_ids=update is not None)
 
@@ -1451,6 +1453,21 @@ def _without_rates(report: dict[str, JsonValue]) -> dict[str, JsonValue]:
         if isinstance(calibration, dict):
             calibration.pop("per_pass", None)
     return report
+
+
+_RECORD_KEY = re.compile(r"(imp_[0-9A-Z]{26}):[0-9]+")
+
+
+def _without_record_keys(value: JsonValue) -> JsonValue:
+    """`value` with every import record key `imp_<ULID>:<ordinal>` cut to the import id: an
+    ordinal names a record's place in the export, which names the held-out part (decision 43)."""
+    if isinstance(value, str):
+        return _RECORD_KEY.sub(r"\1", value)
+    if isinstance(value, list):
+        return [_without_record_keys(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _without_record_keys(item) for key, item in value.items()}
+    return value
 
 
 def _withheld(project: Project, value: JsonValue, include_work_ids: bool = True) -> JsonValue:

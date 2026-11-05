@@ -7,6 +7,7 @@ records, and how many, are held out (decision 43). Every record and work is inve
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -190,3 +191,31 @@ def test_cli_coverage_shows_all_parts(
     report = json.loads(as_json.stdout)
     assert [p["part"] for p in report["parts"]] == ["development", "held-out"]
     assert sum(p["resolved"] for p in report["parts"]) == N
+
+
+@pytest.mark.anyio
+async def test_report_prisma_hides_record_keys(
+    settings: Settings,
+    project: Project,
+    corpus: None,
+    agent: Actor,
+    clock: FixedClock,
+    tmp_path: Path,
+) -> None:
+    """The offline admission query's text names records as `imp_...:<ordinal>`; no agent surface
+    may show an ordinal."""
+    from factory.services.import_admit import admit_import
+    from tests.import_helpers import admission_records, admit_lookups, declare_library, import_bib
+    from tests.test_import_admit import _corpus_doi
+
+    declare_library(project, agent)
+    imp = import_bib(project, tmp_path, admission_records(_corpus_doi(project)))
+    lookups = admit_lookups()
+    resolve_import(project, imp, sources=lookups.sources())
+    admit_import(project, imp, sources=lookups.sources())
+    async with open_session(settings, clock, {}) as session:
+        body = await session.call("report_prisma", project="demo")
+    assert body["ok"] is True
+    text = json.dumps(body)
+    assert not re.search(r"imp_[0-9A-Z]{26}:[0-9]+", text)
+    assert imp in text  # the import itself is still reported
