@@ -45,14 +45,15 @@ from factory.services.contributions import contribution_item
 from factory.services.evidence_report import EvidenceRow, agent_evidence, evidence_report
 from factory.services.extraction import require_schema
 from factory.services.extraction_agreement import final_rows, key_value
+from factory.services.hypothesis_gates import effective_plan
 from factory.services.matching import subject_works
 from factory.services.properties import resolve_property
 from factory.services.protocol import current_protocol
 from factory.services.references import included_works
 
 CONFLICT_RELATIVE_TOLERANCE = Decimal("0.01")
-"""Relative tolerance against the larger magnitude (ruling 4); `hypothesis_plan.conflict_tolerance`
-overrides it once plan H-C adds that section."""
+"""Relative tolerance against the larger magnitude (ruling 4) when the protocol states none;
+`hypothesis_plan.conflict_tolerance` overrides it (`conflict_tolerance`)."""
 LIMIT_MAX = 500
 _PLACES = Decimal("0.0001")
 
@@ -125,6 +126,7 @@ def find_conflicts(
         raise _refuse("limit", f"between 1 and {LIMIT_MAX}")
     start = None if after is None else _cursor_key(after)
     report = agent_evidence(evidence_report(project))
+    tolerance = conflict_tolerance(project)
     found: list[ConflictPair] = []
     scanned = 0
     for group in sorted(report.groups, key=lambda g: g.group_id):
@@ -138,7 +140,7 @@ def find_conflicts(
             wanted = set(conflict.rows)
             members = [r for r in by_key.values() if r.row_key in wanted]
             for a, b in itertools.combinations(sorted(members, key=lambda r: r.row_key), 2):
-                pair = _pair(group.group_id, conflict.method, conflict.variant, a, b)
+                pair = _pair(group.group_id, conflict.method, conflict.variant, a, b, tolerance)
                 if pair is not None:
                     found.append(pair)
     found.sort(key=lambda p: (p.group_id, p.method, p.row_a, p.row_b))
@@ -153,8 +155,19 @@ def find_conflicts(
     )
 
 
+def conflict_tolerance(project: Project) -> Decimal:
+    """The relative tolerance in force: the protocol's `hypothesis_plan.conflict_tolerance`, else
+    the default `CONFLICT_RELATIVE_TOLERANCE`."""
+    return Decimal(effective_plan(project).conflict_tolerance)
+
+
 def _pair(
-    gid: str, method: str, variant: str | None, a: EvidenceRow, b: EvidenceRow
+    gid: str,
+    method: str,
+    variant: str | None,
+    a: EvidenceRow,
+    b: EvidenceRow,
+    tolerance: Decimal,
 ) -> ConflictPair | None:
     if a.work_id == b.work_id:
         return None
@@ -167,7 +180,7 @@ def _pair(
     if larger == 0:
         return None
     relative = abs(na - nb) / larger
-    if relative <= CONFLICT_RELATIVE_TOLERANCE:
+    if relative <= tolerance:
         return None
     return ConflictPair(
         group_id=gid,

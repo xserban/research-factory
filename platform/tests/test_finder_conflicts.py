@@ -81,6 +81,19 @@ def test_within_tolerance_not_conflict(
     assert pair.relative_difference == "0.0132"
 
 
+def test_plan_tolerance_overrides_the_default(
+    project: Project, patched: Callable[[list[Any]], None], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from decimal import Decimal
+
+    patched(_rows())
+    assert finders.conflict_tolerance(project) == Decimal("0.01")  # no plan stated
+    monkeypatch.setattr(finders, "conflict_tolerance", lambda _p: Decimal("0.005"))
+    assert any(p.method == "m2" for p in find_conflicts(project).conflicts)  # 0.66% apart
+    monkeypatch.setattr(finders, "conflict_tolerance", lambda _p: Decimal("0.5"))
+    assert find_conflicts(project).conflicts == []
+
+
 def test_same_work_rows_not_paired(project: Project, patched: Callable[[list[Any]], None]) -> None:
     patched(_rows())
     assert all(p.method != "m4" for p in find_conflicts(project).conflicts)
