@@ -341,6 +341,10 @@ class DraftAudited(StrictModel):
     channel: Channel
 
 
+SENTENCE_STATUSES = ("structural", "interpretive", "unchecked", "supported", "flagged", "stale")
+"""The computed statuses of a sentence, and the only keys of a release's counts."""
+
+
 class DraftAuditReport(StrictModel):
     """Every sample of a draft read together. `incorrect`, `rate` and `above_ceiling` are None in
     the agent variant; `rate` and `above_ceiling` also until a verdict is labelled."""

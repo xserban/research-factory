@@ -47,6 +47,7 @@ from factory.model.drafts import (
     MAX_ORDER,
     MAX_SUPPORTS,
     SENTENCE_MAX_CHARS,
+    SENTENCE_STATUSES,
     DraftCreated,
     DraftKind,
     DraftOutlineRepinned,
@@ -139,14 +140,6 @@ class DraftRow(StrictModel):
 
 
 SentenceStatus = Literal["structural", "interpretive", "unchecked", "supported", "flagged", "stale"]
-STATUSES: tuple[SentenceStatus, ...] = (
-    "structural",
-    "interpretive",
-    "unchecked",
-    "supported",
-    "flagged",
-    "stale",
-)
 
 
 @dataclass(frozen=True)
@@ -523,7 +516,7 @@ def sentence_status(project: Project, draft_id: str, *, agent: bool = False) -> 
 
 def status_counts(rows: Sequence[StatusRow]) -> dict[str, int]:
     """The count of each status, every status present."""
-    return {status: sum(1 for r in rows if r.status == status) for status in STATUSES}
+    return {status: sum(1 for r in rows if r.status == status) for status in SENTENCE_STATUSES}
 
 
 def _works_by_sentence(

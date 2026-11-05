@@ -27,10 +27,13 @@ this stays in the log and changes nothing (no service writes one, so it was writ
   draws from the population at that point of the log; a label from a human, for a sampled verdict.
 - A release is folded from a human or an agent named in `released_by`, for a draft with live
   sentences that `counts` adds up to, under the `writing.release` policy in force at that point of
-  the log and the actor it allows. Outside `exploratory` the audit must be drawn after the last
-  verdict and labelled, and `counts` show no stale sentence; in `systematic` the actor is the
-  human reviewer of record, `counts` show nothing flagged or unchecked, and the labels are under
-  the ceiling. Whether a sentence is really stale is computed on read and cannot be known here.
+  the log and the actor it allows. `counts` has only status keys and no negative value, and its
+  unchecked and flagged figures are those the verdicts and audit labels give, less what `stale`
+  may have taken. Outside `exploratory` the audit must be drawn after the last verdict and
+  labelled, and `counts` show no stale sentence; in `systematic` the actor is the human reviewer
+  of record, `counts` show nothing flagged or unchecked, and the labels are under the ceiling.
+  Whether a sentence is really stale is computed on read and cannot be known here, so a release
+  that claims no stale sentence is taken at its word on that one count.
 - A withdrawal is folded for a live sentence; a reorder only when `order` is a permutation of the
   section's live sentences.
 
@@ -58,6 +61,7 @@ from factory.model.drafts import (
     DRAFT_AUDIT_FRACTION,
     DRAFT_AUDIT_MINIMUM,
     DRAFT_VERIFY_ERROR_CEILING,
+    SENTENCE_STATUSES,
     AuditLabel,
     DraftAuditDrawn,
     DraftAudited,
@@ -648,8 +652,46 @@ def _is_reviewer_of_record(conn: Connection, t: DraftTables, actor: Actor) -> bo
     return any(r.role is ReviewerRole.REVIEWER_OF_RECORD and r.actor == actor.id for r in reviewers)
 
 
+def _open_counts(conn: Connection, draft_id: str) -> dict[str, int]:
+    """The unchecked and flagged sentences the verdicts and audit labels give, before staleness:
+    a live claim-bearing sentence with no verdict, and one whose verdict is not `supported` or
+    whose latest label is `incorrect`."""
+    rows = conn.execute(
+        text(
+            "SELECT v.verdict, EXISTS (SELECT 1 FROM draft_audit_items i "
+            "WHERE i.verdict_id = v.verdict_id AND i.label = :wrong) "
+            "FROM draft_sentences s LEFT JOIN sentence_verdicts v "
+            "ON v.sentence_id = s.sentence_id WHERE s.draft_id = :d "
+            "AND s.superseded_by IS NULL AND s.withdrawn = 0 AND s.cls IN (:claim, :synthesis)"
+        ),
+        {
+            "d": draft_id,
+            "wrong": AuditLabel.INCORRECT.value,
+            "claim": CLAIM_BEARING[0],
+            "synthesis": CLAIM_BEARING[1],
+        },
+    ).all()
+    unchecked = sum(1 for r in rows if r[0] is None)
+    flagged = sum(1 for r in rows if r[0] is not None and (r[0] != Verdict.SUPPORTED.value or r[1]))
+    return {"unchecked": unchecked, "flagged": flagged}
+
+
+def _counts_hold(conn: Connection, p: DraftReleased) -> bool:
+    """Whether `counts` can be what the service read. A stale sentence leaves the count it would
+    otherwise be in, which cannot be known here, so with no stale sentence the figures are exact."""
+    if set(p.counts) - set(SENTENCE_STATUSES) or min(p.counts.values(), default=0) < 0:
+        return False
+    stale = p.counts.get("stale", 0)
+    return all(
+        known - stale <= p.counts.get(status, 0) <= known
+        for status, known in _open_counts(conn, p.draft_id).items()
+    )
+
+
 def _release_holds(conn: Connection, t: DraftTables, event: Event, p: DraftReleased) -> bool:
     """What a release must satisfy that the log alone can tell (see the module docstring)."""
+    if not _counts_hold(conn, p):
+        return False
     live = conn.execute(
         text(
             "SELECT COUNT(*) FROM draft_sentences WHERE draft_id = :d "
