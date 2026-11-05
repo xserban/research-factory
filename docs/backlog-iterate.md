@@ -22,3 +22,4 @@ Minor review findings parked during the v1 build, to address when iterating from
 - G1 T9-10: displayed new_works is reduced by held-out works while report_prisma is not; difference reveals that a held-out work was added, never which (low).
 - Import-B: decide_import accepts an agent actor on any ordinal and its error names the state (no agent surface yet); _Plan.unadmittable unused; library-import accepted as seed explain-miss route though not an admission route; re-resolve after admission rewrites live link states of admitted works; a crash after one admission query succeeds needs a manual re-run (document).
 - living-B: shortfall and drift findings in check cover title/abstract only (check.py:400); extend to full-text later.
+- living-B: audit-missing and update-audit-outstanding both fire when shortfall > 0 in a living review (duplicate warning, check.py:400,778).
