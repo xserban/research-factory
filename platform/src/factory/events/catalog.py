@@ -18,8 +18,8 @@ from factory.model.dedup import DedupMerged, DedupReverted
 from factory.model.digest import DigestGenerated
 from factory.model.document import ConversionFailed, Converted
 from factory.model.drafts import (
-    DraftAudited,
     DraftAuditDrawn,
+    DraftAudited,
     DraftCreated,
     DraftOutlineRepinned,
     DraftReordered,

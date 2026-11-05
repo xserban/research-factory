@@ -4979,9 +4979,10 @@ def draft_show_cmd(
         project = _resolve_project(state)
         found = drafts_service.get_draft(project, draft)
         sentences = [] if found is None else drafts_service.live_sentences(project, draft)
+        statuses = [] if found is None else drafts_service.sentence_status(project, draft)
     if found is None:
         _fail(f"unknown draft {draft}", 1)
-    for line in render.draft_detail_lines(found, sentences):
+    for line in render.draft_detail_lines(found, sentences, statuses):
         typer.echo(line)
 
 

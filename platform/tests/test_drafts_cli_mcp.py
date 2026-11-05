@@ -318,7 +318,12 @@ WRITING_IMPORTERS = frozenset(
     {
         "factory.services.drafts",
         "factory.services.supports",
+        "factory.services.draft_verify",
+        "factory.services.draft_release",
+        "factory.services.exports",  # the bibliography scope `draft:<drf_...>` (plan W-B)
+        "factory.services.check",  # the draft findings (plan W-B)
         "factory.writing.checks",  # a type-only import of ResolvedSupport
+        "factory.writing.render",  # a type-only import of DraftView and StatusRow
         "factory.mcp.server",
         "factory.cli.main",
         "factory.cli.render",
