@@ -923,12 +923,7 @@ def build_server(
         def export() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
             _refuse_pass_session(opened)
-            chosen = exports_service.select_works(
-                opened,
-                None if ids else scope,
-                ids or (),
-                exclude_work_ids=exports_service.held_out_work_ids(opened),
-            )
+            chosen = exports_service.select_works(opened, None if ids else scope, ids or ())
             if len(chosen) > MCP_EXPORT_MAX_WORKS:
                 raise FactoryValidationError(
                     [
@@ -945,9 +940,9 @@ def build_server(
                 "count": len(chosen),
                 "scope": "ids" if ids else scope,
             }
-            return _withheld(opened, data)
+            return _withheld(opened, data, include_work_ids=False)
 
-        return _reply(project, export)
+        return _reply(project, export, include_work_ids=False)
 
     @server.tool()
     def trace(project: str, ref: str, direction: str = "back") -> dict[str, JsonValue]:
