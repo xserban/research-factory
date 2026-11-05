@@ -592,7 +592,7 @@ def _lineage(project: Project) -> list[_Hit]:
 # --- The interpretation layer (slice 3c, plan G3-C) ---
 
 _LAYER_ID = re.compile(r"\b(?:int|cpt|cul)_[0-9A-HJKMNP-TV-Z]{26}\b")
-_LAYER_EDGE = re.compile(r'"(?:explains|uses):')
+_LAYER_EDGE = re.compile(r'"(?:explains:int|uses:cul)_[0-9A-HJKMNP-TV-Z]{26}\b')
 _LAYER_CLASS = re.compile(r'"class"\s*:\s*"interpretation"')
 
 

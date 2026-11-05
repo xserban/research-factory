@@ -275,6 +275,22 @@ def test_layer_leak_fires_on_a_planted_reference(
         assert finding.severity == "error" and finding.refs == ["grouped_rows"]
 
 
+def test_a_quote_that_starts_like_an_edge_id_is_not_a_leak(
+    project: Project, iw: IWorld, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    agent_interpretation(project, iw)
+    monkeypatch.setattr(
+        check_module,
+        "grouped_rows",
+        lambda _p: ['{"quote":"uses: a kernel","note":"explains: why"}'],
+    )
+    assert "layer-leak" not in codes(project, SYSTEMATIC)
+    monkeypatch.setattr(
+        check_module, "grouped_rows", lambda _p: ['"uses:cul_01HZX3K4M5N6P7Q8R9S0T1V2WA"']
+    )
+    assert codes(project)["layer-leak"].refs == ["grouped_rows"]
+
+
 def test_layer_leak_fires_on_a_layer_class_in_an_export(
     project: Project, iw: IWorld, monkeypatch: pytest.MonkeyPatch
 ) -> None:
