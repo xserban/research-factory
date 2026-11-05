@@ -173,3 +173,13 @@ def test_build_that_writes_to_a_captured_container_is_never_restored(tmp_path: P
     assert first == ["seen"]
     assert second == ["seen"]
     assert builds == 2
+
+
+def test_first_build_of_a_process_is_shared(tmp_path: Path) -> None:
+    """Bindings that change by themselves must not split a world's key (`_LAZY_*`)."""
+    before = _counts("_build")
+    _build(_project(tmp_path / "a"), "Primary lazy?")
+    _build(_project(tmp_path / "b"), "Primary lazy?")
+    after = _counts("_build")
+    assert after.get("miss", 0) == before.get("miss", 0) + 1
+    assert after.get("hit", 0) == before.get("hit", 0) + 1

@@ -54,6 +54,13 @@ R = TypeVar("R")
 # a builder passes them. `mock_sources` records requests in `http_log`, which is replayed.
 _KEYED_CALLABLES = frozenset({"mock_sources.<locals>.make", "fake_sources.<locals>.make"})
 
+# Bindings that change by themselves, not through a patch, and so must not change the key: pydantic
+# finishes a model with forward references on first use, and tempfile draws its name sequence on the
+# first temporary directory (often the snapshot store's own). Keyed on them, a world's first two
+# builds in a process never shared a snapshot.
+_LAZY_CLASS_ATTRIBUTES = ("__pydantic_", "__signature__")
+_LAZY_MODULE_BINDINGS = frozenset({"tempfile._name_sequence"})
+
 
 @dataclass(frozen=True)
 class _Snapshot:
@@ -184,14 +191,20 @@ def _environment_key(project: Project) -> str:
             parts.append(f"{name}.{key}={_object_tag(value)}")
             if isinstance(value, type) and value.__module__ == name:
                 parts.extend(
-                    f"{name}.{key}.{k}={_object_tag(v)}" for k, v in _namespace_items(value)
+                    f"{name}.{key}.{k}={_object_tag(v)}"
+                    for k, v in _namespace_items(value)
+                    if not k.startswith(_LAZY_CLASS_ATTRIBUTES)
                 )
             elif isinstance(value, ModuleType) and not value.__name__.startswith(
                 ("factory", "tests")
             ):
                 external[value.__name__] = value
     for name, module in sorted(external.items()):
-        parts.extend(f"{name}.{k}={_object_tag(v)}" for k, v in _namespace_items(module))
+        parts.extend(
+            f"{name}.{k}={_object_tag(v)}"
+            for k, v in _namespace_items(module)
+            if f"{name}.{k}" not in _LAZY_MODULE_BINDINGS
+        )
     # The project is new in every test, so its parts are compared by kind, not identity: a patch
     # on it (or on one of its stores) adds or replaces an attribute of another kind.
     for key, value in _namespace_items(project):
