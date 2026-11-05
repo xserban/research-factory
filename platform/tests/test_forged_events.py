@@ -857,3 +857,47 @@ def test_a_drawn_sample_the_model_refuses_is_never_logged(project: Project) -> N
     for units in ((unit, unit), ()):
         with pytest.raises(ValidationError):
             _drawn(project, units=units)
+
+
+
+
+# --- Gate audit ---
+
+
+def _sampled(**over: Any) -> GateAuditSampled:
+    body: dict[str, Any] = {
+        "audit_id": f"gau_{ulid(1)}",
+        "gate_id": "links.confirm",
+        "act_event_ids": (f"ev_{ulid(1)}", f"ev_{ulid(1)}", f"ev_{ulid(2)}"),
+        "random_seed": 3,
+        "population": 5,
+        "population_digest": "d",
+    }
+    body.update(over)
+    return GateAuditSampled(**body)
+
+
+def _audit_label(act: str = f"ev_{ulid(1)}", **over: Any) -> GateAuditLabelled:
+    body: dict[str, Any] = {
+        "audit_id": f"gau_{ulid(1)}",
+        "act_event_id": act,
+        "correct": False,
+        "channel": Channel.CLI,
+    }
+    body.update(over)
+    return GateAuditLabelled(**body)
+
+
+def test_gate_audit_sample_is_a_human_act(project: Project, human: Actor) -> None:
+    inert(project, "gate.audit_sampled", _sampled(), AGENT)
+    folds(project, "gate.audit_sampled", _sampled(), human)
+    settled(project, "gate.audit_sampled", _sampled(), human)  # a repeat, with repeated acts
+
+
+def test_gate_audit_label_is_a_human_act_on_a_sampled_act(project: Project, human: Actor) -> None:
+    forge(project, "gate.audit_sampled", _sampled(), human)
+    inert(project, "gate.audit_labelled", _audit_label(), AGENT)
+    inert(project, "gate.audit_labelled", _audit_label(f"ev_{ulid(8)}"), human)
+    inert(project, "gate.audit_labelled", _audit_label(audit_id=f"gau_{ulid(8)}"), human)
+    folds(project, "gate.audit_labelled", _audit_label(), human)
+    inert(project, "gate.audit_labelled", _audit_label(correct=True), AGENT)

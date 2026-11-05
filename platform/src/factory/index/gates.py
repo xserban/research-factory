@@ -3,8 +3,9 @@
 `gate_audits` holds each `gate.audit_sampled`; `gate_audit_items` the sampled act ids with the
 human's latest label (`correct`, `note`), null until labelled. Handlers are total: a label of an
 unknown audit or an act outside its sample changes nothing, and a later label replaces an earlier
-one. Both tables are empty for a log without these events, so they are left out of the state hash
-then.
+one. A sample and a label are human acts (the services refuse any other actor, R-51): an event of
+another actor is left unfolded. Both tables are empty for a log without these events, so they are
+left out of the state hash then.
 """
 
 from __future__ import annotations
@@ -51,6 +52,8 @@ def gate_tables(metadata: MetaData) -> GateTables:
 
 def gate_handlers(t: GateTables) -> dict[str, Handler]:
     def sampled(conn: Connection, event: Event) -> None:
+        if event.actor.kind != "human":
+            return
         payload = GateAuditSampled.model_validate(event.payload)
         conn.execute(
             sqlite_insert(t.audits)
@@ -73,6 +76,8 @@ def gate_handlers(t: GateTables) -> dict[str, Handler]:
             )
 
     def labelled(conn: Connection, event: Event) -> None:
+        if event.actor.kind != "human":
+            return
         payload = GateAuditLabelled.model_validate(event.payload)
         conn.execute(
             update(t.items)
