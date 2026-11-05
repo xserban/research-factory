@@ -111,3 +111,10 @@ Minor review findings parked during the v1 build, to address when iterating from
 - XP-B: registry keys are fixed when a row is made, so a later idea merge does not reach an older row (a query expands the idea it is given, not the rows').
 - XP-B: `slice6_check` lists every card and recomputes every conclusive evaluation on each `check`; both want a cache at scale (literature recomputation reads the whole evidence report per hypothesis).
 - XP-B: `hypotheses.close` gates `direction.closed` only; `abandon` and `conclude` check for a human in the service but sit under no declared gate.
+- XP-B review: a margin beyond six places is compared with six-place interval bounds (rounding); extra_runs ids are counted, not reported.
+- XP-B review: the CLI does not print a literature evaluation's works or comparisons.
+- XP-B review: `prior_from_registry` stops at 200 rows, before the PRIOR_CAP count, so `prior_total` can undercount.
+- XP-B review: discarded-lead registry rows have empty conditions (a lead has no design; R-124 says every row states them).
+- XP-B review: the minimum seeds by mode are spelled twice (`hypothesis_gates._MIN_SEEDS`, `index.hypotheses.MIN_SEEDS_BY_MODE`).
+- XP-B review: the spec's advisory findings map to `warning`; the level table has no advisory level.
+- XP-B review: the researcher's trace label could carry the hypothesis statement; it is left out for both readers.
