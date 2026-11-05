@@ -186,6 +186,24 @@ def incorrect_verdicts(project: Project, draft_id: str) -> frozenset[str]:
         )
 
 
+def audit_sheet(project: Project, draft_id: str) -> list[tuple[str, str, str, str | None]]:
+    """(audit id, verdict id, sentence id, label) of every sampled verdict, for the researcher."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        return [
+            (str(r[0]), str(r[1]), str(r[2]), None if r[3] is None else str(r[3]))
+            for r in conn.execute(
+                text(
+                    "SELECT i.audit_id, i.verdict_id, v.sentence_id, i.label "
+                    "FROM draft_audit_items i JOIN draft_audits a ON a.audit_id = i.audit_id "
+                    "JOIN sentence_verdicts v ON v.verdict_id = i.verdict_id "
+                    "WHERE a.draft_id = :d ORDER BY i.audit_id, i.verdict_id"
+                ),
+                {"d": draft_id},
+            )
+        ]
+
+
 def open_audit_items(project: Project, draft_id: str) -> list[tuple[str, str]]:
     """(audit id, verdict id) of the sampled verdicts still unlabelled, in order."""
     project.index.sync()
@@ -208,6 +226,7 @@ __all__ = [
     "GATE",
     "agent_audit_report",
     "audit_report",
+    "audit_sheet",
     "draw_audit",
     "incorrect_verdicts",
     "open_audit_items",

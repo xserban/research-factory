@@ -1,9 +1,9 @@
 """The writing MCP tools, the `factory draft` / `factory outline` commands and the architecture
 rule (slice 7b, plan W-A, task 6).
 
-Five tools and no more: an agent reads the outline, creates a draft, pulls slots and writes
-sentences. None of them sets a status, a flag, a stat value or a citation key. Every tool is
-refused to a pass session and role-blind before a pass opens.
+An agent reads the outline, creates a draft, pulls slots and writes sentences; the verification
+and release tools are plan W-B's. None of them sets a status, a flag, a stat value or a citation
+key. Every tool is refused to a pass session and role-blind before a pass opens.
 """
 
 # ruff: noqa: F401, F811
@@ -44,7 +44,17 @@ from tests.test_mcp_cards import _session
 from tests.views_b_helpers import ext_b
 from tests.writing_helpers import WWorld, audit_above_ceiling, ww
 
-TOOLS = ("writing_outline", "draft_create", "draft_next", "draft_write", "draft_status")
+TOOLS = (
+    "writing_outline",
+    "draft_create",
+    "draft_next",
+    "draft_write",
+    "draft_status",
+    "draft_verify_next",
+    "draft_verify_record",
+    "draft_render",
+    "draft_release",
+)
 WRITER = "01JZ9Q3K5M7N8P0R2S4T6V8W1W"
 AS = {"role": "writer", "model": "claude-sonnet-5-5", "skill": "rf-write"}
 LOREM = "Lorem is described in the method section"
@@ -63,8 +73,8 @@ async def test_tool_list_pins_the_writing_tools(
         names = [t.name for t in (await client.list_tools()).tools]
     related = [n for n in names if n.startswith(("writing_", "draft_"))]
     assert sorted(related) == sorted(TOOLS)
-    for name in related:  # no tool verifies, audits, renders or releases in this plan
-        assert not any(w in name for w in ("verify", "audit", "release", "render", "withdraw"))
+    for name in related:  # no tool audits (spec: the audit is the researcher's)
+        assert not any(w in name for w in ("audit", "label", "withdraw"))
 
 
 @pytest.mark.anyio

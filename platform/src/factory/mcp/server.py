@@ -28,7 +28,7 @@ from factory.mcp.conventions import (
 from factory.model.base import StrictModel
 from factory.model.cards import PropertyDef, QuoteBasis
 from factory.model.chase import ChaseDirection
-from factory.model.drafts import DraftKind
+from factory.model.drafts import DraftKind, SupportSpan, Verdict
 from factory.model.experiments import Cell, ExperimentDesign
 from factory.model.extraction import ClaimInput, ExtractedRowInput, MinerScope
 from factory.model.findings import ContradictionInput
@@ -72,6 +72,9 @@ from factory.services import digest as digest_service
 from factory.services import directions as directions_service
 from factory.services import discovery as discovery_service
 from factory.services import document_read as document_read_service
+from factory.services import draft_audit as draft_audit_service
+from factory.services import draft_release as draft_release_service
+from factory.services import draft_verify as draft_verify_service
 from factory.services import drafts as drafts_service
 from factory.services import evaluation_view as evaluation_view_service
 from factory.services import evidence as evidence_service
@@ -1023,7 +1026,8 @@ def build_server(
         ids: list[str] | None = None,
     ) -> dict[str, JsonValue]:
         """The bibliography of a scope of works as BibTeX or CSL-JSON text (`format` bibtex or
-        csl; `scope` included or corpus, or explicit work `ids`, which replace the scope). At
+        csl; `scope` included, corpus or draft:<drf_...>, or explicit work `ids`, which replace
+        the scope). At
         most MCP_EXPORT_MAX_WORKS works; use the CLI for more. Built from events only; refused to
         any session that has joined a screening or extraction pass, and until a screening pass
         is open (use the CLI before then). Read-only."""
@@ -3216,10 +3220,121 @@ def build_server(
                     }
                     for r in rows
                 ],
+                "audit": draft_audit_service.agent_audit_report(
+                    draft_audit_service.audit_report(opened, draft_id)
+                ).model_dump(mode="json"),
             }
             return _withheld(opened, data, include_work_ids=False)
 
         return _reply(project, status, include_work_ids=False)
+
+    @server.tool()
+    def draft_verify_next(
+        project: str, draft_id: str, role: str, model: str, skill: str
+    ) -> dict[str, JsonValue]:
+        """The next sentence of the draft that needs a verdict, as a task leased to this session:
+        `sentence_id`, `text`, `cls`, `context_previous` (the preceding sentence, context only) and
+        `supports`, each with its `ref`, `kind` and `spans`, the only text you judge from. Returns
+        `unit: null` when none is left. Pass `rf-verify` as `skill`. Refused to a session that
+        wrote a sentence of the draft or joined a pass; in systematic mode, to the writer's
+        model."""
+
+        def serve() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            _require_pass_opened(opened, "view")
+            actor = make_agent_actor(settings, session, role, model, skill)
+            unit = draft_verify_service.verify_next(opened, draft_id, actor=actor)
+            data: dict[str, JsonValue] = {
+                "unit": None if unit is None else unit.model_dump(mode="json")
+            }
+            return _withheld(opened, data, include_work_ids=False)
+
+        return _reply(project, serve, include_work_ids=False)
+
+    @server.tool()
+    def draft_verify_record(
+        project: str,
+        task_id: str,
+        verdict: str,
+        role: str,
+        model: str,
+        skill: str,
+        sentence_span: str | None = None,
+        support_spans: list[dict[str, JsonValue]] | None = None,
+        note: str | None = None,
+    ) -> dict[str, JsonValue]:
+        """Record the verdict of the unit: supported, partial, unsupported, contradicted or
+        overstated (the sentence is stronger than the spans). `sentence_span` is the part of the
+        sentence you judge, required unless supported. `support_spans` lists `{ref, substring}`,
+        verbatim from a span of that support, at least one unless unsupported. `note` is at most
+        300 characters. The platform checks the substrings; it does not judge. Refused to a
+        session that wrote in the draft or joined a pass."""
+
+        def record() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            _require_pass_opened(opened, "view")
+            actor = make_agent_actor(settings, session, role, model, skill)
+            try:
+                item = draft_verify_service.VerdictInput(
+                    verdict=Verdict(verdict),
+                    sentence_span=sentence_span,
+                    support_spans=[SupportSpan.model_validate(s) for s in support_spans or []],
+                    note=note,
+                )
+            except ValueError:
+                raise FactoryValidationError(
+                    [ValidationIssue("verdict", "unknown verdict or malformed support_spans")]
+                ) from None
+            verdict_id = draft_verify_service.verify_record(opened, task_id, item, actor=actor)
+            return _withheld(opened, {"verdict_id": verdict_id}, include_work_ids=False)
+
+        return _reply(project, record, include_work_ids=False)
+
+    @server.tool()
+    def draft_render(project: str, draft_id: str, mode: str = "review") -> dict[str, JsonValue]:
+        """The draft as Markdown text. `review` shows each sentence with its status, flags,
+        supports and their quotes; `clean` the prose with citation keys, `[[UNSUPPORTED: ...]]`
+        and `[[INTERPRETATION]]` markers, the counts and the methods paragraph. An audit's result
+        is the researcher's and is not stated. Read-only; refused to a session that has joined a
+        pass."""
+
+        def render() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            _require_pass_opened(opened, "view")
+            if mode not in ("review", "clean"):
+                raise FactoryValidationError([ValidationIssue("mode", "must be review or clean")])
+            body = drafts_service.draft_render(
+                opened, draft_id, "review" if mode == "review" else "clean", agent=True
+            )
+            return _withheld(opened, {"text": body}, include_work_ids=False)
+
+        return _reply(project, render, include_work_ids=False)
+
+    @server.tool()
+    def draft_release(
+        project: str, draft_id: str, role: str, model: str, skill: str
+    ) -> dict[str, JsonValue]:
+        """Release the draft through the gate `writing.release`: in exploratory mode any non-empty
+        draft; in pilot mode once the audit the researcher drew is labelled and no sentence is
+        stale. A refusal lists the blocking counts. Refused in systematic mode, where only the
+        reviewer of record releases, at the terminal; refused to a session that joined a pass."""
+
+        def act() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            _require_pass_opened(opened, "view")
+            if gates_service.rigor_mode(opened) is RigorMode.SYSTEMATIC:
+                raise FactoryValidationError(
+                    [ValidationIssue("actor", "in this mode a draft is released at the terminal")]
+                )
+            actor = make_agent_actor(settings, session, role, model, skill)
+            event_id = draft_release_service.release(opened, draft_id, actor=actor)
+            return _withheld(opened, {"event_id": event_id}, include_work_ids=False)
+
+        return _reply(project, act, include_work_ids=False)
 
     # --- Experiment designs and runs (slice 6, plan XP-A) ---------------------------------
     # Four tools and no more: an agent drafts and amends a design before the freeze and registers
