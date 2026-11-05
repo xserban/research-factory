@@ -30,6 +30,7 @@ from sqlalchemy.engine import Connection
 from factory.clock import parse_ts
 from factory.events.envelope import Actor
 from factory.index import lab as lab_index
+from factory.model.identity import ulid_time
 from factory.model.lab import (
     DEFAULT_TOKEN_DAYS,
     MAX_TOKEN_DAYS,
@@ -136,7 +137,9 @@ def issue_token(
             if not lab_index.is_active(conn, lab.tables, user):
                 raise refuse("user", f"no active user {user!r}")
         credential_id = lab.ids.new("crd")
-        expires = lab.clock.now() + timedelta(days=days)
+        # From the ID, not the clock: the fold measures the term from `event.ts`, which is whole
+        # milliseconds and not earlier than this ID, so a full `MAX_TOKEN_DAYS` still folds.
+        expires = ulid_time(credential_id.removeprefix("crd_")) + timedelta(days=days)
         payload = payload_of(
             CredentialIssued,
             credential_id=credential_id,
