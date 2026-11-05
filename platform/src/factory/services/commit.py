@@ -67,7 +67,8 @@ class CommitReport(StrictModel):
 
 
 def commit_hosted(settings: Settings, *, sign: bool, push: str | None) -> CommitReport:
-    """Commit the new event and text-blob files of every project hosted here, then push."""
+    """Commit the new event and text-blob files of every project hosted here, then push. `sign`
+    signs with the server key; the CLI signs unless told `--no-sign` (ruling 5)."""
     host_id = _require_host(settings)
     if push is not None and re.fullmatch(_REMOTE_RE, push) is None:
         raise FactoryValidationError([ValidationIssue("push", "not a remote name")])

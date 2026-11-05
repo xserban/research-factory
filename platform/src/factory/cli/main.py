@@ -1235,14 +1235,14 @@ def server_check_cmd(ctx: typer.Context) -> None:
 @app.command("commit")
 def commit_cmd(
     ctx: typer.Context,
-    sign: Annotated[
-        bool, typer.Option("--sign", help="Sign the commit with the server key.")
+    no_sign: Annotated[
+        bool, typer.Option("--no-sign", help="Leave the commit unsigned; signing is the default.")
     ] = False,
     push: Annotated[str | None, typer.Option("--push", help="Remote to push to.")] = None,
 ) -> None:
     """Commit the new event and text-blob files of the projects hosted here."""
     with _reporting_errors():
-        report = commit_hosted(_state(ctx).settings, sign=sign, push=push)
+        report = commit_hosted(_state(ctx).settings, sign=not no_sign, push=push)
     for slug, files in sorted(report.projects.items()):
         typer.echo(f"{slug}: {files} files")
     typer.echo(report.commit or "nothing to commit")
