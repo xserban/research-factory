@@ -42,7 +42,7 @@ from sqlalchemy import text
 from factory.document.anchors import Anchor, AnchorKind, Manifest
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.model.base import StrictModel
-from factory.model.extraction import Scope
+from factory.model.extraction import ScopeKey, scope_from_value
 from factory.model.fulltext import ROUTE_ORDER, Quality, Route
 from factory.model.protocol import ScreeningStage
 from factory.model.screening import PassLabel
@@ -241,14 +241,14 @@ def _full_text_pass(project: Project, session: str) -> PassLabel | None:
     return None if row is None else PassLabel(str(row[0]))
 
 
-def _extraction_pass(project: Project, session: str) -> tuple[Scope, PassLabel] | None:
+def _extraction_pass(project: Project, session: str) -> tuple[ScopeKey, PassLabel] | None:
     """The (scope, pass) of the extraction pass the session joined, if any."""
     with project.index.connect() as conn:
         row = conn.execute(
             text("SELECT scope, pass_label FROM extraction_sessions WHERE session = :s"),
             {"s": session},
         ).first()
-    return None if row is None else (Scope(str(row[0])), PassLabel(str(row[1])))
+    return None if row is None else (scope_from_value(str(row[0])), PassLabel(str(row[1])))
 
 
 def _held_pins(project: Project, session: str, kind: str, work_id: str) -> list[tuple[str, str]]:

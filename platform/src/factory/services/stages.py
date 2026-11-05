@@ -7,11 +7,13 @@ refused as the stage of a run. Full-text screening needs a declared plan
 Invariants:
 - Every refusal is a FactoryValidationError and writes nothing.
 - `task_kind` and `stage_of_kind` are inverse on the four screening task kinds.
-- `kinds_for` and `scope_of_kind` are inverse on the four extraction task kinds.
+- `kinds_for` and `scope_of_kind` are inverse on the four evidence and contribution task kinds;
+  the two mine kinds belong to no fixed scope (the miner is in the task), so `scope_of_kind`
+  is None for them and `is_mine_kind` tells them apart.
 """
 
 from factory.errors import FactoryValidationError, ValidationIssue
-from factory.model.extraction import Scope
+from factory.model.extraction import MinerScope, Scope, ScopeKey
 from factory.model.protocol import ScreeningPlan, ScreeningStage
 from factory.model.screening import PassLabel
 from factory.services.modules import default_task_kinds
@@ -38,9 +40,23 @@ CONTRIB_KINDS: dict[PassLabel, str] = _extract_kinds(Scope.CONTRIBUTION)
 """The task kind of each contribution extraction pass (slice 3b); one task per work per pass."""
 
 
-def kinds_for(scope: Scope) -> dict[PassLabel, str]:
+MINE_KINDS: dict[PassLabel, str] = {
+    label: _REGISTRY.kind_for("mining", label=label) for label in PassLabel
+}
+"""The task kinds of the passes of registered miners; every miner shares them."""
+
+
+def kinds_for(scope: ScopeKey) -> dict[PassLabel, str]:
     """The extraction task kinds of `scope`."""
+    if isinstance(scope, MinerScope):
+        return MINE_KINDS
     return CONTRIB_KINDS if scope is Scope.CONTRIBUTION else EXTRACT_KINDS
+
+
+def is_mine_kind(kind: str) -> bool:
+    """Whether `kind` is a task kind of registered miners (`mine_a`, `mine_b`)."""
+    info = _REGISTRY.describe(kind)
+    return info is not None and info.module == "mining"
 
 
 def scope_of_kind(kind: str) -> Scope | None:

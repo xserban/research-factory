@@ -28,6 +28,9 @@ _EXTRACTION: tuple[tuple[str, str, str, PassLabel], ...] = (
     ("contrib_a", "contributions", Scope.CONTRIBUTION.value, PassLabel.A),
     ("contrib_b", "contributions", Scope.CONTRIBUTION.value, PassLabel.B),
 )
+_MINING: tuple[tuple[str, PassLabel], ...] = (("mine_a", PassLabel.A), ("mine_b", PassLabel.B))
+"""The task kinds of registered miners: the miner is in the task content (`TASK_KIND_RE` admits
+no digits or hyphens, so a kind per miner is not possible; slice M, Generic mine path)."""
 
 
 @lru_cache(maxsize=1)
@@ -38,5 +41,7 @@ def default_task_kinds() -> TaskKindRegistry:
         registry.register(kind, "screening", stage=stage.value, label=label, scope=None)
     for kind, module, scope, label in _EXTRACTION:
         registry.register(kind, module, stage=None, label=label, scope=scope)
+    for kind, label in _MINING:
+        registry.register(kind, "mining", stage=None, label=label, scope=None)
     registry.register(INTUITION_TASK_KIND, "intuition", stage=None, label=None, scope=None)
     return registry

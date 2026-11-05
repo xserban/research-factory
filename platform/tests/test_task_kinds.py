@@ -26,6 +26,7 @@ def test_kinds_unchanged() -> None:
     assert stages.CONTRIB_KINDS == {A: "contrib_a", B: "contrib_b"}
     assert stages.kinds_for(Scope.EVIDENCE) == {A: "extract_a", B: "extract_b"}
     assert stages.kinds_for(Scope.CONTRIBUTION) == {A: "contrib_a", B: "contrib_b"}
+    assert stages.MINE_KINDS == {A: "mine_a", B: "mine_b"}
     assert default_task_kinds().kinds() == (
         "screen_a",
         "screen_b",
@@ -35,6 +36,8 @@ def test_kinds_unchanged() -> None:
         "extract_b",
         "contrib_a",
         "contrib_b",
+        "mine_a",
+        "mine_b",
         INTUITION_TASK_KIND,
     )
 

@@ -22,7 +22,6 @@ from sqlalchemy.engine import Connection
 from factory.events.envelope import Event
 from factory.index.projection import Handler
 from factory.model.extraction import (
-    CONTRIBUTION_SCOPE_NAME,
     WHOLE_ROW_MARKER,
     ClaimRecorded,
     ExtractionAuditLabelled,
@@ -32,8 +31,8 @@ from factory.model.extraction import (
     ExtractionPassOpened,
     ExtractionRecorded,
     ExtractionResolved,
-    Scope,
     audit_scope_of_pack,
+    pack_tag,
     scope_of_pack,
     scope_of_schema_ref,
 )
@@ -251,7 +250,7 @@ def _recorded(t: ExtractionTables) -> Handler:
             .values(
                 extraction_id=payload.extraction_id,
                 scope=scope.value,
-                pack=CONTRIBUTION_SCOPE_NAME if scope is Scope.CONTRIBUTION else None,
+                pack=pack_tag(scope),
                 cited_extraction_id=cited.reference_extraction_id if cited else None,
                 cited_ordinal=cited.ordinal if cited else None,
                 cited_marker=cited.marker if cited else None,

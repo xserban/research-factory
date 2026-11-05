@@ -23,7 +23,6 @@ from factory.document.anchors import AnchorKind
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.packs.model import Conditional, ReportSpec, UnitFamily
 
-MINER_NAME_RE = r"^m-[a-z0-9]+(?:-[a-z0-9]+)*$"
 FIELD_NAME_RE = r"^[a-z][a-z0-9_]*$"
 
 

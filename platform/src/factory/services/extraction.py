@@ -80,11 +80,15 @@ from factory.model.extraction import (
     ExtractionPassJoined,
     ExtractionPassOpened,
     ExtractionRecorded,
+    MinerScope,
     ReportedIn,
     Scope,
+    ScopeKey,
     StoredField,
     Strength,
     UnitReferences,
+    pack_tag,
+    scope_from_value,
     scope_of_pack,
     scope_of_schema_ref,
 )
@@ -113,7 +117,13 @@ from factory.services.references import current_extraction, included_works
 from factory.services.results import BatchResult, ItemError
 from factory.services.screening import _is_label_session, relayed_extraction_label
 from factory.services.search import list_works
-from factory.services.stages import EXTRACT_KINDS, kinds_for, scope_of_kind, screening_plan
+from factory.services.stages import (
+    EXTRACT_KINDS,
+    is_mine_kind,
+    kinds_for,
+    scope_of_kind,
+    screening_plan,
+)
 from factory.services.tasks import (
     TaskSpec,
     build_task_events,
@@ -208,8 +218,27 @@ class ContributionBatchContent(ExtractBatchContent):
     item_rules: list[str]
 
 
+class MineBatchContent(ExtractBatchContent):
+    """Content of a registered miner's task: the batch plus the miner's identity and the anchors
+    its selector selects in the pinned conversion (ids only, never document text). Lives here
+    because it extends `ExtractBatchContent`; `calibration_id` names the calibration the task
+    belongs to (M-D)."""
+
+    miner: str
+    version: int
+    digest: str
+    anchors: tuple[str, ...]
+    calibration_id: str | None = None
+
+
 class ExtractBatch(ExtractBatchContent):
     """A task as served to a session: its content and the task that holds it."""
+
+    task_id: str
+
+
+class MineBatch(MineBatchContent):
+    """A miner task as served: its content (with miner, digest and anchors) and the task."""
 
     task_id: str
 
@@ -224,7 +253,7 @@ class ExtractNext(StrictModel):
     """`batch` is None when nothing is served; `blocked` says why; `remaining` counts the works of
     this pass whose task is not yet completed. A contribution task is a `ContributionBatch`."""
 
-    batch: ExtractBatch | ContributionBatch | None
+    batch: ExtractBatch | ContributionBatch | MineBatch | None
     blocked: list[str]
     remaining: int
 
@@ -253,12 +282,16 @@ _SECTIONS: dict[Scope, tuple[str, str]] = {
 
 
 def require_schema(
-    project: Project, *, scope: Scope = Scope.EVIDENCE
+    project: Project, *, scope: ScopeKey = Scope.EVIDENCE
 ) -> tuple[ProtocolVersion, ExtractionSchema, Pack]:
     """The ready protocol, the schema of `scope` and the schema's pack. Raises on field
     `protocol` when no ready protocol exists; on the scope's section (`extraction_schema` or
     `contribution_schema`) when none is declared (R-13); and on `<section>.pack` for an unknown
     pack or a pack of the other scope (the name `contribution` is reserved for its section)."""
+    if isinstance(scope, MinerScope):
+        from factory.services.mining import miner_schema  # mining imports this module
+
+        return miner_schema(project, scope.name)
     protocol = current_protocol(project)
     if protocol is None or protocol.status is not ProtocolStatus.READY:
         raise FactoryValidationError(
@@ -274,7 +307,7 @@ def require_schema(
         raise FactoryValidationError(
             [ValidationIssue(section, f"declare the {title} in the protocol first (R-13)")]
         )
-    if scope_of_pack(schema.pack) is not scope:
+    if scope_of_pack(schema.pack) != scope:
         raise FactoryValidationError(
             [
                 ValidationIssue(
@@ -309,10 +342,14 @@ def extraction_population(project: Project) -> list[str]:
     return sorted(w for w, o in final_outcomes(project, stage=FT).items() if o is Outcome.INCLUDED)
 
 
-def scope_population(project: Project, scope: Scope) -> list[str]:
+def scope_population(project: Project, scope: ScopeKey) -> list[str]:
     """The works a scope extracts, sorted: `extraction_population` for evidence; G1's
     `included_works` for contribution (slice 3b ruling 9: a work without a current G1 extraction
     is included)."""
+    if isinstance(scope, MinerScope):
+        from factory.services.mining import miner_population  # mining imports this module
+
+        return miner_population(project, scope.name)
     if scope is Scope.EVIDENCE:
         return extraction_population(project)
     project.index.sync()
@@ -335,7 +372,7 @@ def in_dual_sample(seed: int, work_id: str, fraction: float | None) -> bool:
 
 
 def pass_config(
-    project: Project, label: PassLabel, *, scope: Scope = Scope.EVIDENCE
+    project: Project, label: PassLabel, *, scope: ScopeKey = Scope.EVIDENCE
 ) -> PassConfig | None:
     """The seed and field order recorded when pass `label` of `scope` opened; None when it has
     not."""
@@ -356,7 +393,7 @@ def is_extraction_session(project: Project, session: str) -> bool:
     return passes.is_pass_session(project, session, module="extraction")
 
 
-def session_scope(project: Project, session: str) -> Scope | None:
+def session_scope(project: Project, session: str) -> ScopeKey | None:
     """The scope of the extraction pass the session joined; None when it joined none."""
     project.index.sync()
     joined = _joined(project, session)
@@ -364,7 +401,7 @@ def session_scope(project: Project, session: str) -> Scope | None:
 
 
 def unit_pin(
-    project: Project, work_id: str, *, scope: Scope = Scope.EVIDENCE
+    project: Project, work_id: str, *, scope: ScopeKey = Scope.EVIDENCE
 ) -> tuple[str, str] | None:
     """The (document, conversion) the extraction of `work_id` in `scope` is pinned to, for both
     passes: the pin of its latest task of either pass of the scope, by task id, while that
@@ -377,11 +414,13 @@ def unit_pin(
     return ledger.pin(work_id)
 
 
-def _content_model(scope: Scope) -> type[ExtractBatchContent]:
+def _content_model(scope: ScopeKey) -> type[ExtractBatchContent]:
+    if isinstance(scope, MinerScope):
+        return MineBatchContent
     return ContributionBatchContent if scope is Scope.CONTRIBUTION else ExtractBatchContent
 
 
-def _kind_tasks(project: Project, scope: Scope) -> list[tuple[str, str, ExtractBatchContent]]:
+def _kind_tasks(project: Project, scope: ScopeKey) -> list[tuple[str, str, ExtractBatchContent]]:
     """Every task of the scope's kinds as (task id, status, content), in task-ID order."""
     kinds = list(kinds_for(scope).values())
     marks = ", ".join(f":k{i}" for i in range(len(kinds)))
@@ -394,23 +433,28 @@ def _kind_tasks(project: Project, scope: Scope) -> list[tuple[str, str, ExtractB
             {f"k{i}": kind for i, kind in enumerate(kinds)},
         ).all()
     model = _content_model(scope)
-    return [
+    found = [
         (str(task_id), str(status), model.model_validate(project.blobs.get_json(str(blob))))
         for task_id, status, blob in rows
     ]
+    if isinstance(scope, MinerScope):  # every miner shares the mine kinds: keep this miner's
+        found = [
+            t for t in found if isinstance(t[2], MineBatchContent) and t[2].miner == scope.name
+        ]
+    return found
 
 
-def _joined(project: Project, session: str) -> tuple[Scope, PassLabel] | None:
+def _joined(project: Project, session: str) -> tuple[ScopeKey, PassLabel] | None:
     """The (scope, pass) the session joined, if any (one per session, ruling 2)."""
     with project.index.connect() as conn:
         row = conn.execute(
             text("SELECT scope, pass_label FROM extraction_sessions WHERE session = :s"),
             {"s": session},
         ).one_or_none()
-    return None if row is None else (Scope(str(row[0])), PassLabel(str(row[1])))
+    return None if row is None else (scope_from_value(str(row[0])), PassLabel(str(row[1])))
 
 
-def _pass_models(project: Project, label: PassLabel, scope: Scope) -> set[str]:
+def _pass_models(project: Project, label: PassLabel, scope: ScopeKey) -> set[str]:
     with project.index.connect() as conn:
         rows = conn.execute(
             text("SELECT model FROM extraction_sessions WHERE scope = :scope AND pass_label = :l"),
@@ -432,7 +476,7 @@ def _other(label: PassLabel) -> PassLabel:
 
 
 def join_extraction_pass(
-    project: Project, actor: Actor, label: PassLabel, *, scope: Scope = Scope.EVIDENCE
+    project: Project, actor: Actor, label: PassLabel, *, scope: ScopeKey = Scope.EVIDENCE
 ) -> None:
     """Bind the session to extraction pass `label` of `scope`. Refused, with nothing written, when
     the actor is not an agent, when the session relayed a human label or joined a screening pass,
@@ -445,12 +489,14 @@ def join_extraction_pass(
             project.record([_join_event(project, actor, label, scope)])
 
 
-def _scoped_name(scope: Scope, label: PassLabel) -> str:
+def _scoped_name(scope: ScopeKey, label: PassLabel) -> str:
+    if isinstance(scope, MinerScope):
+        return f"miner {scope.name} pass {label.value}"
     prefix = "contribution " if scope is Scope.CONTRIBUTION else ""
     return f"{prefix}pass {label.value}"
 
 
-def _check_join(project: Project, actor: Actor, label: PassLabel, scope: Scope) -> bool:
+def _check_join(project: Project, actor: Actor, label: PassLabel, scope: ScopeKey) -> bool:
     """True when a join must be written; raises on a refusal."""
     if actor.kind != "agent" or actor.model is None:
         raise FactoryValidationError(
@@ -489,19 +535,19 @@ def _check_join(project: Project, actor: Actor, label: PassLabel, scope: Scope) 
     return True
 
 
-def _pack_tag(scope: Scope) -> str | None:
+def _pack_tag(scope: ScopeKey) -> str | None:
     """The `pack` an event of `scope` carries: null for evidence, which projects as before G2."""
-    return CONTRIBUTION_SCOPE_NAME if scope is Scope.CONTRIBUTION else None
+    return pack_tag(scope)
 
 
-def _input(project: Project, actor: Actor, label: PassLabel, scope: Scope) -> str | None:
+def _input(project: Project, actor: Actor, label: PassLabel, scope: ScopeKey) -> str | None:
     value: dict[str, JsonValue] = {"pass_label": label.value}
-    if scope is Scope.CONTRIBUTION:
+    if scope != Scope.EVIDENCE:
         value["scope"] = scope.value
     return project.blobs.put_json(value) if actor.kind == "agent" else None
 
 
-def _join_event(project: Project, actor: Actor, label: PassLabel, scope: Scope) -> Event:
+def _join_event(project: Project, actor: Actor, label: PassLabel, scope: ScopeKey) -> Event:
     model = actor.model
     if model is None:
         raise FactoryValidationError(
@@ -529,7 +575,7 @@ def next_unit(
     actor: Actor,
     label: PassLabel,
     *,
-    scope: Scope,
+    scope: ScopeKey,
     content: ContentHook | None = None,
 ) -> ExtractNext:
     """Serve the next task of extraction pass `label` of `scope` to the session, or say why none
@@ -553,8 +599,8 @@ def next_unit(
         project.index.sync()
         protocol, schema, pack = require_schema(project, scope=scope)
         population = scope_population(project, scope)
-        if scope is Scope.CONTRIBUTION and content is None:
-            raise TypeError("a contribution task needs a content hook")
+        if scope != Scope.EVIDENCE and content is None:
+            raise TypeError(f"a task of scope {scope.value} needs a content hook")
         if actor.kind != "agent" or actor.model is None:
             raise FactoryValidationError(
                 [ValidationIssue("actor", "only an agent extractor joins a pass")]
@@ -681,7 +727,7 @@ def _enqueue(
 
 
 def _hooked(
-    project: Project, hook: ContentHook, base: ExtractBatchContent, scope: Scope
+    project: Project, hook: ContentHook, base: ExtractBatchContent, scope: ScopeKey
 ) -> ExtractBatchContent:
     """The hook's content for `base`. It must keep what the ledger reads (pass, schema, fields,
     records) and, for a contribution task, be a `ContributionBatchContent`; anything else is a
@@ -761,10 +807,16 @@ def _held(project: Project, actor: Actor, kind: str, servable: set[str]) -> Task
     return get_task(project, held[0]) if held else None
 
 
-def _batch(project: Project, task: Task, scope: Scope) -> ExtractBatch | ContributionBatch:
+def _batch(
+    project: Project, task: Task, scope: ScopeKey
+) -> ExtractBatch | ContributionBatch | MineBatch:
     content = task_content(project, task)
     fields = dict(content) if isinstance(content, dict) else {}
-    model = ContributionBatch if scope is Scope.CONTRIBUTION else ExtractBatch
+    model: type[ExtractBatch | ContributionBatch | MineBatch]
+    if isinstance(scope, MinerScope):
+        model = MineBatch
+    else:
+        model = ContributionBatch if scope is Scope.CONTRIBUTION else ExtractBatch
     return model.model_validate({**fields, "task_id": task.task_id})
 
 
@@ -834,7 +886,7 @@ class UnitPin:
     task_id: str
     work_id: str
     pass_label: PassLabel
-    scope: Scope
+    scope: ScopeKey
     document_id: str
     conversion_id: str
 
@@ -872,7 +924,7 @@ class _Unit:
     work_id: str
     document_id: str
     conversion_id: str
-    scope: Scope
+    scope: ScopeKey
 
     @property
     def label(self) -> PassLabel:
@@ -1022,9 +1074,17 @@ def _record(
             )
         task = require_holder(project, actor, task_id)
         unit = _unit_of(project, task)
-        if evidence_only and unit.scope is Scope.CONTRIBUTION:
+        if evidence_only and unit.scope != Scope.EVIDENCE:
+            miner = isinstance(unit.scope, MinerScope)
             raise FactoryValidationError(
-                [ValidationIssue("task_id", "this is a contribution task; use contribution_record")]
+                [
+                    ValidationIssue(
+                        "task_id",
+                        "this is a miner task; use mine_record"
+                        if miner
+                        else "this is a contribution task; use contribution_record",
+                    )
+                ]
             )
         if _joined(project, actor.session) != (unit.scope, unit.label):
             raise FactoryValidationError(
@@ -1225,16 +1285,20 @@ def _unit_of(project: Project, task: Task) -> _Unit:
     """The extraction unit a task holds, in the scope of its kind. Raises on `task_id` for any
     other task, and for one whose schema reference names a pack of the other scope."""
     refusal = FactoryValidationError([ValidationIssue("task_id", "is not an extraction task")])
-    scope = scope_of_kind(task.kind)
+    scope: ScopeKey | None = scope_of_kind(task.kind)
+    raw = task_content(project, task)
+    if scope is None and is_mine_kind(task.kind) and isinstance(raw, dict):
+        miner = raw.get("miner")
+        scope = MinerScope(miner) if isinstance(miner, str) else None
     if scope is None:
         raise refusal
     try:
-        content = _content_model(scope).model_validate(task_content(project, task))
+        content = _content_model(scope).model_validate(raw)
     except ValidationError as exc:
         raise refusal from exc
     if task.kind != kinds_for(scope)[content.pass_label] or len(content.records) != 1:
         raise refusal
-    if scope_of_schema_ref(content.schema_ref) is not scope:
+    if scope_of_schema_ref(content.schema_ref) != scope:
         raise FactoryValidationError(
             [
                 ValidationIssue(
@@ -1472,7 +1536,7 @@ class _Ledger:
     `scope`, whose amendment rule (`scope_rule`) alone stales its rows."""
 
     project: Project
-    scope: Scope
+    scope: ScopeKey
     tasks: dict[tuple[str, PassLabel], list[_UnitTask]]
     closed_at: dict[str, str]
     rows: dict[tuple[str, PassLabel], list[ExtractionRow]]
@@ -1670,7 +1734,7 @@ class _Ledger:
         return stale
 
 
-def _ledger(project: Project, scope: Scope = Scope.EVIDENCE) -> _Ledger:
+def _ledger(project: Project, scope: ScopeKey = Scope.EVIDENCE) -> _Ledger:
     """Read the ledger of `scope`; the caller has synced the index."""
     tasks: dict[tuple[str, PassLabel], list[_UnitTask]] = {}
     for task_id, status, content in _kind_tasks(project, scope):
@@ -1737,7 +1801,7 @@ def _completion_positions(project: Project, task_ids: set[str]) -> dict[str, str
     return {t: completed.get(t, created.get(t, "")) for t in task_ids}
 
 
-def stale_extractions(project: Project, *, scope: Scope = Scope.EVIDENCE) -> set[str]:
+def stale_extractions(project: Project, *, scope: ScopeKey = Scope.EVIDENCE) -> set[str]:
     """The live rows of `scope` that are stale: made stale by an amendment of the scope's section
     recorded after the row (ruling 12, compared by event ID as `model.staleness` does, so a
     reverted amendment keeps recording order), pinned to a document that is no longer the work's
@@ -1748,6 +1812,16 @@ def stale_extractions(project: Project, *, scope: Scope = Scope.EVIDENCE) -> set
     return _ledger(project, scope).stale_rows()
 
 
+def all_scopes(project: Project) -> list[ScopeKey]:
+    """Every scope with rows or passes: evidence, contribution and each registered miner whose
+    pass opened. Read-only; the caller has synced the index."""
+    with project.index.connect() as conn:
+        opened = conn.execute(text("SELECT DISTINCT scope FROM extraction_passes")).all()
+    found = {scope_from_value(str(row[0])) for row in opened}
+    miners = sorted((s for s in found if isinstance(s, MinerScope)), key=lambda s: s.name)
+    return [Scope.EVIDENCE, Scope.CONTRIBUTION, *miners]
+
+
 def abandoned_task_ids(project: Project) -> set[str]:
     """The extraction tasks that are open or claimed (lease live or lapsed) and replaced by a
     newer task of their (work, pass) unit. The ledger serves only a unit's latest task, so an
@@ -1755,7 +1829,7 @@ def abandoned_task_ids(project: Project) -> set[str]:
     project.index.sync()
     return {
         task.task_id
-        for scope in Scope
+        for scope in all_scopes(project)
         for unit in _ledger(project, scope).tasks.values()
         for task in unit[:-1]
         if task.status != TaskStatus.COMPLETED.value
@@ -1770,7 +1844,7 @@ def stale_claims(project: Project) -> set[str]:
     return _ledger(project).stale_claims()
 
 
-def stale_documents(project: Project, *, scope: Scope = Scope.EVIDENCE) -> list[str]:
+def stale_documents(project: Project, *, scope: ScopeKey = Scope.EVIDENCE) -> list[str]:
     """The works, sorted, whose live rows of `scope` pin a conversion other than the work's
     default while their document is the current one: a newer conversion only warns, it stales
     nothing."""
@@ -1789,7 +1863,7 @@ def stale_documents(project: Project, *, scope: Scope = Scope.EVIDENCE) -> list[
     return sorted(out)
 
 
-def unit_states(project: Project, *, scope: Scope = Scope.EVIDENCE) -> list[UnitState]:
+def unit_states(project: Project, *, scope: ScopeKey = Scope.EVIDENCE) -> list[UnitState]:
     """One state per unit of `scope`, by work then pass: every work of `scope_population` in pass
     A, and in pass B the works of its dual sample once pass B has opened (every work before then
     when the declared sample takes every work). Empty, with no refusal, when there is no ready
@@ -1825,7 +1899,7 @@ def live_rows(
     pass_label: PassLabel | None = None,
     *,
     work_id: str | None = None,
-    scope: Scope = Scope.EVIDENCE,
+    scope: ScopeKey = Scope.EVIDENCE,
 ) -> list[ExtractionRow]:
     """The rows of `scope` no later row supersedes, optionally of one pass and one work, by
     extraction id. The default scope is evidence: no evidence read sees a contribution row."""
@@ -1836,7 +1910,7 @@ def live_rows(
 
 
 def recorded_row(
-    project: Project, extraction_id: str, *, scope: Scope = Scope.EVIDENCE
+    project: Project, extraction_id: str, *, scope: ScopeKey = Scope.EVIDENCE
 ) -> tuple[ExtractionRow, bool] | None:
     """The row `extraction_id` of `scope`, live or superseded, with whether it is live; None for
     an unknown id or a row of the other scope."""

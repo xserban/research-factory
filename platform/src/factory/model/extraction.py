@@ -14,6 +14,8 @@ This module is pure. Services in `factory.services` decide when these events are
 
 from __future__ import annotations
 
+import re
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import Annotated, Literal
 
@@ -46,7 +48,12 @@ CLAIM_STATEMENT_MAX = 600
 
 
 CONTRIBUTION_SCOPE_NAME = "contribution"
-"""The pack name (and schema name) of the contribution scope; any other pack is evidence."""
+"""The pack name (and schema name) of the contribution scope."""
+
+
+MINER_NAME_RE = r"^m-[a-z0-9]+(?:-[a-z0-9]+)*$"
+"""A registered miner's name: a namespace no built-in pack uses, so the scope of an extraction event
+stays a pure function of its `pack` (slice M ruling 11)."""
 
 
 class Scope(StrEnum):
@@ -56,9 +63,43 @@ class Scope(StrEnum):
     CONTRIBUTION = "contribution"
 
 
-def scope_of_pack(pack: str | None) -> Scope:
-    """Scope of an event's optional `pack`: events written before G2 have none (evidence)."""
-    return Scope.CONTRIBUTION if pack == CONTRIBUTION_SCOPE_NAME else Scope.EVIDENCE
+@dataclass(frozen=True)
+class MinerScope:
+    """The scope of a registered miner's rows: its name is the scope key the projection stores.
+
+    A value type, not an enum member: compare with `==`, never `is`."""
+
+    name: str
+
+    @property
+    def value(self) -> str:
+        return self.name
+
+
+ScopeKey = Scope | MinerScope
+"""A scope of extraction rows: a built-in one or a registered miner's."""
+
+
+def scope_of_pack(pack: str | None) -> ScopeKey:
+    """Scope of an event's optional `pack`: events written before G2 have none (evidence); a name
+    in the miner namespace is that miner's scope."""
+    if pack == CONTRIBUTION_SCOPE_NAME:
+        return Scope.CONTRIBUTION
+    if pack is not None and re.fullmatch(MINER_NAME_RE, pack):
+        return MinerScope(pack)
+    return Scope.EVIDENCE
+
+
+def scope_from_value(value: str) -> ScopeKey:
+    """The scope whose projected `scope` column holds `value`."""
+    if re.fullmatch(MINER_NAME_RE, value):
+        return MinerScope(value)
+    return Scope(value)
+
+
+def pack_tag(scope: ScopeKey) -> str | None:
+    """The `pack` an event of `scope` carries: null for evidence, which projects as before G2."""
+    return None if scope == Scope.EVIDENCE else scope.value
 
 
 CARD_SCOPE_NAME = "card"
@@ -72,7 +113,7 @@ class CardScope(StrEnum):
     CARD = "card"
 
 
-AuditScope = Scope | CardScope
+AuditScope = ScopeKey | CardScope
 
 
 def audit_scope_of_pack(pack: str | None) -> AuditScope:
@@ -80,7 +121,7 @@ def audit_scope_of_pack(pack: str | None) -> AuditScope:
     return CardScope.CARD if pack == CARD_SCOPE_NAME else scope_of_pack(pack)
 
 
-def scope_of_schema_ref(ref: str) -> Scope:
+def scope_of_schema_ref(ref: str) -> ScopeKey:
     """Scope of a `<name>@<version>` schema reference."""
     return scope_of_pack(ref.split("@", 1)[0])
 

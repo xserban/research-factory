@@ -44,12 +44,14 @@ from factory.extraction.numbers import normalise_for, normalise_text
 from factory.index.extraction import WHOLE_ROW
 from factory.model.base import StrictModel
 from factory.model.extraction import (
-    CONTRIBUTION_SCOPE_NAME,
     ExtractionPassJoined,
     ExtractionResolved,
+    MinerScope,
     ReportedIn,
     Scope,
+    ScopeKey,
     StoredField,
+    pack_tag,
     scope_of_pack,
     scope_of_schema_ref,
 )
@@ -339,7 +341,7 @@ class _Pair:
     a: list[ExtractionRow]
     b: list[ExtractionRow]
     dual: bool
-    scope: Scope = Scope.EVIDENCE
+    scope: ScopeKey = Scope.EVIDENCE
     identity: str = VALUE_FIELD
     """The field a row disagreement shows and whose `neither` drops the row (`value` in evidence,
     the pack's first required field, `item_kind`, in contribution)."""
@@ -390,7 +392,7 @@ class _State:
     are then empty and no work is final. `blocking` is True while a unit of the population is
     open, stale, or queued with a document to extract from."""
 
-    scope: Scope
+    scope: ScopeKey
     schema: ExtractionSchema
     pack: Pack
     configs: dict[PassLabel, PassConfig | None]
@@ -409,11 +411,11 @@ def _compared_fields(schema: ExtractionSchema, pack: Pack) -> Sequence[str]:
     return [f for f in schema.fields if f in pack.compared_fields]
 
 
-def _identity(scope: Scope, pack: Pack) -> str:
+def _identity(scope: ScopeKey, pack: Pack) -> str:
     return VALUE_FIELD if scope is Scope.EVIDENCE else pack.required[0]
 
 
-def _load(project: Project, scope: Scope = Scope.EVIDENCE) -> _State | None:
+def _load(project: Project, scope: ScopeKey = Scope.EVIDENCE) -> _State | None:
     """The state of `scope`, or None without a ready protocol with a known schema and (for
     evidence) a full-text plan."""
     project.index.sync()
@@ -471,7 +473,7 @@ def _load(project: Project, scope: Scope = Scope.EVIDENCE) -> _State | None:
 
 
 def _eligible_rows(
-    project: Project, population: set[str], scope: Scope = Scope.EVIDENCE
+    project: Project, population: set[str], scope: ScopeKey = Scope.EVIDENCE
 ) -> list[ExtractionRow]:
     """The rows agreement and final rows may use: live (not superseded), not stale, and of a
     work still in the scope's population. The one place these exclusions are made."""
@@ -484,7 +486,7 @@ def _eligible_rows(
 
 
 def _resolutions(
-    project: Project, scope: Scope = Scope.EVIDENCE
+    project: Project, scope: ScopeKey = Scope.EVIDENCE
 ) -> dict[tuple[str, str, str], _Resolution]:
     with project.index.connect() as conn:
         rows = conn.execute(
@@ -651,7 +653,7 @@ def _tally(state: _State) -> _Tally:
     )
 
 
-def agreement_overall(project: Project, *, scope: Scope = Scope.EVIDENCE) -> AgreementOverall:
+def agreement_overall(project: Project, *, scope: ScopeKey = Scope.EVIDENCE) -> AgreementOverall:
     """Overall agreement, the dual and single work counts and the row counts. Read-only, needs
     no actor and never raises.
 
@@ -678,7 +680,7 @@ def agreement_overall(project: Project, *, scope: Scope = Scope.EVIDENCE) -> Agr
 
 
 def extraction_agreement(
-    project: Project, actor: Actor, *, scope: Scope = Scope.EVIDENCE
+    project: Project, actor: Actor, *, scope: ScopeKey = Scope.EVIDENCE
 ) -> ExtractionAgreement:
     """The agreement of the two extraction passes, with the unresolved disagreements (both
     fields shown), the resolved and dropped items and the single-extraction works. Read-only.
@@ -752,7 +754,7 @@ def _pass_views(project: Project, state: _State) -> list[ExtractionPassView]:
 
 
 def _refuse_shared(
-    project: Project, views: list[ExtractionPassView], scope: Scope = Scope.EVIDENCE
+    project: Project, views: list[ExtractionPassView], scope: ScopeKey = Scope.EVIDENCE
 ) -> None:
     """Refuse when one session joined both passes or the passes share a model. Joins are read
     from the log: the projection keeps the first join of a session only. A pass's models are
@@ -763,14 +765,14 @@ def _refuse_shared(
     for event in read_all(project.paths.events_dir, project.catalog):
         if event.type == "extraction.pass_joined":
             payload = ExtractionPassJoined.model_validate(event.payload)
-            if scope_of_pack(payload.pack) is not scope:
+            if scope_of_pack(payload.pack) != scope:
                 continue
             joins[payload.pass_label].add(payload.session)
             models[payload.pass_label].add(payload.model)
         elif (
             event.type == "extraction.recorded"
             and event.actor.model is not None
-            and scope_of_schema_ref(str(event.payload["schema_ref"])) is scope
+            and scope_of_schema_ref(str(event.payload["schema_ref"])) == scope
         ):
             label = PassLabel(str(event.payload["pass_label"]))
             models[label].add(event.actor.model)
@@ -794,7 +796,7 @@ def resolve_extraction(
     reason: str,
     channel: Channel,
     *,
-    scope: Scope = Scope.EVIDENCE,
+    scope: ScopeKey = Scope.EVIDENCE,
 ) -> str:
     """Record a human's choice on a disagreement and return the event id (ruling 10).
 
@@ -817,7 +819,7 @@ def resolve_extraction(
             gate_issues(
                 project,
                 actor,
-                "extraction.resolve",
+                "mine.resolve" if isinstance(scope, MinerScope) else "extraction.resolve",
                 channel=channel,
                 agent_text="disagreements are resolved by a human",
             )
@@ -842,7 +844,7 @@ def resolve_extraction(
                 reason=reason,
                 channel=channel,
                 protocol_id=protocol.protocol_id,
-                pack=CONTRIBUTION_SCOPE_NAME if scope is Scope.CONTRIBUTION else None,
+                pack=pack_tag(scope),
             )
         except ValidationError as exc:
             raise FactoryValidationError(
@@ -913,7 +915,7 @@ def _check_target(
 # --- Final and grouped rows ---
 
 
-def final_rows(project: Project, *, scope: Scope = Scope.EVIDENCE) -> list[FinalRow]:
+def final_rows(project: Project, *, scope: ScopeKey = Scope.EVIDENCE) -> list[FinalRow]:
     """The final rows, by work then row key: agreed and resolved rows of the dual sample and the
     pass A rows of single-extraction works. A row with an unresolved disagreement, and every row
     before pass B has opened, is left out. Read-only; empty without a schema."""

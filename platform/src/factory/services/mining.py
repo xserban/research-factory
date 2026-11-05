@@ -14,15 +14,18 @@ from collections.abc import Iterator
 
 from sqlalchemy import text
 
+from factory.errors import FactoryValidationError, ValidationIssue
 from factory.mining.spec import Population, Selector
-from factory.model.protocol import ScreeningStage
+from factory.model.protocol import ExtractionSchema, ScreeningStage
 from factory.model.search import QueryPurpose
+from factory.packs import Pack
 from factory.services.agreement import Outcome, final_outcomes
 from factory.services.context import Project
 from factory.services.document_read import default_conversion
+from factory.services.protocol import ProtocolVersion
 from factory.services.references import current_extraction, included_works
 
-__all__ = ["population", "population_works"]
+__all__ = ["miner_population", "miner_schema", "population", "population_works"]
 
 _BATCH = 500
 
@@ -76,3 +79,18 @@ def population(project: Project, selector: Selector) -> Iterator[tuple[str, str]
             continue
         emitted += 1
         yield work, conversion.conversion_id
+
+
+def miner_schema(project: Project, name: str) -> tuple[ProtocolVersion, ExtractionSchema, Pack]:
+    """The ready protocol, the schema and the pack of the listed miner `name`. Raises on field
+    `miners` until the protocol lists it (replaced by the registry-backed version in task 6)."""
+    del project
+    raise FactoryValidationError(
+        [ValidationIssue("miners", f"miner {name} is not listed in the protocol")]
+    )
+
+
+def miner_population(project: Project, name: str) -> list[str]:
+    """The works the listed miner `name` mines, sorted (task 6)."""
+    del project, name
+    return []

@@ -17,7 +17,6 @@ from factory.errors import ValidationIssue
 from factory.extraction.numbers import normalise_text
 from factory.mining.spec import (
     FIELD_NAME_RE,
-    MINER_NAME_RE,
     AnchorKindRef,
     CitationKind,
     EnumKind,
@@ -27,6 +26,7 @@ from factory.mining.spec import (
     Unverified,
     WorkRefKind,
 )
+from factory.model.extraction import MINER_NAME_RE
 from factory.services.skills import SKILL_NAME_RE
 
 UNVERIFIED_REFUSED = "free text is not verifiable; use a quote, enum, number or another kind"

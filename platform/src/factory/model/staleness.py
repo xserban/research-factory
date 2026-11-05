@@ -8,7 +8,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 
 from factory.model.base import StrictModel
-from factory.model.extraction import Scope
+from factory.model.extraction import MinerScope, Scope, ScopeKey
 from factory.model.notices import WorkNoticeState
 from factory.model.protocol import ExtractionStale, ProtocolAmended, ScreeningStage, StaleRule
 
@@ -98,9 +98,12 @@ def touches(rule: ExtractionStale, fields: Sequence[str]) -> bool:
     return rule.all_records or bool(set(rule.fields) & set(fields))
 
 
-def scope_rule(amendment: ProtocolAmended, scope: Scope) -> ExtractionStale | None:
+def scope_rule(amendment: ProtocolAmended, scope: ScopeKey) -> ExtractionStale | None:
     """The amendment's stale rule for rows of `scope`: `extraction_stale` for evidence,
-    `contribution_stale` for contribution. A rule never crosses scopes."""
+    `contribution_stale` for contribution, the miner's own entry of `miner_stale` for a registered
+    miner. A rule never crosses scopes."""
+    if isinstance(scope, MinerScope):
+        return None
     if scope is Scope.CONTRIBUTION:
         return amendment.contribution_stale
     return amendment.extraction_stale
@@ -111,7 +114,7 @@ def stale_rows(
     amended_at: Sequence[str],
     rows: Sequence[RowRef],
     *,
-    scope: Scope = Scope.EVIDENCE,
+    scope: ScopeKey = Scope.EVIDENCE,
 ) -> list[str]:
     """The ids of rows of `scope` an amendment's rule for that scope (`scope_rule`) makes stale,
     sorted and unique.

@@ -32,6 +32,7 @@ from factory.services.modules import (
     lineage,
     living,
     matching,
+    mining,
     portfolio,
     references,
     regions,
@@ -51,7 +52,7 @@ def default_modules() -> ModuleRegistry:
         core, scoping, retrieval, dedup, screening, fulltext, conversion, extraction,
         contributions, cards, evidence, references, imports, inbox, living, snapshots, lineage,
         intuition, vocabulary, contradictions, discovery, coverage, finders, matching, exports,
-        portfolio, regions,
+        portfolio, regions, mining,
     ]  # fmt: skip
     return ModuleRegistry(
         [m.MODULE for m in modules],

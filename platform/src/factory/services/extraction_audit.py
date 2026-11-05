@@ -30,13 +30,14 @@ from factory.events.envelope import Actor
 from factory.model.base import StrictModel
 from factory.model.extraction import (
     CARD_SCOPE_NAME,
-    CONTRIBUTION_SCOPE_NAME,
     AuditItemRef,
     AuditScope,
     CardScope,
     ExtractionAuditLabelled,
     ExtractionAuditSampled,
     Scope,
+    pack_tag,
+    scope_from_value,
 )
 from factory.model.protocol import ExtractionSchema
 from factory.model.screening import Channel
@@ -433,7 +434,7 @@ def extraction_audit_outstanding(project: Project, *, scope: AuditScope = Scope.
 def _pack_tag(scope: AuditScope) -> str | None:
     if scope is CardScope.CARD:
         return CARD_SCOPE_NAME
-    return CONTRIBUTION_SCOPE_NAME if scope is Scope.CONTRIBUTION else None
+    return pack_tag(scope)
 
 
 def _audit_scope(project: Project, audit_id: str) -> AuditScope:
@@ -444,7 +445,7 @@ def _audit_scope(project: Project, audit_id: str) -> AuditScope:
         ).one_or_none()
     if row is None:
         return Scope.EVIDENCE
-    return CardScope.CARD if str(row[0]) == CardScope.CARD.value else Scope(str(row[0]))
+    return CardScope.CARD if str(row[0]) == CardScope.CARD.value else scope_from_value(str(row[0]))
 
 
 def _last_digest(project: Project, scope: AuditScope = Scope.EVIDENCE) -> str | None:
