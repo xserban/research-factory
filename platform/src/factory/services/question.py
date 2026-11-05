@@ -192,6 +192,25 @@ def goals(project: Project) -> list[Goal]:
     ]
 
 
+class QuestionView(StrictModel):
+    """The current question and the latest stated goal, verbatim. Each is None until recorded."""
+
+    question_id: str | None
+    spec: QuestionSpec | None
+    raw_goal: str | None
+
+
+def question_view(project: Project) -> QuestionView:
+    """The current question with its latest raw goal; read-only."""
+    current = current_question(project)
+    stated = goals(project)
+    return QuestionView(
+        question_id=None if current is None else current.question_id,
+        spec=None if current is None else current.spec,
+        raw_goal=stated[-1].text if stated else None,
+    )
+
+
 def _version(row: Row[Any]) -> QuestionVersion:
     question_id, spec, supersedes, reason, at = tuple(row)
     return QuestionVersion(

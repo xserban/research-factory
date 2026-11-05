@@ -3565,6 +3565,44 @@ def build_server(
 
         return _reply(project, view, include_work_ids=False)
 
+    # The surface reads (plan MS). Each is refused to a pass session (decisions 37 and 43: a pass
+    # session gets what it needs in its batch). A tool that names works also answers neutrally
+    # before a pass opens, as the graph tools do. No tool here performs a human act: imports,
+    # conversion, gate decisions and resolutions stay on the CLI (decisions 46 item 7 and 60).
+
+    @server.tool()
+    def protocol_view(project: str) -> dict[str, JsonValue]:
+        """The current protocol: its id, status, PRESS state, whole spec and amendments, so the
+        spec can be read and passed back to `protocol_amend`. `notice` says so when none is
+        recorded. No seed data. Read-only; refused to a session that has joined a pass."""
+
+        def view() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            found = protocol_service.protocol_view(opened)
+            data = found.model_dump(mode="json")
+            if found.protocol_id is None:
+                data["notice"] = "no protocol recorded yet"
+            return _withheld(opened, data, include_work_ids=False)
+
+        return _reply(project, view, include_work_ids=False)
+
+    @server.tool()
+    def question_view(project: str) -> dict[str, JsonValue]:
+        """The current question: its id, spec and the latest raw goal, verbatim. `notice` says so
+        when none is recorded. Read-only; refused to a session that has joined a pass."""
+
+        def view() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            found = question_service.question_view(opened)
+            data = found.model_dump(mode="json")
+            if found.question_id is None:
+                data["notice"] = "no question recorded yet"
+            return _withheld(opened, data, include_work_ids=False)
+
+        return _reply(project, view, include_work_ids=False)
+
     return server
 
 

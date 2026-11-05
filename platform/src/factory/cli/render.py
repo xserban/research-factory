@@ -70,6 +70,8 @@ from factory.services.modules.listing import ModuleRow
 from factory.services.prisma import UNCONVERTED, PrismaFlow, SearchReport
 from factory.services.prisma_update import UpdateFlow
 from factory.services.properties import PropertyView
+from factory.services.protocol import ProtocolView
+from factory.services.question import QuestionView
 from factory.services.references import ExtractSummary, Page, ReferenceCounts
 from factory.services.regions import ExportRow, RegionState, VersionInfo
 from factory.services.relations import RelationView
@@ -311,6 +313,34 @@ def converter_lines(infos: list[ConverterInfo]) -> list[str]:
         chosen = "default" if info.default else "optional"
         state = f"ready  {info.version}" if info.available else f"unavailable  {info.reason}"
         lines.append(f"{info.name}  {chosen}  {' '.join(info.accepts)}  {info.licence}  {state}")
+    return lines
+
+
+def protocol_view_lines(view: ProtocolView) -> list[str]:
+    """The id, status, PRESS state and amendments, then the whole spec as JSON."""
+    if view.spec is None:
+        return ["no protocol recorded yet"]
+    lines = [
+        f"protocol: {view.protocol_id}",
+        f"status: {view.status}",
+        f"press: {view.press}",
+        f"amendments: {len(view.amendments)}",
+    ]
+    lines.extend(
+        f"  {row.amendment_id}  {row.from_version} -> {row.to_version}  {row.reason}"
+        for row in view.amendments
+    )
+    lines.append(json.dumps(view.spec.model_dump(mode="json"), indent=2, ensure_ascii=False))
+    return lines
+
+
+def question_view_lines(view: QuestionView) -> list[str]:
+    """The id and the latest raw goal, then the spec as JSON."""
+    lines = [] if view.raw_goal is None else [f"goal: {view.raw_goal}"]
+    if view.spec is None:
+        return [*lines, "no question recorded yet"]
+    lines.insert(0, f"question: {view.question_id}")
+    lines.append(json.dumps(view.spec.model_dump(mode="json"), indent=2, ensure_ascii=False))
     return lines
 
 

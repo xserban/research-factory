@@ -123,6 +123,7 @@ from factory.services import prisma_update as prisma_update_service
 from factory.services import project as project_service
 from factory.services import properties as properties_service
 from factory.services import protocol as protocol_service
+from factory.services import question as question_service
 from factory.services import reference_resolve as reference_resolve_service
 from factory.services import references as references_service
 from factory.services import regions as regions_service
@@ -195,7 +196,10 @@ seeds_app = typer.Typer(
     invoke_without_command=True,
     no_args_is_help=False,
 )
-protocol_app = typer.Typer(name="protocol", help="Confirm PRESS reviews.", no_args_is_help=True)
+protocol_app = typer.Typer(
+    name="protocol", help="Read the protocol and confirm PRESS reviews.", no_args_is_help=True
+)
+question_app = typer.Typer(name="question", help="Read the question.", no_args_is_help=True)
 calibrate_app = typer.Typer(
     name="calibrate", help="Draw the calibration set and label it.", no_args_is_help=True
 )
@@ -421,6 +425,7 @@ app.add_typer(inbox_app)
 app.add_typer(report_app)
 app.add_typer(export_app)
 app.add_typer(protocol_app)
+app.add_typer(question_app)
 app.add_typer(calibrate_app)
 app.add_typer(screen_app)
 app.add_typer(audit_app)
@@ -460,6 +465,7 @@ app.add_typer(server_app)
 
 
 _M = TypeVar("_M", bound=BaseModel)
+_JSON = Annotated[bool, typer.Option("--json", help="Print the report model as JSON.")]
 
 
 @dataclass
@@ -1079,6 +1085,34 @@ def search_chase_cmd(
         f"chase round {summary.round_id}: {len(summary.runs)} queries, "
         f"{summary.new_works} new works, {len(summary.unchasable)} unchasable"
     )
+
+
+@protocol_app.command("show")
+def protocol_show_cmd(ctx: typer.Context, as_json: _JSON = False) -> None:
+    """The current protocol: id, status, PRESS state, amendments and the whole spec."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        view = protocol_service.protocol_view(project)
+    if as_json:
+        typer.echo(view.model_dump_json())
+        return
+    for line in render.protocol_view_lines(view):
+        typer.echo(line)
+
+
+@question_app.command("show")
+def question_show_cmd(ctx: typer.Context, as_json: _JSON = False) -> None:
+    """The current question: its id, the latest raw goal and the spec."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        view = question_service.question_view(project)
+    if as_json:
+        typer.echo(view.model_dump_json())
+        return
+    for line in render.question_view_lines(view):
+        typer.echo(line)
 
 
 @protocol_app.command("confirm-press")
@@ -1979,7 +2013,6 @@ def contributions_audit_report_cmd(ctx: typer.Context) -> None:
         typer.echo(line)
 
 
-_JSON = Annotated[bool, typer.Option("--json", help="Print the report model as JSON.")]
 
 
 class PrismaFormat(StrEnum):

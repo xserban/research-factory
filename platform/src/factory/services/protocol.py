@@ -529,6 +529,55 @@ def list_amendments(project: Project) -> list[ProtocolAmended]:
     return [ProtocolAmended.model_validate_json(str(payload)) for (payload,) in rows]
 
 
+class AmendmentSummary(StrictModel):
+    """One amendment as `protocol_view` lists it: everything but the whole spec it records."""
+
+    amendment_id: str
+    from_version: str
+    to_version: str
+    reason: str
+    semantic: bool
+    changes: tuple[CriterionChange, ...]
+    other_changes: tuple[str, ...]
+
+
+class ProtocolView(StrictModel):
+    """The current protocol, whole, so a fresh session can read it and amend it. Every field is
+    None and `amendments` is empty before a protocol is recorded. Carries no seed record: a
+    criterion's worked examples are never held-out seeds (`CriterionExamples`)."""
+
+    protocol_id: str | None
+    status: ProtocolStatus | None
+    press: Literal["none", "reviewed", "confirmed"] | None
+    spec: ProtocolSpec | None
+    amendments: list[AmendmentSummary]
+
+
+def protocol_view(project: Project) -> ProtocolView:
+    """The current protocol with its status, PRESS state and amendments, oldest first."""
+    current = current_protocol(project)
+    if current is None:
+        return ProtocolView(protocol_id=None, status=None, press=None, spec=None, amendments=[])
+    return ProtocolView(
+        protocol_id=current.protocol_id,
+        status=current.status,
+        press=current.press,
+        spec=current.spec,
+        amendments=[
+            AmendmentSummary(
+                amendment_id=row.amendment_id,
+                from_version=row.from_version,
+                to_version=row.to_version,
+                reason=row.reason,
+                semantic=row.semantic,
+                changes=row.changes,
+                other_changes=row.other_changes,
+            )
+            for row in list_amendments(project)
+        ],
+    )
+
+
 def list_deviations(project: Project) -> list[DeviationRecorded]:
     """Every recorded deviation, in recording order."""
     project.index.sync()
