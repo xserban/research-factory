@@ -18,7 +18,10 @@ item; the platform classifies it (`lineage.classify`), never the proposer. Invar
 
 from __future__ import annotations
 
+import json
 import re
+from collections.abc import Collection, Mapping
+from typing import Any
 
 from sqlalchemy import text
 
@@ -28,19 +31,22 @@ from factory.lineage.classify import CLASSIFIER_VERSION, BasisFacts, LinkFacts, 
 from factory.model.base import StrictModel
 from factory.model.extraction import Scope
 from factory.model.lineage import (
+    DEFAULT_STATUSES,
     IDEA_ID_RE,
+    EdgeStatus,
     LineageDecision,
     ProposalStatus,
     RelationDecided,
     RelationProposal,
     RelationProposed,
+    RelationType,
     StatusReason,
 )
 from factory.model.references import LinkState
 from factory.services import seeds
 from factory.services.context import Project
 from factory.services.contributions import ItemView, contribution_item
-from factory.services.extraction import scope_population
+from factory.services.extraction import scope_population, stale_extractions
 from factory.services.reference_view import reference_view, reference_view_of
 
 _IDEA = re.compile(IDEA_ID_RE)
@@ -136,7 +142,7 @@ def propose_relation(project: Project, actor: Actor, proposal: RelationProposal)
             issues.append(ValidationIssue("target", "rejected-by-human"))
         if issues:
             raise FactoryValidationError(issues)
-        if live is not None and live[1] == proposal.basis_item:
+        if live is not None and live[1] == proposal.basis_item and not _is_stale(project, live[0]):
             row = _view_row(project, live[0])
             return ProposeResult(
                 relation_id=live[0],
@@ -165,8 +171,6 @@ def _live_relation(
 def _view_row(
     project: Project, relation_id: str
 ) -> tuple[ProposalStatus, StatusReason | None, tuple[str, ...]]:
-    import json
-
     with project.index.connect() as conn:
         row = conn.execute(
             text("SELECT status, status_reason, flags FROM relations WHERE relation_id = :r"),
@@ -294,3 +298,175 @@ def decide_relation(
         )
         project.record([event])
         return event.id
+
+
+# --- Views: effective status and staleness, computed on read ---
+
+
+class RelationView(StrictModel):
+    """A relation as the log and the current state of its basis give it. `effective` is the
+    status a view shows (ruling 6); `stale_reasons` is non-empty exactly when a stale reason
+    holds, whatever the latest decision."""
+
+    relation_id: str
+    source_work: str
+    target: str
+    edge_type: RelationType
+    basis_item: str | None
+    proposal_status: ProposalStatus
+    status_reason: StatusReason | None
+    decision: LineageDecision | None
+    effective: EdgeStatus
+    stale_reasons: tuple[str, ...]
+    flags: tuple[str, ...]
+    reference_extraction_id: str | None
+    cited_entry: int | None
+    has_note: bool
+    event_id: str
+
+
+_EFFECTIVE_SQL = """
+WITH eff AS (
+  SELECT r.relation_id, r.source_work, r.target, r.edge_type, r.basis_item, r.status,
+         r.status_reason, r.decision, r.flags, r.reference_extraction_id, r.cited_entry,
+         r.note, r.event_id, r.superseded_by,
+         COALESCE(b.superseded_by IS NOT NULL, 0) AS f_superseded,
+         COALESCE(r.basis_item IN (SELECT value FROM json_each(:stale)), 0) AS f_stale,
+         COALESCE(r.reference_extraction_id IS NOT NULL AND x.live = 0, 0) AS f_references,
+         COALESCE(r.status = 'stated' AND
+                  (l.state IS NULL OR l.state != 'resolved' OR l.work_id IS NOT r.target), 0)
+           AS f_link
+  FROM relations r
+  LEFT JOIN extraction_rows b ON b.extraction_id = r.basis_item
+  LEFT JOIN reference_extractions x ON x.extraction_id = r.reference_extraction_id
+  LEFT JOIN reference_links l
+    ON l.extraction_id = r.reference_extraction_id AND l.ordinal = r.cited_entry
+), shown AS (
+  SELECT *, CASE
+    WHEN decision = 'reject' THEN 'rejected'
+    WHEN f_superseded OR f_stale OR f_references OR f_link THEN 'stale'
+    WHEN decision = 'confirm' THEN 'confirmed'
+    ELSE status END AS effective
+  FROM eff
+)
+"""
+_COLUMNS = (
+    "relation_id, source_work, target, edge_type, basis_item, status, status_reason, decision, "
+    "flags, reference_extraction_id, cited_entry, note, event_id, effective, "
+    "f_superseded, f_stale, f_references, f_link"
+)
+
+
+def _stale_json(project: Project) -> str:
+    return json.dumps(sorted(stale_extractions(project, scope=Scope.CONTRIBUTION)))
+
+
+def _view_of(row: Mapping[str, Any]) -> RelationView:
+    reasons = tuple(
+        name
+        for flag, name in (
+            ("f_superseded", "basis-superseded"),
+            ("f_stale", "basis-stale"),
+            ("f_references", "references-superseded"),
+            ("f_link", "link-changed"),
+        )
+        if row[flag]
+    )
+    return RelationView(
+        relation_id=row["relation_id"],
+        source_work=row["source_work"],
+        target=row["target"],
+        edge_type=row["edge_type"],
+        basis_item=row["basis_item"],
+        proposal_status=row["status"],
+        status_reason=None if row["status_reason"] is None else StatusReason(row["status_reason"]),
+        decision=None if row["decision"] is None else LineageDecision(row["decision"]),
+        effective=EdgeStatus(row["effective"]),
+        stale_reasons=reasons,
+        flags=tuple(json.loads(row["flags"])),
+        reference_extraction_id=row["reference_extraction_id"],
+        cited_entry=row["cited_entry"],
+        has_note=row["note"] is not None,
+        event_id=row["event_id"],
+    )
+
+
+def _query(
+    project: Project,
+    where: str,
+    params: Mapping[str, Any],
+    tail: str = "",
+    tail_params: Mapping[str, Any] | None = None,
+) -> list[Any]:
+    project.index.sync()
+    bound = {"stale": _stale_json(project), **params, **(tail_params or {})}
+    with project.index.connect() as conn:
+        return list(
+            conn.execute(
+                text(f"{_EFFECTIVE_SQL} SELECT {_COLUMNS} FROM shown WHERE {where} {tail}"), bound
+            )
+            .mappings()
+            .all()
+        )
+
+
+def relation_view(project: Project, relation_id: str) -> RelationView | None:
+    """One relation, live or superseded; None for an unknown id."""
+    rows = _query(project, "relation_id = :r", {"r": relation_id})
+    return _view_of(rows[0]) if rows else None
+
+
+def relation_views(project: Project, relation_ids: Collection[str]) -> dict[str, RelationView]:
+    """The views of the named relations (unknown ids omitted); the stale set is read once."""
+    if not relation_ids:
+        return {}
+    rows = _query(
+        project,
+        "relation_id IN (SELECT value FROM json_each(:ids))",
+        {"ids": json.dumps(sorted(set(relation_ids)))},
+    )
+    return {v.relation_id: v for v in map(_view_of, rows)}
+
+
+def _is_stale(project: Project, relation_id: str) -> bool:
+    view = relation_view(project, relation_id)
+    return view is not None and bool(view.stale_reasons)
+
+
+def list_relations(
+    project: Project,
+    *,
+    statuses: Collection[EdgeStatus] = DEFAULT_STATUSES,
+    work_id: str | None = None,
+    limit: int = 500,
+    offset: int = 0,
+) -> list[RelationView]:
+    """Live (not superseded) relations whose effective status is in `statuses`, sorted by
+    (source, type, target, id), one page of at most `limit` from `offset`; the filter, order and
+    page are applied in SQL. `work_id` matches the source or the target."""
+    rows = _query(
+        project,
+        "superseded_by IS NULL AND effective IN (SELECT value FROM json_each(:st)) "
+        "AND (:w IS NULL OR source_work = :w OR target = :w)",
+        {"st": json.dumps(sorted(s.value for s in statuses)), "w": work_id},
+        "ORDER BY source_work, edge_type, target, relation_id LIMIT :limit OFFSET :offset",
+        {"limit": limit, "offset": offset},
+    )
+    return [_view_of(r) for r in rows]
+
+
+def relation_counts(project: Project) -> dict[str, dict[str, int]]:
+    """Live relations by edge type and effective status; every status is present."""
+    counts = {t: {s.value: 0 for s in EdgeStatus} for t in ("builds-on", "improves-on")}
+    project.index.sync()
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text(
+                f"{_EFFECTIVE_SQL} SELECT edge_type, effective, COUNT(*) FROM shown "
+                "WHERE superseded_by IS NULL GROUP BY edge_type, effective"
+            ),
+            {"stale": _stale_json(project)},
+        ).all()
+    for edge_type, effective, n in rows:
+        counts[str(edge_type)][str(effective)] = int(n)
+    return counts

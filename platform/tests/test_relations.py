@@ -15,6 +15,7 @@ from factory.events.envelope import Actor
 from factory.events.reader import read_all
 from factory.model.lineage import IdeaProposed, LineageDecision, RelationProposal
 from factory.model.seed import HeldOut
+from factory.services import seeds
 from factory.services.context import Project
 from factory.services.relations import decide_relation, propose_relation
 from tests.lineage_helpers import Lineage, ctr_a, lin, screened, world
@@ -55,6 +56,12 @@ def _refused(project: Project, field: str, reason: str, call: Callable[[], objec
     assert len(_events(project)) == before
 
 
+def _other(project: Project, world: list[str], lin: Lineage) -> str:
+    """An included work other than the source that an agent may see (not a held-out seed)."""
+    hidden = seeds.held_out(project).work_ids
+    return next(w for w in world if w != lin.source and w not in hidden)
+
+
 @pytest.fixture
 def decider(other_session_human: Actor) -> Actor:
     return other_session_human
@@ -89,7 +96,7 @@ def test_improves_on_from_addition_is_stated(project: Project, agent: Actor, lin
 
 
 def test_uncited_base_flag(project: Project, agent: Actor, lin: Lineage, world: list[str]) -> None:
-    other = next(w for w in world if w != lin.source)
+    other = _other(project, world, lin)
     r = propose_relation(project, agent, prop(lin, other, basis=lin.base))
     assert (r.status, r.status_reason, r.flags) == ("inferred", "target-differs", ("uncited-base",))
     _refused(
@@ -160,7 +167,7 @@ def test_basis_must_be_live_base_or_addition_of_source(
 
     refuse("ext_01M68X9EG06809NC9ZQF9CAZZ0", "basis-unknown")
     refuse(lin.limitation, "basis-kind")
-    other_source = next(w for w in world if w != lin.source)
+    other_source = _other(project, world, lin)
     _refused(
         project,
         "source_work",
