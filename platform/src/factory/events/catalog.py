@@ -18,6 +18,8 @@ from factory.model.dedup import DedupMerged, DedupReverted
 from factory.model.digest import DigestGenerated
 from factory.model.document import ConversionFailed, Converted
 from factory.model.drafts import (
+    DraftAudited,
+    DraftAuditDrawn,
     DraftCreated,
     DraftOutlineRepinned,
     DraftReordered,
@@ -343,4 +345,6 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("draft.sentence_withdrawn", SentenceWithdrawn, 1))
     catalog.register(EventType("draft.reordered", DraftReordered, 1))
     catalog.register(EventType("draft.verified", SentenceVerified, 1))
+    catalog.register(EventType("draft.audit_drawn", DraftAuditDrawn, 1))
+    catalog.register(EventType("draft.audited", DraftAudited, 1))
     return catalog
