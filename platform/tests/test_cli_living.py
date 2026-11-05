@@ -144,3 +144,5 @@ def test_cli_conclusions_register_and_diff(ready: Project, settings: Settings) -
     assert code == 0
     code, out, _ = _cli(settings.root, "--project", "demo", "conclusions", "status")
     assert cid not in out
+    code, out, _ = _cli(settings.root, "--project", "demo", "conclusions", "status", "--all")
+    assert code == 0 and cid in out and "retired: withdrawn" in out

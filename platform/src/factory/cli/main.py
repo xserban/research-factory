@@ -2099,14 +2099,20 @@ def conclusions_retire_cmd(
 
 
 @conclusions_app.command("status")
-def conclusions_status_cmd(ctx: typer.Context) -> None:
+def conclusions_status_cmd(
+    ctx: typer.Context,
+    show_all: Annotated[bool, typer.Option("--all", help="Also list retired conclusions.")] = False,
+) -> None:
     """Each active conclusion with your statement and its computed state since the last snapshot."""
     state = _state(ctx)
     with _reporting_errors():
         project = _resolve_project(state)
-        statements = {
-            c.conclusion_id: c.statement for c in conclusions_service.conclusions(project)
-        }
+        records = conclusions_service.conclusions(project, include_retired=show_all)
+        statements = {c.conclusion_id: c.statement for c in records}
+        for record in records:
+            if record.retired:
+                typer.echo(f"{record.conclusion_id}  retired: {record.retire_reason}")
+                typer.echo(f"  statement: {record.statement}")
         for diff in conclusions_service.conclusion_diff(project):
             for line in render.conclusion_lines(diff):
                 typer.echo(line)

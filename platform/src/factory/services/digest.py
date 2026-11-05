@@ -111,17 +111,24 @@ def digest_build(
 
 
 def agent_digest(d: Digest) -> Digest:
-    """`d` as an agent may read it: counts, ids and titles only. The update flow's list of
-    previously included works that changed is dropped; no conclusion statement, label-derived
-    rate or seed mark exists in a digest to begin with."""
+    """`d` as an agent may read it: a candidate that came by `seed-admission` reads `other`, as
+    in `report_discovery`, so the digest never marks a work as a seed. Nothing else is dropped:
+    no conclusion statement, label-derived rate or seed mark exists in a digest to begin with."""
     return d.model_copy(
         update={
             "projects": tuple(
-                p
-                if p.update_flow is None
-                else p.model_copy(
+                p.model_copy(
                     update={
-                        "update_flow": p.update_flow.model_copy(update={"changed_previous": ()})
+                        "new_candidates": p.new_candidates.model_copy(
+                            update={
+                                "items": tuple(
+                                    c.model_copy(update={"route": "other"})
+                                    if c.route == "seed-admission"
+                                    else c
+                                    for c in p.new_candidates.items
+                                )
+                            }
+                        )
                     }
                 )
                 for p in d.projects

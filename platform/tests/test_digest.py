@@ -188,7 +188,8 @@ def test_digest_agent_view_withholds(ready: Project, agent: Actor, human: Actor)
     [full] = built.projects
     assert full.update_flow is not None
     [seen] = agent_digest(built).projects
-    assert seen.update_flow is not None and seen.update_flow.changed_previous == ()
+    assert seen.update_flow is not None
+    assert seen.update_flow.changed_previous == full.update_flow.changed_previous
     assert seen.open_decisions == full.open_decisions  # counts of open decisions stay
     blob = to_json(agent_digest(built))
     assert re.search(r"\b(SEED|NEG)\d{2,}\b", blob) is None  # no seed id
@@ -226,3 +227,29 @@ def test_retired_project_marked(ready: Project, agent: Actor, clock: FixedClock)
     clock.advance(timedelta(days=3))
     [retired] = digest_build([ready]).projects
     assert retired.status == "retired" and retired.overdue == ()
+
+
+def test_agent_view_shows_seed_admission_as_other(ready: Project) -> None:
+    from factory.model.digest import CandidateRow, Listing
+
+    [part] = digest_build([ready]).projects
+    row = CandidateRow(work_id="rf:x-00000000", title="T", query_ids=(), route="seed-admission")
+    other = CandidateRow(
+        work_id="rf:y-00000000", title="U", query_ids=(), route="database:openalex"
+    )
+    built = digest_build([ready]).model_copy(
+        update={
+            "projects": (
+                part.model_copy(
+                    update={"new_candidates": Listing[CandidateRow](items=(row, other), more=0)}
+                ),
+            )
+        }
+    )
+    assert [c.route for c in built.projects[0].new_candidates.items] == [
+        "seed-admission",
+        "database:openalex",
+    ]
+    seen = agent_digest(built).projects[0].new_candidates.items
+    assert [c.route for c in seen] == ["other", "database:openalex"]
+    assert "seed-admission" not in to_json(agent_digest(built))
