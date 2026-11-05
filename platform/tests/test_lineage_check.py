@@ -19,6 +19,7 @@ from factory.model.lineage import (
     RelationProposal,
     RelationProposed,
 )
+from factory.model.notices import NoticeKind
 from factory.model.project import RigorMode
 from factory.model.references import LinkState, ReferenceResolutionDecided
 from factory.model.screening import Channel, PassLabel
@@ -39,7 +40,12 @@ from factory.services.extraction import ContributionBatch
 from factory.services.ideas import propose_idea
 from factory.services.protocol import amend_protocol, current_protocol
 from factory.services.reference_view import reference_view
-from factory.services.relations import decide_relation, propose_relation
+from factory.services.relations import (
+    decide_relation,
+    list_relations,
+    propose_relation,
+    relation_view,
+)
 from tests.contribution_helpers import P1, P2, P3, P4, P5, item, not_stated
 from tests.helpers import open_session
 from tests.lineage_helpers import (
@@ -54,6 +60,7 @@ from tests.lineage_helpers import (
 )
 from tests.lineage_payloads import REL, stated
 from tests.test_contribution_agreement import _lorem
+from tests.test_notice_effects import _observe
 
 LINEAGE_CODES = (
     "contribution-missing-extraction",
@@ -392,3 +399,18 @@ async def test_check_is_refused_to_a_pass_session(
     async with open_session(settings, clock) as client:
         out = await client.call("check", project="demo")
     assert out["ok"] is False and out["errors"][0]["field"] == "session"
+
+
+def test_retracted_basis_leaves_default_views(  # living-C follow-up
+    project: Project, agent: Actor, lin: Lineage
+) -> None:
+    """An edge whose basis item belongs to a work the notices exclude from the synthesis is
+    stale (reason `basis-retracted`): it leaves the default views and `check` lists it."""
+    rid = _rel(project, agent, lin, lin.target5, lin.base)
+    assert [r.relation_id for r in list_relations(project)] == [rid]
+    _observe(project, lin.source, NoticeKind.RETRACTION, "10.1/retraction")
+    view = relation_view(project, rid)
+    assert view is not None and view.effective is EdgeStatus.STALE
+    assert "basis-retracted" in view.stale_reasons
+    assert list_relations(project) == []
+    assert _found(project)["relation-stale"].refs == [rid]

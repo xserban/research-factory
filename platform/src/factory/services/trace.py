@@ -43,6 +43,7 @@ from factory.model.fulltext import ATTEMPT_ID_RE, DOCUMENT_ID_RE
 from factory.model.identity import BLOB_REF_RE, CONVERSION_ID_RE, ULID_RE
 from factory.model.imports import IMPORT_ID_RE
 from factory.model.inbox import INBOX_ID_RE
+from factory.model.lineage import IDEA_ID_RE, REL_ID_RE
 from factory.model.notices import NTC_ID_RE
 from factory.model.protocol import PROTOCOL_ID_RE, ProtocolSpec
 from factory.model.question import QUESTION_ID_RE, QuestionSpec
@@ -52,6 +53,9 @@ from factory.model.seed import SEED_ID_RE
 from factory.model.work import QUERY_ID_RE, RUN_ID_RE
 from factory.model.work_ids import WORK_ID_RE
 from factory.services.context import Project
+from factory.services.contributions import contribution_item
+from factory.services.ideas import idea_view
+from factory.services.relations import relation_view
 
 KINDS: tuple[str, ...] = (
     "question",
@@ -72,6 +76,10 @@ KINDS: tuple[str, ...] = (
     "decision",
     "extraction",
     "claim",
+    "relation",
+    "idea",
+    "cites",
+    "quote",
     "cell",
     "resolution",
     "audit",
@@ -101,7 +109,13 @@ _IMPORT_RECORD_RE = rf"^(imp_{ULID_RE})\:([1-9][0-9]*)$"
 _CELL_RE = r"^rk_[0-9a-f]{12}(?:/(?!\*$)\S+)?$"
 _VERSION_RE = r"^ver:([^/\s]+)/(obs|link)/(.+)$"
 _PREFERENCE_RE = r"^pref:(rf:\S+)$"
+_CITES_RE = rf"^cit:(rex_{ULID_RE}):([1-9][0-9]*)$"
+_QUOTE_RE = rf"^(ext_{ULID_RE})/quote$"
 _PATTERNS: tuple[tuple[str, str], ...] = (
+    (REL_ID_RE, "relation"),
+    (IDEA_ID_RE, "idea"),
+    (_CITES_RE, "cites"),
+    (_QUOTE_RE, "quote"),
     (NTC_ID_RE, "notice"),
     (_VERSION_RE, "version"),
     (_PREFERENCE_RE, "preference"),
@@ -408,6 +422,10 @@ class _Walk:
             "decision": self._decision,
             "extraction": self._extraction,
             "claim": self._claim,
+            "relation": self._relation,
+            "idea": self._idea,
+            "cites": self._cites,
+            "quote": self._quote,
             "cell": self._cell,
             "resolution": self._resolution,
             "audit": self._audit,
@@ -782,6 +800,59 @@ class _Walk:
         if superseded_by is not None:
             label += " (superseded)"
         return _Described(label, str(event_id))
+
+    def _relation(self, ident: str) -> _Described | None:
+        """A relation. The label gives its edge type, proposal status, decision and effective
+        status, never a note or a quote."""
+        view = relation_view(self._project, ident)
+        if view is None:
+            return None
+        label = f"{view.edge_type} {view.proposal_status}"
+        if view.status_reason is not None:
+            label += f" ({view.status_reason.value})"
+        decision = "none" if view.decision is None else view.decision.value
+        label += f", decision {decision}, effective {view.effective.value}"
+        if view.stale_reasons:
+            label += f" ({', '.join(view.stale_reasons)})"
+        superseded = self._column(
+            "SELECT superseded_by FROM relations WHERE relation_id = :r AND superseded_by "
+            "IS NOT NULL",
+            r=ident,
+        )
+        if superseded:
+            label += " (superseded)"
+        return _Described(label, view.event_id)
+
+    def _idea(self, ident: str) -> _Described | None:
+        """An idea. The label gives its state and member count, never its name."""
+        view = idea_view(self._project, ident)
+        if view is None:
+            return None
+        return _Described(f"idea {view.state}, {len(view.members)} member(s)", view.event_id)
+
+    def _cites(self, ident: str) -> _Described | None:
+        """A `cites` edge of the graph projection: its status and whether its extraction is
+        the work's current one."""
+        rows = self._all(
+            "SELECT e.base_status, e.live, e.event_id FROM graph_edges e WHERE e.edge_id = :i",
+            i=ident,
+        )
+        if not rows:
+            return None
+        status, live, event_id = rows[0]
+        label = f"cites {status}"
+        if not live:
+            label += " (superseded extraction)"
+        return _Described(label, str(event_id))
+
+    def _quote(self, ident: str) -> _Described | None:
+        """The verified quote of a contribution row, the one place a label carries document text
+        (it is already in the event)."""
+        row_id = ident.removesuffix("/quote")
+        item = contribution_item(self._project, row_id)
+        if item is None or not item.quote:
+            return None
+        return _Described(item.quote, item.event_id)
 
     def _cell(self, ident: str) -> _Described | None:
         """A cell of an evidence-report row. The label names the field and the work, never a value;
@@ -1479,6 +1550,22 @@ class _Walk:
                 up.append(("extraction", str(supersedes)))
             if superseded_by is not None:
                 down.append(("extraction", str(superseded_by)))
+            if self._column(
+                "SELECT extraction_id FROM extraction_rows WHERE extraction_id = :e "
+                "AND scope = 'contribution'",
+                e=ident,
+            ) and self._quote_anchors(ident):
+                up.append(("quote", f"{ident}/quote"))
+            down += [
+                ("relation", r)
+                for r in self._column(
+                    "SELECT relation_id FROM relations WHERE basis_item = :e", e=ident
+                )
+            ]
+            down += [
+                ("idea", i)
+                for i in self._column("SELECT idea_id FROM ideas WHERE name_item = :e", e=ident)
+            ]
         return up, down
 
     def _edges_claim(self, ident: str) -> tuple[list[Key], list[Key]]:
@@ -1499,6 +1586,99 @@ class _Walk:
             if superseded_by is not None:
                 down.append(("claim", str(superseded_by)))
         return up, down
+
+    def _edges_relation(self, ident: str) -> tuple[list[Key], list[Key]]:
+        rows = self._all(
+            "SELECT source_work, target, basis_item, reference_extraction_id, supersedes, "
+            "superseded_by FROM relations WHERE relation_id = :r",
+            r=ident,
+        )
+        up: list[Key] = []
+        down: list[Key] = []
+        if rows:
+            source, target, basis, rex, supersedes, superseded_by = rows[0]
+            up.append(("work", str(source)))
+            up.append(("idea" if str(target).startswith("ida_") else "work", str(target)))
+            if basis is not None:
+                up.append(("extraction", str(basis)))
+            if rex is not None:
+                up.append(("reference_extraction", str(rex)))
+            if supersedes is not None:
+                up.append(("relation", str(supersedes)))
+            if superseded_by is not None:
+                down.append(("relation", str(superseded_by)))
+        return up, down
+
+    def _edges_idea(self, ident: str) -> tuple[list[Key], list[Key]]:
+        rows = self._all(
+            "SELECT name_item, origin, supersedes, superseded_by, merged_into FROM ideas "
+            "WHERE idea_id = :i",
+            i=ident,
+        )
+        up: list[Key] = []
+        down: list[Key] = []
+        if rows:
+            name_item, origin, supersedes, superseded_by, merged_into = rows[0]
+            up += [("extraction", str(name_item)), ("work", str(origin))]
+            up += [
+                ("work", w)
+                for w in self._column(
+                    "SELECT work_id FROM idea_members WHERE idea_id = :i ORDER BY work_id", i=ident
+                )
+            ]
+            up += [
+                ("idea", i)
+                for i in self._column(
+                    "SELECT idea_id FROM ideas WHERE merged_into = :i AND superseded_by IS NULL",
+                    i=ident,
+                )
+            ]
+            if supersedes is not None:
+                up.append(("idea", str(supersedes)))
+            if superseded_by is not None:
+                down.append(("idea", str(superseded_by)))
+            if merged_into is not None:
+                down.append(("idea", str(merged_into)))
+        down += [
+            ("relation", r)
+            for r in self._column("SELECT relation_id FROM relations WHERE target = :i", i=ident)
+        ]
+        return up, down
+
+    def _edges_cites(self, ident: str) -> tuple[list[Key], list[Key]]:
+        rows = self._all(
+            "SELECT e.reference_extraction_id, e.ordinal, e.target, x.conversion_id, n.anchor "
+            "FROM graph_edges e "
+            "LEFT JOIN reference_extractions x ON x.extraction_id = e.reference_extraction_id "
+            "LEFT JOIN reference_entries n ON n.extraction_id = e.reference_extraction_id "
+            "AND n.ordinal = e.ordinal WHERE e.edge_id = :i",
+            i=ident,
+        )
+        up: list[Key] = []
+        if rows:
+            rex, _, target, conversion_id, anchor = rows[0]
+            up += [("reference_extraction", str(rex)), ("work", str(target))]
+            if anchor is not None and conversion_id is not None:
+                up.append(("anchor", f"{conversion_id}/{anchor}"))
+        return up, []
+
+    def _edges_quote(self, ident: str) -> tuple[list[Key], list[Key]]:
+        row_id = ident.removesuffix("/quote")
+        up = [("anchor", a) for a in self._quote_anchors(row_id)]
+        return up, [("extraction", row_id)]
+
+    def _quote_anchors(self, extraction_id: str) -> list[str]:
+        """The anchors of the quoted fields of a row, as anchor keys of its conversion."""
+        return [
+            f"{c}/{a}"
+            for c, a in self._all(
+                "SELECT DISTINCT r.conversion_id, f.anchor FROM extraction_rows r "
+                "JOIN extraction_fields f ON f.extraction_id = r.extraction_id "
+                "WHERE r.extraction_id = :e AND f.quote IS NOT NULL AND f.anchor IS NOT NULL "
+                "ORDER BY f.anchor",
+                e=extraction_id,
+            )
+        ]
 
     def _edges_cell(self, ident: str) -> tuple[list[Key], list[Key]]:
         row_key, field = _split_cell(ident)
@@ -1750,6 +1930,10 @@ _EDGES: dict[str, Callable[[_Walk, str], tuple[list[Key], list[Key]]]] = {
     "decision": _Walk._edges_decision,
     "extraction": _Walk._edges_extraction,
     "claim": _Walk._edges_claim,
+    "relation": _Walk._edges_relation,
+    "idea": _Walk._edges_idea,
+    "cites": _Walk._edges_cites,
+    "quote": _Walk._edges_quote,
     "cell": _Walk._edges_cell,
     "resolution": _Walk._edges_resolution,
     "audit": _Walk._edges_audit,

@@ -47,6 +47,7 @@ from factory.services.call_memo import memoised
 from factory.services.context import Project
 from factory.services.contributions import ItemView, contribution_item, final_item, final_items
 from factory.services.extraction import scope_population, stale_extractions
+from factory.services.notices import work_states
 from factory.services.reference_view import reference_view, reference_view_of
 
 _IDEA = re.compile(IDEA_ID_RE)
@@ -345,6 +346,8 @@ WITH eff AS (
          COALESCE(b.superseded_by IS NOT NULL, 0) AS f_superseded,
          COALESCE(r.basis_item IN (SELECT value FROM json_each(:stale)), 0) AS f_stale,
          COALESCE(r.basis_item IN (SELECT value FROM json_each(:unresolved)), 0) AS f_unresolved,
+         COALESCE(r.basis_item IS NOT NULL AND
+                  r.source_work IN (SELECT value FROM json_each(:retracted)), 0) AS f_retracted,
          COALESCE(r.basis_item IN (SELECT key FROM json_each(:cited)) AND
                   (SELECT value FROM json_each(:cited) c WHERE c.key = r.basis_item)
                   != COALESCE(r.reference_extraction_id || ':' || r.cited_entry, ''), 0)
@@ -361,8 +364,8 @@ WITH eff AS (
 ), shown AS (
   SELECT *, CASE
     WHEN decision = 'reject' THEN 'rejected'
-    WHEN f_superseded OR f_stale OR f_unresolved OR f_changed OR f_references OR f_link
-      THEN 'stale'
+    WHEN f_superseded OR f_stale OR f_unresolved OR f_retracted OR f_changed OR f_references
+      OR f_link THEN 'stale'
     WHEN decision = 'confirm' THEN 'confirmed'
     ELSE status END AS effective
   FROM eff
@@ -371,14 +374,15 @@ WITH eff AS (
 _COLUMNS = (
     "relation_id, source_work, target, edge_type, basis_item, status, status_reason, decision, "
     "flags, reference_extraction_id, cited_entry, note, event_id, effective, "
-    "f_superseded, f_stale, f_unresolved, f_changed, f_references, f_link"
+    "f_superseded, f_stale, f_unresolved, f_retracted, f_changed, f_references, f_link"
 )
 
 
 @memoised
 def _basis_params(project: Project) -> dict[str, str]:
     """The state of the items relations rest on, read once per call from the final view: `stale`
-    (a field source of the final item is stale), `unresolved` (no final item: superseded,
+    (a field source of the final item is stale), `retracted` (works whose notice state excludes
+    them from the synthesis: their items are no basis), `unresolved` (no final item: superseded,
     reopened or disputed) and `cited` (basis -> `extraction:ordinal` its final item now cites,
     empty for none). Only the bases some relation names are looked at."""
     project.index.sync()
@@ -404,8 +408,10 @@ def _basis_params(project: Project) -> dict[str, str]:
         for b in bases
         if b in finals
     }
+    retracted = sorted(w for w, st in work_states(project).items() if st.synthesis == "excluded")
     return {
         "stale": json.dumps(stale),
+        "retracted": json.dumps(retracted),
         "unresolved": json.dumps(unresolved),
         "cited": json.dumps(cited),
     }
@@ -418,6 +424,7 @@ def _view_of(row: Mapping[str, Any]) -> RelationView:
             ("f_superseded", "basis-superseded"),
             ("f_stale", "basis-stale"),
             ("f_unresolved", "basis-unresolved"),
+            ("f_retracted", "basis-retracted"),
             ("f_changed", "basis-changed"),
             ("f_references", "references-superseded"),
             ("f_link", "link-changed"),

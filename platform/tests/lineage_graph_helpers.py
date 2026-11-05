@@ -151,6 +151,11 @@ def stand_in_basis(monkeypatch: pytest.MonkeyPatch) -> None:
     """The fixture's relations name one stand-in basis item that is no real contribution item, so
     the final-view basis check (G2-C) would mark every relation stale. Neutralise that check; the
     other staleness reasons (link, extraction) stay real. Basis staleness is tested in G2-C."""
-    neutral = lambda project: {"stale": "[]", "unresolved": "[]", "cited": "{}"}  # noqa: E731
+    neutral = lambda project: {
+        "stale": "[]",
+        "retracted": "[]",
+        "unresolved": "[]",
+        "cited": "{}",
+    }  # noqa: E731
     monkeypatch.setattr("factory.services.relations._basis_params", neutral)
     monkeypatch.setattr("factory.services.lineage._basis_params", neutral)

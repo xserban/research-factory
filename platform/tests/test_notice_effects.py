@@ -286,9 +286,5 @@ def test_preference_stales_one_work(project: Project, ext_a: Actor, world: list[
     assert after[(first, PassLabel.A)] == ("stale", "document-version")
 
 
-@pytest.mark.skip(
-    reason="slice 3b lineage service is absent on this base; see the plan's completion notes"
-)
-def test_lineage_retracted_basis_hidden_by_default() -> None:
-    """Edges whose basis is a retracted work's item are labelled `retracted-basis` and leave the
-    default lineage views (spec: Effects). Built with `services/lineage.py`."""
+# The lineage effect of a retraction is tested in tests/test_lineage_check.py
+# (`test_retracted_basis_leaves_default_views`), where the lineage world is built.
