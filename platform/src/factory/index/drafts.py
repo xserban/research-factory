@@ -49,8 +49,8 @@ from factory.index.projection import Handler
 from factory.model.drafts import (
     DRAFT_AUDIT_FRACTION,
     DRAFT_AUDIT_MINIMUM,
-    DraftAudited,
     DraftAuditDrawn,
+    DraftAudited,
     DraftCreated,
     DraftOutlineRepinned,
     DraftReordered,

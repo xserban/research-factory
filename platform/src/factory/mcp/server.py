@@ -3182,9 +3182,11 @@ def build_server(
     def draft_status(project: str, draft_id: str) -> dict[str, JsonValue]:
         """The draft's live sentences in order, each with its class, supports, flags the platform
         computed (citation-mismatch, quantifier-without-statistic, cross-group,
-        single-source-generalisation, off-outline) and its status (`unchecked` until a verifier
-        has judged it; `structural` and `interpretive` are labels). Read-only; refused to a
-        session that has joined a pass."""
+        single-source-generalisation, off-outline) and its computed status: `unchecked` until a
+        verifier has judged it, then `supported` or `flagged` (its `reason` is the verdict),
+        `stale` when a support no longer holds (its `reason` says why: revise the sentence), and
+        `structural` and `interpretive`, which are labels. No verifier's note is shown. Read-only;
+        refused to a session that has joined a pass."""
 
         def status() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
@@ -3194,6 +3196,10 @@ def build_server(
             if found is None:
                 raise FactoryValidationError([ValidationIssue("draft_id", "unknown draft")])
             rows = drafts_service.live_sentences(opened, draft_id)
+            statuses = {
+                s.sentence_id: s
+                for s in drafts_service.sentence_status(opened, draft_id, agent=True)
+            }
             data: dict[str, JsonValue] = {
                 "draft": found.model_dump(mode="json"),
                 "sentences": [
@@ -3205,7 +3211,8 @@ def build_server(
                         "text": r.text,
                         "supports": list(r.supports),
                         "flags": [f.value for f in r.flags],
-                        "status": drafts_service.provisional_status(r.cls),
+                        "status": statuses[r.sentence_id].status,
+                        "reason": statuses[r.sentence_id].reason,
                     }
                     for r in rows
                 ],

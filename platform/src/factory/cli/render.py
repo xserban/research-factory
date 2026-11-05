@@ -30,7 +30,7 @@ from factory.services.directions import RegistryPage
 from factory.services.discovery import DiscoveryReport
 from factory.services.document_convert import ConvertSummary, DocumentStatus
 from factory.services.document_read import DocumentPage
-from factory.services.drafts import DraftRow, SentenceRow, provisional_status
+from factory.services.drafts import DraftRow, SentenceRow, StatusRow
 from factory.services.evaluation_view import EvaluationDetail
 from factory.services.experiments import ExperimentView
 from factory.services.extraction import UnitState
@@ -1510,16 +1510,19 @@ def draft_list_lines(drafts: list[DraftRow]) -> list[str]:
     ]
 
 
-def draft_detail_lines(draft: DraftRow, sentences: list[SentenceRow]) -> list[str]:
+def draft_detail_lines(
+    draft: DraftRow, sentences: list[SentenceRow], rows: list[StatusRow]
+) -> list[str]:
     """A draft with its live sentences, their class, flags and supports. Sentence text is the
     author's own; no quote appears here."""
+    statuses = {r.sentence_id: r.status for r in rows}
     lines = [f"{draft.draft_id}  {draft.kind.value}  {draft.outline_ref}  {draft.title}"]
     for section in draft.sections:
         lines.append(f"{section.section_id}  {section.heading}")
         for row in (r for r in sentences if r.section_id == section.section_id):
             flags = f"  [{', '.join(f.value for f in row.flags)}]" if row.flags else ""
             lines.append(
-                f"  {row.sentence_id}  {row.cls.value}  {provisional_status(row.cls)}"
+                f"  {row.sentence_id}  {row.cls.value}  {statuses[row.sentence_id]}"
                 f"  ({row.author}){flags}"
             )
             lines.append(f"    {row.text}")

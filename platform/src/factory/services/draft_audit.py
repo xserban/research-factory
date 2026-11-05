@@ -29,8 +29,8 @@ from factory.model.drafts import (
     DRAFT_VERIFY_ERROR_CEILING,
     NOTE_MAX_CHARS,
     AuditLabel,
-    DraftAudited,
     DraftAuditDrawn,
+    DraftAudited,
     DraftAuditReport,
 )
 from factory.model.screening import Channel

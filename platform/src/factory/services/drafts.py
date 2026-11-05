@@ -1,8 +1,9 @@
 """Drafts, slots and sentence recording (slice 7b, plan W-A, task 5).
 
 Declares: `create_draft`, `repin_outline`, `write_sentences`, `withdraw`, `reorder`, `draft_next`,
-`live_sentences`, `get_draft`, `list_drafts`, `verifier_sessions`, `SentenceInput`, `SentenceRow`,
-`SlotTask`. The only module that writes `draft.*` events.
+`live_sentences`, `get_draft`, `list_drafts`, `verifier_sessions`, `sentence_status`,
+`status_counts`, `SentenceInput`, `SentenceRow`, `SlotTask`, `StatusRow`. The writer of the
+sentence events (the verification, audit and release events have their own services).
 
 Invariants:
 - The platform never writes prose. Sentences are the writer's; the platform checks them
@@ -15,6 +16,11 @@ Invariants:
   `input_blob` (R-04). A human writes without a task.
 - A session that has verified a sentence of a draft cannot write in it (`verifier_sessions`).
 - A refusal writes nothing and carries positions and fixed codes, never document text.
+- Status is computed on read and never stored. `stale` wins over `flagged`, `flagged` over
+  `supported`, `supported` over `unchecked`; a `structural` or `interpretive` sentence keeps its
+  name unless it is stale. An audit label is a human's result, so the agent variant of the status
+  leaves it out: a rate would follow from counting the sentences it flags (decision 37.14, as
+  decision 90 item 2 reads it).
 """
 
 from __future__ import annotations
@@ -22,6 +28,7 @@ from __future__ import annotations
 import json
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Literal
 
 from pydantic import Field, JsonValue
 from sqlalchemy import text
@@ -46,11 +53,13 @@ from factory.model.drafts import (
     SentenceWithdrawn,
     SupportKind,
     SupportRef,
+    Verdict,
     parse_support,
 )
 from factory.model.task import DRAFT_SLOT_TASK_KIND, Task, TaskCompleted, TaskStatus
 from factory.services.call_memo import entering
 from factory.services.context import Project
+from factory.services.draft_audit import incorrect_verdicts
 from factory.services.outline import DEFAULT_SCOPE, OutlineScope, build_outline, outline_json
 from factory.services.results import BatchResult, ItemError
 from factory.services.supports import ResolvedSupport, resolve_supports
@@ -111,6 +120,31 @@ class DraftRow(StrictModel):
     outline_ref: str
     sections: list[SectionRow]
     sentences: int
+
+
+SentenceStatus = Literal["structural", "interpretive", "unchecked", "supported", "flagged", "stale"]
+STATUSES: tuple[SentenceStatus, ...] = (
+    "structural",
+    "interpretive",
+    "unchecked",
+    "supported",
+    "flagged",
+    "stale",
+)
+
+
+@dataclass(frozen=True)
+class StatusRow:
+    """A live sentence's computed status. `reason` is the verdict of a flagged sentence,
+    `audit-incorrect` for a verdict the audit overturned, or the stale reason code; no note."""
+
+    sentence_id: str
+    section_id: str
+    order: int
+    cls: SentenceClass
+    status: SentenceStatus
+    reason: str | None
+    flags: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -340,6 +374,85 @@ def stale_reason(row: SentenceRow, resolved: Sequence[ResolvedSupport]) -> str |
         if support.ref.kind is SupportKind.STAT and stored != support.stat_value:
             return "stat-changed"
     return None
+
+
+def _latest_verdicts(project: Project, draft_id: str) -> dict[str, tuple[str, Verdict]]:
+    """Sentence id to its latest verdict (id, verdict), by log order."""
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT sentence_id, verdict_id, verdict FROM sentence_verdicts "
+                "WHERE draft_id = :d ORDER BY event_id"
+            ),
+            {"d": draft_id},
+        ).all()
+    return {str(r[0]): (str(r[1]), Verdict(str(r[2]))) for r in rows}
+
+
+def _resolved_by_sentence(
+    project: Project, rows: Sequence[SentenceRow]
+) -> dict[str, list[ResolvedSupport]]:
+    """The supports of each sentence, resolved in one call per sentence class."""
+    found: dict[tuple[SentenceClass, str], ResolvedSupport] = {}
+    for cls in {r.cls for r in rows}:
+        refs = {s: parse_support(s) for r in rows if r.cls is cls for s in r.supports}
+        resolved = resolve_supports(project, list(refs.values()), cls=cls)
+        found.update({(cls, s): one for s, one in zip(refs, resolved, strict=True)})
+    return {r.sentence_id: [found[(r.cls, s)] for s in r.supports] for r in rows}
+
+
+def _status_of(
+    row: SentenceRow,
+    resolved: Sequence[ResolvedSupport],
+    verdict: tuple[str, Verdict] | None,
+    incorrect: frozenset[str],
+) -> tuple[SentenceStatus, str | None]:
+    stale = stale_reason(row, resolved)
+    if stale is not None:
+        return "stale", stale
+    if row.cls is SentenceClass.STRUCTURAL:
+        return "structural", None
+    if row.cls is SentenceClass.INTERPRETIVE:
+        return "interpretive", None
+    if verdict is None:
+        return "unchecked", None
+    if verdict[1] is not Verdict.SUPPORTED:
+        return "flagged", verdict[1].value
+    if verdict[0] in incorrect:
+        return "flagged", "audit-incorrect"
+    return "supported", None
+
+
+def sentence_status(project: Project, draft_id: str, *, agent: bool = False) -> list[StatusRow]:
+    """The status of each live sentence of the draft, in order. `agent` leaves the audit labels
+    out (see the module invariants); the researcher's variant reads them."""
+    with entering():
+        rows = live_sentences(project, draft_id)
+        resolved = _resolved_by_sentence(project, rows)
+        verdicts = _latest_verdicts(project, draft_id)
+        incorrect = frozenset() if agent else incorrect_verdicts(project, draft_id)
+        out: list[StatusRow] = []
+        for row in rows:
+            status, reason = _status_of(
+                row, resolved[row.sentence_id], verdicts.get(row.sentence_id), incorrect
+            )
+            out.append(
+                StatusRow(
+                    sentence_id=row.sentence_id,
+                    section_id=row.section_id,
+                    order=row.order,
+                    cls=row.cls,
+                    status=status,
+                    reason=reason,
+                    flags=tuple(f.value for f in row.flags),
+                )
+            )
+        return out
+
+
+def status_counts(rows: Sequence[StatusRow]) -> dict[str, int]:
+    """The count of each status, every status present."""
+    return {status: sum(1 for r in rows if r.status == status) for status in STATUSES}
 
 
 # --- Creating and repinning ---

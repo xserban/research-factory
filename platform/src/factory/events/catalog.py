@@ -19,8 +19,8 @@ from factory.model.digest import DigestGenerated
 from factory.model.directions import DirectionClosed
 from factory.model.document import ConversionFailed, Converted
 from factory.model.drafts import (
-    DraftAudited,
     DraftAuditDrawn,
+    DraftAudited,
     DraftCreated,
     DraftOutlineRepinned,
     DraftReordered,

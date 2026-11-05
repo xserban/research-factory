@@ -15,8 +15,8 @@ from factory.errors import FactoryValidationError
 from factory.events.envelope import Actor
 from factory.model.drafts import (
     AuditLabel,
-    DraftAudited,
     DraftAuditDrawn,
+    DraftAudited,
     DraftAuditReport,
     DraftKind,
     Verdict,
@@ -363,4 +363,4 @@ def test_forged_label_outside_the_sample_is_inert(project: Project) -> None:
 
 
 def test_session_constant_is_a_session(project: Project) -> None:
-    assert SESSION_A != project.session
+    assert project.session != SESSION_A
