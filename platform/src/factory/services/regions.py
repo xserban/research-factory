@@ -16,32 +16,49 @@ Invariants:
   and `regions.member_decide`; the session that wrote an agent definition never reviews it, and
   the human author of a definition does not review it once another human has acted (a single
   human records `self_reviewed`).
+- A member proposal carries a basis verified when it is made (a verbatim quote of the candidate in
+  an anchored element of its conversion, or a live edge incident to the candidate and to a current
+  member); it never enters a snapshot until a human adds the member. A rejection closes a proposal
+  and is never a decision in effect.
+- A link joins two pinned versions and is a human act (gate `regions.link`). `subregion-of` is
+  verified when it is written and re-read against the latest version of each region by
+  `subregion_violations`; `related` is not verified. Overlap and diff are computed from the
+  version blobs and never stored.
 - Basis positions in a snapshot refer to the canonical (sorted, de-duplicated) include list.
 - Every refusal reports all its issues together and writes nothing.
 """
 
 from __future__ import annotations
 
+import json
 from collections.abc import Sequence
 from typing import Any, Literal
 
 from pydantic import ValidationError
 from sqlalchemy import text
 
+from factory.canonical import canonical_json
+from factory.document.quotes import quote_in_element
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
 from factory.model.base import StrictModel
+from factory.model.lineage import EdgeType
 from factory.model.regions import (
+    PROPOSAL_NOTE_MAX_CHARS,
     REGION_DEFINITION_MAX_CHARS,
     REGION_NAME_MAX_CHARS,
     Facet,
+    MemberBasis,
+    QuoteBasis,
     RegionDefined,
     RegionKind,
+    RegionLinked,
     RegionMemberDecided,
+    RegionMemberProposed,
     RegionReviewed,
     RegionSnapshotTaken,
 )
-from factory.regions.concept_use import concept_exists, concept_live
+from factory.regions.concept_use import concept_exists, concept_live, use_link
 from factory.regions.evaluate import Evaluation, Member, evaluate, read_members_blob
 from factory.regions.rules import (
     CitesRule,
@@ -60,7 +77,9 @@ from factory.regions.version import (
     rules_hash,
 )
 from factory.services.context import Project
+from factory.services.conversions import conversion_manifest, conversion_work
 from factory.services.gates import gate_issues
+from factory.services.lineage import index_neighbours
 from factory.services.question import current_question, get_question
 
 ReviewState = Literal["unreviewed", "reviewed", "wrong", "superseded"]
@@ -389,11 +408,15 @@ def decide_member(
     region_id: str,
     member_type: MemberType,
     member: str,
-    decision: Literal["add", "remove"],
+    decision: Literal["add", "remove", "reject"],
     note: str | None = None,
+    *,
+    proposal_id: str | None = None,
 ) -> str:
-    """Record a human add or removal of one member (gate `regions.member_decide`); the latest
-    decision per member binds the next snapshot. Returns the event id."""
+    """Record a human add, removal or rejection of one member (gate `regions.member_decide`); the
+    latest add or remove per member binds the next snapshot, and a rejection only closes the
+    proposals of that member (those it names, else every open one) and changes no membership.
+    `proposal_id` must name a proposal of this region and member. Returns the event id."""
     with project.index.exclusive():
         project.index.sync()
         issues = gate_issues(project, actor, "regions.member_decide")
@@ -402,6 +425,10 @@ def decide_member(
         if _definition(project, region_id) is None:
             issues.append(ValidationIssue("region_id", "region-unknown"))
         issues += _member_issues(project, member_type, member)
+        if proposal_id is not None and not _proposal_matches(
+            project, proposal_id, region_id, member_type, member
+        ):
+            issues.append(ValidationIssue("proposal_id", "proposal-unknown"))
         if issues:
             raise _refuse(*issues)
         event = project.events.make(
@@ -412,6 +439,7 @@ def decide_member(
                 member=member,
                 decision=decision,
                 note=note,
+                proposal_id=proposal_id,
             ),
             actor,
             refs=[region_id, member],
@@ -456,7 +484,7 @@ def _decisions_in_effect(
         rows = conn.execute(
             text(
                 "SELECT event_id, member_type, member, decision FROM region_member_decisions "
-                "WHERE region_id = :r ORDER BY event_id"
+                "WHERE region_id = :r AND decision != 'reject' ORDER BY event_id"
             ),
             {"r": region_id},
         ).all()
@@ -466,6 +494,203 @@ def _decisions_in_effect(
         key = (member_type, _resolve_member(project, member_type, str(member)))
         latest[key] = (str(event_id), str(decision))
     return sorted(((e, t, m, d) for (t, m), (e, d) in latest.items()), key=lambda x: x[0])
+
+
+# --- Member proposals ---
+
+
+def _proposal_matches(
+    project: Project, proposal_id: str, region_id: str, member_type: MemberType, member: str
+) -> bool:
+    with project.index.connect() as conn:
+        found = conn.execute(
+            text(
+                "SELECT 1 FROM region_member_proposals WHERE proposal_id = :p AND region_id = :r "
+                "AND member_type = :t AND member = :m"
+            ),
+            {"p": proposal_id, "r": region_id, "t": member_type.value, "m": member},
+        ).first()
+    return found is not None
+
+
+def _quote_issues(
+    project: Project, member_type: MemberType, member: str, basis: QuoteBasis
+) -> list[ValidationIssue]:
+    """The quote must be verbatim in the anchored element of a conversion of the candidate work."""
+    if member_type is not MemberType.WORK:
+        return [ValidationIssue("basis", "quote-needs-work-member")]
+    wanted = _resolve_member(project, MemberType.WORK, member)
+    if _resolve_member(project, MemberType.WORK, basis.work_id) != wanted:
+        return [ValidationIssue("basis.work_id", "quote-other-work")]
+    owner = conversion_work(project, basis.conversion_id)
+    if owner is None:
+        return [ValidationIssue("basis.conversion_id", "conversion-unknown")]
+    if _resolve_member(project, MemberType.WORK, owner) != wanted:
+        return [ValidationIssue("basis.conversion_id", "conversion-other-work")]
+    try:
+        manifest = conversion_manifest(project, basis.conversion_id)
+    except FactoryValidationError:
+        return [ValidationIssue("basis.conversion_id", "conversion-unreadable")]
+    anchor = manifest.get(basis.anchor)
+    if anchor is None:
+        return [ValidationIssue("basis.anchor", "anchor-unknown")]
+    if not quote_in_element(anchor.text, basis.quote):
+        return [ValidationIssue("basis.quote", "quote-not-verbatim")]
+    return []
+
+
+_USE_KINDS = {"paper": MemberType.WORK, "idea": MemberType.IDEA, "concept": MemberType.CONCEPT}
+_ALL_EDGE_TYPES = frozenset(EdgeType)
+
+
+def _graph_other_end(project: Project, member: Member, edge_id: str) -> Member | None:
+    """The other end of graph edge `edge_id` seen from `member`, in the default view (stated or
+    confirmed, live); None when no such edge touches the member."""
+    if member[0] is MemberType.CONCEPT:
+        return None
+    neighbours = index_neighbours(project)
+    for direction in ("out", "in"):
+        for edge in neighbours(member[1], direction, _ALL_EDGE_TYPES):
+            if edge.edge_id == edge_id:
+                other = edge.target if direction == "out" else edge.source
+                kind = MemberType.IDEA if other.startswith("ida_") else MemberType.WORK
+                return kind, _resolve_member(project, kind, other)
+    return None
+
+
+def _edge_issues(
+    project: Project, region_id: str, row: Any, member_type: MemberType, member: str, edge_id: str
+) -> list[ValidationIssue]:
+    me: Member = (member_type, _resolve_member(project, member_type, member))
+    other: Member | None
+    with project.index.connect() as conn:
+        use = use_link(conn, edge_id) if edge_id.startswith("lnk_") else None
+        known = (
+            use is not None
+            or conn.execute(
+                text("SELECT 1 FROM graph_edges WHERE edge_id = :e"), {"e": edge_id}
+            ).first()
+            is not None
+        )
+    if not known:
+        return [ValidationIssue("basis.edge_id", "edge-unknown")]
+    if use is not None:
+        from_node, from_kind, concept, _ = use
+        kind = _USE_KINDS[from_kind]
+        ends = [(kind, _resolve_member(project, kind, from_node)), (MemberType.CONCEPT, concept)]
+        other = next((e for e in ends if e != me), None) if me in ends else None
+    else:
+        other = _graph_other_end(project, me, edge_id)
+    if other is None:
+        return [ValidationIssue("basis.edge_id", "edge-not-incident")]
+    result, _ = _evaluate(project, region_id, row)
+    if other not in set(result.members):
+        return [ValidationIssue("basis.edge_id", "edge-not-in-region")]
+    return []
+
+
+def propose_member(
+    project: Project,
+    actor: Actor,
+    region_id: str,
+    member_type: MemberType,
+    member: str,
+    basis: MemberBasis,
+    note: str | None = None,
+) -> str:
+    """Propose one member with a verified basis and return the proposal id (`rmp_`). Any actor
+    may propose; the proposal changes no snapshot until a human adds the member. An identical open
+    proposal (same member and basis) is returned and nothing is written. Refused, with nothing
+    written (fields `actor`, `region_id`, `member`, `note`, `basis`, `basis.<field>`): an unknown
+    region or member, a quote that is not verbatim, an edge that is unknown, not incident to the
+    candidate or not touching a current member."""
+    if actor.kind not in ("agent", "human"):
+        raise _refuse(ValidationIssue("actor", "only an agent or a human proposes a member"))
+    with project.index.exclusive():
+        project.index.sync()
+        row = _definition(project, region_id)
+        issues: list[ValidationIssue] = []
+        if row is None:
+            issues.append(ValidationIssue("region_id", "region-unknown"))
+        issues += _member_issues(project, member_type, member)
+        if note is not None and len(note) > PROPOSAL_NOTE_MAX_CHARS:
+            issues.append(ValidationIssue("note", f"at most {PROPOSAL_NOTE_MAX_CHARS} characters"))
+        if not issues:
+            if isinstance(basis, QuoteBasis):
+                issues += _quote_issues(project, member_type, member, basis)
+            else:
+                issues += _edge_issues(project, region_id, row, member_type, member, basis.edge_id)
+        if issues:
+            raise _refuse(*issues)
+        canonical = canonical_json(basis.model_dump(mode="json")).decode()
+        for open_one in pending_proposals(project, region_id):
+            same = canonical_json(open_one.basis.model_dump(mode="json")).decode() == canonical
+            if same and open_one.member_type is member_type and open_one.member == member:
+                return open_one.proposal_id
+        proposal_id = f"rmp_{project.ids.ulid()}"
+        payload = RegionMemberProposed(
+            proposal_id=proposal_id,
+            region_id=region_id,
+            member_type=member_type,
+            member=member,
+            basis=basis,
+            note=note,
+        )
+        input_blob = (
+            project.blobs.put_json(
+                {
+                    "region_id": region_id,
+                    "member_type": member_type.value,
+                    "member": member,
+                    "basis": json.loads(canonical),
+                }
+            )
+            if actor.kind == "agent"
+            else None
+        )
+        project.record(
+            [
+                project.events.make(
+                    "region.member_proposed",
+                    payload,
+                    actor,
+                    refs=[region_id, member, proposal_id],
+                    input_blob=input_blob,
+                )
+            ]
+        )
+        return proposal_id
+
+
+def pending_proposals(project: Project, region_id: str) -> list[RegionMemberProposed]:
+    """The proposals of the region not yet closed, oldest first: a proposal is closed by any later
+    human decision (add, remove or reject) on the same member, or one that names it."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT p.proposal_id, p.region_id, p.member_type, p.member, p.basis, p.note "
+                "FROM region_member_proposals p WHERE p.region_id = :r AND NOT EXISTS ("
+                "SELECT 1 FROM region_member_decisions d WHERE d.region_id = p.region_id "
+                "AND d.member_type = p.member_type AND d.member = p.member "
+                "AND (d.event_id > p.event_id OR d.proposal_id = p.proposal_id)) "
+                "ORDER BY p.event_id"
+            ),
+            {"r": region_id},
+        ).all()
+    return [
+        RegionMemberProposed.model_validate(
+            {
+                "proposal_id": pid,
+                "region_id": rid,
+                "member_type": kind,
+                "member": member,
+                "basis": json.loads(str(basis)),
+                "note": note,
+            }
+        )
+        for pid, rid, kind, member, basis, note in rows
+    ]
 
 
 # --- Evaluation and snapshots ---
@@ -788,19 +1013,218 @@ def snapshot_diff(project: Project, older: str, newer: str) -> tuple[list[Member
     return sorted(sets[1] - sets[0], key=key), sorted(sets[0] - sets[1], key=key)
 
 
+# --- Links, overlap, diff and membership ---
+
+
+def _version_members(project: Project, version: str, field: str) -> set[Member]:
+    snapshot = _snapshot_of(project, version)
+    if snapshot is None:
+        raise _refuse(ValidationIssue(field, f"version-unknown:{version}"))
+    return set(read_members_blob(project.blobs.get(str(snapshot["members_blob"]))))
+
+
+def link_regions(
+    project: Project,
+    actor: Actor,
+    link_type: Literal["subregion-of", "related"],
+    source: str,
+    target: str,
+    note: str | None = None,
+) -> None:
+    """Declare a link between two pinned versions (gate `regions.link`, human only). `subregion-of`
+    needs every member of `source` in `target`. Refused, with nothing written (fields `actor`,
+    `source`, `target`, `note`): an unknown version, the same version twice, a note over 600
+    characters, a subset that does not hold."""
+    with project.index.exclusive():
+        project.index.sync()
+        issues = gate_issues(project, actor, "regions.link")
+        if actor.kind != "human":
+            issues = issues or [ValidationIssue("actor", "only a human links regions")]
+        sets: dict[str, set[Member]] = {}
+        for field, version in (("source", source), ("target", target)):
+            try:
+                sets[field] = _version_members(project, version, field)
+            except FactoryValidationError as exc:
+                issues += exc.issues
+        try:
+            payload = RegionLinked(link_type=link_type, source=source, target=target, note=note)
+        except ValidationError as exc:
+            issues.append(ValidationIssue("link", str(exc.errors()[0]["msg"])))
+            payload = None
+        if payload is not None and link_type == "subregion-of" and len(sets) == 2:
+            outside = len(sets["source"] - sets["target"])
+            if outside:
+                issues.append(ValidationIssue("source", f"not-a-subset:{outside}"))
+        if issues:
+            raise _refuse(*issues)
+        assert payload is not None
+        project.record(
+            [project.events.make("region.linked", payload, actor, refs=[source, target])]
+        )
+
+
+def subregion_violations(project: Project) -> list[tuple[str, str, str]]:
+    """`(link event id, child region, parent region)` of each `subregion-of` link whose child's
+    latest version has a member the parent's latest version lacks."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT DISTINCT l.event_id, sc.region_id, sp.region_id FROM region_links l "
+                "JOIN region_snapshots sc ON sc.version = l.source "
+                "JOIN region_snapshots sp ON sp.version = l.target "
+                "WHERE l.link_type = 'subregion-of' AND EXISTS ("
+                "SELECT 1 FROM region_members c WHERE c.region_id = sc.region_id AND NOT EXISTS ("
+                "SELECT 1 FROM region_members p WHERE p.region_id = sp.region_id "
+                "AND p.member_type = c.member_type AND p.member = c.member)) "
+                "ORDER BY l.event_id"
+            )
+        ).all()
+    return [(str(e), str(c), str(p)) for e, c, p in rows]
+
+
+class Overlap(StrictModel):
+    """Counts by member type for two versions; `jaccard` is shared over union where the union is
+    not empty. Computed, never stored."""
+
+    a: str
+    b: str
+    shared: dict[MemberType, int]
+    only_a: dict[MemberType, int]
+    only_b: dict[MemberType, int]
+    jaccard: dict[MemberType, float]
+
+
+def _by_type(members: set[Member]) -> dict[MemberType, int]:
+    counts = {kind: sum(1 for t, _ in members if t is kind) for kind in MemberType}
+    return {kind: n for kind, n in counts.items() if n}
+
+
+def overlap(project: Project, a: str, b: str) -> Overlap:
+    """The overlap of two versions. Refused (fields `a`, `b`) for an unknown version."""
+    project.index.sync()
+    issues: list[ValidationIssue] = []
+    sets: dict[str, set[Member]] = {}
+    for field, version in (("a", a), ("b", b)):
+        try:
+            sets[field] = _version_members(project, version, field)
+        except FactoryValidationError as exc:
+            issues += exc.issues
+    if issues:
+        raise _refuse(*issues)
+    union = _by_type(sets["a"] | sets["b"])
+    shared = _by_type(sets["a"] & sets["b"])
+    return Overlap(
+        a=a,
+        b=b,
+        shared=shared,
+        only_a=_by_type(sets["a"] - sets["b"]),
+        only_b=_by_type(sets["b"] - sets["a"]),
+        jaccard={kind: shared.get(kind, 0) / n for kind, n in union.items()},
+    )
+
+
+class RegionDiff(StrictModel):
+    """One page of the changes going from version `a` to version `b`: the page runs over the added
+    members first and then the removed ones, each sorted by (type, id)."""
+
+    a: str
+    b: str
+    added: list[Member]
+    removed: list[Member]
+    total_added: int
+    total_removed: int
+    offset: int
+    limit: int
+
+
+def diff(project: Project, a: str, b: str, *, offset: int = 0, limit: int = 500) -> RegionDiff:
+    """Members added and removed going from `a` to `b`, one deterministic page. Refused (fields
+    `a`, `b`, `offset`, `limit`)."""
+    if offset < 0 or limit < 1:
+        raise _refuse(ValidationIssue("offset" if offset < 0 else "limit", "out-of-range"))
+    try:
+        added, removed = snapshot_diff(project, a, b)
+    except FactoryValidationError as exc:
+        raise _refuse(*(ValidationIssue("a", i.reason) for i in exc.issues)) from exc
+    window = [*((0, m) for m in added), *((1, m) for m in removed)][offset : offset + limit]
+    return RegionDiff(
+        a=a,
+        b=b,
+        added=[m for side, m in window if side == 0],
+        removed=[m for side, m in window if side == 1],
+        total_added=len(added),
+        total_removed=len(removed),
+        offset=offset,
+        limit=limit,
+    )
+
+
+class RegionMembership(StrictModel):
+    """A region whose latest version holds a member, and the basis recorded for it. `adopted_from`
+    is reserved for adopted versions (Later)."""
+
+    region_id: str
+    version: str
+    review_state: ReviewState
+    adopted_from: str | None
+    basis: dict[str, Any]
+
+
+def regions_of(project: Project, member_type: MemberType, member: str) -> list[RegionMembership]:
+    """The regions whose latest version holds the member (merges applied to the id), by region id:
+    one indexed read of `region_members`."""
+    project.index.sync()
+    resolved = _resolve_member(project, member_type, member)
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT m.region_id, m.version, m.basis, COALESCE((SELECT r.state FROM "
+                "region_reviews r WHERE r.version = m.version ORDER BY r.event_id DESC LIMIT 1), "
+                "'unreviewed') FROM region_members m "
+                "WHERE m.member = :m AND m.member_type = :t ORDER BY m.region_id"
+            ),
+            {"m": resolved, "t": member_type.value},
+        ).all()
+    return [
+        RegionMembership(
+            region_id=str(region),
+            version=str(version),
+            review_state="reviewed"
+            if state == "reviewed"
+            else "wrong"
+            if state == "wrong"
+            else "unreviewed",
+            adopted_from=None,
+            basis=json.loads(str(basis)) or {},
+        )
+        for region, version, basis, state in rows
+    ]
+
+
 __all__: Sequence[str] = [
+    "Overlap",
+    "RegionDiff",
+    "RegionMembership",
     "RegionState",
     "VersionInfo",
     "decide_member",
     "define_region",
+    "diff",
     "foci",
     "focus_slot_missing",
+    "link_regions",
+    "overlap",
+    "pending_proposals",
+    "propose_member",
     "region_ids",
     "region_members",
     "region_state",
+    "regions_of",
     "review_region",
     "review_state",
     "snapshot_diff",
     "snapshot_region",
+    "subregion_violations",
     "version_info",
 ]

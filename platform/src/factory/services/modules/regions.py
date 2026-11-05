@@ -21,13 +21,17 @@ SPEC = ModuleSpec(
     events=EventFamily(
         types=(
             "region.defined",
+            "region.linked",
             "region.member_decided",
+            "region.member_proposed",
             "region.reviewed",
             "region.snapshot_taken",
         ),
         tables=(
             "region_definitions",
+            "region_links",
             "region_member_decisions",
+            "region_member_proposals",
             "region_members",
             "region_reviews",
             "region_snapshots",
@@ -48,6 +52,13 @@ SPEC = ModuleSpec(
             ("region.member_decided",),
             PolicyKind.HUMAN,
             ("slice 3d ruling 26", "R-51", "R-90"),
+        ),
+        GateSpec(
+            "regions.link",
+            GateKind.DECISION,
+            ("region.linked",),
+            PolicyKind.HUMAN,
+            ("slice 3d ruling 11", "R-51", "R-90"),
         ),
     ),
 )

@@ -90,7 +90,9 @@ from factory.model.references import (
 )
 from factory.model.regions import (
     RegionDefined,
+    RegionLinked,
     RegionMemberDecided,
+    RegionMemberProposed,
     RegionReviewed,
     RegionSnapshotTaken,
 )
@@ -267,6 +269,8 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("region.snapshot_taken", RegionSnapshotTaken, 1))
     catalog.register(EventType("region.reviewed", RegionReviewed, 1))
     catalog.register(EventType("region.member_decided", RegionMemberDecided, 1))
+    catalog.register(EventType("region.member_proposed", RegionMemberProposed, 1))
+    catalog.register(EventType("region.linked", RegionLinked, 1))
     catalog.register(EventType("lead.recorded", LeadRecorded, 1))
     catalog.register(EventType("lead.decided", LeadDecided, 1))
     catalog.register(EventType("hypothesis.drafted", HypothesisDrafted, 1))

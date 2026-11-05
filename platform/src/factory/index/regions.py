@@ -6,6 +6,8 @@ snapshot event; the latest of a region is the row with the greatest `event_id`. 
 holds the members of the latest snapshot of each region only (older sets are read from their
 blobs on demand) and is replaced as a whole when a newer snapshot is folded. `region_reviews` and
 `region_member_decisions` keep every human act; the latest per version, or per member, binds.
+`region_member_proposals` keeps every proposal (open or not is read against the later decisions)
+and `region_links` every declared link (human only, like a review).
 
 Only a review or a member decision whose actor is a human is folded (defence in depth: no service
 writes one for another actor, R-51). Handlers are total in the sense that a repeated event id
@@ -27,7 +29,13 @@ from factory.canonical import canonical_json
 from factory.events.blobs import BlobStore
 from factory.events.envelope import Event
 from factory.index.projection import Handler
-from factory.model.regions import RegionDefined, RegionMemberDecided, RegionReviewed
+from factory.model.regions import (
+    RegionDefined,
+    RegionLinked,
+    RegionMemberDecided,
+    RegionMemberProposed,
+    RegionReviewed,
+)
 from factory.model.regions import RegionSnapshotTaken as Snapshot
 from factory.regions.version import canonical_rules
 
@@ -40,6 +48,8 @@ class RegionTables:
     members: Table
     reviews: Table
     decisions: Table
+    proposals: Table
+    links: Table
 
 
 def region_tables(metadata: MetaData) -> RegionTables:
@@ -115,11 +125,41 @@ def region_tables(metadata: MetaData) -> RegionTables:
         Column("member", String, nullable=False),
         Column("decision", String, nullable=False),
         Column("decider_user", String, nullable=False),
+        Column("proposal_id", String),
         Index(
             "ix_region_member_decisions_member", "region_id", "member_type", "member", "event_id"
         ),
     )
-    return RegionTables(regions, definitions, snapshots, members, reviews, decisions)
+    proposals = Table(
+        "region_member_proposals",
+        metadata,
+        Column("event_id", String, primary_key=True),
+        Column("proposal_id", String, nullable=False),
+        Column("region_id", String, nullable=False),
+        Column("member_type", String, nullable=False),
+        Column("member", String, nullable=False),
+        Column("basis", String, nullable=False),
+        Column("note", String),
+        Column("proposer_kind", String, nullable=False),
+        Column("proposer_session", String, nullable=False),
+        Index("ix_region_member_proposals_region", "region_id", "event_id"),
+        Index("ix_region_member_proposals_id", "proposal_id"),
+    )
+    links = Table(
+        "region_links",
+        metadata,
+        Column("event_id", String, primary_key=True),
+        Column("link_type", String, nullable=False),
+        Column("source", String, nullable=False),
+        Column("target", String, nullable=False),
+        Column("note", String),
+        Column("linker_user", String, nullable=False),
+        Index("ix_region_links_source", "source"),
+        Index("ix_region_links_target", "target"),
+    )
+    return RegionTables(
+        regions, definitions, snapshots, members, reviews, decisions, proposals, links
+    )
 
 
 def region_handlers(t: RegionTables, blobs: BlobStore | None) -> dict[str, Handler]:
@@ -128,6 +168,8 @@ def region_handlers(t: RegionTables, blobs: BlobStore | None) -> dict[str, Handl
         "region.snapshot_taken": _snapshot(t, blobs),
         "region.reviewed": _reviewed(t),
         "region.member_decided": _member_decided(t),
+        "region.member_proposed": _member_proposed(t),
+        "region.linked": _linked(t),
     }
 
 
@@ -246,8 +288,52 @@ def _member_decided(t: RegionTables) -> Handler:
                 member=p.member,
                 decision=p.decision,
                 decider_user=event.actor.user,
+                proposal_id=p.proposal_id,
             )
             .on_conflict_do_nothing(index_elements=["event_id"])
         )
 
     return decided
+
+
+def _member_proposed(t: RegionTables) -> Handler:
+    def proposed(conn: Connection, event: Event) -> None:
+        p = RegionMemberProposed.model_validate(event.payload)
+        conn.execute(
+            sqlite_insert(t.proposals)
+            .values(
+                event_id=event.id,
+                proposal_id=p.proposal_id,
+                region_id=p.region_id,
+                member_type=p.member_type.value,
+                member=p.member,
+                basis=canonical_json(p.basis.model_dump(mode="json")).decode(),
+                note=p.note,
+                proposer_kind=event.actor.kind,
+                proposer_session=event.actor.session,
+            )
+            .on_conflict_do_nothing(index_elements=["event_id"])
+        )
+
+    return proposed
+
+
+def _linked(t: RegionTables) -> Handler:
+    def linked(conn: Connection, event: Event) -> None:
+        if event.actor.kind != "human":
+            return
+        p = RegionLinked.model_validate(event.payload)
+        conn.execute(
+            sqlite_insert(t.links)
+            .values(
+                event_id=event.id,
+                link_type=p.link_type,
+                source=p.source,
+                target=p.target,
+                note=p.note,
+                linker_user=event.actor.user,
+            )
+            .on_conflict_do_nothing(index_elements=["event_id"])
+        )
+
+    return linked

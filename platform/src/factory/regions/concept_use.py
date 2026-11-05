@@ -71,3 +71,18 @@ def concept_users(conn: Connection, concept_id: str) -> list[str]:
         {"c": concept_id},
     ).all()
     return [str(row[0]) for row in rows]
+
+
+def use_link(conn: Connection, link_id: str) -> tuple[str, str, str, str] | None:
+    """`(from_node, from_kind, live concept id, status)` of a stated or confirmed concept use, or
+    None for an unknown link or one not (yet) stated or confirmed."""
+    row = conn.execute(
+        text(
+            "SELECT from_node, from_kind, concept_id, status FROM concept_uses "
+            "WHERE link_id = :l AND status IN ('stated', 'confirmed')"
+        ),
+        {"l": link_id},
+    ).first()
+    if row is None:
+        return None
+    return str(row[0]), str(row[1]), concept_live(conn, str(row[2])), str(row[3])
