@@ -393,6 +393,8 @@ def miner_calibration_lines(report: MinerCalibrationReport) -> list[str]:
         f"thresholds in force: recall {report.thresholds[0]:.2f}, "
         f"field agreement {report.thresholds[1]:.2f}",
     ]
+    if report.reason is not None:
+        lines.append(f"cannot pass: {report.reason}")
     if report.score is None:
         lines.append("score: not computed (waits for every unit to be labelled and mined)")
         return lines

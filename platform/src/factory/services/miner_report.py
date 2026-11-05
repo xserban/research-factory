@@ -8,6 +8,9 @@ Invariants:
   now and never staleness: a version's result is fixed once every unit is labelled and closed.
 - A score exists only when every unit of the sample is labelled and its calibration task is
   closed; before that the report counts units and nothing else.
+- A sample smaller than the mode's floor (pilot 5, systematic 10) cannot pass, whatever the score:
+  the draw is capped at the units left, and a population drained by production would otherwise let
+  one matching unit calibrate a miner. It fails closed, and the report says why.
 - A calibration with no gold row or no matched row has an undefined rate and does not pass
   (fail closed).
 - The report is for the researcher (CLI, methods): no agent surface returns it.
@@ -18,7 +21,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from factory.events.reader import read_all
-from factory.mining.calibration import thresholds
+from factory.mining.calibration import SAMPLE_FLOOR, thresholds
 from factory.mining.compile import compile_miner
 from factory.mining.score import CalibrationScore, score
 from factory.model.extraction import MinerScope
@@ -46,6 +49,8 @@ class MinerCalibrationReport:
     score: CalibrationScore | None
     thresholds: tuple[float, float]
     passed: bool | None
+    reason: str | None = None
+    """Why the calibration cannot pass whatever the score (a sample below the mode's floor)."""
 
 
 def _submitted(project: Project, tasks: frozenset[str]) -> tuple[int, int]:
@@ -79,10 +84,23 @@ def miner_calibration_report(
     closed = len(calibration_closed_works(project, scope, calibration.calibration_id))
     units = len(calibration.units)
     limits = thresholds(rigor_mode(project), spec.regime)
+    floor = SAMPLE_FLOOR[rigor_mode(project)]
+    short = (
+        f"the sample holds {units} units, fewer than the {floor} units the floor requires"
+        if units < floor
+        else None
+    )
     complete = len(labels) == units and closed == units
     if not complete:
         return MinerCalibrationReport(
-            calibration.calibration_id, units, len(labels), closed, None, limits, None
+            calibration.calibration_id,
+            units,
+            len(labels),
+            closed,
+            None,
+            limits,
+            None if short is None else False,
+            short,
         )
     tasks = calibration_task_ids(project, scope, calibration.calibration_id)
     agent: dict[str, list[ExtractionRow]] = {}
@@ -92,13 +110,14 @@ def miner_calibration_report(
     verified, submitted = _submitted(project, tasks)
     result = score(labels, agent, compile_miner(spec), verified=verified, submitted=submitted)
     passed = (
-        result.recall is not None
+        short is None
+        and result.recall is not None
         and result.field_agreement is not None
         and result.recall >= limits[0]
         and result.field_agreement >= limits[1]
     )
     return MinerCalibrationReport(
-        calibration.calibration_id, units, len(labels), closed, result, limits, passed
+        calibration.calibration_id, units, len(labels), closed, result, limits, passed, short
     )
 
 

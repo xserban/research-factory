@@ -271,3 +271,46 @@ def test_no_agent_admits_a_miner_as_evidence(
     assert current is not None and current.spec.miners is not None
     assert current.spec.miners[0].evidence is False
     _admit(project, human)  # the researcher can
+
+
+# --- 4: the sample floor ---
+
+
+def test_a_sample_below_the_floor_cannot_pass(
+    project: Project, agent: Actor, human: Actor, world: list[str]
+) -> None:
+    from tests.miner_helpers import list_miner, method_vision
+
+    base = method_vision()
+    small = replace(base, regime=MinerRegime(2, 5, 0.8, 0.9))
+    register_miner(project, PROPOSER, spec_to_json(small))
+    list_miner(project, agent, small)
+    judge = miner_actor("01JZ9Q3K5M7N8P0R2S4T6V8W2C", "claude-sonnet-5-5")
+    producer = miner_actor("01JZ9Q3K5M7N8P0R2S4T6V8W2D", "claude-opus-5-5")
+    # production claims eight of the twelve works, so only four are left to calibrate on
+    for _ in range(8):
+        batch = mine_next(project, producer, VISION_NAME, 1, A).batch
+        assert batch is not None
+        mine_record(project, producer, batch.task_id, [mine_row()], finish=True)
+    drawn = draw_miner_calibration(project, human, VISION_NAME, 1, random_seed=3)
+    assert len(drawn.units) == 4
+    for unit in drawn.units:
+        label_miner_calibration(
+            project, human, drawn.calibration_id, unit.work_id, [mine_row()], channel=Channel.CLI
+        )
+    for _ in range(10):
+        batch = mine_next(project, judge, VISION_NAME, 1, A, calibration=True).batch
+        if batch is None:
+            break
+        mine_record(project, judge, batch.task_id, [mine_row()], finish=True)
+    report = miner_calibration_report(project, VISION_NAME, 1)
+    assert report is not None and report.score is not None
+    assert report.score.recall == 1.0 and report.score.field_agreement == 1.0  # a perfect score
+    assert report.passed is False and report.reason is not None
+    assert "fewer than the 5 units" in report.reason
+    assert miner_state(project, VISION_NAME, 1) is MinerState.FAILED
+    assert methods_report(project).miners[0].calibration == "failed"
+    from factory.cli.render import miner_calibration_lines
+
+    assert any(line.startswith("cannot pass: ") for line in miner_calibration_lines(report))
+    _ = mine_pass
