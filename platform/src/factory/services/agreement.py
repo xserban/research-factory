@@ -70,7 +70,7 @@ from factory.services.screening import (
     stale_screening_decisions,
 )
 from factory.services.screening_stats import cohen_kappa, kappa_by_criterion
-from factory.services.search import list_works
+from factory.services.search import corpus_work_ids
 from factory.services.stages import require_pass_stage, screening_plan, task_kind
 
 TA = ScreeningStage.TITLE_ABSTRACT
@@ -293,7 +293,7 @@ def final_outcomes(project: Project, *, stage: ScreeningStage = TA) -> dict[str,
     screen = _load(project, stage)
     population = stage_population(project, stage)
     outcomes: dict[str, Outcome] = {}
-    for work in sorted(work.id for work in list_works(project)):
+    for work in sorted(corpus_work_ids(project)):  # ids only: no work record is parsed
         if work not in population:
             outcomes[work] = Outcome.PENDING
         elif work in calibration:

@@ -46,7 +46,7 @@ from factory.services.context import Project
 from factory.services.gates import gate_issues
 from factory.services.protocol import current_protocol, last_criterion_change, lineage_through
 from factory.services.screening_stats import CALIBRATION_SENSITIVITY, Rates, sensitivity_specificity
-from factory.services.search import list_works
+from factory.services.search import corpus_work_ids
 from factory.services.seeds import (
     SeedRole,
     SeedView,
@@ -341,7 +341,7 @@ def _calibration_size(project: Project, stage: ScreeningStage) -> int:
 
 
 def _corpus_ids(project: Project) -> set[str]:
-    return {work.id for work in list_works(project)}
+    return corpus_work_ids(project)  # ids only: no work record is parsed
 
 
 def _by_number(seeds: Iterable[SeedView]) -> list[SeedView]:

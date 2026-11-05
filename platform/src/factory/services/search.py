@@ -624,6 +624,7 @@ def _known_work_ids(project: Project, purpose: QueryPurpose) -> set[str]:
 
 def corpus_work_ids(project: Project) -> set[str]:
     """The ids of the corpus works, as `list_works` would give them, without loading the works."""
+    project.index.sync()
     with project.index.connect() as conn:
         rows = conn.execute(
             text(
