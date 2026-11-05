@@ -106,3 +106,7 @@ Minor review findings parked during the v1 build, to address when iterating from
 - XP-A: `ingest_results` evaluates baselines in the same lock after the report is recorded; a crash between the two writes leaves a ready baseline without a verdict until the next reproduction run or `evaluate_baselines` call (there is no CLI for it).
 - XP-A: GPU-hours of a run are checked against the total budget only; the per-run cap is validated against the total at design time but not enforced on reports.
 - XP-A: the unlock nonce lives in the `experiment.unlocked` event of the tracked log; it evidences order only (as the spec says), it is not a secret against someone who can read the repository.
+- W-A: a repin keeps the draft's sections, so a section the new outline adds has no slot; `draft_next` serves only the sections the draft was created with.
+- W-A: `resolve_supports` builds the visible-rows world (a full evidence fold) once per call; a long batch of cell supports on a large corpus pays it per call, not per sentence.
+- W-A: a session that wrote sentences may still join an extraction or screening pass; only the reverse is refused (pass sessions cannot use the tools).
+- W-A: `provisional_status` (structural, interpretive, unchecked) stands in for the status W-B computes from verdicts; W-B replaces it.
