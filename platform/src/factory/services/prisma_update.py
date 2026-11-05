@@ -251,6 +251,40 @@ def update_work_ids(
     return set(facts.works), facts.duplicates
 
 
+def update_query_ids(
+    project: Project,
+    work_ids: Iterable[str],
+    since_event: str | None,
+    until_event: str | None,
+) -> dict[str, tuple[str, ...]]:
+    """For each canonical work in `work_ids`, the sorted ids of the non-probe queries whose runs
+    returned it, or a record merged into it, in the window `(since_event, until_event]`. Indexed
+    queries over the provenance rows; the corpus is not loaded."""
+    project.index.sync()
+    members_of: dict[str, set[str]] = {}
+    for merge in active_merges(project):
+        members_of[merge.primary] = {merge.primary, *merge.absorbed}
+    owner: dict[str, str] = {}
+    for work_id in work_ids:
+        for member in members_of.get(work_id, {work_id}):
+            owner[member] = work_id
+    found: dict[str, set[str]] = {w: set() for w in set(owner.values())}
+    members = sorted(owner)
+    with project.index.connect() as conn:
+        for chunk in _chunks(members):
+            rows = conn.execute(
+                text(
+                    f"SELECT DISTINCT p.work_id, p.query_id {_FROM}"
+                    " WHERE p.work_id IN :ids AND (:since IS NULL OR rt.t > :since)"
+                    " AND (:until IS NULL OR rt.t <= :until)"
+                ).bindparams(bindparam("ids", expanding=True)),
+                {"ids": chunk, "since": since_event, "until": until_event},
+            ).all()
+            for work_id, query_id in rows:
+                found[owner[str(work_id)]].add(str(query_id))
+    return {w: tuple(sorted(q)) for w, q in found.items()}
+
+
 # --- the window ---
 
 

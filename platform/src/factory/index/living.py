@@ -13,6 +13,7 @@ from sqlalchemy.engine import Connection
 from factory.clock import format_ts
 from factory.events.envelope import Event
 from factory.index.projection import Handler
+from factory.model.digest import DigestGenerated
 from factory.model.living import SnapshotRecorded
 
 
@@ -50,3 +51,38 @@ def living_handlers(snapshots: Table) -> dict[str, Handler]:
         )
 
     return {"living.snapshot_recorded": snapshot_recorded}
+
+
+def digest_tables(metadata: MetaData) -> Table:
+    """One row per recorded digest of this project; empty for a log without `digest.generated`."""
+    return Table(
+        "digests",
+        metadata,
+        Column("digest_id", String, primary_key=True),
+        Column("event_id", String, nullable=False),
+        Column("ts", String, nullable=False),
+        Column("since_event", String),
+        Column("cutoff_event", String, nullable=False),
+        Column("blob", String, nullable=False),
+        Column("markdown_blob", String, nullable=False),
+    )
+
+
+def digest_handlers(digests: Table) -> dict[str, Handler]:
+    def generated(conn: Connection, event: Event) -> None:
+        payload = DigestGenerated.model_validate(event.payload)
+        conn.execute(
+            sqlite_insert(digests)
+            .values(
+                digest_id=payload.digest_id,
+                event_id=event.id,
+                ts=format_ts(event.ts),
+                since_event=payload.since_event,
+                cutoff_event=payload.cutoff_event,
+                blob=payload.blob,
+                markdown_blob=payload.markdown_blob,
+            )
+            .on_conflict_do_nothing(index_elements=["digest_id"])
+        )
+
+    return {"digest.generated": generated}

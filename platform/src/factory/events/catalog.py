@@ -5,6 +5,7 @@ from factory.model.base import StrictModel
 from factory.model.chase import ChaseRoundStarted, SampleExtended, SeedAdmitted
 from factory.model.conclusions import ConclusionRegistered, ConclusionRetired
 from factory.model.dedup import DedupMerged, DedupReverted
+from factory.model.digest import DigestGenerated
 from factory.model.document import ConversionFailed, Converted
 from factory.model.extraction import (
     ClaimRecorded,
@@ -199,4 +200,5 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("document.preferred", DocumentPreferred, 1))
     catalog.register(EventType("conclusion.registered", ConclusionRegistered, 1))
     catalog.register(EventType("conclusion.retired", ConclusionRetired, 1))
+    catalog.register(EventType("digest.generated", DigestGenerated, 1))
     return catalog

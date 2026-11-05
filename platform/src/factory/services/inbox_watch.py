@@ -17,6 +17,8 @@ Invariants:
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+
 from sqlalchemy import text
 
 from factory.model.base import StrictModel
@@ -47,6 +49,25 @@ def _watch_runs(project: Project) -> dict[str, tuple[str, str]]:
             )
         ).all()
     return {str(r[0]): (str(r[1]), str(r[2])) for r in rows}
+
+
+def route_labels(project: Project, work_ids: Iterable[str]) -> dict[str, tuple[str, str]]:
+    """For each work, its first-surfaced route label and the reference that names it (a watch
+    cycle id for `database:<source>`, else the surfacing event). Works without a discovery record
+    are left out. Read-only."""
+    project.index.sync()
+    wanted = set(work_ids)
+    runs = _watch_runs(project)
+    labels: dict[str, tuple[str, str]] = {}
+    for record in discovery(project):
+        if record.work_id not in wanted:
+            continue
+        watch = runs.get(record.first_event_id)
+        if watch is not None:
+            labels[record.work_id] = (f"{WATCH_ROUTE_PREFIX}{watch[1]}", watch[0])
+        else:
+            labels[record.work_id] = (record.first_route.value, record.first_event_id)
+    return labels
 
 
 def inbox_entries(
