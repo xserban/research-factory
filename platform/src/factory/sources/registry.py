@@ -12,6 +12,7 @@ from factory.config import Settings
 from factory.model.search import QueryKind
 from factory.sources.arxiv import ArxivSource
 from factory.sources.base import Source
+from factory.sources.crossref import CrossrefSource
 from factory.sources.http import default_http
 from factory.sources.importlist import NAME as IMPORTLIST
 from factory.sources.importlist import ImportlistReader, ImportlistSource
@@ -40,6 +41,7 @@ class SourceFactory:
 # What a query is sent to, for the record. Unknown sources fall back to their own name.
 INTERFACES: dict[str, str] = {
     "openalex": "OpenAlex REST API (api.openalex.org/works)",
+    "crossref": "Crossref REST API (api.crossref.org/works)",
     "arxiv": "arXiv API (export.arxiv.org/api/query)",
     REFLIST: "Stored reference entries of the included documents (offline)",
     IMPORTLIST: "Stored records of an imported library export (offline)",
@@ -88,3 +90,17 @@ def default_sources() -> dict[str, SourceFactory]:
 def window_filter_sources() -> frozenset[str]:
     """The default sources whose adapter filters by listing date, so a watch may window them."""
     return frozenset(name for name, factory in default_sources().items() if factory.window_filter)
+
+
+def status_sources() -> dict[str, SourceFactory]:
+    """The adapters a status lookup may use: the default sources plus Crossref.
+
+    Crossref takes status queries only, so it is not among `default_sources`: a protocol cannot
+    plan a search of it."""
+    return {
+        **default_sources(),
+        "crossref": SourceFactory(
+            CrossrefSource.kinds,
+            lambda s, c: CrossrefSource(default_http(s), clock=c, mailto=s.mailto),
+        ),
+    }

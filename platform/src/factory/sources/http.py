@@ -19,6 +19,7 @@ HOST_INTERVALS: Mapping[str, float] = {
     "export.arxiv.org": 3.0,
     "arxiv.org": 3.0,
     "api.openalex.org": 0.1,
+    "api.crossref.org": 0.2,
 }
 
 # arXiv's limit is per IP across both hosts, so they share one throttle clock. Each key maps to

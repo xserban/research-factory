@@ -62,6 +62,7 @@ def test_default_intervals_match_the_brief() -> None:
         "export.arxiv.org": 3.0,
         "arxiv.org": 3.0,
         "api.openalex.org": 0.1,
+        "api.crossref.org": 0.2,
     }
 
 

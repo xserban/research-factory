@@ -11,6 +11,7 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from pydantic import Field
 from sqlalchemy import bindparam, text
 from sqlalchemy.sql.elements import TextClause
 
@@ -33,7 +34,7 @@ from factory.model.search import (
 from factory.model.work import Provenance, ProvenanceMethod, Work
 from factory.services.call_memo import memoised
 from factory.services.context import Project
-from factory.sources.base import RawPage, SourceError
+from factory.sources.base import RawPage, SourceError, StatusRecord
 from factory.sources.http import redact
 from factory.sources.registry import INTERFACES, SourceFactory
 
@@ -53,6 +54,8 @@ class RunSummary(StrictModel):
     note: str | None
     resume_token: str | None
     new_works: int
+    status_records: tuple[StatusRecord, ...] = Field(default=(), exclude=True)
+    """What a STATUS lookup read; empty for every other purpose, and never serialised."""
 
 
 class Shortfall(StrictModel):
@@ -344,6 +347,7 @@ def run_query(
         note=note,
         resume_token=result.resume_token,
         new_works=len({work.id for work in result.works} - known),
+        status_records=result.status_records,
     )
 
 

@@ -31,7 +31,7 @@ from factory.model.work import (
     WorkType,
 )
 from factory.model.work_ids import normalize_arxiv
-from factory.sources.base import PageSink, RawPage, SearchResult, SourceError
+from factory.sources.base import PageSink, RawPage, SearchResult, SourceError, StatusRecord
 from factory.sources.http import PoliteClient, redact
 
 _ENDPOINT = "https://export.arxiv.org/api/query"
@@ -173,6 +173,8 @@ class ArxivSource:
         """
         if spec.kind not in self.kinds:
             raise ValueError(f"arxiv does not take {spec.kind.value} queries")
+        if spec.purpose is QueryPurpose.STATUS:
+            return self._run_status(spec, archive)
         is_ids = spec.kind is QueryKind.ID_LIST
         requested = _requested_ids(spec.text) if is_ids else []
         ids = [raw for raw, _ in requested]
@@ -284,6 +286,81 @@ class ArxivSource:
             status=status,
             skipped=skipped,
             note=note,
+        )
+
+    def _run_status(self, spec: QuerySpec, archive: PageSink) -> SearchResult:
+        """A status lookup: `id_list` of bare ids (the latest version answers), no works.
+
+        One record per returned entry carries the versioned id, and the published DOI and
+        `journal_ref` when arXiv gives them. Each response is archived before it is parsed.
+        """
+        if spec.kind is not QueryKind.ID_LIST:
+            raise ValueError("an arxiv status query is an id_list")
+        requested = _requested_ids(spec.text)
+        ids = [raw for raw, _ in requested]
+        if not ids:
+            raise ValueError("an id_list query must name at least one arXiv id")
+        records: list[StatusRecord] = []
+        pages = 0
+        for start in range(0, len(ids), self._page_size):
+            batch = ids[start : start + self._page_size]
+            params: dict[str, str | int] = {
+                "id_list": ",".join(batch),
+                "max_results": len(batch),
+                "start": 0,
+            }
+            note: str | None = None
+            entries: list[ElementTree.Element] = []
+            try:
+                response = self._http.get(_ENDPOINT, params)
+            except httpx.HTTPError as exc:
+                note = redact(f"{type(exc).__name__}: {exc}", self._mailto)
+            else:
+                archive(
+                    RawPage(
+                        ordinal=start // self._page_size,
+                        body=response.text,
+                        url=redact(str(response.url), self._mailto),
+                        fetched_at=self._clock.now(),
+                    )
+                )
+                pages += 1
+                try:
+                    _, entries = _feed(response.text)
+                except SourceError as exc:
+                    note = redact(f"SourceError: {exc}", self._mailto)
+            if note is not None:
+                return SearchResult(
+                    source=self.name,
+                    query_sent=",".join(ids),
+                    reported_count=None,
+                    works=[],
+                    pages=pages,
+                    status=RunStatus.PARTIAL if records else RunStatus.FAILED,
+                    note=note,
+                    resume_token=str(start),
+                    status_records=tuple(records),
+                )
+            for entry in entries:
+                record = _status_record(entry)
+                if record is not None:
+                    records.append(record)
+        returned = {normalize_arxiv(r.source_version) for r in records if r.source_version}
+        missing = [raw for raw, key in requested if key not in returned]
+        note = (
+            f"{len(missing)} requested id(s) not returned: {', '.join(missing[:10])}"
+            if missing
+            else None
+        )
+        return SearchResult(
+            source=self.name,
+            query_sent=",".join(ids),
+            reported_count=None,
+            works=[],
+            pages=pages,
+            status=RunStatus.COMPLETE,
+            note=note,
+            status_records=tuple(records),
         )
 
     def _params(self, spec: QuerySpec, ids: list[str], start: int) -> dict[str, str | int]:
@@ -442,6 +519,22 @@ class ArxivSource:
                 )
             ],
         )
+
+
+def _status_record(entry: ElementTree.Element) -> StatusRecord | None:
+    """The version (and published-version link) an arXiv entry states, or None if it has no id."""
+    raw_id = _text(entry.find("atom:id", _NS))
+    if not raw_id:
+        return None
+    doi = _text(entry.find("arxiv:doi", _NS))
+    journal_ref = _text(entry.find("arxiv:journal_ref", _NS))
+    return StatusRecord(
+        target=Identifiers(arxiv=raw_id),
+        kind="version",
+        source_version=raw_id.rsplit("/abs/", 1)[-1],
+        linked=Identifiers(doi=doi) if doi else None,
+        venue=journal_ref,
+    )
 
 
 def _search_query(spec: QuerySpec) -> str:

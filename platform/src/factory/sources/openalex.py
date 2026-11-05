@@ -20,6 +20,7 @@ from typing import Any, ClassVar
 import httpx
 
 from factory.clock import Clock
+from factory.model.notices import NoticeKind
 from factory.model.search import QueryKind, QueryPurpose, QuerySpec, RunStatus
 from factory.model.work import (
     Author,
@@ -31,7 +32,8 @@ from factory.model.work import (
     Work,
     WorkType,
 )
-from factory.sources.base import PageSink, RawPage, SearchResult, SourceError
+from factory.model.work_ids import arxiv_id_from_doi, normalize_doi
+from factory.sources.base import PageSink, RawPage, SearchResult, SourceError, StatusRecord
 from factory.sources.http import PoliteClient, redact
 
 _ENDPOINT = "https://api.openalex.org/works"
@@ -110,6 +112,52 @@ def _payload(response: httpx.Response) -> dict[str, Any]:
     return payload
 
 
+def _doi_of_url(url: str | None) -> str | None:
+    """The DOI in a `https://doi.org/...` landing-page URL, or None."""
+    if not url:
+        return None
+    lowered = url.lower()
+    for prefix in ("https://doi.org/", "http://doi.org/", "https://dx.doi.org/"):
+        if lowered.startswith(prefix):
+            return normalize_doi(url[len(prefix) :]) or None
+    return None
+
+
+def status_records(item: dict[str, Any]) -> list[StatusRecord]:
+    """What an OpenAlex work record says about notices and published versions (living-C).
+
+    `is_retracted` yields a retraction notice with no notice DOI and no date: OpenAlex states
+    neither. A `publishedVersion` location whose landing page is a DOI different from the work's
+    own yields a link to that DOI, with the location's source as the venue.
+    """
+    openalex = _strip_url(item.get("id"), "https://openalex.org/")
+    doi_url = _strip_url(item.get("doi"), "https://doi.org/")
+    doi = normalize_doi(doi_url) if doi_url else None
+    target = Identifiers(openalex=openalex, doi=doi, arxiv=arxiv_id_from_doi(doi) if doi else None)
+    out: list[StatusRecord] = []
+    if item.get("is_retracted"):
+        out.append(StatusRecord(target=target, kind="notice", notice_kind=NoticeKind.RETRACTION))
+    for location in item.get("locations") or []:
+        if not isinstance(location, dict) or location.get("version") != "publishedVersion":
+            continue
+        published = _doi_of_url(location.get("landing_page_url")) or (
+            normalize_doi(str(location["doi"])) if location.get("doi") else None
+        )
+        if published is None or published == doi:
+            continue
+        venue = (location.get("source") or {}).get("display_name")
+        out.append(
+            StatusRecord(
+                target=target,
+                kind="version",
+                linked=Identifiers(doi=published),
+                venue=venue if isinstance(venue, str) else None,
+            )
+        )
+        break  # one link per work: the first published location
+    return out
+
+
 class OpenAlexSource:
     """Exhaustive cursor-paged retrieval from OpenAlex."""
 
@@ -147,6 +195,8 @@ class OpenAlexSource:
     ) -> SearchResult:
         if spec.kind not in self.kinds:
             raise ValueError(f"openalex does not take {spec.kind.value} queries")
+        if spec.purpose is QueryPurpose.STATUS:
+            return self._run_status(spec, archive)
 
         query_sent = self._filter_expression(spec)
         method = _METHODS.get(spec.purpose, ProvenanceMethod.DATABASE)
@@ -259,6 +309,75 @@ class OpenAlexSource:
             status=status,
             skipped=skipped,
             note=note,
+        )
+
+    def _run_status(self, spec: QuerySpec, archive: PageSink) -> SearchResult:
+        """A status lookup: the same filter and paging, parsed into status records, no works.
+
+        Each response is archived before it is parsed. A failure after some pages is a partial
+        result whose resume token is the cursor to continue from.
+        """
+        query_sent = self._filter_expression(spec)
+        records: list[StatusRecord] = []
+        archived = 0
+        returned = 0
+        cursor = "*"
+        while cursor:
+            params: dict[str, str | int] = {
+                "filter": query_sent,
+                "per-page": self._page_size,
+                "cursor": cursor,
+            }
+            if self._mailto:
+                params["mailto"] = self._mailto
+            note: str | None = None
+            payload: dict[str, Any] = {}
+            try:
+                response = self._http.get(_ENDPOINT, params)
+            except httpx.HTTPError as exc:
+                note = redact(f"{type(exc).__name__}: {exc}", self._mailto)
+            else:
+                archive(
+                    RawPage(
+                        ordinal=archived,
+                        body=response.text,
+                        url=redact(str(response.url), self._mailto),
+                        fetched_at=self._clock.now(),
+                    )
+                )
+                archived += 1
+                try:
+                    payload = _payload(response)
+                except SourceError as exc:
+                    note = redact(f"SourceError: {exc}", self._mailto)
+            if note is not None:
+                return SearchResult(
+                    source=self.name,
+                    query_sent=query_sent,
+                    reported_count=None,
+                    works=[],
+                    pages=archived,
+                    status=RunStatus.PARTIAL if records else RunStatus.FAILED,
+                    note=note,
+                    resume_token=cursor,
+                    status_records=tuple(records),
+                )
+            results = payload.get("results") or []
+            for item in results:
+                records.extend(status_records(item))
+            returned += len(results)
+            cursor = (payload.get("meta") or {}).get("next_cursor") or ""
+            if not results:
+                break
+        return SearchResult(
+            source=self.name,
+            query_sent=query_sent,
+            reported_count=None,
+            works=[],
+            pages=archived,
+            status=RunStatus.COMPLETE,
+            note=f"{returned} record(s) returned",
+            status_records=tuple(records),
         )
 
     def count(self, spec: QuerySpec, *, archive: PageSink) -> int | None:

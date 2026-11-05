@@ -210,6 +210,7 @@ def test_enum_values_are_lowercase_strings() -> None:
         "seed",
         "supplied",
         "import",
+        "status",
     }
     assert {s.value for s in RunStatus} == {
         "running",

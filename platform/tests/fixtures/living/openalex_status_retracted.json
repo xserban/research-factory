@@ -1,0 +1,29 @@
+{
+  "meta": {"count": 2, "next_cursor": null},
+  "results": [
+    {
+      "id": "https://openalex.org/W9001",
+      "doi": "https://doi.org/10.1000/alpha",
+      "display_name": "Alpha methods for sparse graphs",
+      "is_retracted": true,
+      "locations": [
+        {"version": "publishedVersion", "landing_page_url": "https://doi.org/10.1000/alpha"}
+      ]
+    },
+    {
+      "id": "https://openalex.org/W9002",
+      "doi": "https://doi.org/10.48550/arxiv.2301.00001",
+      "display_name": "Beta bounds on federated drift",
+      "is_retracted": false,
+      "locations": [
+        {"version": "submittedVersion", "landing_page_url": "https://arxiv.org/abs/2301.00001"},
+        {
+          "version": "publishedVersion",
+          "landing_page_url": "https://doi.org/10.1000/beta-journal",
+          "source": {"display_name": "Journal of Synthetic Results"}
+        },
+        {"version": "acceptedVersion", "landing_page_url": "https://example.org/repo/42"}
+      ]
+    }
+  ]
+}

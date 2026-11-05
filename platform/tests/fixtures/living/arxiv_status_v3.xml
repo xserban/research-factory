@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom"
+      xmlns:arxiv="http://arxiv.org/schemas/atom"
+      xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/">
+  <opensearch:totalResults>2</opensearch:totalResults>
+  <entry>
+    <id>http://arxiv.org/abs/2301.00001v3</id>
+    <published>2023-01-02T12:00:00Z</published>
+    <updated>2023-06-01T12:00:00Z</updated>
+    <title>Beta bounds on federated drift</title>
+    <summary>Synthetic.</summary>
+    <author><name>Bo Chen</name></author>
+    <arxiv:doi>10.1000/beta-journal</arxiv:doi>
+    <arxiv:journal_ref>J. Synthetic Results 4 (2023)</arxiv:journal_ref>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/2302.00002v1</id>
+    <published>2023-02-02T12:00:00Z</published>
+    <updated>2023-02-02T12:00:00Z</updated>
+    <title>Gamma routing of experts</title>
+    <summary>Synthetic.</summary>
+    <author><name>Cy Dee</name></author>
+  </entry>
+</feed>

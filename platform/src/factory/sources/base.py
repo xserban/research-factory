@@ -10,12 +10,13 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from datetime import datetime
-from typing import Protocol, runtime_checkable
+from datetime import date, datetime
+from typing import Literal, Protocol, runtime_checkable
 
 from factory.errors import FactoryError
+from factory.model.notices import NoticeKind
 from factory.model.search import QueryKind, QuerySpec, RunStatus
-from factory.model.work import Work
+from factory.model.work import Identifiers, Work
 from factory.model.work_ids import arxiv_id_from_doi, normalize_arxiv
 
 _RESULT_STATUSES = frozenset({RunStatus.COMPLETE, RunStatus.PARTIAL, RunStatus.FAILED})
@@ -33,6 +34,26 @@ class RawPage:
     body: str
     url: str
     fetched_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class StatusRecord:
+    """One fact a status lookup read from a source's metadata about a known work.
+
+    `target` carries every identifier the response gave for the work it is about (the service
+    matches it to a corpus work). A `notice` record has a `notice_kind`, and may have the notice's
+    own DOI and date; a `version` record has a `source_version` (a newer arXiv version, as the
+    versioned id) and/or a `linked` published version (identifiers and venue).
+    """
+
+    target: Identifiers
+    kind: Literal["notice", "version"]
+    notice_kind: NoticeKind | None = None
+    notice_doi: str | None = None
+    notice_date: date | None = None
+    source_version: str | None = None
+    linked: Identifiers | None = None
+    venue: str | None = None
 
 
 PageSink = Callable[[RawPage], str]
@@ -66,6 +87,8 @@ class SearchResult:
     status: RunStatus
     skipped: int = 0
     note: str | None = None
+    status_records: tuple[StatusRecord, ...] = ()
+    """What a STATUS lookup read (living-C); such a result has no `works`."""
     resume_token: str | None = None
     """Where a partial run stopped, in whatever form the source resumes from.
 
@@ -164,5 +187,6 @@ __all__ = [
     "SearchResult",
     "Source",
     "SourceError",
+    "StatusRecord",
     "probe_key",
 ]
