@@ -26,6 +26,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from factory.errors import FactoryValidationError, ValidationIssue
+from factory.lineage.export import iter_dot, iter_json
 from factory.lineage.graph import (
     DEFAULT_FILTER,
     DERIVED,
@@ -720,17 +721,16 @@ def _edge_rows(edges: Sequence[GraphEdge]) -> list[dict[str, JsonValue]]:
     ]
 
 
-def graph_query(
+def _validate(
     project: Project,
     query: str,
-    *,
-    node: str | None = None,
-    target: str | None = None,
-    depth: int = 3,
-    k: int = 2,
-    flt: GraphFilter = DEFAULT_FILTER,
-) -> GraphQueryResult:
-    """Run a bounded query; invalid arguments raise `FactoryValidationError` and read nothing."""
+    node: str | None,
+    target: str | None,
+    depth: int,
+    k: int,
+    flt: GraphFilter,
+) -> QueryKind:
+    """The query kind, or a `FactoryValidationError`; reads nothing but node existence."""
     if query not in _KINDS:
         raise FactoryValidationError([ValidationIssue("query", "unknown query")])
     kind: QueryKind = query  # type: ignore[assignment]
@@ -751,6 +751,51 @@ def graph_query(
     if kind == "path":
         assert target is not None
         require_node(project, target, "target", flt)
+    return kind
+
+
+def _traverse(
+    project: Project,
+    kind: QueryKind,
+    node: str,
+    target: str | None,
+    depth: int,
+    flt: GraphFilter,
+) -> tuple[QueryResult, dict[str, GraphEdge]]:
+    """Run a traversal query; also return every edge the lookups read, by id."""
+    seen: dict[str, GraphEdge] = {}
+    lookup = index_neighbours(project, flt)
+
+    def recording(n: str, d: Direction, types: frozenset[EdgeType]) -> Sequence[GraphEdge]:
+        found = lookup(n, d, types)
+        seen.update((e.edge_id, e) for e in found)
+        return found
+
+    result: QueryResult
+    if kind == "ancestors":
+        result = ancestors(recording, node, depth)
+    elif kind == "descendants":
+        result = descendants(recording, node, depth)
+    elif kind == "path":
+        assert target is not None
+        result = path(recording, node, target)
+    else:
+        result = improvements_on(recording, node)
+    return result, seen
+
+
+def graph_query(
+    project: Project,
+    query: str,
+    *,
+    node: str | None = None,
+    target: str | None = None,
+    depth: int = 3,
+    k: int = 2,
+    flt: GraphFilter = DEFAULT_FILTER,
+) -> GraphQueryResult:
+    """Run a bounded query; invalid arguments raise `FactoryValidationError` and read nothing."""
+    kind = _validate(project, query, node, target, depth, k, flt)
     if kind == "no_stated_base":
         base = no_stated_base(project, flt)
         categories = {
@@ -789,25 +834,8 @@ def graph_query(
             truncated=len(ids) > MAX_RESULTS,
             depth=None,
         )
-    seen: dict[str, GraphEdge] = {}
-    lookup = index_neighbours(project, flt)
-
-    def recording(n: str, d: Direction, types: frozenset[EdgeType]) -> Sequence[GraphEdge]:
-        found = lookup(n, d, types)
-        seen.update((e.edge_id, e) for e in found)
-        return found
-
     assert node is not None
-    result: QueryResult
-    if kind == "ancestors":
-        result = ancestors(recording, node, depth)
-    elif kind == "descendants":
-        result = descendants(recording, node, depth)
-    elif kind == "path":
-        assert target is not None
-        result = path(recording, node, target)
-    else:
-        result = improvements_on(recording, node)
+    result, seen = _traverse(project, kind, node, target, depth, flt)
     return GraphQueryResult(
         query=kind,
         filter=flt.as_dict(),
@@ -816,4 +844,93 @@ def graph_query(
         truncated=result.truncated,
         depth=result.depth,
         depth_clamped=kind in ("ancestors", "descendants") and depth > MAX_DEPTH,
+    )
+
+
+# --- Export ---
+
+ExportFormat = Literal["json", "dot"]
+MCP_EXPORT_MAX_EDGES = 2000
+_TOO_LARGE = "too large; use a query or the CLI"
+
+
+def export_edge_count(project: Project, flt: GraphFilter = DEFAULT_FILTER) -> int:
+    """The number of edges a whole-view export has: SQL counts of the `cites` rows and relation
+    statuses in the filter, plus the derived idea edges. An upper bound by exactly the relation
+    edges that point to an idea the view hides, which the stream drops; the cap check is thus
+    conservative, never lax."""
+    view = _view(project, flt)
+    allowed = sorted(s.value for s in flt.statuses())
+    total = 0
+    if EdgeType.CITES in flt.edge_types:
+        with project.index.connect() as conn:
+            total += int(
+                conn.execute(
+                    text(
+                        "SELECT COUNT(*) FROM graph_edges WHERE edge_type = 'cites' AND live = 1 "
+                        "AND (decision IS NULL OR decision != 'reject') "
+                        "AND base_status IN (SELECT value FROM json_each(:s))"
+                    ),
+                    {"s": json.dumps(allowed)},
+                ).scalar_one()
+            )
+    counts = relation_counts(project)
+    for edge_type in flt.edge_types:
+        if edge_type is not EdgeType.CITES:
+            total += sum(counts[edge_type.value][s] for s in allowed)
+    return total + sum(1 for _ in _derived_edges(project, view))
+
+
+def iter_graph_export(
+    project: Project,
+    fmt: ExportFormat,
+    *,
+    query: str | None = None,
+    node: str | None = None,
+    target: str | None = None,
+    depth: int = 3,
+    k: int = 2,
+    flt: GraphFilter = DEFAULT_FILTER,
+) -> Iterator[str]:
+    """The export in chunks. The whole filtered view is streamed from `iter_nodes` / `iter_edges`
+    when `query` is None; else it is the query's subgraph (bounded). Arguments are validated
+    before the first chunk is produced."""
+    if fmt not in ("json", "dot"):
+        raise FactoryValidationError([ValidationIssue("format", "must be json or dot")])
+    render = iter_json if fmt == "json" else iter_dot
+    if query is None:
+        return render(flt, iter_nodes(project, flt), iter_edges(project, flt))
+    kind = _validate(project, query, node, target, depth, k, flt)
+    edges: list[GraphEdge] = []
+    if kind in ("ancestors", "descendants", "path", "improvements_on"):
+        assert node is not None
+        result, seen = _traverse(project, kind, node, target, depth, flt)
+        edges = [seen[i] for i in result.edges]
+        ids = {node, *result.nodes}
+    else:
+        ids = {str(n["id"]) for n in graph_query(project, kind, k=k, flt=flt).nodes}
+    nodes = [n for n in (graph_node(project, i, flt) for i in sorted(ids)) if n is not None]
+    return render(flt, nodes, sorted(edges, key=GraphEdge.sort_key))
+
+
+def graph_export(
+    project: Project,
+    fmt: ExportFormat,
+    *,
+    query: str | None = None,
+    node: str | None = None,
+    target: str | None = None,
+    depth: int = 3,
+    k: int = 2,
+    flt: GraphFilter = DEFAULT_FILTER,
+    max_edges: int | None = None,
+) -> str:
+    """`iter_graph_export` as one string. With `max_edges`, a whole-view export of more edges is
+    refused on field `query` before anything is rendered (ruling 9)."""
+    if query is None and max_edges is not None and export_edge_count(project, flt) > max_edges:
+        raise FactoryValidationError([ValidationIssue("query", _TOO_LARGE)])
+    return "".join(
+        iter_graph_export(
+            project, fmt, query=query, node=node, target=target, depth=depth, k=k, flt=flt
+        )
     )
