@@ -20,20 +20,16 @@ Invariants:
 
 from __future__ import annotations
 
-import hashlib
 import json
 from collections.abc import Sequence
 from decimal import Decimal
-from typing import cast
 
-from pydantic import JsonValue
 from sqlalchemy import text
 
-from factory.canonical import canonical_json
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.extraction.numbers import normalise_for, normalise_text
 from factory.hypotheses.evaluate import compute_experiment
-from factory.hypotheses.literature import LitRow, Requirement, compare_works
+from factory.hypotheses.literature import LitRow, Requirement, compare_works, literature_hash
 from factory.hypotheses.rules import Favour, apply_literature_rule
 from factory.hypotheses.tquantiles import Level
 from factory.index.evaluation import read_experiment_inputs
@@ -42,6 +38,7 @@ from factory.model.hypotheses import (
     EVALUATOR_VERSION,
     HypothesisEvaluated,
     HypothesisSpec,
+    LiteratureComparison,
     LiteratureDirection,
     LiteratureTest,
     MethodRef,
@@ -188,15 +185,11 @@ def _recompute_literature(project: Project, hypothesis_id: str) -> HypothesisEva
     if view.autonomy == "agent":
         flags.add("autonomy:agent")
     level = _registered_level(project, hypothesis_id)
-    body: dict[str, JsonValue] = {
-        "h": view.h_version,
-        "rule": rule.model_dump(mode="json"),
-        "margin": spec.prediction.margin,
-        "window": start,
-        "compared": [[w, *compared[w][:2]] for w in sorted(compared)],
-        "favour": [compared[w][2] for w in sorted(compared)],
-        "flags": cast(JsonValue, sorted(flags)),
-    }
+    comparisons = tuple(
+        LiteratureComparison(work_id=w, treatment_row=t, baseline_row=b, favour=f)
+        for w, (t, b, f) in sorted(compared.items())
+    )
+    ordered = tuple(sorted(flags))
     return HypothesisEvaluated(
         hypothesis_id=hypothesis_id,
         h_version=view.h_version,
@@ -204,9 +197,10 @@ def _recompute_literature(project: Project, hypothesis_id: str) -> HypothesisEva
         n=len(compared),
         level=level,
         counts=dict(result.counts),
-        flags=tuple(sorted(flags)),
+        flags=ordered,
         works=tuple(sorted(compared)),
-        inputs_hash=hashlib.sha256(canonical_json(body)).hexdigest()[:16],
+        comparisons=comparisons,
+        inputs_hash=literature_hash(spec, view.h_version, comparisons, ordered),
         evaluator_version=EVALUATOR_VERSION,
     )
 

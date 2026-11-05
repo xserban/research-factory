@@ -489,11 +489,22 @@ EVALUATION_OUTCOMES = ("supported", "refuted", "inconclusive", "incomplete")
 SIGNED_DECIMAL_RE = r"^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$"
 
 
+class LiteratureComparison(StrictModel):
+    """One work that compares the two methods: the evidence rows read and the side it favours.
+    The projector checks them against the works and extraction tables."""
+
+    work_id: Annotated[str, StringConstraints(pattern=WORK_ID_RE)]
+    treatment_row: RowKey
+    baseline_row: RowKey
+    favour: Literal["treatment", "baseline", "tie"]
+
+
 class HypothesisEvaluated(StrictModel):
     """The computed outcome of a registered hypothesis, written by the platform (a `system` actor)
     and by nothing else. There is no input model: no tool, command or service takes an outcome.
     The projector recomputes the whole payload from the log and folds the event only if it is
-    equal to the recomputation (experiment hypotheses), so a hand-written event changes nothing."""
+    equal to the recomputation (experiment hypotheses) or checks out against the works, rows,
+    cut-offs and registration (literature hypotheses), so a hand-written event changes nothing."""
 
     hypothesis_id: HypothesisId
     h_version: HVersion
@@ -509,5 +520,6 @@ class HypothesisEvaluated(StrictModel):
     flags: tuple[str, ...] = ()
     runs: tuple[str, ...] = ()
     works: tuple[str, ...] = ()
+    comparisons: tuple[LiteratureComparison, ...] = ()
     inputs_hash: Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{16}$")]
     evaluator_version: str

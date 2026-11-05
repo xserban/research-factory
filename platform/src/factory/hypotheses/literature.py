@@ -12,12 +12,18 @@ Invariants:
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
+from typing import cast
 
+from pydantic import JsonValue
+
+from factory.canonical import canonical_json
 from factory.extraction.numbers import normalise_text
 from factory.hypotheses.rules import Favour, favour_of
+from factory.model.hypotheses import HypothesisSpec, LiteratureComparison, LiteratureTest
 
 
 @dataclass(frozen=True)
@@ -73,6 +79,25 @@ def compare_works(
                     favour_of(Decimal(t[0].value), Decimal(b[0].value), direction, margin),
                 )
     return out
+
+
+def literature_hash(
+    spec: HypothesisSpec,
+    h_version: str,
+    comparisons: Sequence[LiteratureComparison],
+    flags: Sequence[str],
+) -> str:
+    """The hash of what a literature outcome rests on; the projector recomputes it."""
+    assert isinstance(spec.test, LiteratureTest)
+    body: dict[str, JsonValue] = {
+        "h": h_version,
+        "rule": spec.decision_rule.model_dump(mode="json"),
+        "margin": spec.prediction.margin,
+        "window": spec.test.window_start.isoformat(),
+        "comparisons": [c.model_dump(mode="json") for c in comparisons],
+        "flags": cast(JsonValue, sorted(flags)),
+    }
+    return hashlib.sha256(canonical_json(body)).hexdigest()[:16]
 
 
 def _key(row: LitRow) -> str:

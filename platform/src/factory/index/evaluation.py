@@ -11,9 +11,9 @@ the log, unfolded, and changes nothing else):
 - an experiment hypothesis: its live frozen design is the one named, and the payload equals,
   field for field, the evaluation recomputed here from the tables as they stand at that point of
   the log (`hypotheses.evaluate.compute_experiment`), the same function the service uses;
-- a literature hypothesis (its evidence report cannot be recomputed from tables): the outcome and
-  flags equal the rule applied to the counts in the payload, and the works listed are as many as
-  the comparisons counted.
+- a literature hypothesis (its evidence report cannot be recomputed from tables): every comparison
+  names a work inside the window and live rows of it, and the outcome, counts, flags (the rule's,
+  the cut-offs, the autonomy label), level and hash are the ones those comparisons give.
 - an evaluation whose inputs hash equals that of the live one is not folded again.
 
 Handlers are total: an event that does not validate, or names something unknown, changes nothing.
@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import Column, Index, MetaData, String, Table, text
@@ -37,13 +38,16 @@ from factory.hypotheses.evaluate import (
     RunRow,
     compute_experiment,
 )
-from factory.hypotheses.rules import apply_literature_rule
+from factory.hypotheses.literature import literature_hash
+from factory.hypotheses.rules import apply_literature_rule, favour_of
 from factory.index.experiments import design_of
+from factory.index.hypotheses import cutoff_flags_of
 from factory.index.projection import Handler
 from factory.model.experiments import Cell
 from factory.model.hypotheses import (
     HypothesisEvaluated,
     HypothesisSpec,
+    LiteratureComparison,
     LiteratureDirection,
     LiteratureTest,
 )
@@ -174,23 +178,71 @@ def live_evaluation(conn: Connection, hypothesis_id: str) -> Any:
     ).first()
 
 
-def literature_consistent(p: HypothesisEvaluated, spec: HypothesisSpec) -> bool:
-    """Whether a literature evaluation is what the rule gives for its own counts."""
-    rule = spec.decision_rule
-    if not isinstance(rule, LiteratureDirection) or not isinstance(spec.test, LiteratureTest):
+def _row_values(conn: Connection, work_id: str, row_key: str) -> set[str | None] | None:
+    """The canonical values of the live rows of a key in a work, None when it has no such row."""
+    rows = conn.execute(
+        text(
+            "SELECT f.canonical FROM extraction_rows r JOIN extraction_fields f "
+            "ON f.extraction_id = r.extraction_id AND f.field = 'value' "
+            "WHERE r.work_id = :w AND r.row_key = :k AND r.superseded_by IS NULL"
+        ),
+        {"w": work_id, "k": row_key},
+    ).all()
+    return {None if r[0] is None else str(r[0]) for r in rows} or None
+
+
+def _comparison_holds(
+    conn: Connection, c: LiteratureComparison, spec: HypothesisSpec, window_start: str
+) -> bool:
+    """The work exists inside the window and both rows are live rows of it. The side it favours
+    is recomputed when the passes agree on each value; where they differ a resolution decides, and
+    `check` recomputes that one."""
+    published = conn.execute(
+        text("SELECT json_extract(data, '$.dates.published') FROM works WHERE work_id = :w"),
+        {"w": c.work_id},
+    ).first()
+    if published is None or published[0] is None or str(published[0]) < window_start:
         return False
-    c = p.counts
-    k, j, n = c.get("favour_treatment", -1), c.get("favour_baseline", -1), c.get("n", -1)
-    ties = c.get("ties", -1)
-    if min(k, j, n, ties) < 0 or k + j + ties != n or n != len(p.works) or p.n != n:
+    treatment = _row_values(conn, c.work_id, c.treatment_row)
+    baseline = _row_values(conn, c.work_id, c.baseline_row)
+    if treatment is None or baseline is None:
         return False
-    favour = ["treatment"] * k + ["baseline"] * j + ["tie"] * ties
-    result = apply_literature_rule(rule, favour)  # type: ignore[arg-type]
+    if len(treatment) == 1 and len(baseline) == 1:
+        t, b = next(iter(treatment)), next(iter(baseline))
+        if t is not None and b is not None:
+            margin = Decimal(spec.prediction.margin)
+            return favour_of(Decimal(t), Decimal(b), spec.metric.direction, margin) == c.favour
+    return True
+
+
+def literature_consistent(conn: Connection, p: HypothesisEvaluated, hyp: Any) -> bool:
+    """Whether a literature evaluation is what the log gives, as far as tables can say: the
+    evidence report cannot be recomputed here, so each comparison is checked against the works and
+    extraction tables, and the outcome, counts, flags, level and hash are recomputed from them."""
+    spec = HypothesisSpec.model_validate(json.loads(str(hyp[2])))
+    rule, test = spec.decision_rule, spec.test
+    if not isinstance(rule, LiteratureDirection) or not isinstance(test, LiteratureTest):
+        return False
+    if p.experiment_id is not None or p.e_version is not None or p.runs:
+        return False
+    if (p.mean, p.ci_low, p.ci_high) != (None, None, None) or p.level != hyp[4]:
+        return False
+    works = [c.work_id for c in p.comparisons]
+    if len(set(works)) != len(works) or p.works != tuple(sorted(works)) or p.n != len(works):
+        return False
+    start = test.window_start.isoformat()
+    if not all(_comparison_holds(conn, c, spec, start) for c in p.comparisons):
+        return False
+    result = apply_literature_rule(rule, [c.favour for c in p.comparisons])
+    flags = set(result.flags) | set(cutoff_flags_of(conn, p.hypothesis_id))
+    if str(hyp[3]) == "agent":
+        flags.add("autonomy:agent")
+    flags |= set(p.flags) & {"method-unresolved"}
     return (
         p.outcome == result.outcome
-        and set(result.flags) <= set(p.flags)
-        and p.runs == ()
-        and p.experiment_id is None
+        and dict(p.counts) == dict(result.counts)
+        and p.flags == tuple(sorted(flags))
+        and p.inputs_hash == literature_hash(spec, p.h_version, p.comparisons, p.flags)
     )
 
 
@@ -206,7 +258,7 @@ def _evaluated(t: EvaluationTables) -> Handler:
             inputs = read_experiment_inputs(conn, p.hypothesis_id)
             if inputs is None or compute_experiment(inputs) != p:
                 return
-        elif not literature_consistent(p, HypothesisSpec.model_validate(json.loads(str(hyp[2])))):
+        elif not literature_consistent(conn, p, hyp):
             return
         live = live_evaluation(conn, p.hypothesis_id)
         if live is not None and str(live[1]) == p.inputs_hash:

@@ -28,7 +28,7 @@ from sqlalchemy import text
 
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
-from factory.index.hypotheses import plan_in_force
+from factory.index.hypotheses import cutoff_flags_of, plan_in_force
 from factory.model.base import StrictModel
 from factory.model.hypotheses import (
     AbandonReason,
@@ -37,7 +37,6 @@ from factory.model.hypotheses import (
     HypothesisDrafted,
     HypothesisRegistered,
     HypothesisSpec,
-    LiteratureTest,
     MethodRef,
     ModelCutoffDeclared,
     falsifier_text,
@@ -289,41 +288,9 @@ def _registration_of(project: Project, hypothesis_id: str) -> tuple[str | None, 
 
 
 def cutoff_flags(project: Project, hypothesis_id: str) -> tuple[str, ...]:
-    """The R-53 flags of a literature hypothesis, computed on read over the drafter's model and
-    every critic's: `cutoff-unknown` when a model has no declared cut-off, `contaminated` when a
-    cut-off is on or after the window start. An experiment hypothesis has none (its evidence is
-    generated after registration)."""
+    """The R-53 flags of a literature hypothesis, computed on read (`cutoff_flags_of`)."""
     with project.index.connect() as conn:
-        row = conn.execute(
-            text("SELECT spec_json, drafter_model FROM hypotheses WHERE hypothesis_id = :h"),
-            {"h": hypothesis_id},
-        ).first()
-        if row is None:
-            return ()
-        spec = HypothesisSpec.model_validate(json.loads(str(row[0])))
-        if not isinstance(spec.test, LiteratureTest):
-            return ()
-        models = {str(row[1])} if row[1] is not None else set()
-        critics = conn.execute(
-            text(
-                "SELECT DISTINCT critic_model FROM hypothesis_reviews "
-                "WHERE hypothesis_id = :h AND critic_model IS NOT NULL"
-            ),
-            {"h": hypothesis_id},
-        ).scalars()
-        models.update(str(m) for m in critics)
-        cutoffs = {
-            str(m): str(c)
-            for m, c in conn.execute(text("SELECT model, cutoff FROM model_cutoffs")).all()
-        }
-    flags: set[str] = set()
-    start = spec.test.window_start.isoformat()
-    for model in models:
-        if model not in cutoffs:
-            flags.add("cutoff-unknown")
-        elif cutoffs[model] >= start:
-            flags.add("contaminated")
-    return tuple(sorted(flags))
+        return cutoff_flags_of(conn, hypothesis_id)
 
 
 def _flags_of(project: Project, hypothesis_id: str) -> tuple[str, ...]:

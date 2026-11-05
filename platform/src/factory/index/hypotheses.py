@@ -18,6 +18,7 @@ Rows are first-write-wins per id.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 
 from sqlalchemy import Column, Index, Integer, MetaData, String, Table, select, text, update
@@ -33,9 +34,11 @@ from factory.model.hypotheses import (
     HypothesisDrafted,
     HypothesisRegistered,
     HypothesisReviewed,
+    HypothesisSpec,
     LeadDecided,
     LeadRecorded,
     Level,
+    LiteratureTest,
     ModelCutoffDeclared,
 )
 from factory.model.project import RigorMode
@@ -177,6 +180,43 @@ def plan_in_force(conn: Connection) -> tuple[int, Level]:
     min_seeds = plan.min_seeds if plan is not None and plan.min_seeds is not None else None
     level: Level = "0.95" if plan is None else plan.confidence
     return (min_seeds if min_seeds is not None else MIN_SEEDS_BY_MODE[mode]), level
+
+
+def cutoff_flags_of(conn: Connection, hypothesis_id: str) -> tuple[str, ...]:
+    """The R-53 flags of a literature hypothesis over the drafter's model and every critic's:
+    `cutoff-unknown` when a model has no declared cut-off, `contaminated` when a cut-off is on or
+    after the window start. An experiment hypothesis has none (its evidence is generated after
+    registration). The service reads it on request, the fold at its point of the log."""
+    row = conn.execute(
+        text("SELECT spec_json, drafter_model FROM hypotheses WHERE hypothesis_id = :h"),
+        {"h": hypothesis_id},
+    ).first()
+    if row is None:
+        return ()
+    spec = HypothesisSpec.model_validate(json.loads(str(row[0])))
+    if not isinstance(spec.test, LiteratureTest):
+        return ()
+    models = {str(row[1])} if row[1] is not None else set()
+    critics = conn.execute(
+        text(
+            "SELECT DISTINCT critic_model FROM hypothesis_reviews "
+            "WHERE hypothesis_id = :h AND critic_model IS NOT NULL"
+        ),
+        {"h": hypothesis_id},
+    ).scalars()
+    models.update(str(m) for m in critics)
+    cutoffs = {
+        str(m): str(c)
+        for m, c in conn.execute(text("SELECT model, cutoff FROM model_cutoffs")).all()
+    }
+    flags: set[str] = set()
+    start = spec.test.window_start.isoformat()
+    for model in models:
+        if model not in cutoffs:
+            flags.add("cutoff-unknown")
+        elif cutoffs[model] >= start:
+            flags.add("contaminated")
+    return tuple(sorted(flags))
 
 
 def policy_in_force(conn: Connection, t: HypothesisTables, gate_id: str) -> PolicyKind:
