@@ -60,3 +60,10 @@ Minor review findings parked during the v1 build, to address when iterating from
 - M-C: `registered_miners` and `miner_listing` read one row per version (N+1 queries); `mine_status` recomputes unit states per miner per call. Fine for a handful of miners.
 - M-C: a title reference needs a year in its quote; a title cited without one is `work-not-found`. Widen the window by the citing work's year if pilot use shows false rejects.
 - M-C: `miner_register` over MCP is refused to pass sessions; `miner_list` is not (it names no work and no result).
+- H-C: `hypothesis_prior` builds the keys of every hypothesis on each lead record and review serving (a scan, not a lookup); add a `hypothesis_keys` table if projects reach thousands of hypotheses.
+- H-C: a match trigger is verified by paging `match` for both status sets; a project with thousands of cards pays for it on each lead. Cache by `match_key` if it shows up.
+- H-C: a critic whose claim is live gets `None` from `hypothesis_review_next` until the 30-minute lease lapses; a `review_resume` that re-serves the held task to its own session would remove the wait.
+- H-C: `lead.decided` and `hypothesis.registered` are folded only when consistent, but `check` does not yet list the events the fold dropped (as G3-C does for layer reviews); add `lead-decision-dropped` and `hypothesis-registration-dropped` findings.
+- H-C: `check`, `trace` and `report_methods` do not yet cover leads, hypotheses, reviews or cut-offs (plan XP-B owns the slice's check and trace); `trace` does not parse `led_` or `hyp_`.
+- H-C: the R-53 flags use the models of the drafter and of every critic review (eligible or not); a review that the projector ignores still adds its model to the flags (the conservative side).
+- H-C: `declare_cutoff` takes any model string; add a list of known models (from agent events) so that a typo is caught.
