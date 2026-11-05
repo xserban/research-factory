@@ -434,7 +434,7 @@ def segment_hits(project: Project) -> list[_Hit]:
 
 
 def _run_rules(project: Project) -> list[_Hit]:
-    """Run each rule once, in report order, and stamp its hits with the rule's position."""
+    """Run each rule once, in report order, and stamp each hit with its position in the report."""
     project.index.sync()
     outcomes = final_outcomes(project)
     groups: list[list[_Hit]] = [
@@ -462,7 +462,8 @@ def _run_rules(project: Project) -> list[_Hit]:
         _lineage(project),
         _layer(project),
     ]
-    return [replace(hit, seq=seq) for seq, group in enumerate(groups) for hit in group]
+    flat = [hit for group in groups for hit in group]
+    return [replace(hit, seq=seq) for seq, hit in enumerate(flat)]
 
 
 # --- Lineage (slice 3b, plan G2-E) ---

@@ -144,3 +144,25 @@ def test_a_hit_with_no_owner_is_an_error(project: Project, monkeypatch: pytest.M
 def test_levels_come_from_the_declarations() -> None:
     assert default_modules().levels() == check_module.LEVELS
     assert check_module.LEVELS["screening-pending"] == ("warning", "warning", "warning")
+
+
+def test_order_inside_a_rule_group_survives_mixed_owners(
+    project: Project, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One rule can yield codes of several modules; the report keeps the rule's own order."""
+    groups = {
+        "_fulltext": ["library-missing", "fulltext-decision-stale-document", "source-changed"],
+        "_living": ["watch-plan-missing", "calibration-model-drift", "watch-overdue"],
+        "_lineage": ["contribution-error-ceiling", "graph-extraction-missing", "relation-stale"],
+    }
+    for name, codes in groups.items():
+        monkeypatch.setattr(
+            check_module,
+            name,
+            lambda p, *a, _c=codes: [CheckHit(c, (), c) for c in _c],  # type: ignore[misc]
+        )
+    expected = [c for codes in groups.values() for c in codes]
+    mine = set(expected)
+    assert [h.code for h in _legacy_hits(project) if h.code in mine] == expected
+    assert [h.code for h in check_module._hits(project) if h.code in mine] == expected
+    assert _plain(check_module._hits(project)) == _plain(_legacy_hits(project))

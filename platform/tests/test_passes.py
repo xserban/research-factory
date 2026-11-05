@@ -221,3 +221,8 @@ def test_no_duplicate_membership_queries() -> None:
     pattern = re.compile(r"FROM (pass|extraction)_sessions WHERE session = :session\"")
     owners = {path.name: len(pattern.findall(path.read_text())) for path in SERVICES.glob("*.py")}
     assert {name: n for name, n in owners.items() if n} == {"passes.py": 2}
+
+
+def test_stage_either_is_refused(project: Project) -> None:
+    with pytest.raises(FactoryValidationError):
+        is_pass_session(project, "ses_nobody", stage=ScreeningStage.EITHER)

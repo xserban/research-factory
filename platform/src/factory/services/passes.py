@@ -24,6 +24,7 @@ from factory.events.envelope import Actor
 from factory.model.protocol import ScreeningStage
 from factory.model.screening import Channel, PassLabel
 from factory.services.context import Project
+from factory.services.stages import require_pass_stage
 
 PassModule = Literal["screening", "extraction"]
 
@@ -67,6 +68,8 @@ def is_pass_session(
 ) -> bool:
     """Whether `session` joined a pass, of `module` (any when None) and, for screening, at `stage`
     (any when None). A `stage` restricts to screening memberships."""
+    if stage is not None:
+        require_pass_stage(stage)
     for member in memberships(project, session):
         if module is not None and member.module != module:
             continue

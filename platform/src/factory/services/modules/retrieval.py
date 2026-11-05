@@ -24,7 +24,6 @@ SPEC = ModuleSpec(
         types=(
             "chase.round_started",
             "query.registered",
-            "screening.sample_extended",
             "search.page_archived",
             "search.records_parsed",
             "search.run_finished",
@@ -50,9 +49,8 @@ SPEC = ModuleSpec(
             "works",
         ),
         note=(
-            "screening.sample_extended is written by the chase service; "
-            "seed.admitted by seed admission; both are owned here because"
-            " the module whose service writes an event owns it."
+            "seed.admitted is written by seed admission, so it is owned here "
+            "(the module whose service writes an event owns it)."
         ),
     ),
     protocol_sections=(

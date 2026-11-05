@@ -159,3 +159,31 @@ def test_module_kinds_are_the_closed_list() -> None:
 def test_the_catalog_helper_is_not_mutated_between_tests() -> None:
     assert "zzz.extra" not in EventCatalog().names()
     assert "zzz.extra" not in default_catalog().names()
+
+
+def test_every_rule_code_in_check_py_is_declared() -> None:
+    """A static scan of the rule source: each code a rule can emit is declared by a module."""
+    import ast
+    from pathlib import Path
+
+    from factory.services import check as check_module
+
+    tree = ast.parse(Path(check_module.__file__).read_text())
+    emitted: set[str] = set()
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and getattr(node.func, "id", "") == "_Hit"
+            and node.args
+            and isinstance(node.args[0], ast.Constant)
+        ):
+            emitted.add(str(node.args[0].value))
+    emitted |= set(check_module._IMPORT_COUNTS)
+    assert len(emitted) > 50
+    declared = default_modules().levels()
+    undeclared = sorted(c for c in emitted if c not in declared)
+    assert not undeclared, f"rule codes with no declaring module: {undeclared}; {HOW}"
+
+
+def test_sample_extended_belongs_to_screening() -> None:
+    assert default_modules().owner_of_event("screening.sample_extended") == "screening"

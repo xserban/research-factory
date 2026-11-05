@@ -34,6 +34,7 @@ SPEC = ModuleSpec(
             "screening.disagreement_resolved",
             "screening.pass_joined",
             "screening.pass_opened",
+            "screening.sample_extended",
         ),
         tables=(
             "audit_events",
