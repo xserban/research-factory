@@ -13,6 +13,7 @@ Invariants enforced here (validated at the boundary, before any event is written
 - A fetch names each route at most once and never names `researcher-supplied`.
 - A document's quality and provenance follow from its route.
 - A source change records two different library hashes, and a document never supersedes itself.
+- A resolution names a new document exactly when it accepts the new version.
 
 This module is pure. Services in `factory.services` decide when these events are written.
 """
@@ -34,6 +35,7 @@ from factory.model.work_ids import WORK_ID_RE
 FETCH_ID_RE = rf"^fft_{ULID_RE}$"
 ATTEMPT_ID_RE = rf"^att_{ULID_RE}$"
 DOCUMENT_ID_RE = rf"^doc_{ULID_RE}$"
+MAX_RATIONALE = 2000
 
 
 class Route(StrEnum):
@@ -73,6 +75,13 @@ class AttemptOutcome(StrEnum):
 class LicenceStatus(StrEnum):
     REPORTED = "reported"
     NOT_REPORTED = "not-reported"
+
+
+class SourceDecision(StrEnum):
+    """A human's answer to a changed source (plan FL, ruling 1)."""
+
+    KEEP_ORIGINAL = "keep-original"
+    ACCEPT_NEW_VERSION = "accept-new-version"
 
 
 WorkId = Annotated[str, StringConstraints(pattern=WORK_ID_RE)]
@@ -180,4 +189,28 @@ class SourceChanged(StrictModel):
     def _hashes_differ(self) -> Self:
         if self.expected_hash == self.observed_hash:
             raise ValueError("a source change records two different hashes")
+        return self
+
+
+class SourceResolved(StrictModel):
+    """A human's decision on a changed source, naming the hash it accepts or rejects.
+
+    `keep-original` closes the finding. `accept-new-version` closes it and names the document, added
+    in the same append just before this event, that holds the observed bytes and supersedes
+    `document_id`. Earlier documents, their conversions and pinned quotes are never rewritten.
+    """
+
+    document_id: str = Field(pattern=DOCUMENT_ID_RE)
+    observed_hash: str = Field(pattern=BLOB_REF_RE)
+    decision: SourceDecision
+    rationale: Annotated[NonBlank, Field(max_length=MAX_RATIONALE)]
+    new_document_id: str | None = Field(default=None, pattern=DOCUMENT_ID_RE)
+
+    @model_validator(mode="after")
+    def _new_document_follows_decision(self) -> Self:
+        accepted = self.decision is SourceDecision.ACCEPT_NEW_VERSION
+        if (self.new_document_id is not None) != accepted:
+            raise ValueError("a resolution names a new document exactly when it accepts one")
+        if self.new_document_id == self.document_id:
+            raise ValueError("a document never supersedes itself")
         return self

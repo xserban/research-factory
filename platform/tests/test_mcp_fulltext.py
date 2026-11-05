@@ -187,7 +187,15 @@ async def test_mcp_status_shape(settings: Settings, project: Project, clock: Fix
     assert fetched["ok"] is True, fetched
     assert status["ok"] is True
     data = status["data"]
-    assert set(data) == {"promoted", "unsought", "retrieved", "not_retrieved", "by_route", "works"}
+    assert set(data) == {
+        "promoted",
+        "unsought",
+        "retrieved",
+        "not_retrieved",
+        "by_route",
+        "works",
+        "changed_sources",
+    }
     assert data["promoted"] == len(promoted)
     assert data["retrieved"] == 1
     assert set(data["by_route"]) == set(ROUTE_NAMES)

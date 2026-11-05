@@ -2,7 +2,8 @@
 
 A work is `retrieved` when it has a live document, `not-retrieved` when it has attempts but no live
 document, and `unsought` when no route has been tried for it. `reasons` gives the reason of the
-latest attempt on each route, for a not-retrieved work.
+latest attempt on each route, for a not-retrieved work. `changed_sources` lists each source change
+no human has resolved, with the hash `factory fulltext resolve` needs.
 
 Invariants:
 - Only works the title/abstract screening promoted (`final_outcomes` gives `Outcome.INCLUDED`) are
@@ -38,9 +39,19 @@ class WorkFulltext(StrictModel):
     reasons: dict[Route, str]
 
 
+class ChangedSource(StrictModel):
+    """An unresolved source change: one document and one hash a re-fetch observed."""
+
+    document_id: str
+    work_id: str
+    expected_hash: str
+    observed_hash: str
+
+
 class FulltextStatus(StrictModel):
     """Counts over the works in scope. `promoted` is the number of works in scope, so the three
-    states sum to it; `by_route` counts live documents per route over those works."""
+    states sum to it; `by_route` counts live documents per route over those works.
+    `changed_sources` are the open changes of those works, each document and hash once."""
 
     promoted: int
     unsought: int
@@ -48,6 +59,7 @@ class FulltextStatus(StrictModel):
     not_retrieved: int
     by_route: dict[Route, int]
     works: list[WorkFulltext]
+    changed_sources: list[ChangedSource]
 
 
 def fulltext_status(project: Project, *, work_ids: Sequence[str] | None = None) -> FulltextStatus:
@@ -83,6 +95,7 @@ def fulltext_status(project: Project, *, work_ids: Sequence[str] | None = None) 
         not_retrieved=_count(works, "not-retrieved"),
         by_route=by_route,
         works=works,
+        changed_sources=_changed_sources(project, frozenset(scope)),
     )
 
 
@@ -118,6 +131,29 @@ def _work(
             if outcome in _NOT_RETRIEVED and reason is not None:
                 reasons[route] = reason
     return WorkFulltext(work_id=work_id, state=state, documents=live, reasons=reasons)
+
+
+def _changed_sources(project: Project, scope: frozenset[str]) -> list[ChangedSource]:
+    """The open source changes of the works in scope, first seen first, without repeats."""
+    with project.index.connect() as conn:
+        rows = (
+            conn.execute(
+                text(
+                    "SELECT c.document_id, d.work_id, c.expected_hash, c.observed_hash "
+                    "FROM fulltext_source_changes c "
+                    "JOIN fulltext_documents d ON d.document_id = c.document_id "
+                    "WHERE c.resolution IS NULL ORDER BY c.event_id"
+                )
+            )
+            .mappings()
+            .all()
+        )
+    changes: dict[tuple[str, str], ChangedSource] = {}
+    for row in rows:
+        if str(row["work_id"]) in scope:
+            key = (str(row["document_id"]), str(row["observed_hash"]))
+            changes.setdefault(key, ChangedSource.model_validate(dict(row)))
+    return list(changes.values())
 
 
 def _latest_attempts(project: Project) -> dict[str, dict[Route, tuple[str, str | None]]]:

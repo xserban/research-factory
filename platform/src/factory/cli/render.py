@@ -280,6 +280,10 @@ def fulltext_status_lines(status: FulltextStatus) -> list[str]:
     for work in status.works:
         reasons = "; ".join(f"{route.value} {reason}" for route, reason in work.reasons.items())
         lines.append(f"{work.work_id}  {work.state}" + (f"  ({reasons})" if reasons else ""))
+    for change in status.changed_sources:
+        lines.append(
+            f"source changed: {change.document_id}  {change.work_id}  {change.observed_hash}"
+        )
     return lines
 
 

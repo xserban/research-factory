@@ -26,6 +26,7 @@ SPEC = ModuleSpec(
             "fulltext.document_added",
             "fulltext.fetch_started",
             "fulltext.source_changed",
+            "fulltext.source_resolved",
         ),
         tables=(
             "fulltext_attempts",

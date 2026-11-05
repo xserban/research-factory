@@ -187,6 +187,9 @@ def test_source_change_projects(project: Project) -> None:
         "expected_hash": HASH_A,
         "observed_hash": HASH_B,
         "event_id": event.id,
+        "resolution": None,
+        "new_document_id": None,
+        "resolved_event_id": None,
     }
 
 
@@ -232,4 +235,4 @@ def test_projection_never_opens_library(project: Project) -> None:
 
 
 def test_projection_version_bumped() -> None:
-    assert PROJECTION_VERSION == "52"
+    assert PROJECTION_VERSION == "53"

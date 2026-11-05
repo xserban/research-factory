@@ -38,7 +38,7 @@ from factory.model.directions import Conditions, DirectionReason
 from factory.model.drafts import AuditLabel, DraftKind, SentenceClass, SupportSpan, Verdict
 from factory.model.experiments import DeviationKind
 from factory.model.extraction import ExtractedRowInput, MinerScope
-from factory.model.fulltext import Route
+from factory.model.fulltext import Route, SourceDecision
 from factory.model.hypotheses import AbandonReason, DiscardReason
 from factory.model.identity import IdGenerator
 from factory.model.intuition import (
@@ -2383,6 +2383,31 @@ def fulltext_restore_cmd(
     unavailable = [d for d, outcome in results if outcome == "unavailable"]
     if unavailable:
         _fail(f"unavailable: {' '.join(unavailable)}", 1)
+
+
+@fulltext_app.command("resolve")
+def fulltext_resolve_cmd(
+    ctx: typer.Context,
+    document: Annotated[str, typer.Argument(help="The document whose source changed.")],
+    observed_hash: Annotated[str, typer.Argument(help="The hash `fulltext status` lists.")],
+    decision: Annotated[SourceDecision, typer.Argument(help="What to do with the new bytes.")],
+    rationale: Annotated[str, typer.Option("--rationale", help="Why, in a sentence or two.")],
+) -> None:
+    """Resolve a changed source (a human act). The original bytes stay referenced either way."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        new_document = fulltext_service.resolve_source_change(
+            project,
+            project.human_actor(),
+            document,
+            observed_hash,
+            decision,
+            rationale=rationale,
+        )
+    typer.echo(f"{document}  {decision.value}")
+    if new_document is not None:
+        typer.echo(f"{new_document}  supersedes {document}; convert it to read it")
 
 
 @document_app.command("convert")

@@ -4,22 +4,31 @@
 keeps every route tried, one row per attempt, whatever its outcome. `fulltext_documents` keeps
 each document; a document that a later document supersedes carries that later id in
 `superseded_by` (first write wins). `fulltext_source_changes` keeps each re-fetch that hashed
-differently from its document.
+differently from its document; `resolution` is null while the change is open, and a human's
+`fulltext.source_resolved` closes every open row of that document and observed hash.
 
 Hash fields are library references, stored as text. The projection never reads the library
 (decision 39): the state hash depends on events alone. Handlers are total: a repeated event
-for a key that already has a row changes nothing.
+for a key that already has a row changes nothing. A resolution that is not a human's, names no
+open change, or accepts a document that does not hold the observed bytes and supersede the
+original changes nothing, on rebuild too.
 """
 
 from dataclasses import dataclass
 
-from sqlalchemy import Column, Integer, MetaData, String, Table, update
+from sqlalchemy import Column, Integer, MetaData, String, Table, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Connection
 
 from factory.events.envelope import Event
 from factory.index.projection import Handler
-from factory.model.fulltext import Attempted, DocumentAdded, FetchStarted, SourceChanged
+from factory.model.fulltext import (
+    Attempted,
+    DocumentAdded,
+    FetchStarted,
+    SourceChanged,
+    SourceResolved,
+)
 
 
 @dataclass(frozen=True)
@@ -83,6 +92,9 @@ def fulltext_tables(metadata: MetaData) -> FulltextTables:
         Column("expected_hash", String, nullable=False),
         Column("observed_hash", String, nullable=False),
         Column("event_id", String, nullable=False),
+        Column("resolution", String),
+        Column("new_document_id", String),
+        Column("resolved_event_id", String),
     )
     return FulltextTables(fetches, attempts, documents, source_changes)
 
@@ -93,6 +105,7 @@ def fulltext_handlers(t: FulltextTables) -> dict[str, Handler]:
         "fulltext.attempted": _attempted(t),
         "fulltext.document_added": _document_added(t),
         "fulltext.source_changed": _source_changed(t),
+        "fulltext.source_resolved": _source_resolved(t),
     }
 
 
@@ -153,3 +166,55 @@ def _source_changed(t: FulltextTables) -> Handler:
         )
 
     return source_changed
+
+
+def _source_resolved(t: FulltextTables) -> Handler:
+    changes = t.source_changes
+
+    def source_resolved(conn: Connection, event: Event) -> None:
+        payload = SourceResolved.model_validate(event.payload)
+        if event.actor.kind != "human":
+            return
+        is_open = (
+            changes.c.document_id == payload.document_id,
+            changes.c.observed_hash == payload.observed_hash,
+            changes.c.resolution.is_(None),
+        )
+        if conn.execute(select(changes.c.attempt_id).where(*is_open).limit(1)).first() is None:
+            return
+        if payload.new_document_id is not None and not _replaces(conn, t, payload):
+            return
+        conn.execute(
+            update(changes)
+            .where(*is_open)
+            .values(
+                resolution=payload.decision.value,
+                new_document_id=payload.new_document_id,
+                resolved_event_id=event.id,
+            )
+        )
+
+    return source_resolved
+
+
+def _replaces(conn: Connection, t: FulltextTables, payload: SourceResolved) -> bool:
+    """Whether the named new document holds the observed bytes and superseded the original."""
+    documents = t.documents
+    new = conn.execute(
+        select(documents.c.raw_hash, documents.c.supersedes, documents.c.work_id).where(
+            documents.c.document_id == payload.new_document_id
+        )
+    ).first()
+    original = conn.execute(
+        select(documents.c.superseded_by, documents.c.work_id).where(
+            documents.c.document_id == payload.document_id
+        )
+    ).first()
+    if new is None or original is None:
+        return False
+    return bool(
+        new.raw_hash == payload.observed_hash
+        and new.supersedes == payload.document_id
+        and new.work_id == original.work_id
+        and original.superseded_by == payload.new_document_id
+    )

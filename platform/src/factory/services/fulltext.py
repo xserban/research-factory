@@ -21,6 +21,11 @@ Invariants:
 - "Latest" means latest in event order (the event id), never by timestamp text.
 - A restore never adds a document. A hash match restores the library entry; a hash mismatch keeps
   the new bytes and records `fulltext.source_changed` against the existing document.
+- Only a human resolves a source change. `keep-original` closes it, and a later re-fetch of the
+  same hash is not a new change: its attempt is recorded and nothing else. A restore that receives
+  a kept hash still records a change, since the original bytes it sought are gone.
+  `accept-new-version` adds a document for the observed bytes that supersedes the original, from
+  the attempt that observed them; conversions and pinned quotes of the original stay as they are.
 """
 
 from __future__ import annotations
@@ -35,10 +40,11 @@ from pydantic import JsonValue
 from sqlalchemy import text
 from sqlalchemy.engine import RowMapping
 
-from factory.errors import FactoryValidationError, ValidationIssue
+from factory.errors import FactoryError, FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor, Event
 from factory.model.base import StrictModel
 from factory.model.fulltext import (
+    MAX_RATIONALE,
     QUALITY,
     ROUTE_ORDER,
     Attempted,
@@ -48,6 +54,8 @@ from factory.model.fulltext import (
     LicenceStatus,
     Route,
     SourceChanged,
+    SourceDecision,
+    SourceResolved,
 )
 from factory.model.identity import BLOB_REF_RE
 from factory.model.work import Work
@@ -410,7 +418,8 @@ def _work_events(
             disposition = "new"
         else:
             document_id = existing.document_id
-            same = existing.raw_hash == item.content.raw_hash
+            kept = _kept_hashes(project, existing.document_id)
+            same = item.content.raw_hash in {existing.raw_hash, *kept}
             disposition = "same" if same else "changed"
         dispositions.append(disposition)
         events.append(_attempted(project, fetch_id, work_id, attempt_id, item, document_id))
@@ -623,6 +632,127 @@ def _restore_events(
     return events, "source-changed"
 
 
+# --- Resolving a changed source (plan FL, ruling 1) ---
+
+
+@dataclass(frozen=True)
+class _ObservedChange:
+    """The latest open change of one document and hash, with what its attempt recorded. The
+    attempt fields are None if no attempt retrieved those bytes (only a hand-written change)."""
+
+    attempt_id: str
+    source_version: str | None
+    media_type: str | None
+
+
+def resolve_source_change(
+    project: Project,
+    actor: Actor,
+    document_id: str,
+    observed_hash: str,
+    decision: SourceDecision,
+    *,
+    rationale: str,
+) -> str | None:
+    """Record a human's decision on a changed source. Returns the new document's id for
+    `accept-new-version`, else None.
+
+    Every open change of this document and hash closes. The new document takes the version and
+    media type of the latest attempt that observed the bytes, and it is appended just before the
+    resolution, which names it.
+
+    Raises `FactoryValidationError` with nothing written if the actor is not human, the rationale
+    is blank or long, the document is unknown, it has no open change for this hash, or, to accept,
+    the document is superseded or researcher-supplied, no attempt retrieved the bytes, or the
+    library does not hold them intact.
+    """
+    if actor.kind != "human":
+        raise FactoryValidationError([ValidationIssue("actor", "human-only")])
+    if not rationale.strip():
+        raise FactoryValidationError([ValidationIssue("rationale", "must not be blank")])
+    if len(rationale) > MAX_RATIONALE:
+        raise FactoryValidationError(
+            [ValidationIssue("rationale", f"at most {MAX_RATIONALE} characters")]
+        )
+    with project.index.exclusive():
+        project.index.sync()
+        doc = _document(project, document_id)
+        if doc is None:
+            raise FactoryValidationError([ValidationIssue("document_id", "unknown document")])
+        change = _open_change(project, document_id, observed_hash)
+        if change is None:
+            raise FactoryValidationError(
+                [ValidationIssue("observed_hash", "no open change of this document has this hash")]
+            )
+        events: list[Event] = []
+        new_document_id: str | None = None
+        if decision is SourceDecision.ACCEPT_NEW_VERSION:
+            issues = _accept_issues(project, doc, change, observed_hash)
+            if issues:
+                raise FactoryValidationError(issues)
+            new_document_id = project.ids.new("doc")
+            events.append(_accepted(project, actor, doc, change, observed_hash, new_document_id))
+        resolved = SourceResolved(
+            document_id=document_id,
+            observed_hash=observed_hash,
+            decision=decision,
+            rationale=rationale,
+            new_document_id=new_document_id,
+        )
+        refs = (document_id, doc.work_id, *([] if new_document_id is None else [new_document_id]))
+        events.append(project.events.make("fulltext.source_resolved", resolved, actor, refs=refs))
+        project.record(events)
+    return new_document_id
+
+
+def _accept_issues(
+    project: Project, doc: _Document, change: _ObservedChange, observed_hash: str
+) -> list[ValidationIssue]:
+    """Why the observed bytes cannot become a document. Empty if they can."""
+    issues: list[ValidationIssue] = []
+    if doc.superseded:
+        issues.append(ValidationIssue("document_id", "superseded: only keep-original applies"))
+    if doc.route == Route.RESEARCHER:
+        issues.append(ValidationIssue("document_id", "researcher-supplied: re-import the file"))
+    if change.source_version is None or change.media_type is None:
+        issues.append(ValidationIssue("observed_hash", "no attempt retrieved these bytes"))
+    try:
+        project.library.get(observed_hash)
+    except FactoryError:
+        issues.append(ValidationIssue("observed_hash", "the library does not hold these bytes"))
+    return issues
+
+
+def _accepted(
+    project: Project,
+    actor: Actor,
+    doc: _Document,
+    change: _ObservedChange,
+    observed_hash: str,
+    new_document_id: str,
+) -> Event:
+    """The `fulltext.document_added` of an accepted version. `_accept_issues` found it possible."""
+    route = Route(doc.route)
+    added = DocumentAdded(
+        document_id=new_document_id,
+        work_id=doc.work_id,
+        route=route,
+        quality=QUALITY[route],
+        source_version=str(change.source_version),
+        raw_hash=observed_hash,
+        media_type=str(change.media_type),
+        attempt_id=change.attempt_id,
+        provenance="retrieved",
+        supersedes=doc.document_id,
+    )
+    return project.events.make(
+        "fulltext.document_added",
+        added,
+        actor,
+        refs=(new_document_id, doc.work_id, change.attempt_id),
+    )
+
+
 # --- Researcher-supplied documents (ruling 7) ---
 
 
@@ -743,6 +873,46 @@ def _document(project: Project, document_id: str) -> _Document | None:
             .first()
         )
     return None if row is None else _to_document(row)
+
+
+def _open_change(project: Project, document_id: str, observed_hash: str) -> _ObservedChange | None:
+    """The latest open change of this document and hash, or None. Requires a synced index."""
+    with project.index.connect() as conn:
+        row = (
+            conn.execute(
+                text(
+                    "SELECT c.attempt_id, a.source_version, a.media_type "
+                    "FROM fulltext_source_changes c LEFT JOIN fulltext_attempts a "
+                    "ON a.attempt_id = c.attempt_id AND a.raw_hash = c.observed_hash "
+                    "WHERE c.document_id = :doc AND c.observed_hash = :hash "
+                    "AND c.resolution IS NULL ORDER BY c.event_id DESC LIMIT 1"
+                ),
+                {"doc": document_id, "hash": observed_hash},
+            )
+            .mappings()
+            .first()
+        )
+    if row is None:
+        return None
+    version, media_type = row["source_version"], row["media_type"]
+    return _ObservedChange(
+        attempt_id=str(row["attempt_id"]),
+        source_version=None if version is None else str(version),
+        media_type=None if media_type is None else str(media_type),
+    )
+
+
+def _kept_hashes(project: Project, document_id: str) -> set[str]:
+    """The observed hashes a human kept the original against. Requires a synced index."""
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT observed_hash FROM fulltext_source_changes "
+                "WHERE document_id = :doc AND resolution = :kept"
+            ),
+            {"doc": document_id, "kept": SourceDecision.KEEP_ORIGINAL.value},
+        ).all()
+    return {str(row[0]) for row in rows}
 
 
 def document_superseded(project: Project, document_id: str) -> bool:

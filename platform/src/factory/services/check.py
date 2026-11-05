@@ -1969,13 +1969,13 @@ def _conversions(project: Project) -> list[tuple[str, str, str, str, str]]:
 
 
 def _changed_sources(project: Project) -> list[tuple[str, str]]:
-    """(document id, work id) of every recorded source change, in event order."""
+    """(document id, work id) of every source change no human has resolved, in event order."""
     with project.index.connect() as conn:
         rows = conn.execute(
             text(
                 "SELECT c.document_id, d.work_id FROM fulltext_source_changes c "
                 "JOIN fulltext_documents d ON d.document_id = c.document_id "
-                "ORDER BY c.event_id"
+                "WHERE c.resolution IS NULL ORDER BY c.event_id"
             )
         ).all()
     return [(str(d), str(w)) for d, w in rows]

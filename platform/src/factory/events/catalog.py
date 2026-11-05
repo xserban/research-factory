@@ -51,7 +51,13 @@ from factory.model.extraction import (
     ExtractionResolved,
 )
 from factory.model.findings import ContradictionDecided, ContradictionProposed
-from factory.model.fulltext import Attempted, DocumentAdded, FetchStarted, SourceChanged
+from factory.model.fulltext import (
+    Attempted,
+    DocumentAdded,
+    FetchStarted,
+    SourceChanged,
+    SourceResolved,
+)
 from factory.model.gate_audit import GateAuditLabelled, GateAuditSampled
 from factory.model.hosting import ProjectHosted
 from factory.model.hypotheses import (
@@ -251,6 +257,7 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("fulltext.attempted", Attempted, 1))
     catalog.register(EventType("fulltext.document_added", DocumentAdded, 1))
     catalog.register(EventType("fulltext.source_changed", SourceChanged, 1))
+    catalog.register(EventType("fulltext.source_resolved", SourceResolved, 1))
     catalog.register(EventType("extraction.pass_opened", ExtractionPassOpened, 1))
     catalog.register(EventType("extraction.pass_joined", ExtractionPassJoined, 1))
     catalog.register(EventType("extraction.recorded", ExtractionRecorded, 1))
