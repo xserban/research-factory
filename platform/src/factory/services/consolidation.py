@@ -475,25 +475,26 @@ def propose(
         issues += quote_issues(project, quote, f"quotes[{i}]")
     if issues:
         raise _refuse(*issues)
-    proposal_id = f"cnp_{project.ids.ulid()}"
-    event = project.events.make(
-        "consolidation.proposed",
-        ConsolidationProposed(
-            proposal_id=proposal_id,
-            pass_id=str(content["pass_id"]),
-            cluster_index=int(str(content["cluster_index"])),
-            action=action,
-            into=into,
-            members=tuple(members),
-            reason=reason,
-            quotes=tuple(quotes),
-        ),
-        actor,
-        refs=[proposal_id, str(content["pass_id"]), task_id],
-        input_blob=task.content_blob,
-    )
-    project.record([event])
-    complete_task(project, actor, task_id, [proposal_id])
+    with project.writing():
+        proposal_id = f"cnp_{project.ids.ulid()}"
+        event = project.events.make(
+            "consolidation.proposed",
+            ConsolidationProposed(
+                proposal_id=proposal_id,
+                pass_id=str(content["pass_id"]),
+                cluster_index=int(str(content["cluster_index"])),
+                action=action,
+                into=into,
+                members=tuple(members),
+                reason=reason,
+                quotes=tuple(quotes),
+            ),
+            actor,
+            refs=[proposal_id, str(content["pass_id"]), task_id],
+            input_blob=task.content_blob,
+        )
+        project.record([event])
+        complete_task(project, actor, task_id, [proposal_id])
     return proposal_id
 
 

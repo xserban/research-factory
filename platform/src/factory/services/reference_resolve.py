@@ -715,16 +715,17 @@ def _record_clear(
         rationale=rationale,
         confirmed_by="human",
     )
-    project.record(
-        [
-            project.events.make(
-                "reference.resolution_decided",
-                payload,
-                actor,
-                refs=(extraction_id, _entry_key(extraction_id, ordinal)),
-            )
-        ]
-    )
+    with project.writing():
+        project.record(
+            [
+                project.events.make(
+                    "reference.resolution_decided",
+                    payload,
+                    actor,
+                    refs=(extraction_id, _entry_key(extraction_id, ordinal)),
+                )
+            ]
+        )
 
 
 def decide_reference(

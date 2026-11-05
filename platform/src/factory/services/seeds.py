@@ -139,17 +139,18 @@ def _lookup(
         return _unresolved(
             project, actor, seed_id, run, f"ambiguous: {len(works)} records", input_blob
         )
-    project.record(
-        [
-            project.events.make(
-                "seed.resolved",
-                SeedResolved(seed_id=seed_id, work_id=works[0], run_id=run.run_id),
-                actor,
-                refs=(seed_id,),
-                input_blob=input_blob,
-            )
-        ]
-    )
+    with project.writing():
+        project.record(
+            [
+                project.events.make(
+                    "seed.resolved",
+                    SeedResolved(seed_id=seed_id, work_id=works[0], run_id=run.run_id),
+                    actor,
+                    refs=(seed_id,),
+                    input_blob=input_blob,
+                )
+            ]
+        )
     return SeedOutcome(seed_id=seed_id, work_id=works[0], reason=None)
 
 
@@ -161,17 +162,18 @@ def _unresolved(
     reason: str,
     input_blob: str | None,
 ) -> SeedOutcome:
-    project.record(
-        [
-            project.events.make(
-                "seed.unresolved",
-                SeedUnresolved(seed_id=seed_id, run_id=run.run_id, reason=reason),
-                actor,
-                refs=(seed_id,),
-                input_blob=input_blob,
-            )
-        ]
-    )
+    with project.writing():
+        project.record(
+            [
+                project.events.make(
+                    "seed.unresolved",
+                    SeedUnresolved(seed_id=seed_id, run_id=run.run_id, reason=reason),
+                    actor,
+                    refs=(seed_id,),
+                    input_blob=input_blob,
+                )
+            ]
+        )
     return SeedOutcome(seed_id=seed_id, work_id=None, reason=reason)
 
 

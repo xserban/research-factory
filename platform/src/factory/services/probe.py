@@ -194,9 +194,14 @@ def _measure(
         failure = ProbeFailed(
             probe_id=probe_id, query_id=query_id, source=spec.source, reason=reason
         )
-        project.record(
-            [project.events.make("probe.failed", failure, project.system_actor(), refs=(probe_id,))]
-        )
+        with project.writing():
+            project.record(
+                [
+                    project.events.make(
+                        "probe.failed", failure, project.system_actor(), refs=(probe_id,)
+                    )
+                ]
+            )
         return ProbeQueryResult(
             query_id=query_id,
             source=spec.source,
@@ -240,9 +245,14 @@ def _measure(
         untestable=untestable,
         suggestions=suggestions,
     )
-    project.record(
-        [project.events.make("probe.measured", payload, project.system_actor(), refs=(probe_id,))]
-    )
+    with project.writing():
+        project.record(
+            [
+                project.events.make(
+                    "probe.measured", payload, project.system_actor(), refs=(probe_id,)
+                )
+            ]
+        )
     recall = len(retrieved) / len(development) if development else None
     return ProbeQueryResult(
         query_id=query_id,
@@ -306,13 +316,14 @@ def _archiver(
             raw_blob=ref,
             role=role,
         )
-        project.record(
-            [
-                project.events.make(
-                    "probe.page_archived", payload, project.system_actor(), refs=(probe_id,)
-                )
-            ]
-        )
+        with project.writing():
+            project.record(
+                [
+                    project.events.make(
+                        "probe.page_archived", payload, project.system_actor(), refs=(probe_id,)
+                    )
+                ]
+            )
         return ref
 
     return archive

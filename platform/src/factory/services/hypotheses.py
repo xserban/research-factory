@@ -556,11 +556,12 @@ def declare_cutoff(project: Project, actor: Actor, model: str, cutoff: date, sou
     ]
     if issues:
         raise FactoryValidationError(issues)
-    event = project.events.make(
-        "model.cutoff_declared",
-        ModelCutoffDeclared(model=model.strip(), cutoff=cutoff, source=source.strip()),
-        actor,
-        refs=[],
-    )
-    project.record([event])
+    with project.writing():
+        event = project.events.make(
+            "model.cutoff_declared",
+            ModelCutoffDeclared(model=model.strip(), cutoff=cutoff, source=source.strip()),
+            actor,
+            refs=[],
+        )
+        project.record([event])
     return event.id

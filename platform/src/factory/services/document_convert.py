@@ -575,13 +575,14 @@ def _converted(project: Project, doc: _Doc, result: ConversionResult) -> Convers
         counts=counts,
         warnings=_warnings(result.warnings),
     )
-    event = project.events.make(
-        "document.converted",
-        payload,
-        project.human_actor(),
-        refs=(doc.document_id, conversion_id),
-    )
-    project.record([event])
+    with project.writing():
+        event = project.events.make(
+            "document.converted",
+            payload,
+            project.human_actor(),
+            refs=(doc.document_id, conversion_id),
+        )
+        project.record([event])
     return ConversionOutcome(
         document_id=doc.document_id,
         work_id=doc.work_id,
@@ -604,13 +605,14 @@ def _failed(
         reason=reason,
         error_class=error_class,
     )
-    event = project.events.make(
-        "document.conversion_failed",
-        payload,
-        project.human_actor(),
-        refs=(doc.document_id,),
-    )
-    project.record([event])
+    with project.writing():
+        event = project.events.make(
+            "document.conversion_failed",
+            payload,
+            project.human_actor(),
+            refs=(doc.document_id,),
+        )
+        project.record([event])
     return ConversionOutcome(
         document_id=doc.document_id,
         work_id=doc.work_id,

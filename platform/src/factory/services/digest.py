@@ -161,13 +161,14 @@ def record_digest(projects: Sequence[Project], d: Digest) -> str:
             markdown_blob=project.blobs.put(to_markdown(single).encode()),
             counts=digest_counts(part),
         )
-        project.record(
-            [
-                project.events.make(
-                    "digest.generated", payload, project.system_actor(), refs=(digest_id,)
-                )
-            ]
-        )
+        with project.writing():
+            project.record(
+                [
+                    project.events.make(
+                        "digest.generated", payload, project.system_actor(), refs=(digest_id,)
+                    )
+                ]
+            )
     return digest_id
 
 

@@ -245,9 +245,14 @@ def _write(
     refs = [relation_id, proposal.source_work]
     if proposal.basis_item is not None:
         refs.append(proposal.basis_item)
-    project.record(
-        [project.events.make("relation.proposed", payload, actor, refs=refs, input_blob=input_blob)]
-    )
+    with project.writing():
+        project.record(
+            [
+                project.events.make(
+                    "relation.proposed", payload, actor, refs=refs, input_blob=input_blob
+                )
+            ]
+        )
     return ProposeResult(
         relation_id=relation_id,
         status=result.status,

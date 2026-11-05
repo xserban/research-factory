@@ -57,9 +57,10 @@ class TaskCounts(StrictModel):
 
 def create_tasks(project: Project, actor: Actor, specs: Sequence[TaskSpec]) -> BatchResult[str]:
     """Write every valid spec in one append. Returns the new task IDs in input order."""
-    events, result = build_task_events(project, actor, specs)
-    if events:
-        project.record(events)
+    with project.writing():
+        events, result = build_task_events(project, actor, specs)
+        if events:
+            project.record(events)
     return result
 
 
@@ -105,29 +106,30 @@ def claim_next(
     `accept`, when given, sees each candidate's content and may pass over it; `task_ids`, when
     given, limits the candidates to those tasks. A passed-over task stays open and nothing is
     written for it."""
-    project.index.sync()
-    now = _now(project)
-    for task_id, content_blob in _claimable(project, kind, now):
-        if task_ids is not None and task_id not in task_ids:
-            continue
-        if accept is not None and not accept(project.blobs.get_json(content_blob)):
-            continue
-        project.record(
-            [
-                project.events.make(
-                    "task.claimed",
-                    TaskClaimed(task_id=task_id, lease_until=now + lease),
-                    actor,
-                    refs=(task_id,),
-                    input_blob=content_blob,
-                )
-            ]
-        )
-        # Another session may have claimed it first; the projection decides who holds it.
-        claimed = get_task(project, task_id)
-        if claimed is not None and claimed.claim_session == actor.session:
-            return claimed
-    return None
+    with project.writing():
+        project.index.sync()
+        now = _now(project)
+        for task_id, content_blob in _claimable(project, kind, now):
+            if task_ids is not None and task_id not in task_ids:
+                continue
+            if accept is not None and not accept(project.blobs.get_json(content_blob)):
+                continue
+            project.record(
+                [
+                    project.events.make(
+                        "task.claimed",
+                        TaskClaimed(task_id=task_id, lease_until=now + lease),
+                        actor,
+                        refs=(task_id,),
+                        input_blob=content_blob,
+                    )
+                ]
+            )
+            # Another session may have claimed it first; the projection decides who holds it.
+            claimed = get_task(project, task_id)
+            if claimed is not None and claimed.claim_session == actor.session:
+                return claimed
+        return None
 
 
 def complete_task(
@@ -136,35 +138,37 @@ def complete_task(
     refs = tuple(result_refs)
     if any(not ref for ref in refs):
         raise FactoryValidationError([ValidationIssue("result_refs", "must be non-empty strings")])
-    task = require_holder(project, actor, task_id)
-    project.record(
-        [
-            project.events.make(
-                "task.completed",
-                TaskCompleted(task_id=task_id, result_refs=refs),
-                actor,
-                refs=(task_id,),
-                input_blob=task.content_blob,
-            )
-        ]
-    )
-    _require_outcome(project, task_id, TaskStatus.COMPLETED)
+    with project.writing():
+        task = require_holder(project, actor, task_id)
+        project.record(
+            [
+                project.events.make(
+                    "task.completed",
+                    TaskCompleted(task_id=task_id, result_refs=refs),
+                    actor,
+                    refs=(task_id,),
+                    input_blob=task.content_blob,
+                )
+            ]
+        )
+        _require_outcome(project, task_id, TaskStatus.COMPLETED)
 
 
 def release_task(project: Project, actor: Actor, task_id: str, reason: str) -> None:
-    task = require_holder(project, actor, task_id)
-    lease_until = task.lease_until
-    project.record(
-        [
-            project.events.make(
-                "task.released",
-                TaskReleased(task_id=task_id, reason=reason),
-                actor,
-                refs=(task_id,),
-                input_blob=task.content_blob,
-            )
-        ]
-    )
+    with project.writing():
+        task = require_holder(project, actor, task_id)
+        lease_until = task.lease_until
+        project.record(
+            [
+                project.events.make(
+                    "task.released",
+                    TaskReleased(task_id=task_id, reason=reason),
+                    actor,
+                    refs=(task_id,),
+                    input_blob=task.content_blob,
+                )
+            ]
+        )
     # Ignored only if this session still holds the same claim: a release applied and then
     # reclaimed by another session is a success.
     current = get_task(project, task_id)

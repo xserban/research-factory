@@ -78,12 +78,13 @@ def version_check(
     batches = openalex_batches(works) + _arxiv_batches(works)
     outcomes = run_batches(project, cycle_id, sources, batches)
     resolver = Resolver(works)
-    events: list[Event] = []
-    events += _observation_events(project, outcomes, resolver)
-    link_events = _link_events(project, outcomes, resolver, {w.id: w for w in works})
-    events += link_events
-    if events:
-        project.record(events)
+    with project.writing():
+        events: list[Event] = []
+        events += _observation_events(project, outcomes, resolver)
+        link_events = _link_events(project, outcomes, resolver, {w.id: w for w in works})
+        events += link_events
+        if events:
+            project.record(events)
     conflicts = sum(1 for e in link_events if e.payload.get("conflicts_with") is not None)
     return VersionCheckSummary(
         newer=sum(1 for e in events if e.type == "version.observed"),

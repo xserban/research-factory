@@ -664,26 +664,27 @@ def record_supplied_document(
         metadata_blob=None,
         content=_Content(raw_hash=raw_hash, source_version=source_version, media_type=media_type),
     )
-    attempt = _attempted(project, None, work_id, attempt_id, item, document_id, actor=actor)
-    added = DocumentAdded(
-        document_id=document_id,
-        work_id=work_id,
-        route=Route.RESEARCHER,
-        quality=QUALITY[Route.RESEARCHER],
-        source_version=source_version,
-        raw_hash=raw_hash,
-        media_type=media_type,
-        attempt_id=attempt_id,
-        provenance="researcher-supplied",
-        supersedes=_live(docs, Route.RESEARCHER),
-    )
-    document = project.events.make(
-        "fulltext.document_added",
-        added,
-        actor,
-        refs=(document_id, work_id, attempt_id),
-    )
-    project.record([attempt, document, *([] if link is None else [link(document_id)])])
+    with project.writing():
+        attempt = _attempted(project, None, work_id, attempt_id, item, document_id, actor=actor)
+        added = DocumentAdded(
+            document_id=document_id,
+            work_id=work_id,
+            route=Route.RESEARCHER,
+            quality=QUALITY[Route.RESEARCHER],
+            source_version=source_version,
+            raw_hash=raw_hash,
+            media_type=media_type,
+            attempt_id=attempt_id,
+            provenance="researcher-supplied",
+            supersedes=_live(docs, Route.RESEARCHER),
+        )
+        document = project.events.make(
+            "fulltext.document_added",
+            added,
+            actor,
+            refs=(document_id, work_id, attempt_id),
+        )
+        project.record([attempt, document, *([] if link is None else [link(document_id)])])
     return document_id
 
 

@@ -113,12 +113,13 @@ def init_project(
 
     try:
         project = build_project(settings, slug, session=session, clock=clock)
-        event = project.events.make(
-            "project.created",
-            ProjectCreated(slug=slug, rigor_mode=mode),
-            project.human_actor(),
-        )
-        project.record([event])
+        with project.writing():
+            event = project.events.make(
+                "project.created",
+                ProjectCreated(slug=slug, rigor_mode=mode),
+                project.human_actor(),
+            )
+            project.record([event])
     except BaseException:
         shutil.rmtree(paths.dir, ignore_errors=True)
         raise

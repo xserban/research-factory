@@ -545,10 +545,11 @@ def _write_finished(
         dedup_complete=dedup_complete,
         reconciled=reconciled,
     )
-    project.record(
-        [
-            project.events.make(
-                "watch.cycle_finished", finished, project.system_actor(), refs=(cycle_id,)
-            )
-        ]
-    )
+    with project.writing():
+        project.record(
+            [
+                project.events.make(
+                    "watch.cycle_finished", finished, project.system_actor(), refs=(cycle_id,)
+                )
+            ]
+        )

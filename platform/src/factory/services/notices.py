@@ -128,9 +128,10 @@ def notice_check(
     outcomes = run_batches(project, cycle_id, sources, batches)
     covered = {w for o in outcomes if o.status is RunStatus.COMPLETE for w in o.batch.work_ids}
     resolver = Resolver(works)
-    events = _observation_events(project, outcomes, resolver)
-    if events:
-        project.record(events)
+    with project.writing():
+        events = _observation_events(project, outcomes, resolver)
+        if events:
+            project.record(events)
     return NoticeCheckSummary(
         checked=len(covered),
         new_notices=len(events),

@@ -6,7 +6,7 @@ from pathlib import Path
 
 from factory.clock import Clock
 from factory.config import Settings
-from factory.errors import ProjectNotFoundError, ValidationIssue
+from factory.errors import OrderingError, ProjectNotFoundError, ValidationIssue
 from factory.events.blobs import BlobStore
 from factory.events.catalog import EventCatalog, default_catalog
 from factory.events.envelope import Actor, Event
@@ -71,9 +71,20 @@ class Project:
         that take the lock directly mint under the same guarantee."""
         return self.index.exclusive()
 
+    def is_hosted(self) -> bool:
+        return False
+
     def record(self, events: Sequence[Event]) -> None:
-        self.writer.append(events)
-        self.index.sync()
+        """Append and fold under the write lock. On a hosted project, refuse with nothing written a
+        batch that does not sort after the log, and append the rest in ID order."""
+        with self.writing():
+            if events and self.is_hosted():
+                last = self.index.last_event_id()
+                if last is not None and min(event.id for event in events) <= last:
+                    raise OrderingError(f"event minted outside writing(): not after {last}")
+                events = sorted(events, key=lambda event: event.id)
+            self.writer.append(events)
+            self.index.sync()
 
     def human_actor(self) -> Actor:
         return Actor(

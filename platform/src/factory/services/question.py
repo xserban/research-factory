@@ -61,8 +61,9 @@ def state_goal(project: Project, actor: Actor, text: str) -> str:
     payload = GoalStated(text=text)
     # An agent's goal keeps its input, so what the agent was given can be audited later.
     input_blob = project.blobs.put_json({"text": text}) if actor.kind == "agent" else None
-    event = project.events.make("question.goal_stated", payload, actor, input_blob=input_blob)
-    project.record([event])
+    with project.writing():
+        event = project.events.make("question.goal_stated", payload, actor, input_blob=input_blob)
+        project.record([event])
     return event.id
 
 

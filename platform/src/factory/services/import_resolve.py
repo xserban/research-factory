@@ -133,9 +133,10 @@ def resolve_import(
         matcher_version=MATCHER_VERSION,
     )
     input_blob = project.blobs.put_json({"import_id": import_id}) if who.kind == "agent" else None
-    project.record(
-        [project.events.make(_RESOLVED, payload, who, refs=(import_id,), input_blob=input_blob)]
-    )
+    with project.writing():
+        project.record(
+            [project.events.make(_RESOLVED, payload, who, refs=(import_id,), input_blob=input_blob)]
+        )
     counts = {state: 0 for state in LinkState}
     for r in outcome.resolutions:
         counts[r.state] += 1

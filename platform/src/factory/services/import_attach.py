@@ -118,24 +118,25 @@ def _attach(
         )
         return project.events.make(_LINKED, payload, actor, refs=(import_id, document_id))
 
-    digest = hashlib.sha256(data).hexdigest()
-    document_id = record_supplied_document(
-        project,
-        work_id,
-        content=data,
-        source_version=f"{_SOURCE_PREFIX}{digest[:_SOURCE_DIGITS]}",
-        media_type=_MEDIA_TYPE,
-        actor=actor,
-        link=link,
-    )
-    if document_id is not None:
-        report.attached.append((ordinal, work_id, document_id))
-        return
-    # The bytes already back a document of this work: link the record to it.
-    existing = _document_of(project, work_id, f"sha256:{digest}")
-    if existing is not None:
-        project.record([link(existing)])
-    report.already_attached.append(ordinal)
+    with project.writing():
+        digest = hashlib.sha256(data).hexdigest()
+        document_id = record_supplied_document(
+            project,
+            work_id,
+            content=data,
+            source_version=f"{_SOURCE_PREFIX}{digest[:_SOURCE_DIGITS]}",
+            media_type=_MEDIA_TYPE,
+            actor=actor,
+            link=link,
+        )
+        if document_id is not None:
+            report.attached.append((ordinal, work_id, document_id))
+            return
+        # The bytes already back a document of this work: link the record to it.
+        existing = _document_of(project, work_id, f"sha256:{digest}")
+        if existing is not None:
+            project.record([link(existing)])
+        report.already_attached.append(ordinal)
 
 
 def _promoted(project: Project) -> set[str]:

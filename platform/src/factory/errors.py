@@ -21,5 +21,10 @@ class FactoryValidationError(FactoryError):
         super().__init__("; ".join(f"{i.field}: {i.reason}" for i in self.issues))
 
 
+class OrderingError(FactoryError):
+    """An event of a hosted project was minted outside `Project.writing()`: its ID does not sort
+    after the log. A programming error, never a user's; nothing was written."""
+
+
 class ProjectNotFoundError(FactoryError):
     """No project with the requested slug exists."""

@@ -266,22 +266,23 @@ def run_query(
 
     def archive(page: RawPage) -> str:
         ref = project.blobs.put(page.body.encode("utf-8"))
-        project.record(
-            [
-                project.events.make(
-                    "search.page_archived",
-                    SearchPageArchived(
-                        run_id=run_id,
-                        ordinal=page.ordinal,
-                        url=page.url,
-                        fetched_at=page.fetched_at,
-                        raw_blob=ref,
-                    ),
-                    system,
-                    refs=(run_id,),
-                )
-            ]
-        )
+        with project.writing():
+            project.record(
+                [
+                    project.events.make(
+                        "search.page_archived",
+                        SearchPageArchived(
+                            run_id=run_id,
+                            ordinal=page.ordinal,
+                            url=page.url,
+                            fetched_at=page.fetched_at,
+                            raw_blob=ref,
+                        ),
+                        system,
+                        refs=(run_id,),
+                    )
+                ]
+            )
         archived.append(ref)
         return ref
 
@@ -293,21 +294,22 @@ def run_query(
         # The pages already archived stay recorded; nothing from them is parsed here.
         status = RunStatus.PARTIAL if archived else RunStatus.FAILED
         error_note = redact(f"{type(exc).__name__}: {exc}", project.settings.mailto)
-        project.record(
-            [
-                project.events.make(
-                    "search.run_finished",
-                    SearchRunFinished(
-                        run_id=run_id,
-                        status=status,
-                        retrieved_count=0,
-                        note=error_note,
-                    ),
-                    system,
-                    refs=(run_id,),
-                )
-            ]
-        )
+        with project.writing():
+            project.record(
+                [
+                    project.events.make(
+                        "search.run_finished",
+                        SearchRunFinished(
+                            run_id=run_id,
+                            status=status,
+                            retrieved_count=0,
+                            note=error_note,
+                        ),
+                        system,
+                        refs=(run_id,),
+                    )
+                ]
+            )
         if not isinstance(exc, SourceError):
             raise
         return RunSummary(
@@ -338,12 +340,13 @@ def run_query(
         note=note,
         resume_token=result.resume_token,
     )
-    project.record(
-        [
-            *_records_events(project, run_id, result.works),
-            project.events.make("search.run_finished", finished, system, refs=(run_id,)),
-        ]
-    )
+    with project.writing():
+        project.record(
+            [
+                *_records_events(project, run_id, result.works),
+                project.events.make("search.run_finished", finished, system, refs=(run_id,)),
+            ]
+        )
     return RunSummary(
         run_id=run_id,
         query_id=query_id,

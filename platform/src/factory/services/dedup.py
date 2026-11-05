@@ -130,17 +130,18 @@ def revert_merge(project: Project, actor: Actor, merge_id: str, reason: str) -> 
         else None
     )
     revert = DedupReverted(merge_id=merge_id, reason=clean, manual=True)
-    project.record(
-        [
-            project.events.make(
-                "dedup.reverted",
-                revert,
-                actor,
-                refs=(merge_id,),
-                input_blob=input_blob,
-            )
-        ]
-    )
+    with project.writing():
+        project.record(
+            [
+                project.events.make(
+                    "dedup.reverted",
+                    revert,
+                    actor,
+                    refs=(merge_id,),
+                    input_blob=input_blob,
+                )
+            ]
+        )
 
 
 def active_merges(project: Project) -> list[DedupMerged]:
