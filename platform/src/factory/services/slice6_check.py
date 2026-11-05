@@ -8,7 +8,8 @@ Invariants:
   these findings. Severity by mode is the level table of the module that owns the code.
 - `evaluation-stale` compares the stored conclusive evaluation with the recomputation from the log
   (outcome, inputs hash and evaluator version) and lists evaluation events that did not fold (a
-  hand-written one, or one of an evaluator no longer known); `xrun-reported-without-registration` is structurally impossible (the
+  hand-written one, or one of an evaluator no longer known); `xrun-reported-without-registration` is
+  structurally impossible (the
   projector folds a report only for a registered run) and is the broken-chain check.
 - In the agent view a confirmatory baseline's verdict does not show in `baseline-unresolved` before
   the unlock (decision 94).

@@ -2695,8 +2695,9 @@ def build_server(
         """One hypothesis: its spec, version, falsifier sentence, computed state, reviews,
         registration, the R-53 flags of a literature hypothesis and the autonomy label of its
         registration. Once the platform has evaluated it, also the computed `evaluation`: the
-        outcome with its statistics and flags, the specification curve, ablations and controls. The rationale and the lead are shown to the
-        drafting session only (R-51). Read-only; refused to a session that has joined a pass."""
+        outcome with its statistics and flags, the specification curve, ablations and controls. The
+        rationale and the lead are shown to the drafting session only (R-51). Read-only; refused
+        to a session that has joined a pass."""
 
         def view() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
@@ -3184,8 +3185,8 @@ def build_server(
         reported value, the reproduced value and whether it reproduced (`reproduced`,
         `not-reproduced`, `accepted`, `none`; `resolved`, with no value, while a confirmatory
         reproduction awaits the unlock) and the own results of hypotheses whose conditions and
-        metric the group holds. Own and reproduced results never enter the evidence report. Read-only; refused to a session that has joined
-        a pass."""
+        metric the group holds. Own and reproduced results never enter the evidence report.
+        Read-only; refused to a session that has joined a pass."""
 
         def view() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)

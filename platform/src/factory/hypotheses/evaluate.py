@@ -5,10 +5,10 @@ Invariants:
 - The input is `ExperimentInputs`, plain data read from the projection (`index.evaluation`); the
   result is the full `HypothesisEvaluated` payload. Nothing here takes an outcome from anyone.
 - Pairs are formed on the confirmatory split of the primary universe (`hypotheses.pairing`). The
-  evaluation is `incomplete` while a primary cell (arm and seed) has no completed run (a run whose environment
-  differs is completed, and excluded from pairing); otherwise
-  the decision rule of the hypothesis is applied to the paired-t interval of the oriented
-  per-seed differences at the plan's confidence level.
+  evaluation is `incomplete` while a primary cell (arm and seed) has no completed run (a run whose
+  environment differs is completed, and excluded from pairing); otherwise the decision rule of the
+  hypothesis is applied to the paired-t interval of the oriented per-seed differences at the
+  confidence level fixed at registration.
 - `inputs_hash` covers every fact the computation reads (hypothesis and design versions, rule,
   margin, level, minimum seeds, the reported runs that feed it with their events and metrics,
   the semantic deviations after the unlock, whether a baseline was accepted and the autonomy

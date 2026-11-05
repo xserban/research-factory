@@ -170,11 +170,7 @@ def ledger(
                 group_id=group.group_id,
                 key=list(group.key),
                 rows=rows,
-                own_results=[
-                    r.agent_view() if agent else r
-                    for cond, r in own
-                    if group_holds(group.key, cond)
-                ],
+                own_results=[r for cond, r in own if group_holds(group.key, cond)],
             )
         )
     return out
