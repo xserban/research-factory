@@ -456,11 +456,13 @@ def search_counts(project: Project) -> SearchCounts:
         short = (
             conn.execute(
                 text(
-                    "SELECT run_id, source, reported_count, retrieved_count, note FROM runs "
-                    "WHERE status != :running AND reported_count IS NOT NULL "
-                    "AND retrieved_count < reported_count ORDER BY run_id"
+                    "SELECT r.run_id, r.source, r.reported_count, r.retrieved_count, r.note "
+                    "FROM runs r JOIN queries q ON q.query_id = r.query_id "
+                    "WHERE r.status != :running AND r.reported_count IS NOT NULL "
+                    "AND r.retrieved_count < r.reported_count AND q.purpose != :status "
+                    "ORDER BY r.run_id"
                 ),
-                {"running": RunStatus.RUNNING.value},
+                {"running": RunStatus.RUNNING.value, "status": QueryPurpose.STATUS.value},
             )
             .mappings()
             .all()

@@ -77,6 +77,7 @@ def run_batches(
         spec = QuerySpec(
             source=batch.source, kind=batch.kind, text=batch.text, purpose=QueryPurpose.STATUS
         )
+        query_id = ""
         try:
             query_id = register_query(
                 project,
@@ -87,8 +88,26 @@ def run_batches(
                 names_works=batch.work_ids,
             )
             summary = run_query(project, query_id, sources=sources, cycle_id=cycle_id)
-        except Exception:  # a failed batch must not stop the others; the run is on the log
+        except Exception:  # a failed batch must not stop the others
+            summary_or_none = None
+        else:
+            summary_or_none = summary
+        if summary_or_none is None:
+            # `run_query` records a crashed run as failed before it re-raises; keep its run id so
+            # the cycle names it and `check` can report it. A registration refused writes nothing.
+            crashed = _latest_run(project, query_id)
+            if crashed is not None:
+                outcomes.append(
+                    StatusOutcome(
+                        batch=batch,
+                        run_id=crashed,
+                        status=RunStatus.FAILED,
+                        records=(),
+                        raw_blob=first_page_blob(project, crashed),
+                    )
+                )
             continue
+        summary = summary_or_none
         outcomes.append(
             StatusOutcome(
                 batch=batch,
@@ -101,6 +120,18 @@ def run_batches(
     return outcomes
 
 
+def _latest_run(project: Project, query_id: str) -> str | None:
+    if not query_id:
+        return None
+    project.index.sync()
+    with project.index.connect() as conn:
+        row = conn.execute(
+            text("SELECT run_id FROM runs WHERE query_id = :q ORDER BY run_id DESC LIMIT 1"),
+            {"q": query_id},
+        ).one_or_none()
+    return None if row is None else str(row[0])
+
+
 def first_page_blob(project: Project, run_id: str) -> str | None:
     project.index.sync()
     with project.index.connect() as conn:
@@ -111,26 +142,25 @@ def first_page_blob(project: Project, run_id: str) -> str | None:
     return None if row is None else str(row[0])
 
 
-def last_checked(project: Project, work_ids: Sequence[str]) -> dict[str, str]:
-    """For each work, the start time of the latest complete status run that asked about it.
-
-    Works never looked up are absent. One indexed read keyed by work id; no corpus scan.
-    """
+def last_checked_by_source(project: Project, work_ids: Sequence[str]) -> dict[str, dict[str, str]]:
+    """For each source, the start time of the latest complete status run of that source that
+    asked about each work. Works never looked up in a source are absent from its map. One indexed
+    read keyed by work id; no corpus scan."""
     project.index.sync()
-    found: dict[str, str] = {}
+    found: dict[str, dict[str, str]] = {}
     statement = text(
-        "SELECT r.ref, MAX(run.started_at) FROM event_refs r "
+        "SELECT r.ref, qu.source, MAX(run.started_at) FROM event_refs r "
         "JOIN event_refs q ON q.event_id = r.event_id AND q.position = 0 "
         "AND q.type = 'query.registered' "
         "JOIN queries qu ON qu.query_id = q.ref AND qu.purpose = :status "
         "JOIN runs run ON run.query_id = q.ref AND run.status = :complete "
         "WHERE r.type = 'query.registered' AND r.position > 0 AND r.ref IN :ids "
-        "GROUP BY r.ref"
+        "GROUP BY r.ref, qu.source"
     ).bindparams(bindparam("ids", expanding=True))
     ids = sorted(set(work_ids))
     with project.index.connect() as conn:
         for start in range(0, len(ids), _ID_CHUNK):
-            for ref, at in conn.execute(
+            for ref, source, at in conn.execute(
                 statement,
                 {
                     "status": QueryPurpose.STATUS.value,
@@ -138,8 +168,71 @@ def last_checked(project: Project, work_ids: Sequence[str]) -> dict[str, str]:
                     "ids": ids[start : start + _ID_CHUNK],
                 },
             ):
-                found[str(ref)] = str(at)
+                found.setdefault(str(source), {})[str(ref)] = str(at)
     return found
+
+
+def checkable_sources(work: Work, notice_sources: Sequence[str]) -> list[str]:
+    """The notice sources a work can be asked about: OpenAlex by any handle, Crossref by a DOI
+    of its own."""
+    out: list[str] = []
+    if "openalex" in notice_sources and openalex_handle(work) is not None:
+        out.append("openalex")
+    if "crossref" in notice_sources and crossref_doi(work) is not None:
+        out.append("crossref")
+    return out
+
+
+def effective_last_checked(
+    project: Project, works: Sequence[Work], notice_sources: Sequence[str]
+) -> dict[str, str | None]:
+    """When each work was last looked up in every source it can be asked about: the oldest of
+    those sources' last complete runs, "" if one never completed, so one source's success never
+    hides another's failure. None for a work no notice source can be asked about."""
+    by_source = last_checked_by_source(project, [w.id for w in works])
+    out: dict[str, str | None] = {}
+    for work in works:
+        sources = checkable_sources(work, notice_sources)
+        out[work.id] = (
+            min(by_source.get(s, {}).get(work.id, "") for s in sources) if sources else None
+        )
+    return out
+
+
+def unrecovered_failures(project: Project) -> list[str]:
+    """Ids of failed or partial status runs whose works some later complete run of the same source
+    has not yet covered, sorted. A run that asked about no work is never listed."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        runs = conn.execute(
+            text(
+                "SELECT run.run_id, qu.source, run.started_at, q.event_id FROM runs run "
+                "JOIN queries qu ON qu.query_id = run.query_id AND qu.purpose = :status "
+                "JOIN event_refs q ON q.ref = qu.query_id AND q.position = 0 "
+                "AND q.type = 'query.registered' "
+                "WHERE run.status IN ('failed', 'partial') ORDER BY run.run_id"
+            ),
+            {"status": QueryPurpose.STATUS.value},
+        ).all()
+        named: dict[str, list[str]] = {}
+        for run_id, _source, _at, event_id in runs:
+            named[str(run_id)] = [
+                str(r[0])
+                for r in conn.execute(
+                    text(
+                        "SELECT ref FROM event_refs WHERE event_id = :e AND position > 0 "
+                        "AND type = 'query.registered' AND ref LIKE 'rf:%'"
+                    ),
+                    {"e": str(event_id)},
+                )
+            ]
+    every = sorted({w for ws in named.values() for w in ws})
+    by_source = last_checked_by_source(project, every)
+    return [
+        str(run_id)
+        for run_id, source, at, _ in runs
+        if any(by_source.get(str(source), {}).get(w, "") < str(at) for w in named[str(run_id)])
+    ]
 
 
 def match_keys(ids: Identifiers) -> list[tuple[str, str]]:

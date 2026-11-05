@@ -219,6 +219,9 @@ def _link_events(
             for w, k in conn.execute(text("SELECT work_id, link_key FROM version_links"))
         }
     events: list[Event] = []
+    claimed: dict[tuple[str, str], str] = {}
+    """Keys an applied link of this batch already gives to a work: the index does not hold them
+    yet, so a second work linked to the same identifier must see the first."""
     for outcome in outcomes:
         for record in outcome.records:
             linked = record.linked
@@ -236,6 +239,7 @@ def _link_events(
                 continue
             link_key = ":".join(keys[0])
             held_elsewhere = {h for key in keys for h in _holders(project, *key)} - {work_id}
+            held_elsewhere |= {claimed[key] for key in keys if claimed.get(key, work_id) != work_id}
             clashing = sorted(
                 h for h in held_elsewhere if not _merged_together(project, work_id, h)
             )
@@ -243,6 +247,8 @@ def _link_events(
             if (work_id, link_key) in seen or (not clashing and set(keys) <= own):
                 continue
             seen.add((work_id, link_key))
+            if not clashing:
+                claimed.update({key: work_id for key in keys})
             payload = VersionLinked(
                 work_id=work_id,
                 identifiers=linked,

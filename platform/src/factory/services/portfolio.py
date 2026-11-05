@@ -243,8 +243,8 @@ def _last_search_at(project: Project) -> datetime | None:
         latest = conn.execute(
             text(
                 "SELECT MAX(r.finished_at) FROM runs r JOIN queries q ON q.query_id = r.query_id "
-                "WHERE q.purpose != :probe AND r.finished_at IS NOT NULL"
+                "WHERE q.purpose NOT IN (:probe, :status) AND r.finished_at IS NOT NULL"
             ),
-            {"probe": QueryPurpose.PROBE.value},
+            {"probe": QueryPurpose.PROBE.value, "status": QueryPurpose.STATUS.value},
         ).scalar_one()
     return None if latest is None else parse_ts(str(latest))

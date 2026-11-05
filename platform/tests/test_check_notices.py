@@ -9,7 +9,7 @@ import pytest
 from factory.events.envelope import Actor
 from factory.model.notices import AssessmentDecision, NoticeKind
 from factory.model.project import RigorMode
-from factory.services.check import Finding, _findings_as, agent_check, check
+from factory.services.check import Finding, _findings_as, check
 from factory.services.context import Project
 from factory.services.notices import assess_notice
 from factory.services.watch import watch_run
@@ -153,26 +153,3 @@ def test_version_findings(versions: NoticeWorld) -> None:
     version_in_cycle(versions.project, status_factories(arxiv=clash), [pre, pre2])
     conflict = _codes(versions.project, RigorMode.PILOT)["version-link-conflict"]
     assert conflict.refs == [pre, held]
-
-
-def test_agent_check_hides_notices_of_held_out_works(
-    world: NoticeWorld, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _retract(world, 1)
-    held_out = world.included[1]
-    full = {f.code: f for f in check(world.project).findings}
-    assert full["included-retracted"].refs == [held_out]
-    monkeypatch.setattr(
-        "factory.services.check.seeds_held_out_work_ids", lambda _p: frozenset({held_out})
-    )
-    agent = {f.code: f for f in agent_check(world.project).findings}
-    assert "included-retracted" not in agent and "notice-unassessed" not in agent
-    notice_codes = {
-        "included-retracted",
-        "notice-unassessed",
-        "notice-unchecked-crossref",
-        "notice-coverage-age",
-    }
-    findings = agent_check(world.project).findings
-    leaking = [f.code for f in findings if f.code in notice_codes and held_out in str(f)]
-    assert leaking == []

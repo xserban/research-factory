@@ -100,3 +100,13 @@ status_hook = make_status_hook()
 
 DEFAULT_HOOKS: tuple[CycleHook, ...] = (extend_sample_hook, status_hook, snapshot_hook)
 """The hooks the CLI and the MCP server pass to `watch_run`, in order."""
+
+
+def default_hooks(adapters: Mapping[str, SourceFactory] | None = None) -> tuple[CycleHook, ...]:
+    """`DEFAULT_HOOKS` with the status hook over `adapters` (the caller's search adapters, so an
+    injected adapter is honoured) plus Crossref when the caller supplies none; the real adapters
+    when `adapters` is None."""
+    if adapters is None:
+        return DEFAULT_HOOKS
+    sources = {**status_sources(), **adapters}
+    return (extend_sample_hook, make_status_hook(sources), snapshot_hook)

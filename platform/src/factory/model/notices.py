@@ -21,6 +21,7 @@ from pydantic import Field, model_validator
 
 from factory.model.base import StrictModel
 from factory.model.identity import BLOB_REF_RE, ULID_RE
+from factory.model.screening import Channel
 from factory.model.work import RUN_ID_RE
 from factory.model.work_ids import WORK_ID_RE
 
@@ -74,6 +75,9 @@ class NoticeAssessed(StrictModel):
     decision: AssessmentDecision
     fields: tuple[str, ...] = ()
     rationale: str = Field(min_length=1)
+    channel: Channel = Channel.CLI
+    """`mcp` for a human answer relayed by an agent session; that session may never join a pass
+    (decision 37 item 6)."""
 
     @model_validator(mode="after")
     def _fields_iff_affects(self) -> NoticeAssessed:

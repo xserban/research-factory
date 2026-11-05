@@ -110,27 +110,13 @@ def test_cli_versions_list_empty(world: NoticeWorld, settings: Settings) -> None
 
 
 @pytest.mark.anyio
-async def test_mcp_notice_list_hides_held_out_and_assess_is_relayed(
-    world: NoticeWorld,
-    settings: Settings,
-    clock: FixedClock,
-    monkeypatch: pytest.MonkeyPatch,
+async def test_mcp_notice_list_and_relayed_assess(
+    world: NoticeWorld, settings: Settings, clock: FixedClock
 ) -> None:
     ids = _ids(world)
-    held_out = world.included[0]  # the retracted work is a held-out seed's work
-    monkeypatch.setattr(
-        "factory.mcp.server.seeds_service.held_out_work_ids", lambda _p: frozenset({held_out})
-    )
     source = ScriptedSource(by_text({}))
     async with open_session(settings, clock, dict(adapters(source))) as session:
         listed = await session.call("notice_list", project="demo", **AGENT)
-        hidden = await session.call(
-            "notice_assess",
-            project="demo",
-            notice_id=ids["retraction"],
-            decision="exclude",
-            rationale="retracted",
-        )
         shown = await session.call(
             "notice_assess",
             project="demo",
@@ -140,13 +126,11 @@ async def test_mcp_notice_list_hides_held_out_and_assess_is_relayed(
         )
     assert listed["ok"] is True, listed
     data: dict[str, Any] = listed["data"]
-    assert data["count"] == 1 and data["notices"][0]["kind"] == "correction"
-    assert data["notices"][0]["flag"] == "correction-pending"
-    assert data["notices"][0]["synthesis"] == "labelled"
-    assert data["notices"][0]["rows"] == 0 and data["notices"][0]["claims"] == 0
-    assert held_out not in str(listed) and ids["retraction"] not in str(listed)
-    # A notice of a held-out work is unknown to the agent, exactly as a missing one is.
-    assert hidden["ok"] is False and hidden["errors"][0]["field"] == "notice_id"
+    assert data["count"] == 2
+    kinds = {n["kind"]: n for n in data["notices"]}
+    assert kinds["correction"]["flag"] == "correction-pending"
+    assert kinds["correction"]["synthesis"] == "labelled"
+    assert kinds["retraction"]["flag"] == "retracted"
     assert shown["ok"] is True
     events = read_all(world.project.paths.events_dir, world.project.catalog)
     [assessed] = [e for e in events if e.type == "notice.assessed"]

@@ -83,7 +83,11 @@ from factory.services.reference_resolve import lost_human_decisions
 from factory.services.references import current_extraction, included_works
 from factory.services.seeds import SeedRole, _rigor_mode, held_out_work_ids, seed_check
 from factory.services.snowball import recorded_rounds, round_runs
-from factory.services.status_lookup import crossref_doi, last_checked
+from factory.services.status_lookup import (
+    crossref_doi,
+    effective_last_checked,
+    unrecovered_failures,
+)
 from factory.services.trace import dangling_refs
 from factory.services.versions import link_conflicts, newer_versions, vor_available
 from factory.services.watch import cycles, watch_status
@@ -157,6 +161,7 @@ LEVELS: dict[str, tuple[Severity | None, Severity | None, Severity | None]] = {
     "newer-version-available": ("warning", "warning", "warning"),
     "version-of-record-available": ("warning", "warning", "warning"),
     "version-link-conflict": ("warning", "warning", "warning"),
+    "status-lookup-failed": ("warning", "warning", "warning"),
 }
 
 _NOTICE_PHRASES: dict[str, str] = {
@@ -167,6 +172,7 @@ _NOTICE_PHRASES: dict[str, str] = {
     "newer-version-available": "work(s) with a newer version on their route than the document held",
     "version-of-record-available": "preprint work(s) with a published version linked",
     "version-link-conflict": "published-version link(s) refused because another work holds the id",
+    "status-lookup-failed": "status lookup(s) failed and not yet covered by a later complete run",
 }
 """One phrase per notice or version finding. A message is a count and its phrase, so the agent
 view can rebuild it after dropping refs that name a held-out seed's work."""
@@ -242,7 +248,6 @@ def agent_view(
     report: CheckReport,
     *,
     labelled_audit: str | None = None,
-    hidden_refs: frozenset[str] = frozenset(),
 ) -> CheckReport:
     """The report as an agent may read it: seed findings by role and count only (R-20), no
     label-derived rate, and no extraction audit ceiling flag.
@@ -259,27 +264,6 @@ def agent_view(
     order: list[tuple[str, Severity, str] | int] = []
     for finding in report.findings:
         if finding.code in _WITHHELD_CODES:
-            continue
-        if finding.code in _NOTICE_PHRASES:
-            # Notices and versions of a held-out seed's work are not shown: drop their refs and
-            # rebuild the count, so no finding marks the work (R-20).
-            if (
-                any(r in hidden_refs for r in finding.refs)
-                and finding.code == "version-link-conflict"
-            ):
-                continue
-            kept = [r for r in finding.refs if r not in hidden_refs]
-            if not kept:
-                continue
-            others.append(
-                finding.model_copy(
-                    update={
-                        "refs": kept,
-                        "message": f"{len(kept)} {_NOTICE_PHRASES[finding.code]}",
-                    }
-                )
-            )
-            order.append(len(others) - 1)
             continue
         if finding.role is None:
             refs = [r for r in finding.refs if not re.fullmatch(SEED_ID_RE, r)]
@@ -471,6 +455,9 @@ def _notices(project: Project, outcomes: Mapping[str, Outcome]) -> list[_Hit]:
         )
         if retracted:
             hits.append(_notice_hit("included-retracted", retracted))
+    failed = unrecovered_failures(project)
+    if failed:
+        hits.append(_notice_hit("status-lookup-failed", failed))
     protocol = current_protocol(project)
     plan = None if protocol is None else protocol.spec.watch_plan
     if plan is not None:
@@ -500,20 +487,22 @@ def _notice_coverage(project: Project, notice_sources: tuple[str, ...], budget: 
     hits: list[_Hit] = []
     from factory.services.search import works_by_ids
 
+    known = works_by_ids(project, dependents)
     if "crossref" in notice_sources:
-        without = [w.id for w in works_by_ids(project, dependents) if crossref_doi(w) is None]
+        without = [w.id for w in known if crossref_doi(w) is None]
         if without:
             hits.append(_notice_hit("notice-unchecked-crossref", sorted(without)))
     if budget > 0:
         limit = 3 * math.ceil(len(dependents) / budget)
-        checked = last_checked(project, dependents)
+        checked = effective_last_checked(project, known, notice_sources)
         finished = sorted(
             v.started_at.isoformat() for v in cycles(project) if v.status is not CycleStatus.OPEN
         )
         stale = [
             w
             for w in dependents
-            if sum(1 for started in finished if started > _iso(checked.get(w))) > limit
+            if checked.get(w) is not None
+            and sum(1 for started in finished if started > _iso(checked.get(w))) > limit
         ]
         if stale:
             hits.append(_notice_hit("notice-coverage-age", stale))
@@ -523,7 +512,7 @@ def _notice_coverage(project: Project, notice_sources: tuple[str, ...], budget: 
 def _iso(stamp: str | None) -> str:
     """A status run's start (`...Z`) as the cycles' `isoformat` text, for ordering; '' when the
     work was never checked."""
-    if stamp is None:
+    if not stamp:
         return ""
     return parse_ts(stamp).isoformat()
 

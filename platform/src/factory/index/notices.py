@@ -28,6 +28,7 @@ from factory.events.envelope import Event
 from factory.index.projection import Handler
 from factory.model.dedup_keys import identifier_keys
 from factory.model.notices import NoticeAssessed, NoticeObserved
+from factory.model.screening import Channel
 from factory.model.versions import DocumentPreferred, VersionLinked, VersionObserved
 
 
@@ -40,10 +41,11 @@ class NoticeTables:
     notice_assessments: Table
     document_preferences: Table
     work_keys: Table
+    label_sessions: Table
     """The search projection's lookup table, which an applied link adds its identifiers to."""
 
 
-def notice_tables(metadata: MetaData, work_keys: Table) -> NoticeTables:
+def notice_tables(metadata: MetaData, work_keys: Table, label_sessions: Table) -> NoticeTables:
     notices = Table(
         "notices",
         metadata,
@@ -102,6 +104,7 @@ def notice_tables(metadata: MetaData, work_keys: Table) -> NoticeTables:
         Column("fields", String, nullable=False),
         Column("rationale", String, nullable=False),
         Column("actor_id", String, nullable=False),
+        Column("channel", String, nullable=False, server_default="cli"),
         Column("assessed_at", String, nullable=False),
         Index("ix_notice_assessments_notice", "notice_id"),
     )
@@ -117,7 +120,16 @@ def notice_tables(metadata: MetaData, work_keys: Table) -> NoticeTables:
         Column("preferred_at", String, nullable=False),
         Index("ix_document_preferences_work", "work_id"),
     )
-    return NoticeTables(notices, observations, links, aliases, assessments, preferences, work_keys)
+    return NoticeTables(
+        notices,
+        observations,
+        links,
+        aliases,
+        assessments,
+        preferences,
+        work_keys,
+        label_sessions,
+    )
 
 
 def notice_handlers(t: NoticeTables) -> dict[str, Handler]:
@@ -201,10 +213,17 @@ def notice_handlers(t: NoticeTables) -> dict[str, Handler]:
                 fields=canonical_json(list(payload.fields)).decode(),
                 rationale=payload.rationale,
                 actor_id=event.actor.id,
+                channel=payload.channel.value,
                 assessed_at=format_ts(event.ts),
             )
             .on_conflict_do_nothing()
         )
+        if payload.channel is Channel.MCP:  # a relaying session cannot join a pass (37.6)
+            conn.execute(
+                sqlite_insert(t.label_sessions)
+                .values(session=event.actor.session)
+                .on_conflict_do_nothing(index_elements=["session"])
+            )
 
     def preferred(conn: Connection, event: Event) -> None:
         payload = DocumentPreferred.model_validate(event.payload)

@@ -74,7 +74,7 @@ from factory.services import trace as trace_service
 from factory.services import watch as watch_service
 from factory.services.context import Project, open_project
 from factory.services.extraction import ExtractResult
-from factory.services.living_hooks import DEFAULT_HOOKS
+from factory.services.living_hooks import default_hooks
 from factory.services.results import BatchResult, ItemError
 from factory.services.search import list_works
 from factory.services.seeds import SeedOutcome, SeedRole
@@ -263,7 +263,7 @@ def build_server(
                 trigger="agent",
                 actor=actor,
                 force=force,
-                after_runs=DEFAULT_HOOKS,
+                after_runs=default_hooks(adapters),
             )
             if summary is None:
                 return {"cycle": None}
@@ -277,20 +277,19 @@ def build_server(
     def notice_list(project: str) -> dict[str, JsonValue]:
         """Notices of retraction, correction or concern about works the review depends on, with
         source, date (null when the source states none) and the latest human assessment. Read-only;
-        a notice about a held-out seed's work is not listed. Refused to a session that has joined
-        a pass."""
+        a seed's work reads as any corpus work. Refused to a session that has joined a pass."""
 
         def listing() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
             _refuse_pass_session(opened)
-            hidden = seeds_service.held_out_work_ids(opened)
-            views = notices_service.notice_views(opened, exclude_works=hidden)
+            views = notices_service.notice_views(opened)
             return _withheld(
                 opened,
                 {"count": len(views), "notices": [v.model_dump(mode="json") for v in views]},
+                include_work_ids=False,
             )
 
-        return _reply(project, listing)
+        return _reply(project, listing, include_work_ids=False)
 
     @server.tool()
     def notice_assess(
@@ -308,16 +307,6 @@ def build_server(
         def assess() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
             _refuse_pass_session(opened)
-            known = {
-                v.notice_id
-                for v in notices_service.notice_views(
-                    opened, exclude_works=seeds_service.held_out_work_ids(opened)
-                )
-            }
-            if notice_id not in known:
-                raise FactoryValidationError(
-                    [ValidationIssue("notice_id", f"{notice_id}: unknown notice")]
-                )
             try:
                 chosen = AssessmentDecision(decision)
             except ValueError:
@@ -331,10 +320,11 @@ def build_server(
                 chosen,
                 fields=tuple(fields or ()),
                 rationale=rationale,
+                channel=Channel.MCP,
             )
             return {"event_id": event_id}
 
-        return _reply(project, assess)
+        return _reply(project, assess, include_work_ids=False)
 
     @server.tool()
     def question_record(

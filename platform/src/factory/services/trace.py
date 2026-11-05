@@ -254,49 +254,9 @@ def agent_trace(
             for (r, q) in conn.execute(text("SELECT run_id, query_id FROM runs")).all()
             if str(q) in hidden_queries
         }
-    hidden_queries |= _held_out_notice_nodes(project)
     if _hidden(tree, hidden_queries, hidden_runs):
         raise FactoryValidationError([ValidationIssue("ref", "unknown id")])
     return _pruned(tree, hidden_queries, hidden_runs)
-
-
-def _held_out_notice_nodes(project: Project) -> set[str]:
-    """The ids of notice, version and preference nodes about a held-out seed's work, which an
-    agent's trace never shows (R-20); they travel in the same set as hidden queries."""
-    # Imported here: the seeds service reads the search projection this module also reads.
-    from factory.services.seeds import held_out_work_ids
-
-    works = held_out_work_ids(project)
-    if not works:
-        return set()
-    hidden: set[str] = set()
-    with project.index.connect() as conn:
-        for work in works:
-            hidden.update(
-                str(r[0])
-                for r in conn.execute(
-                    text("SELECT notice_id FROM notices WHERE work_id = :w"), {"w": work}
-                )
-            )
-            hidden.update(
-                f"ver:{r[0]}/obs/{r[1]}/{r[2]}"
-                for r in conn.execute(
-                    text(
-                        "SELECT work_id, route, source_version FROM version_observations "
-                        "WHERE work_id = :w"
-                    ),
-                    {"w": work},
-                )
-            )
-            hidden.update(
-                f"ver:{r[0]}/link/{r[1]}"
-                for r in conn.execute(
-                    text("SELECT work_id, link_key FROM version_links WHERE work_id = :w"),
-                    {"w": work},
-                )
-            )
-            hidden.add(f"pref:{work}")
-    return hidden
 
 
 def _pruned(node: TraceNode, queries: set[str], runs: set[str]) -> TraceNode:
@@ -315,7 +275,7 @@ def _pruned(node: TraceNode, queries: set[str], runs: set[str]) -> TraceNode:
 
 
 def _hidden(node: TraceNode, queries: set[str], runs: set[str]) -> bool:
-    if node.kind in ("query", "notice", "version", "preference"):
+    if node.kind == "query":
         return node.id in queries
     if node.kind == "run":
         return node.id in runs

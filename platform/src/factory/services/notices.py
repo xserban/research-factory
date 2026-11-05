@@ -35,6 +35,7 @@ from factory.model.notices import (
     notice_state,
 )
 from factory.model.protocol import ScreeningStage
+from factory.model.screening import Channel
 from factory.model.search import QueryKind, RunStatus
 from factory.model.work import Work
 from factory.services.agreement import Outcome, final_outcomes
@@ -46,8 +47,8 @@ from factory.services.status_lookup import (
     StatusBatch,
     StatusOutcome,
     crossref_doi,
+    effective_last_checked,
     groups,
-    last_checked,
     openalex_batches,
     run_batches,
 )
@@ -65,6 +66,9 @@ class NoticeCheckSummary(StrictModel):
     run_ids: tuple[str, ...]
     work_ids: tuple[str, ...] = ()
     """The works selected for this cycle's lookups, which the version check covers too."""
+    failed: int = 0
+    """Lookups that did not complete. Each is a failed run on the log; `check` reports it until a
+    later complete run of the same source covers the works it asked about."""
 
 
 def dependent_works(project: Project) -> list[str]:
@@ -103,11 +107,15 @@ def notice_check(
     `unchecked_crossref`.
     """
     dependents = dependent_works(project)
-    checked_at = last_checked(project, dependents)
-    selected = sorted(dependents, key=lambda w: (checked_at.get(w, ""), w))[: max(budget, 0)]
+    known = works_by_ids(project, dependents)
+    checked_at = effective_last_checked(project, known, notice_sources)
+    # Never checked first (""), then least recently checked; a work no source can be asked about
+    # (None) is left to the end. Ties by work id.
+    order = sorted(known, key=lambda w: (checked_at[w.id] is None, checked_at[w.id] or "", w.id))
+    works = order[: max(budget, 0)]
+    selected = [w.id for w in works]
     if not selected:
         return NoticeCheckSummary(checked=0, new_notices=0, unchecked_crossref=(), run_ids=())
-    works = works_by_ids(project, selected)
 
     batches: list[StatusBatch] = []
     unchecked: list[str] = []
@@ -129,6 +137,7 @@ def notice_check(
         unchecked_crossref=tuple(sorted(unchecked)),
         run_ids=tuple(o.run_id for o in outcomes),
         work_ids=tuple(selected),
+        failed=sum(1 for o in outcomes if o.status is not RunStatus.COMPLETE),
     )
 
 
@@ -237,7 +246,8 @@ def assessments(project: Project) -> list[tuple[str, NoticeAssessed]]:
     with project.index.connect() as conn:
         rows = conn.execute(
             text(
-                "SELECT event_id, notice_id, decision, fields, rationale FROM notice_assessments "
+                "SELECT event_id, notice_id, decision, fields, rationale, channel "
+                "FROM notice_assessments "
                 "ORDER BY event_id"
             )
         ).all()
@@ -249,9 +259,10 @@ def assessments(project: Project) -> list[tuple[str, NoticeAssessed]]:
                 decision=AssessmentDecision(str(decision)),
                 fields=tuple(json.loads(str(fields))),
                 rationale=str(rationale),
+                channel=Channel(str(channel)),
             ),
         )
-        for event_id, notice, decision, fields, rationale in rows
+        for event_id, notice, decision, fields, rationale, channel in rows
     ]
 
 
@@ -275,18 +286,14 @@ class NoticeView(StrictModel):
     claims: int
 
 
-def notice_views(
-    project: Project, *, exclude_works: frozenset[str] = frozenset()
-) -> list[NoticeView]:
-    """Observed notices with their latest assessment, leaving out `exclude_works` entirely (an
-    agent-facing list drops the held-out seeds' works, so no notice marks one)."""
+def notice_views(project: Project) -> list[NoticeView]:
+    """Observed notices with their latest assessment. A seed's work is listed like any work: the
+    evidence report shows it, so a list that left it out would single it out (decision 43)."""
     assessed = current_assessments(project)
     states = work_states(project)
-    counts = _live_counts(project, {n.work_id for n in observed_notices(project)} - exclude_works)
+    counts = _live_counts(project, {n.work_id for n in observed_notices(project)})
     views: list[NoticeView] = []
     for notice in observed_notices(project):
-        if notice.work_id in exclude_works:
-            continue
         current = assessed.get(notice.notice_id)
         state = states[notice.work_id]
         rows, claims = counts.get(notice.work_id, (0, 0))
@@ -363,6 +370,7 @@ def assess_notice(
     *,
     fields: Sequence[str] = (),
     rationale: str,
+    channel: Channel = Channel.CLI,
 ) -> str:
     """Record a human's assessment of a notice; a later one supersedes it. Returns the event id.
 
@@ -404,7 +412,11 @@ def assess_notice(
         if issues or notice is None:
             raise FactoryValidationError(issues)
         payload = NoticeAssessed(
-            notice_id=notice_id, decision=decision, fields=tuple(fields), rationale=rationale
+            notice_id=notice_id,
+            decision=decision,
+            fields=tuple(fields),
+            rationale=rationale,
+            channel=channel,
         )
         event = project.events.make(
             "notice.assessed", payload, actor, refs=(notice_id, notice.work_id)

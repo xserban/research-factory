@@ -40,6 +40,9 @@ class StatusScript:
         self._answer = answer or (lambda _spec: [])
         self.queried: list[str] = []
         self.fail = False
+        self.raises = False
+        self.tick: Callable[[], None] | None = None
+        self.reported: int | None = None
 
     def run(
         self,
@@ -51,7 +54,11 @@ class StatusScript:
         resume_from: str | None = None,
     ) -> SearchResult:
         self.queried.append(spec.text)
+        if self.tick is not None:
+            self.tick()
         archive(RawPage(ordinal=0, body=f'{{"q": "{spec.text}"}}', url="stub://", fetched_at=T0))
+        if self.raises:
+            raise RuntimeError("stub crash")
         if self.fail:
             return SearchResult(
                 source=self.name,
@@ -65,10 +72,11 @@ class StatusScript:
         return SearchResult(
             source=self.name,
             query_sent=spec.text,
-            reported_count=None,
+            reported_count=self.reported,
             works=[],
             pages=1,
             status=RunStatus.COMPLETE,
+            note=None if self.reported is None else "stub: fewer than reported",
             status_records=tuple(self._answer(spec)),
         )
 
