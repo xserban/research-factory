@@ -157,3 +157,29 @@ def test_labels_not_in_graph_tables(iw: IWorld, project: Project) -> None:
     before = [rows(project, f"SELECT COUNT(*) FROM {t}") for t in tables]
     apply_labels(project, iw.human, [item(iw, "linear attention"), item(iw, "kernel")])
     assert [rows(project, f"SELECT COUNT(*) FROM {t}") for t in tables] == before
+
+
+def test_rerun_keeps_a_withdrawn_tag_withdrawn(
+    project: Project, tmp_path: Path, world: list[str]
+) -> None:
+    path = tmp_path / "lib.bib"
+    path.write_text(BIB)
+    summary = record_import(
+        project, path, format=ImportFormat.BIBTEX, role=ImportRole.REFERENCE, random_seed=1
+    )
+    project.index.sync()
+    with project.index.connect() as conn:
+        conn.execute(
+            text(
+                "UPDATE import_records SET link_state = 'resolved', work_id = :w "
+                "WHERE import_id = :i AND ordinal = "
+                "(SELECT MIN(ordinal) FROM import_records WHERE import_id = :i)"
+            ),
+            {"w": world[0], "i": summary.import_id},
+        )
+        conn.commit()
+    assert import_tags_as_labels(project, summary.import_id) == 2
+    [pears] = [v for v in labels_of(project, MemberType.WORK, world[0]) if v.key == "pears"]
+    withdraw_label(project, project.human_actor(), pears.application_id, "not wanted")
+    assert import_tags_as_labels(project, summary.import_id) == 0
+    assert [v.key for v in labels_of(project, MemberType.WORK, world[0])] == ["fruit"]
