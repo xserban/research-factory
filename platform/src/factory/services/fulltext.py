@@ -744,6 +744,13 @@ def _document(project: Project, document_id: str) -> _Document | None:
     return None if row is None else _to_document(row)
 
 
+def document_superseded(project: Project, document_id: str) -> bool:
+    """Whether a newer document version superseded `document_id`; False for an unknown id. The
+    caller syncs the index."""
+    found = _document(project, document_id)
+    return found is not None and found.superseded
+
+
 def _to_document(row: RowMapping) -> _Document:
     return _Document(
         document_id=str(row["document_id"]),

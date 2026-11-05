@@ -72,6 +72,12 @@ def conversion_manifest(project: Project, conversion_id: str) -> Manifest:
     return _load(project, conversion)
 
 
+def conversion_of(project: Project, conversion_id: str) -> Conversion | None:
+    """One conversion joined to its document, or None when unknown. Read-only; the caller syncs
+    the index. It reads no blob."""
+    return _find(project, "c.conversion_id = :cid", {"cid": conversion_id})
+
+
 def conversion_document(project: Project, conversion_id: str) -> str | None:
     """The document a conversion belongs to, or None when the conversion is unknown. Read-only;
     the caller syncs the index."""

@@ -130,3 +130,15 @@ def rows(project: Project, sql: str) -> list[tuple[Any, ...]]:
     project.index.sync()
     with project.index.connect() as conn:
         return [tuple(row) for row in conn.execute(text(sql)).all()]
+
+
+def live_conversion(project: Project, work: str) -> tuple[str, str]:
+    """(conversion id, document id) of the latest conversion of a non-superseded document."""
+    [(cnv, doc)] = rows(
+        project,
+        "SELECT c.conversion_id, c.document_id FROM document_conversions c "
+        "JOIN fulltext_documents d ON d.document_id = c.document_id "
+        f"WHERE d.work_id = '{work}' AND d.superseded_by IS NULL "
+        "ORDER BY c.event_id DESC LIMIT 1",
+    )
+    return str(cnv), str(doc)
