@@ -46,6 +46,7 @@ from factory.model.fulltext import ATTEMPT_ID_RE, DOCUMENT_ID_RE
 from factory.model.identity import BLOB_REF_RE, CONVERSION_ID_RE, ULID_RE
 from factory.model.imports import IMPORT_ID_RE
 from factory.model.inbox import INBOX_ID_RE
+from factory.model.notices import NTC_ID_RE
 from factory.model.protocol import PROTOCOL_ID_RE, ProtocolSpec
 from factory.model.question import QUESTION_ID_RE, QuestionSpec
 from factory.model.references import ENTRY_KEY_RE, REX_ID_RE, SNW_ID_RE
@@ -85,6 +86,9 @@ KINDS: tuple[str, ...] = (
     "snowball_round",
     "import",
     "import_record",
+    "notice",
+    "version",
+    "preference",
 )
 """Node kinds in chain order. Sibling nodes are listed in this order (reversed for back traces, so
 the work branch of a decision comes before its cited criterion)."""
@@ -100,7 +104,12 @@ _ANCHOR_RE = rf"^(cnv_{ULID_RE})/([^/\s]+)$"
 _RESOLUTION_RE = r"^res:(?:full-text:)?(rf:.+)$"
 _IMPORT_RECORD_RE = rf"^(imp_{ULID_RE})\:([1-9][0-9]*)$"
 _CELL_RE = r"^rk_[0-9a-f]{12}(?:/(?!\*$)\S+)?$"
+_VERSION_RE = r"^ver:([^/\s]+)/(obs|link)/(.+)$"
+_PREFERENCE_RE = r"^pref:(rf:\S+)$"
 _PATTERNS: tuple[tuple[str, str], ...] = (
+    (NTC_ID_RE, "notice"),
+    (_VERSION_RE, "version"),
+    (_PREFERENCE_RE, "preference"),
     (QUESTION_ID_RE, "question"),
     (PROTOCOL_ID_RE, "protocol"),
     (QUALIFIED_CRITERION_RE, "criterion"),
@@ -245,9 +254,49 @@ def agent_trace(
             for (r, q) in conn.execute(text("SELECT run_id, query_id FROM runs")).all()
             if str(q) in hidden_queries
         }
+    hidden_queries |= _held_out_notice_nodes(project)
     if _hidden(tree, hidden_queries, hidden_runs):
         raise FactoryValidationError([ValidationIssue("ref", "unknown id")])
     return _pruned(tree, hidden_queries, hidden_runs)
+
+
+def _held_out_notice_nodes(project: Project) -> set[str]:
+    """The ids of notice, version and preference nodes about a held-out seed's work, which an
+    agent's trace never shows (R-20); they travel in the same set as hidden queries."""
+    # Imported here: the seeds service reads the search projection this module also reads.
+    from factory.services.seeds import held_out_work_ids
+
+    works = held_out_work_ids(project)
+    if not works:
+        return set()
+    hidden: set[str] = set()
+    with project.index.connect() as conn:
+        for work in works:
+            hidden.update(
+                str(r[0])
+                for r in conn.execute(
+                    text("SELECT notice_id FROM notices WHERE work_id = :w"), {"w": work}
+                )
+            )
+            hidden.update(
+                f"ver:{r[0]}/obs/{r[1]}/{r[2]}"
+                for r in conn.execute(
+                    text(
+                        "SELECT work_id, route, source_version FROM version_observations "
+                        "WHERE work_id = :w"
+                    ),
+                    {"w": work},
+                )
+            )
+            hidden.update(
+                f"ver:{r[0]}/link/{r[1]}"
+                for r in conn.execute(
+                    text("SELECT work_id, link_key FROM version_links WHERE work_id = :w"),
+                    {"w": work},
+                )
+            )
+            hidden.add(f"pref:{work}")
+    return hidden
 
 
 def _pruned(node: TraceNode, queries: set[str], runs: set[str]) -> TraceNode:
@@ -266,7 +315,7 @@ def _pruned(node: TraceNode, queries: set[str], runs: set[str]) -> TraceNode:
 
 
 def _hidden(node: TraceNode, queries: set[str], runs: set[str]) -> bool:
-    if node.kind == "query":
+    if node.kind in ("query", "notice", "version", "preference"):
         return node.id in queries
     if node.kind == "run":
         return node.id in runs
@@ -422,6 +471,9 @@ class _Walk:
             "inbox_item": self._inbox_item,
             "import": self._import,
             "import_record": self._import_record,
+            "notice": self._notice,
+            "version": self._version,
+            "preference": self._preference,
         }
 
     # --- Rows and events ---
@@ -885,6 +937,61 @@ class _Walk:
         kind, actor, event_id = rows[0]
         return _Described(f"link ({kind}) captured by {actor}", str(event_id))
 
+    def _notice(self, ident: str) -> _Described | None:
+        rows = self._all(
+            "SELECT n.kind, n.source, n.notice_date, n.event_id, "
+            "(SELECT a.decision FROM notice_assessments a WHERE a.notice_id = n.notice_id "
+            "ORDER BY a.event_id DESC LIMIT 1) FROM notices n WHERE n.notice_id = :n",
+            n=ident,
+        )
+        if not rows:
+            return None
+        kind, source, when, event_id, decision = rows[0]
+        date_text = "date not stated by source" if when is None else str(when)
+        return _Described(
+            f"{kind} notice ({source}, {date_text}); {decision or 'unassessed'}", str(event_id)
+        )
+
+    def _version(self, ident: str) -> _Described | None:
+        match = re.fullmatch(_VERSION_RE, ident)
+        if match is None:
+            return None
+        work, which, rest = match.groups()
+        if which == "obs":
+            route, _, version = rest.partition("/")
+            rows = self._all(
+                "SELECT event_id FROM version_observations WHERE work_id = :w AND route = :r "
+                "AND source_version = :v",
+                w=work,
+                r=route,
+                v=version,
+            )
+            return _Described(f"newer {route} version {version}", str(rows[0][0])) if rows else None
+        rows = self._all(
+            "SELECT event_id, source, conflicts_with FROM version_links "
+            "WHERE work_id = :w AND link_key = :k",
+            w=work,
+            k=rest,
+        )
+        if not rows:
+            return None
+        event_id, source, clash = rows[0]
+        state = "refused: held by another work" if clash else "applied as an alias"
+        return _Described(f"published version {rest} ({source}); {state}", str(event_id))
+
+    def _preference(self, ident: str) -> _Described | None:
+        match = re.fullmatch(_PREFERENCE_RE, ident)
+        if match is None:
+            return None
+        rows = self._all(
+            "SELECT document_id, automatic, event_id FROM document_preferences "
+            "WHERE work_id = :w ORDER BY event_id DESC LIMIT 1",
+            w=match.group(1),
+        )
+        if not rows or rows[0][1]:
+            return None
+        return _Described(f"preferred document {rows[0][0]}", str(rows[0][2]))
+
     def _chase_round(self, ident: str) -> _Described | None:
         rows = self._all(
             "SELECT directions, from_works, event_id FROM chase_rounds WHERE round_id = :c",
@@ -1249,7 +1356,50 @@ class _Walk:
                 w=ident,
             )
         ]
+        down += [
+            ("notice", n)
+            for n in self._column("SELECT notice_id FROM notices WHERE work_id = :w", w=ident)
+        ]
+        down += [
+            ("version", f"ver:{ident}/obs/{route}/{version}")
+            for route, version in self._all(
+                "SELECT route, source_version FROM version_observations WHERE work_id = :w", w=ident
+            )
+        ]
+        down += [
+            ("version", f"ver:{ident}/link/{key}")
+            for key in self._column(
+                "SELECT link_key FROM version_links WHERE work_id = :w", w=ident
+            )
+        ]
+        if self._describers["preference"](f"pref:{ident}") is not None:
+            down.append(("preference", f"pref:{ident}"))
         return up, down
+
+    def _edges_notice(self, ident: str) -> tuple[list[Key], list[Key]]:
+        rows = self._all("SELECT work_id, run_id FROM notices WHERE notice_id = :n", n=ident)
+        if not rows:
+            return [], []
+        work_id, run_id = rows[0]
+        return [("work", str(work_id)), ("run", str(run_id))], []
+
+    def _edges_version(self, ident: str) -> tuple[list[Key], list[Key]]:
+        match = re.fullmatch(_VERSION_RE, ident)
+        return ([("work", match.group(1))] if match else []), []
+
+    def _edges_preference(self, ident: str) -> tuple[list[Key], list[Key]]:
+        match = re.fullmatch(_PREFERENCE_RE, ident)
+        if match is None:
+            return [], []
+        rows = self._all(
+            "SELECT document_id FROM document_preferences WHERE work_id = :w "
+            "ORDER BY event_id DESC LIMIT 1",
+            w=match.group(1),
+        )
+        up: list[Key] = [("work", match.group(1))]
+        if rows:
+            up.append(("document", str(rows[0][0])))
+        return up, []
 
     def _edges_attempt(self, ident: str) -> tuple[list[Key], list[Key]]:
         rows = self._all(
@@ -1674,4 +1824,7 @@ _EDGES: dict[str, Callable[[_Walk, str], tuple[list[Key], list[Key]]]] = {
     "inbox_item": _Walk._edges_inbox_item,
     "import": _Walk._edges_import,
     "import_record": _Walk._edges_import_record,
+    "notice": _Walk._edges_notice,
+    "version": _Walk._edges_version,
+    "preference": _Walk._edges_preference,
 }

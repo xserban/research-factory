@@ -19,6 +19,7 @@ Invariants:
 """
 
 import json
+import math
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -27,12 +28,14 @@ from typing import Literal
 
 from sqlalchemy import bindparam, text
 
+from factory.clock import parse_ts
 from factory.errors import FactoryValidationError
 from factory.events.blobs import BlobIntegrityError
 from factory.events.reader import read_all
 from factory.index.chase import admitted_works
 from factory.living.counts import source_counts
 from factory.model.base import StrictModel
+from factory.model.notices import NoticeKind, unassessed_notices
 from factory.model.project import RigorMode
 from factory.model.protocol import ProtocolStatus, ScreeningStage
 from factory.model.references import Direction, LinkState
@@ -64,6 +67,11 @@ from factory.services.extraction_audit import extraction_audit_outstanding, extr
 from factory.services.fulltext_status import fulltext_status
 from factory.services.imports import list_imports
 from factory.services.methods import MethodsReport, methods_report
+from factory.services.notices import (
+    assessments,
+    dependent_works,
+    observed_notices,
+)
 from factory.services.prisma import search_report
 from factory.services.protocol import current_protocol
 from factory.services.protocol_rules import (
@@ -75,7 +83,9 @@ from factory.services.reference_resolve import lost_human_decisions
 from factory.services.references import current_extraction, included_works
 from factory.services.seeds import SeedRole, _rigor_mode, held_out_work_ids, seed_check
 from factory.services.snowball import recorded_rounds, round_runs
+from factory.services.status_lookup import crossref_doi, last_checked
 from factory.services.trace import dangling_refs
+from factory.services.versions import link_conflicts, newer_versions, vor_available
 from factory.services.watch import cycles, watch_status
 
 Severity = Literal["error", "warning"]
@@ -140,7 +150,26 @@ LEVELS: dict[str, tuple[Severity | None, Severity | None, Severity | None]] = {
     "import-identity-unchecked": ("warning", "warning", "warning"),
     "import-undeclared": ("warning", "error", "error"),
     "import-coverage-optimistic": ("warning", "warning", "warning"),
+    "included-retracted": ("warning", "warning", "error"),
+    "notice-unassessed": ("warning", "warning", "warning"),
+    "notice-unchecked-crossref": ("warning", "warning", "warning"),
+    "notice-coverage-age": ("warning", "warning", "warning"),
+    "newer-version-available": ("warning", "warning", "warning"),
+    "version-of-record-available": ("warning", "warning", "warning"),
+    "version-link-conflict": ("warning", "warning", "warning"),
 }
+
+_NOTICE_PHRASES: dict[str, str] = {
+    "included-retracted": "included work(s) with a retraction or withdrawal no human has assessed",
+    "notice-unassessed": "notice(s) no human has assessed",
+    "notice-unchecked-crossref": "dependent work(s) without a DOI Crossref can be asked about",
+    "notice-coverage-age": "dependent work(s) not looked up for too many cycles",
+    "newer-version-available": "work(s) with a newer version on their route than the document held",
+    "version-of-record-available": "preprint work(s) with a published version linked",
+    "version-link-conflict": "published-version link(s) refused because another work holds the id",
+}
+"""One phrase per notice or version finding. A message is a count and its phrase, so the agent
+view can rebuild it after dropping refs that name a held-out seed's work."""
 
 REFERENCE_UNRESOLVED_CEILING = 0.30
 """The share of a live extraction's entries left unresolved or ambiguous above which `check`
@@ -209,7 +238,12 @@ _WITHHELD_CODES = frozenset({"extraction-error-high"})
 _AUDIT_REPORTED = "extraction-audit-reported"
 
 
-def agent_view(report: CheckReport, *, labelled_audit: str | None = None) -> CheckReport:
+def agent_view(
+    report: CheckReport,
+    *,
+    labelled_audit: str | None = None,
+    hidden_refs: frozenset[str] = frozenset(),
+) -> CheckReport:
     """The report as an agent may read it: seed findings by role and count only (R-20), no
     label-derived rate, and no extraction audit ceiling flag.
 
@@ -225,6 +259,27 @@ def agent_view(report: CheckReport, *, labelled_audit: str | None = None) -> Che
     order: list[tuple[str, Severity, str] | int] = []
     for finding in report.findings:
         if finding.code in _WITHHELD_CODES:
+            continue
+        if finding.code in _NOTICE_PHRASES:
+            # Notices and versions of a held-out seed's work are not shown: drop their refs and
+            # rebuild the count, so no finding marks the work (R-20).
+            if (
+                any(r in hidden_refs for r in finding.refs)
+                and finding.code == "version-link-conflict"
+            ):
+                continue
+            kept = [r for r in finding.refs if r not in hidden_refs]
+            if not kept:
+                continue
+            others.append(
+                finding.model_copy(
+                    update={
+                        "refs": kept,
+                        "message": f"{len(kept)} {_NOTICE_PHRASES[finding.code]}",
+                    }
+                )
+            )
+            order.append(len(others) - 1)
             continue
         if finding.role is None:
             refs = [r for r in finding.refs if not re.fullmatch(SEED_ID_RE, r)]
@@ -386,7 +441,91 @@ def _hits(project: Project) -> list[_Hit]:
     hits += _inbox(project, outcomes)
     hits += _imports(project)
     hits += _living(project)
+    hits += _notices(project, outcomes)
     return hits
+
+
+# --- Notices and versions (slice 4b, living-C) ---
+
+
+def _notice_hit(code: str, refs: list[str]) -> _Hit:
+    return _Hit(code, tuple(refs), f"{len(refs)} {_NOTICE_PHRASES[code]}")
+
+
+def _notices(project: Project, outcomes: Mapping[str, Outcome]) -> list[_Hit]:
+    """Findings of the notices and versions observed for the works the review depends on.
+
+    Messages carry counts; refs carry notice or work ids, never text from a notice."""
+    hits: list[_Hit] = []
+    observed = observed_notices(project)
+    unassessed = unassessed_notices(observed, assessments(project))
+    if unassessed:
+        hits.append(_notice_hit("notice-unassessed", [n.notice_id for n in unassessed]))
+        retracted = sorted(
+            {
+                n.work_id
+                for n in unassessed
+                if n.kind in (NoticeKind.RETRACTION, NoticeKind.WITHDRAWAL)
+                and outcomes.get(n.work_id) is Outcome.INCLUDED
+            }
+        )
+        if retracted:
+            hits.append(_notice_hit("included-retracted", retracted))
+    protocol = current_protocol(project)
+    plan = None if protocol is None else protocol.spec.watch_plan
+    if plan is not None:
+        hits += _notice_coverage(project, plan.notices, plan.notice_budget)
+    newer = sorted({v.work_id for v in newer_versions(project)})
+    if newer:
+        hits.append(_notice_hit("newer-version-available", newer))
+    published = vor_available(project)
+    if published:
+        hits.append(_notice_hit("version-of-record-available", published))
+    for conflict in link_conflicts(project):
+        hits.append(
+            _Hit(
+                "version-link-conflict",
+                (conflict.work_id, conflict.other_work_id),
+                f"1 {_NOTICE_PHRASES['version-link-conflict']}",
+            )
+        )
+    return hits
+
+
+def _notice_coverage(project: Project, notice_sources: tuple[str, ...], budget: int) -> list[_Hit]:
+    """`notice-unchecked-crossref` and `notice-coverage-age` (spec ruling 2 of the plan)."""
+    dependents = dependent_works(project)
+    if not dependents:
+        return []
+    hits: list[_Hit] = []
+    from factory.services.search import works_by_ids
+
+    if "crossref" in notice_sources:
+        without = [w.id for w in works_by_ids(project, dependents) if crossref_doi(w) is None]
+        if without:
+            hits.append(_notice_hit("notice-unchecked-crossref", sorted(without)))
+    if budget > 0:
+        limit = 3 * math.ceil(len(dependents) / budget)
+        checked = last_checked(project, dependents)
+        finished = sorted(
+            v.started_at.isoformat() for v in cycles(project) if v.status is not CycleStatus.OPEN
+        )
+        stale = [
+            w
+            for w in dependents
+            if sum(1 for started in finished if started > _iso(checked.get(w))) > limit
+        ]
+        if stale:
+            hits.append(_notice_hit("notice-coverage-age", stale))
+    return hits
+
+
+def _iso(stamp: str | None) -> str:
+    """A status run's start (`...Z`) as the cycles' `isoformat` text, for ordering; '' when the
+    work was never checked."""
+    if stamp is None:
+        return ""
+    return parse_ts(stamp).isoformat()
 
 
 # --- Living review (slice 4b) ---

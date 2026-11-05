@@ -141,6 +141,9 @@ async def test_mcp_notice_list_hides_held_out_and_assess_is_relayed(
     assert listed["ok"] is True, listed
     data: dict[str, Any] = listed["data"]
     assert data["count"] == 1 and data["notices"][0]["kind"] == "correction"
+    assert data["notices"][0]["flag"] == "correction-pending"
+    assert data["notices"][0]["synthesis"] == "labelled"
+    assert data["notices"][0]["rows"] == 0 and data["notices"][0]["claims"] == 0
     assert held_out not in str(listed) and ids["retraction"] not in str(listed)
     # A notice of a held-out work is unknown to the agent, exactly as a missing one is.
     assert hidden["ok"] is False and hidden["errors"][0]["field"] == "notice_id"

@@ -1534,13 +1534,22 @@ def report_evidence(
     output: Annotated[
         Path | None, typer.Option("--output", help="Write to this file instead of printing.")
     ] = None,
+    include_notice_affected: Annotated[
+        bool,
+        typer.Option(
+            "--include-notice-affected",
+            help="Keep the rows of works a notice excludes, labelled (researcher view only).",
+        ),
+    ] = False,
 ) -> None:
     """The evidence report: grouped final rows, frontiers and limits (full view, audit shown)."""
     state = _state(ctx)
     expectations = [_parse_expect(e) for e in expect or []]
     with _reporting_errors():
         project = _resolve_project(state)
-        report = evidence_report_service.evidence_report(project, expect=expectations)
+        report = evidence_report_service.evidence_report(
+            project, expect=expectations, include_notice_affected=include_notice_affected
+        )
     if fmt is EvidenceFormat.JSON:
         text = report.model_dump_json()
     elif fmt is EvidenceFormat.CSV_ROWS:
@@ -1883,6 +1892,7 @@ def notices_list_cmd(ctx: typer.Context) -> None:
     with _reporting_errors():
         project = _resolve_project(state)
         assessed = notices_service.current_assessments(project)
+        states = notices_service.work_states(project)
         for notice in notices_service.observed_notices(project):
             current = assessed.get(notice.notice_id)
             verdict = "unassessed" if current is None else current[1].decision.value
@@ -1893,7 +1903,7 @@ def notices_list_cmd(ctx: typer.Context) -> None:
             )
             typer.echo(
                 f"{notice.notice_id}  {notice.work_id}  {notice.kind.value}  {when}  "
-                f"{notice.source}  {verdict}"
+                f"{notice.source}  {verdict}  {states[notice.work_id].flag}"
             )
 
 

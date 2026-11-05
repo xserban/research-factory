@@ -77,6 +77,8 @@ def _flags(row: EvidenceRow) -> str:
         flags.append("proposed")
     if row.value.reproduced:
         flags.append("reproduced")
+    if row.notice is not None:
+        flags.append(f"notice: {row.notice}")
     return ", ".join(flags)
 
 

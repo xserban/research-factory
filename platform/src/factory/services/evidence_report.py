@@ -22,20 +22,22 @@ Invariants:
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import Field
+from pydantic import Field, SerializerFunctionWrapHandler, model_serializer
 
 from factory.errors import FactoryValidationError
 from factory.evidence.pareto import Point, pareto, speed_ratio
 from factory.extraction.numbers import canonical, normalise_for, normalise_text, parse_printed
 from factory.model.base import StrictModel
 from factory.model.extraction import ClaimType, EvidenceType, ReportedIn, Strength
+from factory.model.notices import WorkNoticeState
 from factory.model.screening import PassLabel
 from factory.packs import FieldKind, Pack, ReportSpec, UnitFamily
 from factory.services.context import Project
@@ -67,6 +69,7 @@ from factory.services.extraction_audit import (
     extraction_audit_outstanding,
     extraction_audit_report,
 )
+from factory.services.notices import work_states
 from factory.services.search import get_work
 
 __all__ = [
@@ -97,7 +100,9 @@ REPORT_VERSION = 1
 """Version of the derivation; recorded in every report with the pack and its version."""
 
 DirectionStatus = Literal["declared", "pack-default", "conflict", "unparseable", "unknown"]
-ExcludedReason = Literal["unresolved", "stale", "missing-value", "no-final-row"]
+ExcludedReason = Literal[
+    "unresolved", "stale", "missing-value", "no-final-row", "retracted", "correction-pending"
+]
 
 
 # --- Models ---
@@ -136,6 +141,17 @@ class EvidenceRow(StrictModel):
     costs: dict[str, Provenance]
     """Hardware-independent cost cells (`ReportSpec.display_costs`); never a speed field."""
     regime: dict[str, str]
+    notice: str | None = None
+    """The notice flag of the row's work (`retracted`, `correction-pending`, `concern`), set only
+    when a notice labels it (living-C); omitted from the serialised row otherwise."""
+
+    @model_serializer(mode="wrap")
+    def _omit_empty_notice(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        """A row no notice labels serialises exactly as it did before notices existed."""
+        data: dict[str, Any] = handler(self)
+        if self.notice is None:
+            data.pop("notice", None)
+        return data
 
 
 class Limit(StrictModel):
@@ -325,6 +341,8 @@ class ReportInputs:
     declared_fields: tuple[str, ...] | None = None
     """Field names the protocol's extraction schema declares; a frontier axis must be among them.
     None leaves the pack as the only restriction."""
+    notice_states: Mapping[str, WorkNoticeState] = field(default_factory=dict)
+    """Read-time notice states of the works with a notice (living-C)."""
 
 
 def report_inputs(project: Project) -> ReportInputs | None:
@@ -378,18 +396,25 @@ def report_inputs(project: Project) -> ReportInputs | None:
         audit=extraction_audit_report(project),
         audit_outstanding=extraction_audit_outstanding(project),
         declared_fields=tuple(schema.fields),
+        notice_states=work_states(project),
     )
 
 
 def evidence_report(
-    project: Project, *, expect: Sequence[Mapping[str, str]] = ()
+    project: Project,
+    *,
+    expect: Sequence[Mapping[str, str]] = (),
+    include_notice_affected: bool = False,
 ) -> EvidenceReport:
     """The evidence report of the project, recomputed from the projection. Never raises for a
-    missing schema: the report is then empty with the limit `no-extraction`. Writes nothing."""
+    missing schema: the report is then empty with the limit `no-extraction`. Writes nothing.
+
+    By default the rows of works a notice excludes leave the report (see `assemble_report`);
+    `include_notice_affected` is the researcher's wider view and is never offered to an agent."""
     inputs = report_inputs(project)
     if inputs is None:
         return _empty(expect)
-    return assemble_report(inputs, expect=expect)
+    return assemble_report(inputs, expect=expect, include_notice_affected=include_notice_affected)
 
 
 def agent_evidence(report: EvidenceReport) -> EvidenceReport:
@@ -455,10 +480,109 @@ def _empty(expect: Sequence[Mapping[str, str]]) -> EvidenceReport:
 
 
 def assemble_report(
-    inputs: ReportInputs, *, expect: Sequence[Mapping[str, str]] = ()
+    inputs: ReportInputs,
+    *,
+    expect: Sequence[Mapping[str, str]] = (),
+    include_notice_affected: bool = False,
 ) -> EvidenceReport:
     """The report from `inputs`. Pure and deterministic: the same inputs, in any row order,
-    give the same report."""
+    give the same report.
+
+    Notices (living-C, spec ruling 12): the rows, claims and population entries of a work whose
+    notice state excludes it (`synthesis = excluded`) leave the report, so it equals the report
+    without that work, and an `Excluded` entry `retracted` lists them. The rows of a work with a
+    correction pending stay in their groups, labelled, but leave the frontiers; an `Excluded`
+    entry `correction-pending` lists them. A row of a labelled work carries its notice flag.
+    `include_notice_affected` keeps every row in place and only labels it.
+    """
+    states = inputs.notice_states
+    hidden = (
+        frozenset()
+        if include_notice_affected
+        else frozenset(w for w, s in states.items() if s.synthesis == "excluded")
+    )
+    skip = (
+        frozenset()
+        if include_notice_affected
+        else frozenset(w for w, s in states.items() if s.flag == "correction-pending")
+    )
+    removed = _rows_of(inputs, hidden)
+    kept = _without_works(inputs, hidden) if hidden else inputs
+    report = _assemble(kept, expect, skip)
+    report = _labelled(report, states)
+    extra: list[Excluded] = []
+    gone = sorted({w for w, _ in removed} | (hidden & set(inputs.population)))
+    if gone:
+        extra.append(Excluded(reason="retracted", count=len(removed) or len(gone), works=gone))
+    pending = sorted(
+        (r.work_id, r.row_key)
+        for rows in [*(g.rows for g in report.groups), report.ungrouped]
+        for r in rows
+        if r.work_id in skip
+    )
+    if pending:
+        extra.append(
+            Excluded(
+                reason="correction-pending",
+                count=len(pending),
+                works=sorted({w for w, _ in pending}),
+            )
+        )
+    if not extra:
+        return report
+    return report.model_copy(update={"excluded": [*report.excluded, *extra]})
+
+
+def _rows_of(inputs: ReportInputs, works: frozenset[str]) -> list[tuple[str, str]]:
+    """The (work, row key) of every final row of `works`, grouped or not."""
+    if not works:
+        return []
+    rows = [r for members in inputs.grouped.groups.values() for r in members]
+    rows += inputs.grouped.ungrouped
+    return sorted((r.work_id, r.row_key) for r in rows if r.work_id in works)
+
+
+def _without_works(inputs: ReportInputs, hidden: frozenset[str]) -> ReportInputs:
+    """`inputs` as if the works in `hidden` had no rows, claims or place in the population."""
+    groups = {
+        key: kept
+        for key, members in inputs.grouped.groups.items()
+        if (kept := [r for r in members if r.work_id not in hidden])
+    }
+    grouped = Grouped(
+        groups=groups,
+        ungrouped=[r for r in inputs.grouped.ungrouped if r.work_id not in hidden],
+        unresolved=[d for d in inputs.grouped.unresolved if d.work_id not in hidden],
+    )
+    return dataclasses.replace(
+        inputs,
+        grouped=grouped,
+        population=[w for w in inputs.population if w not in hidden],
+        stale=[(w, k) for w, k in inputs.stale if w not in hidden],
+        claims=[c for c in inputs.claims if c.work_id not in hidden],
+    )
+
+
+def _labelled(report: EvidenceReport, states: Mapping[str, WorkNoticeState]) -> EvidenceReport:
+    """The report with each row of a flagged work carrying its notice flag."""
+    flags = {w: s.flag for w, s in states.items() if s.flag != "none"}
+    if not flags:
+        return report
+
+    def label(rows: list[EvidenceRow]) -> list[EvidenceRow]:
+        return [
+            r.model_copy(update={"notice": flags[r.work_id]}) if r.work_id in flags else r
+            for r in rows
+        ]
+
+    groups = [g.model_copy(update={"rows": label(g.rows)}) for g in report.groups]
+    return report.model_copy(update={"groups": groups, "ungrouped": label(report.ungrouped)})
+
+
+def _assemble(
+    inputs: ReportInputs, expect: Sequence[Mapping[str, str]], skip: frozenset[str]
+) -> EvidenceReport:
+    """The report of `inputs`; the works in `skip` take no part in any frontier."""
     pack = inputs.pack
     if pack is None:
         return _empty(expect)
@@ -480,7 +604,7 @@ def assemble_report(
         rows = keep(members)
         if rows:
             groups.append(
-                _group(list(key), rows, pack, spec, inputs.titles, inputs.declared_fields)
+                _group(list(key), rows, pack, spec, inputs.titles, inputs.declared_fields, skip)
             )
     groups.sort(key=lambda g: g.key)
     ungrouped = _rows(keep(inputs.grouped.ungrouped), spec, inputs.titles, pack)
@@ -631,6 +755,7 @@ def _group(
     spec: ReportSpec,
     titles: Mapping[str, str],
     declared: Sequence[str] | None = None,
+    frontier_skip: frozenset[str] = frozenset(),
 ) -> GroupReport:
     gid = group_id(key)
     counts = independence_counts(rows)
@@ -695,7 +820,14 @@ def _group(
     shown = _rows(rows, spec, titles, pack)
     frontiers: list[FrontierAxis] = []
     if status in ("declared", "pack-default") and direction is not None:
-        frontiers = _frontiers(rows, pack, spec, dict(key), direction, declared)
+        frontiers = _frontiers(
+            [r for r in rows if r.work_id not in frontier_skip],
+            pack,
+            spec,
+            dict(key),
+            direction,
+            declared,
+        )
         for axis in frontiers:
             for part in axis.partitions:
                 if part.statement is not None:

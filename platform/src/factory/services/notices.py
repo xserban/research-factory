@@ -26,7 +26,14 @@ from sqlalchemy import text
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor, Event
 from factory.model.base import StrictModel
-from factory.model.notices import AssessmentDecision, NoticeAssessed, NoticeKind, NoticeObserved
+from factory.model.notices import (
+    AssessmentDecision,
+    NoticeAssessed,
+    NoticeKind,
+    NoticeObserved,
+    WorkNoticeState,
+    notice_state,
+)
 from factory.model.protocol import ScreeningStage
 from factory.model.search import QueryKind, RunStatus
 from factory.model.work import Work
@@ -259,6 +266,13 @@ class NoticeView(StrictModel):
     source: str
     assessment: AssessmentDecision | None
     fields: tuple[str, ...]
+    flag: str
+    """The work's computed notice flag (`retracted`, `correction-pending`, `concern`, `none`)."""
+    synthesis: str
+    """What the synthesis does with the work's rows: `excluded`, `labelled` or `normal`."""
+    rows: int
+    """Live extraction rows of the work that the notice puts in doubt or labels."""
+    claims: int
 
 
 def notice_views(
@@ -267,11 +281,15 @@ def notice_views(
     """Observed notices with their latest assessment, leaving out `exclude_works` entirely (an
     agent-facing list drops the held-out seeds' works, so no notice marks one)."""
     assessed = current_assessments(project)
+    states = work_states(project)
+    counts = _live_counts(project, {n.work_id for n in observed_notices(project)} - exclude_works)
     views: list[NoticeView] = []
     for notice in observed_notices(project):
         if notice.work_id in exclude_works:
             continue
         current = assessed.get(notice.notice_id)
+        state = states[notice.work_id]
+        rows, claims = counts.get(notice.work_id, (0, 0))
         views.append(
             NoticeView(
                 notice_id=notice.notice_id,
@@ -282,14 +300,42 @@ def notice_views(
                 source=notice.source,
                 assessment=None if current is None else current[1].decision,
                 fields=() if current is None else current[1].fields,
+                flag=state.flag,
+                synthesis=state.synthesis,
+                rows=rows,
+                claims=claims,
             )
         )
     return views
 
 
+def _live_counts(project: Project, work_ids: set[str]) -> dict[str, tuple[int, int]]:
+    """Live extraction rows and claims per work, for the works given: indexed by work id."""
+    if not work_ids:
+        return {}
+    found: dict[str, list[int]] = {w: [0, 0] for w in work_ids}
+    with project.index.connect() as conn:
+        for index, table in enumerate(("extraction_rows", "extraction_claims")):
+            for work_id, count in conn.execute(
+                text(
+                    f"SELECT work_id, COUNT(*) FROM {table} "
+                    "WHERE superseded_by IS NULL GROUP BY work_id"
+                )
+            ):
+                if str(work_id) in found:
+                    found[str(work_id)][index] = int(count)
+    return {w: (c[0], c[1]) for w, c in found.items()}
+
+
 def current_assessments(project: Project) -> dict[str, tuple[str, NoticeAssessed]]:
     """The latest assessment of each assessed notice, by notice id, as (event id, payload)."""
     return {a.notice_id: (event_id, a) for event_id, a in assessments(project)}
+
+
+def work_states(project: Project) -> dict[str, WorkNoticeState]:
+    """The read-time state of every work with a notice (`model.notices.notice_state`). Read from
+    the observations and assessments only; nothing derived is stored."""
+    return notice_state(observed_notices(project), assessments(project))
 
 
 def declared_fields(project: Project) -> frozenset[str]:

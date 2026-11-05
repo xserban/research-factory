@@ -146,3 +146,18 @@ def test_preferring_default_clears_override(
     # The override is cleared, not merely outvoted: a later better route would be followed.
     assert list_works(project)  # the project is intact
     assert project.index.rebuild() == project.index.state_hash()
+
+
+def test_trace_lists_the_preference(two_documents: tuple[NoticeWorld, str, str, str]) -> None:
+    from factory.services.trace import trace
+
+    world, work, _, source = two_documents
+    prefer_document(world.project, world.project.human_actor(), work, source, "use the source")
+    tree = trace(world.project, work, direction="forward")
+    kinds: list[tuple[str, str]] = []
+    stack = [tree]
+    while stack:
+        node = stack.pop()
+        kinds.append((node.kind, node.label))
+        stack.extend(node.children)
+    assert ("preference", f"preferred document {source}") in kinds

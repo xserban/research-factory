@@ -225,3 +225,25 @@ def test_version_events_rebuild_identical(world: NoticeWorld) -> None:
     before = world.project.index.state_hash()
     assert world.project.index.rebuild() == before
     assert aliases(world.project, pre) == Identifiers(doi=PUBLISHED)
+
+
+def test_trace_lists_version_observations_and_links(world: NoticeWorld) -> None:
+    from factory.services.trace import trace
+
+    pre, pre2, _ = _ids(world)
+    arxiv = StatusScript(
+        "arxiv", _answer_by_arxiv({"2301.00001": 3}, linked={"2301.00001": PUBLISHED})
+    )
+    version_in_cycle(world.project, status_factories(arxiv=arxiv), [pre, pre2])
+    tree = trace(world.project, pre, direction="forward")
+    labels = []
+    stack = [tree]
+    while stack:
+        node = stack.pop()
+        if node.kind == "version":
+            labels.append(node.label)
+        stack.extend(node.children)
+    assert any("newer arxiv-html version 2301.00001v3" in label for label in labels)
+    assert any(
+        "published version doi:10.3000/pub" in label and "alias" in label for label in labels
+    )

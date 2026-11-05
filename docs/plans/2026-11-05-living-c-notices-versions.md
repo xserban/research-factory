@@ -163,3 +163,25 @@
 ## Later (not v1)
 
 None: every task of this plan is in v1.
+
+## Completion notes (2026-11-05, v1 Tasks 1-6)
+
+Built on the living-A/B base (`CycleHook`, `dedup_new`, `work_keys`, snapshots). `PROJECTION_VERSION` 29 to 30 (the controller renumbers at merge).
+
+**Follow-up (lineage).** `services/lineage.py` does not exist on this base, so Task 6's lineage step is not built: no `retracted-basis` status, no hiding of such edges from default lineage views. `test_lineage_retracted_basis_hidden_by_default` is a skipped placeholder. When slice 3b lands, `lineage` reads `work_states` (`services/notices.py`) and marks an edge whose basis item belongs to a work with `synthesis = excluded`.
+
+**Rulings made while building.**
+
+- Gates are hand-written checks in `services/` until slice M-B declares them (comments name `living.status_lookup`, `living.notice_assess`, `living.document_prefer`).
+- A status run is not linked to its cycle as a planned query (`watch_cycle_runs`); the hook returns its run ids for `watch.cycle_finished.status_run_ids`. Status queries and runs are left out of `search_counts`, `search_report` and the portfolio's complete-run count.
+- "Last checked" of a work is read from the `query.registered` refs of status queries, which list the work ids they asked about (`register_query(names_works=...)`); only complete runs count.
+- Crossref repeated `updates:` filters are OR-ed (live test, 2026-11-05), so one query carries up to `CHASE_CHUNK` DOIs. A DataCite arXiv DOI (`10.48550/`) is not looked up in Crossref and counts as `notice-unchecked-crossref`.
+- Only the four mapped Crossref update types and `reinstatement` become notices; every other type is ignored and counted in the run note.
+- A refused version link is recorded as `version.linked` with `conflicts_with` and applies no alias, so `version-link-conflict` can be computed from events; it closes when the two works are merged.
+- Aliases join incremental and full deduplication through `work_keys` and an `aliases` argument of the cascade, so `dedup_new` followed by `dedup_run` writes nothing further.
+- `document.preferred` carries `automatic`, set when the named document is the one the route order serves; such an act clears the override.
+- `affects` assessments stale the rows recorded before the assessment that carry a named field (`StaleMark`, as an amendment judges rows recorded before it); the unit's state reason is `notice`.
+- The evidence report drops an excluded work as if it had no rows, claims or place in the population, and adds `Excluded(reason="retracted")`; a row of a labelled work carries `notice`. `include_notice_affected` is CLI only (`report evidence --include-notice-affected`).
+- Agent views omit notices, version observations and preferences of held-out seeds' works (`notice_list`, `notice_assess`, `check`, `trace`), rebuilding counts after the omission.
+- `notice_check` reads dependents through `final_outcomes` (the same read every report makes), not a bare indexed query.
+

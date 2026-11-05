@@ -88,9 +88,16 @@ from factory.model.extraction import (
     scope_of_pack,
     scope_of_schema_ref,
 )
+from factory.model.notices import WorkNoticeState
 from factory.model.protocol import ExtractionSchema, ProtocolAmended, ProtocolStatus, ScreeningStage
 from factory.model.screening import PassLabel
-from factory.model.staleness import RowRef, scope_rule, stale_rows, touches
+from factory.model.staleness import (
+    RowRef,
+    notice_stale_rows,
+    scope_rule,
+    stale_rows,
+    touches,
+)
 from factory.model.task import Task, TaskCompleted, TaskStatus
 from factory.packs import FieldKind, Pack, get_pack
 from factory.services.agreement import Outcome, final_outcomes
@@ -99,6 +106,7 @@ from factory.services.context import Project
 from factory.services.conversions import conversion_manifest
 from factory.services.document_read import ConversionRef, default_conversion
 from factory.services.extraction_verify import VALUE_FIELD, verify_row_in
+from factory.services.notices import work_states
 from factory.services.protocol import ProtocolVersion, amendments_with_events, current_protocol
 from factory.services.references import current_extraction, included_works
 from factory.services.results import BatchResult, ItemError
@@ -1466,6 +1474,8 @@ class _Ledger:
     amendments: list[tuple[str, ProtocolAmended]]
     orders: dict[PassLabel, str]
     claims: dict[tuple[str, PassLabel], list["ClaimRow"]]
+    notice_states: Mapping[str, WorkNoticeState] = field(default_factory=dict)
+    """Per-work notice states (living-C); only an `affects` assessment's marks stale a row."""
     documents: dict[str, ConversionRef | None] = field(default_factory=dict)
     references: dict[str, str | None] = field(default_factory=dict)
     created: dict[str, str] = field(default_factory=dict)
@@ -1542,6 +1552,13 @@ class _Ledger:
                 continue
             if rule.all_records or any(touches(rule, tuple(r.fields)) for r in carried):
                 return "schema"
+        state = self.notice_states.get(work_id)
+        if state is not None and any(
+            mark.assessed_at > closed and set(mark.fields) & set(r.fields)
+            for mark in state.stale_marks
+            for r in carried
+        ):
+            return "notice"
         # Deliberate: a task created after the replacement may close the unit current with a
         # reason alone; its agent saw the new list, and the old row stays in `stale_extractions`.
         if any(self._replaced_after(row, task.task_id) for row in carried):
@@ -1587,7 +1604,11 @@ class _Ledger:
                 and touches(rule, tuple(row.fields))
             ):
                 return True
-        return False
+        state = self.notice_states.get(row.work_id)
+        return state is not None and any(
+            row.event_id < mark.assessed_at <= position and set(mark.fields) & set(row.fields)
+            for mark in state.stale_marks
+        )
 
     def stale_claims(self) -> set[str]:
         """The live claims pinned to a document other than the work's current one. Schema
@@ -1628,6 +1649,12 @@ class _Ledger:
                 [w for w, _ in self.amendments],
                 refs,
                 scope=self.scope,
+            )
+        )
+        stale.update(
+            notice_stale_rows(
+                self.notice_states,
+                [(r.work_id, r.extraction_id, ref) for r, ref in zip(live, refs, strict=True)],
             )
         )
         for row in live:
@@ -1674,7 +1701,15 @@ def _ledger(project: Project, scope: Scope = Scope.EVIDENCE) -> _Ledger:
         default = "schema" if label is PassLabel.A else "reversed"
         orders[label] = default if config is None else config.field_order
     return _Ledger(
-        project, scope, tasks, closed_at, rows, amendments_with_events(project), orders, claims
+        project,
+        scope,
+        tasks,
+        closed_at,
+        rows,
+        amendments_with_events(project),
+        orders,
+        claims,
+        notice_states=work_states(project),
     )
 
 

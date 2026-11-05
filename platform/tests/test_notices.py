@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
+from typing import Any
 
 import pytest
 
@@ -19,6 +20,7 @@ from factory.services.notices import (
     current_assessments,
     dependent_works,
 )
+from factory.services.trace import agent_trace, trace
 from factory.services.watch import watch_run
 from factory.sources.base import StatusRecord
 from tests.helpers import SourcesFor
@@ -307,3 +309,41 @@ def test_assessment_supersedes(world: NoticeWorld) -> None:
     ]
     assert current_assessments(world.project)[retraction][1].decision is AssessmentDecision.EXCLUDE
     assert world.project.index.rebuild() == world.project.index.state_hash()
+
+
+# --- trace ---
+
+
+def _kinds(node: Any, found: list[tuple[str, str]] | None = None) -> list[tuple[str, str]]:
+    found = [] if found is None else found
+    found.append((node.kind, node.label))
+    for child in node.children:
+        _kinds(child, found)
+    return found
+
+
+def test_trace_lists_notices(world: NoticeWorld, monkeypatch: pytest.MonkeyPatch) -> None:
+    retraction, _ = _retraction_and_correction(world)
+    work = world.included[0]
+    forward = [
+        k for k in _kinds(trace(world.project, work, direction="forward")) if k[0] == "notice"
+    ]
+    assert any("retraction notice" in label and "unassessed" in label for _, label in forward)
+    assess_notice(
+        world.project,
+        world.project.human_actor(),
+        retraction,
+        AssessmentDecision.EXCLUDE,
+        rationale="retracted",
+    )
+    after = [k for k in _kinds(trace(world.project, work, direction="forward")) if k[0] == "notice"]
+    assert any("retraction notice" in label and "exclude" in label for _, label in after)
+    back = {kind for kind, _ in _kinds(trace(world.project, retraction, direction="back"))}
+    assert {"notice", "work", "run"} <= back
+    # An agent's trace of the work shows no notice when the work is a held-out seed's.
+    assert any(
+        k == "notice" for k, _ in _kinds(agent_trace(world.project, work, direction="forward"))
+    )
+    monkeypatch.setattr("factory.services.seeds.held_out_work_ids", lambda _p: frozenset({work}))
+    hidden = _kinds(agent_trace(world.project, work, direction="forward"))
+    assert not any(k in ("notice", "version", "preference") for k, _ in hidden)

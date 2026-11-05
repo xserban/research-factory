@@ -5,10 +5,11 @@ Pure: the services and the index projector both evaluate the rules here, so they
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 from factory.model.base import StrictModel
 from factory.model.extraction import Scope
+from factory.model.notices import WorkNoticeState
 from factory.model.protocol import ExtractionStale, ProtocolAmended, ScreeningStage, StaleRule
 
 
@@ -124,4 +125,24 @@ def stale_rows(
         if rule is None:
             continue
         stale.update(row.row_id for row in rows if row.at < when and touches(rule, row.fields))
+    return sorted(stale)
+
+
+def notice_stale_rows(
+    states: Mapping[str, WorkNoticeState], rows: Sequence[tuple[str, str, RowRef]]
+) -> list[str]:
+    """The ids of rows a correction's `affects` assessment makes stale, sorted and unique.
+
+    `rows` are (work id, row id, ref). A row is stale when an assessment of its own work, recorded
+    after the row, names a field the row carries; no other work's rows and no other field are
+    touched (R-104, spec ruling 13)."""
+    stale: set[str] = set()
+    for work_id, row_id, ref in rows:
+        state = states.get(work_id)
+        if state is None:
+            continue
+        for mark in state.stale_marks:
+            if ref.at < mark.assessed_at and set(mark.fields) & set(ref.fields):
+                stale.add(row_id)
+                break
     return sorted(stale)
