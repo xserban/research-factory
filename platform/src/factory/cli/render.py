@@ -67,6 +67,7 @@ from factory.services.properties import PropertyView
 from factory.services.references import ExtractSummary, Page, ReferenceCounts
 from factory.services.regions import ExportRow, RegionState, VersionInfo
 from factory.services.relations import RelationView
+from factory.services.shared_mining import SharedProject
 from factory.services.snowball import Comparison, RoundCandidate, RoundResult
 from factory.services.trace import TraceNode
 from factory.services.watch import CycleSummary, WatchStatus
@@ -1483,3 +1484,10 @@ def draft_detail_lines(
             if row.supports:
                 lines.append(f"    supports: {', '.join(row.supports)}")
     return lines
+
+
+def shared_status_lines(projects: Sequence[SharedProject]) -> list[str]:
+    """One line per project the shared store knows of, or a notice when it knows none."""
+    if not projects:
+        return ["the shared store holds no project"]
+    return [f"{p.slug}: {p.status}, {p.records} record(s)" for p in projects]

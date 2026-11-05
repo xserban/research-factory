@@ -168,6 +168,7 @@ __all__ = [
     "recorded_row",
     "require_schema",
     "scope_population",
+    "scope_rows",
     "screening_session",
     "session_scope",
     "stale_claims",
@@ -2081,6 +2082,17 @@ def recorded_row(
         {"scope": scope.value, "ident": extraction_id},
     )
     return found[0] if found else None
+
+
+def scope_rows(project: Project, scope: ScopeKey) -> list[tuple[ExtractionRow, bool]]:
+    """Every production row of `scope`, live or superseded, by extraction id, each with whether it
+    is live: what a source project offers the shared store (M-E). A miner's calibration rows are
+    left out: calibration does not travel."""
+    rows = _read_rows(project, " AND scope = :scope", {"scope": scope.value})
+    if not isinstance(scope, MinerScope):
+        return rows
+    apart = calibration_task_ids(project, scope)
+    return [(row, live) for row, live in rows if row.task_id not in apart]
 
 
 _FIELD_BATCH = 5000

@@ -92,6 +92,7 @@ __all__ = [
     "GroupRate",
     "Grouped",
     "IndependenceCounts",
+    "SettledRow",
     "agreement_overall",
     "cell_key",
     "extraction_agreement",
@@ -104,6 +105,7 @@ __all__ = [
     "independence_counts",
     "key_value",
     "resolve_extraction",
+    "settled_rows",
 ]
 
 
@@ -958,6 +960,30 @@ def final_rows(project: Project, *, scope: ScopeKey = Scope.EVIDENCE) -> list[Fi
     if state is None:
         return []
     return [p.final for p in state.pairs if p.final is not None]
+
+
+@dataclass(frozen=True)
+class SettledRow:
+    """A final row with every live row of its pair: what a source project offers (M-E)."""
+
+    final: FinalRow
+    extraction_ids: tuple[str, ...]
+
+
+def settled_rows(
+    project: Project, *, scope: ScopeKey
+) -> tuple[list[SettledRow], frozenset[tuple[str, str]]]:
+    """The final rows of `scope` with the rows behind each, and the `(work_id, row_key)` of the
+    rows a human dropped (`neither`). Read-only; both are empty without a schema."""
+    state = _load(project, scope)
+    if state is None:
+        return [], frozenset()
+    settled = [
+        SettledRow(p.final, tuple(sorted(r.extraction_id for r in (*p.a, *p.b))))
+        for p in state.pairs
+        if p.final is not None
+    ]
+    return settled, frozenset((p.work_id, p.row_key) for p in state.pairs if p.row_dropped)
 
 
 def final_rows_restricted(

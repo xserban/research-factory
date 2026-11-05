@@ -115,6 +115,7 @@ from factory.services import references as references_service
 from factory.services import regions as regions_service
 from factory.services import relations as relations_service
 from factory.services import seeds as seeds_service
+from factory.services import shared_mining as shared_mining_service
 from factory.services import snapshots as snapshot_service
 from factory.services import snowball as snowball_service
 from factory.services import trace as trace_service
@@ -228,6 +229,11 @@ miner_app.add_typer(miner_calibrate_app)
 mine_app = typer.Typer(
     name="mine",
     help="Mining with registered miners: unit status, agreement, resolution and the audit.",
+    no_args_is_help=True,
+)
+shared_app = typer.Typer(
+    name="shared",
+    help="The shared mining store: a rebuildable projection across the projects of this root.",
     no_args_is_help=True,
 )
 mine_audit_app = typer.Typer(
@@ -410,6 +416,7 @@ app.add_typer(document_app)
 app.add_typer(extract_app)
 app.add_typer(miner_app)
 app.add_typer(mine_app)
+app.add_typer(shared_app)
 app.add_typer(contributions_app)
 app.add_typer(relations_app)
 app.add_typer(ideas_app)
@@ -1507,6 +1514,27 @@ def miner_calibrate_label_cmd(
             channel=Channel.CLI,
         )
     typer.echo(f"labelled {work_id}: {'empty' if empty else f'{len(items)} gold row(s)'}")
+
+
+@shared_app.command("rebuild")
+def shared_rebuild_cmd(ctx: typer.Context) -> None:
+    """Rebuild the shared store from every project's log and print its state hash."""
+    state = _state(ctx)
+    with _reporting_errors():
+        digest = shared_mining_service.shared_store(state.settings, state.clock).rebuild()
+    typer.echo(f"state {digest}")
+
+
+@shared_app.command("status")
+def shared_status_cmd(ctx: typer.Context) -> None:
+    """Sync the shared store and list each project, the opted-out and the unreadable ones too."""
+    state = _state(ctx)
+    with _reporting_errors():
+        store = shared_mining_service.shared_store(state.settings, state.clock)
+        store.sync()
+        listing = store.projects()
+    for line in render.shared_status_lines(listing):
+        typer.echo(line)
 
 
 @mine_app.command("agreement")

@@ -25,6 +25,11 @@ class Settings(StrictModel):
     def plugin_dir(self) -> Path:
         return self.plugin_override or self.root / "plugin"
 
+    @property
+    def shared_store_path(self) -> Path:
+        """The shared mining store (slice M ruling 18): a rebuildable projection, git-ignored."""
+        return self.root / ".mining" / "shared.sqlite"
+
     @classmethod
     def load(
         cls,
