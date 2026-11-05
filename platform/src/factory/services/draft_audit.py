@@ -1,8 +1,8 @@
 """The human audit of `supported` verdicts (slice 7b, plan W-B, ruling 5; spec ruling 12).
 
-Declares: `DRAFT_VERIFY_ERROR_CEILING`, `draw_audit`, `record_audit`, `audit_report`,
-`agent_audit_report`, `incorrect_verdicts`, `open_audit_items`. The only module that writes
-`draft.audit_drawn` and `draft.audited`.
+Declares: `DRAFT_VERIFY_ERROR_CEILING`, `AGENT_STATUS_NOTE`, `draw_audit`, `record_audit`,
+`audit_report`, `agent_audit_report`, `agent_audit_note`, `incorrect_verdicts`, `open_audit_items`.
+The only module that writes `draft.audit_drawn` and `draft.audited`.
 
 Invariants:
 - A sample is drawn from the `supported` verdicts of live sentences not drawn before, n =
@@ -16,7 +16,8 @@ Invariants:
   sample is reported beside it.
 - The error rate, the count behind it and the ceiling flag are for the researcher: the agent
   variant carries none of them (decisions 37.14 and 52). The drawn and labelled counts say how far
-  the audit has gone and nothing about its result.
+  the audit has gone and nothing about its result. Once any verdict is labelled an agent's reading
+  says, in the same words whatever the labels are, that it leaves the audit out.
 """
 
 from __future__ import annotations
@@ -44,6 +45,9 @@ from factory.services import audit_core
 from factory.services.context import Project
 
 GATE = "writing.audit_label"
+AGENT_STATUS_NOTE = (
+    "Statuses here exclude the human audit; the researcher's rendering is authoritative."
+)
 
 
 def _refuse(field: str, reason: str) -> FactoryValidationError:
@@ -187,6 +191,12 @@ def agent_audit_report(report: DraftAuditReport) -> DraftAuditReport:
     )
 
 
+def agent_audit_note(report: DraftAuditReport) -> str | None:
+    """The line an agent's status and rendering carry once any verdict is labelled. It depends on
+    no label's value, so it says nothing of the result."""
+    return AGENT_STATUS_NOTE if report.all_labelled else None
+
+
 def incorrect_verdicts(project: Project, draft_id: str) -> frozenset[str]:
     """The verdicts of the draft whose latest audit label is `incorrect`. For the researcher."""
     with project.index.connect() as conn:
@@ -238,8 +248,10 @@ def open_audit_items(project: Project, draft_id: str) -> list[tuple[str, str]]:
 
 
 __all__ = [
+    "AGENT_STATUS_NOTE",
     "DRAFT_VERIFY_ERROR_CEILING",
     "GATE",
+    "agent_audit_note",
     "agent_audit_report",
     "audit_report",
     "audit_sheet",

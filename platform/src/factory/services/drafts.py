@@ -67,7 +67,12 @@ from factory.model.task import DRAFT_SLOT_TASK_KIND, Task, TaskCompleted, TaskSt
 from factory.services.call_memo import entering
 from factory.services.context import Project
 from factory.services.dedup import active_merges
-from factory.services.draft_audit import agent_audit_report, audit_report, incorrect_verdicts
+from factory.services.draft_audit import (
+    agent_audit_note,
+    agent_audit_report,
+    audit_report,
+    incorrect_verdicts,
+)
 from factory.services.exports import select_works
 from factory.services.outline import DEFAULT_SCOPE, OutlineScope, build_outline, outline_json
 from factory.services.results import BatchResult, ItemError
@@ -85,7 +90,7 @@ from factory.services.tasks import (
     task_content,
 )
 from factory.writing.checks import DraftContext, check_sentence
-from factory.writing.render import render_clean, render_closing, render_review
+from factory.writing.render import render_clean, render_closing, render_review, with_note
 from factory.writing.stats import STATS_VERSION
 
 ORDER_STEP = 10
@@ -597,28 +602,32 @@ def draft_render(
     """The draft as Markdown. `review` shows each sentence with its status, flags, supports and
     quotes; `clean` is the prose with citations and markers, ending with the bibliography note and
     the methods paragraph. Quotes are read from the extraction events' projection, never from the
-    library. `agent` reads the agent variants of the status and of the audit. Nothing is written:
-    the caller decides where the text goes, and it is never under the project (spec ruling 8)."""
+    library. `agent` reads the agent variants of the status and of the audit, and says so under the
+    title once any verdict is labelled. Nothing is written: the caller decides where the text goes,
+    and it is never under the project (spec ruling 8)."""
     with entering():
         view = draft_view(project, draft_id)
         statuses = sentence_status(project, draft_id, agent=agent)
+        report = audit_report(project, draft_id)
         if mode == "review":
             rows = live_sentences(project, draft_id)
             resolved = _resolved_by_sentence(project, rows)
             spans = {s.ref.text: s.spans for found in resolved.values() for s in found}
-            return render_review(view, statuses, spans)
-        report = audit_report(project, draft_id)
-        keys = assign_keys(select_works(project, f"draft:{draft_id}"))
-        return (
-            render_clean(view, statuses, keys)
-            + "\n"
-            + render_closing(
-                draft_id,
-                statuses,
-                agent_audit_report(report) if agent else report,
-                _same_model_verdicts(project, draft_id),
+            body = render_review(view, statuses, spans)
+        else:
+            keys = assign_keys(select_works(project, f"draft:{draft_id}"))
+            body = (
+                render_clean(view, statuses, keys)
+                + "\n"
+                + render_closing(
+                    draft_id,
+                    statuses,
+                    agent_audit_report(report) if agent else report,
+                    _same_model_verdicts(project, draft_id),
+                )
             )
-        )
+        note = agent_audit_note(report) if agent else None
+        return body if note is None else with_note(body, note)
 
 
 def refuse_project_path(project: Project, path: Path) -> None:

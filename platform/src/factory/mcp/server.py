@@ -3189,8 +3189,10 @@ def build_server(
         single-source-generalisation, off-outline) and its computed status: `unchecked` until a
         verifier has judged it, then `supported` or `flagged` (its `reason` is the verdict),
         `stale` when a support no longer holds (its `reason` says why: revise the sentence), and
-        `structural` and `interpretive`, which are labels. No verifier's note is shown. Read-only;
-        refused to a session that has joined a pass."""
+        `structural` and `interpretive`, which are labels. No verifier's note is shown. Once any
+        verdict is labelled, `audit_note` says that these statuses exclude the human audit and the
+        researcher's rendering is authoritative; otherwise it is null. Read-only; refused to a
+        session that has joined a pass."""
 
         def status() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
@@ -3204,6 +3206,7 @@ def build_server(
                 s.sentence_id: s
                 for s in drafts_service.sentence_status(opened, draft_id, agent=True)
             }
+            report = draft_audit_service.audit_report(opened, draft_id)
             data: dict[str, JsonValue] = {
                 "draft": found.model_dump(mode="json"),
                 "sentences": [
@@ -3220,9 +3223,8 @@ def build_server(
                     }
                     for r in rows
                 ],
-                "audit": draft_audit_service.agent_audit_report(
-                    draft_audit_service.audit_report(opened, draft_id)
-                ).model_dump(mode="json"),
+                "audit": draft_audit_service.agent_audit_report(report).model_dump(mode="json"),
+                "audit_note": draft_audit_service.agent_audit_note(report),
             }
             return _withheld(opened, data, include_work_ids=False)
 
@@ -3297,8 +3299,8 @@ def build_server(
         """The draft as Markdown text. `review` shows each sentence with its status, flags,
         supports and their quotes; `clean` the prose with citation keys, `[[UNSUPPORTED: ...]]`
         and `[[INTERPRETATION]]` markers, the counts and the methods paragraph. An audit's result
-        is the researcher's and is not stated. Read-only; refused to a session that has joined a
-        pass."""
+        is the researcher's and is not stated; once any verdict is labelled a line under the title
+        says so. Read-only; refused to a session that has joined a pass."""
 
         def render() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)

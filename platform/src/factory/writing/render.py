@@ -1,6 +1,6 @@
 """The review and clean renderings of a draft (slice 7b, plan W-B, ruling 7; spec ruling 14). Pure.
 
-Declares: `render_review`, `render_clean`, `render_closing`, `RENDER_VERSION`.
+Declares: `render_review`, `render_clean`, `render_closing`, `with_note`, `RENDER_VERSION`.
 
 Invariants:
 - Everything here is read from what it is given: no log, no index, no clock, so a rendering is a
@@ -96,6 +96,12 @@ def render_clean(draft: DraftView, statuses: Sequence[StatusRow], keys: Mapping[
         lines += ["", "## Appendix: sentences not supported", ""]
         lines += [f"- {r.sentence_id}: {r.status} ({r.reason or 'no-verdict'})" for r in open_rows]
     return "\n".join(lines) + "\n"
+
+
+def with_note(body: str, note: str) -> str:
+    """The rendering with `note` as its own paragraph under the title."""
+    title, _, rest = body.partition("\n")
+    return f"{title}\n\n{note}\n{rest}"
 
 
 def render_closing(
