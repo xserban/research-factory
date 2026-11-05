@@ -13,7 +13,7 @@ from sqlalchemy import text
 import factory.services.drafts as drafts_mod
 from factory.errors import FactoryValidationError
 from factory.events.envelope import Actor
-from factory.model.drafts import DraftKind, SentenceClass, SentenceFlag
+from factory.model.drafts import MAX_ORDER, DraftKind, SentenceClass, SentenceFlag
 from factory.model.task import TaskStatus
 from factory.services.context import Project
 from factory.services.drafts import (
@@ -153,6 +153,44 @@ def test_bad_items_are_reported_by_field(project: Project, ww: WWorld, draft: st
         {"supersedes"},
         {"text"},
     ]
+
+
+@pytest.mark.parametrize("order", [2**70, MAX_ORDER + 1, -5])
+def test_an_order_out_of_range_is_refused_per_item(
+    project: Project, ww: WWorld, draft: str, order: int
+) -> None:
+    sec = section_of(project, draft, "idea:")
+    (old,) = write_sentences(
+        project, draft, [sent(sec, STRUCT, "Scope comes first")], actor=writer()
+    ).written
+    result = write_sentences(
+        project,
+        draft,
+        [
+            sent(sec, STRUCT, "Scope comes next", supersedes=old, order=order),
+            sent(sec, STRUCT, "Scope comes last"),
+        ],
+        actor=writer(),
+    )
+    assert len(result.written) == 1  # the batch survives
+    assert [(r.index, r.issues[0].field) for r in result.rejected] == [(0, "order")]
+    assert [r.text for r in live_sentences(project, draft)] == [
+        "Scope comes first",
+        "Scope comes last",
+    ]
+
+
+def test_an_appended_order_past_the_bound_is_refused(
+    project: Project, ww: WWorld, draft: str
+) -> None:
+    sec = section_of(project, draft, "idea:")
+    assert write_sentences(
+        project, draft, [sent(sec, STRUCT, "Scope comes first", order=MAX_ORDER)], actor=writer()
+    ).written
+    result = write_sentences(
+        project, draft, [sent(sec, STRUCT, "Scope comes next")], actor=writer()
+    )
+    assert result.written == [] and result.rejected[0].issues[0].field == "order"
 
 
 def test_unknown_draft_and_wrong_actor(project: Project, ww: WWorld, draft: str) -> None:

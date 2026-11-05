@@ -6,16 +6,19 @@ too (as `tests/test_forged_events.py`); each case has a control where the same e
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 import pytest
-from sqlalchemy import text
+from sqlalchemy import Column, Integer, MetaData, Table, create_engine, text
+from sqlalchemy.engine import Connection
 
-from factory.events.envelope import Actor
+from factory.events.envelope import Actor, Event
 from factory.index.default import default_projection
+from factory.index.drafts import _total
 from factory.index.index import OMITTED_WHEN_EMPTY
 from factory.model.base import StrictModel
 from factory.model.drafts import (
+    MAX_ORDER,
     DraftCreated,
     DraftKind,
     DraftOutlineRepinned,
@@ -373,3 +376,72 @@ def test_an_agent_sentence_folds_with_its_session_and_model(project: Project, dr
     folds(project, "draft.sentence_recorded", sentence(draft, 1, author="agent"), agent)
     (row,) = live_sentences(project, draft)
     assert (row.author, row.session, row.model) == ("agent", S2, "m-1")
+
+
+def raw(project: Project, type_: str, model: StrictModel, actor: Actor, **fields: Any) -> None:
+    """Append a line the writer would refuse: a payload that no longer validates, as a hand-edited
+    log may hold."""
+    event = project.events.make(type_, model, actor)
+    edited = event.model_copy(update={"payload": {**event.payload, **fields}})
+    path = project.paths.events_dir / actor.id / f"{actor.session}.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("ab") as handle:
+        handle.write(edited.to_line())
+
+
+@pytest.mark.parametrize("order", [2**70, -5])
+def test_an_order_out_of_range_changes_nothing_even_when_it_supersedes(
+    project: Project, me: Actor, draft: str, order: int
+) -> None:
+    forge(project, "draft.sentence_recorded", sentence(draft, 1), me)
+    before = state(project)
+    raw(project, "draft.sentence_recorded", sentence(draft, 2, supersedes=sid(1)), me, order=order)
+    assert state(project) == before  # the old sentence is not left superseded by nothing
+    synced = project.index.state_hash()
+    assert project.index.rebuild() == synced
+    assert [r.sentence_id for r in live_sentences(project, draft)] == [sid(1)]
+
+
+def test_a_stat_value_out_of_range_changes_nothing(project: Project, me: Actor, draft: str) -> None:
+    model = sentence(
+        draft,
+        1,
+        cls=SentenceClass.SYNTHESIS,
+        supports=[parse_support("stat:ideas-confirmed")],
+        stat_values={"ideas-confirmed": 1},
+    )
+    before = state(project)
+    raw(project, "draft.sentence_recorded", model, me, stat_values={"ideas-confirmed": 2**70})
+    assert state(project) == before
+    synced = project.index.state_hash()
+    assert project.index.rebuild() == synced
+
+
+def test_order_and_stat_values_are_bounded_in_the_model(draft: str) -> None:
+    assert sentence(draft, order=MAX_ORDER).order == MAX_ORDER
+    for bad in (MAX_ORDER + 1, -1):
+        with pytest.raises(ValueError):
+            sentence(draft, order=bad)
+    with pytest.raises(ValueError):
+        sentence(
+            draft,
+            cls=SentenceClass.SYNTHESIS,
+            supports=[parse_support("stat:ideas-confirmed")],
+            stat_values={"ideas-confirmed": MAX_ORDER + 1},
+        )
+
+
+def test_a_handler_that_fails_half_way_leaves_no_partial_fold() -> None:
+    engine = create_engine("sqlite://")
+    rows = Table("rows", MetaData(), Column("n", Integer))
+    rows.create(engine)
+
+    def half(conn: Connection, _event: Event) -> None:
+        conn.execute(rows.insert().values(n=1))
+        raise OverflowError("after the first write")
+
+    with engine.begin() as conn:
+        conn.execute(rows.insert().values(n=0))  # the transaction `_write` holds open
+        _total(half)(conn, cast(Event, None))
+    with engine.connect() as conn:
+        assert [r[0] for r in conn.execute(rows.select())] == [0]

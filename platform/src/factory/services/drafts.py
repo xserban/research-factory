@@ -31,6 +31,7 @@ from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor, Event
 from factory.model.base import StrictModel
 from factory.model.drafts import (
+    MAX_ORDER,
     MAX_SUPPORTS,
     SENTENCE_MAX_CHARS,
     DraftCreated,
@@ -501,14 +502,21 @@ def write_sentences(
         rejected: list[ItemError] = []
         for index, item in enumerate(items):
             issues, payload, resolved = _prepare(
-                project, draft_id, item, sections, live_ids, context, outline_refs, actor, task_id
+                project,
+                draft_id,
+                item,
+                sections,
+                live_ids,
+                top,
+                context,
+                outline_refs,
+                actor,
+                task_id,
             )
             if issues or payload is None:
                 rejected.append(ItemError(index=index, issues=issues))
                 continue
-            order = _order_of(item, payload, live_ids, top)
-            payload = payload.model_copy(update={"order": order})
-            top[item.section_id] = max(top.get(item.section_id, 0), order)
+            top[item.section_id] = max(top.get(item.section_id, 0), payload.order)
             context = _merge(context, resolved)
             if item.supersedes is not None:
                 live_ids.pop(item.supersedes, None)
@@ -542,17 +550,12 @@ def write_sentences(
         return BatchResult[str](written=written, rejected=rejected)
 
 
-def _order_of(
-    item: SentenceInput,
-    payload: SentenceRecorded,
-    live: dict[str, SentenceRow],
-    top: dict[str, int],
-) -> int:
+def _order_of(item: SentenceInput, live: dict[str, SentenceRow], top: dict[str, int]) -> int:
     if item.order is not None:
         return item.order
     if item.supersedes is not None and item.supersedes in live:
         return live[item.supersedes].order
-    return top.get(payload.section_id, 0) + ORDER_STEP
+    return top.get(item.section_id, 0) + ORDER_STEP
 
 
 def _prepare(
@@ -561,6 +564,7 @@ def _prepare(
     item: SentenceInput,
     sections: set[str],
     live: dict[str, SentenceRow],
+    top: dict[str, int],
     context: DraftContext,
     outline_refs: frozenset[str],
     actor: Actor,
@@ -579,6 +583,9 @@ def _prepare(
         )
     if len(item.supports) > MAX_SUPPORTS:
         issues.append(ValidationIssue("supports", f"at most {MAX_SUPPORTS} supports"))
+    order = _order_of(item, live, top)
+    if not 0 <= order <= MAX_ORDER:
+        issues.append(ValidationIssue("order", f"an order is 0 to {MAX_ORDER}"))
     refs: list[SupportRef] = []
     for position, raw in enumerate(item.supports):
         try:
@@ -599,7 +606,7 @@ def _prepare(
         sentence_id=project.ids.new("snt"),
         draft_id=draft_id,
         section_id=item.section_id,
-        order=0,
+        order=order,
         cls=item.cls,
         text=item.text,
         supports=refs,
