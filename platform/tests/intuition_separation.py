@@ -108,6 +108,7 @@ TABLE_READERS = frozenset(
         "factory.services.check",
         "factory.services.trace",
         "factory.index.index",  # OMITTED_WHEN_EMPTY names tables whose emptiness is hash-neutral
+        "factory.services.modules.intuition",  # the module declaration owns the tables; no SQL
         # The command group names `interpretations` / `concepts` and the layer-count lines print
         # them as words; neither holds SQL (`test_cli_modules_hold_no_sql`).
         "factory.cli.main",
