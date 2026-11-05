@@ -14,6 +14,7 @@ from pydantic import BaseModel, TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
 
 from factory.cli import evidence_render, portfolio_render, render
+from factory.cli.organisation import consolidation_app, labels_app, terms_app
 from factory.clock import Clock, SystemClock
 from factory.config import Settings
 from factory.document.registry import default_converters
@@ -82,11 +83,13 @@ from factory.services import inbox as inbox_service
 from factory.services import inbox_watch as inbox_watch_service
 from factory.services import interpretations as interpretations_service
 from factory.services import leads as leads_service
+from factory.services import labels as labels_service
 from factory.services import lineage as graph_service
 from factory.services import matching as matching_service
 from factory.services import methods as methods_service
 from factory.services import mining as mining_service
 from factory.services import notices as notices_service
+from factory.services import organisation_export as organisation_export_service
 from factory.services import portfolio as portfolio_service
 from factory.services import prisma as prisma_service
 from factory.services import prisma_update as prisma_update_service
@@ -371,6 +374,9 @@ app.add_typer(interpretations_app)
 app.add_typer(concepts_app)
 app.add_typer(concept_links_app)
 app.add_typer(regions_app)
+app.add_typer(labels_app)
+app.add_typer(terms_app)
+app.add_typer(consolidation_app)
 app.add_typer(import_app)
 
 
@@ -2660,8 +2666,11 @@ def import_resolve_cmd(
         summary = import_resolve_service.resolve_import(
             project, import_id, sources=dict(default_sources())
         )
+        tagged = labels_service.import_tags_as_labels(project, import_id)
     for line in render.import_resolve_lines(summary):
         typer.echo(line)
+    if tagged:
+        typer.echo(f"tags applied as labels: {tagged}")
 
 
 RationaleOption = Annotated[str, typer.Option("--rationale", help="Why (required).")]
@@ -2734,8 +2743,11 @@ def import_admit_cmd(
         summary = import_admit_service.admit_import(
             project, import_id, sources=dict(default_sources())
         )
+        tagged = labels_service.import_tags_as_labels(project, import_id)
     for line in render.import_admit_lines(summary):
         typer.echo(line)
+    if tagged:
+        typer.echo(f"tags applied as labels: {tagged}")
 
 
 @import_app.command("coverage")
@@ -3704,6 +3716,12 @@ def graph_export_cmd(
     include_inferred: Annotated[bool, _INCLUDE_INFERRED] = False,
     include_stale: Annotated[bool, _INCLUDE_STALE] = False,
     with_interpretation: Annotated[bool, _WITH_INTERPRETATION] = False,
+    with_labels: Annotated[
+        bool,
+        typer.Option(
+            "--with-labels", help="Add the labels and terms beside the graph (organisation class)."
+        ),
+    ] = False,
     out: Annotated[Path | None, typer.Option("--out", help="Write to this file.")] = None,
 ) -> None:
     """Export the graph (no size cap), streamed in a deterministic order."""
@@ -3721,6 +3739,8 @@ def graph_export_cmd(
             flt=GraphFilter(include_inferred=include_inferred, include_stale=include_stale),
             layer=_layer(with_interpretation),
         )
+        if with_labels:
+            chunks = organisation_export_service.iter_with_labels(project, format_, chunks)
         if out is None:
             for chunk in chunks:
                 typer.echo(chunk, nl=False)

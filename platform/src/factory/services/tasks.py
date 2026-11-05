@@ -15,6 +15,7 @@ from factory.events.envelope import Actor, Event
 from factory.model.base import StrictModel
 from factory.model.task import (
     HYPOTHESIS_REVIEW_TASK_KIND,
+    CONSOLIDATE_TASK_KIND,
     INTUITION_TASK_KIND,
     TASK_KIND_RE,
     TASK_LEASE,
@@ -208,10 +209,10 @@ def task_content(project: Project, task: Task) -> JsonValue:
 
 
 def task_counts(project: Project) -> TaskCounts:
-    """Counts of every task by status, the intuition layer's tasks left out (they are not part of
-    the work the project counts). Extraction tasks that a newer task of their unit
-    replaced stay open in the log but are never served again: they are counted as `abandoned`,
-    not as open, claimed or expired."""
+    """Counts of every task by status, the intuition layer's and the consolidation tasks left out
+    (they are not part of the work the project counts). Extraction tasks that a newer task of
+    their unit replaced stay open in the log but are never served again: they are counted as
+    `abandoned`, not as open, claimed or expired."""
     from factory.services.extraction import abandoned_task_ids  # extraction imports this module
 
     project.index.sync()
@@ -220,9 +221,14 @@ def task_counts(project: Project) -> TaskCounts:
     with project.index.connect() as conn:
         rows = conn.execute(
             text(
-                "SELECT task_id, status, lease_until FROM tasks WHERE kind NOT IN (:layer, :review)"
+                "SELECT task_id, status, lease_until FROM tasks "
+                "WHERE kind NOT IN (:layer, :review, :org)"
             ),
-            {"layer": INTUITION_TASK_KIND, "review": HYPOTHESIS_REVIEW_TASK_KIND},
+            {
+                "layer": INTUITION_TASK_KIND,
+                "review": HYPOTHESIS_REVIEW_TASK_KIND,
+                "org": CONSOLIDATE_TASK_KIND,
+            },
         ).all()
     counts = {"open": 0, "claimed": 0, "expired": 0, "completed": 0, "abandoned": 0}
     for task_id, status, lease_until in rows:

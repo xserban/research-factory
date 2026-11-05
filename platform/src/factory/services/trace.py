@@ -52,7 +52,7 @@ from factory.model.screening import AUDIT_ID_RE, DECISION_ID_RE, QUALIFIED_CRITE
 from factory.model.seed import SEED_ID_RE
 from factory.model.work import QUERY_ID_RE, RUN_ID_RE
 from factory.model.work_ids import WORK_ID_RE
-from factory.services import layer_trace, region_trace
+from factory.services import label_trace, layer_trace, region_trace
 from factory.services.context import Project
 from factory.services.contributions import contribution_item
 from factory.services.ideas import idea_view
@@ -100,6 +100,10 @@ KINDS: tuple[str, ...] = (
     "region",
     "region_version",
     "region_member",
+    "label",
+    "term",
+    "consolidation",
+    "proposal",
 )
 """Node kinds in chain order. The layer's kinds come last (G2's pinned order after `claim` is
 unchanged). Sibling nodes are listed in this order (reversed for back traces, so
@@ -123,6 +127,7 @@ _QUOTE_RE = rf"^(ext_{ULID_RE})/quote$"
 _PATTERNS: tuple[tuple[str, str], ...] = (
     *layer_trace.LAYER_PATTERNS,
     *region_trace.REGION_PATTERNS,
+    *label_trace.ORGANISATION_PATTERNS,
     (REL_ID_RE, "relation"),
     (IDEA_ID_RE, "idea"),
     (_CITES_RE, "cites"),
@@ -517,6 +522,10 @@ class _Walk:
             "region": self._region_node,
             "region_version": self._region_node,
             "region_member": self._region_node,
+            "label": self._organisation_node,
+            "term": self._organisation_node,
+            "consolidation": self._organisation_node,
+            "proposal": self._organisation_node,
         }
 
     # --- Rows and events ---
@@ -639,6 +648,11 @@ class _Walk:
             else "region"
         )
         found = region_trace.describe(self._conn, kind, ident)
+        return None if found is None else _Described(*found)
+
+    def _organisation_node(self, ident: str) -> _Described | None:
+        kind = {"lbl": "label", "trm": "term", "cns": "consolidation", "cnp": "proposal"}[ident[:3]]
+        found = label_trace.describe(self._conn, kind, ident)
         return None if found is None else _Described(*found)
 
     def _question(self, ident: str) -> _Described | None:
@@ -1146,6 +1160,8 @@ class _Walk:
             return region_trace.edges(self._conn, kind, ident)
         if kind in layer_trace.LAYER_KINDS:
             up, down = layer_trace.edges(self._conn, kind, ident)
+        elif kind in label_trace.ORGANISATION_KINDS:
+            up, down = label_trace.edges(self._conn, kind, ident)
         else:
             up, down = _EDGES[kind](self, ident)
         if self._layer == "all" and kind in ("anchor", "work", "idea"):

@@ -54,6 +54,7 @@ from factory.services.calibration import calibrated_models, calibration_status
 from factory.services.call_memo import entering
 from factory.services.chase import chase_rounds, forward_chase_rounds
 from factory.services.conclusions import conclusion_diff
+from factory.services.consolidation_due import consolidation_due
 from factory.services.context import Project
 from factory.services.contributions import (
     contribution_audit_report,
@@ -82,6 +83,12 @@ from factory.services.fulltext_status import fulltext_status
 from factory.services.gates import audit_hits, gate_hits, labelled_gate_audits
 from factory.services.ideas import list_ideas
 from factory.services.imports import list_imports
+from factory.services.label_check import (
+    ORGANISATION_ID,
+    organisation_present,
+    unconfirmed_applications,
+    unused_terms,
+)
 from factory.services.layer_check import (
     concept_cycles,
     concepts_without_approved_source,
@@ -482,6 +489,7 @@ def _run_rules(project: Project) -> list[_Hit]:
         _lineage(project),
         _layer(project),
         _regions(project),
+        _organisation(project),
         gate_hits(project),
         audit_hits(project),
         _gate_policies(project),
@@ -718,6 +726,54 @@ def _region_agent_view() -> Iterator[None]:
 def _regions(project: Project) -> list[_Hit]:
     """Findings of regions (plan Regions-B): ids and counts only, advisory in every mode."""
     return [_Hit(f.code, f.refs, f.message) for f in region_findings(project)]
+def _organisation(project: Project) -> list[_Hit]:
+    """Findings of the organisation class (labels, terms, consolidation, regions): counts and
+    identifiers only. A project with none of them has none."""
+    if not organisation_present(project):
+        return []
+    hits: list[_Hit] = []
+    due = consolidation_due(project)
+    if due.due:
+        hits.append(
+            _Hit(
+                "consolidation-due",
+                (),
+                f"consolidation is due: {due.new_label_keys} new label key(s) and "
+                f"{due.new_nodes} new idea(s) or concept(s) since the last completed pass",
+            )
+        )
+    for code, found, phrase in (
+        (
+            "label-application-unconfirmed",
+            unconfirmed_applications(project),
+            "agent label application(s) inferred and awaiting a human decision",
+        ),
+        ("term-unused", unused_terms(project), "term(s) with no stated or confirmed application"),
+    ):
+        if found[0]:
+            hits.append(_Hit(code, tuple(found[1]), f"{found[0]} {phrase}"))
+    leaked = _organisation_leaks(project)
+    if leaked:
+        hits.append(
+            _Hit(
+                "organisation-leak",
+                tuple(leaked),
+                f"{len(leaked)} evidence output(s) mention a region, label, term or "
+                "consolidation id",
+            )
+        )
+    return hits
+
+
+def _organisation_leaks(project: Project) -> list[str]:
+    """Names of the evidence outputs that carry an organisation id. Outputs that cannot be
+    computed are reported by `layer-scan-incomplete` when the layer is present."""
+    snapshot = evidence_snapshot(project)
+    leaked = [n for n, t in sorted(snapshot.items()) if ORGANISATION_ID.search(t)]
+    for fmt in ("json", "dot"):
+        if any(ORGANISATION_ID.search(chunk) for chunk in iter_graph_export(project, fmt)):
+            leaked.append(f"export:{fmt}")
+    return sorted(leaked)
 
 
 def _snapshot_text(value: object) -> str:

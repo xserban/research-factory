@@ -181,7 +181,9 @@ def candidate_clusters(project: Project) -> list[Cluster]:
 # --- Passes ---
 
 
-def _open_pass(project: Project) -> str | None:
+def open_pass_id(project: Project) -> str | None:
+    """The id of the open pass (started, not completed), or None."""
+    project.index.sync()
     with project.index.connect() as conn:
         found = conn.execute(
             text(
@@ -236,7 +238,7 @@ def start_pass(project: Project, actor: Actor) -> str:
         issues = gate_issues(project, actor, "consolidation.decide")
         if actor.kind != "human":
             issues = issues or [ValidationIssue("actor", "only a human starts a pass")]
-        if _open_pass(project) is not None:
+        if open_pass_id(project) is not None:
             issues.append(ValidationIssue("pass_id", "pass-open"))
         if issues:
             raise _refuse(*issues)
@@ -616,6 +618,7 @@ __all__ = [
     "consolidation_next",
     "decide_cluster",
     "list_clusters",
+    "open_pass_id",
     "propose",
     "start_pass",
 ]

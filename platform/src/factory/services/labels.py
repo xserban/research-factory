@@ -22,6 +22,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any, Literal
 
+from pydantic import ConfigDict, Field
 from sqlalchemy import text
 
 from factory.document.quotes import quote_in_element
@@ -60,6 +61,8 @@ class LabelInput(StrictModel):
 
 
 class LabelView(StrictModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, populate_by_name=True)
+
     """One live application as a reader sees it (`class` is `organisation` on every row)."""
 
     application_id: str
@@ -72,7 +75,7 @@ class LabelView(StrictModel):
     origin: Origin
     quote: str | None
     import_ref: str | None
-    class_: str = ORGANISATION
+    class_: str = Field(default=ORGANISATION, serialization_alias="class")
 
 
 def _refuse(*issues: ValidationIssue) -> FactoryValidationError:

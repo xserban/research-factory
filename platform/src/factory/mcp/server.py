@@ -25,7 +25,7 @@ from factory.mcp.conventions import (
     withhold,
 )
 from factory.model.base import StrictModel
-from factory.model.cards import PropertyDef
+from factory.model.cards import PropertyDef, QuoteBasis
 from factory.model.chase import ChaseDirection
 from factory.model.extraction import ClaimInput, ExtractedRowInput
 from factory.model.findings import ContradictionInput
@@ -77,10 +77,12 @@ from factory.services import fulltext as fulltext_service
 from factory.services import fulltext_status as fulltext_status_service
 from factory.services import hypotheses as hypotheses_service
 from factory.services import hypothesis_review as review_service
+from factory.services import consolidation as consolidation_service
 from factory.services import ideas as ideas_service
 from factory.services import inbox as inbox_service
 from factory.services import interpretations as interpretations_service
 from factory.services import leads as leads_service
+from factory.services import labels as labels_service
 from factory.services import lineage as graph_service
 from factory.services import matching as matching_service
 from factory.services import methods as methods_service
@@ -102,6 +104,7 @@ from factory.services import screening as screening_service
 from factory.services import search as search_service
 from factory.services import seeds as seeds_service
 from factory.services import snowball as snowball_service
+from factory.services import terms as terms_service
 from factory.services import trace as trace_service
 from factory.services import watch as watch_service
 from factory.services.context import Project, open_project
@@ -2653,6 +2656,133 @@ def build_server(
             return _withheld(opened, {"event_id": event_id}, include_work_ids=False)
 
         return _reply(project, register, include_work_ids=False)
+
+    @server.tool()
+    def label_apply(
+        project: str,
+        items: list[dict[str, JsonValue]],
+        role: str,
+        model: str,
+        skill: str,
+    ) -> dict[str, JsonValue]:
+        """Apply free labels, each `{target_type: work|idea|concept, target, text, quote?}`: a
+        short label of at most 60 characters on a recorded work, idea or concept. A `quote` is a
+        verbatim {work_id, conversion_id, anchor, quote} of the target work; the platform decides
+        the status: `stated` when the verified quote contains the label key, otherwise `inferred`,
+        which waits for a human. Each item is written or rejected on its own. A label is
+        organisation, not evidence: it selects nothing until a human promotes it to a term.
+        Refused to a session that has joined a pass."""
+
+        def apply() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            _require_pass_opened(opened)
+            actor = make_agent_actor(settings, session, role, model, skill)
+            accepted: list[tuple[int, labels_service.LabelInput]] = []
+            rejected: list[ItemError] = []
+            for index, item in enumerate(items):
+                try:
+                    accepted.append(
+                        (index, parse_input(labels_service.LabelInput, item, f"items.{index}"))
+                    )
+                except FactoryValidationError as exc:
+                    rejected.append(ItemError(index=index, issues=exc.issues))
+            result = labels_service.apply_labels(opened, actor, [item for _, item in accepted])
+            for error in result.rejected:
+                original = accepted[error.index][0]
+                issues = [
+                    ValidationIssue(f"items.{original}.{dotted(issue.field)}", issue.reason)
+                    for issue in error.issues
+                ]
+                rejected.append(ItemError(index=original, issues=issues))
+            batch = BatchResult[str](
+                written=result.written, rejected=sorted(rejected, key=lambda e: e.index)
+            )
+            return _withheld(opened, batch.model_dump(mode="json"), include_work_ids=False)
+
+        return _reply(project, apply, include_work_ids=False)
+
+    @server.tool()
+    def consolidation_next(project: str, role: str, model: str, skill: str) -> dict[str, JsonValue]:
+        """Claim the next candidate cluster of labels, ideas or concepts that may name one thing
+        (computed by the platform; each pair names its signals). Returns the task, the members
+        with their names and aliases, and the signals; or no task. Propose with
+        `consolidation_propose`; you cannot merge, keep or split: a human decides. Refused to a
+        session that has joined a pass."""
+
+        def serve() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            _require_pass_opened(opened)
+            actor = make_agent_actor(settings, session, role, model, skill)
+            task = consolidation_service.consolidation_next(opened, actor)
+            body: JsonValue = None if task is None else task.model_dump(mode="json")
+            return _withheld(opened, {"task": body}, include_work_ids=False)
+
+        return _reply(project, serve, include_work_ids=False)
+
+    @server.tool()
+    def consolidation_propose(
+        project: str,
+        task_id: str,
+        action: str,
+        members: list[str],
+        reason: str,
+        role: str,
+        model: str,
+        skill: str,
+        into: str | None = None,
+        quotes: list[dict[str, JsonValue]] | None = None,
+    ) -> dict[str, JsonValue]:
+        """Propose, for the cluster of a claimed task, to `merge` the named `members` into `into`
+        (one of them), to `keep` them separate, or to `split` them, with a `reason` of at most
+        600 characters and optional verbatim `quotes` ({work_id, conversion_id, anchor, quote}).
+        The task is completed. A human decides; nothing is merged by this call. Refused to a
+        session that has joined a pass."""
+
+        def propose() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            _require_pass_opened(opened)
+            actor = make_agent_actor(settings, session, role, model, skill)
+            if action not in ("merge", "keep", "split"):
+                raise FactoryValidationError([ValidationIssue("action", "merge, keep or split")])
+            parsed = [parse_input(QuoteBasis, q, f"quotes.{i}") for i, q in enumerate(quotes or [])]
+            proposal = consolidation_service.propose(
+                opened,
+                actor,
+                task_id,
+                action=cast(consolidation_service.Action, action),
+                into=into,
+                members=members,
+                reason=reason,
+                quotes=parsed,
+            )
+            return _withheld(opened, {"proposal_id": proposal}, include_work_ids=False)
+
+        return _reply(project, propose, rename=dotted, include_work_ids=False)
+
+    @server.tool()
+    def term_list(project: str, offset: int = 0, limit: int = 50) -> dict[str, JsonValue]:
+        """The live terms (promoted label keys) with their aliases, definitions and the number
+        of their applications by status, one page from `offset`. Applications that came from an
+        import's tags are not counted. Terms are organisation, not evidence. Read-only; refused
+        to a session that has joined a pass."""
+
+        def listing() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            _require_pass_opened(opened)
+            page = terms_service.list_terms(
+                opened,
+                exclude_import_tags=True,
+                limit=max(1, min(limit, 200)),
+                offset=max(0, offset),
+            )
+            body: JsonValue = [t.model_dump(mode="json", by_alias=True) for t in page]
+            return _withheld(opened, {"terms": body}, include_work_ids=False)
+
+        return _reply(project, listing, include_work_ids=False)
 
     return server
 

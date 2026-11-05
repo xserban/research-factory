@@ -139,7 +139,8 @@ def test_import_tags_become_confirmed_labels(
         conn.execute(
             text(
                 "UPDATE import_records SET link_state = 'resolved', work_id = :w "
-                "WHERE import_id = :i AND ordinal = (SELECT MIN(ordinal) FROM import_records WHERE import_id = :i)"
+                "WHERE import_id = :i AND ordinal = "
+                "(SELECT MIN(ordinal) FROM import_records WHERE import_id = :i)"
             ),
             {"w": work, "i": summary.import_id},
         )

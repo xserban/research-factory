@@ -20,7 +20,7 @@ import json
 from collections.abc import Collection, Sequence
 from typing import Any
 
-from pydantic import ValidationError
+from pydantic import ConfigDict, Field, ValidationError
 from sqlalchemy import text
 
 from factory.errors import FactoryValidationError, ValidationIssue
@@ -49,6 +49,8 @@ def _refuse(*issues: ValidationIssue) -> FactoryValidationError:
 
 
 class TermView(StrictModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, populate_by_name=True)
+
     """A term as a reader sees it; `counts` are its live applications by status, and
     `class_` is `organisation` on every row."""
 
@@ -62,7 +64,7 @@ class TermView(StrictModel):
     retired: bool
     version: int
     counts: dict[str, int]
-    class_: str = ORGANISATION
+    class_: str = Field(default=ORGANISATION, serialization_alias="class")
 
 
 # --- Writes ---

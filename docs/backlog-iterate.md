@@ -73,3 +73,10 @@ Minor review findings parked during the v1 build, to address when iterating from
 - Regions-B: `regions_of` reads only the latest version of each region (the `region_members` rows); a membership in an older version is read from the blob through `members`.
 - Regions-B: no CLI to list links; `region_links` is read by `check` only.
 - Regions-B: tests/test_mcp_server.py pins the tool list in order; Regions-C adds its tools to the same list.
+- Regions-B (must do): `region_propose`/`region_query` must withhold the members and live counts of any region whose rules reach an import's `part="all"` or a `run` of purpose `import`, `seed` or `probe` (directly or through pinned versions) from agents; the Regions-A guard only refuses agent-authored rules, it does not hide a human-authored region.
+- Regions-C: with both a layer and an organisation class present, `check` computes the evidence snapshot twice (`layer-leak` and `organisation-leak`); share one scan per call.
+- Regions-C: `consolidate` tasks count in `task_counts` (open/claimed) like extraction tasks; exclude the kind as for the intuition layer if `project_status` should not show them.
+- Regions-C: a label term application is re-derived per term on every read (`list_terms`, `unused_terms`, term rule); add a materialised count if a project has many terms and applications.
+- Regions-C: string blocks and posting lists above 200 members are skipped (documented in decision 86); measure on a real label set before the pilot and tune `BLOCK_MAX` / `POSTING_MAX`.
+- Regions-C: `import admit` / `import resolve` apply tags only to resolved records whose work is already a recorded work; tags of records that resolve later are applied by the next run of either command (idempotent).
+- Regions-C: label export rows carry the label text; a very large label set streams but `list_labels` pages by application id with offset (quadratic over many pages).

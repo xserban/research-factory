@@ -344,11 +344,15 @@ def _full_text_sessions(project: Project) -> list[tuple[str, str]]:
 # pipeline's: the layer has few event types, the pipeline many and growing, so an allow-list would
 # drift with every slice and silently drop a real model. A skill name plays no part (an agent
 # declares its own). Layer events: the `interpretation.` and `concept.` event types and the task
-# events (`task.*`) of the layer's tasks, which carry the layer task's content as their input.
+# events (`task.*`) of the layer's tasks, which carry the layer task's content as their input; the
+# organisation class's are the `label.`, `term.`, `consolidation.` and `region.` types and the
+# events of `consolidate` tasks.
 _LAYER_EVENTS = (
     "AND e.type NOT LIKE 'interpretation.%' AND e.type NOT LIKE 'concept.%' "
+    "AND e.type NOT LIKE 'label.%' AND e.type NOT LIKE 'term.%' "
+    "AND e.type NOT LIKE 'consolidation.%' AND e.type NOT LIKE 'region.%' "
     "AND NOT (e.type LIKE 'task.%' AND e.input_blob IN "
-    "(SELECT content_blob FROM tasks WHERE kind = 'intuition')) "
+    "(SELECT content_blob FROM tasks WHERE kind IN ('intuition', 'consolidate'))) "
 )
 _AGENT_MODELS = text(
     "SELECT DISTINCT e.model FROM events e WHERE e.actor_kind = 'agent' AND e.model IS NOT NULL "
