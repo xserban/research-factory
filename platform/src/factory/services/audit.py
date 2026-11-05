@@ -36,9 +36,9 @@ from sqlalchemy.engine import Connection
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
 from factory.model.base import StrictModel
-from factory.model.project import RigorMode
 from factory.model.protocol import ScreeningStage
 from factory.model.screening import AuditLabelled, AuditSampled, Channel, ScreeningPhase
+from factory.modules.presets import Enforcement, enforcement
 from factory.services import audit_core
 from factory.services.agreement import AgreedWork, agreed_works, screen_agreement
 from factory.services.audit_core import AuditPopulation
@@ -243,7 +243,9 @@ def audit_report(
     verdict = audit_core.ceiling_verdict(
         rates.false_exclusion,
         AUDIT_ERROR_CEILING,
-        enforced=_rigor_mode(project) is RigorMode.SYSTEMATIC,
+        enforced=(
+            enforcement(_rigor_mode(project), "screening.audit_ceiling") is Enforcement.ENFORCED
+        ),
     )
     return AuditReport(
         audit_id=str(latest[0]),

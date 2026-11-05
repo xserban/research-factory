@@ -49,6 +49,7 @@ from factory.model.protocol import (
 )
 from factory.model.search import QueryKind, QueryPurpose, QuerySpec
 from factory.model.watch import CycleStatus
+from factory.modules.presets import Enforcement, enforcement
 from factory.services.context import Project
 from factory.services.protocol_rules import (
     criterion_changes,
@@ -78,9 +79,6 @@ class ProtocolVersion(StrictModel):
     status: ProtocolStatus
     recorded_at: datetime
     press: Literal["none", "reviewed", "confirmed"]
-
-
-_RIGOR_MODES_GATED = frozenset({RigorMode.PILOT, RigorMode.SYSTEMATIC})
 
 
 def record_protocol(
@@ -602,7 +600,9 @@ def search_authorization(
     checks still hold.
     """
     import_issues = _import_issues(project, spec, import_id)
-    if spec.purpose is QueryPurpose.PROBE or _rigor_mode(project) not in _RIGOR_MODES_GATED:
+    if spec.purpose is QueryPurpose.PROBE or (
+        enforcement(_rigor_mode(project), "protocol.ready") is Enforcement.OFF
+    ):
         return import_issues
     current = current_protocol(project)
     if current is None:

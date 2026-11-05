@@ -38,9 +38,9 @@ from factory.model.extraction import (
     ExtractionAuditSampled,
     Scope,
 )
-from factory.model.project import RigorMode
 from factory.model.protocol import ExtractionSchema
 from factory.model.screening import Channel
+from factory.modules.presets import Enforcement, enforcement
 from factory.quality.stats import audit_size, draw_uniform
 from factory.services import audit_core
 from factory.services.audit_core import AuditPopulation
@@ -397,7 +397,9 @@ def extraction_audit_report(
     verdict = audit_core.ceiling_verdict(
         rate,
         EXTRACTION_ERROR_CEILING,
-        enforced=_rigor_mode(project) is RigorMode.SYSTEMATIC,
+        enforced=(
+            enforcement(_rigor_mode(project), "extraction.audit_ceiling") is Enforcement.ENFORCED
+        ),
     )
     return ExtractionAuditReport(
         audit_id=audit_id,

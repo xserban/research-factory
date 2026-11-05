@@ -73,6 +73,8 @@ from factory.model.references import (
 from factory.model.search import QueryKind, QueryPurpose, QuerySpec, RunStatus
 from factory.model.work import Work
 from factory.model.work_ids import arxiv_id_from_doi, normalize_title, work_id
+from factory.modules.contract import PolicyKind
+from factory.modules.presets import preset
 from factory.references.match import Candidate, Match, match_title
 from factory.references.parse import PARSER_VERSION, RefFields, parse_bibliography
 from factory.services.context import Project
@@ -653,7 +655,7 @@ def confirmer_ruling(
     if actor.kind != "agent":
         return None, [ValidationIssue("actor", "only a human confirms or rejects a link")]
     reasons: list[str] = []
-    if mode is not RigorMode.PILOT:
+    if preset(mode, "reference.link_confirm").kind is not PolicyKind.AGENT_AUDIT:
         reasons.append("an agent may only propose outside pilot mode")
     if base_state is not LinkState.UNCONFIRMED:
         reasons.append("a second agent decides title-fuzzy (unconfirmed) links only")
