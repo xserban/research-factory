@@ -1550,6 +1550,7 @@ def build_server(
         def status() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
             _refuse_pass_session(opened)
+            _require_pass_opened(opened)
             report = graph_service.graph_status(opened).model_dump(mode="json")
             return _withheld(opened, report, include_work_ids=False)
 
@@ -1576,6 +1577,7 @@ def build_server(
         def run() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
             _refuse_pass_session(opened)
+            _require_pass_opened(opened)
             result = graph_service.graph_query(
                 opened,
                 query,
@@ -1609,6 +1611,7 @@ def build_server(
         def export() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
             _refuse_pass_session(opened)
+            _require_pass_opened(opened)
             if format not in ("json", "dot"):
                 raise FactoryValidationError([ValidationIssue("format", "must be json or dot")])
             text = graph_service.graph_export(
@@ -1638,6 +1641,14 @@ def _refuse_pass_session(project: Project) -> None:
         raise FactoryValidationError(
             [ValidationIssue("session", "this session has joined a pass and cannot use this tool")]
         )
+
+
+def _require_pass_opened(project: Project) -> None:
+    """The graph tools name works, and before a screening pass opens an agent must not be able to
+    name a held-out seed's work (decision 43). Role-blind and neutral: the same message for every
+    caller, saying nothing of seeds. The CLI is unaffected."""
+    if not coverage_service.held_out_visible(project):
+        raise FactoryValidationError([ValidationIssue("graph", "not available yet")])
 
 
 def _index_keys(name: str, given: Mapping[str, str]) -> dict[int, str]:

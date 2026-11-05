@@ -94,17 +94,22 @@ def test_corpus_scope_matches_canonical_works(gp: Project) -> None:
                 text("INSERT INTO works (work_id, data, first_event_id) VALUES (:w, :d, 'x')"),
                 {"w": work, "d": json.dumps({"title": "An invented title"})},
             )
-        conn.execute(
-            text(
-                'INSERT INTO merges (merge_id, "primary", absorbed, rule, records, status) '
-                "VALUES ('mrg_x', :p, :a, 'doi', 2, 'active')"
-            ),
-            {"p": in_corpus, "a": json.dumps([absorbed])},
-        )
         conn.commit()
+    record(
+        gp,
+        "dedup.merged",
+        {
+            "merge_id": "mrg_01HZX3K4M5N6P7Q8R9S0TVWXYZ",
+            "primary": in_corpus,
+            "absorbed": [absorbed],
+            "rule": "doi",
+            "records": 2,
+        },
+        gp.system_actor(),
+    )
     scopes = {n.node_id: (n.scope, n.title) for n in iter_nodes(gp) if n.node_type == "paper"}
     assert scopes[in_corpus] == ("corpus", "An invented title")
-    assert scopes[absorbed] == ("external", "An invented title")
+    assert absorbed not in scopes  # an absorbed work reads as its primary
     assert scopes[papers[2]] == ("external", None)
     assert graph_status(gp).nodes["paper-corpus"] == 1
 

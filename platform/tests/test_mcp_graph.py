@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import pytest
+from sqlalchemy import text
 
 from factory.clock import FixedClock
 from factory.config import Settings
@@ -22,10 +23,42 @@ P9, P1, P5 = "rf:p9-00000009", "rf:p1-00000001", "rf:p5-00000005"
 
 
 @pytest.fixture
-def gp(project: Project, agent: Actor, monkeypatch: pytest.MonkeyPatch) -> Project:
+def gp_closed(project: Project, agent: Actor, monkeypatch: pytest.MonkeyPatch) -> Project:
+    """The fixture graph, no screening pass opened yet."""
     stand_in_basis(monkeypatch)
     write_fixture(project, agent)
     return project
+
+
+@pytest.fixture
+def gp(gp_closed: Project) -> Project:
+    """The same, after a screening pass has opened (`held_out_visible`)."""
+    with gp_closed.index.connect() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO passes (stage, pass_label, framing, criterion_order, random_seed) "
+                "VALUES ('title-abstract', 'A', 'f', '[]', 1)"
+            )
+        )
+        conn.commit()
+    return gp_closed
+
+
+@pytest.mark.anyio
+async def test_refused_until_a_pass_opens(
+    settings: Settings, gp_closed: Project, clock: FixedClock
+) -> None:
+    async with open_session(settings, clock) as client:
+        outs = [
+            await client.call("graph_status", project="demo"),
+            await client.call("graph_query", project="demo", query="ancestors", node=P9),
+            await client.call("graph_export", project="demo"),
+        ]
+    assert all(o["ok"] is False for o in outs)
+    messages = {(e["field"], e["reason"]) for o in outs for e in o["errors"]}
+    assert len(messages) == 1  # one neutral message, the same for every tool
+    reason = next(iter(messages))[1]
+    assert "held" not in reason.lower() and "seed" not in reason.lower()
 
 
 @pytest.mark.anyio

@@ -13,6 +13,7 @@ import resource
 import time
 import tracemalloc
 from collections.abc import Callable
+from types import SimpleNamespace
 from typing import Any, TypeVar
 
 import pytest
@@ -21,8 +22,14 @@ from sqlalchemy import text
 from factory.lineage.graph import Graph, GraphEdge, GraphFilter, graph_neighbours
 from factory.lineage.paths import MAX_DEPTH, ancestors
 from factory.model.lineage import EdgeStatus, EdgeType
+from factory.services import lineage as lineage_service
 from factory.services.context import Project
-from factory.services.lineage import graph_query, graph_status, index_neighbours
+from factory.services.lineage import (
+    graph_query,
+    graph_status,
+    index_neighbours,
+    no_stated_base,
+)
 
 pytestmark = pytest.mark.slow
 
@@ -36,6 +43,11 @@ T = TypeVar("T")
 
 def _paper(i: int) -> str:
     return f"rf:s{i}-{i:08x}"
+
+
+def _is_odd_target(work: str) -> bool:
+    i = int(work.split("-")[1], 16)
+    return ((i * 7 + 3) % PAPERS) % 2 == 1
 
 
 def _rel(i: int) -> str:
@@ -102,13 +114,50 @@ def _populate(project: Project) -> None:
         conn.commit()
 
 
+def _populate_contribution(project: Project, monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """3,000 population works, each with a final base-idea item citing entry 1 of its reference
+    extraction, resolved to one paper; only even-numbered papers are corpus works. The population
+    and the items are supplied in place of the screening and extraction services."""
+    population = [_paper(i) for i in range(20_000, 23_000)]
+    target = {_paper(i): _paper((i * 7 + 3) % PAPERS) for i in range(20_000, 23_000)}
+    links = [{"x": f"rex_{i:026d}", "w": target[_paper(i)]} for i in range(20_000, 23_000)]
+    works = [{"w": _paper(i)} for i in range(0, PAPERS, 2)]
+    with project.index.connect() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO reference_links (extraction_id, ordinal, state, work_id, base_state, "
+                "candidates, matcher_version, no_source_record, event_id) "
+                "VALUES (:x, 1, 'resolved', :w, 'resolved', '[]', '1', 0, 'ev')"
+            ),
+            links,
+        )
+        conn.execute(
+            text("INSERT INTO works (work_id, data, first_event_id) VALUES (:w, '{}', 'ev')"), works
+        )
+        conn.commit()
+    items = [
+        SimpleNamespace(
+            work_id=_paper(i),
+            item_kind="base-idea",
+            absent_kind=None,
+            cited=SimpleNamespace(reference_extraction_id=f"rex_{i:026d}", ordinal=1),
+        )
+        for i in range(20_000, 23_000)
+    ]
+    states = [SimpleNamespace(work_id=w, state="current") for w in population]
+    monkeypatch.setattr(lineage_service, "_population", lambda project: population)
+    monkeypatch.setattr(lineage_service, "final_items", lambda project: items)
+    monkeypatch.setattr(lineage_service, "unit_states", lambda project, scope: states)
+    return population
+
+
 def _timed(fn: Callable[[], T]) -> tuple[T, float]:
     start = time.perf_counter()
     result = fn()
     return result, time.perf_counter() - start
 
 
-def test_scale_bounded(project: Project) -> None:
+def test_scale_bounded(project: Project, monkeypatch: pytest.MonkeyPatch) -> None:
     project.index.sync()
     _populate(project)
     project.index.sync()  # no event arrived, so nothing is rebuilt
@@ -164,12 +213,30 @@ def test_scale_bounded(project: Project) -> None:
     expected = ancestors(graph_neighbours(reference), deep, MAX_DEPTH)
     assert [n["id"] for n in queried.nodes] == list(expected.nodes)
 
+    population = _populate_contribution(project, monkeypatch)
+    base, t_base = _timed(lambda: no_stated_base(project))
+    with project.index.connect() as conn:
+        based = {
+            str(r[0])
+            for r in conn.execute(
+                text(
+                    "SELECT DISTINCT source FROM graph_edges "
+                    "WHERE edge_type = 'builds-on' AND live = 1"
+                )
+            )
+        }
+    expected_outside = {w for w in population if w not in based and _is_odd_target(w)}
+    assert set(base.target_outside_corpus) == expected_outside and expected_outside
+    assert set(base.no_relation) | expected_outside == set(population) - based
+    assert t_base < LIMIT_SECONDS
+
     traced_peak = tracemalloc.get_traced_memory()[1]
     tracemalloc.stop()
     assert traced_peak < 100 * 2**20  # the queries hold a few pages, never the graph
     peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     print(
         f"\nscale: ancestors {t_ancestors:.3f}s path {t_path:.3f}s status {t_status:.3f}s "
-        f"query {t_query:.3f}s query-phase peak {traced_peak / 2**20:.1f} MiB "
+        f"query {t_query:.3f}s no_stated_base {t_base:.3f}s "
+        f"query-phase peak {traced_peak / 2**20:.1f} MiB "
         f"(process peak RSS incl. building the data {peak / 2**20:.0f} MiB)"
     )

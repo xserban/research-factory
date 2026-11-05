@@ -15,11 +15,12 @@ Invariants:
 
 from __future__ import annotations
 
+import functools
 import heapq
 import json
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Literal, get_args
+from typing import Any, Literal, ParamSpec, TypeVar, get_args
 
 from pydantic import JsonValue
 from sqlalchemy import text
@@ -52,6 +53,7 @@ from factory.lineage.paths import (
 from factory.model.base import StrictModel
 from factory.model.extraction import Scope
 from factory.model.lineage import EdgeStatus, EdgeType
+from factory.services.call_memo import entering
 from factory.services.context import Project
 from factory.services.contributions import final_items
 from factory.services.extraction import scope_population, unit_states
@@ -84,6 +86,22 @@ _REJECTED = EdgeStatus.REJECTED
 _DERIVED_STATUSES = frozenset({EdgeStatus.STATED, EdgeStatus.CONFIRMED})
 
 
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
+
+
+def _scoped(fn: Callable[_P, _R]) -> Callable[_P, _R]:
+    """Run `fn` in one call-memo scope, so the relation basis parameters (a read of every final
+    contribution item) are computed at most once per service call."""
+
+    @functools.wraps(fn)
+    def run(*args: _P.args, **kwargs: _P.kwargs) -> _R:
+        with entering():
+            return fn(*args, **kwargs)
+
+    return run
+
+
 def _is_idea(node_id: str) -> bool:
     return node_id.startswith(_IDEA_PREFIX)
 
@@ -95,8 +113,50 @@ class _View:
 
     project: Project
     flt: GraphFilter
-    params: dict[str, str]
+    cached_params: dict[str, str] | None = None
     shown_cache: dict[str, str | None] = field(default_factory=dict)
+
+    def params(self) -> dict[str, str]:
+        """The relation basis parameters, read on first use (a call may need none) and shared
+        within one service call by the call memo."""
+        if self.cached_params is None:
+            self.cached_params = _basis_params(self.project)
+        return self.cached_params
+
+    # --- dedup merges: a work absorbed by an active merge reads as its primary ---
+
+    def canon(self, conn: Connection, ids: Sequence[str]) -> dict[str, str]:
+        """For each paper id absorbed by an active merge, its primary; other ids are omitted."""
+        papers = sorted({i for i in ids if not _is_idea(i)})
+        if not papers:
+            return {}
+        rows = conn.execute(
+            text(
+                'SELECT mm.work_id, m."primary" FROM merge_members mm '
+                "JOIN merges m ON m.merge_id = mm.merge_id "
+                "WHERE m.status = 'active' AND mm.work_id != m.\"primary\" "
+                "AND mm.work_id IN (SELECT value FROM json_each(:ids))"
+            ),
+            {"ids": json.dumps(papers)},
+        ).all()
+        return {str(a): str(b) for a, b in rows}
+
+    def group(self, conn: Connection, ids: Sequence[str]) -> list[str]:
+        """`ids` and every work in an active merge with one of them: the ids a stored edge may
+        use for the works `ids` stand for."""
+        papers = sorted({i for i in ids if not _is_idea(i)})
+        if not papers:
+            return sorted(set(ids))
+        rows = conn.execute(
+            text(
+                "SELECT DISTINCT other.work_id FROM merge_members mm "
+                "JOIN merges m ON m.merge_id = mm.merge_id AND m.status = 'active' "
+                "JOIN merge_members other ON other.merge_id = m.merge_id "
+                "WHERE mm.work_id IN (SELECT value FROM json_each(:ids))"
+            ),
+            {"ids": json.dumps(papers)},
+        ).all()
+        return sorted({*ids, *(str(r[0]) for r in rows)})
 
     # --- ideas ---
 
@@ -154,7 +214,7 @@ class _View:
                 f"{_EFFECTIVE_SQL} SELECT relation_id, effective FROM shown "
                 "WHERE relation_id IN (SELECT value FROM json_each(:ids))"
             ),
-            {"ids": json.dumps(sorted(set(ids))), **self.params},
+            {"ids": json.dumps(sorted(set(ids))), **self.params()},
         ).all()
         return {str(r[0]): EdgeStatus(str(r[1])) for r in rows}
 
@@ -169,6 +229,7 @@ class _View:
         relation_ids = [str(r["edge_id"]) for r in rows if r["edge_type"] != EdgeType.CITES.value]
         statuses = self.relation_statuses(conn, relation_ids)
         allowed = self.flt.statuses()
+        merged = self.canon(conn, [str(r[c]) for r in rows for c in ("source", "target")])
         out: list[GraphEdge] = []
         for r in rows:
             edge_type = EdgeType(r["edge_type"])
@@ -183,7 +244,7 @@ class _View:
                 status = found
             if status not in allowed:
                 continue
-            target = str(r["target"])
+            target = merged.get(str(r["target"]), str(r["target"]))
             if _is_idea(target):
                 survivor = self.shown_idea(conn, target)
                 if survivor is None:
@@ -193,7 +254,7 @@ class _View:
                 GraphEdge(
                     edge_id=str(r["edge_id"]),
                     edge_type=edge_type,
-                    source=str(r["source"]),
+                    source=merged.get(str(r["source"]), str(r["source"])),
                     target=target,
                     status=status,
                     basis=None if r["basis"] is None else str(r["basis"]),
@@ -214,7 +275,8 @@ class _View:
                 return self.derived(conn, node, types, "out")
             ends, column = self.idea_ends(conn, node), "target"
         else:
-            ends, column = [node], "source" if direction == "out" else "target"
+            node = self.canon(conn, [node]).get(node, node)
+            ends, column = self.group(conn, [node]), "source" if direction == "out" else "target"
         names = json.dumps(sorted(t.value for t in types & set(self.flt.edge_types)))
         rows = (
             conn.execute(
@@ -249,6 +311,7 @@ class _View:
         members = self.effective_members(conn, idea_id)
         if not members:
             return []
+        members = self.group(conn, members)
         own, other = ("source", "target") if direction == "out" else ("target", "source")
         rows = (
             conn.execute(
@@ -262,10 +325,10 @@ class _View:
             .all()
         )
         firm = self.relation_statuses(conn, [str(r["edge_id"]) for r in rows])
-        ends = sorted(
-            {str(r[other]) for r in rows if firm.get(str(r["edge_id"])) in _DERIVED_STATUSES}
-        )
-        if not ends:
+        raw = {str(r[other]) for r in rows if firm.get(str(r["edge_id"])) in _DERIVED_STATUSES}
+        merged = self.canon(conn, sorted(raw))
+        ends = self.group(conn, sorted({merged.get(w, w) for w in raw}))
+        if not raw:
             return []
         owners = conn.execute(
             text(
@@ -302,9 +365,14 @@ class _View:
 
 def _view(project: Project, flt: GraphFilter) -> _View:
     project.index.sync()
-    return _View(project, flt, _basis_params(project))
+    return _View(project, flt)
 
 
+_ACTIVE_MAP = (
+    'SELECT mm.work_id AS work_id, m."primary" AS prim FROM merge_members mm '
+    "JOIN merges m ON m.merge_id = mm.merge_id "
+    "WHERE m.status = 'active' AND mm.work_id != m.\"primary\""
+)
 _ABSORBED = (
     "SELECT DISTINCT j.value AS work_id FROM merges m, json_each(m.absorbed) j "
     "WHERE m.status = 'active'"
@@ -339,6 +407,7 @@ def _paper_nodes(conn: Connection, ids: Sequence[str]) -> dict[str, GraphNode]:
 
 
 def _idea_node(view: _View, conn: Connection, idea_id: str) -> GraphNode:
+    members = view.effective_members(conn, idea_id)
     name = conn.execute(
         text("SELECT name FROM ideas WHERE idea_id = :i"), {"i": idea_id}
     ).scalar_one()
@@ -348,10 +417,13 @@ def _idea_node(view: _View, conn: Connection, idea_id: str) -> GraphNode:
         scope=None,
         title=None,
         name=str(name),
-        members=tuple(view.effective_members(conn, idea_id)),
+        members=tuple(
+            sorted({merged.get(w, w) for merged in [view.canon(conn, members)] for w in members})
+        ),
     )
 
 
+@_scoped
 def graph_node(
     project: Project, node_id: str, flt: GraphFilter = DEFAULT_FILTER
 ) -> GraphNode | None:
@@ -363,18 +435,20 @@ def graph_node(
             if view.shown_idea(conn, node_id) != node_id:
                 return None
             return _idea_node(view, conn, node_id)
+        node_id = view.canon(conn, [node_id]).get(node_id, node_id)
         known = conn.execute(
             text(
-                "SELECT 1 FROM graph_nodes WHERE node_id = :n UNION "
-                "SELECT 1 FROM works WHERE work_id = :n LIMIT 1"
+                "SELECT 1 FROM graph_nodes WHERE node_id IN (SELECT value FROM json_each(:g)) "
+                "UNION SELECT 1 FROM works WHERE work_id = :n LIMIT 1"
             ),
-            {"n": node_id},
+            {"g": json.dumps(view.group(conn, [node_id])), "n": node_id},
         ).first()
         if known is None:
             return None
         return _paper_nodes(conn, [node_id])[node_id]
 
 
+@_scoped
 def require_node(
     project: Project, node_id: str, field_name: str, flt: GraphFilter = DEFAULT_FILTER
 ) -> GraphNode:
@@ -385,9 +459,7 @@ def require_node(
         return node
     if _is_idea(node_id):
         with project.index.connect() as conn:
-            survivor = _View(project, GraphFilter(include_inferred=True), {}).shown_idea(
-                conn, node_id
-            )
+            survivor = _View(project, GraphFilter(include_inferred=True)).shown_idea(conn, node_id)
         if survivor is not None and survivor != node_id:
             raise FactoryValidationError([ValidationIssue(field_name, f"idea-merged:{survivor}")])
     raise FactoryValidationError([ValidationIssue(field_name, "node-unknown")])
@@ -422,8 +494,11 @@ def iter_nodes(project: Project, flt: GraphFilter = DEFAULT_FILTER) -> Iterator[
         with project.index.connect() as conn:
             rows = conn.execute(
                 text(
-                    "SELECT node_id, node_type FROM graph_nodes WHERE node_id > :last "
-                    "ORDER BY node_id LIMIT :n"
+                    f"WITH absorbed AS ({_ACTIVE_MAP}) "
+                    "SELECT cid, node_type FROM (SELECT DISTINCT "
+                    "COALESCE(a.prim, n.node_id) AS cid, n.node_type FROM graph_nodes n "
+                    "LEFT JOIN absorbed a ON a.work_id = n.node_id) "
+                    "WHERE cid > :last ORDER BY cid LIMIT :n"
                 ),
                 {"last": last, "n": GRAPH_PAGE},
             ).all()
@@ -438,7 +513,7 @@ def iter_nodes(project: Project, flt: GraphFilter = DEFAULT_FILTER) -> Iterator[
         last = str(rows[-1][0])
 
 
-def _base_edges(project: Project, view: _View) -> Iterator[GraphEdge]:
+def _ungrouped_edges(project: Project, view: _View) -> Iterator[GraphEdge]:
     """Stored edges in export order. A page holds whole source groups, so the sort after the
     overlay (which may retarget) is global."""
     types = frozenset(view.flt.edge_types)
@@ -450,6 +525,8 @@ def _base_edges(project: Project, view: _View) -> Iterator[GraphEdge]:
                     text(
                         "SELECT * FROM graph_edges WHERE source > :last AND live = 1 "
                         "AND edge_type IN (SELECT value FROM json_each(:types)) "
+                        f"AND source NOT IN (SELECT work_id FROM ({_ACTIVE_MAP}) "
+                        f"UNION SELECT prim FROM ({_ACTIVE_MAP})) "
                         "ORDER BY source, edge_type, target, edge_id LIMIT :n"
                     ),
                     {
@@ -481,6 +558,34 @@ def _base_edges(project: Project, view: _View) -> Iterator[GraphEdge]:
         yield from sorted(edges, key=GraphEdge.sort_key)
         if not full:
             return
+
+
+def _merged_edges(project: Project, view: _View) -> list[GraphEdge]:
+    """The edges of works in an active dedup merge, which read as their primary and so sort
+    elsewhere than their stored source: held (sorted) in memory, bounded by the merged works."""
+    types = frozenset(view.flt.edge_types)
+    with project.index.connect() as conn:
+        rows = (
+            conn.execute(
+                text(
+                    "SELECT * FROM graph_edges WHERE live = 1 "
+                    "AND edge_type IN (SELECT value FROM json_each(:types)) "
+                    f"AND source IN (SELECT work_id FROM ({_ACTIVE_MAP}) "
+                    f"UNION SELECT prim FROM ({_ACTIVE_MAP}))"
+                ),
+                {"types": json.dumps(sorted(t.value for t in types))},
+            )
+            .mappings()
+            .all()
+        )
+        return sorted(view.overlay(conn, rows, types), key=GraphEdge.sort_key)
+
+
+def _base_edges(project: Project, view: _View) -> Iterator[GraphEdge]:
+    """Stored edges in export order, a work absorbed by a merge reading as its primary."""
+    yield from heapq.merge(
+        _ungrouped_edges(project, view), _merged_edges(project, view), key=GraphEdge.sort_key
+    )
 
 
 def _derived_edges(project: Project, view: _View) -> Iterator[GraphEdge]:
@@ -544,6 +649,7 @@ def _population(project: Project) -> list[str]:
         return []
 
 
+@_scoped
 def graph_status(project: Project) -> GraphStatus:
     """Node and edge counts by SQL aggregates (no full-table read into memory), plus the
     contribution population's gaps."""
@@ -552,14 +658,16 @@ def graph_status(project: Project) -> GraphStatus:
     with project.index.connect() as conn:
         node_rows = conn.execute(
             text(
-                f"WITH absorbed AS ({_ABSORBED}) "
-                "SELECT CASE WHEN n.node_type = 'idea' THEN 'idea' "
-                "WHEN w.work_id IS NOT NULL AND n.node_id NOT IN (SELECT work_id FROM absorbed) "
-                "THEN 'paper-corpus' ELSE 'paper-external' END, COUNT(*) "
-                "FROM graph_nodes n LEFT JOIN works w ON w.work_id = n.node_id "
-                "WHERE n.node_type = 'paper' OR n.node_id IN (SELECT idea_id FROM ideas "
+                f"WITH absorbed AS ({_ACTIVE_MAP}), "
+                "canon AS (SELECT DISTINCT COALESCE(a.prim, n.node_id) AS cid FROM graph_nodes n "
+                "LEFT JOIN absorbed a ON a.work_id = n.node_id WHERE n.node_type = 'paper') "
+                "SELECT CASE WHEN w.work_id IS NOT NULL THEN 'paper-corpus' "
+                "ELSE 'paper-external' END, COUNT(*) FROM canon c "
+                "LEFT JOIN works w ON w.work_id = c.cid GROUP BY 1 "
+                "UNION ALL SELECT 'idea', COUNT(*) FROM graph_nodes n WHERE n.node_type = 'idea' "
+                "AND n.node_id IN (SELECT idea_id FROM ideas "
                 "WHERE superseded_by IS NULL AND merged_into IS NULL "
-                "AND (decision IS NULL OR decision != 'reject')) GROUP BY 1"
+                "AND (decision IS NULL OR decision != 'reject'))"
             )
         ).all()
         cite_rows = conn.execute(
@@ -617,6 +725,7 @@ class NoStatedBase(StrictModel):
     no_relation: list[str]
 
 
+@_scoped
 def no_stated_base(project: Project, flt: GraphFilter = DEFAULT_FILTER) -> NoStatedBase:
     view = _view(project, flt)
     population = _population(project)
@@ -627,7 +736,7 @@ def no_stated_base(project: Project, flt: GraphFilter = DEFAULT_FILTER) -> NoSta
                     "SELECT * FROM graph_edges WHERE source IN (SELECT value FROM json_each(:p)) "
                     "AND edge_type IN ('builds-on', 'improves-on') AND live = 1"
                 ),
-                {"p": json.dumps(population)},
+                {"p": json.dumps(view.group(conn, population))},
             )
             .mappings()
             .all()
@@ -639,24 +748,32 @@ def no_stated_base(project: Project, flt: GraphFilter = DEFAULT_FILTER) -> NoSta
             for s in unit_states(project, scope=Scope.CONTRIBUTION)
             if s.state == "current"
         }
-        items = [i for i in final_items(project) if i.work_id in set(rest)]
+        wanted = set(rest)
+        items = [i for i in final_items(project) if i.work_id in wanted]
         absent = {
             i.work_id for i in items if i.item_kind == "not-stated" and i.absent_kind == "base-idea"
         }
         cited = [i for i in items if i.item_kind == "base-idea" and i.cited is not None]
         outside: set[str] = set()
         if cited:
+            pairs = sorted(
+                {(i.cited.reference_extraction_id, i.cited.ordinal) for i in cited if i.cited}
+            )
             links = {
                 (str(r[0]), int(r[1])): str(r[2])
                 for r in conn.execute(
                     text(
-                        "SELECT extraction_id, ordinal, work_id FROM reference_links "
-                        "WHERE state = 'resolved' AND work_id IS NOT NULL"
-                    )
+                        "SELECT l.extraction_id, l.ordinal, l.work_id "
+                        "FROM json_each(:pairs) j JOIN reference_links l "
+                        "ON l.extraction_id = json_extract(j.value, '$[0]') "
+                        "AND l.ordinal = json_extract(j.value, '$[1]') "
+                        "WHERE l.state = 'resolved' AND l.work_id IS NOT NULL"
+                    ),
+                    {"pairs": json.dumps(pairs)},
                 ).all()
-                if (str(r[0]), int(r[1]))
-                in {(i.cited.reference_extraction_id, i.cited.ordinal) for i in cited if i.cited}
             }
+            merged = view.canon(conn, sorted(set(links.values())))
+            links = {k: merged.get(v, v) for k, v in links.items()}
             scopes = _paper_nodes(conn, sorted(set(links.values())))
             for i in cited:
                 assert i.cited is not None
@@ -784,6 +901,7 @@ def _traverse(
     return result, seen
 
 
+@_scoped
 def graph_query(
     project: Project,
     query: str,
@@ -815,16 +933,28 @@ def graph_query(
             categories=categories,
         )
     if kind == "cited_by_at_least":
-        with project.index.connect() as conn:
-            project.index.sync()
-            rows = conn.execute(
-                text(
-                    "SELECT target FROM graph_edges WHERE edge_type = 'cites' AND live = 1 "
-                    "AND (decision IS NULL OR decision != 'reject') GROUP BY target "
-                    "HAVING COUNT(DISTINCT source) >= :k ORDER BY target LIMIT :n"
-                ),
-                {"k": k, "n": MAX_RESULTS + 1},
-            ).all()
+        project.index.sync()
+        rows: Sequence[Any] = []
+        if EdgeType.CITES in flt.edge_types:
+            with project.index.connect() as conn:
+                rows = conn.execute(
+                    text(
+                        f"WITH absorbed AS ({_ACTIVE_MAP}) "
+                        "SELECT COALESCE(ta.prim, e.target) AS t FROM graph_edges e "
+                        "LEFT JOIN absorbed ta ON ta.work_id = e.target "
+                        "LEFT JOIN absorbed sa ON sa.work_id = e.source "
+                        "WHERE e.edge_type = 'cites' AND e.live = 1 "
+                        "AND (e.decision IS NULL OR e.decision != 'reject') "
+                        "AND e.base_status IN (SELECT value FROM json_each(:st)) "
+                        "GROUP BY t HAVING COUNT(DISTINCT COALESCE(sa.prim, e.source)) >= :k "
+                        "ORDER BY t LIMIT :n"
+                    ),
+                    {
+                        "k": k,
+                        "n": MAX_RESULTS + 1,
+                        "st": json.dumps(sorted(s.value for s in flt.statuses())),
+                    },
+                ).all()
         ids = [str(r[0]) for r in rows]
         return GraphQueryResult(
             query=kind,
@@ -854,6 +984,7 @@ MCP_EXPORT_MAX_EDGES = 2000
 _TOO_LARGE = "too large; use a query or the CLI"
 
 
+@_scoped
 def export_edge_count(project: Project, flt: GraphFilter = DEFAULT_FILTER) -> int:
     """The number of edges a whole-view export has: SQL counts of the `cites` rows and relation
     statuses in the filter, plus the derived idea edges. An upper bound by exactly the relation
@@ -881,6 +1012,7 @@ def export_edge_count(project: Project, flt: GraphFilter = DEFAULT_FILTER) -> in
     return total + sum(1 for _ in _derived_edges(project, view))
 
 
+@_scoped
 def iter_graph_export(
     project: Project,
     fmt: ExportFormat,
@@ -913,6 +1045,7 @@ def iter_graph_export(
     return render(flt, nodes, sorted(edges, key=GraphEdge.sort_key))
 
 
+@_scoped
 def graph_export(
     project: Project,
     fmt: ExportFormat,

@@ -43,6 +43,7 @@ from factory.model.lineage import (
     StatusReason,
 )
 from factory.model.references import LinkState
+from factory.services.call_memo import memoised
 from factory.services.context import Project
 from factory.services.contributions import ItemView, contribution_item, final_item, final_items
 from factory.services.extraction import scope_population, stale_extractions
@@ -374,6 +375,7 @@ _COLUMNS = (
 )
 
 
+@memoised
 def _basis_params(project: Project) -> dict[str, str]:
     """The state of the items relations rest on, read once per call from the final view: `stale`
     (a field source of the final item is stale), `unresolved` (no final item: superseded,
