@@ -1,4 +1,5 @@
-"""The MCP server: one session per process. Tools parse input, call a service and format output."""
+"""The MCP server. Tools parse input, call a service and format output; each call runs as the
+principal and session its transport names (`factory.mcp.sessions`)."""
 
 import json
 import re
@@ -15,17 +16,26 @@ from factory.errors import FactoryValidationError, ProjectNotFoundError, Validat
 from factory.events.envelope import Actor
 from factory.hypotheses.design import design_version
 from factory.lineage.graph import GraphFilter
+from factory.mcp import conventions
 from factory.mcp.conventions import (
     PAGE_LIMIT,
     dotted,
     guarded,
-    make_agent_actor,
     paginate,
     parse_input,
     parse_routes,
     parse_stage,
     spec_path,
     withhold,
+)
+from factory.mcp.sessions import (
+    THIS_SESSION,
+    ContextProvider,
+    ScopedServer,
+    ThisSession,
+    current_call,
+    scoped,
+    stdio_provider,
 )
 from factory.model.base import StrictModel
 from factory.model.budgets import REQUESTS_SEARCH
@@ -43,7 +53,6 @@ from factory.model.hypotheses import (
     LeadInput,
     ReviewInput,
 )
-from factory.model.identity import IdGenerator
 from factory.model.inbox import Basis
 from factory.model.intuition import (
     ConceptInput,
@@ -141,7 +150,7 @@ from factory.services import view_coverage as view_coverage_service
 from factory.services import watch as watch_service
 from factory.services import xruns as xruns_service
 from factory.services.agent_view import require_pass_opened as _require_pass_opened
-from factory.services.context import Principal, Project, list_projects
+from factory.services.context import Project, list_projects
 from factory.services.context import open_project as open_as
 from factory.services.extraction import ExtractResult
 from factory.services.gate_status import GateStatusRow, gates_status
@@ -189,21 +198,35 @@ def build_server(
     clock: Clock = _SYSTEM_CLOCK,
     sources: Mapping[str, SourceFactory] | None = None,
     fulltext_routes: Callable[[], Mapping[Route, FullTextRoute]] | None = None,
+    context: ContextProvider | None = None,
 ) -> MCPServer:
-    """The factory's MCP server for one session.
+    """The factory's MCP server. `context` names each call's principal and session; by default the
+    local user and one session per process, as on stdio.
 
     `fulltext_routes`, when given, is called once per `fulltext_fetch` call to build that call's
     routes; tests use it to supply stubs. By default each call builds `default_routes(settings)`,
     so no arXiv version answer outlives the call that asked for it.
     """
-    session = IdGenerator(clock).ulid()
+    provider = stdio_provider(settings, clock) if context is None else context
     adapters = dict(default_sources() if sources is None else sources)
-    server = MCPServer("factory")
-    principal = Principal.local(settings, Channel.MCP)
+    server = ScopedServer("factory", wrap=scoped(provider))
+    session = THIS_SESSION
 
-    def open_project(settings: Settings, slug: str, *, session: str, clock: Clock) -> Project:
-        """Every tool opens a project as this server's principal."""
-        return open_as(settings, slug, session=session, clock=clock, principal=principal)
+    def open_project(
+        settings: Settings, slug: str, *, session: ThisSession, clock: Clock
+    ) -> Project:
+        """Every tool opens a project as the principal and session of its call."""
+        call = current_call()
+        return open_as(settings, slug, session=call.session, clock=clock, principal=call.principal)
+
+    def make_agent_actor(
+        settings: Settings, session: ThisSession, role: str, model: str, skill: str
+    ) -> Actor:
+        """The agent of this call, acting for its principal."""
+        call = current_call()
+        return conventions.make_agent_actor(
+            settings, call.session, role, model, skill, call.principal
+        )
 
     def _fetch_routes() -> Mapping[Route, FullTextRoute]:
         return default_routes(settings) if fulltext_routes is None else fulltext_routes()
@@ -250,11 +273,13 @@ def build_server(
         has joined a pass is not given. Read-only."""
 
         def identify() -> JsonValue:
+            call = current_call()
+            principal = call.principal
             data: dict[str, JsonValue] = {
                 "user": principal.user,
                 "credential": principal.credential,
                 "channel": principal.channel.value,
-                "session": session,
+                "session": call.session,
             }
             slugs = list_projects(settings) if project is None else [project]
             roles: dict[str, JsonValue] = {}
@@ -267,7 +292,7 @@ def build_server(
             data["roles"] = roles
             if project is not None:
                 opened = open_project(settings, project, session=session, clock=clock)
-                if not passes_service.is_pass_session(opened, session):
+                if not passes_service.is_pass_session(opened, call.session):
                     data["workspace"] = workspace_counts(opened, principal.user)
             return data
 
@@ -2858,7 +2883,7 @@ def build_server(
             if found is None:
                 raise FactoryValidationError([ValidationIssue("hypothesis_id", "unknown")])
             data = found.model_dump(mode="json")
-            if found.drafter_session != session:
+            if found.drafter_session != opened.session:
                 # R-51: only the drafter reads its own reasoning and the lead behind it
                 spec = data["spec"]
                 assert isinstance(spec, dict)
@@ -3165,7 +3190,7 @@ def build_server(
         def serve() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
             _refuse_pass_session(opened)
-            blob, pack = briefing_service.serve_pack(opened, session=session)
+            blob, pack = briefing_service.serve_pack(opened, session=opened.session)
             data: dict[str, JsonValue] = {"blob": blob, "pack": json.loads(pack)}
             return _withheld(opened, data, include_work_ids=False)
 
@@ -4080,7 +4105,7 @@ def build_server(
                 return NOT_YET
             chosen = cast(list[leads_service.LeadState], state or list(allowed))
             page = paginate(
-                leads_service.agent_leads(opened, session, states=chosen), cursor, limit
+                leads_service.agent_leads(opened, opened.session, states=chosen), cursor, limit
             )
             rows: list[JsonValue] = [row.model_dump(mode="json") for row in page.items]
             return _withheld(
@@ -4113,7 +4138,7 @@ def build_server(
             if _before_any_pass(opened):
                 return NOT_YET
             page = paginate(
-                hypotheses_service.agent_hypotheses(opened, session, states=state or None),
+                hypotheses_service.agent_hypotheses(opened, opened.session, states=state or None),
                 cursor,
                 limit,
             )
@@ -4203,7 +4228,7 @@ def build_server(
             _refuse_pass_session(opened)
             if _before_any_pass(opened):
                 return NOT_YET
-            page = paginate(drafts_service.agent_drafts(opened, session), cursor, limit)
+            page = paginate(drafts_service.agent_drafts(opened, opened.session), cursor, limit)
             rows: list[JsonValue] = [row.model_dump(mode="json") for row in page.items]
             return _withheld(
                 opened, _listing(rows, page.next_cursor, "no draft found"), include_work_ids=False
