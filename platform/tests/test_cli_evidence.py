@@ -26,7 +26,9 @@ def _run(root: Path, *args: str) -> tuple[int, str, str]:
 def report(monkeypatch: pytest.MonkeyPatch) -> EvidenceReport:
     full = assemble_report(pilot_inputs())
     monkeypatch.setattr(
-        cli_main.evidence_report_service, "evidence_report", lambda _p, expect=(): full
+        cli_main.evidence_report_service,
+        "evidence_report",
+        lambda _p, expect=(), include_notice_affected=False: full,
     )
     return full
 

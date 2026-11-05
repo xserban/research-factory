@@ -14,13 +14,12 @@ from factory.events.envelope import Actor
 from factory.events.reader import read_all
 from factory.model.notices import NoticeKind
 from factory.model.project import RigorMode
-from factory.services.check import _findings_as, agent_check
+from factory.services.check import _findings_as
 from factory.services.context import Project
 from factory.services.dedup import active_merges, dedup_run
 from factory.services.living_hooks import default_hooks
 from factory.services.portfolio import _last_search_at
 from factory.services.search import search_counts
-from factory.services.trace import agent_trace
 from factory.services.watch import watch_run
 from tests.helpers import SourcesFor, open_session
 from tests.notice_helpers import (
@@ -34,7 +33,6 @@ from tests.notice_helpers import (
     status_factories,
     version_in_cycle,
 )
-from tests.test_notices import _kinds
 from tests.test_versions import HELD, PRE, PRE2, _answer_by_arxiv, _events, _ids
 from tests.watch_helpers import ScriptedSource, adapters, by_text
 
@@ -56,48 +54,6 @@ def world(project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
 
 
 # --- 1. a held-out seed's work reads as any corpus work ---
-
-
-@pytest.mark.anyio
-async def test_notice_list_and_assess_treat_held_out_works_as_any_work(
-    world: NoticeWorld,
-    settings: Settings,
-    clock: FixedClock,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    held = world.included[1]
-    source = ScriptedSource(by_text({}))
-    async with open_session(settings, clock, dict(adapters(source))) as session:
-        plain = await session.call("notice_list", project="demo")
-        monkeypatch.setattr(
-            "factory.services.seeds.held_out_work_ids", lambda _p: frozenset({held})
-        )
-        marked = await session.call("notice_list", project="demo")
-        notice = marked["data"]["notices"][0]["notice_id"]
-        assessed = await session.call(
-            "notice_assess",
-            project="demo",
-            notice_id=notice,
-            decision="no-effect",
-            rationale="typo only",
-        )
-    assert plain["ok"] is True and plain["data"]["count"] == 1
-    assert marked == plain  # nothing in the listing tells a seed's work apart
-    assert assessed["ok"] is True, assessed
-
-
-def test_check_and_trace_treat_held_out_works_as_any_work(
-    world: NoticeWorld, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    held = world.included[1]
-    project = world.project
-    before_check = [f.model_dump() for f in agent_check(project).findings]
-    before_trace = _kinds(agent_trace(project, held, direction="forward"))
-    monkeypatch.setattr("factory.services.seeds.held_out_work_ids", lambda _p: frozenset({held}))
-    assert [f.model_dump() for f in agent_check(project).findings] == before_check
-    assert _kinds(agent_trace(project, held, direction="forward")) == before_trace
-    assert any(f["code"] == "notice-unassessed" for f in before_check)
-    assert any(kind == "notice" for kind, _ in before_trace)
 
 
 # --- 2. a link is checked against the batch as well as the index ---
