@@ -139,16 +139,18 @@ from factory.services import trace as trace_service
 from factory.services import view_coverage as view_coverage_service
 from factory.services import watch as watch_service
 from factory.services import xruns as xruns_service
-from factory.services.context import Principal, Project
+from factory.services.context import Principal, Project, list_projects
 from factory.services.context import open_project as open_as
 from factory.services.extraction import ExtractResult
 from factory.services.gate_status import GateStatusRow, gates_status
 from factory.services.hypothesis_gates import GateName, gate_policy
 from factory.services.living_hooks import default_hooks
+from factory.services.members import roles_of
 from factory.services.results import BatchResult, ItemError
 from factory.services.search import list_works
-from factory.services.seeds import SeedOutcome
+from factory.services.seeds import SeedOutcome, SeedRole
 from factory.services.withholding import held_out_tokens
+from factory.services.workspace import workspace_counts
 from factory.services.xrun_accounting import hidden_acceptances
 from factory.sources.fulltext.base import FullTextRoute
 from factory.sources.fulltext.registry import default_routes
@@ -242,6 +244,36 @@ def build_server(
             return _withheld(opened, _without_hidden_acts(_without_rates(report), hidden))
 
         return _reply(project, status)
+
+    @server.tool()
+    def whoami(project: str | None = None) -> dict[str, JsonValue]:
+        """Who this session acts for: the principal, the session and the roles held, on every
+        project or on `project`. With `project`, also the workspace counts, which a session that
+        has joined a pass is not given. Read-only."""
+
+        def identify() -> JsonValue:
+            data: dict[str, JsonValue] = {
+                "user": principal.user,
+                "credential": principal.credential,
+                "channel": principal.channel.value,
+                "session": session,
+            }
+            slugs = list_projects(settings) if project is None else [project]
+            roles: dict[str, JsonValue] = {}
+            for slug in slugs:
+                opened = open_project(settings, slug, session=session, clock=clock)
+                held: list[JsonValue] = [
+                    role.value for role in sorted(roles_of(opened, principal.user))
+                ]
+                roles[slug] = held
+            data["roles"] = roles
+            if project is not None:
+                opened = open_project(settings, project, session=session, clock=clock)
+                if not passes_service.is_pass_session(opened, session):
+                    data["workspace"] = workspace_counts(opened, principal.user)
+            return data
+
+        return guarded(identify)
 
     @server.tool()
     def search_run(

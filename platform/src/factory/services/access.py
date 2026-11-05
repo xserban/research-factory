@@ -11,6 +11,8 @@ Invariants:
 - `lab:admin` comes from the lab `admin` role alone, never from a project role, and needs a lab.
 - With a lab given, a principal the registry does not hold as active holds nothing.
 - A refusal writes nothing and is one issue on field `permission`.
+- A `private` project is read by its members alone. On a `lab` project an active lab member
+  with no grant is an `observer`; that needs the lab, so it is never so without one.
 - A project is `governed` once it is hosted or a grant has counted. Before that whoever runs
   the process is the user, so a service's role check passes (stage 0, acceptance 1).
 """
@@ -23,10 +25,12 @@ from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor, ActorKind
 from factory.index import members as member_index
 from factory.index.members import MEMBER_TABLES
+from factory.index.project import latest_visibility
 from factory.model.lab import LabRole
 from factory.model.members import ProjectRole
+from factory.model.project import ProjectVisibilitySet, Visibility
 from factory.services.context import Principal, Project
-from factory.services.lab import Lab, lab_exists, open_lab, user_record
+from factory.services.lab import Lab, lab_exists, open_lab, payload_of, refuse, user_record
 from factory.services.members import roles_of
 
 
@@ -140,7 +144,9 @@ TOOL_PERMISSIONS: Mapping[str, Permission] = {
     "view_horizon": Permission.PROJECT_READ,
     "experiment_view": Permission.PROJECT_READ,
     "xrun_list": Permission.PROJECT_READ,
-    # MCP tools that run work.
+    "whoami": Permission.PROJECT_READ,
+    # MCP tools that run work. A tool an agent acts through at a gate is here too, a decision
+    # included: the gate policy, not this table, says when an agent may pass it.
     "search_run": Permission.WORK_RUN,
     "search_chase": Permission.WORK_RUN,
     "dedup_run": Permission.WORK_RUN,
@@ -251,6 +257,7 @@ TOOL_PERMISSIONS: Mapping[str, Permission] = {
     "cli:token issue": Permission.LAB_ADMIN,
     "cli:token revoke": Permission.LAB_ADMIN,
     "cli:token list": Permission.LAB_ADMIN,
+    "cli:project visibility": Permission.PROJECT_GOVERN,
     "cli:member grant": Permission.PROJECT_GOVERN,
     "cli:member revoke": Permission.PROJECT_GOVERN,
     "cli:member list": Permission.PROJECT_READ,
@@ -432,7 +439,10 @@ def _holds(
         and project.is_hosted()
     ):
         return False
-    return any(permission in ROLE_PERMISSIONS[role] for role in roles_of(project, principal.user))
+    roles = roles_of(project, principal.user)
+    if not roles and lab is not None and visibility(project) == "lab":
+        roles = frozenset({ProjectRole.OBSERVER})
+    return any(permission in ROLE_PERMISSIONS[role] for role in roles)
 
 
 def authorize(
@@ -452,10 +462,12 @@ def authorize(
 
 def authorize_command(project: Project, principal: Principal, tool: str) -> None:
     """Authorise a command by its `TOOL_PERMISSIONS` row, as a person (ruling 10). Every gate's
-    command has a row whose permission only the gate's role holds. A command with no row reads, and
-    on a project no role binds yet every command runs, as it always has (acceptance 1)."""
-    permission = TOOL_PERMISSIONS.get(tool)
-    if permission is None or not governed(project):
+    command has a row whose permission only the gate's role holds. A command with no row reads, so
+    it needs `project:read` on a `private` project. On a `lab` project no role binds yet, every
+    command runs as it always has (acceptance 1)."""
+    private = visibility(project) == "private"
+    permission = TOOL_PERMISSIONS.get(tool) or (Permission.PROJECT_READ if private else None)
+    if permission is None or not (private or governed(project)):
         return
     authorize(project, principal, "human", permission, lab=lab_of(project))
 
@@ -476,6 +488,23 @@ def full_view_allowed(project: Project, principal: Principal) -> bool:
     `maintainer`, the implicit owner of an unhosted project included. Anyone else reads the agent
     view, because a person who knows which works are held-out seeds is a contaminated screener."""
     return bool(roles_of(project, principal.user) & _FULL_VIEW_ROLES)
+
+
+def visibility(project: Project) -> Visibility:
+    """Who reads the project: `lab` until an owner says `private` (ruling 13)."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        return latest_visibility(conn)
+
+
+def set_visibility(project: Project, actor: Actor, value: Visibility) -> None:
+    """Record the project's visibility. Needs `project:govern`; a person acts in their own name."""
+    payload = payload_of(ProjectVisibilitySet, visibility=value)
+    with project.writing():
+        require_actor(project, actor, Permission.PROJECT_GOVERN)
+        if visibility(project) == value:
+            raise refuse("visibility", f"the project is already {value}")
+        project.record([project.events.make("project.visibility_set", payload, actor)])
 
 
 def governed(project: Project) -> bool:
@@ -500,7 +529,10 @@ def principal_of(project: Project, actor: Actor) -> Principal:
 
 
 def actor_holds(project: Project, actor: Actor, permission: Permission) -> bool:
-    """Whether `actor` holds `permission`, always on a project no role binds yet."""
+    """Whether `actor` holds `permission`. On a project no role binds yet a person holds all, and
+    an agent all but `HUMAN_ONLY`, as `Settings.user` always has."""
+    if actor.kind != "human" and permission in HUMAN_ONLY:
+        return False
     if not governed(project):
         return True
     return _holds(project, principal_of(project, actor), actor.kind, permission, lab_of(project))

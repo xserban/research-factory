@@ -34,6 +34,8 @@ from factory.index.project import (
     project_hosted_handler,
     project_hosts_table,
     project_table,
+    project_visibility_handler,
+    project_visibility_table,
 )
 from factory.index.projection import Handler, Projection, chain, core_tables
 from factory.index.protocol import protocol_handlers, protocol_tables
@@ -61,6 +63,7 @@ def default_projection(blobs: BlobStore | None = None) -> Projection:
     core_tables(metadata)
     project = project_table(metadata)
     project_hosts = project_hosts_table(metadata)
+    project_visibility = project_visibility_table(metadata)
     members = member_tables(metadata)
     reviews = review_tables(metadata)
     tasks = tasks_table(metadata)
@@ -105,6 +108,7 @@ def default_projection(blobs: BlobStore | None = None) -> Projection:
     handlers: dict[str, Handler] = {
         "project.created": project_created_handler(project),
         "project.hosted": project_hosted_handler(project_hosts),
+        "project.visibility_set": project_visibility_handler(project_visibility, members),
         **member_handlers(members),
         **review_handlers(reviews, members, blobs),
         **task_handlers(tasks),

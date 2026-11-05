@@ -139,6 +139,7 @@ OMITTED_WHEN_EMPTY: frozenset[str] = frozenset(
         "draft_releases",
         "project_hosts",
         "briefings_served",
+        "project_visibility",
         "members",
         "member_events",
         "reviews",

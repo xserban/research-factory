@@ -25,6 +25,7 @@ async def test_project_status_tool(settings: Settings, project: Project, clock: 
         names = [t.name for t in (await client.list_tools()).tools]
         assert names == [
             "project_status",
+            "whoami",
             "search_run",
             "search_chase",
             "dedup_run",

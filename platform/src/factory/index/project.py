@@ -5,9 +5,11 @@ from sqlalchemy.engine import Connection
 
 from factory.clock import format_ts
 from factory.events.envelope import Event
+from factory.index.members import MemberTables, holds_here
 from factory.index.projection import Handler
 from factory.model.hosting import ProjectHosted
-from factory.model.project import ProjectCreated
+from factory.model.members import ProjectRole
+from factory.model.project import ProjectCreated, ProjectVisibilitySet, Visibility
 
 
 def project_table(metadata: MetaData) -> Table:
@@ -70,6 +72,42 @@ def project_creator(conn: Connection) -> str | None:
     """Who wrote the `project.created` that folded; None before it."""
     row = conn.execute(text("SELECT created_by FROM project LIMIT 1")).first()
     return None if row is None else str(row[0])
+
+
+def project_visibility_table(metadata: MetaData) -> Table:
+    return Table(
+        "project_visibility",
+        metadata,
+        Column("event_id", String, primary_key=True),
+        Column("visibility", String, nullable=False),
+    )
+
+
+def latest_visibility(conn: Connection) -> Visibility:
+    """The visibility of the last folded `project.visibility_set`; `lab` before any."""
+    row = conn.execute(
+        text("SELECT visibility FROM project_visibility ORDER BY event_id DESC LIMIT 1")
+    ).first()
+    return "private" if row is not None and row[0] == "private" else "lab"
+
+
+def project_visibility_handler(table: Table, members: MemberTables) -> Handler:
+    def visibility_set(conn: Connection, event: Event) -> None:
+        """Folds an owner's act in their own name that changes the visibility. Anything else (an
+        agent, another role, no change, a malformed payload) changes nothing."""
+        if event.actor.kind != "human" or event.actor.id != event.actor.user:
+            return
+        try:
+            payload = ProjectVisibilitySet.model_validate(event.payload)
+        except ValidationError:
+            return
+        if not holds_here(conn, members, event.actor.user, frozenset({ProjectRole.OWNER})):
+            return
+        if payload.visibility == latest_visibility(conn):
+            return
+        conn.execute(insert(table).values(event_id=event.id, visibility=payload.visibility))
+
+    return visibility_set
 
 
 def project_hosted_handler(table: Table) -> Handler:

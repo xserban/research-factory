@@ -17,6 +17,7 @@ from factory.cli import evidence_render, portfolio_render, render
 from factory.cli.admin import member_app, token_app, user_app
 from factory.cli.manuscripts import manuscript_app
 from factory.cli.organisation import consolidation_app, labels_app, terms_app
+from factory.cli.team import project_app, workspace_cmd
 from factory.clock import Clock, SystemClock
 from factory.config import Settings
 from factory.document.optional import converter_infos, override_registry
@@ -484,6 +485,8 @@ app.add_typer(server_app)
 app.add_typer(user_app)
 app.add_typer(token_app)
 app.add_typer(member_app)
+app.add_typer(project_app)
+app.command("workspace")(workspace_cmd)
 
 
 _M = TypeVar("_M", bound=BaseModel)

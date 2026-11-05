@@ -21,6 +21,7 @@ SPEC = ModuleSpec(
         types=(
             "project.created",
             "project.hosted",
+            "project.visibility_set",
             "member.granted",
             "member.revoked",
             "review.requested",
@@ -42,6 +43,7 @@ SPEC = ModuleSpec(
             "meta",
             "project",
             "project_hosts",
+            "project_visibility",
             "reviews",
             "sync_state",
             "tasks",
@@ -50,6 +52,7 @@ SPEC = ModuleSpec(
     protocol_sections=("gate_policies",),
     role_gates=(
         RoleGate("member.grant", ProjectRole.OWNER),
+        RoleGate("project.visibility", ProjectRole.OWNER),
         RoleGate("budget.set", ProjectRole.OWNER),
     ),
     checks=(

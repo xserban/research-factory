@@ -132,7 +132,7 @@ from factory.model.miner_calibration import MinerCalibrationDrawn, MinerCalibrat
 from factory.model.miners import MinerRegistered, MinerRetired
 from factory.model.notices import NoticeAssessed, NoticeObserved
 from factory.model.probe import ProbeFailed, ProbeMeasured, ProbePageArchived
-from factory.model.project import ProjectCreated
+from factory.model.project import ProjectCreated, ProjectVisibilitySet
 from factory.model.protocol import (
     DeviationRecorded,
     PressConfirmed,
@@ -394,6 +394,7 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("manuscript.verified", ManuscriptVerified, 1))
     catalog.register(EventType("manuscript.audit_drawn", ManuscriptAuditDrawn, 1))
     catalog.register(EventType("manuscript.audited", ManuscriptAudited, 1))
+    catalog.register(EventType("project.visibility_set", ProjectVisibilitySet, 1))
     catalog.register(EventType("review.requested", ReviewRequested, 1))
     catalog.register(EventType("review.decided", ReviewDecided, 1))
     return catalog
