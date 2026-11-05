@@ -114,6 +114,25 @@ def miner_extraction_schema(use: MinerUse, fields: tuple[str, ...]) -> Extractio
     )
 
 
+ADMISSION_IS_HUMAN = "admitting a miner as evidence is a human act"
+
+
+def agent_admission_issues(
+    actor: Actor, old: ProtocolSpec | None, new: ProtocolSpec
+) -> list[ValidationIssue]:
+    """Issues for an agent that turns `evidence` on for a miner use (R-51: the proposer, or any
+    agent, must not confirm its own evidence status). Empty for a human or a change that admits
+    nothing new."""
+    if actor.kind == "human":
+        return []
+    before = {(u.name, u.version) for u in (old.miners or ()) if u.evidence} if old else set()
+    return [
+        ValidationIssue(f"miners.{i}.evidence", ADMISSION_IS_HUMAN)
+        for i, use in enumerate(new.miners or ())
+        if use.evidence and (use.name, use.version) not in before
+    ]
+
+
 def calibrated_miners(project: Project, spec: ProtocolSpec) -> set[tuple[str, int]]:
     """The miner versions `spec` lists whose calibration passed in this project and that are not
     retired (they alone may be admitted as evidence). Computed only for a listed use that asks for
@@ -164,6 +183,10 @@ def record_protocol(
             raise FactoryValidationError(
                 [ValidationIssue("question", "record a question before the protocol")]
             )
+        previous = current_protocol(project)
+        admission = agent_admission_issues(actor, None if previous is None else previous.spec, spec)
+        if admission:
+            raise FactoryValidationError(admission)
         spec_question = get_question(project, spec.question_id)
         if spec_question is None:
             raise FactoryValidationError([ValidationIssue("question_id", "unknown question")])
@@ -290,6 +313,9 @@ def amend_protocol(
             issues.append(ValidationIssue("question", "record a question before amending"))
         if issues or current is None or question is None:
             raise FactoryValidationError(issues)
+        admission = agent_admission_issues(actor, current.spec, spec)
+        if admission:
+            raise FactoryValidationError(admission)
 
         spec_question = get_question(project, spec.question_id)
         if spec_question is None:

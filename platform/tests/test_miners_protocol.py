@@ -94,10 +94,10 @@ def test_a_miner_is_listed_once(project: Project, agent: Actor, ready: None) -> 
     assert "miners.1.name" in {i.field for i in raised.value.issues}
 
 
-def test_evidence_true_refused(project: Project, agent: Actor, ready: None) -> None:
+def test_evidence_true_refused(project: Project, agent: Actor, human: Actor, ready: None) -> None:
     _register(project, agent)
     with pytest.raises(FactoryValidationError) as raised:
-        _amend(project, agent, _use(evidence=True))
+        _amend(project, human, _use(evidence=True))
     assert [i.field for i in raised.value.issues] == ["miners.0.evidence"]
     assert "calibrate" in raised.value.issues[0].reason
 

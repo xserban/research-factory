@@ -207,3 +207,67 @@ def test_a_released_calibration_claim_still_marks_the_session(
     assert JUDGE.session in calibration_sessions(project, VISION_NAME)
     with pytest.raises(FactoryValidationError):
         mine_next(project, JUDGE, VISION_NAME, 1, A)  # still no production for the judge
+
+
+# --- 3: evidence admission is a human act ---
+
+
+def _admit(project: Project, actor: Actor) -> None:
+    current = current_protocol(project)
+    assert current is not None
+    uses = tuple(u.model_copy(update={"evidence": True}) for u in current.spec.miners or ())
+    amend_protocol(
+        project,
+        actor,
+        current.spec.model_copy(update={"miners": uses}),
+        reason="admit the miner as evidence",
+        semantic=True,
+        effects={},
+    )
+
+
+def test_no_agent_admits_a_miner_as_evidence(
+    project: Project, agent: Actor, human: Actor, world: list[str]
+) -> None:
+    calibrated_world(project, agent, human)
+    run_calibration(project)
+    for actor in (PROPOSER, agent, JUDGE):
+        with pytest.raises(FactoryValidationError) as raised:
+            _admit(project, actor)
+        assert [i.field for i in raised.value.issues] == ["miners.0.evidence"]
+    current = current_protocol(project)
+    assert current is not None and current.spec.miners is not None
+    assert current.spec.miners[0].evidence is False
+    _admit(project, human)  # the researcher can
+
+
+# --- 3: evidence admission is a human act ---
+
+
+def _admit(project: Project, actor: Actor) -> None:
+    current = current_protocol(project)
+    assert current is not None
+    uses = tuple(u.model_copy(update={"evidence": True}) for u in current.spec.miners or ())
+    amend_protocol(
+        project,
+        actor,
+        current.spec.model_copy(update={"miners": uses}),
+        reason="admit the miner as evidence",
+        semantic=True,
+        effects={},
+    )
+
+
+def test_no_agent_admits_a_miner_as_evidence(
+    project: Project, agent: Actor, human: Actor, world: list[str]
+) -> None:
+    calibrated_world(project, agent, human)
+    run_calibration(project)
+    for actor in (PROPOSER, agent, JUDGE):
+        with pytest.raises(FactoryValidationError) as raised:
+            _admit(project, actor)
+        assert [i.field for i in raised.value.issues] == ["miners.0.evidence"]
+    current = current_protocol(project)
+    assert current is not None and current.spec.miners is not None
+    assert current.spec.miners[0].evidence is False
+    _admit(project, human)  # the researcher can

@@ -71,11 +71,11 @@ def test_evidence_true_refused_until_calibrated(
 ) -> None:
     calibrated_world(project, agent, human)
     with pytest.raises(FactoryValidationError) as raised:
-        _set_evidence(project, agent)  # registered and listed, not calibrated
+        _set_evidence(project, human)  # registered and listed, not calibrated
     assert [i.field for i in raised.value.issues] == ["miners.0.evidence"]
     run_calibration(project)
     assert miner_state(project, VISION_NAME, 1) is MinerState.CALIBRATED
-    _set_evidence(project, agent)  # now allowed
+    _set_evidence(project, human)  # now allowed
 
 
 def test_a_failed_or_retired_miner_cannot_be_admitted(
@@ -85,7 +85,7 @@ def test_a_failed_or_retired_miner_cannot_be_admitted(
     run_calibration(project, miss=tuple(cal.works[:2]))  # recall 0.6: failed
     assert miner_state(project, VISION_NAME, 1) is MinerState.FAILED
     with pytest.raises(FactoryValidationError):
-        _set_evidence(project, agent)
+        _set_evidence(project, human)
 
 
 def test_retiring_a_calibrated_miner_blocks_a_later_admission(
@@ -95,7 +95,7 @@ def test_retiring_a_calibrated_miner_blocks_a_later_admission(
     run_calibration(project)
     retire_miner(project, agent, VISION_NAME, 1, "replaced")
     with pytest.raises(FactoryValidationError):
-        _set_evidence(project, agent)
+        _set_evidence(project, human)
 
 
 def test_evidence_true_allowed_after_pass_by_amendment(
@@ -103,7 +103,7 @@ def test_evidence_true_allowed_after_pass_by_amendment(
 ) -> None:
     calibrated_world(project, agent, human)
     run_calibration(project)
-    result = _set_evidence(project, agent)
+    result = _set_evidence(project, human)
     assert result.stale_rules == [] and not result.prose_only  # type: ignore[attr-defined]
     amended = list_amendments(project)[-1]
     assert amended.other_changes == ("miners",)
