@@ -726,6 +726,49 @@ def test_first_completion_of_a_pass_stands(project: Project, human: Actor) -> No
         )
 
 
+# --- Regions: a snapshot whose blobs are malformed ---
+
+
+def _gz(text_: str) -> bytes:
+    return gzip.compress(text_.encode())
+
+
+def _snapshot(project: Project, members: bytes | None, basis: object = None) -> RegionSnapshotTaken:
+    """A snapshot over `members` (a missing blob when None)."""
+    members_blob = f"sha256:{'c' * 64}" if members is None else project.blobs.put(members)
+    return RegionSnapshotTaken(
+        region_id=f"reg_{ulid(1)}",
+        version="R@0badcafe",
+        definition_event=f"ev_{ulid(1)}",
+        rules_hash="0" * 64,
+        members_blob=members_blob,
+        members_hash="1" * 64,
+        basis_blob=project.blobs.put_json({} if basis is None else basis),  # type: ignore[arg-type]
+        counts={MemberType.WORK: 1},
+        as_of=f"ev_{ulid(2)}",
+    )
+
+
+MALFORMED: dict[str, tuple[bytes | None, object]] = {
+    "not-gzip": (b"plain bytes", None),
+    "no-tab": (_gz("work-without-a-tab\n"), None),
+    "duplicate-member": (_gz("work\tw1\nwork\tw1\n"), None),
+    "basis-not-a-dict": (_gz("work\tw1\n"), ["not", "a", "dict"]),
+    "blob-missing": (None, None),
+}
+
+
+@pytest.mark.parametrize("case", sorted(MALFORMED))
+def test_malformed_snapshot_blobs_never_raise(project: Project, agent: Actor, case: str) -> None:
+    """A logged event can never be removed: a snapshot the projector cannot read stays unfolded."""
+    members, basis = MALFORMED[case]
+    inert(project, "region.snapshot_taken", _snapshot(project, members, basis), agent)
+
+
+def test_well_formed_snapshot_folds(project: Project, agent: Actor) -> None:
+    folds(project, "region.snapshot_taken", _snapshot(project, _gz("work\tw1\n")), agent)
+
+
 
 
 # --- Miners: registration and calibration ---

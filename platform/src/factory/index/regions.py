@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import zlib
 from dataclasses import dataclass
 
 from sqlalchemy import Column, Index, Integer, MetaData, String, Table, delete
@@ -26,6 +27,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Connection
 
 from factory.canonical import canonical_json
+from factory.errors import FactoryError
 from factory.events.blobs import BlobStore
 from factory.events.envelope import Event
 from factory.index.projection import Handler
@@ -207,11 +209,40 @@ def _defined(t: RegionTables) -> Handler:
     return defined
 
 
+def _member_rows(blobs: BlobStore, p: Snapshot) -> list[tuple[str, str, str]] | None:
+    """The `(member_type, member, basis)` rows of a snapshot's blobs, or None when a blob is
+    missing or corrupt, a line has no type, a member repeats or the basis is not an object (the
+    event is then unfolded: a logged event can never be removed, so the fold must not raise)."""
+    try:
+        lines = gzip.decompress(blobs.get(p.members_blob)).decode().splitlines()
+        basis = blobs.get_json(p.basis_blob)
+    except (FactoryError, OSError, EOFError, ValueError, zlib.error):
+        return None
+    if not isinstance(basis, dict) or len(set(lines)) != len(lines):
+        return None
+    rows: list[tuple[str, str, str]] = []
+    for line in lines:
+        member_type, tab, member = line.partition("\t")
+        if not tab:
+            return None
+        rows.append(
+            (
+                member_type,
+                member,
+                json.dumps(basis.get(line), sort_keys=True, separators=(",", ":")),
+            )
+        )
+    return rows
+
+
 def _snapshot(t: RegionTables, blobs: BlobStore | None) -> Handler:
     def taken(conn: Connection, event: Event) -> None:
         if blobs is None:
             raise RuntimeError("the regions projection needs the project's blob store")
         p = Snapshot.model_validate(event.payload)
+        members = _member_rows(blobs, p)
+        if members is None:
+            return  # a snapshot whose blobs cannot be read stays in the log, unfolded
         inserted = conn.execute(
             sqlite_insert(t.snapshots)
             .values(
@@ -231,22 +262,17 @@ def _snapshot(t: RegionTables, blobs: BlobStore | None) -> Handler:
         )
         if not inserted.rowcount:
             return
-        lines = gzip.decompress(blobs.get(p.members_blob)).decode().splitlines()
-        basis = blobs.get_json(p.basis_blob)
-        assert isinstance(basis, dict)
         conn.execute(delete(t.members).where(t.members.c.region_id == p.region_id))
-        rows = []
-        for line in lines:
-            member_type, member = line.split("\t", 1)
-            rows.append(
-                {
-                    "region_id": p.region_id,
-                    "member_type": member_type,
-                    "member": member,
-                    "version": p.version,
-                    "basis": json.dumps(basis.get(line), sort_keys=True, separators=(",", ":")),
-                }
-            )
+        rows = [
+            {
+                "region_id": p.region_id,
+                "member_type": mt,
+                "member": m,
+                "version": p.version,
+                "basis": b,
+            }
+            for mt, m, b in members
+        ]
         for start in range(0, len(rows), 5000):
             conn.execute(sqlite_insert(t.members), rows[start : start + 5000])
 
