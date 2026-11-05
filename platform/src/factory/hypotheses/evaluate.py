@@ -5,7 +5,8 @@ Invariants:
 - The input is `ExperimentInputs`, plain data read from the projection (`index.evaluation`); the
   result is the full `HypothesisEvaluated` payload. Nothing here takes an outcome from anyone.
 - Pairs are formed on the confirmatory split of the primary universe (`hypotheses.pairing`). The
-  evaluation is `incomplete` while a primary cell (arm and seed) has no completed run; otherwise
+  evaluation is `incomplete` while a primary cell (arm and seed) has no completed run (a run whose environment
+  differs is completed, and excluded from pairing); otherwise
   the decision rule of the hypothesis is applied to the paired-t interval of the oriented
   per-seed differences at the plan's confidence level.
 - `inputs_hash` covers every fact the computation reads (hypothesis and design versions, rule,
@@ -140,7 +141,7 @@ def compute_experiment(inputs: ExperimentInputs) -> HypothesisEvaluated:
         split="confirmatory",
         direction=spec.metric.direction,
     )
-    complete = len(pairing.pairs) + len(pairing.confounded) == len(set(design.seeds))
+    complete = _primary_complete(design, facts)
     diffs = [d for _, _, d in pairing.pairs]
     rule = spec.decision_rule
     assert isinstance(rule, Superiority | NonInferiority)  # an experiment hypothesis (H-C)
@@ -187,6 +188,21 @@ def compute_experiment(inputs: ExperimentInputs) -> HypothesisEvaluated:
         inputs_hash=inputs_hash(inputs),
         evaluator_version=EVALUATOR_VERSION,
     )
+
+
+def _primary_complete(design: ExperimentDesign, facts: Sequence[RunFact]) -> bool:
+    """Every primary cell has a completed run. A run whose environment differs is completed: it is
+    excluded from pairing and listed, and the evaluation goes ahead on the remaining pairs."""
+    universe = tuple(sorted(design.primary_universe.items()))
+    done = {
+        (f.cell.arm, f.cell.seed)
+        for f in facts
+        if f.cell.universe == universe
+        and f.cell.split == "confirmatory"
+        and f.value is not None
+        and "failed" not in f.flags
+    }
+    return all((arm, s) in done for arm in ("treatment", "baseline") for s in set(design.seeds))
 
 
 def _evidence_flags(inputs: ExperimentInputs, facts: Sequence[RunFact]) -> set[str]:
