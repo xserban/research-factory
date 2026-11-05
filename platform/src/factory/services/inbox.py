@@ -44,10 +44,9 @@ from factory.model.search import QueryKind, QueryPurpose, QuerySpec, RunStatus
 from factory.model.seed import normalize_openalex
 from factory.model.work import Work
 from factory.model.work_ids import arxiv_id_from_doi, normalize_arxiv, normalize_doi
-from factory.services.calibration import is_pass_session
+from factory.services import passes
 from factory.services.context import Project
 from factory.services.coverage import held_out_visible
-from factory.services.extraction import is_extraction_session
 from factory.services.protocol import search_authorization
 from factory.services.results import BatchResult, ItemError
 from factory.services.search import get_work, list_works, query_issues, register_query, run_query
@@ -138,7 +137,7 @@ def _refuse_actor(project: Project, actor: Actor) -> None:
     """Refuse a system actor and any session that joined a screening or extraction pass."""
     if actor.kind not in ("human", "agent"):
         raise FactoryValidationError([ValidationIssue("actor", "a human or an agent")])
-    if is_pass_session(project, actor.session) or is_extraction_session(project, actor.session):
+    if passes.is_pass_session(project, actor.session):
         raise FactoryValidationError(
             [ValidationIssue("session", "this session has joined a pass and cannot use the inbox")]
         )

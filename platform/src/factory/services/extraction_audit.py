@@ -47,11 +47,10 @@ from factory.quality.stats import audit_size, draw_uniform
 from factory.services.context import Project
 from factory.services.conversions import conversion_manifest
 from factory.services.extraction import (
-    is_extraction_session,
     require_schema,
-    screening_session,
 )
 from factory.services.extraction_agreement import extraction_agreement, final_rows
+from factory.services.passes import require_not_pass_session
 from factory.services.protocol import ProtocolVersion, current_protocol
 from factory.services.seeds import _rigor_mode
 
@@ -215,10 +214,7 @@ def _gate(project: Project, actor: Actor, channel: Channel) -> list[ValidationIs
     issues: list[ValidationIssue] = []
     if actor.kind != "human":
         issues.append(ValidationIssue("actor", "audit labels and evidence are for a human"))
-    if channel is Channel.MCP and (
-        is_extraction_session(project, actor.session) or screening_session(project, actor.session)
-    ):
-        issues.append(ValidationIssue("channel", "this session has joined a pass"))
+    issues.extend(require_not_pass_session(project, actor, channel))
     return issues
 
 

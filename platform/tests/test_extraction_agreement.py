@@ -622,7 +622,10 @@ def test_agent_cannot_resolve_and_pass_session_cannot_relay(
         resolve_extraction(project, relay, odd, d.row_key, "task", "a", "x", Channel.MCP)
     assert e.value.issues[0].field == "channel"
     assert len(_events(project)) == before
-    resolve_extraction(project, human, odd, d.row_key, "task", "a", "relayed", Channel.MCP)
+    # Decision 55: the world's `human` shares a session with its screening agents, so a relay
+    # needs a session that joined no pass of either module.
+    clean = human.model_copy(update={"session": "01JZ9Q3K5M7N8P0R2S4T6V8W1Y"})
+    resolve_extraction(project, clean, odd, d.row_key, "task", "a", "relayed", Channel.MCP)
     assert extraction_agreement(project, human).disagreements == []
 
 

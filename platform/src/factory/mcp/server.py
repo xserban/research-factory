@@ -72,6 +72,7 @@ from factory.services import lineage as graph_service
 from factory.services import matching as matching_service
 from factory.services import methods as methods_service
 from factory.services import notices as notices_service
+from factory.services import passes as passes_service
 from factory.services import prisma as prisma_service
 from factory.services import prisma_update as prisma_update_service
 from factory.services import probe as probe_service
@@ -2122,9 +2123,7 @@ def build_server(
 def _refuse_pass_session(project: Project) -> None:
     """A session that screens or extracts must not read the other pass's results, the report
     surfaces or the answer key (R-20)."""
-    if calibration_service.is_pass_session(
-        project, project.session
-    ) or extraction_service.is_extraction_session(project, project.session):
+    if passes_service.is_pass_session(project, project.session):
         raise FactoryValidationError(
             [ValidationIssue("session", "this session has joined a pass and cannot use this tool")]
         )

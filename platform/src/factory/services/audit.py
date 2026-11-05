@@ -43,6 +43,7 @@ from factory.model.protocol import ScreeningStage
 from factory.model.screening import AuditLabelled, AuditSampled, Channel, ScreeningPhase
 from factory.services.agreement import AgreedWork, agreed_works, screen_agreement
 from factory.services.context import Project
+from factory.services.passes import require_not_pass_session
 from factory.services.protocol import current_protocol
 from factory.services.screening import decision_events, live_decisions
 from factory.services.screening_stats import (
@@ -185,8 +186,7 @@ def audit_record(
                 issues.append(ValidationIssue("criterion", "not a criterion of the protocol"))
             else:
                 qualified = f"{protocol.protocol_id}:{criterion}"
-        if channel is Channel.MCP and _is_pass_session(project, actor.session):
-            issues.append(ValidationIssue("channel", "this session has joined a pass"))
+        issues.extend(require_not_pass_session(project, actor, channel))
         if issues:
             raise FactoryValidationError(issues)
         try:
@@ -446,15 +446,6 @@ def _sampled(project: Project, audit_id: str, work_id: str) -> bool:
         row = conn.execute(
             text("SELECT 1 FROM audit_items WHERE audit_id = :a AND work_id = :w"),
             {"a": audit_id, "w": work_id},
-        ).one_or_none()
-    return row is not None
-
-
-def _is_pass_session(project: Project, session: str) -> bool:
-    """Whether the session joined a pass at any stage (it must not relay an audit label)."""
-    with project.index.connect() as conn:
-        row = conn.execute(
-            text("SELECT 1 FROM pass_sessions WHERE session = :session"), {"session": session}
         ).one_or_none()
     return row is not None
 

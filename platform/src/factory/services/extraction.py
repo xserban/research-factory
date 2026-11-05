@@ -100,6 +100,7 @@ from factory.model.staleness import (
 )
 from factory.model.task import Task, TaskCompleted, TaskStatus
 from factory.packs import FieldKind, Pack, get_pack
+from factory.services import passes
 from factory.services.agreement import Outcome, final_outcomes
 from factory.services.call_memo import memoised
 from factory.services.context import Project
@@ -352,8 +353,7 @@ def pass_config(
 
 def is_extraction_session(project: Project, session: str) -> bool:
     """Whether the session has joined an extraction pass of either scope."""
-    project.index.sync()
-    return _joined(project, session) is not None
+    return passes.is_pass_session(project, session, module="extraction")
 
 
 def session_scope(project: Project, session: str) -> Scope | None:
@@ -421,11 +421,7 @@ def _pass_models(project: Project, label: PassLabel, scope: Scope) -> set[str]:
 
 def screening_session(project: Project, session: str) -> bool:
     """Whether `session` joined a screening pass at any stage."""
-    with project.index.connect() as conn:
-        row = conn.execute(
-            text("SELECT 1 FROM pass_sessions WHERE session = :s"), {"s": session}
-        ).first()
-    return row is not None
+    return passes.is_pass_session(project, session, module="screening")
 
 
 def _other(label: PassLabel) -> PassLabel:

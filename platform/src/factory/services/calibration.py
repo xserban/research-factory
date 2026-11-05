@@ -40,7 +40,9 @@ from factory.model.screening import (
     Verdict,
 )
 from factory.model.seed import SeedKind
+from factory.services import passes
 from factory.services.context import Project
+from factory.services.passes import require_not_pass_session
 from factory.services.protocol import current_protocol, last_criterion_change, lineage_through
 from factory.services.screening_stats import CALIBRATION_SENSITIVITY, Rates, sensitivity_specificity
 from factory.services.search import list_works
@@ -168,8 +170,7 @@ def label_calibration(
                 issues.append(ValidationIssue("criterion", "not a criterion of the protocol"))
             else:
                 qualified = f"{protocol.protocol_id}:{criterion}"
-        if channel is Channel.MCP and is_pass_session(project, actor.session):
-            issues.append(ValidationIssue("channel", "this session has joined a pass"))
+        issues.extend(require_not_pass_session(project, actor, channel))
         if issues:
             raise FactoryValidationError(issues)
         try:
@@ -404,19 +405,8 @@ def _live_decisions(
 
 
 def is_pass_session(project: Project, session: str, *, stage: ScreeningStage | None = None) -> bool:
-    """Whether the session has joined a screening pass at `stage`; at any stage when None.
-
-    Surfaces that keep a session away from the answer key (labels, resolutions, audits) ask for
-    any stage: a session that screened at either stage must not relay a human label."""
-    project.index.sync()
-    sql = "SELECT 1 FROM pass_sessions WHERE session = :session"
-    params = {"session": session}
-    if stage is not None:
-        sql += " AND stage = :stage"
-        params["stage"] = require_pass_stage(stage).value
-    with project.index.connect() as conn:
-        row = conn.execute(text(sql), params).first()
-    return row is not None
+    """Whether the session has joined a screening pass at `stage`; at any stage when None."""
+    return passes.is_pass_session(project, session, module="screening", stage=stage)
 
 
 def _issues(exc: ValidationError) -> list[ValidationIssue]:

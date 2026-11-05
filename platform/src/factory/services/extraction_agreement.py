@@ -71,6 +71,7 @@ from factory.services.extraction import (
     unit_states,
 )
 from factory.services.extraction_verify import VALUE_FIELD
+from factory.services.passes import require_not_pass_session, shared_refusal
 
 __all__ = [
     "NON_COMPARABLE_KEYS",
@@ -756,14 +757,14 @@ def _refuse_shared(
     from the log: the projection keeps the first join of a session only. A pass's models are
     those of its joins and of the actors that recorded its rows, so a session that changed to
     the other pass's model after joining is caught."""
-    joins: dict[str, set[PassLabel]] = {}
+    joins: dict[PassLabel, set[str]] = {label: set() for label in PassLabel}
     models: dict[PassLabel, set[str]] = {label: set() for label in PassLabel}
     for event in read_all(project.paths.events_dir, project.catalog):
         if event.type == "extraction.pass_joined":
             payload = ExtractionPassJoined.model_validate(event.payload)
             if scope_of_pack(payload.pack) is not scope:
                 continue
-            joins.setdefault(payload.session, set()).add(payload.pass_label)
+            joins[payload.pass_label].add(payload.session)
             models[payload.pass_label].add(payload.model)
         elif (
             event.type == "extraction.recorded"
@@ -774,11 +775,9 @@ def _refuse_shared(
             models[label].add(event.actor.model)
     for view in views:
         models[view.pass_label].update(view.models)
-    if any(len(labels) > 1 for labels in joins.values()):
-        raise _refuse("a session has joined both extraction passes; each needs its own session")
-    shared = sorted(models[PassLabel.A] & models[PassLabel.B])
-    if shared:
-        raise _refuse(f"the passes share a model ({', '.join(shared)}); each needs its own")
+    refusal = shared_refusal(joins, models, noun="extraction")
+    if refusal is not None:
+        raise refusal
 
 
 # --- Resolution ---
@@ -815,8 +814,7 @@ def resolve_extraction(
         issues: list[ValidationIssue] = []
         if actor.kind != "human":
             issues.append(ValidationIssue("actor", "disagreements are resolved by a human"))
-        if channel is Channel.MCP and is_extraction_session(project, actor.session):
-            issues.append(ValidationIssue("channel", "this session has joined an extraction pass"))
+        issues.extend(require_not_pass_session(project, actor, channel))
         if issues:
             raise FactoryValidationError(issues)
         state = _load(project, scope)

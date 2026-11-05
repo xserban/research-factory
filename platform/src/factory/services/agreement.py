@@ -60,6 +60,7 @@ from factory.services.calibration import calibration_items, calibration_labels, 
 from factory.services.call_memo import memoised
 from factory.services.context import Project
 from factory.services.conversions import conversion_document
+from factory.services.passes import require_not_pass_session, shared_refusal
 from factory.services.protocol import ProtocolVersion, current_protocol, lineage_through
 from factory.services.screening import (
     live_decisions,
@@ -160,8 +161,7 @@ def screen_agreement(project: Project, actor: Actor, *, stage: ScreeningStage = 
         for label in PassLabel:
             if screen.queues[label] is None:
                 raise _refuse(f"pass {label.value} has not been opened")
-        _refuse_shared_sessions(project, stage)
-        _refuse_shared_models(project, stage)
+        _refuse_shared(project, stage)
         for label in PassLabel:
             open_tasks = _blocking_tasks(project, label, stage)
             if open_tasks:
@@ -208,8 +208,7 @@ def resolve_disagreement(
         issues: list[ValidationIssue] = []
         if actor.kind != "human":
             issues.append(ValidationIssue("actor", "disagreements are resolved by a human"))
-        if channel is Channel.MCP and _is_pass_session(project, actor.session):
-            issues.append(ValidationIssue("channel", "this session has joined a pass"))
+        issues.extend(require_not_pass_session(project, actor, channel))
         if work_id not in _open_for_resolution(screen):
             issues.append(
                 ValidationIssue(
@@ -528,25 +527,21 @@ def _refuse(reason: str) -> FactoryValidationError:
     return FactoryValidationError([ValidationIssue("passes", reason)])
 
 
-def _refuse_shared_sessions(project: Project, stage: ScreeningStage = TA) -> None:
-    """Refuse when one session joined both passes of `stage`. The join events are read from the
-    log: the projection keeps one join per session and stage, so a second join is invisible
-    there. A session in pass A of one stage and pass B of the other is not shared."""
-    joins: dict[str, set[PassLabel]] = {}
+def _refuse_shared(project: Project, stage: ScreeningStage = TA) -> None:
+    """Refuse when one session joined both passes of `stage` or the passes share a model. The
+    join events are read from the log: the projection keeps one join per session and stage, so a
+    second join is invisible there. A session in pass A of one stage and pass B of the other is
+    not shared."""
+    joins: dict[PassLabel, set[str]] = {label: set() for label in PassLabel}
     for event in read_all(project.paths.events_dir, project.catalog):
         if event.type == "screening.pass_joined":
             payload = PassJoined.model_validate(event.payload)
             if payload.stage is stage:
-                joins.setdefault(payload.session, set()).add(payload.pass_label)
-    if any(len(labels) > 1 for labels in joins.values()):
-        raise _refuse("a session has joined both passes; each pass needs its own session")
-
-
-def _refuse_shared_models(project: Project, stage: ScreeningStage = TA) -> None:
+                joins[payload.pass_label].add(payload.session)
     models = {label: _models(project, label, stage) for label in PassLabel}
-    shared = sorted(models[PassLabel.A] & models[PassLabel.B])
-    if shared:
-        raise _refuse(f"the passes share a model ({', '.join(shared)}); each pass needs its own")
+    refusal = shared_refusal(joins, models, noun="screening")
+    if refusal is not None:
+        raise refusal
 
 
 def _models(project: Project, label: PassLabel, stage: ScreeningStage = TA) -> set[str]:
@@ -556,15 +551,6 @@ def _models(project: Project, label: PassLabel, stage: ScreeningStage = TA) -> s
             {"label": label.value, "stage": stage.value},
         ).all()
     return {str(row[0]) for row in rows}
-
-
-def _is_pass_session(project: Project, session: str) -> bool:
-    """Whether the session joined a pass at any stage (it must not relay a human resolution)."""
-    with project.index.connect() as conn:
-        row = conn.execute(
-            text("SELECT 1 FROM pass_sessions WHERE session = :session"), {"session": session}
-        ).one_or_none()
-    return row is not None
 
 
 # --- Agreement ---

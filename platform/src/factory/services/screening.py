@@ -63,6 +63,7 @@ from factory.model.screening import (
 from factory.model.seed import SeedKind
 from factory.model.task import Task, TaskStatus
 from factory.model.work import Work
+from factory.services import passes
 from factory.services.calibration import (
     CalibrationStatus,
     calibrated_models,
@@ -1119,12 +1120,7 @@ def _is_inbox_session(project: Project, session: str) -> bool:
 
 
 def _is_extraction_session(project: Project, session: str) -> bool:
-    with project.index.connect() as conn:
-        row = conn.execute(
-            text("SELECT 1 FROM extraction_sessions WHERE session = :session"),
-            {"session": session},
-        ).one_or_none()
-    return row is not None
+    return passes.is_pass_session(project, session, module="extraction")
 
 
 def _input(project: Project, actor: Actor, value: dict[str, JsonValue]) -> str | None:
