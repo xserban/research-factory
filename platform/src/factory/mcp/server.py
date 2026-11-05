@@ -3143,7 +3143,6 @@ def build_server(
 
         return _reply(project, listing, include_work_ids=False)
 
-
     return server
 
 

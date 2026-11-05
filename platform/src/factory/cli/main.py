@@ -41,16 +41,6 @@ from factory.model.intuition import (
     ReviewState,
     SourceInput,
 )
-experiments_app = typer.Typer(
-    name="experiments",
-    help="Experiment designs: list, show, freeze, unlock, deviation, accept-baseline (human).",
-    no_args_is_help=True,
-)
-runs_app = typer.Typer(
-    name="runs",
-    help="Experiment runs: list and record results from a runner's file (human or runner).",
-    no_args_is_help=True,
-)
 from factory.model.notices import AssessmentDecision
 from factory.model.project import RigorMode
 from factory.model.protocol import ScreeningStage
@@ -287,6 +277,16 @@ leads_app = typer.Typer(
 hypotheses_app = typer.Typer(
     name="hypotheses",
     help="Hypotheses: list, show, register, abandon and conclude (human).",
+    no_args_is_help=True,
+)
+experiments_app = typer.Typer(
+    name="experiments",
+    help="Experiment designs: list, show, freeze, unlock, deviation, accept-baseline (human).",
+    no_args_is_help=True,
+)
+runs_app = typer.Typer(
+    name="runs",
+    help="Experiment runs: list and record results from a runner's file (human or runner).",
     no_args_is_help=True,
 )
 models_app = typer.Typer(
@@ -4737,7 +4737,6 @@ def models_cutoff_cmd(
         project = _resolve_project(state)
         hypotheses_service.declare_cutoff(project, project.human_actor(), model, day, source)
     typer.echo(f"declared {model} {day.isoformat()}")
-
 
 
 # --- Experiment designs and runs (slice 6, plan XP-A) ------------------------------------------

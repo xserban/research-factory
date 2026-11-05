@@ -56,8 +56,7 @@ def default_modules() -> ModuleRegistry:
         core, scoping, retrieval, dedup, screening, fulltext, conversion, extraction,
         contributions, cards, evidence, references, imports, inbox, living, snapshots, lineage,
         intuition, vocabulary, contradictions, discovery, coverage, finders, matching, exports,
-        portfolio, regions, mining, hypotheses, labels, views,
-        portfolio, regions, mining, hypotheses, experiments,
+        portfolio, regions, mining, hypotheses, labels, views, experiments,
     ]  # fmt: skip
     return ModuleRegistry(
         [m.MODULE for m in modules],
