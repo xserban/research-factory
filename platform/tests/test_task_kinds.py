@@ -43,6 +43,7 @@ def test_kinds_unchanged() -> None:
         "consolidate",
         "draft_slot",
         "draft_verify",
+        "manuscript_verify",
     )
 
 

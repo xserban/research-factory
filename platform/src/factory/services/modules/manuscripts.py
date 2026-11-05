@@ -15,6 +15,7 @@ from factory.modules.contract import (
     QualityRegime,
 )
 from factory.services.modules.base import RuleModule
+from factory.services.modules.task_kinds import default_task_kinds
 
 SPEC = ModuleSpec(
     name="manuscripts",
@@ -22,18 +23,26 @@ SPEC = ModuleSpec(
     events=EventFamily(
         types=(
             "manuscript.added",
+            "manuscript.audit_drawn",
+            "manuscript.audited",
             "manuscript.citation_decided",
             "manuscript.citation_resolved",
             "manuscript.segmented",
             "manuscript.unit_closed",
+            "manuscript.verified",
         ),
         tables=(
+            "manuscript_audit_items",
+            "manuscript_audits",
             "manuscript_citations",
             "manuscript_closures",
+            "manuscript_flags",
             "manuscript_sentences",
+            "manuscript_verdicts",
             "manuscripts",
         ),
     ),
+    task_kinds=default_task_kinds().kinds_of("manuscripts"),
     regime=QualityRegime(1, "none", "unit", "none", "gate-sample", ()),
     gates=(
         GateSpec(
@@ -42,6 +51,13 @@ SPEC = ModuleSpec(
             ("manuscript.citation_decided",),
             PolicyKind.AGENT_AUDIT,
             ("slice 7b ruling 17", "slice 3a ruling 3"),
+        ),
+        GateSpec(
+            "manuscript.audit_label",
+            GateKind.DECISION,
+            ("manuscript.audited",),
+            PolicyKind.HUMAN,
+            ("slice 7b ruling 12", "slice 7b ruling 17", "R-131"),
         ),
     ),
 )

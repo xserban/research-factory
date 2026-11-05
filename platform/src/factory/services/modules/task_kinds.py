@@ -19,6 +19,7 @@ from factory.model.task import (
     DRAFT_VERIFY_TASK_KIND,
     HYPOTHESIS_REVIEW_TASK_KIND,
     INTUITION_TASK_KIND,
+    MANUSCRIPT_VERIFY_TASK_KIND,
 )
 from factory.modules.registry import TaskKindRegistry
 
@@ -54,4 +55,7 @@ def default_task_kinds() -> TaskKindRegistry:
     registry.register(CONSOLIDATE_TASK_KIND, "labels", stage=None, label=None, scope=None)
     registry.register(DRAFT_SLOT_TASK_KIND, "writing", stage=None, label=None, scope=None)
     registry.register(DRAFT_VERIFY_TASK_KIND, "writing", stage="verify", label=None, scope=None)
+    registry.register(
+        MANUSCRIPT_VERIFY_TASK_KIND, "manuscripts", stage="verify", label=None, scope=None
+    )
     return registry

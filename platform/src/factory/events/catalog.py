@@ -109,7 +109,10 @@ from factory.model.manuscripts import (
     CitationDecided,
     CitationResolved,
     ManuscriptAdded,
+    ManuscriptAuditDrawn,
+    ManuscriptAudited,
     ManuscriptSegmented,
+    ManuscriptVerified,
     UnitClosed,
 )
 from factory.model.miner_calibration import MinerCalibrationDrawn, MinerCalibrationLabelled
@@ -361,4 +364,7 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("manuscript.citation_resolved", CitationResolved, 1))
     catalog.register(EventType("manuscript.citation_decided", CitationDecided, 1))
     catalog.register(EventType("manuscript.unit_closed", UnitClosed, 1))
+    catalog.register(EventType("manuscript.verified", ManuscriptVerified, 1))
+    catalog.register(EventType("manuscript.audit_drawn", ManuscriptAuditDrawn, 1))
+    catalog.register(EventType("manuscript.audited", ManuscriptAudited, 1))
     return catalog

@@ -1,18 +1,22 @@
 """External manuscripts: adding, reading and reporting (slice 7b, plan W-C; spec ruling 17).
 
 Declares: `add_manuscript`, `list_manuscripts`, `get_manuscript`, `require_manuscript`,
-`manuscript_text`, `library_text`, `sentence_rows`, `citation_rows`, `closure_rows`, `units`. The
-only module that writes `manuscript.added` and `manuscript.segmented`.
+`manuscript_text`, `library_text`, `sentence_rows`, `citation_rows`, `closure_rows`,
+`verdict_rows`, `units`, `manuscript_read`, `refuse_echo`. The only module that writes
+`manuscript.added` and `manuscript.segmented`.
 
 Invariants:
 - A manuscript and its bibliography are copied into the git-ignored library by hash; the original
   file is only read. Events hold positions, hashes and keys, never text (R-47, decision 39).
 - Adding is a human act; no MCP tool adds a manuscript.
+- `manuscript_read` is the one way an agent reads a manuscript. It writes nothing, and it serves
+  the masked slice, which must still hash to the recorded `sha256`.
 - A refusal carries fixed reasons: never a sentence, a file's content or a decoder's message.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -22,10 +26,12 @@ from sqlalchemy import text
 from factory.errors import FactoryError, FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
 from factory.model.manuscripts import (
+    MAX_CONTEXT,
     MAX_KEYS,
     MAX_LABEL,
     MAX_MANUSCRIPT_BYTES,
     MAX_SENTENCES,
+    MIN_ECHO,
     BibFormat,
     CitationRow,
     CitationState,
@@ -34,10 +40,14 @@ from factory.model.manuscripts import (
     ManuscriptFormat,
     ManuscriptRow,
     ManuscriptSegmented,
+    NeighbourText,
     SentenceEntry,
     SentenceRow,
+    SentenceText,
     UnitRow,
+    VerdictRow,
 )
+from factory.services import passes
 from factory.services.context import Project
 from factory.writing.bibfile import BibFileError, BibRecord, read_bib, read_csl
 from factory.writing.cites import cite_keys
@@ -298,3 +308,88 @@ def units(project: Project, manuscript_id: str) -> list[UnitRow]:
                     ordinal=sentence.ordinal, work_id=work, keys=[key], reason=reason
                 )
     return [found[slot] for slot in sorted(found)]
+
+
+def verdict_rows(project: Project, manuscript_id: str) -> dict[tuple[int, str], VerdictRow]:
+    """The verdicts of the manuscript, by (ordinal, work)."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        rows = (
+            conn.execute(
+                text(
+                    "SELECT verdict_id, ordinal, work_id, verdict, span_start, span_end, anchor, "
+                    "quote, conversion_id, note FROM manuscript_verdicts "
+                    "WHERE manuscript_id = :m ORDER BY ordinal, work_id"
+                ),
+                {"m": manuscript_id},
+            )
+            .mappings()
+            .all()
+        )
+    return {
+        (int(r["ordinal"]), str(r["work_id"])): VerdictRow.model_validate(dict(r)) for r in rows
+    }
+
+
+def refuse_pass_session(project: Project, session: str) -> None:
+    """A session that screens or extracts reads no manuscript and records no verdict (R-20)."""
+    if passes.is_pass_session(project, session):
+        raise _refuse("session", "this session has joined a pass and cannot use this tool")
+
+
+def manuscript_read(
+    project: Project,
+    manuscript_id: str,
+    ordinal: int,
+    *,
+    context: int = 1,
+    session: str | None = None,
+) -> SentenceText:
+    """A sentence from the library and up to `context` neighbours on each side. Read-only. Refused:
+    a session in a pass (`session`), a `context` out of range, an unknown manuscript or sentence,
+    a manuscript not in this library or no longer as it was segmented (`manuscript_id`)."""
+    if not 0 <= context <= MAX_CONTEXT:
+        raise _refuse("context", f"from 0 to {MAX_CONTEXT}")
+    project.index.sync()
+    if session is not None:
+        refuse_pass_session(project, session)
+    row = require_manuscript(project, manuscript_id)
+    sentences = sentence_rows(project, manuscript_id)
+    if not 1 <= ordinal <= len(sentences):
+        raise _refuse("ordinal", "no such sentence")
+    try:
+        masked = mask(manuscript_text(project, row), format_of(row.format), row.segmenter)
+    except KeyError:
+        raise _refuse("manuscript_id", "segmented by a version not held here") from None
+    target = sentences[ordinal - 1]
+    body = masked[target.start : target.end]
+    if hashlib.sha256(body.encode()).hexdigest() != target.sha256:
+        raise _refuse("manuscript_id", "the text differs from its segmentation")
+
+    def near(items: list[SentenceRow]) -> list[NeighbourText]:
+        return [NeighbourText(ordinal=s.ordinal, text=masked[s.start : s.end]) for s in items]
+
+    return SentenceText(
+        manuscript_id=manuscript_id,
+        ordinal=ordinal,
+        text=body,
+        length=len(body),
+        keys=target.keys,
+        before=near(sentences[max(0, ordinal - 1 - context) : ordinal - 1]),
+        after=near(sentences[ordinal : ordinal + context]),
+    )
+
+
+def _folded(value: str) -> str:
+    return " ".join(value.split()).casefold()
+
+
+def refuse_echo(project: Project, row: ManuscriptRow, note: str | None) -> None:
+    """Refuse a note that copies the manuscript: it would put its text in an event. A run of
+    `MIN_ECHO` characters shared with the stored text counts, after folding case and whitespace."""
+    if not note:
+        return
+    said = _folded(note)
+    body = _folded(manuscript_text(project, row))
+    if any(said[i : i + MIN_ECHO] in body for i in range(len(said) - MIN_ECHO + 1)):
+        raise _refuse("note", "a note does not copy the manuscript's text")

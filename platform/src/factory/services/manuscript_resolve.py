@@ -19,6 +19,7 @@ Invariants:
 - Running again is idempotent: only what changed is written. A work acquired since lifts its
   closures, by a new resolution of the key.
 - A human's decision stands: a later run changes neither its state nor its work.
+- A unit with a verdict is not closed afterwards: the verdict stands on what was read.
 """
 
 from __future__ import annotations
@@ -58,6 +59,7 @@ from factory.services.manuscripts import (
     read_bibliography,
     require_manuscript,
     sentence_rows,
+    verdict_rows,
 )
 from factory.services.reference_resolve import Corpus, _candidate, _keys, load_corpus
 from factory.services.search import list_works
@@ -254,6 +256,7 @@ def resolve_citations(project: Project, manuscript_id: str) -> ResolutionSummary
         works = _works(project)
         citations = citation_rows(project, manuscript_id)
         closures = closure_rows(project, manuscript_id)
+        verdicts = verdict_rows(project, manuscript_id)
         events: list[Event] = []
         for key in keys:
             current = citations.get(key)
@@ -272,7 +275,11 @@ def resolve_citations(project: Project, manuscript_id: str) -> ResolutionSummary
                     match,
                     current,
                     _reason(project, match.state, match.work_id, works),
-                    _ordinals(sentences, key),
+                    [
+                        o
+                        for o in _ordinals(sentences, key)
+                        if match.work_id is None or (o, match.work_id) not in verdicts
+                    ],
                     closed,
                 )
             )

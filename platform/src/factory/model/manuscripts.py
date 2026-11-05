@@ -14,10 +14,21 @@ from typing import Annotated, Self
 from pydantic import Field, field_validator, model_validator
 
 from factory.model.base import StrictModel
-from factory.model.identity import BLOB_REF_RE, ULID_RE
+from factory.model.drafts import NOTE_MAX_CHARS, AuditLabel, Verdict
+from factory.model.identity import BLOB_REF_RE, CONVERSION_ID_RE, ULID_RE
+from factory.model.references import MAX_QUOTE
+from factory.model.screening import Channel
 from factory.model.work_ids import WORK_ID_RE
 
 MANUSCRIPT_ID_RE = rf"^msc_{ULID_RE}$"
+MANUSCRIPT_VERDICT_ID_RE = rf"^mvd_{ULID_RE}$"
+MANUSCRIPT_AUDIT_ID_RE = rf"^mau_{ULID_RE}$"
+ANCHOR_RE = r"^[^/\s]{1,200}$"
+MAX_CONTEXT = 3
+"""The most neighbours on each side `manuscript_read` serves."""
+MIN_ECHO = 20
+"""A note sharing a run this long with the manuscript is refused: it would copy text into an
+event."""
 MAX_KEY = 120
 """The longest citation key; `writing.cites` replaces anything else by a digest."""
 KEY_RE = rf"^\S{{1,{MAX_KEY}}}$"
@@ -184,6 +195,73 @@ class UnitClosed(StrictModel):
         return self
 
 
+Offset = Annotated[int, Field(ge=0, le=MAX_OFFSET)]
+
+
+class ManuscriptVerified(StrictModel):
+    """A verifier's verdict on a unit, or with `uncited_flag` its advisory flag on an uncited
+    sentence, which carries no verdict and is never counted as one (plan ruling 5).
+
+    `sentence_span` is a pair of offsets into the sentence, never its text. Every verdict but
+    `supported` names one; every verdict but `unsupported` has a quote, from the anchor of the
+    conversion it names."""
+
+    verdict_id: str = Field(pattern=MANUSCRIPT_VERDICT_ID_RE)
+    manuscript_id: str = Field(pattern=MANUSCRIPT_ID_RE)
+    ordinal: int = Field(ge=1, le=MAX_SENTENCES)
+    work_id: str | None = Field(default=None, pattern=WORK_ID_RE)
+    verdict: Verdict | None = None
+    sentence_span: tuple[Offset, Offset] | None = None
+    anchor: str | None = Field(default=None, pattern=ANCHOR_RE)
+    quote: str | None = Field(default=None, min_length=1, max_length=MAX_QUOTE)
+    conversion_id: str | None = Field(default=None, pattern=CONVERSION_ID_RE)
+    note: str | None = Field(default=None, max_length=NOTE_MAX_CHARS)
+    uncited_flag: bool = False
+
+    @model_validator(mode="after")
+    def _is_a_verdict_or_a_flag(self) -> Self:
+        said = (self.work_id, self.verdict, self.conversion_id)
+        if self.uncited_flag:
+            if any(v is not None for v in (*said, self.sentence_span, self.anchor, self.quote)):
+                raise ValueError("a flag carries no verdict")
+            return self
+        if any(v is None for v in said):
+            raise ValueError("a verdict names its work and conversion")
+        if self.sentence_span is not None and self.sentence_span[0] >= self.sentence_span[1]:
+            raise ValueError("a span is not empty")
+        if self.sentence_span is None and self.verdict is not Verdict.SUPPORTED:
+            raise ValueError("sentence_span is required unless supported")
+        if (self.anchor is None) != (self.quote is None):
+            raise ValueError("a quote and its anchor go together")
+        if self.quote is None and self.verdict is not Verdict.UNSUPPORTED:
+            raise ValueError("a quote is required unless unsupported")
+        return self
+
+
+class ManuscriptAuditDrawn(StrictModel):
+    """A sample of `supported` verdicts, drawn by the platform from `seed` out of `population`."""
+
+    audit_id: str = Field(pattern=MANUSCRIPT_AUDIT_ID_RE)
+    manuscript_id: str = Field(pattern=MANUSCRIPT_ID_RE)
+    seed: int = Field(ge=0, lt=2**32)
+    population: int = Field(ge=1, le=MAX_SENTENCES * MAX_KEYS)
+    verdict_ids: list[Annotated[str, Field(pattern=MANUSCRIPT_VERDICT_ID_RE)]] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _ids_are_distinct(self) -> Self:
+        if len(set(self.verdict_ids)) != len(self.verdict_ids):
+            raise ValueError("verdict_ids are distinct")
+        return self
+
+
+class ManuscriptAudited(StrictModel):
+    audit_id: str = Field(pattern=MANUSCRIPT_AUDIT_ID_RE)
+    verdict_id: str = Field(pattern=MANUSCRIPT_VERDICT_ID_RE)
+    label: AuditLabel
+    note: str | None = Field(default=None, max_length=NOTE_MAX_CHARS)
+    channel: Channel
+
+
 # --- Read models ---
 
 
@@ -241,3 +319,45 @@ class ResolutionSummary(StrictModel):
     proposed: int
     unresolved: int
     closed: int
+
+
+class MsUnit(StrictModel):
+    """A verification unit as served: ids only. The text is read with `manuscript_read` and
+    `document_read`, so no task content and no `input_blob` holds any."""
+
+    task_id: str
+    manuscript_id: str
+    ordinal: int
+    work_id: str
+    conversion_id: str
+
+
+class NeighbourText(StrictModel):
+    ordinal: int
+    text: str
+
+
+class SentenceText(StrictModel):
+    """A sentence and its neighbours, marked `before` and `after`, as context only. `length` is
+    what a `sentence_span` is measured against."""
+
+    manuscript_id: str
+    ordinal: int
+    text: str
+    length: int
+    keys: list[str]
+    before: list[NeighbourText]
+    after: list[NeighbourText]
+
+
+class VerdictRow(StrictModel):
+    verdict_id: str
+    ordinal: int
+    work_id: str
+    verdict: Verdict
+    span_start: int | None
+    span_end: int | None
+    anchor: str | None
+    quote: str | None
+    conversion_id: str
+    note: str | None
