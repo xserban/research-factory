@@ -3,6 +3,7 @@
 Declaration only (slice M, decision 55); behaviour stays in the services."""
 
 from factory.modules.contract import (
+    CheckRule,
     EventFamily,
     GateKind,
     GateSpec,
@@ -31,6 +32,7 @@ SPEC = ModuleSpec(
             ("slice 6 ruling 17",),
         ),
     ),
+    checks=(CheckRule("contradiction-unconfirmed", (None, "warning", "warning")),),
 )
 
 MODULE = RuleModule(SPEC)

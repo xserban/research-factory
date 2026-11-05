@@ -7,6 +7,7 @@ runner's record (an agent registers planned runs and never submits a result). Th
 here, with the human-only `experiments.accept_baseline`."""
 
 from factory.modules.contract import (
+    CheckRule,
     EventFamily,
     GateKind,
     GateSpec,
@@ -54,6 +55,15 @@ SPEC = ModuleSpec(
             PolicyKind.HUMAN,
             ("slice 6 ruling 24", "R-122"),
         ),
+    ),
+    checks=(
+        CheckRule("experiment-not-frozen", ("warning", "warning", "warning")),
+        CheckRule("baseline-unresolved", ("warning", "warning", "warning")),
+        CheckRule("xrun-environment-differs", ("warning", "warning", "warning")),
+        CheckRule("xrun-reported-without-registration", ("error", "error", "error")),
+        CheckRule("compute-budget-exceeded", ("warning", "warning", "warning")),
+        CheckRule("test-access-exceeded", ("warning", "warning", "warning")),
+        CheckRule("controls-missing", (None, None, "error")),
     ),
 )
 

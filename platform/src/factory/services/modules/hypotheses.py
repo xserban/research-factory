@@ -5,6 +5,7 @@ proposals an agent writes and a gate holder decides; the critic review is a qual
 gate (slice 6 reconciliation item 1)."""
 
 from factory.modules.contract import (
+    CheckRule,
     EventFamily,
     GateKind,
     GateSpec,
@@ -56,6 +57,13 @@ SPEC = ModuleSpec(
             PolicyKind.AGENT,
             ("slice 6 ruling 11", "R-51"),
         ),
+    ),
+    checks=(
+        CheckRule("lead-undecided", (None, "warning", "warning")),
+        CheckRule("hypothesis-unreviewed", (None, "warning", "warning")),
+        CheckRule("hypothesis-registered-untested", ("warning", "warning", "warning")),
+        CheckRule("hypothesis-cutoff-unknown", ("warning", "warning", "error")),
+        CheckRule("hypothesis-contaminated", ("warning", "warning", "warning")),
     ),
 )
 

@@ -4,6 +4,7 @@ Declaration only (slice M, decision 55); behaviour stays in the services."""
 
 from factory.modules.contract import (
     ArtifactKind,
+    CheckRule,
     EventFamily,
     GateKind,
     GateSpec,
@@ -45,6 +46,10 @@ SPEC = ModuleSpec(
         ),
     ),
     regime=QualityRegime(1, "none", "assertion", "none", "agreed-sample", ("document-version",)),
+    checks=(
+        CheckRule("assertion-inferred-unconfirmed", (None, "warning", "warning")),
+        CheckRule("assertion-stale", ("warning", "warning", "warning")),
+    ),
 )
 
 MODULE = RuleModule(SPEC)

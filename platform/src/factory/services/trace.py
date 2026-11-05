@@ -27,6 +27,7 @@ import json
 import re
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
+from functools import partial
 from typing import Any, Literal
 
 from sqlalchemy import bindparam, text
@@ -52,7 +53,7 @@ from factory.model.screening import AUDIT_ID_RE, DECISION_ID_RE, QUALIFIED_CRITE
 from factory.model.seed import SEED_ID_RE
 from factory.model.work import QUERY_ID_RE, RUN_ID_RE
 from factory.model.work_ids import WORK_ID_RE
-from factory.services import label_trace, layer_trace, region_trace
+from factory.services import label_trace, layer_trace, region_trace, slice6_trace
 from factory.services.context import Project
 from factory.services.contributions import contribution_item
 from factory.services.ideas import idea_view
@@ -104,6 +105,7 @@ KINDS: tuple[str, ...] = (
     "term",
     "consolidation",
     "proposal",
+    *slice6_trace.KINDS,
 )
 """Node kinds in chain order. The layer's kinds come last (G2's pinned order after `claim` is
 unchanged). Sibling nodes are listed in this order (reversed for back traces, so
@@ -128,6 +130,7 @@ _PATTERNS: tuple[tuple[str, str], ...] = (
     *layer_trace.LAYER_PATTERNS,
     *region_trace.REGION_PATTERNS,
     *label_trace.ORGANISATION_PATTERNS,
+    *slice6_trace.PATTERNS,
     (REL_ID_RE, "relation"),
     (IDEA_ID_RE, "idea"),
     (_CITES_RE, "cites"),
@@ -599,6 +602,7 @@ class _Walk:
             "consolidation": self._organisation_node,
             "proposal": self._organisation_node,
         }
+        self._describers.update({k: partial(self._slice6_node, k) for k in slice6_trace.KINDS})
 
     # --- Rows and events ---
 
@@ -721,6 +725,14 @@ class _Walk:
         )
         found = region_trace.describe(self._conn, kind, ident)
         return None if found is None else _Described(*found)
+
+    def _slice6_node(self, kind: str, ident: str) -> _Described | None:
+        found = slice6_trace.describe(self._conn, kind, ident)
+        return None if found is None else _Described(*found)
+
+    def _slice6_keys(self, refs: Sequence[slice6_trace.Ref]) -> list[Key]:
+        keys = [r if isinstance(r, tuple) else _parse(r) for r in refs]
+        return [k for k in keys if k is not None]
 
     def _organisation_node(self, ident: str) -> _Described | None:
         kind = {"lbl": "label", "trm": "term", "cns": "consolidation", "cnp": "proposal"}[ident[:3]]
@@ -1234,8 +1246,16 @@ class _Walk:
             up, down = layer_trace.edges(self._conn, kind, ident)
         elif kind in label_trace.ORGANISATION_KINDS:
             up, down = label_trace.edges(self._conn, kind, ident)
+        elif kind in slice6_trace.KINDS:
+            s6_up, s6_down = slice6_trace.edges(self._conn, kind, ident)
+            return self._slice6_keys(s6_up), self._slice6_keys(s6_down)
         else:
             up, down = _EDGES[kind](self, ident)
+        if kind in ("work", "idea", "cell", "claim"):
+            down = [
+                *down,
+                *self._slice6_keys(slice6_trace.attached(self._conn, kind, ident.split("/", 1)[0])),
+            ]
         if self._layer == "all" and kind in ("anchor", "work", "idea"):
             down = [*down, *layer_trace.attached(self._conn, kind, ident)]
         if self._layer == "all" and kind in ("work", "idea", "concept"):

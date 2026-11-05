@@ -50,6 +50,11 @@ from factory.services.prisma import (
 from factory.services.protocol import current_protocol, list_amendments, list_deviations
 from factory.services.references import reference_counts
 from factory.services.seeds import _rigor_mode, admitted_seed_count, seed_recall
+from factory.services.slice6_methods import (
+    HypothesisCounts,
+    hypotheses_paragraph,
+    hypothesis_counts,
+)
 from factory.services.snowball import recorded_rounds
 
 NOT_COMPUTED = "not computed"
@@ -176,6 +181,9 @@ class MethodsReport(StrictModel):
     gate_policy: list[GateStatusRow] = Field(default_factory=list)
     """The decision gates the statement reports (slice M, `GateStatusRow.notable`): empty, and no
     paragraph, while every act was passed by a human under a `human` policy."""
+    hypotheses: HypothesisCounts | None = None
+    """Counts of leads, hypotheses, outcomes, deviations, baselines and registry rows (slice 6);
+    None, and no paragraph, while the project has none."""
 
 
 def methods_report(project: Project) -> MethodsReport:
@@ -258,6 +266,7 @@ def methods_report(project: Project) -> MethodsReport:
         imports=_imports(project, agent=False),
         gate_policy=notable_rows(project),
         miners=_miners(project),
+        hypotheses=hypothesis_counts(project),
     )
 
 
@@ -513,6 +522,7 @@ def render_methods(report: MethodsReport, *, withheld: frozenset[str] = frozense
         *([] if report.supplied_links is None else [_supplied(report.supplied_links)]),
         *([] if not report.miners else [_miners_paragraph(report, withheld)]),
         *([] if not report.gate_policy else [_gate_policy(report, withheld)]),
+        *([] if report.hypotheses is None else [hypotheses_paragraph(report.hypotheses)]),
         _deviations(report),
     ]
     return "\n\n".join(paragraphs) + "\n"

@@ -153,6 +153,7 @@ def experiment_tables(
         Column("flags_json", String),
         Column("env_differs", Integer),
         Column("nonce_ok", Integer),
+        Column("results_blob", String),
         Index("ix_xruns_cell", "experiment_id", "cell_hash"),
         Index("ix_xruns_access", "access_hash"),
     )
@@ -640,6 +641,7 @@ def _xrun_reported(t: ExperimentTables) -> Handler:
                 flags_json=canonical_json(list(flags)).decode(),
                 env_differs=int("environment-differs" in flags),
                 nonce_ok=1 if cell.needs_unlock else None,
+                results_blob=p.results_blob,
             )
         )
 

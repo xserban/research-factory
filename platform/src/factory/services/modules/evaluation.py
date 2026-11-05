@@ -6,6 +6,7 @@ the rule fixed at registration; no agent or human writes it."""
 
 from factory.modules.contract import (
     ArtifactKind,
+    CheckRule,
     EventFamily,
     ModuleKind,
     ModuleSpec,
@@ -20,6 +21,10 @@ SPEC = ModuleSpec(
         types=("hypothesis.evaluated",),
         tables=("hypothesis_evaluations",),
         system_only=True,
+    ),
+    checks=(
+        CheckRule("evaluation-stale", ("error", "error", "error")),
+        CheckRule("hypothesis-evaluated-unconcluded", ("warning", "warning", "warning")),
     ),
 )
 
