@@ -166,21 +166,12 @@ def test_self_review_one_human_flagged_two_humans_refused(
     assert view2 is not None and "self-reviewed" not in view2.flags
 
 
-def test_mcp_relay_refused_from_a_pass_session(
-    project: Project, iw: IWorld, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_mcp_channel_is_refused(project: Project, iw: IWorld) -> None:
     cid = _approved(project, iw)
-    monkeypatch.setattr("factory.services.concepts._joined_a_pass", lambda p, s: True)
     _refuse(lambda: review_concept(project, iw.human, cid, "reviewed", "", Channel.MCP), "channel")
     assert _events(project) == 0
-    review_concept(project, iw.human, cid, "reviewed", "", Channel.CLI)  # the CLI is no relay
-
-
-def test_mcp_relay_bars_the_session_from_later_passes(project: Project, iw: IWorld) -> None:
-    cid = _approved(project, iw)
-    relay = iw.human.model_copy(update={"session": "01JZ9Q3K5M7N8P0R2S4T6V8W3A"})
-    review_concept(project, relay, cid, "reviewed", "", Channel.MCP)
-    assert (relay.session,) in rows(project, "SELECT session FROM label_sessions")
+    review_concept(project, iw.human, cid, "reviewed", "", Channel.CLI)
+    assert rows(project, "SELECT COUNT(*) FROM label_sessions") == [(0,)]
 
 
 def test_review_counts_are_computed(project: Project, iw: IWorld) -> None:

@@ -259,4 +259,4 @@ def test_rebuild_state_hash_stable_with_both_scopes(project: Project) -> None:
 
 
 def test_projection_version_bumped() -> None:
-    assert PROJECTION_VERSION == "35"
+    assert PROJECTION_VERSION == "36"

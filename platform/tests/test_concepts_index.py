@@ -61,7 +61,7 @@ def _dump(project: Project, tables: tuple[str, ...]) -> dict[str, list[tuple[obj
 
 
 def test_projection_version_bumped() -> None:
-    assert PROJECTION_VERSION == "35"
+    assert PROJECTION_VERSION == "36"
 
 
 def test_concept_tables_are_omitted_when_empty() -> None:
@@ -194,14 +194,15 @@ def test_non_human_or_writer_session_review_not_folded(project: Project, agent: 
     relay = project.human_actor().model_copy(update={"session": agent.session})
     record_event(project, "concept.reviewed", concept_reviewed(CPT1, d1.id, channel="mcp"), relay)
     assert _state(project)[1] == "unreviewed"
-    assert rows(project, "SELECT COUNT(*) FROM concept_reviews") == [(0,)]
+    # kept in the history, never counted (folded = 0)
+    assert rows(project, "SELECT folded FROM concept_reviews ORDER BY event_id") == [(0,), (0,)]
 
 
-def test_mcp_relayed_review_bars_the_session_from_passes(project: Project, agent: Actor) -> None:
+def test_a_concept_review_writes_no_screening_table(project: Project, agent: Actor) -> None:
     d1 = record_event(project, "concept.defined", defined(source=TEXTBOOK), agent)
-    relay = project.human_actor().model_copy(update={"session": "01JZ9Q3K5M7N8P0R2S4T6V8W1B"})
-    record_event(project, "concept.reviewed", concept_reviewed(CPT1, d1.id, channel="mcp"), relay)
-    assert rows(project, "SELECT session FROM label_sessions") == [(relay.session,)]
+    record_event(project, "concept.reviewed", concept_reviewed(CPT1, d1.id))
+    assert rows(project, "SELECT COUNT(*) FROM label_sessions") == [(0,)]
+    assert rows(project, "SELECT folded FROM concept_reviews") == [(1,)]
     assert _state(project)[1] == "reviewed"
 
 

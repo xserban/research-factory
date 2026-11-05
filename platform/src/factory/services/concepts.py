@@ -61,7 +61,6 @@ from factory.model.intuition import (
 )
 from factory.model.screening import Channel
 from factory.services.context import Project
-from factory.services.extraction import is_extraction_session, screening_session
 from factory.services.ideas import idea_view
 from factory.services.interpretations import target_issue
 from factory.services.intuition_sources import (
@@ -116,10 +115,6 @@ def _human_users(project: Project) -> int:
                 text("SELECT COUNT(DISTINCT user) FROM events WHERE actor_kind = 'human'")
             ).scalar_one()
         )
-
-
-def _joined_a_pass(project: Project, session: str) -> bool:
-    return is_extraction_session(project, session) or screening_session(project, session)
 
 
 # --- Definition ---
@@ -327,8 +322,8 @@ def _decision_issues(
         issues.append(
             ValidationIssue("actor", f"the session that wrote a concept cannot {what} it")
         )
-    if channel is Channel.MCP and _joined_a_pass(project, actor.session):
-        issues.append(ValidationIssue("channel", "this session has joined a pass"))
+    if channel is Channel.MCP:
+        issues.append(ValidationIssue("channel", "no MCP tool decides; use the command line"))
     return issues
 
 
@@ -685,7 +680,7 @@ def concept_history(project: Project, concept_id: str) -> list[HistoryEntry]:
         ).all()
         reviews = conn.execute(
             text(
-                "SELECT r.event_id, r.state, r.note, r.self_reviewed, e.actor_id "
+                "SELECT r.event_id, r.state, r.note, r.self_reviewed, e.actor_id, r.folded "
                 "FROM concept_reviews r JOIN events e ON e.id = r.event_id "
                 "WHERE r.concept_id = :c ORDER BY r.event_id"
             ),
@@ -733,8 +728,9 @@ def concept_history(project: Project, concept_id: str) -> list[HistoryEntry]:
             actor=str(actor_id),
             note=str(note),
             self_reviewed=bool(self_reviewed),
+            folded=bool(folded),
         )
-        for event_id, state, note, self_reviewed, actor_id in reviews
+        for event_id, state, note, self_reviewed, actor_id, folded in reviews
     ]
     order = {"recorded": 0, "superseded-by": 1}
     return sorted(history, key=lambda h: (h.event_id, order.get(h.kind, 2)))
@@ -1037,8 +1033,8 @@ def decide_concept_link(
             issues.append(
                 ValidationIssue("actor", "the session that proposed a link cannot decide it")
             )
-        if channel is Channel.MCP and _joined_a_pass(project, actor.session):
-            issues.append(ValidationIssue("channel", "this session has joined a pass"))
+        if channel is Channel.MCP:
+            issues.append(ValidationIssue("channel", "no MCP tool decides; use the command line"))
         if not rationale.strip():
             issues.append(ValidationIssue("rationale", "state why"))
         if decision == "confirm" and row["status"] != LinkStatus.INFERRED.value:
