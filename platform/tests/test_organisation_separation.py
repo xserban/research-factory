@@ -120,6 +120,7 @@ def organised_twin(root: Path, project: Project, w: IWorld) -> tuple[Project, Pr
 
 # --- Architecture ---
 
+COVERAGE = "factory.services.coverage"
 EVIDENCE_PREFIXES = (
     "factory.services.extraction",
     "factory.services.evidence",
@@ -128,8 +129,7 @@ EVIDENCE_PREFIXES = (
     "factory.services.screening",
     "factory.evidence",
 )
-ORGANISATION_MODULES = (  # `services.coverage` is not listed: `methods` reports the library's
-    # coverage by design (Import-C)
+ORGANISATION_MODULES = (
     "factory.regions",
     "factory.consolidation",
     "factory.services.regions",
@@ -140,6 +140,7 @@ ORGANISATION_MODULES = (  # `services.coverage` is not listed: `methods` reports
     "factory.services.label_check",
     "factory.services.label_trace",
     "factory.services.organisation_export",
+    "factory.services.coverage",
     "factory.model.labels",
     "factory.model.regions",
     "factory.index.labels",
@@ -161,6 +162,8 @@ def test_architecture_no_organisation_imports() -> None:
         for importer, imported in imports
         if importer in evidence
         and any(imported == o or imported.startswith(o + ".") for o in ORGANISATION_MODULES)
+        # `methods` reports the imported library's coverage by design (Import-C): its one exemption
+        and not (importer == "factory.services.methods" and imported.startswith(COVERAGE))
     )
     assert bad == []
 

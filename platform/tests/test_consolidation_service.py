@@ -56,8 +56,16 @@ TABLES = (
 )
 
 
+ACTIVE_MERGES = {
+    "label_merges": "SELECT into_key, from_key FROM label_merges WHERE active = 1",
+    "concept_merges": "SELECT into_concept, from_concept FROM concept_merges WHERE active = 1",
+}
+
+
 def dump(project: Project) -> dict[str, list[tuple[Any, ...]]]:
-    return {t: rows(project, f"SELECT * FROM {t} ORDER BY 1, 2") for t in TABLES}
+    out = {t: rows(project, f"SELECT * FROM {t} ORDER BY 1, 2") for t in TABLES}
+    out.update({t: rows(project, f"{sql} ORDER BY 1, 2") for t, sql in ACTIVE_MERGES.items()})
+    return out
 
 
 def label(project: Project, human: Actor, text: str, *targets: str) -> None:
@@ -138,6 +146,8 @@ def test_merge_unmerge_restores_state_hash(cw: CW, kind: str) -> None:
             project, cw.w.human, event.payload["into"], event.payload["from_concept"], "undo"
         )
     assert dump(project) == before
+    live = project.index.state_hash()
+    assert project.index.rebuild() == live  # the live projection is the rebuilt one
 
 
 def test_decision_and_merges_in_one_append_and_reference_proposal(cw: CW) -> None:
