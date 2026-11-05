@@ -8,8 +8,8 @@ Invariants:
 - A draft may be superseded freely. A registered hypothesis may be superseded only while no
   evaluation exists for it and no confirmatory result references its design: otherwise the old one
   must be evaluated or abandoned (`evidence-exists`, R-52). The evaluation and confirmatory tests
-  are provider hooks (`EVALUATION_SOURCES`, `CONFIRMATORY_SOURCES`) that plans XP-A and XP-B fill;
-  until then neither exists.
+  are provider hooks (`EVALUATION_SOURCES`, `CONFIRMATORY_SOURCES`) that plans XP-B and XP-A fill;
+  the confirmatory one is filled from import, the evaluation one stays empty until XP-B.
 - The state is computed on read from the events and the hooks: `abandoned`, then `superseded`,
   then `evaluated`, `registered`, `reviewed`, else `draft`.
 - Abandonment and conclusion are human acts; a conclusion needs an evaluation and is labelled as
@@ -48,6 +48,7 @@ from factory.services.extraction_agreement import final_rows
 from factory.services.hypothesis_gates import effective_plan, may_pass, project_mode
 from factory.services.ideas import idea_view, resolve_idea
 from factory.services.leads import card_keys, lead_view
+from factory.services.xrun_accounting import confirmatory_evidence
 
 HypothesisState = Literal["draft", "reviewed", "registered", "evaluated", "abandoned", "superseded"]
 Autonomy = Literal["human", "agent"]
@@ -55,8 +56,10 @@ Autonomy = Literal["human", "agent"]
 Provider = Callable[[Project, str], bool]
 EVALUATION_SOURCES: list[Provider] = []
 """Tests for "a `hypothesis.evaluated` event exists for this hypothesis"; plan XP-B fills it."""
-CONFIRMATORY_SOURCES: list[Provider] = []
-"""Tests for "a confirmatory run references this hypothesis's design"; plan XP-A fills it."""
+CONFIRMATORY_SOURCES: list[Provider] = [confirmatory_evidence]
+"""Tests for "a confirmatory run references this hypothesis's design". Plan XP-A's test is in the
+list from import, so that it is filled whichever surface loads first (a lazy fill would leave the
+revision rule failing open)."""
 
 
 class HypothesisView(StrictModel):
@@ -87,8 +90,7 @@ def has_evaluation(project: Project, hypothesis_id: str) -> bool:
 
 
 def has_confirmatory_evidence(project: Project, hypothesis_id: str) -> bool:
-    """Whether a confirmatory result references the hypothesis's design; False until plan XP-A
-    registers its test."""
+    """Whether a confirmatory result references a design that names the hypothesis (plan XP-A)."""
     return any(source(project, hypothesis_id) for source in CONFIRMATORY_SOURCES)
 
 
