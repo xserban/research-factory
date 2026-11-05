@@ -676,6 +676,7 @@ def build_server(
                 flow = prisma_update_service.prisma_update(opened, until=until)
                 shown = prisma_update_service.agent_update(opened, flow)
                 data["update"] = shown.model_dump(mode="json")
+            data = _collapsed_import_rows(opened, data)
             return _without_record_keys(
                 _withheld(opened, data, include_work_ids=update is not None)
             )
@@ -1453,6 +1454,41 @@ def _without_rates(report: dict[str, JsonValue]) -> dict[str, JsonValue]:
         if isinstance(calibration, dict):
             calibration.pop("per_pass", None)
     return report
+
+
+def _collapsed_import_rows(project: Project, data: dict[str, JsonValue]) -> dict[str, JsonValue]:
+    """While no pass is open, one search-report row per import, without reported or retrieved
+    counts, runs or record tokens: the admission queries cover the held-out part, so their
+    counts and key lists would give its size (decision 43)."""
+    search = data.get("search")
+    if coverage_service.held_out_visible(project) or not isinstance(search, dict):
+        return data
+    rows = search.get("rows")
+    if not isinstance(rows, list):
+        return data
+    kept: list[JsonValue] = []
+    seen: set[str] = set()
+    for row in rows:
+        if not isinstance(row, dict) or row.get("purpose") != "import":
+            kept.append(row)
+            continue
+        import_id = str(row.get("import_id"))
+        if import_id in seen:
+            continue
+        seen.add(import_id)
+        kept.append(
+            {
+                **row,
+                "text": import_id,
+                "runs": [],
+                "reported": None,
+                "retrieved": 0,
+                "shortfall_reason": None,
+                "new_after_dedup": None,
+                "included": None,
+            }
+        )
+    return {**data, "search": {**search, "rows": kept}}
 
 
 _RECORD_KEY = re.compile(r"(imp_[0-9A-Z]{26}):[0-9]+")

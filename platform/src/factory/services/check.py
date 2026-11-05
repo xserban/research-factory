@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Literal
 
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 
 from factory.errors import FactoryValidationError
 from factory.events.blobs import BlobIntegrityError
@@ -72,7 +72,7 @@ from factory.services.protocol_rules import (
     watch_plan_gaps,
 )
 from factory.services.references import current_extraction, included_works
-from factory.services.seeds import SeedRole, _rigor_mode, seed_check
+from factory.services.seeds import SeedRole, _rigor_mode, held_out_work_ids, seed_check
 from factory.services.snowball import recorded_rounds, round_runs
 from factory.services.trace import dangling_refs
 from factory.services.watch import cycles, watch_status
@@ -1444,9 +1444,16 @@ WHERE r.import_id = :i AND r.outcome != 'malformed'
 def _import_counts(project: Project, import_id: str, *, development_only: bool) -> dict[str, int]:
     """The four count findings of one import; `development_only` leaves the held-out part out
     (the agent view, decision 43)."""
-    sql = _COUNT_SQL + (" AND r.part != 'held-out'" if development_only else "")
+    sql = _COUNT_SQL
+    params: dict[str, object] = {"i": import_id}
+    statement = text(sql)
+    if development_only:
+        # as `classify_import` for the agent view: no held-out part, no held-out seed's work
+        sql += " AND r.part != 'held-out' AND (r.work_id IS NULL OR r.work_id NOT IN :held)"
+        params["held"] = sorted(held_out_work_ids(project)) or [""]
+        statement = text(sql).bindparams(bindparam("held", expanding=True))
     with project.index.connect() as conn:
-        row = conn.execute(text(sql), {"i": import_id}).one()
+        row = conn.execute(statement, params).one()
     return dict(zip(_IMPORT_COUNTS, (int(n) for n in row), strict=True))
 
 

@@ -39,7 +39,7 @@ Invariants:
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Literal, get_args
 
@@ -228,6 +228,7 @@ def classify_import(
     unresolved: dict[Part, int] = {"development": 0, "held-out": 0, "unsplit": 0}
     unconfirmed: dict[Part, int] = {"development": 0, "held-out": 0, "unsplit": 0}
     seen: set[str] = set()
+    held_first: set[str] = set()
     out: list[RecordCoverage] = []
     outcomes: Mapping[str, Outcome] | None = None
     criteria: Mapping[str, str | None] | None = None
@@ -238,8 +239,14 @@ def classify_import(
             if state == LinkState.RESOLVED.value and row.work_id is not None:
                 head = primary.get(row.work_id, row.work_id)
                 if head in seen:
+                    # a work counts in development if any of its records is there
+                    if row.part == "development" and head in held_first:
+                        _to_development(out, pending, head, row)
+                        held_first.discard(head)
                     continue
                 seen.add(head)
+                if row.part == "held-out":
+                    held_first.add(head)
                 if head in exclude_works or row.work_id in exclude_works:
                     continue
                 pending.append((row, head))
@@ -279,6 +286,20 @@ def classify_import(
                 )
             )
     return Classified(records=out, unresolved=unresolved, unconfirmed=unconfirmed)
+
+
+def _to_development(
+    out: list[RecordCoverage], pending: list[tuple[_Row, str]], head: str, row: _Row
+) -> None:
+    """Move the work `head`, first seen at a held-out record, to the development record `row`."""
+    for i, (first, h) in enumerate(pending):
+        if h == head:
+            pending[i] = (replace(first, part="development", ordinal=row.ordinal), h)
+            return
+    for i, item in enumerate(out):
+        if item.work_id == head:
+            out[i] = item.model_copy(update={"part": "development", "ordinal": row.ordinal})
+            return
 
 
 def _bucket(row: _Row, prov: _Prov, violated: list[str], declared: frozenset[str]) -> Bucket:

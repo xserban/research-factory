@@ -23,11 +23,12 @@ from factory.model.imports import ImportRole
 from factory.model.screening import PassLabel
 from factory.services.context import Project
 from factory.services.coverage import coverage_report
+from factory.services.dedup import canonical_works
 from factory.services.import_resolve import resolve_import
 from factory.services.imports import list_import_records, record_import
 from factory.services.screening import open_pass
 from tests.helpers import SourcesFor, _setup, open_session, ready_protocol
-from tests.import_helpers import bib_entry
+from tests.import_helpers import bib_entry, import_bib
 from tests.references_service_helpers import Lookups, oa_item
 from tests.test_cli import _cli_env, runner
 from tests.test_screening_next import _draw
@@ -219,3 +220,86 @@ async def test_report_prisma_hides_record_keys(
     text = json.dumps(body)
     assert not re.search(r"imp_[0-9A-Z]{26}:[0-9]+", text)
     assert imp in text  # the import itself is still reported
+
+
+@pytest.mark.anyio
+async def test_report_prisma_collapses_import_rows_until_a_pass_opens(
+    settings: Settings,
+    project: Project,
+    agent: Actor,
+    human: Actor,
+    mock_sources: SourcesFor,
+    clock: FixedClock,
+    tmp_path: Path,
+) -> None:
+    """Pins ruling (a): before a pass opens, the agent's PRISMA search report has one row per
+    import, with no reported or retrieved count and no per-record token in its text, since the
+    admission queries cover the held-out part. Ruling (b), proposed as decision 80, is NOT
+    pinned here: the PRISMA totals are not blurred, so the held-out size of a split import
+    stays derivable from them (a count, never which record) until the researcher confirms."""
+    from factory.services.import_admit import admit_import
+    from tests.import_helpers import LIBRARY, declare_library
+
+    ready_protocol(project, agent, human, mock_sources)
+    declare_library(project, agent, LIBRARY)
+    entries = [
+        bib_entry(
+            f"k{k}", f"Reed Study {k} Of Moss", year=2018, author="Kim, Ana", doi=f"10.7777/r.{k}"
+        )
+        for k in range(1, 7)
+    ] + [
+        bib_entry(f"t{k}", f"Untraced Title {k} Of Ferns", year=2017, author="Roe, Sam")
+        for k in range(1, 7)
+    ]
+    path = tmp_path / "c.bib"
+    path.write_text("".join(entries))
+    imp = record_import(
+        project, path, format=ImportFormat.BIBTEX, role=ImportRole.CORPUS, random_seed=5
+    ).import_id
+    lookups = Lookups(
+        openalex=[
+            oa_item(f"Reed Study {k} Of Moss", "Ana Kim", 2018, f"W6{k:02d}", doi=f"10.7777/r.{k}")
+            for k in range(1, 7)
+        ]
+    )
+    resolve_import(project, imp, sources=lookups.sources())
+    admit_import(project, imp, sources=lookups.sources())
+
+    def import_rows(body: dict[str, Any]) -> list[dict[str, Any]]:
+        return [r for r in body["data"]["search"]["rows"] if r["purpose"] == "import"]
+
+    async with open_session(settings, clock, {}) as session:
+        before = await session.call("report_prisma", project="demo")
+        rows = import_rows(before)
+        assert len(rows) == 1 and rows[0]["import_id"] == imp
+        assert rows[0]["reported"] is None and rows[0]["retrieved"] == 0 and rows[0]["runs"] == []
+        assert ":" not in rows[0]["text"] and imp not in rows[0]["text"].replace(imp, "", 1)
+        open_pass(project, agent, PassLabel.A)
+        after = await session.call("report_prisma", project="demo")
+        assert len(import_rows(after)) == 2  # the openalex and the importlist query
+
+
+def test_agent_check_leaves_out_held_out_seed_works(
+    project: Project, corpus: None, agent: Actor, tmp_path: Path
+) -> None:
+    from factory.services.check import agent_check, check
+    from factory.services.seeds import held_out_work_ids
+    from tests.import_helpers import declare_library
+
+    declare_library(project, agent)
+    held = held_out_work_ids(project)
+    assert held
+    dois = {w.identifiers.doi for w in canonical_works(project) if w.id in held}
+    [doi] = sorted(d for d in dois if d)[:1]
+    entry = (
+        f"@article{{c, title={{Held Seed Paper}}, author={{Zhou, Ada}}, year={{2020}}, "
+        f"doi={{{doi}}}, file={{PDF:files/gone.pdf:application/pdf}}}}\n"
+    )
+    imp = import_bib(project, tmp_path, [entry])
+    resolve_import(project, imp, sources=Lookups().sources())
+
+    def codes(report: Any) -> set[str]:
+        return {f.code for f in report.findings}
+
+    assert "import-attachment-missing" in codes(check(project))
+    assert "import-attachment-missing" not in codes(agent_check(project))

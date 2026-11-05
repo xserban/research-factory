@@ -225,3 +225,41 @@ def test_suggestions_read_a_bounded_pool(
     report = coverage_report(pre_search, import_id)
     holders = {h for s in report.suggestions for h in s.holders}
     assert report.suggestions and len(holders) <= 2
+
+
+def test_development_duplicate_of_a_held_out_work_counts_in_development(
+    pre_search: Project, tmp_path: Path
+) -> None:
+    n = 16
+    entries = [
+        bib_entry(
+            f"d{i}{c}", f"Dup Study {i} Of Moss", year=2018, author="Kim, Ana", doi=f"10.7777/d.{i}"
+        )
+        for i in range(1, n + 1)
+        for c in "ab"
+    ]
+    path = tmp_path / "dup.bib"
+    path.write_text("".join(entries))
+    imp = record_import(
+        pre_search, path, format=ImportFormat.BIBTEX, role=ImportRole.REFERENCE, random_seed=9
+    ).import_id
+    lookups = Lookups(
+        openalex=[
+            oa_item(f"Dup Study {i} Of Moss", "Ana Kim", 2018, f"W5{i:02d}", doi=f"10.7777/d.{i}")
+            for i in range(1, n + 1)
+        ]
+    )
+    resolve_import(pre_search, imp, sources=lookups.sources())
+    part_of = {r.ordinal: r.part for r in list_import_records(pre_search, imp, view="all")}
+    mixed = [
+        i
+        for i in range(n)
+        if {part_of[2 * i + 1], part_of[2 * i + 2]} == {"development", "held-out"}
+    ]
+    assert mixed
+    report = coverage_report(pre_search, imp)
+    dev = report.parts[0].resolved
+    expected_dev = sum(
+        1 for i in range(n) if "development" in (part_of[2 * i + 1], part_of[2 * i + 2])
+    )
+    assert dev == expected_dev
