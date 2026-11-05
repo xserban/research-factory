@@ -96,3 +96,13 @@ def test_the_registration_replays(project: Project, agent: Actor) -> None:
     project.index.rebuild()
     row = registered_row(project, VISION_NAME, 1)
     assert row is not None and row.miner_id == got.miner_id and row.spec_blob == got.spec_blob
+
+
+def test_register_refuses_a_spec_that_needs_no_quote(project: Project, agent: Actor) -> None:
+    from factory.mining.spec import EvidenceRule
+
+    before = _events(project)
+    for rule in (EvidenceRule(0, True), EvidenceRule(1, False)):
+        with pytest.raises(FactoryValidationError):
+            register_miner(project, agent, spec_to_json(vision_result(evidence=rule)))
+    assert _events(project) == before

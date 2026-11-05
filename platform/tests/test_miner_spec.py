@@ -143,3 +143,29 @@ def test_citation_and_anchor_kinds_checked() -> None:
     )
     assert {"fields[4].kind.patterns[0]", "fields[5].kind.kinds"} <= _fields(validate_miner(spec))
     assert QuoteKind() == QuoteKind()
+
+
+def test_registered_miner_must_ask_for_a_quote() -> None:
+    from factory.mining.spec import EvidenceRule
+
+    spec = vision_result(evidence=EvidenceRule(0, True))
+    assert "evidence.min_quotes_per_record" in _fields(validate_miner(spec))
+    assert "evidence.min_quotes_per_record" not in _fields(validate_miner(spec, built_in=True))
+
+
+def test_enum_quote_exemption_refused_for_registered() -> None:
+    from factory.mining.spec import EvidenceRule
+
+    spec = vision_result(evidence=EvidenceRule(1, False))
+    assert "evidence.enum_needs_quote" in _fields(validate_miner(spec))
+    no_enum = vision_result(
+        evidence=EvidenceRule(1, False),
+        fields=tuple(f for f in vision_result().fields if f.name != "direction"),
+    )
+    assert "evidence.enum_needs_quote" not in _fields(validate_miner(no_enum))
+
+
+def test_single_pass_regime_refused() -> None:
+    spec = vision_result(regime=replace(vision_result().regime, passes=1))
+    assert "regime.passes" in _fields(validate_miner(spec))
+    assert "regime.passes" not in _fields(validate_miner(spec, built_in=True))

@@ -110,6 +110,17 @@ def validate_miner(spec: MinerSpec, *, built_in: bool = False) -> list[Validatio
         bad("evidence.min_quotes_per_record", "must not be negative")
     elif spec.evidence.min_quotes_per_record >= 1 and not _can_quote(spec):
         bad("evidence.min_quotes_per_record", "needs a quote, citation or title-reference field")
+    if not built_in:
+        if spec.evidence.min_quotes_per_record < 1:
+            bad("evidence.min_quotes_per_record", "a registered miner needs at least one quote")
+        if not spec.evidence.enum_needs_quote and any(
+            isinstance(f.kind, EnumKind) for f in spec.fields
+        ):
+            bad("evidence.enum_needs_quote", "an enum field needs an evidence quote (R-141)")
+        if spec.regime.passes != 2:
+            bad(
+                "regime.passes", "a registered miner runs two passes; a single pass is not enforced"
+            )
     for i, pattern in enumerate(spec.citation_patterns):
         if not _compiles(pattern):
             bad(f"citation_patterns[{i}]", "does not compile")
