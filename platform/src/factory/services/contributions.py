@@ -41,11 +41,12 @@ from factory.model.base import StrictModel
 from factory.model.extraction import (
     CitedEntry,
     ExtractedRowInput,
+    ExtractionAuditSampled,
     Scope,
     StoredField,
     UnitReferences,
 )
-from factory.model.screening import PassLabel
+from factory.model.screening import Channel, PassLabel
 from factory.model.seed import HeldOut
 from factory.services import seeds as seeds_service
 from factory.services.context import Project
@@ -69,7 +70,20 @@ from factory.services.extraction import (
     unit_pin,
     unit_states,
 )
-from factory.services.extraction_agreement import FinalField, final_rows
+from factory.services.extraction_agreement import (
+    Choice,
+    ExtractionAgreement,
+    FinalField,
+    extraction_agreement,
+    final_rows,
+    resolve_extraction,
+)
+from factory.services.extraction_audit import (
+    ExtractionAuditReport,
+    extraction_audit_record,
+    extraction_audit_report,
+    extraction_audit_sample,
+)
 from factory.services.reference_view import briefs, reference_view_of
 from factory.services.references import current_extraction
 from factory.services.stages import scope_of_kind
@@ -91,6 +105,10 @@ __all__ = [
     "ContributionStatus",
     "ItemView",
     "checker_superseding",
+    "contribution_agreement",
+    "contribution_audit_record",
+    "contribution_audit_report",
+    "contribution_audit_sample",
     "contribution_check",
     "contribution_close_check",
     "contribution_item",
@@ -100,6 +118,7 @@ __all__ = [
     "final_items",
     "live_items",
     "mask_batch",
+    "resolve_contribution",
 ]
 
 NO_REFERENCES = "no-reference-extraction"
@@ -556,3 +575,60 @@ def contribution_status(project: Project) -> ContributionStatus:
         no_references=none,
         other_conversion=other,
     )
+
+
+# --- Agreement, resolution and audit (plan D with the scope fixed) ---
+
+
+def contribution_agreement(project: Project, actor: Actor) -> ExtractionAgreement:
+    """`extraction_agreement` for contribution items. In a row disagreement the `value` shown is
+    the item's `item_kind`."""
+    return extraction_agreement(project, actor, scope=Scope.CONTRIBUTION)
+
+
+def resolve_contribution(
+    project: Project,
+    actor: Actor,
+    work_id: str,
+    row_key: str,
+    field: str | None,
+    choice: Choice,
+    reason: str,
+    channel: Channel,
+) -> str:
+    """`resolve_extraction` for a contribution item; returns the event id."""
+    return resolve_extraction(
+        project, actor, work_id, row_key, field, choice, reason, channel, scope=Scope.CONTRIBUTION
+    )
+
+
+def contribution_audit_sample(
+    project: Project, actor: Actor, *, random_seed: int | None = None
+) -> ExtractionAuditSampled:
+    """`extraction_audit_sample` over the agreed contribution values (`not-stated` items and
+    `cited_entry` values included)."""
+    return extraction_audit_sample(
+        project, actor, random_seed=random_seed, scope=Scope.CONTRIBUTION
+    )
+
+
+def contribution_audit_record(
+    project: Project,
+    actor: Actor,
+    audit_id: str,
+    work_id: str,
+    row_key: str,
+    field: str,
+    correct: bool,
+    note: str,
+    channel: Channel,
+) -> str:
+    """`extraction_audit_record` for a sampled contribution value; returns the event id."""
+    return extraction_audit_record(
+        project, actor, audit_id, work_id, row_key, field, correct, note, channel
+    )
+
+
+def contribution_audit_report(project: Project) -> ExtractionAuditReport | None:
+    """The latest contribution audit with its error rate; None when none was drawn."""
+    return extraction_audit_report(project, scope=Scope.CONTRIBUTION)
