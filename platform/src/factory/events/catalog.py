@@ -83,7 +83,7 @@ from factory.model.lineage import (
     RelationProposed,
 )
 from factory.model.living import SnapshotRecorded
-from factory.model.miners import MinerRegistered
+from factory.model.miners import MinerRegistered, MinerRetired
 from factory.model.notices import NoticeAssessed, NoticeObserved
 from factory.model.probe import ProbeFailed, ProbeMeasured, ProbePageArchived
 from factory.model.project import ProjectCreated
@@ -215,6 +215,7 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("gate.audit_sampled", GateAuditSampled, 1))
     catalog.register(EventType("gate.audit_labelled", GateAuditLabelled, 1))
     catalog.register(EventType("miner.registered", MinerRegistered, 1))
+    catalog.register(EventType("miner.retired", MinerRetired, 1))
     catalog.register(EventType("fulltext.fetch_started", FetchStarted, 1))
     catalog.register(EventType("fulltext.attempted", Attempted, 1))
     catalog.register(EventType("fulltext.document_added", DocumentAdded, 1))

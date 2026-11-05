@@ -2,7 +2,7 @@
 
 `miners` holds the first registration of each `(name, version)`: a later event naming the same pair
 changes nothing (the service refuses a different digest, so a replayed log only repeats). `retired`
-is reserved for M-D and stays false here. The table is empty for a log without `miner.registered`,
+becomes true on `miner.retired` (M-D). The table is empty for a log without `miner.registered`,
 so it is left out of the state hash then.
 """
 
@@ -10,13 +10,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from sqlalchemy import Boolean, Column, Integer, MetaData, String, Table
+from sqlalchemy import Boolean, Column, Integer, MetaData, String, Table, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Connection
 
 from factory.events.envelope import Event
 from factory.index.projection import Handler
-from factory.model.miners import MinerRegistered
+from factory.model.miners import MinerRegistered, MinerRetired
 
 
 @dataclass(frozen=True)
@@ -60,4 +60,12 @@ def miner_handlers(t: MinerTables) -> dict[str, Handler]:
             .on_conflict_do_nothing(index_elements=["name", "version"])
         )
 
-    return {"miner.registered": registered}
+    def retired(conn: Connection, event: Event) -> None:
+        payload = MinerRetired.model_validate(event.payload)
+        conn.execute(
+            update(t.miners)
+            .where(t.miners.c.name == payload.name, t.miners.c.version == payload.version)
+            .values(retired=True)
+        )
+
+    return {"miner.registered": registered, "miner.retired": retired}

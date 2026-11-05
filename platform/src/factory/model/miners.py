@@ -44,6 +44,15 @@ class MinerRegistered(StrictModel):
     imported_from: ImportedFrom | None = None
 
 
+class MinerRetired(StrictModel):
+    """A miner version taken out of use (R-52): its rows stay and are reported, no task is served.
+    Written by `factory.services.miners.retire_miner`."""
+
+    name: str = Field(pattern=MINER_NAME_RE)
+    version: int = Field(ge=1)
+    reason: str = Field(min_length=1, max_length=300)
+
+
 class MinerUse(StrictModel):
     """A protocol's use of a registered miner. `dual_extract_sample` is the fraction of works
     mined twice (None = every work); `evidence` admits its records to the evidence report (refused

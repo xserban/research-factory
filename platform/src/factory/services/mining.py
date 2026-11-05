@@ -84,6 +84,7 @@ __all__ = [
     "registered_miners",
     "registered_row",
     "require_listed",
+    "require_not_retired",
 ]
 
 _BATCH = 500
@@ -154,6 +155,8 @@ class MinerRow:
     spec_blob: str
     proposer_kind: ActorKind
     event_id: str
+    proposer_session: str = ""
+    retired: bool = False
 
 
 def registered_row(project: Project, name: str, version: int) -> MinerRow | None:
@@ -162,7 +165,8 @@ def registered_row(project: Project, name: str, version: int) -> MinerRow | None
     with project.index.connect() as conn:
         row = conn.execute(
             text(
-                "SELECT miner_id, digest, spec_blob, registered_by_kind, event_id FROM miners "
+                "SELECT miner_id, digest, spec_blob, registered_by_kind, event_id, "
+                "proposer_session, retired FROM miners "
                 "WHERE name = :n AND version = :v"
             ),
             {"n": name, "v": version},
@@ -178,6 +182,8 @@ def registered_row(project: Project, name: str, version: int) -> MinerRow | None
         spec_blob=str(row[2]),
         proposer_kind="human" if kind == "human" else "agent" if kind == "agent" else "system",
         event_id=str(row[4]),
+        proposer_session=str(row[5]),
+        retired=bool(row[6]),
     )
 
 
@@ -282,6 +288,15 @@ def require_listed(
     return protocol, use, spec
 
 
+def require_not_retired(project: Project, name: str, version: int) -> None:
+    """Refuse (field `miner`) a task or record of a retired miner version (R-52); its rows stay."""
+    row = registered_row(project, name, version)
+    if row is not None and row.retired:
+        raise FactoryValidationError(
+            [ValidationIssue("miner", f"miner {name} version {version} is retired")]
+        )
+
+
 def _listed(project: Project, name: str) -> tuple[ProtocolVersion, MinerUse, MinerSpec]:
     protocol = current_protocol(project)
     use = (
@@ -363,6 +378,7 @@ def mine_next(
     Refused, with nothing written, on field `miners` until the protocol lists that registered
     version, and as `next_unit` refuses otherwise."""
     _, _, spec = require_listed(project, name, version)
+    require_not_retired(project, name, version)
     digest = miner_digest(spec)
     notes = {f.name: _kind_note(f.kind) for f in spec.fields}
     described = {f.name: f.description for f in spec.fields if f.description}
@@ -406,6 +422,7 @@ def mine_record(
             [ValidationIssue("task_id", "not a miner task; evidence uses extract_record")]
         )
     _, _, spec = require_listed(project, miner, version if isinstance(version, int) else 0)
+    require_not_retired(project, miner, version if isinstance(version, int) else 0)
     return record_unit(
         project,
         actor,

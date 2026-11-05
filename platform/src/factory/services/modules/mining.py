@@ -24,7 +24,7 @@ SPEC = ModuleSpec(
     inputs=(ArtifactKind.CONVERSION, ArtifactKind.PROTOCOL, ArtifactKind.MINER),
     outputs=(ArtifactKind.RECORD,),
     events=EventFamily(
-        types=("miner.registered",),
+        types=("miner.registered", "miner.retired"),
         tables=("miners",),
         note="registered miners are data; their records are written in the extraction.* family"
         " (the pack on each event is the miner's name); mine.resolve is the gate of the"
