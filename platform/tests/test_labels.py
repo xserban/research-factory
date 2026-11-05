@@ -190,7 +190,7 @@ def test_rerun_keeps_a_withdrawn_tag_withdrawn_across_two_records(
 ) -> None:
     two = (
         "@article{a, title={Made-Up Pears}, year={2019}, doi={10.9999/x.1}, keyword={pears}}\n"
-        "@article{b, title={Made-Up Pears Again}, year={2020}, doi={10.9999/x.2}, keyword={pears}}\n"
+        "@article{b, title={Made-Up Pears 2}, year={2020}, doi={10.9999/x.2}, keyword={pears}}\n"
     )
     path = tmp_path / "two.bib"
     path.write_text(two)
