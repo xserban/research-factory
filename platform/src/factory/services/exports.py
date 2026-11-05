@@ -10,8 +10,10 @@ Invariants:
 - Every refusal is a FactoryValidationError raised before the first character is produced.
 - Exactly one of `scope` and `ids` selects works; an unknown or absorbed id is refused.
 - Files go only to the path the researcher names, never under `projects/`. They are built in a
-  staging directory beside it, under the index's lock so the log cannot move, and appear only
-  when complete; a refusal or a failure leaves the path as it was.
+  staging directory beside it and appear only when complete; a refusal or a failure leaves the
+  path as it was.
+- Assembly takes no lock: appending to the log takes none, so a lock would not stop the log moving,
+  and it would block every other session. An export over a log that moved is refused instead.
 - These file exports are the researcher's (CLI only, spec ruling 22), so nothing here is withheld.
 
 Services imported inside a function are those that may reach `drafts`, which imports this module.
@@ -291,6 +293,18 @@ def _scan_log(project: Project, wanted: Collection[str] = ()) -> _LogScan:
     return scan
 
 
+def _log_mark(project: Project) -> tuple[tuple[str, int], ...]:
+    """Each event file with its size. Event files only grow, so two equal marks mean no event was
+    appended between them, wherever in the log it would land. Costs no parse of the log."""
+    return tuple((str(path), path.stat().st_size) for path in event_files(project.paths.events_dir))
+
+
+def _refuse_if_moved(project: Project, mark: tuple[tuple[str, int], ...]) -> None:
+    """Refuse an export whose parts may come from different log positions."""
+    if _log_mark(project) != mark:
+        raise _issue("project", "the log moved; run again")
+
+
 def _position(scan: _LogScan) -> str:
     """The log position; an empty log has nothing to export."""
     if scan.last_id is None:
@@ -519,10 +533,9 @@ def export_nanopubs(
     vocab = _vocab(project)
     stage = _stage_beside(out)
     try:
-        with project.index.exclusive():
-            summary = _write_nanopubs(
-                project, stage, edges=edges, with_quotes=with_quotes, vocab=vocab
-            )
+        mark = _log_mark(project)
+        summary = _write_nanopubs(project, stage, edges=edges, with_quotes=with_quotes, vocab=vocab)
+        _refuse_if_moved(project, mark)
         _move_children(stage, out)
         return summary
     except OSError as exc:
@@ -944,8 +957,9 @@ def export_crate(
     _check_crate_target(project, out, zip_=zip_, force=force)
     stage = _stage_beside(out)
     try:
-        with project.index.exclusive():
-            summary = _assemble(project, stage, renderers)
+        mark = _log_mark(project)
+        summary = _assemble(project, stage, renderers)
+        _refuse_if_moved(project, mark)
         if zip_:
             _write_zip(stage, out.resolve())
         else:
