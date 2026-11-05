@@ -108,6 +108,8 @@ OMITTED_WHEN_EMPTY: frozenset[str] = frozenset(
         "miner_calibration_units",
         "miner_calibration_labels",
         "miner_calibration_label_sessions",
+        "mine_imports",
+        "mine_import_items",
         "experiments",
         "experiment_amendments",
         "experiment_deviations",

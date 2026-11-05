@@ -39,7 +39,7 @@ from factory.mining.spec import (
 from factory.mining.validate import validate_miner
 from factory.model.base import StrictModel
 from factory.model.extraction import ExtractedRowInput, MinerScope
-from factory.model.miners import MinerRegistered, MinerUse
+from factory.model.miners import ImportedFrom, MinerRegistered, MinerUse
 from factory.model.protocol import ExtractionSchema, ProtocolStatus, ScreeningStage
 from factory.model.screening import PassLabel
 from factory.model.search import QueryPurpose
@@ -71,6 +71,7 @@ __all__ = [
     "MineStatus",
     "MinerListing",
     "MinerRow",
+    "calibration_sample",
     "mine_next",
     "mine_record",
     "mine_status",
@@ -193,8 +194,16 @@ def registered_miner(project: Project, name: str, version: int) -> MinerSpec | N
     return None if row is None else spec_from_json(project.blobs.get_json(row.spec_blob))
 
 
-def register_miner(project: Project, actor: Actor, spec_json: JsonValue) -> MinerRegistered:
+def register_miner(
+    project: Project,
+    actor: Actor,
+    spec_json: JsonValue,
+    *,
+    imported_from: ImportedFrom | None = None,
+) -> MinerRegistered:
     """Register a miner from its JSON spec; the spec is validated and recorded as a blob.
+    `imported_from` records the project it was copied from (M-E); it must name this spec's digest
+    (`digest`).
 
     Refused, with nothing written: for a system actor (`actor`); a spec of the wrong shape or
     meaning (the issues of `spec_from_json` and `validate_miner`, dotted); a `(name, version)` that
@@ -209,6 +218,10 @@ def register_miner(project: Project, actor: Actor, spec_json: JsonValue) -> Mine
     if issues:
         raise FactoryValidationError(issues)
     digest = miner_digest(spec)
+    if imported_from is not None and imported_from.digest != digest:
+        raise FactoryValidationError(
+            [ValidationIssue("digest", "the source registers another digest of this miner")]
+        )
     with project.index.exclusive():
         project.index.sync()
         existing = registered_row(project, spec.name, spec.version)
@@ -239,6 +252,7 @@ def register_miner(project: Project, actor: Actor, spec_json: JsonValue) -> Mine
             digest=digest,
             spec_blob=project.blobs.put_json(body),
             proposer_kind=actor.kind,
+            imported_from=imported_from,
         )
         event = project.events.make(
             "miner.registered",
@@ -323,7 +337,7 @@ def miner_schema(project: Project, name: str) -> tuple[ProtocolVersion, Extracti
     return protocol, schema, compile_miner(spec)
 
 
-def _calibration_sample(project: Project, name: str) -> set[str]:
+def calibration_sample(project: Project, name: str) -> set[str]:
     """The works drawn into any calibration of miner `name` (they are never production units)."""
     project.index.sync()
     with project.index.connect() as conn:
@@ -342,7 +356,7 @@ def miner_population(project: Project, name: str) -> list[str]:
     population less the units drawn into a calibration (M-D ruling 2: a calibration unit is never
     mined by a production pass, so no resolution can have fixed it)."""
     _, _, spec = _listed(project, name)
-    apart = _calibration_sample(project, name)
+    apart = calibration_sample(project, name)
     return [work for work, _ in population(project, spec.selector) if work not in apart]
 
 

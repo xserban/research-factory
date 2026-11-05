@@ -20,12 +20,13 @@ from __future__ import annotations
 import fcntl
 import hashlib
 import json
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+from pydantic import ValidationError
 from sqlalchemy import Engine, MetaData, create_engine, select, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import SQLAlchemyError
@@ -34,7 +35,13 @@ from sqlalchemy.pool import NullPool
 from factory.canonical import canonical_json
 from factory.clock import Clock, SystemClock
 from factory.config import Settings
-from factory.errors import FactoryError, FactoryValidationError, ValidationIssue
+from factory.errors import (
+    FactoryError,
+    FactoryValidationError,
+    ProjectNotFoundError,
+    ValidationIssue,
+)
+from factory.events.envelope import Actor, Event
 from factory.events.reader import event_files, read_file, relative_name
 from factory.index.shared import (
     NON_STATE_TABLES,
@@ -49,11 +56,47 @@ from factory.index.shared import (
     set_meta,
     shared_tables,
 )
-from factory.model.extraction import MinerScope, StoredField
+from factory.mining.compile import compile_miner
+from factory.mining.kinds import kind_checks
+from factory.mining.spec import MinerSpec, spec_to_json
+from factory.model.extraction import (
+    ExtractionRecorded,
+    FieldInput,
+    MinerScope,
+    StoredField,
+)
+from factory.model.mine_imports import (
+    MAX_ITEMS,
+    ImportedItem,
+    ImportedPass,
+    MineImported,
+    SourceStatus,
+)
+from factory.model.miners import ImportedFrom, MinerRegistered
+from factory.model.screening import Channel, PassLabel
 from factory.services.context import Project, ProjectPaths, list_projects, open_project
-from factory.services.extraction import ExtractionRow, scope_rows, stale_extractions
+from factory.services.conversions import conversion_manifest, conversion_of
+from factory.services.extraction import (
+    ExtractionRow,
+    UnitPin,
+    mined_works,
+    scope_rows,
+    stale_extractions,
+)
 from factory.services.extraction_agreement import SettledRow, settled_rows
-from factory.services.mining import MinerRow, registered_miners
+from factory.services.extraction_verify import verify_row_in
+from factory.services.mining import (
+    MinerRow,
+    calibration_sample,
+    register_miner,
+    registered_miner,
+    registered_miners,
+    registered_row,
+    require_listed,
+    require_not_retired,
+)
+from factory.services.results import BatchResult, ItemError
+from factory.services.search import list_works
 
 __all__ = [
     "OPT_OUT_FILE",
@@ -65,6 +108,8 @@ __all__ = [
     "content_hash",
     "field_digest",
     "held_conversions",
+    "mine_import",
+    "register_from",
     "shared_store",
 ]
 
@@ -220,6 +265,30 @@ def _conversions(project: Project, ids: set[str]) -> list[dict[str, object]]:
     ]
 
 
+def _imports(project: Project) -> list[dict[str, object]]:
+    """The project's own `mine.imported` events, as its projection folded them."""
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT i.import_id, i.source_project, i.miner, i.version, i.digest, "
+                "(SELECT COUNT(*) FROM mine_import_items m WHERE m.import_id = i.import_id) "
+                "FROM mine_imports i ORDER BY i.import_id"
+            )
+        ).all()
+    return [
+        {
+            "project": project.paths.slug,
+            "import_id": str(ident),
+            "source_project": str(source),
+            "miner": str(miner),
+            "version": int(version),
+            "digest": str(digest),
+            "items": int(items),
+        }
+        for ident, source, miner, version, digest, items in rows
+    ]
+
+
 def _read_source(project: Project, offsets: Mapping[str, int]) -> SharedFold:
     """What `project` contributes, through its own services. Syncs its index; writes no event."""
     project.index.sync()
@@ -248,6 +317,7 @@ def _read_source(project: Project, offsets: Mapping[str, int]) -> SharedFold:
         ],
         conversions=_conversions(project, {str(r["conversion_id"]) for r in records}),
         records=records,
+        imports=_imports(project),
     )
 
 
@@ -579,3 +649,370 @@ def available_units(
         )
         for slug, work, conversion, hashed, agreed, resolved, single in rows
     ]
+
+
+# --- Import ---
+
+IMPORT_UNVERIFIED = "mine-import-unverified"
+"""The reason of a row that did not re-verify; the check of that name finds the same in a log."""
+_NOT_FINAL = "the source unit is not final"
+_NOT_HELD = "this project does not hold this conversion"
+_NOT_OFFERED = "the source has no such unit of this miner version"
+_MINED_HERE = "this unit is mined in this project"
+_CALIBRATION = "this unit is in the miner's calibration sample"
+_TOO_LARGE = f"a unit of more than {MAX_ITEMS} rows cannot be imported"
+
+
+@dataclass(frozen=True)
+class _SourceRow:
+    """A final row as the source's log holds it. `fields` is empty when the log lacks one."""
+
+    row_key: str
+    status: SourceStatus
+    extraction_ids: tuple[str, ...]
+    fields: Mapping[str, StoredField]
+    passes: tuple[ImportedPass, ...]
+
+
+@dataclass(frozen=True)
+class _SourceUnit:
+    work_id: str
+    conversion_id: str
+    hashed: str | None
+    rows: tuple[_SourceRow, ...]
+    final: bool
+    """False when a live row of the unit is not final: a unit is imported whole (plan ruling 4)."""
+
+
+def _recorded(source: Project, wanted: set[str]) -> dict[str, tuple[ExtractionRecorded, Event]]:
+    """The `extraction.recorded` events of `wanted`, read from the source's log itself: the values
+    an import carries are the log's, never the index's text form."""
+    out: dict[str, tuple[ExtractionRecorded, Event]] = {}
+    for path in event_files(source.paths.events_dir):
+        for event in read_file(path, source.catalog).events:
+            if event.type != "extraction.recorded":
+                continue
+            ident = event.payload.get("extraction_id")
+            if ident in wanted:
+                try:
+                    out[str(ident)] = (ExtractionRecorded.model_validate(event.payload), event)
+                except ValidationError:
+                    continue  # left out: the row then fails re-verification
+    return out
+
+
+def _source_row(
+    settled: SettledRow, recorded: Mapping[str, tuple[ExtractionRecorded, Event]]
+) -> _SourceRow:
+    final = settled.final
+    fields: dict[str, StoredField] = {}
+    for name, cell in final.fields.items():
+        found = recorded.get(cell.extraction_id)
+        stored = None if found is None else found[0].fields.get(name)
+        if stored is None:
+            fields = {}
+            break
+        fields[name] = stored
+    passes = tuple(
+        ImportedPass(
+            pass_label=PassLabel(recorded[i][0].pass_label),
+            session=recorded[i][1].actor.session,
+            model=recorded[i][1].actor.model,
+        )
+        for i in settled.extraction_ids
+        if i in recorded
+    )
+    return _SourceRow(final.row_key, final.status, settled.extraction_ids, fields, passes)
+
+
+def _source_units(source: Project, miner: str, version: int) -> dict[tuple[str, str], _SourceUnit]:
+    """The units of `(miner, version)` in `source`, by `(work_id, conversion_id)`, read through its
+    own services. Only rows mined there: an import is not re-exported."""
+    scope = MinerScope(miner)
+    source.index.sync()
+    settled, dropped = settled_rows(source, scope=scope)
+    meta = _row_meta(source, miner)
+    ref = f"{miner}@{version}"
+    kept = [s for s in settled if all(meta[i][0] == ref for i in s.extraction_ids if i in meta)]
+    recorded = _recorded(source, {i for s in kept for i in s.extraction_ids})
+    rows: dict[tuple[str, str], list[_SourceRow]] = {}
+    for one in kept:
+        key = (one.final.work_id, one.final.conversion_id)
+        rows.setdefault(key, []).append(_source_row(one, recorded))
+    settled_ids = {i for s in settled for i in s.extraction_ids}
+    open_units = {
+        (row.work_id, row.conversion_id)
+        for row, live in scope_rows(source, scope)
+        if live
+        and row.extraction_id not in settled_ids
+        and (row.work_id, row.row_key) not in dropped
+        and meta.get(row.extraction_id, ("", None))[0] == ref
+    }
+    out: dict[tuple[str, str], _SourceUnit] = {}
+    for key in sorted({*rows, *open_units}):
+        conversion = conversion_of(source, key[1])
+        hashed = (
+            None
+            if conversion is None
+            else content_hash(conversion.markdown_hash, conversion.manifest_hash)
+        )
+        out[key] = _SourceUnit(
+            key[0], key[1], hashed, tuple(rows.get(key, ())), key not in open_units
+        )
+    return out
+
+
+def _open_source(project: Project, slug: str) -> Project:
+    """The source project, opened in the importer's session. Refused on `source`."""
+    refused = FactoryValidationError([ValidationIssue("source", f"no source project {slug!r}")])
+    if slug == project.paths.slug:
+        raise FactoryValidationError(
+            [ValidationIssue("source", "a project does not import from itself")]
+        )
+    try:
+        source = open_project(project.settings, slug, session=project.session, clock=project.clock)
+    except ProjectNotFoundError:
+        raise refused from None
+    if (source.paths.dir / OPT_OUT_FILE).exists():
+        raise refused
+    return source
+
+
+def register_from(
+    project: Project, actor: Actor, source: str, name: str, version: int
+) -> MinerRegistered:
+    """Register in `project` the spec `source` registered as `(name, version)`, recording where it
+    came from (`imported_from`). Refused on `source` for an unknown or opted-out project and on
+    `miner` for a version the source does not hold, and as `register_miner`."""
+    origin = _open_source(project, source)
+    spec = registered_miner(origin, name, version)
+    row = registered_row(origin, name, version)
+    if spec is None or row is None:
+        raise FactoryValidationError(
+            [ValidationIssue("miner", f"{source} has no miner {name} version {version}")]
+        )
+    return register_miner(
+        project,
+        actor,
+        spec_to_json(spec),
+        imported_from=ImportedFrom(project=source, digest=row.digest),
+    )
+
+
+def _refused(index: int, field: str, reason: str) -> ItemError:
+    return ItemError(index=index, issues=[ValidationIssue(field, reason)])
+
+
+@dataclass(frozen=True)
+class _Importer:
+    """What every unit of one import is judged against, read once under the importer's lock."""
+
+    project: Project
+    spec: MinerSpec
+    held: Mapping[str, str]
+    corpus: frozenset[str]
+    mined: frozenset[str]
+    calibration: frozenset[str]
+
+
+def _unit_items(
+    importer: _Importer, unit: _SourceUnit, import_id: str
+) -> tuple[list[ImportedItem], list[ValidationIssue]]:
+    """The items of `unit`, each row re-verified against the importer's own conversion by the
+    verifiers a mined row passes, or why the whole unit is refused. Reasons are fixed; no document
+    text enters them."""
+    project, spec = importer.project, importer.spec
+    local = None if unit.hashed is None else importer.held.get(unit.hashed)
+    conversion = None if local is None else conversion_of(project, local)
+    if conversion is None:
+        return [], [ValidationIssue("conversion_id", _NOT_HELD)]
+    if not unit.final or not unit.rows:
+        return [], [ValidationIssue("units", _NOT_FINAL)]
+    if len(unit.rows) > MAX_ITEMS:
+        return [], [ValidationIssue("units", _TOO_LARGE)]
+    work = conversion.work_id
+    if work in importer.mined:
+        return [], [ValidationIssue("units", _MINED_HERE)]
+    if work in importer.calibration:
+        return [], [ValidationIssue("units", _CALIBRATION)]
+    try:
+        manifest = conversion_manifest(project, conversion.conversion_id)
+    except FactoryValidationError as exc:
+        return [], exc.issues
+    pack = compile_miner(spec)
+    declared = tuple(f.name for f in spec.fields)
+    extra = kind_checks(spec)
+    pin = UnitPin(
+        import_id,
+        work,
+        PassLabel.A,
+        MinerScope(spec.name),
+        conversion.document_id,
+        conversion.conversion_id,
+    )
+    items: list[ImportedItem] = []
+    issues: list[ValidationIssue] = []
+    keys: set[str] = set()
+    for row in unit.rows:
+        where = f"rows.{row.row_key}"
+        if not row.fields or not row.passes:
+            issues.append(ValidationIssue(where, IMPORT_UNVERIFIED))
+            continue
+        given = {
+            name: FieldInput(**stored.model_dump(exclude={"canonical", "copy_marker"}))
+            for name, stored in row.fields.items()
+        }
+        verdict = verify_row_in(
+            pack, declared, given, conversion.conversion_id, manifest, importer.corpus
+        )
+        if verdict.fields is None or verdict.row_key is None:
+            issues += [
+                ValidationIssue(f"{where}.{i.field}", f"{IMPORT_UNVERIFIED}: {i.reason}")
+                for i in verdict.issues
+            ]
+            continue
+        checked = extra(project, pin, verdict.fields, ())
+        if checked.issues:
+            issues += [
+                ValidationIssue(f"{where}.{i.field}", f"{IMPORT_UNVERIFIED}: {i.reason}")
+                for i in checked.issues
+            ]
+            continue
+        if verdict.row_key in keys:
+            issues.append(ValidationIssue(where, f"{IMPORT_UNVERIFIED}: duplicate row"))
+            continue
+        keys.add(verdict.row_key)
+        try:
+            items.append(
+                ImportedItem(
+                    extraction_id=project.ids.new("ext"),
+                    work_id=work,
+                    document_id=conversion.document_id,
+                    conversion_id=conversion.conversion_id,
+                    row_key=verdict.row_key,
+                    fields=verdict.fields,
+                    cited=checked.cited,
+                    source_extraction_ids=row.extraction_ids,
+                    source_conversion_id=unit.conversion_id,
+                    source_row_key=row.row_key,
+                    source_status=row.status,
+                    source_passes=row.passes,
+                )
+            )
+        except ValidationError:
+            issues.append(ValidationIssue(where, IMPORT_UNVERIFIED))
+    return ([], issues) if issues else (items, [])
+
+
+def _chosen(
+    offered: Mapping[tuple[str, str], _SourceUnit],
+    units: Sequence[tuple[str, str]] | None,
+    held: Mapping[str, str],
+) -> list[tuple[tuple[str, str], _SourceUnit | None]]:
+    """The units of this import in order. Without `units`, every offered unit whose conversion the
+    importer holds; a named unit the source does not offer stays, as None, to be refused."""
+    if units is None:
+        return [(k, u) for k, u in offered.items() if u.hashed in held]
+    return [(key, offered.get(key)) for key in units]
+
+
+def mine_import(
+    project: Project,
+    actor: Actor,
+    source: str,
+    miner: str,
+    version: int,
+    units: Sequence[tuple[str, str]] | None = None,
+    *,
+    channel: Channel = Channel.CLI,
+) -> BatchResult[str]:
+    """Import whole units of `(miner, version)` from `source` (ruling 19); `units` names them by the
+    source's `(work_id, conversion_id)`, None takes every unit on a conversion this project holds.
+    `written` holds `<work_id>@<conversion_id>` of each imported unit, in this project's ids.
+
+    Refused, with nothing written: for an agent (`actor`: a human act, relayed over MCP by a human
+    actor); on `source` for this project, an unknown one or one that opted out; on `protocol` and
+    `miners` as `require_listed`, which holds a built-in miner too, since no `MinerUse` can allow
+    its import; on `miners` when the use is `deny`; on `miner` for a retired version; on `digest`
+    unless the source registers the same digest.
+
+    Each unit is judged alone: an `ItemError` at its position refuses it when this project does not
+    hold its conversion, the unit is not final in the source, it is mined here or drawn into a
+    calibration, or any row fails re-verification (`mine-import-unverified`). The others are
+    written, as one or more `mine.imported` events in one append.
+
+    The source is read before this project's lock is taken and never under it, so two imports in
+    opposite directions cannot wait on each other."""
+    if actor.kind == "agent":
+        raise FactoryValidationError(
+            [ValidationIssue("actor", "an import is a human act; an agent relays it")]
+        )
+    origin = _open_source(project, source)
+    _, use, _ = require_listed(project, miner, version)
+    if use.imports == "deny":
+        raise FactoryValidationError(
+            [ValidationIssue("miners", f"the protocol declines imports of {miner}")]
+        )
+    require_not_retired(project, miner, version)
+    theirs = registered_row(origin, miner, version)
+    ours = registered_row(project, miner, version)
+    if theirs is None or ours is None or theirs.digest != ours.digest:
+        raise FactoryValidationError(
+            [ValidationIssue("digest", f"{source} does not register this digest of {miner}")]
+        )
+    offered = _source_units(origin, miner, version)
+    with project.index.exclusive():
+        project.index.sync()
+        protocol, use, spec = require_listed(project, miner, version)
+        if use.imports == "deny":
+            raise FactoryValidationError(
+                [ValidationIssue("miners", f"the protocol declines imports of {miner}")]
+            )
+        require_not_retired(project, miner, version)
+        importer = _Importer(
+            project=project,
+            spec=spec,
+            held=held_conversions(project),
+            corpus=frozenset(w.id for w in list_works(project)),
+            mined=frozenset(mined_works(project, MinerScope(miner))),
+            calibration=frozenset(calibration_sample(project, miner)),
+        )
+        written: list[str] = []
+        rejected: list[ItemError] = []
+        batches: list[list[ImportedItem]] = [[]]
+        import_ids = [project.ids.new("mim")]
+        for index, (_, unit) in enumerate(_chosen(offered, units, importer.held)):
+            if unit is None:
+                rejected.append(_refused(index, "units", _NOT_OFFERED))
+                continue
+            items, issues = _unit_items(importer, unit, import_ids[-1])
+            if issues:
+                rejected.append(ItemError(index=index, issues=issues))
+                continue
+            if len(batches[-1]) + len(items) > MAX_ITEMS:
+                batches.append([])
+                import_ids.append(project.ids.new("mim"))
+            batches[-1].extend(items)
+            written.append(f"{items[0].work_id}@{items[0].conversion_id}")
+        events = [
+            project.events.make(
+                "mine.imported",
+                MineImported(
+                    import_id=import_id,
+                    source_project=source,
+                    miner=miner,
+                    version=version,
+                    digest=ours.digest,
+                    protocol_id=protocol.protocol_id,
+                    channel=channel,
+                    items=tuple(batch),
+                ),
+                actor,
+                refs=(import_id, ours.miner_id),
+            )
+            for import_id, batch in zip(import_ids, batches, strict=True)
+            if batch
+        ]
+        if events:
+            project.record(events)
+    return BatchResult[str](written=written, rejected=rejected)

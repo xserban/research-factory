@@ -67,6 +67,7 @@ from factory.services.properties import PropertyView
 from factory.services.references import ExtractSummary, Page, ReferenceCounts
 from factory.services.regions import ExportRow, RegionState, VersionInfo
 from factory.services.relations import RelationView
+from factory.services.results import BatchResult
 from factory.services.shared_mining import SharedProject, SharedUnit
 from factory.services.snowball import Comparison, RoundCandidate, RoundResult
 from factory.services.trace import TraceNode
@@ -1502,3 +1503,11 @@ def shared_unit_lines(units: Sequence[SharedUnit]) -> list[str]:
         + (", dual" if u.dual else "")
         for u in units
     ]
+
+
+def mine_import_lines(result: BatchResult[str]) -> list[str]:
+    """How many units an import wrote, then each refusal by its position."""
+    lines = [f"imported {len(result.written)} unit(s)"]
+    for error in result.rejected:
+        lines += [f"unit {error.index}: {i.field}: {i.reason}" for i in error.issues]
+    return lines

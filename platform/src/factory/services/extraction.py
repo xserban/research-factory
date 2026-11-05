@@ -93,6 +93,7 @@ from factory.model.extraction import (
     scope_of_pack,
     scope_of_schema_ref,
 )
+from factory.model.mine_imports import MINE_IMPORT_PREFIX
 from factory.model.notices import WorkNoticeState
 from factory.model.protocol import ExtractionSchema, ProtocolAmended, ProtocolStatus, ScreeningStage
 from factory.model.screening import PassLabel
@@ -162,6 +163,7 @@ __all__ = [
     "join_extraction_pass",
     "live_claims",
     "live_rows",
+    "mined_works",
     "next_unit",
     "pass_config",
     "record_unit",
@@ -966,6 +968,11 @@ class ExtractionRow(StrictModel):
     fields: dict[str, StoredField]
     event_id: str
     cited: CitedEntry | None = None
+
+    @property
+    def origin(self) -> Literal["local", "imported"]:
+        """`imported` for a row of a `mine.imported` event, whose `task_id` is the import's id."""
+        return "imported" if self.task_id.startswith(MINE_IMPORT_PREFIX) else "local"
 
 
 class ClaimRow(StrictModel):
@@ -1979,6 +1986,14 @@ def started_works(project: Project, *, scope: ScopeKey = Scope.EVIDENCE) -> set[
     return started | {work for work, _ in ledger.rows}
 
 
+def mined_works(project: Project, scope: ScopeKey) -> set[str]:
+    """The works of `scope` this project has a task or a mined row of: an import of one would be
+    shadowed by the local units, so it is refused. Read-only."""
+    project.index.sync()
+    ledger = _ledger(project, scope)
+    return {work for work, _ in ledger.tasks} | {work for work, _ in ledger.rows}
+
+
 def stale_claims(project: Project) -> set[str]:
     """The live claims pinned to a document that is no longer the work's current one. Schema
     amendments never stale a claim. Like `stale_extractions`, it ignores the population: claims
@@ -2045,6 +2060,10 @@ def unit_states(
 # --- Reading recorded rows and claims ---
 
 
+_MINED = f"substr(task_id, 1, {len(MINE_IMPORT_PREFIX)}) != '{MINE_IMPORT_PREFIX}'"
+"""SQL: the row was mined here, not imported (an imported row's `task_id` is its import's id)."""
+
+
 def live_rows(
     project: Project,
     pass_label: PassLabel | None = None,
@@ -2058,9 +2077,12 @@ def live_rows(
 
     A miner's calibration rows (those of its calibration tasks) are a separate population:
     `calibration=False` leaves them out, `calibration=True` returns only them (and nothing for
-    another scope)."""
+    another scope).
+
+    Rows imported from another project are not here: they have no task, pass or unit of this
+    project (`imported_rows`)."""
     where, params = _filters(pass_label, work_id)
-    where += " AND superseded_by IS NULL AND scope = :scope"
+    where += f" AND superseded_by IS NULL AND scope = :scope AND {_MINED}"
     params["scope"] = scope.value
     rows = [row for row, _ in _read_rows(project, where, params)]
     if not isinstance(scope, MinerScope):
@@ -2085,10 +2107,11 @@ def recorded_row(
 
 
 def scope_rows(project: Project, scope: ScopeKey) -> list[tuple[ExtractionRow, bool]]:
-    """Every production row of `scope`, live or superseded, by extraction id, each with whether it
+    """Every row of `scope` mined here, live or superseded, by extraction id, each with whether it
     is live: what a source project offers the shared store (M-E). A miner's calibration rows are
-    left out: calibration does not travel."""
-    rows = _read_rows(project, " AND scope = :scope", {"scope": scope.value})
+    left out, as calibration does not travel, and imported rows too: an import is not re-exported,
+    so a record's source is always the project that mined it."""
+    rows = _read_rows(project, f" AND scope = :scope AND {_MINED}", {"scope": scope.value})
     if not isinstance(scope, MinerScope):
         return rows
     apart = calibration_task_ids(project, scope)

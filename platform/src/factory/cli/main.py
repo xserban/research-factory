@@ -1423,6 +1423,23 @@ def miner_register_cmd(
     typer.echo(f"registered {registered.name} version {registered.version} ({registered.digest})")
 
 
+@miner_app.command("adopt")
+def miner_adopt_cmd(
+    ctx: typer.Context,
+    source: Annotated[str, typer.Option("--from", help="The source project's slug.")],
+    miner: Annotated[str, typer.Option("--miner", help="The miner, as <name>@<version>.")],
+) -> None:
+    """Register the spec another project registered, recording where it came from."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        name, version = _miner_ref(miner)
+        registered = shared_mining_service.register_from(
+            project, project.human_actor(), source, name, version
+        )
+    typer.echo(f"registered {registered.name} version {registered.version}")
+
+
 @miner_app.command("list")
 def miner_list_cmd(ctx: typer.Context) -> None:
     """The registered miners and whether the protocol lists them."""
@@ -1547,34 +1564,61 @@ def _miner_ref(ref: str) -> tuple[str, int]:
     return name, int(version)
 
 
+def _unit_ref(ref: str) -> tuple[str, str]:
+    """`<work_id>@<conversion_id>` as a pair; refused on `units` otherwise."""
+    work, _, conversion = ref.rpartition("@")
+    if not work or not conversion:
+        raise FactoryValidationError(
+            [ValidationIssue("units", "give a unit as <work_id>@<conversion_id>")]
+        )
+    return work, conversion
+
+
 @mine_app.command("import")
 def mine_import_cmd(
     ctx: typer.Context,
     miner: Annotated[str, typer.Option("--miner", help="The miner, as <name>@<version>.")],
     source: Annotated[str | None, typer.Option("--from", help="The source project's slug.")] = None,
+    unit: Annotated[
+        list[str] | None,
+        typer.Option("--unit", help="A source unit, <work_id>@<conversion_id>; repeatable."),
+    ] = None,
     list_units: Annotated[
         bool, typer.Option("--list", help="List the importable units; import nothing.")
     ] = False,
     page: Annotated[int, typer.Option("--page", help="The page of the listing.")] = 0,
 ) -> None:
-    """List the units of a miner that other projects hold on conversions this project holds."""
+    """Import whole units of a miner from another project, each re-verified against this project's
+    own conversion, or list the units that could be imported (the researcher's act)."""
     state = _state(ctx)
     with _reporting_errors():
         project = _resolve_project(state)
         name, version = _miner_ref(miner)
-        row = mining_service.registered_row(project, name, version)
-        if row is None:
-            raise FactoryValidationError(
-                [ValidationIssue("miner", f"{miner} is not registered in this project")]
+        if list_units:
+            row = mining_service.registered_row(project, name, version)
+            if row is None:
+                raise FactoryValidationError(
+                    [ValidationIssue("miner", f"{miner} is not registered in this project")]
+                )
+            store = shared_mining_service.shared_store(state.settings, state.clock)
+            store.sync()
+            units = shared_mining_service.available_units(
+                store, project, name, version, row.digest, source=source, page=page
             )
-        store = shared_mining_service.shared_store(state.settings, state.clock)
-        store.sync()
-        units = shared_mining_service.available_units(
-            store, project, name, version, row.digest, source=source, page=page
+            for line in render.shared_unit_lines(units):
+                typer.echo(line)
+            return
+        if source is None:
+            raise FactoryValidationError([ValidationIssue("source", "give --from <slug>")])
+        result = shared_mining_service.mine_import(
+            project,
+            project.human_actor(),
+            source,
+            name,
+            version,
+            None if not unit else [_unit_ref(u) for u in unit],
         )
-    if not list_units:
-        _fail("give --list", 2)
-    for line in render.shared_unit_lines(units):
+    for line in render.mine_import_lines(result):
         typer.echo(line)
 
 

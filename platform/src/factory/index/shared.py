@@ -45,6 +45,7 @@ class SharedTables:
     miners: Table
     conversions: Table
     records: Table
+    imports: Table
 
 
 def shared_tables(metadata: MetaData) -> SharedTables:
@@ -103,7 +104,18 @@ def shared_tables(metadata: MetaData) -> SharedTables:
         Column("source_last_event", String, nullable=False),
         Index("ix_shared_lookup", "miner", "version", "digest", "conversion_id"),
     )
-    return SharedTables(meta, projects, sync_state, miners, conversions, records)
+    imports = Table(
+        "shared_imports",
+        metadata,
+        Column("project", String, primary_key=True),
+        Column("import_id", String, primary_key=True),
+        Column("source_project", String, nullable=False),
+        Column("miner", String, nullable=False),
+        Column("version", Integer, nullable=False),
+        Column("digest", String, nullable=False),
+        Column("items", Integer, nullable=False),
+    )
+    return SharedTables(meta, projects, sync_state, miners, conversions, records, imports)
 
 
 @dataclass(frozen=True)
@@ -115,11 +127,12 @@ class SharedFold:
     miners: Sequence[Mapping[str, object]] = field(default_factory=tuple)
     conversions: Sequence[Mapping[str, object]] = field(default_factory=tuple)
     records: Sequence[Mapping[str, object]] = field(default_factory=tuple)
+    imports: Sequence[Mapping[str, object]] = field(default_factory=tuple)
 
 
 def clear_project(conn: Connection, t: SharedTables, slug: str) -> None:
     """Remove everything of `slug`, its row in `shared_projects` too."""
-    for table in (t.sync_state, t.miners, t.conversions, t.records):
+    for table in (t.sync_state, t.miners, t.conversions, t.records, t.imports):
         conn.execute(delete(table).where(table.c.project == slug))
     conn.execute(delete(t.projects).where(t.projects.c.slug == slug))
 
@@ -136,6 +149,7 @@ def replace_project(conn: Connection, t: SharedTables, slug: str, fold: SharedFo
         (t.miners, fold.miners),
         (t.conversions, fold.conversions),
         (t.records, fold.records),
+        (t.imports, fold.imports),
     ):
         if rows:
             conn.execute(insert(table), [dict(row) for row in rows])

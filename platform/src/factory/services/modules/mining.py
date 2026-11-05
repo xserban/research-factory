@@ -29,6 +29,7 @@ SPEC = ModuleSpec(
             "miner.retired",
             "miner.calibration_drawn",
             "miner.calibration_labelled",
+            "mine.imported",
         ),
         tables=(
             "miners",
@@ -36,6 +37,8 @@ SPEC = ModuleSpec(
             "miner_calibration_units",
             "miner_calibration_labels",
             "miner_calibration_label_sessions",
+            "mine_imports",
+            "mine_import_items",
         ),
         note="registered miners are data; their records are written in the extraction.* family"
         " (the pack on each event is the miner's name); mine.resolve is the gate of the"

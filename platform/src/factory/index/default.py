@@ -20,6 +20,7 @@ from factory.index.intuition import intuition_handlers, intuition_tables
 from factory.index.labels import label_handlers, label_tables
 from factory.index.lineage import lineage_handlers, lineage_tables
 from factory.index.living import digest_handlers, digest_tables, living_handlers, living_tables
+from factory.index.mine_imports import mine_import_handlers, mine_import_tables
 from factory.index.miners import miner_handlers, miner_tables
 from factory.index.notices import notice_handlers, notice_tables
 from factory.index.probe import probe_handlers, probe_tables
@@ -36,7 +37,7 @@ from factory.index.tasks import task_handlers, tasks_table
 from factory.index.watch import run_started_handler, watch_handlers, watch_tables
 
 # Bump on any change to the tables or handlers below; the index is then rebuilt.
-PROJECTION_VERSION = "49"
+PROJECTION_VERSION = "61"
 
 
 def default_projection(blobs: BlobStore | None = None) -> Projection:
@@ -76,6 +77,7 @@ def default_projection(blobs: BlobStore | None = None) -> Projection:
     gates = gate_tables(metadata)
     regions = region_tables(metadata)
     miners = miner_tables(metadata)
+    mine_imports = mine_import_tables(metadata)
     hypotheses = hypothesis_tables(metadata, protocol.protocols, project)
     labels = label_tables(metadata)
     experiments = experiment_tables(
@@ -111,6 +113,7 @@ def default_projection(blobs: BlobStore | None = None) -> Projection:
         **gate_handlers(gates),
         **region_handlers(regions, blobs),
         **miner_handlers(miners),
+        **mine_import_handlers(mine_imports, extraction, conversions, fulltext, miners),
         **hypothesis_handlers(hypotheses),
         **label_handlers(labels),
         **experiment_handlers(experiments),

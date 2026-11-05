@@ -116,6 +116,7 @@ from factory.services import relations as relations_service
 from factory.services import screening as screening_service
 from factory.services import search as search_service
 from factory.services import seeds as seeds_service
+from factory.services import shared_mining as shared_mining_service
 from factory.services import snowball as snowball_service
 from factory.services import terms as terms_service
 from factory.services import trace as trace_service
@@ -1551,6 +1552,39 @@ def build_server(
             return {"event_id": event_id}
 
         return _reply(project, label, include_work_ids=False)
+
+    @server.tool()
+    def mine_import(
+        project: str,
+        source: str,
+        miner: str,
+        version: int,
+        units: list[list[str]] | None = None,
+    ) -> dict[str, JsonValue]:
+        """The human's import of whole units of a miner from another project: `units` names them as
+        [work_id, conversion_id] of the source, none takes every unit on a conversion this project
+        holds. Each row is re-verified against this project's own conversion; a unit with a failing
+        row is refused. Refused to a session that has joined a pass."""
+
+        def run() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            if units is not None and any(len(unit) != 2 for unit in units):
+                raise FactoryValidationError(
+                    [ValidationIssue("units", "give each unit as [work_id, conversion_id]")]
+                )
+            result = shared_mining_service.mine_import(
+                opened,
+                opened.human_actor(),
+                source,
+                miner,
+                version,
+                None if units is None else [(unit[0], unit[1]) for unit in units],
+                channel=Channel.MCP,
+            )
+            return result.model_dump(mode="json")
+
+        return _reply(project, run, include_work_ids=False)
 
     @server.tool()
     def import_status(
