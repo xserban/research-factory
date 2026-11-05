@@ -93,8 +93,8 @@ from factory.services import miner_report as miner_report_service
 from factory.services import miners as miners_service
 from factory.services import mining as mining_service
 from factory.services import notices as notices_service
-from factory.services import organisation_export as organisation_export_service
 from factory.services import onion as onion_service
+from factory.services import organisation_export as organisation_export_service
 from factory.services import portfolio as portfolio_service
 from factory.services import prisma as prisma_service
 from factory.services import prisma_update as prisma_update_service
