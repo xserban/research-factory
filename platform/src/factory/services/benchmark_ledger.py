@@ -7,8 +7,9 @@ Invariants:
 - Reported and reproduced values are separate columns of a row (`reported`, `reproduced`); a
   reproduction never becomes a row of the evidence report.
 - Own results (a computed evaluation's outcome, mean and interval) sit in `own_results` of the
-  group whose key holds every condition of the hypothesis; they never enter a group's rows,
-  frontiers or counts. A hypothesis with no condition appears in every group.
+  groups that meet the hypothesis's requirements (its conditions and its metric,
+  `evaluation.group_requirements`); they never enter a group's rows, frontiers or counts. A
+  hypothesis with no condition appears in every group of its metric.
 - The agent variant (`agent=True`) carries no reproduced value and no mean or interval of an
   own result (decision 93 item 9: no MCP view carries a metric value), and a baseline that
   reproduces on the confirmatory split reads `resolved` until the design is unlocked (it would
@@ -25,10 +26,11 @@ from typing import Literal
 from sqlalchemy import text
 
 from factory.errors import FactoryValidationError, ValidationIssue
+from factory.hypotheses.literature import Requirement, group_holds
 from factory.index.experiments import design_of
 from factory.model.base import StrictModel
 from factory.services.context import Project
-from factory.services.evaluation import latest_evaluation
+from factory.services.evaluation import group_requirements, latest_evaluation
 from factory.services.evidence_report import agent_evidence, evidence_report
 
 Reproduction = Literal["reproduced", "not-reproduced", "accepted", "resolved", "none"]
@@ -100,13 +102,13 @@ def _hidden_before_unlock(project: Project) -> set[tuple[str, str]]:
     return hidden
 
 
-def _own_results(project: Project) -> list[tuple[dict[str, str], OwnResult]]:
+def _own_results(project: Project) -> list[tuple[list[Requirement], OwnResult]]:
     with project.index.connect() as conn:
         hypotheses = conn.execute(
             text("SELECT DISTINCT hypothesis_id FROM hypothesis_evaluations ORDER BY 1")
         ).scalars()
         ids = [str(h) for h in hypotheses]
-    out: list[tuple[dict[str, str], OwnResult]] = []
+    out: list[tuple[list[Requirement], OwnResult]] = []
     from factory.services.hypotheses import hypothesis_view
 
     for hid in ids:
@@ -117,7 +119,7 @@ def _own_results(project: Project) -> list[tuple[dict[str, str], OwnResult]]:
         p = live.payload
         out.append(
             (
-                dict(view.spec.conditions),
+                group_requirements(project, view.spec),
                 OwnResult(
                     hypothesis_id=hid,
                     experiment_id=p.experiment_id,
@@ -153,7 +155,6 @@ def ledger(
     hidden = _hidden_before_unlock(project) if agent else set()
     out: list[LedgerGroup] = []
     for group in groups:
-        key = set(group.key)
         rows: list[LedgerRow] = []
         for row in group.rows:
             found = reproductions.get(row.row_key)
@@ -189,7 +190,9 @@ def ledger(
                 key=list(group.key),
                 rows=rows,
                 own_results=[
-                    r.agent_view() if agent else r for cond, r in own if set(cond.items()) <= key
+                    r.agent_view() if agent else r
+                    for cond, r in own
+                    if group_holds(group.key, cond)
                 ],
             )
         )

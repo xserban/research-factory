@@ -17,7 +17,7 @@ from factory.services.evidence_report import evidence_report
 from factory.services.experiments import accept_baseline, unlock_experiment
 from factory.services.extraction_agreement import final_rows
 from factory.services.hypotheses import draft_hypothesis
-from tests.evaluation_helpers import SUPPORTED, report_runs, unlocked
+from tests.evaluation_helpers import SUPPORTED, own_result, report_runs, unlocked
 from tests.experiment_helpers import XW, frozen_design, register_with_review, xw
 from tests.hypothesis_helpers import DRAFTER, HW, gw, hw, make_spec
 from tests.test_reproduction import _repro
@@ -55,34 +55,30 @@ def test_not_reproduced_then_accepted(project: Project, human: Any, xw: XW, tmp_
 def test_own_results_attached_by_conditions(
     project: Project, human: Any, xw: XW, hw: HW, tmp_path: Path
 ) -> None:
-    exp = unlocked(project, human, xw)
-    report_runs(project, human, tmp_path, exp, SUPPORTED)
-    hid2, _ = draft_hypothesis(
-        project,
-        DRAFTER,
-        make_spec(lead=hw.lead, rationale="detection", conditions={"task": "detection"}),
+    every = own_result(project, human, hw, xw, tmp_path, SUPPORTED)
+    only = own_result(
+        project, human, hw, xw, tmp_path, SUPPORTED, letter="d", conditions={"task": "detection"}
     )
-    register_with_review(project, human, hid2)
-    fresh = [
-        {"name": "imagenet-dev", "version": "1", "sha256": "a" * 64, "role": "dev"},
-        {"name": "imagenet-test2", "version": "1", "sha256": "c" * 64, "role": "confirmatory"},
-    ]
-    second = unlocked(project, human, XW(hid2, xw.rows), datasets=fresh)
-    report_runs(project, human, tmp_path, second, SUPPORTED)
     groups = ledger(project)
     detection = [g for g in groups if ("task", "detection") in g.key]
     other = [g for g in groups if ("task", "detection") not in g.key]
     assert detection and other
-    assert all({o.hypothesis_id for o in g.own_results} == {xw.hid, hid2} for g in detection)
-    assert all({o.hypothesis_id for o in g.own_results} == {xw.hid} for g in other)  # no condition
-    own = next(o for o in detection[0].own_results if o.hypothesis_id == xw.hid)
-    live = latest_evaluation(project, xw.hid)
-    assert live is not None
+    assert all({o.hypothesis_id for o in g.own_results} == {every, only} for g in detection)
+    assert all({o.hypothesis_id for o in g.own_results} == {every} for g in other)  # no condition
+    own = next(o for o in detection[0].own_results if o.hypothesis_id == every)
     assert (own.outcome, own.mean, own.ci_low, own.n) == ("supported", "1", "0.503167", 3)
     # own results never enter a group's rows
     assert all(
         r.row_key in {x.row_key for x in final_rows(project)} for g in groups for r in g.rows
     )
+
+
+def test_a_result_on_another_metric_is_in_no_group(
+    project: Project, human: Any, xw: XW, tmp_path: Path
+) -> None:
+    exp = unlocked(project, human, xw)  # top-1 accuracy; the world's groups report `low`
+    report_runs(project, human, tmp_path, exp, SUPPORTED)
+    assert not [o for g in ledger(project) for o in g.own_results]
 
 
 def test_evidence_report_unchanged(project: Project, human: Any, xw: XW, tmp_path: Path) -> None:

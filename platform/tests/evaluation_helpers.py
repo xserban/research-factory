@@ -1,7 +1,7 @@
 """Shared builders for the evaluation tests (slice 6, plan XP-B): the XP-A fixtures plus
 `report_runs`, which registers and ingests runs from a table of values."""
 
-# ruff: noqa: F401
+# ruff: noqa: F401, F811
 
 from __future__ import annotations
 
@@ -12,9 +12,18 @@ from typing import Any
 from factory.events.envelope import Actor
 from factory.services.context import Project
 from factory.services.experiments import unlock_experiment, unlock_nonce
+from factory.services.hypotheses import draft_hypothesis
 from factory.services.xruns import ingest_results, register_run
-from tests.experiment_helpers import XW, cell, frozen_design, results_file, xe, xw
-from tests.hypothesis_helpers import DRAFTER, HW, gw, hw
+from tests.experiment_helpers import (
+    XW,
+    cell,
+    frozen_design,
+    register_with_review,
+    results_file,
+    xe,
+    xw,
+)
+from tests.hypothesis_helpers import DRAFTER, HW, gw, hw, make_spec
 
 Table = Mapping[tuple[str, int], str | None]
 """(arm, seed) to the primary metric of the run; `None` is a failed run."""
@@ -52,6 +61,7 @@ def report_runs(
     *,
     split: str = "confirmatory",
     resolution: str = "224",
+    metric: str | None = None,
 ) -> dict[tuple[str, int], str]:
     """Register one run per entry of `table` (in the table's order) and report it. A confirmatory
     run carries the unlock nonce."""
@@ -65,6 +75,8 @@ def report_runs(
         extra: dict[str, Any] = (
             {"metrics": {}, "exit_status": 1} if value is None else {"value": value}
         )
+        if metric is not None and value is not None:
+            extra = {"metrics": {metric: {"value": value, "unit": "%"}}}
         path = results_file(tmp_path, run, nonce=nonce, name=f"run{_counter['n']}.json", **extra)
         ingest_results(project, human, path)
         runs[(arm, seed)] = run
@@ -77,3 +89,39 @@ def unlocked(project: Project, human: Actor, w: XW, **over: Any) -> str:
     exp = frozen_design(project, human, w, **over)
     unlock_experiment(project, human, exp)
     return exp
+
+
+LOW_DESIGN_METRIC = {
+    "name": "Low",
+    "direction": "higher",
+    "unit_family": "score",
+    "unit": "%",
+    "primary": True,
+}
+
+
+def own_result(
+    project: Project,
+    human: Actor,
+    hw: HW,
+    w: XW,
+    tmp_path: Path,
+    table: Table,
+    *,
+    letter: str = "c",
+    **spec: Any,
+) -> str:
+    """A second hypothesis on the metric the evidence world's groups report (`Low`), run on its own
+    confirmatory data: an own result the benchmark ledger can attach."""
+    metric = {"name": "Low", "direction": "higher", "unit_family": "score", "unit": "points"}
+    hid, _ = draft_hypothesis(
+        project, DRAFTER, make_spec(lead=hw.lead, rationale="own", metric=metric, **spec)
+    )
+    register_with_review(project, human, hid)
+    datasets = [
+        {"name": "imagenet-dev", "version": "1", "sha256": "a" * 64, "role": "dev"},
+        {"name": f"test-{letter}", "version": "1", "sha256": letter * 64, "role": "confirmatory"},
+    ]
+    exp = unlocked(project, human, XW(hid, w.rows), datasets=datasets, metrics=[LOW_DESIGN_METRIC])
+    report_runs(project, human, tmp_path, exp, table, metric="Low")
+    return hid

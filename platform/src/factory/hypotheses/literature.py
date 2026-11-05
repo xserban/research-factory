@@ -2,8 +2,9 @@
 
 Invariants:
 - A work compares the two methods when it was published on or after the window start (an
-  undated work is not in the window) and has, in one evidence group whose key holds every
-  condition of the hypothesis, an independent row for each method with a canonical value.
+  undated work is not in the window) and has, in one evidence group that meets every requirement
+  of the hypothesis (`group_holds`: its conditions and its metric, ruling 16), an independent row
+  for each method with a canonical value. A group with no metric key meets no metric requirement.
 - With several rows of one method in one work the one with the smallest row key is used, so the
   same facts always give the same comparison; a work is counted once.
 - Which method a work favours is `rules.favour_of`: the oriented difference beyond the margin.
@@ -15,6 +16,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
 
+from factory.extraction.numbers import normalise_text
 from factory.hypotheses.rules import Favour, favour_of
 
 
@@ -29,6 +31,14 @@ class LitRow:
 
 Group = tuple[Sequence[tuple[str, str]], Sequence[LitRow]]
 """An evidence group: its comparability key and its rows."""
+Requirement = tuple[str, frozenset[str]]
+"""A key of an evidence group and the normalised values it may hold."""
+
+
+def group_holds(key: Sequence[tuple[str, str]], requirements: Sequence[Requirement]) -> bool:
+    """Whether a group's key meets every requirement; a key the group lacks does not."""
+    values = dict(key)
+    return all(k in values and normalise_text(values[k]) in forms for k, forms in requirements)
 
 
 def compare_works(
@@ -36,17 +46,16 @@ def compare_works(
     *,
     treatment: str,
     baseline: str,
-    conditions: Mapping[str, str],
+    requirements: Sequence[Requirement],
     window_start: str,
     dates: Mapping[str, str],
     direction: str,
     margin: Decimal,
 ) -> dict[str, tuple[str, str, Favour]]:
     """Work id to (treatment row key, baseline row key, favoured side) for each comparing work."""
-    wanted = set(conditions.items())
     out: dict[str, tuple[str, str, Favour]] = {}
     for key, rows in groups:
-        if not wanted <= set(key):
+        if not group_holds(key, requirements):
             continue
         by_work: dict[str, list[LitRow]] = {}
         for row in rows:

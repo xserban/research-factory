@@ -31,8 +31,9 @@ from sqlalchemy import text
 
 from factory.canonical import canonical_json
 from factory.errors import FactoryValidationError, ValidationIssue
+from factory.extraction.numbers import normalise_for, normalise_text
 from factory.hypotheses.evaluate import compute_experiment
-from factory.hypotheses.literature import LitRow, compare_works
+from factory.hypotheses.literature import LitRow, Requirement, compare_works
 from factory.hypotheses.rules import Favour, apply_literature_rule
 from factory.hypotheses.tquantiles import Level
 from factory.index.evaluation import read_experiment_inputs
@@ -40,13 +41,16 @@ from factory.model.base import StrictModel
 from factory.model.hypotheses import (
     EVALUATOR_VERSION,
     HypothesisEvaluated,
+    HypothesisSpec,
     LiteratureDirection,
     LiteratureTest,
     MethodRef,
 )
+from factory.packs import Pack
 from factory.services import hypotheses as hypothesis_service
 from factory.services.context import Project
 from factory.services.evidence_report import EvidenceRow, evidence_report
+from factory.services.extraction import require_schema
 
 
 class EvaluationView(StrictModel):
@@ -105,6 +109,28 @@ def _method_name(ref: MethodRef, rows: Sequence[EvidenceRow]) -> str | None:
     return None
 
 
+def _forms(pack: Pack | None, key: str, value: str) -> frozenset[str]:
+    """The normalised values a group key may hold for a stated value: as plain text and through
+    the field's own normaliser."""
+    definition = None if pack is None else pack.field(key)
+    forms = {normalise_text(value)}
+    if definition is not None:
+        forms.add(normalise_text(normalise_for(definition, value)))
+    return frozenset(forms)
+
+
+def group_requirements(project: Project, spec: HypothesisSpec) -> list[Requirement]:
+    """What an evidence group must hold to speak to a hypothesis: its conditions and its metric
+    (ruling 16). `evaluate` and the benchmark ledger read the same requirements."""
+    try:
+        _protocol, _schema, pack = require_schema(project)
+    except FactoryValidationError:
+        pack = None
+    required: list[Requirement] = [(k, frozenset({v})) for k, v in spec.conditions.items()]
+    required.append(("metric", _forms(pack, "metric", spec.metric.name)))
+    return required
+
+
 def _published(project: Project, work_ids: Sequence[str]) -> dict[str, str]:
     if not work_ids:
         return {}
@@ -149,7 +175,7 @@ def _recompute_literature(project: Project, hypothesis_id: str) -> HypothesisEva
             ],
             treatment=treatment,
             baseline=baseline,
-            conditions=spec.conditions,
+            requirements=group_requirements(project, spec),
             window_start=start,
             dates=_published(project, sorted({r.work_id for r in all_rows})),
             direction=spec.metric.direction,

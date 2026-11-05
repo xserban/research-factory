@@ -41,7 +41,7 @@ from factory.services.methods import methods_report, render_methods
 from factory.services.multiverse import ablations, controls, specification_curve
 from factory.services.prisma import prisma_flow
 from factory.services.trace import trace
-from tests.evaluation_helpers import REFUTED, SUPPORTED, report_runs
+from tests.evaluation_helpers import REFUTED, SUPPORTED, own_result, report_runs
 from tests.experiment_helpers import XW, frozen_design, xw
 from tests.helpers import SESSION, T0
 from tests.hypothesis_helpers import HW, LEAD_AUTHOR, LEAD_TEXT, gw, hw, lead_input
@@ -146,15 +146,16 @@ def test_pilot_flow_with_constructed_runs(
     assert view is not None and xw.hid in view.prior
 
     # the benchmark ledger: reported and reproduced apart, the own result beside the group
-    own = [o for g in ledger(project) for o in g.own_results]
-    assert [o.outcome for o in own].count("refuted") >= 1
+    second = own_result(project, human, hw, xw, tmp_path, REFUTED)
+    own = {o.hypothesis_id: o.outcome for g in ledger(project) for o in g.own_results}
+    assert own == {second: "refuted"}  # the first reports another metric than the world's groups
     reproduced = {r.row_key: r.reproduction for g in ledger(project) for r in g.rows}
     assert reproduced[xw.rows[0]] == "reproduced"
 
     # methods count the refuted outcome; trace reaches the question from the outcome
     methods = methods_report(project).hypotheses
-    assert methods is not None and methods.outcomes == {"refuted": 1}
-    assert "refuted 1" in render_methods(methods_report(project))
+    assert methods is not None and methods.outcomes == {"refuted": 2}
+    assert "refuted 2" in render_methods(methods_report(project))
     kinds: set[str] = set()
 
     def walk(node: Any) -> None:

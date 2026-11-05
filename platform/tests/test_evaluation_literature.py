@@ -35,7 +35,7 @@ def compare(rows: list[LitRow], **over: Any) -> dict[str, Any]:
     args: dict[str, Any] = {
         "treatment": "A",
         "baseline": "B",
-        "conditions": {"task": "classification"},
+        "requirements": [("task", frozenset({"classification"}))],
         "window_start": "2024-01-01",
         "dates": {"w1": "2024-05-01", "w2": "2023-05-01", "w3": "2024-01-01", "w4": "2025-01-01"},
         "direction": "higher",
@@ -85,8 +85,8 @@ def test_ties_and_lower_is_better_and_first_row_by_key() -> None:
 
 def test_groups_must_hold_the_conditions() -> None:
     rows = [row("w1", "rk_1", "A", "80"), row("w1", "rk_2", "B", "70")]
-    assert compare(rows, conditions={"task": "detection"}) == {}
-    assert compare(rows, conditions={}) != {}
+    assert compare(rows, requirements=[("task", frozenset({"detection"}))]) == {}
+    assert compare(rows, requirements=[]) != {}
 
 
 def test_real_path_literature_evaluation_is_insufficient_without_comparing_works(

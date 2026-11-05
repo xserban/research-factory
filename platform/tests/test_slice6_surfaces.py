@@ -24,7 +24,7 @@ from factory.services.directions import close_direction
 from factory.services.evaluation import latest_evaluation
 from factory.services.experiments import unlock_experiment
 from tests.cli_helpers import _env
-from tests.evaluation_helpers import REFUTED, SUPPORTED, report_runs, unlocked
+from tests.evaluation_helpers import REFUTED, SUPPORTED, own_result, report_runs, unlocked
 from tests.experiment_helpers import XW, frozen_design, xw
 from tests.extraction_helpers import SESSION_A
 from tests.helpers import install_skill, open_session
@@ -77,9 +77,15 @@ def test_cli_evaluate_show_ledger_registry(
     assert code == 0 and "1 failed direction(s)" in out
     code, _, err = _run(root, "registry", "--reason", "nonsense")
     assert code == 1 and "reasons" in err
-    code, out, _ = _run(root, "benchmark-ledger")
-    assert code == 0 and f"own result {xw.hid}: refuted" in out
     assert _run(root, "benchmark-ledger", "--group", "nope")[0] == 1
+
+
+def test_cli_ledger_shows_an_own_result(
+    settings: Settings, project: Project, human: Actor, xw: XW, hw: HW, tmp_path: Path
+) -> None:
+    hid = own_result(project, human, hw, xw, tmp_path, REFUTED)
+    code, out, _ = _run(settings.root, "benchmark-ledger")
+    assert code == 0 and f"own result {hid}: refuted" in out
 
 
 def test_cli_directions_close(settings: Settings, project: Project, xw: XW) -> None:
@@ -167,6 +173,7 @@ async def test_registry_and_ledger_tools(
     clock: FixedClock,
     human: Actor,
     xw: XW,
+    hw: HW,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -174,6 +181,7 @@ async def test_registry_and_ledger_tools(
     _repro(project, human, tmp_path, exp, xw.rows[0], {1: "1.0", 2: "1.0", 3: "1.0"})
     unlock_experiment(project, human, exp)
     report_runs(project, human, tmp_path, exp, REFUTED)
+    own_result(project, human, hw, xw, tmp_path, REFUTED)
     closed = close_direction(
         project, human, "Private note.", DirectionReason.INFEASIBLE, Conditions(), [xw.hid]
     )
