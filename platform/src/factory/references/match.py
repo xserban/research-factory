@@ -42,12 +42,15 @@ YEAR_TOLERANCE = 1
 
 @dataclass(frozen=True)
 class Candidate:
-    """A work a title may match: its id, title, first author (display name) and year."""
+    """A work a title may match: its id, title, first author (display name) and year.
+    `normalized` is `normalize_title(title)` when the caller matches many entries against the same
+    candidates, so the title is normalised once; None has it normalised here."""
 
     work_id: str
     title: str
     first_author: str | None
     year: int | None
+    normalized: str | None = None
 
 
 @dataclass(frozen=True)
@@ -101,7 +104,7 @@ def match_title(fields: RefFields, candidates: Sequence[Candidate]) -> Match:
     floor_ratio = TITLE_FLOOR
     scored: list[tuple[float, Candidate]] = []
     for c in sorted(candidates, key=lambda c: c.work_id):
-        other = normalize_title(c.title)
+        other = normalize_title(c.title) if c.normalized is None else c.normalized
         if not other:
             continue
         matcher = SequenceMatcher(None, title, other, autojunk=False)

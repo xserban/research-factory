@@ -10,26 +10,34 @@ import json
 from typing import Any
 
 import pytest
+from sqlalchemy import text
 
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
 from factory.model.chase import ChaseDirection, ChaseRoundStarted
 from factory.model.project import RigorMode
 from factory.model.protocol import ScreeningPlan, ScreeningStage, SnowballPlan
-from factory.model.references import Direction, SnowballRoundStarted, Via
+from factory.model.references import Direction, LinkState, SnowballRoundStarted, Via
 from factory.model.screening import PassLabel
 from factory.model.search import QueryKind, QueryPurpose, QuerySpec, RunStatus
 from factory.model.seed import HeldOut
 from factory.model.work import ProvenanceMethod, WorkType
 from factory.model.work_ids import work_id
 from factory.services import chase as chase_service
+from factory.services import references as references_service
 from factory.services import snowball
 from factory.services.agreement import Outcome, final_outcomes
 from factory.services.chase import chase_rounds, search_chase
 from factory.services.context import Project
 from factory.services.fulltext_screening import fulltext_queue
 from factory.services.protocol import amend_protocol, current_protocol, registered_round
-from factory.services.references import extract_references, included_works, list_references
+from factory.services.references import (
+    MASKED_REASON,
+    extract_references,
+    included_works,
+    list_references,
+    reference_counts,
+)
 from factory.services.screening import open_pass
 from factory.services.search import get_work, list_works, register_query, run_query
 from factory.services.seeds import split_seeds
@@ -37,12 +45,14 @@ from factory.services.snowball import (
     RoundCandidate,
     plan_round,
     round_runs,
+    snowball_candidates,
     snowball_queries,
     snowball_round,
     unqueryable_keys,
 )
 from factory.sources.registry import INTERFACES
 from tests.document_helpers import (
+    StubConverter,
     event_bytes,
     events_of_type,
     fetched_document,
@@ -456,8 +466,8 @@ def test_round_waives_only_its_own_texts(
     )
     # the round's own text is waived only for a query that names the round
     register_query(project, agent, own, sources=sources, round_id=result.round_id)
-    for text in ("openalex:W501", "openalex:W999"):
-        hand = own.model_copy(update={"text": text})
+    for wording in ("openalex:W501", "openalex:W999"):
+        hand = own.model_copy(update={"text": wording})
         with pytest.raises(FactoryValidationError) as caught:
             register_query(project, agent, hand, sources=sources)
         assert "query" in _issue_fields(caught.value)
@@ -537,6 +547,136 @@ def test_unconverted_document_blocks_as_not_extracted(
     fetched_document(project, third, bib_html(ENTRIES_B, BODY_B))
     plan = plan_round(project, Direction.BACKWARD)
     assert (third, "not-extracted") in plan.unextracted and not plan.state.allowed
+
+
+# --- Scale (final review 7) ---
+
+
+def _built(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    """A list that grows by one for each `ReferenceItem` the service builds."""
+    real = references_service.ReferenceItem
+    made: list[int] = []
+
+    def counted(**kw: Any) -> Any:
+        made.append(1)
+        return real(**kw)
+
+    monkeypatch.setattr(references_service, "ReferenceItem", counted)
+    return made
+
+
+def _all_pages(project: Project, held: HeldOut | None, **kw: Any) -> list[Any]:
+    out: list[Any] = []
+    after: int | None = 0
+    while after is not None:
+        page = list_references(project, after=after, limit=2, held_out=held, **kw)
+        out += page.items
+        after = page.next_after
+    return out
+
+
+def test_a_page_builds_only_its_own_items(
+    project: Project, planned: tuple[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    made = _built(monkeypatch)
+    page = list_references(project, state=None, work_id=None, after=1, limit=2)
+    assert len(page.items) == len(made) == 2
+    assert page.total == 5 and page.next_after == 3
+
+
+def test_paged_held_out_list_filters_on_the_shown_state(
+    project: Project, planned: tuple[str, str]
+) -> None:
+    """A held-out link is masked before the state filter and the total, and a held-out citing
+    work's entries are gone."""
+    work_a, work_b = planned
+    lattice = _lattice(project)
+    held = HeldOut(work_ids=frozenset({lattice, work_b}), keys=frozenset({"10.5555/jim.4"}))
+    everything = _all_pages(project, held, state=None, work_id=None)
+    assert {i.citing_work for i in everything} == {work_a}
+    assert len(everything) == 4
+    assert sum(i.reason == MASKED_REASON for i in everything) == 2
+    resolved = _all_pages(project, held, state=LinkState.RESOLVED, work_id=None)
+    assert all(lattice != i.work_id for i in resolved)
+    unresolved = _all_pages(project, held, state=LinkState.UNRESOLVED, work_id=None)
+    assert len(resolved) + len(unresolved) == 4
+    assert list_references(
+        project, state=LinkState.UNRESOLVED, work_id=None, after=0, limit=1, held_out=held
+    ).total == len(unresolved)
+
+
+def test_held_out_counts_come_from_sql_and_match_the_list(
+    project: Project, planned: tuple[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, work_b = planned
+    lattice = _lattice(project)
+    held = HeldOut(work_ids=frozenset({lattice, work_b}), keys=frozenset({"10.5555/jim.4"}))
+    shown = _all_pages(project, held, state=None, work_id=None)
+    made = _built(monkeypatch)
+    counts = reference_counts(project, held)
+    assert made == []
+    assert counts.extractions == 1 and counts.entries == len(shown)
+    for state in LinkState:
+        assert getattr(counts, state.value) == sum(i.state is state for i in shown)
+    assert counts.no_source_record == 0
+    assert counts.new_candidates == 1  # the reed work; lattice and the DOI entry are masked
+
+
+def test_counts_without_held_out_are_unchanged(project: Project, planned: tuple[str, str]) -> None:
+    counts = reference_counts(project)
+    assert (counts.extractions, counts.entries) == (2, 5)
+    assert counts.resolved + counts.unconfirmed + counts.ambiguous + counts.unresolved == 5
+    assert counts.no_source_record == 1 and counts.in_corpus == 1 and counts.new_candidates == 3
+
+
+def test_candidate_rows_are_read_for_the_current_extractions_only(
+    project: Project, agent: Actor, planned: tuple[str, str]
+) -> None:
+    work_a, _ = planned
+    run_convert(project, make_registry(StubConverter(version="2.0+stub")))
+    rows_before = snowball._extraction_rows
+    old = {r for (r,) in _extraction_ids(project)}
+    extract_references(project, agent, None, sources=_lookups().sources())
+    current = {r for (r,) in _extraction_ids(project)} - old
+    links, contexts = rows_before(project, sorted(current))
+    assert {str(row[0]) for row in links} <= current and links
+    assert {str(row[0]) for row in contexts} <= current and contexts
+    assert snowball_candidates(project, [work_a])
+
+
+def _extraction_ids(project: Project) -> list[tuple[str]]:
+    with project.index.connect() as conn:
+        rows = conn.execute(text("SELECT extraction_id FROM reference_extractions")).all()
+    return [(str(r[0]),) for r in rows]
+
+
+def test_candidates_do_not_load_the_stored_works(
+    project: Project, planned: tuple[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def refused(*_a: Any, **_kw: Any) -> None:
+        raise AssertionError("candidates must not load every stored work")
+
+    monkeypatch.setattr(snowball, "list_works", refused)
+    assert snowball_candidates(project, list(planned))
+
+
+def test_the_corpus_is_loaded_once_per_extraction_call(
+    project: Project, corpus: None, agent: Actor, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    work_a, work_b = promoted_works(project)[:2]
+    fetched_document(project, work_a, bib_html(ENTRIES_A, BODY_A))
+    fetched_document(project, work_b, bib_html(ENTRIES_B, BODY_B))
+    run_convert(project, make_registry())
+    real = references_service.load_corpus
+    calls: list[int] = []
+
+    def counted(p: Project) -> Any:
+        calls.append(1)
+        return real(p)
+
+    monkeypatch.setattr(references_service, "load_corpus", counted)
+    assert len(extract_references(project, agent, None, sources=_sources()).extractions) == 2
+    assert len(calls) == 1
 
 
 # --- Who blocks a round (ruling 18, final review 1) ---

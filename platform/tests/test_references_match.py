@@ -1,6 +1,9 @@
 """The title matcher (ruling 16). Every title and name is invented."""
 
+import pytest
+
 from factory.model.references import Confidence, LinkState
+from factory.references import match as match_module
 from factory.references.match import (
     MARGIN,
     MATCHER_VERSION,
@@ -142,3 +145,27 @@ def test_deterministic_regardless_of_order() -> None:
     a = match_title(f("Efficient reed transformers v2", "Lee", 2021), near)
     b = match_title(f("Efficient reed transformers v2", "Lee", 2021), near[::-1])
     assert a == b
+
+
+def test_a_prepared_candidate_title_is_not_normalised_again(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Final review 7: a corpus title is normalised once, not once per entry."""
+    candidates = [
+        Candidate("rf:a-00000001", "Moss Growth", None, None, normalized="moss growth"),
+        Candidate("rf:b-00000002", "Reed Beds", None, None, normalized="reed beds"),
+    ]
+    seen: list[str] = []
+    real = match_module.normalize_title
+
+    def counted(title: str) -> str:
+        seen.append(title)
+        return real(title)
+
+    monkeypatch.setattr(match_module, "normalize_title", counted)
+    assert match_title(f("Moss growth"), candidates).work_id == "rf:a-00000001"
+    assert "Reed Beds" not in seen and "Moss Growth" not in seen
+
+
+def test_a_candidate_without_a_prepared_title_is_normalised() -> None:
+    assert match_title(f("Moss growth"), [cand("MOSS: Growth!")]).state is LinkState.RESOLVED

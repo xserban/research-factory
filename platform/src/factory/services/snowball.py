@@ -57,7 +57,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import Field
 from sqlalchemy import text
@@ -102,6 +102,8 @@ from factory.services.references import current_extraction, included_works
 from factory.services.search import (
     RunSummary,
     corpus_size,
+    corpus_work_ids,
+    get_work,
     list_works,
     query_issues,
     register_query,
@@ -528,6 +530,34 @@ def snowball_compare(
 # --- Candidates and queries ---
 
 
+def _extraction_rows(
+    project: Project, extraction_ids: Sequence[str]
+) -> tuple[Sequence[Any], Sequence[Any]]:
+    """(`resolved` links, matched contexts) of the given live extractions, in stored order."""
+    ids = {"ids": json.dumps(list(extraction_ids))}
+    with project.index.connect() as conn:
+        links = conn.execute(
+            text(
+                "SELECT l.extraction_id, l.ordinal, l.work_id, l.no_source_record "
+                "FROM reference_links l JOIN reference_extractions x "
+                "ON x.extraction_id = l.extraction_id AND x.live = 1 "
+                "WHERE l.extraction_id IN (SELECT value FROM json_each(:ids)) "
+                "AND l.state = :resolved AND l.work_id IS NOT NULL "
+                "ORDER BY l.extraction_id, l.ordinal"
+            ),
+            {**ids, "resolved": LinkState.RESOLVED.value},
+        ).all()
+        contexts = conn.execute(
+            text(
+                "SELECT extraction_id, entry, citing_anchor FROM citation_contexts "
+                "WHERE extraction_id IN (SELECT value FROM json_each(:ids)) "
+                "AND state = 'matched' ORDER BY extraction_id, position"
+            ),
+            ids,
+        ).all()
+    return links, contexts
+
+
 def snowball_candidates(project: Project, sources: Sequence[str]) -> list[RoundCandidate]:
     """Candidates drawn from the current extractions of `sources`: live `resolved` links whose
     work is not in the corpus, sorted by (-cited_by_included, work_key)."""
@@ -535,37 +565,20 @@ def snowball_candidates(project: Project, sources: Sequence[str]) -> list[RoundC
     extractions = {
         rex: work for work in sources if (rex := current_extraction(project, work)) is not None
     }
-    with project.index.connect() as conn:
-        links = conn.execute(
-            text(
-                "SELECT l.extraction_id, l.ordinal, l.work_id, l.no_source_record "
-                "FROM reference_links l JOIN reference_extractions x "
-                "ON x.extraction_id = l.extraction_id AND x.live = 1 "
-                "WHERE l.state = :resolved AND l.work_id IS NOT NULL "
-                "ORDER BY l.extraction_id, l.ordinal"
-            ),
-            {"resolved": LinkState.RESOLVED.value},
-        ).all()
-        contexts = conn.execute(
-            text(
-                "SELECT extraction_id, entry, citing_anchor FROM citation_contexts "
-                "WHERE state = 'matched' ORDER BY extraction_id, position"
-            )
-        ).all()
+    links, contexts = _extraction_rows(project, sorted(extractions))
     anchors: dict[tuple[str, int], list[str]] = {}
     for rex, entry, anchor in contexts:
         slot = (str(rex), int(entry))
         if str(anchor) not in anchors.setdefault(slot, []):
             anchors[slot].append(str(anchor))
-    corpus = {w.id for w in list_works(project)}
-    stored = {w.id: w for w in list_works(project, include_probe=True)}
+    corpus = corpus_work_ids(project)
     groups: dict[str, list[tuple[str, int, bool]]] = {}
     for rex, ordinal, wid, flagged in links:
-        if str(rex) in extractions and str(wid) not in corpus:
+        if str(wid) not in corpus:
             groups.setdefault(str(wid), []).append((str(rex), int(ordinal), bool(flagged)))
     out: list[RoundCandidate] = []
     for wid, cites in groups.items():
-        work = stored.get(wid)
+        work = get_work(project, wid)
         no_source = work is None and any(flagged for _, _, flagged in cites)
         if no_source:
             first_rex, first_ordinal = min((r, o) for r, o, flagged in cites if flagged)

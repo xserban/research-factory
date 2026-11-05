@@ -133,7 +133,7 @@ class ResolutionOutcome:
 
 
 @dataclass
-class _Corpus:
+class Corpus:
     """Identifier keys of the corpus, mapped to the canonical work id, and title candidates."""
 
     by_doi: dict[str, str] = field(default_factory=dict)
@@ -161,12 +161,15 @@ def _candidate(work: Work, work_id_: str | None = None) -> Candidate:
         title=work.title,
         first_author=work.authors[0].name if work.authors else None,
         year=work.dates.year,
+        normalized=normalize_title(work.title),
     )
 
 
-def _corpus(project: Project) -> _Corpus:
+def load_corpus(project: Project) -> Corpus:
+    """The corpus as `resolve_entries` matches against it. Probe lookups add nothing to it, so one
+    load serves every work of an extraction call."""
     primary = {absorbed: m.primary for m in active_merges(project) for absorbed in m.absorbed}
-    corpus = _Corpus()
+    corpus = Corpus()
     for work in list_works(project):
         canonical = primary.get(work.id, work.id)
         arxiv, doi = _keys(work.identifiers.doi, work.identifiers.arxiv)
@@ -271,13 +274,14 @@ def resolve_entries(
     entries: Sequence[Resolvable],
     *,
     sources: Mapping[str, SourceFactory],
+    corpus: Corpus,
 ) -> ResolutionOutcome:
-    """Resolve `entries` by the ordered methods of the module docstring.
+    """Resolve `entries` by the ordered methods of the module docstring, against `corpus`
+    (`load_corpus`).
 
     Lookups are probe-purpose queries, recorded as searches by `actor` and outside the corpus.
     Nothing else is written; the caller records the resolutions.
     """
-    corpus = _corpus(project)
     out: dict[int, Resolution] = {}
     runs: list[str] = []
     by_arxiv: dict[str, list[Resolvable]] = {}

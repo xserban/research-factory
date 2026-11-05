@@ -22,8 +22,8 @@ Invariants:
 - An extraction is current while it is the live extraction of its work, pinned to the work's
   default conversion, with this parser version. A new extraction supersedes the earlier one and
   takes over the human decisions on its entries, recorded in `reference.resolved` (`carried`).
-- Counts are computed from the live extractions; the link states sum to the entry count.
-- Listing is paged with a fixed cap (`MAX_PAGE`).
+- Counts are computed from the live extractions, in SQL; the link states sum to the entry count.
+- Listing is paged in SQL with a fixed cap (`MAX_PAGE`).
 - Held-out mask (R-20): an agent never sees a link that touches a held-out seed. Such an entry
   reads as a genuine unresolved link with nothing parsed: reason `no-identifier-no-title`, the only
   reason whose real links have no method, title or identifier, so its shape marks nothing.
@@ -39,7 +39,7 @@ import re
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Literal
 
-from sqlalchemy import text
+from sqlalchemy import RowMapping, text
 
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.blobs import BlobIntegrityError, BlobNotFoundError
@@ -64,6 +64,7 @@ from factory.model.references import (
     ReferenceResolved,
     UnresolvedReason,
 )
+from factory.model.search import QueryPurpose
 from factory.model.seed import HeldOut
 from factory.model.work_ids import WORK_ID_RE
 from factory.references.bbl import align, read_bbl
@@ -82,12 +83,13 @@ from factory.services.conversions import conversion_manifest
 from factory.services.document_read import ConversionRef, default_conversion
 from factory.services.protocol import current_protocol
 from factory.services.reference_resolve import (
+    Corpus,
     carried_decisions,
     entry_digest,
     entry_raw,
+    load_corpus,
     resolve_entries,
 )
-from factory.services.search import list_works
 from factory.sources.registry import SourceFactory
 
 MAX_PAGE = 100
@@ -249,8 +251,9 @@ def extract_references(
                 ]
             )
     results: list[ExtractionResult] = []
+    corpus = load_corpus(project) if scope else Corpus()
     for work, conversion in scope:
-        result = _extract_one(project, actor, work, conversion, sources=sources)
+        result = _extract_one(project, actor, work, conversion, sources=sources, corpus=corpus)
         if isinstance(result, Skipped):
             skipped.append(result)
         else:
@@ -362,6 +365,7 @@ def _extract_one(
     conversion: ConversionRef,
     *,
     sources: Mapping[str, SourceFactory],
+    corpus: Corpus,
 ) -> ExtractionResult | Skipped:
     try:
         manifest = conversion_manifest(project, conversion.conversion_id)
@@ -378,7 +382,7 @@ def _extract_one(
     flags = list(
         dict.fromkeys([*bib.flags, *completeness_flags(bib, contexts), *bbl_flags, *field_flags])
     )
-    outcome = resolve_entries(project, actor, entries, sources=sources)
+    outcome = resolve_entries(project, actor, entries, sources=sources, corpus=corpus)
 
     extraction_id = project.ids.new("rex")
     extracted = ReferenceExtracted(
@@ -465,15 +469,20 @@ _LIVE = "JOIN reference_extractions x ON x.extraction_id = {t}.extraction_id AND
 _HELD_WORK = "IN (SELECT value FROM json_each(:held_works))"
 _HELD_KEY = "IN (SELECT value FROM json_each(:held_keys))"
 _HIDDEN_LINK = (
-    f"(l.work_id {_HELD_WORK} OR l.base_work_id {_HELD_WORK} OR n.doi {_HELD_KEY} "
+    f"COALESCE(l.work_id {_HELD_WORK} OR l.base_work_id {_HELD_WORK} OR n.doi {_HELD_KEY} "
     f"OR n.arxiv {_HELD_KEY} OR EXISTS (SELECT 1 FROM json_each(l.candidates) c "
-    f"WHERE json_extract(c.value, '$.work_id') {_HELD_WORK}))"
+    f"WHERE json_extract(c.value, '$.work_id') {_HELD_WORK}), 0)"
 )
 """Whether a link (`l`, entry `n`) touches a held-out seed's work: its linked, base or candidate
-work, or an identifier the entry states. Agrees with `link_touches_held_out`."""
+work, or an identifier the entry states. Agrees with `link_touches_held_out`. COALESCE because a
+NULL field gives NULL, and `NOT NULL` would drop the link."""
 _ENTRY_LINK = (
     "JOIN reference_links l ON l.extraction_id = n.extraction_id AND l.ordinal = n.ordinal"
 )
+_ENTRIES = f"FROM reference_entries n {_LIVE.format(t='n')} {_ENTRY_LINK}"
+"""The entries of the live extractions (`n`, extraction `x`) with their links (`l`)."""
+_SHOWN_CITING = f"x.work_id NOT {_HELD_WORK}"
+_SHOWN_STATE = f"CASE WHEN {_HIDDEN_LINK} THEN :unresolved ELSE l.state END"
 
 
 def _held_params(held: HeldOut | None) -> dict[str, str]:
@@ -481,10 +490,6 @@ def _held_params(held: HeldOut | None) -> dict[str, str]:
     works = sorted(held.work_ids) if held is not None else []
     keys = sorted(held.keys) if held is not None else []
     return {"held_works": json.dumps(works), "held_keys": json.dumps(keys)}
-
-
-def _hiding(held: HeldOut | None) -> bool:
-    return held is not None and bool(held.work_ids or held.keys)
 
 
 def _agent_states(project: Project, extraction_id: str, held: HeldOut) -> dict[LinkState, int]:
@@ -550,12 +555,6 @@ def masked_anchors(project: Project, held: HeldOut) -> frozenset[str]:
     return frozenset(f"{conversion}/{anchor}" for conversion, anchor in rows)
 
 
-def _hidden(item: ReferenceItem, held: HeldOut) -> bool:
-    """`link_touches_held_out` for a listed item (the SQL `_HIDDEN_LINK` is its twin)."""
-    works = (item.work_id, item.base_work_id, *(w for w, _ in item.candidates))
-    return link_touches_held_out(held, works, item.doi, item.arxiv)
-
-
 def _masked(item: ReferenceItem) -> ReferenceItem:
     """The item as a genuine unresolved entry with nothing parsed: no linked work, no identifier,
     no title (R-20)."""
@@ -582,140 +581,85 @@ def _masked(item: ReferenceItem) -> ReferenceItem:
 
 
 def reference_counts(project: Project, held_out: HeldOut | None = None) -> ReferenceCounts:
-    """Counts over the live extractions; the four states sum to `entries`. With `held_out`, a link
-    that touches a held-out seed's work counts as unresolved, as `list_references` shows it."""
-    if held_out is not None and (held_out.work_ids or held_out.keys):
-        return _counts(project, _agent_items(project, held_out))
-    return _counts_sql(project)
-
-
-def _counts(project: Project, items: Sequence[ReferenceItem]) -> ReferenceCounts:
-    corpus = {w.id for w in list_works(project)}
-    states = {state: 0 for state in LinkState}
-    targets: set[str] = set()
-    no_source = 0
-    extractions = {i.extraction_id for i in items}
-    for i in items:
-        states[i.state] += 1
-        if i.state is LinkState.RESOLVED and i.work_id is not None:
-            targets.add(i.work_id)
-            no_source += int(i.no_source_record)
-    return ReferenceCounts(
-        extractions=len(extractions),
-        entries=len(items),
-        resolved=states[LinkState.RESOLVED],
-        unconfirmed=states[LinkState.UNCONFIRMED],
-        ambiguous=states[LinkState.AMBIGUOUS],
-        unresolved=states[LinkState.UNRESOLVED],
-        no_source_record=no_source,
-        in_corpus=len(targets & corpus),
-        new_candidates=len(targets - corpus),
-    )
-
-
-def _counts_sql(project: Project) -> ReferenceCounts:
-    """Counts over the live extractions; the four states sum to `entries`."""
+    """Counts over the live extractions, in SQL; the four states sum to `entries`. With `held_out`,
+    a held-out work's extraction is left out and a link that touches a held-out seed's work counts
+    as unresolved, as `list_references` shows it."""
     project.index.sync()
+    params = {
+        **_held_params(held_out),
+        "unresolved": LinkState.UNRESOLVED.value,
+        "resolved": LinkState.RESOLVED.value,
+        "probe": QueryPurpose.PROBE.value,
+    }
+    resolved = (
+        f"{_ENTRIES} WHERE {_SHOWN_CITING} AND l.state = :resolved AND l.work_id IS NOT NULL "
+        f"AND NOT {_HIDDEN_LINK}"
+    )
     with project.index.connect() as conn:
         extractions = conn.execute(
-            text("SELECT COUNT(*) FROM reference_extractions WHERE live = 1")
-        ).scalar_one()
-        entries = conn.execute(
-            text(f"SELECT COUNT(*) FROM reference_entries n {_LIVE.format(t='n')}")
-        ).scalar_one()
-        links = conn.execute(
             text(
-                f"SELECT l.state, l.work_id, l.no_source_record FROM reference_links l "
-                f"{_LIVE.format(t='l')}"
-            )
+                f"SELECT COUNT(*) FROM reference_extractions x WHERE live = 1 AND {_SHOWN_CITING}"
+            ),
+            params,
+        ).scalar_one()
+        by_state = conn.execute(
+            text(f"SELECT {_SHOWN_STATE}, COUNT(*) {_ENTRIES} WHERE {_SHOWN_CITING} GROUP BY 1"),
+            params,
         ).all()
-    corpus = {w.id for w in list_works(project)}
+        no_source = conn.execute(
+            text(f"SELECT COUNT(*) {resolved} AND l.no_source_record = 1"), params
+        ).scalar_one()
+        targets, in_corpus = conn.execute(
+            text(
+                "SELECT COUNT(*), COALESCE(SUM(t.work IN (SELECT work_id FROM provenance "
+                "WHERE query_id NOT IN (SELECT query_id FROM queries WHERE purpose = :probe))), 0) "
+                f"FROM (SELECT DISTINCT l.work_id AS work {resolved}) t"
+            ),
+            params,
+        ).one()
     states = {state: 0 for state in LinkState}
-    targets: set[str] = set()
-    no_source = 0
-    for state, work, flagged in links:
-        states[LinkState(str(state))] += 1
-        if state == LinkState.RESOLVED.value and work is not None:
-            targets.add(str(work))
-            no_source += int(flagged)
+    for state, count in by_state:
+        states[LinkState(str(state))] = int(count)
     return ReferenceCounts(
         extractions=int(extractions),
-        entries=int(entries),
+        entries=sum(states.values()),
         resolved=states[LinkState.RESOLVED],
         unconfirmed=states[LinkState.UNCONFIRMED],
         ambiguous=states[LinkState.AMBIGUOUS],
         unresolved=states[LinkState.UNRESOLVED],
-        no_source_record=no_source,
-        in_corpus=len(targets & corpus),
-        new_candidates=len(targets - corpus),
+        no_source_record=int(no_source),
+        in_corpus=int(in_corpus),
+        new_candidates=int(targets) - int(in_corpus),
     )
 
 
-def _all_items(project: Project, work_id: str | None = None) -> list[ReferenceItem]:
-    """Every entry of the live extractions with its link, by citing work, extraction, ordinal."""
-    project.index.sync()
-    with project.index.connect() as conn:
-        rows = (
-            conn.execute(
-                text(
-                    "SELECT n.extraction_id, x.work_id AS citing_work, n.ordinal, n.anchor, "
-                    "n.label, n.title, n.first_author, n.year, n.doi, n.arxiv, l.state, "
-                    "l.work_id, l.confidence, l.method, l.score, l.candidates, l.reason, "
-                    "l.base_state, l.base_work_id, l.decision, l.confirmed_by, l.proposal, "
-                    "l.no_source_record "
-                    f"FROM reference_entries n {_LIVE.format(t='n')} "
-                    "JOIN reference_links l ON l.extraction_id = n.extraction_id "
-                    "AND l.ordinal = n.ordinal "
-                    "WHERE (:work IS NULL OR x.work_id = :work) "
-                    "ORDER BY x.work_id, n.extraction_id, n.ordinal"
-                ),
-                {"work": work_id},
-            )
-            .mappings()
-            .all()
-        )
-    return [
-        ReferenceItem(
-            extraction_id=str(r["extraction_id"]),
-            citing_work=str(r["citing_work"]),
-            ordinal=int(r["ordinal"]),
-            anchor=str(r["anchor"]),
-            label=r["label"],
-            title=r["title"],
-            first_author=r["first_author"],
-            year=r["year"],
-            doi=r["doi"],
-            arxiv=r["arxiv"],
-            state=LinkState(str(r["state"])),
-            work_id=r["work_id"],
-            confidence=r["confidence"],
-            method=r["method"],
-            score=r["score"],
-            candidates=[
-                (str(c["work_id"]), float(c["score"])) for c in json.loads(r["candidates"])
-            ],
-            reason=r["reason"],
-            base_state=LinkState(str(r["base_state"])),
-            base_work_id=r["base_work_id"],
-            decision=r["decision"],
-            confirmed_by=r["confirmed_by"],
-            proposal=r["proposal"],
-            no_source_record=bool(r["no_source_record"]),
-        )
-        for r in rows
-    ]
-
-
-def _agent_items(
-    project: Project, held: HeldOut, work_id: str | None = None
-) -> list[ReferenceItem]:
-    """The items an agent may see: entries cited from a held-out work are left out; a link that
-    touches a held-out work is shown as an unresolved entry."""
-    return [
-        _masked(i) if _hidden(i, held) else i
-        for i in _all_items(project, work_id)
-        if not held.hides(i.citing_work)
-    ]
+def _item(row: RowMapping) -> ReferenceItem:
+    item = ReferenceItem(
+        extraction_id=str(row["extraction_id"]),
+        citing_work=str(row["citing_work"]),
+        ordinal=int(row["ordinal"]),
+        anchor=str(row["anchor"]),
+        label=row["label"],
+        title=row["title"],
+        first_author=row["first_author"],
+        year=row["year"],
+        doi=row["doi"],
+        arxiv=row["arxiv"],
+        state=LinkState(str(row["state"])),
+        work_id=row["work_id"],
+        confidence=row["confidence"],
+        method=row["method"],
+        score=row["score"],
+        candidates=[(str(c["work_id"]), float(c["score"])) for c in json.loads(row["candidates"])],
+        reason=row["reason"],
+        base_state=LinkState(str(row["base_state"])),
+        base_work_id=row["base_work_id"],
+        decision=row["decision"],
+        confirmed_by=row["confirmed_by"],
+        proposal=row["proposal"],
+        no_source_record=bool(row["no_source_record"]),
+    )
+    return _masked(item) if row["hidden"] else item
 
 
 def list_references(
@@ -729,8 +673,9 @@ def list_references(
 ) -> Page:
     """Entries of the live extractions with their links, by citing work, extraction and ordinal.
 
-    `after` is the number of matching items already seen; `limit` is 1..`MAX_PAGE`. With
-    `held_out` (agent views) the held-out works are hidden before filtering and counting.
+    `after` is the number of matching items already seen; `limit` is 1..`MAX_PAGE`. The page and
+    the total are taken in SQL, so only the page's items are built. With `held_out` (agent views)
+    the held-out works are hidden before filtering and counting.
     """
     issues: list[ValidationIssue] = []
     if not 1 <= limit <= MAX_PAGE:
@@ -739,12 +684,35 @@ def list_references(
         issues.append(ValidationIssue("after", "must not be negative"))
     if issues:
         raise FactoryValidationError(issues)
-    everything = (
-        _all_items(project, work_id)
-        if held_out is None
-        else _agent_items(project, held_out, work_id)
+    project.index.sync()
+    scope = (
+        f"{_ENTRIES} WHERE {_SHOWN_CITING} AND (:work IS NULL OR x.work_id = :work) "
+        f"AND (:state IS NULL OR {_SHOWN_STATE} = :state)"
     )
-    rows = [i for i in everything if state is None or i.state is state]
-    page = rows[after : after + limit]
-    end = after + len(page)
-    return Page(items=page, total=len(rows), next_after=end if end < len(rows) else None)
+    params: dict[str, object] = {
+        **_held_params(held_out),
+        "unresolved": LinkState.UNRESOLVED.value,
+        "work": work_id,
+        "state": None if state is None else state.value,
+    }
+    with project.index.connect() as conn:
+        total = int(conn.execute(text(f"SELECT COUNT(*) {scope}"), params).scalar_one())
+        rows = (
+            conn.execute(
+                text(
+                    "SELECT n.extraction_id, x.work_id AS citing_work, n.ordinal, n.anchor, "
+                    "n.label, n.title, n.first_author, n.year, n.doi, n.arxiv, l.state, "
+                    "l.work_id, l.confidence, l.method, l.score, l.candidates, l.reason, "
+                    "l.base_state, l.base_work_id, l.decision, l.confirmed_by, l.proposal, "
+                    f"l.no_source_record, {_HIDDEN_LINK} AS hidden {scope} "
+                    "ORDER BY x.work_id, n.extraction_id, n.ordinal LIMIT :limit OFFSET :after"
+                ),
+                {**params, "limit": limit, "after": after},
+            )
+            .mappings()
+            .all()
+        )
+    end = after + len(rows)
+    return Page(
+        items=[_item(row) for row in rows], total=total, next_after=end if end < total else None
+    )

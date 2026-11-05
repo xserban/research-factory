@@ -584,14 +584,22 @@ def _registered_submitter(project: Project, query_id: str) -> SubmitterKind | No
 def _known_work_ids(project: Project, purpose: QueryPurpose) -> set[str]:
     """The works a run of `purpose` does not count as new: for a probe, every stored work; for any
     other run, the corpus, so a work stored only by a probe lookup is new to the corpus."""
-    sql = "SELECT work_id FROM works"
     if purpose is not QueryPurpose.PROBE:
-        sql = (
-            "SELECT DISTINCT work_id FROM provenance "
-            "WHERE query_id NOT IN (SELECT query_id FROM queries WHERE purpose = :probe)"
-        )
+        return corpus_work_ids(project)
     with project.index.connect() as conn:
-        rows = conn.execute(text(sql), {"probe": QueryPurpose.PROBE.value}).all()
+        return {str(row[0]) for row in conn.execute(text("SELECT work_id FROM works")).all()}
+
+
+def corpus_work_ids(project: Project) -> set[str]:
+    """The ids of the corpus works, as `list_works` would give them, without loading the works."""
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT DISTINCT work_id FROM provenance "
+                "WHERE query_id NOT IN (SELECT query_id FROM queries WHERE purpose = :probe)"
+            ),
+            {"probe": QueryPurpose.PROBE.value},
+        ).all()
     return {str(row[0]) for row in rows}
 
 
