@@ -605,12 +605,16 @@ def _writer_verified(project: Project) -> list[_Hit]:
     draft_of: dict[str, str] = {}
     verdicts: list[tuple[str, frozenset[str]]] = []
     for event in read_all(project.paths.events_dir, project.catalog):
+        sentence = event.payload.get("sentence_id")
+        if not isinstance(sentence, str):  # a hand-written event: the fold dropped it too
+            continue
         if event.type == "draft.sentence_recorded":
-            draft = str(event.payload["draft_id"])
-            draft_of[str(event.payload["sentence_id"])] = draft
-            writers.setdefault(draft, set()).update(identities(event.actor))
+            draft = event.payload.get("draft_id")
+            if isinstance(draft, str):
+                draft_of[sentence] = draft
+                writers.setdefault(draft, set()).update(identities(event.actor))
         elif event.type == "draft.verified":
-            verdicts.append((str(event.payload["sentence_id"]), identities(event.actor)))
+            verdicts.append((sentence, identities(event.actor)))
     broken: dict[str, list[str]] = {}
     for sentence, who in verdicts:
         draft = draft_of.get(sentence, "")
