@@ -46,9 +46,11 @@ from factory.model.intuition import (
     ConceptInput,
     ConceptLinkDecided,
     ConceptLinkProposed,
+    ConceptMerged,
     ConceptReviewed,
     ConceptSourceDecided,
     ConceptState,
+    ConceptUnmerged,
     HistoryEntry,
     LinkStatus,
     SourceState,
@@ -1180,3 +1182,102 @@ def _link_view(r: Any) -> ConceptLinkView:
         note_label="agent-note" if r["basis_kind"] == "none" and r["note"] else None,
         decided_by=r["decided_by"],
     )
+
+
+# --- Merge and unmerge ---
+
+
+def _merge_issues(project: Project, into: str, from_concept: str) -> list[ValidationIssue]:
+    """Ruling B9 (gate concept-merge): both concepts live, distinct and unmerged, `from` with no
+    concepts merged into it, and no self-link or cycle after the two become one."""
+    if into == from_concept:
+        return [ValidationIssue("from_concept", "same-concept")]
+    target, source = _row(project, into), _row(project, from_concept)
+    issues: list[ValidationIssue] = []
+    if target is None:
+        issues.append(ValidationIssue("into", CONCEPT_UNKNOWN))
+    elif target["merged_into"] is not None:
+        issues.append(ValidationIssue("into", f"merged:{target['merged_into']}"))
+    if source is None:
+        issues.append(ValidationIssue("from_concept", CONCEPT_UNKNOWN))
+    elif source["merged_into"] is not None:
+        issues.append(ValidationIssue("from_concept", f"merged:{source['merged_into']}"))
+    else:
+        with project.index.connect() as conn:
+            members = conn.execute(
+                text("SELECT 1 FROM concepts WHERE merged_into = :c LIMIT 1"), {"c": from_concept}
+            ).first()
+        if members is not None:
+            issues.append(ValidationIssue("from_concept", "has-merged-concepts"))
+    if issues:
+        return issues
+    from_edges = _reachable_edges(project, from_concept)
+    into_edges = _reachable_edges(project, into)
+    if (from_concept, into) in from_edges or (into, from_concept) in into_edges:
+        return [ValidationIssue("from_concept", "self-link")]
+    if would_cycle(from_edges, (into, from_concept)) or would_cycle(
+        into_edges, (from_concept, into)
+    ):
+        return [ValidationIssue("from_concept", "cycle")]
+    return []
+
+
+def merge_concepts(
+    project: Project, actor: Actor, into: str, from_concept: str, reason: str
+) -> str:
+    """Merge `from_concept` into `into` (human only, reversible) and return the event id: the
+    projection re-points `from`'s links and names to `into`; no earlier row changes. Refused,
+    with nothing written, for a non-human actor (`actor`), a blank reason (`reason`) and the
+    cases of `_merge_issues` (`into`, `from_concept`)."""
+    if actor.kind != "human":
+        raise _refuse(ValidationIssue("actor", "only a human merges concepts"))
+    with project.index.exclusive():
+        project.index.sync()
+        issues = _merge_issues(project, into, from_concept)
+        if not reason.strip():
+            issues.append(ValidationIssue("reason", "state why"))
+        if issues:
+            raise FactoryValidationError(issues)
+        event = project.events.make(
+            "concept.merged",
+            ConceptMerged(into=into, from_concept=from_concept, reason=reason),
+            actor,
+            refs=[into, from_concept],
+        )
+        project.record([event])
+        return event.id
+
+
+def unmerge_concepts(
+    project: Project, actor: Actor, into: str, from_concept: str, reason: str
+) -> str:
+    """Reverse an active merge `into <- from_concept` (human only) and return the event id.
+    Refused for a non-human actor (`actor`), a blank reason (`reason`) and a pair that is not
+    merged (`from_concept`, `not-merged`)."""
+    if actor.kind != "human":
+        raise _refuse(ValidationIssue("actor", "only a human unmerges concepts"))
+    with project.index.exclusive():
+        project.index.sync()
+        issues: list[ValidationIssue] = []
+        with project.index.connect() as conn:
+            active = conn.execute(
+                text(
+                    "SELECT 1 FROM concept_merges WHERE from_concept = :f AND into_concept = :i "
+                    "AND active = 1"
+                ),
+                {"f": from_concept, "i": into},
+            ).first()
+        if active is None:
+            issues.append(ValidationIssue("from_concept", "not-merged"))
+        if not reason.strip():
+            issues.append(ValidationIssue("reason", "state why"))
+        if issues:
+            raise FactoryValidationError(issues)
+        event = project.events.make(
+            "concept.unmerged",
+            ConceptUnmerged(into=into, from_concept=from_concept, reason=reason),
+            actor,
+            refs=[into, from_concept],
+        )
+        project.record([event])
+        return event.id
