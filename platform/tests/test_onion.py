@@ -146,6 +146,27 @@ def test_an_active_merge_reads_as_its_primary(g: Project) -> None:
     assert before.rings[2].total == 5
 
 
+def test_ideas_follow_a_merge_to_the_primary(g: Project) -> None:
+    """A is a member of a confirmed idea; A is merged into B; the node B lists the idea."""
+    with g.index.connect() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO ideas (idea_id, name, name_item, origin, decision, event_id) "
+                "VALUES ('ida_x', 'n', 'itm_x', :o, 'confirm', 'ev')"
+            ),
+            {"o": F[0]},
+        )
+        conn.execute(
+            text("INSERT INTO idea_members (idea_id, work_id) VALUES ('ida_x', :w)"), {"w": B[1]}
+        )
+        conn.commit()
+    plain = {n.work_id: n.ideas for n in onion_view(g).rings[2].nodes}
+    assert plain[B[1]] == ["ida_x"] and plain[B[0]] == []
+    merge_works(g, B[0], B[1])  # B2 is absorbed into B1
+    merged = {n.work_id: n.ideas for n in onion_view(g).rings[2].nodes}
+    assert merged[B[0]] == ["ida_x"]
+
+
 PROBE_ONLY = "rf:p0-000000a0"
 
 

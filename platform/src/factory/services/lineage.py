@@ -647,17 +647,22 @@ def confirmed_ideas_of(
     view = _view(project, DEFAULT_FILTER)
     out: dict[str, set[str]] = {}
     for start in range(0, len(work_ids), RING_BATCH):
+        chunk = list(work_ids[start : start + RING_BATCH])
+        wanted = set(chunk)
+        group = view.group(conn, chunk)  # a member may be recorded under a work merged into it
+        primary = view.canon(conn, group)
         rows = conn.execute(
             text(
                 "SELECT work_id, idea_id FROM idea_members "
                 "WHERE work_id IN (SELECT value FROM json_each(:w))"
             ),
-            {"w": json.dumps(list(work_ids[start : start + RING_BATCH]))},
+            {"w": json.dumps(group)},
         ).all()
         for work, idea in rows:
+            target = primary.get(str(work), str(work))
             shown = view.shown_idea(conn, str(idea))
-            if shown is not None:
-                out.setdefault(str(work), set()).add(shown)
+            if shown is not None and target in wanted:
+                out.setdefault(target, set()).add(shown)
     return {w: sorted(ideas) for w, ideas in out.items()}
 
 
