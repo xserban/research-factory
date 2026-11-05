@@ -744,6 +744,8 @@ def _writer_verified(project: Project) -> list[_Hit]:
         )
         for draft, sentences in sorted(broken.items())
     ]
+
+
 # --- Ledger (slice 5) ---
 
 

@@ -218,19 +218,6 @@ def as_tool(fn: ToolFn, run: Callable[[ToolContext | None, dict[str, Any]], Tool
     return tool
 
 
-def scoped(provider: ContextProvider) -> ToolWrapper:
-    """Run each tool inside the scope of the call `provider` names."""
-
-    def wrap(name: str, fn: ToolFn) -> ToolFn:
-        def run(context: ToolContext | None, arguments: dict[str, Any]) -> ToolResult:
-            with call_scope(provider(context), context):
-                return fn(**arguments)
-
-        return as_tool(fn, run)
-
-    return wrap
-
-
 class ScopedServer(MCPServer[Any]):
     """An `MCPServer` that registers each tool under `wrap`. Every registration ends in `add_tool`,
     the decorator's included, so no tool escapes the wrapper."""

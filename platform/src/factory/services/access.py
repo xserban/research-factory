@@ -1,6 +1,6 @@
 """Who may do what (slice 5 rulings 9 and 10; the spec's permissions table).
 
-`authorize` decides; enforcement at the MCP server is deploy-B's.
+`authorize` decides; `mcp/authz.py` and `services/cli_access.py` enforce.
 
 Invariants:
 - Deny by default: a role not listed holds nothing, and a principal with no role holds nothing.
@@ -498,6 +498,11 @@ def _holds(
     return any(permission in ROLE_PERMISSIONS[role] for role in roles)
 
 
+def not_held(permission: Permission) -> FactoryValidationError:
+    """The one refusal: it says nothing of why, so a project that does not exist reads the same."""
+    return FactoryValidationError([ValidationIssue("permission", f"{permission} not held")])
+
+
 def authorize(
     project: Project | None,
     principal: Principal,
@@ -510,7 +515,7 @@ def authorize(
     """Return when the principal, acting as `actor_kind`, holds `permission`; else refuse. `tool`
     is the `TOOL_PERMISSIONS` key of the call, which the per-tool wrapper passes."""
     if not _holds(project, principal, actor_kind, permission, lab, tool):
-        raise FactoryValidationError([ValidationIssue("permission", f"{permission} not held")])
+        raise not_held(permission)
 
 
 def authorize_command(project: Project, principal: Principal, tool: str) -> None:
@@ -597,7 +602,7 @@ def actor_holds(project: Project, actor: Actor, permission: Permission) -> bool:
 def require_actor(project: Project, actor: Actor, permission: Permission) -> None:
     """`authorize` for a service: refuse an `actor` who does not hold `permission`."""
     if not actor_holds(project, actor, permission):
-        raise FactoryValidationError([ValidationIssue("permission", f"{permission} not held")])
+        raise not_held(permission)
 
 
 def role_suffices(roles: frozenset[ProjectRole], required: ProjectRole) -> bool:

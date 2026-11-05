@@ -19,6 +19,7 @@ from factory.events.envelope import Actor
 from factory.hypotheses.design import design_version
 from factory.lineage.graph import GraphFilter
 from factory.mcp import conventions
+from factory.mcp.authz import authorising
 from factory.mcp.conventions import (
     PAGE_LIMIT,
     dotted,
@@ -32,11 +33,11 @@ from factory.mcp.conventions import (
 )
 from factory.mcp.sessions import (
     THIS_SESSION,
+    CallContext,
     ContextProvider,
     ScopedServer,
     ThisSession,
     current_call,
-    scoped,
     stdio_provider,
 )
 from factory.model.base import StrictModel
@@ -151,12 +152,14 @@ from factory.services import trace as trace_service
 from factory.services import view_coverage as view_coverage_service
 from factory.services import watch as watch_service
 from factory.services import xruns as xruns_service
+from factory.services.access_log import AccessLog
 from factory.services.agent_view import require_pass_opened as _require_pass_opened
 from factory.services.context import Project, list_projects
 from factory.services.context import open_project as open_as
 from factory.services.extraction import ExtractResult
 from factory.services.gate_status import GateStatusRow, gates_status
 from factory.services.hypothesis_gates import GateName, gate_policy
+from factory.services.lab import Lab, lab_exists, open_lab
 from factory.services.living_hooks import default_hooks
 from factory.services.members import roles_of
 from factory.services.results import BatchResult, ItemError
@@ -214,17 +217,30 @@ def build_server(
     """
     provider = stdio_provider(settings, clock) if context is None else context
     adapters = dict(default_sources() if sources is None else sources)
-    server = ScopedServer(
-        "factory", wrap=scoped(provider), auth=auth, token_verifier=token_verifier
-    )
     session = THIS_SESSION
+
+    def open_for_call(slug: str, call: CallContext) -> Project:
+        return open_as(settings, slug, session=call.session, clock=clock, principal=call.principal)
+
+    def open_registry(lab_session: str) -> Lab | None:
+        return (
+            open_lab(settings, session=lab_session, clock=clock) if lab_exists(settings) else None
+        )
+
+    remote = context is not None
+    log = AccessLog(settings.root) if remote or (settings.root / ".server").is_dir() else None
+    server = ScopedServer(
+        "factory",
+        wrap=authorising(provider, open_for_call, open_registry, log, clock),
+        auth=auth,
+        token_verifier=token_verifier,
+    )
 
     def open_project(
         settings: Settings, slug: str, *, session: ThisSession, clock: Clock
     ) -> Project:
         """Every tool opens a project as the principal and session of its call."""
-        call = current_call()
-        return open_as(settings, slug, session=call.session, clock=clock, principal=call.principal)
+        return open_for_call(slug, current_call())
 
     def make_agent_actor(
         settings: Settings, session: ThisSession, role: str, model: str, skill: str
