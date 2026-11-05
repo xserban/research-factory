@@ -14,6 +14,7 @@ from factory.errors import FactoryValidationError
 from factory.events.envelope import Actor, Event
 from factory.events.reader import read_all
 from factory.hypotheses.design import cell_hash
+from factory.model.extraction import ExtractedRowInput
 from factory.model.screening import PassLabel
 from factory.services.context import Project
 from factory.services.experiments import (
@@ -38,7 +39,7 @@ from tests.experiment_helpers import (
 )
 from tests.extraction_helpers import SESSION_A, _extractor, _r
 from tests.hypothesis_helpers import DRAFTER, HW, gw, hw, make_spec
-from tests.test_finder_gaps import _method
+from tests.test_finder_gaps import SourcesFor, _method
 from tests.test_reproduction import _repro
 
 
@@ -135,3 +136,40 @@ def test_dev_data_of_one_design_is_not_confirmatory_data_of_another(
         {"name": "x-test", "version": "1", "sha256": "b" * 64, "role": "confirmatory"},
     ]
     design_experiment(project, DRAFTER, design(hid2, baselines=[], datasets=same_test))
+
+
+@pytest.mark.parametrize("live", ["says-2", "gone"])
+def test_a_changed_evidence_row_does_not_strand_a_frozen_experiment(
+    project: Project,
+    human: Actor,
+    xw: XW,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    live: str,
+) -> None:
+    # re-review 3: the verdict compares with the value frozen with the design. The reviewer's route
+    # (an agent correcting the row with `extract_record(supersedes=...)`) needs a live claim on a
+    # task of a work whose row is already final, which no sequence of the services gives; so the
+    # live evidence is made to disagree directly: it reports 2, or has lost the row, where 1 was
+    # frozen. (Disclosed in the decision row; the route is not reproduced.)
+    from factory.services import extraction_agreement as agreement
+
+    exp = frozen_design(project, human, xw)
+    rk = xw.rows[0]
+    view = experiment_view(project, exp)
+    assert view is not None and view.baseline_values == {rk: "1"}
+    rows = [r for r in agreement.final_rows(project) if r.row_key == rk]
+    if live == "says-2":
+        field = rows[0].fields["value"].model_copy(update={"value": "2", "canonical": "2"})
+        rows = [rows[0].model_copy(update={"fields": {**rows[0].fields, "value": field}})]
+    else:
+        rows = []
+    monkeypatch.setattr(agreement, "final_rows", lambda _p, **_k: rows)
+    monkeypatch.setattr(
+        "factory.services.reproduction.final_rows", lambda _p, **_k: rows, raising=False
+    )
+    assert baseline_verdicts(project, exp) == {rk: "pending"}
+    before = len(_events(project, "baseline.evaluated"))
+    _repro(project, human, tmp_path, exp, rk, {1: "1", 2: "1", 3: "1"})
+    assert baseline_verdicts(project, exp) == {rk: "reproduced"}  # against the frozen value
+    assert len(_events(project, "baseline.evaluated")) == before + 1

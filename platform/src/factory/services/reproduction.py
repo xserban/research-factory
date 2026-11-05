@@ -23,8 +23,7 @@ from factory.hypotheses.reproduction import (
 )
 from factory.model.experiments import BaselineEvaluated
 from factory.services.context import Project
-from factory.services.experiments import ExperimentView, experiment_view, reported_value
-from factory.services.extraction_agreement import final_rows
+from factory.services.experiments import ExperimentView, experiment_view
 from factory.services.xrun_accounting import (
     ReproductionRun,
     Verdict,
@@ -60,7 +59,6 @@ def _evaluate(project: Project, view: ExperimentView) -> list[Event]:
     }
     if not pending:
         return []
-    rows = {r.row_key: r for r in final_rows(project)}
     metric = next(m.name for m in view.design.metrics if m.primary)
     events: list[Event] = []
     for baseline in view.design.baselines:
@@ -69,7 +67,7 @@ def _evaluate(project: Project, view: ExperimentView) -> list[Event]:
         used = _used_runs(
             view.design.seeds, reproduction_runs(project, view.experiment_id, baseline.row_key)
         )
-        reported = reported_value(rows.get(baseline.row_key))
+        reported = view.baseline_values.get(baseline.row_key)
         if used is None or reported is None:
             continue
         included, excluded = used

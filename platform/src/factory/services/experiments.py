@@ -21,7 +21,7 @@ import json
 import secrets
 from typing import Any, Literal
 
-from pydantic import JsonValue
+from pydantic import Field, JsonValue
 from sqlalchemy import text
 
 from factory.errors import FactoryValidationError, ValidationIssue
@@ -79,6 +79,10 @@ class ExperimentView(StrictModel):
     superseded_by: str | None
     designer_sessions: tuple[str, ...]
     access_limit: int | None
+    baseline_values: dict[str, str] = Field(default_factory=dict)
+    """The reported value of each baseline row when the design froze; empty before the freeze.
+    Verdicts compare with these, never with the live evidence row (a corrected row cannot strand
+    a frozen experiment)."""
     """The confirmatory reads per primary cell fixed at the freeze; None before it."""
     frozen_event: str | None = None
     unlocked_event: str | None = None
@@ -144,6 +148,9 @@ def _view(project: Project, row: Any) -> ExperimentView:
         superseded_by=None if row.superseded_by is None else str(row.superseded_by),
         designer_sessions=tuple(json.loads(str(row.designer_sessions_json))),
         access_limit=None if row.access_limit is None else int(row.access_limit),
+        baseline_values=(
+            {} if row.baseline_values_json is None else json.loads(str(row.baseline_values_json))
+        ),
         frozen_event=None if row.frozen_event_id is None else str(row.frozen_event_id),
         unlocked_event=None if row.unlocked_event_id is None else str(row.unlocked_event_id),
         budget=budget,
