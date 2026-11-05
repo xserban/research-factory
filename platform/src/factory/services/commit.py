@@ -9,7 +9,9 @@ Invariants:
   staged: a missing `.gitignore` stops the job instead of being trusted.
 - The commit holds exactly the paths this job staged; anything else staged by hand stays out.
 - A file is staged under the project's write lock, so a line half-written never enters history.
-- A deletion is never committed: events are append-only.
+- History only grows. An event file must extend what HEAD holds byte for byte, a blob must hash to
+  its own file name, and a deleted file is a refusal: the job never puts the server's name on an
+  edit, a truncation or a removal, and stops loudly instead of skipping one.
 - A push goes only to a remote whose every push URL is listed in `.server/push_remotes`, checked
   before anything is committed; with no list, or an empty one, nothing is pushed (ruling 5: the
   remote is private, and a person vouches for that by listing it).
@@ -17,6 +19,7 @@ Invariants:
   or in HEAD or the index, refuses the push. The job's commit stands; only the push is withheld.
 """
 
+import hashlib
 import re
 import subprocess
 from pathlib import Path
@@ -69,6 +72,7 @@ def commit_hosted(settings: Settings, *, sign: bool, push: str | None) -> Commit
         )
 
     staged: dict[str, list[str]] = {}
+    refused: list[str] = []
     clock = SystemClock()
     session = IdGenerator(clock).ulid()
     for slug in list_projects(settings):
@@ -76,10 +80,18 @@ def commit_hosted(settings: Settings, *, sign: bool, push: str | None) -> Commit
         if current_host(project) != host_id:
             continue
         with project.writing():
-            paths = _committable(root, slug, _changes(root))
-            if paths:
+            paths, problems = _committable(root, slug, _changes(root))
+            refused += problems
+            if paths and not refused:
                 _run(root, "add", *_PATHSPEC_STDIN, stdin=_nul_joined(paths))
                 staged[slug] = paths
+    if refused:
+        done = [path for paths in staged.values() for path in paths]
+        if done:
+            git(root, "reset", "-q", *_PATHSPEC_STDIN, stdin=_nul_joined(done))
+        raise FactoryValidationError(
+            [ValidationIssue("history", problem) for problem in sorted(refused)]
+        )
 
     commit = _commit(root, host_id, staged, sign) if staged else None
     pushed = False
@@ -178,24 +190,51 @@ def _changes(root: Path) -> list[tuple[str, str]]:
     return [(entry[3:], entry[:2]) for entry in entries if entry]
 
 
-def _committable(root: Path, slug: str, changes: list[tuple[str, str]]) -> list[str]:
+def _committable(
+    root: Path, slug: str, changes: list[tuple[str, str]]
+) -> tuple[list[str], list[str]]:
+    """The paths of this project to commit, and what refuses the job."""
     events = f"projects/{slug}/events/"
     blobs = f"projects/{slug}/blobs/"
     paths: list[str] = []
+    refused: list[str] = []
     for path, status in changes:
-        if "D" in status:
-            continue
         event = path.startswith(events) and re.fullmatch(_EVENT_FILE_RE, path[len(events) :])
         blob = path.startswith(blobs) and re.fullmatch(_BLOB_FILE_RE, path[len(blobs) :])
-        if event or (blob and _is_text(root / path)):
+        if not event and not blob:
+            continue
+        if "D" in status:
+            refused.append(f"{path}: deleted")
+            continue
+        data = (root / path).read_bytes()
+        problem = _event_problem(root, path, status, data) if event else _blob_problem(path, data)
+        if problem is not None:
+            refused.append(f"{path}: {problem}")
+        elif event or _is_text(data):
             paths.append(path)
-    return paths
+    return paths, refused
 
 
-def _is_text(path: Path) -> bool:
+def _event_problem(root: Path, path: str, status: str, data: bytes) -> str | None:
+    """Why this event file cannot be committed: what HEAD holds must be a prefix of it. A file new
+    to git has nothing to extend."""
+    if status == "??" or status[0] == "A":
+        return None
+    head = git(root, "show", f"HEAD:{path}")
+    if head.returncode != 0:
+        return "cannot read it from HEAD"
+    return None if data.startswith(head.stdout) else "does not extend what HEAD holds"
+
+
+def _blob_problem(path: str, data: bytes) -> str | None:
+    """Why this blob cannot be committed: a store path is `sha256/<2>/<62>` of its content."""
+    expected = "".join(path.rsplit("/", 2)[-2:])
+    return None if hashlib.sha256(data).hexdigest() == expected else "does not hash to its name"
+
+
+def _is_text(data: bytes) -> bool:
     """Whether a blob is text. Bytes that are not (a PDF, an archive) are literature or derived
     data, and the repository carries neither (decision 39)."""
-    data = path.read_bytes()
     if b"\0" in data:
         return False
     try:
