@@ -1311,21 +1311,32 @@ def build_server(
 
     @server.tool()
     def mine_next(
-        project: str, miner: str, version: int, pass_label: str, role: str, model: str, skill: str
+        project: str,
+        miner: str,
+        version: int,
+        pass_label: str,
+        role: str,
+        model: str,
+        skill: str,
+        calibration: bool = False,
     ) -> dict[str, JsonValue]:
         """Serve the next task of pass A or B of a registered miner to this session, or say why
         none is served. The miner must be registered and listed in the protocol's `miners`
         section. The batch names the miner's fields and the rule of each kind, the work, the
         pinned conversion to read with `document_read` and the anchors the miner's selector
         selects; `blocked` says why ordinary work waits. Joins this session to the miner's pass on
-        its first call."""
+        its first call. With `calibration` the pass is the miner's calibration pass (pass A): the
+        units of its drawn sample only, for a session that neither proposed the miner, nor took
+        part in a production pass, nor recorded a gold label."""
 
         def serve() -> JsonValue:
             label = _pass_label(pass_label)
             opened = open_project(settings, project, session=session, clock=clock)
             _require_pass_opened(opened, "miner")
             actor = make_agent_actor(settings, session, role, model, skill)
-            served = mining_service.mine_next(opened, actor, miner, version, label)
+            served = mining_service.mine_next(
+                opened, actor, miner, version, label, calibration=calibration
+            )
             return _withheld(opened, served.model_dump(mode="json"), include_work_ids=False)
 
         return _reply(project, serve, include_work_ids=False)

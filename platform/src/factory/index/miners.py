@@ -27,6 +27,7 @@ class MinerTables:
     calibrations: Table
     calibration_units: Table
     calibration_labels: Table
+    label_sessions: Table
 
 
 def miner_tables(metadata: MetaData) -> MinerTables:
@@ -75,7 +76,13 @@ def miner_tables(metadata: MetaData) -> MinerTables:
         Column("session", String, nullable=False),
         Column("event_id", String, nullable=False),
     )
-    return MinerTables(miners, calibrations, units, labels)
+    label_sessions = Table(
+        "miner_calibration_label_sessions",
+        metadata,
+        Column("calibration_id", String, primary_key=True),
+        Column("session", String, primary_key=True),
+    )
+    return MinerTables(miners, calibrations, units, labels, label_sessions)
 
 
 def miner_handlers(t: MinerTables) -> dict[str, Handler]:
@@ -145,6 +152,11 @@ def miner_handlers(t: MinerTables) -> dict[str, Handler]:
         ).first()
         if unit is None:
             return  # a label of no drawn unit changes nothing
+        conn.execute(
+            sqlite_insert(t.label_sessions)
+            .values(calibration_id=payload.calibration_id, session=event.actor.session)
+            .on_conflict_do_nothing()
+        )
         rows = canonical_json([r.model_dump(mode="json") for r in payload.rows]).decode()
         values = {
             "empty": payload.empty,

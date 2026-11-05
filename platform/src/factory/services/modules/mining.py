@@ -35,6 +35,7 @@ SPEC = ModuleSpec(
             "miner_calibrations",
             "miner_calibration_units",
             "miner_calibration_labels",
+            "miner_calibration_label_sessions",
         ),
         note="registered miners are data; their records are written in the extraction.* family"
         " (the pack on each event is the miner's name); mine.resolve is the gate of the"
@@ -69,6 +70,8 @@ SPEC = ModuleSpec(
     checks=(
         CheckRule("mine-pending", ("warning", "warning", "warning")),
         CheckRule("mine-single", (None, "warning", "error")),
+        CheckRule("miner-calibration-failed", ("warning", "warning", "warning")),
+        CheckRule("miner-uncalibrated-evidence", ("error", "error", "error")),
     ),
 )
 

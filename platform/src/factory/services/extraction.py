@@ -358,6 +358,53 @@ def scope_population(project: Project, scope: ScopeKey) -> list[str]:
     return included_works(project)
 
 
+def calibration_works(project: Project, calibration_id: str) -> list[str]:
+    """The works of a drawn calibration's sample, sorted. Read-only; the caller syncs the index."""
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT work_id FROM miner_calibration_units WHERE calibration_id = :c "
+                "ORDER BY work_id"
+            ),
+            {"c": calibration_id},
+        ).all()
+    return [str(row[0]) for row in rows]
+
+
+def calibration_task_ids(
+    project: Project, scope: ScopeKey, calibration_id: str | None = None
+) -> frozenset[str]:
+    """The ids of the calibration tasks of a miner scope (those of one calibration when
+    `calibration_id` is given, else of any); empty for another scope and, without reading a blob,
+    for a miner that was never calibrated. Read-only; the caller syncs the index."""
+    if not isinstance(scope, MinerScope):
+        return frozenset()
+    with project.index.connect() as conn:
+        drawn = conn.execute(
+            text("SELECT 1 FROM miner_calibrations WHERE name = :n LIMIT 1"), {"n": scope.name}
+        ).first()
+    if drawn is None:
+        return frozenset()
+    kinds = list(kinds_for(scope).values())
+    marks = ", ".join(f":k{i}" for i in range(len(kinds)))
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text(f"SELECT task_id, content_blob FROM tasks WHERE kind IN ({marks})"),
+            {f"k{i}": kind for i, kind in enumerate(kinds)},
+        ).all()
+    found: set[str] = set()
+    for task_id, blob in rows:
+        content = project.blobs.get_json(str(blob))
+        if (
+            isinstance(content, dict)
+            and content.get("miner") == scope.name
+            and content.get("calibration_id") is not None
+            and (calibration_id is None or content.get("calibration_id") == calibration_id)
+        ):
+            found.add(str(task_id))
+    return frozenset(found)
+
+
 def in_dual_sample(seed: int, work_id: str, fraction: float | None) -> bool:
     """Whether `work_id` is in the dual-extraction sample of `fraction` under `seed`.
 
@@ -422,8 +469,11 @@ def _content_model(scope: ScopeKey) -> type[ExtractBatchContent]:
     return ContributionBatchContent if scope is Scope.CONTRIBUTION else ExtractBatchContent
 
 
-def _kind_tasks(project: Project, scope: ScopeKey) -> list[tuple[str, str, ExtractBatchContent]]:
-    """Every task of the scope's kinds as (task id, status, content), in task-ID order."""
+def _kind_tasks(
+    project: Project, scope: ScopeKey, calibration_id: str | None = None
+) -> list[tuple[str, str, ExtractBatchContent]]:
+    """Every task of the scope's kinds as (task id, status, content), in task-ID order. A miner's
+    tasks are split by `calibration_id`: the production tasks (None) or one calibration's."""
     kinds = list(kinds_for(scope).values())
     marks = ", ".join(f":k{i}" for i in range(len(kinds)))
     with project.index.connect() as conn:
@@ -441,7 +491,11 @@ def _kind_tasks(project: Project, scope: ScopeKey) -> list[tuple[str, str, Extra
     ]
     if isinstance(scope, MinerScope):  # every miner shares the mine kinds: keep this miner's
         found = [
-            t for t in found if isinstance(t[2], MineBatchContent) and t[2].miner == scope.name
+            t
+            for t in found
+            if isinstance(t[2], MineBatchContent)
+            and t[2].miner == scope.name
+            and t[2].calibration_id == calibration_id
         ]
     return found
 
@@ -579,6 +633,7 @@ def next_unit(
     *,
     scope: ScopeKey,
     content: ContentHook | None = None,
+    calibration_id: str | None = None,
 ) -> ExtractNext:
     """Serve the next task of extraction pass `label` of `scope` to the session, or say why none
     is served.
@@ -596,11 +651,20 @@ def next_unit(
 
     `content`, when given, builds each new task's stored content from the plan-D content; a
     contribution task needs one returning a `ContributionBatchContent` (TypeError otherwise: a
-    programming error, not input) and is served as a `ContributionBatch`."""
+    programming error, not input) and is served as a `ContributionBatch`.
+
+    `calibration_id` (a miner scope's pass A only) restricts the pass to the units of that drawn
+    calibration: its tasks are a ledger of their own, apart from the production tasks."""
     with project.index.exclusive():
         project.index.sync()
         protocol, schema, pack = require_schema(project, scope=scope)
-        population = scope_population(project, scope)
+        if calibration_id is not None and (label is not PassLabel.A or content is None):
+            raise TypeError("a calibration pass is pass A of a miner with a content hook")
+        population = (
+            scope_population(project, scope)
+            if calibration_id is None
+            else calibration_works(project, calibration_id)
+        )
         if scope != Scope.EVIDENCE and content is None:
             raise TypeError(f"a task of scope {scope.value} needs a content hook")
         if actor.kind != "agent" or actor.model is None:
@@ -637,7 +701,7 @@ def next_unit(
             (protocol, schema, pack),
             config,
             queue,
-            _ledger(project, scope),
+            _ledger(project, scope, calibration_id),
             content,
         )
         blocked: list[str] = []
@@ -646,7 +710,7 @@ def next_unit(
         if label is PassLabel.B and population and not queue:
             blocked.append("no work falls in the dual sample")
         project.record([*events, *queued])
-        servable = _servable(_ledger(project, scope), label, queue, schema, pack)
+        servable = _servable(_ledger(project, scope, calibration_id), label, queue, schema, pack)
         kind = kinds_for(scope)[label]
         task = _held(project, actor, kind, servable) or claim_next(
             project, actor, kind, task_ids=servable
@@ -927,6 +991,7 @@ class _Unit:
     document_id: str
     conversion_id: str
     scope: ScopeKey
+    calibration_id: str | None = None
 
     @property
     def label(self) -> PassLabel:
@@ -1099,7 +1164,7 @@ def _record(
             )
         protocol, schema, pack = require_schema(project, scope=unit.scope)
         _require_same_schema(project, unit, schema, pack)
-        ledger = _ledger(project, unit.scope)
+        ledger = _ledger(project, unit.scope, unit.calibration_id)
         _require_current_task(project, ledger, unit, schema, pack)
         stale = ledger.stale_rows()
         row_targets = _targets(options.supersedes, len(rows), "supersedes")
@@ -1320,6 +1385,7 @@ def _unit_of(project: Project, task: Task) -> _Unit:
         document_id=record["document_id"],
         conversion_id=record["conversion_id"],
         scope=scope,
+        calibration_id=getattr(content, "calibration_id", None),
     )
 
 
@@ -1472,6 +1538,13 @@ def _require_same_schema(
         )
 
 
+def _unit_population(project: Project, unit: _Unit) -> list[str]:
+    """The works the unit's pass may extract: its calibration's sample, else its scope's."""
+    if unit.calibration_id is not None:
+        return calibration_works(project, unit.calibration_id)
+    return scope_population(project, unit.scope)
+
+
 def _require_current_task(
     project: Project, ledger: "_Ledger", unit: _Unit, schema: ExtractionSchema, pack: Pack
 ) -> None:
@@ -1482,7 +1555,7 @@ def _require_current_task(
         not tasks
         or tasks[-1].task_id != unit.task_id
         or ledger.issue(unit.work_id, unit.label, tasks[-1], schema, pack) is not None
-        or unit.work_id not in scope_population(project, unit.scope)
+        or unit.work_id not in _unit_population(project, unit)
     ):
         raise FactoryValidationError(
             [
@@ -1736,10 +1809,13 @@ class _Ledger:
         return stale
 
 
-def _ledger(project: Project, scope: ScopeKey = Scope.EVIDENCE) -> _Ledger:
-    """Read the ledger of `scope`; the caller has synced the index."""
+def _ledger(
+    project: Project, scope: ScopeKey = Scope.EVIDENCE, calibration_id: str | None = None
+) -> _Ledger:
+    """Read the ledger of `scope`, or of one calibration of a miner scope; the caller has synced
+    the index."""
     tasks: dict[tuple[str, PassLabel], list[_UnitTask]] = {}
-    for task_id, status, content in _kind_tasks(project, scope):
+    for task_id, status, content in _kind_tasks(project, scope, calibration_id):
         if len(content.records) != 1:
             continue
         task = _UnitTask(task_id, status, content)
@@ -1760,8 +1836,10 @@ def _ledger(project: Project, scope: ScopeKey = Scope.EVIDENCE) -> _Ledger:
     }
     closed_at.update(_completion_positions(project, unclosed))
     rows: dict[tuple[str, PassLabel], list[ExtractionRow]] = {}
-    for row in live_rows(project, scope=scope):
-        rows.setdefault((row.work_id, row.pass_label), []).append(row)
+    own = {t.task_id for unit in tasks.values() for t in unit}
+    for row in live_rows(project, scope=scope, calibration=calibration_id is not None):
+        if calibration_id is None or row.task_id in own:
+            rows.setdefault((row.work_id, row.pass_label), []).append(row)
     claims: dict[tuple[str, PassLabel], list[ClaimRow]] = {}
     if scope is Scope.EVIDENCE:  # contribution items carry no claims
         for claim in live_claims(project):
@@ -1803,7 +1881,9 @@ def _completion_positions(project: Project, task_ids: set[str]) -> dict[str, str
     return {t: completed.get(t, created.get(t, "")) for t in task_ids}
 
 
-def stale_extractions(project: Project, *, scope: ScopeKey = Scope.EVIDENCE) -> set[str]:
+def stale_extractions(
+    project: Project, *, scope: ScopeKey = Scope.EVIDENCE, calibration_id: str | None = None
+) -> set[str]:
     """The live rows of `scope` that are stale: made stale by an amendment of the scope's section
     recorded after the row (ruling 12, compared by event ID as `model.staleness` does, so a
     reverted amendment keeps recording order), pinned to a document that is no longer the work's
@@ -1811,7 +1891,7 @@ def stale_extractions(project: Project, *, scope: ScopeKey = Scope.EVIDENCE) -> 
     current G1 extraction. It ignores the population: rows of works no longer included are
     filtered downstream. Read-only."""
     project.index.sync()
-    return _ledger(project, scope).stale_rows()
+    return _ledger(project, scope, calibration_id).stale_rows()
 
 
 def all_scopes(project: Project) -> list[ScopeKey]:
@@ -1878,7 +1958,9 @@ def stale_documents(project: Project, *, scope: ScopeKey = Scope.EVIDENCE) -> li
     return sorted(out)
 
 
-def unit_states(project: Project, *, scope: ScopeKey = Scope.EVIDENCE) -> list[UnitState]:
+def unit_states(
+    project: Project, *, scope: ScopeKey = Scope.EVIDENCE, calibration_id: str | None = None
+) -> list[UnitState]:
     """One state per unit of `scope`, by work then pass: every work of `scope_population` in pass
     A, and in pass B the works of its dual sample once pass B has opened (every work before then
     when the declared sample takes every work). Empty, with no refusal, when there is no ready
@@ -1887,17 +1969,23 @@ def unit_states(project: Project, *, scope: ScopeKey = Scope.EVIDENCE) -> list[U
     project.index.sync()
     try:
         _, schema, pack = require_schema(project, scope=scope)
-        population = scope_population(project, scope)
+        population = (
+            scope_population(project, scope)
+            if calibration_id is None
+            else calibration_works(project, calibration_id)
+        )
     except FactoryValidationError:
         return []
     config = pass_config(project, PassLabel.B, scope=scope)
-    if config is not None:
+    if calibration_id is not None:
+        sample: set[str] = set()  # a calibration is one pass
+    elif config is not None:
         sample = set(_queue(PassLabel.B, population, config.seed, schema))
     elif schema.dual_extract_sample is None or schema.dual_extract_sample >= 1:
         sample = set(population)
     else:
         sample = set()
-    ledger = _ledger(project, scope)
+    ledger = _ledger(project, scope, calibration_id)
     out: list[UnitState] = []
     for work_id in population:
         out.append(ledger.state(work_id, PassLabel.A, schema, pack))
@@ -1915,13 +2003,24 @@ def live_rows(
     *,
     work_id: str | None = None,
     scope: ScopeKey = Scope.EVIDENCE,
+    calibration: bool = False,
 ) -> list[ExtractionRow]:
     """The rows of `scope` no later row supersedes, optionally of one pass and one work, by
-    extraction id. The default scope is evidence: no evidence read sees a contribution row."""
+    extraction id. The default scope is evidence: no evidence read sees a contribution row.
+
+    A miner's calibration rows (those of its calibration tasks) are a separate population:
+    `calibration=False` leaves them out, `calibration=True` returns only them (and nothing for
+    another scope)."""
     where, params = _filters(pass_label, work_id)
     where += " AND superseded_by IS NULL AND scope = :scope"
     params["scope"] = scope.value
-    return [row for row, _ in _read_rows(project, where, params)]
+    rows = [row for row, _ in _read_rows(project, where, params)]
+    if not isinstance(scope, MinerScope):
+        return [] if calibration else rows
+    apart = calibration_task_ids(project, scope)
+    if not apart and not calibration:
+        return rows
+    return [row for row in rows if (row.task_id in apart) == calibration]
 
 
 def recorded_row(

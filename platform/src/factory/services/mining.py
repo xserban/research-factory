@@ -323,10 +323,27 @@ def miner_schema(project: Project, name: str) -> tuple[ProtocolVersion, Extracti
     return protocol, schema, compile_miner(spec)
 
 
+def _calibration_sample(project: Project, name: str) -> set[str]:
+    """The works drawn into any calibration of miner `name` (they are never production units)."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT u.work_id FROM miner_calibration_units u JOIN miner_calibrations c "
+                "ON c.calibration_id = u.calibration_id WHERE c.name = :n"
+            ),
+            {"n": name},
+        ).all()
+    return {str(row[0]) for row in rows}
+
+
 def miner_population(project: Project, name: str) -> list[str]:
-    """The works the listed miner `name` mines, in work-id order (its selector's population)."""
+    """The works the listed miner `name` mines in production, in work-id order: its selector's
+    population less the units drawn into a calibration (M-D ruling 2: a calibration unit is never
+    mined by a production pass, so no resolution can have fixed it)."""
     _, _, spec = _listed(project, name)
-    return [work for work, _ in population(project, spec.selector)]
+    apart = _calibration_sample(project, name)
+    return [work for work, _ in population(project, spec.selector) if work not in apart]
 
 
 # --- The generic mine path ---
@@ -368,17 +385,39 @@ def _kind_note(kind: object) -> str:
 
 
 def mine_next(
-    project: Project, actor: Actor, name: str, version: int, label: PassLabel
+    project: Project,
+    actor: Actor,
+    name: str,
+    version: int,
+    label: PassLabel,
+    *,
+    calibration: bool = False,
 ) -> ExtractNext:
     """Serve the next task of pass `label` of the listed miner `(name, version)`: `next_unit` with
     the miner's scope and a content hook that adds the miner, its digest, the anchors its selector
     selects in the pinned conversion and the rule of each field kind (ids and fixed sentences, never
     document text).
 
+    With `calibration` the pass is the miner's calibration pass (always pass A): it serves only the
+    units of the version's drawn calibration, its tasks carry the calibration id, and its rows are
+    read apart from the production run. Refused on field `session` (a neutral text) to the
+    proposer's session, to a session that relayed a gold label and to a session of a production
+    pass; a production call is refused likewise to a session that served calibration tasks. Field
+    `calibration` when none is drawn, field `pass` for a calibration pass B.
+
     Refused, with nothing written, on field `miners` until the protocol lists that registered
     version, and as `next_unit` refuses otherwise."""
     _, _, spec = require_listed(project, name, version)
     require_not_retired(project, name, version)
+    calibration_id: str | None = None
+    if calibration:
+        from factory.services.miner_independence import require_calibration_pass
+
+        calibration_id = require_calibration_pass(project, actor, name, version, label)
+    else:
+        from factory.services.miner_independence import require_production_pass
+
+        require_production_pass(project, actor, name)
     digest = miner_digest(spec)
     notes = {f.name: _kind_note(f.kind) for f in spec.fields}
     described = {f.name: f.description for f in spec.fields if f.description}
@@ -392,11 +431,19 @@ def mine_next(
             version=version,
             digest=digest,
             anchors=anchors,
+            calibration_id=calibration_id,
             field_kinds=notes,
             descriptions=described,
         )
 
-    return next_unit(project, actor, label, scope=MinerScope(name), content=content)
+    return next_unit(
+        project,
+        actor,
+        label,
+        scope=MinerScope(name),
+        content=content,
+        calibration_id=calibration_id,
+    )
 
 
 def mine_record(
