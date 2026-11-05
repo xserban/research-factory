@@ -811,6 +811,43 @@ def _drawn(project: Project, **over: Any) -> MinerCalibrationDrawn:
 
 
 
+def _gold(work: str = "w1", **over: Any) -> MinerCalibrationLabelled:
+    body: dict[str, Any] = {
+        "calibration_id": f"mcl_{ulid(1)}",
+        "work_id": work,
+        "empty": True,
+        "channel": Channel.CLI,
+    }
+    body.update(over)
+    return MinerCalibrationLabelled(**body)
+
+
+def test_registration_cannot_claim_another_proposer_kind(project: Project, human: Actor) -> None:
+    """`proposer_kind` is what the independence rules read: it must be the writer's own kind."""
+    inert(project, "miner.registered", _registered(project, kind="human"), AGENT)
+    folds(project, "miner.registered", _registered(project, kind="human"), human)
+
+
+def test_calibration_is_drawn_by_a_human_for_a_registered_digest(
+    project: Project, human: Actor
+) -> None:
+    forge(project, "miner.registered", _registered(project), human)
+    inert(project, "miner.calibration_drawn", _drawn(project), AGENT)
+    inert(project, "miner.calibration_drawn", _drawn(project, digest="0" * 16), human)
+    inert(project, "miner.calibration_drawn", _drawn(project, name="m-unregistered"), human)
+    folds(project, "miner.calibration_drawn", _drawn(project), human)
+
+
+def test_gold_label_is_a_human_act_on_a_drawn_unit(project: Project, human: Actor) -> None:
+    forge(project, "miner.registered", _registered(project), human)
+    forge(project, "miner.calibration_drawn", _drawn(project), human)
+    inert(project, "miner.calibration_labelled", _gold(), AGENT)
+    inert(project, "miner.calibration_labelled", _gold("w9"), human)  # not a drawn unit
+    inert(project, "miner.calibration_labelled", _gold(calibration_id=f"mcl_{ulid(9)}"), human)
+    folds(project, "miner.calibration_labelled", _gold(), human)
+    inert(project, "miner.calibration_labelled", _gold(), AGENT)  # nor does it replace a gold label
+
+
 
 
 def test_a_drawn_sample_the_model_refuses_is_never_logged(project: Project) -> None:
