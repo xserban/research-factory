@@ -12,8 +12,10 @@ the log, unfolded, and changes nothing else):
   field for field, the evaluation recomputed here from the tables as they stand at that point of
   the log (`hypotheses.evaluate.compute_experiment`), the same function the service uses;
 - a literature hypothesis (its evidence report cannot be recomputed from tables): every comparison
-  names a work inside the window and live rows of it, and the outcome, counts, flags (the rule's,
-  the cut-offs, the autonomy label), level and hash are the ones those comparisons give.
+  names a work inside the window and live rows of it that hold the side's method, the metric and
+  the conditions of the hypothesis, and the outcome, counts, flags (the rule's, the cut-offs, the
+  autonomy label), level and hash are the ones those comparisons give. A work left out of the
+  comparisons cannot be seen here: only `check`, which recomputes, reports that.
 - an evaluation with the inputs hash and evaluator version of the live one is not folded again;
 - an evaluation of a retired evaluator (`RETIRED_EVALUATORS`) cannot be recomputed and folds on
   structure, so that a version change erases nothing; `check` reports it.
@@ -34,6 +36,7 @@ from sqlalchemy.engine import Connection
 
 from factory.canonical import canonical_json
 from factory.events.envelope import Event
+from factory.extraction.numbers import normalise_resolution, normalise_text
 from factory.hypotheses.evaluate import (
     DeviationRow,
     ExperimentInputs,
@@ -53,6 +56,7 @@ from factory.model.hypotheses import (
     LiteratureComparison,
     LiteratureDirection,
     LiteratureTest,
+    MethodRef,
 )
 
 
@@ -197,11 +201,64 @@ def _row_values(conn: Connection, work_id: str, row_key: str) -> set[str | None]
     return {None if r[0] is None else str(r[0]) for r in rows} or None
 
 
+def _forms(value: str) -> set[str]:
+    """The normalised forms of a stated value. The fold has no pack, so it allows both text forms a
+    field's normaliser can give (`extraction.numbers.normalise_for`)."""
+    return {normalise_text(value), normalise_resolution(value)}
+
+
+def _row_cells(conn: Connection, work_id: str, row_key: str) -> dict[str, set[str]]:
+    """Field name to the forms it holds over the live rows of a key in a work (a group key's value
+    is one of them, with its unit or not: `extraction_agreement.cell_key`). All the passes count, as
+    a resolution may keep either one's cell."""
+    cells: dict[str, set[str]] = {}
+    for name, value, unit, canonical in conn.execute(
+        text(
+            "SELECT f.field, f.value, f.unit, f.canonical FROM extraction_rows r "
+            "JOIN extraction_fields f ON f.extraction_id = r.extraction_id "
+            "WHERE r.work_id = :w AND r.row_key = :k AND r.superseded_by IS NULL"
+        ),
+        {"w": work_id, "k": row_key},
+    ).all():
+        forms = _forms(str(value)) | ({str(canonical)} if canonical else set())
+        suffix = normalise_text(str(unit or ""))
+        forms |= {f"{form} {suffix}" for form in forms} if suffix else set()
+        cells.setdefault(str(name), set()).update(forms)
+    return cells
+
+
+def _method_forms(conn: Connection, ref: MethodRef) -> set[str]:
+    """The forms of the name a side of the hypothesis stands for: its own or its row's."""
+    if ref.name is not None:
+        return _forms(ref.name)
+    names = conn.execute(
+        text(
+            "SELECT f.value FROM extraction_rows r JOIN extraction_fields f "
+            "ON f.extraction_id = r.extraction_id AND f.field = 'method_name' "
+            "WHERE r.row_key = :k AND r.superseded_by IS NULL"
+        ),
+        {"k": ref.row_key},
+    ).scalars()
+    return {form for name in names for form in _forms(str(name))}
+
+
+def _row_speaks(
+    conn: Connection, c: LiteratureComparison, row_key: str, ref: MethodRef, spec: HypothesisSpec
+) -> bool:
+    """Whether a row holds the method of its side and the hypothesis's metric and conditions."""
+    cells = _row_cells(conn, c.work_id, row_key)
+    wanted = [("method_name", _method_forms(conn, ref))]
+    wanted.append(("metric", _forms(spec.metric.name)))
+    wanted += [(key, _forms(value)) for key, value in spec.conditions.items()]
+    return all(cells.get(key, set()) & forms for key, forms in wanted)
+
+
 def _comparison_holds(
     conn: Connection, c: LiteratureComparison, spec: HypothesisSpec, window_start: str
 ) -> bool:
-    """The work exists inside the window and both rows are live rows of it. The side it favours
-    is recomputed when the passes agree on each value; where they differ a resolution decides, and
+    """The work exists inside the window and both rows are live rows of it that speak to the
+    hypothesis, each for its own side, so swapped rows do not hold. The side it favours is
+    recomputed when the passes agree on each value; where they differ a resolution decides, and
     `check` recomputes that one."""
     published = conn.execute(
         text("SELECT json_extract(data, '$.dates.published') FROM works WHERE work_id = :w"),
@@ -212,6 +269,10 @@ def _comparison_holds(
     treatment = _row_values(conn, c.work_id, c.treatment_row)
     baseline = _row_values(conn, c.work_id, c.baseline_row)
     if treatment is None or baseline is None:
+        return False
+    if not _row_speaks(conn, c, c.treatment_row, spec.treatment, spec):
+        return False
+    if not _row_speaks(conn, c, c.baseline_row, spec.baseline, spec):
         return False
     if len(treatment) == 1 and len(baseline) == 1:
         t, b = next(iter(treatment)), next(iter(baseline))

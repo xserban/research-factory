@@ -269,8 +269,8 @@ def evaluate_hypothesis(
     Refused, with nothing written: an unknown hypothesis (`hypothesis_id`: `unknown`); one that is
     not registered, or abandoned or superseded (`state`: `not-registered`); an experiment
     hypothesis with no frozen design (`experiment_id`: `no-frozen-design`) or not unlocked
-    (`experiment_id`: `not-unlocked`); a result that is
-    `incomplete` without `request_incomplete` (`runs`: `incomplete`)."""
+    (`experiment_id`: `not-unlocked`); a result that is `incomplete` without `request_incomplete`
+    (`runs`: `incomplete`, or for a literature hypothesis `method`: `method-unresolved`)."""
     with project.index.exclusive():
         project.index.sync()
         with project.index.connect() as conn:
@@ -290,6 +290,8 @@ def evaluate_hypothesis(
         if payload.experiment_id is not None and not _unlocked(project, payload.experiment_id):
             raise _refuse("experiment_id", "not-unlocked")
         if payload.outcome == "incomplete" and not request_incomplete:
+            if "method-unresolved" in payload.flags:
+                raise _refuse("method", "method-unresolved")
             raise _refuse("runs", "incomplete")
         live = latest_evaluation(project, hypothesis_id)
         if live is not None and (
