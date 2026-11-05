@@ -5,6 +5,8 @@ Invariants:
   it adds what is missing and refuses to change the host id.
 - The first person registered is the caller, as lab `admin`; a registry with people in it gains
   nobody here.
+- Only that bootstrap is open. Once the registry has people, a run needs `lab:admin` before it
+  writes anything, so nobody else can reach the push allow-list.
 - The `.gitignore` entries are those `factory server check` asks for, kept in one list, and they
   are in place before anything is written under `.server/`.
 - The push allow-list holds only URLs the researcher stated. Nothing here reads a git remote or
@@ -24,7 +26,10 @@ from factory.config import Settings
 from factory.index.lab import registry_is_empty
 from factory.model.identity import ACTOR_ID_RE
 from factory.model.lab import LabRole
+from factory.model.screening import Channel
+from factory.services.access import Permission, authorize
 from factory.services.commit import PUSH_REMOTES_FILE, allowed_push_urls
+from factory.services.context import Principal
 from factory.services.lab import (
     init_lab,
     private_server_dir,
@@ -109,8 +114,8 @@ def init_server(
     `.gitignore` entries.
 
     The host id is `host_id`, else the one already configured, else this machine's name. Refused,
-    with nothing written, when it is malformed or differs from the stored one, or when a push URL
-    is malformed."""
+    with nothing written, when it is malformed or differs from the stored one, when a push URL is
+    malformed, and without `lab:admin` once the registry has people."""
     resolved = host_id or settings.host_id or _default_host_id()
     if re.fullmatch(ACTOR_ID_RE, resolved) is None:
         raise refuse("host_id", f"must match {ACTOR_ID_RE}")
@@ -120,13 +125,17 @@ def init_server(
         raise refuse("host_id", f"this root is already host {stored}")
     urls = _push_urls(push_urls)
 
-    server_dir = private_server_dir(settings.root)
-    _ensure_gitignore(settings.root)
-    (server_dir / "host_id").write_text(f"{resolved}\n")
-    listed = _add_push_urls(settings.root, urls)
     lab = init_lab(settings, session=session, clock=clock)
     with lab.writing():
-        if not read_lab(lab, lambda conn: registry_is_empty(conn, lab.tables)):
-            return ServerInit(resolved, None, listed)
-        register_user(lab, lab.human_actor(), settings.user, settings.user, None, (LabRole.ADMIN,))
-    return ServerInit(resolved, settings.user, listed)
+        bootstrap = read_lab(lab, lambda conn: registry_is_empty(conn, lab.tables))
+        if not bootstrap:
+            principal = Principal.local(settings, Channel.CLI)
+            authorize(None, principal, "human", Permission.LAB_ADMIN, lab=lab)
+        server_dir = private_server_dir(settings.root)
+        _ensure_gitignore(settings.root)
+        (server_dir / "host_id").write_text(f"{resolved}\n")
+        listed = _add_push_urls(settings.root, urls)
+        if bootstrap:
+            actor = lab.human_actor()
+            register_user(lab, actor, settings.user, settings.user, None, (LabRole.ADMIN,))
+    return ServerInit(resolved, settings.user if bootstrap else None, listed)
