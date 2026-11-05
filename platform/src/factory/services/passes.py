@@ -119,6 +119,21 @@ def human_membership(
     return None if row is None else (PassLabel(str(row[0])), str(row[1]))
 
 
+def user_kinds(project: Project, user: str, stage: ScreeningStage = TA) -> frozenset[str]:
+    """How `user` screens at `stage`: `human` in person, `agent` through an agent; empty when
+    neither."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT DISTINCT actor_kind FROM pass_sessions "
+                "WHERE user = :user AND stage = :stage"
+            ),
+            {"user": user, "stage": require_pass_stage(stage).value},
+        ).all()
+    return frozenset(str(row[0]) for row in rows)
+
+
 def require_outside_passes(project: Project, user: str, stage: ScreeningStage = TA) -> None:
     """Refuse a member of either pass of `stage` on a hosted project (plan teams-C ruling 2): a
     calibration label, a resolution and an audit are by a person who joined neither."""

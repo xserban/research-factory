@@ -32,6 +32,11 @@ A work with a live, non-stale decision in the pass is not queued again.
 new decision supersedes the live one for the same work and pass, and the task completes once each
 of its records has a live decision of its own.
 
+A person screens through the same two functions, under the session of their join (`passes.
+human_membership`), and is served the same framing, order and batches as an agent. `screen_next`
+gives them back a batch they already hold. A human quote is verified when given, and required for
+an exclusion in `systematic` only (R-110); at full text the anchor is required all the same.
+
 Invariants:
 - No batch carries a decision, a worked example's seed id, or a held-out work.
 - Within a batch, records are shuffled with a generator seeded by the pass seed and the task's
@@ -62,11 +67,13 @@ from factory.model.screening import (
     Channel,
     DecisionRecorded,
     Framing,
+    HumanScreeningItem,
     PassJoined,
     PassLabel,
     PassOpened,
     ScreeningItem,
     ScreeningPhase,
+    Verdict,
 )
 from factory.model.seed import SeedKind
 from factory.model.task import Task, TaskStatus
@@ -79,6 +86,7 @@ from factory.services.calibration import (
     calibration_drawn,
     calibration_items,
     calibration_status,
+    humans_calibrated,
     sensitivity_threshold,
     stage_population,
     worked_examples,
@@ -465,6 +473,12 @@ def screen_next(
                 remaining=0,
             )
         needs_join = _check_join(project, actor, label, stage)
+        human = actor.kind == "human"
+        if human and not needs_join and _joined_pass(project, actor.session, stage) is not label:
+            raise FactoryValidationError(
+                [ValidationIssue("session", "a person screens in the session of their join")]
+            )
+        uncalibrated = human and not humans_calibrated(project, stage)
         # The pass, the join and the queued batches are built first and written in one append,
         # so a failure while building them writes nothing.
         events: list[Event] = []
@@ -480,18 +494,52 @@ def screen_next(
                 extension, added = drawn
                 events.append(extension)
                 row = (row[0], tuple(sorted(set(row[1] or ()) | set(added))))
-        queued, remaining = _enqueue(project, actor, label, protocol, row, stage)
+        queued, remaining = _enqueue(
+            project, actor, label, protocol, row, stage, serve_calibration=not uncalibrated
+        )
         project.record([*events, *queued])
-        gate_closed = status.required and not status.passed[label.value]
+        gate_closed = status.required and not status.passed[label.value] and not uncalibrated
+        blocked = _gate_reasons(project, status, label) if gate_closed else []
+        held = held_batch(project, actor, stage) if human else None
+        if held is not None:
+            return ScreenNext(batch=held, blocked=blocked, remaining=remaining)
         task = claim_next(
             project,
             actor,
             task_kind(stage, label),
             accept=lambda content: _servable(content, gate_closed, protocol.protocol_id),
         )
-        blocked = _gate_reasons(project, status, label) if gate_closed else []
         batch = None if task is None else _claimed_batch(project, task)
         return ScreenNext(batch=batch, blocked=blocked, remaining=remaining)
+
+
+def held_batch(project: Project, actor: Actor, stage: ScreeningStage = TA) -> ScreenBatch | None:
+    """The first batch of the current protocol this session holds a live claim on at `stage`, or
+    None. Nothing is written: a person may come back to a batch in a later process."""
+    label = _joined_pass(project, actor.session, stage)
+    protocol = current_protocol(project)
+    if label is None or protocol is None:
+        return None
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT task_id FROM tasks WHERE kind = :kind AND status = :status "
+                "AND claim_session = :session ORDER BY task_id"
+            ),
+            {
+                "kind": task_kind(stage, label),
+                "status": TaskStatus.CLAIMED.value,
+                "session": actor.session,
+            },
+        ).all()
+    for (task_id,) in rows:
+        try:
+            batch = _claimed_batch(project, require_holder(project, actor, str(task_id)))
+        except FactoryValidationError:  # the lease ran out
+            continue
+        if batch.protocol_id == protocol.protocol_id:
+            return batch
+    return None
 
 
 def obsolete_tasks(project: Project, label: PassLabel, *, stage: ScreeningStage = TA) -> list[str]:
@@ -572,13 +620,17 @@ def stale_screening_decisions(project: Project, *, stage: ScreeningStage | None 
 
 
 def screen_record(
-    project: Project, actor: Actor, task_id: str, items: Sequence[ScreeningItem]
+    project: Project,
+    actor: Actor,
+    task_id: str,
+    items: Sequence[ScreeningItem | HumanScreeningItem],
 ) -> BatchResult[str]:
     """Record the verdicts of a held batch, and return the decision IDs written (R-16, R-30).
 
-    Refused with nothing written when the actor is not an agent, the task is unknown or not held
-    by this session, this session does not screen the task's pass, or the task's protocol version
-    is no longer current. Otherwise each item is checked on its own: an invalid item is reported
+    Refused with nothing written when the actor is neither an agent nor a person who joined a pass
+    and still holds `pass:join-human`, the task is unknown or not held by this session, this session
+    does not screen the task's pass, or the task's protocol version is no longer current. Otherwise
+    each item is checked on its own: an invalid item is reported
     as an ItemError and not written, and the valid items are appended in one write.
 
     A decision supersedes the live decision for the same work in the same pass, if any. When every
@@ -587,10 +639,13 @@ def screen_record(
     """
     with project.index.exclusive():
         project.index.sync()
-        if actor.kind != "agent":
+        human = actor.kind == "human"
+        if actor.kind != "agent" and not (human and _is_human_session(project, actor.session)):
             raise FactoryValidationError(
                 [ValidationIssue("actor", "only an agent screener records a decision")]
             )
+        if human:
+            require_human_screener(project, actor)
         task = require_holder(project, actor, task_id)
         batch = _batch_of(project, task)
         stage = _stage_of_task(task)
@@ -607,11 +662,13 @@ def screen_record(
         records = {str(record["work_id"]): record for record in batch.records}
         criteria = {str(criterion["id"]) for criterion in batch.criteria}
         rejected: list[ItemError] = []
-        accepted: list[ScreeningItem] = []
+        accepted: list[ScreeningItem | HumanScreeningItem] = []
         answered: set[str] = set()
         for index, item in enumerate(items):
             duplicate = item.work_id in answered
-            issues = _item_issues(project, stage, index, item, records, criteria, duplicate)
+            issues = _item_issues(
+                project, stage, index, item, records, criteria, duplicate, human=human
+            )
             if issues:
                 rejected.append(ItemError(index=index, issues=issues))
             else:
@@ -673,6 +730,20 @@ def screen_record(
         return BatchResult[str](written=decision_ids, rejected=rejected)
 
 
+def item_issues(
+    project: Project, actor: Actor, task_id: str, item: HumanScreeningItem
+) -> list[ValidationIssue]:
+    """Why a person's verdict on a held batch would be refused, before it is recorded, so a bad
+    quote is put right at once. Writes nothing."""
+    task = require_holder(project, actor, task_id)
+    batch = _batch_of(project, task)
+    records = {str(record["work_id"]): record for record in batch.records}
+    criteria = {str(criterion["id"]) for criterion in batch.criteria}
+    return _item_issues(
+        project, _stage_of_task(task), 0, item, records, criteria, False, human=True
+    )
+
+
 def _batch_of(project: Project, task: Task) -> ScreenBatchContent:
     """The screening batch a task holds. Raises FactoryValidationError for any other task."""
     refusal = FactoryValidationError([ValidationIssue("task_id", "is not a screening batch")])
@@ -705,10 +776,12 @@ def _item_issues(
     project: Project,
     stage: ScreeningStage,
     index: int,
-    item: ScreeningItem,
+    item: ScreeningItem | HumanScreeningItem,
     records: dict[str, dict[str, str | None]],
     criteria: set[str],
     duplicate: bool,
+    *,
+    human: bool = False,
 ) -> list[ValidationIssue]:
     """Why one item may not be written, located as `items.<index>.<field>`; empty when valid.
 
@@ -718,7 +791,7 @@ def _item_issues(
     At title/abstract an item carries no anchor and its quote is in the record's title or abstract.
     At full text it names an anchor of the conversion its record pins, and its quote is verbatim in
     that anchor's element (never across blocks or cells); nothing outside the pinned conversion is
-    read."""
+    read. An agent always quotes; for a `human` item only an exclusion in `systematic` must."""
     field = f"items.{index}"
     record = records.get(item.work_id)
     if record is None:
@@ -726,7 +799,9 @@ def _item_issues(
     if duplicate:
         return [ValidationIssue(f"{field}.work_id", "is answered twice in one call")]
     try:
-        ScreeningItem.model_validate(item.model_dump(mode="python"))
+        (HumanScreeningItem if human else ScreeningItem).model_validate(
+            item.model_dump(mode="python")
+        )
     except ValidationError as exc:
         return [
             ValidationIssue(".".join([field, *map(str, err["loc"])]), str(err["msg"]))
@@ -742,18 +817,30 @@ def _item_issues(
                 f"applicable at {'full text' if stage is FT else 'title and abstract'}",
             )
         ]
+    if (
+        not item.quote
+        and item.verdict is Verdict.EXCLUDE
+        and _rigor_mode(project) is RigorMode.SYSTEMATIC
+    ):
+        return [ValidationIssue(f"{field}.quote", "an exclusion needs a quote in systematic")]
     if stage is FT:
         return _anchored_quote_issues(project, field, item, _pinned_conversion(record))
-    if not quote_in(item.quote, str(record.get("title") or ""), record.get("abstract")):
+    if item.quote and not quote_in(
+        item.quote, str(record.get("title") or ""), record.get("abstract")
+    ):
         return [ValidationIssue(f"{field}.quote", "is not in the record's title or abstract")]
     return []
 
 
 def _anchored_quote_issues(
-    project: Project, field: str, item: ScreeningItem, conversion_id: str | None
+    project: Project,
+    field: str,
+    item: ScreeningItem | HumanScreeningItem,
+    conversion_id: str | None,
 ) -> list[ValidationIssue]:
     """The full-text checks of one item: the anchor exists in the record's pinned conversion and
-    the quote is verbatim, after normalisation, in that anchor's element only."""
+    the quote, when there is one, is verbatim, after normalisation, in that anchor's element
+    only."""
     if item.anchor is None:
         return [ValidationIssue(f"{field}.anchor", "is required at full-text screening")]
     if conversion_id is None:
@@ -772,7 +859,7 @@ def _anchored_quote_issues(
             )
             for issue in exc.issues
         ]
-    if not quote_in_element(anchor.text, item.quote):
+    if item.quote and not quote_in_element(anchor.text, item.quote):
         return [ValidationIssue(f"{field}.quote", "is not in the cited anchor")]
     return []
 
@@ -787,10 +874,14 @@ def _enqueue(
     protocol: ProtocolVersion,
     row: tuple[int, tuple[str, ...] | None],
     stage: ScreeningStage = TA,
+    *,
+    serve_calibration: bool = True,
 ) -> tuple[list[Event], int]:
     """The `task.created` events of the batches for the pending works of the pass (calibration
     first), not yet recorded, and how many works of the pass's queue still lack a live,
-    non-stale decision for their phase. `row` is the pass's seed and sample."""
+    non-stale decision for their phase. `row` is the pass's seed and sample. Without
+    `serve_calibration` (an uncalibrated human pass) the calibration works are left out of the
+    queue, and stay out of the ordinary works: their outcome is the human's label."""
     seed, sample = row
     corpus = {work.id: work for work in list_works(project)}
     calibration = calibration_items(project, stage=stage)
@@ -807,6 +898,8 @@ def _enqueue(
         calibration = [w for w in calibration if w in pinned]
         base = [w for w in base if w in pinned]
     ordinary = sorted(set(base) - set(calibration))
+    if not serve_calibration:
+        calibration = []
 
     kind = task_kind(stage, label)
     tasks = _kind_tasks(project, kind)
@@ -1150,6 +1243,15 @@ def _joined_pass(project: Project, session: str, stage: ScreeningStage = TA) -> 
             {"session": session, "stage": stage.value},
         ).one_or_none()
     return None if row is None else PassLabel(str(row[0]))
+
+
+def _is_human_session(project: Project, session: str) -> bool:
+    with project.index.connect() as conn:
+        row = conn.execute(
+            text("SELECT 1 FROM pass_sessions WHERE session = :s AND actor_kind = 'human' LIMIT 1"),
+            {"s": session},
+        ).first()
+    return row is not None
 
 
 def _other(label: PassLabel) -> PassLabel:

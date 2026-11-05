@@ -99,6 +99,7 @@ from factory.services import fulltext as fulltext_service
 from factory.services import fulltext_status as fulltext_status_service
 from factory.services import gates as gates_service
 from factory.services import horizon as horizon_service
+from factory.services import human_pass as human_pass_service
 from factory.services import hypotheses as hypotheses_service
 from factory.services import hypothesis_review as review_service
 from factory.services import ideas as ideas_service
@@ -4393,6 +4394,7 @@ def _refuse_pass_session(project: Project) -> None:
         raise FactoryValidationError(
             [ValidationIssue("session", "this session has joined a pass and cannot use this tool")]
         )
+    human_pass_service.refuse_blind_reader(project, project.principal.user)
 
 
 def _listing(rows: list[JsonValue], next_cursor: str | None, empty: str) -> dict[str, JsonValue]:

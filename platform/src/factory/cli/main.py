@@ -9,6 +9,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Any, Literal, NoReturn, TypeVar, cast
 
+import click
 import typer
 from pydantic import BaseModel, TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
@@ -35,12 +36,13 @@ from factory.errors import (
     ProjectNotFoundError,
     ValidationIssue,
 )
+from factory.events.envelope import Actor
 from factory.imports.model import ImportFormat, ImportRole
 from factory.lineage.graph import GraphFilter
 from factory.living.digest_render import to_json as digest_json
 from factory.living.digest_render import to_markdown as digest_markdown
 from factory.mcp.conventions import parse_routes
-from factory.mcp.server import run
+from factory.mcp.server import _withheld, run
 from factory.model import lineage as lineage_model
 from factory.model.chase import ChaseDirection
 from factory.model.conclusions import BasisRef, Predicate
@@ -64,7 +66,7 @@ from factory.model.project import RigorMode
 from factory.model.protocol import ScreeningStage
 from factory.model.references import Decision, Direction, LinkState
 from factory.model.regions import Facet, RegionKind
-from factory.model.screening import Channel
+from factory.model.screening import Channel, HumanRecordFile, HumanScreeningItem, PassLabel
 from factory.model.watch import CycleStatus
 from factory.model.work import ProvenanceMethod
 from factory.regions.rules import MemberType, RuleSet
@@ -106,6 +108,7 @@ from factory.services import fulltext_import as fulltext_import_service
 from factory.services import fulltext_status as fulltext_status_service
 from factory.services import gates as gates_service
 from factory.services import horizon as horizon_service
+from factory.services import human_pass as human_pass_service
 from factory.services import hypotheses as hypotheses_service
 from factory.services import ideas as ideas_service
 from factory.services import import_admit as import_admit_service
@@ -141,6 +144,7 @@ from factory.services import references as references_service
 from factory.services import regions as regions_service
 from factory.services import relations as relations_service
 from factory.services import reproduction as reproduction_service
+from factory.services import screening as screening_service
 from factory.services import seeds as seeds_service
 from factory.services import shared_mining as shared_mining_service
 from factory.services import snapshots as snapshot_service
@@ -571,8 +575,13 @@ def _full_view(project: Project) -> bool:
 
 
 def _resolve_project(state: CliState) -> Project:
-    """The project of this command, authorised."""
-    return _authorized(state, _selected_project(state))
+    """The project of this command, authorised; refuses a command barred while screening a pass."""
+    project = _authorized(state, _selected_project(state))
+    context = click.get_current_context(silent=True)
+    command = "" if context is None else " ".join(context.command_path.split()[1:])
+    with _reporting_errors():
+        human_pass_service.require_command_allowed(project, command)
+    return project
 
 
 def _selected_project(state: CliState) -> Project:
@@ -1579,6 +1588,133 @@ def calibrate_label(
             stage=_stage(stage),
         )
     typer.echo(f"labelled {work} ({verdict})")
+
+
+@screen_app.command("join")
+def screen_join(
+    ctx: typer.Context,
+    pass_label: Annotated[PassLabel, typer.Option("--pass", help="The pass to screen: A or B.")],
+    stage: StageOption = StageChoice.TITLE_ABSTRACT,
+) -> None:
+    """Join a pass as a human screener, once per stage."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        screening_service.join_pass(project, project.human_actor(), pass_label, stage=_stage(stage))
+    typer.echo(f"joined pass {pass_label.value} ({_stage(stage).value})")
+
+
+def _next_batch(project: Project, stage: ScreeningStage) -> tuple[dict[str, Any], Actor]:
+    """The next batch of the person's pass as an agent is served it, and the actor of the pass."""
+    actor, label = human_pass_service.pass_actor(project, stage)
+    served = screening_service.screen_next(project, actor, label, stage=stage)
+    view = served.model_dump(mode="json")
+    if human_pass_service.served_agent_view(project, project.principal):
+        return cast(dict[str, Any], _withheld(project, view, include_work_ids=False)), actor
+    return view, actor
+
+
+@screen_app.command("next")
+def screen_next_cmd(ctx: typer.Context, stage: StageOption = StageChoice.TITLE_ABSTRACT) -> None:
+    """Serve the next batch of your pass, as an agent sees it, with a file to fill in."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        view, _ = _next_batch(project, _stage(stage))
+    for reason in view["blocked"]:
+        typer.echo(f"blocked: {reason}")
+    if view["batch"] is None:
+        typer.echo(f"no batch; {view['remaining']} works remaining")
+        return
+    for line in render.human_batch_lines(view["batch"]):
+        typer.echo(line)
+    typer.echo(f"{view['remaining']} works remaining")
+
+
+def _prompted_item(
+    project: Project, actor: Actor, task_id: str, record: dict[str, Any]
+) -> HumanScreeningItem:
+    """One verdict, asked for until it can be recorded. Only the quote is asked for again when it
+    alone is at fault."""
+    full_text = "conversion_id" in record
+    while True:
+        fields: dict[str, Any] = {
+            "work_id": record["work_id"],
+            "verdict": typer.prompt("verdict (include, exclude, cannot-assess, unsure)"),
+            "criterion": typer.prompt("criterion", default="", show_default=False) or None,
+            "rationale": typer.prompt("rationale", default="", show_default=False),
+        }
+        if full_text:
+            fields["anchor"] = typer.prompt("anchor")
+        while True:
+            fields["quote"] = typer.prompt("quote", default="", show_default=False)
+            try:
+                item = HumanScreeningItem.model_validate(fields)
+            except PydanticValidationError as exc:
+                for error in exc.errors():
+                    typer.echo(f"{error['msg']}", err=True)
+                break
+            issues = screening_service.item_issues(project, actor, task_id, item)
+            if not issues:
+                return item
+            for issue in issues:
+                typer.echo(f"{issue.field}: {issue.reason}", err=True)
+            if not all(issue.field.endswith(".quote") for issue in issues):
+                break
+
+
+def _report_recorded(written: int, rejected: list[Any]) -> None:
+    typer.echo(f"recorded {written} decisions")
+    for item in rejected:
+        for issue in item.issues:
+            typer.echo(f"{issue.field}: {issue.reason}", err=True)
+    if rejected:
+        raise typer.Exit(1)
+
+
+@screen_app.command("record")
+def screen_record_cmd(
+    ctx: typer.Context,
+    file: Annotated[
+        Path | None, typer.Argument(help="A filled-in template from `factory screen next`.")
+    ] = None,
+    interactive: Annotated[
+        bool, typer.Option("--interactive", help="Prompt for each record of your batch.")
+    ] = False,
+    stage: StageOption = StageChoice.TITLE_ABSTRACT,
+) -> None:
+    """Record your verdicts on a held batch, from a file or by prompts."""
+    if (file is None) == (not interactive):
+        _fail("give a decision file or --interactive, not both", 2)
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        run_stage = _stage(stage)
+        if file is None:
+            view, actor = _next_batch(project, run_stage)
+            batch = view["batch"]
+            if batch is None:
+                for reason in view["blocked"]:
+                    typer.echo(f"blocked: {reason}")
+                typer.echo("no batch")
+                return
+            items: list[HumanScreeningItem] = []
+            for record in batch["records"]:
+                for line in render.human_record_lines(record):
+                    typer.echo(line)
+                items.append(_prompted_item(project, actor, batch["task_id"], record))
+            task_id = str(batch["task_id"])
+        else:
+            actor, _ = human_pass_service.pass_actor(project, run_stage)
+            try:
+                raw = json.loads(file.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as exc:
+                _fail(f"cannot read {file}: {exc}", 1)
+            parsed = _parse_model(HumanRecordFile, raw, "file")
+            items = list(parsed.items)
+            task_id = parsed.task_id
+        result = screening_service.screen_record(project, actor, task_id, items)
+    _report_recorded(len(result.written), result.rejected)
 
 
 @screen_app.command("disagreements")

@@ -3,6 +3,7 @@ is read from the model, so the CLI and the MCP tools cannot differ (R-05)."""
 
 import json
 from collections.abc import Mapping, Sequence
+from typing import Any
 
 from factory.document.optional import ConverterInfo
 from factory.errors import ValidationIssue
@@ -419,6 +420,62 @@ def evidence_lines(work_id: str, document_id: str | None, conversion_id: str | N
         f"  document {document_id or '-'}  conversion {conversion_id}",
         f"  read: factory document read {work_id} --conversion {conversion_id}",
     ]
+
+
+def human_batch_lines(batch: Mapping[str, Any]) -> list[str]:
+    """A batch as a person screens it: what an agent is served, then a file to fill in for
+    `factory screen record`. `batch` is the agent view of the batch."""
+    lines = [
+        f"task {batch['task_id']}: pass {batch['pass_label']}, {batch['phase']} batch, "
+        f"protocol {batch['protocol_id']}",
+        str(batch["instructions"]),
+        "criteria:",
+    ]
+    lines += [
+        f"  {c['id']} ({c['kind']}): {c['statement']}  rule: {c['rule']}" for c in batch["criteria"]
+    ]
+    if batch["worked_examples"]:
+        lines.append("worked examples:")
+        lines += [
+            f"  {e['expected']}: {e['title']}: {e.get('abstract', '')}"
+            for e in batch["worked_examples"]
+        ]
+    lines.append("records:")
+    for record in batch["records"]:
+        lines.extend(human_record_lines(record))
+    lines.append("template:")
+    lines.append(json.dumps(human_template(batch), indent=2))
+    return lines
+
+
+def human_record_lines(record: Mapping[str, Any]) -> list[str]:
+    """One record of a batch: title and abstract, or the conversion to read at full text."""
+    lines = [f"  {record['work_id']}  {record['title']}"]
+    if "conversion_id" in record:
+        lines.append(
+            f"    read: factory document read {record['work_id']} "
+            f"--conversion {record['conversion_id']}"
+        )
+    else:
+        lines.append(f"    {record.get('abstract') or '(no abstract)'}")
+    return lines
+
+
+def human_template(batch: Mapping[str, Any]) -> dict[str, Any]:
+    """The file `factory screen record` reads, blank for each record of the batch."""
+    items: list[dict[str, Any]] = []
+    for record in batch["records"]:
+        item: dict[str, Any] = {
+            "work_id": record["work_id"],
+            "verdict": "",
+            "criterion": None,
+            "quote": "",
+            "rationale": "",
+        }
+        if "conversion_id" in record:
+            item["anchor"] = ""
+        items.append(item)
+    return {"task_id": batch["task_id"], "items": items}
 
 
 def decision_lines(label: str, view: DecisionView) -> list[str]:

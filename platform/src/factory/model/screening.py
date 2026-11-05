@@ -157,6 +157,13 @@ class HumanScreeningItem(_ItemFields):
     quote: OptionalQuote = ""
 
 
+class HumanRecordFile(StrictModel):
+    """The file `factory screen record` reads: the verdicts of one held batch."""
+
+    task_id: str = Field(min_length=1)
+    items: tuple[HumanScreeningItem, ...]
+
+
 class PassOpened(StrictModel):
     pass_label: PassLabel
     framing: Framing

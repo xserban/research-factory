@@ -12,7 +12,9 @@ joined a pass, so a screener cannot read the answer key.
 
 `calibration_status` reports, per pass, the sensitivity and specificity of its live calibration
 decisions under the current protocol version, and whether the pass has passed: every item is
-labelled, the pass decided every item, and sensitivity reaches the mode's threshold (if any).
+labelled, the pass decided every item, and sensitivity reaches the mode's threshold (if any). A
+human pass stands outside the gate unless the plan sets `calibrate_humans`, since the labeller is
+usually the reference standard: it counts as passed, and it is served no calibration batch.
 
 Every function takes a keyword `stage` (default title/abstract). The calibration set is drawn once
 per stage; the full-text set is drawn from the full-text population (`_calibration_population`)
@@ -251,19 +253,19 @@ def calibration_status(
     passed: dict[str, bool] = {}
     for label in (PassLabel.A, PassLabel.B):
         key = label.value
-        passes = decided.get(key, {})
+        pass_decided = decided.get(key, {})
         pairs = [
-            (labels[item] == "include", passes[item])
+            (labels[item] == "include", pass_decided[item])
             for item in items
-            if item in labels and item in passes
+            if item in labels and item in pass_decided
         ]
         rates = sensitivity_specificity(pairs)
         per_pass[key] = rates
-        complete = all(item in labels and item in passes for item in items)
+        complete = all(item in labels and item in pass_decided for item in items)
         clears = threshold is None or (
             rates.sensitivity is not None and rates.sensitivity >= threshold
         )
-        passed[key] = complete and clears
+        passed[key] = (complete and clears) or uncalibrated_human(project, label, stage)
     return CalibrationStatus(
         drawn=len(items),
         labelled=sum(1 for item in items if item in labels),
@@ -271,6 +273,24 @@ def calibration_status(
         per_pass=per_pass,
         passed=passed,
     )
+
+
+def uncalibrated_human(project: Project, label: PassLabel, stage: ScreeningStage) -> bool:
+    """Whether pass `label` of `stage` is a human pass the plan does not calibrate."""
+    return "human" in passes.pass_kinds(project, label, stage) and not humans_calibrated(
+        project, stage
+    )
+
+
+def humans_calibrated(project: Project, stage: ScreeningStage) -> bool:
+    """Whether the plan of `stage` sets `calibrate_humans`; False while there is no plan."""
+    protocol = current_protocol(project)
+    if protocol is None:
+        return False
+    try:
+        return screening_plan(protocol, stage).calibrate_humans
+    except FactoryValidationError:  # full text with no declared plan
+        return False
 
 
 def calibrated_models(

@@ -191,6 +191,28 @@ def screen_agreement(project: Project, actor: Actor, *, stage: ScreeningStage = 
         return _agreement(project, screen)
 
 
+def passes_settled(
+    project: Project, *, stage: ScreeningStage = TA, reconciled: bool = True
+) -> bool:
+    """Whether the passes of `stage` have finished, as `screen_agreement` asks: every planned pass
+    is open, no task of it is open or claimed, and its queue is decided. With `reconciled`, no
+    disagreement is left open either. False while there is no protocol or plan."""
+    require_pass_stage(stage)
+    try:
+        screen = _load(project, stage)
+    except FactoryValidationError:  # full text with no declared plan
+        return False
+    if screen is None:
+        return False
+    for label in PassLabel if screen.plan.passes == 2 else (PassLabel.A,):
+        queue = screen.queues[label]
+        if queue is None or queue - screen.decided[label].keys():
+            return False
+        if _blocking_tasks(project, label, stage):
+            return False
+    return not (reconciled and _open_for_resolution(screen))
+
+
 def resolve_disagreement(
     project: Project,
     actor: Actor,
