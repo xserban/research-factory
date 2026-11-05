@@ -173,23 +173,24 @@ def test_methods_sentence(project: Project, corpus: None, tmp_path: Path) -> Non
     assert Outcome.INCLUDED.value  # outcomes are counted, not typed
 
 
-def test_agent_view_leaves_out_held_out_seed_works(
+def test_agent_view_counts_a_held_out_seed_work_as_any_work(
     project: Project, corpus: None, tmp_path: Path
 ) -> None:
+    """Decision 81: a count that drops a corpus work is an oracle, since an agent can compare it
+    with the works it sees elsewhere. Only the held-out PART of an import is withheld."""
     from factory.services.coverage import agent_coverage
-    from factory.services.seeds import held_out_work_ids
+    from factory.services.seeds import SeedRole, all_seeds
 
-    held = held_out_work_ids(project)
+    held = {s.work_id for s in all_seeds(project) if s.role is SeedRole.HELD_OUT and s.work_id}
     assert held
     entries = [found_database(n) for n in range(1, 7)]
     cov = build(project, tmp_path, entries, Lookups())
     full = coverage_report(project, cov.import_id)
     agent_view = agent_coverage(project, cov.import_id)
     listed = {r.work_id for r in record_coverage(project, cov.import_id)}
-    dropped = len(listed & held)
-    assert dropped > 0
-    assert agent_view.parts[0].resolved == full.parts[0].resolved - dropped
-    assert not set(agent_view.parts[0].excluded) & held
+    assert listed & held
+    assert agent_view.parts == full.parts
+    assert agent_view.suggestions == full.suggestions
 
 
 @pytest.mark.parametrize("started", [False, True])

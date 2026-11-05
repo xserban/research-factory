@@ -137,8 +137,8 @@ def build_server(
         """`guarded`, with every agent-facing response scrubbed of held-out identifiers (R-20).
 
         A success is scrubbed by its tool (`_withheld`), and a refusal here, as defence in depth:
-        the services never name a held-out seed. Screening tools pass `include_work_ids=False`,
-        since a screener records its verdicts against a held-out work's own id."""
+        the services never name a held-out seed. Tools that list works pass
+        `include_work_ids=False`; see `_held_out_tokens`."""
         result = guarded(fn, rename)
         if result["ok"] is True:
             return result
@@ -731,14 +731,11 @@ def build_server(
             if update is not None:
                 until = None if update == "last" else update
                 flow = prisma_update_service.prisma_update(opened, until=until)
-                shown = prisma_update_service.agent_update(opened, flow)
-                data["update"] = shown.model_dump(mode="json")
+                data["update"] = flow.model_dump(mode="json")
             data = _collapsed_import_rows(opened, data)
-            return _without_record_keys(
-                _withheld(opened, data, include_work_ids=update is not None)
-            )
+            return _without_record_keys(_withheld(opened, data, include_work_ids=False))
 
-        return _reply(project, report, include_work_ids=update is not None)
+        return _reply(project, report, include_work_ids=False)
 
     @server.tool()
     def report_methods(project: str) -> dict[str, JsonValue]:
@@ -818,9 +815,9 @@ def build_server(
             batch = BatchResult[str](
                 written=result.written, rejected=sorted(rejected, key=lambda e: e.index)
             )
-            return _withheld(opened, batch.model_dump(mode="json"))
+            return _withheld(opened, batch.model_dump(mode="json"), include_work_ids=False)
 
-        return _reply(project, add)
+        return _reply(project, add, include_work_ids=False)
 
     @server.tool()
     def inbox_resolve(
@@ -854,9 +851,9 @@ def build_server(
                 }
                 for o in outcomes
             ]
-            return _withheld(opened, {"items": data})
+            return _withheld(opened, {"items": data}, include_work_ids=False)
 
-        return _reply(project, run)
+        return _reply(project, run, include_work_ids=False)
 
     @server.tool()
     def inbox_list(
@@ -869,9 +866,9 @@ def build_server(
             opened = open_project(settings, project, session=session, clock=clock)
             _refuse_pass_session(opened)
             page = inbox_service.list_items(opened, status=status, cursor=cursor, limit=limit)
-            return _withheld(opened, page.model_dump(mode="json"))
+            return _withheld(opened, page.model_dump(mode="json"), include_work_ids=False)
 
-        return _reply(project, listing)
+        return _reply(project, listing, include_work_ids=False)
 
     @server.tool()
     def report_discovery(project: str) -> dict[str, JsonValue]:
@@ -1017,9 +1014,9 @@ def build_server(
                 limit=limit,
                 actor=actor,
             )
-            return _withheld(opened, summary.model_dump(mode="json"))
+            return _withheld(opened, summary.model_dump(mode="json"), include_work_ids=False)
 
-        return _reply(project, fetch)
+        return _reply(project, fetch, include_work_ids=False)
 
     @server.tool()
     def fulltext_status(project: str, work_ids: list[str] | None = None) -> dict[str, JsonValue]:
@@ -1031,9 +1028,9 @@ def build_server(
             opened = open_project(settings, project, session=session, clock=clock)
             _refuse_pass_session(opened)
             report = fulltext_status_service.fulltext_status(opened, work_ids=work_ids)
-            return _withheld(opened, report.model_dump(mode="json"))
+            return _withheld(opened, report.model_dump(mode="json"), include_work_ids=False)
 
-        return _reply(project, status)
+        return _reply(project, status, include_work_ids=False)
 
     @server.tool()
     def document_read(
@@ -1227,9 +1224,10 @@ def build_server(
                     "items": [row.model_dump(mode="json") for row in page.items],
                     "next_cursor": page.next_cursor,
                 },
+                include_work_ids=False,
             )
 
-        return _reply(project, status)
+        return _reply(project, status, include_work_ids=False)
 
     @server.tool()
     def import_coverage(project: str, import_id: str) -> dict[str, JsonValue]:
@@ -1244,9 +1242,9 @@ def build_server(
             opened = open_project(settings, project, session=session, clock=clock)
             _refuse_pass_session(opened)
             report = coverage_service.agent_coverage(opened, import_id)
-            return _withheld(opened, report.model_dump(mode="json"))
+            return _withheld(opened, report.model_dump(mode="json"), include_work_ids=False)
 
-        return _reply(project, coverage)
+        return _reply(project, coverage, include_work_ids=False)
 
     @server.tool()
     def contribution_next(
@@ -1623,8 +1621,9 @@ def _withheld(project: Project, value: JsonValue, include_work_ids: bool = True)
 def _held_out_tokens(project: Project, include_work_ids: bool = True) -> set[str]:
     """The id, and every identifier as stated or normalised, of each held-out seed.
 
-    `include_work_ids` adds the held-out seed's work id. Screening tools leave it out: a screener
-    must see and record against a held-out work, whose id is not a seed's identity."""
+    `include_work_ids` adds `seed.work_id`, for the seed tools, the probe and `document_read`. Any
+    tool that lists works leaves it out: a work's id is not a seed's identity, and a `[withheld]`
+    among `rf:` ids would mark the work as a seed (decisions 37 item 9 and 81)."""
     tokens: set[str] = set()
     for seed in seeds_service.all_seeds(project):
         if seed.role is not SeedRole.HELD_OUT:
@@ -1641,8 +1640,6 @@ def _held_out_tokens(project: Project, include_work_ids: bool = True) -> set[str
         tokens.update(value for value in (seed.doi, seed.arxiv, seed.openalex) if value)
         if include_work_ids and seed.work_id:
             tokens.add(seed.work_id)
-    if include_work_ids:
-        tokens.update(seeds_service.held_out_work_ids(project))
     return tokens
 
 

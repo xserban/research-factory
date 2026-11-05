@@ -23,20 +23,6 @@ SPLIT_PROCEDURE = "year-stratified-thirds-v1"
 _OPENALEX_PREFIX = "https://openalex.org/"
 
 
-class HeldOut(StrictModel):
-    """What an agent-facing output must not show about the held-out seeds (R-20): the corpus
-    works they resolve to (merge groups included) and their normalised DOI, arXiv and OpenAlex
-    ids. A service that takes one filters before it counts, so a count never differs by it."""
-
-    work_ids: frozenset[str] = frozenset()
-    keys: frozenset[str] = frozenset()
-
-    def hides(self, work_id: str | None = None, *identifiers: str | None) -> bool:
-        return (work_id is not None and work_id in self.work_ids) or any(
-            i is not None and i in self.keys for i in identifiers
-        )
-
-
 class SeedKind(StrEnum):
     POSITIVE = "positive"
     NEGATIVE = "negative"

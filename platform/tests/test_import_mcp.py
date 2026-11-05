@@ -279,15 +279,15 @@ async def test_report_prisma_collapses_import_rows_until_a_pass_opens(
         assert len(import_rows(after)) == 2  # the openalex and the importlist query
 
 
-def test_agent_check_leaves_out_held_out_seed_works(
+def test_agent_check_counts_a_held_out_seed_work_as_any_work(
     project: Project, corpus: None, agent: Actor, tmp_path: Path
 ) -> None:
     from factory.services.check import agent_check, check
-    from factory.services.seeds import held_out_work_ids
+    from factory.services.seeds import SeedRole, all_seeds
     from tests.import_helpers import declare_library
 
     declare_library(project, agent)
-    held = held_out_work_ids(project)
+    held = {s.work_id for s in all_seeds(project) if s.role is SeedRole.HELD_OUT and s.work_id}
     assert held
     dois = {w.identifiers.doi for w in canonical_works(project) if w.id in held}
     [doi] = sorted(d for d in dois if d)[:1]
@@ -302,4 +302,4 @@ def test_agent_check_leaves_out_held_out_seed_works(
         return {f.code for f in report.findings}
 
     assert "import-attachment-missing" in codes(check(project))
-    assert "import-attachment-missing" not in codes(agent_check(project))
+    assert "import-attachment-missing" in codes(agent_check(project))

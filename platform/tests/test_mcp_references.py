@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -18,9 +19,10 @@ from factory.config import Settings
 from factory.events.envelope import Actor
 from factory.events.reader import read_all
 from factory.mcp.conventions import WITHHELD
-from factory.mcp.server import build_server
+from factory.mcp.server import _held_out_tokens, build_server
 from factory.model.work_ids import work_id
 from factory.services.context import Project
+from factory.services.prisma_update import prisma_update
 from factory.services.seeds import SeedRole, all_seeds
 from tests.document_helpers import fetched_document, make_registry, promoted_works, run_convert
 from tests.helpers import SourcesFor, _leaks, _setup, open_session
@@ -497,3 +499,70 @@ async def test_naming_a_held_out_work_in_a_decision_marks_nothing(
         ]
     assert bodies[0] == bodies[1] and bodies[0]["ok"] is False
     assert WITHHELD not in json.dumps(bodies)
+
+
+def _held(project: Project) -> Any:
+    [held, *_] = [s for s in all_seeds(project) if s.role is SeedRole.HELD_OUT]
+    assert held.work_id is not None and held.doi is not None
+    return held
+
+
+def test_the_scrub_holds_seed_ids_and_identifiers_and_at_most_the_seeds_own_work(
+    project: Project, corpus: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`include_work_ids` adds `seed.work_id` alone; a work matched by search is never a token."""
+    from factory.services import seeds as seeds_service
+
+    held = _held(project)
+    plain = _held_out_tokens(project, include_work_ids=False)
+    assert {held.seed_id, held.doi} <= plain and held.work_id not in plain
+    assert _held_out_tokens(project, include_work_ids=True) == plain | {
+        s.work_id for s in all_seeds(project) if s.role is SeedRole.HELD_OUT and s.work_id
+    }
+    real = seeds_service._load_seeds
+    monkeypatch.setattr(
+        seeds_service,
+        "_load_seeds",
+        lambda p: [s.model_copy(update={"work_id": None}) for s in real(p)],
+    )
+    assert held.work_id not in _held_out_tokens(project, include_work_ids=True)
+
+
+@pytest.mark.anyio
+async def test_status_tools_name_a_held_out_work_as_any_work(
+    settings: Settings,
+    project: Project,
+    clock: FixedClock,
+    corpus: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A `[withheld]` in place of one `rf:` id among the others would mark the seed."""
+    from factory.mcp import server as mcp_server
+
+    target = _held(project).work_id
+    flow = prisma_update(project).model_copy(update={"changed_previous": (target,)})
+    monkeypatch.setattr(mcp_server.prisma_update_service, "prisma_update", lambda *_, **__: flow)
+    monkeypatch.setattr(
+        mcp_server.coverage_service,
+        "agent_coverage",
+        lambda *_: SimpleNamespace(model_dump=lambda mode: {"excluded": [target]}),
+    )
+    monkeypatch.setattr(
+        mcp_server.inbox_service,
+        "resolve_links",
+        lambda *_, **__: [
+            SimpleNamespace(item_id="i", status=None, work_id=target, run_id=None, issues=[])
+        ],
+    )
+    async with open_session(settings, clock, _lookups().sources()) as session:
+        bodies = {
+            "fulltext_status": await session.call("fulltext_status", project="demo"),
+            "report_prisma": await session.call("report_prisma", project="demo", update="last"),
+            "import_coverage": await session.call(
+                "import_coverage", project="demo", import_id="imp_x"
+            ),
+            "inbox_resolve": await session.call("inbox_resolve", project="demo"),
+        }
+    for tool, body in bodies.items():
+        assert body["ok"] is True, (tool, body)
+        assert target in json.dumps(body), tool

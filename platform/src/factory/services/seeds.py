@@ -33,7 +33,6 @@ from factory.model.project import RigorMode
 from factory.model.search import QueryKind, QueryPurpose, QuerySpec, RunStatus
 from factory.model.seed import (
     SPLIT_PROCEDURE,
-    HeldOut,
     SeedAdded,
     SeedKind,
     SeedMissExplained,
@@ -657,36 +656,6 @@ def _positive_matches(project: Project) -> list[tuple[_Seed, SeedRole, str | Non
         matched = _matching_work(seed.spec.identity_keys(), found, by_doi, by_arxiv, position)
         out.append((seed, roles[seed.seed_id], matched))
     return out
-
-
-def merge_closure(project: Project, work_ids: frozenset[str]) -> frozenset[str]:
-    """`work_ids` plus every member of an active merge group that holds one of them, whether or
-    not the group's primary is in the corpus."""
-    groups = _merge_groups(project)
-    closed = set(work_ids)
-    for wid in work_ids:
-        closed.update(groups.get(wid, ()))
-    return frozenset(closed)
-
-
-def held_out_work_ids(project: Project) -> frozenset[str]:
-    """Every corpus work a held-out seed resolves to, with its merge group: what an agent-facing
-    output must not show (R-20)."""
-    matched = frozenset(
-        work for _, role, work in _positive_matches(project) if role is SeedRole.HELD_OUT and work
-    )
-    return merge_closure(project, matched)
-
-
-def held_out(project: Project) -> HeldOut:
-    """The held-out seeds' corpus works and identifier values, for agent-facing filters (R-20)."""
-    keys = {
-        value
-        for seed, role, _ in _positive_matches(project)
-        if role is SeedRole.HELD_OUT
-        for value in seed.spec.identity_keys().values()
-    }
-    return HeldOut(work_ids=held_out_work_ids(project), keys=frozenset(keys))
 
 
 _NOT_SEARCH = frozenset(

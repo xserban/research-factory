@@ -31,8 +31,7 @@ cannot rewrite it; only the open window, and a window spanning several snapshots
 from the events as they stand.
 
 Invariants: a window is one snapshot pair, `since < until`; unknown snapshot ids are refused
-(fields `since`, `until`) and nothing is written. The agent view drops held-out works from
-`changed_previous` (`agent_update`).
+(fields `since`, `until`) and nothing is written.
 """
 
 from __future__ import annotations
@@ -60,7 +59,6 @@ from factory.services.prisma import (
     has_admission,
     prisma_flow,
 )
-from factory.services.seeds import held_out_work_ids
 from factory.services.snapshots import (
     SnapshotBlob,
     included_work_ids,
@@ -251,14 +249,6 @@ def update_work_ids(
     project.index.sync()
     facts = _facts(project, since_event, until_event)
     return set(facts.works), facts.duplicates
-
-
-def agent_update(project: Project, flow: UpdateFlow) -> UpdateFlow:
-    """`flow` as an agent may read it: held-out works never listed (decision 43, R-20)."""
-    hidden = held_out_work_ids(project)
-    return flow.model_copy(
-        update={"changed_previous": tuple(w for w in flow.changed_previous if w not in hidden)}
-    )
 
 
 # --- the window ---

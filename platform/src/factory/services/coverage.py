@@ -66,7 +66,6 @@ from factory.services.reference_resolve import (
     _keys,
 )
 from factory.services.search import get_work
-from factory.services.seeds import held_out_work_ids
 from factory.services.vocabulary import suggest_terms
 from factory.sources.importlist import NAME as IMPORTLIST
 
@@ -206,12 +205,8 @@ def record_coverage(project: Project, import_id: str) -> list[RecordCoverage]:
     return classify_import(project, import_id).records
 
 
-def classify_import(
-    project: Project, import_id: str, *, exclude_works: frozenset[str] = frozenset()
-) -> Classified:
-    """Buckets for the resolved records and counts for the unresolved and unconfirmed ones.
-
-    A record whose work is in `exclude_works` (after merging) is left out of every count."""
+def classify_import(project: Project, import_id: str) -> Classified:
+    """Buckets for the resolved records and counts for the unresolved and unconfirmed ones."""
     import_row(project, import_id)  # FactoryValidationError for an unknown import
     protocol = current_protocol(project)
     declared = (
@@ -247,8 +242,6 @@ def classify_import(
                 seen.add(head)
                 if row.part == "held-out":
                     held_first.add(head)
-                if head in exclude_works or row.work_id in exclude_works:
-                    continue
                 pending.append((row, head))
             elif state in (LinkState.UNCONFIRMED.value, LinkState.AMBIGUOUS.value):
                 unconfirmed[row.part] += 1
@@ -432,16 +425,10 @@ def _provenance(
 # --- The report ---
 
 
-def coverage_report(
-    project: Project, import_id: str, *, exclude_works: frozenset[str] = frozenset()
-) -> CoverageReport:
-    """The full report (the researcher's view): every part, every figure.
-
-    `exclude_works` leaves those works out of every count and list (the agent view passes the
-    held-out seeds' works, R-20).
-    """
+def coverage_report(project: Project, import_id: str) -> CoverageReport:
+    """The full report (the researcher's view): every part, every figure."""
     row = import_row(project, import_id)
-    classified = classify_import(project, import_id, exclude_works=exclude_works)
+    classified = classify_import(project, import_id)
     drawn = row.split_mode == "drawn"
     label: CoverageLabel = (
         "held-out" if drawn else "post-search" if row.split_mode == "post-search" else "optimistic"
@@ -453,7 +440,7 @@ def coverage_report(
         import_id=import_id,
         label=label,
         parts=parts,
-        included_not_in_library=_included_not_in_library(project, classified, exclude_works),
+        included_not_in_library=_included_not_in_library(project, classified),
         suggestions=_suggestions(project, classified, protocol),
         protocol_id=None if protocol is None else protocol.protocol_id,
         as_of=_last_event(project),
@@ -488,9 +475,7 @@ def _ratio(numerator: int, denominator: int) -> Ratio | None:
     return Ratio(numerator=numerator, denominator=denominator, value=numerator / denominator)
 
 
-def _included_not_in_library(
-    project: Project, classified: Classified, exclude_works: frozenset[str]
-) -> int:
+def _included_not_in_library(project: Project, classified: Classified) -> int:
     """Included works (merge groups counted once) that no resolved record of the import names."""
     primary = {absorbed: m.primary for m in active_merges(project) for absorbed in m.absorbed}
     included = {
@@ -498,7 +483,6 @@ def _included_not_in_library(
         for work, outcome in final_outcomes(project).items()
         if outcome is Outcome.INCLUDED
     }
-    included -= {primary.get(w, w) for w in exclude_works}
     return len(included - {r.work_id for r in classified.records})
 
 
@@ -540,19 +524,18 @@ def held_out_visible(project: Project) -> bool:
         return conn.execute(text("SELECT 1 FROM passes LIMIT 1")).first() is not None
 
 
-def agent_coverage(
-    project: Project, import_id: str, *, held_out_works: frozenset[str] | None = None
-) -> CoverageReport:
+def agent_coverage(project: Project, import_id: str) -> CoverageReport:
     """The report as an agent outside the passes may read it (decision 43; spec ruling 23).
 
     The development (or unsplit) part is always shown; the held-out part only once a screening
     pass has been opened, and then as figures only: its excluded-work list is dropped, so no work
-    is named as a held-out record. Works a held-out seed resolves to are left out of every count
-    (R-20). Before a pass is opened `included_not_in_library` is None, since it counts the whole
-    library, held-out part included.
+    is named as a held-out record. Before a pass is opened `included_not_in_library` is None,
+    since it counts the whole library, held-out part included.
+
+    What is withheld is a part of the import, never a work: a held-out seed's work counts as any
+    corpus work, since a count short of it could be compared with other tools (decision 81).
     """
-    exclude = held_out_work_ids(project) if held_out_works is None else held_out_works
-    report = coverage_report(project, import_id, exclude_works=exclude)
+    report = coverage_report(project, import_id)
     visible = held_out_visible(project)
     parts = [
         p.model_copy(update={"excluded": []}) if p.part == "held-out" else p
@@ -585,7 +568,6 @@ class ImportStatusRow(StrictModel):
 def agent_import_status(project: Project) -> list[ImportStatusRow]:
     """Every import, oldest first, as `ImportStatusRow`s (decision 43, spec ruling 23)."""
     resolved = set(resolved_import_ids(project))
-    held = held_out_work_ids(project)
     rows: list[ImportStatusRow] = []
     for listing in list_imports(project):
         info = listing.row
@@ -593,7 +575,7 @@ def agent_import_status(project: Project) -> list[ImportStatusRow]:
         states: dict[str, int] | None = None
         buckets: dict[Bucket, int] | None = None
         if info.import_id in resolved:
-            report = agent_coverage(project, info.import_id, held_out_works=held)
+            report = agent_coverage(project, info.import_id)
             [part] = [p for p in report.parts if p.part != "held-out"]
             label, buckets = report.label, part.counts
             states = {

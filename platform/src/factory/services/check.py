@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Literal
 
-from sqlalchemy import bindparam, text
+from sqlalchemy import text
 
 from factory.clock import parse_ts
 from factory.errors import FactoryValidationError
@@ -81,7 +81,7 @@ from factory.services.protocol_rules import (
 )
 from factory.services.reference_resolve import lost_human_decisions
 from factory.services.references import current_extraction, included_works
-from factory.services.seeds import SeedRole, _rigor_mode, held_out_work_ids, seed_check
+from factory.services.seeds import SeedRole, _rigor_mode, seed_check
 from factory.services.snowball import recorded_rounds, round_runs
 from factory.services.status_lookup import (
     crossref_doi,
@@ -1592,16 +1592,9 @@ WHERE r.import_id = :i AND r.outcome != 'malformed'
 def _import_counts(project: Project, import_id: str, *, development_only: bool) -> dict[str, int]:
     """The four count findings of one import; `development_only` leaves the held-out part out
     (the agent view, decision 43)."""
-    sql = _COUNT_SQL
-    params: dict[str, object] = {"i": import_id}
-    statement = text(sql)
-    if development_only:
-        # as `classify_import` for the agent view: no held-out part, no held-out seed's work
-        sql += " AND r.part != 'held-out' AND (r.work_id IS NULL OR r.work_id NOT IN :held)"
-        params["held"] = sorted(held_out_work_ids(project)) or [""]
-        statement = text(sql).bindparams(bindparam("held", expanding=True))
+    sql = _COUNT_SQL + (" AND r.part != 'held-out'" if development_only else "")
     with project.index.connect() as conn:
-        row = conn.execute(statement, params).one()
+        row = conn.execute(text(sql), {"i": import_id}).one()
     return dict(zip(_IMPORT_COUNTS, (int(n) for n in row), strict=True))
 
 
