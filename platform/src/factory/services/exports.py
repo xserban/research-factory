@@ -45,6 +45,7 @@ from factory.exports.bibtex import bibtex
 from factory.exports.crate import (
     DESCRIPTOR,
     MANIFEST,
+    RO_CRATE,
     AgentEntry,
     ConversionEntry,
     CrateFile,
@@ -584,25 +585,61 @@ def _json(value: JsonValue) -> bytes:
 
 
 def _check_crate_target(project: Project, out: Path, *, zip_: bool, force: bool) -> None:
-    """Refuse a path under `projects/` and, without `force`, one that holds anything. Even with
-    `force` nothing but a crate's own entries is ever replaced, because a stray file would be a
-    member `hasPart` does not list."""
+    """Refuse a path under `projects/` and, without `force`, one that holds anything. `force`
+    replaces only what proves to be a crate by its descriptor, never by the names of its entries:
+    `reports/` or `events/` alone may be the researcher's own."""
     _refuse_under_projects(project, out)
     if zip_:
         if out.is_dir():
             raise _issue("out", "is a directory; a zip crate needs a file path")
         if out.exists() and not force:
-            raise _issue("out", "already exists; --force replaces it")
+            raise _issue("out", "already exists; --force replaces a crate there")
+        if out.exists() and not _is_crate_zip(out):
+            raise _issue("out", "is not a zip crate; --force replaces only a crate")
         return
     if not out.exists():
         return
     if not out.is_dir():
         raise _issue("out", "is a file; a crate needs a directory, or --zip")
     held = {child.name for child in out.iterdir()}
-    if held and not force:
+    if not held:
+        return
+    if not force:
         raise _issue("out", "is not empty; --force replaces a crate there")
+    if not _is_crate_dir(out):
+        raise _issue("out", "is not a crate; --force replaces only a crate")
     if held - _CRATE_TOP:
         raise _issue("out", "holds files that are not part of a crate")
+
+
+def _is_descriptor(data: bytes) -> bool:
+    """Whether `data` is an RO-Crate 1.1 metadata file: JSON whose descriptor entity conforms."""
+    try:
+        document = json.loads(data)
+    except ValueError:
+        return False
+    graph = document.get("@graph") if isinstance(document, dict) else None
+    return isinstance(graph, list) and any(
+        isinstance(entity, dict)
+        and entity.get("@id") == DESCRIPTOR
+        and entity.get("conformsTo") == {"@id": RO_CRATE}
+        for entity in graph
+    )
+
+
+def _is_crate_dir(path: Path) -> bool:
+    try:
+        return _is_descriptor((path / DESCRIPTOR).read_bytes())
+    except OSError:
+        return False
+
+
+def _is_crate_zip(path: Path) -> bool:
+    try:
+        with zipfile.ZipFile(path) as archive:
+            return _is_descriptor(archive.read(DESCRIPTOR))
+    except (OSError, KeyError, zipfile.BadZipFile):
+        return False
 
 
 def _copy_events(project: Project, stage: Path) -> None:
