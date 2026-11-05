@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+from sqlalchemy import text
+
 from factory.services.context import Project
 from factory.services.evidence_groups import group_index
 from factory.services.evidence_report import evidence_report
@@ -56,3 +58,36 @@ def test_timeline_reads_the_absorbed_row_under_the_primary(
     gid = next(g.group_id for g in group_index(project) if dict(g.key)["task"] == "classification")
     (unit,) = timeline_view(project, gid).units.values()
     assert [(r.work_id, r.year) for r in unit.records] == [(primary, 2017)]
+
+
+def _codes(view: object) -> dict[str, str]:
+    return {n.code: n.text for n in view.meta.notices}  # type: ignore[attr-defined]
+
+
+def test_the_merge_reading_is_named_in_a_notice_and_the_filter(
+    project: Project, vb_world: VbWorld
+) -> None:
+    gid = next(g.group_id for g in group_index(project) if dict(g.key)["task"] == "classification")
+    assert "merge-read" not in _codes(coverage_view(project))  # no merge, no notice
+    _merged(project, vb_world)
+    for view in (coverage_view(project), horizon_view(project), timeline_view(project, gid)):
+        assert "1 row(s)" in _codes(view)["merge-read"]
+        assert "merge-absorbed" in str(view.meta.filter) or "merge-absorbed" in str(
+            view.meta.filter.values()
+        )
+
+
+def test_a_row_of_an_absorbed_work_is_dropped_with_its_primary_outside_the_corpus(
+    project: Project, vb_world: VbWorld
+) -> None:
+    primary, _ = _merged(project, vb_world)
+    with project.index.connect() as conn:  # the primary leaves the corpus (as a retraction would)
+        conn.execute(text("DELETE FROM provenance WHERE work_id = :w"), {"w": primary})
+        conn.commit()
+    view = coverage_view(project)
+    assert (
+        sum(g.rows for g in view.groups)
+        == 4
+        < sum(len(g.rows) for g in evidence_report(project).groups)
+    )
+    assert "merge-read" not in _codes(view)  # the dropped row was not read under its primary

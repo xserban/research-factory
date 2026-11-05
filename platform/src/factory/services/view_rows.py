@@ -1,14 +1,18 @@
 """The evidence rows a view counts (slice 7b, plan V-B; review I2, I3).
 
-Declares: `canonical_ids`, `visible_groups`, `visible_rows`. Read-only.
+Declares: `canonical_ids`, `visible_groups`, `visible_rows`, `merge_notice`. Read-only.
 
 Invariants:
 - The evidence report keeps the rows of a work an active dedup merge absorbs (it ignores merges).
-  The views keep those rows too, so their row counts equal the report's, but read the work as
-  its primary: an absorbed record and its primary are one paper, so `works` counts papers (the
-  report counts records), and dates, idea membership and lineage edges follow the primary.
+  The views keep those rows too, so their row counts equal the report's except where a row is
+  dropped below, but read the work as its primary: an absorbed record and its primary are one
+  paper, so `works` counts papers (the report counts records), and dates, idea membership and
+  lineage edges follow the primary. The number of rows read so is returned and stated in a notice
+  (`merge_notice`).
 - A row is shown when its canonical work is a corpus work (`view_corpus.corpus_among`: PRISMA's
   corpus, role-blind) and neither the record nor its primary is excluded by a retraction notice.
+  An absorbed row is therefore dropped when its primary is retracted or not in the corpus, so a
+  view can show fewer rows than the report.
   Groups are filtered before they are ranked or cut, so totals equal what is listed.
 - A work with a correction pending (the record or its primary) is returned in `pending`.
 """
@@ -21,6 +25,7 @@ from collections.abc import Sequence
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
+from factory.model.views import ViewNotice
 from factory.services.context import Project
 from factory.services.extraction_agreement import FinalRow, GroupKey
 from factory.services.notices import work_states
@@ -46,12 +51,13 @@ def canonical_ids(conn: Connection, ids: Sequence[str]) -> dict[str, str]:
 
 def visible_groups(
     project: Project, groups: Sequence[tuple[GroupKey, list[FinalRow]]]
-) -> tuple[list[tuple[GroupKey, list[FinalRow]]], frozenset[str]]:
+) -> tuple[list[tuple[GroupKey, list[FinalRow]]], frozenset[str], int]:
     """The groups restricted to visible rows (rows read under their canonical work), empty groups
-    dropped, and the canonical works among them with a correction pending."""
+    dropped, the canonical works among them with a correction pending, and the number of shown
+    rows read under their primary."""
     works = sorted({r.work_id for _, rows in groups for r in rows})
     if not works:
-        return [], frozenset()
+        return [], frozenset(), 0
     with project.index.connect() as conn:
         canon = canonical_ids(conn, works)
         corpus = corpus_among(conn, sorted({canon.get(w, w) for w in works}))
@@ -60,6 +66,7 @@ def visible_groups(
     pending = {w for w, s in states.items() if s.flag == "correction-pending"}
     out: list[tuple[GroupKey, list[FinalRow]]] = []
     pending_out: set[str] = set()
+    merged = 0
     for key, rows in groups:
         kept: list[FinalRow] = []
         for row in rows:
@@ -69,15 +76,28 @@ def visible_groups(
                 continue
             if own in pending or main in pending:
                 pending_out.add(main)
+            merged += main != own
             kept.append(row if main == own else row.model_copy(update={"work_id": main}))
         if kept:
             out.append((key, kept))
-    return out, frozenset(pending_out)
+    return out, frozenset(pending_out), merged
 
 
 def visible_rows(
     project: Project, rows: Sequence[FinalRow]
-) -> tuple[list[FinalRow], frozenset[str]]:
+) -> tuple[list[FinalRow], frozenset[str], int]:
     """`visible_groups` for the rows of one group."""
-    groups, pending = visible_groups(project, [((), list(rows))])
-    return (groups[0][1] if groups else []), pending
+    groups, pending, merged = visible_groups(project, [((), list(rows))])
+    return (groups[0][1] if groups else []), pending, merged
+
+
+def merge_notice(merged: int) -> ViewNotice | None:
+    """The notice that `merged` rows belong to works a dedup merge absorbed and were read as the
+    primary; None for zero. Merges are visible to agents, so one text serves both variants."""
+    if not merged:
+        return None
+    return ViewNotice(
+        code="merge-read",
+        text=f"{merged} row(s) belong to records a dedup merge absorbed and are read as their "
+        "primary work: works are counted as papers, not records.",
+    )

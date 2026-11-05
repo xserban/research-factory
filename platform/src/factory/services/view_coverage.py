@@ -10,9 +10,11 @@ Invariants:
   crosses groups. Variants are not separate rows: a method is its `method_name` normalised as the
   pack does, whatever its `variant`.
 - The rows are the final rows of `grouped_rows` (the grouping of the evidence report) of corpus
-  works (`view_corpus.corpus_among`: PRISMA's corpus minus works an active merge absorbs, role-blind
-  as PRISMA counts it), without the works a retraction notice excludes (the evidence report's
-  default). Group and method totals are computed over all of them; only the lists are cut, at
+  works (`view_rows`: PRISMA's corpus, role-blind), without the works a retraction notice excludes
+  (the evidence report's default). A row of a work an active merge absorbs is kept and read as its
+  primary (the filter says so and a `merge-read` notice counts them); it is dropped when its
+  primary is retracted or outside the corpus. Group and method totals are computed over all of
+  them; only the lists are cut, at
   `VIEW_MAX_GROUPS` groups and `VIEW_MAX_NODES` methods, ordered by (works descending, id).
 - The ideas matrix counts, per confirmed idea (ids only, no names), the rows its member works'
   live, final, non-stale contribution `result` items link by `result_row`; a row linked twice
@@ -37,7 +39,7 @@ from factory.services.extraction_agreement import FinalRow, GroupKey, grouped_ro
 from factory.services.ideas import confirmed_ideas
 from factory.services.onion import VIEW_MAX_NODES
 from factory.services.view_corpus import horizon_notice, search_horizon
-from factory.services.view_rows import canonical_ids, visible_groups
+from factory.services.view_rows import canonical_ids, merge_notice, visible_groups
 from factory.services.views import view_meta
 
 VIEW_VERSION = 1
@@ -54,7 +56,7 @@ def _build(project: Project) -> CoverageView:
     project.index.sync()
     as_of = project.index.head()  # once, before any read: the view describes this position
     notices: list[ViewNotice] = []
-    groups = _shown_groups(project)
+    groups, merged = _shown_groups(project)
     pack_method = _method_definition(project)
     cells: dict[str, dict[str, _Tally]] = {}
     row_group: dict[tuple[str, str], tuple[str, FinalRow]] = {}
@@ -67,6 +69,8 @@ def _build(project: Project) -> CoverageView:
             method = _method(row, pack_method)
             cells.setdefault(method, {}).setdefault(summary.group_id, _Tally()).add(row)
     notices.append(horizon_notice(search_horizon(project)))
+    if (note := merge_notice(merged)) is not None:
+        notices.append(note)
     if not summaries:
         notices.append(
             ViewNotice(
@@ -102,7 +106,8 @@ def _build(project: Project) -> CoverageView:
             "coverage",
             VIEW_VERSION,
             {
-                "rows": "final evidence rows of corpus works, without notice-excluded works",
+                "rows": "final evidence rows of corpus works, without notice-excluded works; "
+                "rows of merge-absorbed works are read as their primary",
                 "max_groups": VIEW_MAX_GROUPS,
                 "max_methods": VIEW_MAX_NODES,
             },
@@ -143,10 +148,11 @@ class _Tally:
         return CoverageCell(independent=self.independent, copied=self.copied, works=len(self.works))
 
 
-def _shown_groups(project: Project) -> list[tuple[GroupKey, list[FinalRow]]]:
+def _shown_groups(project: Project) -> tuple[list[tuple[GroupKey, list[FinalRow]]], int]:
     """The groups of `grouped_rows` restricted to visible rows (`view_rows`: corpus works read as
     their primary, no retraction); a group left without rows is dropped."""
-    return visible_groups(project, sorted(grouped_rows(project).groups.items()))[0]
+    shown, _, merged = visible_groups(project, sorted(grouped_rows(project).groups.items()))
+    return shown, merged
 
 
 def _method_definition(project: Project) -> FieldDef | None:

@@ -9,8 +9,9 @@ Invariants (timeline):
   unparseable has no timeline, only a notice (evidence-report ruling 5).
 - A row's date is the publication year of its work (`dates.published`); rows of undated works are
   listed by work id, never dated by a guess. Copied rows are never records or frontier points.
-- Rows are those of corpus works (`view_corpus.corpus_among`: PRISMA's corpus minus absorbed works,
-  role-blind) that no retraction notice excludes; rows of a work with a correction pending are
+- Rows are those of corpus works (`view_rows`: PRISMA's corpus, role-blind) that no retraction
+  notice excludes; a row of a work an active merge absorbs is read as its primary (stated in the
+  filter and in a `merge-read` notice); rows of a work with a correction pending are
   left out of the records and frontiers, as the evidence report leaves them out of its frontiers.
 - Trace ids are `rk_.../value`; no quote or document text is carried.
 """
@@ -51,7 +52,12 @@ from factory.services.view_corpus import (
     search_horizon,
     years_of,
 )
-from factory.services.view_rows import canonical_ids, visible_groups, visible_rows
+from factory.services.view_rows import (
+    canonical_ids,
+    merge_notice,
+    visible_groups,
+    visible_rows,
+)
 from factory.services.views import view_meta
 from factory.views.timeline import DatedPoint, records, yearly_frontiers
 
@@ -80,7 +86,7 @@ def _timeline(project: Project, group_id: str) -> TimelineView:
     key, all_rows = key_and_rows(project, group_id)
     _, schema, pack = require_schema(project)  # key_and_rows found the group: a schema exists
     spec = report_spec(pack)
-    rows, pending = visible_rows(project, all_rows)
+    rows, pending, merged = visible_rows(project, all_rows)
     notices: list[ViewNotice] = []
     direction, status = group_direction(key, rows, pack, spec)
     units: dict[str, UnitTimeline] = {}
@@ -122,6 +128,8 @@ def _timeline(project: Project, group_id: str) -> TimelineView:
                 )
             )
     notices.append(horizon_notice(search_horizon(project)))
+    if (note := merge_notice(merged)) is not None:
+        notices.append(note)
     if pending:
         notices.append(
             ViewNotice(
@@ -135,7 +143,11 @@ def _timeline(project: Project, group_id: str) -> TimelineView:
             project,
             "timeline",
             VIEW_VERSION,
-            {"group_id": group_id, "rows": "independent rows of dated corpus works"},
+            {
+                "group_id": group_id,
+                "rows": "independent rows of dated corpus works; rows of merge-absorbed works "
+                "are read as their primary",
+            },
             notices=notices,
             as_of=as_of,
         ),
@@ -249,7 +261,9 @@ def _horizon(project: Project) -> HorizonView:
     notices: list[ViewNotice] = []
     included = set(included_works(project))
     ideas = confirmed_ideas(project)
-    shown_groups, pending = visible_groups(project, sorted(grouped_rows(project).groups.items()))
+    shown_groups, pending, merged = visible_groups(
+        project, sorted(grouped_rows(project).groups.items())
+    )
     ranked = sorted(
         shown_groups, key=lambda kv: (-len({r.work_id for r in kv[1]}), group_id(kv[0]))
     )  # filtered first, then ranked as the coverage map ranks, then cut
@@ -293,6 +307,8 @@ def _horizon(project: Project) -> HorizonView:
     keys += [set(per) for per in group_records.values()]
     horizon = search_horizon(project)
     notices.append(horizon_notice(horizon))
+    if (note := merge_notice(merged)) is not None:
+        notices.append(note)
     if not ideas and not new_edges and not group_records:
         notices.append(
             ViewNotice(
@@ -309,7 +325,8 @@ def _horizon(project: Project) -> HorizonView:
             VIEW_VERSION,
             {
                 "series": "included works per idea, new ideas, new stated or confirmed edges, "
-                "records per group; by publication year",
+                "records per group; by publication year; works of merge-absorbed records are "
+                "read as their primary",
                 "max_ideas": HORIZON_MAX_IDEAS,
                 "max_groups": HORIZON_MAX_GROUPS,
             },
