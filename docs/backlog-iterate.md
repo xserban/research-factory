@@ -24,3 +24,4 @@ Minor review findings parked during the v1 build, to address when iterating from
 - living-B: shortfall and drift findings in check cover title/abstract only (check.py:400); extend to full-text later.
 - living-B: audit-missing and update-audit-outstanding both fire when shortfall > 0 in a living review (duplicate warning, check.py:400,778).
 - Import-C: agent_import_status runs full coverage and suggest_terms per import per page; methods_report computes imports twice; _import_lookup_runs reads the whole event log per trace walk.
+- G2-B: mask_batch can differ from the stored blob, so task.completed input_blob may not equal what was served (contributions.py:332).
