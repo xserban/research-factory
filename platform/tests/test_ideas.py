@@ -304,3 +304,30 @@ def test_held_out_work_is_an_ordinary_member(
     monkeypatch.setattr(seeds, "held_out", lambda _p: hidden)
     idea = propose_idea(project, agent, NAME, lin.source, lin.base, [lin.source, lin.target5])
     assert idea_view(project, idea) is not None
+
+
+def test_merge_target_cannot_be_rejected_or_superseded_while_the_merge_stands(
+    project: Project, agent: Actor, decider: Actor, lin: Lineage, world: list[str]
+) -> None:
+    a, b = _two_ideas(project, agent, lin, world)
+    for i in (a, b):
+        decide_idea(project, decider, i, LineageDecision.CONFIRM, "ok")
+    merge_ideas(project, decider, a, b, "same")
+    _refused(
+        project,
+        "idea_id",
+        "merge-target",
+        lambda: decide_idea(project, decider, b, LineageDecision.REJECT, "no"),
+    )
+    _refused(
+        project,
+        "supersedes",
+        "merge-target",
+        lambda: propose_idea(
+            project, agent, NAME, lin.source, lin.base, [lin.source], supersedes=b
+        ),
+    )
+    decide_idea(project, decider, b, LineageDecision.CONFIRM, "still fine")  # not hidden
+    unmerge_idea(project, decider, a, "undo")
+    decide_idea(project, decider, b, LineageDecision.REJECT, "no")
+    assert [i.idea_id for i in list_ideas(project)] == [a]

@@ -92,6 +92,9 @@ def propose_idea(
         issues += _member_issues(project, origin, members)
         if supersedes is not None and _idea_row(project, supersedes, live=True) is None:
             issues.append(ValidationIssue("supersedes", "idea-not-live"))
+        elif supersedes is not None and _has_merged_members(project, supersedes):
+            # Superseding a merge target would hide the ideas merged into it from every view.
+            issues.append(ValidationIssue("supersedes", "merge-target"))
         if issues:
             raise FactoryValidationError(issues)
         idea_id = f"ida_{project.ids.ulid()}"
@@ -166,6 +169,15 @@ def _member_issues(
     return issues
 
 
+def _has_merged_members(project: Project, idea_id: str) -> bool:
+    """Whether some idea is merged into `idea_id` (an indexed read)."""
+    with project.index.connect() as conn:
+        row = conn.execute(
+            text("SELECT 1 FROM ideas WHERE merged_into = :i LIMIT 1"), {"i": idea_id}
+        ).first()
+    return row is not None
+
+
 def _idea_row(project: Project, idea_id: str, *, live: bool = False) -> Any | None:
     """The idea's row; with `live`, only when not superseded and not rejected."""
     with project.index.connect() as conn:
@@ -192,7 +204,8 @@ def decide_idea(
 ) -> str:
     """Record a human decision on a live idea and return its event id. Refused (nothing written)
     for a non-human actor or the proposing session (`actor`), an unknown or superseded idea
-    (`idea_id`), a blank or long rationale (`rationale`) and a confirmation whose name item is no
+    (`idea_id`), a rejection of an idea other ideas are merged into (`idea_id`: `merge-target`;
+    unmerge first), a blank or long rationale (`rationale`) and a confirmation whose name item is no
     longer final (`name_item`)."""
     _only_human(actor)
     with project.index.exclusive():
@@ -211,6 +224,8 @@ def decide_idea(
             issues.append(ValidationIssue("rationale", "state the reason for the decision"))
         elif len(rationale) > MAX_RATIONALE:
             issues.append(ValidationIssue("rationale", f"at most {MAX_RATIONALE} characters"))
+        if decision is LineageDecision.REJECT and _has_merged_members(project, idea_id):
+            issues.append(ValidationIssue("idea_id", "merge-target"))
         if decision is LineageDecision.CONFIRM and final_item(project, str(row[4])) is None:
             issues.append(ValidationIssue("name_item", "name-item-unresolved"))
         if issues:
