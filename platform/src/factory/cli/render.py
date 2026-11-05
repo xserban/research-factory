@@ -49,6 +49,7 @@ from factory.services.inbox import InboxPage, ResolveOutcome
 from factory.services.interpretations import InterpretationList, InterpretationView
 from factory.services.lineage import GraphQueryResult, GraphStatus
 from factory.services.matching import MatchPage
+from factory.services.modules.listing import ModuleRow
 from factory.services.prisma import UNCONVERTED, PrismaFlow, SearchReport
 from factory.services.prisma_update import UpdateFlow
 from factory.services.properties import PropertyView
@@ -1088,6 +1089,27 @@ def gap_lines(report: GapReport) -> list[str]:
         report.statement,
     ]
     lines += [f"{c.row}  {c.column}" for c in report.empty]
+    return lines
+
+
+def module_lines(rows: list[ModuleRow]) -> list[str]:
+    """One block per declared module: counts, task kinds, sections, gates with their floor,
+    checks, strategies and the family note."""
+    lines: list[str] = []
+    for row in rows:
+        lines.append(f"{row.name} ({row.kind}): {row.events} event types, {row.tables} tables")
+        if row.task_kinds:
+            lines.append(f"  task kinds: {', '.join(row.task_kinds)}")
+        if row.sections:
+            lines.append(f"  protocol sections: {', '.join(row.sections)}")
+        if row.gates:
+            lines.append(f"  gates: {', '.join(f'{g.gate_id} ({g.floor})' for g in row.gates)}")
+        if row.checks:
+            lines.append(f"  checks: {', '.join(row.checks)}")
+        if row.strategies:
+            lines.append(f"  strategies: {', '.join(row.strategies)}")
+        if row.note:
+            lines.append(f"  note: {row.note}")
     return lines
 
 

@@ -98,6 +98,7 @@ from factory.services import watch as watch_service
 from factory.services.context import Project, list_projects, open_project
 from factory.services.extraction_agreement import Choice
 from factory.services.living_hooks import DEFAULT_HOOKS
+from factory.services.modules.listing import module_rows
 from factory.services.project import ScreeningStatus
 from factory.services.search import list_works
 from factory.sources.fulltext.registry import default_routes
@@ -479,6 +480,20 @@ def status(
         for item in report.human.items:
             stage = "" if item.stage is None else f" ({item.stage})"
             typer.echo(f"  {item.gate.value}{stage}: {item.count} \u2014 {item.command}")
+
+
+@app.command("modules")
+def modules_cmd(
+    as_json: Annotated[bool, typer.Option("--json", help="Print the module rows as JSON.")] = False,
+) -> None:
+    """The declared stage modules: kind, event types, task kinds, protocol sections, gates with
+    their floor, checks and strategies. Reads declarations only; no project is opened."""
+    rows = module_rows()
+    if as_json:
+        typer.echo(json.dumps([row.model_dump(mode="json") for row in rows]))
+    else:
+        for line in render.module_lines(rows):
+            typer.echo(line)
 
 
 @app.command("portfolio")

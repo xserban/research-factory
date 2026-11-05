@@ -93,6 +93,7 @@ from factory.services.layer_check import (
 )
 from factory.services.lineage import graph_status, iter_graph_export
 from factory.services.methods import MethodsReport, methods_report, render_methods
+from factory.services.modules import default_modules
 from factory.services.notices import (
     assessments,
     dependent_works,
@@ -122,98 +123,11 @@ from factory.services.watch import cycles, watch_status
 
 Severity = Literal["error", "warning"]
 
-LEVELS: dict[str, tuple[Severity | None, Severity | None, Severity | None]] = {
-    # code: (exploratory, pilot, systematic); None means no finding in that mode.
-    "broken-link": ("error", "error", "error"),
-    "missing-provenance": ("error", "error", "error"),
-    "shortfall-unexplained": ("error", "error", "error"),
-    "seed-missing": ("warning", "error", "error"),
-    "seed-admission-pending": ("warning", "warning", "error"),
-    "protocol-not-ready": (None, "error", "error"),
-    "press-missing": (None, "error", "error"),
-    "screening-pending": ("warning", "warning", "warning"),
-    "single-pass": (None, "warning", "error"),
-    "calibration-missing": (None, "error", "error"),
-    "kappa-below-floor": ("warning", "warning", "warning"),
-    "audit-missing": (None, "warning", "error"),
-    "audit-error-high": (None, "warning", "error"),
-    "chase-missing": (None, "warning", "error"),
-    "profile-checklist": ("warning", "warning", "warning"),
-    "merge-verdict-conflict": ("warning", "warning", "warning"),
-    "library-missing": ("warning", "warning", "warning"),
-    "library-corrupt": ("error", "error", "error"),
-    "source-changed": ("warning", "warning", "warning"),
-    "fulltext-unsought": ("warning", "warning", "warning"),
-    "fulltext-decision-stale-document": ("warning", "warning", "warning"),
-    "extraction-pending": ("warning", "warning", "warning"),
-    "extraction-single": (None, "warning", "error"),
-    "extraction-unresolved": (None, "warning", "error"),
-    "extraction-audit-missing": (None, "warning", "error"),
-    "extraction-error-high": (None, "warning", "error"),
-    "extraction-schema-stale": ("warning", "warning", "warning"),
-    "extraction-library-missing": ("warning", "warning", "warning"),
-    "extraction-document-stale": ("warning", "warning", "warning"),
-    "extraction-copy-flag": ("warning", "warning", "warning"),
-    "evidence-excluded-rows": ("warning", "warning", "warning"),
-    "evidence-ungrouped": ("warning", "warning", "warning"),
-    "evidence-direction": ("warning", "warning", "warning"),
-    "references-missing-extraction": (None, "warning", "error"),
-    "references-stale-extraction": ("warning", "warning", "warning"),
-    "references-parse-incomplete": ("warning", "warning", "warning"),
-    "references-unresolved-ceiling": ("warning", "warning", "warning"),
-    "references-library-missing": ("warning", "warning", "warning"),
-    "references-decision-lost": ("warning", "warning", "error"),
-    "snowball-plan-missing": (None, "warning", "error"),
-    "snowball-over-plan": ("warning", "warning", "warning"),
-    "snowball-unscreened": ("error", "error", "error"),
-    "inbox-open-after-screening": ("warning", "warning", "warning"),
-    "inbox-resolve-failed": ("warning", "warning", "warning"),
-    "supplied-without-plan": (None, "warning", "warning"),
-    "watch-plan-missing": ("warning", "error", "error"),
-    "watch-overdue": ("warning", "warning", "warning"),
-    "watch-source-failing": ("warning", "warning", "error"),
-    "watch-cycle-open": ("warning", "warning", "warning"),
-    "window-misses": ("warning", "warning", "warning"),
-    "update-audit-outstanding": (None, "warning", "error"),
-    "calibration-model-drift": (None, "warning", "error"),
-    "import-unresolved": ("warning", "warning", "warning"),
-    "import-unconfirmed": ("warning", "warning", "warning"),
-    "import-attachment-missing": ("warning", "warning", "warning"),
-    "import-identity-unchecked": ("warning", "warning", "warning"),
-    "import-undeclared": ("warning", "error", "error"),
-    "import-coverage-optimistic": ("warning", "warning", "warning"),
-    "included-retracted": ("warning", "warning", "error"),
-    "notice-unassessed": ("warning", "warning", "warning"),
-    "notice-unchecked-crossref": ("warning", "warning", "warning"),
-    "notice-coverage-age": ("warning", "warning", "warning"),
-    "newer-version-available": ("warning", "warning", "warning"),
-    "version-of-record-available": ("warning", "warning", "warning"),
-    "version-link-conflict": ("warning", "warning", "warning"),
-    "status-lookup-failed": ("warning", "warning", "warning"),
-    "conclusion-changed": ("warning", "warning", "warning"),
-    "conclusion-basis-affected": ("warning", "warning", "error"),
-    "contribution-missing-extraction": ("warning", "warning", "error"),
-    "contribution-stale": ("warning", "warning", "warning"),
-    "contribution-schema-missing": (None, "warning", "error"),
-    "contribution-closed-without-items": ("warning", "warning", "warning"),
-    "contribution-error-ceiling": (None, "warning", "error"),
-    "relation-stale": ("warning", "warning", "warning"),
-    "relation-unconfirmed": ("warning", "warning", "warning"),
-    "relation-uncited-base": ("warning", "warning", "warning"),
-    "relation-without-basis": ("error", "error", "error"),
-    "idea-unconfirmed": ("warning", "warning", "warning"),
-    "graph-extraction-missing": ("warning", "warning", "warning"),
-    "interpretation-unreviewed": ("warning", "warning", "error"),
-    "concept-unreviewed": ("warning", "warning", "error"),
-    "interpretation-source-stale": ("warning", "warning", "warning"),
-    "interpretation-self-reviewed": ("warning", "warning", "warning"),
-    "concept-source-missing": ("warning", "warning", "warning"),
-    "concept-link-unconfirmed": ("warning", "warning", "warning"),
-    "layer-review-dropped": ("warning", "warning", "warning"),
-    "layer-leak": ("error", "error", "error"),
-    "layer-scan-incomplete": ("warning", "warning", "warning"),
-    "concept-cycle": ("error", "error", "error"),
-}
+LEVELS: dict[str, tuple[Severity | None, Severity | None, Severity | None]] = (
+    default_modules().levels()
+)
+"""code: (exploratory, pilot, systematic); None means no finding in that mode. Each code is
+declared by the module that owns its rule (`services/modules/<module>.py`)."""
 
 LAYER_CHECK_CODES = frozenset(
     {
@@ -490,8 +404,20 @@ def _finding(hit: _Hit, severity: Severity) -> Finding:
 
 
 def _hits(project: Project) -> list[_Hit]:
-    """Every condition in the project, in rule order. Computed once per check."""
-    return _run_rules(project)
+    """Every condition in the project, composed from the modules' hooks and reported in rule
+    order. The rules run once per call: every module reads the same rule results.
+
+    A hit whose code no module declares is an error (KeyError), never dropped."""
+    registry = default_modules()
+    results = _run_rules(project)
+    token = _RULE_HITS.set((project, results))
+    try:
+        composed = [hit for module in registry.modules() for hit in module.hits(project)]
+    finally:
+        _RULE_HITS.reset(token)
+    for hit in results:
+        registry.owner_of_check(hit.code)
+    return sorted(composed, key=lambda hit: hit.seq)
 
 
 _RULE_HITS: ContextVar[tuple[Project, list[_Hit]] | None] = ContextVar("rule_hits", default=None)

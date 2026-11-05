@@ -4,6 +4,7 @@ Declaration only (slice M, decision 55); behaviour stays in the services."""
 
 from factory.modules.contract import (
     ArtifactKind,
+    CheckRule,
     EventFamily,
     GateKind,
     GateSpec,
@@ -76,6 +77,18 @@ SPEC = ModuleSpec(
             PolicyKind.HUMAN,
             ("slice 3c",),
         ),
+    ),
+    checks=(
+        CheckRule("interpretation-unreviewed", ("warning", "warning", "error")),
+        CheckRule("concept-unreviewed", ("warning", "warning", "error")),
+        CheckRule("interpretation-source-stale", ("warning", "warning", "warning")),
+        CheckRule("interpretation-self-reviewed", ("warning", "warning", "warning")),
+        CheckRule("concept-source-missing", ("warning", "warning", "warning")),
+        CheckRule("concept-link-unconfirmed", ("warning", "warning", "warning")),
+        CheckRule("layer-review-dropped", ("warning", "warning", "warning")),
+        CheckRule("layer-leak", ("error", "error", "error")),
+        CheckRule("layer-scan-incomplete", ("warning", "warning", "warning")),
+        CheckRule("concept-cycle", ("error", "error", "error")),
     ),
 )
 
