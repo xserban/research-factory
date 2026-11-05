@@ -34,6 +34,7 @@ from factory.errors import FactoryValidationError, ValidationIssue
 from factory.lineage.graph import GraphFilter
 from factory.model.lineage import EdgeType
 from factory.model.regions import RegionKind
+from factory.model.search import QueryPurpose
 from factory.model.views import (
     OnionEdgeType,
     OnionFilter,
@@ -62,6 +63,7 @@ VIEW_MAX_NODES = 500
 VIEW_VERSION = 1
 
 _SEEN = "onion_seen"
+_PROBE = QueryPurpose.PROBE.value
 
 
 DEFAULT_FILTER = OnionFilter()
@@ -191,13 +193,33 @@ def _focus(project: Project, flt: OnionFilter) -> list[str]:
         return sorted(set(included_works(project)))
     named = sorted(set(flt.focus))
     with project.index.connect() as conn:
-        nodes = paper_nodes(conn, named)
-    bad = [w for w in named if w not in nodes or nodes[w].scope != "corpus"]
+        corpus = _corpus_among(conn, named)
+    bad = [w for w in named if w not in corpus]
     if bad:
         raise FactoryValidationError(
             [ValidationIssue("focus", f"{w}: not a corpus work") for w in bad]
         )
     return named
+
+
+def _corpus_among(conn: Connection, ids: Sequence[str]) -> set[str]:
+    """The ids that are corpus works as `list_works` defines the corpus (a non-probe provenance
+    row) and that no active merge absorbs. Role-blind: a seed's work is an ordinary corpus work."""
+    found: set[str] = set()
+    for start in range(0, len(ids), RING_BATCH):
+        rows = conn.execute(
+            text(
+                "SELECT DISTINCT p.work_id FROM provenance p "
+                "WHERE p.work_id IN (SELECT value FROM json_each(:ids)) "
+                "AND p.query_id NOT IN (SELECT query_id FROM queries WHERE purpose = :probe) "
+                "AND p.work_id NOT IN (SELECT mm.work_id FROM merge_members mm JOIN merges m "
+                "ON m.merge_id = mm.merge_id WHERE m.status = 'active' "
+                'AND mm.work_id != m."primary")'
+            ),
+            {"ids": json.dumps(list(ids[start : start + RING_BATCH])), "probe": _PROBE},
+        )
+        found.update(str(r[0]) for r in rows)
+    return found
 
 
 def _seed(conn: Connection, focus: Sequence[str]) -> None:
@@ -237,6 +259,7 @@ def _nodes(
     if not listed:
         return []
     papers = paper_nodes(conn, listed)
+    corpus = _corpus_among(conn, listed)
     years = _years(conn, listed)
     ideas = confirmed_ideas_of(project, conn, listed)
     return [
@@ -245,7 +268,7 @@ def _nodes(
             title=papers[w].title or "",
             year=years.get(w),
             depth=depths.of(w),
-            scope=papers[w].scope or "external",
+            scope="corpus" if w in corpus else "external",
             ideas=ideas.get(w, []),
         )
         for w in listed

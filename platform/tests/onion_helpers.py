@@ -102,6 +102,13 @@ def write_graph(
         conn.execute(
             text("INSERT INTO works (work_id, data, first_event_id) VALUES (:w, :d, 'ev')"), works
         )
+        conn.execute(
+            text(
+                "INSERT INTO provenance (work_id, run_id, query_id, source, method, raw_blob, at) "
+                "VALUES (:w, 'run_x', 'qry_x', 's', 'm', 'b', '2026-01-01T00:00:00+00:00')"
+            ),
+            [{"w": w["w"]} for w in works],
+        )
         if cites:
             conn.execute(
                 text(

@@ -13,6 +13,7 @@ from factory.services.depth import DepthIndex
 from factory.services.onion import ONION_MAX_RING, VIEW_MAX_NODES, onion_view
 from factory.services.views import to_json
 from tests.onion_helpers import A, B, F, write_graph
+from tests.region_helpers import add_queries
 
 
 @pytest.fixture
@@ -116,6 +117,56 @@ def test_explicit_focus_and_unknown_focus_error(g: Project) -> None:
         with pytest.raises(FactoryValidationError) as err:
             onion_view(g, OnionFilter(focus=(bad,)))
         assert err.value.issues[0].field == "focus"
+
+
+PROBE_ONLY = "rf:p0-000000a0"
+
+
+def _add_probe_only(project: Project) -> None:
+    add_queries(project, {"qry_probe": "probe"})
+    with project.index.connect() as conn:
+        conn.execute(
+            text("INSERT INTO works (work_id, data, first_event_id) VALUES (:w, '{}', 'ev')"),
+            {"w": PROBE_ONLY},
+        )
+        conn.execute(
+            text(
+                "INSERT INTO provenance (work_id, run_id, query_id, source, method, raw_blob, at) "
+                "VALUES (:w, 'run_qry_probe', 'qry_probe', 's', 'm', 'b', "
+                "'2026-01-01T00:00:00+00:00')"
+            ),
+            {"w": PROBE_ONLY},
+        )
+        conn.commit()
+
+
+def test_probe_only_work_is_not_a_corpus_work(g: Project) -> None:
+    _add_probe_only(g)
+    with pytest.raises(FactoryValidationError) as err:
+        onion_view(g, OnionFilter(focus=(PROBE_ONLY,)))
+    assert err.value.issues[0].field == "focus"
+
+
+def test_scope_follows_the_corpus_not_the_works_table(g: Project) -> None:
+    _add_probe_only(g)
+    with g.index.connect() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO graph_nodes (node_id, node_type, event_id) VALUES (:w, 'paper', 'ev')"
+            ),
+            {"w": PROBE_ONLY},
+        )
+        conn.execute(
+            text(
+                "INSERT INTO graph_edges (edge_id, edge_type, source, target, base_status, live, "
+                "flags, event_id) VALUES ('cit:rex_z:1', 'cites', :s, :t, 'stated', 1, '[]', 'ev')"
+            ),
+            {"s": F[0], "t": PROBE_ONLY},
+        )
+        conn.commit()
+    ring1 = {n.work_id: n for n in onion_view(g).rings[1].nodes}
+    assert ring1[PROBE_ONLY].scope == "external"
+    assert ring1[A[0]].scope == "corpus"
 
 
 def test_node_fields(g: Project) -> None:
