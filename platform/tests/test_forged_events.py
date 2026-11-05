@@ -415,6 +415,14 @@ def test_registration_by_a_human_under_the_wrong_policy_does_not_fold(
     folds(project, "hypothesis.registered", _registration(hw, review), human)
 
 
+def test_registration_of_another_version_does_not_fold(
+    project: Project, human: Actor, hw: HW
+) -> None:
+    """With no review to cite, the version is the only thing tying the act to the draft."""
+    inert(project, "hypothesis.registered", _registration(hw, None, h_version="H@00000000"), human)
+    folds(project, "hypothesis.registered", _registration(hw, None), human)
+
+
 def test_registration_of_an_abandoned_hypothesis_does_not_fold(
     project: Project, human: Actor, hw: HW
 ) -> None:
@@ -769,11 +777,7 @@ def test_well_formed_snapshot_folds(project: Project, agent: Actor) -> None:
     folds(project, "region.snapshot_taken", _snapshot(project, _gz("work\tw1\n")), agent)
 
 
-
-
 # --- Miners: registration and calibration ---
-
-
 
 
 def _registered(project: Project, *, kind: str = "human", version: int = 1) -> MinerRegistered:
@@ -786,8 +790,6 @@ def _registered(project: Project, *, kind: str = "human", version: int = 1) -> M
         spec_blob=project.blobs.put_json(spec_to_json(spec)),
         proposer_kind=kind,  # type: ignore[arg-type]
     )
-
-
 
 
 def _drawn(project: Project, **over: Any) -> MinerCalibrationDrawn:
@@ -807,8 +809,6 @@ def _drawn(project: Project, **over: Any) -> MinerCalibrationDrawn:
     }
     body.update(over)
     return MinerCalibrationDrawn(**body)
-
-
 
 
 def _gold(work: str = "w1", **over: Any) -> MinerCalibrationLabelled:
@@ -848,8 +848,6 @@ def test_gold_label_is_a_human_act_on_a_drawn_unit(project: Project, human: Acto
     inert(project, "miner.calibration_labelled", _gold(), AGENT)  # nor does it replace a gold label
 
 
-
-
 def test_a_drawn_sample_the_model_refuses_is_never_logged(project: Project) -> None:
     from pydantic import ValidationError
 
@@ -857,8 +855,6 @@ def test_a_drawn_sample_the_model_refuses_is_never_logged(project: Project) -> N
     for units in ((unit, unit), ()):
         with pytest.raises(ValidationError):
             _drawn(project, units=units)
-
-
 
 
 # --- Gate audit ---
