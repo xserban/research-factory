@@ -11,8 +11,8 @@ from factory.events.envelope import Actor
 from factory.model.drafts import (
     AuditLabel,
     DraftKind,
-    SentenceRecorded,
     SentenceClass,
+    SentenceRecorded,
     SentenceVerified,
     Verdict,
 )

@@ -24,6 +24,7 @@ SKILLS = (
     "rf-regions",
     "rf-screen",
     "rf-search",
+    "rf-verify",
     "rf-write",
 )
 
@@ -246,6 +247,25 @@ def test_rf_experiment_names_its_tools_and_never_types_a_result() -> None:
         assert kept in text
     # the skill's tools cannot freeze, unlock, ingest, accept or record, and it names none
     for absent in ("experiment_freeze", "experiment_unlock", "xrun_record", "baseline_accept"):
+        assert absent not in text
+
+
+def test_rf_verify_names_its_tools_and_judges_only_from_the_spans() -> None:
+    text = (REPO_ROOT / "plugin" / "skills" / "rf-verify" / "SKILL.md").read_text("utf-8")
+    for tool in ("draft_verify_next", "draft_verify_record"):
+        assert tool in text, tool
+    lowered = " ".join(text.lower().split())
+    for phrase in (
+        "judge only from the spans shown",
+        "never use outside knowledge",
+        "overstated",
+        "always quote the sentence part and the span part",
+        "scope, hedging or quantifier",
+    ):
+        assert phrase in lowered, phrase
+    for kept in ("## Independence", "## Procedure", "## Tool arguments", "## Done when"):
+        assert kept in text
+    for absent in ("draft_write", "draft_release"):
         assert absent not in text
 
 

@@ -51,6 +51,10 @@ DRAFT_TABLES = (
     "sentence_supports",
     "sentence_flags",
     "sentence_stats",
+    "sentence_verdicts",
+    "draft_audits",
+    "draft_audit_items",
+    "draft_releases",
 )
 
 

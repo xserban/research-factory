@@ -28,7 +28,7 @@ from factory.mcp.server import run
 from factory.model import lineage as lineage_model
 from factory.model.chase import ChaseDirection
 from factory.model.conclusions import BasisRef, Predicate
-from factory.model.drafts import DraftKind, SentenceClass
+from factory.model.drafts import AuditLabel, DraftKind, SentenceClass, SupportSpan, Verdict
 from factory.model.experiments import DeviationKind
 from factory.model.extraction import ExtractedRowInput, MinerScope
 from factory.model.fulltext import Route
@@ -65,6 +65,9 @@ from factory.services import digest as digest_service
 from factory.services import discovery as discovery_service
 from factory.services import document_convert as document_convert_service
 from factory.services import document_read as document_read_service
+from factory.services import draft_audit as draft_audit_service
+from factory.services import draft_release as draft_release_service
+from factory.services import draft_verify as draft_verify_service
 from factory.services import drafts as drafts_service
 from factory.services import evidence as evidence_service
 from factory.services import evidence_report as evidence_report_service
@@ -1955,7 +1958,8 @@ def _emit(chunks: Iterable[str], out: Path | None) -> None:
 
 
 _SCOPE = Annotated[
-    str | None, typer.Option("--scope", help="included (default) or corpus; not with --id.")
+    str | None,
+    typer.Option("--scope", help="included (default), corpus or draft:<drf_...>; not with --id."),
 ]
 _IDS = Annotated[list[str] | None, typer.Option("--id", help="A work id (repeatable).")]
 _OUT = Annotated[
@@ -5030,6 +5034,162 @@ def draft_write_cmd(
             typer.echo(f"{issue.field}: {issue.reason}", err=True)
         raise typer.Exit(1)
     typer.echo(f"wrote {result.written[0]}")
+
+
+@draft_app.command("status")
+def draft_status_cmd(
+    ctx: typer.Context, draft: Annotated[str, typer.Argument(help="A draft id, drf_.")]
+) -> None:
+    """Counts by status, each sentence's computed status, and the audit with its rate."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        found = drafts_service.get_draft(project, draft)
+        if found is None:
+            raise FactoryValidationError([ValidationIssue("draft_id", "unknown draft")])
+        lines = render.draft_status_lines(
+            found,
+            drafts_service.sentence_status(project, draft),
+            draft_audit_service.audit_report(project, draft),
+            draft_audit_service.audit_sheet(project, draft),
+        )
+    for line in lines:
+        typer.echo(line)
+
+
+@draft_app.command("render")
+def draft_render_cmd(
+    ctx: typer.Context,
+    draft: Annotated[str, typer.Argument(help="A draft id, drf_.")],
+    clean: Annotated[
+        bool, typer.Option("--clean/--review", help="Clean prose, or every sentence with quotes.")
+    ] = False,
+    out: Annotated[
+        Path | None, typer.Option("--out", help="Write here, outside the project; default stdout.")
+    ] = None,
+) -> None:
+    """The draft as Markdown, to stdout or a path you name, never under the project."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        if out is not None:
+            drafts_service.refuse_project_path(project, out)
+        body = drafts_service.draft_render(project, draft, "clean" if clean else "review")
+    _emit([body], out)
+
+
+@draft_app.command("audit")
+def draft_audit_cmd(
+    ctx: typer.Context,
+    draft: Annotated[str, typer.Argument(help="A draft id, drf_.")],
+    draw: Annotated[bool, typer.Option("--draw", help="Draw a sample first.")] = False,
+) -> None:
+    """The audit of the draft's supported verdicts; `--draw` draws a new sample first."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        if draw:
+            typer.echo(f"drew {draft_audit_service.draw_audit(project, draft)}")
+        found = drafts_service.get_draft(project, draft)
+        if found is None:
+            raise FactoryValidationError([ValidationIssue("draft_id", "unknown draft")])
+        lines = render.draft_status_lines(
+            found,
+            [],
+            draft_audit_service.audit_report(project, draft),
+            draft_audit_service.audit_sheet(project, draft),
+        )
+    for line in lines[2:]:
+        typer.echo(line)
+
+
+@draft_app.command("label")
+def draft_label_cmd(
+    ctx: typer.Context,
+    audit: Annotated[str, typer.Argument(help="An audit id, dau_.")],
+    verdict: Annotated[str, typer.Argument(help="A verdict id, svd_.")],
+    correct: Annotated[
+        bool | None, typer.Option("--correct/--incorrect", help="Your label of the verdict.")
+    ] = None,
+    note: Annotated[str | None, typer.Option("--note", help="At most 300 characters.")] = None,
+) -> None:
+    """Label one sampled verdict. A later label of it replaces the earlier."""
+    state = _state(ctx)
+    with _reporting_errors():
+        if correct is None:
+            raise FactoryValidationError(
+                [ValidationIssue("label", "give --correct or --incorrect")]
+            )
+        project = _resolve_project(state)
+        label = AuditLabel.CORRECT if correct else AuditLabel.INCORRECT
+        draft_audit_service.record_audit(
+            project, audit, verdict, label, note, actor=project.human_actor()
+        )
+    typer.echo(f"labelled {verdict} {label.value}")
+
+
+@draft_app.command("release")
+def draft_release_cmd(
+    ctx: typer.Context, draft: Annotated[str, typer.Argument(help="A draft id, drf_.")]
+) -> None:
+    """Release the draft through the gate `writing.release`. A refusal prints the blocking counts
+    and writes nothing."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        draft_release_service.release(project, draft, actor=project.human_actor())
+    typer.echo(f"released {draft}")
+
+
+@draft_app.command("verify")
+def draft_verify_cmd(
+    ctx: typer.Context,
+    draft: Annotated[str, typer.Argument(help="A draft id, drf_.")],
+    verdict: Annotated[
+        str | None,
+        typer.Option(
+            "--verdict",
+            help="supported, partial, unsupported, contradicted or overstated; asked if left out.",
+        ),
+    ] = None,
+    sentence_span: Annotated[
+        str | None, typer.Option("--sentence-span", help="The part of the sentence you judge.")
+    ] = None,
+    support_span: Annotated[
+        list[str] | None,
+        typer.Option("--support-span", help="<support>=<substring of its span>; repeat."),
+    ] = None,
+    note: Annotated[str | None, typer.Option("--note", help="At most 300 characters.")] = None,
+) -> None:
+    """Verify the next sentence as the researcher (spec ruling 16: a human may verify an agent's
+    sentence, never their own): print the unit, then record your verdict in the same command, as
+    a task is leased to one session."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        actor = project.human_actor()
+        unit = draft_verify_service.verify_next(project, draft, actor=actor)
+        if unit is None:
+            typer.echo("none left")
+            return
+        typer.echo(unit.model_dump_json(indent=2))
+        chosen = verdict if verdict is not None else str(typer.prompt("verdict"))
+        try:
+            item = draft_verify_service.VerdictInput(
+                verdict=Verdict(chosen),
+                sentence_span=sentence_span,
+                support_spans=[
+                    SupportSpan(ref=ref, substring=quote)
+                    for ref, _, quote in (s.partition("=") for s in support_span or [])
+                ],
+                note=note,
+            )
+        except ValueError:
+            raise FactoryValidationError(
+                [ValidationIssue("verdict", "unknown verdict or malformed --support-span")]
+            ) from None
+        verdict_id = draft_verify_service.verify_record(project, unit.task_id, item, actor=actor)
+    typer.echo(f"recorded {verdict_id}")
 
 
 @draft_app.command("withdraw")

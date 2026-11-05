@@ -1,5 +1,5 @@
-"""Trace nodes and edges of drafts (slice 7b, plan W-B, task 6; spec Trace). This closes R-01's chain
-"claim -> synthesis sentence".
+"""Trace nodes and edges of drafts (slice 7b, plan W-B, task 6; spec Trace). This closes R-01's
+chain "claim -> synthesis sentence".
 
 Read-only SQL on the connection `services.trace` already holds. Upstream of a sentence are its
 supports and the sentence it superseded; downstream its draft, its verdicts and the sentence that

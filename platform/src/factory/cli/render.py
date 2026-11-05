@@ -6,7 +6,7 @@ from collections.abc import Mapping, Sequence
 
 from factory.errors import ValidationIssue
 from factory.model.conclusions import ConclusionDiff
-from factory.model.drafts import Outline
+from factory.model.drafts import DraftAuditReport, Outline
 from factory.model.intuition import (
     HistoryEntry,
     LayerCounts,
@@ -1430,6 +1430,38 @@ def draft_list_lines(drafts: list[DraftRow]) -> list[str]:
         f"{d.draft_id}  {d.kind.value}  {d.outline_ref}  {d.sentences} sentences  {d.title}"
         for d in drafts
     ]
+
+
+def draft_status_lines(
+    draft: DraftRow,
+    rows: list[StatusRow],
+    audit: DraftAuditReport,
+    sheet: list[tuple[str, str, str, str | None]],
+) -> list[str]:
+    """Counts by status, each sentence's status and reason, and the audit as the researcher reads
+    it, its sample listed with the verdicts to label."""
+    counts: dict[str, int] = {}
+    for row in rows:
+        counts[row.status] = counts.get(row.status, 0) + 1
+    lines = [f"{draft.draft_id}  {draft.title}"]
+    lines.append("  ".join(f"{k} {counts[k]}" for k in sorted(counts)) or "no sentences")
+    for row in rows:
+        reason = f"  {row.reason}" if row.reason else ""
+        lines.append(f"  {row.sentence_id}  {row.cls.value}  {row.status}{reason}")
+    if audit.drawn == 0:
+        return [*lines, "audit: none drawn"]
+    rate = "undefined" if audit.rate is None else f"{audit.rate:.3f}"
+    above = "  above the ceiling" if audit.above_ceiling else ""
+    outdated = "  a verdict is newer than the last draw" if audit.outdated else ""
+    lines.append(
+        f"audit: {audit.labelled}/{audit.drawn} labelled, {audit.incorrect} incorrect, "
+        f"rate {rate}{above}{outdated}"
+    )
+    lines += [
+        f"  {audit_id}  {verdict}  {sentence}  {label or 'unlabelled'}"
+        for audit_id, verdict, sentence, label in sheet
+    ]
+    return lines
 
 
 def draft_detail_lines(

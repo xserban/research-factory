@@ -29,6 +29,7 @@ from __future__ import annotations
 import json
 from collections.abc import Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal
 
 from pydantic import Field, JsonValue
@@ -585,6 +586,13 @@ def draft_render(
                 _same_model_verdicts(project, draft_id),
             )
         )
+
+
+def refuse_project_path(project: Project, path: Path) -> None:
+    """A rendering goes to stdout or a path the researcher names, never under the project: the
+    tree holds events and blobs, not renderings with quotes (spec ruling 8)."""
+    if path.resolve().is_relative_to(project.paths.dir.resolve()):
+        raise _refuse("out", "a rendering is not written under the project")
 
 
 # --- Creating and repinning ---
