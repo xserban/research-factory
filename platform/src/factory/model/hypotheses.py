@@ -167,3 +167,171 @@ class LeadDecided(StrictModel):
             raise ValueError("a reason `other` needs a note")
         return self
 
+
+# --- Hypothesis specification --------------------------------------------------------------
+
+CardRef = Annotated[str, StringConstraints(pattern=CARD_ID_RE)]
+IdeaRef = Annotated[str, StringConstraints(pattern=IDEA_ID_RE)]
+RowKey = Annotated[str, StringConstraints(pattern=ROW_KEY_RE)]
+Decimal0 = Annotated[str, StringConstraints(pattern=DECIMAL_RE)]
+Name = Annotated[NonBlank, Field(max_length=MAX_METHOD_NAME)]
+
+
+class MethodRef(StrictModel):
+    """A method of the hypothesis: exactly one of a method card, a lineage idea or a plain name,
+    with an optional evidence row that reports it."""
+
+    card: CardRef | None = None
+    idea: IdeaRef | None = None
+    name: Name | None = None
+    row_key: RowKey | None = None
+
+    @model_validator(mode="after")
+    def _exactly_one(self) -> Self:
+        if sum(x is not None for x in (self.card, self.idea, self.name)) != 1:
+            raise ValueError("name exactly one of card, idea or name")
+        return self
+
+
+class MetricSpec(StrictModel):
+    name: Name
+    direction: Literal["higher", "lower"]
+    unit_family: UnitFamily
+    unit: Annotated[NonBlank, Field(max_length=40)] | None = None
+
+
+class Prediction(StrictModel):
+    direction: Literal["treatment-better", "no-worse"]
+    margin: Decimal0
+    unit: Annotated[NonBlank, Field(max_length=40)] | None = None
+
+
+class Superiority(StrictModel):
+    rule: Literal["superiority"] = "superiority"
+
+
+class NonInferiority(StrictModel):
+    rule: Literal["non-inferiority"] = "non-inferiority"
+
+
+class LiteratureDirection(StrictModel):
+    rule: Literal["literature-direction"] = "literature-direction"
+    n_min: int = Field(ge=1)
+    q: Decimal0
+
+    @model_validator(mode="after")
+    def _q_in_range(self) -> Self:
+        if not Decimal("0.5") < Decimal(self.q) <= Decimal(1):
+            raise ValueError("q lies in (0.5, 1]")
+        return self
+
+
+DecisionRule = Annotated[
+    Superiority | NonInferiority | LiteratureDirection, Field(discriminator="rule")
+]
+
+
+class ExperimentTest(StrictModel):
+    """The hypothesis is tested by an experiment design that names it (the design points here,
+    so linking a design never changes `H@`)."""
+
+    kind: Literal["experiment"] = "experiment"
+
+
+class LiteratureTest(StrictModel):
+    kind: Literal["literature"] = "literature"
+    window_start: date
+    sources: tuple[Annotated[NonBlank, Field(max_length=120)], ...] = ()
+    """The search runs or protocol versions that define "later literature"."""
+
+
+Test = Annotated[ExperimentTest | LiteratureTest, Field(discriminator="kind")]
+
+
+class HypothesisSpec(StrictModel):
+    """A hypothesis as an agent or a human states it. `H@` hashes the decision-relevant fields
+    (`HASHED_FIELDS`); `statement`, `rationale`, `alternatives` and `lead` are links and prose."""
+
+    kind: Literal["experiment", "literature"]
+    statement: Annotated[NonBlank, Field(max_length=MAX_STATEMENT)]
+    lead: LeadId | None = None
+    treatment: MethodRef
+    baseline: MethodRef
+    metric: MetricSpec
+    conditions: dict[str, str] = Field(default_factory=dict)
+    prediction: Prediction
+    decision_rule: DecisionRule
+    test: Test
+    alternatives: tuple[HypothesisId, ...] = ()
+    rationale: str = Field(default="", max_length=2000)
+
+    @model_validator(mode="after")
+    def _consistent(self) -> Self:
+        if self.kind != self.test.kind:
+            raise ValueError("kind and test.kind must agree")
+        rule = self.decision_rule.rule
+        if (self.kind == "literature") != (rule == "literature-direction"):
+            raise ValueError("literature-direction is the rule of a literature hypothesis only")
+        if (self.prediction.direction == "no-worse") != (rule == "non-inferiority"):
+            raise ValueError("a `no-worse` prediction goes with non-inferiority, and only it")
+        if any(not k.strip() or not v.strip() for k, v in self.conditions.items()):
+            raise ValueError("conditions name a key and a value")
+        return self
+
+
+HASHED_FIELDS = (
+    "kind",
+    "treatment",
+    "baseline",
+    "metric",
+    "conditions",
+    "prediction",
+    "decision_rule",
+    "test",
+)
+
+
+def hypothesis_version(spec: HypothesisSpec) -> str:
+    """`H@` and the first eight hex digits of the hash over the decision-relevant fields. The
+    statement, rationale, alternatives and lead never enter; neither does key order."""
+    dump = spec.model_dump(mode="json")
+    body: dict[str, JsonValue] = {name: dump[name] for name in HASHED_FIELDS}
+    test = dict(dump["test"])
+    if "sources" in test:
+        test["sources"] = sorted(test["sources"])
+    body["test"] = test
+    return "H@" + hashlib.sha256(canonical_json(body)).hexdigest()[:8]
+
+
+def _percent(value: str) -> str:
+    return f"{(Decimal(value) * 100).normalize():f}%"
+
+
+def falsifier_text(spec: HypothesisSpec, *, confidence: str = "0.95") -> str:
+    """The sentence that says what would refute the hypothesis, generated from the rule, the
+    margin, the metric and the conditions; never typed by an agent."""
+    unit = spec.prediction.unit or spec.metric.unit
+    margin = f"{spec.prediction.margin} {unit}" if unit else spec.prediction.margin
+    where = ", ".join(f"{k}={v}" for k, v in sorted(spec.conditions.items()))
+    scope = f" ({where})" if where else ""
+    metric = spec.metric.name
+    difference = (
+        "(treatment \N{MINUS SIGN} baseline)"
+        if spec.metric.direction == "higher"
+        else "(baseline \N{MINUS SIGN} treatment)"
+    )
+    rule = spec.decision_rule
+    if isinstance(rule, Superiority):
+        return (
+            f"Refuted if the {_percent(confidence)} CI upper bound of {difference} on "
+            f"{metric}{scope} is below {margin}."
+        )
+    if isinstance(rule, NonInferiority):
+        return (
+            f"Refuted if the {_percent(confidence)} CI upper bound of {difference} on "
+            f"{metric}{scope} is below \N{MINUS SIGN}{margin}."
+        )
+    return (
+        f"Refuted if at least {_percent(rule.q)} of at least {rule.n_min} later-literature "
+        f"comparisons of treatment and baseline on {metric}{scope} favour the baseline."
+    )
