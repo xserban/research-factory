@@ -185,7 +185,11 @@ def test_missing_audit_finding_in_pilot(
     _second_agent_confirms(project, extraction, agent)
     assert _codes(project, RigorMode.PILOT) == ["gate-audit-missing"]
     assert _codes(project, RigorMode.EXPLORATORY) == []
-    gate_audit_sample(project, human, LINK, random_seed=4)
+    sampled = gate_audit_sample(project, human, LINK, random_seed=4)
+    assert _codes(project, RigorMode.PILOT) == ["gate-audit-unlabelled"]
+    gate_audit_record(
+        project, human, sampled.audit_id, sampled.act_event_ids[0], True, None, Channel.CLI
+    )
     assert _codes(project, RigorMode.PILOT) == []
 
 

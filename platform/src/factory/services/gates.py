@@ -459,36 +459,59 @@ def labelled_gate_audits(project: Project) -> list[str]:
     return found
 
 
+def _latest_audit_event(project: Project, gate_id: str) -> str | None:
+    with project.index.connect() as conn:
+        row = conn.execute(
+            text("SELECT event_id FROM gate_audits WHERE gate_id = :g ORDER BY event_id DESC"),
+            {"g": gate_id},
+        ).first()
+    return None if row is None else str(row[0])
+
+
 def audit_hits(project: Project) -> list[CheckHit]:
-    """`gate-audit-missing` for an `agent_audit` gate with agent acts and no audit drawn, and
+    """For each `agent_audit` gate: `gate-audit-missing` for agent acts outside the population of
+    the latest audit (all of them when none was drawn; the population is every agent act recorded
+    before the draw), `gate-audit-unlabelled` for a latest sample with unlabelled acts, and
     `gate-audit-error-high` for a latest audit above the ceiling. Messages carry counts, never a
-    rate."""
+    rate (the same shape as `audit.outdated` and `extraction_audit_outstanding`)."""
     from factory.services.modules.default import default_modules  # the registry imports services
 
     hits: list[CheckHit] = []
     for gate in default_modules().gates():
         if gate.kind is not GateKind.DECISION:
             continue
-        if effective_policy(project, gate.gate_id).kind is not PolicyKind.AGENT_AUDIT:
+        gate_id = gate.gate_id
+        if effective_policy(project, gate_id).kind is not PolicyKind.AGENT_AUDIT:
             continue
-        report = gate_audit_report(project, gate.gate_id)
-        if report is None:
-            keys = _population(project, gate.gate_id).keys
-            if keys:
-                hits.append(
-                    CheckHit(
-                        "gate-audit-missing",
-                        keys,
-                        f"{len(keys)} agent act(s) at gate {gate.gate_id} have no human audit",
-                    )
+        report = gate_audit_report(project, gate_id)
+        drawn_at = _latest_audit_event(project, gate_id)
+        keys = _population(project, gate_id).keys
+        uncovered = tuple(k for k in keys if drawn_at is None or k > drawn_at)
+        if uncovered:
+            hits.append(
+                CheckHit(
+                    "gate-audit-missing",
+                    uncovered,
+                    f"{len(uncovered)} agent act(s) at gate {gate_id} are outside any human audit",
                 )
-        elif report.verdict.above:
+            )
+        if report is None:
+            continue
+        if report.labelled < report.sample_size:
+            hits.append(
+                CheckHit(
+                    "gate-audit-unlabelled",
+                    (report.audit_id,),
+                    f"{report.sample_size - report.labelled} sampled act(s) of the audit of gate "
+                    f"{gate_id} are unlabelled",
+                )
+            )
+        if report.verdict.above:
             hits.append(
                 CheckHit(
                     "gate-audit-error-high",
                     (report.audit_id,),
-                    f"the human audit of gate {gate.gate_id} found errors above the declared "
-                    "ceiling",
+                    f"the human audit of gate {gate_id} found errors above the declared ceiling",
                 )
             )
     return hits
