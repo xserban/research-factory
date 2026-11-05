@@ -625,6 +625,7 @@ def round_plan_lines(direction: str, result: RoundResult, gaps: list[ValidationI
     lines.append(f"{len(result.queries)} query(ies), {len(result.unqueryable)} unqueryable")
     lines += [f"  {q.source}: {q.text}" for q in result.queries]
     lines += [f"  not extracted {w}: {why}" for w, why in result.unextracted]
+    lines.append(f"{result.no_document} work(s) with no document: listed, not blocking")
     return lines
 
 

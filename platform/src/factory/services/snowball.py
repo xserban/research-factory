@@ -31,8 +31,8 @@ Invariants:
   the direction's maximum is reached, when the previous round of the direction yielded no included
   work and the plan says to stop (skipped, with a note, when that round is incomplete: a failed,
   partial or interrupted run, or a recorded query that never ran, so its retry is possible; the
-  maximum still holds), while any corpus work's outcome is
-  pending, while an included work has a document but no current extraction (ruling 18), when
+  maximum still holds), while any corpus work can still be acted on at screening, while an
+  included work has a document but no current extraction (ruling 18), when
   there is no candidate or no queryable candidate, when a query does not fit its source, or when
   the protocol gate refuses (always asked; the round's texts waived).
 - `snowball.round_started` is written before any query is registered; each query is then
@@ -42,6 +42,11 @@ Invariants:
   are recorded together, in one append under the lock that computed the plan, before any of its
   queries (R-24), so no other round can be recorded in between and no chase round is left
   without its ledger entry.
+- Ruling 18 blocks on the works someone can act on now: those pending at title/abstract (queued or
+  in disagreement), and the promoted works pending at full text that have a converted or still
+  convertible document. A promoted work with no obtainable document is neither included nor
+  pending: it is listed `no-document` in `unextracted` and counted (`no_document`), never blocks,
+  and blocks again only if a document arrives.
 - The no-yield stop reads `round_yield`: a previous round with `included == 0` stops the
   direction; a new work counts once, as its dedup primary; a round without runs is unsettled.
 - Candidates are never included: retrieved records enter the corpus as pending works.
@@ -143,6 +148,8 @@ class RoundPlan(StrictModel):
     queries: list[QuerySpec]
     unqueryable: list[str]
     unextracted: list[tuple[str, str]]
+    no_document: int = 0
+    """How many of `unextracted` have no obtainable document: listed, never blocking."""
 
 
 class RoundResult(StrictModel):
@@ -158,6 +165,7 @@ class RoundResult(StrictModel):
     unextracted: list[tuple[str, str]]
     runs: list[RunSummary]
     new_works: int
+    no_document: int = 0
     chase_round_id: str | None = None
     """The delegated `search_chase` round of a recorded forward round."""
 
@@ -352,7 +360,9 @@ def _retrieved(project: Project, runs: Sequence[str]) -> list[str]:
 
 def _settled_included(project: Project, works: set[str]) -> int | None:
     """How many of `works` are INCLUDED at the last declared stage; None while any is pending
-    there (at title/abstract, or at full text after promotion when full text is planned)."""
+    there (at title/abstract, or at full text after promotion when full text is planned). A
+    promoted work with no obtainable document is neither: it counts as not included, and does not
+    keep the yield unsettled."""
     outcomes = final_outcomes(project)
     protocol = current_protocol(project)
     full_text = protocol is not None and protocol.spec.full_text_screening is not None
@@ -362,6 +372,8 @@ def _settled_included(project: Project, works: set[str]) -> int | None:
         outcome = outcomes.get(work, Outcome.PENDING)
         if full_text and outcome is Outcome.INCLUDED:
             outcome = ft.get(work, Outcome.PENDING)
+            if outcome is Outcome.PENDING and not _has_document(project, work):
+                continue
         if outcome is Outcome.PENDING:
             return None
         included += outcome is Outcome.INCLUDED
@@ -667,21 +679,28 @@ def _named(ids: Sequence[str]) -> str:
     return shown + (f" and {more} more" if more > 0 else "")
 
 
+def _promoted_pending(project: Project) -> set[str]:
+    """Ordinary works promoted at title/abstract and pending at full text, when the protocol plans
+    full text screening; else none. Calibration works are left out."""
+    protocol = current_protocol(project)
+    if protocol is None or protocol.spec.full_text_screening is None:
+        return set()
+    promoted = {w for w, o in final_outcomes(project).items() if o is Outcome.INCLUDED}
+    calibration = set(calibration_items(project, stage=ScreeningStage.FULL_TEXT))
+    return {
+        w
+        for w, o in final_outcomes(project, stage=ScreeningStage.FULL_TEXT).items()
+        if w in promoted and o is Outcome.PENDING and w not in calibration
+    }
+
+
 def _pending(project: Project) -> list[str]:
-    """Ordinary works whose outcome is pending at title/abstract, or, when the protocol plans full
-    text screening, at full text after promotion. Calibration works are left out."""
+    """The ordinary works that block a round (ruling 18): pending at title/abstract, or promoted
+    and pending at full text with a document someone can screen or convert now."""
     calibration = set(calibration_items(project))
     outcomes = final_outcomes(project)
     pending = {w for w, o in outcomes.items() if o is Outcome.PENDING and w not in calibration}
-    protocol = current_protocol(project)
-    if protocol is not None and protocol.spec.full_text_screening is not None:
-        promoted = {w for w, o in outcomes.items() if o is Outcome.INCLUDED}
-        ft_calibration = set(calibration_items(project, stage=ScreeningStage.FULL_TEXT))
-        pending |= {
-            w
-            for w, o in final_outcomes(project, stage=ScreeningStage.FULL_TEXT).items()
-            if w in promoted and o is Outcome.PENDING and w not in ft_calibration
-        }
+    pending |= {w for w in _promoted_pending(project) if _has_document(project, w)}
     return sorted(pending)
 
 
@@ -705,7 +724,8 @@ def _has_document(project: Project, work: str) -> bool:
 def _scope(
     project: Project,
 ) -> tuple[list[str], list[str], list[tuple[str, str]]]:
-    """(sources, their current extraction ids, unextracted (work, reason)) of the included works."""
+    """(sources, their current extraction ids, unextracted (work, reason)) of the included works;
+    `unextracted` also lists the promoted works with no obtainable document (`NO_DOCUMENT`)."""
     sources: list[str] = []
     extraction_ids: list[str] = []
     unextracted: list[tuple[str, str]] = []
@@ -718,6 +738,11 @@ def _scope(
             unextracted.append((work, NOT_EXTRACTED))
         else:
             unextracted.append((work, NO_DOCUMENT))
+    unextracted += [
+        (work, NO_DOCUMENT)
+        for work in sorted(_promoted_pending(project))
+        if not _has_document(project, work)
+    ]
     return sources, extraction_ids, unextracted
 
 
@@ -844,6 +869,7 @@ def plan_round(project: Project, direction: Direction) -> RoundPlan:
         queries=queries,
         unqueryable=unqueryable,
         unextracted=unextracted,
+        no_document=_no_document(unextracted),
     )
 
 
@@ -1040,12 +1066,14 @@ def agent_round_view(project: Project, result: RoundResult, held_out: HeldOut) -
         removed = len({w for w in fresh if hidden(w)})
         removed_total += removed
         runs.append(run.model_copy(update={"new_works": max(run.new_works - removed, 0)}))
+    unextracted = [(w, why) for w, why in result.unextracted if not hidden(w)]
     return result.model_copy(
         update={
             "candidates": candidates,
             "queries": queries,
             "sources": [w for w in result.sources if not hidden(w)],
-            "unextracted": [(w, why) for w, why in result.unextracted if not hidden(w)],
+            "unextracted": unextracted,
+            "no_document": _no_document(unextracted),
             "unqueryable": [k for k in result.unqueryable if k in {c.work_key for c in candidates}],
             "runs": runs,
             "new_works": max(result.new_works - removed_total, 0),
@@ -1065,6 +1093,10 @@ def _without_ids(queries: Sequence[QuerySpec], dropped: set[str]) -> list[QueryS
         if kept:
             out.append(q.model_copy(update={"text": "cites:" + "|".join(kept)}))
     return out
+
+
+def _no_document(unextracted: Sequence[tuple[str, str]]) -> int:
+    return sum(reason == NO_DOCUMENT for _, reason in unextracted)
 
 
 def _unextracted(plan: RoundPlan) -> tuple[Unextracted, ...]:
@@ -1097,4 +1129,5 @@ def _result(
         unextracted=plan.unextracted,
         runs=runs,
         new_works=new_works,
+        no_document=plan.no_document,
     )

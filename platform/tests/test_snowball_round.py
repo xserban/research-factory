@@ -15,10 +15,11 @@ from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
 from factory.model.chase import ChaseDirection, ChaseRoundStarted
 from factory.model.project import RigorMode
-from factory.model.protocol import SnowballPlan
+from factory.model.protocol import ScreeningPlan, ScreeningStage, SnowballPlan
 from factory.model.references import Direction, SnowballRoundStarted, Via
 from factory.model.screening import PassLabel
 from factory.model.search import QueryKind, QueryPurpose, QuerySpec, RunStatus
+from factory.model.seed import HeldOut
 from factory.model.work import ProvenanceMethod, WorkType
 from factory.model.work_ids import work_id
 from factory.services import chase as chase_service
@@ -26,6 +27,7 @@ from factory.services import snowball
 from factory.services.agreement import Outcome, final_outcomes
 from factory.services.chase import chase_rounds
 from factory.services.context import Project
+from factory.services.fulltext_screening import fulltext_queue
 from factory.services.protocol import amend_protocol, current_protocol, registered_round
 from factory.services.references import extract_references, included_works, list_references
 from factory.services.screening import open_pass
@@ -535,6 +537,81 @@ def test_unconverted_document_blocks_as_not_extracted(
     fetched_document(project, third, bib_html(ENTRIES_B, BODY_B))
     plan = plan_round(project, Direction.BACKWARD)
     assert (third, "not-extracted") in plan.unextracted and not plan.state.allowed
+
+
+# --- Who blocks a round (ruling 18, final review 1) ---
+
+
+def _plan_full_text(project: Project, agent: Actor) -> None:
+    current = current_protocol(project)
+    assert current is not None
+    spec = current.spec.model_copy(
+        update={
+            "full_text_screening": ScreeningPlan(
+                passes=2,
+                dual_sample=1.0,
+                kappa_floor=0.7,
+                calibration_size=0,
+                reviewers=current.spec.screening.reviewers,
+            )
+        }
+    )
+    amend_protocol(project, agent, spec, reason="plan full text", semantic=True, effects={})
+
+
+def test_promoted_work_without_a_document_neither_blocks_nor_counts(
+    project: Project, agent: Actor, agent_other: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    """Full text is screened to the end; one promoted work never got a document."""
+    _screened_full_text_world(project, agent, agent_other, human, mock_sources)
+    [missing] = fulltext_queue(project).not_retrieved
+    assert final_outcomes(project, stage=ScreeningStage.FULL_TEXT)[missing] is Outcome.PENDING
+    plan = plan_round(project, Direction.FORWARD)
+    assert "screening" not in [i.field for i in plan.state.refusals]
+    assert (missing, "no-document") in plan.unextracted
+    assert plan.no_document == 1
+    assert snowball._settled_included(project, {missing}) == 0
+
+
+def test_included_no_source_record_work_does_not_block_at_full_text(
+    project: Project, agent: Actor, planned: tuple[str, str]
+) -> None:
+    """A snowballed `no-source-record` work has no document route: promoted, it blocks nothing,
+    while the works that do have a document stay in the full-text queue and do block."""
+    snowball_round(project, agent, Direction.BACKWARD, sources=_sources(), dry_run=False)
+    _screen_new(project, agent, "include")
+    _plan_full_text(project, agent)
+    plan = plan_round(project, Direction.BACKWARD)
+    [refusal] = [i for i in plan.state.refusals if i.field == "screening"]
+    assert NO_SOURCE not in refusal.reason
+    assert all(w in refusal.reason for w in planned)
+    assert (NO_SOURCE, "no-document") in plan.unextracted
+    assert plan.no_document >= 1
+    assert snowball._settled_included(project, {NO_SOURCE}) == 0
+    assert snowball._settled_included(project, {NO_SOURCE, planned[0]}) is None
+
+
+def test_promoted_work_with_a_convertible_document_still_blocks(
+    project: Project, agent: Actor, planned: tuple[str, str]
+) -> None:
+    """Someone can act on it now (convert, then screen): the set is not settled."""
+    third = sorted(set(promoted_works(project)) - set(planned))[0]
+    fetched_document(project, third, bib_html(ENTRIES_B, BODY_B))
+    _plan_full_text(project, agent)
+    plan = plan_round(project, Direction.BACKWARD)
+    [refusal] = [i for i in plan.state.refusals if i.field == "screening"]
+    assert third in refusal.reason
+    assert snowball._settled_included(project, {third}) is None
+
+
+def test_dry_run_reports_the_no_document_count_and_hides_held_out(
+    project: Project, agent: Actor, planned: tuple[str, str]
+) -> None:
+    result = snowball_round(project, agent, Direction.BACKWARD, sources=_sources())
+    others = sorted(set(promoted_works(project)) - set(planned))
+    assert result.no_document == len(others)
+    view = snowball.agent_round_view(project, result, HeldOut(work_ids=frozenset(others[:1])))
+    assert view.no_document == len(others) - 1
 
 
 # --- Forward rounds (delegated to search_chase) ---
