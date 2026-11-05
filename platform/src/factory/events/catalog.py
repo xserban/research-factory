@@ -27,6 +27,7 @@ from factory.model.extraction import (
     ExtractionRecorded,
     ExtractionResolved,
 )
+from factory.model.findings import ContradictionDecided, ContradictionProposed
 from factory.model.fulltext import Attempted, DocumentAdded, FetchStarted, SourceChanged
 from factory.model.imports import (
     ImportAdmissionPlanned,
@@ -239,4 +240,6 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("concept.link_decided", ConceptLinkDecided, 1))
     catalog.register(EventType("concept.merged", ConceptMerged, 1))
     catalog.register(EventType("concept.unmerged", ConceptUnmerged, 1))
+    catalog.register(EventType("contradiction.proposed", ContradictionProposed, 1))
+    catalog.register(EventType("contradiction.decided", ContradictionDecided, 1))
     return catalog
