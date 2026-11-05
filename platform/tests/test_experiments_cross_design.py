@@ -173,3 +173,32 @@ def test_a_changed_evidence_row_does_not_strand_a_frozen_experiment(
     _repro(project, human, tmp_path, exp, rk, {1: "1", 2: "1", 3: "1"})
     assert baseline_verdicts(project, exp) == {rk: "reproduced"}  # against the frozen value
     assert len(_events(project, "baseline.evaluated")) == before + 1
+
+
+def test_an_agent_cannot_set_the_test_access_limit_by_recording_a_protocol(
+    explore_project: Project, human: Actor
+) -> None:
+    # re-review 4: the same refusal at the other door (`record_protocol`, and the MCP tool on it)
+    from factory.model.hypothesis_plan import HypothesisPlan
+    from factory.services.hypothesis_gates import effective_plan
+    from factory.services.protocol import agent_admission_issues, record_protocol
+    from tests.helpers import pilot_protocol_spec, record_pilot_question
+    from tests.hypothesis_helpers import OTHER
+
+    project = explore_project
+    question = record_pilot_question(project, human)
+    plain = pilot_protocol_spec(question, None, reviewer=human.id)
+    high = plain.model_copy(update={"hypothesis_plan": HypothesisPlan(test_access_limit=50)})
+    with pytest.raises(FactoryValidationError) as err:  # a first record
+        record_protocol(project, OTHER, high, ready=False)
+    assert _fields(err) == [("hypothesis_plan.test_access_limit", "agent-cannot-raise")]
+    record_protocol(project, OTHER, plain, ready=False)
+    with pytest.raises(FactoryValidationError) as err:  # a re-recorded draft
+        record_protocol(project, OTHER, high, ready=False)
+    assert _fields(err) == [("hypothesis_plan.test_access_limit", "agent-cannot-raise")]
+    assert effective_plan(project).test_access_limit == 1
+    record_protocol(project, human, high, ready=False)  # the researcher may
+    assert effective_plan(project).test_access_limit == 50
+    assert agent_admission_issues(OTHER, high, high) == []  # an agent may keep or lower it
+    lower = plain.model_copy(update={"hypothesis_plan": HypothesisPlan(test_access_limit=2)})
+    assert agent_admission_issues(OTHER, high, lower) == []

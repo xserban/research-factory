@@ -120,17 +120,27 @@ ADMISSION_IS_HUMAN = "admitting a miner as evidence is a human act"
 def agent_admission_issues(
     actor: Actor, old: ProtocolSpec | None, new: ProtocolSpec
 ) -> list[ValidationIssue]:
-    """Issues for an agent that turns `evidence` on for a miner use (R-51: the proposer, or any
-    agent, must not confirm its own evidence status). Empty for a human or a change that admits
-    nothing new."""
+    """Issues for an agent that relaxes what only the researcher relaxes (R-51): it turns
+    `evidence` on for a miner use (the proposer, or any agent, must not confirm its own evidence
+    status), or it sets `hypothesis_plan.test_access_limit` above the value in force (the mode's
+    default of 1 when no protocol is in force). Empty for a human or a change that relaxes
+    nothing. Used by `record_protocol` and `amend_protocol` alike."""
     if actor.kind == "human":
         return []
     before = {(u.name, u.version) for u in (old.miners or ()) if u.evidence} if old else set()
-    return [
+    issues = [
         ValidationIssue(f"miners.{i}.evidence", ADMISSION_IS_HUMAN)
         for i, use in enumerate(new.miners or ())
         if use.evidence and (use.name, use.version) not in before
     ]
+    if _plan_limit(new) > (1 if old is None else _plan_limit(old)):
+        issues.append(ValidationIssue("hypothesis_plan.test_access_limit", "agent-cannot-raise"))
+    return issues
+
+
+def _plan_limit(spec: ProtocolSpec) -> int:
+    plan = spec.hypothesis_plan
+    return 1 if plan is None else plan.test_access_limit
 
 
 def calibrated_miners(project: Project, spec: ProtocolSpec) -> set[tuple[str, int]]:
@@ -286,11 +296,6 @@ class AmendResult(StrictModel):
     prose_only: bool
 
 
-def _plan_limit(spec: ProtocolSpec) -> int:
-    plan = spec.hypothesis_plan
-    return 1 if plan is None else plan.test_access_limit
-
-
 def amend_protocol(
     project: Project,
     actor: Actor,
@@ -340,12 +345,6 @@ def amend_protocol(
         )
         if check.errors or check.gaps:
             raise FactoryValidationError([*check.errors, *check.gaps])
-
-        if actor.kind == "agent" and _plan_limit(spec) > _plan_limit(current.spec):
-            # the confirmatory allowance is a rule of the protocol; only the researcher relaxes it
-            raise FactoryValidationError(
-                [ValidationIssue("hypothesis_plan.test_access_limit", "agent-cannot-raise")]
-            )
 
         changes = criterion_changes(current.spec, spec)
         changed = {cid for cid, kind in changes if kind is ChangeKind.CHANGED}

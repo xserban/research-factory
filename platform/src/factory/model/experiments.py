@@ -174,7 +174,10 @@ class Cell(StrictModel):
     @property
     def needs_unlock(self) -> bool:
         """A confirmatory-split run needs the unlock and its nonce, except a baseline
-        reproduction: those run first, by design, and are not test accesses (ruling 8)."""
+        reproduction: those run first, by design, so one on the confirmatory split carries no
+        nonce (an exception to R-123 and ruling 18, marked for the researcher). It is still a
+        test access: it needs a registered hypothesis, counts as a read of the primary baseline
+        cell and closes revision."""
         return self.split == "confirmatory" and not self.is_reproduction
 
 
