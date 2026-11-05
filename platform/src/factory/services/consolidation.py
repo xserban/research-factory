@@ -104,14 +104,19 @@ class Cluster:
     pairs: tuple[Pair, ...]
 
 
-def _label_items(project: Project) -> list[Item]:
+def _label_items(project: Project, *, agent: bool = False) -> list[Item]:
+    """The label items. For an agent (`agent=True`) every application from an import's tag is
+    left out, whatever the record's part, and a key only a tag gives is not an item: the tag is
+    withheld, never the work (decision 43)."""
     with project.index.connect() as conn:
         found = conn.execute(
             text(
                 "SELECT live_key, key, target_type, target FROM labels "
                 "WHERE withdrawn = 0 AND COALESCE(decision, '') != 'reject' "
+                "AND (:a = 0 OR origin != 'import-tag') "
                 "ORDER BY live_key, key, target_type, target"
-            )
+            ),
+            {"a": int(agent)},
         ).all()
     names: dict[str, set[str]] = {}
     targets: dict[str, set[str]] = {}
@@ -121,6 +126,7 @@ def _label_items(project: Project) -> list[Item]:
     return [
         Item("label", live, tuple(sorted(names[live])), frozenset(targets[live]))
         for live in sorted(names)
+        if not agent or live in names[live]
     ]
 
 
@@ -195,7 +201,8 @@ def open_pass_id(project: Project) -> str | None:
 
 
 def _members_brief(project: Project, cluster: Cluster) -> list[dict[str, Any]]:
-    """Names, aliases and counts of the members: no document text, no score."""
+    """Names, aliases and counts of the members: no document text, no score. Label members come
+    from the agent-visible items (no import tag), so a task carries no tag key."""
     briefs: list[dict[str, Any]] = []
     if cluster.kind == "label":
         with project.index.connect() as conn:
@@ -205,7 +212,8 @@ def _members_brief(project: Project, cluster: Cluster) -> list[dict[str, Any]]:
                     for r in conn.execute(
                         text(
                             "SELECT DISTINCT key FROM labels WHERE live_key = :k "
-                            "AND withdrawn = 0 ORDER BY key"
+                            "AND withdrawn = 0 AND origin != 'import-tag' "
+                            "AND COALESCE(decision, '') != 'reject' ORDER BY key"
                         ),
                         {"k": live},
                     )
@@ -227,6 +235,24 @@ def _members_brief(project: Project, cluster: Cluster) -> list[dict[str, Any]]:
     return [
         {"id": m, "name": by_id[m].name, "aliases": list(by_id[m].aliases)} for m in cluster.members
     ]
+
+
+def _agent_label_pairs(project: Project) -> list[Pair]:
+    """The candidate pairs among labels as an agent may see them (no import-tag application)."""
+    items = _label_items(project, agent=True)
+    return merge_pairs(
+        [*string_pairs(items), *acronym_pairs(items), *overlap_pairs(items, inverted_index(items))]
+    )
+
+
+def _agent_label_view(cluster: Cluster, agent_pairs: Sequence[Pair]) -> Cluster | None:
+    """The part of a label cluster an agent is served: the members that exist without a tag and
+    the pairs among them; None when fewer than two members or no pair is left."""
+    visible = {m for p in agent_pairs for m in (p.a, p.b)} & set(cluster.members)
+    pairs = tuple(p for p in agent_pairs if p.a in visible and p.b in visible)
+    if len(visible) < 2 or not pairs:
+        return None
+    return Cluster("label", tuple(sorted(visible)), pairs)
 
 
 def start_pass(project: Project, actor: Actor) -> str:
@@ -258,25 +284,30 @@ def start_pass(project: Project, actor: Actor) -> str:
         ]
         blob = project.blobs.put_json(cast(JsonValue, listing))
         counts = {k: sum(1 for c in found if c.kind == k) for k in KINDS}
-        specs = [
-            TaskSpec(
-                CONSOLIDATE_TASK_KIND,
-                cast(
-                    JsonValue,
-                    {
-                        "pass_id": pass_id,
-                        "cluster_index": n,
-                        "kind": c.kind,
-                        "members": _members_brief(project, c),
-                        "signals": [
-                            {"a": p.a, "b": p.b, "signals": list(p.signals)} for p in c.pairs
-                        ],
-                    },
-                ),
-                refs=(pass_id,),
+        agent_pairs = _agent_label_pairs(project)
+        specs = []
+        for n, c in enumerate(found):
+            view = c if c.kind != "label" else _agent_label_view(c, agent_pairs)
+            if view is None:
+                continue  # nothing of the cluster is visible to an agent without a tag key
+            specs.append(
+                TaskSpec(
+                    CONSOLIDATE_TASK_KIND,
+                    cast(
+                        JsonValue,
+                        {
+                            "pass_id": pass_id,
+                            "cluster_index": n,
+                            "kind": view.kind,
+                            "members": _members_brief(project, view),
+                            "signals": [
+                                {"a": p.a, "b": p.b, "signals": list(p.signals)} for p in view.pairs
+                            ],
+                        },
+                    ),
+                    refs=(pass_id,),
+                )
             )
-            for n, c in enumerate(found)
-        ]
         tasks, _ = build_task_events(project, actor, specs)
         started = project.events.make(
             "consolidation.pass_started",

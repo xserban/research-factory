@@ -476,3 +476,35 @@ def test_label_apply_is_no_oracle_for_import_tags(project: Project, iw: IWorld) 
         project, iw.writer, [LabelInput(target_type=W, target=iw.other, text="performer")]
     )
     assert again.rejected[0].issues[0].reason == "duplicate-application"  # its own, visible
+
+
+def test_consolidation_task_carries_no_import_tag_key(project: Project, iw: IWorld) -> None:
+    from factory.services.consolidation import consolidation_next, list_clusters, start_pass
+
+    targets = (iw.source, iw.other, iw.third)
+    for t in targets[:2]:
+        import_tag(project, iw, "Secret Tag", t, "imp_01JZ9Q3K5M7N8P0R2S4T6V8W1J:1")
+        import_tag(project, iw, "Other Name", t, "imp_01JZ9Q3K5M7N8P0R2S4T6V8W1J:2")
+    pass_id = start_pass(project, iw.human)
+    [cluster] = [c for c in list_clusters(project, pass_id) if c.kind == "label"]
+    assert set(cluster.members) == {"secret tag", "other name"}  # the researcher sees tag keys
+    served = consolidation_next(project, iw.writer)  # a tag-only cluster serves no task
+    assert served is None or served.kind != "label"
+
+
+def test_mixed_cluster_serves_only_the_tag_free_part(project: Project, iw: IWorld) -> None:
+    from factory.services.consolidation import consolidation_next, list_clusters, start_pass
+
+    for t in (iw.source, iw.other, iw.third):
+        label(project, iw.human, "Performer", t)
+        label(project, iw.human, "FAVOR+", t)
+        import_tag(project, iw, "Secret Tag", t, "imp_01JZ9Q3K5M7N8P0R2S4T6V8W1J:1")
+    pass_id = start_pass(project, iw.human)
+    [cluster] = [c for c in list_clusters(project, pass_id) if c.kind == "label"]
+    assert "secret tag" in cluster.members
+    task = consolidation_next(project, iw.writer)
+    while task is not None and task.kind != "label":
+        task = consolidation_next(project, iw.writer)
+    assert task is not None
+    assert sorted(m["id"] for m in task.members) == ["favor+", "performer"]
+    assert "secret" not in task.model_dump_json().lower()
