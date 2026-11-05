@@ -26,6 +26,15 @@ from factory.services.audit import audit_report
 from factory.services.calibration import calibration_status
 from factory.services.chase import chase_rounds
 from factory.services.context import Project
+from factory.services.coverage import (
+    Bucket,
+    PartCoverage,
+    Ratio,
+    agent_coverage,
+    coverage_report,
+    held_out_visible,
+    resolved_import_ids,
+)
 from factory.services.discovery import supplied_only_included
 from factory.services.evidence_report import evidence_report
 from factory.services.extraction_agreement import agreement_overall
@@ -55,6 +64,16 @@ class SuppliedLinks(StrictModel):
     captured: dict[str, int]
     resolved: dict[str, int]
     included: dict[str, int]
+
+
+class ImportMethods(StrictModel):
+    """Coverage of one resolved library import, by part (slice 3d). Parts carry figures only."""
+
+    import_id: str
+    label: str
+    parts: list[PartCoverage]
+    held_out_withheld: bool = False
+    """True in the agent view while no screening pass has been opened."""
 
 
 class MethodsReport(StrictModel):
@@ -128,6 +147,8 @@ class MethodsReport(StrictModel):
     """Recorded snowball rounds per direction (`backward`, `forward`)."""
     snowball_rule: str | None = None
     """The declared stopping rule, stated in words; None while no plan is declared."""
+    imports: list[ImportMethods] = Field(default_factory=list)
+    """Resolved library imports (slice 3d); empty, and no paragraph, without imports."""
 
 
 def methods_report(project: Project) -> MethodsReport:
@@ -207,7 +228,26 @@ def methods_report(project: Project) -> MethodsReport:
         evidence_frontier_costs=sorted({a.axis for g in groups for a in g.frontiers}),
         **references,
         supplied_links=_supplied_links(project),
+        imports=_imports(project, agent=False),
     )
+
+
+def _imports(project: Project, *, agent: bool) -> list[ImportMethods]:
+    """The coverage of each resolved import; `agent` applies the agent view (decision 43)."""
+    out: list[ImportMethods] = []
+    visible = held_out_visible(project)
+    for import_id in resolved_import_ids(project):
+        report = (
+            agent_coverage(project, import_id) if agent else coverage_report(project, import_id)
+        )
+        parts = [p.model_copy(update={"excluded": []}) for p in report.parts]
+        withheld = agent and not visible and report.label == "held-out"
+        out.append(
+            ImportMethods(
+                import_id=import_id, label=report.label, parts=parts, held_out_withheld=withheld
+            )
+        )
+    return out
 
 
 def _references(project: Project, plan: SnowballPlan | None) -> dict[str, Any]:
@@ -335,14 +375,13 @@ def agent_methods(project: Project, report: MethodsReport) -> tuple[MethodsRepor
         withheld.add("recall_held_out")
         update["recall_held_out"] = None
         update["recall_held_out_admitted"] = 0
+    update["imports"] = _imports(project, agent=True)
     return report.model_copy(update=update), frozenset(withheld)
 
 
 def _screening_started(project: Project) -> bool:
     """Whether any screening pass has been opened."""
-    project.index.sync()
-    with project.index.connect() as conn:
-        return conn.execute(text("SELECT 1 FROM passes LIMIT 1")).first() is not None
+    return held_out_visible(project)
 
 
 def render_methods(report: MethodsReport, *, withheld: frozenset[str] = frozenset()) -> str:
@@ -362,6 +401,7 @@ def render_methods(report: MethodsReport, *, withheld: frozenset[str] = frozense
         *([] if report.extraction_pack is None else [_extraction(report, withheld)]),
         *([] if report.extraction_pack is None else [_evidence(report)]),
         *([] if report.reference_parser is None else [_references_paragraph(report)]),
+        *[_import_paragraph(i) for i in report.imports],
         _seed_recall(report, withheld),
         *([] if report.supplied_links is None else [_supplied(report.supplied_links)]),
         _deviations(report),
@@ -406,6 +446,44 @@ def _references_paragraph(report: MethodsReport) -> str:
         f"lists), forward {rounds.get('forward', 0)} (from source metadata, as citation "
         f"chasing); stopping rule: {report.snowball_rule or NONE_RECORDED}. Records by "
         f"mechanism: {_counts(flow.identified_other_detail)}."
+    )
+
+
+_PART_ORDER = {"held-out": 0, "development": 1, "unsplit": 2}
+_PART_TITLE = {"held-out": "Held-out", "development": "Development", "unsplit": "All"}
+
+
+def _import_paragraph(entry: ImportMethods) -> str:
+    """One paragraph per import, the held-out part first (R-24)."""
+    parts = [
+        _part_sentence(p, entry.label)
+        for p in sorted(entry.parts, key=lambda p: _PART_ORDER[p.part])
+    ]
+    if entry.held_out_withheld:
+        parts.insert(0, "Held-out part: withheld until screening has started.")
+    return f"Library import {entry.import_id} ({entry.label}). " + " ".join(parts)
+
+
+def _ratio_text(name: str, ratio: Ratio | None) -> str:
+    if ratio is None:
+        return f"{name} {NOT_COMPUTED}"
+    return f"{name} {ratio.numerator}/{ratio.denominator} ({ratio.value:.3f})"
+
+
+def _part_sentence(part: PartCoverage, label: str) -> str:
+    c = part.counts
+    note = " (optimistic: the library may have shaped the queries)" if label == "optimistic" else ""
+    return (
+        f"{_PART_TITLE[part.part]} part{note}: {part.resolved} resolved records, "
+        f"{c[Bucket.FOUND_DATABASE]} found by database search, "
+        f"{c[Bucket.FOUND_SUPPLEMENTARY]} by supplementary routes, "
+        f"{c[Bucket.QUERY_MISS]} missed within reach, "
+        f"{c[Bucket.OUTSIDE_LIMITS]} outside limits, "
+        f"{c[Bucket.NOT_IN_SOURCES]} in no declared source, "
+        f"{c[Bucket.SOURCE_UNCHECKED]} with a source unchecked; "
+        f"{part.unresolved} unresolved, {part.unconfirmed} unconfirmed; "
+        f"{_ratio_text('search sensitivity', part.sensitivity)}, "
+        f"{_ratio_text('corpus coverage', part.coverage)}."
     )
 
 

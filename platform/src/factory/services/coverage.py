@@ -14,6 +14,12 @@ and the final outcomes, and returns values. It writes no event.
 | `source-unchecked` | not found; within limits; a declared source was not asked about it |
 | `not-in-sources` | not found; within limits; every declared source was asked and had nothing |
 
+`coverage_report` adds the figures per part (development and held-out when a split was drawn, else
+one `unsplit` part). Search sensitivity is `found-database / (found-database +
+found-supplementary + query-miss)` and corpus coverage `(found-database + found-supplementary) /
+resolved`, each with numerator and denominator and `None` for a zero denominator (R-05).
+Term suggestions come from the development (or unsplit) `query-miss` works only.
+
 Invariants:
 - `library-import` provenance (the admission of the import itself) and `supplied` provenance never
   make a record found, and probe-purpose provenance is a lookup, not a find.
@@ -43,6 +49,7 @@ from sqlalchemy import bindparam, text
 from factory.imports.limits import outside_limits
 from factory.imports.model import ImportFields, ParseOutcome, RecordType
 from factory.model.base import StrictModel
+from factory.model.probe import TermSuggestion
 from factory.model.protocol import Limit
 from factory.model.references import LinkState
 from factory.model.search import QueryPurpose
@@ -51,13 +58,15 @@ from factory.services.agreement import Outcome, exclusion_criteria, final_outcom
 from factory.services.context import Project
 from factory.services.dedup import active_merges
 from factory.services.imports import import_row
-from factory.services.protocol import current_protocol
+from factory.services.protocol import ProtocolVersion, current_protocol
 from factory.services.reference_resolve import (
     LOOKUP_IDENTIFIER,
     LOOKUP_TITLE,
     NO_SOURCE_RECORD,
     _keys,
 )
+from factory.services.search import get_work
+from factory.services.vocabulary import suggest_terms
 from factory.sources.importlist import NAME as IMPORTLIST
 
 CHUNK = 2_000
@@ -119,6 +128,45 @@ class RecordCoverage(StrictModel):
     """The criterion a found, excluded record is excluded under (bare id); empty otherwise."""
 
 
+class Ratio(StrictModel):
+    """A figure with its numerator and denominator; reported together, never alone (R-05)."""
+
+    numerator: int
+    denominator: int
+    value: float
+
+
+class PartCoverage(StrictModel):
+    """Coverage of one part of an import: counts per bucket and the two figures."""
+
+    part: Part
+    counts: dict[Bucket, int]
+    unresolved: int
+    unconfirmed: int
+    resolved: int
+    sensitivity: Ratio | None
+    coverage: Ratio | None
+    outcomes: dict[str, int]
+    """Screening outcome counts of the found records (`included`, `excluded`, `pending`)."""
+    excluded: list[str]
+    """Work ids of found records excluded by screening: a list for the researcher, no verdict."""
+
+
+CoverageLabel = Literal["held-out", "post-search", "optimistic"]
+
+
+class CoverageReport(StrictModel):
+    import_id: str
+    label: CoverageLabel
+    parts: list[PartCoverage]
+    included_not_in_library: int | None
+    """Included works absent from the import's resolved records; None when withheld."""
+    suggestions: list[TermSuggestion]
+    protocol_id: str | None
+    as_of: str
+    """The id of the last event the report reads."""
+
+
 @dataclass(frozen=True)
 class Classified:
     """The buckets of one import plus the records the buckets leave out, by part."""
@@ -154,8 +202,12 @@ def record_coverage(project: Project, import_id: str) -> list[RecordCoverage]:
     return classify_import(project, import_id).records
 
 
-def classify_import(project: Project, import_id: str) -> Classified:
-    """Buckets for the resolved records and counts for the unresolved and unconfirmed ones."""
+def classify_import(
+    project: Project, import_id: str, *, exclude_works: frozenset[str] = frozenset()
+) -> Classified:
+    """Buckets for the resolved records and counts for the unresolved and unconfirmed ones.
+
+    A record whose work is in `exclude_works` (after merging) is left out of every count."""
     import_row(project, import_id)  # FactoryValidationError for an unknown import
     protocol = current_protocol(project)
     declared = (
@@ -184,6 +236,8 @@ def classify_import(project: Project, import_id: str) -> Classified:
                 if head in seen:
                     continue
                 seen.add(head)
+                if head in exclude_works or row.work_id in exclude_works:
+                    continue
                 pending.append((row, head))
             elif state in (LinkState.UNCONFIRMED.value, LinkState.AMBIGUOUS.value):
                 unconfirmed[row.part] += 1
@@ -348,3 +402,153 @@ def _provenance(
         )
         for head in heads
     }
+
+
+# --- The report ---
+
+
+def coverage_report(
+    project: Project, import_id: str, *, exclude_works: frozenset[str] = frozenset()
+) -> CoverageReport:
+    """The full report (the researcher's view): every part, every figure.
+
+    `exclude_works` leaves those works out of every count and list (the agent view passes the
+    held-out seeds' works, R-20).
+    """
+    row = import_row(project, import_id)
+    classified = classify_import(project, import_id, exclude_works=exclude_works)
+    drawn = row.split_mode == "drawn"
+    label: CoverageLabel = (
+        "held-out" if drawn else "post-search" if row.split_mode == "post-search" else "optimistic"
+    )
+    names: tuple[Part, ...] = ("development", "held-out") if drawn else ("unsplit",)
+    parts = [_part_coverage(name, classified) for name in names]
+    protocol = current_protocol(project)
+    return CoverageReport(
+        import_id=import_id,
+        label=label,
+        parts=parts,
+        included_not_in_library=_included_not_in_library(project, classified, exclude_works),
+        suggestions=_suggestions(project, classified, protocol),
+        protocol_id=None if protocol is None else protocol.protocol_id,
+        as_of=_last_event(project),
+    )
+
+
+def _part_coverage(part: Part, classified: Classified) -> PartCoverage:
+    rows = [r for r in classified.records if r.part == part]
+    counts = {bucket: sum(1 for r in rows if r.bucket is bucket) for bucket in Bucket}
+    found = sum(counts[b] for b in FOUND)
+    reached = found + counts[Bucket.QUERY_MISS]
+    outcomes = dict.fromkeys((o.value for o in Outcome), 0)
+    for r in rows:
+        if r.bucket in FOUND:
+            outcomes[(r.outcome or Outcome.PENDING).value] += 1
+    return PartCoverage(
+        part=part,
+        counts=counts,
+        unresolved=classified.unresolved[part],
+        unconfirmed=classified.unconfirmed[part],
+        resolved=len(rows),
+        sensitivity=_ratio(counts[Bucket.FOUND_DATABASE], reached),
+        coverage=_ratio(found, len(rows)),
+        outcomes=outcomes,
+        excluded=sorted(r.work_id for r in rows if r.outcome is Outcome.EXCLUDED),
+    )
+
+
+def _ratio(numerator: int, denominator: int) -> Ratio | None:
+    if denominator == 0:
+        return None
+    return Ratio(numerator=numerator, denominator=denominator, value=numerator / denominator)
+
+
+def _included_not_in_library(
+    project: Project, classified: Classified, exclude_works: frozenset[str]
+) -> int:
+    """Included works (merge groups counted once) that no resolved record of the import names."""
+    primary = {absorbed: m.primary for m in active_merges(project) for absorbed in m.absorbed}
+    included = {
+        primary.get(work, work)
+        for work, outcome in final_outcomes(project).items()
+        if outcome is Outcome.INCLUDED
+    }
+    included -= {primary.get(w, w) for w in exclude_works}
+    return len(included - {r.work_id for r in classified.records})
+
+
+def _suggestions(
+    project: Project, classified: Classified, protocol: ProtocolVersion | None
+) -> list[TermSuggestion]:
+    """Term blocks the development (or unsplit) query misses share that the queries lack."""
+    if protocol is None:
+        return []
+    missed_ids = [
+        r.work_id
+        for r in classified.records
+        if r.bucket is Bucket.QUERY_MISS and r.part != "held-out"
+    ]
+    missed = [w for wid in missed_ids if (w := get_work(project, wid)) is not None]
+    query = " ".join(q.text for q in protocol.spec.queries)
+    return suggest_terms(missed, missed, query)
+
+
+def _last_event(project: Project) -> str:
+    project.index.sync()
+    with project.index.connect() as conn:
+        last = conn.execute(text("SELECT MAX(id) FROM events")).scalar_one_or_none()
+    return "" if last is None else str(last)
+
+
+# --- Agent view (decision 43) ---
+
+
+def held_out_visible(project: Project) -> bool:
+    """Whether held-out figures may be shown to an agent: a screening pass has been opened.
+    Before then, a figure that includes the held-out part is a differential oracle."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        return conn.execute(text("SELECT 1 FROM passes LIMIT 1")).first() is not None
+
+
+def agent_coverage(
+    project: Project, import_id: str, *, held_out_works: frozenset[str] | None = None
+) -> CoverageReport:
+    """The report as an agent outside the passes may read it (decision 43; spec ruling 23).
+
+    The development (or unsplit) part is always shown; the held-out part only once a screening
+    pass has been opened, and then as figures only: its excluded-work list is dropped, so no work
+    is named as a held-out record. Works a held-out seed resolves to are left out of every count
+    (R-20). Before a pass is opened `included_not_in_library` is None, since it counts the whole
+    library, held-out part included.
+    """
+    from factory.services.seeds import held_out_work_ids
+
+    exclude = held_out_work_ids(project) if held_out_works is None else held_out_works
+    report = coverage_report(project, import_id, exclude_works=exclude)
+    visible = held_out_visible(project)
+    parts = [
+        p.model_copy(update={"excluded": []}) if p.part == "held-out" else p
+        for p in report.parts
+        if visible or p.part != "held-out"
+    ]
+    return report.model_copy(
+        update={
+            "parts": parts,
+            "included_not_in_library": report.included_not_in_library if visible else None,
+        }
+    )
+
+
+def resolved_import_ids(project: Project) -> list[str]:
+    """The imports that have been resolved (some record has a link state), oldest first."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT i.import_id FROM imports i WHERE EXISTS (SELECT 1 FROM import_records r "
+                "WHERE r.import_id = i.import_id AND r.link_state IS NOT NULL) "
+                "ORDER BY i.recorded_at, i.event_id"
+            )
+        ).all()
+    return [str(r[0]) for r in rows]
