@@ -46,10 +46,15 @@ from factory.services import audit_core, passes
 from factory.services.context import Project
 
 _LIVE_DECISIONS = {
-    "reference.link_confirm": "reference_decisions",
-    "import.resolution_confirm": "import_decisions",
+    "reference.link_confirm": (
+        "reference_decisions d JOIN reference_extractions x "
+        "ON x.extraction_id = d.extraction_id AND x.live = 1"
+    ),
+    "import.resolution_confirm": "import_decisions d",
 }
-"""Gates whose acts are the live `binding` rows of a decisions table."""
+"""Gates whose acts are the `binding` rows of a decisions table that still bind: a reference
+decision of a superseded extraction does not, and a decision carried to the live extraction is
+the same event, counted once (`DISTINCT`). A new import resolution deletes the earlier rows."""
 
 
 @dataclass(frozen=True)
@@ -183,7 +188,7 @@ def gate_acts(project: Project, gate_id: str) -> Iterator[GateAct]:
         if live is not None:
             rows = conn.execute(
                 text(
-                    f"SELECT e.id, e.actor_kind, e.session FROM {live} d "
+                    f"SELECT DISTINCT e.id, e.actor_kind, e.session FROM {live} "
                     "JOIN events e ON e.id = d.event_id WHERE d.kind = 'binding' ORDER BY e.id"
                 )
             ).all()
