@@ -5,6 +5,7 @@
 import pytest
 
 from factory.events.envelope import Actor
+from factory.lineage.refs import EntryView, ReferenceView
 from factory.model.extraction import EntryBrief
 from factory.model.references import Confidence, Decision, LinkState
 from factory.model.seed import HeldOut
@@ -148,11 +149,63 @@ def test_briefs_mask_entries_linked_to_held_out_works(
     listed = briefs(view, HeldOut(work_ids=frozenset({linked.link_work})))
     masked = listed[2]
     assert masked.ordinal == 3 and masked.anchor == "b3"
-    assert (masked.title, masked.first_author, masked.year, masked.doi, masked.arxiv) == (
-        None,
-        None,
-        None,
-        None,
-        None,
-    )
+    assert (masked.title, masked.doi, masked.arxiv) == (None, None, None)
+    assert (masked.first_author, masked.year) == ("Zhou", 2020)  # as G1's `_masked`
     assert listed[4].title == "Linear attention with kernels"
+
+
+def test_masked_brief_has_the_shape_of_a_genuine_bare_entry(
+    project: Project, agent: Actor, world: list[str]
+) -> None:  # decision 37 item 9: nothing marks the seed
+    work = world[0]
+    entries = [
+        *ENTRIES[:2],
+        "A. Zhou. A held paper. Journal of Tests, 2020. doi:10.1000/p2.",
+        *ENTRIES[3:5],
+        "Smith, J. 2020.",
+    ]
+    with_references(project, agent, work, entries=entries)
+    view = reference_view(project, work)
+    assert view is not None
+    linked = view.entry(3)
+    assert linked is not None and linked.link_work is not None
+    listed = briefs(view, HeldOut(work_ids=frozenset({linked.link_work})))
+
+    def shape(brief: object) -> tuple[bool, ...]:
+        return tuple(
+            getattr(brief, f) is None for f in ("title", "first_author", "year", "doi", "arxiv")
+        )
+
+    genuine = listed[5]
+    assert (genuine.first_author, genuine.year) == ("Smith", 2020)
+    assert shape(listed[2]) == shape(genuine)
+
+
+def _entry(**link: object) -> EntryView:
+    return EntryView(
+        ordinal=1,
+        anchor="b1",
+        label=None,
+        title="T",
+        first_author="A",
+        year=2020,
+        doi=None,
+        arxiv=None,
+        link_state=LinkState.UNRESOLVED,
+        link_work=None,
+        confidence=None,
+        **link,  # type: ignore[arg-type]
+    )
+
+
+def test_briefs_mask_rejected_and_candidate_held_out_links() -> None:
+    held = HeldOut(work_ids=frozenset({"rf:secret"}))
+    for link in (
+        {"base_work": "rf:secret"},  # a rejected link keeps its base work
+        {"candidate_works": ("rf:other", "rf:secret")},  # an ambiguous link's candidate
+    ):
+        view = ReferenceView("rex_x", "rf:w", "cnv_x", (_entry(**link),), ())
+        (brief,) = briefs(view, held)
+        assert brief.title is None, link
+    view = ReferenceView("rex_x", "rf:w", "cnv_x", (_entry(base_work="rf:fine"),), ())
+    assert briefs(view, held)[0].title == "T"

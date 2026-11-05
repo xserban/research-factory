@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Literal
 
 from sqlalchemy import text
@@ -432,11 +432,21 @@ def agent_extract_view(summary: ExtractSummary, held_out: HeldOut) -> ExtractSum
     )
 
 
+def link_touches_held_out(
+    held: HeldOut,
+    works: Iterable[str | None],
+    doi: str | None,
+    arxiv: str | None,
+) -> bool:
+    """Whether a link touches a held-out seed's work: any of `works` (its linked, base or
+    candidate work), or an identifier the entry states (R-20)."""
+    return any(held.hides(w) for w in works) or held.hides(None, doi, arxiv)
+
+
 def _hidden(item: ReferenceItem, held: HeldOut) -> bool:
-    """Whether a link touches a held-out seed's work: its linked, base or candidate work, or an
-    identifier the entry states."""
+    """`link_touches_held_out` for a listed item."""
     works = (item.work_id, item.base_work_id, *(w for w, _ in item.candidates))
-    return any(held.hides(w) for w in works) or held.hides(None, item.doi, item.arxiv)
+    return link_touches_held_out(held, works, item.doi, item.arxiv)
 
 
 def _masked(item: ReferenceItem) -> ReferenceItem:

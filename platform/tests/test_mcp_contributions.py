@@ -223,7 +223,8 @@ async def test_held_out_entries_are_masked(
     assert served["ok"] is True, served
     listed = served["data"]["batch"]["references"]["entries"]
     masked = next(e for e in listed if e["ordinal"] == 3)
-    assert masked["title"] is None and masked["doi"] is None and masked["first_author"] is None
+    assert masked["title"] is None and masked["doi"] is None and masked["arxiv"] is None
+    assert masked["first_author"] == "Zhou" and masked["year"] == 2020
     text = json.dumps(served)
     assert held.doi not in text and "held paper" not in text
     assert next(e for e in listed if e["ordinal"] == 5)["title"] == "Linear attention with kernels"

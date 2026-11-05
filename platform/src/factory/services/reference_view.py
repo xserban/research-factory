@@ -13,6 +13,8 @@ Invariants:
 
 from __future__ import annotations
 
+import json
+
 from sqlalchemy import text
 
 from factory.lineage.refs import ContextView, EntryView, ReferenceView
@@ -20,6 +22,7 @@ from factory.model.extraction import EntryBrief
 from factory.model.references import Confidence, LinkState
 from factory.model.seed import HeldOut
 from factory.services.context import Project
+from factory.services.references import link_touches_held_out
 
 __all__ = [
     "briefs",
@@ -57,7 +60,7 @@ def reference_view_of(project: Project, extraction_id: str) -> ReferenceView | N
             conn.execute(
                 text(
                     "SELECT n.ordinal, n.anchor, n.label, n.title, n.first_author, n.year, "
-                    "n.doi, n.arxiv, l.state, l.work_id, l.confidence "
+                    "n.doi, n.arxiv, l.state, l.work_id, l.confidence, l.base_work_id, l.candidates "
                     "FROM reference_entries n LEFT JOIN reference_links l "
                     "ON l.extraction_id = n.extraction_id AND l.ordinal = n.ordinal "
                     "WHERE n.extraction_id = :x ORDER BY n.ordinal"
@@ -95,6 +98,10 @@ def reference_view_of(project: Project, extraction_id: str) -> ReferenceView | N
                 link_state=LinkState(str(r["state"])) if r["state"] else LinkState.UNRESOLVED,
                 link_work=r["work_id"],
                 confidence=Confidence(str(r["confidence"])) if r["confidence"] else None,
+                base_work=r["base_work_id"],
+                candidate_works=tuple(
+                    str(c["work_id"]) for c in json.loads(r["candidates"] or "[]")
+                ),
             )
             for r in entries
         ),
@@ -123,19 +130,23 @@ def is_live_reference_extraction(project: Project, extraction_id: str) -> bool:
 
 def briefs(view: ReferenceView, held_out: HeldOut | None = None) -> list[EntryBrief]:
     """The entries of `view` as an agent sees them: ordinal, anchor, label and parsed fields. With
-    `held_out`, an entry that links to a held-out work or states a held-out identifier keeps only
-    its ordinal, anchor and label."""
+    `held_out`, an entry whose link touches a held-out work (linked, base or candidate), or that
+    states a held-out identifier, loses its title, DOI and arXiv id, as G1's `_masked` does; its
+    author and year stay, so it looks like a genuine entry without identifier or title."""
     out: list[EntryBrief] = []
     for entry in view.entries:
-        hidden = held_out is not None and held_out.hides(entry.link_work, entry.doi, entry.arxiv)
+        works = (entry.link_work, entry.base_work, *entry.candidate_works)
+        hidden = held_out is not None and link_touches_held_out(
+            held_out, works, entry.doi, entry.arxiv
+        )
         out.append(
             EntryBrief(
                 ordinal=entry.ordinal,
                 anchor=entry.anchor,
                 label=entry.label,
                 title=None if hidden else entry.title,
-                first_author=None if hidden else entry.first_author,
-                year=None if hidden else entry.year,
+                first_author=entry.first_author,
+                year=entry.year,
                 doi=None if hidden else entry.doi,
                 arxiv=None if hidden else entry.arxiv,
             )
