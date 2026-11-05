@@ -71,6 +71,7 @@ from factory.services.protocol_rules import (
     snowball_plan_gaps,
     watch_plan_gaps,
 )
+from factory.services.reference_resolve import lost_human_decisions
 from factory.services.references import current_extraction, included_works
 from factory.services.seeds import SeedRole, _rigor_mode, held_out_work_ids, seed_check
 from factory.services.snowball import recorded_rounds, round_runs
@@ -119,6 +120,7 @@ LEVELS: dict[str, tuple[Severity | None, Severity | None, Severity | None]] = {
     "references-parse-incomplete": ("warning", "warning", "warning"),
     "references-unresolved-ceiling": ("warning", "warning", "warning"),
     "references-library-missing": ("warning", "warning", "warning"),
+    "references-decision-lost": ("warning", "warning", "error"),
     "snowball-plan-missing": (None, "warning", "error"),
     "snowball-over-plan": ("warning", "warning", "warning"),
     "snowball-unscreened": ("error", "error", "error"),
@@ -1289,6 +1291,16 @@ def _references(project: Project) -> list[_Hit]:
                 tuple(incomplete),
                 f"{len(incomplete)} reference extraction(s) are flagged incomplete (parse, "
                 "marker gap, no bibliography or bbl count mismatch)",
+            )
+        )
+    lost = lost_human_decisions(project)
+    if lost:
+        hits.append(
+            _Hit(
+                "references-decision-lost",
+                tuple(lost),
+                f"{sum(lost.values())} human reference decision(s) name an entry that the live "
+                f"extraction of their work no longer has ({len(lost)} extraction(s))",
             )
         )
     above = _above_ceiling(project)

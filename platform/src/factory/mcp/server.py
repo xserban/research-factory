@@ -1265,9 +1265,10 @@ def build_server(
     ) -> dict[str, JsonValue]:
         """Extract and resolve the reference lists of included works from their converted
         documents. With no `work_ids`: every included work with a conversion and no current
-        extraction. A malformed id refuses the call; works that cannot be extracted (not
-        included, no conversion) are reported under `skipped` while the others are recorded.
-        Refused to a session that has joined a pass."""
+        extraction. A malformed id refuses the call, and so does a named work whose current
+        extraction already uses this conversion and parser version; works that cannot be
+        extracted (not included, no conversion) are reported under `skipped` while the others
+        are recorded. Refused to a session that has joined a pass."""
 
         def extract() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)

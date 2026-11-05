@@ -8,7 +8,9 @@ resolution as recorded, and `state`, `work_id` and `confidence` fold the latest 
 (`confirm` makes the link resolved with confidence `confirmed`, `reject` makes it unresolved);
 `decision`/`confirmed_by` name that binding decision and `proposal` the latest proposal, which
 never changes the state. `reference_decisions` keeps the latest decision per entry and kind, so a
-decision recorded before its link is folded when the link arrives.
+decision recorded before its link is folded when the link arrives. A `reference.resolved` event's
+`carried` decisions enter `reference_decisions` as the binding decisions of the new extraction,
+under the human's own event id.
 
 `reason` is the recorded resolution's reason and is not folded: an unresolved link made so by a
 `reject` keeps the reason of its base resolution, which is NULL when the base was not unresolved.
@@ -319,6 +321,21 @@ def _resolved(t: ReferenceTables) -> Handler:
             )
             if inserted.rowcount:
                 _fold(conn, t, p.extraction_id, r.ordinal)
+        for c in p.carried:
+            conn.execute(
+                sqlite_insert(t.decisions)
+                .values(
+                    extraction_id=p.extraction_id,
+                    ordinal=c.ordinal,
+                    kind=BINDING,
+                    decision=c.decision.value,
+                    work_id=c.work_id,
+                    confirmed_by="human",
+                    event_id=c.decided_event,
+                )
+                .on_conflict_do_nothing(index_elements=["extraction_id", "ordinal", "kind"])
+            )
+            _fold(conn, t, p.extraction_id, c.ordinal)
 
     return resolved
 

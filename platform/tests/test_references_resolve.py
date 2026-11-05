@@ -14,17 +14,29 @@ from factory.events.envelope import Actor
 from factory.model.project import RigorMode
 from factory.model.references import Decision, LinkState, ReferenceExtracted
 from factory.services import reference_resolve
+from factory.services import references as references_service
+from factory.services.check import LEVELS, _findings_as
 from factory.services.context import Project
 from factory.services.reference_resolve import decide_reference, entry_digest, entry_text
 from factory.services.references import (
     ReferenceItem,
+    current_extraction,
     extract_references,
     list_references,
     reference_counts,
 )
-from tests.document_helpers import events_of_type
+from tests.document_helpers import (
+    StubConverter,
+    event_bytes,
+    events_of_type,
+    fetched_document,
+    make_registry,
+    promoted_works,
+    run_convert,
+)
 from tests.references_service_helpers import (
     Lookups,
+    bib_html,
     converted_work,
     corpus_works,
     oa_item,
@@ -38,6 +50,7 @@ ENTRIES = [
 ]
 ENTRY_QUOTE = "Efficient reed transformers v2"
 CAND_QUOTE = "Efficient Reed Transformers"
+MOSS_QUOTES = ("Moss growth under filtered light v2", "Moss growth under filtered light")
 
 
 @pytest.fixture
@@ -278,3 +291,166 @@ def test_any_earlier_proposal_of_the_session_blocks_its_confirmation(
     with pytest.raises(FactoryValidationError):
         _decide(project, agent, extraction, 1, Decision.CONFIRM)
     assert _item(project, 1).state is LinkState.UNCONFIRMED
+
+
+# --- Re-extraction (final review 3 and 4) ---
+
+
+def _reextract(project: Project, agent: Actor, version: str = "2.0+stub") -> str:
+    """A genuine re-extraction: a new conversion of the same document, same entry text."""
+    run_convert(project, make_registry(StubConverter(version=version)))
+    lookups = Lookups(
+        openalex=[
+            oa_item("Efficient Reed Transformers", "Bo Lee", 2021, "W501"),
+            oa_item("Moss growth under filtered light", "Pia Ostrander", 2008, "W502"),
+            oa_item("Moss growth under filtered lights", "Pia Ostrander", 2008, "W503"),
+        ]
+    )
+    [result] = extract_references(project, agent, None, sources=lookups.sources()).extractions
+    return result.extraction_id
+
+
+def test_named_extraction_of_a_current_work_is_refused(
+    project: Project, extraction: str, agent: Actor
+) -> None:
+    work = _item(project, 1).citing_work
+    before = event_bytes(project)
+    with pytest.raises(FactoryValidationError) as caught:
+        extract_references(project, agent, [work], sources=Lookups().sources())
+    assert [i.field for i in caught.value.issues] == ["work_ids"]
+    assert work in caught.value.issues[0].reason
+    assert event_bytes(project) == before
+    assert current_extraction(project, work) == extraction
+
+
+def test_a_refused_work_stops_the_whole_call(
+    project: Project, extraction: str, agent: Actor
+) -> None:
+    work = _item(project, 1).citing_work
+    other = next(w for w in promoted_works(project) if w != work)
+    fetched_document(project, other, bib_html(ENTRIES[:1], ["x"]))
+    run_convert(project, make_registry())
+    before = len(events_of_type(project, "reference.extracted"))
+    with pytest.raises(FactoryValidationError):
+        extract_references(project, agent, [other, work], sources=Lookups().sources())
+    assert len(events_of_type(project, "reference.extracted")) == before
+
+
+def test_human_confirmation_carries_to_the_new_extraction(
+    project: Project, extraction: str, human: Actor, agent: Actor
+) -> None:
+    _decide(project, human, extraction, 1, Decision.CONFIRM)
+    rex = _reextract(project, agent)
+    item = _item(project, 1)
+    assert item.extraction_id == rex and item.state is LinkState.RESOLVED
+    assert item.confidence == "confirmed" and item.confirmed_by == "human"
+    assert item.work_id == item.base_work_id
+    [carried] = events_of_type(project, "reference.resolved")[-1].payload["carried"]
+    assert carried["from_extraction"] == extraction and carried["decision"] == "confirm"
+    assert carried["ordinal"] == 1 and carried["from_ordinal"] == 1
+
+
+def test_summary_states_count_the_carried_decision(
+    project: Project, extraction: str, human: Actor, agent: Actor
+) -> None:
+    _decide(project, human, extraction, 1, Decision.CONFIRM)
+    run_convert(project, make_registry(StubConverter(version="2.0+stub")))
+    lookups = Lookups(openalex=[oa_item("Efficient Reed Transformers", "Bo Lee", 2021, "W501")])
+    [result] = extract_references(project, agent, None, sources=lookups.sources()).extractions
+    assert result.states[LinkState.UNCONFIRMED] == 0
+    assert result.states[LinkState.RESOLVED] == 2
+
+
+def test_human_rejection_carries_and_an_agent_cannot_reopen_it(
+    project: Project, extraction: str, human: Actor, agent: Actor
+) -> None:
+    """The review's scenario, on a genuine re-extraction."""
+    _decide(project, human, extraction, 1, Decision.REJECT)
+    rex = _reextract(project, agent)
+    item = _item(project, 1)
+    assert item.state is LinkState.UNRESOLVED and item.work_id is None
+    assert item.decision == "reject" and item.confirmed_by == "human"
+    _decide(project, agent, rex, 1, Decision.PROPOSE_CONFIRM)
+    with pytest.raises(FactoryValidationError):
+        _decide(project, second_agent(agent), rex, 1, Decision.CONFIRM)
+    assert _item(project, 1).state is LinkState.UNRESOLVED
+
+
+def test_a_carried_decision_survives_a_second_extraction_and_a_rebuild(
+    project: Project, extraction: str, human: Actor, agent: Actor
+) -> None:
+    _decide(project, human, extraction, 1, Decision.CONFIRM)
+    _reextract(project, agent)
+    _reextract(project, agent, "3.0+stub")
+    assert _item(project, 1).confirmed_by == "human"
+    before = project.index.rebuild()
+    assert project.index.rebuild() == before
+    assert _item(project, 1).confirmed_by == "human"
+
+
+def test_the_human_can_change_a_carried_decision(
+    project: Project, extraction: str, human: Actor, agent: Actor
+) -> None:
+    _decide(project, human, extraction, 1, Decision.CONFIRM)
+    rex = _reextract(project, agent)
+    _decide(project, human, rex, 1, Decision.REJECT)
+    assert _item(project, 1).state is LinkState.UNRESOLVED
+
+
+def test_an_agent_decision_does_not_carry(project: Project, extraction: str, agent: Actor) -> None:
+    _decide(project, agent, extraction, 1, Decision.PROPOSE_CONFIRM)
+    _decide(project, second_agent(agent), extraction, 1, Decision.CONFIRM)
+    assert _item(project, 1).confirmed_by == "second-agent"
+    _reextract(project, agent)
+    item = _item(project, 1)
+    assert item.state is LinkState.UNCONFIRMED
+    assert item.decision is None and item.proposal is None
+
+
+def test_a_session_that_proposed_on_an_earlier_extraction_cannot_confirm(
+    project: Project, extraction: str, agent: Actor
+) -> None:
+    """Sessions are judged per entry across the work's extractions, by `entry_sha256`."""
+    _decide(project, agent, extraction, 1, Decision.PROPOSE_CONFIRM)
+    rex = _reextract(project, agent)
+    third = second_agent(agent).model_copy(update={"session": "01JZ9Q3K5M7N8P0R2S4T6V8W2A"})
+    _decide(project, third, rex, 1, Decision.PROPOSE_CONFIRM)
+    with pytest.raises(FactoryValidationError) as caught:
+        _decide(project, agent, rex, 1, Decision.CONFIRM)
+    assert "proposed or decided" in caught.value.issues[0].reason
+    _decide(project, second_agent(agent), rex, 1, Decision.CONFIRM)
+    assert _item(project, 1).confirmed_by == "second-agent"
+
+
+def test_a_lost_human_decision_is_a_finding_naming_the_extraction(
+    project: Project,
+    extraction: str,
+    human: Actor,
+    agent: Actor,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The entry's text differs in the new conversion, so its decision cannot follow it."""
+    _decide(project, human, extraction, 1, Decision.CONFIRM)
+    _decide(project, human, extraction, 2, Decision.REJECT, quotes=MOSS_QUOTES)
+    assert "references-decision-lost" not in _codes(project, RigorMode.SYSTEMATIC)
+    real = references_service.entry_digest
+    monkeypatch.setattr(
+        references_service,
+        "entry_digest",
+        lambda raw: real(raw + " changed") if "Efficient reed" in raw else real(raw),
+    )
+    rex = _reextract(project, agent)
+    assert _item(project, 1).decision is None
+    assert _item(project, 2).decision == "reject"
+    [finding] = [
+        f
+        for f in _findings_as(project, RigorMode.SYSTEMATIC)
+        if f.code == "references-decision-lost"
+    ]
+    assert finding.refs == [rex] or tuple(finding.refs) == (rex,)
+    assert finding.message.startswith("1 ")
+    assert LEVELS["references-decision-lost"] == ("warning", "warning", "error")
+
+
+def _codes(project: Project, mode: RigorMode) -> set[str]:
+    return {f.code for f in _findings_as(project, mode)}

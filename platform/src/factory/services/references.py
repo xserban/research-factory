@@ -11,6 +11,8 @@ Invariants:
   text when the protocol has a full-text plan, else title/abstract), with a default conversion.
   The default scope is those without a current extraction; a named work that is not included, has
   no conversion or whose stored conversion is unreadable is skipped with a reason, never refused.
+  A named work with a current extraction refuses the call, writing nothing: extracting it again
+  would change nothing but the extraction id, which would stale what cites it.
 - No raw entry text is stored (ruling 14): entries carry the parsed fields and `entry_sha256`
   over the whitespace-normalised text of the entry's anchor. Title, venue and surname longer than
   the model bounds are truncated (flag `field-truncated`); an over-long DOI, arXiv id or URL is
@@ -18,7 +20,8 @@ Invariants:
 - An agent's events carry `input_blob`: the request, the conversion and the entry hashes, never
   the bibliography text (decision 39; the blob store is tracked in git).
 - An extraction is current while it is the live extraction of its work, pinned to the work's
-  default conversion, with this parser version. A new extraction supersedes the earlier one.
+  default conversion, with this parser version. A new extraction supersedes the earlier one and
+  takes over the human decisions on its entries, recorded in `reference.resolved` (`carried`).
 - Counts are computed from the live extractions; the link states sum to the entry count.
 - Listing is paged with a fixed cap (`MAX_PAGE`).
 - Held-out mask (R-20): an agent never sees a link that touches a held-out seed. Such an entry
@@ -54,6 +57,7 @@ from factory.model.references import (
     BblInfo,
     CitationContext,
     CitationContextsRecorded,
+    Decision,
     LinkState,
     ReferenceEntry,
     ReferenceExtracted,
@@ -77,7 +81,12 @@ from factory.services.context import Project
 from factory.services.conversions import conversion_manifest
 from factory.services.document_read import ConversionRef, default_conversion
 from factory.services.protocol import current_protocol
-from factory.services.reference_resolve import entry_digest, entry_raw, resolve_entries
+from factory.services.reference_resolve import (
+    carried_decisions,
+    entry_digest,
+    entry_raw,
+    resolve_entries,
+)
 from factory.services.search import list_works
 from factory.sources.registry import SourceFactory
 
@@ -201,7 +210,8 @@ def extract_references(
     sources: Mapping[str, SourceFactory],
 ) -> ExtractSummary:
     """Extract and resolve the references of `work_ids` (default: every included work with a
-    conversion and no current extraction). A malformed work id refuses the call, writing nothing.
+    conversion and no current extraction). A malformed work id, or a named work whose current
+    extraction already uses this conversion and parser version, refuses the call, writing nothing.
     """
     if work_ids is not None:
         bad = [w for w in work_ids if re.match(WORK_ID_RE, w) is None]
@@ -227,6 +237,17 @@ def extract_references(
                 skipped.append(Skipped(work_id=work, reason="no-conversion"))
             else:
                 scope.append((work, conversion))
+        current = [w for w, _ in scope if current_extraction(project, w) is not None]
+        if current:
+            raise FactoryValidationError(
+                [
+                    ValidationIssue(
+                        "work_ids",
+                        f"{w}: already extracted from this conversion with this parser version",
+                    )
+                    for w in current
+                ]
+            )
     results: list[ExtractionResult] = []
     for work, conversion in scope:
         result = _extract_one(project, actor, work, conversion, sources=sources)
@@ -327,6 +348,13 @@ def _quality(project: Project, document_id: str) -> Quality:
     return Quality(str(value))
 
 
+def _state_after(state: LinkState, carried: Decision | None) -> LinkState:
+    """A link's state once a carried decision is folded in."""
+    if carried is None:
+        return state
+    return LinkState.RESOLVED if carried is Decision.CONFIRM else LinkState.UNRESOLVED
+
+
 def _extract_one(
     project: Project,
     actor: Actor,
@@ -380,12 +408,6 @@ def _extract_one(
             for c in contexts
         ),
     )
-    resolved = ReferenceResolved(
-        extraction_id=extraction_id,
-        resolutions=outcome.resolutions,
-        matcher_version=MATCHER_VERSION,
-        lookup_runs=outcome.lookup_runs,
-    )
     input_blob = (
         project.blobs.put_json(
             {
@@ -400,21 +422,31 @@ def _extract_one(
         if actor.kind == "agent"
         else None
     )
-    events: list[Event] = [
-        project.events.make(
-            type_, payload, actor, refs=(extraction_id, work), input_blob=input_blob
-        )
-        for type_, payload in (
-            ("reference.extracted", extracted),
-            ("citation.contexts_recorded", recorded),
-            ("reference.resolved", resolved),
-        )
-    ]
     with project.index.exclusive():
+        project.index.sync()
+        carried = carried_decisions(project, work, entries)
+        resolved = ReferenceResolved(
+            extraction_id=extraction_id,
+            resolutions=outcome.resolutions,
+            matcher_version=MATCHER_VERSION,
+            lookup_runs=outcome.lookup_runs,
+            carried=carried,
+        )
+        events: list[Event] = [
+            project.events.make(
+                type_, payload, actor, refs=(extraction_id, work), input_blob=input_blob
+            )
+            for type_, payload in (
+                ("reference.extracted", extracted),
+                ("citation.contexts_recorded", recorded),
+                ("reference.resolved", resolved),
+            )
+        ]
         project.record(events)
+    decided = {c.ordinal: c.decision for c in carried}
     states = {state: 0 for state in LinkState}
     for r in outcome.resolutions:
-        states[r.state] += 1
+        states[_state_after(r.state, decided.get(r.ordinal))] += 1
     return ExtractionResult(
         extraction_id=extraction_id,
         work_id=work,

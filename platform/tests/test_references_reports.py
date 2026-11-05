@@ -62,6 +62,7 @@ EXPECTED_LEVELS = {
     "references-parse-incomplete": ("warning", "warning", "warning"),
     "references-unresolved-ceiling": ("warning", "warning", "warning"),
     "references-library-missing": ("warning", "warning", "warning"),
+    "references-decision-lost": ("warning", "warning", "error"),
     "snowball-plan-missing": (None, "warning", "error"),
     "snowball-over-plan": ("warning", "warning", "warning"),
     "snowball-unscreened": ("error", "error", "error"),

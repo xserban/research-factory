@@ -24,7 +24,7 @@ from factory.index.tasks import task_handlers, tasks_table
 from factory.index.watch import run_started_handler, watch_handlers, watch_tables
 
 # Bump on any change to the tables or handlers below; the index is then rebuilt.
-PROJECTION_VERSION = "29"
+PROJECTION_VERSION = "30"
 
 
 def _chain(first: Handler, second: Handler) -> Handler:

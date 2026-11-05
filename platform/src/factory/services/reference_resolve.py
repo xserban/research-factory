@@ -28,6 +28,13 @@ from a human, or in `pilot` mode from an agent whose session has made no earlier
 proposal on the entry, seconding a recorded proposal, on a title-fuzzy (`unconfirmed`) link only,
 and never once a human has made a binding decision on it (ruling 3: a human's decision is final
 relative to agents). Proposals never change a link's state.
+
+An entry keeps its identity across the extractions of a work through `entry_sha256`. A new
+extraction takes over the latest human binding decision on each of its entries
+(`carried_decisions`), so an agent cannot reopen it; an agent's decision or proposal does not
+carry. A session that decided or proposed on the entry in any extraction of the work cannot
+confirm it (`_deciding_sessions`). A human decision whose entry no longer exists in the work's live
+extraction is reported by `lost_human_decisions`.
 """
 
 from __future__ import annotations
@@ -48,6 +55,7 @@ from factory.model.references import (
     BINDING_DECISIONS,
     MAX_QUOTE,
     MAX_RATIONALE,
+    CarriedDecision,
     Confidence,
     ConfirmedBy,
     Decision,
@@ -517,18 +525,87 @@ def _entry_key(extraction_id: str, ordinal: int) -> str:
 
 
 def _deciding_sessions(project: Project, extraction_id: str, ordinal: int) -> set[str]:
-    """Every session that recorded a decision or proposal on the entry (events are referenced by
-    the entry key, so all of them are found, not only the latest)."""
-    key = json.dumps(_entry_key(extraction_id, ordinal))
+    """Every session that recorded a decision or proposal on the entry, in any extraction of its
+    work (the same `entry_sha256`; events are referenced by the entry key, so all of them are
+    found, not only the latest)."""
+    with project.index.connect() as conn:
+        same_entry = conn.execute(
+            text(
+                "SELECT e.extraction_id, e.ordinal FROM reference_entries e "
+                "JOIN reference_extractions x ON x.extraction_id = e.extraction_id "
+                "WHERE x.work_id = (SELECT work_id FROM reference_extractions "
+                "WHERE extraction_id = :rex) "
+                "AND e.entry_sha256 = (SELECT entry_sha256 FROM reference_entries "
+                "WHERE extraction_id = :rex AND ordinal = :ordinal)"
+            ),
+            {"rex": extraction_id, "ordinal": ordinal},
+        ).all()
+        keys = [_entry_key(str(rex), int(number)) for rex, number in same_entry]
+        rows = conn.execute(
+            text(
+                "SELECT DISTINCT e.session FROM event_refs f JOIN events e ON e.id = f.event_id "
+                "WHERE f.type = 'reference.resolution_decided' "
+                "AND f.ref IN (SELECT value FROM json_each(:keys))"
+            ),
+            {"keys": json.dumps(keys)},
+        ).all()
+    return {str(row[0]) for row in rows}
+
+
+def carried_decisions(
+    project: Project, work_id: str, entries: Sequence[ReferenceEntry]
+) -> tuple[CarriedDecision, ...]:
+    """The latest human binding decision on each of `entries`, found by `entry_sha256` among the
+    earlier extractions of `work_id`, ascending by ordinal. A decision carried once is carried
+    on, under the human's own event."""
     with project.index.connect() as conn:
         rows = conn.execute(
             text(
-                "SELECT session FROM events WHERE type = 'reference.resolution_decided' "
-                "AND instr(refs, :key) > 0"
+                "SELECT e.entry_sha256, d.extraction_id, d.ordinal, d.decision, d.work_id, "
+                "d.event_id FROM reference_decisions d "
+                "JOIN reference_entries e ON e.extraction_id = d.extraction_id "
+                "AND e.ordinal = d.ordinal "
+                "JOIN reference_extractions x ON x.extraction_id = d.extraction_id "
+                "WHERE x.work_id = :work AND d.kind = 'binding' AND d.confirmed_by = 'human' "
+                "ORDER BY d.event_id, d.extraction_id"
             ),
-            {"key": key},
+            {"work": work_id},
         ).all()
-    return {str(row[0]) for row in rows}
+    latest = {str(row[0]): row for row in rows}
+    return tuple(
+        CarriedDecision(
+            ordinal=entry.ordinal,
+            decision=Decision(str(row[3])),
+            work_id=None if row[4] is None else str(row[4]),
+            from_extraction=str(row[1]),
+            from_ordinal=int(row[2]),
+            decided_event=str(row[5]),
+        )
+        for entry in entries
+        if (row := latest.get(entry.entry_sha256)) is not None
+    )
+
+
+def lost_human_decisions(project: Project) -> dict[str, int]:
+    """Live extraction -> how many entries with a human binding decision in an earlier extraction
+    of its work it no longer has (by `entry_sha256`). Extractions that lost none are absent."""
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT live.extraction_id, COUNT(DISTINCT e.entry_sha256) "
+                "FROM reference_extractions live "
+                "JOIN reference_extractions old ON old.work_id = live.work_id "
+                "AND old.extraction_id != live.extraction_id "
+                "JOIN reference_decisions d ON d.extraction_id = old.extraction_id "
+                "AND d.kind = 'binding' AND d.confirmed_by = 'human' "
+                "JOIN reference_entries e ON e.extraction_id = d.extraction_id "
+                "AND e.ordinal = d.ordinal "
+                "WHERE live.live = 1 AND e.entry_sha256 NOT IN (SELECT n.entry_sha256 "
+                "FROM reference_entries n WHERE n.extraction_id = live.extraction_id) "
+                "GROUP BY live.extraction_id ORDER BY live.extraction_id"
+            )
+        ).all()
+    return {str(rex): int(count) for rex, count in rows}
 
 
 def _rigor_mode(project: Project) -> RigorMode:
@@ -632,7 +709,8 @@ def decide_reference(
             issues.append(
                 ValidationIssue("extraction_id", f"{extraction_id}: superseded by a later one")
             )
-        if link.base_state not in (LinkState.UNCONFIRMED, LinkState.AMBIGUOUS):
+        carried_on = link.confirmed_by is not None  # a decided link stays decidable by a human
+        if link.base_state not in (LinkState.UNCONFIRMED, LinkState.AMBIGUOUS) and not carried_on:
             issues.append(
                 ValidationIssue(
                     "ordinal",

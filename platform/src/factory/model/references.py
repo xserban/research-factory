@@ -18,6 +18,8 @@ Invariants enforced here (validated at the boundary, before any event is written
   reason. `confirmed` comes only from a decision.
 - A binding decision (`confirm`, `reject`) names who confirmed; a proposal never does and quotes
   both the entry and the candidate. A confirmation names its work.
+- A carried decision is a human's binding decision taken over by a new extraction for the entry
+  with the same `entry_sha256`; it names the event that made it. An agent's decision never carries.
 - A backward round goes via the document reference list and has no chase round; a forward round
   goes via source metadata and names the delegated chase round. A candidate's citers are among
   the round's source works and cite it through the round's extractions. Counts are never fields: the
@@ -294,11 +296,32 @@ class CitationContextsRecorded(StrictModel):
     contexts: tuple[CitationContext, ...]
 
 
+class CarriedDecision(StrictModel):
+    """A human's binding decision on an earlier extraction's entry, applied to `ordinal` of this
+    one, which has the same `entry_sha256`. `decided_event` is the human's own event."""
+
+    ordinal: Ordinal
+    decision: Decision
+    work_id: WorkId | None
+    from_extraction: ExtractionId
+    from_ordinal: Ordinal
+    decided_event: str = Field(pattern=rf"^ev_{ULID_RE}$")
+
+    @model_validator(mode="after")
+    def _binding(self) -> Self:
+        if self.decision not in BINDING_DECISIONS:
+            raise ValueError("only a binding decision carries")
+        if self.decision is Decision.CONFIRM and self.work_id is None:
+            raise ValueError("a carried confirmation names its work")
+        return self
+
+
 class ReferenceResolved(StrictModel):
     extraction_id: ExtractionId
     resolutions: tuple[Resolution, ...]
     matcher_version: VersionLabel
     lookup_runs: tuple[Annotated[str, StringConstraints(pattern=RUN_ID_RE)], ...] = ()
+    carried: tuple[CarriedDecision, ...] = ()
 
     @model_validator(mode="after")
     def _ordinals(self) -> Self:
@@ -306,6 +329,7 @@ class ReferenceResolved(StrictModel):
         if ordinals != sorted(set(ordinals)):
             raise ValueError("resolutions name each ordinal once, in ascending order")
         _unique(self.lookup_runs, "lookup_runs")
+        _unique(tuple(c.ordinal for c in self.carried), "carried")
         return self
 
 
