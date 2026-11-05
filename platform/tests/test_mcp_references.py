@@ -439,6 +439,20 @@ async def test_document_read_keeps_the_scrub_until_decision_78_is_settled(
 
 
 @pytest.mark.anyio
+async def test_document_read_names_a_seed_work_by_its_id(
+    settings: Settings, project: Project, clock: FixedClock, corpus: None
+) -> None:
+    """`seed.work_id` set, the common case: 37 item 9 does not withhold the `rf:` id."""
+    held = _held(project)
+    fetched_document(project, held.work_id, bib_html(ENTRIES_B, BODY_B))
+    run_convert(project, make_registry())
+    async with open_session(settings, clock, _lookups().sources()) as session:
+        body = await session.call("document_read", project="demo", work_id=held.work_id)
+    assert body["ok"] is True, body
+    assert body["data"]["work_id"] == held.work_id
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize(
     "decision", ["propose-confirm", "propose-reject", "confirm", "reject", "clear"]
 )

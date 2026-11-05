@@ -46,6 +46,7 @@ from factory.model.work import Work
 from factory.model.work_ids import arxiv_id_from_doi, normalize_arxiv, normalize_doi
 from factory.services.calibration import is_pass_session
 from factory.services.context import Project
+from factory.services.coverage import held_out_visible
 from factory.services.extraction import is_extraction_session
 from factory.services.protocol import search_authorization
 from factory.services.results import BatchResult, ItemError
@@ -104,6 +105,22 @@ class InboxItemView(StrictModel):
 class InboxPage(StrictModel):
     items: list[InboxItemView]
     next_cursor: str | None
+
+
+_PRE_PASS_OMITTED = frozenset({"link", "identifier_value", "identifier_version"})
+"""The fields that state an item's identifier: a held-out seed's reads `[withheld]`."""
+
+
+def agent_page(project: Project, page: InboxPage) -> dict[str, JsonValue]:
+    """`page` as an agent may read it. Before a screening pass, every item loses its link and
+    identifier, role-blind, since a scrubbed one would name a held-out seed (decision 81)."""
+    data: dict[str, JsonValue] = page.model_dump(mode="json")
+    if held_out_visible(project):
+        return data
+    items: list[JsonValue] = [
+        item.model_dump(mode="json", exclude=set(_PRE_PASS_OMITTED)) for item in page.items
+    ]
+    return {**data, "items": items}
 
 
 # --- Sessions ---

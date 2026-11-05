@@ -18,7 +18,7 @@ any form, writes nothing and is reported. Probe lookups leave their works outsid
 import json
 import random
 import secrets
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from enum import StrEnum
 from typing import Any, Literal
 
@@ -40,6 +40,7 @@ from factory.model.seed import (
     SeedSpec,
     SeedSplitDrawn,
     SeedUnresolved,
+    normalize_openalex,
 )
 from factory.model.work import ProvenanceMethod, Work
 from factory.model.work_ids import arxiv_id_from_doi
@@ -656,6 +657,31 @@ def _positive_matches(project: Project) -> list[tuple[_Seed, SeedRole, str | Non
         matched = _matching_work(seed.spec.identity_keys(), found, by_doi, by_arxiv, position)
         out.append((seed, roles[seed.seed_id], matched))
     return out
+
+
+def held_out_seed_matcher(project: Project) -> Callable[[Work], bool]:
+    """Whether a work is a held-out seed's, by resolved work, merge group or identifier. Identifiers
+    count because a work the search missed need not be in the corpus. For the coverage term
+    suggestions alone, where a seed's own terms would bias R-24 upward; never to hide a work from
+    an agent view (decision 81)."""
+    groups = _merge_groups(project)
+    works: set[str] = set()
+    keys: set[str] = set()
+    for seed, role, matched in _positive_matches(project):
+        if role is not SeedRole.HELD_OUT:
+            continue
+        keys.update(seed.spec.identity_keys().values())
+        for work_id in (matched, seed.work_id):
+            if work_id is not None:
+                works.update((work_id, *groups.get(work_id, ())))
+
+    def matches(work: Work) -> bool:
+        openalex = work.identifiers.openalex
+        oa_key = normalize_openalex(openalex) if openalex else None
+        stated = (work.identifiers.doi, _work_arxiv(work), oa_key)
+        return work.id in works or any(value in keys for value in stated if value)
+
+    return matches
 
 
 _NOT_SEARCH = frozenset(

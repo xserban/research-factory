@@ -25,6 +25,7 @@ from factory.model.search import QueryPurpose
 from factory.model.work import Work
 from factory.services.agreement import Outcome, final_outcomes
 from factory.services.context import Project
+from factory.services.coverage import held_out_visible
 from factory.services.dedup import active_merges
 from factory.services.dedup_cascade import merge_works
 from factory.services.prisma import has_full_text_plan, prisma_flow
@@ -65,6 +66,17 @@ def _canonical_ids(project: Project) -> list[str]:
         if wid != merge.primary
     }
     return [wid for wid in corpus if wid not in absorbed]
+
+
+def refuse_before_screening(project: Project) -> None:
+    """The agent bibliography waits for a screening pass, for every project and whatever it holds.
+
+    An entry's `doi` reads `[withheld]` when a held-out seed states it, and that would name the
+    seed during query design, where decision 37 item 9 does not reach (decisions 43 and 81). The
+    check reads no seed, so the refusal says nothing about any. The CLI is not refused.
+    """
+    if not held_out_visible(project):
+        raise _issue("project", "available once a screening pass is open; until then use the CLI")
 
 
 def select_works(
@@ -170,6 +182,7 @@ __all__ = [
     "export_bibliography",
     "export_prisma_svg",
     "iter_works",
+    "refuse_before_screening",
     "render_bibliography",
     "select_works",
 ]

@@ -173,6 +173,42 @@ def test_methods_sentence(project: Project, corpus: None, tmp_path: Path) -> Non
     assert Outcome.INCLUDED.value  # outcomes are counted, not typed
 
 
+def test_suggestions_leave_out_a_held_out_seed_work(
+    pre_search: Project, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A held-out seed's terms must not steer the queries, which would bias R-24 upward. The
+    filter is here alone: the seed's work still counts in the part's figures (decision 81)."""
+    from factory.services import seeds as seeds_module
+
+    import_id, _ = _split_import(pre_search, tmp_path)
+    before = coverage_report(pre_search, import_id)
+    target = sorted(h for s in before.suggestions for h in s.holders)[0]
+    work = get_work(pre_search, target)
+    assert work is not None and work.identifiers.doi is not None
+    real = seeds_module._load_seeds
+    held = {
+        s.seed_id
+        for s in seeds_module.all_seeds(pre_search)
+        if s.role is seeds_module.SeedRole.HELD_OUT
+    }
+    spec = {"doi": work.identifiers.doi}
+    monkeypatch.setattr(
+        seeds_module,
+        "_load_seeds",
+        lambda p: [
+            s.model_copy(update={"work_id": None, "spec": s.spec.model_copy(update=spec)})
+            if s.seed_id in held
+            else s
+            for s in real(p)
+        ],
+    )
+    monkeypatch.setattr(seeds_module, "_admitted", lambda project: {})
+    after = coverage_report(pre_search, import_id)
+    assert after.suggestions  # the other misses still suggest
+    assert all(target not in s.holders for s in after.suggestions)
+    assert after.parts == before.parts
+
+
 def test_agent_view_counts_a_held_out_seed_work_as_any_work(
     project: Project, corpus: None, tmp_path: Path
 ) -> None:

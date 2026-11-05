@@ -860,13 +860,15 @@ def build_server(
         project: str, status: str | None = None, cursor: str | None = None, limit: int = PAGE_LIMIT
     ) -> dict[str, JsonValue]:
         """Inbox items in id order with status and last resolution outcome, one page at a time
-        (`status`: open, resolved or withdrawn). Refused to a session that has joined a pass."""
+        (`status`: open, resolved or withdrawn). Until a screening pass is open, items carry no
+        link or identifier. Refused to a session that has joined a pass."""
 
         def listing() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
             _refuse_pass_session(opened)
             page = inbox_service.list_items(opened, status=status, cursor=cursor, limit=limit)
-            return _withheld(opened, page.model_dump(mode="json"), include_work_ids=False)
+            shown = inbox_service.agent_page(opened, page)
+            return _withheld(opened, shown, include_work_ids=False)
 
         return _reply(project, listing, include_work_ids=False)
 
@@ -915,11 +917,13 @@ def build_server(
         """The bibliography of a scope of works as BibTeX or CSL-JSON text (`format` bibtex or
         csl; `scope` included or corpus, or explicit work `ids`, which replace the scope). At
         most MCP_EXPORT_MAX_WORKS works; use the CLI for more. Built from events only; refused to
-        any session that has joined a screening or extraction pass. Read-only."""
+        any session that has joined a screening or extraction pass, and until a screening pass
+        is open (use the CLI before then). Read-only."""
 
         def export() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
             _refuse_pass_session(opened)
+            exports_service.refuse_before_screening(opened)
             chosen = exports_service.select_works(opened, None if ids else scope, ids or ())
             if len(chosen) > MCP_EXPORT_MAX_WORKS:
                 raise FactoryValidationError(
@@ -1064,9 +1068,9 @@ def build_server(
                 max_chars=max_chars,
                 session=opened.session,
             )
-            return _withheld(opened, page.model_dump(mode="json"))
+            return _withheld(opened, page.model_dump(mode="json"), include_work_ids=False)
 
-        return _reply(project, read)
+        return _reply(project, read, include_work_ids=False)
 
     @server.tool()
     def extract_next(
@@ -1621,8 +1625,8 @@ def _withheld(project: Project, value: JsonValue, include_work_ids: bool = True)
 def _held_out_tokens(project: Project, include_work_ids: bool = True) -> set[str]:
     """The id, and every identifier as stated or normalised, of each held-out seed.
 
-    `include_work_ids` adds `seed.work_id`, for the seed tools, the probe and `document_read`. Any
-    tool that lists works leaves it out: a work's id is not a seed's identity, and a `[withheld]`
+    `include_work_ids` adds `seed.work_id`, for the seed tools and the probe. Any tool that names
+    works leaves it out: a work's id is not a seed's identity, and a `[withheld]`
     among `rf:` ids would mark the work as a seed (decisions 37 item 9 and 81)."""
     tokens: set[str] = set()
     for seed in seeds_service.all_seeds(project):

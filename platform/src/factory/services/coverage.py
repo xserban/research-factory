@@ -66,6 +66,7 @@ from factory.services.reference_resolve import (
     _keys,
 )
 from factory.services.search import get_work
+from factory.services.seeds import held_out_seed_matcher
 from factory.services.vocabulary import suggest_terms
 from factory.sources.importlist import NAME as IMPORTLIST
 
@@ -489,7 +490,9 @@ def _included_not_in_library(project: Project, classified: Classified) -> int:
 def _suggestions(
     project: Project, classified: Classified, protocol: ProtocolVersion | None
 ) -> list[TermSuggestion]:
-    """Term blocks the development (or unsplit) query misses share that the queries lack."""
+    """Term blocks the development (or unsplit) query misses share that the queries lack. A
+    held-out seed's work adds none, in any view: its terms would steer the queries towards the
+    seed and bias R-24 upward. It still counts in the figures (decision 81)."""
     if protocol is None:
         return []
     missed_ids = [
@@ -497,10 +500,11 @@ def _suggestions(
         for r in classified.records
         if r.bucket is Bucket.QUERY_MISS and r.part != "held-out"
     ]
+    held = held_out_seed_matcher(project)
     missed = [
         w
         for wid in sorted(missed_ids)[:SUGGESTION_POOL]
-        if (w := get_work(project, wid)) is not None
+        if (w := get_work(project, wid)) is not None and not held(w)
     ]
     query = " ".join(q.text for q in protocol.spec.queries)
     return suggest_terms(missed, missed, query)

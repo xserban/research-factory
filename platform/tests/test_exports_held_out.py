@@ -1,7 +1,8 @@
-"""Decision 81 (restores 37 item 9): the agent bibliography shows a held-out seed's work as any
-corpus work, whether the seed was admitted or only matched by search. Seed ids and the identifiers
-a seed states stay withheld, so the work's own `doi` field reads `[withheld]`: the residual
-marking of decisions 78 and 81, pinned here so that it is not lost."""
+"""Decision 81 (restores 37 item 9). Once a pass is open, the agent bibliography shows a held-out
+seed's work as any corpus work, whether the seed was admitted or only matched by search. Seed ids
+and the identifiers a seed states stay withheld, so the work's own `doi` field reads `[withheld]`:
+the residual marking of decisions 78 and 81, pinned here so that it is not lost. Before a pass the
+tool is refused for every project, since that marker would name the seed during query design."""
 
 from collections.abc import Callable, Mapping
 from typing import Any
@@ -13,14 +14,17 @@ from factory.config import Settings
 from factory.events.envelope import Actor
 from factory.exports.keys import bib_key
 from factory.mcp.conventions import WITHHELD
+from factory.model.screening import PassLabel
 from factory.services import seeds as seeds_module
 from factory.services.context import Project
-from factory.services.exports import select_works
+from factory.services.exports import export_bibliography, select_works
+from factory.services.screening import open_pass
 from factory.services.search import get_work
 from factory.services.seeds import SeedRole, all_seeds
 from factory.sources.registry import SourceFactory
-from tests.helpers import _leaks, open_session
+from tests.helpers import _leaks, _setup, open_session
 from tests.test_chase_service import _corpus, _settle
+from tests.test_screening_next import _draw
 
 SourcesFor = Callable[..., Mapping[str, SourceFactory]]
 
@@ -81,3 +85,44 @@ async def test_mcp_export_shows_a_held_out_work_as_any_work(
     ordinary = next(e for e in entries.values() if "doi" in e)
     assert _fields(own) == _fields(ordinary)
     assert WITHHELD in own  # the stated identifier: decisions 37 item 9 and 78
+
+
+@pytest.mark.anyio
+async def test_mcp_export_is_refused_until_a_pass_opens(
+    settings: Settings,
+    project: Project,
+    agent: Actor,
+    human: Actor,
+    clock: FixedClock,
+    mock_sources: SourcesFor,
+) -> None:
+    _setup(project, agent, human, mock_sources, random_works=0)
+    held = _held(project)
+    async with open_session(settings, clock) as session:
+        body = await session.call("export_bibliography", project="demo", scope="corpus")
+        named = await session.call("export_bibliography", project="demo", ids=[held.work_id])
+        unknown = await session.call("export_bibliography", project="demo", ids=["rf:nope-0"])
+    assert body["ok"] is False and body == named == unknown  # one message, whatever is asked
+    assert [e["field"] for e in body["errors"]] == ["project"]
+    assert WITHHELD not in str(body)
+    assert "".join(export_bibliography(project, "bibtex", scope="corpus"))  # the CLI's service
+    _draw(project)
+    open_pass(project, agent, PassLabel.A)
+    async with open_session(settings, clock) as session:
+        opened = await session.call("export_bibliography", project="demo", scope="corpus")
+    assert opened["ok"] is True, opened
+
+
+@pytest.mark.anyio
+async def test_the_pre_pass_refusal_does_not_depend_on_seeds(
+    settings: Settings,
+    explore_project: Project,
+    clock: FixedClock,
+) -> None:
+    """A project with no seeds at all is refused in the same words."""
+    assert all_seeds(explore_project) == []
+    async with open_session(settings, clock) as session:
+        body = await session.call("export_bibliography", project="demo")
+    assert body["ok"] is False and [e["field"] for e in body["errors"]] == ["project"]
+    reason = body["errors"][0]["reason"].lower()
+    assert "seed" not in reason and "held" not in reason

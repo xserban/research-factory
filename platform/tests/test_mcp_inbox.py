@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from factory.clock import FixedClock
@@ -9,12 +11,15 @@ from factory.config import Settings
 from factory.events.envelope import Actor
 from factory.events.reader import read_all
 from factory.mcp import server as mcp_server
+from factory.mcp.conventions import WITHHELD
 from factory.model.screening import PassLabel
 from factory.services.context import Project
 from factory.services.discovery import DiscoveryReport, Route, agent_view
-from factory.services.screening import join_pass
+from factory.services.screening import join_pass, open_pass
+from factory.services.seeds import SeedRole, all_seeds
 from tests.helpers import SESSION, SourcesFor, _setup, install_skill, open_session
 from tests.inbox_helpers import Keyed, link_item
+from tests.test_screening_next import _draw
 
 AGENT = {"role": "searcher", "model": "claude-opus-5-5", "skill": "rf-search"}
 DOI = "https://doi.org/10.2000/s1"
@@ -125,6 +130,36 @@ async def test_pass_session_refused_by_every_inbox_tool(
     async with open_session(settings, clock) as client:
         out = await client.call("inbox_list", project="demo")
     assert out["ok"] is True, out
+
+
+@pytest.mark.anyio
+async def test_list_omits_the_link_until_a_pass_opens(
+    settings: Settings,
+    project: Project,
+    agent: Actor,
+    human: Actor,
+    clock: FixedClock,
+    mock_sources: SourcesFor,
+) -> None:
+    """Role-blind: a `[withheld]` link would name a held-out seed during query design. The
+    identifier fields repeat the link, so they go with it."""
+    _setup(project, agent, human, mock_sources, random_works=0)
+    [held, *_] = [s for s in all_seeds(project) if s.role is SeedRole.HELD_OUT]
+    items = [{"link": f"https://doi.org/{held.doi}"}, {"link": DOI}]
+    async with open_session(settings, clock) as client:
+        added = await client.call("inbox_add", project="demo", items=items, channel="mcp")
+        assert added["ok"] is True and len(added["data"]["written"]) == 2, added
+        before = await client.call("inbox_list", project="demo")
+    assert before["ok"] is True, before
+    assert WITHHELD not in json.dumps(before)
+    for item in before["data"]["items"]:
+        assert not {"link", "identifier_value", "identifier_version"} & set(item)
+        assert item["status"] == "open"
+    _draw(project)
+    open_pass(project, agent, PassLabel.A)
+    async with open_session(settings, clock) as client:
+        after = await client.call("inbox_list", project="demo")
+    assert {i["link"] for i in after["data"]["items"]} >= {DOI}
 
 
 def test_agent_view_reports_seed_admission_as_other() -> None:
