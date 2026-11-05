@@ -183,3 +183,32 @@ def test_rerun_keeps_a_withdrawn_tag_withdrawn(
     withdraw_label(project, project.human_actor(), pears.application_id, "not wanted")
     assert import_tags_as_labels(project, summary.import_id) == 0
     assert [v.key for v in labels_of(project, MemberType.WORK, world[0])] == ["fruit"]
+
+
+def test_rerun_keeps_a_withdrawn_tag_withdrawn_across_two_records(
+    project: Project, tmp_path: Path, world: list[str]
+) -> None:
+    two = (
+        "@article{a, title={Made-Up Pears}, year={2019}, doi={10.9999/x.1}, keyword={pears}}\n"
+        "@article{b, title={Made-Up Pears Again}, year={2020}, doi={10.9999/x.2}, keyword={pears}}\n"
+    )
+    path = tmp_path / "two.bib"
+    path.write_text(two)
+    summary = record_import(
+        project, path, format=ImportFormat.BIBTEX, role=ImportRole.REFERENCE, random_seed=1
+    )
+    project.index.sync()
+    with project.index.connect() as conn:
+        conn.execute(
+            text(
+                "UPDATE import_records SET link_state = 'resolved', work_id = :w "
+                "WHERE import_id = :i"
+            ),
+            {"w": world[0], "i": summary.import_id},
+        )
+        conn.commit()
+    assert import_tags_as_labels(project, summary.import_id) == 1  # one work, one key
+    [pears] = labels_of(project, MemberType.WORK, world[0])
+    withdraw_label(project, project.human_actor(), pears.application_id, "not wanted")
+    assert import_tags_as_labels(project, summary.import_id) == 0
+    assert labels_of(project, MemberType.WORK, world[0]) == []

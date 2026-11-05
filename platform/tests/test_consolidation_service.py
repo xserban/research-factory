@@ -376,6 +376,10 @@ def test_duplicate_merge_from_refused_and_a_logged_duplicate_rebuilds(cw: CW) ->
     project.index.sync()
     state = project.index.rebuild()
     assert project.index.rebuild() == state
+    # the second merge stays inactive after the first is unmerged: the key reads as itself
+    unmerge_labels(project, cw.w.human, one, "undo")
+    assert {v.key: v.live_key for v in list_labels(project)}[row.members[1]] == row.members[1]
+    assert rows(project, "SELECT active FROM label_merges ORDER BY event_id") == [(0,), (0,)]
 
 
 def test_concept_batch_merge_is_validated_cumulatively(cw: CW) -> None:

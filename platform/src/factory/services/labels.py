@@ -304,10 +304,9 @@ def import_tags_as_labels(project: Project, import_id: str) -> int:
             ).all()
         }
         applied = {
-            (str(r), str(k))
-            for r, k in conn.execute(
-                text("SELECT import_ref, key FROM labels WHERE import_ref LIKE :p"),
-                {"p": f"{import_id}:%"},
+            (str(t), str(k))
+            for t, k in conn.execute(
+                text("SELECT target, key FROM labels WHERE origin = 'import-tag'")
             ).all()
         }
     items: list[LabelInput] = []
@@ -318,7 +317,9 @@ def import_tags_as_labels(project: Project, import_id: str) -> int:
             continue
         ref = record_key(import_id, record.ordinal)
         for tag in record.fields.tags if record.fields else []:
-            if key_problem(tag) is None and (ref, label_key(tag)) not in applied:
+            # keyed on the work and the key, withdrawn or not: a withdrawn tag stays withdrawn
+            if key_problem(tag) is None and (work, label_key(tag)) not in applied:
+                applied.add((work, label_key(tag)))
                 items.append(LabelInput(target_type=MemberType.WORK, target=work, text=tag))
                 refs.append(ref)
     if not items:
