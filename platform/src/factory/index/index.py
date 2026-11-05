@@ -97,6 +97,13 @@ OMITTED_WHEN_EMPTY: frozenset[str] = frozenset(
         "model_cutoffs",
         "region_member_proposals",
         "region_links",
+        "labels",
+        "label_merges",
+        "terms",
+        "term_aliases",
+        "consolidation_passes",
+        "consolidation_proposals",
+        "consolidation_decisions",
     }
 )
 """Tables added after slice 3: while empty they leave no trace in the hash, so a log without

@@ -60,6 +60,20 @@ from factory.model.intuition import (
     InterpretationRecorded,
     InterpretationReviewed,
 )
+from factory.model.labels import (
+    ConsolidationDecided,
+    ConsolidationPassCompleted,
+    ConsolidationPassStarted,
+    ConsolidationProposed,
+    LabelApplicationDecided,
+    LabelApplied,
+    LabelMerged,
+    LabelUnmerged,
+    LabelWithdrawn,
+    TermPromoted,
+    TermRetired,
+    TermRevised,
+)
 from factory.model.lineage import (
     IdeaDecided,
     IdeaMerged,
@@ -279,4 +293,16 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("hypothesis.reviewed", HypothesisReviewed, 1))
     catalog.register(EventType("hypothesis.registered", HypothesisRegistered, 1))
     catalog.register(EventType("model.cutoff_declared", ModelCutoffDeclared, 1))
+    catalog.register(EventType("label.applied", LabelApplied, 1))
+    catalog.register(EventType("label.withdrawn", LabelWithdrawn, 1))
+    catalog.register(EventType("label.application_decided", LabelApplicationDecided, 1))
+    catalog.register(EventType("label.merged", LabelMerged, 1))
+    catalog.register(EventType("label.unmerged", LabelUnmerged, 1))
+    catalog.register(EventType("term.promoted", TermPromoted, 1))
+    catalog.register(EventType("term.revised", TermRevised, 1))
+    catalog.register(EventType("term.retired", TermRetired, 1))
+    catalog.register(EventType("consolidation.pass_started", ConsolidationPassStarted, 1))
+    catalog.register(EventType("consolidation.proposed", ConsolidationProposed, 1))
+    catalog.register(EventType("consolidation.decided", ConsolidationDecided, 1))
+    catalog.register(EventType("consolidation.pass_completed", ConsolidationPassCompleted, 1))
     return catalog

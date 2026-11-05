@@ -85,7 +85,7 @@ def _resolved(project: Project, field: str | None, choice: str, reason: str) -> 
 
 
 def test_projection_version_pinned() -> None:
-    assert PROJECTION_VERSION == "43"
+    assert PROJECTION_VERSION == "44"
 
 
 def test_pass_join_and_close_first_write_wins(project: Project) -> None:
