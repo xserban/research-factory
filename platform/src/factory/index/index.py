@@ -173,8 +173,8 @@ class Index:
         """Hold the write lock across several reads and writes, so none can interleave.
 
         Re-entrant: the sync and reads made inside the block do not wait on the lock they hold.
-        With `on_exclusive`, the outermost hold syncs first and hands it the last applied event id,
-        so whatever the block mints sorts after everything already in the log (slice 5 ruling 3).
+        With `on_exclusive`, the outermost hold syncs first and hands it the last applied event id
+        (the ID floor of a hosted project, slice 5 ruling 3).
         """
         outermost = not self._holding
         with self._locked():

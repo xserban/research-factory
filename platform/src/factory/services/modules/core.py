@@ -50,6 +50,7 @@ SPEC = ModuleSpec(
         CheckRule("gate-policy-below-systematic-preset", (None, None, "error")),
         CheckRule("host-mismatch", ("error", "error", "error")),
         CheckRule("host-mismatch-unchecked", ("warning", "warning", "warning")),
+        CheckRule("future-dated-event", ("warning", "warning", "warning")),
     ),
 )
 

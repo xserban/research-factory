@@ -1,7 +1,8 @@
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from factory.clock import Clock
@@ -15,9 +16,12 @@ from factory.events.writer import EventWriter
 from factory.index.default import default_projection
 from factory.index.index import Index
 from factory.index.project import latest_host
-from factory.model.identity import SLUG_RE, IdGenerator
+from factory.model.identity import SLUG_RE, IdGenerator, ulid_time
 
 MAX_SLUG_LENGTH = 64
+FUTURE_MARGIN = timedelta(minutes=1)
+"""How far past the clock an event may be dated and still set the ID floor. A later one (a logged
+event can never be removed) would otherwise push every later `ts` past it for good."""
 
 
 @dataclass(frozen=True)
@@ -64,9 +68,12 @@ class Project:
     index: Index
 
     def writing(self) -> AbstractContextManager[None]:
-        """The project write context: holds the lock, syncs, and floors `ids` above the last
-        applied event, so an event minted inside sorts after the whole log and append order equals
-        ID order across sessions and processes (slice 5 ruling 3). Re-entrant.
+        """The project write context: holds the lock and syncs. On a hosted project it also floors
+        `ids` above the last applied event, so an event minted inside sorts after the whole log and
+        append order equals ID order across sessions and processes (slice 5 ruling 3). Re-entrant.
+
+        An unhosted project keeps its IDs as they were (ruling 2). A future-dated last event sets no
+        floor: IDs follow the clock, and the index rebuilds as it does for any out-of-order event.
 
         It is `index.exclusive()`: `build_project` wires the floor into the lock, so the services
         that take the lock directly mint under the same guarantee."""
@@ -77,13 +84,15 @@ class Project:
 
     def record(self, events: Sequence[Event]) -> None:
         """Append and fold under the write lock. On a hosted project, refuse with nothing written a
-        batch that does not sort after the log, and append the rest in ID order."""
+        batch that does not sort after the log, and append the rest in ID order. A future-dated last
+        event is no measure of order: nothing can sort after it, so the batch is appended."""
         with self.writing():
             # A foreign machine is not asked about order: the writer refuses it, naming the host.
             host = hosted_by(self.index) if events else None
             if host is not None and host == self.settings.host_id:
                 last = self.index.last_event_id()
-                if last is not None and min(event.id for event in events) <= last:
+                ordered = last is None or future_dated(last, self.clock.now())
+                if not ordered and min(event.id for event in events) <= str(last):
                     raise OrderingError(f"event minted outside writing(): not after {last}")
                 events = sorted(events, key=lambda event: event.id)
             self.writer.append(events)
@@ -113,12 +122,9 @@ def hosted_by(index: Index) -> str | None:
         return latest_host(conn)
 
 
-def _id_floor(ids: IdGenerator) -> Callable[[str | None], None]:
-    def floor(last_event_id: str | None) -> None:
-        if last_event_id is not None:
-            ids.floor(last_event_id.removeprefix("ev_"))
-
-    return floor
+def future_dated(event_id: str, now: datetime) -> bool:
+    """Whether an event is dated past `now` by more than `FUTURE_MARGIN`."""
+    return ulid_time(event_id.removeprefix("ev_")) > now + FUTURE_MARGIN
 
 
 def build_project(settings: Settings, slug: str, *, session: str, clock: Clock) -> Project:
@@ -127,12 +133,19 @@ def build_project(settings: Settings, slug: str, *, session: str, clock: Clock) 
     catalog = default_catalog()
     ids = IdGenerator(clock)
     blobs = BlobStore(paths.blobs_dir)
+
+    def floor_ids(last_event_id: str | None) -> None:
+        if last_event_id is None or hosted_by(index) is None:
+            return
+        if not future_dated(last_event_id, clock.now()):
+            ids.floor(last_event_id.removeprefix("ev_"))
+
     index = Index(
         paths.index_path,
         paths.events_dir,
         catalog,
         default_projection(blobs),
-        on_exclusive=_id_floor(ids),
+        on_exclusive=floor_ids,
     )
     return Project(
         paths=paths,

@@ -30,7 +30,7 @@ from typing import Literal
 
 from sqlalchemy import text
 
-from factory.clock import parse_ts
+from factory.clock import format_ts, parse_ts
 from factory.errors import FactoryValidationError
 from factory.events.blobs import BlobIntegrityError
 from factory.events.reader import read_all
@@ -56,7 +56,7 @@ from factory.services.call_memo import entering
 from factory.services.chase import chase_rounds, forward_chase_rounds
 from factory.services.conclusions import conclusion_diff
 from factory.services.consolidation_due import consolidation_due
-from factory.services.context import Project
+from factory.services.context import FUTURE_MARGIN, Project, future_dated
 from factory.services.contributions import (
     contribution_audit_report,
     contribution_status,
@@ -528,6 +528,7 @@ def _run_rules(project: Project) -> list[_Hit]:
         _drafts(project),
         _writer_verified(project),
         _hosting(project),
+        _future_dated(project),
     ]
     flat = [hit for group in groups for hit in group]
     return [replace(hit, seq=seq) for seq, hit in enumerate(flat)]
@@ -657,6 +658,24 @@ def _hosting(project: Project) -> list[_Hit]:
         )
         for f in foreign
     ]
+
+
+def _future_dated(project: Project) -> list[_Hit]:
+    """Events dated past the clock. Such an event cannot be removed: until the clock passes it, it
+    sets no ID floor and each new event rebuilds the index. Reads one `meta` row unless one exists,
+    since the greatest ID is the latest date."""
+    project.index.sync()
+    last = project.index.last_event_id()
+    now = project.clock.now()
+    if last is None or not future_dated(last, now):
+        return []
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text("SELECT id FROM events WHERE ts > :limit ORDER BY id"),
+            {"limit": format_ts(now + FUTURE_MARGIN)},
+        ).all()
+    refs = tuple(str(row[0]) for row in rows)
+    return [_Hit("future-dated-event", refs, f"{len(refs)} events are dated past the clock")]
 
 
 # --- Registered miners (slice M, M-C) ---
