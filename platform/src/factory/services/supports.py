@@ -80,7 +80,7 @@ class ResolvedSupport:
 class SupportShown(StrictModel):
     """What one support says. `spans` are what a verdict may quote: the quotes of the support, a
     cell's value, an item's numbers, a stat's value, a group's row values, an edge's works when it
-    has no basis."""
+    has no basis. `spans_omitted` counts the group values past `GROUP_SPANS_MAX` not shown."""
 
     ref: str
     kind: SupportKind
@@ -88,6 +88,7 @@ class SupportShown(StrictModel):
     value: str | None = None
     unit: str | None = None
     stat_value: int | None = None
+    spans_omitted: int = 0
 
 
 class _Reader:
@@ -171,6 +172,7 @@ def support_shown(project: Project, r: ResolvedSupport) -> SupportShown:
     spans = list(r.spans)
     value: str | None = None
     unit: str | None = None
+    omitted = 0
     if r.ref.kind is SupportKind.CELL:
         row_key, _, name = r.ref.ref.partition("/")
         found = visible_rows_by_group(project).row(row_key)
@@ -183,8 +185,9 @@ def support_shown(project: Project, r: ResolvedSupport) -> SupportShown:
     elif r.ref.kind is SupportKind.GROUP:
         rows = visible_rows_by_group(project).groups[r.ref.ref][1]
         cells = [row.fields["value"] for row in rows if "value" in row.fields]
-        said = [c.quote if c.quote is not None else str(c.value) for c in cells]
-        spans.extend(list(dict.fromkeys(said))[:GROUP_SPANS_MAX])
+        said = list(dict.fromkeys(c.quote if c.quote is not None else str(c.value) for c in cells))
+        spans.extend(said[:GROUP_SPANS_MAX])
+        omitted = max(0, len(said) - GROUP_SPANS_MAX)
     elif r.ref.kind is SupportKind.ITEM:
         spans.extend(str(n) for n in r.numbers)
     elif not spans and r.ref.kind is SupportKind.EDGE:
@@ -198,6 +201,7 @@ def support_shown(project: Project, r: ResolvedSupport) -> SupportShown:
         value=value,
         unit=unit,
         stat_value=r.stat_value,
+        spans_omitted=omitted,
     )
 
 
