@@ -22,7 +22,6 @@ Invariants:
 
 from __future__ import annotations
 
-import gzip
 from collections.abc import Sequence
 from typing import Any, Literal
 
@@ -581,11 +580,33 @@ def region_members(
     return sorted(members, key=lambda m: (m[0].value, m[1]))[offset : offset + limit]
 
 
-def version_members_count(project: Project, version: str) -> int:
+class VersionInfo(StrictModel):
+    """A pinned version as a reader sees it: counts by member type come from its snapshot."""
+
+    version: str
+    region_id: str
+    counts: dict[str, int]
+    review_state: ReviewState
+    latest: bool
+
+
+def version_info(project: Project, version: str) -> VersionInfo | None:
+    """The pinned version `version`, or None when no snapshot has it."""
+    project.index.sync()
     snapshot = _snapshot_of(project, version)
     if snapshot is None:
-        return 0
-    return len(gzip.decompress(project.blobs.get(str(snapshot["members_blob"]))).splitlines())
+        return None
+    region_id = str(snapshot["region_id"])
+    latest = _latest_snapshot(project, region_id)
+    members = read_members_blob(project.blobs.get(str(snapshot["members_blob"])))
+    counts = {kind.value: sum(1 for t, _ in members if t is kind) for kind in MemberType}
+    return VersionInfo(
+        version=version,
+        region_id=region_id,
+        counts={k: v for k, v in counts.items() if v},
+        review_state=review_state(project, version),
+        latest=latest is not None and latest["version"] == version,
+    )
 
 
 # --- Foci ---
@@ -626,6 +647,7 @@ def snapshot_diff(project: Project, older: str, newer: str) -> tuple[list[Member
 
 __all__: Sequence[str] = [
     "RegionState",
+    "VersionInfo",
     "decide_member",
     "define_region",
     "foci",
@@ -637,4 +659,5 @@ __all__: Sequence[str] = [
     "review_state",
     "snapshot_diff",
     "snapshot_region",
+    "version_info",
 ]

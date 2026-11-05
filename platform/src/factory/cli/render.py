@@ -14,6 +14,7 @@ from factory.model.intuition import (
 )
 from factory.model.references import Decision, LinkState
 from factory.model.screening import PassLabel
+from factory.regions.rules import MemberType
 from factory.services.agreement import DecisionView
 from factory.services.audit import AuditReport
 from factory.services.cards import CardSummary, CardView
@@ -55,6 +56,7 @@ from factory.services.prisma import UNCONVERTED, PrismaFlow, SearchReport
 from factory.services.prisma_update import UpdateFlow
 from factory.services.properties import PropertyView
 from factory.services.references import ExtractSummary, Page, ReferenceCounts
+from factory.services.regions import RegionState, VersionInfo
 from factory.services.relations import RelationView
 from factory.services.snowball import Comparison, RoundCandidate, RoundResult
 from factory.services.trace import TraceNode
@@ -1148,4 +1150,51 @@ def contradiction_lines(views: list[ContradictionView]) -> list[str]:
     return [
         f"{v.contradiction_id}  {v.state}  {v.ref_a} ({v.work_a})  vs  {v.ref_b} ({v.work_b})"
         for v in views
+    ]
+
+
+# --- Regions (slice 3d, Regions-A) ---
+
+
+def _counts(counts: Mapping[str, int]) -> str:
+    return ", ".join(f"{n} {kind}" for kind, n in sorted(counts.items())) or "no members"
+
+
+def region_lines(states: Sequence[RegionState]) -> list[str]:
+    """One region per line: id, kind (and slot for a focus), name, latest version, review state,
+    live counts and the drift since the snapshot. Counts are read from the model."""
+    if not states:
+        return ["no regions"]
+    lines: list[str] = []
+    for s in states:
+        slot = "" if s.facet is None else f" {s.facet.question_id}:{s.facet.slot}"
+        version = s.latest_version or "no snapshot"
+        drift = f"  drift +{s.drift_added} -{s.drift_removed}" if s.latest_version else ""
+        lines.append(
+            f"{s.region_id}  {s.kind.value}{slot}  {s.name}  {version}  {s.review_state}  "
+            f"live {_counts(s.live_counts)}{drift}"
+        )
+        if s.live_error is not None:
+            lines.append(f"  not evaluable: {s.live_error}")
+    return lines
+
+
+def version_lines(info: VersionInfo) -> list[str]:
+    latest = "latest" if info.latest else "older"
+    return [
+        f"{info.version}  {info.region_id}  {latest}  {info.review_state}  {_counts(info.counts)}"
+    ]
+
+
+def member_lines(members: Sequence[tuple[MemberType, str]]) -> list[str]:
+    return [f"  {kind.value} {member}" for kind, member in members]
+
+
+def diff_lines(
+    added: Sequence[tuple[MemberType, str]], removed: Sequence[tuple[MemberType, str]]
+) -> list[str]:
+    return [
+        f"added {len(added)}  removed {len(removed)}",
+        *(f"+ {kind.value} {member}" for kind, member in added),
+        *(f"- {kind.value} {member}" for kind, member in removed),
     ]

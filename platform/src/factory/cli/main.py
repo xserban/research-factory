@@ -41,9 +41,11 @@ from factory.model.notices import AssessmentDecision
 from factory.model.project import RigorMode
 from factory.model.protocol import ScreeningStage
 from factory.model.references import Decision, Direction, LinkState
+from factory.model.regions import Facet, RegionKind
 from factory.model.screening import Channel
 from factory.model.watch import CycleStatus
 from factory.model.work import ProvenanceMethod
+from factory.regions.rules import MemberType, RuleSet
 from factory.services import agreement as agreement_service
 from factory.services import audit as audit_service
 from factory.services import calibration as calibration_service
@@ -89,6 +91,7 @@ from factory.services import properties as properties_service
 from factory.services import protocol as protocol_service
 from factory.services import reference_resolve as reference_resolve_service
 from factory.services import references as references_service
+from factory.services import regions as regions_service
 from factory.services import relations as relations_service
 from factory.services import seeds as seeds_service
 from factory.services import snapshots as snapshot_service
@@ -239,6 +242,11 @@ concept_links_app = typer.Typer(
     help="`uses` links from papers, ideas and concepts to concepts: list, confirm, reject.",
     no_args_is_help=True,
 )
+regions_app = typer.Typer(
+    name="regions",
+    help="Regions and foci: typed rules, pinned versions R@, drift and human review.",
+    no_args_is_help=True,
+)
 graph_app = typer.Typer(
     name="graph",
     help="The lineage graph: build, status, bounded queries and JSON or DOT export.",
@@ -328,6 +336,7 @@ app.add_typer(graph_app)
 app.add_typer(interpretations_app)
 app.add_typer(concepts_app)
 app.add_typer(concept_links_app)
+app.add_typer(regions_app)
 app.add_typer(import_app)
 
 
@@ -3775,3 +3784,194 @@ def contradictions_reject_cmd(
     """Reject a proposed contradiction; it stays in the log."""
     _decide_contradiction(ctx, contradiction, "reject", rationale)
     typer.echo(f"rejected {contradiction}")
+
+
+# --- Regions and foci (slice 3d, Regions-A) ---
+
+
+def _read_rules(path: Path) -> RuleSet:
+    try:
+        return RuleSet.model_validate_json(path.read_text())
+    except (OSError, PydanticValidationError) as exc:
+        _fail(f"--rules {path}: {exc}", 2)
+
+
+def _parse_facet(raw: str) -> Facet:
+    question, _, slot = raw.rpartition(":")
+    try:
+        return Facet(question_id=question, slot=slot)
+    except PydanticValidationError as exc:
+        _fail(f"--facet must be Q@xxxxxxxx:slot ({exc.errors()[0]['msg']})", 2)
+
+
+@regions_app.command("define")
+def regions_define_cmd(
+    ctx: typer.Context,
+    name: Annotated[str, typer.Option("--name", help="The region's name.")],
+    kind: Annotated[RegionKind, typer.Option("--kind", help="focus or region.")],
+    definition: Annotated[str, typer.Option("--definition", help="What it selects, at most 600.")],
+    rules: Annotated[Path, typer.Option("--rules", help="A JSON file holding the rule set.")],
+    facet: Annotated[
+        str | None, typer.Option("--facet", help="Q@xxxxxxxx:slot, for a focus only.")
+    ] = None,
+) -> None:
+    """Define a region or a focus as a human; take a snapshot to pin a version."""
+    state = _state(ctx)
+    rule_set = _read_rules(rules)
+    bound = None if facet is None else _parse_facet(facet)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        region_id = regions_service.define_region(
+            project,
+            project.human_actor(),
+            kind=kind,
+            name=name,
+            definition=definition,
+            rules=rule_set,
+            facet=bound,
+        )
+    typer.echo(f"defined {region_id}")
+
+
+@regions_app.command("revise")
+def regions_revise_cmd(
+    ctx: typer.Context,
+    region: Annotated[str, typer.Argument(help="A region id, reg_.")],
+    name: Annotated[str, typer.Option("--name", help="The region's name.")],
+    definition: Annotated[str, typer.Option("--definition", help="What it selects, at most 600.")],
+    rules: Annotated[Path, typer.Option("--rules", help="A JSON file holding the rule set.")],
+) -> None:
+    """Record a new definition of a region; its kind and facet stay."""
+    state = _state(ctx)
+    rule_set = _read_rules(rules)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        kind = regions_service.region_state(project, region).kind
+        regions_service.define_region(
+            project,
+            project.human_actor(),
+            kind=kind,
+            name=name,
+            definition=definition,
+            rules=rule_set,
+            region_id=region,
+        )
+    typer.echo(f"revised {region}")
+
+
+@regions_app.command("snapshot")
+def regions_snapshot_cmd(
+    ctx: typer.Context,
+    region: Annotated[str, typer.Argument(help="A region id, reg_.")],
+) -> None:
+    """Evaluate the rules now and pin the member set as a version R@."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        version = regions_service.snapshot_region(project, project.human_actor(), region)
+    typer.echo(f"snapshot {version}")
+
+
+@regions_app.command("review")
+def regions_review_cmd(
+    ctx: typer.Context,
+    version: Annotated[str, typer.Argument(help="A region version, R@xxxxxxxx.")],
+    reviewed: Annotated[bool, typer.Option("--reviewed", help="The members are right.")] = False,
+    wrong: Annotated[bool, typer.Option("--wrong", help="The members are wrong.")] = False,
+    note: Annotated[str | None, typer.Option("--note", help="Required with --wrong.")] = None,
+) -> None:
+    """Review a pinned version (a human act; not from the session that wrote the definition)."""
+    state = _state(ctx)
+    if reviewed == wrong:
+        _fail("pass exactly one of --reviewed and --wrong", 2)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        regions_service.review_region(
+            project, project.human_actor(), version, "wrong" if wrong else "reviewed", note
+        )
+    typer.echo(f"{'wrong' if wrong else 'reviewed'} {version}")
+
+
+@regions_app.command("add")
+def regions_add_cmd(
+    ctx: typer.Context,
+    region: Annotated[str, typer.Argument(help="A region id, reg_.")],
+    member: Annotated[str, typer.Argument(help="A work, idea or concept id.")],
+    member_type: Annotated[MemberType, typer.Option("--type", help="work, idea or concept.")] = (
+        MemberType.WORK
+    ),
+    remove: Annotated[bool, typer.Option("--remove", help="Remove instead of add.")] = False,
+) -> None:
+    """Add a member to a region, or remove one, by a human decision; it enters the next snapshot."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        regions_service.decide_member(
+            project,
+            project.human_actor(),
+            region,
+            member_type,
+            member,
+            "remove" if remove else "add",
+        )
+    typer.echo(f"{'removed' if remove else 'added'} {member}")
+
+
+@regions_app.command("list")
+def regions_list_cmd(ctx: typer.Context) -> None:
+    """Regions and foci with their latest version, review state and drift."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        states = [
+            regions_service.region_state(project, rid)
+            for rid in regions_service.region_ids(project)
+        ]
+    for line in render.region_lines(states):
+        typer.echo(line)
+
+
+@regions_app.command("show")
+def regions_show_cmd(
+    ctx: typer.Context,
+    ident: Annotated[str, typer.Argument(help="A region id (reg_) or a version (R@).")],
+    members: Annotated[bool, typer.Option("--members", help="List the members.")] = False,
+    offset: Annotated[int, typer.Option("--offset", min=0, help="Members to skip.")] = 0,
+    limit: Annotated[int, typer.Option("--limit", min=1, help="Page size.")] = 500,
+) -> None:
+    """One region (live state and drift) or one version (counts and review state)."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        if ident.startswith("R@"):
+            info = regions_service.version_info(project, ident)
+            if info is None:
+                raise FactoryValidationError([ValidationIssue("version", "version-unknown")])
+            lines = render.version_lines(info)
+            version: str | None = ident
+        else:
+            region_state = regions_service.region_state(project, ident)
+            lines = render.region_lines([region_state])
+            version = region_state.latest_version
+        page = (
+            regions_service.region_members(project, version, offset=offset, limit=limit)
+            if members and version is not None
+            else []
+        )
+    for line in [*lines, *render.member_lines(page)]:
+        typer.echo(line)
+
+
+@regions_app.command("diff")
+def regions_diff_cmd(
+    ctx: typer.Context,
+    older: Annotated[str, typer.Argument(help="The earlier version, R@.")],
+    newer: Annotated[str, typer.Argument(help="The later version, R@.")],
+) -> None:
+    """Members added and removed going from one version to another."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        added, removed = regions_service.snapshot_diff(project, older, newer)
+    for line in render.diff_lines(added, removed):
+        typer.echo(line)
