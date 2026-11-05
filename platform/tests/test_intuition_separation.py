@@ -79,6 +79,17 @@ def test_no_sql_outside_layer_names_layer_tables() -> None:
     assert sorted(named - LAYER_MODULES - TABLE_READERS) == []
 
 
+def test_cli_modules_hold_no_sql() -> None:
+    """The command modules are table readers only by name (command groups and count lines): they
+    hold no SQL statement, so every query on a layer table is in a service."""
+    modules = package_modules()
+    for name in ("factory.cli.main", "factory.cli.render"):
+        assert (
+            modules_with_string_literals({name: modules[name]}, ["SELECT", "INSERT", "DELETE"])
+            == set()
+        )
+
+
 def test_layer_modules_never_name_g2_graph_tables() -> None:
     """Ruling A1: no layer row in graph_nodes / graph_edges, and no layer code that reads them."""
     modules = package_modules()

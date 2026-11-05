@@ -1,16 +1,24 @@
 """Markdown and text renderings of the report models for the CLI. Formatting only: every figure
 is read from the model, so the CLI and the MCP tools cannot differ (R-05)."""
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 
 from factory.errors import ValidationIssue
 from factory.model.conclusions import ConclusionDiff
+from factory.model.intuition import (
+    HistoryEntry,
+    LayerCounts,
+    LayerGraph,
+    LayerHidden,
+    StoredSource,
+)
 from factory.model.references import Decision, LinkState
 from factory.model.screening import PassLabel
 from factory.services.agreement import DecisionView
 from factory.services.audit import AuditReport
 from factory.services.cards import CardSummary, CardView
 from factory.services.check import CheckReport
+from factory.services.concepts import ConceptLinkList, ConceptList, ConceptView
 from factory.services.contributions import ContributionStatus, ItemView
 from factory.services.coverage import CoverageReport, Ratio
 from factory.services.discovery import DiscoveryReport
@@ -38,6 +46,7 @@ from factory.services.imports import (
     RecordRow,
 )
 from factory.services.inbox import InboxPage, ResolveOutcome
+from factory.services.interpretations import InterpretationList, InterpretationView
 from factory.services.lineage import GraphQueryResult, GraphStatus
 from factory.services.matching import MatchPage
 from factory.services.prisma import UNCONVERTED, PrismaFlow, SearchReport
@@ -801,6 +810,8 @@ def graph_status_lines(status: GraphStatus) -> list[str]:
         f"unextracted {len(status.unextracted)}; no references {len(status.no_references)}; "
         f"not-stated base ideas {status.not_stated}; uncited base ideas {status.uncited_base}"
     )
+    if status.layer is not None:
+        lines += layer_counts_lines(status.layer)
     return lines
 
 
@@ -824,6 +835,184 @@ def graph_query_lines(result: GraphQueryResult) -> list[str]:
             lines.extend(f"  {w}" for w in works)
     elif result.query != "path":
         lines.extend(f"node {n['id']} ({n['type']}, {n['scope'] or '-'})" for n in result.nodes)
+    if result.layer is not None:
+        lines += layer_graph_lines(result.layer)
+    return lines
+
+
+# --- The interpretation layer (slice 3c, plan G3-C): each item shows `interpretation · state` ---
+
+LAYER_HEADER = "interpretation layer (not evidence)"
+
+
+def _hidden_line(hidden: LayerHidden) -> str:
+    i, c = hidden.interpretations, hidden.concepts
+    return (
+        f"hidden: interpretations wrong {i.wrong}, superseded {i.superseded}; "
+        f"concepts unapproved {c.unapproved}, wrong {c.wrong}, merged {c.merged}; "
+        f"links inferred {c.links_inferred}, rejected {c.links_rejected}; "
+        f"edges with a hidden endpoint {hidden.endpoint_hidden}"
+    )
+
+
+def layer_counts_lines(counts: LayerCounts) -> list[str]:
+    """The layer's own counts, in a section of their own (no total with the evidence)."""
+    lines = [LAYER_HEADER]
+    lines.append(
+        "interpretations: " + ", ".join(f"{k} {v}" for k, v in counts.interpretations.items())
+    )
+    lines.append("concepts: " + ", ".join(f"{k} {v}" for k, v in counts.concepts.items()))
+    lines.append(f"explains edges shown: {counts.explains}")
+    lines.append("uses links: " + ", ".join(f"{k} {v}" for k, v in counts.uses.items()))
+    lines.append(_hidden_line(counts.hidden))
+    return lines
+
+
+def layer_graph_lines(layer: LayerGraph) -> list[str]:
+    """The layer attached to a query: nodes, then edges, each labelled with its review state."""
+    lines = [LAYER_HEADER]
+    for n in layer.nodes:
+        flags = f"  [{', '.join(n.flags)}]" if n.flags else ""
+        lines.append(f"{n.node_type} {n.node_id}  {n.label}{flags}  {n.name or ''}".rstrip())
+    for e in layer.edges:
+        lines.append(f"{e.source} -> {e.target}  {e.edge_type}  {e.label}  {e.edge_id}")
+    lines.append(_hidden_line(layer.hidden))
+    return lines
+
+
+def _flag_text(flags: Sequence[str]) -> str:
+    return f"  [{', '.join(flags)}]" if flags else ""
+
+
+def _source_lines(sources: Sequence[StoredSource]) -> list[str]:
+    lines = []
+    for i, s in enumerate(sources):
+        if s.kind == "quote":
+            lines.append(
+                f"  source {i} {s.role}: quote of {s.work_id} {s.conversion_id}/{s.anchor}"
+            )
+            lines.append(f'    "{s.quote}"')
+        else:
+            cited = s.reference or s.work_id
+            lines.append(f"  source {i} {s.role}: citation {cited} ({s.link_state or 'work'})")
+    return lines
+
+
+def interpretation_list_lines(result: InterpretationList) -> list[str]:
+    """One labelled line per interpretation, then the hidden counts."""
+    lines = []
+    for v in result.items:
+        flags = [
+            *(["self-reviewed"] if v.self_reviewed else []),
+            *(["source-stale"] if v.source_stale else []),
+        ]
+        lines.append(
+            f"{v.interpretation_id}  {v.label}  {v.target_kind} {v.target}  {v.author}"
+            f"{_flag_text(flags)}  {v.text}"
+        )
+    if not result.items:
+        lines.append("no interpretations")
+    lines.append(f"hidden: wrong {result.hidden.wrong}, superseded {result.hidden.superseded}")
+    if result.next_cursor:
+        lines.append(f"more after {result.next_cursor}")
+    return lines
+
+
+def interpretation_lines(view: InterpretationView, blob: str | None) -> list[str]:
+    """One interpretation in full: label, target, text, sources with their quotes and anchors,
+    the writer and the content of the input the writer saw."""
+    flags = [
+        *(["self-reviewed"] if view.self_reviewed else []),
+        *(["source-stale"] if view.source_stale else []),
+    ]
+    lines = [
+        f"{view.interpretation_id}  {view.label}{_flag_text(flags)}",
+        f"  target: {view.target_kind} {view.target}",
+        f"  author: {view.author}; writer: {view.writer}",
+        f"  text: {view.text}",
+        *_source_lines(view.sources),
+    ]
+    if view.source_stale:
+        lines.append("  stale documents: " + ", ".join(view.source_stale))
+    if view.input_blob is not None:
+        lines.append(
+            f"  input_blob {view.input_blob}: {blob if blob is not None else 'not readable'}"
+        )
+    return lines
+
+
+def history_lines(entries: Sequence[HistoryEntry]) -> list[str]:
+    """One line per step: event, kind, state, actor, flags and the review note."""
+    lines = []
+    for h in entries:
+        state = f" {h.state}" if h.state else ""
+        extra = ("" if h.folded else " (did not count)") + (
+            " (self-reviewed)" if h.self_reviewed else ""
+        )
+        note = f"  note: {h.note}" if h.note else ""
+        lines.append(f"{h.event_id}  {h.kind}{state}  {h.actor}{extra}{note}")
+    return lines
+
+
+def concept_list_lines(result: ConceptList) -> list[str]:
+    """One labelled line per concept, then the hidden counts."""
+    lines = []
+    for v in result.items:
+        shown = v.name + (f" ({', '.join(v.aliases)})" if v.aliases else "")
+        lines.append(
+            f"{v.concept_id}  {v.label}  source {v.source_state}  {shown}{_flag_text(v.flags)}"
+        )
+    if not result.items:
+        lines.append("no concepts")
+    h = result.hidden
+    lines.append(
+        f"hidden: unapproved {h.unapproved}, wrong {h.wrong}, merged {h.merged}; "
+        f"links inferred {h.links_inferred}, rejected {h.links_rejected}"
+    )
+    if result.next_cursor:
+        lines.append(f"more after {result.next_cursor}")
+    return lines
+
+
+def concept_lines(view: ConceptView) -> list[str]:
+    """One concept in full: label, name and aliases, text, source and quotes, writer, flags."""
+    lines = [f"{view.concept_id}  {view.label}{_flag_text(view.flags)}"]
+    lines.append(
+        f"  name: {view.name}" + (f" (aliases: {', '.join(view.aliases)})" if view.aliases else "")
+    )
+    if view.merged_into:
+        lines.append(f"  merged into: {view.merged_into}")
+    if view.text:
+        lines.append(f"  text: {view.text}")
+    if view.source is not None:
+        work = f" work {view.source.work_id}" if view.source.work_id else ""
+        lines.append(
+            f"  source ({view.source_state}): {view.source.kind}, {view.source.citation}{work}"
+        )
+    else:
+        lines.append(f"  source ({view.source_state}): none")
+    lines += _source_lines(view.quotes)
+    lines.append(f"  author: {view.author}; writer: {view.writer}")
+    return lines
+
+
+def concept_link_lines(result: ConceptLinkList) -> list[str]:
+    """One labelled line per link, then the hidden counts."""
+    lines = []
+    for v in result.items:
+        basis = (
+            v.basis_kind if v.quote is None else f"quote {v.quote.conversion_id}/{v.quote.anchor}"
+        )
+        lines.append(
+            f"{v.link_id}  {v.label}  {v.from_kind} {v.from_node} uses {v.concept_id}  "
+            f"{v.status_reason}  basis {basis}"
+        )
+    if not result.items:
+        lines.append("no concept links")
+    h = result.hidden
+    lines.append(f"hidden: links inferred {h.links_inferred}, rejected {h.links_rejected}")
+    if result.next_cursor:
+        lines.append(f"more after {result.next_cursor}")
     return lines
 
 

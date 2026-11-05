@@ -705,6 +705,7 @@ def list_interpretations(
     states: Collection[ReviewState] | None = None,
     cursor: str | None = None,
     limit: int = LIST_PAGE,
+    interpretation_id: str | None = None,
 ) -> InterpretationList:
     """One page of interpretations by id, labelled. Default states are the visible ones
     (`unreviewed`, `reviewed`; ruling 7); the hidden counts (`wrong`, `superseded`) are always
@@ -723,6 +724,9 @@ def list_interpretations(
     if cursor is not None:
         where += " AND i.interpretation_id > :c"
         params["c"] = cursor
+    if interpretation_id is not None:  # one item, whatever its state (the caller sets `states`)
+        where += " AND i.interpretation_id = :iid"
+        params["iid"] = interpretation_id
     with project.index.connect() as conn:
         found = (
             conn.execute(

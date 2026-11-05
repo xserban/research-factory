@@ -7,9 +7,11 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Annotated, Literal, NoReturn, cast
+from typing import Annotated, Literal, NoReturn, TypeVar, cast
 
 import typer
+from pydantic import BaseModel, TypeAdapter
+from pydantic import ValidationError as PydanticValidationError
 
 from factory.cli import evidence_render, portfolio_render, render
 from factory.clock import Clock, SystemClock
@@ -27,6 +29,14 @@ from factory.model.chase import ChaseDirection
 from factory.model.conclusions import BasisRef, Predicate
 from factory.model.fulltext import Route
 from factory.model.identity import IdGenerator
+from factory.model.intuition import (
+    ConceptInput,
+    ConceptSourceInput,
+    InterpretationInput,
+    LinkStatus,
+    ReviewState,
+    SourceInput,
+)
 from factory.model.notices import AssessmentDecision
 from factory.model.project import RigorMode
 from factory.model.protocol import ScreeningStage
@@ -40,6 +50,7 @@ from factory.services import calibration as calibration_service
 from factory.services import cards as cards_service
 from factory.services import chase as chase_service
 from factory.services import check as check_service
+from factory.services import concepts as concepts_service
 from factory.services import conclusions as conclusions_service
 from factory.services import contributions as contributions_service
 from factory.services import coverage as coverage_service
@@ -64,6 +75,7 @@ from factory.services import import_resolve as import_resolve_service
 from factory.services import imports as imports_service
 from factory.services import inbox as inbox_service
 from factory.services import inbox_watch as inbox_watch_service
+from factory.services import interpretations as interpretations_service
 from factory.services import lineage as graph_service
 from factory.services import matching as matching_service
 from factory.services import methods as methods_service
@@ -204,6 +216,21 @@ contradictions_app = typer.Typer(
     help="Claim contradictions: list, confirm and reject (human only).",
     no_args_is_help=True,
 )
+interpretations_app = typer.Typer(
+    name="interpretations",
+    help="Interpretations of the intuition layer: list, show, review, supersede and write (human).",
+    no_args_is_help=True,
+)
+concepts_app = typer.Typer(
+    name="concepts",
+    help="Background concepts: define, approve a source, review, merge and unmerge (human).",
+    no_args_is_help=True,
+)
+concept_links_app = typer.Typer(
+    name="concept-links",
+    help="`uses` links from papers, ideas and concepts to concepts: list, confirm, reject.",
+    no_args_is_help=True,
+)
 graph_app = typer.Typer(
     name="graph",
     help="The lineage graph: build, status, bounded queries and JSON or DOT export.",
@@ -289,7 +316,13 @@ app.add_typer(cards_app)
 app.add_typer(finders_app)
 app.add_typer(contradictions_app)
 app.add_typer(graph_app)
+app.add_typer(interpretations_app)
+app.add_typer(concepts_app)
+app.add_typer(concept_links_app)
 app.add_typer(import_app)
+
+
+_M = TypeVar("_M", bound=BaseModel)
 
 
 @dataclass
@@ -1839,12 +1872,24 @@ def trace(
     forward: Annotated[
         bool, typer.Option("--forward", help="What was derived from REF, not what it came from.")
     ] = False,
+    with_interpretation: Annotated[
+        bool,
+        typer.Option(
+            "--with-interpretation",
+            help="Also show the interpretation items an anchor, work or idea carries.",
+        ),
+    ] = False,
 ) -> None:
     """The chain from REF as an indented tree, seeds included (the human view)."""
     state = _state(ctx)
     with _reporting_errors():
         project = _resolve_project(state)
-        tree = trace_service.trace(project, ref, direction="forward" if forward else "back")
+        tree = trace_service.trace(
+            project,
+            ref,
+            direction="forward" if forward else "back",
+            layer="all" if with_interpretation else "evidence",
+        )
     for line in render.trace_lines(tree):
         typer.echo(line)
 
@@ -2745,6 +2790,456 @@ def ideas_candidates_cmd(
         typer.echo(line)
 
 
+# --- The interpretation layer (slice 3c, plan G3-C): every review here is a human act ---
+
+_BLOB_SHOWN = 2000
+
+
+def _verdict(reviewed: bool, wrong: bool) -> Literal["reviewed", "wrong"]:
+    if reviewed == wrong:
+        _fail("name exactly one of --reviewed and --wrong", 2)
+    return "wrong" if wrong else "reviewed"
+
+
+def _parse_model(model: type[_M], data: object, label: str) -> _M:
+    """Validate `data` as `model`; a failure is reported as `label.field: reason`, exit 1."""
+    try:
+        return model.model_validate(data)
+    except PydanticValidationError as exc:
+        for error in exc.errors():
+            where = ".".join(str(p) for p in error["loc"])
+            typer.echo(f"{label}{'.' + where if where else ''}: {error['msg']}", err=True)
+        raise typer.Exit(1) from None
+
+
+def _sources(raw: list[str] | None) -> list[object]:
+    parsed: list[object] = []
+    for i, text_ in enumerate(raw or []):
+        try:
+            parsed.append(json.loads(text_))
+        except json.JSONDecodeError as exc:
+            _fail(f"source[{i}]: not JSON ({exc.msg})", 1)
+    return parsed
+
+
+def _source_inputs(raw: list[str] | None) -> list[object]:
+    adapter = TypeAdapter(SourceInput)
+    out: list[object] = []
+    for i, data in enumerate(_sources(raw)):
+        try:
+            out.append(adapter.validate_python(data))
+        except PydanticValidationError as exc:
+            for error in exc.errors():
+                where = ".".join(str(p) for p in error["loc"])
+                typer.echo(f"source[{i}].{where}: {error['msg']}", err=True)
+            raise typer.Exit(1) from None
+    return out
+
+
+def _concept_source(kind: str | None, citation: str | None, work: str | None) -> object:
+    if kind is None and citation is None and work is None:
+        return None
+    if kind is None or citation is None:
+        _fail("a source needs --source-kind and --citation", 2)
+    return _parse_model(
+        ConceptSourceInput, {"kind": kind, "citation": citation, "work_id": work}, "source"
+    )
+
+
+@interpretations_app.command("list")
+def interpretations_list_cmd(
+    ctx: typer.Context,
+    state_: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--state",
+            help="unreviewed, reviewed, wrong or superseded (repeatable); default the first two.",
+        ),
+    ] = None,
+    target: Annotated[str | None, typer.Option("--target", help="An idea or paper.")] = None,
+    cursor: Annotated[str | None, typer.Option("--cursor", help="Continue after this id.")] = None,
+) -> None:
+    """Interpretations, labelled; wrong and superseded ones are hidden and counted."""
+    state = _state(ctx)
+    states: list[ReviewState] | None = None
+    if state_:
+        try:
+            states = [ReviewState(s) for s in state_]
+        except ValueError:
+            _fail("--state: unreviewed, reviewed, wrong or superseded", 2)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        found = interpretations_service.list_interpretations(
+            project, target=target, states=states, cursor=cursor
+        )
+    for line in render.interpretation_list_lines(found):
+        typer.echo(line)
+
+
+@interpretations_app.command("show")
+def interpretations_show_cmd(
+    ctx: typer.Context, interpretation: Annotated[str, typer.Argument(help="An int_ id.")]
+) -> None:
+    """One interpretation: text, sources with quote and anchor, writer, input and flags."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        found = interpretations_service.list_interpretations(
+            project, states=list(ReviewState), interpretation_id=interpretation
+        )
+        if not found.items:
+            raise FactoryValidationError([ValidationIssue("interpretation_id", "unknown")])
+        view = found.items[0]
+        blob: str | None = None
+        if view.input_blob is not None:
+            try:
+                blob = project.blobs.get(view.input_blob).decode("utf-8")
+                if len(blob) > _BLOB_SHOWN:
+                    blob = blob[:_BLOB_SHOWN] + " ... (cut)"
+            except (OSError, UnicodeDecodeError, KeyError):
+                blob = None
+    for line in render.interpretation_lines(view, blob):
+        typer.echo(line)
+
+
+@interpretations_app.command("history")
+def interpretations_history_cmd(
+    ctx: typer.Context, interpretation: Annotated[str, typer.Argument(help="An int_ id.")]
+) -> None:
+    """Every step of an interpretation, with review notes."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        entries = interpretations_service.interpretation_history(project, interpretation)
+        if not entries:
+            raise FactoryValidationError([ValidationIssue("interpretation_id", "unknown")])
+    for line in render.history_lines(entries):
+        typer.echo(line)
+
+
+@interpretations_app.command("review")
+def interpretations_review_cmd(
+    ctx: typer.Context,
+    interpretation: Annotated[str, typer.Argument(help="An int_ id.")],
+    reviewed: Annotated[bool, typer.Option("--reviewed", help="It is right.")] = False,
+    wrong: Annotated[bool, typer.Option("--wrong", help="It is wrong (needs --note).")] = False,
+    note: Annotated[str, typer.Option("--note", help="Why.")] = "",
+) -> None:
+    """Review an interpretation as the human; a wrong verdict needs a note."""
+    verdict = _verdict(reviewed, wrong)
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        interpretations_service.review_interpretation(
+            project, project.human_actor(), interpretation, verdict, note, Channel.CLI
+        )
+    typer.echo(f"{interpretation}  interpretation · {verdict}")
+
+
+@interpretations_app.command("supersede")
+def interpretations_supersede_cmd(
+    ctx: typer.Context,
+    interpretation: Annotated[str, typer.Argument(help="The int_ id to replace.")],
+    text_: Annotated[str, typer.Option("--text", help="The replacement text.")],
+    source: Annotated[
+        list[str] | None, typer.Option("--source", help="A source as JSON (repeatable).")
+    ] = None,
+) -> None:
+    """Replace an interpretation with the human's own; the earlier one becomes superseded."""
+    state = _state(ctx)
+    sources = _source_inputs(source)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        new = interpretations_service.supersede_interpretation(
+            project,
+            project.human_actor(),
+            interpretation,
+            text_,
+            cast(list[SourceInput], sources),
+        )
+    typer.echo(f"{new}  interpretation · unreviewed  supersedes {interpretation}")
+
+
+@interpretations_app.command("write")
+def interpretations_write_cmd(
+    ctx: typer.Context,
+    target: Annotated[str, typer.Option("--target", help="A confirmed idea or a corpus paper.")],
+    text_: Annotated[str, typer.Option("--text", help="At most 600 characters.")],
+    source: Annotated[
+        list[str] | None, typer.Option("--source", help="A source as JSON (repeatable, 1 to 5).")
+    ] = None,
+) -> None:
+    """Write an interpretation as the human (no task)."""
+    state = _state(ctx)
+    sources = _source_inputs(source)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        entry = InterpretationInput(
+            target=target, text=text_, sources=tuple(cast(list[SourceInput], sources))
+        )
+        new = interpretations_service.record_interpretation(project, project.human_actor(), entry)
+    typer.echo(f"{new}  interpretation · unreviewed")
+
+
+@concepts_app.command("list")
+def concepts_list_cmd(
+    ctx: typer.Context,
+    all_: Annotated[
+        bool, typer.Option("--all", help="Also list concepts that are hidden by default.")
+    ] = False,
+    cursor: Annotated[str | None, typer.Option("--cursor", help="Continue after this id.")] = None,
+) -> None:
+    """Concepts with an approved source, labelled; the others are counted."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        found = concepts_service.list_concepts(project, include_hidden=all_, cursor=cursor)
+    for line in render.concept_list_lines(found):
+        typer.echo(line)
+
+
+@concepts_app.command("show")
+def concepts_show_cmd(
+    ctx: typer.Context, concept: Annotated[str, typer.Argument(help="A cpt_ id.")]
+) -> None:
+    """One concept: name, text, source, quotes, writer and flags."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        view = concepts_service.concept_view(project, concept)
+        if view is None:
+            raise FactoryValidationError([ValidationIssue("concept_id", "concept-unknown")])
+    for line in render.concept_lines(view):
+        typer.echo(line)
+
+
+@concepts_app.command("history")
+def concepts_history_cmd(
+    ctx: typer.Context, concept: Annotated[str, typer.Argument(help="A cpt_ id.")]
+) -> None:
+    """Every step of a concept: definitions, source decisions and reviews."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        entries = concepts_service.concept_history(project, concept)
+        if not entries:
+            raise FactoryValidationError([ValidationIssue("concept_id", "concept-unknown")])
+    for line in render.history_lines(entries):
+        typer.echo(line)
+
+
+@concepts_app.command("define")
+def concepts_define_cmd(
+    ctx: typer.Context,
+    name: Annotated[str, typer.Argument(help="The concept's name.")],
+    alias: Annotated[list[str] | None, typer.Option("--alias", help="Another name.")] = None,
+    text_: Annotated[str | None, typer.Option("--text", help="A short explanation.")] = None,
+    source_kind: Annotated[
+        str | None, typer.Option("--source-kind", help="textbook, survey, corpus-paper or other.")
+    ] = None,
+    citation: Annotated[
+        str | None, typer.Option("--citation", help="The source, as cited.")
+    ] = None,
+    work: Annotated[
+        str | None, typer.Option("--work", help="The source's work id, if in the corpus.")
+    ] = None,
+    approve: Annotated[
+        bool, typer.Option("--approve", help="Approve the source in the same step.")
+    ] = False,
+) -> None:
+    """Define a concept as the human; with --approve its source is approved too."""
+    state = _state(ctx)
+    source = _concept_source(source_kind, citation, work)
+    entry = _parse_model(
+        ConceptInput,
+        {"name": name, "aliases": alias or [], "text": text_, "source": source},
+        "concept",
+    )
+    with _reporting_errors():
+        project = _resolve_project(state)
+        concept_id = concepts_service.define_concept(
+            project, project.human_actor(), entry, approve_source=approve
+        )
+    typer.echo(f"{concept_id}  concept defined" + ("; source approved" if approve else ""))
+
+
+@concepts_app.command("source")
+def concepts_source_cmd(
+    ctx: typer.Context,
+    concept: Annotated[str, typer.Argument(help="A cpt_ id.")],
+    source_kind: Annotated[
+        str, typer.Option("--source-kind", help="textbook, survey, corpus-paper or other.")
+    ],
+    citation: Annotated[str, typer.Option("--citation", help="The source, as cited.")],
+    work: Annotated[str | None, typer.Option("--work", help="The source's work id.")] = None,
+) -> None:
+    """Give a concept a new source (a redefinition by the human) and approve it."""
+    state = _state(ctx)
+    source = _concept_source(source_kind, citation, work)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        view = concepts_service.concept_view(project, concept)
+        if view is None:
+            raise FactoryValidationError([ValidationIssue("concept_id", "concept-unknown")])
+        live = [
+            h for h in concepts_service.concept_history(project, concept) if h.kind == "recorded"
+        ]
+        entry = _parse_model(
+            ConceptInput,
+            {
+                "name": view.name,
+                "aliases": view.aliases,
+                "text": view.text,
+                "source": source,
+                "concept_id": concept,
+                "supersedes": live[-1].event_id,
+            },
+            "concept",
+        )
+        concepts_service.define_concept(project, project.human_actor(), entry, approve_source=True)
+    typer.echo(f"{concept}  source redefined and approved")
+
+
+@concepts_app.command("approve")
+def concepts_approve_cmd(
+    ctx: typer.Context,
+    concept: Annotated[str, typer.Argument(help="A cpt_ id.")],
+    note: Annotated[str, typer.Option("--note", help="Optional.")] = "",
+) -> None:
+    """Approve a concept's source; the concept then shows, labelled unreviewed."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        concepts_service.decide_concept_source(
+            project, project.human_actor(), concept, "approve", note, Channel.CLI
+        )
+    typer.echo(f"{concept}  source approved")
+
+
+@concepts_app.command("reject-source")
+def concepts_reject_source_cmd(
+    ctx: typer.Context,
+    concept: Annotated[str, typer.Argument(help="A cpt_ id.")],
+    note: Annotated[str, typer.Option("--note", help="Why the source does not serve.")] = "",
+) -> None:
+    """Reject a concept's source (a note is required)."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        concepts_service.decide_concept_source(
+            project, project.human_actor(), concept, "reject", note, Channel.CLI
+        )
+    typer.echo(f"{concept}  source rejected")
+
+
+@concepts_app.command("review")
+def concepts_review_cmd(
+    ctx: typer.Context,
+    concept: Annotated[str, typer.Argument(help="A cpt_ id.")],
+    reviewed: Annotated[bool, typer.Option("--reviewed", help="The definition is right.")] = False,
+    wrong: Annotated[bool, typer.Option("--wrong", help="It is wrong (needs --note).")] = False,
+    note: Annotated[str, typer.Option("--note", help="Why.")] = "",
+) -> None:
+    """Review a concept's live definition as the human; a wrong verdict needs a note."""
+    verdict = _verdict(reviewed, wrong)
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        concepts_service.review_concept(
+            project, project.human_actor(), concept, verdict, note, Channel.CLI
+        )
+    typer.echo(f"{concept}  interpretation · {verdict}")
+
+
+@concepts_app.command("merge")
+def concepts_merge_cmd(
+    ctx: typer.Context,
+    into: Annotated[str, typer.Argument(help="The concept that stays.")],
+    from_concept: Annotated[str, typer.Argument(help="The concept folded into it.")],
+    reason: Annotated[str, typer.Option("--reason", help="Why they are one concept.")],
+) -> None:
+    """Merge two names of one concept; reversible with `concepts unmerge`."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        concepts_service.merge_concepts(project, project.human_actor(), into, from_concept, reason)
+    typer.echo(f"merged {from_concept} into {into}")
+
+
+@concepts_app.command("unmerge")
+def concepts_unmerge_cmd(
+    ctx: typer.Context,
+    into: Annotated[str, typer.Argument(help="The concept it was merged into.")],
+    from_concept: Annotated[str, typer.Argument(help="The merged concept to restore.")],
+    reason: Annotated[str, typer.Option("--reason", help="Why the merge is undone.")],
+) -> None:
+    """Undo a merge."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        concepts_service.unmerge_concepts(
+            project, project.human_actor(), into, from_concept, reason
+        )
+    typer.echo(f"unmerged {from_concept} from {into}")
+
+
+@concept_links_app.command("list")
+def concept_links_list_cmd(
+    ctx: typer.Context,
+    status_: Annotated[
+        list[str] | None,
+        typer.Option("--status", help="stated, inferred, confirmed or rejected (repeatable)."),
+    ] = None,
+    cursor: Annotated[str | None, typer.Option("--cursor", help="Continue after this id.")] = None,
+) -> None:
+    """`uses` links, labelled; the default shows stated and confirmed ones."""
+    state = _state(ctx)
+    statuses: list[LinkStatus] | None = None
+    if status_:
+        try:
+            statuses = [LinkStatus(s) for s in status_]
+        except ValueError:
+            _fail("--status: stated, inferred, confirmed or rejected", 2)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        found = concepts_service.list_concept_links(project, statuses=statuses, cursor=cursor)
+    for line in render.concept_link_lines(found):
+        typer.echo(line)
+
+
+def _decide_link(
+    ctx: typer.Context, link: str, decision: Literal["confirm", "reject"], rationale: str
+) -> None:
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        concepts_service.decide_concept_link(
+            project, project.human_actor(), link, decision, rationale, Channel.CLI
+        )
+
+
+@concept_links_app.command("confirm")
+def concept_links_confirm_cmd(
+    ctx: typer.Context,
+    link: Annotated[str, typer.Argument(help="An inferred cul_ link.")],
+    rationale: Annotated[str, typer.Option("--rationale", help="Why the concept is used.")],
+) -> None:
+    """Confirm an inferred `uses` link."""
+    _decide_link(ctx, link, "confirm", rationale)
+    typer.echo(f"{link}  interpretation · confirmed")
+
+
+@concept_links_app.command("reject")
+def concept_links_reject_cmd(
+    ctx: typer.Context,
+    link: Annotated[str, typer.Argument(help="A cul_ link.")],
+    rationale: Annotated[str, typer.Option("--rationale", help="Why it does not hold.")],
+) -> None:
+    """Reject a `uses` link; it stays in the log and leaves the views."""
+    _decide_link(ctx, link, "reject", rationale)
+    typer.echo(f"{link}  interpretation · rejected")
+
+
 # --- Vocabulary and cards (slice 6, H-A): every decision here is a human act ---
 
 
@@ -2938,6 +3433,14 @@ _INCLUDE_INFERRED = typer.Option(
     "--include-inferred", help="Also show inferred relations and unconfirmed ideas, labelled."
 )
 _INCLUDE_STALE = typer.Option("--include-stale", help="Also show stale relations, labelled.")
+_WITH_INTERPRETATION = typer.Option(
+    "--with-interpretation",
+    help="Also show the interpretation layer, in a separate part marked as not evidence.",
+)
+
+
+def _layer(with_interpretation: bool) -> graph_service.Layer:
+    return "all" if with_interpretation else "evidence"
 
 
 @graph_app.command("build")
@@ -2953,12 +3456,14 @@ def graph_build_cmd(ctx: typer.Context) -> None:
 
 
 @graph_app.command("status")
-def graph_status_cmd(ctx: typer.Context) -> None:
-    """Node and edge counts by type and status."""
+def graph_status_cmd(
+    ctx: typer.Context, with_interpretation: Annotated[bool, _WITH_INTERPRETATION] = False
+) -> None:
+    """Node and edge counts by type and status; the layer's counts only on request."""
     state = _state(ctx)
     with _reporting_errors():
         project = _resolve_project(state)
-        status = graph_service.graph_status(project)
+        status = graph_service.graph_status(project, layer=_layer(with_interpretation))
     for line in render.graph_status_lines(status):
         typer.echo(line)
 
@@ -2979,6 +3484,7 @@ def graph_query_cmd(
     k: Annotated[int, typer.Option("--k", help="Distinct citing works.")] = 2,
     include_inferred: Annotated[bool, _INCLUDE_INFERRED] = False,
     include_stale: Annotated[bool, _INCLUDE_STALE] = False,
+    with_interpretation: Annotated[bool, _WITH_INTERPRETATION] = False,
 ) -> None:
     """Run a bounded lineage query; the default view shows stated and confirmed edges."""
     state = _state(ctx)
@@ -2992,6 +3498,7 @@ def graph_query_cmd(
             depth=depth,
             k=k,
             flt=GraphFilter(include_inferred=include_inferred, include_stale=include_stale),
+            layer=_layer(with_interpretation),
         )
     for line in render.graph_query_lines(result):
         typer.echo(line)
@@ -3008,6 +3515,7 @@ def graph_export_cmd(
     k: Annotated[int, typer.Option("--k")] = 2,
     include_inferred: Annotated[bool, _INCLUDE_INFERRED] = False,
     include_stale: Annotated[bool, _INCLUDE_STALE] = False,
+    with_interpretation: Annotated[bool, _WITH_INTERPRETATION] = False,
     out: Annotated[Path | None, typer.Option("--out", help="Write to this file.")] = None,
 ) -> None:
     """Export the graph (no size cap), streamed in a deterministic order."""
@@ -3023,6 +3531,7 @@ def graph_export_cmd(
             depth=depth,
             k=k,
             flt=GraphFilter(include_inferred=include_inferred, include_stale=include_stale),
+            layer=_layer(with_interpretation),
         )
         if out is None:
             for chunk in chunks:
