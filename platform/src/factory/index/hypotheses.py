@@ -363,11 +363,25 @@ def _drafted(t: HypothesisTables) -> Handler:
     return drafted
 
 
+def _conclusive_evaluation(conn: Connection, hypothesis_id: str) -> bool:
+    """Whether a conclusive evaluation of the hypothesis has been folded."""
+    found = conn.execute(
+        text(
+            "SELECT 1 FROM hypothesis_evaluations WHERE hypothesis_id = :h "
+            "AND outcome != 'incomplete' LIMIT 1"
+        ),
+        {"h": hypothesis_id},
+    ).first()
+    return found is not None
+
+
 def _abandoned(t: HypothesisTables) -> Handler:
     def abandoned(conn: Connection, event: Event) -> None:
         if event.actor.kind != "human":
             return
         p = HypothesisAbandoned.model_validate(event.payload)
+        if _conclusive_evaluation(conn, p.hypothesis_id):
+            return  # an evaluated outcome stays on record (R-52)
         conn.execute(
             update(t.hypotheses)
             .where(
@@ -385,6 +399,8 @@ def _concluded(t: HypothesisTables) -> Handler:
         if event.actor.kind != "human":
             return
         p = HypothesisConcluded.model_validate(event.payload)
+        if not _conclusive_evaluation(conn, p.hypothesis_id):
+            return  # a conclusion reads an outcome; none exists
         conn.execute(
             update(t.hypotheses)
             .where(t.hypotheses.c.hypothesis_id == p.hypothesis_id)
