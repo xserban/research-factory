@@ -6,6 +6,7 @@ from factory.index.chase import chase_handlers, chase_tables
 from factory.index.conclusions import conclusion_handlers, conclusion_tables
 from factory.index.dedup import dedup_handlers, dedup_tables
 from factory.index.document import document_handlers, document_tables
+from factory.index.drafts import draft_handlers, draft_tables
 from factory.index.experiments import experiment_handlers, experiment_tables
 from factory.index.extraction import extraction_handlers, extraction_tables
 from factory.index.findings import finding_handlers, finding_tables
@@ -35,7 +36,7 @@ from factory.index.tasks import task_handlers, tasks_table
 from factory.index.watch import run_started_handler, watch_handlers, watch_tables
 
 # Bump on any change to the tables or handlers below; the index is then rebuilt.
-PROJECTION_VERSION = "46"
+PROJECTION_VERSION = "48"
 
 
 def default_projection(blobs: BlobStore | None = None) -> Projection:
@@ -80,6 +81,7 @@ def default_projection(blobs: BlobStore | None = None) -> Projection:
     experiments = experiment_tables(
         metadata, protocol.protocols, project, hypotheses.hypotheses, hypotheses.registrations
     )
+    drafts = draft_tables(metadata)
     handlers: dict[str, Handler] = {
         "project.created": project_created_handler(project),
         **task_handlers(tasks),
@@ -112,6 +114,7 @@ def default_projection(blobs: BlobStore | None = None) -> Projection:
         **hypothesis_handlers(hypotheses),
         **label_handlers(labels),
         **experiment_handlers(experiments),
+        **draft_handlers(drafts, blobs),
     }
     # The graph projection reads the tables the other handlers of the same event just folded.
     for event_type, handler in graph_handlers().items():
