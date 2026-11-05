@@ -45,7 +45,7 @@ from factory.model.lineage import (
 from factory.model.references import LinkState
 from factory.services import seeds
 from factory.services.context import Project
-from factory.services.contributions import ItemView, contribution_item, final_item
+from factory.services.contributions import ItemView, contribution_item, final_item, final_items
 from factory.services.extraction import scope_population, stale_extractions
 from factory.services.reference_view import reference_view, reference_view_of
 
@@ -349,6 +349,11 @@ WITH eff AS (
          r.note, r.event_id, r.superseded_by,
          COALESCE(b.superseded_by IS NOT NULL, 0) AS f_superseded,
          COALESCE(r.basis_item IN (SELECT value FROM json_each(:stale)), 0) AS f_stale,
+         COALESCE(r.basis_item IN (SELECT value FROM json_each(:unresolved)), 0) AS f_unresolved,
+         COALESCE(r.basis_item IN (SELECT key FROM json_each(:cited)) AND
+                  (SELECT value FROM json_each(:cited) c WHERE c.key = r.basis_item)
+                  != COALESCE(r.reference_extraction_id || ':' || r.cited_entry, ''), 0)
+           AS f_changed,
          COALESCE(r.reference_extraction_id IS NOT NULL AND x.live = 0, 0) AS f_references,
          COALESCE(r.status = 'stated' AND
                   (l.state IS NULL OR l.state != 'resolved' OR l.work_id IS NOT r.target), 0)
@@ -361,7 +366,8 @@ WITH eff AS (
 ), shown AS (
   SELECT *, CASE
     WHEN decision = 'reject' THEN 'rejected'
-    WHEN f_superseded OR f_stale OR f_references OR f_link THEN 'stale'
+    WHEN f_superseded OR f_stale OR f_unresolved OR f_changed OR f_references OR f_link
+      THEN 'stale'
     WHEN decision = 'confirm' THEN 'confirmed'
     ELSE status END AS effective
   FROM eff
@@ -370,12 +376,43 @@ WITH eff AS (
 _COLUMNS = (
     "relation_id, source_work, target, edge_type, basis_item, status, status_reason, decision, "
     "flags, reference_extraction_id, cited_entry, note, event_id, effective, "
-    "f_superseded, f_stale, f_references, f_link"
+    "f_superseded, f_stale, f_unresolved, f_changed, f_references, f_link"
 )
 
 
-def _stale_json(project: Project) -> str:
-    return json.dumps(sorted(stale_extractions(project, scope=Scope.CONTRIBUTION)))
+def _basis_params(project: Project) -> dict[str, str]:
+    """The state of the items relations rest on, read once per call from the final view: `stale`
+    (a field source of the final item is stale), `unresolved` (no final item: superseded,
+    reopened or disputed) and `cited` (basis -> `extraction:ordinal` its final item now cites,
+    empty for none). Only the bases some relation names are looked at."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        bases = [
+            str(r[0])
+            for r in conn.execute(
+                text("SELECT DISTINCT basis_item FROM relations WHERE basis_item IS NOT NULL")
+            )
+        ]
+    wanted = set(bases)
+    finals: dict[str, ItemView] = {}
+    if wanted:
+        for item in final_items(project):
+            for source in item.sources.values():
+                if source.extraction_id in wanted:
+                    finals[source.extraction_id] = item
+    raw = stale_extractions(project, scope=Scope.CONTRIBUTION) & wanted
+    stale = sorted(raw | {b for b in bases if b in finals and finals[b].stale})
+    unresolved = sorted(b for b in bases if b not in finals)
+    cited = {
+        b: "" if (c := finals[b].cited) is None else f"{c.reference_extraction_id}:{c.ordinal}"
+        for b in bases
+        if b in finals
+    }
+    return {
+        "stale": json.dumps(stale),
+        "unresolved": json.dumps(unresolved),
+        "cited": json.dumps(cited),
+    }
 
 
 def _view_of(row: Mapping[str, Any]) -> RelationView:
@@ -384,6 +421,8 @@ def _view_of(row: Mapping[str, Any]) -> RelationView:
         for flag, name in (
             ("f_superseded", "basis-superseded"),
             ("f_stale", "basis-stale"),
+            ("f_unresolved", "basis-unresolved"),
+            ("f_changed", "basis-changed"),
             ("f_references", "references-superseded"),
             ("f_link", "link-changed"),
         )
@@ -416,7 +455,7 @@ def _query(
     tail_params: Mapping[str, Any] | None = None,
 ) -> list[Any]:
     project.index.sync()
-    bound = {"stale": _stale_json(project), **params, **(tail_params or {})}
+    bound = {**_basis_params(project), **params, **(tail_params or {})}
     with project.index.connect() as conn:
         return list(
             conn.execute(
@@ -482,7 +521,7 @@ def relation_counts(project: Project) -> dict[str, dict[str, int]]:
                 f"{_EFFECTIVE_SQL} SELECT edge_type, effective, COUNT(*) FROM shown "
                 "WHERE superseded_by IS NULL GROUP BY edge_type, effective"
             ),
-            {"stale": _stale_json(project)},
+            _basis_params(project),
         ).all()
     for edge_type, effective, n in rows:
         counts[str(edge_type)][str(effective)] = int(n)

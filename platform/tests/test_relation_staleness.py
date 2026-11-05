@@ -102,7 +102,7 @@ def test_basis_correction_stales_and_reproposal_restores(  # Review Focus 5
     )
     view = relation_view(project, rid)
     assert view is not None and view.effective is EdgeStatus.STALE
-    assert view.stale_reasons == ("basis-superseded",)
+    assert "basis-superseded" in view.stale_reasons
     assert [r.relation_id for r in list_relations(project, statuses={EdgeStatus.STALE})] == [rid]
     again = _propose(project, agent, lin, lin.target5, new_a[0])
     assert again != rid
@@ -121,7 +121,7 @@ def test_amendment_removing_field_stales_relation(
     )
     spec = current.spec.model_copy(update={"contribution_schema": narrowed})
     amend_protocol(project, agent, spec, reason="narrow", semantic=True, effects={})
-    assert _reasons(project, rid) == ("basis-stale",)
+    assert "basis-stale" in _reasons(project, rid)
 
 
 def test_new_g1_extraction_stales_relation(project: Project, agent: Actor, lin: Lineage) -> None:
@@ -255,3 +255,36 @@ def test_inferred_relation_records_its_reference_extraction(
     stale = relation_view(project, rid)
     assert stale is not None and "references-superseded" in stale.stale_reasons
     assert stale.effective is EdgeStatus.STALE
+
+
+def _resolved_to_b(project: Project, human: Actor, lin: Lineage) -> tuple[str, str]:
+    [d] = contribution_agreement(project, human).disagreements
+    resolve_contribution(
+        project, human, d.work_id, d.row_key, "cited_entry", "b", "entry 3", Channel.CLI
+    )
+    return d.work_id, d.row_key
+
+
+def test_new_g1_extraction_after_resolution_stales_confirmed_relation(
+    project: Project, agent: Actor, human: Actor, other_session_human: Actor, disputed: Lineage
+) -> None:  # review fix 1: the final item is unresolved afterwards
+    _resolved_to_b(project, human, disputed)
+    rid = _propose(project, agent, disputed, disputed.target5, disputed.base)  # inferred
+    decide_relation(project, other_session_human, rid, LineageDecision.CONFIRM, "ok")
+    extract_references(project, agent, [disputed.source], sources={})
+    view = relation_view(project, rid)
+    assert view is not None and view.effective is EdgeStatus.STALE
+    assert rid not in {r.relation_id for r in list_relations(project)}
+
+
+def test_re_resolving_the_cited_entry_stales_a_stated_relation(
+    project: Project, agent: Actor, human: Actor, disputed: Lineage
+) -> None:  # review fix 1: the final cited entry moved from 3 to 5
+    work, row_key = _resolved_to_b(project, human, disputed)
+    rid = _propose(project, agent, disputed, disputed.target3, disputed.base)
+    view = relation_view(project, rid)
+    assert view is not None and view.effective is EdgeStatus.STATED
+    resolve_contribution(project, human, work, row_key, "cited_entry", "a", "entry 5", Channel.CLI)
+    changed = relation_view(project, rid)
+    assert changed is not None and changed.effective is EdgeStatus.STALE
+    assert changed.stale_reasons == ("basis-changed",)
