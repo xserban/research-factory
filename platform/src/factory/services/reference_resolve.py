@@ -62,6 +62,7 @@ from factory.model.references import (
     DecisionQuote,
     LinkCandidate,
     LinkState,
+    ReferenceEntry,
     ReferenceResolutionDecided,
     Resolution,
     UnresolvedReason,
