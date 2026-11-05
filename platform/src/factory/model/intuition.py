@@ -171,3 +171,6 @@ class HistoryEntry(StrictModel):
     actor: str
     note: str
     self_reviewed: bool
+    folded: bool = True
+    """False for a review the fold dropped (not a human, or the writer's own session): kept in the
+    history, never counted in the state."""

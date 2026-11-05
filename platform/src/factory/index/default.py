@@ -28,7 +28,7 @@ from factory.index.tasks import task_handlers, tasks_table
 from factory.index.watch import run_started_handler, watch_handlers, watch_tables
 
 # Bump on any change to the tables or handlers below; the index is then rebuilt.
-PROJECTION_VERSION = "34"
+PROJECTION_VERSION = "35"
 
 
 def default_projection(blobs: BlobStore | None = None) -> Projection:
@@ -62,7 +62,7 @@ def default_projection(blobs: BlobStore | None = None) -> Projection:
     conclusions = conclusion_tables(metadata)
     digests = digest_tables(metadata)
     cards = card_tables(metadata)
-    intuition = intuition_tables(metadata, screening.label_sessions)
+    intuition = intuition_tables(metadata)
     handlers: dict[str, Handler] = {
         "project.created": project_created_handler(project),
         **task_handlers(tasks),
@@ -87,7 +87,7 @@ def default_projection(blobs: BlobStore | None = None) -> Projection:
         **conclusion_handlers(conclusions),
         **digest_handlers(digests),
         **card_handlers(cards),
-        **intuition_handlers(intuition, screening.label_sessions),
+        **intuition_handlers(intuition),
     }
     # The graph projection reads the tables the other handlers of the same event just folded.
     for event_type, handler in graph_handlers().items():

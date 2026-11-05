@@ -112,33 +112,38 @@ def test_review_of_superseded_row_kept_in_history_state_unchanged(
     assert rows(project, "SELECT COUNT(*) FROM interpretation_reviews") == [(1,)]
 
 
-def test_non_human_review_is_not_folded(project: Project, agent: Actor) -> None:
+def test_non_human_review_is_stored_unfolded(project: Project, agent: Actor) -> None:
     record_event(project, "interpretation.recorded", recorded(), agent)
     other = agent.model_copy(update={"session": "01JZ9Q3K5M7N8P0R2S4T6V8W1A"})
     record_event(project, "interpretation.reviewed", reviewed(), other)
     assert rows(project, "SELECT review_state FROM interpretations") == [("unreviewed",)]
-    assert rows(project, "SELECT COUNT(*) FROM interpretation_reviews") == [(0,)]
+    assert rows(project, "SELECT folded FROM interpretation_reviews") == [(0,)]
 
 
-def test_review_from_the_writing_session_is_not_folded(project: Project, agent: Actor) -> None:
+def test_review_from_the_writing_session_is_stored_unfolded(project: Project, agent: Actor) -> None:
     """A human answer relayed by the session that wrote the interpretation (R-51)."""
     record_event(project, "interpretation.recorded", recorded(), agent)
     relay = project.human_actor().model_copy(update={"session": agent.session})
     record_event(project, "interpretation.reviewed", reviewed(channel="mcp"), relay)
     assert rows(project, "SELECT review_state FROM interpretations") == [("unreviewed",)]
+    assert rows(project, "SELECT folded FROM interpretation_reviews") == [(0,)]
 
 
-def test_mcp_relayed_review_bars_the_session_from_passes(project: Project, agent: Actor) -> None:
+def test_folded_review_is_marked_and_writes_no_screening_row(
+    project: Project, agent: Actor
+) -> None:
     record_event(project, "interpretation.recorded", recorded(), agent)
     relay = project.human_actor().model_copy(update={"session": "01JZ9Q3K5M7N8P0R2S4T6V8W1B"})
     record_event(project, "interpretation.reviewed", reviewed(channel="mcp"), relay)
-    assert rows(project, "SELECT session FROM label_sessions") == [(relay.session,)]
+    assert rows(project, "SELECT folded FROM interpretation_reviews") == [(1,)]
     assert rows(project, "SELECT review_state FROM interpretations") == [("reviewed",)]
+    assert rows(project, "SELECT session FROM label_sessions") == []
 
 
 def test_unknown_interpretation_is_total(project: Project) -> None:
     record_event(project, "interpretation.reviewed", reviewed(INT2))
     assert rows(project, "SELECT COUNT(*) FROM interpretations") == [(0,)]
+    assert rows(project, "SELECT folded FROM interpretation_reviews") == [(0,)]
 
 
 def test_layer_hidden_view_counts(project: Project, agent: Actor) -> None:

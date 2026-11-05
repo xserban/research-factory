@@ -15,15 +15,28 @@ from pathlib import Path
 
 import pytest
 
+from factory.services import contributions as contributions_service
 from factory.services.context import Project
-from tests.intuition_helpers import SKILL, IWorld, ctr_a, ctr_b, iw, lin, screened, world
+from factory.services.contributions import ItemView
+from tests.intuition_helpers import (
+    IWorld,
+    ctr_a,
+    ctr_b,
+    evidenced,
+    ext_a,
+    ext_b,
+    iw,
+    iwe,
+    lin,
+    screened,
+    world,
+)
 from tests.intuition_separation import (
     ALLOWED_IMPORTERS,
     G2_TABLES,
     LAYER_MODULES,
     LAYER_TABLES,
     TABLE_READERS,
-    agent_provenance,
     evidence_outputs,
     imports_of,
     layer_event_count,
@@ -104,37 +117,41 @@ def test_scanner_ignores_docstrings(tmp_path: Path) -> None:
 
 
 def test_evidence_outputs_byte_identical_with_and_without_layer(
-    tmp_path: Path, project: Project, iw: IWorld
+    tmp_path: Path, project: Project, iwe: IWorld
 ) -> None:
+    """Every output a researcher reads, data and rendered, is the same with a populated layer."""
+    iw = iwe
     plain, layered = twin_projects(tmp_path, project, iw)
-    nodes = [iw.source, iw.idea1]
+    nodes = [iw.source, iw.other, iw.idea1]
     assert layer_event_count(plain) == 0 and layer_event_count(layered) > 0
-    assert evidence_outputs(plain, nodes) == evidence_outputs(layered, nodes)
-    # the only visible trace is provenance: the intuition writer's skill in the methods lists
-    plain_models, plain_skills = agent_provenance(plain)
-    layered_models, layered_skills = agent_provenance(layered)
-    assert set(layered_skills) - set(plain_skills) <= {SKILL}
-    assert set(layered_models) - set(plain_models) <= {iw.writer.model}
-    # the outputs are not vacuous: at least the contribution items and the ideas are populated
-    outputs = evidence_outputs(plain, nodes)
-    assert outputs["contribution_items"] != "[]" and iw.idea1 in outputs["ideas"]
+    expected = evidence_outputs(plain, nodes)
+    # the comparison is not vacuous: real final rows, claims, groups and independent rows
+    assert expected["final_rows"] not in ("[]", "")
+    assert expected["live_claims"] not in ("[]", "")
+    assert '"groups": []' not in expected["evidence_report"]
+    assert "No rows" not in expected["evidence_markdown"]
+    assert expected["independence"] != "IndependenceCounts(independent=0, copied=0)"
+    assert iw.idea1 in expected["ideas"] and expected["contribution_items"] != "[]"
+    assert "claude-intuition-only" not in expected["methods_text"]
+    got = evidence_outputs(layered, nodes)
+    assert [k for k in expected if expected[k] != got[k]] == []
+    assert expected == got
 
 
 def test_differential_detects_a_leak(
-    tmp_path: Path, project: Project, iw: IWorld, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, project: Project, iwe: IWorld, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    plain, layered = twin_projects(tmp_path, project, iw)
-    nodes = [iw.source]
-    real = layered_final = None  # noqa: F841
-    from factory.services import ideas as ideas_service
+    """Patch the real read path (`final_items`, which every contribution reader uses) so the
+    layered project's items carry a layer id; the outputs must then differ."""
+    plain, layered = twin_projects(tmp_path, project, iwe)
+    nodes = [iwe.source]
+    original = contributions_service.final_items
 
-    original = ideas_service.list_ideas
+    def leaking(p: Project) -> list[ItemView]:
+        found = original(p)
+        if p is layered and found:
+            return [found[0].model_copy(update={"name": "int_LEAKED"}), *found[1:]]
+        return found
 
-    def leaking(p: Project, **kw: object) -> list[object]:
-        found = original(p, **kw)  # type: ignore[arg-type]
-        if p is layered:
-            return [*found, "int_LEAKED"]
-        return list(found)
-
-    monkeypatch.setattr("tests.intuition_separation.list_ideas", leaking)
+    monkeypatch.setattr(contributions_service, "final_items", leaking)
     assert evidence_outputs(plain, nodes) != evidence_outputs(layered, nodes)

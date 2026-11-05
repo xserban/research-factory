@@ -14,6 +14,7 @@ from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor, Event
 from factory.model.base import StrictModel
 from factory.model.task import (
+    INTUITION_TASK_KIND,
     TASK_KIND_RE,
     TASK_LEASE,
     Task,
@@ -206,7 +207,8 @@ def task_content(project: Project, task: Task) -> JsonValue:
 
 
 def task_counts(project: Project) -> TaskCounts:
-    """Counts of every task by status. Extraction tasks that a newer task of their unit
+    """Counts of every task by status, the intuition layer's tasks left out (they are not part of
+    the work the project counts). Extraction tasks that a newer task of their unit
     replaced stay open in the log but are never served again: they are counted as `abandoned`,
     not as open, claimed or expired."""
     from factory.services.extraction import abandoned_task_ids  # extraction imports this module
@@ -215,7 +217,10 @@ def task_counts(project: Project) -> TaskCounts:
     now = _now(project)
     abandoned = abandoned_task_ids(project)
     with project.index.connect() as conn:
-        rows = conn.execute(text("SELECT task_id, status, lease_until FROM tasks")).all()
+        rows = conn.execute(
+            text("SELECT task_id, status, lease_until FROM tasks WHERE kind != :layer"),
+            {"layer": INTUITION_TASK_KIND},
+        ).all()
     counts = {"open": 0, "claimed": 0, "expired": 0, "completed": 0, "abandoned": 0}
     for task_id, status, lease_until in rows:
         if task_id in abandoned:
@@ -229,6 +234,21 @@ def task_counts(project: Project) -> TaskCounts:
         else:
             counts["claimed"] += 1
     return TaskCounts(**counts)
+
+
+def session_served_kind(project: Project, session: str, kind: str) -> bool:
+    """Whether `session` ever claimed a task of `kind` (read from the claim events and the task's
+    kind, so it survives the task's completion)."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        row = conn.execute(
+            text(
+                "SELECT 1 FROM events e JOIN tasks t ON t.content_blob = e.input_blob "
+                "WHERE e.type = 'task.claimed' AND e.session = :s AND t.kind = :k LIMIT 1"
+            ),
+            {"s": session, "k": kind},
+        ).first()
+    return row is not None
 
 
 def _now(project: Project) -> datetime:

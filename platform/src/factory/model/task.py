@@ -9,6 +9,9 @@ from factory.model.identity import ULID_RE
 TASK_LEASE = timedelta(minutes=30)
 TASK_KIND_RE = r"^[a-z][a-z_]*$"
 TASK_ID_RE = rf"^tsk_{ULID_RE}$"
+INTUITION_TASK_KIND = "intuition"
+"""The kind of the intuition layer's tasks. Pass joins and task counts name it by value, as the
+layer's modules may not be imported by them."""
 
 
 class TaskStatus(StrEnum):

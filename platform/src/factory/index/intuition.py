@@ -16,7 +16,8 @@ Handlers are total: an event naming an unknown interpretation changes nothing, n
 interpretation id is first-write-wins. Defence in depth (R-51): a review is folded only when its
 actor is human, and not when it comes from the session that wrote an agent-written interpretation
 (a relay of a human answer by the writing session); no service writes such an event.
-An MCP-relayed review records its session in `label_sessions`, which bars it from passes.
+`interpretation_reviews.folded` is 0 for a review the fold dropped, so the history lists it.
+No layer event writes a screening table (`label_sessions` gates pass joins).
 """
 
 from __future__ import annotations
@@ -47,7 +48,6 @@ from factory.model.intuition import (
     InterpretationReviewed,
     ReviewState,
 )
-from factory.model.screening import Channel
 
 LAYER_CLASS = "interpretation"
 
@@ -61,7 +61,7 @@ class IntuitionTables:
     layer_edges: Table
 
 
-def intuition_tables(metadata: MetaData, label_sessions: Table) -> IntuitionTables:
+def intuition_tables(metadata: MetaData) -> IntuitionTables:
     interpretations = Table(
         "interpretations",
         metadata,
@@ -111,6 +111,7 @@ def intuition_tables(metadata: MetaData, label_sessions: Table) -> IntuitionTabl
         Column("reviewer_user", String, nullable=False),
         Column("self_reviewed", Integer, nullable=False),
         Column("channel", String, nullable=False),
+        Column("folded", Integer, nullable=False),
         Index("ix_interpretation_reviews_id", "interpretation_id", "event_id"),
     )
     layer_nodes = Table(
@@ -151,10 +152,10 @@ def intuition_tables(metadata: MetaData, label_sessions: Table) -> IntuitionTabl
     return IntuitionTables(interpretations, sources, reviews, layer_nodes, layer_edges)
 
 
-def intuition_handlers(t: IntuitionTables, label_sessions: Table) -> dict[str, Handler]:
+def intuition_handlers(t: IntuitionTables) -> dict[str, Handler]:
     return {
         "interpretation.recorded": _recorded(t),
-        "interpretation.reviewed": _reviewed(t, label_sessions),
+        "interpretation.reviewed": _reviewed(t),
     }
 
 
@@ -263,10 +264,8 @@ def _supersede(conn: Connection, t: IntuitionTables, prior: str, new: str) -> No
         _set_state(conn, t, prior, ReviewState.SUPERSEDED.value)
 
 
-def _reviewed(t: IntuitionTables, label_sessions: Table) -> Handler:
+def _reviewed(t: IntuitionTables) -> Handler:
     def reviewed(conn: Connection, ev: Event) -> None:
-        if ev.actor.kind != "human":
-            return
         p = InterpretationReviewed.model_validate(ev.payload)
         row = conn.execute(
             text(
@@ -275,10 +274,14 @@ def _reviewed(t: IntuitionTables, label_sessions: Table) -> Handler:
             ),
             {"i": p.interpretation_id},
         ).first()
-        if row is None:
-            return
-        if row[0] == Author.AGENT.value and row[1] == ev.actor.session:
-            return  # the writer never evaluates its own output, relayed or not
+        # The fold stays pure; every review is kept, and `folded` says whether it counted.
+        # Dropped: not by a human, an unknown interpretation, or (R-51) the writing session of an
+        # agent-written one. A review of a superseded interpretation is kept and folded as history.
+        folded = (
+            ev.actor.kind == "human"
+            and row is not None
+            and not (row[0] == Author.AGENT.value and row[1] == ev.actor.session)
+        )
         conn.execute(
             sqlite_insert(t.reviews)
             .values(
@@ -289,16 +292,11 @@ def _reviewed(t: IntuitionTables, label_sessions: Table) -> Handler:
                 reviewer_user=ev.actor.user,
                 self_reviewed=int(p.self_reviewed),
                 channel=p.channel.value,
+                folded=int(folded),
             )
             .on_conflict_do_nothing(index_elements=["event_id"])
         )
-        if p.channel is Channel.MCP:  # a relaying session cannot join a pass (37.6)
-            conn.execute(
-                sqlite_insert(label_sessions)
-                .values(session=ev.actor.session)
-                .on_conflict_do_nothing(index_elements=["session"])
-            )
-        if row[2] == ReviewState.SUPERSEDED.value:
+        if not folded or row is None or row[2] == ReviewState.SUPERSEDED.value:
             return
         conn.execute(
             update(t.interpretations)

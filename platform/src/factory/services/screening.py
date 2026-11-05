@@ -61,7 +61,7 @@ from factory.model.screening import (
     ScreeningPhase,
 )
 from factory.model.seed import SeedKind
-from factory.model.task import Task, TaskStatus
+from factory.model.task import INTUITION_TASK_KIND, Task, TaskStatus
 from factory.model.work import Work
 from factory.services.calibration import (
     CalibrationStatus,
@@ -94,6 +94,7 @@ from factory.services.tasks import (
     claim_next,
     complete_task,
     require_holder,
+    session_served_kind,
     task_content,
 )
 
@@ -274,6 +275,14 @@ def _check_join(
     if _is_extraction_session(project, actor.session):
         raise FactoryValidationError(
             [ValidationIssue("session", "this session joined an extraction pass and cannot screen")]
+        )
+    if session_served_kind(project, actor.session, INTUITION_TASK_KIND):
+        raise FactoryValidationError(
+            [
+                ValidationIssue(
+                    "session", "this session was served an intuition task and cannot screen"
+                )
+            ]
         )
     if relayed_extraction_label(project, actor.session):
         raise FactoryValidationError(

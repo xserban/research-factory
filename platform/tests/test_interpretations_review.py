@@ -88,25 +88,34 @@ def test_writer_session_cannot_review_even_as_the_relayed_human(
     assert _events(project) == before
 
 
-def test_mcp_relay_bars_the_session_from_later_passes(project: Project, iw: IWorld) -> None:
+def test_mcp_channel_is_refused_at_the_service(project: Project, iw: IWorld) -> None:
+    """No MCP tool reviews (spec): a relay is refused and leaves no screening-table row."""
     iid = _agent_int(project, iw)
     relay = iw.human.model_copy(update={"session": "01JZ9Q3K5M7N8P0R2S4T6V8W3A"})
-    review_interpretation(project, relay, iid, "reviewed", "", Channel.MCP)
-    assert (relay.session,) in rows(project, "SELECT session FROM label_sessions")
-
-
-def test_mcp_relay_refused_from_a_pass_session(
-    project: Project, iw: IWorld, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    iid = _agent_int(project, iw)
-    monkeypatch.setattr("factory.services.interpretations._joined_a_pass", lambda p, s: True)
+    before = _events(project)
     _refuse(
-        lambda: review_interpretation(project, iw.human, iid, "reviewed", "", Channel.MCP),
+        lambda: review_interpretation(project, relay, iid, "reviewed", "", Channel.MCP),
         "channel",
     )
-    review_interpretation(
-        project, iw.human, iid, "reviewed", "", Channel.CLI
-    )  # the CLI is not a relay
+    assert _events(project) == before
+    assert (
+        rows(project, f"SELECT session FROM label_sessions WHERE session = '{relay.session}'") == []
+    )
+    review_interpretation(project, relay, iid, "reviewed", "", Channel.CLI)
+
+
+def test_history_lists_a_review_the_fold_dropped(project: Project, iw: IWorld) -> None:
+    """Acceptance 3: the history lists all events, including a dropped one (folded = false)."""
+    from tests.intuition_helpers import record_event, reviewed
+
+    iid = _agent_int(project, iw)
+    relay = iw.human.model_copy(update={"session": iw.writer.session})
+    record_event(
+        project, "interpretation.reviewed", reviewed(iid, "reviewed", channel="mcp"), relay
+    )
+    history = interpretation_history(project, iid)
+    assert [(h.kind, h.folded) for h in history] == [("recorded", True), ("reviewed", False)]
+    assert _view(project, iid).review_state == "unreviewed"
 
 
 def test_wrong_needs_note_and_is_hidden_but_traceable(project: Project, iw: IWorld) -> None:

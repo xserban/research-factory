@@ -18,10 +18,14 @@ from sqlalchemy import text
 from factory.events.envelope import Actor, Event
 from factory.model.intuition import InterpretationInput
 from factory.model.lineage import LineageDecision
+from factory.model.screening import PassLabel
 from factory.services.context import Project
 from factory.services.ideas import decide_idea, propose_idea
+from tests.contribution_helpers import ext_a
+from tests.evidence_helpers import claim_input, run_pass
 from tests.helpers import S2, S3
 from tests.lineage_helpers import Lineage, ctr_a, ctr_b, lin, screened, world
+from tests.test_extraction_agreement import _r, ext_b
 
 ULID = "01HZX3K4M5N6P7Q8R9S0T1V2W"
 INT1 = f"int_{ULID}A"
@@ -152,6 +156,8 @@ def live_conversion(project: Project, work: str) -> tuple[str, str]:
 
 
 SKILL = "rf-intuition@1a2b3c4d"
+WRITER_MODEL = "claude-intuition-only"
+"""A model no other agent of the world uses, so a leak into a model list shows."""
 
 
 @dataclass
@@ -200,7 +206,7 @@ def writer_actor(session: str = S3, ident: str = "intuiter") -> Actor:
         id=ident,
         user="obd",
         session=session,
-        model="claude-opus-5-5",
+        model=WRITER_MODEL,
         skill=SKILL,
     )
 
@@ -230,3 +236,17 @@ def iw(project: Project, agent: Actor, lin: Lineage, world: list[str]) -> IWorld
         writer=writer_actor(),
         human=human,
     )
+
+
+@pytest.fixture
+def evidenced(project: Project, ext_a: Actor, ext_b: Actor, world: list[str]) -> None:
+    """Real evidence: both passes extract one row per work (so rows are agreed and final) and
+    pass A records a claim per work. Runs before `lin` replaces the source document."""
+    run_pass(project, ext_a, PassLabel.A, lambda _w: [_r()], lambda _w: [claim_input()])
+    run_pass(project, ext_b, PassLabel.B, lambda _w: [_r()])
+
+
+@pytest.fixture
+def iwe(evidenced: None, iw: IWorld) -> IWorld:
+    """`iw` in a world that also has final evidence rows and claims."""
+    return iw

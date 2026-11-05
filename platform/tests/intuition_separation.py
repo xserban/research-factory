@@ -15,20 +15,22 @@ from pathlib import Path
 from typing import Any
 
 import factory
+from factory.cli import evidence_render, render
 from factory.config import Settings
 from factory.events.reader import read_all
 from factory.lineage.graph import GraphFilter
+from factory.living.digest_render import to_json, to_markdown
+from factory.model.intuition import InterpretationReviewed
 from factory.model.screening import Channel
+from factory.services import contributions as contributions_service
+from factory.services import evidence_report as evidence_report_service
+from factory.services import extraction as extraction_service
+from factory.services import extraction_agreement as agreement_service
+from factory.services import ideas as ideas_service
+from factory.services.check import check
 from factory.services.context import Project, open_project
-from factory.services.contributions import final_items
-from factory.services.evidence_report import evidence_report
-from factory.services.extraction import live_claims
-from factory.services.extraction_agreement import (
-    final_rows,
-    grouped_rows,
-    independence_counts,
-)
-from factory.services.ideas import list_ideas
+from factory.services.digest import digest_build
+from factory.services.exports import export_prisma_svg
 from factory.services.interpretations import (
     intuition_next,
     record_interpretation,
@@ -36,10 +38,12 @@ from factory.services.interpretations import (
     supersede_interpretation,
 )
 from factory.services.lineage import graph_export, graph_query, graph_status
-from factory.services.methods import methods_report
+from factory.services.methods import methods_report, render_methods
 from factory.services.prisma import prisma_flow, search_report
-from tests.helpers import SESSION
-from tests.intuition_helpers import IWorld
+from factory.services.project import project_status
+from factory.services.trace import trace
+from tests.helpers import SESSION, T0
+from tests.intuition_helpers import IWorld, writer_actor
 
 SRC_ROOT = Path(factory.__file__).parent
 
@@ -155,8 +159,9 @@ def modules_with_string_literals(modules: dict[str, ast.Module], names: Iterable
 
 def populate_layer(project: Project, iw: IWorld) -> int:
     """A fixed set of layer events through the services: an agent-written interpretation reviewed
-    and superseded by a human, a second agent-written one left unreviewed, a human-written one on
-    a paper and a rejected one. Returns the number of layer events written."""
+    and superseded by a human, a second agent-written one reviewed wrong, a human-written one on a
+    paper, a review relayed over MCP (written raw: the service refuses the channel) and an open
+    claimed task. Returns the number of layer events written."""
     batch = intuition_next(project, iw.writer, targets=[iw.idea1]).batch
     assert batch is not None
     first = record_interpretation(project, iw.writer, iw.entry(iw.idea1), task_id=batch.task_id)
@@ -166,7 +171,19 @@ def populate_layer(project: Project, iw: IWorld) -> int:
     assert batch2 is not None
     second = record_interpretation(project, iw.writer, iw.entry(iw.idea2), task_id=batch2.task_id)
     review_interpretation(project, iw.human, second, "wrong", "misreads", Channel.CLI)
-    record_interpretation(project, iw.human, iw.entry(iw.third))
+    relayed = record_interpretation(project, iw.human, iw.entry(iw.other))
+    relay = iw.human.model_copy(update={"session": "01JZ9Q3K5M7N8P0R2S4T6V8W5A"})
+    payload = InterpretationReviewed(
+        interpretation_id=relayed,
+        state="reviewed",
+        note="",
+        self_reviewed=True,
+        channel=Channel.MCP,
+    )
+    project.record([project.events.make("interpretation.reviewed", payload, relay)])
+    # an open task: served and claimed, never answered
+    held = writer_actor("01JZ9Q3K5M7N8P0R2S4T6V8W5B", "open-task")
+    assert intuition_next(project, held, targets=[iw.third]).batch is not None
     return layer_event_count(project)
 
 
@@ -191,36 +208,41 @@ def _run(fn: Callable[[], Any]) -> str:
     return result if isinstance(result, str) else repr(result)
 
 
-def methods_without_agent_provenance(project: Project) -> str:
-    """The methods report without `models` and `skills`: those list every agent that acted in the
-    project, so they name the intuition writer's skill once a layer exists. They are provenance,
-    not a count or a result; `agent_provenance` compares them separately."""
-    report = methods_report(project).model_dump(mode="json")
-    report.pop("models")
-    report.pop("skills")
-    return json.dumps(report, sort_keys=True, default=str)
-
-
-def agent_provenance(project: Project) -> tuple[list[str], list[str]]:
-    report = methods_report(project)
-    return report.models, report.skills
-
-
 def evidence_outputs(project: Project, nodes: Iterable[str] = ()) -> dict[str, str]:
-    """Each evidence output of the project, serialised."""
+    """Each evidence output of the project, data and rendered text, serialised. The services are
+    reached through their modules so a test can patch the real path."""
+    nodes = list(nodes)
     out: dict[str, str] = {
-        "final_rows": _run(lambda: final_rows(project)),
-        "grouped_rows": _run(lambda: repr(grouped_rows(project))),
-        "independence": _run(lambda: independence_counts(final_rows(project))),
-        "live_claims": _run(lambda: live_claims(project)),
-        "evidence_report": _run(lambda: evidence_report(project)),
+        "final_rows": _run(lambda: agreement_service.final_rows(project)),
+        "grouped_rows": _run(lambda: repr(agreement_service.grouped_rows(project))),
+        "independence": _run(
+            lambda: agreement_service.independence_counts(agreement_service.final_rows(project))
+        ),
+        "live_claims": _run(lambda: extraction_service.live_claims(project)),
+        "evidence_report": _run(lambda: evidence_report_service.evidence_report(project)),
+        "evidence_markdown": _run(
+            lambda: evidence_render.evidence_markdown(
+                evidence_report_service.evidence_report(project)
+            )
+        ),
         "prisma": _run(lambda: prisma_flow(project)),
+        "prisma_markdown": _run(lambda: render.prisma_markdown(prisma_flow(project))),
+        "prisma_svg": _run(lambda: export_prisma_svg(project)),
         "search_report": _run(lambda: search_report(project)),
-        "methods": _run(lambda: methods_without_agent_provenance(project)),
-        "contribution_items": _run(lambda: final_items(project)),
-        "ideas": _run(lambda: list_ideas(project, include_unconfirmed=True)),
+        "methods": _run(lambda: methods_report(project)),
+        "methods_text": _run(lambda: render_methods(methods_report(project))),
+        "check": _run(lambda: check(project)),
+        "contribution_items": _run(lambda: contributions_service.final_items(project)),
+        "ideas": _run(lambda: ideas_service.list_ideas(project, include_unconfirmed=True)),
         "graph_status": _run(lambda: graph_status(project)),
+        "digest": _run(lambda: digest_text(project)),
+        "status": _run(lambda: status_without_log_counts(project)),
     }
+    for node in nodes:
+        for direction in ("back", "forward"):
+            out[f"trace:{node}:{direction}"] = _run(
+                lambda n=node, d=direction: trace(project, n, direction=d)  # type: ignore[arg-type]
+            )
     filters = {
         "default": GraphFilter(),
         "all": GraphFilter(include_inferred=True, include_stale=True),
@@ -233,15 +255,42 @@ def evidence_outputs(project: Project, nodes: Iterable[str] = ()) -> dict[str, s
             lambda f=flt: graph_query(project, "no_stated_base", flt=f)
         )
         for node in nodes:
-            for kind in ("ancestors", "descendants"):
+            for kind in ("ancestors", "descendants", "improvements_on"):
                 out[f"{kind}:{node}:{label}"] = _run(
                     lambda k=kind, n=node, f=flt: graph_query(project, k, node=n, flt=f)
+                )
+            for target in nodes:
+                out[f"path:{node}:{target}:{label}"] = _run(
+                    lambda n=node, t=target, f=flt: graph_query(
+                        project, "path", node=n, target=t, flt=f
+                    )
                 )
         for fmt in ("json", "dot"):
             out[f"export:{fmt}:{label}"] = _run(
                 lambda m=fmt, f=flt: graph_export(project, m, flt=f)  # type: ignore[arg-type]
             )
     return out
+
+
+def digest_text(project: Project) -> str:
+    """The digest from the start of the log, as JSON and Markdown, with its cut-off event id
+    blanked: the cut-off is the last event of the log, which any event moves."""
+    built = digest_build([project], since=None, now=T0)
+    blanked = built.model_copy(
+        update={
+            "projects": tuple(p.model_copy(update={"cutoff_event": ""}) for p in built.projects)
+        }
+    )
+    return to_json(blanked) + to_markdown(blanked)
+
+
+def status_without_log_counts(project: Project) -> str:
+    """`project_status` without the per-type event counts and the last-event time, which are
+    counts of the log itself and so change with any event, evidence or not."""
+    status = project_status(project).model_dump(mode="json")
+    for key in ("events_total", "events_by_type", "last_event_at"):
+        status.pop(key, None)
+    return json.dumps(status, sort_keys=True, default=str)
 
 
 def twin_projects(root: Path, project: Project, iw: IWorld) -> tuple[Project, Project]:

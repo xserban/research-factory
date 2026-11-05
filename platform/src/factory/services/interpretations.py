@@ -48,11 +48,11 @@ from factory.model.intuition import (
     StoredSource,
 )
 from factory.model.screening import Channel
-from factory.model.task import TaskCompleted, TaskStatus
+from factory.model.task import INTUITION_TASK_KIND, TaskCompleted, TaskStatus
 from factory.services.call_memo import entering
 from factory.services.context import Project
 from factory.services.contributions import final_item
-from factory.services.extraction import is_extraction_session, live_rows, screening_session
+from factory.services.extraction import live_rows
 from factory.services.ideas import idea_view, list_ideas, resolve_idea
 from factory.services.intuition_sources import stale_sources, verify_sources
 from factory.services.lineage import graph_node
@@ -66,7 +66,7 @@ from factory.services.tasks import (
     task_content,
 )
 
-INTUITION_KIND = "intuition"
+INTUITION_KIND = INTUITION_TASK_KIND
 MAX_SERVED_ITEMS = 60
 """Items served with one target, by work then item id; a target with more is served the first."""
 PAGE = 500
@@ -103,6 +103,8 @@ class IntuitionBatch(StrictModel):
     items: list[ServedItem]
     max_chars: int
     max_sources: int
+    truncated: bool = False
+    """True when the target has more final items than `MAX_SERVED_ITEMS`; the first are served."""
 
 
 class TargetSkip(StrictModel):
@@ -190,18 +192,20 @@ def _open_task_targets(project: Project) -> set[str]:
     return {str(r[0]) for r in rows}
 
 
-def _items_of(project: Project, members: Sequence[str]) -> list[ServedItem]:
+def _items_of(project: Project, members: Sequence[str]) -> tuple[list[ServedItem], bool]:
     """The live, non-stale final contribution items of `members` (at most `MAX_SERVED_ITEMS`),
-    from `final_item` so a resolved field shows its final value."""
+    from `final_item` so a resolved field shows its final value, and whether more were left out."""
     served: dict[str, ServedItem] = {}
+    truncated = False
     with entering():
         for work in sorted(members):
             for row in live_rows(project, work_id=work, scope=Scope.CONTRIBUTION):
-                if len(served) >= MAX_SERVED_ITEMS:
-                    break
                 item = final_item(project, row.extraction_id)
                 if item is None or not item.live or item.stale or item.extraction_id in served:
                     continue
+                if len(served) >= MAX_SERVED_ITEMS:
+                    truncated = True
+                    break
                 served[item.extraction_id] = ServedItem(
                     work_id=item.work_id,
                     extraction_id=item.extraction_id,
@@ -212,7 +216,9 @@ def _items_of(project: Project, members: Sequence[str]) -> list[ServedItem]:
                     quote=item.quote,
                     conversion_id=item.conversion_id,
                 )
-    return sorted(served.values(), key=lambda i: (i.work_id, i.extraction_id))
+            if truncated:
+                break
+    return sorted(served.values(), key=lambda i: (i.work_id, i.extraction_id)), truncated
 
 
 def _content(project: Project, target: str) -> dict[str, JsonValue]:
@@ -224,13 +230,14 @@ def _content(project: Project, target: str) -> dict[str, JsonValue]:
     else:
         members = [target]
         name = None
-    items = _items_of(project, members)
+    items, truncated = _items_of(project, members)
     return {
         "target": target,
         "target_kind": _kind_of(target),
         "target_name": name,
         "members": list(members),
         "items": [i.model_dump(mode="json") for i in items],
+        "truncated": truncated,
     }
 
 
@@ -245,6 +252,7 @@ def _batch(task_id: str, content: dict[str, Any]) -> IntuitionBatch:
         items=[ServedItem.model_validate(i) for i in content["items"]],
         max_chars=600,
         max_sources=5,
+        truncated=bool(content.get("truncated", False)),
     )
 
 
@@ -530,10 +538,6 @@ def _task_issues(
 # --- Review ---
 
 
-def _joined_a_pass(project: Project, session: str) -> bool:
-    return is_extraction_session(project, session) or screening_session(project, session)
-
-
 def _human_users(project: Project) -> int:
     """How many distinct human users have acted in the project (a count in SQL)."""
     with project.index.connect() as conn:
@@ -554,8 +558,8 @@ def review_interpretation(
 ) -> str:
     """Record a human review (`reviewed` or `wrong`) and return its event id; a later review
     supersedes the earlier. Refused, with nothing written, for a non-human actor or the session
-    that wrote an agent-written interpretation, relay included (`actor`), an MCP relay from a
-    session that joined a pass (`channel`), an unknown or superseded interpretation
+    that wrote an agent-written interpretation, relay included (`actor`), an
+    MCP channel (`channel`: no tool relays a review), an unknown or superseded interpretation
     (`interpretation_id`), a `wrong` without a note (`note`), and the author of a human-written
     interpretation when more than one human has acted in the project (`reviewer`, ruling A7);
     with a single human the review is recorded `self_reviewed`."""
@@ -577,8 +581,8 @@ def review_interpretation(
                     "actor", "the session that wrote an interpretation cannot review it"
                 )
             )
-        if channel is Channel.MCP and _joined_a_pass(project, actor.session):
-            issues.append(ValidationIssue("channel", "this session has joined a pass"))
+        if channel is Channel.MCP:
+            issues.append(ValidationIssue("channel", "no MCP tool reviews; use the command line"))
         if state == "wrong" and not note.strip():
             issues.append(ValidationIssue("note", "state why the interpretation is wrong"))
         self_reviewed = row["author"] == Author.HUMAN.value and row["author_user"] == actor.user
@@ -801,7 +805,7 @@ def interpretation_history(project: Project, interpretation_id: str) -> list[His
             return []
         reviews = conn.execute(
             text(
-                "SELECT r.event_id, r.state, r.note, r.self_reviewed, e.actor_id "
+                "SELECT r.event_id, r.state, r.note, r.self_reviewed, e.actor_id, r.folded "
                 "FROM interpretation_reviews r JOIN events e ON e.id = r.event_id "
                 "WHERE r.interpretation_id = :i ORDER BY r.event_id"
             ),
@@ -836,6 +840,7 @@ def interpretation_history(project: Project, interpretation_id: str) -> list[His
             actor=str(r[4]),
             note=str(r[2]),
             self_reviewed=bool(r[3]),
+            folded=bool(r[5]),
         )
         for r in reviews
     ]

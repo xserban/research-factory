@@ -334,13 +334,18 @@ def _full_text_sessions(project: Project) -> list[tuple[str, str]]:
     return [(str(session), str(model)) for session, model in rows]
 
 
+# The intuition layer's writers screened and extracted nothing, so the statement leaves their
+# events out: their skill and model are not what made the decisions it describes (R-xx(h)).
+_NOT_LAYER = "AND skill NOT LIKE 'rf-intuition@%' "
 _AGENT_MODELS = text(
     "SELECT DISTINCT model FROM events WHERE actor_kind = 'agent' AND model IS NOT NULL "
-    "ORDER BY model"
+    + _NOT_LAYER
+    + "ORDER BY model"
 )
 _AGENT_SKILLS = text(
     "SELECT DISTINCT skill FROM events WHERE actor_kind = 'agent' AND skill IS NOT NULL "
-    "ORDER BY skill"
+    + _NOT_LAYER
+    + "ORDER BY skill"
 )
 
 
