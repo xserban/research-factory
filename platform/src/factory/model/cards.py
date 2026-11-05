@@ -121,6 +121,7 @@ class QuoteBasis(StrictModel):
 
 
 class RowBasis(StrictModel):
+    work_id: Annotated[str, StringConstraints(pattern=WORK_ID_RE)]
     row_key: Annotated[str, StringConstraints(pattern=ROW_KEY_RE)]
     field: NonBlank
 

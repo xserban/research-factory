@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from sqlalchemy import Column, Index, MetaData, String, Table, and_, delete, select, update
+from sqlalchemy import Column, Index, Integer, MetaData, String, Table, and_, delete, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Connection
 
@@ -32,6 +32,7 @@ from factory.events.envelope import Event
 from factory.index.projection import Handler
 from factory.model.cards import (
     AssertionDecided,
+    BasisKind,
     CardAsserted,
     CardCreated,
     PropertyDecided,
@@ -100,6 +101,7 @@ def card_tables(metadata: MetaData) -> CardTables:
         Column("vocabulary_version", String, nullable=False),
         Column("supersedes", String),
         Column("superseded_by", String),
+        Column("folded", Integer, nullable=False),
         Column("decision", String),
         Column("decision_event_id", String),
         Column("event_id", String, nullable=False),
@@ -238,6 +240,9 @@ def _card_created(t: CardTables) -> Handler:
 def _asserted(t: CardTables) -> Handler:
     def asserted(conn: Connection, event: Event) -> None:
         p = CardAsserted.model_validate(event.payload)
+        # Only a human states a property as the researcher (the service refuses the rest): a
+        # hand-written agent event claiming it is kept, visibly unfolded, and changes nothing else.
+        folded = not (p.basis_kind is BasisKind.RESEARCHER and event.actor.kind != "human")
         inserted = conn.execute(
             sqlite_insert(t.assertions)
             .values(
@@ -256,11 +261,12 @@ def _asserted(t: CardTables) -> Handler:
                 status=p.status,
                 vocabulary_version=p.vocabulary_version,
                 supersedes=p.supersedes,
+                folded=int(folded),
                 event_id=event.id,
             )
             .on_conflict_do_nothing(index_elements=["assertion_id"])
         )
-        if not inserted.rowcount:
+        if not inserted.rowcount or not folded:
             return
         for norm in value_norms(p):
             conn.execute(

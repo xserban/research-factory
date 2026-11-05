@@ -244,10 +244,12 @@ def create_card(project: Project, actor: Actor, kind: CardKind, subject: str, ow
 # --- Assertions ---
 
 
-def _load_final_rows(project: Project) -> dict[str, FinalRow]:
-    """The final evidence rows by row key (the seam tests patch). Read once per call that needs a
+def _load_final_rows(project: Project) -> dict[tuple[str, str], FinalRow]:
+    """The final evidence rows by (work, row key): a row key is unique within a unit, not across
+    works (the seam tests patch). `final_rows` includes `single` rows, so a `stated` row assertion
+    can rest on one extraction that no second pass has checked. Read once per call that needs a
     row basis, never otherwise."""
-    return {r.row_key: r for r in final_rows(project)}
+    return {(r.work_id, r.row_key): r for r in final_rows(project)}
 
 
 @dataclass
@@ -255,15 +257,22 @@ class _Ctx:
     """Per-call caches: nothing is read twice, and nothing is read unless an item needs it."""
 
     project: Project
-    _rows: dict[str, FinalRow] | None = None
+    _rows: dict[tuple[str, str], FinalRow] | None = None
     _promoted: frozenset[str] | None = None
     manifests: dict[str, Manifest | None] = field(default_factory=dict)
     defaults: dict[str, str | None] = field(default_factory=dict)
     ideas: dict[str, bool] = field(default_factory=dict)
     changes: dict[str, str | None] = field(default_factory=dict)
     rejected_keys: dict[str, bool] = field(default_factory=dict)
+    definitions: dict[str, PropertyDef | None] = field(default_factory=dict)
 
-    def rows(self) -> dict[str, FinalRow]:
+    def definition(self, key: str) -> PropertyDef | None:
+        """The live approved definition `key` resolves to, read once per key per call."""
+        if key not in self.definitions:
+            self.definitions[key] = resolve_property(self.project, key)
+        return self.definitions[key]
+
+    def rows(self) -> dict[tuple[str, str], FinalRow]:
         if self._rows is None:
             self._rows = _load_final_rows(self.project)
         return self._rows
@@ -340,7 +349,7 @@ def _item_issues(
     ctx: _Ctx, actor: Actor, card_kind: str, item: AssertionInput
 ) -> tuple[list[ValidationIssue], PropertyDef | None, str | None]:
     """Every issue of one item, its property definition and the number's canonical value."""
-    defn = resolve_property(ctx.project, item.property)
+    defn = ctx.definition(item.property)
     if defn is None:
         return [ValidationIssue("property", "unknown")], None, None
     if defn.applies_to not in (card_kind, "both"):
@@ -363,7 +372,11 @@ def _item_issues(
             issues = [ValidationIssue("value", "value-not-in-quote")]
     elif isinstance(basis, RowBasis):
         reason = _row_reason(
-            defn, ctx.rows().get(basis.row_key), basis.field, item.value, verdict.canonical
+            defn,
+            ctx.rows().get((basis.work_id, basis.row_key)),
+            basis.field,
+            item.value,
+            verdict.canonical,
         )
         issues = [] if reason is None else [ValidationIssue("basis.row_key", reason)]
         if reason == "value-differs":
@@ -382,7 +395,7 @@ def _live_assertion(project: Project, card_id: str, property_key: str) -> str | 
         row = conn.execute(
             text(
                 "SELECT assertion_id FROM card_assertions WHERE card_id = :c AND property = :p "
-                "AND superseded_by IS NULL ORDER BY event_id DESC LIMIT 1"
+                "AND superseded_by IS NULL AND folded = 1 ORDER BY event_id DESC LIMIT 1"
             ),
             {"c": card_id, "p": property_key},
         ).first()
@@ -517,7 +530,7 @@ def decide_assertion(
             row = conn.execute(
                 text(
                     "SELECT a.status, a.superseded_by, e.session FROM card_assertions a "
-                    "JOIN events e ON e.id = a.event_id WHERE a.assertion_id = :a"
+                    "JOIN events e ON e.id = a.event_id WHERE a.assertion_id = :a AND a.folded = 1"
                 ),
                 {"a": assertion_id},
             ).first()
@@ -550,25 +563,50 @@ def decide_assertion(
 # --- Staleness ---
 
 
-def _latest_definition_change(ctx: _Ctx, key: str) -> str | None:
-    """The latest event that approved a definition of `key` or of the key it resolves to."""
-    if key not in ctx.changes:
-        resolved = resolved_key(ctx.project, key)
-        with ctx.project.index.connect() as conn:
+def _merge_chain(project: Project, key: str) -> list[str]:
+    """`key` and the keys it is merged into, in order (cycle-safe)."""
+    chain = [key]
+    while True:
+        with project.index.connect() as conn:
             row = conn.execute(
                 text(
-                    "SELECT max(decision_event_id) FROM properties "
-                    "WHERE key IN (:k, :r) AND state IN ('approved', 'superseded')"
+                    "SELECT kind, into_key FROM property_merges WHERE from_key = :k "
+                    "ORDER BY event_id DESC LIMIT 1"
                 ),
-                {"k": key, "r": resolved},
+                {"k": chain[-1]},
             ).first()
-        ctx.changes[key] = None if row is None or row[0] is None else str(row[0])
+        if row is None or row[0] != "merged" or str(row[1]) in chain:
+            return chain
+        chain.append(str(row[1]))
+
+
+def _latest_definition_change(ctx: _Ctx, key: str) -> str | None:
+    """The latest event that approved a definition of `key` or of a key it is merged into, or
+    that merged or unmerged `key` or one of those keys."""
+    if key not in ctx.changes:
+        chain = _merge_chain(ctx.project, key)
+        marks = ", ".join(f":c{i}" for i in range(len(chain)))
+        params = {f"c{i}": k for i, k in enumerate(chain)}
+        with ctx.project.index.connect() as conn:
+            approved = conn.execute(
+                text(
+                    "SELECT max(decision_event_id) FROM properties "
+                    f"WHERE key IN ({marks}) AND state IN ('approved', 'superseded')"
+                ),
+                params,
+            ).scalar()
+            merged = conn.execute(
+                text(f"SELECT max(event_id) FROM property_merges WHERE from_key IN ({marks})"),
+                params,
+            ).scalar()
+        latest = [str(v) for v in (approved, merged) if v is not None]
+        ctx.changes[key] = max(latest) if latest else None
     return ctx.changes[key]
 
 
 def _property_rejected(ctx: _Ctx, key: str) -> bool:
     if key not in ctx.rejected_keys:
-        ctx.rejected_keys[key] = resolve_property(ctx.project, key) is None
+        ctx.rejected_keys[key] = ctx.definition(key) is None
     return ctx.rejected_keys[key]
 
 
@@ -591,16 +629,21 @@ def _stale_reasons(ctx: _Ctx, row: Any) -> tuple[str, ...]:
     basis = None if row["basis_json"] is None else json.loads(str(row["basis_json"]))
     kind = str(row["basis_kind"])
     if kind == "row" and basis is not None:
-        defn = resolve_property(ctx.project, key)
+        defn = ctx.definition(key)
         value = json.loads(str(row["value_json"]))
         if isinstance(value, list):
             value = tuple(value)
-        found = ctx.rows().get(str(basis["row_key"]))
+        found = ctx.rows().get((str(basis["work_id"]), str(basis["row_key"])))
         if defn is None or _row_reason(defn, found, str(basis["field"]), value, row["canonical"]):
             reasons.add("row-changed")
+    quoted = []
     if kind == "quote" and basis is not None:
-        current = ctx.default_conversion(str(basis["work_id"]))
-        if current is not None and current != basis["conversion_id"]:
+        quoted = [basis]
+    elif kind == "inferred" and basis is not None:
+        quoted = list(basis.get("supports", []))
+    for quote in quoted:
+        current = ctx.default_conversion(str(quote["work_id"]))
+        if current is not None and current != quote["conversion_id"]:
             reasons.add("document-superseded")
     subject = str(row["subject"])
     if (
@@ -656,8 +699,8 @@ def card_view(
             conn.execute(
                 text(
                     _ASSERTION_SQL
-                    + "WHERE a.card_id = :c AND a.superseded_by IS NULL ORDER BY a.property, "
-                    "a.event_id"
+                    + "WHERE a.card_id = :c AND a.superseded_by IS NULL AND a.folded = 1 "
+                    "ORDER BY a.property, a.event_id"
                 ),
                 {"c": card_id},
             )
@@ -714,7 +757,7 @@ def list_cards(
             text(
                 "SELECT c.card_id, c.kind, c.subject, c.owner, c.event_id, "
                 "(SELECT count(*) FROM card_assertions a WHERE a.card_id = c.card_id "
-                "AND a.superseded_by IS NULL) FROM cards c "
+                "AND a.superseded_by IS NULL AND a.folded = 1) FROM cards c "
                 + where
                 + "ORDER BY c.card_id LIMIT :n OFFSET :o"
             ),
@@ -816,7 +859,8 @@ def card_audit_population(project: Project) -> list[tuple[AuditItemRef, str]]:
             rows = (
                 conn.execute(
                     text(
-                        _ASSERTION_SQL + "WHERE a.superseded_by IS NULL AND a.status = 'stated' "
+                        _ASSERTION_SQL
+                        + "WHERE a.superseded_by IS NULL AND a.folded = 1 AND a.status = 'stated' "
                         "AND a.basis_kind = 'quote' "
                         "AND (a.decision IS NULL OR a.decision != 'reject') "
                         "AND a.assertion_id > :after ORDER BY a.assertion_id LIMIT :n"

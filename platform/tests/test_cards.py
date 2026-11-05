@@ -197,23 +197,25 @@ def test_row_basis_follows_final_row(
     card: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:  # Review Focus 3
-    rows = {"rk_0123456789ab": _row(cw)}
+    rows = {(cw.source, "rk_0123456789ab"): _row(cw)}
     monkeypatch.setattr(cards_service, "_load_final_rows", lambda _p: rows)
     item = AssertionInput(
         property="pr:top1",
         value="82.4",
         unit="%",
         basis_kind="row",
-        basis=RowBasis(row_key="rk_0123456789ab", field="value"),
+        basis=RowBasis(work_id=cw.source, row_key="rk_0123456789ab", field="value"),
     )
     differs = item.model_copy(update={"value": "82.5"})
-    unknown = item.model_copy(update={"basis": RowBasis(row_key="rk_ffffffffffff", field="value")})
+    unknown = item.model_copy(
+        update={"basis": RowBasis(work_id=cw.source, row_key="rk_ffffffffffff", field="value")}
+    )
     r = assert_properties(project, agent, card, [item, differs, unknown])
     assert [i for i, *_ in r.accepted] == [0] and r.accepted[0][2] == "stated"
     assert {i: x[0].reason for i, x in r.rejected} == {1: "value-differs", 2: "row-unknown"}
     assert card_view(project, card).assertions[0].effective == "stated"  # type: ignore[union-attr]
     # the row is re-resolved to another value: the assertion is stale, not silently updated
-    rows["rk_0123456789ab"] = _row(cw, "83.0")
+    rows[(cw.source, "rk_0123456789ab")] = _row(cw, "83.0")
     view = card_view(project, card, include_stale=True)
     assert view is not None
     [a] = view.assertions
@@ -454,6 +456,7 @@ def test_merged_property_resolves_in_card_props(
         other_session_human,
         prop("pr:long-seqs", kind="bool", allowed=[], value_aliases={}, aliases=["long sequences"]),
     )
+    merge_properties(project, other_session_human, "pr:long-seqs", "pr:long-sequences", "same")
     assert_properties(
         project,
         agent,
@@ -467,7 +470,6 @@ def test_merged_property_resolves_in_card_props(
             )
         ],
     )
-    merge_properties(project, other_session_human, "pr:long-seqs", "pr:long-sequences", "same")
     [row] = list(effective_card_props(project, ["pr:long-sequences"], {"stated"}))
     assert row.property_key == "pr:long-sequences" and row.card_kind == "method"
     assert row.subject == cw.source
@@ -481,7 +483,9 @@ def test_card_audit_population_is_stated_quotes(
     card: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:  # ruling 6
-    monkeypatch.setattr(cards_service, "_load_final_rows", lambda _p: {"rk_0123456789ab": _row(cw)})
+    monkeypatch.setattr(
+        cards_service, "_load_final_rows", lambda _p: {(cw.source, "rk_0123456789ab"): _row(cw)}
+    )
     r = assert_properties(
         project,
         agent,
@@ -494,7 +498,7 @@ def test_card_audit_population_is_stated_quotes(
                 value="82.4",
                 unit="%",
                 basis_kind="row",
-                basis=RowBasis(row_key="rk_0123456789ab", field="value"),
+                basis=RowBasis(work_id=cw.source, row_key="rk_0123456789ab", field="value"),
             ),
             AssertionInput(
                 property="pr:dense-prediction",
