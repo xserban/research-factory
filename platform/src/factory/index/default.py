@@ -23,6 +23,7 @@ from factory.index.projection import Handler, Projection, chain, core_tables
 from factory.index.protocol import protocol_handlers, protocol_tables
 from factory.index.question import question_handlers, question_tables
 from factory.index.references import reference_handlers, reference_tables
+from factory.index.regions import region_handlers, region_tables
 from factory.index.screening import screening_handlers, screening_tables
 from factory.index.search import search_handlers, search_tables
 from factory.index.seeds import seed_handlers, seed_tables
@@ -30,14 +31,14 @@ from factory.index.tasks import task_handlers, tasks_table
 from factory.index.watch import run_started_handler, watch_handlers, watch_tables
 
 # Bump on any change to the tables or handlers below; the index is then rebuilt.
-PROJECTION_VERSION = "39"
+PROJECTION_VERSION = "40"
 
 
 def default_projection(blobs: BlobStore | None = None) -> Projection:
     """A fresh projection: core tables plus the project, task, search, dedup, question, seed,
     probe, protocol, screening, chase, full-text, extraction, document, reference, import, inbox
-    watch, relation, idea, graph, card and contradiction tables. `blobs` is the project blob store
-    the import handlers read records from; without it, folding an import event raises."""
+    watch, relation, idea, graph, card, contradiction and region tables. `blobs` is the project blob
+    store the import and region handlers read from; without it, folding such an event raises."""
     metadata = MetaData()
     core_tables(metadata)
     project = project_table(metadata)
@@ -67,6 +68,7 @@ def default_projection(blobs: BlobStore | None = None) -> Projection:
     intuition = intuition_tables(metadata)
     findings = finding_tables(metadata)
     gates = gate_tables(metadata)
+    regions = region_tables(metadata)
     handlers: dict[str, Handler] = {
         "project.created": project_created_handler(project),
         **task_handlers(tasks),
@@ -94,6 +96,7 @@ def default_projection(blobs: BlobStore | None = None) -> Projection:
         **intuition_handlers(intuition),
         **finding_handlers(findings),
         **gate_handlers(gates),
+        **region_handlers(regions, blobs),
     }
     # The graph projection reads the tables the other handlers of the same event just folded.
     for event_type, handler in graph_handlers().items():

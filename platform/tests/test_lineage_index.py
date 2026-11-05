@@ -53,7 +53,7 @@ def _decision(project: Project, relation_id: str = REL) -> Any:
 
 
 def test_projection_version_bumped() -> None:
-    assert PROJECTION_VERSION == "39"
+    assert PROJECTION_VERSION == "40"
 
 
 def test_new_tables_are_omitted_when_empty() -> None:

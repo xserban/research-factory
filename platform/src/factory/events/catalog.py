@@ -77,6 +77,12 @@ from factory.model.references import (
     ReferenceResolved,
     SnowballRoundStarted,
 )
+from factory.model.regions import (
+    RegionDefined,
+    RegionMemberDecided,
+    RegionReviewed,
+    RegionSnapshotTaken,
+)
 from factory.model.screening import (
     AuditLabelled,
     AuditSampled,
@@ -245,4 +251,8 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("concept.unmerged", ConceptUnmerged, 1))
     catalog.register(EventType("contradiction.proposed", ContradictionProposed, 1))
     catalog.register(EventType("contradiction.decided", ContradictionDecided, 1))
+    catalog.register(EventType("region.defined", RegionDefined, 1))
+    catalog.register(EventType("region.snapshot_taken", RegionSnapshotTaken, 1))
+    catalog.register(EventType("region.reviewed", RegionReviewed, 1))
+    catalog.register(EventType("region.member_decided", RegionMemberDecided, 1))
     return catalog

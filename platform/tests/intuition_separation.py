@@ -109,6 +109,9 @@ TABLE_READERS = frozenset(
         "factory.services.trace",
         "factory.index.index",  # OMITTED_WHEN_EMPTY names tables whose emptiness is hash-neutral
         "factory.services.modules.intuition",  # the module declaration owns the tables; no SQL
+        # Regions-A: the `concept` rule reads stated or confirmed `uses` of a visible concept. The
+        # reader is this one module; the rest of `factory.regions` names no layer table.
+        "factory.regions.concept_use",
         # The command group names `interpretations` / `concepts` and the layer-count lines print
         # them as words; neither holds SQL (`test_cli_modules_hold_no_sql`).
         "factory.cli.main",

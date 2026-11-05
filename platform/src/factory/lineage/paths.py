@@ -35,7 +35,14 @@ class QueryResult:
     truncated: bool
 
 
-def _walk(nb: Neighbours, node: str, depth: int, direction: Direction, query: str) -> QueryResult:
+def _walk(
+    nb: Neighbours,
+    node: str,
+    depth: int,
+    direction: Direction,
+    query: str,
+    limit: int = MAX_RESULTS,
+) -> QueryResult:
     depth = max(0, min(depth, MAX_DEPTH))
     visited = {node}
     edge_ids: set[str] = set()
@@ -46,7 +53,7 @@ def _walk(nb: Neighbours, node: str, depth: int, direction: Direction, query: st
         for current in sorted(frontier):
             for edge in nb(current, direction, LINEAGE_TYPES):
                 other = edge.target if direction == "out" else edge.source
-                if other not in visited and len(visited) > MAX_RESULTS:
+                if other not in visited and len(visited) > limit:
                     truncated = True
                     break
                 edge_ids.add(edge.edge_id)
@@ -67,14 +74,15 @@ def _walk(nb: Neighbours, node: str, depth: int, direction: Direction, query: st
     )
 
 
-def ancestors(nb: Neighbours, node: str, depth: int) -> QueryResult:
-    """The works `node` builds on, transitively, up to `depth` levels."""
-    return _walk(nb, node, depth, "out", "ancestors")
+def ancestors(nb: Neighbours, node: str, depth: int, *, limit: int = MAX_RESULTS) -> QueryResult:
+    """The works `node` builds on, transitively, up to `depth` levels. `limit` replaces
+    `MAX_RESULTS` for callers with their own bound (regions)."""
+    return _walk(nb, node, depth, "out", "ancestors", limit)
 
 
-def descendants(nb: Neighbours, node: str, depth: int) -> QueryResult:
-    """The works that build on `node`, transitively, up to `depth` levels."""
-    return _walk(nb, node, depth, "in", "descendants")
+def descendants(nb: Neighbours, node: str, depth: int, *, limit: int = MAX_RESULTS) -> QueryResult:
+    """The works that build on `node`, transitively, up to `depth` levels (`limit` as above)."""
+    return _walk(nb, node, depth, "in", "descendants", limit)
 
 
 def path(nb: Neighbours, a: str, b: str) -> QueryResult:

@@ -81,6 +81,12 @@ OMITTED_WHEN_EMPTY: frozenset[str] = frozenset(
         "concept_uses",
         "concept_merges",
         "contradictions",
+        "regions",
+        "region_definitions",
+        "region_snapshots",
+        "region_members",
+        "region_reviews",
+        "region_member_decisions",
     }
 )
 """Tables added after slice 3: while empty they leave no trace in the hash, so a log without
@@ -207,6 +213,15 @@ class Index:
             self._write(conn, new, offsets)
             self._set_meta(conn, _LAST_EVENT_ID, new[-1].id)
         return SyncResult(applied=len(new), rebuilt=False)
+
+    def last_event_id(self) -> str | None:
+        """The greatest event id folded into the index, or None while it is empty."""
+        meta = self._table("meta")
+        with self.connect() as conn:
+            value = conn.execute(
+                select(meta.c.value).where(meta.c.key == _LAST_EVENT_ID)
+            ).scalar_one_or_none()
+        return None if value is None else str(value)
 
     def state_hash(self) -> str:
         with self._locked(shared=True):
