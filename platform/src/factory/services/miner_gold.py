@@ -25,15 +25,15 @@ from factory.model.miner_calibration import GoldRow, MinerCalibrationLabelled
 from factory.model.screening import Channel, PassLabel
 from factory.services.context import Project
 from factory.services.conversions import conversion_document, conversion_manifest
-from factory.services.extraction import UnitPin
+from factory.services.extraction import UnitPin, calibration_closed_works
 from factory.services.extraction_verify import verify_row_in
 from factory.services.gates import gate_issues
-from factory.services.miners import _registered, calibration_by_id, proposer
+from factory.services.miners import CalibrationRow, _registered, calibration_by_id, proposer
 from factory.services.mining import require_listed
 from factory.services.protocol import miner_extraction_schema
 from factory.services.search import list_works
 
-__all__ = ["LABEL_GATE", "calibration_labels", "label_miner_calibration"]
+__all__ = ["LABEL_GATE", "calibration_frozen", "calibration_labels", "label_miner_calibration"]
 
 LABEL_GATE = "miner.calibration_label"
 
@@ -54,6 +54,19 @@ def calibration_labels(project: Project, calibration_id: str) -> dict[str, tuple
         str(work): tuple(GoldRow.model_validate(row) for row in json.loads(str(rows)))
         for work, rows in found
     }
+
+
+def calibration_frozen(project: Project, calibration: CalibrationRow) -> bool:
+    """Whether the calibration is frozen: every unit is labelled and has a closed calibration
+    task. From then on it is neither served nor labelled again, and its result stands; a
+    correction is a new draw for a new version. Read from the projection of the log, so a rebuild
+    agrees."""
+    project.index.sync()
+    works = {u.work_id for u in calibration.units}
+    return set(calibration_labels(project, calibration.calibration_id)) >= works and (
+        calibration_closed_works(project, MinerScope(calibration.name), calibration.calibration_id)
+        >= works
+    )
 
 
 def label_miner_calibration(
@@ -100,6 +113,10 @@ def label_miner_calibration(
         if _registered(project, calibration.name, calibration.version).retired:
             raise FactoryValidationError(
                 [ValidationIssue("miner", f"miner {calibration.name} is retired")]
+            )
+        if calibration_frozen(project, calibration):
+            raise FactoryValidationError(
+                [ValidationIssue("calibration", "this calibration is closed; its result stands")]
             )
         unit = next((u for u in calibration.units if u.work_id == work_id), None)
         if unit is None:

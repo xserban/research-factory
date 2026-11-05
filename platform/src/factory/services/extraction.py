@@ -367,16 +367,25 @@ def calibration_sessions_of(project: Project, scope: ScopeKey) -> set[str]:
     return calibration_sessions(project, scope.name)
 
 
-def calibration_closed_works(project: Project, scope: ScopeKey, calibration_id: str) -> set[str]:
-    """The works of a calibration whose latest calibration task is completed. It reads the
-    calibration's own tasks only, never the schema the miner's scope is listed under now, so a
-    version's result does not depend on which version is listed or on later staleness."""
-    latest: dict[str, tuple[str, str]] = {}
+def calibration_first_closed(
+    project: Project, scope: ScopeKey, calibration_id: str
+) -> dict[str, str]:
+    """For each work of a calibration with a completed calibration task, the id of its first one
+    (task ids are time-ordered). A calibration is scored from these tasks only: it reads the
+    calibration's own tasks, never the schema the miner's scope is listed under now, so a
+    version's result depends neither on which version is listed nor on later staleness, and a
+    unit mined again after it closed does not change it."""
+    first: dict[str, str] = {}
     for task_id, status, content in _kind_tasks(project, scope, calibration_id):
         work = content.records[0]["work_id"]
-        if work not in latest or task_id > latest[work][0]:
-            latest[work] = (task_id, status)
-    return {w for w, (_, status) in latest.items() if status == TaskStatus.COMPLETED.value}
+        if status == TaskStatus.COMPLETED.value and (work not in first or task_id < first[work]):
+            first[work] = task_id
+    return first
+
+
+def calibration_closed_works(project: Project, scope: ScopeKey, calibration_id: str) -> set[str]:
+    """The works of a calibration that have a completed calibration task."""
+    return set(calibration_first_closed(project, scope, calibration_id))
 
 
 def calibration_works(project: Project, calibration_id: str) -> list[str]:
@@ -725,6 +734,11 @@ def next_unit(
             )
         if needs_join:
             events.append(_join_event(project, actor, label, scope))
+        if (
+            calibration_id is not None
+        ):  # a unit closed once is never mined for the calibration again
+            closed = calibration_closed_works(project, scope, calibration_id)
+            population = [w for w in population if w not in closed]
         queue = _queue(label, population, config.seed, schema)
         queued, remaining, unconverted = _enqueue(
             project,

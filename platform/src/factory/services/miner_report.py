@@ -28,8 +28,7 @@ from factory.model.extraction import MinerScope
 from factory.services.context import Project
 from factory.services.extraction import (
     ExtractionRow,
-    calibration_closed_works,
-    calibration_task_ids,
+    calibration_first_closed,
     live_rows,
 )
 from factory.services.gates import rigor_mode
@@ -81,7 +80,8 @@ def miner_calibration_report(
         return None
     scope = MinerScope(name)
     labels = calibration_labels(project, calibration.calibration_id)
-    closed = len(calibration_closed_works(project, scope, calibration.calibration_id))
+    first = calibration_first_closed(project, scope, calibration.calibration_id)
+    closed = len(first)
     units = len(calibration.units)
     limits = thresholds(rigor_mode(project), spec.regime)
     floor = SAMPLE_FLOOR[rigor_mode(project)]
@@ -102,7 +102,7 @@ def miner_calibration_report(
             None if short is None else False,
             short,
         )
-    tasks = calibration_task_ids(project, scope, calibration.calibration_id)
+    tasks = frozenset(first.values())  # each unit is scored from its first closed task
     agent: dict[str, list[ExtractionRow]] = {}
     for row in live_rows(project, scope=scope, calibration=True):
         if row.task_id in tasks:

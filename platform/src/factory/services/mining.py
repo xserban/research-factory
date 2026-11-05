@@ -414,6 +414,12 @@ def mine_next(
         from factory.services.miner_independence import require_calibration_pass
 
         calibration_id = require_calibration_pass(project, actor, name, version, label)
+        from factory.services.miner_gold import calibration_frozen
+        from factory.services.miners import calibration_by_id
+
+        drawn = calibration_by_id(project, calibration_id)
+        if drawn is not None and calibration_frozen(project, drawn):
+            return ExtractNext(batch=None, blocked=[], remaining=0)  # scored: nothing is served
     else:
         from factory.services.miner_independence import require_production_pass
 
