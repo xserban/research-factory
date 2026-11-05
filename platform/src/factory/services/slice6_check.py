@@ -7,7 +7,8 @@ Invariants:
 - A project with no property, card, contradiction, lead, hypothesis or experiment has none of
   these findings. Severity by mode is the level table of the module that owns the code.
 - `evaluation-stale` compares the stored conclusive evaluation with the recomputation from the log
-  (outcome and inputs hash); `xrun-reported-without-registration` is structurally impossible (the
+  (outcome, inputs hash and evaluator version) and lists evaluation events that did not fold (a
+  hand-written one, or one of an evaluator no longer known); `xrun-reported-without-registration` is structurally impossible (the
   projector folds a report only for a registered run) and is the broken-chain check.
 - `card-imported-unverified` is not emitted: cross-project card import is not built (Later).
 """
@@ -186,12 +187,21 @@ def _evaluations(project: Project) -> list[CheckHit | None]:
         if live is None or live.payload.outcome == "incomplete":
             continue
         now = recompute(project, v.hypothesis_id)
-        if now is None or (now.outcome, now.inputs_hash) != (
+        if now is None or (now.outcome, now.inputs_hash, now.evaluator_version) != (
             live.payload.outcome,
             live.payload.inputs_hash,
+            live.payload.evaluator_version,
         ):
             stale.append(v.hypothesis_id)
-    return [_hit("evaluation-stale", stale, "evaluation(s) that the log no longer gives")]
+    unfolded = _strings(
+        project,
+        "SELECT id FROM events WHERE type = 'hypothesis.evaluated' "
+        "AND id NOT IN (SELECT event_id FROM hypothesis_evaluations)",
+    )
+    return [
+        _hit("evaluation-stale", stale, "evaluation(s) that the log no longer gives"),
+        _hit("evaluation-stale", unfolded, "evaluation event(s) in the log that did not fold"),
+    ]
 
 
 def slice6_hits(project: Project) -> list[CheckHit]:

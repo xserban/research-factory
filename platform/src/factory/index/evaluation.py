@@ -14,7 +14,9 @@ the log, unfolded, and changes nothing else):
 - a literature hypothesis (its evidence report cannot be recomputed from tables): every comparison
   names a work inside the window and live rows of it, and the outcome, counts, flags (the rule's,
   the cut-offs, the autonomy label), level and hash are the ones those comparisons give.
-- an evaluation whose inputs hash equals that of the live one is not folded again.
+- an evaluation with the inputs hash and evaluator version of the live one is not folded again;
+- an evaluation of a retired evaluator (`RETIRED_EVALUATORS`) cannot be recomputed and folds on
+  structure, so that a version change erases nothing; `check` reports it.
 
 Handlers are total: an event that does not validate, or names something unknown, changes nothing.
 """
@@ -50,6 +52,7 @@ from factory.model.hypotheses import (
     LiteratureComparison,
     LiteratureDirection,
     LiteratureTest,
+    RETIRED_EVALUATORS,
 )
 
 
@@ -67,6 +70,7 @@ def evaluation_tables(metadata: MetaData) -> EvaluationTables:
         Column("outcome", String, nullable=False),
         Column("flags_json", String, nullable=False),
         Column("inputs_hash", String, nullable=False),
+        Column("evaluator_version", String, nullable=False),
         Column("supersedes", String),
         Column("payload_json", String, nullable=False),
         Index("ix_hypothesis_evaluations_hyp", "hypothesis_id"),
@@ -171,7 +175,7 @@ def live_evaluation(conn: Connection, hypothesis_id: str) -> Any:
     """The latest folded evaluation of a hypothesis (event id and inputs hash), else None."""
     return conn.execute(
         text(
-            "SELECT event_id, inputs_hash FROM hypothesis_evaluations "
+            "SELECT event_id, inputs_hash, evaluator_version FROM hypothesis_evaluations "
             "WHERE hypothesis_id = :h ORDER BY event_id DESC LIMIT 1"
         ),
         {"h": hypothesis_id},
@@ -246,6 +250,31 @@ def literature_consistent(conn: Connection, p: HypothesisEvaluated, hyp: Any) ->
     )
 
 
+def _structurally_sound(conn: Connection, p: HypothesisEvaluated, hyp: Any) -> bool:
+    """An evaluation of a retired evaluator cannot be recomputed: it folds if what it names exists
+    (the level fixed at registration, the design, reported runs of it, known works), so a rebuild
+    after a version change keeps it, and `check` reports it as `evaluation-stale`."""
+    if p.level != hyp[4]:
+        return False
+    if str(hyp[1]) == "experiment":
+        inputs = read_experiment_inputs(conn, p.hypothesis_id)
+        if inputs is None or (p.experiment_id, p.e_version) != (
+            inputs.experiment_id,
+            inputs.e_version,
+        ):
+            return False
+        reported = {r.run_id for r in inputs.runs if r.reported_event_id is not None}
+        return set(p.runs) <= reported
+    known = {
+        str(w)
+        for w in conn.execute(
+            text("SELECT work_id FROM works WHERE work_id IN (SELECT value FROM json_each(:w))"),
+            {"w": json.dumps(list(p.works))},
+        ).scalars()
+    }
+    return not p.runs and set(p.works) <= known
+
+
 def _evaluated(t: EvaluationTables) -> Handler:
     def evaluated(conn: Connection, event: Event) -> None:
         p = HypothesisEvaluated.model_validate(event.payload)
@@ -254,14 +283,20 @@ def _evaluated(t: EvaluationTables) -> Handler:
         hyp = registered_hypothesis(conn, p.hypothesis_id)
         if hyp is None or str(hyp[0]) != p.h_version:
             return
-        if str(hyp[1]) == "experiment":
+        if p.evaluator_version in RETIRED_EVALUATORS:
+            if not _structurally_sound(conn, p, hyp):
+                return
+        elif str(hyp[1]) == "experiment":
             inputs = read_experiment_inputs(conn, p.hypothesis_id)
             if inputs is None or compute_experiment(inputs) != p:
                 return
         elif not literature_consistent(conn, p, hyp):
             return
         live = live_evaluation(conn, p.hypothesis_id)
-        if live is not None and str(live[1]) == p.inputs_hash:
+        if live is not None and (str(live[1]), str(live[2])) == (
+            p.inputs_hash,
+            p.evaluator_version,
+        ):
             return
         conn.execute(
             sqlite_insert(t.evaluations)
@@ -271,6 +306,7 @@ def _evaluated(t: EvaluationTables) -> Handler:
                 outcome=p.outcome,
                 flags_json=canonical_json(list(p.flags)).decode(),
                 inputs_hash=p.inputs_hash,
+                evaluator_version=p.evaluator_version,
                 supersedes=None if live is None else str(live[0]),
                 payload_json=canonical_json(p.model_dump(mode="json")).decode(),
             )

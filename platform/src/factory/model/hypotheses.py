@@ -485,6 +485,10 @@ class ModelCutoffDeclared(StrictModel):
 # --- Evaluation (plan XP-B) ---------------------------------------------------------------
 
 EVALUATOR_VERSION = "1"
+RETIRED_EVALUATORS: frozenset[str] = frozenset()
+"""Versions this evaluator replaced. Bumping `EVALUATOR_VERSION` adds the old one here, so that a
+rebuild keeps their evaluations and registry rows (folded on structure; `check` calls them
+`evaluation-stale` until the researcher evaluates again) instead of erasing them."""
 EVALUATION_OUTCOMES = ("supported", "refuted", "inconclusive", "incomplete")
 SIGNED_DECIMAL_RE = r"^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$"
 

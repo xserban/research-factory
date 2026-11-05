@@ -262,7 +262,10 @@ def evaluate_hypothesis(
         if payload.outcome == "incomplete" and not request_incomplete:
             raise _refuse("runs", "incomplete")
         live = latest_evaluation(project, hypothesis_id)
-        if live is not None and live.payload.inputs_hash == payload.inputs_hash:
+        if live is not None and (
+            live.payload.inputs_hash,
+            live.payload.evaluator_version,
+        ) == (payload.inputs_hash, payload.evaluator_version):
             return live.event_id
         refs = [hypothesis_id] + ([] if payload.experiment_id is None else [payload.experiment_id])
         event = project.events.make(
