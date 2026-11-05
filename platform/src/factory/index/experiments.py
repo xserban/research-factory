@@ -178,7 +178,25 @@ def experiment_tables(
     )
 
 
+def _total(handler: Handler) -> Handler:
+    """A handler that cannot raise on what a log holds: an event whose payload does not validate,
+    or whose values the fold cannot compute with, changes nothing (the log may be edited by hand,
+    and a rebuild must still finish)."""
+
+    def total(conn: Connection, event: Event) -> None:
+        try:
+            handler(conn, event)
+        except (ValueError, ArithmeticError, KeyError, TypeError, AttributeError, IndexError):
+            return
+
+    return total
+
+
 def experiment_handlers(t: ExperimentTables) -> dict[str, Handler]:
+    return {k: _total(h) for k, h in _handlers(t).items()}
+
+
+def _handlers(t: ExperimentTables) -> dict[str, Handler]:
     return {
         "experiment.designed": _designed(t),
         "experiment.amended": _amended(t),

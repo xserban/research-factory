@@ -304,7 +304,7 @@ class CanonicalMetric(StrictModel):
 
     printed: str
     unit: str | None = None
-    value: str
+    value: Annotated[str, StringConstraints(pattern=CANONICAL_RE)]
 
 
 class XrunReported(StrictModel):
@@ -336,8 +336,8 @@ class BaselineEvaluated(StrictModel):
 
     experiment_id: ExperimentId
     row_key: Annotated[str, StringConstraints(pattern=ROW_KEY_RE)]
-    reported: str
-    reproduced: str | None
+    reported: Annotated[str, StringConstraints(pattern=CANONICAL_RE)]
+    reproduced: Annotated[str, StringConstraints(pattern=CANONICAL_RE)] | None
     runs: tuple[RunId, ...]
     excluded_runs: tuple[RunId, ...] = ()
     """Runs of seeds that only failed: left out of the mean and listed."""

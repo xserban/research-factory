@@ -351,3 +351,58 @@ def test_projector_recomputes_the_access_limit_of_a_freeze(
     project.record([project.events.make("experiment.frozen", honest, human)])
     view = experiment_view(project, exp)
     assert view is not None and (view.state, view.access_limit) == ("frozen", 1)
+
+
+@pytest.mark.parametrize(
+    "type_,payload",
+    [
+        ("experiment.designed", {}),
+        ("experiment.amended", {"experiment_id": "exp_x"}),
+        ("experiment.frozen", {"experiment_id": 7}),
+        ("experiment.unlocked", {"nonce": None}),
+        ("experiment.deviation_recorded", {"kind": "whim"}),
+        ("xrun.registered", {"run_id": "xrn_x"}),
+        ("xrun.reported", {"run_id": "xrn_x", "metrics": "abc"}),
+        ("baseline.evaluated", {"reported": "abc"}),
+        ("baseline.accepted", {"experiment_id": ["x"], "row_key": 3}),
+    ],
+)
+def test_a_malformed_event_changes_nothing_and_never_breaks_a_rebuild(
+    project: Project, human: Actor, xw: XW, type_: str, payload: dict[str, object]
+) -> None:
+    # review I5: every handler is total
+    from tests.experiment_helpers import experiment_rows, inject, raw_event
+
+    exp, _ = design_experiment(project, DRAFTER, xw.design())
+    freeze_experiment(project, human, exp)
+    before = experiment_rows(project)
+    inject(project, raw_event(project, type_, human, payload))
+    project.index.rebuild()
+    assert experiment_rows(project) == before
+
+
+def test_a_baseline_verdict_with_a_non_numeric_value_is_skipped(
+    project: Project, human: Actor, xw: XW
+) -> None:
+    from factory.model.experiments import BaselineEvaluated
+    from tests.experiment_helpers import experiment_rows, inject
+
+    exp, _ = design_experiment(project, DRAFTER, xw.design())
+    freeze_experiment(project, human, exp)
+    row = xw.rows[0]
+    bad = BaselineEvaluated.model_construct(
+        experiment_id=exp,
+        row_key=row,
+        reported="abc",
+        reproduced="9",
+        runs=(),
+        excluded_runs=(),
+        tolerance="0.01",
+        tolerance_kind="relative",
+        verdict="reproduced",
+        evaluator_version="x",
+    )
+    before = experiment_rows(project)
+    inject(project, project.events.make("baseline.evaluated", bad, project.system_actor()))
+    project.index.rebuild()
+    assert experiment_rows(project) == before

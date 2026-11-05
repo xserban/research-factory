@@ -172,3 +172,45 @@ def xe(explore_project: Project) -> XW:
     hid, _ = draft_hypothesis(explore_project, DRAFTER, make_spec(metric=METRIC))
     register_hypothesis(explore_project, OTHER, hid)
     return XW(hid, [])
+
+
+def inject(project: Project, event: Any) -> None:
+    """Append an event line to the log without the writer's validation: what someone who edits the
+    log by hand can do. The projector must fold it as a no-op, never raise."""
+    path = project.paths.events_dir / event.actor.id / f"{event.actor.session}.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("ab") as handle:
+        handle.write(event.to_line())
+
+
+def raw_event(project: Project, type_: str, actor: Actor, payload: dict[str, Any]) -> Any:
+    """An event of `type_` whose payload is exactly `payload`, valid or not."""
+    from factory.model.hypotheses import ModelCutoffDeclared
+
+    shell = project.events.make(
+        "model.cutoff_declared",
+        ModelCutoffDeclared(model="m", cutoff="2020-01-01", source="s"),  # type: ignore[arg-type]
+        actor,
+    )
+    return shell.model_copy(update={"type": type_, "payload": payload})
+
+
+EXPERIMENT_TABLES = (
+    "experiments",
+    "experiment_amendments",
+    "experiment_deviations",
+    "xruns",
+    "baseline_evaluations",
+)
+
+
+def experiment_rows(project: Project) -> dict[str, list[tuple[Any, ...]]]:
+    """Every row of the experiment tables: what a fold changed, as plain data."""
+    from sqlalchemy import text
+
+    project.index.sync()
+    with project.index.connect() as conn:
+        return {
+            name: [tuple(r) for r in conn.execute(text(f"SELECT * FROM {name} ORDER BY 1, 2"))]
+            for name in EXPERIMENT_TABLES
+        }
