@@ -31,6 +31,7 @@ from dataclasses import dataclass
 from sqlalchemy import Column, Index, Integer, MetaData, String, Table, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Connection
+from sqlalchemy.exc import SQLAlchemyError
 
 from factory.errors import FactoryError
 from factory.events.blobs import BlobStore
@@ -143,12 +144,23 @@ def draft_handlers(t: DraftTables, blobs: BlobStore | None = None) -> dict[str, 
 
 def _total(handler: Handler) -> Handler:
     """A handler that cannot raise on what a log holds (the log may be edited by hand, and a
-    rebuild must still finish)."""
+    rebuild must still finish) and folds all of an event or nothing: its writes run in a savepoint
+    of the transaction the index holds, so a failure half way leaves no partial fold."""
 
     def total(conn: Connection, event: Event) -> None:
         try:
-            handler(conn, event)
-        except (ValueError, ArithmeticError, KeyError, TypeError, AttributeError, IndexError):
+            with conn.begin_nested():
+                handler(conn, event)
+        except (
+            ValueError,
+            ArithmeticError,
+            KeyError,
+            TypeError,
+            AttributeError,
+            IndexError,
+            FactoryError,
+            SQLAlchemyError,
+        ):
             return
 
     return total

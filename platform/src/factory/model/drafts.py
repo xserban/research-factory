@@ -19,7 +19,7 @@ import json
 import re
 from collections.abc import Sequence
 from enum import StrEnum
-from typing import Literal, Self
+from typing import Annotated, Literal, Self
 
 from pydantic import Field, JsonValue, field_validator, model_validator
 
@@ -42,6 +42,8 @@ MAX_SUPPORTS = 6
 MAX_TITLE = 200
 MAX_HEADING = 200
 MAX_REASON = 300
+MAX_ORDER = 2**63 - 1
+"""The largest sentence order and stat value: what the index's integer columns hold."""
 _FIELD_RE = r"^[a-z][a-z0-9_]*$"
 _CITES_RE = rf"^cit:{REX_ID_RE[1:-1]}:[1-9][0-9]*$"
 _STAT_RE = r"^[a-z][a-z-]*(?::[A-Za-z0-9_.-]+){0,2}$"
@@ -214,11 +216,11 @@ class SentenceRecorded(StrictModel):
     sentence_id: str = Field(pattern=SENTENCE_ID_RE)
     draft_id: str = Field(pattern=DRAFT_ID_RE)
     section_id: str = Field(pattern=SECTION_ID_RE)
-    order: int = Field(ge=0)
+    order: int = Field(ge=0, le=MAX_ORDER)
     cls: SentenceClass
     text: str = Field(min_length=1, max_length=SENTENCE_MAX_CHARS)
     supports: list[SupportRef] = Field(default_factory=list, max_length=MAX_SUPPORTS)
-    stat_values: dict[str, int] = Field(default_factory=dict)
+    stat_values: dict[str, Annotated[int, Field(ge=0, le=MAX_ORDER)]] = Field(default_factory=dict)
     stats_version: int = Field(ge=1)
     flags: list[SentenceFlag] = Field(default_factory=list)
     author: Literal["agent", "human"]
