@@ -124,7 +124,7 @@ def find_conflicts(
     if not 1 <= limit <= LIMIT_MAX:
         raise _refuse("limit", f"between 1 and {LIMIT_MAX}")
     start = None if after is None else _cursor_key(after)
-    report = evidence_report(project)
+    report = agent_evidence(evidence_report(project))
     found: list[ConflictPair] = []
     scanned = 0
     for group in sorted(report.groups, key=lambda g: g.group_id):

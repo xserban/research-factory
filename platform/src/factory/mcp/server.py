@@ -1963,6 +1963,19 @@ def build_server(
         `inferred`, which waits for a human; you cannot confirm. Returns the link, its status and
         reason, and whether it already existed. Refused to a session that has joined a pass."""
 
+        def propose() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            _require_pass_opened(opened)
+            actor = make_agent_actor(settings, session, role, model, skill)
+            basis = parse_input(UseBasisInput, {"quote": quote, "reference": reference}, "basis")
+            result = concepts_service.propose_concept_link(
+                opened, actor, from_node, concept_id, basis, note
+            )
+            return _withheld(opened, result.model_dump(mode="json"), include_work_ids=False)
+
+        return _reply(project, propose, rename=dotted, include_work_ids=False)
+
     @server.tool()
     def match_query(
         project: str,
@@ -2066,16 +2079,6 @@ def build_server(
             opened = open_project(settings, project, session=session, clock=clock)
             _refuse_pass_session(opened)
             _require_pass_opened(opened)
-            actor = make_agent_actor(settings, session, role, model, skill)
-            basis = parse_input(UseBasisInput, {"quote": quote, "reference": reference}, "basis")
-            result = concepts_service.propose_concept_link(
-                opened, actor, from_node, concept_id, basis, note
-            )
-            return _withheld(opened, result.model_dump(mode="json"), include_work_ids=False)
-
-        return _reply(project, propose, rename=dotted, include_work_ids=False)
-
-    @server.tool()
             if decision is not None:
                 raise FactoryValidationError(
                     [ValidationIssue("decision", "only the researcher decides; do not send one")]
