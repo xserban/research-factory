@@ -339,7 +339,7 @@ def ingest_results(project: Project, actor: Actor, path: Path, *, runner: str | 
             raise FactoryValidationError(issues)
         before_hours = Decimal(budget_view(project, run.experiment_id).gpu_hours_used)  # type: ignore[union-attr]
         reused = False
-        if run.access_hash is not None and results.exit_status == 0:
+        if run.access_hash is not None and metrics:
             counts = access_counts(project, run.experiment_id)
             reused = counts.get(run.access_hash, 0) >= (view.access_limit or 1)
         payload = XrunReported(

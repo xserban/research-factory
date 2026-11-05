@@ -546,10 +546,11 @@ def _xrun_reported(t: ExperimentTables) -> Handler:
                     t.xruns.c.experiment_id == run.experiment_id,
                     t.xruns.c.access_hash == run.access_hash,
                     t.xruns.c.reported_event_id.is_not(None),
-                    t.xruns.c.exit_status == 0,
+                    t.xruns.c.metrics_json.is_not(None),
+                    t.xruns.c.metrics_json != "{}",
                 )
             ).scalar_one()
-            reused = p.exit_status == 0 and int(prior) >= int(exp[2] or 1)
+            reused = bool(p.metrics) and int(prior) >= int(exp[2] or 1)
         flags = report_flags(design, p, reused=reused)
         conn.execute(
             update(t.xruns)

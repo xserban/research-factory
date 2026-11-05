@@ -5,12 +5,12 @@ stored, never typed.
 Invariants:
 - GPU-hours used is the sum over reported runs, failed runs included. `max_runs` counts registered
   runs. `over` is true when the hours used exceed the budget.
-- The access count of a primary cell is the number of completed (exit status 0) confirmatory runs
-  of that exact cell; every primary cell is listed, with 0 when unread. Baseline reproductions are
-  not test accesses.
-- A hypothesis has confirmatory evidence when any confirmatory, non-reproduction run of a design
-  that names it has been reported, failed runs included: a run that failed may still have read the
-  test split (R-52, ruling 12).
+- The access count of a primary cell is the number of confirmatory reports that carry a metric
+  value (a failed run too) for that cell, or for its seed when a baseline reproduces there; every
+  primary cell is listed, with 0 when unread.
+- A hypothesis has confirmatory evidence when any confirmatory run of a design that names it has
+  been reported, a baseline reproduction and a failed run too: they may have read the test split
+  (R-52, rulings 12 and 18).
 """
 
 from __future__ import annotations
@@ -68,8 +68,9 @@ def budget_view(project: Project, experiment_id: str) -> BudgetView | None:
 
 
 def access_counts(project: Project, experiment_id: str) -> dict[str, int]:
-    """Primary cell hash to the number of completed runs that read it on the confirmatory split:
-    the primary runs of that cell and the confirmatory baseline reproductions of its seed."""
+    """Primary cell hash to the number of reports that read it on the confirmatory split: the
+    primary runs of that cell and the confirmatory baseline reproductions of its seed. A report
+    that carries a metric value counts, a failed run too (ruling 18: it has read the split)."""
     project.index.sync()
     with project.index.connect() as conn:
         raw = conn.execute(
@@ -83,7 +84,8 @@ def access_counts(project: Project, experiment_id: str) -> dict[str, int]:
             text(
                 "SELECT access_hash, COUNT(*) FROM xruns WHERE experiment_id = :e "
                 "AND access_hash IS NOT NULL "
-                "AND reported_event_id IS NOT NULL AND exit_status = 0 GROUP BY access_hash"
+                "AND reported_event_id IS NOT NULL AND metrics_json IS NOT NULL AND metrics_json != '{}' "
+                "GROUP BY access_hash"
             ),
             {"e": experiment_id},
         ).all()

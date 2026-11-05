@@ -353,3 +353,21 @@ def test_has_confirmatory_evidence_blocks_revision(
             supersedes=hw.hid,
         )
     assert _fields(err) == [("supersedes", "evidence-exists")]
+
+
+def test_a_failed_run_that_carries_metrics_is_a_read_of_the_test_split(
+    project: Project, human: Actor, xw: XW, tmp_path: Path
+) -> None:
+    # review I1: ruling 18 outranks "completed": a report with a value has read the split
+    exp, nonce = _unlocked(project, human, xw)
+    key = cell_hash(cell("treatment"))
+    first = _report(project, human, tmp_path, exp, nonce, value="10", exit_status=1, name="a.json")
+    view = experiment_view(project, exp)
+    assert view is not None and view.access[key] == 1 and view.deviations == []
+    second = _report(project, human, tmp_path, exp, nonce, value="99", name="b.json")
+    kept = xrun_view(project, second)
+    assert kept is not None and kept.flags == ("test-reused",)
+    view = experiment_view(project, exp)
+    assert view is not None and [d.kind for d in view.deviations] == ["test-reuse"]
+    again = xrun_view(project, first)
+    assert again is not None and again.flags == ("failed",)  # a failed first read is not "reused"
