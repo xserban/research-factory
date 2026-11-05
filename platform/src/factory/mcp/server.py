@@ -60,6 +60,7 @@ from factory.services import chase as chase_service
 from factory.services import check as check_service
 from factory.services import concepts as concepts_service
 from factory.services import conclusions as conclusions_service
+from factory.services import consolidation as consolidation_service
 from factory.services import contributions as contributions_service
 from factory.services import coverage as coverage_service
 from factory.services import dedup as dedup_service
@@ -77,12 +78,11 @@ from factory.services import fulltext as fulltext_service
 from factory.services import fulltext_status as fulltext_status_service
 from factory.services import hypotheses as hypotheses_service
 from factory.services import hypothesis_review as review_service
-from factory.services import consolidation as consolidation_service
 from factory.services import ideas as ideas_service
 from factory.services import inbox as inbox_service
 from factory.services import interpretations as interpretations_service
-from factory.services import leads as leads_service
 from factory.services import labels as labels_service
+from factory.services import leads as leads_service
 from factory.services import lineage as graph_service
 from factory.services import matching as matching_service
 from factory.services import methods as methods_service

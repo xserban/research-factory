@@ -82,8 +82,8 @@ from factory.services import imports as imports_service
 from factory.services import inbox as inbox_service
 from factory.services import inbox_watch as inbox_watch_service
 from factory.services import interpretations as interpretations_service
-from factory.services import leads as leads_service
 from factory.services import labels as labels_service
+from factory.services import leads as leads_service
 from factory.services import lineage as graph_service
 from factory.services import matching as matching_service
 from factory.services import methods as methods_service

@@ -14,8 +14,8 @@ from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor, Event
 from factory.model.base import StrictModel
 from factory.model.task import (
-    HYPOTHESIS_REVIEW_TASK_KIND,
     CONSOLIDATE_TASK_KIND,
+    HYPOTHESIS_REVIEW_TASK_KIND,
     INTUITION_TASK_KIND,
     TASK_KIND_RE,
     TASK_LEASE,

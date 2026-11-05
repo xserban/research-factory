@@ -726,6 +726,8 @@ def _region_agent_view() -> Iterator[None]:
 def _regions(project: Project) -> list[_Hit]:
     """Findings of regions (plan Regions-B): ids and counts only, advisory in every mode."""
     return [_Hit(f.code, f.refs, f.message) for f in region_findings(project)]
+
+
 def _organisation(project: Project) -> list[_Hit]:
     """Findings of the organisation class (labels, terms, consolidation, regions): counts and
     identifiers only. A project with none of them has none."""
