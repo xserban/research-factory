@@ -1,6 +1,7 @@
 from sqlalchemy import MetaData
 
 from factory.events.blobs import BlobStore
+from factory.index.cards import card_handlers, card_tables
 from factory.index.chase import chase_handlers, chase_tables
 from factory.index.conclusions import conclusion_handlers, conclusion_tables
 from factory.index.dedup import dedup_handlers, dedup_tables
@@ -26,13 +27,13 @@ from factory.index.tasks import task_handlers, tasks_table
 from factory.index.watch import run_started_handler, watch_handlers, watch_tables
 
 # Bump on any change to the tables or handlers below; the index is then rebuilt.
-PROJECTION_VERSION = "33"
+PROJECTION_VERSION = "34"
 
 
 def default_projection(blobs: BlobStore | None = None) -> Projection:
     """A fresh projection: core tables plus the project, task, search, dedup, question, seed,
     probe, protocol, screening, chase, full-text, extraction, document, reference, import, inbox
-    watch, relation, idea and graph tables. `blobs` is the project's blob store, which the import
+    watch, relation, idea, graph and card tables. `blobs` is the project blob store the import
     handlers read records from; without it, folding an import event raises."""
     metadata = MetaData()
     core_tables(metadata)
@@ -59,6 +60,7 @@ def default_projection(blobs: BlobStore | None = None) -> Projection:
     graph_tables(metadata)
     conclusions = conclusion_tables(metadata)
     digests = digest_tables(metadata)
+    cards = card_tables(metadata)
     handlers: dict[str, Handler] = {
         "project.created": project_created_handler(project),
         **task_handlers(tasks),
@@ -82,6 +84,7 @@ def default_projection(blobs: BlobStore | None = None) -> Projection:
         **lineage_handlers(lineage),
         **conclusion_handlers(conclusions),
         **digest_handlers(digests),
+        **card_handlers(cards),
     }
     # The graph projection reads the tables the other handlers of the same event just folded.
     for event_type, handler in graph_handlers().items():

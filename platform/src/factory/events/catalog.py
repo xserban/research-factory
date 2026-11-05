@@ -2,6 +2,16 @@ import re
 from dataclasses import dataclass
 
 from factory.model.base import StrictModel
+from factory.model.cards import (
+    AssertionDecided,
+    CardAsserted,
+    CardCreated,
+    CardImported,
+    PropertyDecided,
+    PropertyMerged,
+    PropertyProposed,
+    PropertyUnmerged,
+)
 from factory.model.chase import ChaseRoundStarted, SampleExtended, SeedAdmitted
 from factory.model.conclusions import ConclusionRegistered, ConclusionRetired
 from factory.model.dedup import DedupMerged, DedupReverted
@@ -201,4 +211,12 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("conclusion.registered", ConclusionRegistered, 1))
     catalog.register(EventType("conclusion.retired", ConclusionRetired, 1))
     catalog.register(EventType("digest.generated", DigestGenerated, 1))
+    catalog.register(EventType("vocabulary.property_proposed", PropertyProposed, 1))
+    catalog.register(EventType("vocabulary.property_decided", PropertyDecided, 1))
+    catalog.register(EventType("vocabulary.property_merged", PropertyMerged, 1))
+    catalog.register(EventType("vocabulary.property_unmerged", PropertyUnmerged, 1))
+    catalog.register(EventType("card.created", CardCreated, 1))
+    catalog.register(EventType("card.asserted", CardAsserted, 1))
+    catalog.register(EventType("card.assertion_decided", AssertionDecided, 1))
+    catalog.register(EventType("card.imported", CardImported, 1))
     return catalog

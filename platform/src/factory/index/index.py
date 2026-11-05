@@ -60,6 +60,11 @@ OMITTED_WHEN_EMPTY: frozenset[str] = frozenset(
         "graph_edges",
         "conclusions",
         "digests",
+        "properties",
+        "property_merges",
+        "cards",
+        "card_assertions",
+        "card_props",
     }
 )
 """Tables added after slice 3: while empty they leave no trace in the hash, so a log without
