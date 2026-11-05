@@ -17,6 +17,9 @@ Invariants:
   entries, and each anchor to the work its link names, so a snowball candidate traces back to the
   citing anchor. A snowball round (`snw_…`) is derived from its source works and extractions; its
   queries are those whose `query.registered` refs name it, or, forward, its chase round.
+- With `masked` anchors (the agent view, R-20) an entry an agent may not see is not reached from
+  its extraction or its work, and leads to no work, on either path, so it reads as an unresolved
+  entry: those have no edge from their extraction either.
 - A reference that names no row is shown as a node with an empty `event_id`, so a broken link is
   visible rather than hidden.
 - An identifier that names no row raises `FactoryValidationError([ValidationIssue("ref",
@@ -51,6 +54,8 @@ from factory.model.seed import SEED_ID_RE
 from factory.model.work import QUERY_ID_RE, RUN_ID_RE
 from factory.model.work_ids import WORK_ID_RE
 from factory.services.context import Project
+from factory.services.references import masked_anchors
+from factory.services.seeds import held_out
 
 KINDS: tuple[str, ...] = (
     "question",
@@ -178,7 +183,11 @@ class _ProtocolRow:
 
 
 def trace(
-    project: Project, ref: str, *, direction: Literal["back", "forward"] = "back"
+    project: Project,
+    ref: str,
+    *,
+    direction: Literal["back", "forward"] = "back",
+    masked: frozenset[str] = frozenset(),
 ) -> TraceNode:
     """The chain from `ref`, as a tree rooted at that node.
 
@@ -190,13 +199,15 @@ def trace(
     trace from a decision claims the protocol and the question under the work branch (through the
     query), and the criterion branch may then end at the element. Criteria lead upward to their
     protocol and element, never to queries: queries are downstream of protocols.
+
+    `masked` names bibliography anchors (`<conversion_id>/<anchor>`) to walk as unresolved entries.
     """
     if direction not in ("back", "forward"):
         raise ValueError(f"direction must be 'back' or 'forward', not {direction!r}")
     key = _parse(ref)
     project.index.sync()
     with project.index.connect() as conn:
-        walk = _Walk(project, conn)
+        walk = _Walk(project, conn, masked)
         described = None if key is None else walk.describe(key)
         if key is None or described is None:
             raise FactoryValidationError([ValidationIssue("ref", "unknown id")])
@@ -216,9 +227,11 @@ def agent_trace(
     removed with everything below them, and so are the records and pages reachable only through
     them, so a seed's work reads as any corpus work does. A record found by seed admission or hand
     search is labelled `supplementary`, not by its route. Provenance of probe queries is not in
-    any view (the corpus does not count it either).
+    any view (the corpus does not count it either). A reference entry `references_list` hides from
+    an agent is walked as an unresolved entry (`masked_anchors`).
     """
-    tree = without_seeds(trace(project, ref, direction=direction))
+    masked = masked_anchors(project, held_out(project))
+    tree = without_seeds(trace(project, ref, direction=direction, masked=masked))
     project.index.sync()
     with project.index.connect() as conn:
         hidden_queries = {
@@ -348,7 +361,7 @@ def _build(
         upstream, downstream = walk.edges(key)
         neighbours = upstream if direction == "back" else downstream
         ordered = sorted(
-            set(neighbours),
+            {n for n in neighbours if not walk.masks(key, n)},
             key=lambda item: (_RANK[item[0]], item[1]),
             reverse=direction == "back",
         )
@@ -370,9 +383,12 @@ def _build(
 class _Walk:
     """One walk's view of the projection. Caches the rows that many nodes share."""
 
-    def __init__(self, project: Project, conn: Connection) -> None:
+    def __init__(
+        self, project: Project, conn: Connection, masked: frozenset[str] = frozenset()
+    ) -> None:
         self._project = project
         self._conn = conn
+        self._masked = masked
         self._questions: dict[str, _QuestionRow] | None = None
         self._protocols: dict[str, _ProtocolRow] | None = None
         self._scanned: dict[tuple[str, str], str] | None = None
@@ -507,6 +523,17 @@ class _Walk:
                     round_queries.setdefault(chosen, []).append(str(query_id))
             self._chase = (query_round, round_queries)
         return self._chase
+
+    def masks(self, key: Key, neighbour: Key) -> bool:
+        """Whether an edge exists only because a masked entry's link is resolved: extraction or
+        work to the entry, or the entry to its work."""
+        if key[0] == "anchor":
+            return key[1] in self._masked and neighbour[0] == "work"
+        return (
+            key[0] in ("reference_extraction", "work")
+            and neighbour[0] == "anchor"
+            and neighbour[1] in self._masked
+        )
 
     # --- Describing one node ---
 

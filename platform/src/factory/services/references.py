@@ -21,6 +21,12 @@ Invariants:
   default conversion, with this parser version. A new extraction supersedes the earlier one.
 - Counts are computed from the live extractions; the link states sum to the entry count.
 - Listing is paged with a fixed cap (`MAX_PAGE`).
+- Held-out mask (R-20): an agent never sees a link that touches a held-out seed. Such an entry
+  reads as a genuine unresolved link with nothing parsed: reason `no-identifier-no-title`, the only
+  reason whose real links have no method, title or identifier, so its shape marks nothing.
+  `first_author`, `year` and the anchor stay, since the document shows them. `_HIDDEN_LINK` is the
+  one definition of "touches"; the list, the counts, the extraction summary and the agent `trace`
+  all read it.
 """
 
 from __future__ import annotations
@@ -52,6 +58,7 @@ from factory.model.references import (
     ReferenceEntry,
     ReferenceExtracted,
     ReferenceResolved,
+    UnresolvedReason,
 )
 from factory.model.seed import HeldOut
 from factory.model.work_ids import WORK_ID_RE
@@ -75,6 +82,7 @@ from factory.services.search import list_works
 from factory.sources.registry import SourceFactory
 
 MAX_PAGE = 100
+MASKED_REASON: UnresolvedReason = "no-identifier-no-title"
 
 SkipReason = Literal["not-included", "no-conversion", "library-missing"]
 
@@ -422,12 +430,63 @@ def _extract_one(
 # --- Counts and listing ---
 
 _LIVE = "JOIN reference_extractions x ON x.extraction_id = {t}.extraction_id AND x.live = 1"
+_HELD_WORK = "IN (SELECT value FROM json_each(:held_works))"
+_HELD_KEY = "IN (SELECT value FROM json_each(:held_keys))"
+_HIDDEN_LINK = (
+    f"(l.work_id {_HELD_WORK} OR l.base_work_id {_HELD_WORK} OR n.doi {_HELD_KEY} "
+    f"OR n.arxiv {_HELD_KEY} OR EXISTS (SELECT 1 FROM json_each(l.candidates) c "
+    f"WHERE json_extract(c.value, '$.work_id') {_HELD_WORK}))"
+)
+"""Whether a link (`l`, entry `n`) touches a held-out seed's work: its linked, base or candidate
+work, or an identifier the entry states. Agrees with `link_touches_held_out`."""
+_ENTRY_LINK = (
+    "JOIN reference_links l ON l.extraction_id = n.extraction_id AND l.ordinal = n.ordinal"
+)
 
 
-def agent_extract_view(summary: ExtractSummary, held_out: HeldOut) -> ExtractSummary:
-    """`summary` without the extractions and skips of held-out works (R-20)."""
+def _held_params(held: HeldOut | None) -> dict[str, str]:
+    """The bind parameters of `_HIDDEN_LINK`."""
+    works = sorted(held.work_ids) if held is not None else []
+    keys = sorted(held.keys) if held is not None else []
+    return {"held_works": json.dumps(works), "held_keys": json.dumps(keys)}
+
+
+def _hiding(held: HeldOut | None) -> bool:
+    return held is not None and bool(held.work_ids or held.keys)
+
+
+def _agent_states(project: Project, extraction_id: str, held: HeldOut) -> dict[LinkState, int]:
+    """The extraction's states as `list_references` shows them to an agent."""
+    states = {state: 0 for state in LinkState}
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text(
+                f"SELECT CASE WHEN {_HIDDEN_LINK} THEN :unresolved ELSE l.state END, COUNT(*) "
+                f"FROM reference_entries n {_ENTRY_LINK} WHERE n.extraction_id = :x GROUP BY 1"
+            ),
+            {
+                "x": extraction_id,
+                "unresolved": LinkState.UNRESOLVED.value,
+                **_held_params(held),
+            },
+        ).all()
+    for state, count in rows:
+        states[LinkState(str(state))] = int(count)
+    return states
+
+
+def agent_extract_view(
+    project: Project, summary: ExtractSummary, held_out: HeldOut
+) -> ExtractSummary:
+    """`summary` without the extractions and skips of held-out works, its states counted as
+    `list_references` shows them (R-20)."""
+    project.index.sync()
     return ExtractSummary(
-        extractions=[e for e in summary.extractions if not held_out.hides(e.work_id)],
+        extractions=[
+            e.model_copy(update={"states": _agent_states(project, e.extraction_id, held_out)})
+            for e in summary.extractions
+            if not held_out.hides(e.work_id)
+        ],
         skipped=[k for k in summary.skipped if not held_out.hides(k.work_id)],
     )
 
@@ -443,14 +502,31 @@ def link_touches_held_out(
     return any(held.hides(w) for w in works) or held.hides(None, doi, arxiv)
 
 
+def masked_anchors(project: Project, held: HeldOut) -> frozenset[str]:
+    """`<conversion_id>/<anchor>` of every entry `list_references` hides from an agent, in any
+    extraction: its link touches a held-out work, or the citing work is held out."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT DISTINCT x.conversion_id, n.anchor FROM reference_entries n "
+                "JOIN reference_extractions x ON x.extraction_id = n.extraction_id "
+                f"{_ENTRY_LINK} WHERE x.work_id {_HELD_WORK} OR {_HIDDEN_LINK}"
+            ),
+            _held_params(held),
+        ).all()
+    return frozenset(f"{conversion}/{anchor}" for conversion, anchor in rows)
+
+
 def _hidden(item: ReferenceItem, held: HeldOut) -> bool:
-    """`link_touches_held_out` for a listed item."""
+    """`link_touches_held_out` for a listed item (the SQL `_HIDDEN_LINK` is its twin)."""
     works = (item.work_id, item.base_work_id, *(w for w, _ in item.candidates))
     return link_touches_held_out(held, works, item.doi, item.arxiv)
 
 
 def _masked(item: ReferenceItem) -> ReferenceItem:
-    """The item as an unresolved entry: no linked work, no identifier, no title (R-20)."""
+    """The item as a genuine unresolved entry with nothing parsed: no linked work, no identifier,
+    no title (R-20)."""
     return item.model_copy(
         update={
             "state": LinkState.UNRESOLVED,
@@ -459,7 +535,7 @@ def _masked(item: ReferenceItem) -> ReferenceItem:
             "method": None,
             "score": None,
             "candidates": [],
-            "reason": None,
+            "reason": MASKED_REASON,
             "base_state": LinkState.UNRESOLVED,
             "base_work_id": None,
             "decision": None,

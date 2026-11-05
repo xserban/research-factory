@@ -1276,7 +1276,9 @@ def build_server(
             summary = references_service.extract_references(
                 opened, actor, work_ids, sources=adapters
             )
-            summary = references_service.agent_extract_view(summary, seeds_service.held_out(opened))
+            summary = references_service.agent_extract_view(
+                opened, summary, seeds_service.held_out(opened)
+            )
             return _withheld(opened, summary.model_dump(mode="json"))
 
         return _reply(project, extract)

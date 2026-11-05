@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 from mcp import Client
+from sqlalchemy import text
 
 from factory.clock import FixedClock
 from factory.config import Settings
@@ -309,3 +310,138 @@ async def test_held_out_work_matched_by_search_is_absent_from_every_view(
         i for i in listed["data"]["items"] if i["ordinal"] == 1 and i["citing_work"] == others[0]
     ]
     assert [(i["state"], i["work_id"], i["doi"]) for i in masked] == [("unresolved", None, None)]
+
+
+# --- The held-out mask (final review 2 and 8) ---
+
+BARE_ENTRY = "Zhou, 2020."
+"""An entry from which nothing but a year parses: a genuine `no-identifier-no-title` link."""
+
+
+@pytest.fixture
+def masked_world(
+    project: Project, agent: Actor, corpus: None, monkeypatch: pytest.MonkeyPatch
+) -> tuple[str, str, str]:
+    """(citing work, held-out corpus work, held DOI): the first entry cites the held-out work by
+    DOI and the last is the genuine bare entry. The held-out work has a document of its own."""
+    from factory.services import seeds as seeds_service
+
+    real = seeds_service._load_seeds
+    monkeypatch.setattr(
+        seeds_service,
+        "_load_seeds",
+        lambda p: [s.model_copy(update={"work_id": None}) for s in real(p)],
+    )
+    [held, *_] = [s for s in all_seeds(project) if s.role is SeedRole.HELD_OUT]
+    assert held.doi is not None
+    [target] = seeds_service.held_out_work_ids(project)
+    citing = next(w for w in promoted_works(project) if w != target)
+    entries = [
+        f"A. Zhou. A held paper. Journal of Tests, 2020. doi:{held.doi}.",
+        *ENTRIES_A[1:],
+        BARE_ENTRY,
+    ]
+    fetched_document(project, citing, bib_html(entries, BODY_A))
+    fetched_document(project, target, bib_html(ENTRIES_B, BODY_B))
+    run_convert(project, make_registry())
+    _amend(project, agent, PLAN)
+    return citing, target, held.doi
+
+
+def _shape(item: dict[str, Any]) -> dict[str, Any]:
+    """What a reader can tell about a link: every field but the entry's position and the fields
+    the document shows anyway, nulls as nulls."""
+    kept = set(item) - {"extraction_id", "citing_work", "ordinal", "anchor", "label"}
+    return {key: item[key] for key in kept - {"first_author", "year"}}
+
+
+@pytest.mark.anyio
+async def test_masked_entry_reads_as_a_genuine_unresolved_link(
+    settings: Settings,
+    project: Project,
+    clock: FixedClock,
+    masked_world: tuple[str, str, str],
+) -> None:
+    citing, _, _ = masked_world
+    async with open_session(settings, clock, _lookups().sources()) as session:
+        await _extracted(session)
+        listed = await session.call("references_list", project="demo", work_id=citing, limit=100)
+    items = listed["data"]["items"]
+    masked, genuine = items[0], items[-1]
+    assert genuine["reason"] == "no-identifier-no-title"
+    assert _shape(masked) == _shape(genuine)
+
+
+@pytest.mark.anyio
+async def test_agent_trace_applies_the_mask_on_both_paths(
+    settings: Settings,
+    project: Project,
+    clock: FixedClock,
+    masked_world: tuple[str, str, str],
+) -> None:
+    from factory.services.search import get_work
+
+    citing, target, _ = masked_world
+    work = get_work(project, target)
+    assert work is not None
+    async with open_session(settings, clock, _lookups().sources()) as session:
+        await _extracted(session)
+        listed = await session.call("references_list", project="demo", work_id=citing, limit=100)
+        rex = listed["data"]["items"][0]["extraction_id"]
+        forward = await session.call("trace", project="demo", ref=rex, direction="forward")
+        conversion = _conversion_of(project, rex)
+        entry = await session.call(
+            "trace", project="demo", ref=f"{conversion}/b1", direction="forward"
+        )
+        cited = await session.call("trace", project="demo", ref=target, direction="back")
+    assert forward["ok"] and entry["ok"] and cited["ok"]
+    for body in (forward, entry):
+        text = json.dumps(body)
+        assert _leaks(text, {target}) == [] and work.title not in text
+    assert f"{conversion}/b1" not in json.dumps(forward)
+    assert f"{conversion}/b2" in json.dumps(forward)  # a link the list shows stays traced
+    assert f"{conversion}/b1" not in json.dumps(cited)
+
+
+def _conversion_of(project: Project, rex: str) -> str:
+    with project.index.connect() as conn:
+        row = conn.execute(
+            text("SELECT conversion_id FROM reference_extractions WHERE extraction_id = :x"),
+            {"x": rex},
+        ).scalar_one()
+    return str(row)
+
+
+@pytest.mark.anyio
+async def test_agent_extract_states_agree_with_the_list(
+    settings: Settings,
+    project: Project,
+    clock: FixedClock,
+    masked_world: tuple[str, str, str],
+) -> None:
+    citing, _, _ = masked_world
+    async with open_session(settings, clock, _lookups().sources()) as session:
+        extracted = await _extracted(session)
+        listed = await session.call("references_list", project="demo", work_id=citing, limit=100)
+    [states] = [e["states"] for e in extracted["data"]["extractions"] if e["work_id"] == citing]
+    shown: dict[str, int] = {}
+    for item in listed["data"]["items"]:
+        shown[item["state"]] = shown.get(item["state"], 0) + 1
+    assert {k: v for k, v in states.items() if v} == shown
+
+
+@pytest.mark.anyio
+async def test_document_read_keeps_the_scrub_until_decision_78_is_settled(
+    settings: Settings,
+    project: Project,
+    clock: FixedClock,
+    masked_world: tuple[str, str, str],
+) -> None:
+    """Decided entry 37 item 9 has tools withhold seed identifiers, so the scrub stays; the
+    placeholder this leaves in document text is the open question of decision 78."""
+    citing, _, doi = masked_world
+    async with open_session(settings, clock, _lookups().sources()) as session:
+        body = await session.call("document_read", project="demo", work_id=citing, anchor="b1")
+    assert body["ok"] is True, body
+    assert _leaks(json.dumps(body), {doi}) == []
+    assert "[withheld]" in body["data"]["segments"][0]["text"]
