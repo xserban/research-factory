@@ -286,6 +286,11 @@ class AmendResult(StrictModel):
     prose_only: bool
 
 
+def _plan_limit(spec: ProtocolSpec) -> int:
+    plan = spec.hypothesis_plan
+    return 1 if plan is None else plan.test_access_limit
+
+
 def amend_protocol(
     project: Project,
     actor: Actor,
@@ -335,6 +340,12 @@ def amend_protocol(
         )
         if check.errors or check.gaps:
             raise FactoryValidationError([*check.errors, *check.gaps])
+
+        if actor.kind == "agent" and _plan_limit(spec) > _plan_limit(current.spec):
+            # the confirmatory allowance is a rule of the protocol; only the researcher relaxes it
+            raise FactoryValidationError(
+                [ValidationIssue("hypothesis_plan.test_access_limit", "agent-cannot-raise")]
+            )
 
         changes = criterion_changes(current.spec, spec)
         changed = {cid for cid, kind in changes if kind is ChangeKind.CHANGED}

@@ -84,7 +84,8 @@ def access_counts(project: Project, experiment_id: str) -> dict[str, int]:
             text(
                 "SELECT access_hash, COUNT(*) FROM xruns WHERE experiment_id = :e "
                 "AND access_hash IS NOT NULL "
-                "AND reported_event_id IS NOT NULL AND metrics_json IS NOT NULL AND metrics_json != '{}' "
+                "AND reported_event_id IS NOT NULL AND metrics_json IS NOT NULL "
+                "AND metrics_json != '{}' "
                 "GROUP BY access_hash"
             ),
             {"e": experiment_id},

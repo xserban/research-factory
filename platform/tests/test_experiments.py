@@ -305,3 +305,28 @@ def test_rebuild_state_hash_stable(project: Project, human: Actor, xw: XW) -> No
 
 def test_projection_version_bumped() -> None:
     assert PROJECTION_VERSION == "43"
+
+
+def test_an_agent_cannot_raise_the_test_access_limit_by_amending_the_protocol(
+    project: Project, human: Actor, xw: XW
+) -> None:
+    # review I2: the allowance is a rule of the protocol; only the researcher relaxes it
+    from factory.model.hypothesis_plan import HypothesisPlan
+    from factory.services.hypothesis_gates import effective_plan
+    from factory.services.protocol import amend_protocol, current_protocol
+
+    current = current_protocol(project)
+    assert current is not None
+    raised = current.spec.model_copy(
+        update={"hypothesis_plan": HypothesisPlan(test_access_limit=50)}
+    )
+    with pytest.raises(FactoryValidationError) as err:
+        amend_protocol(project, OTHER, raised, reason="more reads", semantic=True, effects={})
+    assert _fields(err) == [("hypothesis_plan.test_access_limit", "agent-cannot-raise")]
+    assert effective_plan(project).test_access_limit == 1
+    # the same amendment by the researcher goes through; an agent may lower or keep the limit
+    amend_protocol(project, human, raised, reason="more reads", semantic=True, effects={})
+    assert effective_plan(project).test_access_limit == 50
+    lowered = raised.model_copy(update={"hypothesis_plan": HypothesisPlan(test_access_limit=2)})
+    amend_protocol(project, OTHER, lowered, reason="fewer reads", semantic=True, effects={})
+    assert effective_plan(project).test_access_limit == 2
