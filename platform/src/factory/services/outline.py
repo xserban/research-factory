@@ -7,8 +7,8 @@ Invariants:
 - The outline holds ids and fixed codes only: no quote, no statement, no title. Two builds from the
   same log give the same JSON and the same `OL@` id.
 - Sections, in this order: (1) one per confirmed idea in lineage order (an idea after the ideas it
-  builds on, ties by the origin work's publication date, then id; a cycle, which stated edges
-  cannot make, is broken by that same key); (2) one per comparability group with at least two
+  builds on or improves on, ties by the origin work's publication date, then id; a cycle is
+  broken by that same key); (2) one per comparability group with at least two
   works; (3) one per claim type for live claims of included works that no section above covers;
   (4) the limits: evidence-report limit codes and the works with no stated base.
 - Method disagreement is a slot, never an average: a group section lists each disagreement as a
@@ -127,14 +127,22 @@ def _origin_date(project: Project, idea: IdeaView) -> str:
 
 
 def _lineage_order(project: Project, ideas: Sequence[IdeaView]) -> list[IdeaView]:
-    """Bases before the ideas that build on them; ties by origin date then id."""
+    """Bases before the ideas that build on or improve on them, ties by origin date then id. The
+    edges are the stated and confirmed `builds-on` and `improves-on` edges of the members, read one
+    member at a time: the graph derives idea edges from `builds-on` alone. An edge to a member of
+    another idea, or to the idea itself, orders the two."""
     by_id = {i.idea_id: i for i in ideas}
+    owners: dict[str, set[str]] = {}
+    for idea in ideas:
+        for work in idea.effective_members:
+            owners.setdefault(work, set()).add(idea.idea_id)
     neighbours = index_neighbours(project)
     needs: dict[str, set[str]] = {i: set() for i in by_id}
-    for idea_id in by_id:
-        for edge in neighbours(idea_id, "out", _LINEAGE):
-            if edge.target in by_id and edge.target != idea_id:
-                needs[idea_id].add(edge.target)
+    for idea in ideas:
+        for work in idea.effective_members:
+            for edge in neighbours(work, "out", _LINEAGE):
+                bases = owners.get(edge.target, {edge.target} & by_id.keys())
+                needs[idea.idea_id] |= bases - {idea.idea_id}
     key = {i: (_origin_date(project, v), i) for i, v in by_id.items()}
     ordered: list[IdeaView] = []
     remaining = set(by_id)
