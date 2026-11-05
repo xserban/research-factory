@@ -166,3 +166,14 @@ def test_order_inside_a_rule_group_survives_mixed_owners(
     assert [h.code for h in _legacy_hits(project) if h.code in mine] == expected
     assert [h.code for h in check_module._hits(project) if h.code in mine] == expected
     assert _plain(check_module._hits(project)) == _plain(_legacy_hits(project))
+
+
+def test_layer_hits_keep_their_place_after_lineage(
+    project: Project, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    layer = ["layer-leak", "concept-cycle", "layer-scan-incomplete"]
+    monkeypatch.setattr(check_module, "_layer", lambda p: [CheckHit(c, (), c) for c in layer])
+    monkeypatch.setattr(check_module, "_lineage", lambda p: [CheckHit("relation-stale", (), "r")])
+    got = [h.code for h in check_module._hits(project)]
+    assert got[-4:] == ["relation-stale", *layer]
+    assert [h.code for h in _legacy_hits(project)][-4:] == got[-4:]
