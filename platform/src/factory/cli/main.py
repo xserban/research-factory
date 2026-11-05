@@ -18,7 +18,12 @@ from factory.cli.organisation import consolidation_app, labels_app, terms_app
 from factory.clock import Clock, SystemClock
 from factory.config import Settings
 from factory.document.registry import default_converters
-from factory.errors import FactoryValidationError, ProjectNotFoundError, ValidationIssue
+from factory.errors import (
+    FactoryError,
+    FactoryValidationError,
+    ProjectNotFoundError,
+    ValidationIssue,
+)
 from factory.imports.model import ImportFormat, ImportRole
 from factory.lineage.graph import GraphFilter
 from factory.living.digest_render import to_json as digest_json
@@ -5276,6 +5281,41 @@ def draft_release_cmd(
     typer.echo(f"released {draft}")
 
 
+def _human_verdict(
+    unit: draft_verify_service.VerifyUnit,
+    verdict: str | None,
+    sentence_span: str | None,
+    support_span: list[str] | None,
+    note: str | None,
+) -> draft_verify_service.VerdictInput:
+    """The verdict on a unit already printed: what the options left out is asked for now, as the
+    spans can only be chosen once the unit has been read."""
+    chosen = verdict if verdict is not None else str(typer.prompt("verdict"))
+    if sentence_span is None and chosen != Verdict.SUPPORTED.value:
+        sentence_span = str(typer.prompt("the part of the sentence you judge"))
+    pairs = [(ref, quote) for ref, _, quote in (s.partition("=") for s in support_span or [])]
+    if not pairs and chosen != Verdict.UNSUPPORTED.value:
+        for support in unit.supports:
+            quote = str(
+                typer.prompt(
+                    f"substring of {support.ref} (empty to skip)", default="", show_default=False
+                )
+            )
+            if quote:
+                pairs.append((support.ref, quote))
+    try:
+        return draft_verify_service.VerdictInput(
+            verdict=Verdict(chosen),
+            sentence_span=sentence_span,
+            support_spans=[SupportSpan(ref=ref, substring=quote) for ref, quote in pairs],
+            note=note,
+        )
+    except ValueError:
+        raise FactoryValidationError(
+            [ValidationIssue("verdict", "unknown verdict or malformed --support-span")]
+        ) from None
+
+
 @draft_app.command("verify")
 def draft_verify_cmd(
     ctx: typer.Context,
@@ -5297,8 +5337,9 @@ def draft_verify_cmd(
     note: Annotated[str | None, typer.Option("--note", help="At most 300 characters.")] = None,
 ) -> None:
     """Verify the next sentence as the researcher (spec ruling 16: a human may verify an agent's
-    sentence, never their own): print the unit, then record your verdict in the same command, as
-    a task is leased to one session."""
+    sentence, never their own): print the unit, ask for what the options left out, then record
+    your verdict in the same command, as a task is leased to one session. A refusal, or leaving
+    the prompts, gives the unit back."""
     state = _state(ctx)
     with _reporting_errors():
         project = _resolve_project(state)
@@ -5308,22 +5349,14 @@ def draft_verify_cmd(
             typer.echo("none left")
             return
         typer.echo(unit.model_dump_json(indent=2))
-        chosen = verdict if verdict is not None else str(typer.prompt("verdict"))
         try:
-            item = draft_verify_service.VerdictInput(
-                verdict=Verdict(chosen),
-                sentence_span=sentence_span,
-                support_spans=[
-                    SupportSpan(ref=ref, substring=quote)
-                    for ref, _, quote in (s.partition("=") for s in support_span or [])
-                ],
-                note=note,
+            item = _human_verdict(unit, verdict, sentence_span, support_span, note)
+            verdict_id = draft_verify_service.verify_record(
+                project, unit.task_id, item, actor=actor
             )
-        except ValueError:
-            raise FactoryValidationError(
-                [ValidationIssue("verdict", "unknown verdict or malformed --support-span")]
-            ) from None
-        verdict_id = draft_verify_service.verify_record(project, unit.task_id, item, actor=actor)
+        except (FactoryError, typer.Abort):
+            draft_verify_service.verify_release(project, unit.task_id, actor=actor)
+            raise
     typer.echo(f"recorded {verdict_id}")
 
 

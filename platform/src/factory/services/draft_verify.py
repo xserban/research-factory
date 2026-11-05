@@ -1,6 +1,6 @@
 """Independent verification of sentences (slice 7b, plan W-B, rulings 1 to 3; spec ruling 12).
 
-Declares: `VerifyUnit`, `VerdictInput`, `verify_next`, `verify_record`. The only
+Declares: `VerifyUnit`, `VerdictInput`, `verify_next`, `verify_record`, `verify_release`. The only
 module that writes `draft.verified`.
 
 Invariants:
@@ -50,6 +50,7 @@ from factory.services.tasks import (
     TaskSpec,
     claim_next,
     create_tasks,
+    release_task,
     require_holder,
     task_content,
 )
@@ -196,6 +197,17 @@ def verify_next(project: Project, draft_id: str, *, actor: Actor) -> VerifyUnit 
         if passed_over:
             raise _refuse("model", "the writer's model cannot verify in systematic mode")
         return None
+
+
+def verify_release(project: Project, task_id: str, *, actor: Actor) -> None:
+    """Give back a unit `actor` holds, so that a refused verdict does not keep the sentence for the
+    whole lease. A unit no longer held has nothing to give back."""
+    with project.index.exclusive():
+        project.index.sync()
+        try:
+            release_task(project, actor, task_id, "verdict-refused")
+        except FactoryValidationError:
+            return
 
 
 def _sentence(project: Project, sentence_id: str) -> tuple[str, str | None]:
