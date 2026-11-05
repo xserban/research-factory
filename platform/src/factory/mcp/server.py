@@ -7,6 +7,8 @@ from collections import Counter
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Annotated, Literal, TypeVar, cast, get_args
 
+from mcp.server.auth.provider import TokenVerifier
+from mcp.server.auth.settings import AuthSettings
 from mcp.server.mcpserver import MCPServer
 from pydantic import Field, JsonValue, StringConstraints, TypeAdapter, ValidationError
 
@@ -199,9 +201,12 @@ def build_server(
     sources: Mapping[str, SourceFactory] | None = None,
     fulltext_routes: Callable[[], Mapping[Route, FullTextRoute]] | None = None,
     context: ContextProvider | None = None,
+    auth: AuthSettings | None = None,
+    token_verifier: TokenVerifier | None = None,
 ) -> MCPServer:
     """The factory's MCP server. `context` names each call's principal and session; by default the
-    local user and one session per process, as on stdio.
+    local user and one session per process, as on stdio. `auth` and `token_verifier` are the HTTP
+    transport's (`factory.mcp.http`).
 
     `fulltext_routes`, when given, is called once per `fulltext_fetch` call to build that call's
     routes; tests use it to supply stubs. By default each call builds `default_routes(settings)`,
@@ -209,7 +214,9 @@ def build_server(
     """
     provider = stdio_provider(settings, clock) if context is None else context
     adapters = dict(default_sources() if sources is None else sources)
-    server = ScopedServer("factory", wrap=scoped(provider))
+    server = ScopedServer(
+        "factory", wrap=scoped(provider), auth=auth, token_verifier=token_verifier
+    )
     session = THIS_SESSION
 
     def open_project(
