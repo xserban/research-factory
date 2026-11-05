@@ -146,6 +146,7 @@ TOOL_PERMISSIONS: Mapping[str, Permission] = {
     "xrun_list": Permission.PROJECT_READ,
     "whoami": Permission.PROJECT_READ,
     "review_list": Permission.PROJECT_READ,
+    "ledger_view": Permission.PROJECT_READ,
     # MCP tools that run work. A tool an agent acts through at a gate is here too, a decision
     # included: the gate policy, not this table, says when an agent may pass it.
     "search_run": Permission.WORK_RUN,
@@ -271,6 +272,8 @@ TOOL_PERMISSIONS: Mapping[str, Permission] = {
     "cli:member grant": Permission.PROJECT_GOVERN,
     "cli:member revoke": Permission.PROJECT_GOVERN,
     "cli:member list": Permission.PROJECT_READ,
+    "cli:ledger confirm": Permission.PROJECT_READ,
+    "cli:ledger confirm-for": Permission.PROJECT_GOVERN,
     "cli:inbox add": Permission.WORK_RUN,
     "cli:inbox resolve": Permission.WORK_RUN,
     "cli:inbox withdraw": Permission.WORK_RUN,

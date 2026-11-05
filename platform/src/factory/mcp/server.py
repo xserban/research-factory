@@ -107,6 +107,7 @@ from factory.services import inbox as inbox_service
 from factory.services import interpretations as interpretations_service
 from factory.services import labels as labels_service
 from factory.services import leads as leads_service
+from factory.services import ledger as ledger_service
 from factory.services import lineage as graph_service
 from factory.services import manuscript_verify as manuscript_verify_service
 from factory.services import manuscripts as manuscripts_service
@@ -912,6 +913,21 @@ def build_server(
             return agent_view_service.prisma_view(opened, update)
 
         return _reply(project, report, include_work_ids=False)
+
+    @server.tool()
+    def ledger_view(project: str) -> dict[str, JsonValue]:
+        """The contribution ledger: counts per person and CRediT role, counts per agent role under
+        its delegating user, unmapped event types, the map version, the hash and each person's
+        confirmation status. Computed from the log; empty with a notice on a fresh project.
+        Read-only. Refused to any session that has joined a pass."""
+
+        def view() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            report = ledger_service.ledger_report(opened).model_dump(mode="json")
+            return _withheld(opened, report, include_work_ids=False)
+
+        return _reply(project, view, include_work_ids=False)
 
     @server.tool()
     def report_methods(project: str) -> dict[str, JsonValue]:

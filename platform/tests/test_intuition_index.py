@@ -35,7 +35,7 @@ ALL = GraphFilter(include_inferred=True, include_stale=True)
 
 
 def test_projection_version_bumped() -> None:
-    assert PROJECTION_VERSION == "60"
+    assert PROJECTION_VERSION == "61"
 
 
 def test_layer_tables_are_omitted_when_empty() -> None:

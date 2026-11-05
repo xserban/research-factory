@@ -117,6 +117,7 @@ from factory.services.layer_check import (
     unreviewed_concepts,
     unreviewed_interpretations,
 )
+from factory.services.ledger import is_team_project, unconfirmed
 from factory.services.lineage import graph_status, iter_graph_export
 from factory.services.manuscripts import (
     citation_rows,
@@ -556,6 +557,7 @@ def _run_rules(project: Project) -> list[_Hit]:
         _manuscripts(project),
         _members(project),
         _team_review(project),
+        _ledger_gaps(project),
     ]
     flat = [hit for group in groups for hit in group]
     return [replace(hit, seq=seq) for seq, hit in enumerate(flat)]
@@ -740,6 +742,19 @@ def _writer_verified(project: Project) -> list[_Hit]:
         )
         for draft, sentences in sorted(broken.items())
     ]
+# --- Ledger (slice 5) ---
+
+
+def _ledger_gaps(project: Project) -> list[_Hit]:
+    """People the ledger names with no confirmation of it as it stands: a promotion gap, and the
+    gap to close before an export. A project no one shares has no one to confirm for."""
+    if not is_team_project(project):
+        return []
+    users = unconfirmed(project)
+    if not users:
+        return []
+    message = f"{len(users)} person(s) have not confirmed the ledger as it stands"
+    return [_Hit("ledger-unconfirmed", tuple(users), message)]
 
 
 # --- Hosting (slice 5) ---

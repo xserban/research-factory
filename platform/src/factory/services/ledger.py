@@ -14,28 +14,44 @@ Invariants:
 - `ledger.confirmed` is outside the ledger altogether (see `model/ledger.py`).
 - A governance event the fold refused (a hand-written grant from someone who holds no `owner`)
   stays in the log and credits nobody.
+- A confirmation is a person's own act, by CLI or elicitation, never an agent's or a relay. Only an
+  owner confirms for another person, and only for one the lab holds as deactivated, with a reason.
+- One event that changes the rows, the unmapped list or the map stales every confirmation. An event
+  that credits nobody (a person's task claim, a `system` page) leaves the hash as it was.
 """
 
 import hashlib
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, TypeVar
 
-from sqlalchemy import text
+from sqlalchemy import select, text
 
 from factory.canonical import canonical_json
 from factory.clock import parse_ts
+from factory.events.envelope import Actor
+from factory.index.ledger import LEDGER_TABLES
+from factory.index.members import MEMBER_TABLES, any_grant
 from factory.model.ledger import (
     LEDGER_CONFIRMED,
     MAP_VERSION,
     PEOPLE_ONLY,
     AgentRow,
+    Confirmation,
     CreditRole,
     Ledger,
+    LedgerConfirmed,
+    LedgerReport,
     PersonRow,
     map_entry,
 )
-from factory.services.context import Project
+from factory.model.screening import Channel
+from factory.services.access import Permission, authorize
+from factory.services.context import Principal, Project
+from factory.services.lab import lab_exists, open_lab, payload_of, refuse, user_record
+
+EMPTY_NOTICE = "no contribution has been recorded on this project yet"
 
 _ROWS = text(
     "SELECT type, actor_kind, actor_id, user, model, skill, COUNT(*), MIN(ts), MAX(ts) "
@@ -150,3 +166,150 @@ def _hash(people: list[PersonRow], agents: list[AgentRow], unmapped: dict[str, i
         }
     )
     return f"sha256:{hashlib.sha256(body).hexdigest()}"
+
+
+def confirmations(project: Project) -> dict[str, Confirmation]:
+    """Each person's latest confirmation, by user, and whether it pins the ledger as it stands."""
+    return _confirmations(project, ledger(project))
+
+
+def _confirmations(project: Project, current: Ledger) -> dict[str, Confirmation]:
+    table = LEDGER_TABLES.confirmations
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            select(table.c.user, table.c.ledger_hash, table.c.map_version).order_by(table.c.user)
+        ).all()
+    return {
+        str(user): Confirmation(
+            ledger_hash=str(pinned),
+            current=pinned == current.ledger_hash and version == current.map_version,
+        )
+        for user, pinned, version in rows
+    }
+
+
+def ledger_report(project: Project) -> LedgerReport:
+    """The ledger with its confirmations: empty, with a notice, on a fresh project."""
+    current = ledger(project)
+    notice = EMPTY_NOTICE if not current.named else None
+    return LedgerReport(
+        ledger=current, confirmations=_confirmations(project, current), notice=notice
+    )
+
+
+def confirm_ledger(
+    project: Project, actor: Actor, *, user: str | None = None, reason: str | None = None
+) -> LedgerReport:
+    """Pin the ledger as it stands to `user` (the actor by default) and return what was confirmed.
+
+    Refused, with nothing written: to anyone but a person; over an MCP relay; for someone the ledger
+    does not name; and for another person unless the actor holds `project:govern`, states a reason,
+    and the lab holds that person as deactivated. The ledger is read and the event written under one
+    hold of the write lock, so the pin is of the ledger the caller is given."""
+    target = actor.user if user is None else user
+    with project.writing():
+        channel = project.principal.channel
+        if actor.kind != "human":
+            raise refuse("actor", "only a person confirms the ledger")
+        if channel is Channel.MCP:
+            raise refuse("channel", "the ledger is confirmed by CLI or elicitation, not a relay")
+        if target == actor.user:
+            if reason is not None:
+                raise refuse("reason", "a reason is for confirming on another person's behalf")
+        else:
+            _require_on_behalf(project, actor, target, reason)
+        current = ledger(project)
+        if target not in current.named:
+            raise refuse("user", f"the ledger does not name {target}")
+        payload = payload_of(
+            LedgerConfirmed,
+            user=target,
+            ledger_hash=current.ledger_hash,
+            map_version=current.map_version,
+            channel=channel,
+            reason=reason,
+        )
+        project.record([project.events.make(LEDGER_CONFIRMED, payload, actor)])
+        return ledger_report(project)
+
+
+def _require_on_behalf(project: Project, actor: Actor, user: str, reason: str | None) -> None:
+    if reason is None:
+        raise refuse("reason", "confirming for another person needs a reason")
+    settings = project.settings
+    if not lab_exists(settings):
+        raise refuse("user", "only a deactivated user's entry is confirmed by an owner")
+    lab = open_lab(settings, session=project.session, clock=project.clock)
+    principal = Principal(actor.user, actor.credential, project.principal.channel)
+    authorize(project, principal, actor.kind, Permission.PROJECT_GOVERN, lab=lab)
+    record = user_record(lab, user)
+    if record is None or record.active:
+        raise refuse("user", "only a deactivated user's entry is confirmed by an owner")
+
+
+def is_team_project(project: Project) -> bool:
+    """Whether people share the project: it is hosted, or a grant has counted. A single researcher's
+    stage-0 project has no one to confirm for (acceptance 1)."""
+    if project.is_hosted():
+        return True
+    with project.index.connect() as conn:
+        return any_grant(conn, MEMBER_TABLES)
+
+
+def unconfirmed(project: Project) -> list[str]:
+    """Everyone the ledger names who has no confirmation of it as it stands."""
+    current = ledger(project)
+    confirmed = _confirmations(project, current)
+    return [user for user in current.named if _status(user, confirmed) != "confirmed"]
+
+
+def _when(value: datetime) -> str:
+    return value.date().isoformat()
+
+
+def _status(user: str, confirmed: Mapping[str, Confirmation]) -> str:
+    entry = confirmed.get(user)
+    if entry is None:
+        return "unconfirmed"
+    return "confirmed" if entry.current else "stale"
+
+
+def _credit_table(rows: Sequence[PersonRow]) -> list[str]:
+    lines = ["| Person | CRediT role | Events | First | Last |", "| --- | --- | --- | --- | --- |"]
+    lines += [
+        f"| {r.user} | {r.role.value} | {r.events} | {_when(r.first)} | {_when(r.last)} |"
+        for r in rows
+    ]
+    return lines
+
+
+def _agent_table(rows: Sequence[AgentRow]) -> list[str]:
+    lines = [
+        "| Delegating user | Agent role | Model | Skill | Would map to | Events |",
+        "| --- | --- | --- | --- | --- | --- |",
+    ]
+    lines += [
+        f"| {r.user} | {r.agent_role} | {r.model} | {r.skill} | "
+        f"{r.role.value if r.role is not None else 'no role'} | {r.events} |"
+        for r in rows
+    ]
+    return lines
+
+
+def render_ledger(report: Ledger, confirmed: Mapping[str, Confirmation]) -> str:
+    """The CRediT statement, the AI-assistance statement, the map version, the hash and each named
+    person's confirmation status, as Markdown. A ledger with no rows is one notice."""
+    head = ["# Contribution ledger", ""]
+    tail = ["", f"Map version: {report.map_version}", f"Ledger hash: {report.ledger_hash}"]
+    if not report.named and not report.unmapped:
+        return "\n".join([*head, EMPTY_NOTICE.capitalize() + ".", *tail]) + "\n"
+    lines = [*head, "## CRediT statement", ""]
+    lines += _credit_table(report.people) if report.people else ["No person has a CRediT role."]
+    lines += ["", "## AI-assistance statement", ""]
+    lines += _agent_table(report.agents) if report.agents else ["No agent contributed."]
+    if report.unmapped:
+        lines += ["", "## Unmapped event types", ""]
+        lines += [f"- {name}: {count}" for name, count in report.unmapped.items()]
+    lines += ["", "## Confirmation", ""]
+    lines += [f"- {user}: {_status(user, confirmed)}" for user in report.named]
+    return "\n".join([*lines, *tail]) + "\n"

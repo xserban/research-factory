@@ -51,6 +51,7 @@ async def test_project_status_tool(settings: Settings, project: Project, clock: 
             "audit_record",
             "protocol_deviation",
             "report_prisma",
+            "ledger_view",
             "report_methods",
             "inbox_add",
             "inbox_resolve",

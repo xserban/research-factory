@@ -21,6 +21,7 @@ from factory.index.imports import import_handlers, import_tables
 from factory.index.inbox import inbox_handlers, inbox_tables
 from factory.index.intuition import intuition_handlers, intuition_tables
 from factory.index.labels import label_handlers, label_tables
+from factory.index.ledger import ledger_handlers, ledger_tables
 from factory.index.lineage import lineage_handlers, lineage_tables
 from factory.index.living import digest_handlers, digest_tables, living_handlers, living_tables
 from factory.index.manuscripts import manuscript_handlers, manuscript_tables
@@ -50,7 +51,7 @@ from factory.index.tasks import task_handlers, tasks_table
 from factory.index.watch import run_started_handler, watch_handlers, watch_tables
 
 # Bump on any change to the tables or handlers below; the index is then rebuilt.
-PROJECTION_VERSION = "60"
+PROJECTION_VERSION = "61"
 
 
 def default_projection(blobs: BlobStore | None = None) -> Projection:
@@ -105,6 +106,7 @@ def default_projection(blobs: BlobStore | None = None) -> Projection:
     directions = direction_tables(metadata)
     drafts = draft_tables(metadata, protocol.protocols, project)
     manuscripts = manuscript_tables(metadata)
+    ledger = ledger_tables(metadata)
     handlers: dict[str, Handler] = {
         "project.created": project_created_handler(project),
         "project.hosted": project_hosted_handler(project_hosts),
@@ -147,6 +149,7 @@ def default_projection(blobs: BlobStore | None = None) -> Projection:
         **draft_handlers(drafts, blobs),
         **briefing_handlers(briefings, blobs),
         **manuscript_handlers(manuscripts, blobs),
+        **ledger_handlers(ledger, members),
     }
     # A direction fails in the event that decides it: derived after that event's own fold.
     chain_derived(handlers, directions)

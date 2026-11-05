@@ -107,6 +107,7 @@ from factory.model.labels import (
     TermRetired,
     TermRevised,
 )
+from factory.model.ledger import LedgerConfirmed
 from factory.model.lineage import (
     IdeaDecided,
     IdeaMerged,
@@ -397,4 +398,5 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("project.visibility_set", ProjectVisibilitySet, 1))
     catalog.register(EventType("review.requested", ReviewRequested, 1))
     catalog.register(EventType("review.decided", ReviewDecided, 1))
+    catalog.register(EventType("ledger.confirmed", LedgerConfirmed, 1))
     return catalog

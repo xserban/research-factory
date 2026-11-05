@@ -1,7 +1,8 @@
-"""The contribution ledger's values (slice 5 ruling 16, R-112).
+"""The contribution ledger's values and the event that confirms it (slice 5 ruling 16, R-112).
 
-Pure: `services/ledger.py` folds the log into these rows. `ledger` is the contribution ledger;
-slice 6's evidence-versus-reproduction ledger is `benchmark_ledger` (decision 75).
+Pure: `services/ledger.py` folds the log into these rows, and `index/ledger.py` decides when a
+confirmation counts. `ledger` is the contribution ledger; slice 6's evidence-versus-reproduction
+ledger is `benchmark_ledger` (decision 75).
 
 Invariants:
 - Nothing here is typed by a person or an agent: every count is computed from events (R-05).
@@ -15,10 +16,16 @@ Invariants:
 from datetime import datetime
 from enum import StrEnum
 
+from pydantic import Field
+
 from factory.model.base import StrictModel
+from factory.model.lab import Reason, UserId
+from factory.model.screening import Channel
 
 MAP_VERSION = "credit-map@1"
 LEDGER_CONFIRMED = "ledger.confirmed"
+LEDGER_HASH_RE = r"^sha256:[0-9a-f]{64}$"
+MAP_VERSION_RE = r"^credit-map@[0-9]{1,6}$"
 
 
 class CreditRole(StrEnum):
@@ -133,3 +140,29 @@ class Ledger(StrictModel):
     def named(self) -> list[str]:
         """Everyone the statements name: each person, and each user an agent worked for."""
         return sorted({row.user for row in self.people} | {row.user for row in self.agents})
+
+
+class LedgerConfirmed(StrictModel):
+    """A person's confirmation of their entry, pinned to the ledger they read. `reason` is set only
+    when an owner confirms for a deactivated user, who can no longer do it."""
+
+    user: UserId
+    ledger_hash: str = Field(pattern=LEDGER_HASH_RE)
+    map_version: str = Field(pattern=MAP_VERSION_RE)
+    channel: Channel
+    reason: Reason | None = None
+
+
+class Confirmation(StrictModel):
+    """The latest confirmation of one person; `current` when it pins the ledger as it stands."""
+
+    ledger_hash: str
+    current: bool
+
+
+class LedgerReport(StrictModel):
+    """The ledger with its confirmations; `notice` says why it is empty on a fresh project."""
+
+    ledger: Ledger
+    confirmations: dict[str, Confirmation]
+    notice: str | None

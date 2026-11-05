@@ -32,12 +32,14 @@ SPEC = ModuleSpec(
             "task.released",
             "gate.audit_sampled",
             "gate.audit_labelled",
+            "ledger.confirmed",
         ),
         tables=(
             "event_refs",
             "events",
             "gate_audit_items",
             "gate_audits",
+            "ledger_confirmations",
             "member_events",
             "members",
             "meta",
@@ -71,6 +73,7 @@ SPEC = ModuleSpec(
         CheckRule("member-missing-reviewer-of-record", (None, "warning", "error")),
         CheckRule("review-open", ("warning", "warning", "warning")),
         CheckRule("review-stale", ("warning", "warning", "warning")),
+        CheckRule("ledger-unconfirmed", (None, "warning", "error")),
     ),
 )
 
