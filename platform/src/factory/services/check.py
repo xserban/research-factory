@@ -75,6 +75,8 @@ from factory.services.evidence_report import evidence_report
 from factory.services.extraction import (
     calibration_task_ids,
     extraction_population,
+    filled_imports,
+    import_items,
     in_dual_sample,
     live_claims,
     live_rows,
@@ -146,6 +148,7 @@ from factory.services.region_check import AGENT_VIEW, region_findings
 from factory.services.relations import RelationView, list_relations
 from factory.services.seeds import SeedRole, _rigor_mode, seed_check
 from factory.services.slice6_check import slice6_hits
+from factory.services.shared_mining import source_state, unverified_imports
 from factory.services.snowball import recorded_rounds, round_runs
 from factory.services.status_lookup import (
     crossref_doi,
@@ -539,6 +542,7 @@ def _run_rules(project: Project) -> list[_Hit]:
         _mining(project),
         _miner_lifecycle(project),
         slice6_hits(project),
+        _mine_imports(project),
         _drafts(project),
         _writer_verified(project),
         _hosting(project),
@@ -766,21 +770,30 @@ def _mining(project: Project) -> list[_Hit]:
                 )
             )
         config = pass_config(project, PassLabel.B, scope=scope)
+        filled = filled_imports(project, scope)
+        items = import_items(project) if filled else {}
+        single = {
+            work
+            for work, rows in filled.items()
+            if work in population
+            and not all(r.extraction_id in items and items[r.extraction_id].dual for r in rows)
+        }
         if config is not None:
-            single = sorted(
+            single |= {
                 w
                 for w in population
-                if not in_dual_sample(config.seed, w, schema.dual_extract_sample)
-            )
-            if single:
-                hits.append(
-                    _Hit(
-                        "mine-single",
-                        tuple(single),
-                        f"miner {use.name}: {len(single)} work(s) are mined once, outside the "
-                        "dual sample",
-                    )
+                if w not in filled
+                and not in_dual_sample(config.seed, w, schema.dual_extract_sample)
+            }
+        if single:
+            hits.append(
+                _Hit(
+                    "mine-single",
+                    tuple(sorted(single)),
+                    f"miner {use.name}: {len(single)} work(s) are mined once, outside the "
+                    "dual sample",
                 )
+            )
     return hits
 
 
@@ -797,6 +810,74 @@ def _production_rows(project: Project, name: str, version: int) -> int:
             {"s": name, "r": f"{name}@{version}"},
         ).all()
     return sum(1 for (task,) in found if str(task) not in apart)
+
+
+def _mine_imports(project: Project) -> list[_Hit]:
+    """Findings of imported records (rulings 19, 20): a row that does not re-verify here, a source
+    record since corrected, and a source that cannot be asked. Ids and counts only. Nothing is
+    reported, and the store is not opened, without imported rows in use."""
+    hits: list[_Hit] = []
+    failing = unverified_imports(project)
+    if failing:
+        hits.append(
+            _Hit(
+                "mine-import-unverified",
+                tuple(failing),
+                f"{len(failing)} imported row(s) do not re-verify against this project's "
+                "conversions",
+            )
+        )
+    state = source_state(project)
+    if state.superseded:
+        hits.append(
+            _Hit(
+                "mine-source-superseded",
+                state.superseded,
+                f"{len(state.superseded)} imported row(s) were corrected in their source; "
+                "re-import or re-mine them",
+            )
+        )
+    if state.store_missing:
+        hits.append(
+            _Hit(
+                "mine-source-unavailable",
+                (),
+                "the shared store is not built, so imported rows cannot be compared with their "
+                "source; run `factory shared rebuild`",
+            )
+        )
+    if state.unavailable:
+        hits.append(
+            _Hit(
+                "mine-source-unavailable",
+                state.unavailable,
+                f"the source of {len(state.unavailable)} imported row(s) cannot be read",
+            )
+        )
+    hits.extend(_unaudited_imports(project))
+    return hits
+
+
+def _unaudited_imports(project: Project) -> list[_Hit]:
+    """Imported rows in use under `imports = "audit"` that no audit has sampled (ruling 19)."""
+    from factory.model.extraction import MinerScope
+    from factory.services.extraction import filled_imports, imports_policy
+    from factory.services.extraction_audit import extraction_audit_outstanding
+
+    protocol = current_protocol(project)
+    uses = () if protocol is None else protocol.spec.miners or ()
+    return [
+        _Hit(
+            "mine-import-unaudited",
+            (),
+            f"miner {use.name}: imported rows are in the audit population and no audit has "
+            "sampled them",
+        )
+        for use in uses
+        if imports_policy(project, MinerScope(use.name)) == "audit"
+        and filled_imports(project, MinerScope(use.name))
+        and extraction_audit_outstanding(project, scope=MinerScope(use.name))
+    ]
 
 
 def _miner_lifecycle(project: Project) -> list[_Hit]:

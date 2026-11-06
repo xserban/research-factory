@@ -94,6 +94,7 @@ from factory.model.extraction import (
     scope_of_pack,
     scope_of_schema_ref,
 )
+from factory.model.mine_imports import MINE_IMPORT_PREFIX
 from factory.model.notices import WorkNoticeState
 from factory.model.protocol import ExtractionSchema, ProtocolAmended, ProtocolStatus, ScreeningStage
 from factory.model.screening import PassLabel
@@ -152,23 +153,30 @@ __all__ = [
     "ExtractNext",
     "ExtractResult",
     "ExtractionRow",
+    "ImportItem",
     "PassConfig",
     "UnitPin",
     "UnitState",
     "extract_next",
     "extract_record",
     "extraction_population",
+    "filled_imports",
+    "import_items",
+    "imported_rows",
+    "imports_policy",
     "in_dual_sample",
     "is_extraction_session",
     "join_extraction_pass",
     "live_claims",
     "live_rows",
+    "mined_works",
     "next_unit",
     "pass_config",
     "record_unit",
     "recorded_row",
     "require_schema",
     "scope_population",
+    "scope_rows",
     "screening_session",
     "session_scope",
     "stale_claims",
@@ -675,6 +683,7 @@ def next_unit(
     scope: ScopeKey,
     content: ContentHook | None = None,
     calibration_id: str | None = None,
+    reopened: frozenset[str] = frozenset(),
 ) -> ExtractNext:
     """Serve the next task of extraction pass `label` of `scope` to the session, or say why none
     is served.
@@ -695,7 +704,10 @@ def next_unit(
     programming error, not input) and is served as a `ContributionBatch`.
 
     `calibration_id` (a miner scope's pass A only) restricts the pass to the units of that drawn
-    calibration: its tasks are a ledger of their own, apart from the production tasks."""
+    calibration: its tasks are a ledger of their own, apart from the production tasks.
+
+    `reopened` names works an import fills that are to be mined again: they are queued, and their
+    first claimed task shadows the imported rows."""
     with project.index.exclusive():
         project.index.sync()
         protocol, schema, pack = require_schema(project, scope=scope)
@@ -749,7 +761,7 @@ def next_unit(
             (protocol, schema, pack),
             config,
             queue,
-            _ledger(project, scope, calibration_id),
+            _ledger(project, scope, calibration_id, reopened),
             content,
         )
         blocked: list[str] = []
@@ -758,7 +770,8 @@ def next_unit(
         if label is PassLabel.B and population and not queue:
             blocked.append("no work falls in the dual sample")
         project.record([*events, *queued])
-        servable = _servable(_ledger(project, scope, calibration_id), label, queue, schema, pack)
+        ledger = _ledger(project, scope, calibration_id, reopened)
+        servable = _servable(ledger, label, queue, schema, pack)
         kind = kinds_for(scope)[label]
         task = _held(project, actor, kind, servable) or claim_next(
             project, actor, kind, task_ids=servable
@@ -966,6 +979,11 @@ class ExtractionRow(StrictModel):
     fields: dict[str, StoredField]
     event_id: str
     cited: CitedEntry | None = None
+
+    @property
+    def origin(self) -> Literal["local", "imported"]:
+        """`imported` for a row of a `mine.imported` event, whose `task_id` is the import's id."""
+        return "imported" if self.task_id.startswith(MINE_IMPORT_PREFIX) else "local"
 
 
 class ClaimRow(StrictModel):
@@ -1699,6 +1717,33 @@ class _Ledger:
     documents: dict[str, ConversionRef | None] = field(default_factory=dict)
     references: dict[str, str | None] = field(default_factory=dict)
     created: dict[str, str] = field(default_factory=dict)
+    imported: dict[str, list[ExtractionRow]] = field(default_factory=dict)
+    """Each work's live imported rows (M-E), kept apart from `rows`: they have no task and no pass
+    here, so a mined row neither collides with one nor supersedes one. Empty when the protocol
+    declines imports, and for a calibration."""
+    reopened: frozenset[str] = frozenset()
+    """Imported works to queue again: their source was corrected (`mine_next`). They stay filled
+    (their rows in use) until a local row or claimed task shadows them."""
+    _filled: set[str] | None = None
+
+    def filled(self) -> set[str]:
+        """The works an import fills: a unit counts as current through its imported rows, so it is
+        not queued, while no local row or claimed task shadows them and none of them is stale (a
+        queued, unserved task shadows nothing). A reopened work stays filled, so its imported rows
+        stand and its source flag stays live, until its first task is claimed."""
+        if self._filled is None:
+            local = {
+                work
+                for (work, _), tasks in self.tasks.items()
+                if any(t.status != TaskStatus.OPEN.value for t in tasks)
+            } | {work for work, _ in self.rows}
+            stale = self.stale_rows() if self.imported else set()
+            self._filled = {
+                work
+                for work, rows in self.imported.items()
+                if work not in local and not any(row.extraction_id in stale for row in rows)
+            }
+        return self._filled
 
     def reference_extraction(self, work_id: str) -> str | None:
         """The work's current G1 reference extraction (`current_extraction`), read once."""
@@ -1846,22 +1891,25 @@ class _Ledger:
     ) -> UnitState:
         tasks = self.tasks.get((work_id, label))
         if not tasks:
-            return UnitState(work_id=work_id, pass_label=label, state="queued", reason=None)
+            empty: Literal["current", "queued"] = (
+                "current" if work_id in self.filled() and work_id not in self.reopened else "queued"
+            )
+            return UnitState(work_id=work_id, pass_label=label, state=empty, reason=None)
         latest = tasks[-1]
         reason = self.issue(work_id, label, latest, schema, pack)
         if reason is not None:
             return UnitState(work_id=work_id, pass_label=label, state="stale", reason=reason)
-        state: Literal["open", "current", "queued"] = "queued"
+        status: Literal["open", "current", "queued"] = "queued"
         if latest.status == TaskStatus.COMPLETED.value:
-            state = "current"
+            status = "current"
         elif latest.status == TaskStatus.CLAIMED.value:
-            state = "open"
-        return UnitState(work_id=work_id, pass_label=label, state=state, reason=None)
+            status = "open"
+        return UnitState(work_id=work_id, pass_label=label, state=status, reason=None)
 
     def stale_rows(self) -> set[str]:
         """The live rows an amendment recorded after them stales, or that pin a document other
         than the work's current one."""
-        live = [row for rows in self.rows.values() for row in rows]
+        live = [row for rows in (*self.rows.values(), *self.imported.values()) for row in rows]
         refs = [RowRef(row_id=r.extraction_id, fields=tuple(r.fields), at=r.event_id) for r in live]
         stale = set(
             stale_rows(
@@ -1886,7 +1934,10 @@ class _Ledger:
 
 
 def _ledger(
-    project: Project, scope: ScopeKey = Scope.EVIDENCE, calibration_id: str | None = None
+    project: Project,
+    scope: ScopeKey = Scope.EVIDENCE,
+    calibration_id: str | None = None,
+    reopened: frozenset[str] = frozenset(),
 ) -> _Ledger:
     """Read the ledger of `scope`, or of one calibration of a miner scope; the caller has synced
     the index."""
@@ -1925,6 +1976,12 @@ def _ledger(
         config = pass_config(project, label, scope=scope)
         default = "schema" if label is PassLabel.A else "reversed"
         orders[label] = default if config is None else config.field_order
+    imported: dict[str, list[ExtractionRow]] = {}
+    if calibration_id is None:
+        found = imported_rows(project, scope)
+        if found and imports_policy(project, scope) != "deny":
+            for row in found:
+                imported.setdefault(row.work_id, []).append(row)
     return _Ledger(
         project,
         scope,
@@ -1935,6 +1992,8 @@ def _ledger(
         orders,
         claims,
         notice_states=work_states(project),
+        imported=imported,
+        reopened=reopened,
     )
 
 
@@ -2004,7 +2063,20 @@ def started_works(project: Project, *, scope: ScopeKey = Scope.EVIDENCE) -> set[
         for (work, _), tasks in ledger.tasks.items()
         if any(t.status != TaskStatus.OPEN.value for t in tasks)
     }
-    return started | {work for work, _ in ledger.rows}
+    return started | {work for work, _ in ledger.rows} | ledger.filled()
+
+
+def mined_works(project: Project, scope: ScopeKey) -> set[str]:
+    """The works of `scope` this project has a claimed or completed task or a mined row of: an
+    import of one would be shadowed by the local units, so it is refused. A queued task nobody
+    served does not count, so a re-import stays possible. Read-only."""
+    project.index.sync()
+    ledger = _ledger(project, scope)
+    return {
+        work
+        for (work, _), tasks in ledger.tasks.items()
+        if any(t.status != TaskStatus.OPEN.value for t in tasks)
+    } | {work for work, _ in ledger.rows}
 
 
 def stale_claims(project: Project) -> set[str]:
@@ -2073,6 +2145,10 @@ def unit_states(
 # --- Reading recorded rows and claims ---
 
 
+_MINED = f"substr(task_id, 1, {len(MINE_IMPORT_PREFIX)}) != '{MINE_IMPORT_PREFIX}'"
+"""SQL: the row was mined here, not imported (an imported row's `task_id` is its import's id)."""
+
+
 def live_rows(
     project: Project,
     pass_label: PassLabel | None = None,
@@ -2086,9 +2162,12 @@ def live_rows(
 
     A miner's calibration rows (those of its calibration tasks) are a separate population:
     `calibration=False` leaves them out, `calibration=True` returns only them (and nothing for
-    another scope)."""
+    another scope).
+
+    Rows imported from another project are not here: they have no task, pass or unit of this
+    project (`imported_rows`)."""
     where, params = _filters(pass_label, work_id)
-    where += " AND superseded_by IS NULL AND scope = :scope"
+    where += f" AND superseded_by IS NULL AND scope = :scope AND {_MINED}"
     params["scope"] = scope.value
     rows = [row for row, _ in _read_rows(project, where, params)]
     if not isinstance(scope, MinerScope):
@@ -2110,6 +2189,93 @@ def recorded_row(
         {"scope": scope.value, "ident": extraction_id},
     )
     return found[0] if found else None
+
+
+def imported_rows(project: Project, scope: ScopeKey) -> list[ExtractionRow]:
+    """The live rows of `scope` imported from another project, by extraction id. Only a registered
+    miner's scope holds any."""
+    if not isinstance(scope, MinerScope):
+        return []
+    where = f" AND superseded_by IS NULL AND scope = :scope AND NOT ({_MINED})"
+    return [row for row, _ in _read_rows(project, where, {"scope": scope.value})]
+
+
+def imports_policy(project: Project, scope: ScopeKey) -> Literal["allow", "deny", "audit"]:
+    """What the current protocol says of records imported into `scope`: its `MinerUse.imports`, or
+    `deny` for a scope no use lists. A forged import under `deny` therefore never counts, and a
+    protocol that declines imports later stops counting those it had (ruling 19)."""
+    protocol = current_protocol(project)
+    if protocol is None or not isinstance(scope, MinerScope):
+        return "deny"
+    use = next((u for u in protocol.spec.miners or () if u.name == scope.name), None)
+    return "deny" if use is None else use.imports
+
+
+def filled_imports(project: Project, scope: ScopeKey) -> dict[str, list[ExtractionRow]]:
+    """The imported rows in use, by work: of the units an import fills (`_Ledger.filled`), so never
+    a stale row, a row shadowed by local mining, or one the protocol declines. Read-only."""
+    project.index.sync()
+    if not imported_rows(project, scope):
+        return {}
+    ledger = _ledger(project, scope)
+    return {work: ledger.imported[work] for work in sorted(ledger.filled())}
+
+
+@dataclass(frozen=True)
+class ImportItem:
+    """Where one imported row came from, as `mine_import_items` holds it."""
+
+    extraction_id: str
+    import_id: str
+    source_project: str
+    miner: str
+    version: int
+    digest: str
+    dual: bool
+    source_conversion_id: str
+    source_row_key: str
+    source_extraction_ids: tuple[str, ...] = ()
+
+
+def import_items(project: Project) -> dict[str, ImportItem]:
+    """Every imported row's provenance, by its extraction id. Read-only."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT i.extraction_id, i.import_id, m.source_project, m.miner, m.version, "
+                "m.digest, i.dual, i.source_conversion_id, i.source_row_key, "
+                "i.source_extraction_ids "
+                "FROM mine_import_items i JOIN mine_imports m ON m.import_id = i.import_id"
+            )
+        ).all()
+    return {
+        str(r[0]): ImportItem(
+            str(r[0]),
+            str(r[1]),
+            str(r[2]),
+            str(r[3]),
+            int(r[4]),
+            str(r[5]),
+            bool(r[6]),
+            str(r[7]),
+            str(r[8]),
+            tuple(str(i) for i in json.loads(str(r[9]))),
+        )
+        for r in rows
+    }
+
+
+def scope_rows(project: Project, scope: ScopeKey) -> list[tuple[ExtractionRow, bool]]:
+    """Every row of `scope` mined here, live or superseded, by extraction id, each with whether it
+    is live: what a source project offers the shared store (M-E). A miner's calibration rows are
+    left out, as calibration does not travel, and imported rows too: an import is not re-exported,
+    so a record's source is always the project that mined it."""
+    rows = _read_rows(project, f" AND scope = :scope AND {_MINED}", {"scope": scope.value})
+    if not isinstance(scope, MinerScope):
+        return rows
+    apart = calibration_task_ids(project, scope)
+    return [(row, live) for row, live in rows if row.task_id not in apart]
 
 
 _FIELD_BATCH = 5000

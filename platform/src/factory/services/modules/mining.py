@@ -29,6 +29,7 @@ SPEC = ModuleSpec(
             "miner.retired",
             "miner.calibration_drawn",
             "miner.calibration_labelled",
+            "mine.imported",
         ),
         tables=(
             "miners",
@@ -36,6 +37,8 @@ SPEC = ModuleSpec(
             "miner_calibration_units",
             "miner_calibration_labels",
             "miner_calibration_label_sessions",
+            "mine_imports",
+            "mine_import_items",
         ),
         note="registered miners are data; their records are written in the extraction.* family"
         " (the pack on each event is the miner's name); mine.resolve is the gate of the"
@@ -68,8 +71,12 @@ SPEC = ModuleSpec(
         ("amendment", "document-version", "conversion"),
     ),
     checks=(
+        CheckRule("mine-import-unaudited", ("warning", "warning", "error")),
+        CheckRule("mine-import-unverified", ("error", "error", "error")),
         CheckRule("mine-pending", ("warning", "warning", "warning")),
         CheckRule("mine-single", (None, "warning", "error")),
+        CheckRule("mine-source-superseded", ("warning", "warning", "error")),
+        CheckRule("mine-source-unavailable", ("warning", "warning", "warning")),
         CheckRule("miner-calibration-failed", ("warning", "warning", "warning")),
         CheckRule("miner-uncalibrated-evidence", ("error", "error", "error")),
         CheckRule("miner-version-unread", ("warning", "warning", "warning")),

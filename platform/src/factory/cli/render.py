@@ -76,6 +76,8 @@ from factory.services.question import QuestionView
 from factory.services.references import ExtractSummary, Page, ReferenceCounts, ReResolveSummary
 from factory.services.regions import ExportRow, RegionState, VersionInfo
 from factory.services.relations import RelationView
+from factory.services.results import BatchResult
+from factory.services.shared_mining import SharedProject, SharedUnit
 from factory.services.snowball import Comparison, RoundCandidate, RoundResult
 from factory.services.trace import TraceNode
 from factory.services.watch import CycleSummary, WatchStatus
@@ -492,6 +494,11 @@ def mine_status_lines(status: list[MineStatus]) -> list[str]:
     return [
         f"{m.name} version {m.version}: units {m.units} (closed {m.closed}, open {m.open}, "
         f"stale {m.stale}), rows {m.rows}, agreement {_rate(m.agreement)}"
+        + (
+            f", imported dual {m.imported_dual}, single {m.imported_single}"
+            if m.imported_dual or m.imported_single
+            else ""
+        )
         for m in status
     ]
 
@@ -1661,4 +1668,30 @@ def draft_detail_lines(
             lines.append(f"    {row.text}")
             if row.supports:
                 lines.append(f"    supports: {', '.join(row.supports)}")
+    return lines
+
+
+def shared_status_lines(projects: Sequence[SharedProject]) -> list[str]:
+    """One line per project the shared store knows of, or a notice when it knows none."""
+    if not projects:
+        return ["the shared store holds no project"]
+    return [f"{p.slug}: {p.status}, {p.records} record(s)" for p in projects]
+
+
+def shared_unit_lines(units: Sequence[SharedUnit]) -> list[str]:
+    """One line per importable unit, or a notice when there is none."""
+    if not units:
+        return ["no importable unit"]
+    return [
+        f"{u.project} {u.work_id} {u.conversion_id}: {u.status}, {u.rows} row(s)"
+        + (", dual" if u.dual else "")
+        for u in units
+    ]
+
+
+def mine_import_lines(result: BatchResult[str]) -> list[str]:
+    """How many units an import wrote, then each refusal by its position."""
+    lines = [f"imported {len(result.written)} unit(s)"]
+    for error in result.rejected:
+        lines += [f"unit {error.index}: {i.field}: {i.reason}" for i in error.issues]
     return lines

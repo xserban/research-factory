@@ -39,7 +39,7 @@ from factory.mining.spec import (
 from factory.mining.validate import validate_miner
 from factory.model.base import StrictModel
 from factory.model.extraction import ExtractedRowInput, MinerScope
-from factory.model.miners import MinerRegistered, MinerUse
+from factory.model.miners import ImportedFrom, MinerRegistered, MinerUse
 from factory.model.protocol import ExtractionSchema, ProtocolStatus, ScreeningStage
 from factory.model.screening import PassLabel
 from factory.model.search import QueryPurpose
@@ -53,13 +53,18 @@ from factory.services.extraction import (
     ExtractNext,
     ExtractResult,
     MineBatchContent,
+    filled_imports,
     live_rows,
     next_unit,
     record_unit,
     stale_extractions,
     unit_states,
 )
-from factory.services.extraction_agreement import agreement_overall
+from factory.services.extraction_agreement import (
+    agreement_overall,
+    final_rows,
+    independence_counts,
+)
 from factory.services.passes import memberships
 from factory.services.protocol import ProtocolVersion, current_protocol, miner_extraction_schema
 from factory.services.references import current_extraction, included_works
@@ -71,6 +76,7 @@ __all__ = [
     "MineStatus",
     "MinerListing",
     "MinerRow",
+    "calibration_sample",
     "mine_next",
     "mine_record",
     "mine_status",
@@ -193,8 +199,16 @@ def registered_miner(project: Project, name: str, version: int) -> MinerSpec | N
     return None if row is None else spec_from_json(project.blobs.get_json(row.spec_blob))
 
 
-def register_miner(project: Project, actor: Actor, spec_json: JsonValue) -> MinerRegistered:
+def register_miner(
+    project: Project,
+    actor: Actor,
+    spec_json: JsonValue,
+    *,
+    imported_from: ImportedFrom | None = None,
+) -> MinerRegistered:
     """Register a miner from its JSON spec; the spec is validated and recorded as a blob.
+    `imported_from` records the project it was copied from (M-E); it must name this spec's digest
+    (`digest`).
 
     Refused, with nothing written: for a system actor (`actor`); a spec of the wrong shape or
     meaning (the issues of `spec_from_json` and `validate_miner`, dotted); a `(name, version)` that
@@ -209,6 +223,10 @@ def register_miner(project: Project, actor: Actor, spec_json: JsonValue) -> Mine
     if issues:
         raise FactoryValidationError(issues)
     digest = miner_digest(spec)
+    if imported_from is not None and imported_from.digest != digest:
+        raise FactoryValidationError(
+            [ValidationIssue("digest", "the source registers another digest of this miner")]
+        )
     with project.index.exclusive():
         project.index.sync()
         existing = registered_row(project, spec.name, spec.version)
@@ -239,6 +257,7 @@ def register_miner(project: Project, actor: Actor, spec_json: JsonValue) -> Mine
             digest=digest,
             spec_blob=project.blobs.put_json(body),
             proposer_kind=actor.kind,
+            imported_from=imported_from,
         )
         event = project.events.make(
             "miner.registered",
@@ -323,7 +342,7 @@ def miner_schema(project: Project, name: str) -> tuple[ProtocolVersion, Extracti
     return protocol, schema, compile_miner(spec)
 
 
-def _calibration_sample(project: Project, name: str) -> set[str]:
+def calibration_sample(project: Project, name: str) -> set[str]:
     """The works drawn into any calibration of miner `name` (they are never production units)."""
     project.index.sync()
     with project.index.connect() as conn:
@@ -342,7 +361,7 @@ def miner_population(project: Project, name: str) -> list[str]:
     population less the units drawn into a calibration (M-D ruling 2: a calibration unit is never
     mined by a production pass, so no resolution can have fixed it)."""
     _, _, spec = _listed(project, name)
-    apart = _calibration_sample(project, name)
+    apart = calibration_sample(project, name)
     return [work for work, _ in population(project, spec.selector) if work not in apart]
 
 
@@ -424,6 +443,11 @@ def mine_next(
         from factory.services.miner_independence import require_production_pass
 
         require_production_pass(project, actor, name)
+    reopened: frozenset[str] = frozenset()
+    if not calibration:
+        from factory.services.shared_mining import reopened_works  # it imports this module
+
+        reopened = reopened_works(project, name)
     digest = miner_digest(spec)
     notes = {f.name: _kind_note(f.kind) for f in spec.fields}
     described = {f.name: f.description for f in spec.fields if f.description}
@@ -449,6 +473,7 @@ def mine_next(
         scope=MinerScope(name),
         content=content,
         calibration_id=calibration_id,
+        reopened=reopened,
     )
 
 
@@ -530,6 +555,9 @@ class MineStatus(StrictModel):
     rows: int
     stale: int
     agreement: float | None
+    imported_dual: int = 0
+    imported_single: int = 0
+    """Imported rows in use, split by whether the source had two agreeing, independent passes."""
 
 
 def mine_status(
@@ -565,6 +593,12 @@ def mine_status(
         ]
         stale = stale_extractions(project, scope=scope)
         live = [r for r in live_rows(project, scope=scope) if r.extraction_id not in stale]
+        imported = 0 if own is not None else sum(map(len, filled_imports(project, scope).values()))
+        split = (
+            independence_counts(final_rows(project, scope=scope))
+            if imported and own is None
+            else None
+        )
         agreement = (
             agreement_overall(project, scope=scope).overall
             if with_agreement and own is None
@@ -578,9 +612,11 @@ def mine_status(
                 units=len(states),
                 open=sum(s.state in ("open", "queued") for s in states),
                 closed=sum(s.state == "current" for s in states),
-                rows=len([r for r in live if own is None or r.pass_label == own[1]]),
+                rows=len([r for r in live if own is None or r.pass_label == own[1]]) + imported,
                 stale=sum(s.state == "stale" for s in states),
                 agreement=agreement,
+                imported_dual=0 if split is None else split.imported_dual,
+                imported_single=0 if split is None else split.imported_single,
             )
         )
     return out

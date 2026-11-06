@@ -126,6 +126,7 @@ from factory.model.manuscripts import (
     ManuscriptVerified,
     UnitClosed,
 )
+from factory.model.mine_imports import MineImported
 from factory.model.miner_calibration import MinerCalibrationDrawn, MinerCalibrationLabelled
 from factory.model.miners import MinerRegistered, MinerRetired
 from factory.model.notices import NoticeAssessed, NoticeObserved
@@ -265,6 +266,7 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("miner.retired", MinerRetired, 1))
     catalog.register(EventType("miner.calibration_drawn", MinerCalibrationDrawn, 1))
     catalog.register(EventType("miner.calibration_labelled", MinerCalibrationLabelled, 1))
+    catalog.register(EventType("mine.imported", MineImported, 1))
     catalog.register(EventType("fulltext.fetch_started", FetchStarted, 1))
     catalog.register(EventType("fulltext.attempted", Attempted, 1))
     catalog.register(EventType("fulltext.document_added", DocumentAdded, 1))

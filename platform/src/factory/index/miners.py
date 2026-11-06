@@ -95,6 +95,10 @@ def miner_handlers(t: MinerTables) -> dict[str, Handler]:
         payload = MinerRegistered.model_validate(event.payload)
         if payload.proposer_kind != event.actor.kind:
             return
+        source = payload.imported_from
+        carried = source is not None and source.proposer_session is not None
+        kind = "agent" if carried else payload.proposer_kind
+        session = source.proposer_session if source is not None and carried else event.actor.session
         conn.execute(
             sqlite_insert(t.miners)
             .values(
@@ -102,8 +106,8 @@ def miner_handlers(t: MinerTables) -> dict[str, Handler]:
                 version=payload.version,
                 digest=payload.digest,
                 miner_id=payload.miner_id,
-                registered_by_kind=payload.proposer_kind,
-                proposer_session=event.actor.session,
+                registered_by_kind=kind,
+                proposer_session=str(session),
                 spec_blob=payload.spec_blob,
                 retired=False,
                 event_id=event.id,

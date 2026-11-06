@@ -199,3 +199,9 @@ Minor review findings parked during the v1 build, to address when iterating from
 - W-C: a refused `manuscript add` can leave its bytes in the library, which is git-ignored and harmless.
 - W-C: a task whose unit closed after it was made stays open in the log; it is not counted and is never served.
 - W-C: `manuscript.segmented` holds every sentence in one event, up to 100000 entries; check the line size against what the reader expects at that end.
+- M-E: a project that grew has all its records computed again at sync, since any event can change a status; a sync costs one project's `settled_rows`, which carries decision 92's per-row fold cost.
+- M-E: `source-superseded` is reported by `check` and drives `mine_next`, but `mine_status` and the methods do not show it.
+- M-E: the store does not hold the verifier version of a record (spec ruling 18 "verification results"): the extraction tables do not project it, and every stored row passed verification.
+- M-E: a `pending` source row is never flagged in an importer, so a source record that leaves its population is not `source-superseded`.
+- M-E: `kind_checks` reads the importer's current reference list, so `mine-import-unverified` can fire on a `work_ref(entry)` row after the importer replaces that list.
+- M-E: `available_units` has no MCP tool; a relaying agent names units from the researcher's `mine import --list`.

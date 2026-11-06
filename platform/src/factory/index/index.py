@@ -117,6 +117,8 @@ OMITTED_WHEN_EMPTY: frozenset[str] = frozenset(
         "manuscript_flags",
         "manuscript_audits",
         "manuscript_audit_items",
+        "mine_imports",
+        "mine_import_items",
         "experiments",
         "experiment_amendments",
         "experiment_deviations",

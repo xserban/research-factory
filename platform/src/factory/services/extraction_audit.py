@@ -35,6 +35,7 @@ from factory.model.extraction import (
     CardScope,
     ExtractionAuditLabelled,
     ExtractionAuditSampled,
+    MinerScope,
     Scope,
     pack_tag,
     scope_from_value,
@@ -48,6 +49,7 @@ from factory.services.audit_core import AuditPopulation
 from factory.services.context import Project
 from factory.services.conversions import conversion_manifest
 from factory.services.extraction import (
+    imports_policy,
     require_schema,
 )
 from factory.services.extraction_agreement import extraction_agreement, final_rows
@@ -126,15 +128,18 @@ def _values(project: Project, scope: AuditScope) -> list[tuple[AuditItemRef, str
     """The agreed values with the extraction each came from, sorted. Single-extraction rows are
     not audited here; a field a human dropped (`neither`) is not a value. Every field of a
     contribution row is a value, `item_kind` and `absent_kind` too, so a not-stated item is
-    audited. The card scope's values are the stated quote assertions of live cards."""
+    audited. The card scope's values are the stated quote assertions of live cards. An imported
+    value is here only under `imports = "audit"`, and then every one of them, a single-pass one too
+    (ruling 19); otherwise its source's audit is the only one it had."""
     if scope is CardScope.CARD:
         from factory.services.cards import card_audit_population  # cards import this module
 
         return card_audit_population(project)
+    audited = imports_policy(project, scope) == "audit"
     out = [
         (AuditItemRef(work_id=row.work_id, row_key=row.row_key, field=name), f.extraction_id)
         for row in final_rows(project, scope=scope)
-        if row.status in ("agreed", "resolved")
+        if (audited if row.origin == "imported" else row.status in ("agreed", "resolved"))
         for name, f in row.fields.items()
     ]
     return sorted(out, key=lambda pair: _sort_key(pair[0]))
@@ -159,6 +164,15 @@ def agreed_values(project: Project, *, scope: AuditScope = Scope.EVIDENCE) -> li
     """The agreed or resolved field values of aligned dual rows of `scope`, sorted. Read-only."""
     project.index.sync()
     return [item for item, _ in _scoped_population(project, scope)]
+
+
+def _imported_only(project: Project, scope: AuditScope) -> bool:
+    """Whether the scope's population is imported rows alone, under `imports = "audit"`: no local
+    pass exists to finish, so the audit does not wait for one (ruling 19)."""
+    if not isinstance(scope, MinerScope) or imports_policy(project, scope) != "audit":
+        return False
+    rows = final_rows(project, scope=scope)
+    return bool(rows) and all(row.origin == "imported" for row in rows)
 
 
 def extraction_audit_sample(
@@ -188,12 +202,13 @@ def extraction_audit_sample(
             protocol, fraction, minimum = _card_parameters(project)
         else:
             protocol, schema, _ = require_schema(project, scope=scope)
-            agreement = extraction_agreement(project, actor, scope=scope)
-            if agreement.disagreements:
-                raise _refuse(
-                    f"{len(agreement.disagreements)} disagreement(s) are unresolved; "
-                    "resolve them before the audit"
-                )
+            if not _imported_only(project, scope):  # no pass of its own to wait for
+                agreement = extraction_agreement(project, actor, scope=scope)
+                if agreement.disagreements:
+                    raise _refuse(
+                        f"{len(agreement.disagreements)} disagreement(s) are unresolved; "
+                        "resolve them before the audit"
+                    )
             fraction, minimum = schema.audit_fraction, schema.audit_minimum
         population = _scoped_population(project, scope)
         if not population:

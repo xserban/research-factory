@@ -132,6 +132,7 @@ from factory.services import regions as regions_service
 from factory.services import relations as relations_service
 from factory.services import reproduction as reproduction_service
 from factory.services import seeds as seeds_service
+from factory.services import shared_mining as shared_mining_service
 from factory.services import snapshots as snapshot_service
 from factory.services import snowball as snowball_service
 from factory.services import trace as trace_service
@@ -254,6 +255,11 @@ miner_app.add_typer(miner_calibrate_app)
 mine_app = typer.Typer(
     name="mine",
     help="Mining with registered miners: unit status, agreement, resolution and the audit.",
+    no_args_is_help=True,
+)
+shared_app = typer.Typer(
+    name="shared",
+    help="The shared mining store: a rebuildable projection across the projects of this root.",
     no_args_is_help=True,
 )
 mine_audit_app = typer.Typer(
@@ -443,6 +449,7 @@ app.add_typer(document_app)
 app.add_typer(extract_app)
 app.add_typer(miner_app)
 app.add_typer(mine_app)
+app.add_typer(shared_app)
 app.add_typer(contributions_app)
 app.add_typer(relations_app)
 app.add_typer(ideas_app)
@@ -1609,6 +1616,23 @@ def miner_register_cmd(
     typer.echo(f"registered {registered.name} version {registered.version} ({registered.digest})")
 
 
+@miner_app.command("adopt")
+def miner_adopt_cmd(
+    ctx: typer.Context,
+    source: Annotated[str, typer.Option("--from", help="The source project's slug.")],
+    miner: Annotated[str, typer.Option("--miner", help="The miner, as <name>@<version>.")],
+) -> None:
+    """Register the spec another project registered, recording where it came from."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        name, version = _miner_ref(miner)
+        registered = shared_mining_service.register_from(
+            project, project.human_actor(), source, name, version
+        )
+    typer.echo(f"registered {registered.name} version {registered.version}")
+
+
 @miner_app.command("list")
 def miner_list_cmd(ctx: typer.Context) -> None:
     """The registered miners and whether the protocol lists them."""
@@ -1700,6 +1724,95 @@ def miner_calibrate_label_cmd(
             channel=Channel.CLI,
         )
     typer.echo(f"labelled {work_id}: {'empty' if empty else f'{len(items)} gold row(s)'}")
+
+
+@shared_app.command("rebuild")
+def shared_rebuild_cmd(ctx: typer.Context) -> None:
+    """Rebuild the shared store from every project's log and print its state hash."""
+    state = _state(ctx)
+    with _reporting_errors():
+        digest = shared_mining_service.shared_store(state.settings, state.clock).rebuild()
+    typer.echo(f"state {digest}")
+
+
+@shared_app.command("status")
+def shared_status_cmd(ctx: typer.Context) -> None:
+    """Sync the shared store and list each project, the opted-out and the unreadable ones too."""
+    state = _state(ctx)
+    with _reporting_errors():
+        store = shared_mining_service.shared_store(state.settings, state.clock)
+        store.sync()
+        listing = store.projects()
+    for line in render.shared_status_lines(listing):
+        typer.echo(line)
+
+
+def _miner_ref(ref: str) -> tuple[str, int]:
+    """`<name>@<version>` as a name and a version; refused on `miner` otherwise."""
+    name, _, version = ref.rpartition("@")
+    if not name or not version.isdigit():
+        raise FactoryValidationError(
+            [ValidationIssue("miner", "give the miner as <name>@<version>")]
+        )
+    return name, int(version)
+
+
+def _unit_ref(ref: str) -> tuple[str, str]:
+    """`<work_id>@<conversion_id>` as a pair; refused on `units` otherwise."""
+    work, _, conversion = ref.rpartition("@")
+    if not work or not conversion:
+        raise FactoryValidationError(
+            [ValidationIssue("units", "give a unit as <work_id>@<conversion_id>")]
+        )
+    return work, conversion
+
+
+@mine_app.command("import")
+def mine_import_cmd(
+    ctx: typer.Context,
+    miner: Annotated[str, typer.Option("--miner", help="The miner, as <name>@<version>.")],
+    source: Annotated[str | None, typer.Option("--from", help="The source project's slug.")] = None,
+    unit: Annotated[
+        list[str] | None,
+        typer.Option("--unit", help="A source unit, <work_id>@<conversion_id>; repeatable."),
+    ] = None,
+    list_units: Annotated[
+        bool, typer.Option("--list", help="List the importable units; import nothing.")
+    ] = False,
+    page: Annotated[int, typer.Option("--page", help="The page of the listing.")] = 0,
+) -> None:
+    """Import whole units of a miner from another project, each re-verified against this project's
+    own conversion, or list the units that could be imported (the researcher's act)."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        name, version = _miner_ref(miner)
+        if list_units:
+            row = mining_service.registered_row(project, name, version)
+            if row is None:
+                raise FactoryValidationError(
+                    [ValidationIssue("miner", f"{miner} is not registered in this project")]
+                )
+            store = shared_mining_service.shared_store(state.settings, state.clock)
+            store.sync()
+            units = shared_mining_service.available_units(
+                store, project, name, version, row.digest, source=source, page=page
+            )
+            for line in render.shared_unit_lines(units):
+                typer.echo(line)
+            return
+        if source is None:
+            raise FactoryValidationError([ValidationIssue("source", "give --from <slug>")])
+        result = shared_mining_service.mine_import(
+            project,
+            project.human_actor(),
+            source,
+            name,
+            version,
+            None if not unit else [_unit_ref(u) for u in unit],
+        )
+    for line in render.mine_import_lines(result):
+        typer.echo(line)
 
 
 @mine_app.command("agreement")
