@@ -332,7 +332,7 @@ def test_cli_resolve_and_audit_label(
     drawn = runner.invoke(app, ["calibrate", "draw"], env=env)
     assert drawn.exit_code == 0, drawn.stderr
     items = calibration_items(project)
-    assert drawn.stdout == f"calibration set: {len(items)} works\n"
+    assert drawn.stdout.splitlines() == [f"calibration set: {len(items)} works", *sorted(items)]
     labelled = runner.invoke(
         app, ["calibrate", "label", items[0], "exclude", "--criterion", "EX01"], env=env
     )

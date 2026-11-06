@@ -44,7 +44,13 @@ from factory.modules.presets import Enforcement, enforcement
 from factory.services import passes
 from factory.services.context import Project
 from factory.services.gates import gate_issues
-from factory.services.protocol import current_protocol, last_criterion_change, lineage_through
+from factory.services.protocol import (
+    ProtocolVersion,
+    current_protocol,
+    last_criterion_change,
+    lineage_through,
+)
+from factory.services.protocol_rules import library_only
 from factory.services.screening_stats import CALIBRATION_SENSITIVITY, Rates, sensitivity_specificity
 from factory.services.search import corpus_work_ids
 from factory.services.seeds import (
@@ -92,8 +98,9 @@ def draw_calibration(
 
     A second call returns the existing set and writes nothing. The default seed is 32 random
     bits. Refused when the hold-out split has not been drawn, since the set must exclude
-    held-out works. The protocol's `calibration_size` is a floor, not a cap: every development
-    seed in the population (but for the worked examples) is always included, and seeded random
+    held-out works, unless a library-only protocol has no seed to hold out. The protocol's
+    `calibration_size` is a floor, not a cap: every development seed in the population (but for
+    the worked examples) is always included, and seeded random
     works fill the set up to the size when the population allows. Refused, with nothing written,
     at full text while no work is eligible yet, so the draw can be redone after conversion.
     """
@@ -109,7 +116,7 @@ def draw_calibration(
         issues: list[ValidationIssue] = []
         if not 0 <= seed < 2**32:
             issues.append(ValidationIssue("random_seed", "must be an integer from 0 to 2**32 - 1"))
-        if not split_is_drawn(project):
+        if not split_is_drawn(project) and not _nothing_held_out(project, protocol):
             issues.append(ValidationIssue("split", "draw the seed split before the calibration"))
         if stage is ScreeningStage.FULL_TEXT and not _calibration_population(project, stage):
             issues.append(
@@ -314,6 +321,15 @@ def stage_population(project: Project, stage: ScreeningStage) -> set[str]:
     """The works that `stage` screens: the corpus at title/abstract, the promoted works at full
     text. Calibration and the passes' queues are drawn from it."""
     return _calibration_population(project, require_pass_stage(stage))
+
+
+def _nothing_held_out(project: Project, protocol: ProtocolVersion | None) -> bool:
+    """A library-only protocol with no seed: the split would hold nothing out (PD-3)."""
+    return (
+        protocol is not None
+        and library_only(protocol.spec, _rigor_mode(project))
+        and not all_seeds(project)
+    )
 
 
 def _select(project: Project, seed: int, stage: ScreeningStage) -> list[str]:

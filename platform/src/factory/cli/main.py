@@ -1304,9 +1304,9 @@ def calibrate_draw(ctx: typer.Context, stage: StageOption = StageChoice.TITLE_AB
             for item in items
         }
     typer.echo(f"calibration set: {len(items)} works")
-    if run_stage is ScreeningStage.FULL_TEXT:
-        for item in items:
-            typer.echo(item)
+    for item in items:
+        typer.echo(item)
+        if run_stage is ScreeningStage.FULL_TEXT:
             for line in render.evidence_lines(
                 item, found[item].document_id, found[item].conversion_id
             ):
