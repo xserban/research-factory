@@ -103,7 +103,7 @@ def find_contexts(manifest: Manifest, bib: Bibliography) -> tuple[list[Context],
                 contexts.append(Context(anchor.id, entry, token, "link", state))
             elif m.group("num"):
                 token = _token(m.group("num"))
-                for number in _numbers(m.group("nbody")):
+                for number in bracket_numbers(m.group("nbody")):
                     entry, state = numeric(number) if number is not None else (None, "unmatched")
                     contexts.append(Context(anchor.id, entry, token, "numeric", state))
             elif m.group("narr"):
@@ -135,7 +135,7 @@ def _digit_label_mode(bib: Bibliography) -> bool:
     return digits > 0 and 2 * digits >= len(bib.entries)
 
 
-def _numbers(body: str) -> list[int | None]:
+def bracket_numbers(body: str) -> list[int | None]:
     """The numbers a bracket body stands for; a descending or oversized range is one `None`."""
     out: list[int | None] = []
     for piece in re.split(r"[,;]", body):

@@ -372,6 +372,8 @@ class DraftAuditReport(StrictModel):
     all_labelled: int = 0
     all_incorrect: int | None = None
     all_rate: float | None = None
+    """Manuscripts: `all_` figures count every sample drawn, detached verdicts included; `drawn`
+    and the rate count live verdicts alone."""
 
 
 class DraftReleased(StrictModel):

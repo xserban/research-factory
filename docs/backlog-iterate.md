@@ -192,3 +192,10 @@ Minor review findings parked during the v1 build, to address when iterating from
 - PF: a task created before a merge keeps its absorbed record, and a promoted absorbed record stays in `fulltext_queue` and the full-text boxes as pending.
 - PF: line 16c (incremental dedup against blocked pairs) is still unverified; it needed the test Task 3 would have written.
 - PF: a bare DOI with a literal `#` or `?` is cut there, as a URL is; such a DOI must be given percent-encoded.
+- W-C: author-year citations (`Wang et al. (2021)`) are not found, as the spec and plan list only `\cite`, pandoc and numeric forms; `references/markers.py` has the pattern.
+- W-C: the segmenter does not split at `word." Next` (a closing quote before the space) nor before a sentence opening with `(` or `"`; a Markdown list with no blank lines is one paragraph. A change is a new `SEGMENTER_VERSION`.
+- W-C: `[2020]` in Markdown or plain text reads as a numeric citation and closes as `citation-unresolved`.
+- W-C: `_open_tasks` reads one blob per open task on each `manuscript_verify_next`, as W-B does; measure at a few thousand units.
+- W-C: a refused `manuscript add` can leave its bytes in the library, which is git-ignored and harmless.
+- W-C: a task whose unit closed after it was made stays open in the log; it is not counted and is never served.
+- W-C: `manuscript.segmented` holds every sentence in one event, up to 100000 entries; check the line size against what the reader expects at that end.

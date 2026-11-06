@@ -107,6 +107,8 @@ from factory.services import interpretations as interpretations_service
 from factory.services import labels as labels_service
 from factory.services import leads as leads_service
 from factory.services import lineage as graph_service
+from factory.services import manuscript_verify as manuscript_verify_service
+from factory.services import manuscripts as manuscripts_service
 from factory.services import matching as matching_service
 from factory.services import methods as methods_service
 from factory.services import miner_gold as miner_gold_service
@@ -3398,6 +3400,125 @@ def build_server(
 
         return _reply(project, act, include_work_ids=False)
 
+    # --- External manuscripts (slice 7b, plan W-C) ----------------------------------------
+    # Three tools and no more: an agent verifies. Adding a manuscript, confirming a fuzzy citation
+    # and auditing are the researcher's, at the command line. Every tool is refused to a pass
+    # session, and before a pass opens, since a unit names a work.
+
+    @server.tool()
+    def manuscript_verify_next(
+        project: str, manuscript_id: str, role: str, model: str, skill: str
+    ) -> dict[str, JsonValue]:
+        """The next unit of the manuscript that needs a verdict, as a task leased to this session:
+        `task_id`, `manuscript_id`, `ordinal`, `work_id` and `conversion_id`, ids only. Read the
+        sentence with `manuscript_read` and the source with `document_read` at that conversion.
+        Returns `unit: null` when none is left. Pass `rf-verify` as `skill`. Refused to a session
+        that joined a pass."""
+
+        def serve() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            _require_pass_opened(opened, "view")
+            actor = make_agent_actor(settings, session, role, model, skill)
+            unit = manuscript_verify_service.manuscript_verify_next(
+                opened, manuscript_id, actor=actor
+            )
+            data: dict[str, JsonValue] = {
+                "unit": None if unit is None else unit.model_dump(mode="json")
+            }
+            return _withheld(opened, data, include_work_ids=False)
+
+        return _reply(project, serve, include_work_ids=False)
+
+    @server.tool()
+    def manuscript_read(
+        project: str, manuscript_id: str, ordinal: int, context: int = 1
+    ) -> dict[str, JsonValue]:
+        """One sentence of a manuscript: `text`, its `length`, its citation `keys`, and up to
+        `context` (0 to 3) preceding sentences in `before`, as context only; `after` is empty.
+        Agents read manuscripts only through this tool; never copy the text into a note.
+        Read-only; refused to a session that joined a pass."""
+
+        def read() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            _require_pass_opened(opened, "view")
+            found = manuscripts_service.manuscript_read(
+                opened, manuscript_id, ordinal, context=context, session=opened.session
+            )
+            return _withheld(
+                opened, found.model_dump(mode="json"), include_work_ids=False, same_length=True
+            )
+
+        return _reply(project, read, include_work_ids=False)
+
+    @server.tool()
+    def manuscript_verify_record(
+        project: str,
+        role: str,
+        model: str,
+        skill: str,
+        task_id: str | None = None,
+        verdict: str | None = None,
+        sentence_span: list[int] | None = None,
+        anchor: str | None = None,
+        quote: str | None = None,
+        note: str | None = None,
+        manuscript_id: str | None = None,
+        uncited_ordinal: int | None = None,
+    ) -> dict[str, JsonValue]:
+        """Record the verdict of the unit `task_id`: supported, partial, unsupported, contradicted
+        or overstated. `sentence_span` is `[start, end]`, character offsets inside the sentence,
+        required unless supported. `quote` is verbatim from the anchor `anchor` of the unit's
+        conversion, required unless unsupported. `note` is at most 300 characters and must not
+        copy the manuscript. Or, with `manuscript_id` and `uncited_ordinal` and no task, flag an
+        uncited sentence as `uncited-claim`: advisory, never a verdict. The platform checks the
+        quote; it does not judge. Refused to a session that joined a pass."""
+
+        def record() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            _require_pass_opened(opened, "view")
+            actor = make_agent_actor(settings, session, role, model, skill)
+            if uncited_ordinal is not None:
+                if manuscript_id is None or task_id is not None or verdict is not None:
+                    raise FactoryValidationError(
+                        [ValidationIssue("uncited_ordinal", "give manuscript_id and no task")]
+                    )
+                flag_id = manuscript_verify_service.flag_uncited(
+                    opened, manuscript_id, uncited_ordinal, note, actor=actor
+                )
+                return _withheld(opened, {"flag_id": flag_id}, include_work_ids=False)
+            if task_id is None or verdict is None:
+                raise FactoryValidationError(
+                    [ValidationIssue("task_id", "give task_id and verdict")]
+                )
+            try:
+                judged = Verdict(verdict)
+            except ValueError:
+                raise FactoryValidationError(
+                    [ValidationIssue("verdict", "unknown verdict")]
+                ) from None
+            if sentence_span is not None and len(sentence_span) != 2:
+                raise FactoryValidationError(
+                    [ValidationIssue("sentence_span", "must be [start, end]")]
+                )
+            verdict_id = manuscript_verify_service.manuscript_verify_record(
+                opened,
+                task_id,
+                judged,
+                sentence_span=None
+                if sentence_span is None
+                else (sentence_span[0], sentence_span[1]),
+                anchor=anchor,
+                quote=quote,
+                note=note,
+                actor=actor,
+            )
+            return _withheld(opened, {"verdict_id": verdict_id}, include_work_ids=False)
+
+        return _reply(project, record, include_work_ids=False)
+
     # --- Experiment designs and runs (slice 6, plan XP-A) ---------------------------------
     # Four tools and no more: an agent drafts and amends a design before the freeze and registers
     # planned runs. Nothing here freezes, unlocks, ingests a result, accepts a baseline or records
@@ -4439,9 +4560,12 @@ def _without_record_keys(value: JsonValue) -> JsonValue:
     return value
 
 
-def _withheld(project: Project, value: JsonValue, include_work_ids: bool = True) -> JsonValue:
-    """Strip every held-out seed's identifiers from an agent-facing response (R-20)."""
-    return withhold(value, _held_out_tokens(project, include_work_ids))
+def _withheld(
+    project: Project, value: JsonValue, include_work_ids: bool = True, same_length: bool = False
+) -> JsonValue:
+    """Strip every held-out seed's identifiers from an agent-facing response (R-20). With
+    `same_length` a match is filled with `#` of its own length, so offsets stay exact."""
+    return withhold(value, _held_out_tokens(project, include_work_ids), same_length)
 
 
 def _held_out_tokens(project: Project, include_work_ids: bool = True) -> set[str]:

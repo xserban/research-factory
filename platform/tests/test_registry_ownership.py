@@ -123,7 +123,11 @@ def test_gate_ids_unique_and_act_events_registered() -> None:
 def test_gate_floors_reproduce_the_decided_entries() -> None:
     reg = default_modules()
     agent_audit = {g.gate_id for g in reg.gates() if g.floor is PolicyKind.AGENT_AUDIT}
-    assert agent_audit == {"reference.link_confirm", "import.resolution_confirm"}
+    assert agent_audit == {
+        "reference.link_confirm",
+        "import.resolution_confirm",
+        "manuscript.citation_confirm",
+    }
     human = {g.gate_id for g in reg.gates() if g.floor is PolicyKind.HUMAN}
     for gate_id in (
         "protocol.press_confirm",

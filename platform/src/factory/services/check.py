@@ -114,6 +114,13 @@ from factory.services.layer_check import (
     unreviewed_interpretations,
 )
 from factory.services.lineage import graph_status, iter_graph_export
+from factory.services.manuscripts import (
+    citation_rows,
+    list_manuscripts,
+    sentence_rows,
+    units,
+    verdict_rows,
+)
 from factory.services.methods import MethodsReport, methods_report, render_methods
 from factory.services.miner_report import calibration_passed
 from factory.services.miners import MinerState, miner_state
@@ -537,9 +544,50 @@ def _run_rules(project: Project) -> list[_Hit]:
         _hosting(project),
         _future_dated(project),
         _briefings(project),
+        _manuscripts(project),
     ]
     flat = [hit for group in groups for hit in group]
     return [replace(hit, seq=seq) for seq, hit in enumerate(flat)]
+
+
+# --- Manuscripts (slice 7b, plan W-C) ---
+
+
+def _manuscript_hits(project: Project, manuscript_id: str) -> list[_Hit]:
+    """Counts and the manuscript's id: never a sentence, and no key, which is the author's text."""
+    citations = citation_rows(project, manuscript_id)
+    keys = {k for s in sentence_rows(project, manuscript_id) for k in s.keys}
+    resolved = {k for k, c in citations.items() if c.state.value == "resolved"}
+    hits: list[_Hit] = []
+    if keys - resolved:
+        hits.append(
+            _Hit(
+                "manuscript-citation-unresolved",
+                (manuscript_id,),
+                f"{len(keys - resolved)} citation key(s) of a manuscript are not resolved",
+            )
+        )
+    verdicts = verdict_rows(project, manuscript_id)
+    waiting = [
+        u
+        for u in units(project, manuscript_id)
+        if u.reason is None and (u.ordinal, str(u.work_id)) not in verdicts
+    ]
+    if waiting:
+        hits.append(
+            _Hit(
+                "manuscript-unverified",
+                (manuscript_id,),
+                f"{len(waiting)} unit(s) of a manuscript have no verdict",
+            )
+        )
+    return hits
+
+
+def _manuscripts(project: Project) -> list[_Hit]:
+    return [
+        hit for m in list_manuscripts(project) for hit in _manuscript_hits(project, m.manuscript_id)
+    ]
 
 
 # --- Drafts (slice 7b, plan W-B) ---

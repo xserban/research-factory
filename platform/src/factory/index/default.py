@@ -23,6 +23,7 @@ from factory.index.intuition import intuition_handlers, intuition_tables
 from factory.index.labels import label_handlers, label_tables
 from factory.index.lineage import lineage_handlers, lineage_tables
 from factory.index.living import digest_handlers, digest_tables, living_handlers, living_tables
+from factory.index.manuscripts import manuscript_handlers, manuscript_tables
 from factory.index.miners import miner_handlers, miner_tables
 from factory.index.notices import notice_handlers, notice_tables
 from factory.index.probe import probe_handlers, probe_tables
@@ -44,7 +45,7 @@ from factory.index.tasks import task_handlers, tasks_table
 from factory.index.watch import run_started_handler, watch_handlers, watch_tables
 
 # Bump on any change to the tables or handlers below; the index is then rebuilt.
-PROJECTION_VERSION = "55"
+PROJECTION_VERSION = "56"
 
 
 def default_projection(blobs: BlobStore | None = None) -> Projection:
@@ -94,6 +95,7 @@ def default_projection(blobs: BlobStore | None = None) -> Projection:
     evaluations = evaluation_tables(metadata)
     directions = direction_tables(metadata)
     drafts = draft_tables(metadata, protocol.protocols, project)
+    manuscripts = manuscript_tables(metadata)
     handlers: dict[str, Handler] = {
         "project.created": project_created_handler(project),
         "project.hosted": project_hosted_handler(project_hosts),
@@ -131,6 +133,7 @@ def default_projection(blobs: BlobStore | None = None) -> Projection:
         **direction_handlers(directions),
         **draft_handlers(drafts, blobs),
         **briefing_handlers(briefings, blobs),
+        **manuscript_handlers(manuscripts, blobs),
     }
     # A direction fails in the event that decides it: derived after that event's own fold.
     chain_derived(handlers, directions)
