@@ -516,7 +516,8 @@ def evidence_report(
     )
     shown = reduced if without_grey else _grey_labelled(full, grey)
     return with_miner_rows(
-        project, with_copied_flags(project, shown.model_copy(update={"grey_sensitivity": sensitivity}))
+        project,
+        with_copied_flags(project, shown.model_copy(update={"grey_sensitivity": sensitivity})),
     )
 
 

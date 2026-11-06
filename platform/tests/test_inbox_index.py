@@ -43,7 +43,7 @@ def _status(project: Project, item_id: str = ITEM) -> str:
 
 
 def test_projection_version_bumped() -> None:
-    assert PROJECTION_VERSION == "65"
+    assert PROJECTION_VERSION == "66"
 
 
 def test_added_item_is_open(project: Project) -> None:
