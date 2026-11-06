@@ -150,13 +150,16 @@ def build_briefing(project: Project) -> Briefing:
         return compose(project, check(project), draft_counts(project, agent=False))
 
 
-def briefing_agent_view(project: Project) -> Briefing:
+def briefing_agent_view(project: Project, *, session: str | None = None) -> Briefing:
     """The briefing as an agent outside the passes may read it (see the module docstring). It
-    builds from the project, not from a `Briefing`: section 7 must come from `agent_check`."""
+    builds from the project, not from a `Briefing`: section 7 must come from `agent_check`.
+    `session`, the reader, is refused when it is verifying a released draft."""
     with entering():
         at_position = _at_log_position(project)
         built = compose(
-            at_position, agent_check(at_position), draft_counts(at_position, agent=True)
+            at_position,
+            agent_check(at_position),
+            draft_counts(at_position, agent=True, session=session),
         )
         reduced = _reduced(built, opened=held_out_visible(project))
         scrubbed = withhold(
@@ -179,7 +182,7 @@ def serve_pack(project: Project, *, session: str) -> tuple[str, str]:
         raise FactoryValidationError(
             [ValidationIssue("session", "this session has joined a pass and cannot use this tool")]
         )
-    built = _bounded(briefing_agent_view(project))
+    built = _bounded(briefing_agent_view(project, session=session))
     pack = to_json(built)
     blob = project.blobs.put(pack.encode())
     position = built.meta.as_of
@@ -249,11 +252,14 @@ def issue_counts(report: CheckReport) -> dict[str, int]:
     return dict(sorted(counts.items()))
 
 
-def draft_counts(project: Project, *, agent: bool) -> dict[str, dict[str, int]]:
+def draft_counts(
+    project: Project, *, agent: bool, session: str | None = None
+) -> dict[str, dict[str, int]]:
     """The count of each sentence status of every released draft; `agent` is the variant of
-    `sentence_status` that reads no audit label."""
+    `sentence_status` that reads no audit label. `session` is the agent reader, refused when it
+    is verifying a draft."""
     return {
-        draft_id: status_counts(sentence_status(project, draft_id, agent=agent))
+        draft_id: status_counts(sentence_status(project, draft_id, agent=agent, session=session))
         for draft_id in sorted(released_drafts(project))
     }
 
