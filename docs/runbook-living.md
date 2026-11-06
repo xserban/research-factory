@@ -65,6 +65,16 @@ A routine that reads what the watch found runs three steps, in order (skill `rf-
 
 The routine records no screening verdict and no priority, and it does not assess notices, prefer documents or register conclusions: those are the researcher's acts (`factory notices assess`, `factory versions prefer`, `factory conclusions register`). New works enter the corpus as pending works and are screened through the declared passes in separate sessions. A routine that runs `watch_run` over MCP is recorded with the agent actor and keeps its input.
 
+## A worked external schedule
+
+The platform has no scheduler and no delivery channel (decision 63). One working arrangement is a daily cron entry that runs both commands in order and leaves the digest files for a routine or a person to deliver:
+
+```
+30 5 * * *  cd /path/to/research-factory/platform && uv run factory --root /path/to/factory-root watch run --due --all >> /path/to/factory-root/watch.log 2>&1; uv run factory --root /path/to/factory-root digest --all --record --format md --out /path/to/factory-root/digests >> /path/to/factory-root/watch.log 2>&1
+```
+
+The `;` is deliberate: a failed or partial cycle exits 1, and the digest must still run, since it lists failed and overdue watches. `--record` makes the next digest start where this one ended; run it from one schedule only, or two schedules split the window between them. Delivery stays a step outside the platform: mail or post the files in `digests/`, or let the routine above do it. For a weekly meeting, `factory pack` reads the same log and prints counts and titles only.
+
 ## Conclusions
 
 `factory conclusions register --statement TEXT --basis KIND:REF ... [--predicate JSON]` records a conclusion with its basis (cell, row, group, work); every reference must resolve. `factory conclusions status|diff [--since SNAPSHOT]` show how each stands against a snapshot: `unchanged`, `changed`, `basis-affected` or `new`, all computed. Take a snapshot with `factory living snapshot` (or `snapshot_every` in the watch plan) so that later cycles have a reference.
