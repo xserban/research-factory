@@ -1187,6 +1187,51 @@ def link_regions(
         )
 
 
+class RegionLink(StrictModel):
+    """One declared link between two pinned versions."""
+
+    link_type: str
+    source: str
+    target: str
+    note: str | None
+    event_id: str
+
+
+def region_links(project: Project, region_id: str | None = None) -> list[RegionLink]:
+    """Declared links in event order; with `region_id`, those with a version of that region at
+    either end."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT l.link_type, l.source, l.target, l.note, l.event_id FROM region_links l "
+                "WHERE :r IS NULL OR EXISTS (SELECT 1 FROM region_snapshots s "
+                "WHERE s.region_id = :r AND s.version IN (l.source, l.target)) "
+                "ORDER BY l.event_id"
+            ),
+            {"r": region_id},
+        ).all()
+    return [
+        RegionLink(
+            link_type=str(kind),
+            source=str(source),
+            target=str(target),
+            note=None if note is None else str(note),
+            event_id=str(event_id),
+        )
+        for kind, source, target, note, event_id in rows
+    ]
+
+
+def current_definition(project: Project, region_id: str) -> tuple[str, str, RuleSet]:
+    """The name, definition prose and rules in force, which a revision keeps by default."""
+    project.index.sync()
+    row = _definition(project, region_id)
+    if row is None:
+        raise _refuse(ValidationIssue("region_id", "unknown region"))
+    return str(row["name"]), str(row["definition"]), _rules_of(row)
+
+
 def subregion_violations(project: Project) -> list[tuple[str, str, str]]:
     """`(link event id, child region, parent region)` of each `subregion-of` link whose child's
     latest version has a member the parent's latest version lacks."""

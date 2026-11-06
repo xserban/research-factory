@@ -130,6 +130,7 @@ from factory.services import screening as screening_service
 from factory.services import search as search_service
 from factory.services import seeds as seeds_service
 from factory.services import snowball as snowball_service
+from factory.services import tasks as tasks_service
 from factory.services import terms as terms_service
 from factory.services import trace as trace_service
 from factory.services import view_coverage as view_coverage_service
@@ -4067,6 +4068,27 @@ def build_server(
             return _withheld(opened, {"merge_id": merge_id}, include_work_ids=False)
 
         return _reply(project, revert, include_work_ids=False)
+
+    @server.tool()
+    def task_release(
+        project: str,
+        task_id: str,
+        role: str,
+        model: str,
+        skill: str,
+        reason: str = "released by its holder",
+    ) -> dict[str, JsonValue]:
+        """Give back a task this session holds and cannot finish, so another session need not wait
+        for the lease. Only the holder may release, so it serves a pass session too: it shows
+        nothing of the task."""
+
+        def release() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            actor = make_agent_actor(settings, session, role, model, skill)
+            tasks_service.release_task(opened, actor, task_id, reason)
+            return _withheld(opened, {"task_id": task_id}, include_work_ids=False)
+
+        return _reply(project, release, include_work_ids=False)
 
     return server
 

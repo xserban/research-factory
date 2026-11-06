@@ -36,7 +36,7 @@ from factory.model.chase import ChaseDirection
 from factory.model.conclusions import BasisRef, Predicate
 from factory.model.directions import Conditions, DirectionReason
 from factory.model.drafts import AuditLabel, DraftKind, SentenceClass, SupportSpan, Verdict
-from factory.model.experiments import DeviationKind
+from factory.model.experiments import DeviationKind, ExperimentDesign
 from factory.model.extraction import ExtractedRowInput, MinerScope
 from factory.model.fulltext import SourceDecision
 from factory.model.hypotheses import AbandonReason, DiscardReason
@@ -129,6 +129,7 @@ from factory.services import reference_resolve as reference_resolve_service
 from factory.services import references as references_service
 from factory.services import regions as regions_service
 from factory.services import relations as relations_service
+from factory.services import reproduction as reproduction_service
 from factory.services import seeds as seeds_service
 from factory.services import snapshots as snapshot_service
 from factory.services import snowball as snowball_service
@@ -4679,26 +4680,51 @@ def regions_define_cmd(
 def regions_revise_cmd(
     ctx: typer.Context,
     region: Annotated[str, typer.Argument(help="A region id, reg_.")],
-    name: Annotated[str, typer.Option("--name", help="The region's name.")],
-    definition: Annotated[str, typer.Option("--definition", help="What it selects, at most 600.")],
-    rules: Annotated[Path, typer.Option("--rules", help="A JSON file holding the rule set.")],
+    name: Annotated[str | None, typer.Option("--name", help="The region's name.")] = None,
+    definition: Annotated[
+        str | None, typer.Option("--definition", help="What it selects, at most 600.")
+    ] = None,
+    rules: Annotated[
+        Path | None, typer.Option("--rules", help="A JSON file holding the rule set.")
+    ] = None,
 ) -> None:
-    """Record a new definition of a region; its kind and facet stay."""
+    """Record a new definition of a region; its kind and facet stay, and what is not given keeps
+    its current value."""
     state = _state(ctx)
-    rule_set = _read_rules(rules)
+    if name is None and definition is None and rules is None:
+        _fail("give --name, --definition or --rules", 2)
+    rule_set = None if rules is None else _read_rules(rules)
     with _reporting_errors():
         project = _resolve_project(state)
         kind = regions_service.region_state(project, region).kind
+        old_name, old_definition, old_rules = regions_service.current_definition(project, region)
         regions_service.define_region(
             project,
             project.human_actor(),
             kind=kind,
-            name=name,
-            definition=definition,
-            rules=rule_set,
+            name=old_name if name is None else name,
+            definition=old_definition if definition is None else definition,
+            rules=old_rules if rule_set is None else rule_set,
             region_id=region,
         )
     typer.echo(f"revised {region}")
+
+
+@regions_app.command("links")
+def regions_links_cmd(
+    ctx: typer.Context,
+    region: Annotated[str | None, typer.Argument(help="Only links of this region, reg_.")] = None,
+) -> None:
+    """The declared links between pinned versions."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        links = regions_service.region_links(project, region)
+    if not links:
+        typer.echo("no link yet")
+    for link in links:
+        note = "" if link.note is None else f"  {link.note}"
+        typer.echo(f"{link.link_type}  {link.source} -> {link.target}{note}")
 
 
 @regions_app.command("snapshot")
@@ -5170,6 +5196,46 @@ def experiments_show_cmd(
         _fail(f"unknown experiment {experiment}", 1)
     for line in render.experiment_detail_lines(view, verdicts):
         typer.echo(line)
+
+
+@experiments_app.command("amend")
+def experiments_amend_cmd(
+    ctx: typer.Context,
+    experiment: Annotated[str, typer.Argument(help="A design id, exp_.")],
+    design: Annotated[Path, typer.Option("--design", help="A JSON file holding the design.")],
+    reason: Annotated[str, typer.Option("--reason", help="Why the design changes.")],
+    semantic: Annotated[
+        bool, typer.Option("--semantic/--prose", help="Whether the change alters the design.")
+    ] = True,
+) -> None:
+    """Replace the design of an experiment not yet frozen; `E@` is recomputed."""
+    state = _state(ctx)
+    try:
+        data = json.loads(design.read_text())
+    except (OSError, ValueError) as exc:
+        _fail(f"--design {design}: {exc}", 2)
+    parsed = _parse_model(ExperimentDesign, data, "design")
+    with _reporting_errors():
+        project = _resolve_project(state)
+        experiments_service.amend_experiment(
+            project, project.human_actor(), experiment, parsed, reason, semantic
+        )
+    typer.echo(f"amended {experiment}")
+
+
+@experiments_app.command("evaluate-baselines")
+def experiments_evaluate_baselines_cmd(
+    ctx: typer.Context, experiment: Annotated[str, typer.Argument(help="A design id, exp_.")]
+) -> None:
+    """Write the verdict of every baseline that is ready and has none: what a crash between a
+    reproduction's ingestion and its verdict left pending. Safe to repeat."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        if experiments_service.experiment_view(project, experiment) is None:
+            raise FactoryValidationError([ValidationIssue("experiment", "unknown")])
+        written = reproduction_service.evaluate_baselines(project, experiment)
+    typer.echo(f"baseline verdicts written: {len(written)}")
 
 
 @experiments_app.command("freeze")
