@@ -7,6 +7,8 @@ Invariants:
 - `manuscript_status` and `manuscript_report` read the projection only and hold no sentence: counts
   are derived, never stored. `report_text` is the one place the report meets the text, read from
   the library at render time, for the researcher's command.
+- `report_text` re-runs `quote_in_element` on each verdict's quote against its anchor (R-32; the
+  fold has no library) and marks a failing verdict; it never drops one.
 - No MCP tool reads this module: the audit's rate in the report is the researcher's.
 - A verdict whose unit no longer stands (its citation changed since) is shown as `detached` and
   enters no count.
@@ -20,7 +22,8 @@ from pathlib import Path
 
 from sqlalchemy import text
 
-from factory.errors import FactoryValidationError, ValidationIssue
+from factory.document.quotes import quote_in_element
+from factory.errors import FactoryError, FactoryValidationError, ValidationIssue
 from factory.model.manuscripts import (
     CitationState,
     ManuscriptReport,
@@ -31,6 +34,7 @@ from factory.model.manuscripts import (
     VerdictRow,
 )
 from factory.services.context import Project
+from factory.services.conversions import resolve_anchor
 from factory.services.manuscript_audit import audit_report
 from factory.services.manuscripts import (
     citation_rows,
@@ -151,8 +155,29 @@ def manuscript_status(project: Project, manuscript_id: str) -> ManuscriptStatus:
     )
 
 
+def _quote_failed(project: Project, report: ManuscriptReport) -> set[str]:
+    """Ids of the verdicts whose quote `quote_in_element` no longer finds in its anchor (R-32).
+    The fold cannot make this check, so a forged or stale verdict is marked here, not dropped. An
+    anchor or conversion that cannot be read counts as a failure."""
+    failed: set[str] = set()
+    for row in report.rows:
+        for unit in row.units:
+            v = unit.verdict
+            if v is None or v.quote is None or v.anchor is None:
+                continue
+            try:
+                found = resolve_anchor(project, v.conversion_id, v.anchor)
+            except FactoryError:
+                failed.add(v.verdict_id)
+                continue
+            if not quote_in_element(found.text, v.quote):
+                failed.add(v.verdict_id)
+    return failed
+
+
 def report_text(project: Project, manuscript_id: str) -> str:
-    """The report as Markdown, with each listed sentence's text read from the library now."""
+    """The report as Markdown, with each listed sentence's text read from the library now. A
+    verdict whose quote is no longer in its anchor is marked."""
     report = manuscript_report(project, manuscript_id)
     row = require_manuscript(project, manuscript_id)
     masked = mask(manuscript_text(project, row), format_of(row.format), row.segmenter)
@@ -162,4 +187,4 @@ def report_text(project: Project, manuscript_id: str) -> str:
         for s in sentence_rows(project, manuscript_id)
         if s.ordinal in wanted
     }
-    return render_report(report, texts)
+    return render_report(report, texts, _quote_failed(project, report))

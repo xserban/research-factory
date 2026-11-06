@@ -3,7 +3,7 @@ go in, text comes out. The caller reads the text from the library; nothing here 
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 
 from factory.model.manuscripts import ManuscriptReport, ReportUnit
 
@@ -12,7 +12,7 @@ def _counts(counts: Mapping[str, int]) -> str:
     return ", ".join(f"{k} {counts[k]}" for k in sorted(counts)) or "none"
 
 
-def _unit_lines(unit: ReportUnit) -> list[str]:
+def _unit_lines(unit: ReportUnit, quote_failed: Collection[str] = ()) -> list[str]:
     who = unit.work_id or ", ".join(unit.keys)
     if unit.reason is not None:
         return [f"- {who}: cannot-verify: {unit.reason.value}"]
@@ -27,14 +27,19 @@ def _unit_lines(unit: ReportUnit) -> list[str]:
         lines.append(f"  - sentence span: {v.span_start}-{v.span_end}")
     if v.quote is not None:
         lines.append(f'  - {v.conversion_id}/{v.anchor}: "{v.quote}"')
+    if v.verdict_id in quote_failed:
+        lines.append("  - quote not confirmed: it is not in that anchor of the conversion now")
     if v.note is not None:
         lines.append(f"  - note: {v.note}")
     lines.append(f"  - verdict id: {v.verdict_id}")
     return lines
 
 
-def render_report(report: ManuscriptReport, texts: Mapping[int, str]) -> str:
-    """The title, the counts, the audit and each cited or flagged sentence with its units."""
+def render_report(
+    report: ManuscriptReport, texts: Mapping[int, str], quote_failed: Collection[str] = ()
+) -> str:
+    """The title, the counts, the audit and each cited or flagged sentence with its units. A
+    verdict id in `quote_failed` is marked, not dropped."""
     audit = report.audit
     lines = [
         f"# {report.label} ({report.manuscript_id})",
@@ -55,5 +60,5 @@ def render_report(report: ManuscriptReport, texts: Mapping[int, str]) -> str:
         if row.waiting:
             lines.append(f"- keys not resolved yet: {', '.join(row.waiting)}")
         for unit in row.units:
-            lines += _unit_lines(unit)
+            lines += _unit_lines(unit, quote_failed)
     return "\n".join(lines) + "\n"
