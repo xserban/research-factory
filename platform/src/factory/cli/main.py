@@ -48,6 +48,7 @@ from factory.mcp.server import run
 from factory.model import lineage as lineage_model
 from factory.model.chase import ChaseDirection
 from factory.model.conclusions import BasisRef, Predicate
+from factory.model.curation import CurationDecision
 from factory.model.directions import Conditions, DirectionReason
 from factory.model.drafts import AuditLabel, DraftKind, SentenceClass, SupportSpan, Verdict
 from factory.model.experiments import DeviationKind, ExperimentDesign
@@ -85,6 +86,7 @@ from factory.services import concepts as concepts_service
 from factory.services import conclusions as conclusions_service
 from factory.services import contributions as contributions_service
 from factory.services import coverage as coverage_service
+from factory.services import curation as curation_service
 from factory.services import dedup as dedup_service
 from factory.services import digest as digest_service
 from factory.services import directions as directions_service
@@ -121,6 +123,7 @@ from factory.services import imports as imports_service
 from factory.services import inbox as inbox_service
 from factory.services import inbox_watch as inbox_watch_service
 from factory.services import interpretations as interpretations_service
+from factory.services import lab_pack as lab_pack_service
 from factory.services import labels as labels_service
 from factory.services import leads as leads_service
 from factory.services import lineage as graph_service
@@ -134,6 +137,7 @@ from factory.services import notices as notices_service
 from factory.services import onion as onion_service
 from factory.services import organisation_export as organisation_export_service
 from factory.services import outline as outline_service
+from factory.services import performance as performance_service
 from factory.services import portfolio as portfolio_service
 from factory.services import prisma as prisma_service
 from factory.services import prisma_update as prisma_update_service
@@ -446,6 +450,12 @@ references_app = typer.Typer(
 snowball_app = typer.Typer(
     name="snowball", help="Snowball rounds: plan, run, compare.", no_args_is_help=True
 )
+curation_app = typer.Typer(
+    name="curation",
+    help="Curation proposals made from audit findings: list lessons and proposals, decide.",
+    no_args_is_help=True,
+)
+app.add_typer(curation_app)
 app.add_typer(references_app)
 app.add_typer(snowball_app)
 app.add_typer(seeds_app)
@@ -865,6 +875,102 @@ def briefing_cmd(
             built = briefing_service.build_briefing(project)
             body = views_service.to_json(built) if chosen == "json" else briefing_markdown(built)
         _emit_view(body, out)
+
+
+@app.command("performance")
+def performance_cmd(
+    ctx: typer.Context,
+    as_json: Annotated[bool, typer.Option("--json", help="Print the report as JSON.")] = False,
+) -> None:
+    """Measured figures per role, model and skill version. CLI only: no agent tool shows them.
+    A figure below the sample floor prints its count, not a rate. Writes no event."""
+    state = _state(ctx)
+    with _reporting_errors():
+        report = performance_service.performance(_resolve_project(state))
+    if as_json:
+        typer.echo(views_service.to_json(report), nl=False)
+        return
+    for line in performance_service.lines(report):
+        typer.echo(line)
+
+
+@app.command("pack")
+def pack_cmd(
+    ctx: typer.Context,
+    since: Annotated[
+        str, typer.Option("--since", help="`last` (the last recorded digest) or an event id.")
+    ] = "last",
+    out: Annotated[Path | None, typer.Option("--out", help="Write the pack to this file.")] = None,
+    handover: Annotated[
+        bool, typer.Option("--handover", help="Add the open tasks and what each gate needs.")
+    ] = False,
+) -> None:
+    """The weekly meeting pack, or with --handover a handover note. Counts and titles only;
+    writes no event."""
+    state = _state(ctx)
+    with _reporting_errors():
+        built = lab_pack_service.lab_pack(_resolve_project(state), since, handover=handover)
+    _emit_view(lab_pack_service.pack_markdown(built), out)
+
+
+@curation_app.command("lessons")
+def curation_lessons_cmd(ctx: typer.Context) -> None:
+    """The computed lessons proposals can answer (counts only)."""
+    state = _state(ctx)
+    with _reporting_errors():
+        found = curation_service.lessons(_resolve_project(state))
+    for lesson in found:
+        typer.echo(f"{lesson.lesson_id}  {lesson.subject}  n={lesson.count}")
+    if not found:
+        typer.echo("no lessons")
+
+
+@curation_app.command("list")
+def curation_list_cmd(
+    ctx: typer.Context,
+    open_only: Annotated[bool, typer.Option("--open", help="Undecided proposals only.")] = False,
+) -> None:
+    """The proposals, rejected ones included."""
+    state = _state(ctx)
+    with _reporting_errors():
+        found = curation_service.proposals(_resolve_project(state), open_only=open_only)
+    for p in found:
+        label = "open" if p.decision is None else p.decision.value
+        typer.echo(f"{p.cur_id}  {p.kind.value}  {label}  by {p.proposer}")
+        typer.echo(f"  {p.text}")
+        typer.echo(f"  lessons: {', '.join(p.lessons)}")
+    if not found:
+        typer.echo("no proposals")
+
+
+@curation_app.command("decide")
+def curation_decide_cmd(
+    ctx: typer.Context,
+    cur_id: Annotated[str, typer.Argument(help="The proposal.")],
+    decision: Annotated[str, typer.Argument(help="accepted or rejected.")],
+    rationale: Annotated[str, typer.Option("--rationale", help="Why.")],
+    amendment_event: Annotated[
+        str | None,
+        typer.Option("--amendment-event", help="The protocol.amended event that carried it out."),
+    ] = None,
+) -> None:
+    """Accept or reject a proposal. Acceptance changes no protocol: amend it with protocol amend."""
+    state = _state(ctx)
+    try:
+        choice = CurationDecision(decision)
+    except ValueError:
+        _fail("decision: must be one of: accepted, rejected", 2)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        event_id = curation_service.decide_proposal(
+            project,
+            project.human_actor(),
+            cur_id,
+            choice,
+            rationale=rationale,
+            amendment_event=amendment_event,
+        )
+    typer.echo(f"recorded {event_id}")
 
 
 @app.command("portfolio")

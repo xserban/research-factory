@@ -71,6 +71,7 @@ OMITTED_WHEN_EMPTY: frozenset[str] = frozenset(
         "graph_edges",
         "conclusions",
         "digests",
+        "curation_proposals",
         "properties",
         "property_merges",
         "cards",

@@ -15,6 +15,7 @@ from factory.model.cards import (
 )
 from factory.model.chase import ChaseRoundStarted, SampleExtended, SeedAdmitted
 from factory.model.conclusions import ConclusionRegistered, ConclusionRetired
+from factory.model.curation import CurationDecided, CurationProposed
 from factory.model.dedup import DedupMerged, DedupReverted
 from factory.model.digest import DigestGenerated
 from factory.model.directions import DirectionClosed
@@ -354,6 +355,8 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("hypothesis.concluded", HypothesisConcluded, 1))
     catalog.register(EventType("hypothesis.evaluated", HypothesisEvaluated, 1))
     catalog.register(EventType("direction.closed", DirectionClosed, 1))
+    catalog.register(EventType("curation.proposed", CurationProposed, 1))
+    catalog.register(EventType("curation.decided", CurationDecided, 1))
     catalog.register(EventType("hypothesis.reviewed", HypothesisReviewed, 1))
     catalog.register(EventType("hypothesis.registered", HypothesisRegistered, 1))
     catalog.register(EventType("model.cutoff_declared", ModelCutoffDeclared, 1))

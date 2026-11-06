@@ -21,6 +21,7 @@ from factory.services.modules import (
     conversion,
     core,
     coverage,
+    curation,
     dedup,
     directions,
     discovery,
@@ -63,7 +64,7 @@ def default_modules() -> ModuleRegistry:
         contributions, cards, evidence, references, imports, inbox, living, snapshots, lineage,
         intuition, vocabulary, contradictions, discovery, coverage, finders, matching, exports,
         portfolio, regions, mining, hypotheses, labels, views, experiments,
-        evaluation, benchmark_ledger, directions, writing, briefing, manuscripts,
+        evaluation, benchmark_ledger, directions, curation, writing, briefing, manuscripts,
     ]  # fmt: skip
     return ModuleRegistry(
         [m.MODULE for m in modules],

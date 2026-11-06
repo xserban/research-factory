@@ -11,6 +11,7 @@ from factory.index.budgets import (
 from factory.index.cards import card_handlers, card_tables
 from factory.index.chase import chase_handlers, chase_tables
 from factory.index.conclusions import conclusion_handlers, conclusion_tables
+from factory.index.curation import curation_handlers, curation_tables
 from factory.index.dedup import dedup_handlers, dedup_tables
 from factory.index.directions import chain_derived, direction_handlers, direction_tables
 from factory.index.document import document_handlers, document_tables
@@ -57,7 +58,7 @@ from factory.index.tasks import task_handlers, tasks_table
 from factory.index.watch import run_started_handler, watch_handlers, watch_tables
 
 # Bump on any change to the tables or handlers below; the index is then rebuilt.
-PROJECTION_VERSION = "62"
+PROJECTION_VERSION = "63"
 
 
 def default_projection(blobs: BlobStore | None = None) -> Projection:
@@ -110,6 +111,7 @@ def default_projection(blobs: BlobStore | None = None) -> Projection:
     )
     evaluations = evaluation_tables(metadata)
     directions = direction_tables(metadata)
+    curation = curation_tables(metadata)
     drafts = draft_tables(metadata, protocol.protocols, project)
     manuscripts = manuscript_tables(metadata)
     ledger = ledger_tables(metadata)
@@ -153,6 +155,7 @@ def default_projection(blobs: BlobStore | None = None) -> Projection:
         **experiment_handlers(experiments),
         **evaluation_handlers(evaluations),
         **direction_handlers(directions),
+        **curation_handlers(curation),
         **draft_handlers(drafts, blobs),
         **briefing_handlers(briefings, blobs),
         **manuscript_handlers(manuscripts, blobs),
