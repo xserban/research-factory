@@ -181,9 +181,13 @@ def audit_report(project: Project, draft_id: str) -> DraftAuditReport:
 
 def agent_audit_report(report: DraftAuditReport) -> DraftAuditReport:
     """The report an agent may read: no rate, no ceiling flag, and no count of incorrect labels,
-    from which the rate follows."""
+    from which the rate follows. `drawn` and `labelled` are the figures of every sample, so that
+    the two pairs cannot be compared and neither moves when a sentence is revised (decisions 52 and
+    37.14)."""
     return report.model_copy(
         update={
+            "drawn": report.all_drawn,
+            "labelled": report.all_labelled,
             "incorrect": None,
             "rate": None,
             "above_ceiling": None,

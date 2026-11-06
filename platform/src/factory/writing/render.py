@@ -112,7 +112,7 @@ def render_closing(
 ) -> str:
     """The bibliography note and the methods paragraph of a clean rendering; every figure derived.
     The agent variant of `audit` carries no result, so none is stated."""
-    if audit.drawn == 0:
+    if audit.drawn == 0 and audit.all_drawn == 0:
         summary = "No audit of the supported verdicts was drawn."
     elif audit.incorrect is None:
         summary = "The audit of the supported verdicts is reported to the researcher."
