@@ -21,6 +21,7 @@ SPEC = ModuleSpec(
         CheckRule("evidence-excluded-rows", ("warning", "warning", "warning")),
         CheckRule("evidence-ungrouped", ("warning", "warning", "warning")),
         CheckRule("evidence-direction", ("warning", "warning", "warning")),
+        CheckRule("copied-value-differs", ("warning", "warning", "warning")),
     ),
 )
 

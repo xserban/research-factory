@@ -467,7 +467,7 @@ def evidence_report(
     grey = grey & {*inputs.population, *(r.work_id for r in _all_rows(inputs))}
     full = assemble_report(inputs, expect=expect, include_notice_affected=include_notice_affected)
     if not grey:
-        return full
+        return with_copied_flags(project, full)
     reduced = assemble_report(
         _without_works(inputs, grey), expect=expect, include_notice_affected=include_notice_affected
     )
@@ -478,7 +478,7 @@ def evidence_report(
         without_grey=without_grey,
     )
     shown = reduced if without_grey else _grey_labelled(full, grey)
-    return shown.model_copy(update={"grey_sensitivity": sensitivity})
+    return with_copied_flags(project, shown.model_copy(update={"grey_sensitivity": sensitivity}))
 
 
 def _all_rows(inputs: ReportInputs) -> list[Any]:
@@ -499,6 +499,31 @@ def _grey_labelled(report: EvidenceReport, grey: frozenset[str]) -> EvidenceRepo
 
     groups = [g.model_copy(update={"rows": label(g.rows)}) for g in report.groups]
     return report.model_copy(update={"groups": groups, "ungrouped": label(report.ungrouped)})
+
+
+def with_copied_flags(project: Project, report: EvidenceReport) -> EvidenceReport:
+    """The report with a `copied-value-differs` limit for each copied row whose value differs from
+    its cited paper's own (IDEA-23). A flag, never a correction: no row changes. A report with no
+    such row is returned as it is, so it serialises as it did before."""
+    from factory.services.copied_check import copied_mismatches  # imports this module
+
+    flagged = [
+        m for m in copied_mismatches(project, report) if m.status in ("differs", "version-differs")
+    ]
+    if not flagged:
+        return report
+    limits = [
+        Limit(
+            code="copied-value-differs",
+            text=(
+                f"row {m.row} copies a value of {m.cited_work} that differs from its own row "
+                f"{m.source_row} ({m.status})"
+            ),
+            subject=m.row,
+        )
+        for m in flagged
+    ]
+    return report.model_copy(update={"limits": [*report.limits, *limits]})
 
 
 def agent_evidence(report: EvidenceReport) -> EvidenceReport:

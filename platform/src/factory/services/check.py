@@ -69,6 +69,7 @@ from factory.services.contributions import (
     final_items,
     live_items,
 )
+from factory.services.copied_check import copied_hits
 from factory.services.dedup import active_merges
 from factory.services.document_convert import conversion_census
 from factory.services.document_read import default_conversion
@@ -565,6 +566,7 @@ def _run_rules(project: Project) -> list[_Hit]:
         _ledger_gaps(project),
         _budgets_spent(project),
         appraisal_hits(project),
+        copied_hits(project),
     ]
     flat = [hit for group in groups for hit in group]
     return [replace(hit, seq=seq) for seq, hit in enumerate(flat)]
