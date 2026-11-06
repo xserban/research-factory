@@ -25,7 +25,8 @@ round and routes the new works back into screening.
    `new_works`. A run that is `partial` or `failed` is reported as it is, with its note; do
    not hide a shortfall.
 3. Call `dedup_run` so that a work the chase returned again, or that duplicates a corpus work
-   under another identifier, is merged instead of screened twice.
+   under another identifier, is merged instead of screened twice. `dedup_merges` lists the merges
+   with their rule; a wrong one is undone with `merge_revert`, stating why.
 4. Return to screening. The new works are served by `screen_next` to pass A, and to pass B
    when the platform draws them into the pass B sample. Screening, agreement and resolution
    follow the `rf-screen` procedure, in their own sessions.

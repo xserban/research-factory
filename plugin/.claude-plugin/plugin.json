@@ -1,5 +1,5 @@
 {
   "name": "research-factory",
   "version": "0.1.0",
-  "description": "Skills that drive the research-factory MCP tools: frame a question, probe its searchability, and draft a versioned protocol."
+  "description": "Skills that drive the research-factory MCP tools across a whole run, from framing a question to searching, screening, extracting, mining, hypotheses, experiments and writing. Start with rf-run."
 }

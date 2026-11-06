@@ -16,3 +16,8 @@ rules and thresholds are kept from the source; the procedure is rewritten for th
 old stage documents: it describes how a scheduled agent session runs the due watch cycles and
 delivers the computed digest, and which acts remain the researcher's. Its reference is the hash
 computed by the platform from the installed file.
+
+`rf-run` and `rf-mine` are written for this platform (plan MS) and have no counterpart in the old
+stage documents: the first states the order of a run and how to read the next step from the tools,
+the second is the procedure a registered miner names. Their references are the hashes computed by
+the platform from the installed files.
