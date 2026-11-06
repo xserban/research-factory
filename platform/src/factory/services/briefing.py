@@ -183,11 +183,12 @@ def serve_pack(project: Project, *, session: str) -> tuple[str, str]:
     pack = to_json(built)
     blob = project.blobs.put(pack.encode())
     position = built.meta.as_of
-    if position is None or any(row.blob == blob for row in served_for(project, session)):
-        return blob, pack
-    payload = BriefingServed(session=session, audience="agent", blob=blob, as_of=position)
-    actor = project.system_actor().model_copy(update={"session": session})
-    project.record([project.events.make("briefing.served", payload, actor)])
+    with project.writing():  # the build above is a long read: outside the write lock
+        if position is None or any(row.blob == blob for row in served_for(project, session)):
+            return blob, pack
+        payload = BriefingServed(session=session, audience="agent", blob=blob, as_of=position)
+        actor = project.system_actor().model_copy(update={"session": session})
+        project.record([project.events.make("briefing.served", payload, actor)])
     return blob, pack
 
 
