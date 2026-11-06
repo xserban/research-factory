@@ -44,6 +44,7 @@ from factory.services.appraisal import (
     instrument_in_force,
     item_applies,
 )
+from factory.services.budgets import budget_issue, spent_for, task_unit
 from factory.services.context import Project
 from factory.services.conversions import conversion_manifest, conversion_of
 from factory.services.extraction import in_dual_sample
@@ -219,9 +220,13 @@ def appraisal_next(project: Project, actor: Actor, label: PassLabel) -> Appraisa
         def accept(content: object) -> bool:
             return _is_current(content, found, current)
 
-        task = _held(project, actor, kind, accept) or claim_next(
-            project, actor, kind, accept=accept
-        )
+        task = _held(project, actor, kind, accept)
+        # A claim already held pays for no new claim; a spent budget on the kind blocks a new one.
+        spent = None if task is not None else spent_for(project, actor, task_unit(kind))
+        if spent is not None:
+            blocked.append(budget_issue(spent).reason)
+        elif task is None:
+            task = claim_next(project, actor, kind, accept=accept)
         batch = None if task is None else _batch(project, task, label)
         return AppraisalNext(batch=batch, blocked=blocked, remaining=len(pending))
 

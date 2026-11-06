@@ -53,9 +53,7 @@ def _refuse(field: str, reason: str) -> FactoryValidationError:
     return FactoryValidationError([ValidationIssue(field, reason)])
 
 
-def _human_gate(
-    project: Project, actor: Actor, channel: Channel, what: str, act: HumanAct
-) -> None:
+def _human_gate(project: Project, actor: Actor, channel: Channel, what: str, act: HumanAct) -> None:
     """Refuse a non-human, a pass session and a forged or barred channel. The caller holds the
     write lock."""
     issues: list[ValidationIssue] = []
