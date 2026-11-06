@@ -2,6 +2,7 @@
 
 import json
 import re
+from collections import Counter
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Annotated, Literal, TypeVar, cast
 
@@ -43,8 +44,14 @@ from factory.model.hypotheses import (
 )
 from factory.model.identity import IdGenerator
 from factory.model.inbox import Basis
-from factory.model.intuition import ConceptInput, InterpretationInput, ReviewState, UseBasisInput
-from factory.model.lineage import RelationProposal
+from factory.model.intuition import (
+    ConceptInput,
+    ConceptState,
+    InterpretationInput,
+    ReviewState,
+    UseBasisInput,
+)
+from factory.model.lineage import DEFAULT_STATUSES, EdgeStatus, RelationProposal
 from factory.model.notices import AssessmentDecision
 from factory.model.project import RigorMode
 from factory.model.protocol import CriterionEffect, PressFinding, ProtocolSpec, ScreeningStage
@@ -3643,6 +3650,169 @@ def build_server(
 
         return _reply(project, report, include_work_ids=False)
 
+    @server.tool()
+    def extraction_status(
+        project: str, cursor: str | None = None, limit: int = PAGE_LIMIT
+    ) -> dict[str, JsonValue]:
+        """Each evidence extraction unit (a work in one pass) with its state (queued, open,
+        current, stale) and why it is stale, one page at a time, and the counts by state. No row
+        or value. Read-only. Refused to a session that has joined a pass."""
+
+        def status() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            units = extraction_service.unit_states(opened)
+            page = paginate(units, cursor, limit)
+            rows: list[JsonValue] = [unit.model_dump(mode="json") for unit in page.items]
+            data = _listing(rows, page.next_cursor, "no extraction unit yet")
+            data["counts"] = cast(JsonValue, dict(Counter(unit.state for unit in units)))
+            return _withheld(opened, data, include_work_ids=False)
+
+        return _reply(project, status, include_work_ids=False)
+
+    @server.tool()
+    def contribution_status(
+        project: str, cursor: str | None = None, limit: int = PAGE_LIMIT
+    ) -> dict[str, JsonValue]:
+        """The contribution counts: units by state, final items by kind, not-stated kinds and
+        citation markers. The three lists (`no_references`, `other_conversion`,
+        `closed_without_items`) are one page each, with their totals in `totals`; `next_cursor`
+        continues them together. Read-only. Refused to a session that has joined a pass."""
+
+        def status() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            found = contributions_service.contribution_status(opened)
+            data: dict[str, JsonValue] = found.model_dump(
+                mode="json",
+                exclude={"no_references", "other_conversion", "closed_without_items"},
+            )
+            lists: dict[str, list[JsonValue]] = {
+                "no_references": list(found.no_references),
+                "other_conversion": list(found.other_conversion),
+                "closed_without_items": [
+                    item.model_dump(mode="json") for item in found.closed_without_items
+                ],
+            }
+            pages = {name: paginate(rows, cursor, limit) for name, rows in lists.items()}
+            data.update({name: page.items for name, page in pages.items()})
+            data["totals"] = {name: len(rows) for name, rows in lists.items()}
+            data["next_cursor"] = next(
+                (p.next_cursor for p in pages.values() if p.next_cursor is not None), None
+            )
+            if not found.units:
+                data["notice"] = "no contribution unit yet"
+            return _withheld(opened, data, include_work_ids=False)
+
+        return _reply(project, status, include_work_ids=False)
+
+    @server.tool()
+    def relation_list(
+        project: str,
+        work_id: str | None = None,
+        status: list[str] | None = None,
+        cursor: str | None = None,
+        limit: int = PAGE_LIMIT,
+    ) -> dict[str, JsonValue]:
+        """Live relations by source, type and target, one page at a time, each with its effective
+        status, the reasons it is stale and its basis item. `work_id` matches the source or the
+        target; `status` widens the default (stated, confirmed) to inferred, stale or rejected.
+        Empty with a notice until a screening pass has opened. Read-only; refused to a session
+        that has joined a pass."""
+
+        def listing() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            statuses = _edge_statuses(status)
+            offset, size = _window(cursor, limit)
+            if _before_any_pass(opened):
+                return NOT_YET
+            views = relations_service.list_relations(
+                opened, statuses=statuses, work_id=work_id, limit=size + 1, offset=offset
+            )
+            rows: list[JsonValue] = [view.model_dump(mode="json") for view in views[:size]]
+            following = str(offset + size) if len(views) > size else None
+            return _withheld(
+                opened, _listing(rows, following, "no relation found"), include_work_ids=False
+            )
+
+        return _reply(project, listing, include_work_ids=False)
+
+    @server.tool()
+    def idea_list(
+        project: str,
+        status: str = "confirmed",
+        cursor: str | None = None,
+        limit: int = PAGE_LIMIT,
+    ) -> dict[str, JsonValue]:
+        """Ideas by id, one page at a time, with name, origin, members and state. `status` is
+        `confirmed` (default) or `all`, which adds the ideas still only proposed; a rejected,
+        merged or superseded idea is never listed. Empty with a notice until a screening pass has
+        opened. Read-only; refused to a session that has joined a pass."""
+
+        def listing() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            if status not in ("confirmed", "all"):
+                raise FactoryValidationError(
+                    [ValidationIssue("status", "must be confirmed or all")]
+                )
+            offset, size = _window(cursor, limit)
+            if _before_any_pass(opened):
+                return NOT_YET
+            views = ideas_service.list_ideas(
+                opened, include_unconfirmed=status == "all", limit=size + 1, offset=offset
+            )
+            rows: list[JsonValue] = [view.model_dump(mode="json") for view in views[:size]]
+            following = str(offset + size) if len(views) > size else None
+            return _withheld(
+                opened, _listing(rows, following, "no idea found"), include_work_ids=False
+            )
+
+        return _reply(project, listing, include_work_ids=False)
+
+    @server.tool()
+    def concept_list(
+        project: str,
+        state: str | None = None,
+        cursor: str | None = None,
+        limit: int = PAGE_LIMIT,
+    ) -> dict[str, JsonValue]:
+        """Background concepts by id, one page at a time, each with `class` and `label` (never
+        evidence), text, source, review state and flags. By default the visible ones; `state`
+        (unreviewed, reviewed, wrong, merged) lists those in that state, hidden or not. The hidden
+        counts are always reported; `next_cursor` is the id to continue after. Empty with a notice
+        until a screening pass has opened. Read-only; refused to a session that has joined a
+        pass."""
+
+        def listing() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            try:
+                chosen = None if state is None else ConceptState(state)
+            except ValueError:
+                choices = ", ".join(item.value for item in ConceptState)
+                raise FactoryValidationError(
+                    [ValidationIssue("state", f"must be among {choices}")]
+                ) from None
+            if _before_any_pass(opened):
+                return NOT_YET
+            found = concepts_service.list_concepts(
+                opened,
+                review_state=chosen,
+                cursor=cursor,
+                limit=min(max(limit, 1), PAGE_LIMIT),
+            )
+            rows: list[JsonValue] = [
+                item.model_dump(mode="json", by_alias=True, exclude={"input_blob"})
+                for item in found.items
+            ]
+            data = _listing(rows, found.next_cursor, "no concept found")
+            data["hidden"] = found.hidden.model_dump(mode="json")
+            return _withheld(opened, data, include_work_ids=False)
+
+        return _reply(project, listing, include_work_ids=False)
+
     return server
 
 
@@ -3679,6 +3849,19 @@ def _window(cursor: str | None, limit: int) -> tuple[int, int]:
     one row more than the size to learn whether another page follows."""
     paginate((), cursor, limit)  # validates the cursor
     return (0 if cursor is None else int(cursor)), min(max(limit, 1), PAGE_LIMIT)
+
+
+def _edge_statuses(values: list[str] | None) -> frozenset[EdgeStatus]:
+    """The statuses a relation list shows; the default view when none is named."""
+    if not values:
+        return DEFAULT_STATUSES
+    try:
+        return frozenset(EdgeStatus(value) for value in values)
+    except ValueError:
+        choices = ", ".join(status.value for status in EdgeStatus)
+        raise FactoryValidationError(
+            [ValidationIssue("status", f"must be among {choices}")]
+        ) from None
 
 
 REGION_PAGE_LIMIT = 500

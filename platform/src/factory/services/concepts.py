@@ -587,15 +587,20 @@ def list_concepts(
     project: Project,
     *,
     include_hidden: bool = False,
+    review_state: ConceptState | None = None,
     cursor: str | None = None,
     limit: int = LIST_PAGE,
 ) -> ConceptList:
     """One page of concepts by id, labelled. By default only the visible ones (an approved
-    source, not merged, not reviewed `wrong`; ruling B2); `include_hidden` lists all. The hidden
-    counts are always reported. `next_cursor` continues the listing."""
+    source, not merged, not reviewed `wrong`; ruling B2); `include_hidden` lists all, and
+    `review_state` lists those in that state, hidden or not. The hidden counts are always
+    reported. `next_cursor` continues the listing."""
     project.index.sync()
-    where = "1 = 1" if include_hidden else _VISIBLE_SQL
+    where = "1 = 1" if include_hidden or review_state is not None else _VISIBLE_SQL
     params: dict[str, Any] = {"n": limit + 1}
+    if review_state is not None:
+        where += " AND c.review_state = :rs"
+        params["rs"] = review_state.value
     if cursor is not None:
         where += " AND c.concept_id > :c"
         params["c"] = cursor
