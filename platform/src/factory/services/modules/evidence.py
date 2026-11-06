@@ -16,7 +16,10 @@ SPEC = ModuleSpec(
     kind=ModuleKind.BUILDER,
     inputs=(ArtifactKind.RECORD,),
     outputs=(ArtifactKind.REPORT,),
-    reads=BuilderReads(miners=()),  # the report reads the evidence schema, no registered miner
+    # The report reads the evidence schema and, dynamically, each miner version the protocol
+    # admits as evidence (`services/evidence_miners.admitted_miners`); `check` adds those to
+    # the static pairs so `miner-version-unread` clears for them.
+    reads=BuilderReads(miners=()),
     checks=(
         CheckRule("evidence-excluded-rows", ("warning", "warning", "warning")),
         CheckRule("evidence-ungrouped", ("warning", "warning", "warning")),

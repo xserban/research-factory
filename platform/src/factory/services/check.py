@@ -1006,7 +1006,7 @@ def _miner_lifecycle(project: Project) -> list[_Hit]:
         else set()
     )
     hits: list[_Hit] = []
-    read = default_modules().read_miners()
+    read = default_modules().read_miners() | admitted
     for row in registered_miners(project):
         if (row.name, row.version) not in read and _production_rows(project, row.name, row.version):
             hits.append(

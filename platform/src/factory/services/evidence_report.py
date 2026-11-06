@@ -327,6 +327,35 @@ class GreySensitivity(StrictModel):
     without_grey: bool
 
 
+class MinerRowRef(StrictModel):
+    """A row of an admitted miner that sits in no group: where it came from, never a value."""
+
+    row_key: str
+    work_id: str
+    fields: list[str]
+
+
+class MinerGroup(StrictModel):
+    """Rows of one admitted miner version whose fields map to the evidence schema's comparability
+    keys, grouped only within identical key values. Never merged with an evidence group."""
+
+    miner: str
+    version: int
+    group_id: str
+    key: list[tuple[str, str]]
+    rows: list[EvidenceRow]
+
+
+class MinerUngrouped(StrictModel):
+    """Rows of an admitted miner version listed with no group, with the reason: its fields do not
+    map to the evidence schema's keys, or the row lacks a key or the value field."""
+
+    miner: str
+    version: int
+    reason: Literal["fields-do-not-map", "row-lacks-key"]
+    rows: list[MinerRowRef]
+
+
 class EvidenceReport(StrictModel):
     project_protocol_id: str | None
     pack: str | None
@@ -347,13 +376,21 @@ class EvidenceReport(StrictModel):
     """Reason -> count of proposed/baseline speed pairs that were not formed."""
     grey_sensitivity: GreySensitivity | None = None
     """Set only when the protocol declares `grey_sources` and a grey work is in the population."""
+    miner_groups: list[MinerGroup] = Field(default_factory=list)
+    """Rows of miners the protocol admits as evidence (`evidence: true`), per miner version and
+    key; empty (and then omitted from the serialised report) without such a miner."""
+    miner_ungrouped: list[MinerUngrouped] = Field(default_factory=list)
 
     @model_serializer(mode="wrap")
-    def _omit_absent_grey(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
-        """A report without grey evidence serialises exactly as it did before."""
+    def _omit_absent_optional(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        """A report without grey evidence or admitted-miner rows serialises exactly as it did
+        before they existed."""
         data: dict[str, Any] = handler(self)
         if self.grey_sensitivity is None:
             data.pop("grey_sensitivity", None)
+        for name in ("miner_groups", "miner_ungrouped"):
+            if not data.get(name):
+                data.pop(name, None)
         return data
 
 
@@ -467,7 +504,7 @@ def evidence_report(
     grey = grey & {*inputs.population, *(r.work_id for r in _all_rows(inputs))}
     full = assemble_report(inputs, expect=expect, include_notice_affected=include_notice_affected)
     if not grey:
-        return with_copied_flags(project, full)
+        return with_miner_rows(project, with_copied_flags(project, full))
     reduced = assemble_report(
         _without_works(inputs, grey), expect=expect, include_notice_affected=include_notice_affected
     )
@@ -478,7 +515,9 @@ def evidence_report(
         without_grey=without_grey,
     )
     shown = reduced if without_grey else _grey_labelled(full, grey)
-    return with_copied_flags(project, shown.model_copy(update={"grey_sensitivity": sensitivity}))
+    return with_miner_rows(
+        project, with_copied_flags(project, shown.model_copy(update={"grey_sensitivity": sensitivity}))
+    )
 
 
 def _all_rows(inputs: ReportInputs) -> list[Any]:
@@ -499,6 +538,17 @@ def _grey_labelled(report: EvidenceReport, grey: frozenset[str]) -> EvidenceRepo
 
     groups = [g.model_copy(update={"rows": label(g.rows)}) for g in report.groups]
     return report.model_copy(update={"groups": groups, "ungrouped": label(report.ungrouped)})
+
+
+def with_miner_rows(project: Project, report: EvidenceReport) -> EvidenceReport:
+    """The report with the rows of the miners the protocol admits as evidence (plan EQ task 8).
+    A report without such a miner is returned as it is."""
+    from factory.services.evidence_miners import miner_rows  # imports this module
+
+    groups, ungrouped = miner_rows(project, report)
+    if not groups and not ungrouped:
+        return report
+    return report.model_copy(update={"miner_groups": groups, "miner_ungrouped": ungrouped})
 
 
 def with_copied_flags(project: Project, report: EvidenceReport) -> EvidenceReport:

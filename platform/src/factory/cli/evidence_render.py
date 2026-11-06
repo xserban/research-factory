@@ -82,6 +82,26 @@ def _flags(row: EvidenceRow) -> str:
     return ", ".join(flags)
 
 
+def _miner_sections(report: EvidenceReport) -> list[str]:
+    """Rows of admitted miners: one section per miner version and key, never merged with an
+    evidence group; then the rows listed with no group. Nothing when no miner is admitted."""
+    out: list[str] = []
+    if report.miner_groups:
+        out += ["## Admitted miners", ""]
+        for g in report.miner_groups:
+            key = ", ".join(f"{k}={_flat(v)}" for k, v in g.key)
+            out += [f"### {g.miner} version {g.version}: {g.group_id}", "", f"- key: {key}", ""]
+            out += _row_table(g.rows)
+            out.append("")
+    if report.miner_ungrouped:
+        out += ["## Admitted miner rows with no group", ""]
+        for u in report.miner_ungrouped:
+            out.append(f"- {u.miner} version {u.version} ({u.reason}): {len(u.rows)} row(s)")
+            out += [f"  - {r.row_key} ({r.work_id}): {', '.join(r.fields)}" for r in u.rows]
+        out.append("")
+    return out
+
+
 def _row_table(rows: list[EvidenceRow]) -> list[str]:
     cost_names = sorted({n for r in rows for n in r.costs})
     head = [
@@ -196,6 +216,7 @@ def evidence_markdown(report: EvidenceReport, *, show_audit: bool = True) -> str
     speed = _speed_section(report)
     if speed:
         out += [*speed, ""]
+    out += _miner_sections(report)
     out += ["## Claims by type", ""]
     for ctype, entries in report.claims.items():
         out += [f"### {ctype}", ""]
