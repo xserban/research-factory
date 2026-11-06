@@ -19,11 +19,13 @@ Invariants:
 
 from __future__ import annotations
 
+import json
+
 from pydantic import JsonValue, ValidationError
 from sqlalchemy import text
 
 from factory.document.quotes import quote_in_element
-from factory.errors import FactoryValidationError, ValidationIssue
+from factory.errors import FactoryError, FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
 from factory.index.drafts import VERIFY_SKILL
 from factory.model.drafts import Verdict
@@ -63,17 +65,30 @@ def _require_verifier(project: Project, actor: Actor) -> None:
 
 
 def _open_tasks(project: Project, manuscript_id: str) -> dict[tuple[int, str], str]:
-    """The task of each unit of the manuscript that has one not completed."""
+    """The task of each unit of the manuscript that has one not completed, read from the task's
+    refs and checked against its content. A task that does not validate as a unit of this
+    manuscript, or whose blob cannot be read, was written by hand and is passed over."""
     with project.index.connect() as conn:
         rows = conn.execute(
-            text("SELECT task_id, content_blob FROM tasks WHERE kind = :k AND status != :done"),
+            text(
+                "SELECT task_id, content_blob, refs FROM tasks WHERE kind = :k AND status != :done"
+            ),
             {"k": MANUSCRIPT_VERIFY_TASK_KIND, "done": TaskStatus.COMPLETED.value},
         ).all()
     found: dict[tuple[int, str], str] = {}
-    for task_id, blob in rows:
-        content = project.blobs.get_json(str(blob))
-        if isinstance(content, dict) and content.get("manuscript_id") == manuscript_id:
-            found[(int(str(content["ordinal"])), str(content["work_id"]))] = str(task_id)
+    for task_id, blob, refs in rows:
+        try:
+            named = json.loads(str(refs))
+            if len(named) != 2 or named[0] != manuscript_id:
+                continue
+            content = project.blobs.get_json(str(blob))
+            if not isinstance(content, dict):
+                continue
+            unit = MsUnit.model_validate({**content, "task_id": str(task_id)})
+        except (FactoryError, OSError, ValueError):
+            continue
+        if unit.manuscript_id == manuscript_id and unit.work_id == named[1]:
+            found.setdefault((unit.ordinal, unit.work_id), str(task_id))
     return found
 
 
