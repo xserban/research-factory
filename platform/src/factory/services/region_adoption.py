@@ -9,6 +9,8 @@ Invariants:
   (it reaches an import's `all` part or a barred run purpose) is never adopted: its members would
   carry held-out structure into this project.
 - Adoption changes no corpus count: the members are recorded, never admitted.
+- A `private` source (teams-A) is read by its members alone: a person who holds no role there
+  gets the refusal of an unreadable source, so a private project is not told apart from none.
 - The source's blobs are read before the write lock is taken; nothing is read from the network.
 """
 
@@ -24,17 +26,26 @@ from factory.errors import FactoryError, FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
 from factory.model.identity import IdGenerator
 from factory.model.regions import RegionAdopted
+from factory.model.screening import Channel
 from factory.regions.rules import MemberType
 from factory.regions.version import member_lines, members_hash
+from factory.services.access import visibility
 from factory.services.context import Project, open_project
 from factory.services.gates import gate_issues
+from factory.services.human_channel import require_human_channel
+from factory.services.members import roles_of
 from factory.services.regions import latest_adoptions, region_withheld
 
-__all__ = ["adopt_region", "adoption_outdated", "open_source"]
+__all__ = ["adopt_region", "adoption_outdated", "open_source", "source_readable"]
 
 
 def _refuse(*issues: ValidationIssue) -> FactoryValidationError:
     return FactoryValidationError(list(issues))
+
+
+def source_readable(source: Project, user: str) -> bool:
+    """Whether `user` may read `source`: any project not marked `private`, else a member of it."""
+    return visibility(source) != "private" or bool(roles_of(source, user))
 
 
 def open_source(project: Project, source_root: Path) -> Project:
@@ -48,9 +59,19 @@ def open_source(project: Project, source_root: Path) -> Project:
     settings = project.settings.model_copy(update={"root": path.parent.parent})
     session = IdGenerator(project.clock).ulid()
     try:
-        return open_project(settings, path.name, session=session, clock=project.clock)
+        source = open_project(
+            settings,
+            path.name,
+            session=session,
+            clock=project.clock,
+            principal=project.principal,
+        )
+        readable = source_readable(source, project.principal.user)
     except FactoryError as exc:
         raise _refuse(ValidationIssue("source", "source-unreadable")) from exc
+    if not readable:
+        raise _refuse(ValidationIssue("source", "source-unreadable"))
+    return source
 
 
 def _reviewed(source: Project, version: str) -> bool:
@@ -76,7 +97,13 @@ def _text_of(blob: bytes) -> bytes | None:
     return "".join(f"{line}\n" for line in lines).encode()
 
 
-def adopt_region(project: Project, actor: Actor, source_root: Path, version: str) -> str:
+def adopt_region(
+    project: Project,
+    actor: Actor,
+    source_root: Path,
+    version: str,
+    channel: Channel = Channel.CLI,
+) -> str:
     """Adopt the reviewed `version` (R@) of a region of the project at `source_root`; return the
     event id. A re-adoption of the latest adopted version writes nothing and returns the earlier
     event id. Refused with nothing written (fields `actor`, `source`, `version`, `blob`): not a
@@ -116,6 +143,7 @@ def adopt_region(project: Project, actor: Actor, source_root: Path, version: str
         raise _refuse(ValidationIssue("blob", "member-list-tampered"))
     counts = {MemberType(k): int(v) for k, v in json.loads(str(snap["counts"])).items()}
     with project.writing():
+        require_human_channel(project, actor, channel, "sign-off")
         for row in latest_adoptions(project):
             if (
                 row["source_project"] == source.paths.slug
@@ -148,7 +176,10 @@ def adoption_outdated(project: Project) -> list[tuple[str, str]]:
                 str(row["source_project"]),
                 session=IdGenerator(project.clock).ulid(),
                 clock=project.clock,
+                principal=project.principal,
             )
+            if not source_readable(source, project.principal.user):
+                continue
             source.index.sync()
             with source.index.connect() as conn:
                 versions = [

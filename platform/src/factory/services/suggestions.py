@@ -17,8 +17,8 @@ Invariants:
   identifier or held-out rate is read, so none can leave a project through a suggestion. A reason
   names the other project and the signal, never a title, a quotation or a count of seeds.
 - Opening another project may refresh its rebuildable index, and appends no event. A project that
-  cannot be read is skipped. (There is no `private` flag on this base; when teams-A lands, a
-  private project is skipped here.)
+  cannot be read is skipped, and so is a `private` project (teams-A) in which the reader holds no
+  role: its works are never named to a non-member.
 - The result is deterministic: sorted by project slug, signal order, work id, and capped.
 """
 
@@ -35,6 +35,7 @@ from factory.model.base import StrictModel
 from factory.model.identity import IdGenerator
 from factory.services.agreement import Outcome, final_outcomes
 from factory.services.context import Project, list_projects, open_project
+from factory.services.region_adoption import source_readable
 from factory.services.regions import region_withheld
 from factory.services.search import corpus_work_ids
 
@@ -203,7 +204,10 @@ def suggestions(
                 slug,
                 session=IdGenerator(project.clock).ulid(),
                 clock=project.clock,
+                principal=project.principal,
             )
+            if not source_readable(source, project.principal.user):
+                continue
             source.index.sync()
             found += _from_source(source, own, own_included, cited)
         except (FactoryError, OSError, SQLAlchemyError):

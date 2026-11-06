@@ -37,6 +37,7 @@ from factory.model.cards import (
     QuoteBasis,
     RowBasis,
 )
+from factory.model.screening import Channel
 from factory.services.cards import (
     AssertionStatus,
     _Ctx,
@@ -47,6 +48,7 @@ from factory.services.cards import (
 )
 from factory.services.context import Project
 from factory.services.gates import gate_issues
+from factory.services.human_channel import require_human_channel
 from factory.services.properties import vocabulary_version
 from factory.services.region_adoption import open_source
 
@@ -101,7 +103,11 @@ def _verified(
 
 
 def import_card(
-    project: Project, actor: Actor, source_root: Path, source_card_id: str
+    project: Project,
+    actor: Actor,
+    source_root: Path,
+    source_card_id: str,
+    channel: Channel = Channel.CLI,
 ) -> CardImportResult:
     """Import the card `source_card_id` of the project at `source_root` as a new card here, with
     recorded provenance (`card.imported`). Refused with nothing written (fields `actor`,
@@ -141,6 +147,7 @@ def import_card(
         raise _refuse("card_id", "unknown")
     kind = str(card["kind"])
     with project.writing():
+        require_human_channel(project, actor, channel, "sign-off")
         subject, subject_issues = (
             _method_subject(project, str(card["subject"]))
             if kind == "method"
