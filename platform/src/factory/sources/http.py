@@ -154,8 +154,14 @@ GENERIC_CLIENT = "research-factory"
 
 
 def fetch_page(url: str) -> httpx.Response:
-    """GET a web page once, politely, under the generic client name (no contact address)."""
-    http = httpx.Client(timeout=60.0, follow_redirects=True, headers={"User-Agent": GENERIC_CLIENT})
+    """GET a web page once, politely, under the generic client name (no contact address). The
+    outbound guard checks the URL and every redirect hop: https to public addresses only."""
+    http = httpx.Client(
+        timeout=60.0,
+        follow_redirects=True,
+        event_hooks={"request": [client_hook()]},
+        headers={"User-Agent": GENERIC_CLIENT},
+    )
     try:
         return PoliteClient(http).get(url)
     finally:

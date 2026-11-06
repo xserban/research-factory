@@ -1,4 +1,4 @@
-"""Grey literature: the declared sources and the reported events (plan SG, PD-7 provisional).
+"""Grey literature: the declared sources and the reported events (plan SG, PD-7, decision 113).
 
 Grey evidence is labelled and never pooled silently. A grey source is declared in the protocol
 section `grey_sources`; the section is left out of every hash while absent.

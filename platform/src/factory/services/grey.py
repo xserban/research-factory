@@ -1,4 +1,4 @@
-"""Grey literature (plan SG, PD-7 provisional): what the protocol declares and what was found.
+"""Grey literature (plan SG, PD-7, decision 113): what the protocol declares and what was found.
 
 Grey methods are provenance methods appended after `library-import`, so no existing PRISMA count
 moves. A work counts as grey when it carries a grey provenance method. Nothing here judges: the
