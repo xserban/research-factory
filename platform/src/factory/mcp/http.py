@@ -10,6 +10,7 @@ Invariants:
 - A refusal at the transport leaves one access-log line, with no header value in it.
 """
 
+import time
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, timedelta
 from functools import partial
@@ -37,6 +38,7 @@ from factory.model.screening import Channel
 from factory.services.access_log import AccessEntry, AccessLog
 from factory.services.credentials import verify_token
 from factory.services.lab import Lab, open_lab
+from factory.services.rate_limit import DEFAULT_BURST, DEFAULT_RATE, RateLimiter
 from factory.sources.fulltext.base import FullTextRoute
 from factory.sources.registry import SourceFactory
 
@@ -135,6 +137,8 @@ def build_http_app(
     clock: Clock | None = None,
     sources: Mapping[str, SourceFactory] | None = None,
     fulltext_routes: Callable[[], Mapping[Route, FullTextRoute]] | None = None,
+    rate: float = DEFAULT_RATE,
+    burst: int = DEFAULT_BURST,
 ) -> Starlette:
     """The ASGI app of `factory serve --http`. `issuer_url` is what the protected-resource metadata
     names; v1 tokens are personal ones, so no authorisation server is run here (ruling 7)."""
@@ -161,6 +165,7 @@ def build_http_app(
             validate_token_resource=False,
         ),
         token_verifier=FactoryTokenVerifier(lab_opener, now),
+        limiter=RateLimiter(rate, burst, time.monotonic),
     )
     app = server.streamable_http_app(
         stateless_http=False,

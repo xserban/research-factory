@@ -163,6 +163,7 @@ from factory.services.hypothesis_gates import GateName, gate_policy
 from factory.services.lab import Lab, lab_exists, open_lab
 from factory.services.living_hooks import default_hooks
 from factory.services.members import roles_of
+from factory.services.rate_limit import RateLimiter
 from factory.services.results import BatchResult, ItemError
 from factory.services.search import list_works
 from factory.services.seeds import SeedOutcome
@@ -207,6 +208,7 @@ def build_server(
     context: ContextProvider | None = None,
     auth: AuthSettings | None = None,
     token_verifier: TokenVerifier | None = None,
+    limiter: RateLimiter | None = None,
 ) -> MCPServer:
     """The factory's MCP server. `context` names each call's principal and session; by default the
     local user and one session per process, as on stdio. `auth` and `token_verifier` are the HTTP
@@ -232,7 +234,7 @@ def build_server(
     log = AccessLog(settings.root) if remote or (settings.root / ".server").is_dir() else None
     server = ScopedServer(
         "factory",
-        wrap=authorising(provider, open_for_call, open_registry, log, clock),
+        wrap=authorising(provider, open_for_call, open_registry, log, clock, limiter),
         auth=auth,
         token_verifier=token_verifier,
     )

@@ -10,6 +10,7 @@ Invariants:
   an agent. `authorize` is told the tool, or it could not lift the subtraction for those.
 - The active check never rests on `verify_token`: each call reads the lab itself, and an
   authenticated principal with no lab to read holds nothing.
+- A principal over its rate limit is refused before authorisation, with one access-log line.
 - An authenticated caller naming a project that does not exist gets the refusal a project they hold
   no role in gets. On stdio the local user keeps the tool's own answer.
 """
@@ -47,6 +48,7 @@ from factory.services.access import (
 from factory.services.access_log import AccessEntry, AccessLog, Outcome, field_names
 from factory.services.context import MAX_SLUG_LENGTH, Project
 from factory.services.lab import Lab
+from factory.services.rate_limit import RateLimiter
 
 ProjectOpener = Callable[[str, CallContext], Project]
 LabOpener = Callable[[str], Lab | None]
@@ -108,6 +110,7 @@ def authorised(
     lab_opener: LabOpener,
     log: AccessLog | None,
     clock: Clock,
+    limiter: RateLimiter | None = None,
 ) -> Callable[[ToolFn], ToolFn]:
     """The wrapper of tool `name`. Raises `KeyError` for a tool with no permission row."""
     permission = TOOL_PERMISSIONS[name]
@@ -149,6 +152,10 @@ def authorised(
                 write(None, slug, "refused", exc.issues)
                 return fail(exc.issues)
             with call_scope(call, context) as scoped:
+                if limiter is not None and not limiter.allow(scoped.principal.user):
+                    over = [ValidationIssue("rate_limit", "too many calls; slow down")]
+                    write(scoped, slug, "refused", over)
+                    return fail(over)
                 try:
                     _admit(name, scoped, slug, actor_kind, permission, opener, lab_opener)
                 except FactoryValidationError as exc:
@@ -176,10 +183,11 @@ def authorising(
     lab_opener: LabOpener,
     log: AccessLog | None,
     clock: Clock,
+    limiter: RateLimiter | None = None,
 ) -> ToolWrapper:
     """What `ScopedServer` puts every tool under."""
 
     def wrap(name: str, fn: ToolFn) -> ToolFn:
-        return authorised(name, provider, opener, lab_opener, log, clock)(fn)
+        return authorised(name, provider, opener, lab_opener, log, clock, limiter)(fn)
 
     return wrap

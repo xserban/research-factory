@@ -14,6 +14,7 @@ from urllib.parse import quote, quote_plus
 import httpx
 
 from factory.config import Settings
+from factory.sources.guard import client_hook
 
 HOST_INTERVALS: Mapping[str, float] = {
     "export.arxiv.org": 3.0,
@@ -142,6 +143,7 @@ def default_http(settings: Settings) -> PoliteClient:
     http = httpx.Client(
         timeout=60.0,
         follow_redirects=True,
+        event_hooks={"request": [client_hook()]},
         headers={"User-Agent": user_agent(settings.mailto)},
     )
     return PoliteClient(http)
