@@ -810,7 +810,13 @@ def register_from(
         project,
         actor,
         spec_to_json(spec),
-        imported_from=ImportedFrom(project=source, digest=row.digest),
+        imported_from=ImportedFrom(
+            project=source,
+            digest=row.digest,
+            proposer_session=row.proposer_session
+            if row.proposer_kind == "agent" and row.proposer_session
+            else None,
+        ),
     )
 
 

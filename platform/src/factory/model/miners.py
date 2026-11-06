@@ -32,6 +32,10 @@ class ImportedFrom(StrictModel):
 
     project: str
     digest: str = Field(pattern=DIGEST_RE)
+    proposer_session: str | None = Field(default=None, min_length=1, max_length=200)
+    """The session of an agent that authored the source's version, kept so that adopting it does
+    not turn an agent proposal into a human one (R-04, R-51). None when the source's was not an
+    agent's. It only ever adds the agent proposer; it never removes one."""
 
 
 class MinerRegistered(StrictModel):
