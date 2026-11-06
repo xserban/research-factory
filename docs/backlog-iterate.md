@@ -179,7 +179,7 @@ Minor review findings parked during the v1 build, to address when iterating from
 - PI: after `--converter X`, repeating `--converter docling` is `unchanged` and X stays the latest; `document read --conversion` reads the other.
 - PI: `import.resolved` rewriting an admitted record's link is refused by the service only; a hand-written event still folds. Enforcing it in the fold needs a look at old logs that re-resolved after admission (iterate line 22).
 - PI: `import show --researcher` could write the CSV template for `import describe`, with ordinals and file names.
-- MS: no human-queue gate says an import waits to be resolved (`factory import resolve`): the five intake gates start at confirmation.
+- MS: no human-queue gate says an import waits to be resolved (`factory import resolve`), or that a record described since its resolution waits for `--described`: the five intake gates start at confirmation, and such an import only leaves the admission count.
 - MS: `dedup.revert_merge` checks the merge outside the index lock, so two reverts can both pass; the fold takes the first.
 - MS: `project_status` now derives the stage on every call, and `probe.py` calls it for the rigor mode alone; read the mode directly if a probe feels slow.
 - MS: `document_status`, `extraction_status` and the list tools read the whole list and page in Python; `lead_list`, `hypothesis_list` and `experiment_list` too. Page in SQL if a project grows.
