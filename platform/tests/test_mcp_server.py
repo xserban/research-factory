@@ -171,6 +171,9 @@ async def test_project_status_tool(settings: Settings, project: Project, clock: 
             "review_request",
             "review_list",
             "review_decide",
+            "appraisal_next",
+            "appraisal_record",
+            "appraisal_status",
         ]
         res = await client.call_tool("project_status", {"project": "demo"})
         body = _body(res)

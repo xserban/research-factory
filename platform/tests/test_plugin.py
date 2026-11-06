@@ -9,6 +9,7 @@ from factory.services.skills import skill_ref
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SKILLS = (
+    "rf-appraise",
     "rf-cards",
     "rf-contributions",
     "rf-critic",

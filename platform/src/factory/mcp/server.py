@@ -42,6 +42,7 @@ from factory.mcp.sessions import (
     current_call,
     stdio_provider,
 )
+from factory.model.appraisal_events import AnswerInput
 from factory.model.base import StrictModel
 from factory.model.budgets import REQUESTS_SEARCH
 from factory.model.cards import CardKind, PropertyDef, QuoteBasis
@@ -83,6 +84,8 @@ from factory.modules.contract import Autonomy, PolicyKind
 from factory.regions.rules import MemberType, RuleSet
 from factory.services import agent_view as agent_view_service
 from factory.services import agreement as agreement_service
+from factory.services import appraisal_judgements as appraisal_service
+from factory.services import appraisal_passes as appraisal_passes_service
 from factory.services import audit as audit_service
 from factory.services import benchmark_ledger as ledger_service
 from factory.services import briefing as briefing_service
@@ -4613,6 +4616,86 @@ def build_server(
             return {"review_request_id": review_request_id, "decision": said["decision"]}
 
         return _reply(project, decide, include_work_ids=False)
+
+    @server.tool()
+    def appraisal_next(
+        project: str, pass_label: str, role: str, model: str, skill: str
+    ) -> dict[str, JsonValue]:
+        """Serve the next appraisal task of pass A or B to this session, or say why none is
+        served. The batch names the instrument, the span items to answer and the pinned
+        conversion to read with `document_read`. Refused when the protocol declares no
+        instrument, to a session in a screening or extraction pass, to a session or model that
+        gave the other pass, and to a session that appraised and then extracts."""
+
+        def serve() -> JsonValue:
+            label = _pass_label(pass_label)
+            opened = open_project(settings, project, session=session, clock=clock)
+            actor = make_agent_actor(settings, session, role, model, skill)
+            served = appraisal_passes_service.appraisal_next(opened, actor, label)
+            return _withheld(opened, served.model_dump(mode="json"), include_work_ids=False)
+
+        return _reply(project, serve, include_work_ids=False)
+
+    @server.tool()
+    def appraisal_record(
+        project: str,
+        task_id: str,
+        answers: list[dict[str, JsonValue]],
+        role: str,
+        model: str,
+        skill: str,
+        finish: bool = False,
+        reason: str | None = None,
+    ) -> dict[str, JsonValue]:
+        """Record answers read from a held appraisal task. An answer is {item, answer, anchor,
+        quote}: answer is yes, no or unclear; yes and no need the anchor and a verbatim quote
+        from that one anchor, unclear needs neither. An invalid answer is reported by index and
+        the valid ones are written. `finish` closes the work once no answer of the call is
+        rejected and every item has an answer. Judgement items are a human's and never served."""
+
+        def record() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            actor = make_agent_actor(settings, session, role, model, skill)
+            good, bad = _parse_all(AnswerInput, answers, "answers")
+            result = appraisal_passes_service.appraisal_record(
+                opened,
+                actor,
+                task_id,
+                [answer for _, answer in good],
+                finish=finish and not bad,
+                reason=reason,
+            )
+            merged = result.model_copy(
+                update={
+                    "rejected": sorted(
+                        [
+                            *bad,
+                            *(
+                                ItemError(index=good[e.index][0], issues=e.issues)
+                                for e in result.rejected
+                            ),
+                        ],
+                        key=lambda e: e.index,
+                    )
+                }
+            )
+            return _withheld(opened, merged.model_dump(mode="json"), include_work_ids=False)
+
+        return _reply(project, record, include_work_ids=False)
+
+    @server.tool()
+    def appraisal_status(project: str) -> dict[str, JsonValue]:
+        """The appraisal counts: works, span items by state, judgement items open and recorded,
+        stale works. No answer, quote or judgement. Read-only. Refused to a session that has
+        joined a pass."""
+
+        def status() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            found = appraisal_service.appraisal_status(opened)
+            return _withheld(opened, found.model_dump(mode="json"), include_work_ids=False)
+
+        return _reply(project, status, include_work_ids=False)
 
     return server
 

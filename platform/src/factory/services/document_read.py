@@ -15,10 +15,10 @@ Invariants:
   pass and to no full-text pass is refused (field `session`). A session joined to a full-text pass
   reads only the works of the full-text batches of its own pass that it holds or has completed,
   and only the conversion such a batch pins; a session joined to an extraction pass (of either
-  scope, evidence or contribution) is gated the same way on the tasks of its own pass; this rule
-  applies whether or not the session also joined a title/abstract pass, so a title/abstract
-  membership never widens the access. Any other work, document or conversion is refused on its
-  own field. A session in neither stage, and
+  scope, evidence or contribution), or holding appraisal tasks, is gated the same way on the
+  tasks of its own pass; this rule applies whether or not the session also joined a
+  title/abstract pass, so a title/abstract membership never widens the access. Any other work,
+  document or conversion is refused on its own field. A session in neither stage, and
   a call without `session` (the researcher's CLI), are not gated. The tool returns only document
   segments, never a verdict or label of either pass.
 - Read-only: nothing is written, and the index is only synced, never written.
@@ -203,6 +203,8 @@ def _gate(
         extracting = _extraction_pass(project, session)
         kind = None if extracting is None else kinds_for(extracting[0])[extracting[1]]
     if kind is None:
+        kind = _appraisal_kind(project, session)
+    if kind is None:
         if is_pass_session(project, session, stage=ScreeningStage.TITLE_ABSTRACT):
             raise FactoryValidationError(
                 [
@@ -239,6 +241,20 @@ def _full_text_pass(project: Project, session: str) -> PassLabel | None:
             {"s": session, "stage": ScreeningStage.FULL_TEXT.value},
         ).first()
     return None if row is None else PassLabel(str(row[0]))
+
+
+def _appraisal_kind(project: Project, session: str) -> str | None:
+    """The appraisal task kind (`appraise_a` or `appraise_b`) whose task this session claimed, if
+    any: such a session reads only the works of the tasks it holds or has completed."""
+    with project.index.connect() as conn:
+        row = conn.execute(
+            text(
+                "SELECT kind FROM tasks WHERE claim_session = :s AND kind IN "
+                "('appraise_a', 'appraise_b') ORDER BY task_id DESC LIMIT 1"
+            ),
+            {"s": session},
+        ).first()
+    return None if row is None else str(row[0])
 
 
 def _extraction_pass(project: Project, session: str) -> tuple[ScopeKey, PassLabel] | None:
