@@ -104,6 +104,7 @@ from factory.services.hosting import foreign_event_files
 from factory.services.human_channel import human_act_counts
 from factory.services.ideas import list_ideas
 from factory.services.imports import library_import_only, list_imports
+from factory.services.lab_library import adoption_sources_missing
 from factory.services.label_check import (
     ORGANISATION_ID,
     organisation_present,
@@ -2210,6 +2211,14 @@ def _fulltext(project: Project) -> list[_Hit]:
                 "fulltext-unsought",
                 tuple(unsought),
                 f"{len(unsought)} promoted work(s) have no full-text attempt",
+            )
+        )
+    for document_id, work_id in adoption_sources_missing(project):
+        hits.append(
+            _Hit(
+                "adoption-source-missing",
+                (document_id, work_id),
+                "an adopted document's source project or document is gone from this root",
             )
         )
     hits += _stale_document_decisions(project)

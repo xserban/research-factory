@@ -108,6 +108,7 @@ from factory.model.intuition import (
     InterpretationRecorded,
     InterpretationReviewed,
 )
+from factory.model.lab_library import FulltextAdopted, SourceConfirmed
 from factory.model.labels import (
     ConsolidationDecided,
     ConsolidationPassCompleted,
@@ -293,6 +294,8 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("fulltext.document_added", DocumentAdded, 1))
     catalog.register(EventType("fulltext.source_changed", SourceChanged, 1))
     catalog.register(EventType("fulltext.source_resolved", SourceResolved, 1))
+    catalog.register(EventType("fulltext.adopted", FulltextAdopted, 1))
+    catalog.register(EventType("library.source_confirmed", SourceConfirmed, 1))
     catalog.register(EventType("extraction.pass_opened", ExtractionPassOpened, 1))
     catalog.register(EventType("extraction.pass_joined", ExtractionPassJoined, 1))
     catalog.register(EventType("extraction.recorded", ExtractionRecorded, 1))

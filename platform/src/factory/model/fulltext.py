@@ -43,10 +43,13 @@ class Route(StrEnum):
     ARXIV_SOURCE = "arxiv-source"
     OA_PDF = "oa-pdf"
     RESEARCHER = "researcher-supplied"
+    LAB_LIBRARY = "lab-library"
+    """A document another project of the lab acquired, adopted by an explicit act (deploy-C)."""
 
 
 ROUTE_ORDER: tuple[Route, ...] = (Route.ARXIV_HTML, Route.ARXIV_SOURCE, Route.OA_PDF)
-"""The automatic routes in the order they are tried. `RESEARCHER` is not among them."""
+"""The automatic routes in the order they are tried. `RESEARCHER` and `LAB_LIBRARY` are not among
+them."""
 
 
 class Quality(StrEnum):
@@ -63,6 +66,8 @@ QUALITY: Mapping[Route, Quality] = MappingProxyType(
         Route.RESEARCHER: Quality.PDF_TEXT,
     }
 )
+"""The quality each route yields. `LAB_LIBRARY` has none of its own: an adopted document keeps the
+quality of the document it adopts."""
 
 
 class AttemptOutcome(StrEnum):
@@ -105,6 +110,8 @@ class FetchStarted(StrictModel):
             return self
         if Route.RESEARCHER in self.routes:
             raise ValueError("a researcher-supplied route is never fetched automatically")
+        if Route.LAB_LIBRARY in self.routes and len(self.routes) > 1:
+            raise ValueError("an adoption names the lab-library route alone")
         if len(set(self.routes)) != len(self.routes):
             raise ValueError("routes must not repeat a route")
         return self
@@ -176,10 +183,11 @@ class DocumentAdded(StrictModel):
 
     @model_validator(mode="after")
     def _check_derived_fields(self) -> Self:
-        if self.quality is not QUALITY[self.route]:
+        if self.route is not Route.LAB_LIBRARY and self.quality is not QUALITY[self.route]:
             raise ValueError("a document's quality follows from its route")
         supplied = self.route is Route.RESEARCHER
-        if (self.provenance == "researcher-supplied") != supplied:
+        adopted = self.route is Route.LAB_LIBRARY  # keeps the provenance of the adopted document
+        if not adopted and (self.provenance == "researcher-supplied") != supplied:
             raise ValueError("a document's provenance follows from its route")
         if self.supersedes == self.document_id:
             raise ValueError("a document never supersedes itself")

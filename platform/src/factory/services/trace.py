@@ -60,6 +60,7 @@ from factory.model.work import QUERY_ID_RE, RUN_ID_RE
 from factory.model.work_ids import WORK_ID_RE
 from factory.services import (
     draft_trace,
+    lab_trace,
     label_trace,
     layer_trace,
     manuscript_trace,
@@ -129,6 +130,7 @@ KINDS: tuple[str, ...] = (
     "briefing",
     "served",
     "session",
+    lab_trace.ADOPTION_KIND,
 )
 """Node kinds in chain order. The layer's kinds come last (G2's pinned order after `claim` is
 unchanged). Sibling nodes are listed in this order (reversed for back traces, so
@@ -188,6 +190,7 @@ _PATTERNS: tuple[tuple[str, str], ...] = (
     (BLOB_REF_RE, "page"),
     (WORK_ID_RE, "work"),
     (ATTEMPT_ID_RE, "attempt"),
+    lab_trace.ADOPTION_PATTERN,
     (DOCUMENT_ID_RE, "document"),
     (CONVERSION_ID_RE, "conversion"),
     (_ANCHOR_RE, "anchor"),
@@ -614,6 +617,7 @@ class _Walk:
             "work": self._work,
             "attempt": self._attempt,
             "document": self._document,
+            lab_trace.ADOPTION_KIND: self._adoption,
             "conversion": self._conversion,
             "anchor": self._anchor,
             "decision": self._decision,
@@ -1020,6 +1024,10 @@ class _Walk:
             label += f" ({reason})"
         return _Described(label, str(event_id))
 
+    def _adoption(self, ident: str) -> _Described | None:
+        found = lab_trace.describe(self._project, self._conn, ident)
+        return None if found is None else _Described(*found)
+
     def _document(self, ident: str) -> _Described | None:
         rows = self._all(
             "SELECT route, quality, superseded_by, event_id FROM fulltext_documents "
@@ -1384,6 +1392,8 @@ class _Walk:
         kind, ident = key
         if kind in region_trace.REGION_KINDS:
             return region_trace.edges(self._conn, kind, ident)
+        if kind == lab_trace.ADOPTION_KIND:
+            return lab_trace.edges(self._conn, ident)
         if kind in draft_trace.DRAFT_KINDS:
             return draft_trace.edges(self._project, self._conn, kind, ident)
         if kind in manuscript_trace.MANUSCRIPT_KINDS:
@@ -1786,6 +1796,12 @@ class _Walk:
             ("attempt", a)
             for a in self._column(
                 "SELECT attempt_id FROM fulltext_documents WHERE document_id = :d", d=ident
+            )
+        ]
+        up += [
+            (lab_trace.ADOPTION_KIND, lab_trace.adoption_key(d))
+            for d in self._column(
+                "SELECT document_id FROM fulltext_adoptions WHERE document_id = :d", d=ident
             )
         ]
         down: list[Key] = [

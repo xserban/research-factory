@@ -41,6 +41,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import RowMapping
 
 from factory.errors import FactoryError, FactoryValidationError, ValidationIssue
+from factory.events.blobs import BlobIntegrityError, BlobNotFoundError
 from factory.events.envelope import Actor, Event
 from factory.model.base import StrictModel
 from factory.model.budgets import REQUESTS_FULLTEXT
@@ -587,6 +588,8 @@ def restore_document(
         doc = _document(project, document_id)
         if doc is None:
             raise FactoryValidationError([ValidationIssue("document_id", "unknown document")])
+        if doc.route == Route.LAB_LIBRARY.value:
+            return _adopted_present(project, doc)
         issues = _restore_issues(doc, routes)
         if issues:
             raise FactoryValidationError(issues)
@@ -607,6 +610,18 @@ def restore_document(
         events, status = _restore_events(project, doc, item, trigger)
         project.record(events)
     return status
+
+
+def _adopted_present(project: Project, doc: _Document) -> RestoreStatus:
+    """An adopted document has no route to ask: its bytes are in the lab library or they are not.
+    They are `present` when the lab library serves them and they hash to the document's ref."""
+    try:
+        project.library.get(doc.raw_hash)
+    except (BlobNotFoundError, BlobIntegrityError) as exc:
+        raise FactoryValidationError(
+            [ValidationIssue("document_id", "lab-library: push the blob or adopt it again")]
+        ) from exc
+    return "present"
 
 
 def _has_open_change(project: Project, document_id: str) -> bool:
@@ -644,6 +659,9 @@ def restore_missing(
     for document_id, route in library_missing(project):
         if route is Route.RESEARCHER:
             yield RestoreOutcome(document_id, "needs-reimport")
+            continue
+        if route is Route.LAB_LIBRARY:
+            yield RestoreOutcome(document_id, "needs-lab-library")
             continue
         try:
             status: str = restore_document(project, document_id, routes=routes, actor=actor)

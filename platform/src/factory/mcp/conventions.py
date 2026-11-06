@@ -147,6 +147,13 @@ def parse_routes(values: Sequence[str] | None, field: str) -> list[Route] | None
                 )
             )
             continue
+        if value == Route.LAB_LIBRARY.value:
+            issues.append(
+                ValidationIssue(
+                    f"{field}.{index}", "a lab-library document is adopted, not fetched"
+                )
+            )
+            continue
         try:
             route = Route(value)
         except ValueError:

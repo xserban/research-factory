@@ -13,9 +13,11 @@ from factory.events.blobs import BlobStore
 from factory.events.catalog import EventCatalog, default_catalog
 from factory.events.envelope import Actor, Event
 from factory.events.factory import EventFactory
+from factory.events.library import LabLibrary, ProjectLibrary
 from factory.events.writer import EventWriter
 from factory.index.default import default_projection
 from factory.index.index import Index
+from factory.index.library import referenced_check
 from factory.index.project import latest_host
 from factory.model.identity import SLUG_RE, IdGenerator, ulid_time
 from factory.model.lab import LAB_SLUG
@@ -79,7 +81,7 @@ class Project:
     ids: IdGenerator
     catalog: EventCatalog
     blobs: BlobStore
-    library: BlobStore
+    library: ProjectLibrary
     events: EventFactory
     writer: EventWriter
     index: Index
@@ -198,7 +200,9 @@ def build_project(
         ids=ids,
         catalog=catalog,
         blobs=blobs,
-        library=BlobStore(paths.library_dir),
+        library=ProjectLibrary(
+            BlobStore(paths.library_dir), LabLibrary(settings.root), referenced_check(index)
+        ),
         events=EventFactory(slug, catalog, ids),
         writer=EventWriter(
             paths.events_dir,

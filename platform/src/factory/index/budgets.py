@@ -341,8 +341,8 @@ def _attempted(tables: BudgetTables) -> Handler:
             payload = Attempted.model_validate(event.payload)
         except ValidationError:
             return
-        if payload.route is Route.RESEARCHER:
-            return
+        if payload.route in (Route.RESEARCHER, Route.LAB_LIBRARY):
+            return  # no request reached a source
         started = None if payload.fetch_id is None else _starter(conn, tables, payload.fetch_id)
         user = event.actor.user if started is None else started
         _charge(conn, tables, event, payload.attempt_id, user, FULLTEXT_KIND)

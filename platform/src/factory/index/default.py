@@ -31,6 +31,7 @@ from factory.index.inbox import inbox_handlers, inbox_tables
 from factory.index.intuition import intuition_handlers, intuition_tables
 from factory.index.labels import label_handlers, label_tables
 from factory.index.ledger import ledger_handlers, ledger_tables
+from factory.index.library import library_handlers, library_tables
 from factory.index.lineage import lineage_handlers, lineage_tables
 from factory.index.living import digest_handlers, digest_tables, living_handlers, living_tables
 from factory.index.manuscripts import manuscript_handlers, manuscript_tables
@@ -60,7 +61,7 @@ from factory.index.tasks import task_handlers, tasks_table
 from factory.index.watch import run_started_handler, watch_handlers, watch_tables
 
 # Bump on any change to the tables or handlers below; the index is then rebuilt.
-PROJECTION_VERSION = "66"
+PROJECTION_VERSION = "67"
 
 
 def default_projection(blobs: BlobStore | None = None) -> Projection:
@@ -86,6 +87,7 @@ def default_projection(blobs: BlobStore | None = None) -> Projection:
     screening = screening_tables(metadata)
     chase = chase_tables(metadata)
     fulltext = fulltext_tables(metadata)
+    library = library_tables(metadata)
     extraction = extraction_tables(metadata)
     conversions, conversion_failures = document_tables(metadata)
     references = reference_tables(metadata)
@@ -136,6 +138,7 @@ def default_projection(blobs: BlobStore | None = None) -> Projection:
         **screening_handlers(screening),
         **chase_handlers(chase),
         **fulltext_handlers(fulltext),
+        **library_handlers(library, members, fulltext.documents),
         **extraction_handlers(extraction),
         **document_handlers(conversions, conversion_failures),
         **reference_handlers(references),
