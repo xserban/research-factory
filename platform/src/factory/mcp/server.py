@@ -3362,9 +3362,9 @@ def build_server(
         project: str, manuscript_id: str, ordinal: int, context: int = 1
     ) -> dict[str, JsonValue]:
         """One sentence of a manuscript: `text`, its `length`, its citation `keys`, and up to
-        `context` (0 to 3) preceding sentences in `before`, as context only; `after` is empty. Agents
-        read manuscripts only through this tool; never copy the text into a note. Read-only;
-        refused to a session that joined a pass."""
+        `context` (0 to 3) preceding sentences in `before`, as context only; `after` is empty.
+        Agents read manuscripts only through this tool; never copy the text into a note.
+        Read-only; refused to a session that joined a pass."""
 
         def read() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
