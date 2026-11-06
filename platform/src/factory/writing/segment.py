@@ -41,6 +41,7 @@ ABBREVIATIONS = frozenset(
 ruling 5 and `al.`, `Sec.`, `Tab.`, `approx.`, `resp.`. A single capital initial is one too."""
 
 _BOUNDARY = re.compile(rf"[.?!](?=\s+(?:[{UPPER}]|\d|\\|\[))")
+_OPEN_CITE = re.compile(r"\\(?!nocite)[A-Za-z]*[Cc]ite[A-Za-z]*\*?(?:\s*\[[^\]]*\])?\s*\[[^\]]*\Z")
 _PARAGRAPH = re.compile(r"(?:\r\n?|\n)\s*(?:\r\n?|\n)")
 _LEADING = "([{\"'`*_“‘"
 
@@ -56,7 +57,7 @@ _TEX_FLOAT = re.compile(
     rf"\\begin\{{(?P<e>(?:{_TEX_FLOATS})\*?)\}}.*?(?:\\end\{{(?P=e)\}}|\Z)", re.DOTALL
 )
 _TEX_DISPLAY = re.compile(
-    rf"\\begin\{{(?P<e>(?:{_TEX_MATH})\*?)\}}.*?(?:\\end\{{(?P=e)\}}|\Z)|\\\[.*?(?:\\\]|\Z)",
+    rf"\\begin\{{(?P<e>(?:{_TEX_MATH})\*?)\}}.*?(?:\\end\{{(?P=e)\}}|\Z)|(?<!\\)\\\[.*?\\\]",
     re.DOTALL,
 )
 _TEX_HEADING = re.compile(
@@ -152,6 +153,8 @@ def _ends_sentence(text: str, stop: int) -> bool:
     """Whether the mark at `stop` ends a sentence, by the token before it."""
     if text[stop] != ".":
         return True
+    if _OPEN_CITE.search(text, max(0, stop - 200), stop):
+        return False  # a period inside the optional argument of a citation
     start = stop
     while start > 0 and not text[start - 1].isspace():
         start -= 1

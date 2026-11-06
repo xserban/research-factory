@@ -25,7 +25,7 @@ from factory.references.markers import bracket_numbers
 from factory.writing.segment import Format
 
 _LATEX = re.compile(
-    r"\\(?:[Cc]ite[pt]?|[Pp]arencite|[Tt]extcite|[Aa]utocite)\*?"
+    r"\\(?!nocite)[A-Za-z]*[Cc]ite[A-Za-z]*\*?"
     r"(?:\s*\[[^\]]*\]){0,2}\s*\{(?P<keys>[^{}]*)\}"
 )
 _PANDOC = re.compile(r"(?<![\w.@/\\])@(?P<key>\w(?:[\w:.#$%&+?<>~/-]*\w)?)")
