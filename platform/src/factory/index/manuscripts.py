@@ -353,10 +353,21 @@ def _citation_decided(t: ManuscriptTables) -> Handler:
         if event.actor.kind != "human":
             return
         row = _citation(t, conn, p.manuscript_id, p.key)
-        if row is None or row[0] != CitationState.PROPOSED.value or row[2] is not None:
+        if row is None:
+            return
+        c = t.citations.c
+        if p.decision is CitationDecision.CLEAR:
+            if row[2] is None:
+                return
+            conn.execute(
+                update(t.citations)
+                .where(c.manuscript_id == p.manuscript_id, c.key == p.key)
+                .values(decision=None, event_id=event.id)
+            )
+            return
+        if row[0] != CitationState.PROPOSED.value or row[2] is not None:
             return
         confirmed = p.decision is CitationDecision.CONFIRM
-        c = t.citations.c
         conn.execute(
             update(t.citations)
             .where(c.manuscript_id == p.manuscript_id, c.key == p.key)

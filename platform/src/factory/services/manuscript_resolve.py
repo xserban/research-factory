@@ -294,6 +294,47 @@ def resolve_citations(project: Project, manuscript_id: str) -> ResolutionSummary
         )
 
 
+def _clear(
+    project: Project,
+    row: ManuscriptRow,
+    key: str,
+    current: CitationRow | None,
+    actor: Actor,
+) -> str:
+    """Withdraw a decision (a new event; the old one stays in the log) and match the key afresh,
+    in the same write. Refused when the key has no decision."""
+    manuscript_id = row.manuscript_id
+    if current is None or current.decision is None:
+        raise _refuse("key", "no decision to clear")
+    event = project.events.make(
+        "manuscript.citation_decided",
+        CitationDecided(manuscript_id=manuscript_id, key=key, decision=CitationDecision.CLEAR),
+        actor,
+        refs=[manuscript_id],
+    )
+    works = _works(project)
+    match = _match(_records(project, row, [key]).get(key), works)
+    closed = {o: c for (o, k), c in closure_rows(project, manuscript_id).items() if k == key}
+    verdicts = verdict_rows(project, manuscript_id)
+    sentences = sentence_rows(project, manuscript_id)
+    follow = _key_events(
+        project,
+        manuscript_id,
+        key,
+        match,
+        current.model_copy(update={"decision": None}),
+        _reason(project, match.state, match.work_id, works),
+        [
+            o
+            for o in _ordinals(sentences, key)
+            if match.work_id is None or (o, match.work_id) not in verdicts
+        ],
+        closed,
+    )
+    project.record([event, *follow])
+    return event.id
+
+
 def decide_citation(
     project: Project,
     manuscript_id: str,
@@ -314,8 +355,10 @@ def decide_citation(
             issues.append(ValidationIssue("actor", "a fuzzy citation is decided by a human"))
         if issues:
             raise FactoryValidationError(issues)
-        require_manuscript(project, manuscript_id)
+        row = require_manuscript(project, manuscript_id)
         current = citation_rows(project, manuscript_id).get(key)
+        if decision is CitationDecision.CLEAR:
+            return _clear(project, row, key, current, actor)
         if (
             current is None
             or current.state is not CitationState.PROPOSED

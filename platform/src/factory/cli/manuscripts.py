@@ -119,18 +119,30 @@ def manuscript_resolve_cmd(
     reject: Annotated[
         str | None, typer.Option("--reject", help="Reject this proposed key.")
     ] = None,
+    clear: Annotated[
+        str | None, typer.Option("--clear", help="Withdraw the decision on this key.")
+    ] = None,
 ) -> None:
     """Resolve the citations again and list what waits for you, or decide one proposed key."""
     from factory.cli.main import _reporting_errors, _resolve_project, _state
 
     state = _state(ctx)
     with _reporting_errors():
-        if confirm is not None and reject is not None:
-            raise FactoryValidationError([ValidationIssue("key", "give --confirm or --reject")])
+        given = [k for k in (confirm, reject, clear) if k is not None]
+        if len(given) > 1:
+            raise FactoryValidationError(
+                [ValidationIssue("key", "give one of --confirm, --reject or --clear")]
+            )
         project = _resolve_project(state)
-        key = confirm if confirm is not None else reject
+        key = given[0] if given else None
         if key is not None:
-            decision = CitationDecision.CONFIRM if confirm is not None else CitationDecision.REJECT
+            decision = (
+                CitationDecision.CONFIRM
+                if confirm is not None
+                else CitationDecision.REJECT
+                if reject is not None
+                else CitationDecision.CLEAR
+            )
             resolve_service.decide_citation(
                 project, manuscript, key, decision, actor=project.human_actor()
             )

@@ -79,6 +79,8 @@ class CitationMethod(StrEnum):
 class CitationDecision(StrEnum):
     CONFIRM = "confirm"
     REJECT = "reject"
+    CLEAR = "clear"
+    """Withdraw an earlier decision; the next resolution matches the key afresh."""
 
 
 class CloseReason(StrEnum):
@@ -171,7 +173,8 @@ class CitationResolved(StrictModel):
 
 
 class CitationDecided(StrictModel):
-    """A human's decision on a `proposed` citation."""
+    """A human's decision on a `proposed` citation, or the withdrawal of one (`clear`), which
+    supersedes it."""
 
     manuscript_id: str = Field(pattern=MANUSCRIPT_ID_RE)
     key: Key
