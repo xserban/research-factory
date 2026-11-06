@@ -44,6 +44,8 @@ OMITTED_WHEN_EMPTY: frozenset[str] = frozenset(
         "budgets",
         "task_usage",
         "watch_cycles",
+        "grey_searches",
+        "grey_contacts",
         "gate_audits",
         "gate_audit_items",
         "watch_cycle_sources",

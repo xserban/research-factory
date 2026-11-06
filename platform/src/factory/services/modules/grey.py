@@ -15,9 +15,15 @@ SPEC = ModuleSpec(
     name="grey",
     kind=ModuleKind.RETRIEVAL,
     outputs=(ArtifactKind.WORK,),
-    events=EventFamily(),
+    events=EventFamily(
+        types=("grey.contact_logged", "grey.search_reported"),
+        tables=("grey_contacts", "grey_searches"),
+    ),
     protocol_sections=("grey_sources",),
-    checks=(CheckRule("grey-undeclared", ("warning", "warning", "error")),),
+    checks=(
+        CheckRule("grey-undeclared", ("warning", "warning", "error")),
+        CheckRule("grey-reported-only", ("warning", "warning", "error")),
+    ),
 )
 
 MODULE = RuleModule(SPEC)

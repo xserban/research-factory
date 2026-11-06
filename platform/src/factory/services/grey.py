@@ -12,23 +12,27 @@ Invariants:
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from urllib.parse import urlsplit
 
 import httpx
-from pydantic import JsonValue
+from pydantic import JsonValue, ValidationError
 from sqlalchemy import bindparam, text
 
 from factory.canonical import canonical_json
 from factory.document.html_generic import WEB_CAPTURE_HTML
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
-from factory.model.grey import GreyMethod, GreySource
+from factory.model.grey import GreyContactLogged, GreyMethod, GreySearchReported, GreySource
+from factory.model.inbox import Basis
+from factory.model.screening import Channel
 from factory.model.search import QueryKind, QueryPurpose, QuerySpec
 from factory.model.work import ProvenanceMethod
 from factory.services.context import Project
 from factory.services.fulltext import record_supplied_document
+from factory.services.inbox import LinkInput, add_links
 from factory.services.protocol import current_protocol
 from factory.services.search import register_query, run_query
 from factory.sources.http import PoliteClient
@@ -216,4 +220,179 @@ def capture_url(
         sha256=f"sha256:{digest}",
         media_type=media_type,
         new_work=summary.new_works > 0,
+    )
+
+
+# --- Reported searches and expert contact (Task 6) ---
+
+
+@dataclass(frozen=True)
+class ReportOutcome:
+    """What a reported search or contact wrote: its id and the inbox items its URLs became
+    (`offered`) against the URLs the inbox could not parse to an identifier (`unparsed`)."""
+
+    record_id: str
+    offered: tuple[str, ...]
+    unparsed: tuple[str, ...]
+
+
+def _offer(project: Project, actor: Actor, urls: tuple[str, ...]) -> ReportOutcome | None:
+    """Offer URLs to the inbox as capture-only items; never enrols a work."""
+    if not urls:
+        return None
+    items = [
+        LinkInput(url, basis=Basis(kind="knowledge") if actor.kind == "agent" else None)
+        for url in urls
+    ]
+    result = add_links(project, actor, items, Channel.MCP if actor.kind == "agent" else Channel.CLI)
+    unparsed = tuple(urls[e.index] for e in result.rejected)
+    return ReportOutcome("", tuple(result.written), unparsed)
+
+
+def _input_blob(project: Project, actor: Actor, sent: dict[str, JsonValue]) -> str | None:
+    return project.blobs.put_json(sent) if actor.kind == "agent" else None
+
+
+def report_search(
+    project: Project,
+    actor: Actor,
+    *,
+    target: str,
+    engine: str,
+    query: str,
+    timestamp: datetime,
+    urls: Sequence[str],
+    stopping_rule: str,
+) -> ReportOutcome:
+    """Record a web search run in the agent (an explicit R-21 exception, PD-7).
+
+    `target` must be a declared `agent-web-search` entry of `grey_sources`; the run states its own
+    `stopping_rule`. The platform cannot verify the search: the event records what the agent said.
+    Its URLs are offered to the inbox (an identifier is parsed, anything else is listed as
+    unparsed); no work is enrolled by this call. Writes happen under `project.writing()`; the
+    inbox offer follows as its own recorded step.
+    """
+    issues: list[ValidationIssue] = []
+    if actor.kind not in ("agent", "human"):
+        issues.append(ValidationIssue("actor", "a human or an agent"))
+    if not any(
+        s.method is GreyMethod.AGENT_WEB_SEARCH and s.target == target
+        for s in declared_sources(project)
+    ):
+        issues.append(ValidationIssue("target", "not a declared agent-web-search grey source"))
+    unique = tuple(dict.fromkeys(u.strip() for u in urls if u.strip()))
+    try:
+        payload = GreySearchReported(
+            report_id=project.ids.new("grs"),
+            target=target,
+            engine=engine,
+            query=query,
+            timestamp=timestamp,
+            urls=unique,
+            stopping_rule=stopping_rule,
+        )
+    except ValidationError as exc:
+        issues.extend(ValidationIssue(".".join(map(str, e["loc"])), e["msg"]) for e in exc.errors())
+    if issues:
+        raise FactoryValidationError(issues)
+    sent: dict[str, JsonValue] = payload.model_dump(mode="json")
+    with project.writing():
+        project.record(
+            [
+                project.events.make(
+                    "grey.search_reported",
+                    payload,
+                    actor,
+                    refs=(payload.report_id,),
+                    input_blob=_input_blob(project, actor, sent),
+                )
+            ]
+        )
+    offered = _offer(project, actor, unique)
+    if offered is None:
+        return ReportOutcome(payload.report_id, (), ())
+    return ReportOutcome(payload.report_id, offered.offered, offered.unparsed)
+
+
+def log_contact(
+    project: Project,
+    actor: Actor,
+    *,
+    target: str,
+    contacted_on: datetime,
+    summary: str,
+    urls: Sequence[str] = (),
+) -> ReportOutcome:
+    """Log an expert contact. `target` must be a declared `expert-contact` entry. The log holds a
+    label and a summary, never an address; its URLs are offered to the inbox as for a search."""
+    issues: list[ValidationIssue] = []
+    if not any(
+        s.method is GreyMethod.EXPERT_CONTACT and s.target == target
+        for s in declared_sources(project)
+    ):
+        issues.append(ValidationIssue("target", "not a declared expert-contact grey source"))
+    unique = tuple(dict.fromkeys(u.strip() for u in urls if u.strip()))
+    try:
+        payload = GreyContactLogged(
+            contact_id=project.ids.new("grc"),
+            target=target,
+            contacted_on=contacted_on,
+            summary=summary,
+            urls=unique,
+        )
+    except ValidationError as exc:
+        issues.extend(ValidationIssue(".".join(map(str, e["loc"])), e["msg"]) for e in exc.errors())
+    if issues:
+        raise FactoryValidationError(issues)
+    sent: dict[str, JsonValue] = payload.model_dump(mode="json")
+    with project.writing():
+        project.record(
+            [
+                project.events.make(
+                    "grey.contact_logged",
+                    payload,
+                    actor,
+                    refs=(payload.contact_id,),
+                    input_blob=_input_blob(project, actor, sent),
+                )
+            ]
+        )
+    offered = _offer(project, actor, unique)
+    if offered is None:
+        return ReportOutcome(payload.contact_id, (), ())
+    return ReportOutcome(payload.contact_id, offered.offered, offered.unparsed)
+
+
+def reported_counts(project: Project) -> tuple[int, int]:
+    """(reported searches, logged contacts), for the methods text."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        searches = conn.execute(text("SELECT COUNT(*) FROM grey_searches")).scalar_one()
+        contacts = conn.execute(text("SELECT COUNT(*) FROM grey_contacts")).scalar_one()
+    return int(searches), int(contacts)
+
+
+def reported_only_sources(project: Project) -> list[str]:
+    """Declared, pooled `agent-web-search` targets with reports while no `structured` or
+    `website` source of the protocol has yielded a work: the evidence rests on reports alone
+    (review focus 2). Empty while nothing was reported."""
+    sources = declared_sources(project)
+    project.index.sync()
+    with project.index.connect() as conn:
+        reported = {
+            str(r[0]) for r in conn.execute(text("SELECT DISTINCT target FROM grey_searches")).all()
+        }
+        verifiable = conn.execute(
+            text("SELECT 1 FROM provenance WHERE method IN (:a, :b) LIMIT 1"),
+            {
+                "a": ProvenanceMethod.GREY_STRUCTURED.value,
+                "b": ProvenanceMethod.GREY_WEBSITE.value,
+            },
+        ).first()
+    if verifiable is not None:
+        return []
+    return sorted(
+        s.target
+        for s in sources
+        if s.method is GreyMethod.AGENT_WEB_SEARCH and s.included and s.target in reported
     )

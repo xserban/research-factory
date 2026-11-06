@@ -23,6 +23,7 @@ from factory.index.findings import finding_handlers, finding_tables
 from factory.index.fulltext import fulltext_handlers, fulltext_tables
 from factory.index.gates import gate_handlers, gate_tables
 from factory.index.graph import graph_handlers, graph_tables
+from factory.index.grey import grey_handlers, grey_tables
 from factory.index.hypotheses import hypothesis_handlers, hypothesis_tables
 from factory.index.imports import import_handlers, import_tables
 from factory.index.inbox import inbox_handlers, inbox_tables
@@ -89,6 +90,7 @@ def default_projection(blobs: BlobStore | None = None) -> Projection:
     references = reference_tables(metadata)
     imports = import_tables(metadata)
     inbox = inbox_tables(metadata)
+    grey = grey_tables(metadata)
     watch = watch_tables(metadata, search.runs)
     snapshots = living_tables(metadata)
     notices = notice_tables(metadata, search.work_keys, screening.label_sessions)
@@ -137,6 +139,7 @@ def default_projection(blobs: BlobStore | None = None) -> Projection:
         **reference_handlers(references),
         **import_handlers(imports, blobs),
         **inbox_handlers(inbox),
+        **grey_handlers(grey),
         **watch_handlers(watch),
         **living_handlers(snapshots),
         **notice_handlers(notices),

@@ -1368,6 +1368,38 @@ def grey_capture(
     )
 
 
+@grey_app.command("contact")
+def grey_contact(
+    ctx: typer.Context,
+    target: Annotated[
+        str, typer.Option("--target", help="The declared `expert-contact` target (a role label).")
+    ],
+    summary: Annotated[str, typer.Option("--summary", help="What was asked and what came back.")],
+    on: Annotated[
+        str | None, typer.Option("--on", help="ISO date or timestamp; today when omitted.")
+    ] = None,
+    url: Annotated[list[str] | None, typer.Option("--url", help="A link the contact gave.")] = None,
+) -> None:
+    """Log an expert contact. The log holds a label and a summary, never an address."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        when = project.clock.now() if on is None else datetime.fromisoformat(on)
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=project.clock.now().tzinfo)
+        outcome = grey_service.log_contact(
+            project,
+            project.human_actor(),
+            target=target,
+            contacted_on=when,
+            summary=summary,
+            urls=url or (),
+        )
+    typer.echo(f"logged {outcome.record_id}")
+    for link in outcome.unparsed:
+        typer.echo(f"not an identifier link, not offered: {link}", err=True)
+
+
 @inbox_app.command("withdraw")
 def inbox_withdraw(
     ctx: typer.Context,

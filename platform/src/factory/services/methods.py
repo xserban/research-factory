@@ -49,7 +49,7 @@ from factory.services.evidence_report import evidence_report
 from factory.services.extraction_agreement import agreement_overall
 from factory.services.extraction_audit import extraction_audit_report
 from factory.services.gate_status import GateStatusRow, notable_rows
-from factory.services.grey import declared_sources, grey_paragraph
+from factory.services.grey import declared_sources, grey_paragraph, reported_counts
 from factory.services.imports import library_import_only
 from factory.services.prisma import (
     UNCONVERTED,
@@ -339,6 +339,8 @@ def methods_report(project: Project) -> MethodsReport:
         **references,
         supplied_links=_supplied_links(project),
         grey_sources=list(declared_sources(project)),
+        grey_reported=reported_counts(project)[0] if declared_sources(project) else 0,
+        grey_contacts=reported_counts(project)[1] if declared_sources(project) else 0,
         imports=_imports(project, agent=False),
         gate_policy=notable_rows(project),
         miners=_miners(project),

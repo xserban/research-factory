@@ -62,6 +62,7 @@ from factory.model.fulltext import (
     SourceResolved,
 )
 from factory.model.gate_audit import GateAuditLabelled, GateAuditSampled
+from factory.model.grey import GreyContactLogged, GreySearchReported
 from factory.model.hosting import ProjectHosted
 from factory.model.hypotheses import (
     HypothesisAbandoned,
@@ -310,6 +311,8 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("import.resolution_decided", ImportResolutionDecided, 1))
     catalog.register(EventType("import.record_described", ImportRecordDescribed, 1))
     catalog.register(EventType("inbox.link_added", InboxLinkAdded, 1))
+    catalog.register(EventType("grey.search_reported", GreySearchReported, 1))
+    catalog.register(EventType("grey.contact_logged", GreyContactLogged, 1))
     catalog.register(EventType("inbox.link_withdrawn", InboxLinkWithdrawn, 1))
     catalog.register(EventType("inbox.prioritised", InboxPrioritised, 1))
     catalog.register(EventType("inbox.link_resolved", InboxLinkResolved, 1))

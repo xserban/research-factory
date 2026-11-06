@@ -1742,19 +1742,30 @@ def _inbox(project: Project, outcomes: Mapping[str, Outcome]) -> list[_Hit]:
 def _grey(project: Project) -> list[_Hit]:
     """`grey-undeclared`: works carry grey provenance while the protocol declares no
     `grey_sources` (plan SG). The works are listed; nothing is removed."""
-    from factory.services.grey import declared_sources, grey_work_ids
+    from factory.services.grey import declared_sources, grey_work_ids, reported_only_sources
 
     found = sorted(grey_work_ids(project))
+    hits: list[_Hit] = []
     if found and not declared_sources(project):
-        return [
+        hits.append(
             _Hit(
                 "grey-undeclared",
                 tuple(found),
                 f"{len(found)} work(s) found by a grey method; the protocol declares no "
                 "grey_sources",
             )
-        ]
-    return []
+        )
+    only = reported_only_sources(project)
+    if only:
+        hits.append(
+            _Hit(
+                "grey-reported-only",
+                tuple(only),
+                f"{len(only)} agent-web-search source(s) have reports and no captured or "
+                "structured grey source has yielded a work; reported searches are unverified",
+            )
+        )
+    return hits
 
 
 # --- Links and provenance ---

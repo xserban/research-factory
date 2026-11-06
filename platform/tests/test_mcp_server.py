@@ -57,6 +57,7 @@ async def test_project_status_tool(settings: Settings, project: Project, clock: 
             "inbox_add",
             "inbox_resolve",
             "inbox_list",
+            "grey_search_report",
             "report_discovery",
             "report_evidence",
             "export_bibliography",

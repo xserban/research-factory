@@ -5,6 +5,7 @@ import json
 import re
 from collections import Counter
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from datetime import datetime
 from typing import Annotated, Literal, TypeVar, cast, get_args
 
 from mcp.server.auth.provider import TokenVerifier
@@ -115,6 +116,7 @@ from factory.services import finders as findings_service
 from factory.services import fulltext as fulltext_service
 from factory.services import fulltext_status as fulltext_status_service
 from factory.services import gates as gates_service
+from factory.services import grey as grey_service
 from factory.services import horizon as horizon_service
 from factory.services import human_pass as human_pass_service
 from factory.services import hypotheses as hypotheses_service
@@ -1158,6 +1160,59 @@ def build_server(
             return _withheld(opened, shown, include_work_ids=False)
 
         return _reply(project, listing, include_work_ids=False)
+
+    @server.tool()
+    def grey_search_report(
+        project: str,
+        target: str,
+        engine: str,
+        query: str,
+        timestamp: str,
+        urls: list[str],
+        stopping_rule: str,
+        role: str | None = None,
+        model: str | None = None,
+        skill: str | None = None,
+    ) -> dict[str, JsonValue]:
+        """Report a web search you ran yourself (grey literature, an explicit R-21 exception).
+        `target` is a declared `agent-web-search` entry of the protocol's `grey_sources`;
+        `timestamp` is ISO 8601 with a zone; `stopping_rule` states when you stopped. The
+        platform cannot verify the search: the event records what you say you ran. The `urls`
+        are offered to the inbox (only arXiv, DOI and OpenAlex links parse; the rest are listed
+        as unparsed); no work is enrolled by this call, and a reported search is never the only
+        evidence of a planned source. Refused to a session that has joined a pass."""
+
+        def report() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            actor = _inbox_actor(opened, role, model, skill)
+            try:
+                when = datetime.fromisoformat(timestamp)
+            except ValueError as exc:
+                raise FactoryValidationError(
+                    [ValidationIssue("timestamp", "an ISO 8601 timestamp with a zone")]
+                ) from exc
+            outcome = grey_service.report_search(
+                opened,
+                actor,
+                target=target,
+                engine=engine,
+                query=query,
+                timestamp=when,
+                urls=urls,
+                stopping_rule=stopping_rule,
+            )
+            return _withheld(
+                opened,
+                {
+                    "report_id": outcome.record_id,
+                    "offered": list(outcome.offered),
+                    "unparsed": list(outcome.unparsed),
+                },
+                include_work_ids=False,
+            )
+
+        return _reply(project, report, include_work_ids=False)
 
     @server.tool()
     def report_discovery(project: str) -> dict[str, JsonValue]:
