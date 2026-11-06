@@ -132,6 +132,12 @@ def register_query(
                 issues.append(ValidationIssue("cycle_id", "a status query names an open cycle"))
             if spec.kind not in (QueryKind.ID_LIST, QueryKind.FILTER):
                 issues.append(ValidationIssue("kind", "a status query is an id_list or a filter"))
+        if spec.purpose is QueryPurpose.GREY and (
+            spec.source != "openalex" or not spec.filters.get("type")
+        ):
+            issues.append(
+                ValidationIssue("purpose", "a grey search is an OpenAlex query with a type filter")
+            )
         supplied_by = None
         if inbox_item is not None:
             supplied_by = _item_submitter(project, inbox_item, open_only=True)

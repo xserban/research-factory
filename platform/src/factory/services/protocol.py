@@ -28,6 +28,7 @@ from factory.events.envelope import Actor
 from factory.index.chase import chase_round_texts, snowball_round_texts
 from factory.living.window import window_spec
 from factory.model.base import StrictModel
+from factory.model.grey import structured_types
 from factory.model.miners import MinerUse
 from factory.model.project import RigorMode
 from factory.model.protocol import (
@@ -845,6 +846,7 @@ def search_authorization(
         and deviation_id is None
         and not _chase_round_waives(project, spec, pending_round_texts, round_id)
         and not _supplied_waives(current.spec, spec, supplied_by)
+        and not _grey_waives(current.spec, spec)
         and not _cycle_waives(project, current, spec, cycle_id)
         and not _status_waives(project, current, spec, cycle_id)
         and not (spec.purpose is QueryPurpose.IMPORT and not import_issues)
@@ -951,6 +953,15 @@ def _supplied_waives(
         and plan is not None
         and supplied_by in plan.accept_from
     )
+
+
+def _grey_waives(protocol: ProtocolSpec, spec: QuerySpec) -> bool:
+    """Whether `grey_sources` plans this structured grey search (plan SG): an OpenAlex query of
+    purpose `grey` whose `type` filter names only types a `structured` entry declares."""
+    if spec.purpose is not QueryPurpose.GREY or spec.source != "openalex":
+        return False
+    asked = {t.strip() for t in spec.filters.get("type", "").split("|") if t.strip()}
+    return bool(asked) and asked <= structured_types(protocol.grey_sources)
 
 
 def registered_deviation(project: Project, query_id: str) -> str | None:
