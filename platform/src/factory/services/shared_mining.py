@@ -1138,17 +1138,10 @@ def source_state(project: Project, store: SharedStore | None = None) -> SourceSt
 
 
 def source_superseded(project: Project, store: SharedStore | None = None) -> list[str]:
-    """The imported extraction ids whose source record is now superseded or stale, or whose source
-    project disappeared. Read-only; empty without a store."""
-    state = source_state(project, store)
-    items = import_items(project) if state.unavailable else {}
-    root = project.settings.root
-    gone = [
-        ident
-        for ident in state.unavailable
-        if not ProjectPaths(root, items[ident].source_project).events_dir.is_dir()
-    ]
-    return sorted([*state.superseded, *gone])
+    """The imported extraction ids whose source record is now superseded, stale or corrected.
+    A source that disappeared is not one: its rows are self-contained and stay, and `check`
+    reports it as unavailable (`source_state`). Read-only; empty without a store."""
+    return sorted(source_state(project, store).superseded)
 
 
 def reopened_works(project: Project, name: str) -> frozenset[str]:
