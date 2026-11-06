@@ -43,6 +43,7 @@ from factory.lineage.graph import GraphFilter
 from factory.living.digest_render import to_json as digest_json
 from factory.living.digest_render import to_markdown as digest_markdown
 from factory.mcp.conventions import parse_routes
+from factory.mcp.http import build_http_app
 from factory.mcp.server import run
 from factory.model import lineage as lineage_model
 from factory.model.chase import ChaseDirection
@@ -167,6 +168,7 @@ from factory.services.living_hooks import DEFAULT_HOOKS
 from factory.services.modules.listing import module_rows
 from factory.services.project import ScreeningStatus
 from factory.services.search import list_works
+from factory.services.serve_http import serve_http_issues
 from factory.services.server_check import server_check
 from factory.services.server_init import init_server
 from factory.services.xrun_accounting import baseline_verdicts
@@ -1545,9 +1547,48 @@ def commit_cmd(
 
 
 @app.command()
-def serve(ctx: typer.Context) -> None:
-    """Run the MCP server on stdio."""
-    run(_state(ctx).settings)
+def serve(
+    ctx: typer.Context,
+    http: Annotated[bool, typer.Option("--http", help="Serve over streamable HTTP.")] = False,
+    host: Annotated[str, typer.Option("--host", help="Address to bind (with --http).")] = (
+        "127.0.0.1"
+    ),
+    port: Annotated[int, typer.Option("--port", help="Port to bind (with --http).")] = 8765,
+    issuer_url: Annotated[
+        str | None, typer.Option("--issuer-url", help="Issuer URL the metadata names.")
+    ] = None,
+    resource_url: Annotated[
+        str | None, typer.Option("--resource-url", help="Public URL of this server.")
+    ] = None,
+    allowed_host: Annotated[
+        list[str] | None,
+        typer.Option("--allowed-host", help="A Host header value to accept; repeatable."),
+    ] = None,
+    insecure_direct: Annotated[
+        bool, typer.Option("--insecure-direct", help="Allow a non-loopback bind without TLS.")
+    ] = False,
+) -> None:
+    """Run the MCP server on stdio, or with --http over authenticated streamable HTTP."""
+    settings = _state(ctx).settings
+    if not http:
+        run(settings)
+        return
+    issues = serve_http_issues(settings, host, insecure_direct=insecure_direct)
+    for issue in issues:
+        typer.echo(f"{issue.field}: {issue.reason}", err=True)
+    if issues:
+        raise typer.Exit(1)
+    import uvicorn  # the optional `server` extra
+
+    base = f"http://{host}:{port}"
+    app_ = build_http_app(
+        settings,
+        issuer_url=issuer_url or base,
+        resource_url=resource_url or base,
+        allowed_hosts=[f"{host}:{port}", *(allowed_host or [])],
+        allowed_origins=[],
+    )
+    uvicorn.run(app_, host=host, port=port)
 
 
 @calibrate_app.command("draw")
