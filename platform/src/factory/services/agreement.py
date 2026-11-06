@@ -12,6 +12,10 @@ A work's binary outcome is `promote` (include, cannot-assess) or exclude. `unsur
 or differing outcomes, is a disagreement for the human (reason `unsure` or `outcome`). Exclusions
 citing different criteria agree on the outcome and lower only the per-criterion κ.
 
+Agreement is reported per pair type (`agent-agent`, `human-agent`, `human-human`), computed from
+who screens each pass; `agreement_by_pair_type` groups the stages by it. `PassConfig.users` names
+people, so an agent reads `agent_agreement`, which leaves them out.
+
 `resolve_disagreement` records a human verdict on a disputed work, or on an `unsure` single-pass
 work. It is human-only, and an MCP-relayed resolution is refused from a session that has joined a
 pass.
@@ -41,7 +45,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import ValidationError
+from pydantic import Field, ValidationError
 from sqlalchemy import text
 
 from factory.errors import FactoryValidationError, ValidationIssue
@@ -54,6 +58,7 @@ from factory.model.screening import (
     DecisionRecorded,
     DisagreementResolved,
     Framing,
+    PassActorKind,
     PassJoined,
     PassLabel,
     ScreeningPhase,
@@ -92,6 +97,12 @@ class Outcome(StrEnum):
     PENDING = "pending"
 
 
+class PairType(StrEnum):
+    AGENT_AGENT = "agent-agent"
+    HUMAN_AGENT = "human-agent"
+    HUMAN_HUMAN = "human-human"
+
+
 class PassConfig(StrictModel):
     pass_label: PassLabel
     framing: Framing
@@ -99,6 +110,9 @@ class PassConfig(StrictModel):
     random_seed: int
     sessions: list[str]
     models: list[str]
+    actor_kind: PassActorKind = "agent"
+    users: list[str] = Field(default_factory=list)
+    """U(P), for the researcher. An agent reads `agent_agreement`, where it is empty."""
 
 
 class DecisionView(StrictModel):
@@ -120,6 +134,8 @@ class Disagreement(StrictModel):
 
 
 class Agreement(StrictModel):
+    stage: ScreeningStage
+    pair_type: PairType
     passes: list[PassConfig]
     n_dual: int
     kappa: float | None
@@ -406,6 +422,27 @@ def agreement_summary(project: Project, *, stage: ScreeningStage = TA) -> Agreem
     return _agreement(project, screen)
 
 
+def agreement_by_pair_type(project: Project) -> dict[PairType, list[Agreement]]:
+    """The agreement of each stage that can report one, by pair type, title/abstract first. A
+    stage that `agreement_summary` cannot compare yet is left out."""
+    protocol = current_protocol(project)
+    stages = [TA]
+    if protocol is not None and protocol.spec.full_text_screening is not None:
+        stages.append(ScreeningStage.FULL_TEXT)
+    grouped: dict[PairType, list[Agreement]] = {}
+    for stage in stages:
+        summary = agreement_summary(project, stage=stage)
+        if summary is not None:
+            grouped.setdefault(summary.pair_type, []).append(summary)
+    return grouped
+
+
+def agent_agreement(agreement: Agreement) -> Agreement:
+    """The agreement as an agent may read it: who screened by kind, not by name."""
+    passes = [config.model_copy(update={"users": []}) for config in agreement.passes]
+    return agreement.model_copy(update={"passes": passes})
+
+
 def single_pass_works(project: Project, *, stage: ScreeningStage = TA) -> list[str]:
     """The ordinary works whose final outcome rests on pass A alone, sorted (R-33).
 
@@ -639,11 +676,14 @@ def _agreement(project: Project, screen: _Screen) -> Agreement:
     ]
     kappa = cohen_kappa(outcome_pairs)
     floor = plan.kappa_floor
+    configs = [
+        _pass_config(project, PassLabel.A, screen.stage),
+        _pass_config(project, PassLabel.B, screen.stage),
+    ]
     return Agreement(
-        passes=[
-            _pass_config(project, PassLabel.A, screen.stage),
-            _pass_config(project, PassLabel.B, screen.stage),
-        ],
+        stage=screen.stage,
+        pair_type=_pair_type(configs),
+        passes=configs,
         n_dual=len(outcome_pairs),
         kappa=kappa,
         kappa_by_criterion=kappa_by_criterion(criterion_pairs, exclusion_ids),
@@ -654,6 +694,11 @@ def _agreement(project: Project, screen: _Screen) -> Agreement:
         single_pass=sorted(screen.single),
         cannot_assess_rate=_cannot_assess_rate(screen),
     )
+
+
+def _pair_type(configs: list[PassConfig]) -> PairType:
+    humans = sum(1 for config in configs if config.actor_kind == "human")
+    return (PairType.AGENT_AGENT, PairType.HUMAN_AGENT, PairType.HUMAN_HUMAN)[humans]
 
 
 def _cannot_assess_rate(screen: _Screen) -> dict[str, float | None]:
@@ -724,8 +769,8 @@ def _pass_config(project: Project, label: PassLabel, stage: ScreeningStage = TA)
         ).one()
         joined = conn.execute(
             text(
-                "SELECT session, model FROM pass_sessions WHERE pass_label = :l AND stage = :s "
-                "ORDER BY session"
+                "SELECT session, model, actor_kind, user FROM pass_sessions "
+                "WHERE pass_label = :l AND stage = :s ORDER BY session"
             ),
             {"l": label.value, "s": stage.value},
         ).all()
@@ -735,8 +780,10 @@ def _pass_config(project: Project, label: PassLabel, stage: ScreeningStage = TA)
             "framing": Framing(str(framing)),
             "criterion_order": str(order),
             "random_seed": int(seed),
-            "sessions": [str(session) for session, _ in joined],
-            "models": sorted({str(model) for _, model in joined if model is not None}),
+            "sessions": [str(row[0]) for row in joined],
+            "models": sorted({str(row[1]) for row in joined if row[1] is not None}),
+            "actor_kind": "human" if any(str(row[2]) == "human" for row in joined) else "agent",
+            "users": sorted({str(row[3]) for row in joined if row[3] is not None}),
         }
     )
 

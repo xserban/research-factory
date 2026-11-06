@@ -760,7 +760,9 @@ def build_server(
                 actor = opened.human_actor()
             else:
                 actor = make_agent_actor(settings, session, role or "", model or "", skill or "")
-            result = agreement_service.screen_agreement(opened, actor, stage=run_stage)
+            result = agreement_service.agent_agreement(
+                agreement_service.screen_agreement(opened, actor, stage=run_stage)
+            )
             return _withheld(opened, result.model_dump(mode="json"), include_work_ids=False)
 
         return _reply(project, agreement, include_work_ids=False)

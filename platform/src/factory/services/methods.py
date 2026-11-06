@@ -21,7 +21,12 @@ from factory.model.protocol import ScreeningStage, SnowballPlan
 from factory.model.references import Direction
 from factory.references.match import MATCHER_VERSION
 from factory.references.parse import PARSER, PARSER_VERSION
-from factory.services.agreement import agreement_summary
+from factory.services.agreement import (
+    Agreement,
+    PairType,
+    agreement_by_pair_type,
+    agreement_summary,
+)
 from factory.services.audit import audit_report
 from factory.services.calibration import calibration_status
 from factory.services.chase import chase_rounds
@@ -106,6 +111,24 @@ class MinerMethods(StrictModel):
     verification_rate: float | None = None
 
 
+class PassScreeners(StrictModel):
+    """Who screened one pass. `users` is empty in the agent view."""
+
+    pass_label: str
+    actor_kind: str
+    users: list[str]
+    models: list[str]
+
+
+class ScreeningPair(StrictModel):
+    """One stage's pair: its type, κ and who screened each pass."""
+
+    stage: str
+    pair_type: str
+    kappa: float | None
+    passes: list[PassScreeners]
+
+
 class MethodsReport(StrictModel):
     rigor_mode: str
     method_profile: str | None
@@ -132,6 +155,9 @@ class MethodsReport(StrictModel):
     chase_rounds: int
     admitted_seeds: int
     prisma: PrismaFlow
+    screening_pairs: list[ScreeningPair] = Field(default_factory=list)
+    """Each stage's pair, once a person screens at any stage; empty for agents alone, whose
+    statement stays as it was."""
     full_text_passes: int = 0
     """0 when the protocol declares no full-text plan; the other full-text fields are then empty."""
     full_text_dual_sample: float | None = None
@@ -270,6 +296,7 @@ def methods_report(project: Project) -> MethodsReport:
         chase_rounds=len(chase_rounds(project)),
         admitted_seeds=admitted_seed_count(project),
         prisma=flow,
+        screening_pairs=_screening_pairs(project),
         full_text_passes=0 if full_text is None else full_text.passes,
         full_text_dual_sample=None if full_text is None else full_text.dual_sample,
         full_text_kappa_floor=None if full_text is None else full_text.kappa_floor,
@@ -444,6 +471,36 @@ def _supplied_links(project: Project) -> SuppliedLinks | None:
     return SuppliedLinks(captured=captured, resolved=resolved, included=included)
 
 
+def _screening_pairs(project: Project) -> list[ScreeningPair]:
+    """Each stage's pair in stage order, or nothing while agents alone screen."""
+    grouped = agreement_by_pair_type(project)
+    if set(grouped) <= {PairType.AGENT_AGENT}:
+        return []
+    stages = [ScreeningStage.TITLE_ABSTRACT, ScreeningStage.FULL_TEXT]
+    agreements = sorted(
+        (agreement for found in grouped.values() for agreement in found),
+        key=lambda agreement: stages.index(agreement.stage),
+    )
+    return [_pair(agreement) for agreement in agreements]
+
+
+def _pair(agreement: Agreement) -> ScreeningPair:
+    return ScreeningPair(
+        stage=agreement.stage.value,
+        pair_type=agreement.pair_type.value,
+        kappa=agreement.kappa,
+        passes=[
+            PassScreeners(
+                pass_label=config.pass_label.value,
+                actor_kind=config.actor_kind,
+                users=config.users,
+                models=config.models,
+            )
+            for config in agreement.passes
+        ],
+    )
+
+
 def _extraction_sessions(project: Project) -> list[tuple[str, str]]:
     """(session, model) of every session bound to an evidence extraction pass (the methods
     report describes the evidence table; contribution passes are not counted)."""
@@ -546,6 +603,12 @@ def agent_methods(project: Project, report: MethodsReport) -> tuple[MethodsRepor
         update["recall_held_out"] = None
         update["recall_held_out_admitted"] = None
     update["imports"] = _imports(project, agent=True)
+    update["screening_pairs"] = [
+        pair.model_copy(
+            update={"passes": [p.model_copy(update={"users": []}) for p in pair.passes]}
+        )
+        for pair in report.screening_pairs
+    ]
     update["gate_policy"] = [row.agent_view() for row in report.gate_policy]
     if report.hypotheses is not None:
         update["hypotheses"] = agent_counts(project, report.hypotheses)
@@ -744,8 +807,24 @@ def _agreement_and_audit(report: MethodsReport, withheld: frozenset[str]) -> str
         f"{_fmt(report.dual_sample)}. Agreement between passes (Cohen's kappa): "
         f"{_fmt(report.kappa)}; per-criterion kappa: {per_criterion or NOT_COMPUTED}. "
         f"Calibration sensitivity per pass: {sensitivity or NOT_COMPUTED}. "
-        f"{audit}"
+        f"{audit}{''.join(f' {_pair_sentence(pair)}' for pair in report.screening_pairs)}"
     )
+
+
+def _pair_sentence(pair: ScreeningPair) -> str:
+    first, second = pair.passes
+    return (
+        f"At {pair.stage}, pass {first.pass_label} was screened by {_screener(first)} and pass "
+        f"{second.pass_label} by {_screener(second)} (pair type {pair.pair_type}); kappa = "
+        f"{_fmt(pair.kappa)}."
+    )
+
+
+def _screener(screeners: PassScreeners) -> str:
+    if screeners.actor_kind == "human":
+        names = ", ".join(screeners.users) or "user ids withheld in the agent view"
+        return f"a human ({names})"
+    return f"an agent (model {_list(screeners.models)})"
 
 
 def _full_text(report: MethodsReport) -> str:

@@ -102,6 +102,7 @@ SPEC = ModuleSpec(
         CheckRule("audit-error-high", (None, "warning", "error")),
         CheckRule("fulltext-decision-stale-document", ("warning", "warning", "warning")),
         CheckRule("calibration-model-drift", (None, "warning", "error")),
+        CheckRule("pass-same-user", ("error", "error", "error")),
     ),
 )
 

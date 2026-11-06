@@ -221,3 +221,15 @@ Minor review findings parked during the v1 build, to address when iterating from
 - teams-B: `portfolio` reads every project without a role check or the agent view (cli/main.py).
 - teams-B: `whoami` shows no budgets left until teams-D, and deploy-B's wrapper must allow its optional project (mcp/server.py).
 - teams-B: `factory project` is created here; deploy-C's `project host` joins `project_app` (cli/team.py).
+- teams-C: needs tests when testing resumes (nothing of this plan has ever run). The plan's tests in `test_human_pass_model`, `test_human_pass_join`, `test_human_pass_cli`, `test_pass_member_rules`, `test_pair_types`, `test_acceptance_teams_screening`, plus a removal proof for each guard:
+  - fold, each with a hand-written event and a rebuild: `join_refusal` (mixed pass, same user hosted, same person in person unhosted, stage judge, role), human join by another actor or session, agent-kind join by a human, payload `user` not the actor's, malformed join, human decision outside its pass, quoteless agent decision, quoteless systematic exclusion, supersession across passes, label, resolution, audit label and audit sample by a hosted pass member.
+  - services: `_check_join` human branch, `require_human_screener` at join and record, `require_outside_passes` at its four callers, `_refuse_shared` users, `screen_next` session check, ruling 4 quotes, uncalibrated human pass (gate, queue, `passed`), `held_batch`, `passes_settled`.
+  - views: `require_command_allowed` (deny by default) and `refuse_blind_reader`, `served_agent_view`, `_withheld` on `factory screen next`, `agent_agreement` and `agent_methods` dropping user ids, `pass-same-user`, protocol hash unchanged without `calibrate_humans`, old `pass_joined` line byte-identical.
+- teams-C: on merge, replace `human_pass.full_view_allowed` with teams-B's and keep the `blind_stage` term in `served_agent_view`; renumber `PROJECTION_VERSION` "53" and decision row 100.
+- teams-C: `cli/main.py` imports the private `_withheld` from `mcp/server.py`; the held-out scrub belongs in a service.
+- teams-C: the fold keeps `HUMAN_PASS_ROLES` beside `ROLE_PERMISSIONS`, two statements of one rule (model/members.py, services/access.py).
+- teams-C: an agent decision is still not checked against pass membership at the fold, as before this plan (index/screening.py).
+- teams-C: `_refuse_shared` still reads agent joins from the raw log, so a forged agent join the fold ignored can refuse agreement (services/agreement.py).
+- teams-C: a blind person cannot run `status`; a progress line for them would need a rate-free view (services/human_pass.py).
+- teams-C: the methods sentence "Screening decisions were made by Claude models" stands beside the pair sentence when a person screens (services/methods.py).
+- teams-C: `EventWriter`'s docstring still says one process writes a session file; a human pass session has several in turn, under the lock (events/writer.py).

@@ -136,6 +136,7 @@ from factory.services.notices import (
     dependent_works,
     observed_notices,
 )
+from factory.services.passes import pass_users
 from factory.services.prisma import prisma_flow, search_report, unattributed_chase_runs
 from factory.services.project import project_status
 from factory.services.protocol import current_protocol
@@ -1908,6 +1909,27 @@ def _calibration_and_agreement(project: Project) -> list[_Hit]:
                 severity="error" if agreement.enforced else "warning",
             )
         )
+    hits.extend(_pass_same_user(project))
+    return hits
+
+
+def _pass_same_user(project: Project) -> list[_Hit]:
+    """A person in both passes of a stage of a hosted project (R-110): a log written before the
+    project was hosted, since a later join is refused. By count, as an agent reads this too."""
+    if not project.is_hosted():
+        return []
+    hits: list[_Hit] = []
+    for stage in (ScreeningStage.TITLE_ABSTRACT, ScreeningStage.FULL_TEXT):
+        shared = pass_users(project, PassLabel.A, stage) & pass_users(project, PassLabel.B, stage)
+        if shared:
+            hits.append(
+                _Hit(
+                    "pass-same-user",
+                    (),
+                    f"{stage.value}: {len(shared)} person(s) screen both passes, in person or "
+                    "through an agent",
+                )
+            )
     return hits
 
 
