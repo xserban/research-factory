@@ -184,3 +184,11 @@ Minor review findings parked during the v1 build, to address when iterating from
 - MS: `project_status` now derives the stage on every call, and `probe.py` calls it for the rigor mode alone; read the mode directly if a probe feels slow.
 - MS: `document_status`, `extraction_status` and the list tools read the whole list and page in Python; `lead_list`, `hypothesis_list` and `experiment_list` too. Page in SQL if a project grows.
 - MS: a slot task of an earlier pin stays open in the log for good, retired only by comparison with the pin; task counts leave slot tasks out, so nothing shows it.
+- PF: an agent's `inbox.link_added` input blob keeps the link's query tokens (it records what was sent); strip them there too if tokens matter.
+- PF: a converted document whose conversion blobs are missing still reads `not-extracted` and blocks a snowball round; only raw-missing without a conversion became `no-document`.
+- PF: `view_rows.py` and `horizon.py` read `flag == "correction-pending"`, so a kept retraction with a pending correction stays in the views; `WorkNoticeState.correction_pending` is there to use.
+- PF: `horizon` keeps one direction per group, so a two-metric group still reads unknown there while the evidence report splits it.
+- PF: `dedup_current` runs the cascade on every `screen_next`; fine at a few hundred works, cache it per index state before 10^4.
+- PF: a task created before a merge keeps its absorbed record, and a promoted absorbed record stays in `fulltext_queue` and the full-text boxes as pending.
+- PF: line 16c (incremental dedup against blocked pairs) is still unverified; it needed the test Task 3 would have written.
+- PF: a bare DOI with a literal `#` or `?` is cut there, as a URL is; such a DOI must be given percent-encoded.
