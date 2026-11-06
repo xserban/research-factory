@@ -54,6 +54,7 @@ SPEC = ModuleSpec(
         CheckRule("import-identity-unchecked", ("warning", "warning", "warning")),
         CheckRule("import-undeclared", ("warning", "error", "error")),
         CheckRule("import-coverage-optimistic", ("warning", "warning", "warning")),
+        CheckRule("search-none", ("warning", "warning", "error")),
     ),
 )
 

@@ -41,6 +41,7 @@ from factory.services.evidence_report import evidence_report
 from factory.services.extraction_agreement import agreement_overall
 from factory.services.extraction_audit import extraction_audit_report
 from factory.services.gate_status import GateStatusRow, notable_rows
+from factory.services.imports import library_import_only
 from factory.services.prisma import (
     UNCONVERTED,
     PrismaFlow,
@@ -137,6 +138,8 @@ class MethodsReport(StrictModel):
     full_text_kappa: float | None = None
     full_text_sessions: int = 0
     full_text_models: list[str] = Field(default_factory=list)
+    library_only: bool = False
+    """The corpus came from the researcher's library, and no database search was run."""
     conversions: list[ConverterCount] = Field(default_factory=list)
     """What each live document reads through; empty when nothing is converted."""
     extraction_pack: str | None = None
@@ -249,6 +252,7 @@ def methods_report(project: Project) -> MethodsReport:
         full_text_kappa=ft_kappa,
         full_text_sessions=len(ft_sessions),
         full_text_models=sorted({model for _, model in ft_sessions}),
+        library_only=library_import_only(project),
         conversions=conversion_census(project),
         extraction_pack=None if schema is None else f"{schema.pack}@{schema.pack_version}",
         extraction_fields=[] if schema is None else list(schema.fields),
@@ -548,6 +552,12 @@ def _counts(counts: dict[str, int]) -> str:
     return ", ".join(f"{name} {count}" for name, count in counts.items()) or NONE_RECORDED
 
 
+_LIBRARY_ONLY = (
+    " The corpus is the researcher's own library: no database search was run, so no recall of the "
+    "literature is claimed."
+)
+
+
 def _search(report: MethodsReport) -> str:
     flow = report.prisma
     protocol = report.protocol_id or NOT_COMPUTED
@@ -558,7 +568,7 @@ def _search(report: MethodsReport) -> str:
         f"Records identified from databases: {_counts(flow.identified_databases)}. "
         f"Records identified by other methods: {_counts(flow.identified_other)}. "
         f"Citation-chase rounds: {report.chase_rounds}."
-    )
+    ) + (_LIBRARY_ONLY if report.library_only else "")
 
 
 def _references_paragraph(report: MethodsReport) -> str:

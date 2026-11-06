@@ -507,6 +507,15 @@ def _resolves(parent: str, slot_names: set[str], non_goal_ids: set[str]) -> bool
     return parent in non_goal_ids
 
 
+def library_only(spec: ProtocolSpec, mode: RigorMode) -> bool:
+    """Whether the protocol may rest on a declared library with no search (PD-3): a `corpus` entry
+    in `library_sources`, in exploratory or pilot. `systematic` always needs a search. The PRESS
+    review stays required; with nothing to review its findings are empty."""
+    return mode is not RigorMode.SYSTEMATIC and any(
+        source.role is ImportRole.CORPUS for source in spec.library_sources or ()
+    )
+
+
 def _gaps(
     spec: ProtocolSpec,
     question: QuestionVersion,
@@ -520,10 +529,11 @@ def _gaps(
         gaps.extend(_priority_gaps(spec))
         gaps.extend(_probe_gaps(spec, probes))
 
-    if not any(source.included for source in spec.sources):
-        gaps.append(ValidationIssue("sources", "at least one source must be included"))
-    if not spec.queries:
-        gaps.append(ValidationIssue("queries", "at least one query is required"))
+    if not library_only(spec, mode):
+        if not any(source.included for source in spec.sources):
+            gaps.append(ValidationIssue("sources", "at least one source must be included"))
+        if not spec.queries:
+            gaps.append(ValidationIssue("queries", "at least one query is required"))
 
     if mode is RigorMode.PILOT:
         gaps.extend(_pilot_screening_gaps(spec))

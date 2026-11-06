@@ -91,7 +91,7 @@ from factory.services.fulltext_status import fulltext_status
 from factory.services.gates import audit_hits, gate_hits, labelled_gate_audits
 from factory.services.hosting import foreign_event_files
 from factory.services.ideas import list_ideas
-from factory.services.imports import list_imports
+from factory.services.imports import library_import_only, list_imports
 from factory.services.label_check import (
     ORGANISATION_ID,
     organisation_present,
@@ -2445,6 +2445,14 @@ def _imports(project: Project) -> list[_Hit]:
     promotion gap) and a pre-search import whose split was declined."""
     protocol = current_protocol(project)
     hits: list[_Hit] = []
+    if library_import_only(project):
+        hits.append(
+            _Hit(
+                "search-none",
+                (),
+                "the corpus is the researcher's library: no database search was run",
+            )
+        )
     for listing in list_imports(project):
         row = listing.row
         counts = _import_counts(project, row.import_id, development_only=False)

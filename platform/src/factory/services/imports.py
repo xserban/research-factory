@@ -50,6 +50,7 @@ from factory.model.imports import (
     SplitMode,
 )
 from factory.model.search import QueryPurpose, RunStatus
+from factory.model.work import ProvenanceMethod
 from factory.services.context import Project
 from factory.services.seeds import draw_split
 
@@ -437,7 +438,7 @@ def _split(
     random_seed: int | None,
     split: bool,
 ) -> ImportSplitDrawn:
-    if _search_started(project):
+    if search_started(project):
         return ImportSplitDrawn(import_id=import_id, mode="post-search")
     if not split:
         return ImportSplitDrawn(import_id=import_id, mode="declined")
@@ -457,11 +458,21 @@ def _split(
     )
 
 
+def library_import_only(project: Project) -> bool:
+    """Whether works were admitted from a library and no search-purpose run has started."""
+    with project.index.connect() as conn:
+        admitted = conn.execute(
+            text("SELECT 1 FROM provenance WHERE method = :m LIMIT 1"),
+            {"m": ProvenanceMethod.LIBRARY_IMPORT.value},
+        ).first()
+    return admitted is not None and not search_started(project)
+
+
 def _splittable(record: ImportRecord) -> bool:
     return record.outcome is not ParseOutcome.MALFORMED
 
 
-def _search_started(project: Project) -> bool:
+def search_started(project: Project) -> bool:
     """Whether any run of a search-purpose query has started."""
     with project.index.connect() as conn:
         row = conn.execute(
