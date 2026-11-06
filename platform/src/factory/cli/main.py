@@ -692,6 +692,10 @@ def rebuild(ctx: typer.Context) -> None:
 def status(
     ctx: typer.Context,
     as_json: Annotated[bool, typer.Option("--json", help="Print ProjectStatus as JSON.")] = False,
+    mine: Annotated[
+        bool,
+        typer.Option("--mine", help="Show only the pending decisions routed to you."),
+    ] = False,
 ) -> None:
     """Show a project's rigor mode, event counts and task queue."""
     state = _state(ctx)
@@ -702,6 +706,18 @@ def status(
             if _full_view(project)
             else agent_view_service.agent_status(project)
         )
+        if mine and report.human is not None:
+            report = report.model_copy(
+                update={
+                    "human": report.human.model_copy(
+                        update={
+                            "items": [
+                                i for i in report.human.items if i.assignee == project.settings.user
+                            ]
+                        }
+                    )
+                }
+            )
     if as_json:
         typer.echo(report.model_dump_json())
         return
@@ -748,7 +764,8 @@ def status(
         typer.echo("waiting on you:")
         for item in report.human.items:
             stage = "" if item.stage is None else f" ({item.stage})"
-            typer.echo(f"  {item.gate.value}{stage}: {item.count} \u2014 {item.command}")
+            who = "" if item.assignee is None else f" [{item.assignee}]"
+            typer.echo(f"  {item.gate.value}{stage}{who}: {item.count} \u2014 {item.command}")
 
 
 @app.command("modules")

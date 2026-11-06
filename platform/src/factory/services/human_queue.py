@@ -19,6 +19,7 @@ from enum import StrEnum
 
 from factory.errors import FactoryValidationError
 from factory.model.base import StrictModel
+from factory.model.members import ProjectRole
 from factory.model.protocol import ScreeningStage
 from factory.services.agreement import screen_agreement
 from factory.services.audit import audit_report
@@ -27,6 +28,7 @@ from factory.services.context import Project
 from factory.services.extraction_agreement import extraction_agreement
 from factory.services.extraction_audit import extraction_audit_report
 from factory.services.intake_queue import intake_counts
+from factory.services.members import members
 from factory.services.prisma import has_full_text_plan
 from factory.services.protocol import current_protocol
 
@@ -56,12 +58,45 @@ INTAKE_COMMANDS: dict[Gate, str] = {
 }
 """The command of each intake gate, after `factory --project <slug>`."""
 
+_LABELLERS = (ProjectRole.SCREENER, ProjectRole.MAINTAINER, ProjectRole.OWNER)
+_STEWARDS = (ProjectRole.MAINTAINER, ProjectRole.OWNER)
+
+GATE_ROLES: dict[Gate, tuple[ProjectRole, ...]] = {
+    Gate.PRESS_CONFIRMATION: _STEWARDS,
+    Gate.CALIBRATION_LABELS: _LABELLERS,
+    Gate.SCREENING_DISAGREEMENTS: _LABELLERS,
+    Gate.SCREENING_AUDIT: _LABELLERS,
+    Gate.EXTRACTION_DISAGREEMENTS: _LABELLERS,
+    Gate.EXTRACTION_AUDIT: _LABELLERS,
+    Gate.IMPORT_CONFIRMATION: _STEWARDS,
+    Gate.IMPORT_ADMISSION: _STEWARDS,
+    Gate.ATTACHMENTS_WAITING: _STEWARDS,
+    Gate.DOCUMENTS_UNCONVERTED: _STEWARDS,
+    Gate.INBOX_OPEN: _STEWARDS,
+}
+"""The project roles responsible for each gate, in order of preference (PD-8 routing): the first
+role that has a holder supplies the assignee. Labelling gates go to a screener, then a maintainer
+or the owner; the rest to a maintainer or the owner."""
+
+
+def assignee_for(gate: Gate, held: dict[str, frozenset[ProjectRole]]) -> str | None:
+    """The responsible person of `gate`: the first user, in name order, holding the first role of
+    `GATE_ROLES[gate]` that anyone holds. None while no member holds any of them."""
+    for role in GATE_ROLES[gate]:
+        holders = sorted(user for user, roles in held.items() if role in roles)
+        if holders:
+            return holders[0]
+    return None
+
 
 class HumanItem(StrictModel):
     gate: Gate
     stage: str | None
     count: int
     command: str
+    assignee: str | None = None
+    """The person responsible, from the project roles; None on the agent path and while no member
+    holds a responsible role."""
 
 
 class HumanQueue(StrictModel):
@@ -78,6 +113,7 @@ def human_queue(project: Project, *, agent: bool = False) -> HumanQueue:
     if has_full_text_plan(project):
         stages.append(ScreeningStage.FULL_TEXT)
     items: list[HumanItem] = []
+    held = {} if agent else members(project)
 
     def add(gate: Gate, stage: ScreeningStage | None, count: int, command: str) -> None:
         if count > 0:
@@ -87,6 +123,7 @@ def human_queue(project: Project, *, agent: bool = False) -> HumanQueue:
                     stage=None if stage is None else stage.value,
                     count=count,
                     command=command,
+                    assignee=assignee_for(gate, held),
                 )
             )
 

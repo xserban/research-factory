@@ -32,8 +32,10 @@ from factory.model.curation import (
     CurationProposed,
 )
 from factory.model.protocol import ScreeningStage
+from factory.model.screening import Channel
 from factory.services.agreement import screen_agreement
 from factory.services.context import Project
+from factory.services.human_channel import require_human_channel
 from factory.services.protocol import amendments_with_events
 from factory.services.status_lookup import unrecovered_failures
 
@@ -195,6 +197,7 @@ def decide_proposal(
     *,
     rationale: str,
     amendment_event: str | None = None,
+    channel: Channel = Channel.CLI,
 ) -> str:
     """Accept or reject a proposal (a human other than the proposer) and return the event id.
     Refused, with nothing written: a non-human actor (`actor`: `human-only`); an unknown
@@ -205,6 +208,7 @@ def decide_proposal(
     if actor.kind != "human":
         raise _refuse("actor", "human-only")
     with project.writing():
+        require_human_channel(project, actor, channel, "sign-off")
         row = _row(project, cur_id)
         if row is None:
             raise _refuse("cur_id", "unknown")
