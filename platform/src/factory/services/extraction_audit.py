@@ -102,6 +102,12 @@ class ExtractionAuditReport(StrictModel):
     """Error rate per pack field group over the labelled items; None when a group has none."""
 
 
+def audit_reportable(audit: ExtractionAuditReport | None) -> bool:
+    """Whether the audit holds labels, current or outdated: the one condition for the neutral
+    marker an agent reads in `check` and in the evidence report."""
+    return audit is not None and bool(audit.labelled or audit.outdated)
+
+
 def _sort_key(item: AuditItemRef) -> tuple[str, str, str]:
     return (item.work_id, item.row_key, item.field)
 

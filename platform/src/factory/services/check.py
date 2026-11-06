@@ -86,7 +86,11 @@ from factory.services.extraction import (
     unit_states,
 )
 from factory.services.extraction_agreement import final_rows, grouped_rows, independence_counts
-from factory.services.extraction_audit import extraction_audit_outstanding, extraction_audit_report
+from factory.services.extraction_audit import (
+    audit_reportable,
+    extraction_audit_outstanding,
+    extraction_audit_report,
+)
 from factory.services.fulltext_status import fulltext_status
 from factory.services.gates import audit_hits, gate_hits, labelled_gate_audits
 from factory.services.hosting import foreign_event_files
@@ -363,9 +367,7 @@ def agent_check(project: Project, *, promote_to: RigorMode | None = None) -> Che
     extraction audit when it has labels. Read-only."""
     with entering(), _region_agent_view():
         audit = extraction_audit_report(project)
-        labelled = (
-            audit.audit_id if audit is not None and (audit.labelled or audit.outdated) else None
-        )
+        labelled = audit.audit_id if audit is not None and audit_reportable(audit) else None
         contribution = contribution_audit_report(project)
         report = agent_view(
             check(project, promote_to=promote_to),

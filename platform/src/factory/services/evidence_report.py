@@ -25,7 +25,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from typing import Any, Literal
@@ -66,6 +66,7 @@ from factory.services.extraction_agreement import (
 )
 from factory.services.extraction_audit import (
     ExtractionAuditReport,
+    audit_reportable,
     extraction_audit_outstanding,
     extraction_audit_report,
 )
@@ -107,7 +108,13 @@ REPORT_VERSION = 1
 
 DirectionStatus = Literal["declared", "pack-default", "conflict", "unparseable", "unknown"]
 ExcludedReason = Literal[
-    "unresolved", "stale", "missing-value", "no-final-row", "retracted", "correction-pending"
+    "unresolved",
+    "stale",
+    "missing-value",
+    "no-final-row",
+    "retracted",
+    "concern",
+    "correction-pending",
 ]
 
 
@@ -271,6 +278,8 @@ class Quality(StrictModel):
     """Labelled items of the latest audit."""
     audit_error_rate: float | None
     audit_above_ceiling: bool | None
+    audit_reportable: bool = Field(default=False, exclude=True)
+    """`audit_reportable` of the latest audit; only `agent_evidence` reads it, never serialised."""
     agreement_rows_aligned: int
     """Aligned dual rows over which `agreement_overall` is computed."""
     agreement_rows_unmatched: int
@@ -428,9 +437,9 @@ def agent_evidence(report: EvidenceReport) -> EvidenceReport:
     ceiling flag (decision 37.14). Any `audit-above-ceiling` limit is dropped, and the fixed limit
     `audit-reported-to-researcher` is present whenever an audit is labelled, whatever the flag, so
     the limits do not reveal it. Counts (`audit_n`) are unchanged; the researcher's view keeps
-    the rate."""
+    the rate. The limit fires on the condition of `check`'s neutral marker (`audit_reportable`)."""
     limits = [lim for lim in report.limits if lim.code != "audit-above-ceiling"]
-    if report.quality.audit_n > 0:
+    if report.quality.audit_reportable:
         limits.append(
             Limit(
                 code="audit-reported-to-researcher",
@@ -496,9 +505,11 @@ def assemble_report(
 
     Notices (living-C, spec ruling 12): the rows, claims and population entries of a work whose
     notice state excludes it (`synthesis = excluded`) leave the report, so it equals the report
-    without that work, and an `Excluded` entry `retracted` lists them. The rows of a work with a
-    correction pending stay in their groups, labelled, but leave the frontiers; an `Excluded`
-    entry `correction-pending` lists them. A row of a labelled work carries its notice flag.
+    without that work, and an `Excluded` entry lists them, claims-only works included: `concern`
+    for a work excluded on an expression of concern, else `retracted`. The rows of a work with a
+    correction pending, even under a stronger flag, stay in their groups, labelled, but leave the
+    frontiers until it is assessed; an `Excluded` entry `correction-pending` lists them. A row of a
+    labelled work carries its notice flag.
     `include_notice_affected` keeps every row in place and only labels it.
     """
     states = inputs.notice_states
@@ -510,16 +521,23 @@ def assemble_report(
     skip = (
         frozenset()
         if include_notice_affected
-        else frozenset(w for w, s in states.items() if s.flag == "correction-pending")
+        else frozenset(w for w, s in states.items() if s.correction_pending)
     )
     removed = _rows_of(inputs, hidden)
     kept = _without_works(inputs, hidden) if hidden else inputs
     report = _assemble(kept, expect, skip)
     report = _labelled(report, states)
     extra: list[Excluded] = []
-    gone = sorted({w for w, _ in removed} | (hidden & set(inputs.population)))
-    if gone:
-        extra.append(Excluded(reason="retracted", count=len(removed) or len(gone), works=gone))
+    gone = {w for w, _ in removed} | (hidden & {*inputs.population, *_claim_works(inputs)})
+    concern = {w for w in gone if states[w].flag == "concern"}
+    reasons: tuple[tuple[ExcludedReason, set[str]], ...] = (
+        ("retracted", gone - concern),
+        ("concern", concern),
+    )
+    for reason, works in reasons:
+        if works:
+            rows = sum(w in works for w, _ in removed)
+            extra.append(Excluded(reason=reason, count=rows or len(works), works=sorted(works)))
     pending = sorted(
         (r.work_id, r.row_key)
         for rows in [*(g.rows for g in report.groups), report.ungrouped]
@@ -537,6 +555,10 @@ def assemble_report(
     if not extra:
         return report
     return report.model_copy(update={"excluded": [*report.excluded, *extra]})
+
+
+def _claim_works(inputs: ReportInputs) -> set[str]:
+    return {c.work_id for c in inputs.claims}
 
 
 def _rows_of(inputs: ReportInputs, works: frozenset[str]) -> list[tuple[str, str]]:
@@ -778,7 +800,9 @@ def _group(
         works=len(works),
         independent_works=len(independent_works),
     )
-    direction, status = group_direction(key, rows, pack, spec)
+    by_metric = _metric_split(key, rows, pack)
+    parts = {m: group_direction(key, members, pack, spec) for m, members in by_metric.items()}
+    direction, status = _overall_direction(parts)
     statements: list[Limit] = []
     if len(works) == 1:
         statements.append(
@@ -803,40 +827,25 @@ def _group(
                 subject=gid,
             )
         )
-    if status == "conflict":
-        statements.append(
-            Limit(
-                code="direction-conflict",
-                text="The declared metric direction is inconsistent; no frontier is computed.",
-                subject=gid,
-            )
-        )
-    elif status == "unparseable":
-        statements.append(
-            Limit(
-                code="direction-unparseable",
-                text="A declared metric direction is not a boolean; no frontier is computed.",
-                subject=gid,
-            )
-        )
-    elif status == "unknown":
-        statements.append(
-            Limit(
-                code="direction-unknown",
-                text="The metric direction is neither declared nor known to the pack; "
-                "no frontier is computed.",
-                subject=gid,
-            )
-        )
+    for metric, (_, part_status) in parts.items():
+        limit = _direction_limit(part_status, gid, metric if len(parts) > 1 else None)
+        if limit is not None:
+            statements.append(limit)
     shown = _rows(rows, spec, titles, pack)
     frontiers: list[FrontierAxis] = []
-    if status in ("declared", "pack-default") and direction is not None:
+    usable = {
+        metric: value
+        for metric, (value, part_status) in parts.items()
+        if part_status in ("declared", "pack-default") and value is not None
+    }
+    if usable:
+        drawn = {r.row_key for metric in usable for r in by_metric[metric]}
         frontiers = _frontiers(
-            [r for r in rows if r.work_id not in frontier_skip],
+            [r for r in rows if r.row_key in drawn and r.work_id not in frontier_skip],
             pack,
             spec,
             dict(key),
-            direction,
+            (lambda metric: usable[metric]) if len(parts) > 1 else (lambda _: usable[""]),
             declared,
         )
         for axis in frontiers:
@@ -860,6 +869,52 @@ def _group(
         method_conflicts=_conflicts(shown, _metrics_of(rows, pack, dict(key))),
         statements=statements,
     )
+
+
+def _metric_split(
+    key: Sequence[tuple[str, str]], rows: Sequence[FinalRow], pack: Pack
+) -> dict[str, list[FinalRow]]:
+    """The rows by normalised metric when the group holds several metrics, each then taking its
+    own direction; else all rows under "", as one metric."""
+    if "metric" in dict(key):
+        return {"": list(rows)}
+    split: dict[str, list[FinalRow]] = {}
+    for row in rows:
+        split.setdefault(_metric_of(row, pack), []).append(row)
+    return split if len(split.keys() - {""}) > 1 else {"": list(rows)}
+
+
+def _overall_direction(
+    parts: Mapping[str, tuple[bool | None, DirectionStatus]],
+) -> tuple[bool | None, DirectionStatus]:
+    """The group's direction from its metrics': the worst problem if any has one, else their common
+    value, or None when they differ (each frontier partition then keeps its metric's)."""
+    if len(parts) == 1:
+        return next(iter(parts.values()))
+    statuses = {status for _, status in parts.values()}
+    problems: tuple[DirectionStatus, ...] = ("unparseable", "conflict", "unknown")
+    for problem in problems:
+        if problem in statuses:
+            return None, problem
+    values = {value for value, _ in parts.values()}
+    return (
+        next(iter(values)) if len(values) == 1 else None,
+        "declared" if "declared" in statuses else "pack-default",
+    )
+
+
+def _direction_limit(status: DirectionStatus, gid: str, metric: str | None) -> Limit | None:
+    """The limit of a direction problem, naming `metric` when the group has several."""
+    texts = {
+        "conflict": "The declared metric direction is inconsistent; no frontier is computed.",
+        "unparseable": "A declared metric direction is not a boolean; no frontier is computed.",
+        "unknown": "The metric direction is neither declared nor known to the pack; "
+        "no frontier is computed.",
+    }
+    if status not in texts:
+        return None
+    named = "" if metric is None else f"Metric {metric or '(none)'}: "
+    return Limit(code=f"direction-{status}", text=f"{named}{texts[status]}", subject=gid)
 
 
 def _decimal(f: FinalField) -> Decimal | None:
@@ -1064,12 +1119,13 @@ def _frontiers(
     pack: Pack,
     spec: ReportSpec,
     key: Mapping[str, str],
-    higher_is_better: bool,
+    higher_is_better: Callable[[str], bool],
     declared: Sequence[str] | None = None,
 ) -> list[FrontierAxis]:
     """One frontier per cost axis of the spec over the group's independent rows (ruling 6),
     partitioned by value unit and, each if not a group key, by normalised metric and by
-    resolution (decision 52). Speed fields are never
+    resolution (decision 52). `higher_is_better` gives a partition's direction by its metric
+    ("" when the metric is a group key). Speed fields are never
     axes. An axis whose pack field or schema declaration is
     missing is omitted; one with no plottable point is kept with its missing counts."""
     by_resolution = "input_resolution" not in key
@@ -1132,7 +1188,7 @@ def _frontiers(
                 b[2] or None,
                 points,
                 names,
-                higher_is_better=higher_is_better,
+                higher_is_better=higher_is_better(b[0]),
                 metric=b[0] if by_metric else None,
             )
             for b, points in sorted(buckets.items())
@@ -1377,6 +1433,7 @@ def _quality(inputs: ReportInputs) -> Quality:
         audit_n=0 if audit is None else audit.labelled,
         audit_error_rate=None if audit is None else audit.error_rate,
         audit_above_ceiling=None if audit is None else audit.above_ceiling,
+        audit_reportable=audit_reportable(audit),
         agreement_rows_aligned=inputs.agreement.rows_aligned,
         agreement_rows_unmatched=inputs.agreement.rows_unmatched,
     )

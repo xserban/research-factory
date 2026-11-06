@@ -116,7 +116,8 @@ class WorkNoticeState(StrictModel):
     the synthesis (`excluded`), stay with a label (`labelled`) or are untouched (`normal`).
     `stale_fields` is the union of the fields named by `affects` assessments, with the assessing
     events in `stale_marks`. `assessed` is true when every live notice has an assessment (a
-    reinstated retraction needs none)."""
+    reinstated retraction needs none). `correction_pending` is true while a live correction waits
+    for its assessment, whatever stronger flag hides it."""
 
     work_id: str
     flag: Flag
@@ -125,6 +126,7 @@ class WorkNoticeState(StrictModel):
     notices: tuple[str, ...]
     assessed: bool
     stale_marks: tuple[StaleMark, ...] = ()
+    correction_pending: bool = False
 
 
 def notice_state(
@@ -155,6 +157,7 @@ def notice_state(
         synthesis: Synthesis = "normal"
         marks: list[StaleMark] = []
         every_one_assessed = True
+        correction_pending = False
         for notice in live[work_id]:
             current = latest.get(notice.notice_id)
             decision = None if current is None else current[1].decision
@@ -163,6 +166,7 @@ def notice_state(
                 every_one_assessed = False
             if decision is AssessmentDecision.AFFECTS and current is not None:
                 marks.append(StaleMark(assessed_at=current[0], fields=current[1].fields))
+            correction_pending = correction_pending or n_flag == "correction-pending"
             flag = max(flag, n_flag, key=_FLAG_ORDER.index)
             synthesis = max(synthesis, n_synthesis, key=_SYNTHESIS_ORDER.index)
         states[work_id] = WorkNoticeState(
@@ -173,6 +177,7 @@ def notice_state(
             notices=tuple(ids),
             assessed=every_one_assessed,
             stale_marks=tuple(sorted(marks, key=lambda m: m.assessed_at)),
+            correction_pending=correction_pending,
         )
     return states
 
