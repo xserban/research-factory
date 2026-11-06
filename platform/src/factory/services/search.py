@@ -132,11 +132,15 @@ def register_query(
                 issues.append(ValidationIssue("cycle_id", "a status query names an open cycle"))
             if spec.kind not in (QueryKind.ID_LIST, QueryKind.FILTER):
                 issues.append(ValidationIssue("kind", "a status query is an id_list or a filter"))
-        if spec.purpose is QueryPurpose.GREY and (
-            spec.source != "openalex" or not spec.filters.get("type")
+        if spec.purpose is QueryPurpose.GREY and not (
+            (spec.source == "openalex" and spec.filters.get("type"))
+            or (spec.source == "webcapture" and spec.filters.get("source_id"))
         ):
             issues.append(
-                ValidationIssue("purpose", "a grey search is an OpenAlex query with a type filter")
+                ValidationIssue(
+                    "purpose",
+                    "a grey search is an OpenAlex query with a type filter, or a web capture",
+                )
             )
         supplied_by = None
         if inbox_item is not None:

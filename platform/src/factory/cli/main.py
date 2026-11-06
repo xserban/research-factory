@@ -112,6 +112,7 @@ from factory.services import fulltext as fulltext_service
 from factory.services import fulltext_import as fulltext_import_service
 from factory.services import fulltext_status as fulltext_status_service
 from factory.services import gates as gates_service
+from factory.services import grey as grey_service
 from factory.services import horizon as horizon_service
 from factory.services import human_pass as human_pass_service
 from factory.services import hypotheses as hypotheses_service
@@ -445,6 +446,11 @@ inbox_app = typer.Typer(
     help="Supplied links: capture, list, resolve into the corpus, withdraw.",
     no_args_is_help=True,
 )
+grey_app = typer.Typer(
+    name="grey",
+    help="Grey literature: capture declared web pages, log reported searches and contacts.",
+    no_args_is_help=True,
+)
 references_app = typer.Typer(
     name="references",
     help="Reference lists of the included works: extract, status, list, decide.",
@@ -468,6 +474,7 @@ app.add_typer(conclusions_app)
 app.add_typer(notices_app)
 app.add_typer(versions_app)
 app.add_typer(inbox_app)
+app.add_typer(grey_app)
 app.add_typer(report_app)
 app.add_typer(export_app)
 app.add_typer(protocol_app)
@@ -1326,6 +1333,39 @@ def inbox_prioritise(
         )
     word = "cleared" if clear else "prioritised"
     typer.echo(f"{word} {item_id}" if wrote else f"{item_id} already {word}")
+
+
+@grey_app.command("capture")
+def grey_capture(
+    ctx: typer.Context,
+    url: Annotated[str, typer.Argument(help="An http or https page or PDF.")],
+    source: Annotated[
+        str, typer.Option("--source", help="The declared `website` target in grey_sources.")
+    ],
+    title: Annotated[str, typer.Option("--title", help="The title the work is recorded under.")],
+    deviation: Annotated[
+        str | None,
+        typer.Option("--deviation", help="A recorded deviation that authorises the capture."),
+    ] = None,
+) -> None:
+    """Fetch a page once into the library and record it as a grey `website` work."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        result = grey_service.capture_url(
+            project,
+            project.human_actor(),
+            url,
+            source_id=source,
+            title=title,
+            deviation_id=deviation,
+        )
+    typer.echo(f"captured {result.work_id} ({result.media_type}, {result.sha256})")
+    typer.echo(
+        f"document {result.document_id}"
+        if result.document_id
+        else "these bytes were already captured for the work"
+    )
 
 
 @inbox_app.command("withdraw")

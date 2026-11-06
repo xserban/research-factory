@@ -15,6 +15,7 @@ from collections.abc import Sequence
 
 from factory.document.converter import Converter
 from factory.document.docling import DoclingConverter
+from factory.document.html_generic import HtmlGenericConverter
 from factory.document.latexml_html import LatexmlHtmlConverter
 from factory.document.pandoc import PandocConverter
 
@@ -47,9 +48,12 @@ class ConverterRegistry:
 
 def default_converters() -> ConverterRegistry:
     """The converters of decision 49: HTML latexml-html, PDF Docling, LaTeX e-prints pandoc.
+    `html-generic` (captured web pages, plan SG) takes its own media type, so it competes with none.
 
     The order is load-bearing: pandoc also accepts HTML, so latexml-html must come before it.
     PyMuPDF4LLM is not listed; it stays an optional extra reachable only through
     `factory.document.optional`.
     """
-    return ConverterRegistry([LatexmlHtmlConverter(), DoclingConverter(), PandocConverter()])
+    return ConverterRegistry(
+        [LatexmlHtmlConverter(), DoclingConverter(), PandocConverter(), HtmlGenericConverter()]
+    )

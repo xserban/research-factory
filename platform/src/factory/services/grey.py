@@ -11,12 +11,30 @@ Invariants:
 
 from __future__ import annotations
 
+import hashlib
+from collections.abc import Callable
+from dataclasses import dataclass
+from urllib.parse import urlsplit
+
+import httpx
+from pydantic import JsonValue
 from sqlalchemy import bindparam, text
 
-from factory.model.grey import GreySource
+from factory.canonical import canonical_json
+from factory.document.html_generic import WEB_CAPTURE_HTML
+from factory.errors import FactoryValidationError, ValidationIssue
+from factory.events.envelope import Actor
+from factory.model.grey import GreyMethod, GreySource
+from factory.model.search import QueryKind, QueryPurpose, QuerySpec
 from factory.model.work import ProvenanceMethod
 from factory.services.context import Project
+from factory.services.fulltext import record_supplied_document
 from factory.services.protocol import current_protocol
+from factory.services.search import register_query, run_query
+from factory.sources.http import PoliteClient
+from factory.sources.registry import SourceFactory
+from factory.sources.webcapture import NAME as WEBCAPTURE
+from factory.sources.webcapture import WebCaptureSource
 
 GREY_METHOD_VALUES: tuple[str, ...] = (
     ProvenanceMethod.GREY_STRUCTURED.value,
@@ -64,3 +82,138 @@ def grey_paragraph(sources: tuple[GreySource, ...], *, reported: int = 0, contac
             " Reported searches were run outside the platform and are not reproducible from it."
         )
     return body
+
+
+# --- Capture (Task 5) ---
+
+_CAPTURE_HEADERS = ("content-type", "last-modified", "etag", "date", "content-length")
+_CLIENT_NAME = "research-factory"
+"""A generic client name. The contact address is never sent to a captured site."""
+MAX_CAPTURE_BYTES = 50_000_000
+
+
+@dataclass(frozen=True)
+class CaptureResult:
+    """What one capture recorded: the run, the work, the document (None when these exact bytes
+    were already captured for the work), the bytes' hash and whether the work is new."""
+
+    run_id: str
+    work_id: str
+    document_id: str | None
+    sha256: str
+    media_type: str
+    new_work: bool
+
+
+def _fetch(url: str) -> httpx.Response:
+    client = PoliteClient(
+        httpx.Client(timeout=60.0, follow_redirects=True, headers={"User-Agent": _CLIENT_NAME})
+    )
+    return client.get(url)
+
+
+def _media_type(content_type: str, body: bytes) -> str | None:
+    base = content_type.split(";")[0].strip().lower()
+    if base == "application/pdf" or body[:5] == b"%PDF-":
+        return "application/pdf"
+    if base in ("text/html", "application/xhtml+xml"):
+        return WEB_CAPTURE_HTML
+    return None
+
+
+def capture_url(
+    project: Project,
+    actor: Actor,
+    url: str,
+    *,
+    source_id: str,
+    title: str,
+    fetch: Callable[[str], httpx.Response] | None = None,
+    deviation_id: str | None = None,
+) -> CaptureResult:
+    """Fetch `url` once into the project library and record it as a grey `website` work.
+
+    `source_id` names a declared `website` entry of `grey_sources` (the gate re-checks it; a
+    deviation may waive it). The fetch runs outside any lock; bytes go to the library only, and
+    the event log holds the hash, timestamp and a few response headers. A PDF is recorded with
+    `application/pdf` and converts through the PDF converter; an HTML page with the capture media
+    type and `html-generic`. A repeat capture whose bytes changed is a new document of the same
+    work (superseding the earlier), never an overwrite; identical bytes record nothing new.
+    """
+    issues: list[ValidationIssue] = []
+    parts = urlsplit(url)
+    if parts.scheme not in ("http", "https") or not parts.netloc:
+        issues.append(ValidationIssue("url", "an http or https URL"))
+    if not title.strip():
+        issues.append(ValidationIssue("title", "must not be blank"))
+    declared = any(
+        s.method is GreyMethod.WEBSITE and s.target == source_id for s in declared_sources(project)
+    )
+    if not declared and deviation_id is None:
+        issues.append(ValidationIssue("source_id", "not a declared website grey source"))
+    if issues:
+        raise FactoryValidationError(issues)
+    try:
+        response = (fetch or _fetch)(url)
+    except (httpx.HTTPError, OSError) as exc:
+        raise FactoryValidationError([ValidationIssue("url", f"fetch failed: {exc}")]) from exc
+    body = response.content
+    if len(body) > MAX_CAPTURE_BYTES:
+        raise FactoryValidationError([ValidationIssue("url", "page exceeds the capture limit")])
+    media_type = _media_type(response.headers.get("content-type", ""), body)
+    if media_type is None:
+        raise FactoryValidationError(
+            [ValidationIssue("url", "not a PDF or HTML page; nothing was recorded")]
+        )
+    digest = hashlib.sha256(body).hexdigest()
+    headers: dict[str, JsonValue] = {
+        k: response.headers[k] for k in _CAPTURE_HEADERS if k in response.headers
+    }
+    filters = {
+        "source_id": source_id,
+        "title": title.strip(),
+        "sha256": f"sha256:{digest}",
+        "captured_at": project.clock.now().isoformat(),
+        "status": str(response.status_code),
+        "headers": canonical_json(headers).decode(),
+    }
+    spec = QuerySpec(
+        source=WEBCAPTURE,
+        kind=QueryKind.FILTER,
+        text=url,
+        purpose=QueryPurpose.GREY,
+        filters=filters,
+    )
+    adapters = {
+        WEBCAPTURE: SourceFactory(
+            WebCaptureSource.kinds, lambda _settings, clock: WebCaptureSource(clock=clock)
+        )
+    }
+    query_id = register_query(project, actor, spec, sources=adapters, deviation_id=deviation_id)
+    summary = run_query(project, query_id, sources=adapters, actor=actor)
+    project.index.sync()
+    with project.index.connect() as conn:
+        row = conn.execute(
+            text("SELECT work_id FROM provenance WHERE run_id = :r"), {"r": summary.run_id}
+        ).first()
+    if row is None:
+        raise FactoryValidationError([ValidationIssue("url", "the capture run recorded no work")])
+    work_id = str(row[0])
+    with project.index.exclusive():
+        project.index.sync()
+        document_id = record_supplied_document(
+            project,
+            work_id,
+            content=body,
+            source_version=f"web:{digest[:12]}",
+            media_type=media_type,
+            actor=project.system_actor(),
+        )
+    return CaptureResult(
+        run_id=summary.run_id,
+        work_id=work_id,
+        document_id=document_id,
+        sha256=f"sha256:{digest}",
+        media_type=media_type,
+        new_work=summary.new_works > 0,
+    )

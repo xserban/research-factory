@@ -28,7 +28,7 @@ from factory.events.envelope import Actor
 from factory.index.chase import chase_round_texts, snowball_round_texts
 from factory.living.window import window_spec
 from factory.model.base import StrictModel
-from factory.model.grey import structured_types
+from factory.model.grey import GreyMethod, structured_types
 from factory.model.miners import MinerUse
 from factory.model.project import RigorMode
 from factory.model.protocol import (
@@ -958,7 +958,14 @@ def _supplied_waives(
 def _grey_waives(protocol: ProtocolSpec, spec: QuerySpec) -> bool:
     """Whether `grey_sources` plans this structured grey search (plan SG): an OpenAlex query of
     purpose `grey` whose `type` filter names only types a `structured` entry declares."""
-    if spec.purpose is not QueryPurpose.GREY or spec.source != "openalex":
+    if spec.purpose is not QueryPurpose.GREY:
+        return False
+    if spec.source == "webcapture":
+        return any(
+            s.method is GreyMethod.WEBSITE and s.target == spec.filters.get("source_id")
+            for s in protocol.grey_sources or ()
+        )
+    if spec.source != "openalex":
         return False
     asked = {t.strip() for t in spec.filters.get("type", "").split("|") if t.strip()}
     return bool(asked) and asked <= structured_types(protocol.grey_sources)
