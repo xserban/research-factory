@@ -268,7 +268,8 @@ def _audited(project: Project, act: GateAct) -> bool:
 
 def autonomy_of(project: Project, act: GateAct) -> Autonomy:
     """Ruling 10: `human` for a human act, `audited-agent` for an agent act at a gate whose
-    policy then was `agent_audit` and whose audit sample contains the act, else `agent`."""
+    policy then was `agent_audit`, after an audit was drawn at the gate over a population holding
+    the act (decision 84 item 5: the act need not be sampled or labelled), else `agent`."""
     if act.actor_kind != "agent":
         return Autonomy.HUMAN
     policy = effective_policy(project, act.gate_id, protocol_id=act.protocol_id)

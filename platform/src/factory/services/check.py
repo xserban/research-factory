@@ -124,7 +124,7 @@ from factory.services.notices import (
     dependent_works,
     observed_notices,
 )
-from factory.services.prisma import prisma_flow, search_report
+from factory.services.prisma import prisma_flow, search_report, unattributed_chase_runs
 from factory.services.project import project_status
 from factory.services.protocol import current_protocol
 from factory.services.protocol_rules import (
@@ -508,6 +508,7 @@ def _run_rules(project: Project) -> list[_Hit]:
         _calibration_and_agreement(project),
         _audit(project),
         _chase(project, outcomes),
+        _chase_unattributed(project),
         _checklist(project),
         _merge_conflicts(project, outcomes),
         _fulltext(project),
@@ -1783,6 +1784,21 @@ def _chase(project: Project, outcomes: dict[str, Outcome]) -> list[_Hit]:
             "chase-missing",
             (),
             "promoted works exist and no citation chase round follows the last decision",
+        )
+    ]
+
+
+def _chase_unattributed(project: Project) -> list[_Hit]:
+    """Chase runs with no registered query: PRISMA cannot name their mechanism."""
+    runs = unattributed_chase_runs(project)
+    if not runs:
+        return []
+    return [
+        _Hit(
+            "chase-run-unattributed",
+            tuple(runs),
+            f"{len(runs)} chase run(s) have no registered query; PRISMA counts their works "
+            "as unattributed",
         )
     ]
 

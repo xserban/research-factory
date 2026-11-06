@@ -76,6 +76,9 @@ CHASE_FORWARD = "chase-forward"
 SNOWBALL_BACKWARD = "snowball-backward"
 OTHER_DETAIL_KEYS: tuple[str, ...] = (CHASE_BACKWARD, CHASE_FORWARD, SNOWBALL_BACKWARD)
 """The mechanisms of `identified_other_detail` (slice 3a)."""
+CHASE_UNATTRIBUTED = "unattributed"
+"""A detail key present only when a chase run has no registered query, so no mechanism is known.
+`check` reports such runs (`chase-run-unattributed`)."""
 
 
 class FullTextBoxes(StrictModel):
@@ -280,10 +283,8 @@ def prisma_flow(project: Project) -> PrismaFlow:
             method = _other_method(work)
             other[method.value] += 1
             if method is ProvenanceMethod.CITATION_CHASE:
-                first = min(
-                    e.run_id for e in work.provenance if e.method is ProvenanceMethod.CITATION_CHASE
-                )
-                detail[mechanisms.get(first, CHASE_BACKWARD)] += 1
+                mechanism = mechanisms.get(_first_chase_run(work), CHASE_UNATTRIBUTED)
+                detail[mechanism] = detail.get(mechanism, 0) + 1
         outcome = outcomes[work.id]
         if outcome is Outcome.INCLUDED:
             included += 1
@@ -496,6 +497,31 @@ def _database_records(project: Project) -> dict[str, int]:
             {"search": QueryPurpose.SEARCH.value, "database": ProvenanceMethod.DATABASE.value},
         ).all()
     return {str(source): int(count) for source, count in rows}
+
+
+def _first_chase_run(work: Work) -> str:
+    return min(e.run_id for e in work.provenance if e.method is ProvenanceMethod.CITATION_CHASE)
+
+
+def unattributed_chase_runs(project: Project) -> list[str]:
+    """The chase runs that first found a canonical work and have no registered query, sorted."""
+    mechanisms = _chase_mechanisms(project)
+    return sorted(
+        {
+            run
+            for work in canonical_works(project)
+            if _other_method_applies(work) and (run := _first_chase_run(work)) not in mechanisms
+        }
+    )
+
+
+def _other_method_applies(work: Work) -> bool:
+    """Whether the work counts under `citation-chase` in the flow's other methods."""
+    methods = {entry.method for entry in work.provenance}
+    return (
+        ProvenanceMethod.DATABASE not in methods
+        and _other_method(work) is ProvenanceMethod.CITATION_CHASE
+    )
 
 
 def _chase_mechanisms(project: Project) -> dict[str, str]:

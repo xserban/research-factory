@@ -114,6 +114,8 @@ class MethodsReport(StrictModel):
     deviations: int
     sources: list[str]
     models: list[str]
+    screening_models: list[str] = Field(default_factory=list)
+    """The models of screening decision events; the "Screening decisions" sentence names these."""
     skills: list[str]
     passes: int
     dual_sample: float | None
@@ -124,7 +126,8 @@ class MethodsReport(StrictModel):
     audit_n: int
     recall_held_out: float | None
     recall_development: float | None
-    recall_held_out_admitted: int = 0
+    recall_held_out_admitted: int | None = 0
+    """None when withheld, so an agent cannot read it as a count of none."""
     recall_development_admitted: int = 0
     chase_rounds: int
     admitted_seeds: int
@@ -226,6 +229,7 @@ def methods_report(project: Project) -> MethodsReport:
         deviations=len(list_deviations(project)),
         sources=sorted({row.source for row in search_report(project).rows}),
         models=_agent_values(project, _AGENT_MODELS),
+        screening_models=_agent_values(project, _SCREENING_MODELS),
         skills=_agent_values(project, _AGENT_SKILLS),
         passes=0 if plan is None else plan.passes,
         dual_sample=None if plan is None else plan.dual_sample,
@@ -443,6 +447,10 @@ _AGENT_MODELS = text(
     + _LAYER_EVENTS
     + "ORDER BY e.model"
 )
+_SCREENING_MODELS = text(
+    "SELECT DISTINCT e.model FROM events e WHERE e.actor_kind = 'agent' AND e.model IS NOT NULL "
+    "AND e.type = 'screening.decision_recorded' ORDER BY e.model"
+)
 _AGENT_SKILLS = text(
     "SELECT DISTINCT e.skill FROM events e WHERE e.actor_kind = 'agent' AND e.skill IS NOT NULL "
     + _LAYER_EVENTS
@@ -486,7 +494,7 @@ def agent_methods(project: Project, report: MethodsReport) -> tuple[MethodsRepor
     if not _screening_started(project):
         withheld.add("recall_held_out")
         update["recall_held_out"] = None
-        update["recall_held_out_admitted"] = 0
+        update["recall_held_out_admitted"] = None
     update["imports"] = _imports(project, agent=True)
     update["gate_policy"] = [row.agent_view() for row in report.gate_policy]
     if report.hypotheses is not None:
@@ -649,14 +657,20 @@ def _screening(report: MethodsReport) -> str:
     flow = report.prisma
     breakdown = ", ".join(f"{criterion} ({n})" for criterion, n in flow.excluded.items())
     provisional = " The flow is provisional." if flow.provisional else ""
+    others = [m for m in report.models if m not in report.screening_models]
+    other_steps = (
+        f" Other agent steps used these models (as reported by the agent): {_list(others)}."
+        if others
+        else ""
+    )
     return (
         f"Screening of {flow.screened} works: {flow.included} included, "
         f"{flow.excluded_total} excluded, {flow.pending} pending.{provisional} "
         "Exclusions by criterion: "
         f"{breakdown or NONE_RECORDED}. "
         "Screening decisions were made by Claude models (as reported by the agent: "
-        f"{_list(report.models)}) following the skills {_list(report.skills)}; "
-        "the platform made no model calls."
+        f"{_list(report.screening_models)}) following the skills {_list(report.skills)}; "
+        f"the platform made no model calls.{other_steps}"
     )
 
 
@@ -822,7 +836,8 @@ def _gate_policy(report: MethodsReport, withheld: frozenset[str]) -> str:
     """Decision gates passed by an agent, or under a protocol policy: who passed what."""
     parts = [
         "Decision gates. A gate is passed by a human, or, where its policy is agent_audit, by an "
-        "agent whose acts a human audits on a random sample."
+        "agent. An agent act counts as audited-agent once a human audit was drawn at the gate "
+        "after it; the act itself need not be sampled or labelled."
     ]
     for row in report.gate_policy:
         counts = ", ".join(f"{level} {n}" for level, n in row.counts.items())
