@@ -3,8 +3,8 @@
 Declares: `create_draft`, `repin_outline`, `write_sentences`, `withdraw`, `reorder`, `draft_next`,
 `live_sentences`, `get_draft`, `list_drafts`, `verifier_sessions`, `is_verifying`,
 `refuse_verifier`, `sentence_status`, `status_counts`, `draft_view`, `draft_works`, `draft_render`,
-`SentenceInput`, `SentenceRow`, `SlotTask`, `StatusRow`, `DraftView`. The writer of the sentence events (the
-verification, audit and release events have their own services).
+`SentenceInput`, `SentenceRow`, `SlotTask`, `StatusRow`, `DraftView`. The writer of the sentence
+events (the verification, audit and release events have their own services).
 
 Invariants:
 - The platform never writes prose. Sentences are the writer's; the platform checks them
@@ -26,8 +26,8 @@ Invariants:
   recomputes to another value (`stat-changed`), or when a cell, item, claim or edge no longer says
   what the verdict's unit showed (`support-changed`): a value can be replaced under the same row
   key. A group is left out, as an added row would stale every sentence on it. An audit label is a
-  human's result, so the agent variant of the status leaves it out: a rate would follow from counting the
-  sentences it flags (decision 37.14, as decision 90 item 2 reads it).
+  human's result, so the agent variant of the status leaves it out: a rate would follow from
+  counting the sentences it flags (decision 37.14, as decision 90 item 2 reads it).
 """
 
 from __future__ import annotations
