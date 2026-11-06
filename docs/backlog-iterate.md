@@ -172,3 +172,10 @@ Minor review findings parked during the v1 build, to address when iterating from
 - V-C: `passed` for extraction agreement means the agreement could be computed, not that it cleared a bar; there is no floor to read (services/briefing.py `_extraction_agreement`).
 - V-C: `briefing.served` is a marker of the kind decision 37 item 15 called a later candidate; decide whether it should serve that purpose.
 - V-C: whether PRISMA flow counts (`identified_other`, in the pack and in `report_prisma`) expose an import's held-out part before a pass needs its own look.
+- PI: the junk-title list is fixed, so a template stamp (`Submitted to INTERSPEECH`, seen in the walk) passes as the record's title. An identifier resolved it there; with none, the researcher sees it in `import show` and can describe it.
+- PI: methods' search sentence lists `arxiv, importlist` as databases for import queries of a library-only project, beside the sentence saying no database search was run.
+- PI: `parse_pdf_folder` holds every PDF's bytes in memory until the import is recorded; a folder of several GB needs streaming.
+- PI: two byte-identical PDFs admitted by `importlist` make one work and one provenance row (key work, run), so the second record lists `unresolved` at attach. Harmless, but the count misleads.
+- PI: after `--converter X`, repeating `--converter docling` is `unchanged` and X stays the latest; `document read --conversion` reads the other.
+- PI: `import.resolved` rewriting an admitted record's link is refused by the service only; a hand-written event still folds. Enforcing it in the fold needs a look at old logs that re-resolved after admission (iterate line 22).
+- PI: `import show --researcher` could write the CSV template for `import describe`, with ordinals and file names.

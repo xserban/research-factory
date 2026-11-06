@@ -219,3 +219,9 @@ Create: `docs/runbook-pdf-pilot.md`. Modify: `document/optional.py`, `document/r
 - PDF manuscripts, after decision 49 and W-C (slice 7b Later).
 - A batch command that chains import, resolve and admit, if the pilot shows the separate steps cost more than they give.
 - `identity-unchecked` for filename identifiers, if pilot use shows mislabelled files.
+
+## Implementation notes (2026-11-06, branch `plan-pdf-intake`)
+
+Decision 49 landed before this plan was built, so Tasks 1 and 2 shrank: PD-1 is moot, and the opt-in became an override (`--converter NAME`, single-valued), with `document converters` kept as the setup check. `PROVISIONAL_CONVERTERS` and `conversion-provisional` were dropped. Task 2's census and methods paragraph stay, as reporting. Check code `conversion-not-chosen` replaces the provisional one.
+
+Added by following the path to `document_read`, none of it in the tasks above: a record no source knows takes its file through the work `importlist` built from it (the attach step otherwise listed it unresolved for good); `import resolve --described`; a library-only protocol with no seed draws its calibration set without a split (Task 8 asked to confirm no seed was needed: the draw refused); `calibrate draw` prints the works. `import.record_described` carries the plan's fields plus nothing else; the table also holds `pending`. See decision 99.

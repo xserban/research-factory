@@ -194,6 +194,8 @@ Added on acceptance (numbers in [01-rigour.md](01-rigour.md)):
 ## In scope
 Region model, rules, evaluation, snapshots, review, member proposals, links, adoption; foci; labels, consolidation passes and proposals, merges, promotion to terms; BibTeX, CSL JSON and PDF-folder import; resolution, split, admission, attachments, coverage audit; PRISMA and PRISMA-S additions; tools, CLI, check, trace; skills `rf-regions`, `rf-consolidate`.
 
+Implemented later: plan PI (`docs/plans/2026-11-05-pdf-intake.md`, decision 99) adds record descriptions, incremental admission and file names in the researcher's view.
+
 ## Out of scope
 Onion, cluster and distance views (slice 7); scheduled re-evaluation, alerts and digests per region (slice 4); ownership and review of shared regions, a shared region store (slice 5, IDEA-11); cross-project suggestions themselves (IDEA-04) and cross-region matching (slice 6); free relation names on edges; embeddings (decision 9); RIS, Zotero web API, Mendeley databases; region filters on evidence outputs; any model call by the platform.
 

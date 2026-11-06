@@ -1,5 +1,7 @@
 # Runbook: a full-text use case with arXiv HTML papers
 
+For a folder of your own PDFs, start with `docs/runbook-pdf-pilot.md`. The status line below predates extraction.
+
 Status: written 2026-11-04 against branch `plan-2c-fulltext-screening`. Every command and tool name below was checked against `platform/src/factory/cli/main.py`, `platform/src/factory/mcp/server.py` and `plugin/skills/*/SKILL.md`. Scope: slice 1 (question to chase, reports, check) plus slice-2 plans A (acquisition), B2 (conversion, `document_read`) and C (full-text screening, full PRISMA). Extraction and the evidence report do not exist yet (section 4).
 
 Notation: **[H]** is a human act (CLI in a terminal, or a human-only MCP tool); **[A]** is an agent act (MCP tool called by Claude Code under a skill). Every [A] call also takes `project`, `role`, `model` (the agent's own model id) and `skill` (bare name, e.g. `rf-screen`); these are omitted below except where they matter.

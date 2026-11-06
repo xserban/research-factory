@@ -1,4 +1,4 @@
-"""The researcher's description of an import record (PD-2, decision 120 provisional).
+"""The researcher's description of an import record (PD-2, decision 99).
 
 A PDF with no usable metadata has nothing a resolver can read, and only the researcher can say what
 it is: a script guessing a title from the first page would be an identity claim nobody made.
