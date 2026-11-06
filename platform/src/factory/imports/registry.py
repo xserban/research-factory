@@ -13,6 +13,7 @@ from factory.imports.bibtex import parse_bibtex
 from factory.imports.csl import parse_csl
 from factory.imports.model import ImportFormat, ParsedImport
 from factory.imports.pdfs import parse_pdf_folder
+from factory.imports.ris import parse_ris
 
 
 def _bibtex(path: Path) -> ParsedImport:
@@ -23,17 +24,28 @@ def _csl(path: Path) -> ParsedImport:
     return parse_csl(path.read_bytes(), path.parent)
 
 
+def _ris(path: Path) -> ParsedImport:
+    return parse_ris(path.read_bytes(), path.parent)
+
+
 PARSERS: Mapping[ImportFormat, Callable[[Path], ParsedImport]] = MappingProxyType(
     {
         ImportFormat.BIBTEX: _bibtex,
         ImportFormat.CSL: _csl,
+        ImportFormat.RIS: _ris,
         ImportFormat.PDFS: parse_pdf_folder,
     }
 )
 
 
 BYTE_PARSERS: Mapping[ImportFormat, Callable[[bytes, Path | None], ParsedImport]] = (
-    MappingProxyType({ImportFormat.BIBTEX: parse_bibtex, ImportFormat.CSL: parse_csl})
+    MappingProxyType(
+        {
+            ImportFormat.BIBTEX: parse_bibtex,
+            ImportFormat.CSL: parse_csl,
+            ImportFormat.RIS: parse_ris,
+        }
+    )
 )
 
 

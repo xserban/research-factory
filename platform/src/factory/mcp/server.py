@@ -189,6 +189,7 @@ class _LinkItem(StrictModel):
     link: str
     note: str | None = None
     basis: Basis | None = None
+    page: bool = False
 
 
 class _ProbeQuery(StrictModel):
@@ -1067,7 +1068,9 @@ def build_server(
         `channel="agent"`: an agent proposes the link and must give `basis`, either
         `{"kind": "document", "document_id": "doc_...", "anchor": "..."}` for a citing span it
         read or `{"kind": "knowledge"}`; it gives no note. `channel="mcp"`: a human's link relayed
-        verbatim, with an optional note and no basis. Offline; each item is written or rejected
+        verbatim, with an optional note and no basis. `page: true` on an item keeps an http(s) link
+        with no identifier as a publisher page, whose `citation_doi` is read once at resolve.
+        Offline; each item is written or rejected
         on its own. Refused to a session that has joined a pass; a session that captures a link
         cannot later screen. Screeners never see how a work was found."""
 
@@ -1087,7 +1090,12 @@ def build_server(
                 try:
                     parsed = parse_input(_LinkItem, item, f"items.{index}")
                     accepted.append(
-                        (index, inbox_service.LinkInput(parsed.link, parsed.note, parsed.basis))
+                        (
+                            index,
+                            inbox_service.LinkInput(
+                                parsed.link, parsed.note, parsed.basis, parsed.page
+                            ),
+                        )
                     )
                 except FactoryValidationError as exc:
                     rejected.append(ItemError(index=index, issues=exc.issues))

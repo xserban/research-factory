@@ -1244,12 +1244,18 @@ def inbox_add(
     note: Annotated[
         str | None, typer.Option("--note", help="A short note (at most 300 characters).")
     ] = None,
+    page: Annotated[
+        bool,
+        typer.Option(
+            "--page", help="Treat a link with no identifier as a publisher page (citation_doi)."
+        ),
+    ] = False,
 ) -> None:
     """Capture links as inbox items. Offline; an unsupported link is reported and not written."""
     state = _state(ctx)
     with _reporting_errors():
         project = _resolve_project(state)
-        items = [inbox_service.LinkInput(link, note=note) for link in links]
+        items = [inbox_service.LinkInput(link, note=note, page=page) for link in links]
         result = inbox_service.add_links(project, project.human_actor(), items, Channel.CLI)
     for item_id in result.written:
         typer.echo(f"captured {item_id}")
@@ -3953,6 +3959,19 @@ def import_csl_cmd(
 ) -> None:
     """Archive and record a CSL JSON export; prints the import id, counts and split."""
     _library_import(ctx, path, ImportFormat.CSL, role, collection, seed, no_split)
+
+
+@import_app.command("ris")
+def import_ris_cmd(
+    ctx: typer.Context,
+    path: Annotated[Path, typer.Argument(help="A RIS export.")],
+    role: RoleOption,
+    collection: CollectionOption = None,
+    seed: SeedOption = None,
+    no_split: NoSplitOption = False,
+) -> None:
+    """Archive and record a RIS export; prints the import id, counts and split."""
+    _library_import(ctx, path, ImportFormat.RIS, role, collection, seed, no_split)
 
 
 @import_app.command("pdfs")

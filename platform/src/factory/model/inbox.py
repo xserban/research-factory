@@ -19,7 +19,7 @@ from pydantic import Field, model_validator
 from factory.inbox.links import MAX_LINK, IdentifierKind
 from factory.model.base import StrictModel
 from factory.model.fulltext import DOCUMENT_ID_RE
-from factory.model.identity import ULID_RE
+from factory.model.identity import BLOB_REF_RE, ULID_RE
 from factory.model.protocol import DEVIATION_ID_RE
 from factory.model.screening import Channel, NonBlank
 from factory.model.work import QUERY_ID_RE, RUN_ID_RE
@@ -103,6 +103,9 @@ class InboxLinkResolved(StrictModel):
     status: ResolveStatus
     work_id: str | None = Field(default=None, pattern=WORK_ID_RE)
     deviation_id: str | None = Field(default=None, pattern=DEVIATION_ID_RE)
+    page_sha256: str | None = Field(default=None, pattern=BLOB_REF_RE)
+    """The library hash of the publisher page read for a `page` item (plan SG); the bytes stay in
+    the library. None for every other item."""
 
     @model_validator(mode="after")
     def _work_iff_found(self) -> Self:

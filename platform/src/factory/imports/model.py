@@ -43,6 +43,7 @@ class ImportFormatError(Exception):
 class ImportFormat(StrEnum):
     BIBTEX = "bibtex"
     CSL = "csl"
+    RIS = "ris"
     PDFS = "pdfs"
 
 

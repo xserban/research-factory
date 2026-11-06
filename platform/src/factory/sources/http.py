@@ -147,3 +147,16 @@ def default_http(settings: Settings) -> PoliteClient:
         headers={"User-Agent": user_agent(settings.mailto)},
     )
     return PoliteClient(http)
+
+
+GENERIC_CLIENT = "research-factory"
+"""The client name sent to sites that are not APIs of ours. No contact address is ever sent."""
+
+
+def fetch_page(url: str) -> httpx.Response:
+    """GET a web page once, politely, under the generic client name (no contact address)."""
+    http = httpx.Client(timeout=60.0, follow_redirects=True, headers={"User-Agent": GENERIC_CLIENT})
+    try:
+        return PoliteClient(http).get(url)
+    finally:
+        http.close()

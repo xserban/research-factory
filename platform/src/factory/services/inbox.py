@@ -19,15 +19,23 @@ Invariants:
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 
+import httpx
+from lxml import etree, html
 from pydantic import JsonValue
 from sqlalchemy import text
 
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
-from factory.inbox.links import IdentifierKind, LinkIdentifier, parse_link, stored_link
+from factory.inbox.links import (
+    IdentifierKind,
+    LinkIdentifier,
+    parse_link,
+    parse_page_link,
+    stored_link,
+)
 from factory.model.base import StrictModel
 from factory.model.budgets import REQUESTS_SEARCH
 from factory.model.inbox import (
@@ -53,6 +61,7 @@ from factory.services.coverage import held_out_visible
 from factory.services.protocol import search_authorization
 from factory.services.results import BatchResult, ItemError
 from factory.services.search import get_work, list_works, query_issues, register_query, run_query
+from factory.sources.http import fetch_page
 from factory.sources.registry import SourceFactory
 
 UNSUPPORTED_LINK = "unsupported-link"
@@ -67,6 +76,8 @@ class LinkInput:
     link: str
     note: str | None = None
     basis: Basis | None = None
+    page: bool = False
+    """The link is a publisher page, not an identifier: its `citation_doi` is read at resolution."""
 
 
 @dataclass(frozen=True)
@@ -156,6 +167,8 @@ def _item_issues(
 ) -> tuple[LinkIdentifier | None, list[ValidationIssue]]:
     issues: list[ValidationIssue] = []
     identifier = parse_link(item.link)
+    if identifier is None and item.page:
+        identifier = parse_page_link(item.link)
     if identifier is None:
         issues.append(ValidationIssue("link", UNSUPPORTED_LINK))
     if actor.kind == "agent":
@@ -173,6 +186,8 @@ def _item_issues(
 
 def _as_sent(item: LinkInput) -> dict[str, JsonValue]:
     sent: dict[str, JsonValue] = {"link": item.link}
+    if item.page:
+        sent["page"] = True
     if item.note is not None:
         sent["note"] = item.note
     if item.basis is not None:
@@ -306,6 +321,7 @@ def resolve_links(
     sources: Mapping[str, SourceFactory],
     item_ids: Sequence[str] | None = None,
     deviation_id: str | None = None,
+    page_fetch: Callable[[str], httpx.Response] | None = None,
 ) -> list[ResolveOutcome]:
     """Look up open items (all, or `item_ids`) in id order, one recorded `supplied` query each.
 
@@ -331,7 +347,7 @@ def resolve_links(
         if issues:
             raise FactoryValidationError(issues)
         items = [item for item in items if item.item_id in wanted]
-    return [_resolve_one(project, actor, item, sources, deviation_id) for item in items]
+    return [_resolve_one(project, actor, item, sources, deviation_id, page_fetch) for item in items]
 
 
 def _resolve_one(
@@ -340,8 +356,18 @@ def _resolve_one(
     item: _Item,
     sources: Mapping[str, SourceFactory],
     deviation_id: str | None,
+    page_fetch: Callable[[str], httpx.Response] | None = None,
 ) -> ResolveOutcome:
-    query = lookup_query(item.kind, item.value)
+    page_sha256: str | None = None
+    kind, value = item.kind, item.value
+    if kind is IdentifierKind.PAGE:
+        # One fetch of the page, outside any lock; its bytes go to the library only.
+        found = _page_doi(project, value, page_fetch or fetch_page)
+        if isinstance(found, ValidationIssue):
+            return ResolveOutcome(item_id=item.item_id, status=None, issues=[found])
+        page_sha256, value = found
+        kind = IdentifierKind.DOI
+    query = lookup_query(kind, value)
     supplied_by: SubmitterKind = "human" if item.actor_kind == "human" else "agent"
     with project.index.exclusive():
         project.index.sync()
@@ -376,6 +402,7 @@ def _resolve_one(
         status=status,
         work_id=work_id,
         deviation_id=deviation_id,
+        page_sha256=page_sha256,
     )
     refs = tuple(ref for ref in (item.item_id, query_id, run.run_id, work_id) if ref is not None)
     with project.index.exclusive():
@@ -400,6 +427,31 @@ def _resolve_one(
             ]
         )
     return ResolveOutcome(item_id=item.item_id, status=status, work_id=work_id, run_id=run.run_id)
+
+
+def _page_doi(
+    project: Project, url: str, fetch: Callable[[str], httpx.Response]
+) -> tuple[str, str] | ValidationIssue:
+    """(library hash, DOI) read from the page's `citation_doi` meta tag, or the issue that keeps
+    the item open: the page refused, or it names no DOI."""
+    try:
+        response = fetch(url)
+    except (httpx.HTTPError, OSError) as exc:
+        return ValidationIssue("link", f"page-unavailable: {exc}")
+    if response.status_code >= 400:
+        return ValidationIssue("link", f"page-refused: HTTP {response.status_code}")
+    body = response.content
+    ref = project.library.put(body)
+    try:
+        root = html.fromstring(body)
+    except (etree.ParserError, ValueError):
+        return ValidationIssue("link", "page-unreadable: not HTML")
+    for meta in root.iter("meta"):
+        if (meta.get("name") or "").strip().lower() == "citation_doi":
+            content = (meta.get("content") or "").strip()
+            if content:
+                return ref, normalize_doi(content)
+    return ValidationIssue("link", "page-without-citation-doi")
 
 
 def _run_works(project: Project, run_id: str) -> list[str]:

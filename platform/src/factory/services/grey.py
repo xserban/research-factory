@@ -35,7 +35,7 @@ from factory.services.fulltext import record_supplied_document
 from factory.services.inbox import LinkInput, add_links
 from factory.services.protocol import current_protocol
 from factory.services.search import register_query, run_query
-from factory.sources.http import PoliteClient
+from factory.sources.http import fetch_page
 from factory.sources.registry import SourceFactory
 from factory.sources.webcapture import NAME as WEBCAPTURE
 from factory.sources.webcapture import WebCaptureSource
@@ -91,8 +91,6 @@ def grey_paragraph(sources: tuple[GreySource, ...], *, reported: int = 0, contac
 # --- Capture (Task 5) ---
 
 _CAPTURE_HEADERS = ("content-type", "last-modified", "etag", "date", "content-length")
-_CLIENT_NAME = "research-factory"
-"""A generic client name. The contact address is never sent to a captured site."""
 MAX_CAPTURE_BYTES = 50_000_000
 
 
@@ -107,13 +105,6 @@ class CaptureResult:
     sha256: str
     media_type: str
     new_work: bool
-
-
-def _fetch(url: str) -> httpx.Response:
-    client = PoliteClient(
-        httpx.Client(timeout=60.0, follow_redirects=True, headers={"User-Agent": _CLIENT_NAME})
-    )
-    return client.get(url)
 
 
 def _media_type(content_type: str, body: bytes) -> str | None:
@@ -158,7 +149,7 @@ def capture_url(
     if issues:
         raise FactoryValidationError(issues)
     try:
-        response = (fetch or _fetch)(url)
+        response = (fetch or fetch_page)(url)
     except (httpx.HTTPError, OSError) as exc:
         raise FactoryValidationError([ValidationIssue("url", f"fetch failed: {exc}")]) from exc
     body = response.content

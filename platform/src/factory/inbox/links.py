@@ -25,7 +25,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from enum import StrEnum
-from urllib.parse import unquote
+from urllib.parse import unquote, urlsplit
 
 from factory.model.work_ids import (
     TRAILING_PUNCTUATION,
@@ -69,6 +69,9 @@ class IdentifierKind(StrEnum):
     ARXIV = "arxiv"
     DOI = "doi"
     OPENALEX = "openalex"
+    PAGE = "page"
+    """A publisher page whose `citation_doi` meta tag is read once at resolution (slice 4a Later,
+    plan SG). Captured only on request (`LinkInput.page`); `parse_link` never returns it."""
 
 
 @dataclass(frozen=True)
@@ -141,3 +144,16 @@ def parse_link(link: str) -> LinkIdentifier | None:
     if (u := _URL.fullmatch(text)) and (d := _DOI_IN_PATH.search(u.group("path"))):
         return _doi(d.group("doi"))
     return None
+
+
+def parse_page_link(link: str) -> LinkIdentifier | None:
+    """An http(s) page URL as a `page` identifier: the stored link, without query or fragment.
+
+    Only for a link the caller declared to be a publisher page; `parse_link` is tried first."""
+    if len(link) > MAX_LINK:
+        return None
+    stored = stored_link(link)
+    parts = urlsplit(stored)
+    if parts.scheme not in ("http", "https") or "." not in parts.netloc:
+        return None
+    return LinkIdentifier(kind=IdentifierKind.PAGE, value=stored, version=None)
