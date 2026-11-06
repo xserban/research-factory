@@ -170,8 +170,9 @@ from factory.services.commit import commit_hosted
 from factory.services.context import Principal, Project, list_projects, open_project
 from factory.services.extraction_agreement import Choice
 from factory.services.gate_status import gates_status
-from factory.services.living_hooks import DEFAULT_HOOKS
+from factory.services.living_hooks import DEFAULT_HOOKS, make_status_hook
 from factory.services.modules.listing import module_rows
+from factory.services.notices import NoticeCheckSummary
 from factory.services.project import ScreeningStatus
 from factory.services.search import list_works
 from factory.services.serve_http import serve_http_issues
@@ -179,7 +180,7 @@ from factory.services.server_check import server_check
 from factory.services.server_init import init_server
 from factory.services.xrun_accounting import baseline_verdicts
 from factory.sources.fulltext.registry import default_routes
-from factory.sources.registry import default_sources
+from factory.sources.registry import default_sources, status_sources
 from factory.views import render as views_render
 from factory.views.briefing_render import briefing_markdown
 
@@ -3394,6 +3395,53 @@ def notices_list_cmd(ctx: typer.Context) -> None:
             )
 
 
+@notices_app.command("check")
+def notices_check_cmd(
+    ctx: typer.Context,
+    all_works: Annotated[
+        bool,
+        typer.Option("--all", help="Check every corpus work, not only the works the review uses."),
+    ] = False,
+    budget: Annotated[
+        int, typer.Option("--budget", min=1, help="At most this many works are looked up.")
+    ] = 200,
+) -> None:
+    """Look up notices for every corpus work (least recently checked first) within a budget, as a
+    human-triggered watch cycle: the protocol's planned searches run in that cycle as well. Reports
+    what the budget left out and what no source can be asked about."""
+    if not all_works:
+        _fail("pass --all; the dependents are checked by `factory watch run`", 2)
+    state = _state(ctx)
+    seen: list[NoticeCheckSummary] = []
+    with _reporting_errors():
+        project = _resolve_project(state)
+        sources = dict(default_sources())
+        hook = make_status_hook(
+            {**status_sources(), **sources},
+            scope="corpus",
+            budget=budget,
+            on_summary=seen.append,
+        )
+        cycle = watch_service.watch_run(
+            project,
+            sources=sources,
+            trigger="human",
+            actor=project.human_actor(),
+            force=True,
+            after_runs=(hook,),
+        )
+    if cycle is None or not seen:
+        typer.echo("no cycle ran")
+        raise typer.Exit(1)
+    summary = seen[0]
+    typer.echo(
+        f"{cycle.cycle_id}  checked {summary.checked}  new notices {summary.new_notices}  "
+        f"beyond budget {summary.beyond_budget}  failed lookups {summary.failed}"
+    )
+    typer.echo(f"no identifier a source takes: {len(summary.unaskable)}")
+    typer.echo(f"no Crossref DOI: {len(summary.unchecked_crossref)}")
+
+
 @notices_app.command("assess")
 def notices_assess_cmd(
     ctx: typer.Context,
@@ -3611,9 +3659,15 @@ def digest_cmd(
     record: Annotated[
         bool, typer.Option("--record", help="Store the digest and write digest.generated.")
     ] = False,
+    region: Annotated[
+        str | None,
+        typer.Option("--region", help="Only the work members of this region's latest version."),
+    ] = None,
 ) -> None:
     """The computed digest since the last one (or an event): print it, or write it to --out."""
     state = _state(ctx)
+    if record and region is not None:
+        _fail("a digest restricted to a region is not recorded: it would move the cut-off", 2)
     slugs = _watch_projects(state, project if project is not None else state.project, all_projects)
     if fmt is DigestFormat.BOTH and out is None:
         _fail("--format both needs --out", 2)
@@ -3627,7 +3681,7 @@ def digest_cmd(
         ]
         if not opened:
             _fail("no project; run factory init", 2)
-        built = digest_service.digest_build(opened, since=since)
+        built = digest_service.digest_build(opened, since=since, region=region)
         if record:
             built = built.model_copy(
                 update={"digest_id": digest_service.record_digest(opened, built)}

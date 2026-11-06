@@ -25,6 +25,7 @@ from typing import Literal
 
 from sqlalchemy import text
 
+from factory.errors import FactoryValidationError, ValidationIssue
 from factory.living.counts import source_counts
 from factory.model.base import StrictModel
 from factory.model.conclusions import ConclusionDiff
@@ -38,6 +39,7 @@ from factory.model.digest import (
 )
 from factory.model.notices import unassessed_notices
 from factory.model.watch import CycleStatus
+from factory.regions.rules import MemberType
 from factory.services.conclusions import conclusion_diff
 from factory.services.context import Project
 from factory.services.human_queue import Gate, human_queue
@@ -46,6 +48,7 @@ from factory.services.notices import assessments, observed_notices
 from factory.services.prisma_update import UpdateFlow, update_query_ids, update_work_ids
 from factory.services.protocol import current_protocol
 from factory.services.references import reference_counts
+from factory.services.regions import region_ids, region_members, region_state
 from factory.services.search import get_work
 from factory.services.snapshots import snapshot_blob
 from factory.services.status_lookup import unrecovered_failures
@@ -96,9 +99,15 @@ def digest_build(
     *,
     since: str | Literal["last"] | None = "last",
     now: datetime | None = None,
+    region: str | None = None,
 ) -> Digest:
     """The digest of `projects` since `since` (`"last"`: each project's last recorded digest;
-    an event id; `None`: the start of the log). Read-only."""
+    an event id; `None`: the start of the log). Read-only.
+
+    `region` (a `reg_` id) restricts candidates, notices and versions to the work members of the
+    region's latest pinned version, in every project; the conclusion diffs and the update flow
+    are left out, since they are not per work. A project where the region is unknown or has no
+    snapshot is refused (field `region`), with nothing built."""
     if now is None:
         if not projects:
             raise ValueError("a digest of no project needs an explicit time")
@@ -106,7 +115,7 @@ def digest_build(
     return Digest(
         digest_id=None,
         generated_at=now,
-        projects=tuple(_project_digest(p, since) for p in projects),
+        projects=tuple(_project_digest(p, since, _region_works(p, region)) for p in projects),
     )
 
 
@@ -200,7 +209,26 @@ def last_digest_cutoff(project: Project) -> str | None:
 # --- assembly ---
 
 
-def _project_digest(project: Project, since: str | None) -> DigestProject:
+def _region_works(project: Project, region: str | None) -> frozenset[str] | None:
+    """The work members of the region's latest pinned version, or None for no restriction."""
+    if region is None:
+        return None
+    if region not in region_ids(project):
+        raise FactoryValidationError([ValidationIssue("region", "region-unknown")])
+    version = region_state(project, region).latest_version
+    if version is None:
+        raise FactoryValidationError([ValidationIssue("region", "region-not-snapshotted")])
+    works: set[str] = set()
+    offset = 0
+    while page := region_members(project, version, offset=offset, limit=500):
+        works.update(m for kind, m in page if kind is MemberType.WORK)
+        offset += len(page)
+    return frozenset(works)
+
+
+def _project_digest(
+    project: Project, since: str | None, members: frozenset[str] | None = None
+) -> DigestProject:
     project.index.sync()
     cutoff = _last_event(project)
     since_event = last_digest_cutoff(project) if since == "last" else since
@@ -236,14 +264,14 @@ def _project_digest(project: Project, since: str | None) -> DigestProject:
         since_event=since_event,
         cutoff_event=cutoff,
         cycles=cycles,
-        new_candidates=_candidates(project, since_event, cutoff, cap),
+        new_candidates=_candidates(project, since_event, cutoff, cap, members),
         open_decisions=_open_decisions(project),
-        notices=_notices(project, since_event, cutoff, cap),
-        versions=_versions(project, since_event, cutoff, cap),
-        conclusions=tuple(conclusion_diff(project)),
+        notices=_notices(project, since_event, cutoff, cap, members),
+        versions=_versions(project, since_event, cutoff, cap, members),
+        conclusions=() if members is not None else tuple(conclusion_diff(project)),
         failures=tuple(sorted(failures)),
         overdue=tuple(sorted(overdue)),
-        update_flow=_update_flow(project, since_event, cutoff),
+        update_flow=None if members is not None else _update_flow(project, since_event, cutoff),
     )
 
 
@@ -282,9 +310,15 @@ def _cycles(project: Project, since: str | None, cutoff: str) -> tuple[CycleSumm
 
 
 def _candidates(
-    project: Project, since: str | None, cutoff: str, cap: int
+    project: Project,
+    since: str | None,
+    cutoff: str,
+    cap: int,
+    members: frozenset[str] | None = None,
 ) -> Listing[CandidateRow]:
     new, _duplicates = update_work_ids(project, since, cutoff)
+    if members is not None:
+        new = {w for w in new if w in members}
     queries = update_query_ids(project, new, since, cutoff)
     ordered = sorted(new, key=lambda w: (queries.get(w, ()), w))
     shown = ordered[:cap]
@@ -319,7 +353,13 @@ def _open_decisions(project: Project) -> dict[str, int]:
     }
 
 
-def _notices(project: Project, since: str | None, cutoff: str, cap: int) -> Listing[NoticeRow]:
+def _notices(
+    project: Project,
+    since: str | None,
+    cutoff: str,
+    cap: int,
+    members: frozenset[str] | None = None,
+) -> Listing[NoticeRow]:
     with project.index.connect() as conn:
         rows = conn.execute(
             text(
@@ -340,13 +380,20 @@ def _notices(project: Project, since: str | None, cutoff: str, cap: int) -> List
                 assessed=str(r[0]) in assessed,
             )
             for r in rows
+            if members is None or str(r[1]) in members
         ),
         key=lambda n: (n.notice_date is None, n.notice_date or "", n.work_id, n.notice_id),
     )
     return Listing[NoticeRow](items=tuple(found[:cap]), more=max(0, len(found) - cap))
 
 
-def _versions(project: Project, since: str | None, cutoff: str, cap: int) -> Listing[VersionRow]:
+def _versions(
+    project: Project,
+    since: str | None,
+    cutoff: str,
+    cap: int,
+    members: frozenset[str] | None = None,
+) -> Listing[VersionRow]:
     window = {"since": since, "cutoff": cutoff}
     with project.index.connect() as conn:
         observed = conn.execute(
@@ -370,6 +417,8 @@ def _versions(project: Project, since: str | None, cutoff: str, cap: int) -> Lis
         named = {k: v for k, v in json.loads(str(identifiers)).items() if v is not None}
         detail = " ".join(f"{k}:{named[k]}" for k in sorted(named))
         rows.append(VersionRow(work_id=str(work_id), kind="version-of-record", detail=detail))
+    if members is not None:
+        rows = [v for v in rows if v.work_id in members]
     rows.sort(key=lambda v: (v.work_id, v.kind, v.detail))
     return Listing[VersionRow](items=tuple(rows[:cap]), more=max(0, len(rows) - cap))
 

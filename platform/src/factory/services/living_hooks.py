@@ -15,12 +15,13 @@ Invariants:
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from typing import Literal
 
 from sqlalchemy import text
 
 from factory.services.context import Project
-from factory.services.notices import notice_check
+from factory.services.notices import NoticeCheckSummary, notice_check
 from factory.services.protocol import current_protocol
 from factory.services.screening import extend_sample
 from factory.services.snapshots import last_snapshot_event, snapshot
@@ -66,8 +67,17 @@ def snapshot_hook(
     return ()
 
 
-def make_status_hook(sources: Mapping[str, SourceFactory] | None = None) -> CycleHook:
-    """A status hook over `sources` (default: the real adapters, built when the hook runs)."""
+def make_status_hook(
+    sources: Mapping[str, SourceFactory] | None = None,
+    *,
+    scope: Literal["dependents", "corpus"] = "dependents",
+    budget: int | None = None,
+    on_summary: Callable[[NoticeCheckSummary], None] | None = None,
+) -> CycleHook:
+    """A status hook over `sources` (default: the real adapters, built when the hook runs).
+    `scope="corpus"` and `budget` serve the explicit `notices check --all`; the default hook
+    checks the dependents within the plan's `notice_budget`. `on_summary` receives the notice
+    check's summary (what it left out and could not ask) for the command to report."""
 
     def status_hook(
         project: Project, cycle_id: str, new_work_ids: tuple[str, ...]
@@ -81,9 +91,12 @@ def make_status_hook(sources: Mapping[str, SourceFactory] | None = None) -> Cycl
             project,
             cycle_id,
             sources=factories,
-            budget=plan.notice_budget,
+            budget=plan.notice_budget if budget is None else budget,
             notice_sources=plan.notices,
+            scope=scope,
         )
+        if on_summary is not None:
+            on_summary(summary)
         run_ids = summary.run_ids
         if plan.track_versions and summary.work_ids:
             versions = version_check(

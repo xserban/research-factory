@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping, Sequence
 from datetime import date
+from typing import Literal
 
 from sqlalchemy import text
 
@@ -42,7 +43,7 @@ from factory.services.agreement import Outcome, final_outcomes
 from factory.services.context import Project
 from factory.services.human_channel import require_human_channel
 from factory.services.protocol import current_protocol
-from factory.services.search import works_by_ids
+from factory.services.search import corpus_work_ids, works_by_ids
 from factory.services.status_lookup import (
     Resolver,
     StatusBatch,
@@ -67,6 +68,11 @@ class NoticeCheckSummary(StrictModel):
     run_ids: tuple[str, ...]
     work_ids: tuple[str, ...] = ()
     """The works selected for this cycle's lookups, which the version check covers too."""
+    beyond_budget: int = 0
+    """Works of the scope left unselected because the budget ran out (least recently checked
+    first, so a later run reaches them)."""
+    unaskable: tuple[str, ...] = ()
+    """Selected works no notice source can be asked about (no identifier any of them takes)."""
     failed: int = 0
     """Lookups that did not complete. Each is a failed run on the log; `check` reports it until a
     later complete run of the same source covers the works it asked about."""
@@ -93,6 +99,12 @@ def dependent_works(project: Project) -> list[str]:
     return sorted(ids)
 
 
+def _corpus_works(project: Project) -> list[str]:
+    """Every corpus work, sorted: the scope of `notices check --all`."""
+    project.index.sync()
+    return sorted(corpus_work_ids(project))
+
+
 def notice_check(
     project: Project,
     cycle_id: str,
@@ -100,14 +112,18 @@ def notice_check(
     sources: Mapping[str, SourceFactory],
     budget: int,
     notice_sources: Sequence[str] = NOTICE_SOURCES,
+    scope: Literal["dependents", "corpus"] = "dependents",
 ) -> NoticeCheckSummary:
-    """Look up up to `budget` dependents in the notice sources and record new notices.
+    """Look up up to `budget` works in the notice sources and record new notices.
 
-    Runs inside the open cycle `cycle_id`. Works with no identifier any source takes are selected
-    like the rest but cannot be covered; works without a Crossref DOI are reported in
+    Runs inside the open cycle `cycle_id`. `scope` is the dependent works (the default) or, for
+    the explicit `notices check --all`, every corpus work; the order and the budget are the same,
+    and the summary reports what the budget left out (`beyond_budget`) and what no source can be
+    asked about (`unaskable`). Works with no identifier any source takes are selected like the
+    rest but cannot be covered; works without a Crossref DOI are reported in
     `unchecked_crossref`.
     """
-    dependents = dependent_works(project)
+    dependents = dependent_works(project) if scope == "dependents" else _corpus_works(project)
     known = works_by_ids(project, dependents)
     checked_at = effective_last_checked(project, known, notice_sources)
     # Never checked first (""), then least recently checked; a work no source can be asked about
@@ -115,8 +131,12 @@ def notice_check(
     order = sorted(known, key=lambda w: (checked_at[w.id] is None, checked_at[w.id] or "", w.id))
     works = order[: max(budget, 0)]
     selected = [w.id for w in works]
+    beyond = len(order) - len(works)
+    unaskable = tuple(sorted(w.id for w in works if checked_at[w.id] is None))
     if not selected:
-        return NoticeCheckSummary(checked=0, new_notices=0, unchecked_crossref=(), run_ids=())
+        return NoticeCheckSummary(
+            checked=0, new_notices=0, unchecked_crossref=(), run_ids=(), beyond_budget=beyond
+        )
 
     batches: list[StatusBatch] = []
     unchecked: list[str] = []
@@ -139,6 +159,8 @@ def notice_check(
         unchecked_crossref=tuple(sorted(unchecked)),
         run_ids=tuple(o.run_id for o in outcomes),
         work_ids=tuple(selected),
+        beyond_budget=beyond,
+        unaskable=unaskable,
         failed=sum(1 for o in outcomes if o.status is not RunStatus.COMPLETE),
     )
 
