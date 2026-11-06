@@ -485,6 +485,7 @@ def _attempted(
     outcome: AttemptOutcome | None = None,
     actor: Actor | None = None,
     input_blob: str | None = None,
+    version_differs: str | None = None,
 ) -> Event:
     """One `fulltext.attempted`. `outcome` overrides the route's outcome (a restore records
     `restored`); `actor` and `input_blob` default to the system and to no input."""
@@ -507,6 +508,7 @@ def _attempted(
         raw_hash=None if item.content is None else item.content.raw_hash,
         metadata_blob=item.metadata_blob,
         document_id=document_id,
+        version_differs=version_differs,
     )
     return project.events.make(
         "fulltext.attempted",
@@ -652,6 +654,7 @@ def _restore_events(
         )
         return [attempt], "unavailable"
     same = item.content.raw_hash == doc.raw_hash
+    observed = item.content.source_version
     attempt = _attempted(
         project,
         None,
@@ -662,6 +665,7 @@ def _restore_events(
         outcome=AttemptOutcome.RESTORED,
         actor=trigger,
         input_blob=blob,
+        version_differs=observed if same and observed != doc.source_version else None,
     )
     events = [attempt]
     if same:

@@ -1871,6 +1871,14 @@ def _fulltext(project: Project) -> list[_Hit]:
                 "a re-fetch hashed differently from its document; a decision is needed",
             )
         )
+    for document_id, work_id in _version_differs(project):
+        hits.append(
+            _Hit(
+                "source-version-differs",
+                (document_id, work_id),
+                "a restore found the same bytes under another version string",
+            )
+        )
     unsought = [
         entry.work_id for entry in fulltext_status(project).works if entry.state == "unsought"
     ]
@@ -1976,6 +1984,20 @@ def _changed_sources(project: Project) -> list[tuple[str, str]]:
                 "SELECT c.document_id, d.work_id FROM fulltext_source_changes c "
                 "JOIN fulltext_documents d ON d.document_id = c.document_id "
                 "WHERE c.resolution IS NULL ORDER BY c.event_id"
+            )
+        ).all()
+    return [(str(d), str(w)) for d, w in rows]
+
+
+def _version_differs(project: Project) -> list[tuple[str, str]]:
+    """(document id, work id) of every document a restore found under another version string with
+    the same bytes, once each, in event order."""
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT a.document_id, a.work_id FROM fulltext_attempts a "
+                "WHERE a.version_differs IS NOT NULL AND a.document_id IS NOT NULL "
+                "GROUP BY a.document_id, a.work_id ORDER BY MIN(a.event_id)"
             )
         ).all()
     return [(str(d), str(w)) for d, w in rows]

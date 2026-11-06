@@ -39,6 +39,7 @@ SPEC = ModuleSpec(
         CheckRule("library-missing", ("warning", "warning", "warning")),
         CheckRule("library-corrupt", ("error", "error", "error")),
         CheckRule("source-changed", ("warning", "warning", "warning")),
+        CheckRule("source-version-differs", ("warning", "warning", "warning")),
         CheckRule("fulltext-unsought", ("warning", "warning", "warning")),
     ),
 )

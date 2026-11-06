@@ -129,6 +129,15 @@ class Attempted(StrictModel):
     raw_hash: str | None = Field(default=None, pattern=BLOB_REF_RE)
     metadata_blob: str | None = Field(default=None, pattern=BLOB_REF_RE)
     document_id: str | None = Field(default=None, pattern=DOCUMENT_ID_RE)
+    version_differs: NonBlank | None = None
+    """On a restore whose bytes match the document but whose route names another version: the
+    version the route observed. The document's recorded version is not rewritten."""
+
+    @model_validator(mode="after")
+    def _check_version_differs(self) -> Self:
+        if self.version_differs is not None and self.outcome is not AttemptOutcome.RESTORED:
+            raise ValueError("only a restored attempt records a differing version")
+        return self
 
     @model_validator(mode="after")
     def _check_outcome(self) -> Self:

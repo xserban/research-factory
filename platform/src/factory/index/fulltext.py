@@ -66,6 +66,7 @@ def fulltext_tables(metadata: MetaData) -> FulltextTables:
         Column("raw_hash", String),
         Column("metadata_blob", String),
         Column("document_id", String),
+        Column("version_differs", String),
         Column("event_id", String, nullable=False),
     )
     documents = Table(
