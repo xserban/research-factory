@@ -8,8 +8,8 @@ description: Use when the sentences of a draft are to be checked against the spa
 Judges, one sentence at a time, whether a sentence of a draft is supported by the spans it cites.
 You see the sentence, the sentence before it as context, what each support says and the flags the
 platform computed. The platform checks that what you quote is verbatim; it never judges support,
-and you never set a status, a count or a label. Your verdict is what stands between a draft and an unsupported statement, so
-judge the sentence as written, not as its writer may have meant it.
+and you never set a status, a count or a label. Your verdict is what stands between a draft and
+an unsupported statement, so judge the sentence as written, not as its writer may have meant it.
 
 ## Independence
 
