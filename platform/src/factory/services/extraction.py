@@ -706,7 +706,7 @@ def next_unit(
     calibration: its tasks are a ledger of their own, apart from the production tasks.
 
     `reopened` names works an import fills that are to be mined again: they are queued, and their
-    first task shadows the imported rows for good."""
+    first claimed task shadows the imported rows."""
     with project.index.exclusive():
         project.index.sync()
         protocol, schema, pack = require_schema(project, scope=scope)
@@ -1693,22 +1693,26 @@ class _Ledger:
     here, so a mined row neither collides with one nor supersedes one. Empty when the protocol
     declines imports, and for a calibration."""
     reopened: frozenset[str] = frozenset()
-    """Imported works to mine again: their source was corrected (`mine_next`)."""
+    """Imported works to queue again: their source was corrected (`mine_next`). They stay filled
+    (their rows in use) until a local row or claimed task shadows them."""
     _filled: set[str] | None = None
 
     def filled(self) -> set[str]:
         """The works an import fills: a unit counts as current through its imported rows, so it is
-        not queued, while no local task or row shadows them and none of them is stale. This reads
-        this project's log alone, except `reopened`, which only `mine_next` passes."""
+        not queued, while no local row or claimed task shadows them and none of them is stale (a
+        queued, unserved task shadows nothing). A reopened work stays filled, so its imported rows
+        stand and its source flag stays live, until its first task is claimed."""
         if self._filled is None:
-            local = {work for work, _ in self.tasks} | {work for work, _ in self.rows}
+            local = {
+                work
+                for (work, _), tasks in self.tasks.items()
+                if any(t.status != TaskStatus.OPEN.value for t in tasks)
+            } | {work for work, _ in self.rows}
             stale = self.stale_rows() if self.imported else set()
             self._filled = {
                 work
                 for work, rows in self.imported.items()
-                if work not in local
-                and work not in self.reopened
-                and not any(row.extraction_id in stale for row in rows)
+                if work not in local and not any(row.extraction_id in stale for row in rows)
             }
         return self._filled
 
@@ -1859,7 +1863,7 @@ class _Ledger:
         tasks = self.tasks.get((work_id, label))
         if not tasks:
             empty: Literal["current", "queued"] = (
-                "current" if work_id in self.filled() else "queued"
+                "current" if work_id in self.filled() and work_id not in self.reopened else "queued"
             )
             return UnitState(work_id=work_id, pass_label=label, state=empty, reason=None)
         latest = tasks[-1]
@@ -2034,11 +2038,16 @@ def started_works(project: Project, *, scope: ScopeKey = Scope.EVIDENCE) -> set[
 
 
 def mined_works(project: Project, scope: ScopeKey) -> set[str]:
-    """The works of `scope` this project has a task or a mined row of: an import of one would be
-    shadowed by the local units, so it is refused. Read-only."""
+    """The works of `scope` this project has a claimed or completed task or a mined row of: an
+    import of one would be shadowed by the local units, so it is refused. A queued task nobody
+    served does not count, so a re-import stays possible. Read-only."""
     project.index.sync()
     ledger = _ledger(project, scope)
-    return {work for work, _ in ledger.tasks} | {work for work, _ in ledger.rows}
+    return {
+        work
+        for (work, _), tasks in ledger.tasks.items()
+        if any(t.status != TaskStatus.OPEN.value for t in tasks)
+    } | {work for work, _ in ledger.rows}
 
 
 def stale_claims(project: Project) -> set[str]:
