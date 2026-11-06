@@ -40,6 +40,20 @@ DRAFT_PATTERNS: tuple[tuple[str, str], ...] = (
 CITABLE_KINDS = ("claim", "cell", "extraction", "relation", "cites", "interpretation", "concept")
 
 
+_DRAFT_OF = {
+    "draft": "SELECT draft_id FROM drafts WHERE draft_id = :i",
+    "sentence": "SELECT draft_id FROM draft_sentences WHERE sentence_id = :i",
+    "verdict": "SELECT draft_id FROM sentence_verdicts WHERE verdict_id = :i",
+}
+
+
+def draft_of(conn: Connection, kind: str, ident: str) -> str | None:
+    """The draft a draft, sentence or verdict node belongs to; None for any other node."""
+    query = _DRAFT_OF.get(kind)
+    row = None if query is None else conn.execute(text(query), {"i": ident}).first()
+    return None if row is None else str(row[0])
+
+
 def _support_key(kind: str, ref: str) -> Key:
     """The trace node of a support."""
     support = SupportKind(kind)

@@ -68,7 +68,7 @@ from factory.services.dedup import active_merges
 from factory.services.document_read import default_conversion
 from factory.services.draft_audit import audit_report as draft_audit_report
 from factory.services.draft_release import released_drafts
-from factory.services.drafts import list_drafts, sentence_status
+from factory.services.drafts import is_verifying, list_drafts, sentence_status
 from factory.services.evidence_report import evidence_report
 from factory.services.extraction import (
     calibration_task_ids,
@@ -551,6 +551,7 @@ def audit_report_of(project: Project, draft_id: str) -> int:
 
 def _draft_hits(project: Project, draft_id: str, released: bool) -> list[_Hit]:
     rows = sentence_status(project, draft_id, agent=AGENT_VIEW.get())
+    verifying = AGENT_VIEW.get() and is_verifying(project, draft_id, project.session)
     hits: list[_Hit] = []
     for status, code in _SENTENCE_CODES:
         refs = tuple(r.sentence_id for r in rows if r.status == status)
@@ -558,7 +559,7 @@ def _draft_hits(project: Project, draft_id: str, released: bool) -> list[_Hit]:
             hits.append(
                 _Hit(
                     code,
-                    (draft_id, *refs),
+                    (draft_id,) if verifying else (draft_id, *refs),
                     f"{len(refs)} sentence(s) of a draft are {status}",
                     severity=None if released else "warning",
                 )
@@ -587,7 +588,8 @@ def _draft_hits(project: Project, draft_id: str, released: bool) -> list[_Hit]:
 def _drafts(project: Project) -> list[_Hit]:
     """The state of each draft: ids and counts only, never a sentence's text. For a released draft
     the sentence findings read their level by mode (an error in `systematic`); for a draft not
-    released they stay warnings. The agent view reads the status without audit labels."""
+    released they stay warnings. The agent view reads the status without audit labels, and gives a
+    session verifying the draft no sentence ids."""
     released = released_drafts(project)
     return [
         hit

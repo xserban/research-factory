@@ -1,8 +1,8 @@
 """Drafts, slots and sentence recording (slice 7b, plan W-A, task 5).
 
 Declares: `create_draft`, `repin_outline`, `write_sentences`, `withdraw`, `reorder`, `draft_next`,
-`live_sentences`, `get_draft`, `list_drafts`, `verifier_sessions`, `refuse_verifier`,
-`sentence_status`, `status_counts`, `draft_view`, `draft_works`, `draft_render`, `SentenceInput`,
+`live_sentences`, `get_draft`, `list_drafts`, `verifier_sessions`, `is_verifying`,
+`refuse_verifier`, `sentence_status`, `status_counts`, `draft_view`, `draft_works`, `draft_render`, `SentenceInput`,
 `SentenceRow`, `SlotTask`, `StatusRow`, `DraftView`. The writer of the sentence events (the
 verification, audit and release events have their own services).
 
@@ -16,8 +16,9 @@ Invariants:
 - Every agent-written event carries the call and the task content it was served as its
   `input_blob` (R-04). A human writes without a task.
 - A session that has verified a sentence of a draft cannot write in it (`verifier_sessions`). A
-  session with a verdict on a draft, or a live claim on one of its units, cannot read an agent's
-  status or rendering of it (`refuse_verifier`; ruling 12, R-131): a unit is all it judges from.
+  session with a verdict on a draft, or a live claim on one of its units, is not served the draft
+  by any other door: status, rendering, slot, trace, or the sentence refs of `check`
+  (`is_verifying`; ruling 12, R-131). A unit is all it judges from.
 - A refusal writes nothing and carries positions and fixed codes, never document text.
 - Status is computed on read and never stored. `stale` wins over `flagged`, `flagged` over
   `supported`, `supported` over `unchecked`; a `structural` or `interpretive` sentence keeps its
@@ -219,10 +220,15 @@ def verifier_sessions(project: Project, draft_id: str) -> frozenset[str]:
         return verifiers_of(conn, draft_id)
 
 
-def refuse_verifier(project: Project, draft_id: str, session: str) -> None:
-    """Refuse a session that has a verdict on the draft or a live claim on one of its units."""
+def is_verifying(project: Project, draft_id: str, session: str) -> bool:
+    """Whether the session has a verdict on the draft or a live claim on one of its units."""
     held = any(draft_id in refs for refs in held_refs(project, session, DRAFT_VERIFY_TASK_KIND))
-    if held or session in verifier_sessions(project, draft_id):
+    return held or session in verifier_sessions(project, draft_id)
+
+
+def refuse_verifier(project: Project, draft_id: str, session: str) -> None:
+    """Refuse a session that `is_verifying` the draft."""
+    if is_verifying(project, draft_id, session):
         raise _refuse("session", "a session verifying this draft cannot read it")
 
 
@@ -1099,12 +1105,14 @@ def draft_next(
     """Serve the next section of the draft with no live sentence (or the named one) as a task
     claimed by `actor`, its content listing the section's eligible supports with their quotes and
     stored as the task's input. A task this session already holds is served again; a section whose
-    task another session holds is passed over. None when nothing is left to serve."""
+    task another session holds is passed over. None when nothing is left to serve. Refused to a
+    session verifying the draft: a slot shows the section's sentences."""
     if actor.kind != "agent":
         raise _refuse("actor", "only an agent is served a task")
     with project.index.exclusive(), entering():
         project.index.sync()
         require_draft(project, draft_id)
+        refuse_verifier(project, draft_id, actor.session)
         sections = _sections(project, draft_id)
         if section_id is not None and section_id not in {s.section_id for s in sections}:
             raise _refuse("section_id", "unknown section")

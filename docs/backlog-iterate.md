@@ -139,7 +139,6 @@ Minor review findings parked during the v1 build, to address when iterating from
 - W-A: `_stated_edges` reads `list_relations` with its 500-row cap per work.
 - W-A: titles and withdrawal reasons are truncated silently (200 and 300 characters).
 - W-B: a writer can type `[[/]]`, `[[UNSUPPORTED...` or `[@key]` in a sentence, which would confuse a clean rendering's markers. Refuse those forms at write time (W-A's `check_sentence`).
-- W-B: `draft_status` and `draft_render` are refused to a session with a live claim or a verdict on the draft, but a session can read them before its first claim, and `draft_next` still serves a section's sentences to a verifier session.
 - W-B: a task's unit is fixed when the task is created; if a cell's value or quote changes under the same row key before the unit is claimed, the verifier reads the older span. The verdict then reads stale `support-changed`, so nothing false is released, but the verifier's work is lost; a unit could be rebuilt when it is claimed.
 - W-B: a one-character substring satisfies ruling 3. A minimum length, or a check that the span covers the sentence's numbers, would make a verdict's quote carry more.
 - W-B: `sentence_status` resolves supports per reference through W-A's `_Reader`, one query each, not the plan's "7 queries" per draft. It is fine at section size; measure at 200 sentences.

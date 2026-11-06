@@ -294,7 +294,8 @@ def agent_trace(
     removed with everything below them, and so are the records and pages reachable only through
     them, so a seed's work reads as any corpus work does. A record found by seed admission or hand
     search is labelled `supplementary`, not by its route. Provenance of probe queries is not in
-    any view (the corpus does not count it either).
+    any view (the corpus does not count it either). A session verifying a draft is refused a
+    chain that reaches it (ruling 12, R-131), from the ref itself or through a support it cites.
     """
     project.index.sync()
     with project.index.connect() as conn:
@@ -319,10 +320,25 @@ def agent_trace(
         }
     skip = _agent_skip(project, hidden_queries, hidden_runs)
     tree = without_seeds(_trace(project, ref, direction, layer, skip))
+    _refuse_verifier(project, tree)
     tree = _without_withheld_regions(project, tree)
     if _hidden(tree, hidden_queries, hidden_runs):
         raise FactoryValidationError([ValidationIssue("ref", "unknown id")])
     return _pruned(tree, hidden_queries, hidden_runs)
+
+
+def _refuse_verifier(project: Project, tree: TraceNode) -> None:
+    """Refuse the session when the chain reaches a draft it is verifying."""
+    from factory.services.drafts import refuse_verifier  # drafts reads what the trace walks
+
+    pending, drafts = [tree], set()
+    with project.index.connect() as conn:
+        while pending:
+            node = pending.pop()
+            pending.extend(node.children)
+            drafts.add(draft_trace.draft_of(conn, node.kind, node.id))
+    for draft_id in sorted(d for d in drafts if d is not None):
+        refuse_verifier(project, draft_id, project.session)
 
 
 def _agent_skip(project: Project, queries: set[str], runs: set[str]) -> Callable[[Key], bool]:

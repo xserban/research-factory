@@ -1067,7 +1067,8 @@ def build_server(
         `all`; `all` adds the interpretation items an anchor, work or idea carries, each labelled
         `interpretation` with its review state (a layer id `int_`, `cpt_` or `cul_` is traced
         either way). Refused to a session that has joined a pass, since the chain leads to the
-        other pass's decisions, resolutions and audit."""
+        other pass's decisions, resolutions and audit, and to one verifying a draft the chain
+        reaches."""
 
         def walk() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
