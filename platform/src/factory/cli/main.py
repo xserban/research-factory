@@ -156,6 +156,7 @@ from factory.services import seeds as seeds_service
 from factory.services import shared_mining as shared_mining_service
 from factory.services import snapshots as snapshot_service
 from factory.services import snowball as snowball_service
+from factory.services import suggestions as suggestions_service
 from factory.services import trace as trace_service
 from factory.services import versions as versions_service
 from factory.services import view_coverage as view_coverage_service
@@ -989,6 +990,28 @@ def curation_decide_cmd(
             amendment_event=amendment_event,
         )
     typer.echo(f"recorded {event_id}")
+
+
+@app.command("suggest")
+def suggest_cmd(
+    ctx: typer.Context,
+    cap: Annotated[int, typer.Option("--cap", help="At most this many suggestions.")] = 100,
+    as_json: Annotated[bool, typer.Option("--json", help="Print JSON.")] = False,
+) -> None:
+    """Computed hints from the other projects under the root, each with its reason. Read-only:
+    nothing is written in any project; add a work to the inbox yourself to act on one."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        found = suggestions_service.suggestions(project, cap=cap)
+    if as_json:
+        typer.echo(json.dumps([s.model_dump(mode="json") for s in found], indent=2))
+        return
+    for item in found:
+        typer.echo(f"{item.from_project}\t{item.signal}\t{item.work}\t{item.identifier or '-'}")
+        typer.echo(f"  {item.reason}")
+    if not found:
+        typer.echo("no suggestions")
 
 
 @app.command("portfolio")
