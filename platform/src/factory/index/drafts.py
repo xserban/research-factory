@@ -530,9 +530,11 @@ def _unit_spans(
         return None
     spans: dict[str, list[str]] = {}
     for support in supports:
-        said = support.get("spans") if isinstance(support, dict) else None
-        if isinstance(support, dict) and isinstance(said, list):
-            spans[str(support["ref"])] = [str(s) for s in said]
+        if not isinstance(support, dict):
+            continue
+        ref, said = support.get("ref"), support.get("spans")
+        if isinstance(ref, str) and isinstance(said, list):
+            spans[ref] = [str(s) for s in said]
     return spans
 
 
