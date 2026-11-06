@@ -21,9 +21,11 @@ from sqlalchemy import text
 
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
+from factory.index import members as member_index
+from factory.index.members import MEMBER_TABLES
 from factory.model.hosting import ProjectHosted
 from factory.model.identity import ACTOR_ID_RE
-from factory.services.context import Project, hosted_by
+from factory.services.context import Principal, Project, hosted_by
 
 GIT_TIMEOUT_SECONDS = 300
 # Set by a git hook or a wrapping shell, these would point every command at another repository.
@@ -92,6 +94,50 @@ def host_project(project: Project, actor: Actor, host_id: str) -> str:
         event = project.events.make("project.hosted", payload, actor)
         project.record([event])
     return event.id
+
+
+def host_import(project: Project, actor: Actor, owner: str, reason: str) -> None:
+    """Take over a project whose events were pulled by git onto this server: record
+    `project.hosted` for this machine's host id and `member.granted(owner, owner)`, the first grant
+    that a hosted project without grants cannot otherwise have (deploy-C, Task 4).
+
+    Refused, with nothing written (fields `permission`, `host_id`, `lab`, `owner`, `project`): the
+    actor lacks `lab:admin`; there is no lab registry or this machine has no host id; the owner is
+    not an active user; the project already has grants. Hosting by this machine already in force is
+    not repeated, so a project can be completed after an interrupted import."""
+    from factory.services.access import Permission, authorize, lab_of
+    from factory.services.lab import user_record
+    from factory.services.members import bootstrap_owner
+
+    lab = lab_of(project)
+    host_id = project.settings.host_id
+    principal = Principal(actor.user, actor.credential, project.principal.channel)
+    with project.writing():
+        if lab is None:
+            raise FactoryValidationError([ValidationIssue("lab", "no lab registry on this root")])
+        authorize(None, principal, actor.kind, Permission.LAB_ADMIN, lab=lab)
+        if host_id is None:
+            raise FactoryValidationError(
+                [ValidationIssue("host_id", "this machine is not a lab server")]
+            )
+        record = user_record(lab, owner)
+        if record is None or not record.active:
+            raise FactoryValidationError(
+                [ValidationIssue("owner", f"no active user {owner!r} in the lab registry")]
+            )
+        with project.index.connect() as conn:
+            granted = member_index.any_grant(conn, MEMBER_TABLES)
+        if granted:
+            raise FactoryValidationError(
+                [
+                    ValidationIssue(
+                        "project", "this project has grants: an owner grants through grant"
+                    )
+                ]
+            )
+        if current_host(project) != host_id:
+            host_project(project, actor, host_id)
+        bootstrap_owner(project, lab, actor, owner, reason)
 
 
 def foreign_event_files(project: Project) -> list[ForeignFile] | None:

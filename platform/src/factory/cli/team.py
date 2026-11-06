@@ -27,6 +27,7 @@ from factory.model.reviews import (
     ReviewState,
 )
 from factory.model.screening import Channel
+from factory.services import hosting as hosting_service
 from factory.services import protocol as protocol_service
 from factory.services import reviews as reviews_service
 from factory.services import workspace as workspace_service
@@ -120,6 +121,23 @@ def project_visibility_cmd(
     with _project(ctx) as project:
         set_visibility(project, project.human_actor(), cast(Visibility, value))
     typer.echo(f"visibility {value}")
+
+
+@project_app.command("host")
+def project_host_cmd(
+    ctx: typer.Context,
+    slug: Annotated[str, typer.Argument(help="Project slug (events already pulled by git).")],
+    owner: Annotated[str, typer.Option("--owner", help="User id of the first owner (required).")],
+    reason: Annotated[
+        str, typer.Option("--reason", help="Why.")
+    ] = "project imported onto this server",
+) -> None:
+    """Host a project pulled onto this server and name its first owner (lab admin)."""
+    from factory.cli.admin import _member_call
+
+    with _member_call(ctx, "cli:project host", slug) as project:
+        hosting_service.host_import(project, project.human_actor(), owner, reason)
+    typer.echo(f"hosted {slug}; owner {owner}")
 
 
 @review_app.command("list")

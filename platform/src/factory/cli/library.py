@@ -17,6 +17,7 @@ from factory.cli.ledger import project_call
 from factory.model.screening import Channel
 from factory.services import lab_library as lab_library_service
 from factory.services.context import Project
+from factory.services.library_push import push_library
 
 library_app = typer.Typer(
     name="library", help="The lab library and adoption.", no_args_is_help=True
@@ -98,4 +99,28 @@ def library_consolidate_cmd(ctx: typer.Context) -> None:
     for ref in report.kept:
         typer.echo(f"kept (failed verification): {ref}", err=True)
     if report.kept:
+        raise typer.Exit(1)
+
+
+@library_app.command("push")
+def library_push_cmd(
+    ctx: typer.Context,
+    server_url: Annotated[str, typer.Argument(help="https URL of the lab server.")],
+    token: Annotated[
+        str,
+        typer.Option("--token", envvar="FACTORY_TOKEN", help="Your personal token for the server."),
+    ],
+) -> None:
+    """Send this project's library blobs to the lab server (HEAD first; PUT what it lacks)."""
+    from factory.cli import main
+
+    with project_call(ctx, "cli:library push") as project:
+        state = main._state(ctx)
+        report = push_library(
+            state.settings, project.paths.slug, server_url, token, clock=state.clock
+        )
+    typer.echo(f"sent {report.sent}, already there {report.skipped}, failed {len(report.failed)}")
+    for ref in report.failed:
+        typer.echo(f"failed: {ref}", err=True)
+    if report.failed:
         raise typer.Exit(1)

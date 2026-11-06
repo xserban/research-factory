@@ -296,6 +296,8 @@ TOOL_PERMISSIONS: Mapping[str, Permission] = {
     "cli:library adopt": Permission.WORK_RUN,
     "cli:library consolidate": Permission.WORK_RUN,
     "cli:library confirm-source": Permission.HUMAN_CONFIRM,
+    "cli:library push": Permission.WORK_RUN,
+    "cli:project host": Permission.LAB_ADMIN,
     "cli:document convert": Permission.WORK_RUN,
     "cli:watch run": Permission.WORK_RUN,
     "cli:living snapshot": Permission.WORK_RUN,
