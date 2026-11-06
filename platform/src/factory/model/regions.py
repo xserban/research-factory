@@ -16,7 +16,7 @@ from typing import Annotated, Literal, Self
 from pydantic import Field, StringConstraints, model_validator
 
 from factory.model.base import StrictModel
-from factory.model.identity import BLOB_REF_RE, CONVERSION_ID_RE, ULID_RE
+from factory.model.identity import BLOB_REF_RE, CONVERSION_ID_RE, SLUG_RE, ULID_RE
 from factory.model.question import QUESTION_ID_RE
 from factory.model.screening import NonBlank, anchor_form
 from factory.model.work_ids import WORK_ID_RE
@@ -148,3 +148,16 @@ class RegionLinked(StrictModel):
         if self.source == self.target:
             raise ValueError("a link joins two different versions")
         return self
+
+
+class RegionAdopted(StrictModel):
+    """A human adopts a reviewed version of a region of another project, read-only. The member
+    list is copied by hash into this project's blobs; no corpus count changes. `source_project` is
+    the source's slug."""
+
+    source_project: str = Field(pattern=SLUG_RE)
+    source_region: str = Field(pattern=REGION_ID_RE)
+    version: str = Field(pattern=REGION_VERSION_RE)
+    members_blob: str = Field(pattern=BLOB_REF_RE)
+    members_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    counts: dict[MemberType, int]

@@ -21,6 +21,7 @@ SPEC = ModuleSpec(
     kind=ModuleKind.PROPOSAL,
     events=EventFamily(
         types=(
+            "region.adopted",
             "region.defined",
             "region.linked",
             "region.member_decided",
@@ -29,6 +30,7 @@ SPEC = ModuleSpec(
             "region.snapshot_taken",
         ),
         tables=(
+            "region_adoptions",
             "region_definitions",
             "region_links",
             "region_member_decisions",
@@ -61,8 +63,16 @@ SPEC = ModuleSpec(
             PolicyKind.HUMAN,
             ("slice 3d ruling 11", "R-51", "R-90"),
         ),
+        GateSpec(
+            "regions.adopt",
+            GateKind.DECISION,
+            ("region.adopted",),
+            PolicyKind.HUMAN,
+            ("slice 3d ruling 4", "R-51", "R-90"),
+        ),
     ),
     checks=(
+        CheckRule("region-adoption-outdated", ("warning", "warning", "warning")),
         CheckRule("region-unreviewed", ("warning", "warning", "warning")),
         CheckRule("region-drift", ("warning", "warning", "warning")),
         CheckRule("region-subregion-violated", ("warning", "warning", "warning")),

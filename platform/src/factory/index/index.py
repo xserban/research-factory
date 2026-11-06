@@ -107,6 +107,7 @@ OMITTED_WHEN_EMPTY: frozenset[str] = frozenset(
         "model_cutoffs",
         "region_member_proposals",
         "region_links",
+        "region_adoptions",
         "labels",
         "label_merges",
         "terms",

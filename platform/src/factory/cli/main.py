@@ -147,6 +147,7 @@ from factory.services import protocol as protocol_service
 from factory.services import question as question_service
 from factory.services import reference_resolve as reference_resolve_service
 from factory.services import references as references_service
+from factory.services import region_adoption
 from factory.services import regions as regions_service
 from factory.services import relations as relations_service
 from factory.services import reproduction as reproduction_service
@@ -5496,6 +5497,23 @@ def regions_link_cmd(
             project, project.human_actor(), link_type, source, target, note
         )
     typer.echo(f"{link_type} {source} {target}")
+
+
+@regions_app.command("adopt")
+def regions_adopt_cmd(
+    ctx: typer.Context,
+    version: Annotated[str, typer.Argument(help="A reviewed region version, R@xxxxxxxx.")],
+    source: Annotated[
+        Path, typer.Option("--from", help="The source project's directory, projects/<slug>.")
+    ],
+) -> None:
+    """Adopt a reviewed region version from another project on this machine, read-only (a human
+    act); the source project is never written and no corpus count changes."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        event_id = region_adoption.adopt_region(project, project.human_actor(), source, version)
+    typer.echo(f"adopted {version} ({event_id})")
 
 
 @regions_app.command("export")

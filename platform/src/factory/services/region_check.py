@@ -8,7 +8,7 @@ Invariants:
   by `agent_check`) a region withheld from agents (it reaches an import's `all` part or a barred
   query purpose) is never evaluated and contributes no drift or link finding, and the drift
   totals are computed without it, so an agent reads no live count of it (decision 43).
-- A project with no region has no finding.
+- A project with no region and no adoption has no finding.
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 
 from factory.services.context import Project
+from factory.services.region_adoption import adoption_outdated
 from factory.services.regions import (
     agent_region_state,
     focus_slot_missing,
@@ -41,11 +42,21 @@ class RegionFinding:
 
 def region_findings(project: Project) -> list[RegionFinding]:
     """The region findings in report order: unreviewed, drift, subregion violations, foci whose
-    slot the question dropped, open member proposals."""
+    slot the question dropped, open member proposals. Outdated adoptions come first."""
     ids = region_ids(project)
-    if not ids:
-        return []
     found: list[RegionFinding] = []
+    outdated = adoption_outdated(project)
+    if outdated:
+        found.append(
+            RegionFinding(
+                "region-adoption-outdated",
+                tuple(adopted for adopted, _ in outdated),
+                f"{len(outdated)} adopted region version(s) have a newer reviewed version "
+                "in their source project",
+            )
+        )
+    if not ids:
+        return found
     agent = AGENT_VIEW.get()
     states = [
         agent_region_state(project, rid) if agent else region_state(project, rid) for rid in ids

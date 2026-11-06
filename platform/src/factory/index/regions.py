@@ -31,6 +31,7 @@ from factory.events.blobs import BlobStore
 from factory.events.envelope import Event
 from factory.index.projection import Handler
 from factory.model.regions import (
+    RegionAdopted,
     RegionDefined,
     RegionLinked,
     RegionMemberDecided,
@@ -38,7 +39,8 @@ from factory.model.regions import (
     RegionReviewed,
 )
 from factory.model.regions import RegionSnapshotTaken as Snapshot
-from factory.regions.version import canonical_rules, member_lines
+from factory.regions.rules import MemberType
+from factory.regions.version import canonical_rules, member_lines, members_hash
 
 
 @dataclass(frozen=True)
@@ -51,6 +53,7 @@ class RegionTables:
     decisions: Table
     proposals: Table
     links: Table
+    adoptions: Table
 
 
 def region_tables(metadata: MetaData) -> RegionTables:
@@ -158,8 +161,21 @@ def region_tables(metadata: MetaData) -> RegionTables:
         Index("ix_region_links_source", "source"),
         Index("ix_region_links_target", "target"),
     )
+    adoptions = Table(
+        "region_adoptions",
+        metadata,
+        Column("event_id", String, primary_key=True),
+        Column("source_project", String, nullable=False),
+        Column("source_region", String, nullable=False),
+        Column("version", String, nullable=False),
+        Column("members_blob", String, nullable=False),
+        Column("members_hash", String, nullable=False),
+        Column("counts", String, nullable=False),
+        Column("adopter_user", String, nullable=False),
+        Index("ix_region_adoptions_source", "source_project", "source_region", "event_id"),
+    )
     return RegionTables(
-        regions, definitions, snapshots, members, reviews, decisions, proposals, links
+        regions, definitions, snapshots, members, reviews, decisions, proposals, links, adoptions
     )
 
 
@@ -171,6 +187,7 @@ def region_handlers(t: RegionTables, blobs: BlobStore | None) -> dict[str, Handl
         "region.member_decided": _member_decided(t),
         "region.member_proposed": _member_proposed(t),
         "region.linked": _linked(t),
+        "region.adopted": _adopted(t, blobs),
     }
 
 
@@ -362,3 +379,41 @@ def _linked(t: RegionTables) -> Handler:
         )
 
     return linked
+
+
+def _adopted(t: RegionTables, blobs: BlobStore | None) -> Handler:
+    """Fold a human adoption whose copied member list is present and matches its hash; any other
+    (an agent's, a missing or altered blob) stays in the log, unfolded."""
+
+    def adopted(conn: Connection, event: Event) -> None:
+        if event.actor.kind != "human":
+            return
+        if blobs is None:
+            raise RuntimeError("the regions projection needs the project's blob store")
+        p = RegionAdopted.model_validate(event.payload)
+        try:
+            lines = member_lines(blobs.get(p.members_blob))
+        except (FactoryError, OSError, EOFError, ValueError, zlib.error):
+            return
+        kinds = {m.value for m in MemberType}
+        if any(line.partition("\t")[0] not in kinds or "\t" not in line for line in lines):
+            return
+        text_bytes = "".join(f"{line}\n" for line in lines).encode()
+        if members_hash(text_bytes) != p.members_hash:
+            return
+        conn.execute(
+            sqlite_insert(t.adoptions)
+            .values(
+                event_id=event.id,
+                source_project=p.source_project,
+                source_region=p.source_region,
+                version=p.version,
+                members_blob=p.members_blob,
+                members_hash=p.members_hash,
+                counts=canonical_json({k.value: v for k, v in sorted(p.counts.items())}).decode(),
+                adopter_user=event.actor.user,
+            )
+            .on_conflict_do_nothing(index_elements=["event_id"])
+        )
+
+    return adopted

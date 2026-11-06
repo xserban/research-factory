@@ -36,6 +36,7 @@ Invariants:
 from __future__ import annotations
 
 import json
+import zlib
 from collections.abc import Sequence
 from typing import Any, Literal
 
@@ -44,7 +45,7 @@ from sqlalchemy import text
 
 from factory.canonical import canonical_json
 from factory.document.quotes import quote_in_element
-from factory.errors import FactoryValidationError, ValidationIssue
+from factory.errors import FactoryError, FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
 from factory.model.base import StrictModel
 from factory.model.lineage import EdgeType
@@ -78,6 +79,7 @@ from factory.regions.rules import (
 from factory.regions.term_use import term_has_import_tags
 from factory.regions.version import (
     canonical_rules,
+    member_lines,
     members_hash,
     members_text,
     region_version,
@@ -1331,7 +1333,7 @@ def diff(project: Project, a: str, b: str, *, offset: int = 0, limit: int = 500)
 
 class RegionMembership(StrictModel):
     """A region whose latest version holds a member, and the basis recorded for it. `adopted_from`
-    is reserved for adopted versions (Later)."""
+    is the source project's slug for a version adopted from another project, else None."""
 
     region_id: str
     version: str
@@ -1340,9 +1342,54 @@ class RegionMembership(StrictModel):
     basis: dict[str, Any]
 
 
+def latest_adoptions(project: Project) -> list[Any]:
+    """The latest adoption of each `(source project, source region)`, by source and region."""
+    with project.index.connect() as conn:
+        return list(
+            conn.execute(
+                text(
+                    "SELECT a.event_id, a.source_project, a.source_region, a.version, "
+                    "a.members_blob, a.members_hash, a.counts FROM region_adoptions a "
+                    "WHERE a.event_id = (SELECT MAX(b.event_id) FROM region_adoptions b "
+                    "WHERE b.source_project = a.source_project AND "
+                    "b.source_region = a.source_region) "
+                    "ORDER BY a.source_project, a.source_region"
+                )
+            )
+            .mappings()
+            .all()
+        )
+
+
+def _adopted_memberships(
+    project: Project, member_type: MemberType, member: str
+) -> list[RegionMembership]:
+    """Adopted versions holding the member; their member lists are read from this project's
+    copies. Only reviewed versions are ever adopted, so the state is `reviewed`."""
+    found: list[RegionMembership] = []
+    key = f"{member_type.value}\t{member}"
+    for row in latest_adoptions(project):
+        try:
+            lines = member_lines(project.blobs.get(str(row["members_blob"])))
+        except (FactoryError, OSError, EOFError, ValueError, zlib.error):
+            continue
+        if key in lines:
+            found.append(
+                RegionMembership(
+                    region_id=str(row["source_region"]),
+                    version=str(row["version"]),
+                    review_state="reviewed",
+                    adopted_from=str(row["source_project"]),
+                    basis={},
+                )
+            )
+    return found
+
+
 def regions_of(project: Project, member_type: MemberType, member: str) -> list[RegionMembership]:
     """The regions whose latest version holds the member (merges applied to the id), by region id:
-    one indexed read of `region_members`."""
+    one indexed read of `region_members`, then the adopted versions that hold it (labelled with
+    `adopted_from`)."""
     project.index.sync()
     resolved = _resolve_member(project, member_type, member)
     with project.index.connect() as conn:
@@ -1355,7 +1402,7 @@ def regions_of(project: Project, member_type: MemberType, member: str) -> list[R
             ),
             {"m": resolved, "t": member_type.value},
         ).all()
-    return [
+    own = [
         RegionMembership(
             region_id=str(region),
             version=str(version),
@@ -1369,6 +1416,7 @@ def regions_of(project: Project, member_type: MemberType, member: str) -> list[R
         )
         for region, version, basis, state in rows
     ]
+    return own + _adopted_memberships(project, member_type, resolved)
 
 
 class ExportRow(StrictModel):
@@ -1428,6 +1476,7 @@ __all__: Sequence[str] = [
     "export_version",
     "foci",
     "focus_slot_missing",
+    "latest_adoptions",
     "link_regions",
     "overlap",
     "pending_proposals",

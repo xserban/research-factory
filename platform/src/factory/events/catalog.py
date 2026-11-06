@@ -153,6 +153,7 @@ from factory.model.references import (
     SnowballRoundStarted,
 )
 from factory.model.regions import (
+    RegionAdopted,
     RegionDefined,
     RegionLinked,
     RegionMemberDecided,
@@ -348,6 +349,7 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("region.member_decided", RegionMemberDecided, 1))
     catalog.register(EventType("region.member_proposed", RegionMemberProposed, 1))
     catalog.register(EventType("region.linked", RegionLinked, 1))
+    catalog.register(EventType("region.adopted", RegionAdopted, 1))
     catalog.register(EventType("lead.recorded", LeadRecorded, 1))
     catalog.register(EventType("lead.decided", LeadDecided, 1))
     catalog.register(EventType("hypothesis.drafted", HypothesisDrafted, 1))
