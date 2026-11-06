@@ -38,6 +38,7 @@ from factory.index.chase import admitted_works
 from factory.index.drafts import identities
 from factory.living.counts import source_counts
 from factory.model.base import StrictModel
+from factory.model.drafts import DRAFT_VERIFY_ERROR_CEILING
 from factory.model.extraction import MinerScope, Scope
 from factory.model.lineage import EdgeStatus, LineageDecision
 from factory.model.notices import NoticeKind, unassessed_notices
@@ -572,7 +573,7 @@ def _draft_hits(project: Project, draft_id: str, released: bool) -> list[_Hit]:
                 "a draft's supported verdicts have no complete, current audit",
             )
         )
-    if report.above_ceiling:
+    if report.all_rate is not None and report.all_rate > DRAFT_VERIFY_ERROR_CEILING:
         hits.append(
             _Hit(
                 "draft-verify-error-high",

@@ -8,12 +8,14 @@ Invariants:
 - A sample is drawn from the `supported` verdicts of live sentences not drawn before, n =
   min(N, max(ceil(0.1 N), 20)), from a recorded seed: the fold recomputes the draw, so a sample
   cannot be picked by hand. A new sample waits for a verdict newer than the last draw, so samples
-  cannot be drawn again until an easy one comes up.
+  cannot be drawn again until an easy one comes up, or for no verdict of the last draw to be live
+  while another waits, so nobody is trapped.
 - A label is a human act at the gate `writing.audit_label`; a later label of a verdict replaces the
   earlier.
-- The report's rate reads the verdicts still live, as the gate does: a sentence revised after a
-  sample leaves it, or a small draft could never get back under the ceiling. The rate of every
-  sample is reported beside it.
+- The report's rate reads all labels of the latest draw, live or not, as the gate does: withdrawing
+  a sentence labelled incorrect does not clear it, and a small draft gets back under the ceiling
+  through a new draw of its revised, verified sentences. The rate of every sample is reported
+  beside it.
 - The error rate, the count behind it and the ceiling flag are for the researcher: the agent
   variant carries none of them (decisions 37.14 and 52). The drawn and labelled counts say how far
   the audit has gone and nothing about its result. Once any verdict is labelled an agent's reading
@@ -154,17 +156,17 @@ def _tally(labels: Sequence[str | None]) -> tuple[int, int, float | None]:
 
 def audit_report(project: Project, draft_id: str) -> DraftAuditReport:
     """Every sample of the draft read together. A rate is incorrect / labelled, undefined until a
-    verdict is labelled; the gate's reads the verdicts still live, `all_rate` every sample.
-    `outdated` says a verdict is newer than the last draw."""
+    verdict is labelled; the gate's reads the latest draw, `all_rate` every sample. `outdated` says
+    a new draw is due."""
     project.index.sync()
     with project.index.connect() as conn:
-        live = audit_labels(conn, draft_id, live=True)
+        latest = audit_labels(conn, draft_id, latest=True)
         every = audit_labels(conn, draft_id)
         outdated = bool(every) and audit_due(conn, draft_id)
-    labelled, incorrect, rate = _tally(live)
+    labelled, incorrect, rate = _tally(latest)
     all_labelled, all_incorrect, all_rate = _tally(every)
     return DraftAuditReport(
-        drawn=len(live),
+        drawn=len(latest),
         labelled=labelled,
         incorrect=incorrect,
         rate=rate,

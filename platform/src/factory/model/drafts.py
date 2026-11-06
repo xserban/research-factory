@@ -346,9 +346,9 @@ SENTENCE_STATUSES = ("structural", "interpretive", "unchecked", "supported", "fl
 
 
 class DraftAuditReport(StrictModel):
-    """Every sample of a draft read together. `drawn` to `above_ceiling` read the verdicts still
-    live, which is what the gate reads; the `all_` figures read every sample, sentences revised
-    since included. `incorrect`, `rate`, `above_ceiling`, `all_incorrect` and `all_rate` are None
+    """Every sample of a draft read together. `drawn` to `above_ceiling` read the latest draw, its
+    sentences live or not, which is what the gate reads; the `all_` figures read every sample.
+    `incorrect`, `rate`, `above_ceiling`, `all_incorrect` and `all_rate` are None
     in the agent variant; the rates and `above_ceiling` also until a verdict is labelled."""
 
     drawn: int

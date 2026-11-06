@@ -29,10 +29,10 @@ this stays in the log and changes nothing (no service writes one, so it was writ
   sentences that `counts` adds up to, under the `writing.release` policy in force at that point of
   the log and the actor it allows. `counts` has only status keys and no negative value, and its
   unchecked and flagged figures are those the verdicts and audit labels give, less what `stale`
-  may have taken. Outside `exploratory` the audit of the verdicts still live must be drawn after
-  the last verdict and labelled, and `counts` show no stale sentence; in `systematic` the actor is
-  the human reviewer of record, `counts` show nothing flagged or unchecked, and the labels of those
-  verdicts are under the ceiling.
+  may have taken. Outside `exploratory` no draw may be due and every verdict of the latest draw,
+  live or not, must be labelled, and `counts` show no stale sentence; in `systematic` the actor is
+  the human reviewer of record, `counts` show nothing flagged or unchecked, and the labels of that
+  draw are under the ceiling.
   Whether a sentence is really stale is computed on read and cannot be known here, so a release
   that claims no stale sentence is taken at its word on that one count.
 - A withdrawal is folded for a live sentence; a reorder only when `order` is a permutation of the
@@ -323,8 +323,9 @@ def audit_population(conn: Connection, draft_id: str) -> list[str]:
 
 
 def audit_due(conn: Connection, draft_id: str) -> bool:
-    """Whether a live `supported` verdict is newer than the last draw (any such verdict when none
-    was drawn)."""
+    """Whether a new draw is due: a live `supported` verdict is newer than the last draw (any such
+    verdict when none was drawn), or no verdict of the last draw is live while a verdict waits, so
+    that nobody is trapped behind a sample whose sentences are all gone."""
     last = conn.execute(
         text("SELECT MAX(event_id) FROM draft_audits WHERE draft_id = :d"), {"d": draft_id}
     ).scalar()
@@ -332,7 +333,20 @@ def audit_due(conn: Connection, draft_id: str) -> bool:
         text(f"SELECT MAX(v.event_id) {_SUPPORTED_LIVE}"),
         {"d": draft_id, "supported": Verdict.SUPPORTED.value},
     ).scalar()
-    return newest is not None and (last is None or str(newest) > str(last))
+    if newest is not None and (last is None or str(newest) > str(last)):
+        return True
+    if last is None:
+        return False
+    alive = conn.execute(
+        text(
+            "SELECT 1 FROM draft_audit_items i JOIN draft_audits a ON a.audit_id = i.audit_id "
+            "JOIN sentence_verdicts v ON v.verdict_id = i.verdict_id "
+            "JOIN draft_sentences s ON s.sentence_id = v.sentence_id "
+            "WHERE a.event_id = :e AND s.superseded_by IS NULL AND s.withdrawn = 0 LIMIT 1"
+        ),
+        {"e": str(last)},
+    ).first()
+    return alive is None and bool(audit_population(conn, draft_id))
 
 
 def _writes(event: Event) -> bool:
@@ -632,15 +646,19 @@ def _audited(t: DraftTables) -> Handler:
     return audited
 
 
-def audit_labels(conn: Connection, draft_id: str, *, live: bool = False) -> list[str | None]:
-    """The label of each sampled verdict of the draft, None when unlabelled; with `live`, only of
-    verdicts whose sentence is still live, which is what the release gate reads."""
-    where = " AND s.superseded_by IS NULL AND s.withdrawn = 0" if live else ""
+def audit_labels(conn: Connection, draft_id: str, *, latest: bool = False) -> list[str | None]:
+    """The label of each sampled verdict of the draft, None when unlabelled; with `latest`, only of
+    the latest draw, its sentences live or not, which is what the release gate reads: a sentence
+    leaves the rate through a new draw of its revision, never by being withdrawn."""
+    where = (
+        " AND a.event_id = (SELECT MAX(event_id) FROM draft_audits WHERE draft_id = :d)"
+        if latest
+        else ""
+    )
     rows = conn.execute(
         text(
             "SELECT i.label FROM draft_audit_items i JOIN draft_audits a "
-            "ON a.audit_id = i.audit_id JOIN sentence_verdicts v ON v.verdict_id = i.verdict_id "
-            f"JOIN draft_sentences s ON s.sentence_id = v.sentence_id WHERE a.draft_id = :d{where}"
+            f"ON a.audit_id = i.audit_id WHERE a.draft_id = :d{where}"
         ),
         {"d": draft_id},
     ).all()
@@ -712,7 +730,7 @@ def _release_holds(conn: Connection, t: DraftTables, event: Event, p: DraftRelea
     mode = _mode(conn, t)
     if mode is RigorMode.EXPLORATORY:
         return True
-    labels = audit_labels(conn, p.draft_id, live=True)
+    labels = audit_labels(conn, p.draft_id, latest=True)
     if not labels or None in labels or audit_due(conn, p.draft_id) or p.counts.get("stale", 0):
         return False
     if mode is RigorMode.PILOT:

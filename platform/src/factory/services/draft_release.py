@@ -3,10 +3,9 @@
 Declares: `GATE`, `release`, `released_drafts`. The only module that writes `draft.released`.
 
 Who may release is the gate `writing.release` (`require_gate`). What must hold follows the rigor
-mode: `exploratory`, a non-empty draft; `pilot`, the audit of the verdicts still live drawn after
-the last verdict and fully labelled, and no `stale` sentence; `systematic`, the same and no
-`flagged` or `unchecked` sentence and their audit rate under the ceiling, released by the reviewer
-of record.
+mode: `exploratory`, a non-empty draft; `pilot`, no draw due and the latest draw fully labelled,
+live or not, and no `stale` sentence; `systematic`, the same and no `flagged` or `unchecked`
+sentence and that draw's rate under the ceiling, released by the reviewer of record.
 
 Invariants:
 - A refusal has one issue per blocking condition, counts only, never text. The conditions an
