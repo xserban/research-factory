@@ -65,6 +65,8 @@ async def test_project_status_tool(settings: Settings, project: Project, clock: 
             "check",
             "fulltext_fetch",
             "fulltext_status",
+            "library_adoptable",
+            "library_adopt",
             "document_read",
             "extract_next",
             "extract_record",

@@ -17,6 +17,7 @@ from pydantic import ValidationError as PydanticValidationError
 from factory.cli import appraisal_render, evidence_render, portfolio_render, render
 from factory.cli.admin import member_app, token_app, user_app
 from factory.cli.ledger import budget_app, ledger_cmd
+from factory.cli.library import library_app
 from factory.cli.manuscripts import manuscript_app
 from factory.cli.organisation import consolidation_app, labels_app, terms_app
 from factory.cli.team import (
@@ -494,6 +495,7 @@ app.add_typer(gate_app)
 app.add_typer(search_app)
 app.add_typer(dedup_app)
 app.add_typer(fulltext_app)
+app.add_typer(library_app)
 app.add_typer(document_app)
 app.add_typer(extract_app)
 app.add_typer(miner_app)

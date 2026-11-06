@@ -121,6 +121,8 @@ CLI_READS: frozenset[str] = frozenset(
         "import list",
         "import show",
         "import coverage",
+        "library status",
+        "library adoptable",
     )
 )
 """Commands with no `TOOL_PERMISSIONS` row because they record no research fact. `rebuild` and

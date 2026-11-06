@@ -5,6 +5,7 @@ import json
 import re
 from collections import Counter
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import asdict
 from datetime import datetime
 from typing import Annotated, Literal, TypeVar, cast, get_args
 
@@ -127,6 +128,7 @@ from factory.services import hypothesis_review as review_service
 from factory.services import ideas as ideas_service
 from factory.services import inbox as inbox_service
 from factory.services import interpretations as interpretations_service
+from factory.services import lab_library as lab_library_service
 from factory.services import labels as labels_service
 from factory.services import leads as leads_service
 from factory.services import ledger as contribution_ledger_service
@@ -1383,6 +1385,50 @@ def build_server(
             return _withheld(opened, report.model_dump(mode="json"), include_work_ids=False)
 
         return _reply(project, status, include_work_ids=False)
+
+    @server.tool()
+    def library_adoptable(project: str, work_id: str) -> dict[str, JsonValue]:
+        """The documents of one promoted work that other projects of the lab hold in the lab
+        library and this project may adopt: source project, document, route, quality, provenance,
+        licence status and the number of conversions that come with it. A project you may not read
+        is absent. Read-only. Refused to a session that has joined a pass."""
+
+        def listing() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            found = lab_library_service.adoptable(opened, work_id)
+            rows: list[JsonValue] = [asdict(candidate) for candidate in found]
+            return _withheld(opened, {"candidates": rows}, include_work_ids=False)
+
+        return _reply(project, listing, include_work_ids=False)
+
+    @server.tool()
+    def library_adopt(
+        project: str,
+        work_id: str,
+        source_project: str,
+        source_doc: str,
+        role: str,
+        model: str,
+        skill: str,
+    ) -> dict[str, JsonValue]:
+        """Adopt a document another project acquired as this project's full text of a promoted
+        work: the bytes are shared through the lab library, the adoption is recorded as an attempt
+        on the `lab-library` route with the source named, and the source's conversions come with it.
+        Refused, with nothing written, for a work not promoted, a source you may not read, bytes
+        the lab library does not hold, and a researcher-supplied document whose source the owner has
+        not confirmed. Returns the new document id. Refused to a session that has joined a pass."""
+
+        def adopt() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            actor = make_agent_actor(settings, session, role, model, skill)
+            document_id = lab_library_service.adopt(
+                opened, actor, work_id, source_project, source_doc
+            )
+            return _withheld(opened, {"document_id": document_id}, include_work_ids=False)
+
+        return _reply(project, adopt, include_work_ids=False)
 
     @server.tool()
     def document_read(
