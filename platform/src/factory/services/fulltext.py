@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal
 
@@ -71,7 +71,9 @@ _NOT_RETRIEVED = (AttemptOutcome.NOT_AVAILABLE, AttemptOutcome.FAILED)
 _UNSPECIFIED = "unspecified"
 
 Status = Literal["retrieved", "not-retrieved", "already-retrieved", "source-changed"]
-RestoreStatus = Literal["present", "restored", "source-changed", "unavailable"]
+RestoreStatus = Literal[
+    "present", "restored", "source-changed", "source-changed-unresolved", "unavailable"
+]
 
 
 class WorkFetch(StrictModel):
@@ -542,6 +544,8 @@ def restore_document(
       hash, `fulltext.source_changed` records both hashes, and the new bytes stay in the library.
     - `unavailable`: the route did not retrieve; the attempt records its reason and no document
       changes.
+    - `source-changed-unresolved`: an earlier change of this document's source awaits a human
+      decision; nothing is requested and nothing is written (plan FL, ruling 2).
 
     Raises `FactoryValidationError` with nothing written if the document is unknown, is
     researcher-supplied (re-import it instead), or its route is not supplied.
@@ -557,6 +561,8 @@ def restore_document(
             raise FactoryValidationError(issues)
         if project.library.exists(doc.raw_hash):
             return "present"
+        if _has_open_change(project, doc.document_id):
+            return "source-changed-unresolved"
         work = get_work(project, doc.work_id)
         if work is None:
             raise FactoryValidationError([ValidationIssue("document_id", "work not found")])
@@ -569,6 +575,49 @@ def restore_document(
         events, status = _restore_events(project, doc, item, trigger)
         project.record(events)
     return status
+
+
+def _has_open_change(project: Project, document_id: str) -> bool:
+    """Whether a source change of this document awaits a decision. Requires a synced index."""
+    with project.index.connect() as conn:
+        row = conn.execute(
+            text(
+                "SELECT 1 FROM fulltext_source_changes "
+                "WHERE document_id = :d AND resolution IS NULL LIMIT 1"
+            ),
+            {"d": document_id},
+        ).first()
+    return row is not None
+
+
+@dataclass(frozen=True)
+class RestoreOutcome:
+    """One document's result in a restore of all missing entries. `status` is a `RestoreStatus`,
+    `needs-reimport` (researcher-supplied), or `failed: <exception class name>` with no message."""
+
+    document_id: str
+    status: str
+
+
+def restore_missing(
+    project: Project,
+    routes: Mapping[Route, FullTextRoute],
+    actor: Actor | None = None,
+) -> Iterator[RestoreOutcome]:
+    """Restore every document whose library entry is missing, yielding each outcome as it is
+    known. A researcher-supplied document is listed `needs-reimport` and never fetched. Each
+    document is caught on its own: an unexpected exception gives `failed: <class name>` and the
+    rest continue. A document with an unresolved source change is not requested again.
+    """
+    for document_id, route in library_missing(project):
+        if route is Route.RESEARCHER:
+            yield RestoreOutcome(document_id, "needs-reimport")
+            continue
+        try:
+            status: str = restore_document(project, document_id, routes=routes, actor=actor)
+        except Exception as exc:
+            status = f"failed: {type(exc).__name__}"
+        yield RestoreOutcome(document_id, status)
 
 
 def _restore_issues(doc: _Document, routes: Mapping[Route, FullTextRoute]) -> list[ValidationIssue]:

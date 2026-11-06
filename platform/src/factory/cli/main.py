@@ -38,7 +38,7 @@ from factory.model.directions import Conditions, DirectionReason
 from factory.model.drafts import AuditLabel, DraftKind, SentenceClass, SupportSpan, Verdict
 from factory.model.experiments import DeviationKind
 from factory.model.extraction import ExtractedRowInput, MinerScope
-from factory.model.fulltext import Route, SourceDecision
+from factory.model.fulltext import SourceDecision
 from factory.model.hypotheses import AbandonReason, DiscardReason
 from factory.model.identity import IdGenerator
 from factory.model.intuition import (
@@ -2363,24 +2363,32 @@ def fulltext_restore_cmd(
         project = _resolve_project(state)
         routes = default_routes(state.settings)
         human = project.human_actor()
-        supplied: list[str] = []
-        targets = [document] if document is not None else []
+        if document is not None:
+            outcomes: Iterator[fulltext_service.RestoreOutcome] = iter(
+                [
+                    fulltext_service.RestoreOutcome(
+                        document,
+                        fulltext_service.restore_document(
+                            project, document, routes=routes, actor=human
+                        ),
+                    )
+                ]
+            )
+        else:
+            outcomes = fulltext_service.restore_missing(project, routes, human)
+        counts: dict[str, int] = {}
+        unavailable: list[str] = []
+        for outcome in outcomes:
+            typer.echo(f"{outcome.document_id}  {outcome.status}")
+            key = outcome.status.split(":")[0]
+            counts[key] = counts.get(key, 0) + 1
+            if outcome.status == "unavailable":
+                unavailable.append(outcome.document_id)
         if missing:
-            absent = fulltext_service.library_missing(project)
-            if not absent:
+            if not counts:
                 typer.echo("no library entry is missing")
                 return
-            supplied = [d for d, route in absent if route is Route.RESEARCHER]
-            targets = [d for d, route in absent if route is not Route.RESEARCHER]
-        results = [
-            (d, fulltext_service.restore_document(project, d, routes=routes, actor=human))
-            for d in targets
-        ]
-    for d in supplied:
-        typer.echo(f"{d}  needs re-import (researcher-supplied)")
-    for d, outcome in results:
-        typer.echo(f"{d}  {outcome}")
-    unavailable = [d for d, outcome in results if outcome == "unavailable"]
+            typer.echo(", ".join(f"{n} {k}" for k, n in sorted(counts.items())))
     if unavailable:
         _fail(f"unavailable: {' '.join(unavailable)}", 1)
 
