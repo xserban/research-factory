@@ -31,6 +31,7 @@ ABSTRACT_TRUNCATED = "abstract-truncated"
 AUTHORS_TRUNCATED = "authors-truncated"
 TAGS_TRUNCATED = "tags-truncated"
 NOT_PDF = "not-pdf"
+TITLE_METADATA_REJECTED = "title-metadata-rejected"
 
 RecordType = Literal["article", "inproceedings", "preprint", "book", "thesis", "report", "other"]
 

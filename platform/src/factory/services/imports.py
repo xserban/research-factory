@@ -41,6 +41,7 @@ from factory.imports.model import (
     ParsedImport,
     ParseOutcome,
 )
+from factory.imports.pdfs import first_page_hint
 from factory.imports.registry import parse, parse_bytes
 from factory.model.base import StrictModel
 from factory.model.imports import (
@@ -407,6 +408,23 @@ def import_file_names(project: Project, import_id: str) -> dict[int, str]:
         if isinstance(entry, list) and len(entry) == 3 and isinstance(entry[2], str):
             names[ordinal] = entry[2]
     return names
+
+
+def first_page_hints(project: Project, import_id: str) -> dict[int, str]:
+    """The first line of each untitled record's file, read in memory from the library. The
+    researcher's view: never stored, and no agent surface may return it."""
+    hints: dict[int, str] = {}
+    for record in effective_records(project, import_id):
+        content = record.attachment.content_sha256 if record.attachment else None
+        if content is None or (record.fields is not None and record.fields.title):
+            continue
+        try:
+            hint = first_page_hint(project.library.get(f"sha256:{content}"))
+        except (FactoryError, OSError):
+            continue
+        if hint is not None:
+            hints[record.ordinal] = hint
+    return hints
 
 
 def import_row(project: Project, import_id: str) -> ImportRow:

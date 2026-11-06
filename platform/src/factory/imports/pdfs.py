@@ -9,6 +9,7 @@ Invariants of `parse_pdf_folder`:
 - Each file is read from disk once; the record hash, identifier sniffing (filename, else page 1)
   and the metadata title all use those bytes. Page-1 text is read in memory and never returned.
 - A file without a PDF header is `malformed`, flagged `not-pdf`.
+- A junk metadata title is dropped and the record flagged `title-metadata-rejected`.
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ from pypdf import PdfReader
 from factory.imports.attachments import sha256_hex
 from factory.imports.model import (
     NOT_PDF,
+    TITLE_METADATA_REJECTED,
     Attachment,
     ImportFormat,
     ImportFormatError,
@@ -42,13 +44,21 @@ from factory.model.work_ids import (
 )
 
 PARSER = "pypdf"
-PARSER_VERSION = f"{pypdf.__version__}+rf1"
+PARSER_VERSION = f"{pypdf.__version__}+rf2"
 
 Source = Literal["filename", "first-page", "none"]
 
 _PDF_HEADER = b"%PDF-"
 _HEADER_WINDOW = 1024
 _WS = re.compile(r"\s+")
+_MIN_TITLE = 8
+_HINT_MAX = 200
+# What authoring tools leave in the title field: an application stamp, a file name, a placeholder.
+_JUNK_TITLE = re.compile(
+    r"^(?:microsoft word\b.*|.*\.(?:docx?|tex|pdf|dvi|indd)"
+    r"|untitled[\s_-]*\d*|(?:title|document|paper|manuscript)[\s_-]*\d*)$",
+    re.IGNORECASE,
+)
 
 # A new-style arXiv id, not preceded by a digit or dot, so `10.48550_arXiv.2301.01234` is left to
 # the DOI pattern, and the id's version suffix is optional.
@@ -144,8 +154,10 @@ def _record(ordinal: int, path: Path, folder: Path, data: bytes, digest: str) ->
     """One PDF's record, from the one read of its bytes (the file is not opened again)."""
     identifiers, _ = _sniff(path.name, lambda: PdfReader(io.BytesIO(data)))
     arxiv = _first(identifiers, _ARXIV_KEY)
+    stated = _metadata_title(data)
+    title = None if stated is None or is_junk_title(stated) else stated
     fields, flags = bounded_fields(
-        title=_metadata_title(data),
+        title=title,
         authors=[],
         year=None,
         doi=_first(identifiers, _DOI_KEY),
@@ -165,13 +177,35 @@ def _record(ordinal: int, path: Path, folder: Path, data: bytes, digest: str) ->
         attachment=Attachment(
             path_sha256=sha256_hex(relative.encode("utf-8")), content_sha256=digest
         ),
-        flags=flags,
+        flags=(*flags, TITLE_METADATA_REJECTED) if stated and title is None else flags,
     )
 
 
 def _first(identifiers: set[str], prefix: str) -> str | None:
     found = sorted(i[len(prefix) :] for i in identifiers if i.startswith(prefix))
     return found[0] if found else None
+
+
+def is_junk_title(title: str) -> bool:
+    """Whether a PDF's metadata title says nothing of the work: too short, without letters, or left
+    by an authoring tool. A guess at the true title is never made here."""
+    return (
+        len(title) < _MIN_TITLE
+        or not any(c.isalpha() for c in title)
+        or _JUNK_TITLE.match(title) is not None
+    )
+
+
+def first_page_hint(data: bytes) -> str | None:
+    """The first non-empty line of page 1, shortened, for the researcher to read. It is never
+    stored and never becomes a title (PD-2). A reader failure gives None."""
+    try:
+        text = PdfReader(io.BytesIO(data)).pages[0].extract_text() or ""
+    # pypdf raises many exception types on damaged input, and none of them is fatal here.
+    except Exception:
+        return None
+    line = next((_WS.sub(" ", raw).strip() for raw in text.splitlines() if raw.strip()), "")
+    return line[:_HINT_MAX] or None
 
 
 def _metadata_title(data: bytes) -> str | None:

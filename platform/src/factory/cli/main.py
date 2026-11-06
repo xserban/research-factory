@@ -3061,11 +3061,19 @@ def import_show_cmd(
         bool,
         typer.Option("--researcher", help="Confirm a researcher's view; needed for held-out/all."),
     ] = False,
+    hints: Annotated[
+        bool,
+        typer.Option(
+            "--hints", help="With --researcher: the first line of each untitled record's file."
+        ),
+    ] = False,
 ) -> None:
     """The records of an import. By default: records that are not held out, by hash, with no
     ordinals, and the held-out count. `--researcher` lists ordinals, parts and, for a PDF folder,
     file names."""
     state = _state(ctx)
+    if hints and not researcher:
+        _fail("--hints shows file text; pass --researcher", 1)
     if part is not PartChoice.DEVELOPMENT:
         if not researcher:
             _fail(f"--part {part.value} lists held-out records; pass --researcher", 1)
@@ -3079,7 +3087,8 @@ def import_show_cmd(
         if researcher:
             records = imports_service.list_import_records(project, import_id, view=part.value)
             names = imports_service.import_file_names(project, import_id)
-            lines = render.import_record_lines(records, names)
+            shown = imports_service.first_page_hints(project, import_id) if hints else {}
+            lines = render.import_record_lines(records, names, shown)
         else:
             view = imports_service.development_view(project, import_id)
             lines = render.development_view_lines(view)
