@@ -317,6 +317,17 @@ def document_status(project: Project) -> DocumentStatus:
     """
     with project.index.exclusive():
         project.index.sync()
+    return _status(project)
+
+
+def unconverted_documents(project: Project) -> int:
+    """How many live documents of promoted works have no conversion. Takes no write lock, so a
+    status read inside another service's lock can call it."""
+    project.index.sync()
+    return _status(project).not_converted
+
+
+def _status(project: Project) -> DocumentStatus:
     promoted = _promoted(project)
     latest = _latest_conversions(project)
     failures = _latest_failures(project)

@@ -29,6 +29,7 @@ Invariants:
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 
 from pydantic import Field
@@ -109,6 +110,32 @@ def attach_import(project: Project, import_id: str) -> AttachReport:
                 continue
             _attach(project, import_id, ordinal, work_id, data, report)
     return report
+
+
+def attachments_waiting(project: Project, shown: Mapping[str, Collection[int] | None]) -> int:
+    """How many files `attach_import` would attach now: a file in the library, named by a record
+    whose work (resolved, or built from it by `importlist`) is promoted, and not yet attached. The
+    title check is not run, as it reads the file. `shown` maps each import to count to the ordinals
+    to count, None for all of them. Read-only."""
+    if not shown:
+        return 0
+    promoted = _promoted(project)
+    built = _built_from_records(project)
+    count = 0
+    for import_id, ordinals in shown.items():
+        linked = _linked(project, import_id)
+        for record in _records(project, import_id):
+            resolved = record.work_id if record.link_state == LinkState.RESOLVED.value else None
+            work_id = resolved or built.get(record_key(import_id, record.ordinal))
+            if (
+                (ordinals is None or record.ordinal in ordinals)
+                and record.ordinal not in linked
+                and record.content_sha256 is not None
+                and work_id in promoted
+                and project.library.exists(f"sha256:{record.content_sha256}")
+            ):
+                count += 1
+    return count
 
 
 def _attach(

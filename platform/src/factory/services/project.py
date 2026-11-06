@@ -19,6 +19,7 @@ from factory.services.chase import chase_rounds
 from factory.services.context import Project, ProjectPaths, build_project, slug_issues
 from factory.services.human_queue import HumanQueue, human_queue
 from factory.services.prisma import has_full_text_plan
+from factory.services.project_stage import Stage, derive_stage, stage_facts
 from factory.services.protocol import current_protocol
 from factory.services.question import current_question
 from factory.services.screening import stale_screening_decisions
@@ -87,6 +88,8 @@ class ProjectStatus(StrictModel):
     human: HumanQueue | None = None
     """Pending human decisions per gate kind; counts only."""
     inbox: InboxCounts = InboxCounts()
+    stage: Stage | None = None
+    """The derived stage (spec 7a ruling 4); None only where an agent path takes it out."""
 
 
 def init_project(
@@ -126,7 +129,9 @@ def init_project(
     return project
 
 
-def project_status(project: Project) -> ProjectStatus:
+def project_status(project: Project, *, agent: bool = False) -> ProjectStatus:
+    """The project's state. `agent` gives the human queue of the agent path, whose import gates
+    count the development part only; the researcher's status stays complete."""
     project.index.sync()
     slug = project.paths.slug
     with project.index.connect() as conn:
@@ -176,8 +181,9 @@ def project_status(project: Project) -> ProjectStatus:
         screening=_screening_status(project),
         chase_rounds=len(chase_rounds(project)),
         admitted_seeds=admitted_seed_count(project),
-        human=human_queue(project),
+        human=human_queue(project, agent=agent),
         inbox=_inbox_counts(project),
+        stage=derive_stage(stage_facts(project)),
     )
 
 

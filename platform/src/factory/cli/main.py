@@ -581,6 +581,7 @@ def status(
         return
     typer.echo(f"project: {report.slug}")
     typer.echo(f"rigor mode: {report.rigor_mode.value}")
+    typer.echo(f"stage: {report.stage.value if report.stage else 'unknown'}")
     typer.echo(f"events: {report.events_total}")
     typer.echo(f"question: {report.question or 'none'}")
     protocol = report.protocol
@@ -2011,8 +2012,6 @@ def contributions_audit_report_cmd(ctx: typer.Context) -> None:
         return
     for line in render.audit_report_lines(report):
         typer.echo(line)
-
-
 
 
 class PrismaFormat(StrEnum):

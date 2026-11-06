@@ -218,11 +218,16 @@ def build_server(
 
     @server.tool()
     def project_status(project: str) -> dict[str, JsonValue]:
-        """Report a project's rigor mode, event counts and task queue state."""
+        """Report a project's rigor mode, event counts, task queue state, derived `stage` (null to
+        a session that has joined a pass) and `human`: what waits on the researcher, each with the
+        command that does it. Imports, conversion and gate decisions are the researcher's acts on
+        the CLI: relay the command, there is no tool for them."""
 
         def status() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
-            report = project_service.project_status(opened).model_dump(mode="json")
+            report = project_service.project_status(opened, agent=True).model_dump(mode="json")
+            if passes_service.is_pass_session(opened, opened.session):
+                report["stage"] = None  # it follows the final outcomes (decisions 37 and 43)
             hidden = hidden_acceptances(opened)
             return _withheld(opened, _without_hidden_acts(_without_rates(report), hidden))
 

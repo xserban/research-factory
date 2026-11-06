@@ -245,6 +245,12 @@ def plan_admission(project: Project, import_id: str) -> list[QuerySpec]:
     return _plan(project, import_id).specs
 
 
+def planned_ordinals(project: Project, import_id: str) -> set[int]:
+    """The records an admission would plan now: those no earlier run retrieved and that a query can
+    name. Pure over the projection."""
+    return {_ordinal_key(key) for keys in _plan(project, import_id).keys for key in keys}
+
+
 def _blocking(project: Project, import_id: str) -> list[ValidationIssue]:
     """Why the import's records cannot be admitted yet: unresolved, unconfirmed or ambiguous."""
     rows = _rows(project, import_id)
