@@ -137,8 +137,15 @@ def capture_url(
     """
     issues: list[ValidationIssue] = []
     parts = urlsplit(url)
-    if parts.scheme not in ("http", "https") or not parts.netloc:
-        issues.append(ValidationIssue("url", "an http or https URL"))
+    if parts.scheme == "http":
+        issues.append(
+            ValidationIssue(
+                "url",
+                "an https URL: the outbound guard refuses http, so an http page cannot be fetched",
+            )
+        )
+    elif parts.scheme != "https" or not parts.netloc:
+        issues.append(ValidationIssue("url", "an https URL"))
     if not title.strip():
         issues.append(ValidationIssue("title", "must not be blank"))
     declared = any(
