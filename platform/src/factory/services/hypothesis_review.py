@@ -33,7 +33,7 @@ from factory.model.hypotheses import (
     ReviewTask,
     ReviewTrigger,
 )
-from factory.model.task import HYPOTHESIS_REVIEW_TASK_KIND, TaskStatus
+from factory.model.task import HYPOTHESIS_REVIEW_TASK_KIND, Task, TaskStatus
 from factory.services.context import Project
 from factory.services.finders import ref_quote
 from factory.services.hypotheses import (
@@ -134,12 +134,22 @@ def _task_for(project: Project, hypothesis_id: str, h_version: str) -> str | Non
     return None
 
 
+def _held(project: Project, actor: Actor, task_id: str) -> Task | None:
+    """The task if this session holds its claim, so a critic resumes without waiting out the
+    lease; else None."""
+    try:
+        return require_holder(project, actor, task_id)
+    except FactoryValidationError:
+        return None
+
+
 def review_next(project: Project, actor: Actor) -> ServedReview | None:
     """Serve the oldest draft without an eligible review to `actor`, or None when none is waiting.
 
     Refused (field `actor`; reasons `drafter-session`, `lead-author-session`, `same-model`) when
     drafts wait and `actor` may review none of them, so an ineligible session is turned away
-    before it sees any artefact. A draft whose task another session holds is passed over."""
+    before it sees any artefact. A draft whose task another session holds is passed over; one this
+    session already holds is served again as it stands, its lease unchanged."""
     with project.index.exclusive():
         project.index.sync()
         waiting = list_hypotheses(project, states=["draft"])
@@ -165,6 +175,7 @@ def review_next(project: Project, actor: Actor) -> ServedReview | None:
                 )
                 task_id = result.written[0]
             claimed = claim_next(project, actor, HYPOTHESIS_REVIEW_TASK_KIND, task_ids={task_id})
+            claimed = claimed or _held(project, actor, task_id)
             if claimed is None:
                 continue
             task = ReviewTask.model_validate(task_content(project, claimed))

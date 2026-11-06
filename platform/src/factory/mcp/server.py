@@ -2772,10 +2772,10 @@ def build_server(
     ) -> dict[str, JsonValue]:
         """Claim the oldest hypothesis draft that has no independent review and return its
         review task: the artefact only (spec without prose, statement, the lead's triggers and
-        the prior failures), never the lead's text or the drafter's reasoning. The data is null
-        when none waits. Refused to the drafter's session, to the lead author's session and, when
-        the protocol asks for a distinct critic model, to the drafter's model. Refused to a
-        session that has joined a pass."""
+        the prior failures), never the lead's text or the drafter's reasoning. A review this
+        session already holds is served again. The data is null when none waits. Refused to the
+        drafter's session, to the lead author's session and, when the protocol asks for a distinct
+        critic model, to the drafter's model. Refused to a session that has joined a pass."""
 
         def serve() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
