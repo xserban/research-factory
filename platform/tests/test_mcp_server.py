@@ -164,6 +164,8 @@ async def test_project_status_tool(settings: Settings, project: Project, clock: 
             "draft_reorder",
             "dedup_merges",
             "merge_revert",
+            "lessons_list",
+            "curation_propose",
             "task_release",
             "review_request",
             "review_list",

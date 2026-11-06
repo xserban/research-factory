@@ -45,6 +45,7 @@ from factory.model.base import StrictModel
 from factory.model.budgets import REQUESTS_SEARCH
 from factory.model.cards import CardKind, PropertyDef, QuoteBasis
 from factory.model.chase import ChaseDirection
+from factory.model.curation import CurationKind
 from factory.model.drafts import DraftKind, SupportSpan, Verdict
 from factory.model.experiments import Cell, ExperimentDesign
 from factory.model.extraction import ClaimInput, ExtractedRowInput, MinerScope
@@ -93,6 +94,7 @@ from factory.services import conclusions as conclusions_service
 from factory.services import consolidation as consolidation_service
 from factory.services import contributions as contributions_service
 from factory.services import coverage as coverage_service
+from factory.services import curation as curation_service
 from factory.services import dedup as dedup_service
 from factory.services import digest as digest_service
 from factory.services import directions as directions_service
@@ -4385,6 +4387,63 @@ def build_server(
             return _withheld(opened, {"merge_id": merge_id}, include_work_ids=False)
 
         return _reply(project, revert, include_work_ids=False)
+
+    @server.tool()
+    def lessons_list(
+        project: str, cursor: str | None = None, limit: int = PAGE_LIMIT
+    ) -> dict[str, JsonValue]:
+        """The computed lessons a curation proposal can answer, by id, one page at a time: audit
+        errors and disagreements by criterion, `cannot-assess` spikes and failed runs, each with
+        its kind, subject and a count. No rate is given (decision 43). Empty with a notice when
+        there are none. Read-only; refused to a session that has joined a pass."""
+
+        def listing() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            offset, size = _window(cursor, limit)
+            found = curation_service.lessons(opened)
+            rows: list[JsonValue] = [
+                item.model_dump(mode="json") for item in found[offset : offset + size]
+            ]
+            following = str(offset + size) if len(found) > offset + size else None
+            return _withheld(
+                opened, _listing(rows, following, "no lesson yet"), include_work_ids=False
+            )
+
+        return _reply(project, listing, include_work_ids=False)
+
+    @server.tool()
+    def curation_propose(
+        project: str,
+        kind: str,
+        text: str,
+        lessons: list[str],
+        role: str,
+        model: str,
+        skill: str,
+        target: str | None = None,
+    ) -> dict[str, JsonValue]:
+        """Record a curation proposal: `kind` is `amendment`, `worked-example` or `skill-revision`,
+        `text` what is proposed, `lessons` one to twenty ids from `lessons_list`, `target` the
+        protocol part or skill it concerns. A human other than the proposer decides; an accepted
+        amendment still goes through `protocol_amend`, and a revised skill must pass calibration
+        before use. Returns the `cur_` id. Refused to a session that has joined a pass."""
+
+        def propose() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            try:
+                chosen = CurationKind(kind)
+            except ValueError:
+                choices = ", ".join(item.value for item in CurationKind)
+                raise FactoryValidationError(
+                    [ValidationIssue("kind", f"must be among {choices}")]
+                ) from None
+            actor = make_agent_actor(settings, session, role, model, skill)
+            cur_id = curation_service.propose(opened, actor, chosen, text, lessons, target)
+            return _withheld(opened, {"cur_id": cur_id}, include_work_ids=False)
+
+        return _reply(project, propose, include_work_ids=False)
 
     @server.tool()
     def task_release(
