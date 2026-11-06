@@ -110,6 +110,10 @@
 - [ ] **Step 2:** Run `uv run pytest tests/test_acceptance_slice5.py -m slow -q`; fix defects test-first.
 - [ ] **Step 3:** Verification `uv run pytest -m "not network" -q && uv run mypy --strict src && uv run ruff check .`; commit `test(slice5): acceptance`.
 
+## Completion notes (2026-11-06)
+
+Built with testing paused (nothing was run but ruff and mypy): Tasks 1 to 4 and the non-test part of Task 5 (none). Deferred: every test named above, including the `slow` acceptance of Task 5 Step 1; the pilot (Later L1). Rulings 1 to 5 are adopted as written and recorded as decision 115 (Proposed). Differences from the text: `FulltextAdopted` also carries `document_id` and `attempt_id`; `consolidate` returns a report (moved, already held, kept); the view is `ProjectLibrary` in `events/library.py` and `referenced_check` in `index/library.py`; `library_adoptable` and `factory library adoptable` list candidates; the trace node `adoption` is `adp:<document id>`; PROJECTION_VERSION is 67.
+
 ## Later (not v1)
 
 Moved here by the v1 cut of 2026-11-04 (decision 74); built after the v1 plans of the build order (`2026-11-05-build-order.md`), in the order listed. Task text is unchanged; references to "Task N" inside a moved task use the plan's original numbering.
