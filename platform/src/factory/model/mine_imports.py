@@ -70,6 +70,9 @@ class ImportedItem(StrictModel):
     source_row_key: str = Field(pattern=ROW_KEY_RE)
     source_status: SourceStatus
     source_passes: tuple[ImportedPass, ...] = Field(min_length=1, max_length=4)
+    # SHA-256 per source field at import: lets a later look at the store see a corrected value
+    # that kept its row key. Empty on events written before it existed (nothing is compared).
+    source_field_digests: dict[FieldName, str] = Field(default_factory=dict)
 
     @field_validator("cited")
     @classmethod

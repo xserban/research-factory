@@ -2196,6 +2196,7 @@ class ImportItem:
     dual: bool
     source_conversion_id: str
     source_row_key: str
+    source_extraction_ids: tuple[str, ...] = ()
 
 
 def import_items(project: Project) -> dict[str, ImportItem]:
@@ -2205,7 +2206,8 @@ def import_items(project: Project) -> dict[str, ImportItem]:
         rows = conn.execute(
             text(
                 "SELECT i.extraction_id, i.import_id, m.source_project, m.miner, m.version, "
-                "m.digest, i.dual, i.source_conversion_id, i.source_row_key "
+                "m.digest, i.dual, i.source_conversion_id, i.source_row_key, "
+                "i.source_extraction_ids "
                 "FROM mine_import_items i JOIN mine_imports m ON m.import_id = i.import_id"
             )
         ).all()
@@ -2220,6 +2222,7 @@ def import_items(project: Project) -> dict[str, ImportItem]:
             bool(r[6]),
             str(r[7]),
             str(r[8]),
+            tuple(str(i) for i in json.loads(str(r[9]))),
         )
         for r in rows
     }

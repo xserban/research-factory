@@ -81,6 +81,7 @@ from factory.services.extraction import (
     ExtraCheck,
     ExtractionRow,
     ExtraVerdict,
+    ImportItem,
     UnitPin,
     filled_imports,
     import_items,
@@ -922,6 +923,7 @@ def _unit_items(
                     source_row_key=row.row_key,
                     source_status=row.status,
                     source_passes=row.passes,
+                    source_field_digests={n: field_digest(f) for n, f in row.fields.items()},
                 )
             )
         except ValidationError:
@@ -1070,6 +1072,21 @@ def _rows_in_use(project: Project) -> list[ExtractionRow]:
     return sorted(rows, key=lambda r: r.extraction_id)
 
 
+def _corrected(item: ImportItem, found: tuple[str, str, str], entry: ImportedItem | None) -> bool:
+    """Whether the store's record is no longer what was imported: superseded or stale, or its rows
+    changed (a correction that kept the row key), or a field's digest differs. A pending record
+    counts as changed when its rows differ."""
+    status, ids_json, digests_json = found
+    if status in ("superseded", "stale"):
+        return True
+    if not set(item.source_extraction_ids) <= set(json.loads(ids_json)):
+        return True
+    if entry is None or status == "pending":
+        return False
+    now = json.loads(digests_json)
+    return any(now.get(name) != digest for name, digest in entry.source_field_digests.items())
+
+
 def source_state(project: Project, store: SharedStore | None = None) -> SourceState:
     """The state of each imported row's source, read from the store as it stands: nothing is
     synced and nothing written, in this project or the store. A row of a source the store reads
@@ -1082,6 +1099,7 @@ def source_state(project: Project, store: SharedStore | None = None) -> SourceSt
     if not shared.available():
         return SourceState((), (), True)
     items = import_items(project)
+    logged = _logged_items(project, set(items))
     superseded: list[str] = []
     unavailable: list[str] = []
     with shared.connect() as conn:
@@ -1097,9 +1115,10 @@ def source_state(project: Project, store: SharedStore | None = None) -> SourceSt
             if statuses.get(item.source_project) != STATUS_OK or not events.is_dir():
                 unavailable.append(row.extraction_id)
                 continue
-            status = conn.execute(
+            found = conn.execute(
                 text(
-                    "SELECT status FROM shared_records WHERE miner = :m AND version = :v "
+                    "SELECT status, extraction_ids, field_digests FROM shared_records "
+                    "WHERE miner = :m AND version = :v "
                     "AND digest = :d AND conversion_id = :c AND project = :p AND row_key = :k"
                 ),
                 {
@@ -1110,8 +1129,10 @@ def source_state(project: Project, store: SharedStore | None = None) -> SourceSt
                     "p": item.source_project,
                     "k": item.source_row_key,
                 },
-            ).scalar_one_or_none()
-            if status is None or status in ("superseded", "stale"):
+            ).one_or_none()
+            if found is None or _corrected(
+                item, (str(found[0]), str(found[1]), str(found[2])), logged.get(row.extraction_id)
+            ):
                 superseded.append(row.extraction_id)
     return SourceState(tuple(superseded), tuple(unavailable), False)
 
