@@ -12,12 +12,16 @@ Invariants:
   is None for them and `is_mine_kind` tells them apart.
 """
 
+from typing import TYPE_CHECKING
+
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.model.extraction import MinerScope, Scope, ScopeKey
 from factory.model.protocol import ScreeningPlan, ScreeningStage
 from factory.model.screening import PassLabel
 from factory.services.modules import default_task_kinds
-from factory.services.protocol import ProtocolVersion
+
+if TYPE_CHECKING:  # annotation only: protocol reaches this module through gates and passes
+    from factory.services.protocol import ProtocolVersion
 
 _REGISTRY = default_task_kinds()
 
@@ -89,7 +93,7 @@ def stage_of_kind(kind: str) -> ScreeningStage | None:
     return ScreeningStage(info.stage)
 
 
-def screening_plan(protocol: ProtocolVersion, stage: ScreeningStage) -> ScreeningPlan:
+def screening_plan(protocol: "ProtocolVersion", stage: ScreeningStage) -> ScreeningPlan:
     """The plan that governs `stage`. Raises on field `full_text_screening` at full text when the
     protocol declares no plan (R-13: declare the full-text screening plan first)."""
     if require_pass_stage(stage) is ScreeningStage.TITLE_ABSTRACT:
