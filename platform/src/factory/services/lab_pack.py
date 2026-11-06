@@ -2,7 +2,8 @@
 
 Invariants:
 - Read-only: nothing is written; every figure is computed from the events and the index (R-05).
-- Counts, ids and titles only. No label, rate, rationale, quote or document text appears.
+- Counts, ids and titles only (the handover's reading path takes the briefing's idea names and
+  origin titles, nothing else of it). No label, rate, rationale, quote or document text appears.
 - Deterministic: the same log and the same `since` give the same pack.
 - A fresh project yields empty sections and a notice for each, never an error.
 - Delivery is not here (decision 63): the CLI prints the pack or writes it to a file.
@@ -15,6 +16,7 @@ import json
 from sqlalchemy import text
 
 from factory.model.base import StrictModel
+from factory.services.briefing import build_briefing
 from factory.services.context import Project
 from factory.services.digest import digest_build, last_digest_cutoff
 from factory.services.human_queue import HumanItem, human_queue
@@ -48,6 +50,10 @@ class LabPack(StrictModel):
     queue: list[HumanItem]
     open_tasks: list[OpenTask]
     """Handover only."""
+    reading_path: list[str]
+    """Handover only: `<idea name> (<idea id>): <origin title>`, from the briefing (plan V-C)."""
+    gate_needs: list[str]
+    """Handover only: each pending human decision with its command, from the briefing."""
     notices: list[str]
     handover: bool
 
@@ -81,6 +87,15 @@ def lab_pack(project: Project, since: str | None = "last", *, handover: bool = F
             else []
         )
     notices: list[str] = []
+    path: list[str] = []
+    needs: list[str] = []
+    if handover and until is not None:
+        briefing = build_briefing(project)
+        path = [f"{e.name} ({e.idea_id}): {e.origin.title}" for e in briefing.reading_path]
+        needs = [
+            f"{p.kind}{'' if p.stage is None else f' ({p.stage})'}: {p.count}, run `{p.command}`"
+            for p in briefing.pending
+        ]
     rows = []
     for (raw,) in amendments:
         payload = json.loads(str(raw))
@@ -119,6 +134,8 @@ def lab_pack(project: Project, since: str | None = "last", *, handover: bool = F
         more_literature=more,
         queue=queue,
         open_tasks=[OpenTask(task_id=str(a), kind=str(b), status=str(c)) for a, b, c in tasks],
+        reading_path=path,
+        gate_needs=needs,
         notices=notices,
         handover=handover,
     )
@@ -153,7 +170,9 @@ def pack_markdown(pack: LabPack) -> str:
         out += ["", "## Open tasks", ""]
         out += [f"- {t.task_id} ({t.kind}, {t.status})" for t in pack.open_tasks] or ["- none"]
         out += ["", "## What each pending gate needs", ""]
-        out += [f"- {i.gate.value}: run `{i.command}`" for i in pack.queue] or ["- none"]
+        out += [f"- {line}" for line in pack.gate_needs] or ["- none"]
+        out += ["", "## Reading path", ""]
+        out += [f"- {line}" for line in pack.reading_path] or ["- none"]
     if pack.notices:
         out += ["", "## Notices", ""]
         out += [f"- {n}" for n in pack.notices]
