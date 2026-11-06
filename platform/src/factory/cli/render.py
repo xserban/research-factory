@@ -28,6 +28,7 @@ from factory.services.check import LAYER_CHECK_CODES, CheckReport, Finding
 from factory.services.concepts import ConceptLinkList, ConceptList, ConceptView
 from factory.services.contributions import ContributionStatus, ItemView
 from factory.services.coverage import CoverageReport, Ratio
+from factory.services.dedup import MergeRow
 from factory.services.directions import RegistryPage
 from factory.services.discovery import DiscoveryReport
 from factory.services.document_convert import ConvertSummary, DocumentStatus
@@ -341,6 +342,20 @@ def question_view_lines(view: QuestionView) -> list[str]:
         return [*lines, "no question recorded yet"]
     lines.insert(0, f"question: {view.question_id}")
     lines.append(json.dumps(view.spec.model_dump(mode="json"), indent=2, ensure_ascii=False))
+    return lines
+
+
+def merge_lines(merges: Sequence[MergeRow]) -> list[str]:
+    """One line per merge: id, status, rule, primary and absorbed works, and a reversal's reason."""
+    if not merges:
+        return ["no merge yet"]
+    lines = []
+    for row in merges:
+        absorbed = ", ".join(row.absorbed or ())
+        why = "" if row.reason is None else f"  ({row.reason})"
+        lines.append(
+            f"{row.merge_id}  {row.status.value}  {row.rule}  {row.primary} <- {absorbed}{why}"
+        )
     return lines
 
 

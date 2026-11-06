@@ -70,6 +70,7 @@ from factory.services import concepts as concepts_service
 from factory.services import conclusions as conclusions_service
 from factory.services import contributions as contributions_service
 from factory.services import coverage as coverage_service
+from factory.services import dedup as dedup_service
 from factory.services import digest as digest_service
 from factory.services import directions as directions_service
 from factory.services import discovery as discovery_service
@@ -210,6 +211,9 @@ screen_app = typer.Typer(
 )
 search_app = typer.Typer(
     name="search", help="Citation chasing from the included works.", no_args_is_help=True
+)
+dedup_app = typer.Typer(
+    name="dedup", help="Find duplicate works, list merges and revert one.", no_args_is_help=True
 )
 audit_app = typer.Typer(
     name="audit", help="Sample, label and report the audit.", no_args_is_help=True
@@ -431,6 +435,7 @@ app.add_typer(screen_app)
 app.add_typer(audit_app)
 app.add_typer(gate_app)
 app.add_typer(search_app)
+app.add_typer(dedup_app)
 app.add_typer(fulltext_app)
 app.add_typer(document_app)
 app.add_typer(extract_app)
@@ -1151,6 +1156,44 @@ def references_extract_cmd(
         )
     for line in render.extract_summary_lines(summary):
         typer.echo(line)
+
+
+@dedup_app.command("run")
+def dedup_run_cmd(ctx: typer.Context) -> None:
+    """Reconcile the recorded merges with the cascade; a reverted pair stays apart."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        summary = dedup_service.dedup_run(project)
+    typer.echo(
+        f"merged {len(summary.created)}, reverted {len(summary.reverted)}, "
+        f"unchanged {summary.unchanged}; {summary.canonical} works from {summary.works}"
+    )
+
+
+@dedup_app.command("list")
+def dedup_list_cmd(ctx: typer.Context) -> None:
+    """Every merge, active and reverted, with its rule, works and any reversal's reason."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        merges = dedup_service.list_merges(project)
+    for line in render.merge_lines(merges):
+        typer.echo(line)
+
+
+@dedup_app.command("revert")
+def dedup_revert_cmd(
+    ctx: typer.Context,
+    merge: Annotated[str, typer.Argument(help="An active merge id.")],
+    reason: Annotated[str, typer.Option("--reason", help="Why the works are not one paper.")],
+) -> None:
+    """Undo an active merge; the pair stays apart on every later run."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        dedup_service.revert_merge(project, project.human_actor(), merge, reason)
+    typer.echo(f"reverted {merge}")
 
 
 @references_app.command("status")

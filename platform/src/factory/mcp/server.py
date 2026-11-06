@@ -4031,6 +4031,43 @@ def build_server(
 
         return _reply(project, reorder, include_work_ids=False)
 
+    @server.tool()
+    def dedup_merges(
+        project: str, cursor: str | None = None, limit: int = PAGE_LIMIT
+    ) -> dict[str, JsonValue]:
+        """Every merge by id, active and reverted, one page at a time, with the matching rule, the
+        record count, the works and a reversal's reason. Until a screening pass has opened the
+        works and reasons are null on every row. Read-only; refused to a session that has joined a
+        pass."""
+
+        def listing() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            merges = dedup_service.list_merges(opened, named=not _before_any_pass(opened))
+            page = paginate(merges, cursor, limit)
+            rows: list[JsonValue] = [row.model_dump(mode="json") for row in page.items]
+            return _withheld(
+                opened, _listing(rows, page.next_cursor, "no merge yet"), include_work_ids=False
+            )
+
+        return _reply(project, listing, include_work_ids=False)
+
+    @server.tool()
+    def merge_revert(
+        project: str, merge_id: str, reason: str, role: str, model: str, skill: str
+    ) -> dict[str, JsonValue]:
+        """Undo an active merge, stating why. The pair stays apart on every later `dedup_run`, and
+        your input is kept for audit. Refused to a session that has joined a pass."""
+
+        def revert() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            actor = make_agent_actor(settings, session, role, model, skill)
+            dedup_service.revert_merge(opened, actor, merge_id, reason)
+            return _withheld(opened, {"merge_id": merge_id}, include_work_ids=False)
+
+        return _reply(project, revert, include_work_ids=False)
+
     return server
 
 

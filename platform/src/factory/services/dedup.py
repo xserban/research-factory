@@ -167,6 +167,48 @@ def active_merges(project: Project) -> list[DedupMerged]:
     ]
 
 
+class MergeRow(StrictModel):
+    """One recorded merge, active or reverted, with the rule that matched. No verdict exists: the
+    cascade matches identifiers. `primary`, `absorbed` and `reason` are None where works may not
+    be named yet (`list_merges`)."""
+
+    merge_id: str
+    status: MergeStatus
+    rule: str
+    records: int
+    primary: str | None
+    absorbed: tuple[str, ...] | None
+    reason: str | None
+    manual: bool | None
+
+
+def list_merges(project: Project, *, named: bool = True) -> list[MergeRow]:
+    """Every merge by id. Without `named` a row keeps its id, status, rule and record count only:
+    before a screening pass opens an agent must not read a held-out seed's work, and a human's
+    reason may name one (decision 43). The shape does not depend on the row."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text(
+                'SELECT merge_id, status, rule, records, "primary", absorbed, reverted_reason, '
+                "manual FROM merges ORDER BY merge_id"
+            )
+        ).all()
+    return [
+        MergeRow(
+            merge_id=str(merge_id),
+            status=MergeStatus(str(status)),
+            rule=str(rule),
+            records=int(records),
+            primary=str(primary) if named else None,
+            absorbed=tuple(str(w) for w in json.loads(str(absorbed))) if named else None,
+            reason=None if reason is None or not named else str(reason),
+            manual=None if manual is None else bool(manual),
+        )
+        for merge_id, status, rule, records, primary, absorbed, reason, manual in rows
+    ]
+
+
 def canonical_works(project: Project) -> list[Work]:
     """The corpus with every active merge applied: one work per merge, all others unchanged."""
     works = {work.id: work for work in list_works(project)}
