@@ -162,6 +162,7 @@ def briefing_agent_view(project: Project, *, session: str | None = None) -> Brie
             draft_counts(at_position, agent=True, session=session),
         )
         reduced = _reduced(built, opened=held_out_visible(project))
+        reduced = _without_hidden_gate_audit(reduced, at_position)
         scrubbed = withhold(
             reduced.model_dump(mode="json"), held_out_tokens(project, include_work_ids=False)
         )
@@ -303,6 +304,26 @@ def _reduced(b: Briefing, *, opened: bool) -> Briefing:
         update={"notices": notices, "filter": {**b.meta.filter, "audience": "agent"}}
     )
     return b.model_copy(update={**update, "meta": meta})
+
+
+def _without_hidden_gate_audit(b: Briefing, project: Project) -> Briefing:
+    """`b` without the gate-audit row of `experiments.accept_baseline` when every act at that gate
+    is an acceptance whose verdict the agent may not read (`hidden_acceptances`): the audit is then
+    drawn over hidden acts alone, and its row, `labelled_complete` or date would show that one was
+    accepted. The row stays whole when a visible act remains, as `gate_status` leaves its audit."""
+    from factory.services.xrun_accounting import hidden_acceptances  # xrun imports services
+
+    gate_id = "experiments.accept_baseline"
+    hidden = hidden_acceptances(project)
+    if not hidden:
+        return b
+    visible = next(
+        (sum(r.counts.values()) - hidden for r in gates_status(project) if r.gate_id == gate_id), 0
+    )
+    if visible > 0:
+        return b
+    kept = [g for g in b.gates if not (g.gate == "gate-audit" and g.scope == gate_id)]
+    return b.model_copy(update={"gates": kept})
 
 
 def _rate_blind(gate: GateBrief) -> GateBrief:
