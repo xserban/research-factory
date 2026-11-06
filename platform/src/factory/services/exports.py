@@ -69,6 +69,7 @@ from factory.exports.nanopub import (
 )
 from factory.exports.prisma_svg import prisma_svg
 from factory.exports.rdf import IRI, Literal_, iri, trig
+from factory.exports.update_flow_svg import update_flow_svg
 from factory.lineage.graph import GraphEdge, GraphFilter
 from factory.model.base import StrictModel
 from factory.model.lineage import EdgeType
@@ -89,6 +90,7 @@ from factory.services.prisma import (
     prisma_flow,
     search_report,
 )
+from factory.services.prisma_update import prisma_update
 from factory.services.search import load_works
 
 if TYPE_CHECKING:
@@ -248,6 +250,12 @@ def render_bibliography(
 def export_prisma_svg(project: Project) -> str:
     """The PRISMA 2020 flow of the project as SVG."""
     return prisma_svg(prisma_flow(project))
+
+
+def export_update_flow_svg(project: Project, until: str | None = None) -> str:
+    """The PRISMA 2020 update flow as SVG: the window closed at snapshot `until` (a snapshot id),
+    or the last snapshot to now when None."""
+    return update_flow_svg(prisma_update(project, until=until))
 
 
 # --- The log, read once ---

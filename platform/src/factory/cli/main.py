@@ -2816,12 +2816,25 @@ def export_csl(
 
 
 @export_app.command("prisma")
-def export_prisma(ctx: typer.Context, out: _OUT = None) -> None:
-    """The PRISMA 2020 flow diagram as SVG."""
+def export_prisma(
+    ctx: typer.Context,
+    out: _OUT = None,
+    update: Annotated[
+        str | None,
+        typer.Option("--update", help="The update flow: `last`, or the snapshot it closed at."),
+    ] = None,
+) -> None:
+    """The PRISMA 2020 flow diagram as SVG (with --update, the update flow)."""
     state = _state(ctx)
     with _reporting_errors():
         project = _resolve_project(state)
-        svg = exports_service.export_prisma_svg(project)
+        svg = (
+            exports_service.export_prisma_svg(project)
+            if update is None
+            else exports_service.export_update_flow_svg(
+                project, None if update == "last" else update
+            )
+        )
         _emit([svg], out)
 
 
@@ -5396,20 +5409,44 @@ def _parse_facet(raw: str) -> Facet:
 @regions_app.command("define")
 def regions_define_cmd(
     ctx: typer.Context,
-    name: Annotated[str, typer.Option("--name", help="The region's name.")],
     kind: Annotated[RegionKind, typer.Option("--kind", help="focus or region.")],
-    definition: Annotated[str, typer.Option("--definition", help="What it selects, at most 600.")],
-    rules: Annotated[Path, typer.Option("--rules", help="A JSON file holding the rule set.")],
+    name: Annotated[str, typer.Option("--name", help="The region's name.")] = "",
+    definition: Annotated[
+        str, typer.Option("--definition", help="What it selects, at most 600.")
+    ] = "",
+    rules: Annotated[
+        Path | None, typer.Option("--rules", help="A JSON file holding the rule set.")
+    ] = None,
     facet: Annotated[
         str | None, typer.Option("--facet", help="Q@xxxxxxxx:slot, for a focus only.")
+    ] = None,
+    from_import: Annotated[
+        str | None,
+        typer.Option(
+            "--from-import",
+            help="Draft a region from the development part of this import (imp_); replaces "
+            "--rules, and --name and --definition may be left to the draft.",
+        ),
     ] = None,
 ) -> None:
     """Define a region or a focus as a human; take a snapshot to pin a version."""
     state = _state(ctx)
-    rule_set = _read_rules(rules)
+    if (rules is None) == (from_import is None):
+        _fail("pass exactly one of --rules and --from-import", 2)
     bound = None if facet is None else _parse_facet(facet)
     with _reporting_errors():
         project = _resolve_project(state)
+        if from_import is not None:
+            drafted_name, drafted_definition, rule_set = regions_service.import_draft(
+                project, from_import
+            )
+            name = name or drafted_name
+            definition = definition or drafted_definition
+        else:
+            assert rules is not None
+            rule_set = _read_rules(rules)
+        if not name or not definition:
+            _fail("--name and --definition are required with --rules", 2)
         region_id = regions_service.define_region(
             project,
             project.human_actor(),

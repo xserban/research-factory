@@ -392,6 +392,27 @@ def define_region(
         return new_id
 
 
+def import_draft(project: Project, import_id: str) -> tuple[str, str, RuleSet]:
+    """`(name, definition, rules)` of a draft region over the development part of one import
+    (`factory regions define --from-import`). The rule never names the `all` part, so an agent
+    could write it too (decision 88); a human defines it and reviews its version like any other.
+    Refused (field `import_id`, reason `import-unknown`) for an import this project does not
+    have."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        known = conn.execute(
+            text("SELECT 1 FROM imports WHERE import_id = :i"), {"i": import_id}
+        ).first()
+    if known is None:
+        raise _refuse(ValidationIssue("import_id", "import-unknown"))
+    return (
+        f"Import {import_id}, development part",
+        f"Draft: the works of the development part of import {import_id}. Snapshot and review "
+        "the version before relying on it.",
+        RuleSet(include=(ImportRule(import_id=import_id, part="development"),)),
+    )
+
+
 # --- Member decisions ---
 
 
@@ -1476,6 +1497,7 @@ __all__: Sequence[str] = [
     "export_version",
     "foci",
     "focus_slot_missing",
+    "import_draft",
     "latest_adoptions",
     "link_regions",
     "overlap",

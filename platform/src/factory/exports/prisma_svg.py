@@ -50,6 +50,10 @@ def _wrap(text: str, limit: float = BOX_W - 2 * PAD) -> list[str]:
     return lines or [""]
 
 
+Lines = tuple[list[str], list[str]]
+Row = tuple[Lines, Lines | None]
+
+
 @dataclass(frozen=True)
 class _Box:
     x: int
@@ -156,7 +160,7 @@ def prisma_svg(flow: PrismaFlow) -> str:
         ft_excluded = _lines("Reports excluded", [NOT_RUN])
         final = _lines("Studies included in review", [NOT_RUN])
 
-    rows: list[tuple[tuple[list[str], list[str]], tuple[list[str], list[str]] | None]] = [
+    rows: list[Row] = [
         (databases, other),
         (duplicates, None),
         (screened, excluded),
@@ -165,6 +169,12 @@ def prisma_svg(flow: PrismaFlow) -> str:
         (final, None),
     ]
 
+    return render_rows(rows, banner)
+
+
+def render_rows(rows: list[Row], banner: str | None) -> str:
+    """The template: two columns of boxes, one row each, an optional banner above. Shared by the
+    cumulative flow and the update flow (`exports/update_flow_svg.py`)."""
     y = 20
     if banner:
         y += 28
