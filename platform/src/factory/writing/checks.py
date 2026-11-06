@@ -12,6 +12,8 @@ Invariants:
   printed value, a stored stat value or the publication year of a support work.
 - Citations are not typed by the writer: any citation pattern in the text is checked against the
   first authors of the support works.
+- The projector reads `is_single_sentence`, so it stays as old logs folded under it; anything
+  tighter (`_et_al_boundary`, the reserved markers) applies at write time only.
 """
 
 from __future__ import annotations
@@ -73,7 +75,10 @@ COMPARATIVES: tuple[str, ...] = (
     "exceed\\w*",
 )
 _QUANTIFIER_RE = re.compile(
-    r"(?<![\w-])(?:" + "|".join(re.escape(q) for q in QUANTIFIERS) + r")(?![\w-])", re.IGNORECASE
+    r"(?<![\w-])(?:"
+    + "|".join(re.escape(q) for q in QUANTIFIERS)
+    + r"|(?:best|most)-[a-z]+)(?![\w-])",  # `best-performing`; the guard keeps out `all-reduce`
+    re.IGNORECASE,
 )
 _COMPARATIVE_RE = re.compile(r"\b(?:" + "|".join(COMPARATIVES) + r")\b", re.IGNORECASE)
 _ABBREVIATIONS = re.compile(r"\b(?:et al|e\.g|i\.e|cf|figs?|eqs?|vs)\.", re.IGNORECASE)
@@ -81,6 +86,9 @@ _INITIAL = re.compile(r"\b[A-Z]\.")
 _BOUNDARY = re.compile(r"[.?!][\"')\]]*\s+[A-Z0-9]")
 _NAME = re.compile(r"[A-ZÀ-ÖØ-Þ][\w'’-]*")
 _CITATIONS = tuple(re.compile(p) for p in CITATION_PATTERNS)
+_ET_AL_BOUNDARY = re.compile(r"\bet al\.[\"')\]]*\s+[A-Z][a-z]")
+_RESERVED_MARKER = re.compile(r"\[\[/\]\]|\[\[UNSUPPORTED|\[@")
+"""The forms a rendering writes around a sentence: typed by a writer they would read as markers."""
 
 
 @dataclass(frozen=True)
@@ -104,6 +112,11 @@ def is_single_sentence(text: str) -> bool:
     masked = _ABBREVIATIONS.sub(lambda m: m.group(0).replace(".", "·"), text)
     masked = _INITIAL.sub(lambda m: m.group(0).replace(".", "·"), masked)
     return _BOUNDARY.search(masked) is None
+
+
+def _et_al_boundary(text: str) -> bool:
+    """A capitalised word after `et al.` starts a new sentence, which `is_single_sentence` masks."""
+    return _ET_AL_BOUNDARY.search(text) is not None
 
 
 def citation_matches(text: str) -> list[str]:
@@ -244,8 +257,10 @@ def check_sentence(
         if not s.eligible
     ]
     refusals += _class_issues(cls, supports)
-    if not is_single_sentence(text):
+    if not is_single_sentence(text) or _et_al_boundary(text):
         refusals.append(ValidationIssue("text", "more-than-one-sentence"))
+    if _RESERVED_MARKER.search(text):
+        refusals.append(ValidationIssue("text", "reserved-marker"))
     if cls is SentenceClass.STRUCTURAL:
         refusals += _structural(text, draft_context)
         return CheckOutcome(tuple(refusals), ())

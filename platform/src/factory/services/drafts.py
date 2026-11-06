@@ -52,7 +52,9 @@ from factory.index.drafts import identities, verifiers_of
 from factory.model.base import StrictModel
 from factory.model.drafts import (
     MAX_ORDER,
+    MAX_REASON,
     MAX_SUPPORTS,
+    MAX_TITLE,
     SENTENCE_MAX_CHARS,
     SENTENCE_STATUSES,
     DraftCreated,
@@ -740,6 +742,8 @@ def create_draft(
     _require_writer(actor)
     if not title.strip():
         raise _refuse("title", "a draft needs a title")
+    if len(title.strip()) > MAX_TITLE:
+        raise _refuse("title", f"at most {MAX_TITLE} characters")
     outline = build_outline(project, scope)  # a long read: outside the write lock
     if len(outline.sections) > MAX_SECTIONS:
         raise _refuse("scope", f"the outline has more than {MAX_SECTIONS} sections; narrow it")
@@ -748,7 +752,7 @@ def create_draft(
         draft_id = project.ids.new("drf")
         payload = DraftCreated(
             draft_id=draft_id,
-            title=title.strip()[:200],
+            title=title.strip(),
             kind=kind,
             outline_ref=outline.outline_id,
             outline_blob=blob,
@@ -852,9 +856,11 @@ def _context(project: Project, rows: Sequence[SentenceRow]) -> DraftContext:
 
 
 def _context_of(resolved: Sequence[ResolvedSupport]) -> DraftContext:
+    """The names a structural sentence may not use. A stale support still counts: its sentence is
+    live, so it still names those works."""
     return DraftContext(
-        first_authors=frozenset(a for s in resolved if s.eligible for a in s.first_authors),
-        method_names=frozenset(m for s in resolved if s.eligible for m in s.method_names),
+        first_authors=frozenset(a for s in resolved for a in s.first_authors),
+        method_names=frozenset(m for s in resolved for m in s.method_names),
     )
 
 
@@ -865,26 +871,30 @@ def _merge(a: DraftContext, resolved: Sequence[ResolvedSupport]) -> DraftContext
 
 def _task_checks(
     project: Project, actor: Actor, draft_id: str, task_id: str | None
-) -> tuple[str | None, list[ValidationIssue]]:
-    """The task blob an agent's call was served as, and the issues with the task named."""
+) -> tuple[str | None, str | None, list[ValidationIssue]]:
+    """The task blob an agent's call was served as, the section of that slot task, and the issues
+    with the task named."""
     if actor.kind == "human":
-        return None, (
-            [ValidationIssue("task_id", "a human writes without a task")] if task_id else []
+        return (
+            None,
+            None,
+            ([ValidationIssue("task_id", "a human writes without a task")] if task_id else []),
         )
     if task_id is None:
-        return None, []
+        return None, None, []
     try:
         task = require_holder(project, actor, task_id)
     except FactoryValidationError as exc:
-        return None, exc.issues
+        return None, None, exc.issues
     if task.kind != DRAFT_SLOT_TASK_KIND:
-        return None, [ValidationIssue("task_id", "not a writing slot task")]
+        return None, None, [ValidationIssue("task_id", "not a writing slot task")]
     content = task_content(project, task)
     if not isinstance(content, dict) or content.get("draft_id") != draft_id:
-        return None, [ValidationIssue("task_id", "the task is for another draft")]
+        return None, None, [ValidationIssue("task_id", "the task is for another draft")]
     if content.get("outline") != require_draft(project, draft_id)[2]:
-        return None, [ValidationIssue("task_id", "the draft was repinned: ask draft_next again")]
-    return task.content_blob, []
+        issue = ValidationIssue("task_id", "the draft was repinned: ask draft_next again")
+        return None, None, [issue]
+    return task.content_blob, str(content.get("section_id")), []
 
 
 def write_sentences(
@@ -899,19 +909,17 @@ def write_sentences(
     """Check and record sentences; each stands or falls alone and the result lists the written
     sentence ids and the rejected items (position and issues). The whole call is refused, with
     nothing written, for an unknown draft, a wrong actor or task, or a session that verified the
-    draft. An agent's call completes its slot task once it has written a sentence."""
+    draft. A slot task takes sentences of its own section only. An agent's call completes its slot
+    task once it has written a sentence, and a call that writes none stores no input blob."""
     _require_writer(actor)
     with project.index.exclusive(), entering():
         project.index.sync()
         require_draft(project, draft_id)
         if identities(actor) & verifier_sessions(project, draft_id):
             raise _refuse("session", "a session that verified this draft cannot write in it")
-        task_blob, task_issues = _task_checks(project, actor, draft_id, task_id)
+        task_blob, task_section, task_issues = _task_checks(project, actor, draft_id, task_id)
         if task_issues:
             raise FactoryValidationError(task_issues)
-        if actor.kind == "agent" and input_blob is None:
-            call: JsonValue = [i.model_dump(mode="json") for i in items]
-            input_blob = project.blobs.put_json({"task_input": task_blob, "call": call})
         sections = {s.section_id for s in _sections(project, draft_id)}
         outline_refs = _outline_refs(_pinned_outline(project, draft_id))
         existing = sentence_rows(project, draft_id)
@@ -920,10 +928,13 @@ def write_sentences(
         for row in existing:
             top[row.section_id] = max(top.get(row.section_id, 0), row.order)
         live_ids = {r.sentence_id: r for r in existing}
-        events: list[Event] = []
-        written: list[str] = []
+        accepted: list[tuple[SentenceRecorded, str | None]] = []
         rejected: list[ItemError] = []
         for index, item in enumerate(items):
+            if task_section is not None and item.section_id != task_section:
+                issue = ValidationIssue("section_id", "the task is for another section")
+                rejected.append(ItemError(index=index, issues=[issue]))
+                continue
             issues, payload, resolved = _prepare(
                 project,
                 draft_id,
@@ -943,21 +954,26 @@ def write_sentences(
             context = _merge(context, resolved)
             if item.supersedes is not None:
                 live_ids.pop(item.supersedes, None)
-            events.append(
-                project.events.make(
-                    "draft.sentence_recorded",
-                    payload,
-                    actor,
-                    refs=[
-                        payload.sentence_id,
-                        draft_id,
-                        *(s.ref for s in payload.supports),
-                        *([item.supersedes] if item.supersedes else []),
-                    ],
-                    input_blob=input_blob,
-                )
+            accepted.append((payload, item.supersedes))
+        if accepted and actor.kind == "agent" and input_blob is None:
+            call: JsonValue = [i.model_dump(mode="json") for i in items]
+            input_blob = project.blobs.put_json({"task_input": task_blob, "call": call})
+        events: list[Event] = [
+            project.events.make(
+                "draft.sentence_recorded",
+                payload,
+                actor,
+                refs=[
+                    payload.sentence_id,
+                    draft_id,
+                    *(s.ref for s in payload.supports),
+                    *([supersedes] if supersedes else []),
+                ],
+                input_blob=input_blob,
             )
-            written.append(payload.sentence_id)
+            for payload, supersedes in accepted
+        ]
+        written = [payload.sentence_id for payload, _ in accepted]
         if events and actor.kind == "agent" and task_id is not None and task_blob is not None:
             events.append(
                 project.events.make(
@@ -1067,9 +1083,11 @@ def withdraw(project: Project, sentence_id: str, reason: str, *, actor: Actor) -
         _refuse_verifier(project, actor, str(row[0]))
         if not reason.strip():
             raise _refuse("reason", "state the reason")
+        if len(reason.strip()) > MAX_REASON:
+            raise _refuse("reason", f"at most {MAX_REASON} characters")
         event = project.events.make(
             "draft.sentence_withdrawn",
-            SentenceWithdrawn(sentence_id=sentence_id, reason=reason.strip()[:300]),
+            SentenceWithdrawn(sentence_id=sentence_id, reason=reason.strip()),
             actor,
             refs=[sentence_id, str(row[0])],
             input_blob=_call_blob(project, actor, {"sentence_id": sentence_id}),

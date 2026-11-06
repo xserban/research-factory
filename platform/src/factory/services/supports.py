@@ -139,8 +139,22 @@ class _Reader:
         return tuple(authors), tuple(years)
 
 
-def _refuse(ref: SupportRef, reason: str, works: Sequence[str] = ()) -> ResolvedSupport:
-    return ResolvedSupport(ref=ref, eligible=False, reason=reason, work_ids=tuple(works))
+def _refuse(
+    ref: SupportRef,
+    reason: str,
+    works: Sequence[str] = (),
+    *,
+    group_ids: Sequence[str] = (),
+    method_names: Sequence[str] = (),
+) -> ResolvedSupport:
+    return ResolvedSupport(
+        ref=ref,
+        eligible=False,
+        reason=reason,
+        work_ids=tuple(works),
+        group_ids=tuple(group_ids),
+        method_names=tuple(method_names),
+    )
 
 
 def _numbers(*values: object) -> tuple[Decimal, ...]:
@@ -264,7 +278,7 @@ def _claim(reader: _Reader, ref: SupportRef) -> ResolvedSupport:
     if not reader.counts(work):
         return _refuse(ref, "not-included", [work])
     if ref.ref in reader.stale_claim_ids():
-        return _refuse(ref, "stale", [work])
+        return _with_facts(reader, _refuse(ref, "stale", [work]))
     return _with_facts(
         reader,
         ResolvedSupport(
@@ -298,9 +312,20 @@ def _cell(reader: _Reader, ref: SupportRef) -> ResolvedSupport:
     cell = row.fields.get(name)
     if cell is None:
         return _refuse(ref, "unknown", [row.work_id])
-    if any(f.extraction_id in reader.stale_rows() for f in row.fields.values()):
-        return _refuse(ref, "stale", [row.work_id])
     method = row.fields.get("method_name")
+    if any(f.extraction_id in reader.stale_rows() for f in row.fields.values()):
+        # A stale cell still has its group and names: it reads as stale, not as off the outline,
+        # and it still guards structural sentences.
+        return _with_facts(
+            reader,
+            _refuse(
+                ref,
+                "stale",
+                [row.work_id],
+                group_ids=() if gid is None else (gid,),
+                method_names=() if method is None else (normalise_text(str(method.value)),),
+            ),
+        )
     return _with_facts(
         reader,
         ResolvedSupport(
@@ -335,7 +360,7 @@ def _item(reader: _Reader, ref: SupportRef) -> ResolvedSupport:
     if item is None:
         return _refuse(ref, "not-final", [work])
     if item.stale:
-        return _refuse(ref, "stale", [work])
+        return _with_facts(reader, _refuse(ref, "stale", [work]))
     return _with_facts(
         reader,
         ResolvedSupport(

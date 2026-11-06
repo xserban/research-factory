@@ -56,7 +56,7 @@ from factory.services.tasks import (
     require_holder,
     task_content,
 )
-from factory.writing.verdicts import verdict_issues
+from factory.writing.verdicts import span_length_issues, verdict_issues
 
 
 class VerifyUnit(StrictModel):
@@ -255,6 +255,12 @@ def verify_record(project: Project, task_id: str, item: VerdictInput, *, actor: 
             raise _refuse("sentence_id", "the sentence has a verdict")
         issues = verdict_issues(
             item.verdict,
+            item.sentence_span,
+            item.support_spans,
+            sentence=unit.text,
+            spans_by_ref={s.ref: s.spans for s in unit.supports},
+        )
+        issues += span_length_issues(
             item.sentence_span,
             item.support_spans,
             sentence=unit.text,

@@ -8,6 +8,8 @@ Invariants:
 - `sentence_span` is compared with the sentence after whitespace collapsing only; a support
   substring with `normalise_quote` on both sides, as a quote is.
 - Reasons are fixed codes; none carries text of the sentence or of a span.
+- `span_length_issues` holds at write time only: the projector folds by the substring rules, so
+  a verdict logged before the minimum still stands.
 """
 
 from __future__ import annotations
@@ -17,6 +19,9 @@ from collections.abc import Mapping, Sequence
 from factory.document.quotes import normalise_quote
 from factory.errors import ValidationIssue
 from factory.model.drafts import SupportSpan, Verdict
+
+MIN_SPAN_CHARS = 12
+"""The shortest span a verdict may quote (plan PF ruling 2), unless that is the whole source."""
 
 
 def _collapse(text: str) -> str:
@@ -31,6 +36,32 @@ def in_sentence(span: str, sentence: str) -> bool:
 def in_spans(substring: str, spans: Sequence[str]) -> bool:
     needle = normalise_quote(substring)
     return bool(needle) and any(needle in normalise_quote(span) for span in spans)
+
+
+def _too_short(span: str, sources: Sequence[str]) -> bool:
+    needle = _collapse(span)
+    return len(needle) < MIN_SPAN_CHARS and needle not in {_collapse(s) for s in sources}
+
+
+def span_length_issues(
+    sentence_span: str | None,
+    support_spans: Sequence[SupportSpan],
+    *,
+    sentence: str,
+    spans_by_ref: Mapping[str, Sequence[str]],
+) -> list[ValidationIssue]:
+    """Spans too short to carry a verdict's quote. Write time only (see the module docstring)."""
+    issues: list[ValidationIssue] = []
+    if sentence_span is not None and _too_short(sentence_span, [sentence]):
+        issues.append(ValidationIssue("sentence_span", f"at least {MIN_SPAN_CHARS} characters"))
+    for i, span in enumerate(support_spans):
+        if _too_short(span.substring, spans_by_ref.get(span.ref, ())):
+            issues.append(
+                ValidationIssue(
+                    f"support_spans[{i}].substring", f"at least {MIN_SPAN_CHARS} characters"
+                )
+            )
+    return issues
 
 
 def verdict_issues(
