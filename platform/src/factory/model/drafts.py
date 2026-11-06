@@ -232,9 +232,20 @@ class DraftCreated(StrictModel):
 
 
 class DraftOutlineRepinned(StrictModel):
+    """A new pin. `sections` are the outline's sections the draft did not have, appended in order;
+    an event written before they were recorded has none and replays as it did."""
+
     draft_id: str = Field(pattern=DRAFT_ID_RE)
     outline_ref: str = Field(pattern=OUTLINE_ID_RE)
     outline_blob: str = Field(pattern=BLOB_REF_RE)
+    sections: list[SectionDef] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _sections_are_distinct(self) -> Self:
+        ids = [s.section_id for s in self.sections]
+        if len(set(ids)) != len(ids):
+            raise ValueError("section ids must be distinct")
+        return self
 
 
 class SentenceRecorded(StrictModel):

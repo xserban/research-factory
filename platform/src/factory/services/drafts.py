@@ -15,10 +15,14 @@ Invariants:
   support among valid ones is refused whole; another valid sentence of the same call is written.
 - Every agent-written event carries the call and the task content it was served as its
   `input_blob` (R-04). A human writes without a task.
-- A session that has verified a sentence of a draft cannot write in it (`verifier_sessions`). A
-  session with a verdict on a draft, or a live claim on one of its units, is not served the draft
-  by any other door: status, rendering, slot, trace, or the sentence refs of `check`
-  (`is_verifying`; ruling 12, R-131). A unit is all it judges from.
+- A session that has verified a sentence of a draft cannot write in it (`verifier_sessions`), nor
+  repin, reorder or withdraw in it; a session holding a verification task of the draft cannot do
+  those three either (`_refuse_verifier`, R-51). A session with a verdict on a draft, or a live
+  claim on one of its units, is not served the draft by any other door: status, rendering, slot,
+  trace, or the sentence refs of `check` (`is_verifying`; ruling 12, R-131). A unit is all it
+  judges from.
+- A repin adds the outline's new sections and retires the slot tasks of the old outline: a task
+  whose `outline` is not the draft's pin is neither served nor written under.
 - A refusal writes nothing and carries positions and fixed codes, never document text.
 - Status is computed on read and never stored. `stale` wins over `flagged`, `flagged` over
   `supported`, `supported` over `unchecked`; a `structural` or `interpretive` sentence keeps its
@@ -772,26 +776,62 @@ def create_draft(
         return draft_id
 
 
+def _refuse_verifier(project: Project, actor: Actor, draft_id: str) -> None:
+    """A session with a verdict on the draft, or holding a verification task of it, must not
+    reshape the draft it verifies (R-51, MS ruling 4)."""
+    if identities(actor) & verifier_sessions(project, draft_id) or holds_verification(
+        project, actor.session, draft_id
+    ):
+        raise _refuse("session", "a session that verifies this draft cannot change it")
+
+
+def _new_sections(known: Sequence[SectionRow], outline: Outline) -> list[SectionDef]:
+    """The outline's sections the draft does not hold, numbered after the last section id."""
+    held = {s.outline_section for s in known}
+    top = max((int(s.section_id.removeprefix("sec_")) for s in known), default=0)
+    fresh = [s for s in outline.sections if s.section_ref not in held]
+    if top + len(fresh) > MAX_SECTIONS:
+        raise _refuse("scope", f"the draft would have more than {MAX_SECTIONS} sections; narrow it")
+    return [
+        SectionDef(
+            section_id=f"sec_{top + i + 1:02d}",
+            heading=_heading(s.kind, s.title_ref),
+            outline_section=s.section_ref,
+        )
+        for i, s in enumerate(fresh)
+    ]
+
+
 def repin_outline(
     project: Project, draft_id: str, scope: OutlineScope | None = None, *, actor: Actor
 ) -> str:
     """Pin the draft to a new outline (the same scope unless `scope` is given). Sentences whose
-    supports are not in it read as `off-outline`; nothing is rewritten. Returns the event id."""
+    supports are not in it read as `off-outline`; nothing is rewritten. Sections new to the draft
+    are added, so `draft_next` serves them; a section the outline dropped stays, and its slot says
+    `outline-section-gone`. Refused to a verifier. Returns the event id."""
     _require_writer(actor)
     current = _pinned_outline(project, draft_id)
+    _refuse_verifier(project, actor, draft_id)
     if scope is None:
         scope = OutlineScope.from_json(current.scope)
     outline = build_outline(project, scope)  # a long read: outside the write lock
     blob = project.blobs.put(outline_json(outline).encode())
     with project.index.exclusive():
+        project.index.sync()
+        _refuse_verifier(project, actor, draft_id)
         event = project.events.make(
             "draft.outline_repinned",
             DraftOutlineRepinned(
-                draft_id=draft_id, outline_ref=outline.outline_id, outline_blob=blob
+                draft_id=draft_id,
+                outline_ref=outline.outline_id,
+                outline_blob=blob,
+                sections=_new_sections(_sections(project, draft_id), outline),
             ),
             actor,
             refs=[draft_id, outline.outline_id],
-            input_blob=_call_blob(project, actor, {"draft_id": draft_id}),
+            input_blob=_call_blob(
+                project, actor, {"draft_id": draft_id, "scope": _scope_of(scope)}
+            ),
         )
         project.record([event])
         return event.id
@@ -842,6 +882,8 @@ def _task_checks(
     content = task_content(project, task)
     if not isinstance(content, dict) or content.get("draft_id") != draft_id:
         return None, [ValidationIssue("task_id", "the task is for another draft")]
+    if content.get("outline") != require_draft(project, draft_id)[2]:
+        return None, [ValidationIssue("task_id", "the draft was repinned: ask draft_next again")]
     return task.content_blob, []
 
 
@@ -1005,7 +1047,8 @@ def _prepare(
 
 
 def withdraw(project: Project, sentence_id: str, reason: str, *, actor: Actor) -> str:
-    """Withdraw a live sentence (it stays in the log). Returns the event id."""
+    """Withdraw a live sentence (it stays in the log). Refused to a verifier of its draft. Returns
+    the event id."""
     _require_writer(actor)
     with project.index.exclusive():
         project.index.sync()
@@ -1021,6 +1064,7 @@ def withdraw(project: Project, sentence_id: str, reason: str, *, actor: Actor) -
             raise _refuse("sentence_id", "unknown sentence")
         if row[1] is not None or row[2]:
             raise _refuse("sentence_id", "not a live sentence")
+        _refuse_verifier(project, actor, str(row[0]))
         if not reason.strip():
             raise _refuse("reason", "state the reason")
         event = project.events.make(
@@ -1037,11 +1081,12 @@ def withdraw(project: Project, sentence_id: str, reason: str, *, actor: Actor) -
 def reorder(
     project: Project, draft_id: str, section_id: str, order: Sequence[str], *, actor: Actor
 ) -> str:
-    """Set the order of a section's live sentences; `order` must list exactly those. Returns the
-    event id."""
+    """Set the order of a section's live sentences; `order` must list exactly those. Refused to a
+    verifier of the draft. Returns the event id."""
     _require_writer(actor)
     with project.index.exclusive():
         require_draft(project, draft_id)
+        _refuse_verifier(project, actor, draft_id)
         if section_id not in {s.section_id for s in _sections(project, draft_id)}:
             raise _refuse("section_id", "unknown section")
         live = {
@@ -1054,7 +1099,11 @@ def reorder(
             DraftReordered(draft_id=draft_id, section_id=section_id, order=list(order)),
             actor,
             refs=[draft_id],
-            input_blob=_call_blob(project, actor, {"draft_id": draft_id}),
+            input_blob=_call_blob(
+                project,
+                actor,
+                {"draft_id": draft_id, "section_id": section_id, "order": list(order)},
+            ),
         )
         project.record([event])
         return event.id
@@ -1120,6 +1169,9 @@ def _slot_content(project: Project, draft_id: str, section: SectionRow) -> dict[
 
 
 def _open_slot_task(project: Project, draft_id: str, section_id: str) -> str | None:
+    """The section's slot task not completed, under the outline the draft is pinned to: a task of
+    an earlier pin holds old content, and a release would only offer it again."""
+    pinned = require_draft(project, draft_id)[2]
     with project.index.connect() as conn:
         rows = conn.execute(
             text("SELECT task_id, content_blob FROM tasks WHERE kind = :k AND status != :done"),
@@ -1134,6 +1186,7 @@ def _open_slot_task(project: Project, draft_id: str, section_id: str) -> str | N
             isinstance(content, dict)
             and content.get("draft_id") == draft_id
             and content.get("section_id") == section_id
+            and content.get("outline") == pinned
         ):
             return str(task_id)
     return None

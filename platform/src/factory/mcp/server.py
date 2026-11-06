@@ -3973,6 +3973,64 @@ def build_server(
 
         return _reply(project, listing, include_work_ids=False)
 
+    @server.tool()
+    def draft_repin(
+        project: str,
+        draft_id: str,
+        role: str,
+        model: str,
+        skill: str,
+        scope_works: list[str] | None = None,
+        ideas: list[str] | None = None,
+        groups: list[str] | None = None,
+    ) -> dict[str, JsonValue]:
+        """Pin a draft to a fresh outline, of the same scope unless one is named (see
+        `writing_outline`). Sections new to the draft are added and `draft_next` serves them;
+        sentences whose supports left the outline read as off-outline; a slot task of the old
+        outline is retired, so ask `draft_next` again. Refused to a session that verifies the
+        draft, to a session that has joined a pass, and before a screening pass has opened."""
+
+        def repin() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            _require_pass_opened(opened, "view")
+            actor = make_agent_actor(settings, session, role, model, skill)
+            scope = None
+            if scope_works is not None or ideas is not None or groups is not None:
+                scope = outline_service.OutlineScope(
+                    works="included" if scope_works is None else tuple(scope_works),
+                    ideas=None if ideas is None else tuple(ideas),
+                    groups=None if groups is None else tuple(groups),
+                )
+            event_id = drafts_service.repin_outline(opened, draft_id, scope, actor=actor)
+            return _withheld(opened, {"event_id": event_id}, include_work_ids=False)
+
+        return _reply(project, repin, include_work_ids=False)
+
+    @server.tool()
+    def draft_reorder(
+        project: str,
+        draft_id: str,
+        section_id: str,
+        order: list[str],
+        role: str,
+        model: str,
+        skill: str,
+    ) -> dict[str, JsonValue]:
+        """Set the order of a section's sentences: `order` lists exactly its live sentences, once
+        each. Refused to a session that verifies the draft, to a session that has joined a pass,
+        and before a screening pass has opened."""
+
+        def reorder() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            _require_pass_opened(opened, "view")
+            actor = make_agent_actor(settings, session, role, model, skill)
+            event_id = drafts_service.reorder(opened, draft_id, section_id, order, actor=actor)
+            return _withheld(opened, {"event_id": event_id}, include_work_ids=False)
+
+        return _reply(project, reorder, include_work_ids=False)
+
     return server
 
 

@@ -11,7 +11,8 @@ An act is folded only when it is consistent with what the services enforce; an e
 this stays in the log and changes nothing (no service writes one, so it was written by hand):
 - A draft is folded for a fresh id from a human or an agent, with an outline blob whose content
   hashes to the `outline_ref` (when the blob store is at hand). A repin is folded likewise, for
-  a known draft.
+  a known draft, from anyone with no verdict on it; the sections it adds have fresh ids, name a
+  section of that outline (when the blob store is at hand) and one the draft does not hold yet.
 - A sentence is folded for a known draft and section, a fresh id, an `author` equal to the
   actor's kind (human or agent), exactly one sentence, the class's structural rules (a claim has a
   support, a synthesis a stat or group support, a structural or interpretive sentence no number, a
@@ -36,7 +37,8 @@ this stays in the log and changes nothing (no service writes one, so it was writ
   Whether a sentence is really stale is computed on read and cannot be known here, so a release
   that claims no stale sentence is taken at its word on that one count.
 - A withdrawal is folded for a live sentence; a reorder only when `order` is a permutation of the
-  section's live sentences.
+  section's live sentences. Neither is folded from a session (or a human) that verified a sentence
+  of the draft (R-51).
 
 Handlers are total: an event naming an unknown draft or sentence changes nothing, never raises.
 Rows are first-write-wins per id.
@@ -411,13 +413,55 @@ def _repinned(t: DraftTables, blobs: BlobStore | None) -> Handler:
         p = DraftOutlineRepinned.model_validate(event.payload)
         if not _writes(event) or not _outline_matches(blobs, p.outline_ref, p.outline_blob):
             return
+        if not conn.execute(
+            select(t.drafts.c.draft_id).where(t.drafts.c.draft_id == p.draft_id)
+        ).first():
+            return
+        if identities(event.actor) & verifiers_of(conn, p.draft_id):
+            return
+        held = conn.execute(
+            select(t.sections.c.section_id, t.sections.c.ord, t.sections.c.outline_section).where(
+                t.sections.c.draft_id == p.draft_id
+            )
+        ).all()
+        ids = {str(r[0]) for r in held}
+        refs = {r[2] for r in held}
+        if any(s.section_id in ids or s.outline_section in refs for s in p.sections):
+            return
+        if blobs is not None and p.sections and not _in_outline(blobs, p):
+            return
         conn.execute(
             update(t.drafts)
             .where(t.drafts.c.draft_id == p.draft_id)
             .values(outline_ref=p.outline_ref, outline_blob=p.outline_blob)
         )
+        top = max((int(r[1]) for r in held), default=-1)
+        for i, s in enumerate(p.sections):
+            conn.execute(
+                t.sections.insert().values(
+                    draft_id=p.draft_id,
+                    section_id=s.section_id,
+                    ord=top + 1 + i,
+                    heading=s.heading,
+                    outline_section=s.outline_section,
+                )
+            )
 
     return repinned
+
+
+def _in_outline(blobs: BlobStore, p: DraftOutlineRepinned) -> bool:
+    """Whether every section the repin adds names a section of its outline, once each."""
+    try:
+        data = blobs.get_json(p.outline_blob)
+    except (FactoryError, OSError, ValueError):
+        return False
+    sections = data.get("sections") if isinstance(data, dict) else None
+    if not isinstance(sections, list):
+        return False
+    known = {s.get("section_ref") for s in sections if isinstance(s, dict)}
+    named = [s.outline_section for s in p.sections]
+    return len(set(named)) == len(named) and all(n is not None and n in known for n in named)
 
 
 def _structural_ok(p: SentenceRecorded) -> bool:
@@ -773,6 +817,11 @@ def _withdrawn(t: DraftTables) -> Handler:
         p = SentenceWithdrawn.model_validate(event.payload)
         if not _writes(event):
             return
+        row = conn.execute(
+            select(t.sentences.c.draft_id).where(t.sentences.c.sentence_id == p.sentence_id)
+        ).first()
+        if row is None or identities(event.actor) & verifiers_of(conn, str(row[0])):
+            return
         conn.execute(
             update(t.sentences)
             .where(
@@ -789,7 +838,7 @@ def _withdrawn(t: DraftTables) -> Handler:
 def _reordered(t: DraftTables) -> Handler:
     def reordered(conn: Connection, event: Event) -> None:
         p = DraftReordered.model_validate(event.payload)
-        if not _writes(event):
+        if not _writes(event) or identities(event.actor) & verifiers_of(conn, p.draft_id):
             return
         live = {
             str(r[0])

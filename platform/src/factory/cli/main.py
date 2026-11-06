@@ -5444,6 +5444,9 @@ def draft_write_cmd(
     supersedes: Annotated[
         str | None, typer.Option("--supersedes", help="A live sentence this one replaces.")
     ] = None,
+    order: Annotated[
+        int | None, typer.Option("--order", help="Its place in the section; default: last.")
+    ] = None,
 ) -> None:
     """Write one sentence as the researcher (author human). It passes the same checks as an
     agent's; a refusal prints each issue and writes nothing."""
@@ -5463,6 +5466,7 @@ def draft_write_cmd(
                     cls=cls,
                     text=text,
                     supports=list(support or []),
+                    order=order,
                     supersedes=supersedes,
                 )
             ],
@@ -5473,6 +5477,39 @@ def draft_write_cmd(
             typer.echo(f"{issue.field}: {issue.reason}", err=True)
         raise typer.Exit(1)
     typer.echo(f"wrote {result.written[0]}")
+
+
+@draft_app.command("repin")
+def draft_repin_cmd(
+    ctx: typer.Context,
+    draft: Annotated[str, typer.Argument(help="A draft id, drf_.")],
+    work: Annotated[list[str] | None, _WORK_OPT] = None,
+    idea: Annotated[list[str] | None, _IDEA_OPT] = None,
+    group: Annotated[list[str] | None, _GROUP_OPT] = None,
+) -> None:
+    """Pin a draft to a fresh outline, of the same scope unless one is named. New sections are
+    added; sentences whose supports left the outline read as off-outline."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        scope = _scope(idea, group, work) if idea or group or work else None
+        drafts_service.repin_outline(project, draft, scope, actor=project.human_actor())
+    typer.echo(f"repinned {draft}")
+
+
+@draft_app.command("reorder")
+def draft_reorder_cmd(
+    ctx: typer.Context,
+    draft: Annotated[str, typer.Argument(help="A draft id, drf_.")],
+    section: Annotated[str, typer.Argument(help="A section id, sec_01.")],
+    sentences: Annotated[list[str], typer.Argument(help="The section's live sentences, in order.")],
+) -> None:
+    """Set the order of a section's live sentences; name each exactly once."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        drafts_service.reorder(project, draft, section, sentences, actor=project.human_actor())
+    typer.echo(f"reordered {section}")
 
 
 @draft_app.command("status")
