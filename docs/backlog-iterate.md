@@ -141,7 +141,7 @@ Minor review findings parked during the v1 build, to address when iterating from
 - W-B: a writer can type `[[/]]`, `[[UNSUPPORTED...` or `[@key]` in a sentence, which would confuse a clean rendering's markers. Refuse those forms at write time (W-A's `check_sentence`).
 - W-B: a task's unit is fixed when the task is created; if a cell's value or quote changes under the same row key before the unit is claimed, the verifier reads the older span. The verdict then reads stale `support-changed`, so nothing false is released, but the verifier's work is lost; a unit could be rebuilt when it is claimed.
 - W-B: a one-character substring satisfies ruling 3. A minimum length, or a check that the span covers the sentence's numbers, would make a verdict's quote carry more.
-- W-B: `sentence_status` resolves supports per reference through W-A's `_Reader`, one query each, not the plan's "7 queries" per draft. It is fine at section size; measure at 200 sentences.
+- W-B: `sentence_status` resolves supports per reference through W-A's `_Reader`, one query each, not the plan's "7 queries" per draft. It is fine at section size; measure at 200 sentences, with `support_changed`, which rebuilds what each support says per sentence and scans the unit's supports linearly.
 - W-B: a human who verified a sentence can label the audit of that verdict; only the gate's human check applies.
 - W-B: the fold of `draft.audited` accepts `channel = mcp` from any human (as the G3-C note above); only the service refuses a pass session's relay.
 - W-B: `render_closing` points at `factory export bibtex` for the bibliography; it does not list the works.
