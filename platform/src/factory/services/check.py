@@ -147,8 +147,8 @@ from factory.services.references import current_extraction, included_works
 from factory.services.region_check import AGENT_VIEW, region_findings
 from factory.services.relations import RelationView, list_relations
 from factory.services.seeds import SeedRole, _rigor_mode, seed_check
-from factory.services.slice6_check import slice6_hits
 from factory.services.shared_mining import source_state, unverified_imports
+from factory.services.slice6_check import slice6_hits
 from factory.services.snowball import recorded_rounds, round_runs
 from factory.services.status_lookup import (
     crossref_doi,

@@ -111,7 +111,7 @@ Moved here by the v1 cut of 2026-11-04 (decision 74); built after the v1 plans o
 **Files:** Modify `services/shared_mining.py`, `services/modules/mining.py`; Test `tests/test_source_superseded.py`.
 
 **Interfaces:**
-- Produces: `source_superseded(project, store: SharedStore | None = None) -> list[str]` (imported extraction ids whose source record is now `superseded` or `stale`,, read-only; a deleted source project is reported by `mine-source-unavailable` only); check `mine-source-superseded` (warning, warning, error) and `mine-source-unavailable` (warning ×3) when the store is absent or the source is missing; nothing in the importer changes until re-import or re-mining.
+- Produces: `source_superseded(project, store: SharedStore | None = None) -> list[str]` (imported extraction ids whose source record is now `superseded` or `stale`, read-only; a deleted source project is reported by `mine-source-unavailable` only); check `mine-source-superseded` (warning, warning, error) and `mine-source-unavailable` (warning ×3) when the store is absent or the source is missing; nothing in the importer changes until re-import or re-mining.
 
 - [ ] **Step 1: Tests.** `test_source_correction_flags_importer_after_sync`; `test_no_store_gives_unavailable_warning_not_error`; `test_reimport_clears_flag`.
 - [ ] **Step 2:** FAIL. **Step 3:** Implement. **Step 4:** mypy; ruff. **Step 5:** Commit `feat(shared): flag imports whose source was corrected`.
