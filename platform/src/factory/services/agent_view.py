@@ -207,15 +207,19 @@ def discovery_view(project: Project) -> JsonValue:
 
 
 def agent_evidence(
-    project: Project, expect: Sequence[Mapping[str, str]] = ()
+    project: Project, expect: Sequence[Mapping[str, str]] = (), *, without_grey: bool = False
 ) -> evidence_report_service.EvidenceReport:
     return evidence_report_service.agent_evidence(
-        evidence_report_service.evidence_report(project, expect=expect)
+        evidence_report_service.evidence_report(
+            project, expect=expect, without_grey=without_grey
+        )
     )
 
 
-def evidence_view(project: Project, expect: Sequence[Mapping[str, str]] = ()) -> JsonValue:
-    report = agent_evidence(project, expect)
+def evidence_view(
+    project: Project, expect: Sequence[Mapping[str, str]] = (), *, without_grey: bool = False
+) -> JsonValue:
+    report = agent_evidence(project, expect, without_grey=without_grey)
     return withheld(project, report.model_dump(mode="json"), include_work_ids=False)
 
 

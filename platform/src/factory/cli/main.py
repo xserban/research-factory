@@ -3054,6 +3054,13 @@ def report_evidence(
             help="Keep the rows of works a notice excludes, labelled (researcher view only).",
         ),
     ] = False,
+    without_grey: Annotated[
+        bool,
+        typer.Option(
+            "--without-grey",
+            help="Show the tables without works found by a grey method; both counts are stated.",
+        ),
+    ] = False,
 ) -> None:
     """The evidence report: grouped final rows, frontiers and limits (full view, audit shown)."""
     state = _state(ctx)
@@ -3063,12 +3070,17 @@ def report_evidence(
         full = _full_view(project)
         if full:
             report = evidence_report_service.evidence_report(
-                project, expect=expectations, include_notice_affected=include_notice_affected
+                project,
+                expect=expectations,
+                include_notice_affected=include_notice_affected,
+                without_grey=without_grey,
             )
         elif include_notice_affected:
             _fail("--include-notice-affected: researcher view only", 1)
         else:
-            report = agent_view_service.agent_evidence(project, expectations)
+            report = agent_view_service.agent_evidence(
+                project, expectations, without_grey=without_grey
+            )
     if fmt is EvidenceFormat.JSON:
         text = report.model_dump_json()
     elif fmt is EvidenceFormat.CSV_ROWS:

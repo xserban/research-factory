@@ -70,6 +70,7 @@ from factory.services.extraction_audit import (
     extraction_audit_outstanding,
     extraction_audit_report,
 )
+from factory.services.grey import declared_sources, grey_work_ids
 from factory.services.notices import work_states
 from factory.services.search import get_work
 
@@ -158,12 +159,19 @@ class EvidenceRow(StrictModel):
     """The notice flag of the row's work (`retracted`, `correction-pending`, `concern`), set only
     when a notice labels it (living-C); omitted from the serialised row otherwise."""
 
+    grey: bool = False
+    """Whether the row's work was found by a grey method (plan SG); grey evidence is labelled and
+    never pooled silently. Omitted from the serialised row while false."""
+
     @model_serializer(mode="wrap")
     def _omit_empty_notice(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
-        """A row no notice labels serialises exactly as it did before notices existed."""
+        """A row no notice labels, and no grey method found, serialises exactly as it did before
+        notices and grey literature existed."""
         data: dict[str, Any] = handler(self)
         if self.notice is None:
             data.pop("notice", None)
+        if not self.grey:
+            data.pop("grey", None)
         return data
 
 
@@ -309,6 +317,16 @@ class WithinPaperRatio(StrictModel):
     context: dict[str, str | None] = Field(default_factory=dict)
 
 
+class GreySensitivity(StrictModel):
+    """Both counts of the grey sensitivity (plan SG): rows with and without grey works, derived
+    from provenance. `without_grey` says which of the two this report's tables show."""
+
+    grey_works: int
+    rows_with_grey: int
+    rows_without_grey: int
+    without_grey: bool
+
+
 class EvidenceReport(StrictModel):
     project_protocol_id: str | None
     pack: str | None
@@ -327,6 +345,16 @@ class EvidenceReport(StrictModel):
     """Sorted by (work, field, method, baseline); never inside a group table (ruling 7)."""
     speed_unpaired: dict[str, int] = Field(default_factory=dict)
     """Reason -> count of proposed/baseline speed pairs that were not formed."""
+    grey_sensitivity: GreySensitivity | None = None
+    """Set only when the protocol declares `grey_sources` and a grey work is in the population."""
+
+    @model_serializer(mode="wrap")
+    def _omit_absent_grey(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        """A report without grey evidence serialises exactly as it did before."""
+        data: dict[str, Any] = handler(self)
+        if self.grey_sensitivity is None:
+            data.pop("grey_sensitivity", None)
+        return data
 
 
 # --- Inputs ---
@@ -420,16 +448,57 @@ def evidence_report(
     *,
     expect: Sequence[Mapping[str, str]] = (),
     include_notice_affected: bool = False,
+    without_grey: bool = False,
 ) -> EvidenceReport:
     """The evidence report of the project, recomputed from the projection. Never raises for a
     missing schema: the report is then empty with the limit `no-extraction`. Writes nothing.
 
     By default the rows of works a notice excludes leave the report (see `assemble_report`);
-    `include_notice_affected` is the researcher's wider view and is never offered to an agent."""
+    `include_notice_affected` is the researcher's wider view and is never offered to an agent.
+
+    While the protocol declares `grey_sources`, rows of works found by a grey method carry
+    `grey = True`, and `grey_sensitivity` states the row counts with and without them.
+    `without_grey` shows the tables without those works; it changes nothing when the protocol
+    declares none (plan SG)."""
     inputs = report_inputs(project)
     if inputs is None:
         return _empty(expect)
-    return assemble_report(inputs, expect=expect, include_notice_affected=include_notice_affected)
+    grey = grey_work_ids(project) if declared_sources(project) else frozenset()
+    grey = grey & {*inputs.population, *(r.work_id for r in _all_rows(inputs))}
+    full = assemble_report(inputs, expect=expect, include_notice_affected=include_notice_affected)
+    if not grey:
+        return full
+    reduced = assemble_report(
+        _without_works(inputs, grey), expect=expect, include_notice_affected=include_notice_affected
+    )
+    sensitivity = GreySensitivity(
+        grey_works=len(grey),
+        rows_with_grey=_row_count(full),
+        rows_without_grey=_row_count(reduced),
+        without_grey=without_grey,
+    )
+    shown = reduced if without_grey else _grey_labelled(full, grey)
+    return shown.model_copy(update={"grey_sensitivity": sensitivity})
+
+
+def _all_rows(inputs: ReportInputs) -> list[Any]:
+    return [r for rows in inputs.grouped.groups.values() for r in rows] + list(
+        inputs.grouped.ungrouped
+    )
+
+
+def _row_count(report: EvidenceReport) -> int:
+    return sum(len(g.rows) for g in report.groups) + len(report.ungrouped)
+
+
+def _grey_labelled(report: EvidenceReport, grey: frozenset[str]) -> EvidenceReport:
+    """The report with each row of a grey work labelled."""
+
+    def label(rows: list[EvidenceRow]) -> list[EvidenceRow]:
+        return [r.model_copy(update={"grey": True}) if r.work_id in grey else r for r in rows]
+
+    groups = [g.model_copy(update={"rows": label(g.rows)}) for g in report.groups]
+    return report.model_copy(update={"groups": groups, "ungrouped": label(report.ungrouped)})
 
 
 def agent_evidence(report: EvidenceReport) -> EvidenceReport:
