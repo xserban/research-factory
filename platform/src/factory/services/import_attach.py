@@ -10,7 +10,10 @@ Each record with an attachment lands in exactly one list of the report:
   already back a document of its work gets its link and is listed here too.)
 - `attachment_missing`: the export named a file that could not be read at import time, or its
   bytes are no longer in the library.
-- `unresolved`: the record has no resolved work (unresolved, unconfirmed or ambiguous).
+- `unresolved`: the record has no resolved work (unresolved, unconfirmed or ambiguous) and no work
+  was built from it. A record no source knows is admitted through `importlist`, which builds its
+  work from the record, so that work is the record's own: it takes the file with no title check,
+  since nothing outside the record claims the identity.
 - `not_promoted`: its work has not passed screening. No document is ever recorded for it.
 - `identity_unchecked`: a PDF-folder record whose resolved title does not occur, normalised, in
   the first page's text, until a human confirms the record (`decide_import`).
@@ -43,8 +46,9 @@ from factory.services.agreement import Outcome, final_outcomes
 from factory.services.context import Project
 from factory.services.dedup import active_merges
 from factory.services.fulltext import record_supplied_document
-from factory.services.imports import import_row
+from factory.services.imports import import_row, record_key
 from factory.services.search import get_work
+from factory.sources.importlist import NAME as IMPORTLIST
 
 _MEDIA_TYPE = "application/pdf"
 _SOURCE_PREFIX = "file:"
@@ -74,6 +78,7 @@ def attach_import(project: Project, import_id: str) -> AttachReport:
         row = import_row(project, import_id)
         promoted = _promoted(project)
         linked = _linked(project, import_id)
+        built = _built_from_records(project)
         for record in _records(project, import_id):
             ordinal = record.ordinal
             content = record.content_sha256
@@ -83,8 +88,9 @@ def attach_import(project: Project, import_id: str) -> AttachReport:
             if content is None:
                 report.attachment_missing.append(ordinal)
                 continue
-            work_id = record.work_id
-            if record.link_state != LinkState.RESOLVED.value or work_id is None:
+            resolved = record.work_id if record.link_state == LinkState.RESOLVED.value else None
+            work_id = resolved or built.get(record_key(import_id, ordinal))
+            if work_id is None:
                 report.unresolved.append(ordinal)
                 continue
             if work_id not in promoted:
@@ -95,7 +101,7 @@ def attach_import(project: Project, import_id: str) -> AttachReport:
                 report.attachment_missing.append(ordinal)
                 continue
             data = project.library.get(ref)
-            confirmed = record.decision == "confirm"
+            confirmed = record.decision == "confirm" or resolved is None
             if (
                 row.format is ImportFormat.PDFS
                 and not confirmed
@@ -176,6 +182,18 @@ def _records(project: Project, import_id: str) -> list[_Record]:
         )
         for o, s, w, d, c in rows
     ]
+
+
+def _built_from_records(project: Project) -> dict[str, str]:
+    """The work `importlist` built from each record key."""
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT raw_ref, work_id FROM provenance WHERE source = :s AND raw_ref IS NOT NULL"
+            ),
+            {"s": IMPORTLIST},
+        ).all()
+    return {str(key): str(work) for key, work in rows}
 
 
 def _linked(project: Project, import_id: str) -> set[int]:
