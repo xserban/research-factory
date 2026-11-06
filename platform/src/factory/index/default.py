@@ -24,8 +24,8 @@ from factory.index.labels import label_handlers, label_tables
 from factory.index.lineage import lineage_handlers, lineage_tables
 from factory.index.living import digest_handlers, digest_tables, living_handlers, living_tables
 from factory.index.manuscripts import manuscript_handlers, manuscript_tables
-from factory.index.mine_imports import mine_import_handlers, mine_import_tables
 from factory.index.members import member_handlers, member_tables
+from factory.index.mine_imports import mine_import_handlers, mine_import_tables
 from factory.index.miners import miner_handlers, miner_tables
 from factory.index.notices import notice_handlers, notice_tables
 from factory.index.probe import probe_handlers, probe_tables
@@ -47,7 +47,7 @@ from factory.index.tasks import task_handlers, tasks_table
 from factory.index.watch import run_started_handler, watch_handlers, watch_tables
 
 # Bump on any change to the tables or handlers below; the index is then rebuilt.
-PROJECTION_VERSION = "57"
+PROJECTION_VERSION = "58"
 
 
 def default_projection(blobs: BlobStore | None = None) -> Projection:

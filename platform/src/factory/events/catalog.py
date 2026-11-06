@@ -126,8 +126,8 @@ from factory.model.manuscripts import (
     ManuscriptVerified,
     UnitClosed,
 )
-from factory.model.mine_imports import MineImported
 from factory.model.members import MemberGranted, MemberRevoked
+from factory.model.mine_imports import MineImported
 from factory.model.miner_calibration import MinerCalibrationDrawn, MinerCalibrationLabelled
 from factory.model.miners import MinerRegistered, MinerRetired
 from factory.model.notices import NoticeAssessed, NoticeObserved
