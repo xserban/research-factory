@@ -114,12 +114,13 @@ def spec_path(field: str) -> str:
     return f"spec.{dotted(field)}" if head in _SPEC_FIELDS else dotted(field)
 
 
-def withhold(value: JsonValue, tokens: Iterable[str]) -> JsonValue:
+def withhold(value: JsonValue, tokens: Iterable[str], same_length: bool = False) -> JsonValue:
     """`value` with every whole-identifier occurrence of a token replaced in its strings.
 
     Tokens match case-insensitively and only as whole identifiers, so `10.1000/p2` does not
     match inside `10.1000/p21`. An agent-facing response passes through this with the identifiers
-    of every held-out seed (R-20); nothing else is changed.
+    of every held-out seed (R-20); nothing else is changed. With `same_length` each match is
+    replaced by as many `#` as it has characters, so offsets into the text stay exact.
     """
     cleaned = sorted({token for token in tokens if token}, key=len, reverse=True)
     if not cleaned:
@@ -128,16 +129,18 @@ def withhold(value: JsonValue, tokens: Iterable[str]) -> JsonValue:
         r"(?<![0-9A-Za-z])(?:" + "|".join(re.escape(t) for t in cleaned) + r")(?![0-9A-Za-z])",
         re.IGNORECASE,
     )
-    return _scrub(value, pattern)
+    return _scrub(value, pattern, same_length)
 
 
-def _scrub(value: JsonValue, pattern: re.Pattern[str]) -> JsonValue:
+def _scrub(value: JsonValue, pattern: re.Pattern[str], same_length: bool = False) -> JsonValue:
     if isinstance(value, str):
+        if same_length:
+            return pattern.sub(lambda m: "#" * len(m.group(0)), value)
         return pattern.sub(WITHHELD, value)
     if isinstance(value, dict):
-        return {key: _scrub(item, pattern) for key, item in value.items()}
+        return {key: _scrub(item, pattern, same_length) for key, item in value.items()}
     if isinstance(value, list):
-        return [_scrub(item, pattern) for item in value]
+        return [_scrub(item, pattern, same_length) for item in value]
     return value
 
 

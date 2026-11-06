@@ -3373,7 +3373,9 @@ def build_server(
             found = manuscripts_service.manuscript_read(
                 opened, manuscript_id, ordinal, context=context, session=opened.session
             )
-            return _withheld(opened, found.model_dump(mode="json"), include_work_ids=False)
+            return _withheld(
+                opened, found.model_dump(mode="json"), include_work_ids=False, same_length=True
+            )
 
         return _reply(project, read, include_work_ids=False)
 
@@ -3856,9 +3858,12 @@ def _without_record_keys(value: JsonValue) -> JsonValue:
     return value
 
 
-def _withheld(project: Project, value: JsonValue, include_work_ids: bool = True) -> JsonValue:
-    """Strip every held-out seed's identifiers from an agent-facing response (R-20)."""
-    return withhold(value, _held_out_tokens(project, include_work_ids))
+def _withheld(
+    project: Project, value: JsonValue, include_work_ids: bool = True, same_length: bool = False
+) -> JsonValue:
+    """Strip every held-out seed's identifiers from an agent-facing response (R-20). With
+    `same_length` a match is filled with `#` of its own length, so offsets stay exact."""
+    return withhold(value, _held_out_tokens(project, include_work_ids), same_length)
 
 
 def _held_out_tokens(project: Project, include_work_ids: bool = True) -> set[str]:
