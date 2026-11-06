@@ -35,6 +35,7 @@ from factory.model.extraction import (
     CardScope,
     ExtractionAuditLabelled,
     ExtractionAuditSampled,
+    MinerScope,
     Scope,
     pack_tag,
     scope_from_value,
@@ -159,6 +160,15 @@ def agreed_values(project: Project, *, scope: AuditScope = Scope.EVIDENCE) -> li
     return [item for item, _ in _scoped_population(project, scope)]
 
 
+def _imported_only(project: Project, scope: AuditScope) -> bool:
+    """Whether the scope's population is imported rows alone, under `imports = "audit"`: no local
+    pass exists to finish, so the audit does not wait for one (ruling 19)."""
+    if not isinstance(scope, MinerScope) or imports_policy(project, scope) != "audit":
+        return False
+    rows = final_rows(project, scope=scope)
+    return bool(rows) and all(row.origin == "imported" for row in rows)
+
+
 def extraction_audit_sample(
     project: Project,
     actor: Actor,
@@ -186,12 +196,13 @@ def extraction_audit_sample(
             protocol, fraction, minimum = _card_parameters(project)
         else:
             protocol, schema, _ = require_schema(project, scope=scope)
-            agreement = extraction_agreement(project, actor, scope=scope)
-            if agreement.disagreements:
-                raise _refuse(
-                    f"{len(agreement.disagreements)} disagreement(s) are unresolved; "
-                    "resolve them before the audit"
-                )
+            if not _imported_only(project, scope):  # no pass of its own to wait for
+                agreement = extraction_agreement(project, actor, scope=scope)
+                if agreement.disagreements:
+                    raise _refuse(
+                        f"{len(agreement.disagreements)} disagreement(s) are unresolved; "
+                        "resolve them before the audit"
+                    )
             fraction, minimum = schema.audit_fraction, schema.audit_minimum
         population = _scoped_population(project, scope)
         if not population:

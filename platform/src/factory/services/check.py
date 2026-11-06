@@ -742,7 +742,30 @@ def _mine_imports(project: Project) -> list[_Hit]:
                 f"the source of {len(state.unavailable)} imported row(s) cannot be read",
             )
         )
+    hits.extend(_unaudited_imports(project))
     return hits
+
+
+def _unaudited_imports(project: Project) -> list[_Hit]:
+    """Imported rows in use under `imports = "audit"` that no audit has sampled (ruling 19)."""
+    from factory.model.extraction import MinerScope
+    from factory.services.extraction import filled_imports, imports_policy
+    from factory.services.extraction_audit import extraction_audit_outstanding
+
+    protocol = current_protocol(project)
+    uses = () if protocol is None else protocol.spec.miners or ()
+    return [
+        _Hit(
+            "mine-import-unaudited",
+            (),
+            f"miner {use.name}: imported rows are in the audit population and no audit has "
+            "sampled them",
+        )
+        for use in uses
+        if imports_policy(project, MinerScope(use.name)) == "audit"
+        and filled_imports(project, MinerScope(use.name))
+        and extraction_audit_outstanding(project, scope=MinerScope(use.name))
+    ]
 
 
 def _miner_lifecycle(project: Project) -> list[_Hit]:

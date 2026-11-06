@@ -71,6 +71,7 @@ SPEC = ModuleSpec(
         ("amendment", "document-version", "conversion"),
     ),
     checks=(
+        CheckRule("mine-import-unaudited", ("warning", "warning", "error")),
         CheckRule("mine-import-unverified", ("error", "error", "error")),
         CheckRule("mine-pending", ("warning", "warning", "warning")),
         CheckRule("mine-single", (None, "warning", "error")),
