@@ -439,6 +439,21 @@ def _names_unit(blobs: BlobStore | None, event: Event, p: ManuscriptVerified) ->
     )
 
 
+def _held_task(conn: Connection, event: Event) -> bool:
+    """Whether the event's `input_blob` is the content of a task its actor's session holds. The
+    service writes a verdict before the task completes, so every service verdict passes."""
+    return (
+        conn.execute(
+            sql(
+                "SELECT 1 FROM tasks WHERE content_blob = :b AND status = 'claimed' "
+                "AND claim_session = :s"
+            ),
+            {"b": event.input_blob, "s": event.actor.session},
+        ).first()
+        is not None
+    )
+
+
 def _unit_is_live(
     t: ManuscriptTables, conn: Connection, p: ManuscriptVerified, keys: list[str]
 ) -> bool:
@@ -521,6 +536,8 @@ def _verified(t: ManuscriptTables, blobs: BlobStore | None) -> Handler:
                 _fold_flag(t, conn, event, p)
             return
         if p.work_id is None or p.verdict is None:
+            return
+        if blobs is not None and not _held_task(conn, event):
             return
         length = int(sentence[1]) - int(sentence[0])
         if p.sentence_span is not None and p.sentence_span[1] > length:
