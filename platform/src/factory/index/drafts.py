@@ -324,6 +324,24 @@ def audit_population(conn: Connection, draft_id: str) -> list[str]:
     return [str(r[0]) for r in rows]
 
 
+def has_live_supported(conn: Connection, draft_id: str) -> bool:
+    """Whether a live sentence holds a `supported` verdict no audit labelled `incorrect`. Release
+    needs one in pilot and systematic, so a draft whose whole sample was withdrawn cannot pass on
+    the labels of sentences that are gone."""
+    row = conn.execute(
+        text(
+            f"SELECT 1 {_SUPPORTED_LIVE} AND NOT EXISTS (SELECT 1 FROM draft_audit_items i "
+            "WHERE i.verdict_id = v.verdict_id AND i.label = :wrong) LIMIT 1"
+        ),
+        {
+            "d": draft_id,
+            "supported": Verdict.SUPPORTED.value,
+            "wrong": AuditLabel.INCORRECT.value,
+        },
+    ).first()
+    return row is not None
+
+
 def audit_due(conn: Connection, draft_id: str) -> bool:
     """Whether a new draw is due: a live `supported` verdict is newer than the last draw (any such
     verdict when none was drawn), or no verdict of the last draw is live while a verdict waits, so
@@ -778,6 +796,8 @@ def _release_holds(conn: Connection, t: DraftTables, event: Event, p: DraftRelea
         return True
     labels = audit_labels(conn, p.draft_id, latest=True)
     if not labels or None in labels or audit_due(conn, p.draft_id) or p.counts.get("stale", 0):
+        return False
+    if not has_live_supported(conn, p.draft_id):
         return False
     if mode is RigorMode.PILOT:
         return True

@@ -74,6 +74,8 @@ def _blocking(
     if mode is RigorMode.EXPLORATORY:
         return issues
     issues += _audit_issues(report)
+    if not counts.get("supported", 0):
+        issues.append(ValidationIssue("audit", "no live sentence is supported"))
     issues += _count_issue(counts, "stale")
     if mode is RigorMode.SYSTEMATIC:
         issues += _count_issue(counts, "flagged")
