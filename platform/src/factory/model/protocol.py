@@ -28,6 +28,7 @@ from pydantic import (
 
 from factory.canonical import canonical_json
 from factory.imports.model import ImportFormat, ImportRole
+from factory.model.appraisal import AppraisalInstrument
 from factory.model.base import StrictModel
 from factory.model.gates import GatePolicies
 from factory.model.grey import GreySource, grey_source_issues
@@ -83,6 +84,7 @@ _OMITTED_WHEN_NONE = frozenset(
         "miners",
         "hypothesis_plan",
         "grey_sources",
+        "appraisal_instrument",
     }
 )
 """Optional sections left out of every hash while unset, so protocols that predate them keep
@@ -314,6 +316,9 @@ class ProtocolSpec(StrictModel):
     grey_sources: tuple[GreySource, ...] | None = None
     """The declared grey literature sources (plan SG, PD-7). Absent (None) until declared; left
     out of the hash while unset, so protocols that predate it keep their versions."""
+    appraisal_instrument: AppraisalInstrument | None = None
+    """The per-paper appraisal instrument (IDEA-21, R-41). Absent (None) until declared; left out
+    of the hash while unset, so protocols that predate it keep their versions."""
     rationale: str = ""
 
     @model_validator(mode="after")
@@ -387,6 +392,7 @@ AMENDABLE_FIELDS = (
     "miners",
     "hypothesis_plan",
     "grey_sources",
+    "appraisal_instrument",
 )
 """Top-level hashed fields other than criteria, which an amendment reports as `other_changes`."""
 

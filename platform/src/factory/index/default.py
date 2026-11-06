@@ -1,6 +1,7 @@
 from sqlalchemy import MetaData
 
 from factory.events.blobs import BlobStore
+from factory.index.appraisal import appraisal_handlers, appraisal_tables
 from factory.index.briefings import briefing_handlers, briefing_tables
 from factory.index.budgets import (
     budget_handlers,
@@ -59,7 +60,7 @@ from factory.index.tasks import task_handlers, tasks_table
 from factory.index.watch import run_started_handler, watch_handlers, watch_tables
 
 # Bump on any change to the tables or handlers below; the index is then rebuilt.
-PROJECTION_VERSION = "65"
+PROJECTION_VERSION = "66"
 
 
 def default_projection(blobs: BlobStore | None = None) -> Projection:
@@ -111,6 +112,7 @@ def default_projection(blobs: BlobStore | None = None) -> Projection:
     experiments = experiment_tables(
         metadata, protocol.protocols, project, hypotheses.hypotheses, hypotheses.registrations
     )
+    appraisals = appraisal_tables(metadata, protocol.protocols)
     evaluations = evaluation_tables(metadata)
     directions = direction_tables(metadata)
     curation = curation_tables(metadata)
@@ -156,6 +158,7 @@ def default_projection(blobs: BlobStore | None = None) -> Projection:
         **hypothesis_handlers(hypotheses),
         **label_handlers(labels),
         **experiment_handlers(experiments),
+        **appraisal_handlers(appraisals),
         **evaluation_handlers(evaluations),
         **direction_handlers(directions),
         **curation_handlers(curation),

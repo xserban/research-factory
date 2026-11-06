@@ -1,6 +1,13 @@
 import re
 from dataclasses import dataclass
 
+from factory.model.appraisal_events import (
+    AppraisalAuditLabelled,
+    AppraisalAuditSampled,
+    AppraisalJudged,
+    AppraisalRecorded,
+    AppraisalResolved,
+)
 from factory.model.base import StrictModel
 from factory.model.budgets import BudgetSet
 from factory.model.cards import (
@@ -295,6 +302,11 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("extraction.resolved", ExtractionResolved, 1))
     catalog.register(EventType("extraction.audit_sampled", ExtractionAuditSampled, 1))
     catalog.register(EventType("extraction.audit_labelled", ExtractionAuditLabelled, 1))
+    catalog.register(EventType("appraisal.recorded", AppraisalRecorded, 1))
+    catalog.register(EventType("appraisal.judged", AppraisalJudged, 1))
+    catalog.register(EventType("appraisal.resolved", AppraisalResolved, 1))
+    catalog.register(EventType("appraisal.audit_sampled", AppraisalAuditSampled, 1))
+    catalog.register(EventType("appraisal.audit_labelled", AppraisalAuditLabelled, 1))
     catalog.register(EventType("document.converted", Converted, 1))
     catalog.register(EventType("document.conversion_failed", ConversionFailed, 1))
     catalog.register(EventType("reference.extracted", ReferenceExtracted, 1))

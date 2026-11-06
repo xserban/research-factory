@@ -26,6 +26,7 @@ from dataclasses import dataclass
 
 from factory.errors import ValidationIssue
 from factory.imports.model import ImportFormat, ImportRole
+from factory.model.appraisal import INSTRUMENT_SECTION, PLATFORM_RULE_NAMES, AppraisalInstrument
 from factory.model.miners import MinerUse
 from factory.model.project import RigorMode
 from factory.model.protocol import (
@@ -260,6 +261,27 @@ def _errors(
             )
     issues.extend(_extraction_errors(spec.extraction_schema))
     issues.extend(_contribution_errors(spec.contribution_schema))
+    issues.extend(appraisal_errors(spec.appraisal_instrument))
+    return issues
+
+
+def appraisal_errors(instrument: AppraisalInstrument | None) -> list[ValidationIssue]:
+    """The `appraisal_instrument` section: item ids are unique and a platform item names a rule of
+    the fixed menu. Absence is no error: the section is optional, and `systematic` only gets a
+    `check` finding (plan EQ, required when)."""
+    if instrument is None:
+        return []
+    issues: list[ValidationIssue] = []
+    seen: set[str] = set()
+    for i, item in enumerate(instrument.items):
+        where = f"{INSTRUMENT_SECTION}.items.{i}"
+        if item.id in seen:
+            issues.append(ValidationIssue(f"{where}.id", "an item id is listed once"))
+        seen.add(item.id)
+        if item.rule is not None and item.rule not in PLATFORM_RULE_NAMES:
+            issues.append(
+                ValidationIssue(f"{where}.rule", f"unknown rule; one of {PLATFORM_RULE_NAMES}")
+            )
     return issues
 
 

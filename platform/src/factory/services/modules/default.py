@@ -13,6 +13,7 @@ from factory.events.catalog import default_catalog
 from factory.index.default import default_projection
 from factory.modules.registry import ModuleRegistry
 from factory.services.modules import (
+    appraisal,
     benchmark_ledger,
     briefing,
     cards,
@@ -62,8 +63,8 @@ def default_modules() -> ModuleRegistry:
     them; `check` reports in rule order, which `CheckHit.seq` carries."""
     modules = [
         core, scoping, retrieval, dedup, screening, fulltext, conversion, extraction,
-        contributions, cards, evidence, references, imports, inbox, grey, living, snapshots,
-        lineage,
+        contributions, appraisal, cards, evidence, references, imports, inbox, grey, living,
+        snapshots, lineage,
         intuition, vocabulary, contradictions, discovery, coverage, finders, matching, exports,
         portfolio, regions, mining, hypotheses, labels, views, experiments,
         evaluation, benchmark_ledger, directions, curation, writing, briefing, manuscripts,
