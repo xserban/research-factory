@@ -629,6 +629,8 @@ def _stale_reasons(ctx: _Ctx, row: Any) -> tuple[str, ...]:
         reasons.add("property-rejected")
     basis = None if row["basis_json"] is None else json.loads(str(row["basis_json"]))
     kind = str(row["basis_kind"])
+    if kind == "imported" and basis is not None:
+        kind = "row" if "row_key" in basis else "inferred" if "note" in basis else "quote"
     if kind == "row" and basis is not None:
         defn = ctx.definition(key)
         value = json.loads(str(row["value_json"]))

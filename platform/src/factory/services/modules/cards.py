@@ -44,6 +44,13 @@ SPEC = ModuleSpec(
             PolicyKind.HUMAN,
             ("slice 6 ruling 9",),
         ),
+        GateSpec(
+            "cards.import",
+            GateKind.DECISION,
+            ("card.imported",),
+            PolicyKind.HUMAN,
+            ("plan XL task 2", "R-51"),
+        ),
     ),
     regime=QualityRegime(1, "none", "assertion", "none", "agreed-sample", ("document-version",)),
     checks=(

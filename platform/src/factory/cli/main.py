@@ -79,6 +79,7 @@ from factory.services import audit as audit_service
 from factory.services import benchmark_ledger as ledger_service
 from factory.services import briefing as briefing_service
 from factory.services import calibration as calibration_service
+from factory.services import card_import, region_adoption
 from factory.services import cards as cards_service
 from factory.services import chase as chase_service
 from factory.services import check as check_service
@@ -147,7 +148,6 @@ from factory.services import protocol as protocol_service
 from factory.services import question as question_service
 from factory.services import reference_resolve as reference_resolve_service
 from factory.services import references as references_service
-from factory.services import region_adoption
 from factory.services import regions as regions_service
 from factory.services import relations as relations_service
 from factory.services import reproduction as reproduction_service
@@ -4863,6 +4863,28 @@ def _decide_assertion(
     with _reporting_errors():
         project = _resolve_project(state)
         cards_service.decide_assertion(project, project.human_actor(), assertion, decision, why)
+
+
+@cards_app.command("import")
+def cards_import_cmd(
+    ctx: typer.Context,
+    card: Annotated[str, typer.Argument(help="The source card id, mcd_ or pbd_.")],
+    source: Annotated[
+        Path, typer.Option("--from", help="The source project's directory, projects/<slug>.")
+    ],
+) -> None:
+    """Import a card from another project on this machine, as a human act. An assertion is
+    stated only if its basis re-verifies here; the rest are imported-unverified. The source
+    project is never written."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        result = card_import.import_card(project, project.human_actor(), source, card)
+    typer.echo(f"imported {result.card_id}")
+    for source_id, new_id, status in result.imported:
+        typer.echo(f"  {source_id} -> {new_id} ({status})")
+    for source_id, reason in result.skipped:
+        typer.echo(f"  skipped {source_id}: {reason}")
 
 
 @cards_app.command("confirm")

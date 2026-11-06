@@ -35,6 +35,7 @@ from factory.model.cards import (
     BasisKind,
     CardAsserted,
     CardCreated,
+    CardImported,
     PropertyDecided,
     PropertyMerged,
     PropertyProposed,
@@ -131,7 +132,7 @@ def card_handlers(t: CardTables) -> dict[str, Handler]:
         "card.created": _card_created(t),
         "card.asserted": _asserted(t),
         "card.assertion_decided": _assertion_decided(t),
-        "card.imported": _imported,
+        "card.imported": _imported(t),
     }
 
 
@@ -316,5 +317,18 @@ def _assertion_decided(t: CardTables) -> Handler:
     return decided
 
 
-def _imported(conn: Connection, event: Event) -> None:
-    """`card.imported` is written by the Later cross-project import; nothing is projected yet."""
+def _imported(t: CardTables) -> Handler:
+    """`card.imported` marks a card as imported from another project. Only a human's folds, and
+    only onto a card that exists and carries no mark yet."""
+
+    def imported(conn: Connection, event: Event) -> None:
+        if event.actor.kind != "human":
+            return
+        p = CardImported.model_validate(event.payload)
+        conn.execute(
+            update(t.cards)
+            .where(and_(t.cards.c.card_id == p.card_id, t.cards.c.imported_from.is_(None)))
+            .values(imported_from=f"{p.source_project}:{p.source_card_id}")
+        )
+
+    return imported
