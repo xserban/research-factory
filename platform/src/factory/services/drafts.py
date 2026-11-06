@@ -23,8 +23,9 @@ Invariants:
 - Status is computed on read and never stored. `stale` wins over `flagged`, `flagged` over
   `supported`, `supported` over `unchecked`; a `structural` or `interpretive` sentence keeps its
   name unless it is stale. A sentence is stale when a support stopped being eligible, when a stat
-  recomputes to another value (`stat-changed`), or when a cell, item or claim no longer says what
-  the verdict's unit showed (`support-changed`): a value can be replaced under the same row key. A
+  recomputes to another value (`stat-changed`), or when a cell, item, claim or edge no longer says
+  what the verdict's unit showed (`support-changed`): a value can be replaced under the same row
+  key. A
   group is left out, as an added row would stale every sentence on it. An audit label is a human's
   result, so the agent variant of the status leaves it out: a rate would follow from counting the
   sentences it flags (decision 37.14, as decision 90 item 2 reads it).
@@ -105,7 +106,7 @@ from factory.writing.stats import STATS_VERSION
 
 ORDER_STEP = 10
 MAX_SECTIONS = 99
-COMPARED_KINDS = (SupportKind.CELL, SupportKind.ITEM, SupportKind.CLAIM)
+COMPARED_KINDS = (SupportKind.CELL, SupportKind.ITEM, SupportKind.CLAIM, SupportKind.EDGE)
 """The supports whose words a verdict relied on, compared on read with the unit it was given."""
 
 
@@ -447,7 +448,7 @@ def _unit_shown(project: Project, blob: str | None) -> dict[str, SupportShown] |
 def support_changed(
     project: Project, resolved: Sequence[ResolvedSupport], blob: str | None
 ) -> bool:
-    """Whether an eligible cell, item or claim says something other than the verdict's unit showed.
+    """Whether an eligible cell, item, claim or edge says other than the verdict's unit showed.
     A unit that cannot be read vouches for nothing, so it reads as changed (fail closed)."""
     shown = _unit_shown(project, blob)
     if shown is None:
