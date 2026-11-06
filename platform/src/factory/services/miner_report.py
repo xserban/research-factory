@@ -54,14 +54,17 @@ class MinerCalibrationReport:
 
 def _submitted(project: Project, tasks: frozenset[str]) -> tuple[int, int]:
     """`(verified, submitted)` rows of the calibration pass: the rows recorded, and the rows of the
-    distinct calls that recorded them (each recorded event carries its call's input)."""
+    distinct calls that recorded them or had every row rejected (each such event carries its
+    call's input)."""
     verified = 0
     blobs: set[str] = set()
     for event in read_all(project.paths.events_dir, project.catalog):
-        if event.type == "extraction.recorded" and event.payload.get("task_id") in tasks:
+        if event.payload.get("task_id") not in tasks:
+            continue
+        if event.type == "extraction.recorded":
             verified += 1
-            if event.input_blob is not None:
-                blobs.add(event.input_blob)
+        if event.type in ("extraction.recorded", "extraction.rejected") and event.input_blob:
+            blobs.add(event.input_blob)
     submitted = 0
     for blob in blobs:
         body = project.blobs.get_json(blob)

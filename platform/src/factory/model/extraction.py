@@ -276,6 +276,13 @@ class ExtractionRecorded(StrictModel):
     cited: CitedEntry | None = None
 
 
+class ExtractionRejected(StrictModel):
+    """A calibration call whose every row was rejected, which would otherwise leave no trace: its
+    input blob holds the submitted rows, so `verification_rate` counts them (plan PF)."""
+
+    task_id: str = Field(pattern=TASK_ID_RE)
+
+
 class ClaimRecorded(StrictModel):
     claim_id: str = Field(pattern=CLAIM_ID_RE)
     work_id: str = Field(min_length=1)

@@ -58,6 +58,7 @@ from factory.services.extraction import (
 )
 from factory.services.reference_view import reference_view_of
 from factory.services.references import current_extraction
+from factory.services.search import get_work
 
 NO_CITATION_MARKER = "no-citation-marker"
 ANCHOR_NOT_FOUND = "anchor-not-found"
@@ -69,6 +70,8 @@ ENUM_NEEDS_QUOTE = "enum-needs-quote"
 
 _YEAR = re.compile(r"\b(1[89]\d{2}|20\d{2})\b")
 YEAR_WINDOW = 1
+_EARLIEST_YEAR = 1800
+"""The lowest year `_YEAR` can read: a title with no stated year is searched from here."""
 _BATCH = 500
 """A title reference is looked for among works this many years either side of its quote's year."""
 
@@ -121,20 +124,29 @@ def title_candidates(project: Project, lo: int, hi: int) -> list[Candidate]:
     return sorted(found.values(), key=lambda c: (c.work_id, c.title))
 
 
-def title_ref(project: Project, title: str, quote: str | None) -> TitleRef | None:
-    """The corpus work `title` names, or None. The year comes from the quote (a title reference
-    whose quote states no year is not found); candidates are the works within `YEAR_WINDOW`
-    years of it."""
+def title_ref(
+    project: Project, title: str, quote: str | None, citing_year: int | None = None
+) -> TitleRef | None:
+    """The corpus work `title` names, or None. The year comes from the quote, and candidates are
+    the works within `YEAR_WINDOW` years of it. A quote that states no year widens the window to
+    everything up to the citing work's year (`citing_year`), and the match is then only inferred;
+    with no year from either, the title is not found."""
     found = _YEAR.search(quote or "")
-    if found is None:
+    if found is None and citing_year is None:
         return None
-    year = int(found.group(1))
-    candidates = title_candidates(project, year - YEAR_WINDOW, year + YEAR_WINDOW)
+    if found is None:
+        assert citing_year is not None
+        year = None
+        lo, hi = _EARLIEST_YEAR, citing_year + YEAR_WINDOW
+    else:
+        year = int(found.group(1))
+        lo, hi = year - YEAR_WINDOW, year + YEAR_WINDOW
+    candidates = title_candidates(project, lo, hi)
     match = match_title(RefFields(None, None, None, year, None, title, None), candidates)
     if match.work_id is None:
         return None
     if match.state is LinkState.RESOLVED and match.confidence is Confidence.TITLE_EXACT:
-        return TitleRef(match.work_id, "stated")
+        return TitleRef(match.work_id, "stated" if year is not None else "inferred")
     if match.state is LinkState.UNCONFIRMED:
         return TitleRef(match.work_id, "inferred")
     return None
@@ -207,7 +219,9 @@ def kind_checks(spec: MinerSpec) -> ExtraCheck:
                         reference_extraction_id=view.extraction_id, ordinal=ordinal, marker=marker
                     )
             elif isinstance(kind, WorkRefKind):
-                if title_ref(project, str(stored.value), stored.quote) is None:
+                citing = get_work(project, pin.work_id)
+                citing_year = None if citing is None else citing.dates.year
+                if title_ref(project, str(stored.value), stored.quote, citing_year) is None:
                     issues.append(ValidationIssue(f"{where}.value", WORK_NOT_FOUND))
             elif (
                 isinstance(kind, EnumKind)

@@ -23,7 +23,7 @@ from collections.abc import Collection, Iterator, Mapping, Sequence
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any, Literal
 
-from pydantic import JsonValue
+from pydantic import Field, JsonValue
 from sqlalchemy import text
 
 from factory.canonical import canonical_json
@@ -247,8 +247,10 @@ def ref_quote(project: Project, ref: str) -> str | None:
 def propose_contradiction(
     project: Project, actor: Actor, item: ContradictionInput
 ) -> tuple[str, bool]:
-    """Propose that two refs contradict each other; returns (contradiction id, written). The
-    same unordered pair is idempotent: the first proposal's id is returned and nothing written.
+    """Propose that two refs contradict each other; returns (contradiction id, new). The same
+    unordered pair is idempotent: the first proposal's id is returned and `new` is False. A session
+    that has not proposed the pair yet is recorded under that id, for `decide_contradiction`'s
+    proposer rule; the fold keeps the first event, so the contradiction itself does not change.
 
     Refused, with nothing written: an actor that is not an agent or a human (`actor`); the same
     ref twice (`ref_b`: `same-ref`); a ref that names no claim or quoted contribution item
@@ -278,9 +280,9 @@ def propose_contradiction(
                 text("SELECT contradiction_id FROM contradictions WHERE ref_a = :a AND ref_b = :b"),
                 {"a": ref_a, "b": ref_b},
             ).first()
-        if existing is not None:
+        if existing is not None and actor.session in _proposers(project, str(existing[0])):
             return str(existing[0]), False
-        contradiction_id = project.ids.new("ctr")
+        contradiction_id = project.ids.new("ctr") if existing is None else str(existing[0])
         payload = ContradictionProposed(
             contradiction_id=contradiction_id,
             ref_a=ref_a,
@@ -305,7 +307,20 @@ def propose_contradiction(
                 )
             ]
         )
-    return contradiction_id, True
+    return contradiction_id, existing is None
+
+
+def _proposers(project: Project, contradiction_id: str) -> set[str]:
+    """Every session that proposed the contradiction, first or again."""
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT DISTINCT e.session FROM event_refs f JOIN events e ON e.id = f.event_id "
+                "WHERE f.type = 'contradiction.proposed' AND f.ref = :c"
+            ),
+            {"c": contradiction_id},
+        ).all()
+    return {str(row[0]) for row in rows}
 
 
 def decide_contradiction(
@@ -324,16 +339,13 @@ def decide_contradiction(
         project.index.sync()
         with project.index.connect() as conn:
             row = conn.execute(
-                text(
-                    "SELECT e.session FROM contradictions c JOIN events e ON e.id = c.event_id "
-                    "WHERE c.contradiction_id = :c"
-                ),
+                text("SELECT 1 FROM contradictions WHERE contradiction_id = :c"),
                 {"c": contradiction_id},
             ).first()
         issues: list[ValidationIssue] = []
         if row is None:
             issues.append(ValidationIssue("contradiction_id", "unknown"))
-        elif str(row[0]) == actor.session:
+        elif actor.session in _proposers(project, contradiction_id):
             issues.append(ValidationIssue("actor", "proposer-session"))
         if not rationale.strip():
             issues.append(ValidationIssue("rationale", "state the reason for the decision"))
@@ -440,6 +452,9 @@ class GapReport(StrictModel):
     corpus: CorpusDefinition
     statement: str
     gap_key: str
+    aggregated_keys: list[str] = Field(default_factory=list)
+    """The comparability keys each cell adds up across: a filled cell need not hold one setting of
+    them. Not part of `gap_key`, which stays what it was."""
 
 
 def _corpus(project: Project) -> CorpusDefinition:
@@ -612,6 +627,7 @@ def find_gaps(
         sorted(universe_rows),
         sorted(universe_cols),
         counts,
+        [k for k in keys if k != columns_axis and k not in wanted],
     )
 
 
@@ -673,6 +689,7 @@ def _report(
     rows: Sequence[str],
     columns: Sequence[str],
     counts: Mapping[tuple[str, str], int],
+    aggregated_keys: Sequence[str] = (),
 ) -> GapReport:
     size = len(rows) * len(columns)
     if size > GAP_MAX_CELLS:
@@ -705,4 +722,5 @@ def _report(
             search=corpus.last_search or "none",
         ),
         gap_key=hashlib.sha256(canonical_json(body)).hexdigest()[:16],
+        aggregated_keys=list(aggregated_keys),
     )

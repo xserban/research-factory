@@ -36,6 +36,7 @@ SPEC = ModuleSpec(
             "extraction.pass_joined",
             "extraction.pass_opened",
             "extraction.recorded",
+            "extraction.rejected",
             "extraction.resolved",
         ),
         tables=(

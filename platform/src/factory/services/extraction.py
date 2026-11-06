@@ -81,6 +81,7 @@ from factory.model.extraction import (
     ExtractionPassJoined,
     ExtractionPassOpened,
     ExtractionRecorded,
+    ExtractionRejected,
     MinerScope,
     ReportedIn,
     Scope,
@@ -1296,6 +1297,7 @@ def _record(
             if refusals:
                 raise FactoryValidationError(refusals)
         if not (accepted_rows or accepted_claims or closing):
+            _note_rejected_call(project, actor, task, task_id, rows)
             return ExtractResult(
                 rows=BatchResult[str](written=[], rejected=row_errors),
                 claims=BatchResult[str](written=[], rejected=claim_errors),
@@ -1393,6 +1395,33 @@ def _record(
             claims=BatchResult[str](written=claim_ids, rejected=claim_errors),
             completed=closing,
         )
+
+
+def _note_rejected_call(
+    project: Project,
+    actor: Actor,
+    task: Task,
+    task_id: str,
+    rows: Sequence[ExtractedRowInput],
+) -> None:
+    """Keep the submitted rows of a calibration call that recorded nothing, for its rate."""
+    raw = task_content(project, task)
+    if not rows or not isinstance(raw, dict) or raw.get("calibration_id") is None:
+        return
+    blob = project.blobs.put_json(
+        {"task_id": task_id, "rows": [row.model_dump(mode="json") for row in rows]}
+    )
+    project.record(
+        [
+            project.events.make(
+                "extraction.rejected",
+                ExtractionRejected(task_id=task_id),
+                actor,
+                refs=(task_id,),
+                input_blob=blob,
+            )
+        ]
+    )
 
 
 def _unit_of(project: Project, task: Task) -> _Unit:

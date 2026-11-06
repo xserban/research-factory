@@ -48,6 +48,7 @@ from factory.model.extraction import (
     ExtractionPassJoined,
     ExtractionPassOpened,
     ExtractionRecorded,
+    ExtractionRejected,
     ExtractionResolved,
 )
 from factory.model.findings import ContradictionDecided, ContradictionProposed
@@ -264,6 +265,7 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("extraction.recorded", ExtractionRecorded, 1))
     catalog.register(EventType("extraction.claim_recorded", ClaimRecorded, 1))
     catalog.register(EventType("extraction.closed", ExtractionClosed, 1))
+    catalog.register(EventType("extraction.rejected", ExtractionRejected, 1))
     catalog.register(EventType("extraction.resolved", ExtractionResolved, 1))
     catalog.register(EventType("extraction.audit_sampled", ExtractionAuditSampled, 1))
     catalog.register(EventType("extraction.audit_labelled", ExtractionAuditLabelled, 1))

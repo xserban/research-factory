@@ -331,15 +331,19 @@ def _cites(ev: _Eval, rule: CitesRule, target: str, field: str) -> None:
         f"LEFT JOIN {ev.canon} cs ON cs.work_id = e.source "
         f"LEFT JOIN {ev.canon} ct ON ct.work_id = e.target"
     )
+    # A resolved link may name a work no corpus query found: such a target joins no region.
+    corpus = ev.corpus()
     if rule.direction == "citing":
         sql = (
             f"SELECT {cs} AS id FROM graph_edges e JOIN {expanded} b ON b.id = e.target {joins} "
-            f"WHERE {live} GROUP BY {cs} HAVING COUNT(DISTINCT {ct}) >= :k"
+            f"WHERE {live} AND {cs} IN (SELECT id FROM {corpus}) "
+            f"GROUP BY {cs} HAVING COUNT(DISTINCT {ct}) >= :k"
         )
     else:
         sql = (
             f"SELECT {ct} AS id FROM graph_edges e JOIN {expanded} b ON b.id = e.source {joins} "
-            f"WHERE {live} GROUP BY {ct} HAVING COUNT(DISTINCT {cs}) >= :k"
+            f"WHERE {live} AND {ct} IN (SELECT id FROM {corpus}) "
+            f"GROUP BY {ct} HAVING COUNT(DISTINCT {cs}) >= :k"
         )
     ev.add_works(target, sql, {"k": rule.min_k})
 
