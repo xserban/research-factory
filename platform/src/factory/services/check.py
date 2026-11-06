@@ -536,6 +536,7 @@ def _run_rules(project: Project) -> list[_Hit]:
         _references(project),
         _snowball(project, outcomes),
         _inbox(project, outcomes),
+        _grey(project),
         _imports(project),
         _living(project),
         _notices(project, outcomes),
@@ -1736,6 +1737,24 @@ def _inbox(project: Project, outcomes: Mapping[str, Outcome]) -> list[_Hit]:
             )
         )
     return hits
+
+
+def _grey(project: Project) -> list[_Hit]:
+    """`grey-undeclared`: works carry grey provenance while the protocol declares no
+    `grey_sources` (plan SG). The works are listed; nothing is removed."""
+    from factory.services.grey import declared_sources, grey_work_ids
+
+    found = sorted(grey_work_ids(project))
+    if found and not declared_sources(project):
+        return [
+            _Hit(
+                "grey-undeclared",
+                tuple(found),
+                f"{len(found)} work(s) found by a grey method; the protocol declares no "
+                "grey_sources",
+            )
+        ]
+    return []
 
 
 # --- Links and provenance ---

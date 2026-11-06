@@ -36,6 +36,7 @@ class QueryPurpose(StrEnum):
     SUPPLIED = "supplied"
     IMPORT = "import"
     STATUS = "status"
+    GREY = "grey"
 
 
 class RunStatus(StrEnum):

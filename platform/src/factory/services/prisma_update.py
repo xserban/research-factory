@@ -58,6 +58,7 @@ from factory.services.prisma import (
     full_text_boxes,
     has_admission,
     prisma_flow,
+    reported_other_methods,
 )
 from factory.services.snapshots import (
     SnapshotBlob,
@@ -208,11 +209,7 @@ def compute_update(
             criterion = criteria.get(work) or UNSPECIFIED
             excluded[criterion] = excluded.get(criterion, 0) + 1
     imports = has_admission(project)
-    other = {
-        method.value: 0
-        for method in OTHER_METHODS
-        if imports or method is not ProvenanceMethod.LIBRARY_IMPORT
-    }
+    other = {method.value: 0 for method in reported_other_methods(project, imports=imports)}
     for method in facts.other.values():
         other[method] += 1
     flow = prisma_flow(project)

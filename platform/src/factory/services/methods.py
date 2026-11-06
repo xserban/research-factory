@@ -18,6 +18,7 @@ from sqlalchemy import TextClause, text
 
 from factory.model.base import StrictModel
 from factory.model.budgets import Budget
+from factory.model.grey import GreySource
 from factory.model.protocol import ScreeningStage, SnowballPlan
 from factory.model.references import Direction
 from factory.references.match import MATCHER_VERSION
@@ -48,6 +49,7 @@ from factory.services.evidence_report import evidence_report
 from factory.services.extraction_agreement import agreement_overall
 from factory.services.extraction_audit import extraction_audit_report
 from factory.services.gate_status import GateStatusRow, notable_rows
+from factory.services.grey import declared_sources, grey_paragraph
 from factory.services.imports import library_import_only
 from factory.services.prisma import (
     UNCONVERTED,
@@ -198,6 +200,10 @@ class MethodsReport(StrictModel):
     """Cost axes on which at least one group has a frontier."""
     supplied_links: SuppliedLinks | None = None
     """None when no link was ever captured: the paragraph is then left out."""
+    grey_sources: list[GreySource] = Field(default_factory=list)
+    """The protocol's declared grey sources (plan SG); empty, and no paragraph, while absent."""
+    grey_reported: int = 0
+    grey_contacts: int = 0
     reference_extractions: int = 0
     """Live reference-list extractions (slice 3a); 0, and the fields below empty, when the
     project has neither an extraction nor a snowball round."""
@@ -332,6 +338,7 @@ def methods_report(project: Project) -> MethodsReport:
         evidence_frontier_costs=sorted({a.axis for g in groups for a in g.frontiers}),
         **references,
         supplied_links=_supplied_links(project),
+        grey_sources=list(declared_sources(project)),
         imports=_imports(project, agent=False),
         gate_policy=notable_rows(project),
         miners=_miners(project),
@@ -668,6 +675,17 @@ def render_methods(report: MethodsReport, *, withheld: frozenset[str] = frozense
         *[_import_paragraph(i) for i in report.imports],
         _seed_recall(report, withheld),
         *([] if report.supplied_links is None else [_supplied(report.supplied_links)]),
+        *(
+            []
+            if not report.grey_sources
+            else [
+                grey_paragraph(
+                    tuple(report.grey_sources),
+                    reported=report.grey_reported,
+                    contacts=report.grey_contacts,
+                )
+            ]
+        ),
         *([] if not report.miners else [_miners_paragraph(report, withheld)]),
         *([] if not report.imported_rows else [_imports_paragraph(report)]),
         *([] if not report.gate_policy else [_gate_policy(report, withheld)]),

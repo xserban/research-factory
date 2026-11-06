@@ -64,6 +64,10 @@ class ProvenanceMethod(StrEnum):
     HAND_SEARCH = "hand-search"
     SUPPLIED = "supplied"
     LIBRARY_IMPORT = "library-import"
+    GREY_STRUCTURED = "grey-structured"
+    GREY_WEBSITE = "grey-website"
+    GREY_WEB_SEARCH = "grey-web-search"
+    EXPERT_CONTACT = "expert-contact"
 
 
 class Identifiers(_WorkModel):

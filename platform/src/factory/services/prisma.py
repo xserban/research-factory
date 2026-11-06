@@ -66,10 +66,39 @@ OTHER_METHODS: tuple[ProvenanceMethod, ...] = (
     ProvenanceMethod.HAND_SEARCH,
     ProvenanceMethod.SUPPLIED,
     ProvenanceMethod.LIBRARY_IMPORT,
+    ProvenanceMethod.GREY_STRUCTURED,
+    ProvenanceMethod.GREY_WEBSITE,
+    ProvenanceMethod.GREY_WEB_SEARCH,
+    ProvenanceMethod.EXPERT_CONTACT,
 )
 """Non-database methods in precedence order: a work counts under the first one it carries.
 The `library-import` line is reported only once an import has been admitted (`has_admission`),
-so a project without imports keeps its flow unchanged."""
+and the grey lines only once the protocol declares `grey_sources` (plan SG, PD-7), so a project
+without either keeps its flow unchanged. The grey methods come last, so no existing count moves
+(decision 75 item 2)."""
+
+GREY_METHODS: frozenset[ProvenanceMethod] = frozenset(
+    {
+        ProvenanceMethod.GREY_STRUCTURED,
+        ProvenanceMethod.GREY_WEBSITE,
+        ProvenanceMethod.GREY_WEB_SEARCH,
+        ProvenanceMethod.EXPERT_CONTACT,
+    }
+)
+
+
+def reported_other_methods(project: Project, *, imports: bool) -> tuple[ProvenanceMethod, ...]:
+    """The `OTHER_METHODS` lines the flow reports: `library-import` once an import is admitted,
+    the grey methods once the current protocol declares `grey_sources`."""
+    current = current_protocol(project)
+    grey = current is not None and current.spec.grey_sources is not None
+    return tuple(
+        method
+        for method in OTHER_METHODS
+        if (imports or method is not ProvenanceMethod.LIBRARY_IMPORT)
+        and (grey or method not in GREY_METHODS)
+    )
+
 
 CHASE_BACKWARD = "chase-backward"
 CHASE_FORWARD = "chase-forward"
@@ -265,11 +294,7 @@ def prisma_flow(project: Project) -> PrismaFlow:
 
     databases = _database_records(project)
     imports = has_admission(project)
-    other = {
-        method.value: 0
-        for method in OTHER_METHODS
-        if imports or method is not ProvenanceMethod.LIBRARY_IMPORT
-    }
+    other = {method.value: 0 for method in reported_other_methods(project, imports=imports)}
     mechanisms = _chase_mechanisms(project)
     detail = dict.fromkeys(OTHER_DETAIL_KEYS, 0)
     canonical_with_database = 0

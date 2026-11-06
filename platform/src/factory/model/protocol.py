@@ -30,6 +30,7 @@ from factory.canonical import canonical_json
 from factory.imports.model import ImportFormat, ImportRole
 from factory.model.base import StrictModel
 from factory.model.gates import GatePolicies
+from factory.model.grey import GreySource, grey_source_issues
 from factory.model.hypothesis_plan import HypothesisPlan
 from factory.model.identity import REVIEW_REQUEST_ID_RE, ULID_RE
 from factory.model.miners import MinerUse
@@ -66,6 +67,7 @@ _SORT_KEYS: dict[str, tuple[str, ...]] = {
     "limits": ("field", "value"),
     "library_sources": ("name", "format", "role"),
     "miners": ("name", "version"),
+    "grey_sources": ("method", "target", "stopping_rule"),
 }
 _SEARCH_STRATEGY_KEYS = ("sources", "queries", "limits")
 _OMITTED_WHEN_NONE = frozenset(
@@ -80,6 +82,7 @@ _OMITTED_WHEN_NONE = frozenset(
         "gate_policies",
         "miners",
         "hypothesis_plan",
+        "grey_sources",
     }
 )
 """Optional sections left out of every hash while unset, so protocols that predate them keep
@@ -308,7 +311,18 @@ class ProtocolSpec(StrictModel):
     hypothesis_plan: HypothesisPlan | None = None
     """Hypothesis defaults (slice 6): minimum seeds, confidence, test-access limit, conflict
     tolerance. Absent (None) until declared; left out of the hash while unset."""
+    grey_sources: tuple[GreySource, ...] | None = None
+    """The declared grey literature sources (plan SG, PD-7). Absent (None) until declared; left
+    out of the hash while unset, so protocols that predate it keep their versions."""
     rationale: str = ""
+
+    @model_validator(mode="after")
+    def _grey_sources_valid(self) -> Self:
+        if self.grey_sources is not None:
+            issues = grey_source_issues(self.grey_sources)
+            if issues:
+                raise ValueError("; ".join(reason for _, reason in issues))
+        return self
 
     @model_validator(mode="after")
     def _library_sources_unique(self) -> Self:
@@ -372,6 +386,7 @@ AMENDABLE_FIELDS = (
     "gate_policies",
     "miners",
     "hypothesis_plan",
+    "grey_sources",
 )
 """Top-level hashed fields other than criteria, which an amendment reports as `other_changes`."""
 

@@ -32,6 +32,7 @@ from factory.services.modules import (
     extraction,
     finders,
     fulltext,
+    grey,
     hypotheses,
     imports,
     inbox,
@@ -61,7 +62,8 @@ def default_modules() -> ModuleRegistry:
     them; `check` reports in rule order, which `CheckHit.seq` carries."""
     modules = [
         core, scoping, retrieval, dedup, screening, fulltext, conversion, extraction,
-        contributions, cards, evidence, references, imports, inbox, living, snapshots, lineage,
+        contributions, cards, evidence, references, imports, inbox, grey, living, snapshots,
+        lineage,
         intuition, vocabulary, contradictions, discovery, coverage, finders, matching, exports,
         portfolio, regions, mining, hypotheses, labels, views, experiments,
         evaluation, benchmark_ledger, directions, curation, writing, briefing, manuscripts,
