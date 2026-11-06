@@ -351,6 +351,9 @@ class DraftAuditReport(StrictModel):
     rate: float | None
     above_ceiling: bool | None
     outdated: bool = False
+    all_drawn: int = 0
+    """Manuscripts only: every sample drawn, detached verdicts included; `drawn` and the rate
+    count live verdicts alone."""
 
 
 class DraftReleased(StrictModel):

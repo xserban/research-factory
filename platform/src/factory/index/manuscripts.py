@@ -580,13 +580,26 @@ def _verified(t: ManuscriptTables, blobs: BlobStore | None) -> Handler:
     return verified
 
 
+LIVE_VERDICT = (
+    "EXISTS (SELECT 1 FROM manuscript_sentences s, json_each(s.keys) j "
+    "JOIN manuscript_citations c ON c.manuscript_id = s.manuscript_id AND c.key = j.value "
+    "WHERE s.manuscript_id = v.manuscript_id AND s.ordinal = v.ordinal "
+    "AND c.state = 'resolved' AND c.work_id = v.work_id AND NOT EXISTS ("
+    "SELECT 1 FROM manuscript_closures z WHERE z.manuscript_id = v.manuscript_id "
+    "AND z.ordinal = v.ordinal AND z.key = j.value))"
+)
+"""A verdict `v` whose unit still stands: a key of its sentence resolves to its work and no closure
+stands on that key. A detached verdict (its citation changed since) is not live and enters no
+count, no draw and no rate."""
+
+
 def audit_population(conn: Connection, manuscript_id: str) -> list[str]:
-    """The `supported` verdicts of the manuscript no sample has drawn, sorted."""
+    """The live `supported` verdicts of the manuscript no sample has drawn, sorted."""
     rows = conn.execute(
         sql(
-            "SELECT verdict_id FROM manuscript_verdicts WHERE manuscript_id = :m "
-            "AND verdict = :supported AND verdict_id NOT IN "
-            "(SELECT verdict_id FROM manuscript_audit_items) ORDER BY verdict_id"
+            "SELECT v.verdict_id FROM manuscript_verdicts v WHERE v.manuscript_id = :m "
+            f"AND v.verdict = :supported AND {LIVE_VERDICT} AND v.verdict_id NOT IN "
+            "(SELECT verdict_id FROM manuscript_audit_items) ORDER BY v.verdict_id"
         ),
         {"m": manuscript_id, "supported": Verdict.SUPPORTED.value},
     ).all()
@@ -594,15 +607,16 @@ def audit_population(conn: Connection, manuscript_id: str) -> list[str]:
 
 
 def audit_due(conn: Connection, manuscript_id: str) -> bool:
-    """Whether a `supported` verdict is newer than the last draw (any such when none was drawn)."""
+    """Whether a live `supported` verdict is newer than the last draw (any such when none was
+    drawn)."""
     last = conn.execute(
         sql("SELECT MAX(event_id) FROM manuscript_audits WHERE manuscript_id = :m"),
         {"m": manuscript_id},
     ).scalar()
     newest = conn.execute(
         sql(
-            "SELECT MAX(event_id) FROM manuscript_verdicts "
-            "WHERE manuscript_id = :m AND verdict = :supported"
+            "SELECT MAX(v.event_id) FROM manuscript_verdicts v "
+            f"WHERE v.manuscript_id = :m AND v.verdict = :supported AND {LIVE_VERDICT}"
         ),
         {"m": manuscript_id, "supported": Verdict.SUPPORTED.value},
     ).scalar()

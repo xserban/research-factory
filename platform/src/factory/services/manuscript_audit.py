@@ -22,7 +22,7 @@ from sqlalchemy import text
 
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
-from factory.index.manuscripts import audit_due, audit_population
+from factory.index.manuscripts import LIVE_VERDICT, audit_due, audit_population
 from factory.model.drafts import (
     DRAFT_AUDIT_FRACTION,
     DRAFT_AUDIT_MINIMUM,
@@ -135,22 +135,23 @@ def audit_report(project: Project, manuscript_id: str) -> DraftAuditReport:
     labelled, undefined until a verdict is labelled."""
     project.index.sync()
     with project.index.connect() as conn:
-        labels = [
-            None if r[0] is None else str(r[0])
-            for r in conn.execute(
-                text(
-                    "SELECT i.label FROM manuscript_audit_items i JOIN manuscript_audits a "
-                    "ON a.audit_id = i.audit_id WHERE a.manuscript_id = :m"
-                ),
-                {"m": manuscript_id},
-            )
-        ]
+        rows = conn.execute(
+            text(
+                f"SELECT i.label, {LIVE_VERDICT} FROM manuscript_audit_items i "
+                "JOIN manuscript_audits a ON a.audit_id = i.audit_id "
+                "JOIN manuscript_verdicts v ON v.verdict_id = i.verdict_id "
+                "WHERE a.manuscript_id = :m"
+            ),
+            {"m": manuscript_id},
+        ).all()
+        labels = [None if r[0] is None else str(r[0]) for r in rows if r[1]]
         outdated = bool(labels) and audit_due(conn, manuscript_id)
     labelled = [x for x in labels if x is not None]
     incorrect = sum(1 for x in labelled if x == AuditLabel.INCORRECT.value)
     rate = incorrect / len(labelled) if labelled else None
     return DraftAuditReport(
         drawn=len(labels),
+        all_drawn=len(rows),
         labelled=len(labelled),
         incorrect=incorrect,
         rate=rate,
