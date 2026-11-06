@@ -91,6 +91,7 @@ KINDS: tuple[str, ...] = (
     "decision",
     "extraction",
     "claim",
+    "appraisal",
     "relation",
     "idea",
     "cites",
@@ -148,6 +149,7 @@ _VERSION_RE = r"^ver:([^/\s]+)/(obs|link)/(.+)$"
 _PREFERENCE_RE = r"^pref:(rf:\S+)$"
 _CITES_RE = rf"^cit:(rex_{ULID_RE}):([1-9][0-9]*)$"
 _QUOTE_RE = rf"^(ext_{ULID_RE})/quote$"
+_APPRAISAL_RE = rf"^app_({ULID_RE})/([a-z][a-z0-9-]{{0,39}})$"
 _PATTERNS: tuple[tuple[str, str], ...] = (
     *layer_trace.LAYER_PATTERNS,
     *region_trace.REGION_PATTERNS,
@@ -172,6 +174,7 @@ _PATTERNS: tuple[tuple[str, str], ...] = (
     (DECISION_ID_RE, "decision"),
     (EXTRACTION_ID_RE, "extraction"),
     (CLAIM_ID_RE, "claim"),
+    (_APPRAISAL_RE, "appraisal"),
     (_CELL_RE, "cell"),
     (AUDIT_ID_RE, "audit"),
     (_AUDIT_ITEM_RE, "audit"),
@@ -616,6 +619,7 @@ class _Walk:
             "decision": self._decision,
             "extraction": self._extraction,
             "claim": self._claim,
+            "appraisal": self._appraisal,
             "relation": self._relation,
             "idea": self._idea,
             "cites": self._cites,
@@ -1085,6 +1089,36 @@ class _Walk:
         if superseded_by is not None:
             label += " (superseded)"
         return _Described(label, str(event_id))
+
+    def _appraisal_row(self, ident: str) -> Sequence[Any] | None:
+        """The answer row of `app_<event ULID>/<item>`: pass, item, answer, work, conversion,
+        anchor and event. The label and edges carry no quote."""
+        match = re.fullmatch(_APPRAISAL_RE, ident)
+        if match is None:
+            return None
+        rows = self._all(
+            "SELECT pass_label, item, answer, work_id, conversion_id, anchor, event_id "
+            "FROM appraisal_answers WHERE event_id = :e AND item = :i",
+            e=f"ev_{match.group(1)}",
+            i=match.group(2),
+        )
+        return rows[0] if rows else None
+
+    def _appraisal(self, ident: str) -> _Described | None:
+        """An appraisal answer. The label gives pass, item and answer, never a quote."""
+        row = self._appraisal_row(ident)
+        if row is None:
+            return None
+        return _Described(f"appraisal pass {row[0]} · {row[1]} · {row[2]}", str(row[6]))
+
+    def _edges_appraisal(self, ident: str) -> tuple[list[Key], list[Key]]:
+        row = self._appraisal_row(ident)
+        if row is None:
+            return [], []
+        up: list[Key] = [("work", str(row[3])), ("conversion", str(row[4]))]
+        if row[5] is not None:
+            up.append(("anchor", f"{row[4]}/{row[5]}"))
+        return up, []
 
     def _claim(self, ident: str) -> _Described | None:
         """A claim. The label gives its pass, type and strength, never its statement."""
@@ -2256,6 +2290,7 @@ _EDGES: dict[str, Callable[[_Walk, str], tuple[list[Key], list[Key]]]] = {
     "decision": _Walk._edges_decision,
     "extraction": _Walk._edges_extraction,
     "claim": _Walk._edges_claim,
+    "appraisal": _Walk._edges_appraisal,
     "relation": _Walk._edges_relation,
     "idea": _Walk._edges_idea,
     "cites": _Walk._edges_cites,

@@ -77,6 +77,7 @@ from factory.regions.rules import MemberType, RuleSet
 from factory.services import agent_view as agent_view_service
 from factory.services import agreement as agreement_service
 from factory.services import appraisal_judgements as appraisal_service
+from factory.services import appraisal_report as appraisal_report_service
 from factory.services import audit as audit_service
 from factory.services import benchmark_ledger as ledger_service
 from factory.services import briefing as briefing_service
@@ -3221,10 +3222,19 @@ def report_evidence(
             help="Show the tables without works found by a grey method; both counts are stated.",
         ),
     ] = False,
+    with_appraisal: Annotated[
+        bool,
+        typer.Option(
+            "--with-appraisal",
+            help="Add the appraisal matrix (md and json only). It shows items; it filters nothing.",
+        ),
+    ] = False,
 ) -> None:
     """The evidence report: grouped final rows, frontiers and limits (full view, audit shown)."""
     state = _state(ctx)
     expectations = [_parse_expect(e) for e in expect or []]
+    if with_appraisal and fmt not in (EvidenceFormat.MD, EvidenceFormat.JSON):
+        _fail("--with-appraisal applies to the md and json formats", 2)
     with _reporting_errors():
         project = _resolve_project(state)
         full = _full_view(project)
@@ -3237,18 +3247,25 @@ def report_evidence(
             )
         elif include_notice_affected:
             _fail("--include-notice-affected: researcher view only", 1)
+        elif with_appraisal:
+            _fail("--with-appraisal: researcher view only", 1)
         else:
             report = agent_view_service.agent_evidence(
                 project, expectations, without_grey=without_grey
             )
+        matrix = appraisal_report_service.appraisal_report(project) if with_appraisal else None
     if fmt is EvidenceFormat.JSON:
         text = report.model_dump_json()
+        if matrix is not None:
+            text = '{"evidence": ' + text + ', "appraisal": ' + matrix.model_dump_json() + "}"
     elif fmt is EvidenceFormat.CSV_ROWS:
         text = evidence_render.rows_csv(report)
     elif fmt is EvidenceFormat.CSV_POINTS:
         text = evidence_render.points_csv(report)
     else:
         text = evidence_render.evidence_markdown(report, show_audit=full)
+        if matrix is not None:
+            text = text.rstrip("\n") + "\n" + appraisal_render.report_markdown(matrix)
     if not full:
         text = agent_view_service.scrubbed_text(project, text)
     if output is not None:

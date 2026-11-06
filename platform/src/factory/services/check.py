@@ -53,6 +53,7 @@ from factory.model.work import ProvenanceMethod
 from factory.modules.contract import CheckHit
 from factory.services.access import governed
 from factory.services.agreement import Outcome, agreement_summary, final_outcomes, single_pass_works
+from factory.services.appraisal_report import appraisal_hits
 from factory.services.audit import audit_outstanding, audit_report, audit_shortfall
 from factory.services.briefing_served import stale_sessions
 from factory.services.budgets import budget_status
@@ -563,6 +564,7 @@ def _run_rules(project: Project) -> list[_Hit]:
         _team_review(project),
         _ledger_gaps(project),
         _budgets_spent(project),
+        appraisal_hits(project),
     ]
     flat = [hit for group in groups for hit in group]
     return [replace(hit, seq=seq) for seq, hit in enumerate(flat)]

@@ -29,6 +29,11 @@ from factory.services.agreement import (
     agreement_by_pair_type,
     agreement_summary,
 )
+from factory.services.appraisal_report import (
+    AppraisalMethods,
+    appraisal_methods,
+    appraisal_paragraph,
+)
 from factory.services.audit import audit_report
 from factory.services.budgets import budgets, reported_usage
 from factory.services.calibration import calibration_status
@@ -248,6 +253,8 @@ class MethodsReport(StrictModel):
     """The decision gates the statement reports (slice M, `GateStatusRow.notable`): empty, and no
     paragraph, while every act was passed by a human under a `human` policy."""
     hypotheses: HypothesisCounts | None = None
+    appraisal: AppraisalMethods | None = None
+    """The appraisal instrument and counts (plan EQ); None when none is declared."""
     """Counts of leads, hypotheses, outcomes, deviations, baselines and registry rows (slice 6);
     None, and no paragraph, while the project has none."""
     budget_limits: list[str] = Field(default_factory=list)
@@ -348,6 +355,7 @@ def methods_report(project: Project) -> MethodsReport:
         **_mine_imports(project),
         budget_limits=[_budget_limit(budget) for budget in budgets(project)],
         reported_usage=reported_usage(project),
+        appraisal=appraisal_methods(project),
     )
 
 
@@ -693,6 +701,7 @@ def render_methods(report: MethodsReport, *, withheld: frozenset[str] = frozense
         *([] if not report.gate_policy else [_gate_policy(report, withheld)]),
         *([] if report.hypotheses is None else [hypotheses_paragraph(report.hypotheses)]),
         *([] if not (report.budget_limits or report.reported_usage) else [_budgets(report)]),
+        *([] if report.appraisal is None else [appraisal_paragraph(report.appraisal)]),
         _deviations(report),
     ]
     return "\n\n".join(paragraphs) + "\n"

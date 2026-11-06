@@ -10,6 +10,7 @@ from factory.services.appraisal_judgements import (
     Disagreement,
     PassAnswer,
 )
+from factory.services.appraisal_report import AppraisalReport
 
 
 def status_lines(status: AppraisalStatus) -> list[str]:
@@ -65,3 +66,17 @@ def agreement_lines(by_item: list[AgreementBySpan], open_: list[Disagreement]) -
     lines.append(f"open disagreements: {len(open_)}")
     lines += [f"  {d.work_id}  {d.item}  A {d.a.value}  B {d.b.value}" for d in open_]
     return lines
+
+
+def report_markdown(report: AppraisalReport) -> str:
+    """The work by item matrix. Works are listed by id; there is no total, rank or filter."""
+    if report.instrument is None:
+        return ""
+    out = ["", "## Appraisal", "", f"Instrument: {report.instrument}. Items are shown singly.", ""]
+    head = ["work", *[i.id for i in report.items]]
+    out.append("| " + " | ".join(head) + " |")
+    out.append("|" + "|".join(["---"] * len(head)) + "|")
+    for row in report.rows:
+        out.append("| " + " | ".join([row.work_id, *[c.value for c in row.cells]]) + " |")
+    out.append("")
+    return "\n".join(out)
