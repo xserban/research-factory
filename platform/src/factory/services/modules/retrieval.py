@@ -64,6 +64,7 @@ SPEC = ModuleSpec(
         CheckRule("seed-admission-pending", ("warning", "warning", "error")),
         CheckRule("chase-missing", (None, "warning", "error")),
         CheckRule("snowball-plan-missing", (None, "warning", "error")),
+        CheckRule("chase-declared-not-run", (None, "warning", "error")),
         CheckRule("snowball-over-plan", ("warning", "warning", "warning")),
         CheckRule("snowball-unscreened", ("error", "error", "error")),
     ),

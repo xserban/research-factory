@@ -1682,19 +1682,37 @@ def build_server(
 
     @server.tool()
     def references_extract(
-        project: str, role: str, model: str, skill: str, work_ids: list[str] | None = None
+        project: str,
+        role: str,
+        model: str,
+        skill: str,
+        work_ids: list[str] | None = None,
+        re_resolve: bool = False,
+        states: list[str] | None = None,
     ) -> dict[str, JsonValue]:
         """Extract and resolve the reference lists of included works from their converted
         documents. With no `work_ids`: every included work with a conversion and no current
         extraction. A malformed id refuses the call, and so does a named work whose current
         extraction already uses this conversion and parser version; works that cannot be
         extracted (not included, no conversion) are reported under `skipped` while the others
-        are recorded. Refused to a session that has joined a pass."""
+        are recorded. With `re_resolve` nothing is parsed: the links of the live extractions
+        selected by `states` (default `source-error`; an unresolved reason or a link state) are
+        looked up again under the same extraction ids, where the lookup failed or the matcher has
+        changed. Refused to a session that has joined a pass."""
 
         def extract() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
             _refuse_pass_session(opened)
             actor = make_agent_actor(settings, session, role, model, skill)
+            if re_resolve:
+                retried = references_service.re_resolve(
+                    opened,
+                    actor,
+                    work_ids=work_ids,
+                    states=states or ("source-error",),
+                    sources=adapters,
+                )
+                return _withheld(opened, retried.model_dump(mode="json"), include_work_ids=False)
             summary = references_service.extract_references(
                 opened, actor, work_ids, sources=adapters
             )

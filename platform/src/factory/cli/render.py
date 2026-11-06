@@ -73,7 +73,7 @@ from factory.services.prisma_update import UpdateFlow
 from factory.services.properties import PropertyView
 from factory.services.protocol import ProtocolView
 from factory.services.question import QuestionView
-from factory.services.references import ExtractSummary, Page, ReferenceCounts
+from factory.services.references import ExtractSummary, Page, ReferenceCounts, ReResolveSummary
 from factory.services.regions import ExportRow, RegionState, VersionInfo
 from factory.services.relations import RelationView
 from factory.services.snowball import Comparison, RoundCandidate, RoundResult
@@ -761,6 +761,16 @@ def watch_status_lines(slug: str, status: WatchStatus) -> list[str]:
             f"{s.consecutive_failures} consecutive failures"
         )
     return lines
+
+
+def re_resolve_summary_lines(summary: ReResolveSummary) -> list[str]:
+    lines = [
+        f"{r.extraction_id} ({r.work_id}): {len(r.ordinals)} link(s) retried, "
+        + ", ".join(f"{state.value} {count}" for state, count in r.states.items() if count)
+        for r in summary.re_resolved
+    ]
+    lines += [f"skipped {s.work_id}: {s.reason}" for s in summary.skipped]
+    return lines or ["nothing to retry"]
 
 
 def extract_summary_lines(summary: ExtractSummary) -> list[str]:

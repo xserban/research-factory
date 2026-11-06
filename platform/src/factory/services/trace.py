@@ -972,9 +972,21 @@ class _Walk:
     def _work(self, ident: str) -> _Described | None:
         rows = self._all("SELECT data, first_event_id FROM works WHERE work_id = :w", w=ident)
         if not rows:
-            return None
+            return self._no_source_work(ident)
         title = json.loads(str(rows[0][0]))["title"]
         return _Described(str(title), str(rows[0][1]))
+
+    def _no_source_work(self, ident: str) -> _Described | None:
+        """A work only a reference names: no source returned it, so its entry describes it."""
+        rows = self._all(
+            "SELECT n.title, l.event_id FROM reference_links l JOIN reference_entries n "
+            "ON n.extraction_id = l.extraction_id AND n.ordinal = l.ordinal "
+            "WHERE l.work_id = :w AND l.no_source_record = 1 ORDER BY l.event_id LIMIT 1",
+            w=ident,
+        )
+        if not rows:
+            return None
+        return _Described(f"{rows[0][0]} (no source record)", str(rows[0][1]))
 
     def _attempt(self, ident: str) -> _Described | None:
         rows = self._all(

@@ -718,12 +718,13 @@ def _pending(project: Project) -> list[str]:
 
 
 def _has_document(project: Project, work: str) -> bool:
-    """Whether the work has a live document that is converted or still convertible (no recorded
-    conversion failure)."""
+    """Whether the work has a live document that is converted or still convertible: no recorded
+    conversion failure and its raw file in the library. A raw-missing document cannot be converted
+    until restored, so it is `no-document`, listed and counted, and blocks no round."""
     with project.index.connect() as conn:
         rows = conn.execute(
             text(
-                "SELECT d.document_id, "
+                "SELECT d.raw_hash, "
                 "(SELECT COUNT(*) FROM document_conversions c "
                 "WHERE c.document_id = d.document_id), "
                 "(SELECT COUNT(*) FROM document_failures f WHERE f.document_id = d.document_id) "
@@ -731,7 +732,10 @@ def _has_document(project: Project, work: str) -> bool:
             ),
             {"work": work},
         ).all()
-    return any(int(converted) > 0 or int(failed) == 0 for _, converted, failed in rows)
+    return any(
+        int(converted) > 0 or (int(failed) == 0 and project.library.exists(str(raw)))
+        for raw, converted, failed in rows
+    )
 
 
 def _scope(

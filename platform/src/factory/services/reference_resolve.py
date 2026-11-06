@@ -32,10 +32,13 @@ relative to agents). Proposals never change a link's state.
 An entry keeps its identity across the extractions of a work through `entry_sha256`. A new
 extraction takes over the latest human binding decision on each of its entries
 (`carried_decisions`), so an agent cannot reopen it; an agent's decision or proposal does not
-carry. A session that decided or proposed on the entry in any extraction of the work cannot
-confirm it (`_deciding_sessions`). A human decision whose entry no longer exists in the work's live
-extraction is reported by `lost_human_decisions`. A human withdraws a human decision, on any base,
-with `clear`: an event like any other, after which the entry's decision neither folds nor carries.
+carry. A rejection carries only onto a link that names a rejected work: it said this entry is not
+that work, and says nothing about another (a link that names none, such as a `source-error`, takes
+it up again if a re-resolve names the work). A session that decided or proposed on the entry in
+any extraction of the work cannot confirm it (`_deciding_sessions`). A human decision whose entry
+no longer exists in the work's live extraction is reported by `lost_human_decisions`.
+A human withdraws a human decision, on any base, with `clear`: an event like any other, after
+which the entry's decision neither folds nor carries.
 
 No refusal echoes a named work.
 """
@@ -46,7 +49,7 @@ import hashlib
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Any, Protocol
 
 from sqlalchemy import text
 
@@ -562,26 +565,58 @@ def _deciding_sessions(project: Project, extraction_id: str, ordinal: int) -> se
     return {str(row[0]) for row in rows}
 
 
+def _names(resolution: Resolution | None) -> set[str]:
+    """The works a recorded resolution names: its work and its candidates."""
+    if resolution is None:
+        return set()
+    named = {c.work_id for c in resolution.candidates}
+    return named | ({resolution.work_id} if resolution.work_id is not None else set())
+
+
+def _rejected(work_id: object, base_work_id: object, candidates: object) -> set[str]:
+    """What a rejection rejected: its named work, else every work its link offered."""
+    if work_id is not None:
+        return {str(work_id)}
+    listed = {str(c["work_id"]) for c in json.loads(str(candidates))}
+    return listed | ({str(base_work_id)} if base_work_id is not None else set())
+
+
 def carried_decisions(
-    project: Project, work_id: str, entries: Sequence[ReferenceEntry]
+    project: Project,
+    work_id: str,
+    entries: Sequence[ReferenceEntry],
+    resolutions: Sequence[Resolution],
 ) -> tuple[CarriedDecision, ...]:
     """The latest human binding decision on each of `entries`, found by `entry_sha256` among the
     earlier extractions of `work_id`, ascending by ordinal. A decision carried once is carried
-    on, under the human's own event."""
+    on, under the human's own event. A rejection applies only when the entry's new link
+    (`resolutions`) names a work it rejected."""
     with project.index.connect() as conn:
         rows = conn.execute(
             text(
                 "SELECT e.entry_sha256, d.extraction_id, d.ordinal, d.decision, d.work_id, "
-                "d.event_id FROM reference_decisions d "
+                "d.event_id, l.base_work_id, COALESCE(l.candidates, '[]') "
+                "FROM reference_decisions d "
                 "JOIN reference_entries e ON e.extraction_id = d.extraction_id "
                 "AND e.ordinal = d.ordinal "
                 "JOIN reference_extractions x ON x.extraction_id = d.extraction_id "
+                "LEFT JOIN reference_links l ON l.extraction_id = d.extraction_id "
+                "AND l.ordinal = d.ordinal "
                 "WHERE x.work_id = :work AND d.kind = 'binding' AND d.confirmed_by = 'human' "
                 "ORDER BY d.event_id, d.extraction_id"
             ),
             {"work": work_id},
         ).all()
     latest = {str(row[0]): row for row in rows}
+    resolved = {r.ordinal: r for r in resolutions}
+
+    def applies(entry: ReferenceEntry, row: Any) -> bool:
+        if row[3] == Decision.CLEAR.value:
+            return False
+        if row[3] != Decision.REJECT.value:
+            return True
+        return bool(_rejected(row[4], row[6], row[7]) & _names(resolved.get(entry.ordinal)))
+
     return tuple(
         CarriedDecision(
             ordinal=entry.ordinal,
@@ -592,7 +627,7 @@ def carried_decisions(
             decided_event=str(row[5]),
         )
         for entry in entries
-        if (row := latest.get(entry.entry_sha256)) is not None and row[3] != Decision.CLEAR.value
+        if (row := latest.get(entry.entry_sha256)) is not None and applies(entry, row)
     )
 
 

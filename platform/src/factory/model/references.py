@@ -336,6 +336,62 @@ class ReferenceResolved(StrictModel):
         return self
 
 
+RE_RESOLVE_STATES = frozenset(
+    {
+        "source-error",
+        "not-found",
+        "no-identifier-no-title",
+        LinkState.RESOLVED.value,
+        LinkState.UNCONFIRMED.value,
+        LinkState.AMBIGUOUS.value,
+    }
+)
+"""What `re_resolve` selects by: a reason for an unresolved link, the state for any other."""
+
+
+def re_resolvable(
+    *,
+    reason: str | None,
+    link_matcher: str,
+    matcher: str,
+    decision: str | None,
+    proposal: str | None,
+) -> bool:
+    """Whether a link may take a new resolution from `matcher`, on the same extraction.
+
+    Retried: a lookup that failed (`source-error`), or a link recorded by another matcher version.
+    Never a link holding a binding decision or a proposal: both were made on what it names now.
+    The service selects by this and the fold refuses by it, so neither can drift from the other.
+    """
+    if decision is not None or proposal is not None:
+        return False
+    return reason == "source-error" or link_matcher != matcher
+
+
+class ReferenceReResolved(StrictModel):
+    """New resolutions for links of a live extraction, whose id and entries stay (plan PF).
+
+    `carried` holds the human decisions that apply to the new links, as in `ReferenceResolved`.
+    """
+
+    extraction_id: ExtractionId
+    resolutions: tuple[Resolution, ...] = Field(min_length=1)
+    matcher_version: VersionLabel
+    lookup_runs: tuple[Annotated[str, StringConstraints(pattern=RUN_ID_RE)], ...] = ()
+    carried: tuple[CarriedDecision, ...] = ()
+
+    @model_validator(mode="after")
+    def _ordinals(self) -> Self:
+        ordinals = [r.ordinal for r in self.resolutions]
+        if ordinals != sorted(set(ordinals)):
+            raise ValueError("resolutions name each ordinal once, in ascending order")
+        _unique(self.lookup_runs, "lookup_runs")
+        _unique(tuple(c.ordinal for c in self.carried), "carried")
+        if not {c.ordinal for c in self.carried} <= set(ordinals):
+            raise ValueError("a carried decision names a re-resolved ordinal")
+        return self
+
+
 class ReferenceResolutionDecided(StrictModel):
     """A decision on one link; it supersedes the previous decision for the entry."""
 

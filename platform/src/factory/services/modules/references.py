@@ -23,6 +23,7 @@ SPEC = ModuleSpec(
         types=(
             "citation.contexts_recorded",
             "reference.extracted",
+            "reference.re_resolved",
             "reference.resolution_decided",
             "reference.resolved",
         ),

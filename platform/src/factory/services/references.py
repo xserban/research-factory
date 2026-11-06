@@ -22,6 +22,9 @@ Invariants:
 - An extraction is current while it is the live extraction of its work, pinned to the work's
   default conversion, with this parser version. A new extraction supersedes the earlier one and
   takes over the human decisions on its entries, recorded in `reference.resolved` (`carried`).
+- `re_resolve` retries links of live extractions (a failed lookup, or an older `MATCHER_VERSION`)
+  in one `reference.re_resolved` event per extraction. The extraction id stays, so nothing that
+  cites the extraction goes stale; a link holding a decision or a proposal is left alone.
 - Counts are computed from the live extractions, in SQL; the link states sum to the entry count.
 - Listing is paged in SQL with a fixed cap (`MAX_PAGE`).
 - Nothing here knows the seeds: a held-out seed's work reads as any corpus work in every link,
@@ -50,6 +53,7 @@ from factory.model.references import (
     MAX_TITLE,
     MAX_URL,
     MAX_VENUE,
+    RE_RESOLVE_STATES,
     BblInfo,
     CitationContext,
     CitationContextsRecorded,
@@ -57,7 +61,9 @@ from factory.model.references import (
     LinkState,
     ReferenceEntry,
     ReferenceExtracted,
+    ReferenceReResolved,
     ReferenceResolved,
+    re_resolvable,
 )
 from factory.model.search import QueryPurpose
 from factory.model.work_ids import WORK_ID_RE
@@ -88,7 +94,7 @@ from factory.sources.registry import SourceFactory
 
 MAX_PAGE = 100
 
-SkipReason = Literal["not-included", "no-conversion", "library-missing"]
+SkipReason = Literal["not-included", "no-conversion", "library-missing", "no-extraction"]
 
 
 class Skipped(StrictModel):
@@ -111,6 +117,21 @@ class ExtractionResult(StrictModel):
 
 class ExtractSummary(StrictModel):
     extractions: list[ExtractionResult]
+    skipped: list[Skipped]
+
+
+class ReResolved(StrictModel):
+    """One `reference.re_resolved`: the ordinals retried and the states they now hold."""
+
+    extraction_id: str
+    work_id: str
+    ordinals: list[int]
+    states: dict[LinkState, int]
+    lookup_runs: list[str]
+
+
+class ReResolveSummary(StrictModel):
+    re_resolved: list[ReResolved]
     skipped: list[Skipped]
 
 
@@ -421,7 +442,7 @@ def _extract_one(
     )
     with project.index.exclusive():
         project.index.sync()
-        carried = carried_decisions(project, work, entries)
+        carried = carried_decisions(project, work, entries, outcome.resolutions)
         resolved = ReferenceResolved(
             extraction_id=extraction_id,
             resolutions=outcome.resolutions,
@@ -456,14 +477,197 @@ def _extract_one(
     )
 
 
-# --- Counts and listing ---
-
 _LIVE = "JOIN reference_extractions x ON x.extraction_id = {t}.extraction_id AND x.live = 1"
 _ENTRY_LINK = (
     "JOIN reference_links l ON l.extraction_id = n.extraction_id AND l.ordinal = n.ordinal"
 )
 _ENTRIES = f"FROM reference_entries n {_LIVE.format(t='n')} {_ENTRY_LINK}"
 """The entries of the live extractions (`n`, extraction `x`) with their links (`l`)."""
+
+
+# --- Re-resolution ---
+
+
+def _retryable(
+    project: Project,
+    work_ids: Sequence[str] | None,
+    states: Sequence[str],
+) -> dict[tuple[str, str], list[ReferenceEntry]]:
+    """(extraction, citing work) -> the entries to retry, over the live extractions."""
+    with project.index.connect() as conn:
+        rows = (
+            conn.execute(
+                text(
+                    "SELECT x.extraction_id, x.work_id AS citing_work, l.base_state, l.reason, "
+                    "l.matcher_version, l.decision, l.proposal, n.ordinal, n.anchor, n.label, "
+                    "n.doi, n.arxiv, n.url, n.year, n.first_author, n.title, n.venue, "
+                    f"n.entry_sha256 {_ENTRIES} ORDER BY x.work_id, n.ordinal"
+                )
+            )
+            .mappings()
+            .all()
+        )
+    named = None if work_ids is None else set(work_ids)
+    found: dict[tuple[str, str], list[ReferenceEntry]] = {}
+    for row in rows:
+        selector = row["reason"] or row["base_state"]
+        if (named is not None and row["citing_work"] not in named) or selector not in states:
+            continue
+        if not re_resolvable(
+            reason=row["reason"],
+            link_matcher=str(row["matcher_version"]),
+            matcher=MATCHER_VERSION,
+            decision=row["decision"],
+            proposal=row["proposal"],
+        ):
+            continue
+        entry = ReferenceEntry(
+            ordinal=int(row["ordinal"]),
+            anchor=str(row["anchor"]),
+            label=row["label"],
+            doi=row["doi"],
+            arxiv=row["arxiv"],
+            url=row["url"],
+            year=row["year"],
+            first_author=row["first_author"],
+            title=row["title"],
+            venue=row["venue"],
+            entry_sha256=str(row["entry_sha256"]),
+        )
+        found.setdefault((str(row["extraction_id"]), str(row["citing_work"])), []).append(entry)
+    return found
+
+
+def _re_resolve_one(
+    project: Project,
+    actor: Actor,
+    extraction_id: str,
+    work: str,
+    entries: Sequence[ReferenceEntry],
+    *,
+    sources: Mapping[str, SourceFactory],
+    corpus: Corpus,
+    states: Sequence[str],
+) -> ReResolved | None:
+    """Look the entries up, then write under the lock what is still retryable: a decision, or a
+    new extraction, may have landed during the lookups. None when nothing is left to write."""
+    outcome = resolve_entries(project, actor, entries, sources=sources, corpus=corpus)
+    with project.index.exclusive():
+        project.index.sync()
+        still = _retryable(project, [work], states).get((extraction_id, work), [])
+        ordinals = {e.ordinal for e in still}
+        resolutions = tuple(r for r in outcome.resolutions if r.ordinal in ordinals)
+        if not resolutions:
+            return None
+        payload = ReferenceReResolved(
+            extraction_id=extraction_id,
+            resolutions=resolutions,
+            matcher_version=MATCHER_VERSION,
+            lookup_runs=outcome.lookup_runs,
+            carried=carried_decisions(project, work, still, resolutions),
+        )
+        input_blob = (
+            project.blobs.put_json(
+                {
+                    "extraction_id": extraction_id,
+                    "matcher_version": MATCHER_VERSION,
+                    "ordinals": [r.ordinal for r in resolutions],
+                    "states": list(states),
+                }
+            )
+            if actor.kind == "agent"
+            else None
+        )
+        project.record(
+            [
+                project.events.make(
+                    "reference.re_resolved",
+                    payload,
+                    actor,
+                    refs=(extraction_id, work),
+                    input_blob=input_blob,
+                )
+            ]
+        )
+    decided = {c.ordinal: c.decision for c in payload.carried}
+    counts = {state: 0 for state in LinkState}
+    for r in resolutions:
+        counts[_state_after(r.state, decided.get(r.ordinal))] += 1
+    return ReResolved(
+        extraction_id=extraction_id,
+        work_id=work,
+        ordinals=[r.ordinal for r in resolutions],
+        states=counts,
+        lookup_runs=list(outcome.lookup_runs),
+    )
+
+
+def re_resolve(
+    project: Project,
+    actor: Actor,
+    *,
+    work_ids: Sequence[str] | None = None,
+    states: Sequence[str] = ("source-error",),
+    sources: Mapping[str, SourceFactory],
+) -> ReResolveSummary:
+    """Resolve again the links of the live extractions selected by `states` (`RE_RESOLVE_STATES`:
+    an unresolved reason, or a link state), in `work_ids` or everywhere.
+
+    A selected link is retried when its lookup failed or a newer `MATCHER_VERSION` recorded it
+    (`re_resolvable`), so a repeat with nothing to retry writes nothing. A malformed work id or an
+    unknown state refuses the call, writing nothing; a named work with no live extraction is
+    skipped with a reason. The entries are not parsed again: their stored fields are looked up.
+    """
+    issues: list[ValidationIssue] = []
+    if work_ids is not None:
+        issues += [
+            ValidationIssue("work_ids", f"{w!r}: not a work id")
+            for w in work_ids
+            if re.match(WORK_ID_RE, w) is None
+        ]
+    issues += [
+        ValidationIssue("states", f"{s!r}: one of {sorted(RE_RESOLVE_STATES)}")
+        for s in states
+        if s not in RE_RESOLVE_STATES
+    ]
+    if issues:
+        raise FactoryValidationError(issues)
+    project.index.sync()
+    with project.index.connect() as conn:
+        extracted = {
+            str(row[0])
+            for row in conn.execute(
+                text("SELECT work_id FROM reference_extractions WHERE live = 1")
+            ).all()
+        }
+    skipped = [
+        Skipped(work_id=w, reason="no-extraction")
+        for w in dict.fromkeys(work_ids or ())
+        if w not in extracted
+    ]
+    scope = _retryable(project, work_ids, states)
+    corpus = load_corpus(project) if scope else Corpus()
+    results = [
+        result
+        for (extraction_id, work), entries in scope.items()
+        if (
+            result := _re_resolve_one(
+                project,
+                actor,
+                extraction_id,
+                work,
+                entries,
+                sources=sources,
+                corpus=corpus,
+                states=states,
+            )
+        )
+        is not None
+    ]
+    return ReResolveSummary(re_resolved=results, skipped=skipped)
+
+
+# --- Counts and listing ---
 
 
 def reference_counts(project: Project) -> ReferenceCounts:

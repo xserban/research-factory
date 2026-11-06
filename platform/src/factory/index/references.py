@@ -11,7 +11,11 @@ never changes the state. `reference_decisions` keeps the latest decision per ent
 decision recorded before its link is folded when the link arrives. A `reference.resolved` event's
 `carried` decisions enter `reference_decisions` as the binding decisions of the new extraction,
 under the human's own event id. A `clear` is the latest binding decision of its entry and folds
-to none: the link reads as recorded.
+to none: the link reads as recorded. A `reference.re_resolved` event replaces the recorded
+resolution of named links of a live extraction, keeping the extraction id, then folds their
+decisions again. It is all or nothing: an unknown or superseded extraction, a link that is absent
+or not `re_resolvable`, or a carried decision that does not match a human's recorded one changes
+nothing.
 
 `reason` is the recorded resolution's reason and is not folded: an unresolved link made so by a
 `reject` keeps the reason of its base resolution, which is NULL when the base was not unresolved.
@@ -41,14 +45,17 @@ from factory.events.envelope import Event
 from factory.index.projection import Handler
 from factory.model.references import (
     BINDING_DECISIONS,
+    CarriedDecision,
     CitationContextsRecorded,
     Confidence,
     Decision,
     LinkState,
     ReferenceExtracted,
+    ReferenceReResolved,
     ReferenceResolutionDecided,
     ReferenceResolved,
     SnowballRoundStarted,
+    re_resolvable,
 )
 
 BINDING = "binding"
@@ -197,6 +204,7 @@ def reference_handlers(t: ReferenceTables) -> dict[str, Handler]:
         "reference.extracted": _extracted(t),
         "citation.contexts_recorded": _contexts(t),
         "reference.resolved": _resolved(t),
+        "reference.re_resolved": _re_resolved(t),
         "reference.resolution_decided": _decided(t),
         "snowball.round_started": _round_started(t),
     }
@@ -339,6 +347,98 @@ def _resolved(t: ReferenceTables) -> Handler:
             _fold(conn, t, p.extraction_id, c.ordinal)
 
     return resolved
+
+
+def _carried_recorded(conn: Connection, t: ReferenceTables, c: CarriedDecision) -> bool:
+    """Whether `c` is a human's binding decision as recorded on its source entry."""
+    d = t.decisions.c
+    row = conn.execute(
+        select(d.decision, d.work_id).where(
+            and_(
+                d.extraction_id == c.from_extraction,
+                d.ordinal == c.from_ordinal,
+                d.kind == BINDING,
+                d.confirmed_by == "human",
+                d.event_id == c.decided_event,
+            )
+        )
+    ).first()
+    return row is not None and row[0] == c.decision.value and row[1] == c.work_id
+
+
+def _re_resolve_allowed(conn: Connection, t: ReferenceTables, p: ReferenceReResolved) -> bool:
+    """The guards of `reference.re_resolved`; every one holds, or the event folds to nothing."""
+    live = conn.execute(
+        select(t.extractions.c.live).where(t.extractions.c.extraction_id == p.extraction_id)
+    ).scalar()
+    if live != 1:
+        return False
+    for r in p.resolutions:
+        link = conn.execute(
+            select(
+                t.links.c.reason,
+                t.links.c.matcher_version,
+                t.links.c.decision,
+                t.links.c.proposal,
+            ).where(
+                and_(t.links.c.extraction_id == p.extraction_id, t.links.c.ordinal == r.ordinal)
+            )
+        ).first()
+        if link is None or not re_resolvable(
+            reason=link[0],
+            link_matcher=link[1],
+            matcher=p.matcher_version,
+            decision=link[2],
+            proposal=link[3],
+        ):
+            return False
+    return all(_carried_recorded(conn, t, c) for c in p.carried)
+
+
+def _re_resolved(t: ReferenceTables) -> Handler:
+    def re_resolved(conn: Connection, event: Event) -> None:
+        p = ReferenceReResolved.model_validate(event.payload)
+        if not _re_resolve_allowed(conn, t, p):
+            return
+        for r in p.resolutions:
+            confidence = None if r.confidence is None else r.confidence.value
+            conn.execute(
+                update(t.links)
+                .where(
+                    and_(t.links.c.extraction_id == p.extraction_id, t.links.c.ordinal == r.ordinal)
+                )
+                .values(
+                    base_state=r.state.value,
+                    base_work_id=r.work_id,
+                    base_confidence=confidence,
+                    method=r.method,
+                    score=r.score,
+                    candidates=_json([c.model_dump(mode="json") for c in r.candidates]),
+                    source_blob=r.source_blob,
+                    reason=r.reason,
+                    matcher_version=p.matcher_version,
+                    no_source_record=1 if r.no_source_record else 0,
+                    event_id=event.id,
+                )
+            )
+        for c in p.carried:
+            conn.execute(
+                sqlite_insert(t.decisions)
+                .values(
+                    extraction_id=p.extraction_id,
+                    ordinal=c.ordinal,
+                    kind=BINDING,
+                    decision=c.decision.value,
+                    work_id=c.work_id,
+                    confirmed_by="human",
+                    event_id=c.decided_event,
+                )
+                .on_conflict_do_nothing(index_elements=["extraction_id", "ordinal", "kind"])
+            )
+        for r in p.resolutions:
+            _fold(conn, t, p.extraction_id, r.ordinal)
+
+    return re_resolved
 
 
 def _decided(t: ReferenceTables) -> Handler:

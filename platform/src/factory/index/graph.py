@@ -25,7 +25,11 @@ from sqlalchemy.engine import Connection
 from factory.events.envelope import Event
 from factory.index.projection import Handler
 from factory.model.lineage import IdeaProposed, RelationDecided, RelationProposed
-from factory.model.references import ReferenceResolutionDecided, ReferenceResolved
+from factory.model.references import (
+    ReferenceReResolved,
+    ReferenceResolutionDecided,
+    ReferenceResolved,
+)
 
 PAPER = "paper"
 IDEA = "idea"
@@ -74,6 +78,7 @@ def graph_handlers() -> dict[str, Handler]:
     return {
         "reference.extracted": _extracted(),
         "reference.resolved": _resolved(),
+        "reference.re_resolved": _re_resolved(),
         "reference.resolution_decided": _decided(),
         "relation.proposed": _relation_proposed(),
         "relation.decided": _relation_decided(),
@@ -169,6 +174,20 @@ def _resolved() -> Handler:
             _sync_link(conn, p.extraction_id, ordinal, event.id)
 
     return resolved
+
+
+def _re_resolved() -> Handler:
+    def re_resolved(conn: Connection, event: Event) -> None:
+        # Only the links this event changed: a refused event leaves every edge as it was.
+        p = ReferenceReResolved.model_validate(event.payload)
+        rows = conn.execute(
+            text("SELECT ordinal FROM reference_links WHERE extraction_id = :x AND event_id = :e"),
+            {"x": p.extraction_id, "e": event.id},
+        ).all()
+        for row in rows:
+            _sync_link(conn, p.extraction_id, int(row[0]), event.id)
+
+    return re_resolved
 
 
 def _decided() -> Handler:

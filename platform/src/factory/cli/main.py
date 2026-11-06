@@ -1197,6 +1197,36 @@ def dedup_revert_cmd(
     typer.echo(f"reverted {merge}")
 
 
+@references_app.command("re-resolve")
+def references_re_resolve_cmd(
+    ctx: typer.Context,
+    work: Annotated[
+        list[str] | None, typer.Option("--work", help="A citing work to retry; repeatable.")
+    ] = None,
+    states: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--state",
+            help="An unresolved reason or a link state to retry; repeatable. "
+            "Default: source-error.",
+        ),
+    ] = None,
+) -> None:
+    """Look up again links whose lookup failed or whose matcher changed; extraction ids stay."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        summary = references_service.re_resolve(
+            project,
+            project.human_actor(),
+            work_ids=work,
+            states=states or ("source-error",),
+            sources=dict(default_sources()),
+        )
+    for line in render.re_resolve_summary_lines(summary):
+        typer.echo(line)
+
+
 @references_app.command("status")
 def references_status_cmd(ctx: typer.Context) -> None:
     """Counts over the live extractions; the four link states sum to the entries."""

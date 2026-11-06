@@ -1753,14 +1753,25 @@ def _chase(project: Project, outcomes: dict[str, Outcome]) -> list[_Hit]:
     ULID order. It is stricter than "after the last agreement", which is not an event in the log:
     any decision recorded after the latest round brings the finding back, even one that changes
     no agreed outcome. A protocol whose `snowball_plan` allows a round governs chasing by that
-    plan, its rounds and its stopping rule, so the finding does not apply.
+    plan, its rounds and its stopping rule, so that finding does not apply; instead
+    `chase-declared-not-run` says so while no snowball round has been recorded.
     """
     if not any(outcome is Outcome.INCLUDED for outcome in outcomes.values()):
         return []
     protocol = current_protocol(project)
     plan = None if protocol is None else protocol.spec.snowball_plan
     if plan is not None and (plan.max_backward_rounds or plan.max_forward_rounds):
-        return []
+        with project.index.connect() as conn:
+            ran = conn.execute(text("SELECT 1 FROM snowball_rounds LIMIT 1")).first() is not None
+        if ran:
+            return []
+        return [
+            _Hit(
+                "chase-declared-not-run",
+                (),
+                "the snowball plan declares a round, promoted works exist and no round has run",
+            )
+        ]
     rounds = [round_.round_id.split("_", 1)[1] for round_ in chase_rounds(project)]
     last = _last_decision_ulid(project)
     if rounds and (last is None or max(rounds) > last):
