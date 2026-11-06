@@ -60,7 +60,11 @@ from factory.services.extraction import (
     stale_extractions,
     unit_states,
 )
-from factory.services.extraction_agreement import agreement_overall
+from factory.services.extraction_agreement import (
+    agreement_overall,
+    final_rows,
+    independence_counts,
+)
 from factory.services.passes import memberships
 from factory.services.protocol import ProtocolVersion, current_protocol, miner_extraction_schema
 from factory.services.references import current_extraction, included_works
@@ -551,6 +555,9 @@ class MineStatus(StrictModel):
     rows: int
     stale: int
     agreement: float | None
+    imported_dual: int = 0
+    imported_single: int = 0
+    """Imported rows in use, split by whether the source had two agreeing, independent passes."""
 
 
 def mine_status(
@@ -587,6 +594,11 @@ def mine_status(
         stale = stale_extractions(project, scope=scope)
         live = [r for r in live_rows(project, scope=scope) if r.extraction_id not in stale]
         imported = 0 if own is not None else sum(map(len, filled_imports(project, scope).values()))
+        split = (
+            independence_counts(final_rows(project, scope=scope))
+            if imported and own is None
+            else None
+        )
         agreement = (
             agreement_overall(project, scope=scope).overall
             if with_agreement and own is None
@@ -603,6 +615,8 @@ def mine_status(
                 rows=len([r for r in live if own is None or r.pass_label == own[1]]) + imported,
                 stale=sum(s.state == "stale" for s in states),
                 agreement=agreement,
+                imported_dual=0 if split is None else split.imported_dual,
+                imported_single=0 if split is None else split.imported_single,
             )
         )
     return out

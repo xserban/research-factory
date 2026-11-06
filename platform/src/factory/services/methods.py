@@ -176,6 +176,8 @@ class MethodsReport(StrictModel):
     imported_units: int = 0
     imported_rows: int = 0
     imported_sources: list[str] = Field(default_factory=list)
+    imported_dual: int = 0
+    imported_single: int = 0
     """Records in use that were imported from other projects (slice M, M-E), counted apart."""
 
     @model_serializer(mode="wrap")
@@ -183,7 +185,13 @@ class MethodsReport(StrictModel):
         """A report without imports serialises as it did before imports existed."""
         out: dict[str, Any] = handler(self)
         if not self.imported_rows:
-            for name in ("imported_units", "imported_rows", "imported_sources"):
+            for name in (
+                "imported_units",
+                "imported_rows",
+                "imported_sources",
+                "imported_dual",
+                "imported_single",
+            ):
                 out.pop(name, None)
         return out
 
@@ -281,6 +289,7 @@ def _mine_imports(project: Project) -> dict[str, Any]:
     Empty, so the fields keep their defaults, without any."""
     from factory.model.extraction import MinerScope
     from factory.services.extraction import filled_imports, import_items
+    from factory.services.extraction_agreement import final_rows, independence_counts
 
     protocol = current_protocol(project)
     uses = () if protocol is None else protocol.spec.miners or ()
@@ -289,7 +298,10 @@ def _mine_imports(project: Project) -> dict[str, Any]:
     if not rows:
         return {}
     items = import_items(project)
+    counts = [independence_counts(final_rows(project, scope=MinerScope(u.name))) for u in uses]
     return {
+        "imported_dual": sum(c.imported_dual for c in counts),
+        "imported_single": sum(c.imported_single for c in counts),
         "imported_units": len({(r.work_id, r.conversion_id) for r in rows}),
         "imported_rows": len(rows),
         "imported_sources": sorted(
@@ -820,8 +832,9 @@ def _imports_paragraph(report: MethodsReport) -> str:
     return (
         f"Imported records. {report.imported_rows} record(s) of {report.imported_units} unit(s) "
         f"were imported from {', '.join(report.imported_sources)} and re-verified against this "
-        "project's own conversions. They are counted apart from the records mined here: as dual "
-        "only where the source had two agreeing passes, otherwise as single-pass."
+        "project's own conversions. They are counted apart from the records mined here: "
+        f"{report.imported_dual} as dual (the source had two agreeing passes) and "
+        f"{report.imported_single} as single-pass."
     )
 
 

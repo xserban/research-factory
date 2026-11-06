@@ -421,6 +421,11 @@ def mine_status_lines(status: list[MineStatus]) -> list[str]:
     return [
         f"{m.name} version {m.version}: units {m.units} (closed {m.closed}, open {m.open}, "
         f"stale {m.stale}), rows {m.rows}, agreement {_rate(m.agreement)}"
+        + (
+            f", imported dual {m.imported_dual}, single {m.imported_single}"
+            if m.imported_dual or m.imported_single
+            else ""
+        )
         for m in status
     ]
 
