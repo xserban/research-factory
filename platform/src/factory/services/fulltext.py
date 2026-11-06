@@ -264,12 +264,15 @@ def _targets(
     revisit: bool,
     limit: int,
 ) -> list[str]:
-    """The works this call processes, sorted by id. Explicit ids are validated against `limit`
-    beforehand; the default selection is capped at `limit`."""
+    """The works this call processes. Explicit ids are validated against `limit` beforehand and
+    returned sorted; the default selection is capped at `limit`. A revisit rotates: works are
+    ordered by their last attempt, oldest first (never attempted first), then by id, so repeated
+    calls reach the whole corpus (plan FL, ruling 3)."""
     if work_ids is not None:
         return sorted(set(work_ids))
     if revisit:
-        chosen = sorted(promoted)
+        last = _last_attempts(project)
+        chosen = sorted(promoted, key=lambda w: (last.get(w, ""), w))
     else:
         excluded = _documented_works(project) | _attempted_works(project)
         chosen = sorted(w for w in promoted if w not in excluded)
@@ -987,6 +990,16 @@ def _documented_works(project: Project) -> set[str]:
     with project.index.connect() as conn:
         rows = conn.execute(text("SELECT DISTINCT work_id FROM fulltext_documents")).all()
     return {str(row[0]) for row in rows}
+
+
+def _last_attempts(project: Project) -> dict[str, str]:
+    """Each attempted work's latest attempt time as recorded (UTC ISO text, so it sorts as time).
+    Requires a synced index."""
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text("SELECT work_id, MAX(retrieved_at) FROM fulltext_attempts GROUP BY work_id")
+        ).all()
+    return {str(w): str(t) for w, t in rows}
 
 
 def _attempted_works(project: Project) -> set[str]:
