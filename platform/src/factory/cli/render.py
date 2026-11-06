@@ -540,15 +540,17 @@ def library_imports_lines(listings: list[ImportListing]) -> list[str]:
     return lines or ["no imports"]
 
 
-def import_record_lines(records: list[RecordRow]) -> list[str]:
-    """One line per record: ordinal, part, outcome, link state, year, identifier, title."""
-    lines = ["ordinal  part  outcome  state  year  identifier  title"]
+def import_record_lines(records: list[RecordRow], names: Mapping[int, str]) -> list[str]:
+    """One line per record: ordinal, part, outcome, link state, year, identifier, title, and the
+    file when `names` holds any. The researcher's view."""
+    lines = ["ordinal  part  outcome  state  year  identifier  title" + ("  file" if names else "")]
     for r in records:
         identifier = f"doi:{r.doi}" if r.doi else f"arxiv:{r.arxiv}" if r.arxiv else "-"
         year = str(r.year) if r.year is not None else "-"
+        file = f"  {names.get(r.ordinal, '-')}" if names else ""
         lines.append(
             f"{r.ordinal}  {r.part}  {r.outcome.value}  {r.link_state or '-'}  {year}"
-            f"  {identifier}  {r.title or '-'}"
+            f"  {identifier}  {r.title or '-'}{file}"
         )
     return lines
 

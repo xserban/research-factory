@@ -510,8 +510,8 @@ def _screening_started(project: Project) -> bool:
 def render_methods(report: MethodsReport, *, withheld: frozenset[str] = frozenset()) -> str:
     """The methods statement as Markdown paragraphs, separated by blank lines, in the order:
     search, deduplication, screening and automation, agreement and audit, full-text screening,
-    document conversion (when any), extraction and evidence (when declared), reference lists and snowballing (when run), seed
-    recall, deviations.
+    document conversion (when any), extraction and evidence (when declared), reference lists and
+    snowballing (when run), seed recall, deviations.
 
     `withheld` names the fields an agent view hides; each is rendered as withheld, not as zero.
     """

@@ -96,13 +96,16 @@ class ImportRecord(StrictModel):
 
 @dataclass(frozen=True)
 class ParsedImport:
-    """A parser's result. `attachment_bytes` maps content hash to bytes and is never serialised."""
+    """A parser's result. `attachment_bytes` maps content hash to bytes and `local_paths` maps a
+    PDF-folder record's ordinal to its path under the folder; neither reaches a record, and only
+    the library manifest holds the paths (ruling 19)."""
 
     format: ImportFormat
     parser: str
     parser_version: str
     records: tuple[ImportRecord, ...]
     attachment_bytes: Mapping[str, bytes] = field(default_factory=dict)
+    local_paths: Mapping[int, str] = field(default_factory=dict)
 
 
 def bounded_fields(

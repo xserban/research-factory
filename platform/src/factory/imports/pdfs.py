@@ -93,8 +93,10 @@ def parse_pdf_folder(folder: Path) -> ParsedImport:
     files = sorted(p for p in folder.rglob("*") if p.is_file() and p.suffix.lower() == ".pdf")
     records: list[ImportRecord] = []
     attachment_bytes: dict[str, bytes] = {}
+    local_paths: dict[int, str] = {}
     for ordinal, path in enumerate(files, start=1):
         data = path.read_bytes()
+        local_paths[ordinal] = path.relative_to(folder).as_posix()
         digest = sha256_hex(data)
         if _PDF_HEADER not in data[:_HEADER_WINDOW]:
             records.append(
@@ -115,6 +117,7 @@ def parse_pdf_folder(folder: Path) -> ParsedImport:
         parser_version=PARSER_VERSION,
         records=tuple(records),
         attachment_bytes=attachment_bytes,
+        local_paths=local_paths,
     )
 
 

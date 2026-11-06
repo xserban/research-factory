@@ -3056,7 +3056,8 @@ def import_show_cmd(
     ] = False,
 ) -> None:
     """The records of an import. By default: records that are not held out, by hash, with no
-    ordinals, and the held-out count. `--researcher` lists ordinals and parts."""
+    ordinals, and the held-out count. `--researcher` lists ordinals, parts and, for a PDF folder,
+    file names."""
     state = _state(ctx)
     if part is not PartChoice.DEVELOPMENT:
         if not researcher:
@@ -3070,7 +3071,8 @@ def import_show_cmd(
         project = _resolve_project(state)
         if researcher:
             records = imports_service.list_import_records(project, import_id, view=part.value)
-            lines = render.import_record_lines(records)
+            names = imports_service.import_file_names(project, import_id)
+            lines = render.import_record_lines(records, names)
         else:
             view = imports_service.development_view(project, import_id)
             lines = render.development_view_lines(view)

@@ -30,7 +30,7 @@ from typing import Literal
 from pydantic import JsonValue
 from sqlalchemy import text
 
-from factory.errors import FactoryValidationError, ValidationIssue
+from factory.errors import FactoryError, FactoryValidationError, ValidationIssue
 from factory.imports.model import (
     ImportFormat,
     ImportFormatError,
@@ -294,6 +294,26 @@ def list_import_records(
         return [RecordRow.model_validate(dict(r)) for r in rows.mappings()]
 
 
+def import_file_names(project: Project, import_id: str) -> dict[int, str]:
+    """Each record's path under the imported folder, by ordinal. The researcher's view: no agent
+    surface may return it. Empty for an export, for an import recorded before the manifest kept
+    paths, and when the manifest has left the library."""
+    row = _import_row(project, import_id)
+    if row.format is not ImportFormat.PDFS:
+        return {}
+    try:
+        manifest = project.library.get_json(row.file_hash)
+    except (FactoryError, OSError):
+        return {}
+    if not isinstance(manifest, list):
+        return {}
+    names: dict[int, str] = {}
+    for ordinal, entry in enumerate(manifest, start=1):
+        if isinstance(entry, list) and len(entry) == 3 and isinstance(entry[2], str):
+            names[ordinal] = entry[2]
+    return names
+
+
 def import_row(project: Project, import_id: str) -> ImportRow:
     """One import as the index holds it; `FactoryValidationError` when there is none."""
     return _import_row(project, import_id)
@@ -395,14 +415,19 @@ def _parse(
 def _archive(project: Project, parsed: ParsedImport, data: bytes | None) -> str:
     """Put the export's bytes (as parsed) into the library; for a PDF folder, the manifest.
 
-    The manifest is the canonical JSON list of `[path_sha256, record_sha256]` per record, in
-    ordinal order (`path_sha256` is null for a file that is not a PDF); each record hash is that of
-    the one read of the file's bytes.
+    The manifest is the canonical JSON list of `[path_sha256, record_sha256, relative_path]` per
+    record, in ordinal order (`path_sha256` is null for a file that is not a PDF); each record hash
+    is that of the one read of the file's bytes. The library is git-ignored, so the path stays out
+    of events and `blobs/` (ruling 19). Imports recorded earlier have two columns.
     """
     if data is not None:
         return project.library.put(data)
     manifest: list[JsonValue] = [
-        [r.attachment.path_sha256 if r.attachment else None, r.record_sha256]
+        [
+            r.attachment.path_sha256 if r.attachment else None,
+            r.record_sha256,
+            parsed.local_paths.get(r.ordinal),
+        ]
         for r in parsed.records
     ]
     return project.library.put_json(manifest)
