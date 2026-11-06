@@ -355,6 +355,42 @@ def list_leads(project: Project, *, states: Collection[LeadState] = _ALL_STATES)
     return [v for v in (_row_view(project, r) for r in rows) if v.state in states]
 
 
+class AgentLeadRow(StrictModel):
+    """A lead as a list shows it to an agent. `text` is None for every session but the lead's
+    author: the critic must not read it (R-51, slice 6 ruling 13), and neither the author's
+    session nor a human's note appears."""
+
+    lead_id: str
+    text: str | None
+    triggers: tuple[Trigger, ...]
+    framework: str | None
+    prior: tuple[str, ...]
+    prior_total: int
+    state: LeadState
+    decision: str | None
+    reason: str | None
+
+
+def agent_leads(
+    project: Project, session: str, *, states: Collection[LeadState] = _ALL_STATES
+) -> list[AgentLeadRow]:
+    """`list_leads` for the agent path; `session` is the reading session."""
+    return [
+        AgentLeadRow(
+            lead_id=view.lead_id,
+            text=view.text if view.author_session == session else None,
+            triggers=view.triggers,
+            framework=view.framework,
+            prior=view.prior,
+            prior_total=view.prior_total,
+            state=view.state,
+            decision=view.decision,
+            reason=view.reason,
+        )
+        for view in list_leads(project, states=states)
+    ]
+
+
 def decide_lead(
     project: Project,
     actor: Actor,

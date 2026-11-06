@@ -24,6 +24,7 @@ from collections.abc import Callable, Collection
 from datetime import date
 from typing import Any, Literal
 
+from pydantic import JsonValue
 from sqlalchemy import text
 
 from factory.errors import FactoryValidationError, ValidationIssue
@@ -350,6 +351,24 @@ def list_hypotheses(
         rows = conn.execute(text("SELECT * FROM hypotheses ORDER BY hypothesis_id")).all()
     views = [_view(project, r) for r in rows]
     return views if states is None else [v for v in views if v.state in states]
+
+
+def agent_hypotheses(
+    project: Project, session: str, *, states: Collection[str] | None = None
+) -> list[dict[str, JsonValue]]:
+    """`list_hypotheses` for the agent path: the rationale and the lead are shown to the drafting
+    session only (R-51, as `hypothesis_view`), and no row names the drafter's session or model."""
+    rows: list[dict[str, JsonValue]] = []
+    for view in list_hypotheses(project, states=states):
+        row: dict[str, JsonValue] = view.model_dump(
+            mode="json", exclude={"drafter_session", "drafter_model"}
+        )
+        spec = row["spec"]
+        if view.drafter_session != session and isinstance(spec, dict):
+            spec.pop("rationale", None)
+            spec.pop("lead", None)
+        rows.append(row)
+    return rows
 
 
 # --- Prior failures -----------------------------------------------------------------------

@@ -302,6 +302,46 @@ def list_drafts(project: Project) -> list[DraftRow]:
     return [d for i in ids if (d := get_draft(project, i)) is not None]
 
 
+def holds_verification(project: Project, session: str, draft_id: str) -> bool:
+    """Whether `session` holds a claimed verification task on a sentence of the draft. A task
+    whose content cannot be read counts for nothing."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        blobs = conn.execute(
+            text(
+                "SELECT content_blob FROM tasks WHERE kind = :k AND status = :claimed "
+                "AND claim_session = :s"
+            ),
+            {"k": DRAFT_VERIFY_TASK_KIND, "claimed": TaskStatus.CLAIMED.value, "s": session},
+        ).all()
+        sentences = {
+            str(r[0])
+            for r in conn.execute(
+                text("SELECT sentence_id FROM draft_sentences WHERE draft_id = :d"),
+                {"d": draft_id},
+            )
+        }
+    for (blob,) in blobs:
+        try:
+            content = project.blobs.get_json(str(blob))
+        except (FactoryError, OSError, ValueError):
+            continue
+        if isinstance(content, dict) and content.get("sentence_id") in sentences:
+            return True
+    return False
+
+
+def agent_drafts(project: Project, session: str) -> list[DraftRow]:
+    """`list_drafts` for the agent path, without the drafts `session` verifies: it has a verdict
+    on one or holds a verification task, and a verifier reads only its unit (R-51)."""
+    return [
+        row
+        for row in list_drafts(project)
+        if session not in verifier_sessions(project, row.draft_id)
+        and not holds_verification(project, session, row.draft_id)
+    ]
+
+
 def _pinned_outline(project: Project, draft_id: str) -> Outline:
     _, _, _, blob = require_draft(project, draft_id)
     return Outline.model_validate(project.blobs.get_json(blob))

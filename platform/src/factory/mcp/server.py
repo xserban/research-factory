@@ -4,7 +4,7 @@ import json
 import re
 from collections import Counter
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from typing import Annotated, Literal, TypeVar, cast
+from typing import Annotated, Literal, TypeVar, cast, get_args
 
 from mcp.server.mcpserver import MCPServer
 from pydantic import Field, JsonValue, StringConstraints, TypeAdapter, ValidationError
@@ -28,7 +28,7 @@ from factory.mcp.conventions import (
     withhold,
 )
 from factory.model.base import StrictModel
-from factory.model.cards import PropertyDef, QuoteBasis
+from factory.model.cards import CardKind, PropertyDef, QuoteBasis
 from factory.model.chase import ChaseDirection
 from factory.model.drafts import DraftKind, SupportSpan, Verdict
 from factory.model.experiments import Cell, ExperimentDesign
@@ -3810,6 +3810,161 @@ def build_server(
             data = _listing(rows, found.next_cursor, "no concept found")
             data["hidden"] = found.hidden.model_dump(mode="json")
             return _withheld(opened, data, include_work_ids=False)
+
+        return _reply(project, listing, include_work_ids=False)
+
+    @server.tool()
+    def lead_list(
+        project: str,
+        state: list[str] | None = None,
+        cursor: str | None = None,
+        limit: int = PAGE_LIMIT,
+    ) -> dict[str, JsonValue]:
+        """Leads by id, one page at a time, with triggers, framework, prior failures and state
+        (`state` narrows to open, promoted, parked or discarded). The lead's text is shown to its
+        author's session only: everywhere else `text` is null (R-51). Empty with a notice until a
+        screening pass has opened. Read-only; refused to a session that has joined a pass."""
+
+        def listing() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            allowed = get_args(leads_service.LeadState)
+            if state and any(name not in allowed for name in state):
+                raise FactoryValidationError(
+                    [ValidationIssue("state", f"must be among {', '.join(allowed)}")]
+                )
+            if _before_any_pass(opened):
+                return NOT_YET
+            chosen = cast(list[leads_service.LeadState], state or list(allowed))
+            page = paginate(
+                leads_service.agent_leads(opened, session, states=chosen), cursor, limit
+            )
+            rows: list[JsonValue] = [row.model_dump(mode="json") for row in page.items]
+            return _withheld(
+                opened, _listing(rows, page.next_cursor, "no lead found"), include_work_ids=False
+            )
+
+        return _reply(project, listing, include_work_ids=False)
+
+    @server.tool()
+    def hypothesis_list(
+        project: str,
+        state: list[str] | None = None,
+        cursor: str | None = None,
+        limit: int = PAGE_LIMIT,
+    ) -> dict[str, JsonValue]:
+        """Hypotheses by id, one page at a time, as `hypothesis_view` shows each: the rationale
+        and the lead to the drafting session only, and no drafter session or model. `state`
+        narrows to draft, reviewed, registered, evaluated, abandoned or superseded. Empty with a
+        notice until a screening pass has opened. Read-only; refused to a session that has joined
+        a pass."""
+
+        def listing() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            allowed = get_args(hypotheses_service.HypothesisState)
+            if state and any(name not in allowed for name in state):
+                raise FactoryValidationError(
+                    [ValidationIssue("state", f"must be among {', '.join(allowed)}")]
+                )
+            if _before_any_pass(opened):
+                return NOT_YET
+            page = paginate(
+                hypotheses_service.agent_hypotheses(opened, session, states=state or None),
+                cursor,
+                limit,
+            )
+            rows = cast(list[JsonValue], page.items)
+            return _withheld(
+                opened,
+                _listing(rows, page.next_cursor, "no hypothesis found"),
+                include_work_ids=False,
+            )
+
+        return _reply(project, listing, include_work_ids=False)
+
+    @server.tool()
+    def card_list(
+        project: str,
+        kind: str | None = None,
+        cursor: str | None = None,
+        limit: int = PAGE_LIMIT,
+    ) -> dict[str, JsonValue]:
+        """Method and problem cards by id, one page at a time, each with its subject, owner and
+        live assertion count; `kind` is method or problem. `card_view` reads one. Empty with a
+        notice until a screening pass has opened. Read-only; refused to a session that has joined
+        a pass."""
+
+        def listing() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            if kind is not None and kind not in get_args(CardKind):
+                raise FactoryValidationError([ValidationIssue("kind", "must be method or problem")])
+            offset, size = _window(cursor, limit)
+            if _before_any_pass(opened):
+                return NOT_YET
+            cards = cards_service.list_cards(
+                opened, cast(CardKind | None, kind), limit=size + 1, offset=offset
+            )
+            rows: list[JsonValue] = [card.model_dump(mode="json") for card in cards[:size]]
+            following = str(offset + size) if len(cards) > size else None
+            return _withheld(
+                opened, _listing(rows, following, "no card found"), include_work_ids=False
+            )
+
+        return _reply(project, listing, include_work_ids=False)
+
+    @server.tool()
+    def experiment_list(
+        project: str,
+        hypothesis_id: str | None = None,
+        cursor: str | None = None,
+        limit: int = PAGE_LIMIT,
+    ) -> dict[str, JsonValue]:
+        """Experiment designs by id, one page at a time: hypothesis, version `E@`, computed state,
+        flags, the deviation count and the baseline states as `experiment_view` shows them. No
+        metric or baseline value and no design: `experiment_view` reads one. Empty with a notice
+        until a screening pass has opened. Read-only; refused to a session that has joined a
+        pass."""
+
+        def listing() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            if _before_any_pass(opened):
+                return NOT_YET
+            page = paginate(
+                experiments_service.agent_experiments(opened, hypothesis_id=hypothesis_id),
+                cursor,
+                limit,
+            )
+            rows: list[JsonValue] = [row.model_dump(mode="json") for row in page.items]
+            return _withheld(
+                opened,
+                _listing(rows, page.next_cursor, "no experiment found"),
+                include_work_ids=False,
+            )
+
+        return _reply(project, listing, include_work_ids=False)
+
+    @server.tool()
+    def draft_list(
+        project: str, cursor: str | None = None, limit: int = PAGE_LIMIT
+    ) -> dict[str, JsonValue]:
+        """Drafts by id, one page at a time: title, kind, pinned outline, sections and the count
+        of live sentences. A draft this session verifies is not listed: a verifier reads only its
+        unit. Empty with a notice until a screening pass has opened. Read-only; refused to a
+        session that has joined a pass."""
+
+        def listing() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            if _before_any_pass(opened):
+                return NOT_YET
+            page = paginate(drafts_service.agent_drafts(opened, session), cursor, limit)
+            rows: list[JsonValue] = [row.model_dump(mode="json") for row in page.items]
+            return _withheld(
+                opened, _listing(rows, page.next_cursor, "no draft found"), include_work_ids=False
+            )
 
         return _reply(project, listing, include_work_ids=False)
 

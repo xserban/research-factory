@@ -647,3 +647,44 @@ def agent_baseline_view(
     flags = tuple(f for f in view.flags if f != "baseline-not-reproduced")
     deviations = [d for d in view.deviations if d.kind != "baseline-accepted"]
     return view.model_copy(update={"flags": flags, "deviations": deviations}), states
+
+
+class AgentExperimentRow(StrictModel):
+    """An experiment as a list shows it to an agent: its identity, computed state, flags and
+    baseline states, through `agent_baseline_view`. No metric or baseline value, no design, no
+    designer session; `experiment_view` reads one design whole."""
+
+    experiment_id: str
+    hypothesis: str
+    e_version: str
+    state: ExperimentState
+    flags: tuple[str, ...]
+    deviations: int
+    baselines: dict[str, str]
+    supersedes: str | None
+    superseded_by: str | None
+
+
+def agent_experiments(
+    project: Project, *, hypothesis_id: str | None = None
+) -> list[AgentExperimentRow]:
+    """Designs in id order for the agent path, of one hypothesis when `hypothesis_id` is given."""
+    rows: list[AgentExperimentRow] = []
+    for view in list_experiments(project):
+        if hypothesis_id is not None and view.hypothesis != hypothesis_id:
+            continue
+        shown, states = agent_baseline_view(project, view)
+        rows.append(
+            AgentExperimentRow(
+                experiment_id=shown.experiment_id,
+                hypothesis=shown.hypothesis,
+                e_version=shown.e_version,
+                state=shown.state,
+                flags=shown.flags,
+                deviations=len(shown.deviations),
+                baselines=states,
+                supersedes=shown.supersedes,
+                superseded_by=shown.superseded_by,
+            )
+        )
+    return rows
