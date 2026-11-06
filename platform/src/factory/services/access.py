@@ -148,6 +148,7 @@ TOOL_PERMISSIONS: Mapping[str, Permission] = {
     "review_list": Permission.PROJECT_READ,
     "ledger_view": Permission.PROJECT_READ,
     "budget_status": Permission.PROJECT_READ,
+    "appraisal_status": Permission.PROJECT_READ,
     # MCP tools that run work. A tool an agent acts through at a gate is here too, a decision
     # included: the gate policy, not this table, says when an agent may pass it.
     "search_run": Permission.WORK_RUN,
@@ -166,6 +167,8 @@ TOOL_PERMISSIONS: Mapping[str, Permission] = {
     "fulltext_fetch": Permission.WORK_RUN,
     "extract_next": Permission.WORK_RUN,
     "extract_record": Permission.WORK_RUN,
+    "appraisal_next": Permission.WORK_RUN,
+    "appraisal_record": Permission.WORK_RUN,
     "mine_next": Permission.WORK_RUN,
     "mine_record": Permission.WORK_RUN,
     "contribution_next": Permission.WORK_RUN,
@@ -338,12 +341,18 @@ TOOL_PERMISSIONS: Mapping[str, Permission] = {
     "cli:extract resolve": Permission.HUMAN_LABEL,
     "cli:extract audit-sample": Permission.HUMAN_LABEL,
     "cli:extract audit-label": Permission.HUMAN_LABEL,
+    "cli:appraisal audit-sample": Permission.HUMAN_LABEL,
+    "cli:appraisal audit-label": Permission.HUMAN_LABEL,
     "cli:contributions resolve": Permission.HUMAN_LABEL,
     "cli:contributions audit sample": Permission.HUMAN_LABEL,
     "cli:contributions audit label": Permission.HUMAN_LABEL,
     "cli:references decide": Permission.HUMAN_CONFIRM,
     "cli:curation decide": Permission.HUMAN_CONFIRM,
     "cli:curation lessons": Permission.PROJECT_READ,
+    "cli:appraisal status": Permission.PROJECT_READ,
+    "cli:appraisal sheet": Permission.PROJECT_READ,
+    "cli:appraisal agreement": Permission.PROJECT_READ,
+    "cli:appraisal audit-report": Permission.PROJECT_READ,
     "cli:curation list": Permission.PROJECT_READ,
     "cli:performance": Permission.PROJECT_READ,
     "cli:pack": Permission.PROJECT_READ,
@@ -407,6 +416,8 @@ TOOL_PERMISSIONS: Mapping[str, Permission] = {
     "cli:terms retire": Permission.HUMAN_CONFIRM,
     "cli:consolidation decide": Permission.HUMAN_CONFIRM,
     "cli:consolidation complete": Permission.HUMAN_CONFIRM,
+    "cli:appraisal judge": Permission.HUMAN_CONFIRM,
+    "cli:appraisal resolve": Permission.HUMAN_CONFIRM,
 }
 """One permission per MCP tool and per mutating CLI command (ruling 10). A tool with no row is a
 tool the server refuses to start with."""
@@ -421,6 +432,8 @@ FULL_VIEW_COMMANDS: frozenset[str] = frozenset(
         "cli:screen disagreements",
         "cli:extract agreement",
         "cli:extract audit-report",
+        "cli:appraisal agreement",
+        "cli:appraisal audit-report",
         "cli:mine agreement",
         "cli:mine audit report",
         "cli:miner calibrate report",

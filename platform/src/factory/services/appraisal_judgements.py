@@ -45,6 +45,7 @@ from factory.services.appraisal_passes import (
 )
 from factory.services.audit_core import validate_seed
 from factory.services.context import Project
+from factory.services.human_channel import HumanAct, require_human_channel
 from factory.services.passes import require_not_pass_session
 
 
@@ -52,13 +53,18 @@ def _refuse(field: str, reason: str) -> FactoryValidationError:
     return FactoryValidationError([ValidationIssue(field, reason)])
 
 
-def _human_gate(project: Project, actor: Actor, channel: Channel, act: str) -> None:
+def _human_gate(
+    project: Project, actor: Actor, channel: Channel, what: str, act: HumanAct
+) -> None:
+    """Refuse a non-human, a pass session and a forged or barred channel. The caller holds the
+    write lock."""
     issues: list[ValidationIssue] = []
     if actor.kind != "human":
-        issues.append(ValidationIssue("actor", f"only a human {act}"))
+        issues.append(ValidationIssue("actor", f"only a human {what}"))
     issues.extend(require_not_pass_session(project, actor, channel))
     if issues:
         raise FactoryValidationError(issues)
+    require_human_channel(project, actor, channel, act)
 
 
 def _require_instrument(project: Project) -> InstrumentInForce:
@@ -87,7 +93,7 @@ def record_judgement(
     and a blank rationale. A later call on the same (work, item) supersedes the earlier one."""
     with project.writing():
         project.index.sync()
-        _human_gate(project, actor, channel, "judges an appraisal item")
+        _human_gate(project, actor, channel, "judges an appraisal item", "label")
         found = _require_instrument(project)
         declared = found.instrument.item(item)
         issues: list[ValidationIssue] = []
@@ -126,7 +132,7 @@ def resolve_disagreement(
     pass session, a cell that is not an open disagreement and a blank reason."""
     with project.writing():
         project.index.sync()
-        _human_gate(project, actor, channel, "resolves an appraisal disagreement")
+        _human_gate(project, actor, channel, "resolves an appraisal disagreement", "resolve")
         found = _require_instrument(project)
         issues: list[ValidationIssue] = []
         if choice not in ("a", "b", "neither"):
@@ -422,7 +428,7 @@ def appraisal_audit_label(
     sample."""
     with project.writing():
         project.index.sync()
-        _human_gate(project, actor, channel, "labels an appraisal audit item")
+        _human_gate(project, actor, channel, "labels an appraisal audit item", "audit-label")
         with project.index.connect() as conn:
             row = conn.execute(
                 text(
