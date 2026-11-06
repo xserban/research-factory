@@ -73,6 +73,7 @@ from factory.services import dedup as dedup_service
 from factory.services import digest as digest_service
 from factory.services import directions as directions_service
 from factory.services import discovery as discovery_service
+from factory.services import document_convert as document_convert_service
 from factory.services import document_read as document_read_service
 from factory.services import draft_audit as draft_audit_service
 from factory.services import draft_release as draft_release_service
@@ -3603,6 +3604,45 @@ def build_server(
 
         return _reply(project, view, include_work_ids=False)
 
+    @server.tool()
+    def document_status(
+        project: str, cursor: str | None = None, limit: int = PAGE_LIMIT
+    ) -> dict[str, JsonValue]:
+        """The conversion state of each live document of a promoted work, one page at a time:
+        converted or not, the converter and version, anchor counts and the latest failure's
+        reason, with the totals. No document text. Conversion is the researcher's act
+        (`factory document convert`). Read-only. Refused to a session that has joined a pass."""
+
+        def status() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            found = document_convert_service.document_status(opened)
+            page = paginate(found.documents, cursor, limit)
+            rows: list[JsonValue] = [row.model_dump(mode="json") for row in page.items]
+            data = _listing(rows, page.next_cursor, "no document of a promoted work yet")
+            data["converted"] = found.converted
+            data["not_converted"] = found.not_converted
+            return _withheld(opened, data, include_work_ids=False)
+
+        return _reply(project, status, include_work_ids=False)
+
+    @server.tool()
+    def report_search(project: str) -> dict[str, JsonValue]:
+        """The PRISMA-S search report alone: each registered query and what it retrieved. While
+        no pass is open an import is one row without counts, as in `report_prisma`. Read-only.
+        Refused to a session that has joined a pass."""
+
+        def report() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            data: dict[str, JsonValue] = {
+                "search": prisma_service.search_report(opened).model_dump(mode="json")
+            }
+            data = _collapsed_import_rows(opened, data)
+            return _without_record_keys(_withheld(opened, data, include_work_ids=False))
+
+        return _reply(project, report, include_work_ids=False)
+
     return server
 
 
@@ -3613,6 +3653,32 @@ def _refuse_pass_session(project: Project) -> None:
         raise FactoryValidationError(
             [ValidationIssue("session", "this session has joined a pass and cannot use this tool")]
         )
+
+
+def _listing(rows: list[JsonValue], next_cursor: str | None, empty: str) -> dict[str, JsonValue]:
+    """One page of a list tool; `notice` says why it holds nothing."""
+    data: dict[str, JsonValue] = {"items": rows, "next_cursor": next_cursor}
+    if not rows and next_cursor is None:
+        data["notice"] = empty
+    return data
+
+
+def _before_any_pass(project: Project) -> bool:
+    """Whether a list that names works answers empty: before a screening pass opens an agent must
+    not be able to name a held-out seed's work (decision 43). Role-blind, like
+    `_require_pass_opened`, and it reads no row, so the answer says nothing of what exists."""
+    return not coverage_service.held_out_visible(project)
+
+
+NOT_YET: dict[str, JsonValue] = {"items": [], "next_cursor": None, "notice": "not available yet"}
+"""A list tool's whole answer before a screening pass opens; the same for every project."""
+
+
+def _window(cursor: str | None, limit: int) -> tuple[int, int]:
+    """The offset and page size a cursor and limit name, for a service that pages in SQL. Fetch
+    one row more than the size to learn whether another page follows."""
+    paginate((), cursor, limit)  # validates the cursor
+    return (0 if cursor is None else int(cursor)), min(max(limit, 1), PAGE_LIMIT)
 
 
 REGION_PAGE_LIMIT = 500
