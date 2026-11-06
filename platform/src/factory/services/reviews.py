@@ -53,6 +53,7 @@ from factory.services.access import (
     role_suffices,
 )
 from factory.services.context import Project
+from factory.services.human_channel import require_human_channel
 from factory.services.lab import payload_of, refuse
 from factory.services.members import roles_of
 
@@ -242,6 +243,7 @@ def decide_review(
     with project.writing():
         if actor.kind != "human" or actor.id != actor.user:
             raise refuse("actor", "a review decision is a person's own act")
+        require_human_channel(project, actor, channel, "resolve")
         issues = passes.require_not_pass_session(project, actor, channel)
         issues.extend(
             _decision_issues(project, actor, review(project, review_request_id), decision)

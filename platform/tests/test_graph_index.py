@@ -42,7 +42,7 @@ def _edges(project: Project) -> list[tuple[Any, ...]]:
 
 
 def test_projection_version_bumped() -> None:
-    assert PROJECTION_VERSION == "61"
+    assert PROJECTION_VERSION == "62"
 
 
 def test_new_tables_are_omitted_when_empty() -> None:

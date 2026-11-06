@@ -4475,15 +4475,20 @@ def build_server(
         def decide() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
             _refuse_pass_session(opened)
+            channel, said = confirm_human_act(
+                f"Decision on review request {review_request_id}",
+                {"decision": decision, "rationale": rationale},
+                {"decision": ("approve", "reject", "withdraw")},
+            )
             reviews_service.decide_review(
                 opened,
                 opened.human_actor(),
                 review_request_id,
-                cast(ReviewDecision, decision),
-                rationale,
-                Channel.MCP,
+                cast(ReviewDecision, said["decision"]),
+                said["rationale"],
+                channel,
             )
-            return {"review_request_id": review_request_id, "decision": decision}
+            return {"review_request_id": review_request_id, "decision": said["decision"]}
 
         return _reply(project, decide, include_work_ids=False)
 
