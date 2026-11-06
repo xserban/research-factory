@@ -25,7 +25,7 @@ MANUSCRIPT_VERDICT_ID_RE = rf"^mvd_{ULID_RE}$"
 MANUSCRIPT_AUDIT_ID_RE = rf"^mau_{ULID_RE}$"
 ANCHOR_RE = r"^[^/\s]{1,200}$"
 MAX_CONTEXT = 3
-"""The most neighbours on each side `manuscript_read` serves."""
+"""The most preceding sentences `manuscript_read` serves."""
 MIN_ECHO = 20
 """A note sharing a run this long with the manuscript is refused: it would copy text into an
 event."""
@@ -338,7 +338,8 @@ class NeighbourText(StrictModel):
 
 
 class SentenceText(StrictModel):
-    """A sentence and its neighbours, marked `before` and `after`, as context only. `length` is
+    """A sentence and the sentences before it, marked `before`, as context only; `after` is always
+    empty (ruling 12). `length` is
     what a `sentence_span` is measured against."""
 
     manuscript_id: str

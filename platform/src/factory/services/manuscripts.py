@@ -346,7 +346,8 @@ def manuscript_read(
     context: int = 1,
     session: str | None = None,
 ) -> SentenceText:
-    """A sentence from the library and up to `context` neighbours on each side. Read-only. Refused:
+    """A sentence from the library and up to `context` preceding sentences (ruling 12: none after).
+    Read-only. Refused:
     a session in a pass (`session`), a `context` out of range, an unknown manuscript or sentence,
     a manuscript not in this library or no longer as it was segmented (`manuscript_id`)."""
     if not 0 <= context <= MAX_CONTEXT:
@@ -377,7 +378,7 @@ def manuscript_read(
         length=len(body),
         keys=target.keys,
         before=near(sentences[max(0, ordinal - 1 - context) : ordinal - 1]),
-        after=near(sentences[ordinal : ordinal + context]),
+        after=[],  # ruling 12: the sentence and the one before it as context, nothing after
     )
 
 
