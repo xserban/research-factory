@@ -14,7 +14,7 @@ import typer
 from pydantic import BaseModel, TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
 
-from factory.cli import evidence_render, portfolio_render, render
+from factory.cli import appraisal_render, evidence_render, portfolio_render, render
 from factory.cli.admin import member_app, token_app, user_app
 from factory.cli.ledger import budget_app, ledger_cmd
 from factory.cli.manuscripts import manuscript_app
@@ -46,6 +46,7 @@ from factory.mcp.conventions import parse_routes
 from factory.mcp.http import build_http_app
 from factory.mcp.server import run
 from factory.model import lineage as lineage_model
+from factory.model.appraisal import Answer as AppraisalAnswer
 from factory.model.chase import ChaseDirection
 from factory.model.conclusions import BasisRef, Predicate
 from factory.model.curation import CurationDecision
@@ -75,6 +76,7 @@ from factory.model.work import ProvenanceMethod
 from factory.regions.rules import MemberType, RuleSet
 from factory.services import agent_view as agent_view_service
 from factory.services import agreement as agreement_service
+from factory.services import appraisal_judgements as appraisal_service
 from factory.services import audit as audit_service
 from factory.services import benchmark_ledger as ledger_service
 from factory.services import briefing as briefing_service
@@ -306,6 +308,11 @@ contributions_audit_app = typer.Typer(
     name="audit", help="Sample, label and report the contribution audit.", no_args_is_help=True
 )
 contributions_app.add_typer(contributions_audit_app)
+appraisal_app = typer.Typer(
+    name="appraisal",
+    help="Per-paper appraisal: status, sheet, agreement, judgement items and the audit.",
+    no_args_is_help=True,
+)
 relations_app = typer.Typer(
     name="relations",
     help="Lineage relations: list them, confirm or reject an inferred one (human only).",
@@ -492,6 +499,7 @@ app.add_typer(miner_app)
 app.add_typer(mine_app)
 app.add_typer(shared_app)
 app.add_typer(contributions_app)
+app.add_typer(appraisal_app)
 app.add_typer(relations_app)
 app.add_typer(ideas_app)
 app.add_typer(vocabulary_app)
@@ -2760,6 +2768,152 @@ def contributions_audit_report_cmd(ctx: typer.Context) -> None:
         return
     for line in render.audit_report_lines(report):
         typer.echo(line)
+
+
+# --- Appraisal (plan EQ): a declared instrument, items never summed ---
+
+
+@appraisal_app.command("status")
+def appraisal_status_cmd(ctx: typer.Context, as_json: _JSON = False) -> None:
+    """Works, span items by state, judgement items open and recorded, stale works. Computed."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        status = appraisal_service.appraisal_status(project)
+    if as_json:
+        typer.echo(status.model_dump_json())
+        return
+    for line in appraisal_render.status_lines(status):
+        typer.echo(line)
+
+
+@appraisal_app.command("sheet")
+def appraisal_sheet_cmd(
+    ctx: typer.Context,
+    work: Annotated[str, typer.Argument(help="An appraised work.")],
+    as_json: _JSON = False,
+) -> None:
+    """One work item by item: computed items, both passes' answers with quotes, judgements."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        sheet = appraisal_service.appraisal_sheet(project, work)
+    if as_json:
+        typer.echo(sheet.model_dump_json())
+        return
+    for line in appraisal_render.sheet_lines(sheet):
+        typer.echo(line)
+
+
+@appraisal_app.command("agreement")
+def appraisal_agreement_cmd(ctx: typer.Context) -> None:
+    """Agreement by item between the passes and the open disagreements."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        by_item = appraisal_service.agreement(project)
+        open_ = appraisal_service.disagreements(project)
+    for line in appraisal_render.agreement_lines(by_item, open_):
+        typer.echo(line)
+
+
+@appraisal_app.command("resolve")
+def appraisal_resolve_cmd(
+    ctx: typer.Context,
+    work: Annotated[str, typer.Argument(help="A work with a disagreement.")],
+    item: Annotated[str, typer.Argument(help="The disputed item.")],
+    choice: Annotated[ExtractChoice, typer.Option("--choice", help="a, b or neither.")],
+    reason: Annotated[str, typer.Option("--reason", help="Why the human decided.")],
+) -> None:
+    """The human's choice between the passes on one span-item disagreement."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        appraisal_service.resolve_disagreement(
+            project, project.human_actor(), work, item, choice.value, reason, channel=Channel.CLI
+        )
+    typer.echo(f"resolved {work} {item} ({choice.value})")
+
+
+@appraisal_app.command("judge")
+def appraisal_judge_cmd(
+    ctx: typer.Context,
+    work: Annotated[str, typer.Argument(help="An appraised work.")],
+    item: Annotated[str, typer.Argument(help="A judgement item of the instrument.")],
+    answer: Annotated[str, typer.Argument(help="yes, no or unclear.")],
+    rationale: Annotated[str, typer.Option("--rationale", help="Why the human judged so.")],
+) -> None:
+    """A human's judgement of one item of one work; a later judgement supersedes it."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        appraisal_service.record_judgement(
+            project,
+            project.human_actor(),
+            work,
+            item,
+            AppraisalAnswer(answer),
+            rationale=rationale,
+            channel=Channel.CLI,
+        )
+    typer.echo(f"judged {work} {item} ({answer})")
+
+
+@appraisal_app.command("audit-sample")
+def appraisal_audit_sample_cmd(
+    ctx: typer.Context,
+    seed: Annotated[
+        int | None, typer.Option("--seed", help="Random seed; fresh if omitted.")
+    ] = None,
+) -> None:
+    """Draw the audit sample of final span answers."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        drawn = appraisal_service.appraisal_audit_sample(
+            project, project.human_actor(), random_seed=seed
+        )
+    typer.echo(f"audit {drawn.audit_id}: {len(drawn.items)} answers")
+    for work_id, item in drawn.items:
+        typer.echo(f"  {work_id}  {item}")
+
+
+@appraisal_app.command("audit-label")
+def appraisal_audit_label_cmd(
+    ctx: typer.Context,
+    audit_id: Annotated[str, typer.Argument(help="The audit being labelled.")],
+    work: Annotated[str, typer.Argument(help="A work of the sample.")],
+    item: Annotated[str, typer.Argument(help="The sampled item.")],
+    correct: Annotated[
+        bool, typer.Option("--correct/--incorrect", help="Whether the final answer is right.")
+    ],
+    note: Annotated[str, typer.Option("--note", help="An optional note.")] = "",
+) -> None:
+    """A human's label on one sampled answer."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        appraisal_service.appraisal_audit_label(
+            project, project.human_actor(), audit_id, work, item, correct, note, Channel.CLI
+        )
+    typer.echo(f"labelled {work} {item} in {audit_id} ({'correct' if correct else 'incorrect'})")
+
+
+@appraisal_app.command("audit-report")
+def appraisal_audit_report_cmd(ctx: typer.Context) -> None:
+    """The latest appraisal audit's counts and error rate."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        report = appraisal_service.appraisal_audit_report(project)
+    if report is None:
+        typer.echo("no audit sampled")
+        return
+    rate = "n/a" if report.error_rate is None else f"{report.error_rate:.3f}"
+    typer.echo(
+        f"audit {report.audit_id}: sampled {report.sampled}, labelled {report.labelled}, "
+        f"incorrect {report.incorrect}, error rate {rate}"
+    )
 
 
 class PrismaFormat(StrEnum):
