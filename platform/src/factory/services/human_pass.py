@@ -23,12 +23,11 @@ Invariants:
 
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
-from factory.model.members import ProjectRole
 from factory.model.protocol import ScreeningStage
 from factory.model.screening import PassLabel
+from factory.services.access import full_view_allowed
 from factory.services.agreement import passes_settled
 from factory.services.context import Principal, Project
-from factory.services.members import roles_of
 from factory.services.passes import human_membership, user_kinds
 
 MEMBER_COMMANDS = frozenset(
@@ -46,15 +45,6 @@ MEMBER_COMMANDS = frozenset(
 may be the only labeller (it shows no decision); a hosted project refuses a pass member there."""
 
 _STAGES = (ScreeningStage.TITLE_ABSTRACT, ScreeningStage.FULL_TEXT)
-
-
-def full_view_allowed(project: Project, principal: Principal) -> bool:
-    """Whether the role reads the full view (ruling 20): `owner` or `maintainer`.
-
-    teams-C's own small version: teams-B defines the same function in `services/access.py`, and on
-    merge this one gives way to it. Screening in a pass is `blind_stage`'s matter, not this one's.
-    """
-    return bool(roles_of(project, principal.user) & {ProjectRole.OWNER, ProjectRole.MAINTAINER})
 
 
 def blind_stage(project: Project, user: str) -> ScreeningStage | None:

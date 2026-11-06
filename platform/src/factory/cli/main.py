@@ -42,7 +42,7 @@ from factory.lineage.graph import GraphFilter
 from factory.living.digest_render import to_json as digest_json
 from factory.living.digest_render import to_markdown as digest_markdown
 from factory.mcp.conventions import parse_routes
-from factory.mcp.server import _withheld, run
+from factory.mcp.server import run
 from factory.model import lineage as lineage_model
 from factory.model.chase import ChaseDirection
 from factory.model.conclusions import BasisRef, Predicate
@@ -1610,7 +1610,9 @@ def _next_batch(project: Project, stage: ScreeningStage) -> tuple[dict[str, Any]
     served = screening_service.screen_next(project, actor, label, stage=stage)
     view = served.model_dump(mode="json")
     if human_pass_service.served_agent_view(project, project.principal):
-        return cast(dict[str, Any], _withheld(project, view, include_work_ids=False)), actor
+        return cast(
+            dict[str, Any], agent_view_service.withheld(project, view, include_work_ids=False)
+        ), actor
     return view, actor
 
 
