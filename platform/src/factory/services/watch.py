@@ -32,6 +32,7 @@ from factory.living.counts import cycle_run_ids, cycle_work_ids, new_work_ids, s
 from factory.living.due import CycleView, consecutive_failures, due_sources, next_due
 from factory.living.window import is_full_replay, window_spec, window_start
 from factory.model.base import StrictModel
+from factory.model.budgets import REQUESTS_SEARCH
 from factory.model.protocol import PlannedQuery, ProtocolStatus
 from factory.model.search import QueryPurpose, QuerySpec
 from factory.model.watch import (
@@ -43,6 +44,7 @@ from factory.model.watch import (
     WatchCycleStarted,
     WatchSource,
 )
+from factory.services.budgets import require_for
 from factory.services.context import Project
 from factory.services.dedup_incremental import dedup_new
 from factory.services.protocol import (
@@ -279,6 +281,7 @@ def _open_or_resume(
         if open_view is not None:
             members = _recorded_sources(project, open_view.cycle_id)
             _require_runnable(project, tuple(m.source for m in members), planned, adapters)
+            require_for(project, actor or project.system_actor(), REQUESTS_SEARCH)
             return open_view.cycle_id, members, planned
 
         if force:
@@ -291,6 +294,7 @@ def _open_or_resume(
         if not due:
             return None
         _require_runnable(project, due, planned, adapters)
+        require_for(project, actor or project.system_actor(), REQUESTS_SEARCH)
 
         by_name = {item.source: item for item in plan.sources}
         chosen = tuple(_cycle_source(by_name[name], views) for name in due if name in by_name)

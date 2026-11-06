@@ -29,6 +29,7 @@ from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
 from factory.inbox.links import IdentifierKind, LinkIdentifier, parse_link, stored_link
 from factory.model.base import StrictModel
+from factory.model.budgets import REQUESTS_SEARCH
 from factory.model.inbox import (
     MAX_NOTE,
     Basis,
@@ -45,6 +46,7 @@ from factory.model.seed import normalize_openalex
 from factory.model.work import Work
 from factory.model.work_ids import arxiv_id_from_doi, normalize_arxiv, normalize_doi
 from factory.services import passes
+from factory.services.budgets import budget_issues
 from factory.services.context import Project
 from factory.services.coverage import held_out_visible
 from factory.services.protocol import search_authorization
@@ -318,6 +320,7 @@ def _resolve_one(
         issues += search_authorization(
             project, query, deviation_id=deviation_id, supplied_by=supplied_by
         )
+        issues += budget_issues(project, actor, REQUESTS_SEARCH)
     if issues:
         return ResolveOutcome(item_id=item.item_id, status=None, issues=issues)
     before = _corpus_keys(project)

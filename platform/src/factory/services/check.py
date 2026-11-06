@@ -55,6 +55,7 @@ from factory.services.access import governed
 from factory.services.agreement import Outcome, agreement_summary, final_outcomes, single_pass_works
 from factory.services.audit import audit_outstanding, audit_report, audit_shortfall
 from factory.services.briefing_served import stale_sessions
+from factory.services.budgets import budget_status
 from factory.services.calibration import calibrated_models, calibration_status
 from factory.services.call_memo import entering
 from factory.services.chase import chase_rounds, forward_chase_rounds
@@ -558,6 +559,7 @@ def _run_rules(project: Project) -> list[_Hit]:
         _members(project),
         _team_review(project),
         _ledger_gaps(project),
+        _budgets_spent(project),
     ]
     flat = [hit for group in groups for hit in group]
     return [replace(hit, seq=seq) for seq, hit in enumerate(flat)]
@@ -755,6 +757,16 @@ def _ledger_gaps(project: Project) -> list[_Hit]:
         return []
     message = f"{len(users)} person(s) have not confirmed the ledger as it stands"
     return [_Hit("ledger-unconfirmed", tuple(users), message)]
+
+
+def _budgets_spent(project: Project) -> list[_Hit]:
+    """Budgets with nothing left in their period: advisory, the refusal is `require_budget`."""
+    spent = [line.budget for line in budget_status(project).budgets if line.remaining == 0]
+    if not spent:
+        return []
+    units = ", ".join(sorted({budget.unit for budget in spent}))
+    message = f"{len(spent)} budget(s) are spent: {units}"
+    return [_Hit("budget-exhausted", tuple(budget.budget_id for budget in spent), message)]
 
 
 # --- Hosting (slice 5) ---

@@ -19,6 +19,7 @@ from factory.clock import parse_ts
 from factory.errors import FactoryError, FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor, Event
 from factory.model.base import StrictModel
+from factory.model.budgets import REQUESTS_SEARCH
 from factory.model.protocol import SubmitterKind
 from factory.model.search import (
     QueryKind,
@@ -32,9 +33,10 @@ from factory.model.search import (
     SearchRunStarted,
 )
 from factory.model.work import Provenance, ProvenanceMethod, Work
+from factory.services.budgets import spent_for
 from factory.services.call_memo import memoised
 from factory.services.context import Project
-from factory.sources.base import RawPage, SourceError, StatusRecord
+from factory.sources.base import BudgetedSink, RawPage, SourceError, StatusRecord
 from factory.sources.http import redact
 from factory.sources.registry import INTERFACES, SourceFactory
 
@@ -202,6 +204,10 @@ def run_query(
     A query that the protocol no longer authorises (see `protocol.search_authorization`) is
     refused before anything is written, including on a resume.
 
+    The adapter asks before each request whether the request budget of `actor`'s person is spent
+    (plan teams-D ruling 6, charged per ruling 5); if so the run ends partial with its resume
+    token. Refusing a run outright is the caller's: each asks before its first write.
+
     Raw pages are archived as they arrive. Records are recorded once the adapter returns, one
     `search.records_parsed` per page. A `SourceError` is an outcome, recorded and returned; any
     other exception is recorded as a failed run and then re-raised.
@@ -286,9 +292,16 @@ def run_query(
         archived.append(ref)
         return ref
 
+    def budget_gone() -> bool:
+        return spent_for(project, started_by, REQUESTS_SEARCH) is not None
+
     try:
         result = adapter.run(
-            spec, run_id=run_id, query_id=query_id, archive=archive, resume_from=resume_token
+            spec,
+            run_id=run_id,
+            query_id=query_id,
+            archive=BudgetedSink(archive, budget_gone),
+            resume_from=resume_token,
         )
     except Exception as exc:
         # The pages already archived stay recorded; nothing from them is parsed here.

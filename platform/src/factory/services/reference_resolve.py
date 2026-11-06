@@ -56,6 +56,7 @@ from sqlalchemy import text
 from factory.document.quotes import normalise_quote, quote_in_element
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
+from factory.model.budgets import REQUESTS_SEARCH
 from factory.model.project import RigorMode
 from factory.model.references import (
     BINDING_DECISIONS,
@@ -79,6 +80,7 @@ from factory.model.work_ids import arxiv_id_from_doi, normalize_title, work_id
 from factory.modules.contract import GatePolicy, PolicyKind
 from factory.references.match import Candidate, Match, match_title
 from factory.references.parse import PARSER_VERSION, RefFields, parse_bibliography
+from factory.services.budgets import spent_for
 from factory.services.context import Project
 from factory.services.conversions import conversion_manifest
 from factory.services.dedup import active_merges, canonical_works
@@ -199,8 +201,9 @@ class _Lookup:
 def _lookup(
     project: Project, actor: Actor, spec: QuerySpec, sources: Mapping[str, SourceFactory]
 ) -> _Lookup:
-    """Register and run one probe query; a source the caller does not provide is a failure."""
-    if spec.source not in sources:
+    """Register and run one probe query. A source the caller does not provide, or a spent request
+    budget, is a failure that writes nothing."""
+    if spec.source not in sources or spent_for(project, actor, REQUESTS_SEARCH) is not None:
         return _Lookup(None, RunStatus.FAILED, [])
     query_id = register_query(project, actor, spec, sources=sources)
     run = run_query(project, query_id, sources=sources, actor=actor)

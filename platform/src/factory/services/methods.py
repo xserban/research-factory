@@ -17,6 +17,7 @@ from pydantic import Field, SerializerFunctionWrapHandler, model_serializer
 from sqlalchemy import TextClause, text
 
 from factory.model.base import StrictModel
+from factory.model.budgets import Budget
 from factory.model.protocol import ScreeningStage, SnowballPlan
 from factory.model.references import Direction
 from factory.references.match import MATCHER_VERSION
@@ -28,6 +29,7 @@ from factory.services.agreement import (
     agreement_summary,
 )
 from factory.services.audit import audit_report
+from factory.services.budgets import budgets, reported_usage
 from factory.services.calibration import calibration_status
 from factory.services.chase import chase_rounds
 from factory.services.context import Project
@@ -242,6 +244,11 @@ class MethodsReport(StrictModel):
     hypotheses: HypothesisCounts | None = None
     """Counts of leads, hypotheses, outcomes, deviations, baselines and registry rows (slice 6);
     None, and no paragraph, while the project has none."""
+    budget_limits: list[str] = Field(default_factory=list)
+    """The budgets in force as declared (slice 5 ruling 17); with `reported_usage` empty too, no
+    paragraph."""
+    reported_usage: dict[str, float] = Field(default_factory=dict)
+    """What agents reported, never measured and never enforced."""
 
 
 def methods_report(project: Project) -> MethodsReport:
@@ -330,6 +337,8 @@ def methods_report(project: Project) -> MethodsReport:
         miners=_miners(project),
         hypotheses=hypothesis_counts(project),
         **_mine_imports(project),
+        budget_limits=[_budget_limit(budget) for budget in budgets(project)],
+        reported_usage=reported_usage(project),
     )
 
 
@@ -357,6 +366,12 @@ def _mine_imports(project: Project) -> dict[str, Any]:
             {items[r.extraction_id].source_project for r in rows if r.extraction_id in items}
         ),
     }
+
+
+def _budget_limit(budget: Budget) -> str:
+    scope = "the project" if budget.scope_user is None else budget.scope_user
+    period = "per week" if budget.period == "week" else "in total"
+    return f"{budget.unit} {budget.limit} {period} for {scope}"
 
 
 def _miners(project: Project) -> list[MinerMethods]:
@@ -657,6 +672,7 @@ def render_methods(report: MethodsReport, *, withheld: frozenset[str] = frozense
         *([] if not report.imported_rows else [_imports_paragraph(report)]),
         *([] if not report.gate_policy else [_gate_policy(report, withheld)]),
         *([] if report.hypotheses is None else [hypotheses_paragraph(report.hypotheses)]),
+        *([] if not (report.budget_limits or report.reported_usage) else [_budgets(report)]),
         _deviations(report),
     ]
     return "\n\n".join(paragraphs) + "\n"
@@ -998,6 +1014,19 @@ def _gate_policy(report: MethodsReport, withheld: frozenset[str]) -> str:
                 "became human."
             )
         parts.append(text)
+    return " ".join(parts)
+
+
+def _budgets(report: MethodsReport) -> str:
+    parts = ["Budgets."]
+    if report.budget_limits:
+        parts.append(
+            f"Declared limits: {_list(report.budget_limits)}. Consumption was computed from the "
+            "log: tasks claimed and source requests made."
+        )
+    if report.reported_usage:
+        usage = ", ".join(f"{name} {value:g}" for name, value in report.reported_usage.items())
+        parts.append(f"Reported usage, as agents stated it, measured by nothing: {usage}.")
     return " ".join(parts)
 
 

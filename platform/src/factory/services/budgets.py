@@ -13,6 +13,8 @@ Invariants:
 
 from datetime import UTC, datetime, timedelta
 
+from pydantic import JsonValue, TypeAdapter, ValidationError
+
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
 from factory.index.budgets import BUDGET_TABLES, consumed, live_budgets, reported_totals
@@ -25,6 +27,7 @@ from factory.model.budgets import (
     BudgetStatus,
     Period,
 )
+from factory.model.task import ReportedUsage
 from factory.services.access import Permission, authorize
 from factory.services.context import Principal, Project
 from factory.services.lab import lab_exists, open_lab, payload_of, refuse, user_record
@@ -32,6 +35,7 @@ from factory.services.modules.task_kinds import default_task_kinds
 
 EMPTY_NOTICE = "no budget is declared and no usage has been reported on this project"
 _KNOWN_KINDS = "unit names no task kind of this platform"
+_USAGE: TypeAdapter[ReportedUsage] = TypeAdapter(ReportedUsage)
 
 
 def task_unit(kind: str) -> str:
@@ -137,6 +141,11 @@ def exhausted_unit(project: Project, principal: Principal, unit: str) -> str | N
     return tightest[1]
 
 
+def spent_for(project: Project, actor: Actor, unit: str) -> str | None:
+    """`exhausted_unit` for the person `actor` works for."""
+    return exhausted_unit(project, actor_principal(project, actor), unit)
+
+
 def budget_issue(unit: str) -> ValidationIssue:
     return ValidationIssue("budget", f"budget-exhausted: {unit}")
 
@@ -148,6 +157,41 @@ def require_budget(project: Project, principal: Principal, unit: str) -> None:
         raise FactoryValidationError([budget_issue(spent)])
 
 
+def require_for(project: Project, actor: Actor, unit: str) -> None:
+    """`require_budget` for the person `actor` works for."""
+    require_budget(project, actor_principal(project, actor), unit)
+
+
+def budget_issues(project: Project, actor: Actor, unit: str) -> list[ValidationIssue]:
+    """`require_for` as issues, for a service that reports every refusal at once."""
+    spent = spent_for(project, actor, unit)
+    return [] if spent is None else [budget_issue(spent)]
+
+
+def parse_reported_usage(raw: dict[str, JsonValue] | None) -> ReportedUsage | None:
+    """Usage as an agent stated it, validated at the boundary."""
+    if raw is None:
+        return None
+    try:
+        return _USAGE.validate_python(raw)
+    except ValidationError as exc:
+        raise FactoryValidationError(
+            [
+                ValidationIssue(
+                    ".".join(["reported_usage", *(str(p) for p in err["loc"])]), err["msg"]
+                )
+                for err in exc.errors()
+            ]
+        ) from exc
+
+
+def reported_usage(project: Project) -> dict[str, float]:
+    """The sums of what agents reported: shown, labelled reported, and never enforced."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        return reported_totals(conn, BUDGET_TABLES)
+
+
 def budget_status(project: Project) -> BudgetStatus:
     """Every budget in force with its computed consumption, and the usage agents reported, shown as
     reported and never enforced. Empty, with a notice, on a fresh project."""
@@ -157,7 +201,6 @@ def budget_status(project: Project) -> BudgetStatus:
         used = _used(project, budget, now)
         left = max(budget.limit - used, 0)
         lines.append(BudgetLine(budget=budget, consumed=used, remaining=left))
-    with project.index.connect() as conn:
-        usage = reported_totals(conn, BUDGET_TABLES)
+    usage = reported_usage(project)
     notice = EMPTY_NOTICE if not lines and not usage else None
     return BudgetStatus(budgets=lines, reported_usage=usage, notice=notice)

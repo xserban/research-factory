@@ -36,13 +36,14 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal
 
-from pydantic import JsonValue
+from pydantic import Field, JsonValue
 from sqlalchemy import text
 from sqlalchemy.engine import RowMapping
 
 from factory.errors import FactoryError, FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor, Event
 from factory.model.base import StrictModel
+from factory.model.budgets import REQUESTS_FULLTEXT
 from factory.model.fulltext import (
     MAX_RATIONALE,
     QUALITY,
@@ -60,6 +61,8 @@ from factory.model.fulltext import (
 from factory.model.identity import BLOB_REF_RE
 from factory.model.work import Work
 from factory.services.agreement import Outcome, final_outcomes
+from factory.services.budgets import remaining as remaining_budget
+from factory.services.budgets import require_for
 from factory.services.context import Project
 from factory.services.search import get_work, list_works
 from factory.sources.fulltext.base import FullTextRoute, RouteResult
@@ -86,11 +89,14 @@ class WorkFetch(StrictModel):
 
 
 class FetchSummary(StrictModel):
-    """What one `fetch_fulltext` call did. `remaining` counts promoted works with no document."""
+    """What one `fetch_fulltext` call did. `remaining` counts promoted works with no document.
+    `budget_stopped` names the works the request budget left unasked or cut short: one that has an
+    attempt is asked again by naming it, or by `refresh`."""
 
     fetch_id: str
     works: list[WorkFetch]
     remaining: int
+    budget_stopped: list[str] = Field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -151,6 +157,9 @@ def fetch_fulltext(
     `limit` works are processed; explicit `work_ids` beyond `limit` are refused, not truncated.
     `remaining` counts the promoted works still without a document afterwards.
 
+    A spent `requests:fulltext` budget refuses the call with nothing written. A budget spent during
+    the call stops it before the next route is asked; what stopped is in `budget_stopped`.
+
     Raises `FactoryValidationError` with nothing written if a work is not promoted, `only` names
     `researcher-supplied` or a route not supplied, `limit` is outside 1..200, the distinct explicit
     `work_ids` exceed `limit`, or `input_blob` is not a stored blob. A route's failure is an
@@ -166,6 +175,7 @@ def fetch_fulltext(
         issues = _request_issues(project, promoted, routes, work_ids, only, limit, input_blob)
         if issues:
             raise FactoryValidationError(issues)
+        require_for(project, trigger, REQUESTS_FULLTEXT)
         targets = _targets(project, promoted, work_ids, revisit, limit)
         fetch_id = project.ids.new("fft")
         request = _request(work_ids, only, refresh, limit)
@@ -188,16 +198,25 @@ def fetch_fulltext(
             ]
         )
 
-    works = [
-        _fetch_work(project, fetch_id, corpus[work_id], routes, candidates, only, revisit)
-        for work_id in targets
-    ]
+    works: list[WorkFetch] = []
+    stopped: list[str] = []
+    for work_id in targets:
+        left = remaining_budget(project, trigger.user, REQUESTS_FULLTEXT, project.clock.now())
+        if left == 0:
+            stopped.append(work_id)
+            continue
+        fetched = _fetch_work(
+            project, fetch_id, corpus[work_id], routes, candidates, only, revisit, left
+        )
+        works.append(fetched)
+        if fetched.status == "not-retrieved" and left == len(fetched.attempts):
+            stopped.append(work_id)
 
     with project.index.exclusive():
         project.index.sync()
         documented = _documented_works(project)
     remaining = len(promoted - documented)
-    return FetchSummary(fetch_id=fetch_id, works=works, remaining=remaining)
+    return FetchSummary(fetch_id=fetch_id, works=works, remaining=remaining, budget_stopped=stopped)
 
 
 # --- Validation and selection (under the write lock, before any write) ---
@@ -307,8 +326,9 @@ def _fetch_work(
     candidates: Sequence[Route],
     only: Sequence[Route] | None,
     revisit: bool,
+    budget: int | None,
 ) -> WorkFetch:
-    """Run the routes for one work and record its events in one call.
+    """Run the routes for one work, at most `budget` of them, and record its events in one call.
 
     The state is read under the write lock before any network request, and again before the
     decision, so a document written in between is seen. The routes themselves run without the lock.
@@ -317,7 +337,7 @@ def _fetch_work(
         project.index.sync()
         if not revisit and _documents(project, work.id):
             return WorkFetch(work_id=work.id, attempts=[], documents=[], status="already-retrieved")
-    fetched = _attempt_routes(project, work, routes, candidates, only)
+    fetched = _attempt_routes(project, work, routes, candidates, only, budget)
     with project.index.exclusive():
         project.index.sync()
         docs = _documents(project, work.id)
@@ -332,10 +352,15 @@ def _attempt_routes(
     routes: Mapping[Route, FullTextRoute],
     candidates: Sequence[Route],
     only: Sequence[Route] | None,
+    budget: int | None,
 ) -> list[_Fetched]:
-    """Ask each candidate route in order. Without `only`, stop at the first retrieved attempt."""
+    """Ask each candidate route in order, at most `budget` of them. Without `only`, stop at the
+    first retrieved attempt. The attempts fold only once the work's events are written, so the
+    budget is counted here."""
     fetched: list[_Fetched] = []
     for route in candidates:
+        if budget is not None and len(fetched) >= budget:
+            break
         item = _check(project, route, routes[route].fetch(work))
         fetched.append(item)
         if only is None and item.content is not None:
@@ -553,7 +578,8 @@ def restore_document(
       decision; nothing is requested and nothing is written (plan FL, ruling 2).
 
     Raises `FactoryValidationError` with nothing written if the document is unknown, is
-    researcher-supplied (re-import it instead), or its route is not supplied.
+    researcher-supplied (re-import it instead), its route is not supplied, or the
+    `requests:fulltext` budget is spent.
     """
     trigger = actor or project.system_actor()
     with project.index.exclusive():
@@ -571,6 +597,7 @@ def restore_document(
         work = get_work(project, doc.work_id)
         if work is None:
             raise FactoryValidationError([ValidationIssue("document_id", "work not found")])
+        require_for(project, trigger, REQUESTS_FULLTEXT)
 
     route = Route(doc.route)
     item = _check(project, route, routes[route].fetch(work, version=doc.source_version))

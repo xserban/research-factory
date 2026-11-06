@@ -105,10 +105,11 @@ from factory.model.staleness import (
     stale_rows,
     touches,
 )
-from factory.model.task import Task, TaskCompleted, TaskStatus
+from factory.model.task import ReportedUsage, Task, TaskCompleted, TaskStatus
 from factory.packs import FieldKind, Pack, get_pack
 from factory.services import passes
 from factory.services.agreement import Outcome, final_outcomes
+from factory.services.budgets import budget_issue, require_for, spent_for, task_unit
 from factory.services.call_memo import memoised
 from factory.services.context import Project
 from factory.services.conversions import conversion_manifest
@@ -132,6 +133,7 @@ from factory.services.tasks import (
     build_task_events,
     claim_next,
     get_task,
+    holds_live_claim,
     require_holder,
     session_in_layer,
     task_content,
@@ -727,6 +729,9 @@ def next_unit(
         needs_join = _check_join(
             project, actor, label, scope, calibration=calibration_id is not None
         )
+        unit_kind = kinds_for(scope)[label]
+        if not holds_live_claim(project, actor, unit_kind):
+            require_for(project, actor, task_unit(unit_kind))
         events: list[Event] = []
         config = pass_config(project, label, scope=scope)
         if config is None:
@@ -772,10 +777,13 @@ def next_unit(
         project.record([*events, *queued])
         ledger = _ledger(project, scope, calibration_id, reopened)
         servable = _servable(ledger, label, queue, schema, pack)
-        kind = kinds_for(scope)[label]
-        task = _held(project, actor, kind, servable) or claim_next(
-            project, actor, kind, task_ids=servable
-        )
+        task = _held(project, actor, unit_kind, servable)
+        # A claim held on a stale task let the call through above; it pays for no new claim.
+        spent = None if task is not None else spent_for(project, actor, task_unit(unit_kind))
+        if spent is not None:
+            blocked.append(budget_issue(spent).reason)
+        elif task is None:
+            task = claim_next(project, actor, unit_kind, task_ids=servable)
         batch = None if task is None else _batch(project, task, scope)
         return ExtractNext(batch=batch, blocked=blocked, remaining=remaining)
 
@@ -1094,16 +1102,27 @@ def extract_record(
     reason: str | None = None,
     supersedes: Mapping[int, str] | None = None,
     claim_supersedes: Mapping[int, str] | None = None,
+    reported_usage: ReportedUsage | None = None,
 ) -> ExtractResult:
     """Record an evidence task: `record_unit` without hooks. A contribution task is refused on
-    `task_id` (its items go through `contribution_record`, which supplies the hooks)."""
+    `task_id` (its items go through `contribution_record`, which supplies the hooks).
+    `reported_usage` goes on the task's completion, shown and never enforced."""
     return _record(
         project,
         actor,
         task_id,
         rows,
         claims,
-        _Options(finish, reason, supersedes, claim_supersedes, None, None, DUPLICATE_ROW),
+        _Options(
+            finish,
+            reason,
+            supersedes,
+            claim_supersedes,
+            None,
+            None,
+            DUPLICATE_ROW,
+            reported_usage,
+        ),
         evidence_only=True,
     )
 
@@ -1185,6 +1204,7 @@ class _Options:
     extra_check: ExtraCheck | None
     close_check: CloseCheck | None
     duplicate_reason: str
+    reported_usage: ReportedUsage | None = None
 
 
 def _record(
@@ -1400,6 +1420,7 @@ def _record(
                 blob,
                 sorted([*remaining_rows, *row_ids]),
                 sorted([*remaining_claims, *claim_ids]),
+                options.reported_usage,
             )
         project.record(events)
         if closing:
@@ -1583,6 +1604,7 @@ def _closing_events(
     blob: str,
     row_ids: list[str],
     claim_ids: list[str],
+    reported_usage: ReportedUsage | None,
 ) -> list[Event]:
     """`extraction.closed` with the computed live counts, and the task's completion with the live
     row ids then claim ids as its results (the payload and input blob `complete_task` writes)."""
@@ -1595,7 +1617,9 @@ def _closing_events(
         reason=reason,
         pack=_pack_tag(unit.scope),
     )
-    completed = TaskCompleted(task_id=unit.task_id, result_refs=(*row_ids, *claim_ids))
+    completed = TaskCompleted(
+        task_id=unit.task_id, result_refs=(*row_ids, *claim_ids), reported_usage=reported_usage
+    )
     return [
         project.events.make(
             "extraction.closed", closed, actor, refs=(unit.task_id,), input_blob=blob

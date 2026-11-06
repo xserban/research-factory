@@ -16,8 +16,8 @@ from pydantic import ValidationError as PydanticValidationError
 
 from factory.cli import evidence_render, portfolio_render, render
 from factory.cli.admin import member_app, token_app, user_app
+from factory.cli.ledger import budget_app, ledger_cmd
 from factory.cli.manuscripts import manuscript_app
-from factory.cli.ledger import ledger_cmd
 from factory.cli.organisation import consolidation_app, labels_app, terms_app
 from factory.cli.team import (
     project_app,
@@ -505,6 +505,7 @@ protocol_app.command("amend")(protocol_amend_cmd)
 protocol_app.command("deviation")(protocol_deviation_cmd)
 app.command("workspace")(workspace_cmd)
 app.command("ledger")(ledger_cmd)
+app.add_typer(budget_app)
 
 
 _M = TypeVar("_M", bound=BaseModel)

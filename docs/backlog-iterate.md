@@ -231,3 +231,8 @@ Minor review findings parked during the v1 build, to address when iterating from
 - teams-C: a blind person cannot run `status`; a progress line for them would need a rate-free view (services/human_pass.py).
 - teams-C: the methods sentence "Screening decisions were made by Claude models" stands beside the pair sentence when a person screens (services/methods.py).
 - teams-C: `EventWriter`'s docstring still says one process writes a session file; a human pass session has several in turn, under the lock (events/writer.py).
+- teams-D: `requests:search` also counts pages of local sources (reflist, importlist), which make no outbound request (index/budgets.py).
+- teams-D: `reported_usage` is not taken by `mine_record`, `contribution_record` or the intuition, review and consolidation completions (services/tasks.py).
+- teams-D: a revoked but active member cannot confirm their ledger entry, and no one may for them (services/ledger.py).
+- teams-D: no export refuses on `ledger-unconfirmed` yet (services/check.py).
+- teams-D: the plugin skills do not yet mention `ledger_view`, `budget_status` or `reported_usage`.

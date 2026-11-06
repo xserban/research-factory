@@ -50,6 +50,7 @@ from factory.model.intuition import (
 )
 from factory.model.screening import Channel
 from factory.model.task import INTUITION_TASK_KIND, TaskCompleted, TaskStatus
+from factory.services.budgets import require_for, task_unit
 from factory.services.call_memo import entering
 from factory.services.context import Project
 from factory.services.contributions import final_item
@@ -65,6 +66,7 @@ from factory.services.tasks import (
     build_task_events,
     claim_next,
     get_task,
+    holds_live_claim,
     require_holder,
     task_content,
 )
@@ -330,6 +332,8 @@ def intuition_next(
     wanted = None if targets is None else list(dict.fromkeys(targets))
     with project.index.exclusive():
         project.index.sync()
+        if not holds_live_claim(project, actor, INTUITION_KIND):
+            require_for(project, actor, task_unit(INTUITION_KIND))
         skipped: list[TargetSkip] = []
         if wanted is not None:
             for t in wanted:

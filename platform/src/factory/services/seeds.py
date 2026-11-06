@@ -28,6 +28,7 @@ from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
 from factory.index.chase import admitted_works
 from factory.model.base import StrictModel
+from factory.model.budgets import REQUESTS_SEARCH
 from factory.model.chase import SeedAdmitted
 from factory.model.project import RigorMode
 from factory.model.search import QueryKind, QueryPurpose, QuerySpec, RunStatus
@@ -44,6 +45,7 @@ from factory.model.seed import (
 )
 from factory.model.work import ProvenanceMethod, Work
 from factory.model.work_ids import arxiv_id_from_doi
+from factory.services.budgets import budget_issues
 from factory.services.context import Project
 from factory.services.dedup import active_merges
 from factory.services.results import BatchResult, ItemError
@@ -92,6 +94,7 @@ def add_seeds(
             if not issues:
                 # The lookup must be registrable, or the seed could never resolve.
                 issues = query_issues(project, _lookup_query(spec), sources)
+                issues += budget_issues(project, actor, REQUESTS_SEARCH)
             if issues:
                 rejected.append(ItemError(index=index, issues=issues))
                 continue
@@ -488,6 +491,7 @@ def admit_seed(
         query = _lookup_query(seed.spec, QueryPurpose.SEED)
         issues += query_issues(project, query, sources)
         issues += protocol_service.search_authorization(project, query, deviation_id=deviation_id)
+        issues += budget_issues(project, actor, REQUESTS_SEARCH)
         if issues:
             raise FactoryValidationError(issues)
 

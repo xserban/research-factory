@@ -34,6 +34,7 @@ from factory.model.hypotheses import (
     ReviewTrigger,
 )
 from factory.model.task import HYPOTHESIS_REVIEW_TASK_KIND, Task, TaskStatus
+from factory.services.budgets import require_for, task_unit
 from factory.services.context import Project
 from factory.services.finders import ref_quote
 from factory.services.hypotheses import (
@@ -153,6 +154,8 @@ def review_next(project: Project, actor: Actor) -> ServedReview | None:
     with project.index.exclusive():
         project.index.sync()
         waiting = list_hypotheses(project, states=["draft"])
+        if waiting:
+            require_for(project, actor, task_unit(HYPOTHESIS_REVIEW_TASK_KIND))
         first_refusal: ValidationIssue | None = None
         for view in waiting:
             refusal = critic_refusal(project, actor, view)

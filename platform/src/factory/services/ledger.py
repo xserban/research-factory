@@ -59,6 +59,8 @@ _ROWS = text(
     "WHERE type != :confirmed "
     "AND NOT (type LIKE 'member.%' AND id NOT IN (SELECT event_id FROM member_events)) "
     "AND NOT (type = 'budget.set' AND id NOT IN (SELECT event_id FROM budgets)) "
+    "AND NOT (type = 'review.decided' AND id NOT IN "
+    "(SELECT decided_event FROM reviews WHERE decided_event IS NOT NULL)) "
     "GROUP BY type, actor_kind, actor_id, user, model, skill"
 )
 

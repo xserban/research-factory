@@ -28,6 +28,7 @@ from factory.mcp.conventions import (
     withhold,
 )
 from factory.model.base import StrictModel
+from factory.model.budgets import REQUESTS_SEARCH
 from factory.model.cards import CardKind, PropertyDef, QuoteBasis
 from factory.model.chase import ChaseDirection
 from factory.model.drafts import DraftKind, SupportSpan, Verdict
@@ -70,6 +71,7 @@ from factory.services import agreement as agreement_service
 from factory.services import audit as audit_service
 from factory.services import benchmark_ledger as ledger_service
 from factory.services import briefing as briefing_service
+from factory.services import budgets as budget_service
 from factory.services import calibration as calibration_service
 from factory.services import cards as cards_service
 from factory.services import chase as chase_service
@@ -107,7 +109,7 @@ from factory.services import inbox as inbox_service
 from factory.services import interpretations as interpretations_service
 from factory.services import labels as labels_service
 from factory.services import leads as leads_service
-from factory.services import ledger as ledger_service
+from factory.services import ledger as contribution_ledger_service
 from factory.services import lineage as graph_service
 from factory.services import manuscript_verify as manuscript_verify_service
 from factory.services import manuscripts as manuscripts_service
@@ -297,6 +299,7 @@ def build_server(
             opened = open_project(settings, project, session=session, clock=clock)
             actor = make_agent_actor(settings, session, role, model, skill)
             spec = _spec(source, query, kind, purpose, limit)
+            budget_service.require_for(opened, actor, REQUESTS_SEARCH)
             if resume_run is not None:
                 query_id = search_service.resume_query_id(opened, resume_run, spec)
             else:
@@ -710,17 +713,24 @@ def build_server(
         role: str,
         model: str,
         skill: str,
+        reported_usage: dict[str, JsonValue] | None = None,
     ) -> dict[str, JsonValue]:
         """Record verdicts for a held batch. Each item is {work_id, verdict, criterion, quote,
         rationale}, plus `anchor` for a full-text batch (the stage is the batch's); an invalid item
-        is reported by index and the valid ones are written."""
+        is reported by index and the valid ones are written. `reported_usage` may state
+        `input_tokens`, `output_tokens` and `cost_usd`: it goes on the batch's completion, is shown
+        as reported and is never enforced."""
 
         def record() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
             actor = make_agent_actor(settings, session, role, model, skill)
             accepted, rejected = _parse_items(items)
             result = screening_service.screen_record(
-                opened, actor, task_id, [item for _, item in accepted]
+                opened,
+                actor,
+                task_id,
+                [item for _, item in accepted],
+                reported_usage=budget_service.parse_reported_usage(reported_usage),
             )
             for error in result.rejected:
                 original = accepted[error.index][0]
@@ -924,10 +934,24 @@ def build_server(
         def view() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
             _refuse_pass_session(opened)
-            report = ledger_service.ledger_report(opened).model_dump(mode="json")
+            report = contribution_ledger_service.ledger_report(opened).model_dump(mode="json")
             return _withheld(opened, report, include_work_ids=False)
 
         return _reply(project, view, include_work_ids=False)
+
+    @server.tool()
+    def budget_status(project: str) -> dict[str, JsonValue]:
+        """Each declared budget with its computed consumption and what is left in its period, and
+        the usage agents reported, which is shown and never enforced. Empty with a notice on a
+        project with neither. Read-only. Refused to any session that has joined a pass."""
+
+        def status() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            report = budget_service.budget_status(opened).model_dump(mode="json")
+            return _withheld(opened, report, include_work_ids=False)
+
+        return _reply(project, status, include_work_ids=False)
 
     @server.tool()
     def report_methods(project: str) -> dict[str, JsonValue]:
@@ -1284,13 +1308,15 @@ def build_server(
         reason: str | None = None,
         supersedes: dict[str, str] | None = None,
         claim_supersedes: dict[str, str] | None = None,
+        reported_usage: dict[str, JsonValue] | None = None,
     ) -> dict[str, JsonValue]:
         """Record the rows (and, in pass A, claims) extracted from a held task. A row is
         {fields: {name: {value, unit, anchor, cell, quote, reported_in, cited_work}}}. An invalid
         item is reported by index and the valid ones are written. `supersedes` maps the index of
         a row of this call (a string key) to the id of the row it corrects; `claim_supersedes`
         likewise for claims. `finish` closes the work once no item is rejected; a work with no
-        results needs a `reason`."""
+        results needs a `reason`. `reported_usage` may state `input_tokens`, `output_tokens` and
+        `cost_usd`: it goes on the completion, is shown as reported and is never enforced."""
 
         def record() -> JsonValue:
             row_targets = _index_keys("supersedes", supersedes or {})
@@ -1311,6 +1337,7 @@ def build_server(
                 claim_supersedes=_renumbered(
                     "claim_supersedes", claim_targets, good_claims, len(claims or [])
                 ),
+                reported_usage=budget_service.parse_reported_usage(reported_usage),
             )
             merged = ExtractResult(
                 rows=_merged(result.rows, good_rows, bad_rows),

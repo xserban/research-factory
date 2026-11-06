@@ -57,6 +57,28 @@ class StatusRecord:
 
 
 PageSink = Callable[[RawPage], str]
+
+BUDGET_STOP_NOTE = "budget-exhausted: requests:search"
+"""Why a run stopped at its request budget (slice 5 ruling 17). Such a run is partial and carries
+its resume token, so it continues once the budget is raised (R-23)."""
+
+
+@dataclass(frozen=True, slots=True)
+class BudgetedSink:
+    """A page sink that also knows whether the run may ask its source for another page."""
+
+    sink: PageSink
+    spent: Callable[[], bool]
+
+    def __call__(self, page: RawPage) -> str:
+        return self.sink(page)
+
+
+def budget_spent(archive: PageSink) -> bool:
+    """Asked by a paginating adapter before each request. A plain sink has no budget."""
+    return isinstance(archive, BudgetedSink) and archive.spent()
+
+
 """Archives one raw response and returns its blob ref.
 
 Called as each response arrives, before its records are parsed, so a long search that dies on
@@ -181,6 +203,8 @@ def probe_key(source: str, work: Work) -> str | None:
 
 
 __all__ = [
+    "BUDGET_STOP_NOTE",
+    "BudgetedSink",
     "PageSink",
     "Prober",
     "RawPage",
@@ -188,5 +212,6 @@ __all__ = [
     "Source",
     "SourceError",
     "StatusRecord",
+    "budget_spent",
     "probe_key",
 ]

@@ -31,7 +31,15 @@ from factory.model.work import (
     WorkType,
 )
 from factory.model.work_ids import normalize_arxiv
-from factory.sources.base import PageSink, RawPage, SearchResult, SourceError, StatusRecord
+from factory.sources.base import (
+    BUDGET_STOP_NOTE,
+    PageSink,
+    RawPage,
+    SearchResult,
+    SourceError,
+    StatusRecord,
+    budget_spent,
+)
 from factory.sources.http import PoliteClient, redact
 
 _ENDPOINT = "https://export.arxiv.org/api/query"
@@ -193,6 +201,18 @@ class ArxivSource:
         start = int(resume_from) if resume_from else 0
 
         while True:
+            if budget_spent(archive):
+                return SearchResult(
+                    source=self.name,
+                    query_sent=query_sent,
+                    reported_count=reported,
+                    works=works,
+                    pages=pages,
+                    status=RunStatus.PARTIAL,
+                    skipped=skipped,
+                    note=BUDGET_STOP_NOTE,
+                    resume_token=str(start),
+                )
             try:
                 response = self._http.get(_ENDPOINT, self._params(spec, ids, start))
             except httpx.HTTPError as exc:
@@ -303,6 +323,18 @@ class ArxivSource:
         records: list[StatusRecord] = []
         pages = 0
         for start in range(0, len(ids), self._page_size):
+            if budget_spent(archive):
+                return SearchResult(
+                    source=self.name,
+                    query_sent=",".join(ids),
+                    reported_count=None,
+                    works=[],
+                    pages=pages,
+                    status=RunStatus.PARTIAL,
+                    note=BUDGET_STOP_NOTE,
+                    resume_token=str(start),
+                    status_records=tuple(records),
+                )
             batch = ids[start : start + self._page_size]
             params: dict[str, str | int] = {
                 "id_list": ",".join(batch),

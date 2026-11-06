@@ -37,12 +37,14 @@ from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
 from factory.imports.model import ImportFormat, ImportRole, ParseOutcome
 from factory.model.base import StrictModel
+from factory.model.budgets import REQUESTS_SEARCH
 from factory.model.imports import ImportAdmissionPlanned, PlannedImportQuery
 from factory.model.project import RigorMode
 from factory.model.references import MAX_QUERY, LinkState
 from factory.model.search import QueryKind, QueryPurpose, QuerySpec, RunStatus
 from factory.model.work import Work
 from factory.model.work_ids import arxiv_id_from_doi
+from factory.services.budgets import budget_issues
 from factory.services.context import Project
 from factory.services.dedup import active_merges
 from factory.services.import_resolve import surname
@@ -343,6 +345,8 @@ def admit_import(
                 for i in search_authorization(project, spec, deviation_id=None, import_id=import_id)
                 if i.field not in ("import_id", "query")
             ]
+        if plan.specs:
+            issues += budget_issues(project, who, REQUESTS_SEARCH)
         if issues:
             raise FactoryValidationError(list(dict.fromkeys(issues)))
         if not plan.specs:

@@ -80,6 +80,7 @@ SPEC = ModuleSpec(
         CheckRule("review-open", ("warning", "warning", "warning")),
         CheckRule("review-stale", ("warning", "warning", "warning")),
         CheckRule("ledger-unconfirmed", (None, "warning", "error")),
+        CheckRule("budget-exhausted", ("warning", "warning", "warning")),
     ),
 )
 

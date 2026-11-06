@@ -20,7 +20,15 @@ from factory.clock import Clock
 from factory.model.notices import NoticeKind
 from factory.model.search import QueryKind, QueryPurpose, QuerySpec, RunStatus
 from factory.model.work import Identifiers
-from factory.sources.base import PageSink, RawPage, SearchResult, SourceError, StatusRecord
+from factory.sources.base import (
+    BUDGET_STOP_NOTE,
+    PageSink,
+    RawPage,
+    SearchResult,
+    SourceError,
+    StatusRecord,
+    budget_spent,
+)
 from factory.sources.http import PoliteClient, redact
 
 NAME = "crossref"
@@ -126,6 +134,10 @@ class CrossrefSource:
         archived = 0
         seen_items = 0
         while True:
+            if budget_spent(archive):
+                return self._result(
+                    spec, records, ignored, archived, RunStatus.PARTIAL, BUDGET_STOP_NOTE, cursor
+                )
             params: dict[str, str | int] = {"filter": spec.text, "rows": _ROWS, "cursor": cursor}
             if self._mailto:
                 params["mailto"] = self._mailto

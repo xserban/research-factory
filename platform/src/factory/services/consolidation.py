@@ -54,6 +54,7 @@ from factory.model.labels import (
 )
 from factory.model.task import CONSOLIDATE_TASK_KIND
 from factory.regions.concept_use import concept_users
+from factory.services.budgets import require_for, task_unit
 from factory.services.concepts import build_concept_merge, merge_group_issues, visible_concepts
 from factory.services.consolidation_due import (
     CONSOLIDATION_DUE_LABELS,
@@ -417,9 +418,11 @@ def _still_open(project: Project, content: JsonValue) -> bool:
 
 def consolidation_next(project: Project, actor: Actor) -> ClusterTask | None:
     """Claim the next open cluster task (a lease, 00-system section 8), or None."""
-    task = claim_next(
-        project, actor, CONSOLIDATE_TASK_KIND, accept=lambda c: _still_open(project, c)
-    )
+    with project.writing():
+        require_for(project, actor, task_unit(CONSOLIDATE_TASK_KIND))
+        task = claim_next(
+            project, actor, CONSOLIDATE_TASK_KIND, accept=lambda c: _still_open(project, c)
+        )
     if task is None:
         return None
     content = task_content(project, task)

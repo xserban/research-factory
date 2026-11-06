@@ -30,9 +30,11 @@ from sqlalchemy import text
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor, Event
 from factory.model.base import StrictModel
+from factory.model.budgets import REQUESTS_SEARCH
 from factory.model.chase import CHASE_CHUNK, ChaseDirection, ChaseRoundStarted
 from factory.model.search import QueryKind, QueryPurpose, QuerySpec
 from factory.services.agreement import Outcome, final_outcomes
+from factory.services.budgets import require_for
 from factory.services.calibration import calibration_items
 from factory.services.context import Project
 from factory.services.protocol import current_protocol, search_authorization
@@ -175,6 +177,7 @@ def search_chase(
     new round.
     """
     with project.index.exclusive():
+        require_for(project, actor, REQUESTS_SEARCH)
         start = start_chase(project, actor, directions, sources=sources, from_works=from_works)
         before, _ = corpus_size(project)
         project.record([start.event])

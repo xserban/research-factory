@@ -22,6 +22,7 @@ from factory.model.task import (
     MANUSCRIPT_VERIFY_TASK_KIND,
     TASK_KIND_RE,
     TASK_LEASE,
+    ReportedUsage,
     Task,
     TaskClaimed,
     TaskCompleted,
@@ -133,8 +134,32 @@ def claim_next(
         return None
 
 
+def holds_live_claim(project: Project, actor: Actor, kind: str) -> bool:
+    """Whether this session holds a live claim on a task of `kind`: serving it again claims nothing,
+    so it costs no budget."""
+    with project.index.connect() as conn:
+        row = conn.execute(
+            text(
+                "SELECT 1 FROM tasks WHERE kind = :kind AND status = :claimed "
+                "AND claim_session = :session AND lease_until > :now LIMIT 1"
+            ),
+            {
+                "kind": kind,
+                "claimed": TaskStatus.CLAIMED.value,
+                "session": actor.session,
+                "now": format_ts(project.clock.now()),
+            },
+        ).first()
+    return row is not None
+
+
 def complete_task(
-    project: Project, actor: Actor, task_id: str, result_refs: Sequence[str] = ()
+    project: Project,
+    actor: Actor,
+    task_id: str,
+    result_refs: Sequence[str] = (),
+    *,
+    reported_usage: ReportedUsage | None = None,
 ) -> None:
     refs = tuple(result_refs)
     if any(not ref for ref in refs):
@@ -145,7 +170,7 @@ def complete_task(
             [
                 project.events.make(
                     "task.completed",
-                    TaskCompleted(task_id=task_id, result_refs=refs),
+                    TaskCompleted(task_id=task_id, result_refs=refs, reported_usage=reported_usage),
                     actor,
                     refs=(task_id,),
                     input_blob=task.content_blob,

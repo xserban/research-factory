@@ -65,6 +65,7 @@ from sqlalchemy import text
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor, Event
 from factory.model.base import StrictModel
+from factory.model.budgets import REQUESTS_SEARCH
 from factory.model.chase import CHASE_CHUNK, ChaseDirection
 from factory.model.project import RigorMode
 from factory.model.protocol import ScreeningStage, SnowballPlan
@@ -82,6 +83,7 @@ from factory.model.references import (
 from factory.model.search import QueryKind, QueryPurpose, QuerySpec, RunStatus
 from factory.model.work_ids import arxiv_id_from_doi
 from factory.services.agreement import Outcome, final_outcomes
+from factory.services.budgets import budget_issues
 from factory.services.calibration import calibration_items
 from factory.services.chase import (
     ChaseStart,
@@ -969,6 +971,7 @@ def snowball_round(
         probe = specs[0] if specs else _GATE_PLACEHOLDER
         texts = [spec.text for spec in specs] or [probe.text]
         issues += search_authorization(project, probe, deviation_id=None, pending_round_texts=texts)
+        issues += budget_issues(project, actor, REQUESTS_SEARCH)
         if issues:
             raise FactoryValidationError(issues)
         before, _ = corpus_size(project)

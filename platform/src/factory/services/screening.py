@@ -76,10 +76,11 @@ from factory.model.screening import (
     Verdict,
 )
 from factory.model.seed import SeedKind
-from factory.model.task import Task, TaskStatus
+from factory.model.task import ReportedUsage, Task, TaskStatus
 from factory.model.work import Work
 from factory.services import passes
 from factory.services.access import Permission, authorize
+from factory.services.budgets import require_for, task_unit
 from factory.services.calibration import (
     CalibrationStatus,
     calibrated_models,
@@ -438,7 +439,8 @@ def screen_next(
     Nothing is written while the protocol is not ready, while a `dedup_run` would still change the
     merges (twins must not be drawn or queued apart), while the calibration set is required and
     not yet drawn (the human draws and labels it; an agent does not), or while pass B has no
-    second pass to run. Otherwise the session joins the pass, the pass opens, the pending works are
+    second pass to run, and a spent task budget refuses the call with nothing written. Otherwise
+    the session joins the pass, the pass opens, the pending works are
     queued, and the next claimable batch is claimed.
     """
     require_pass_stage(stage)
@@ -479,6 +481,7 @@ def screen_next(
                 [ValidationIssue("session", "a person screens in the session of their join")]
             )
         uncalibrated = human and not humans_calibrated(project, stage)
+        require_for(project, actor, task_unit(task_kind(stage, label)))
         # The pass, the join and the queued batches are built first and written in one append,
         # so a failure while building them writes nothing.
         events: list[Event] = []
@@ -624,6 +627,8 @@ def screen_record(
     actor: Actor,
     task_id: str,
     items: Sequence[ScreeningItem | HumanScreeningItem],
+    *,
+    reported_usage: ReportedUsage | None = None,
 ) -> BatchResult[str]:
     """Record the verdicts of a held batch, and return the decision IDs written (R-16, R-30).
 
@@ -635,7 +640,8 @@ def screen_record(
 
     A decision supersedes the live decision for the same work in the same pass, if any. When every
     record of the task has a live decision of the task, the task completes with those decisions as
-    its results. The decision events carry the validated input as their input blob.
+    its results, and with `reported_usage`, which is shown and never enforced. The decision events
+    carry the validated input as their input blob.
     """
     with project.index.exclusive():
         project.index.sync()
@@ -726,7 +732,13 @@ def screen_record(
         }
         results = [decided.get(str(record["work_id"])) for record in batch.records]
         if all(result is not None for result in results):
-            complete_task(project, actor, task_id, [str(result) for result in results])
+            complete_task(
+                project,
+                actor,
+                task_id,
+                [str(result) for result in results],
+                reported_usage=reported_usage,
+            )
         return BatchResult[str](written=decision_ids, rejected=rejected)
 
 

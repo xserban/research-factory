@@ -23,6 +23,7 @@ from typing import Literal
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
 from factory.model.base import StrictModel
+from factory.model.budgets import REQUESTS_SEARCH
 from factory.model.probe import (
     ProbeFailed,
     ProbeMeasured,
@@ -33,6 +34,7 @@ from factory.model.project import RigorMode
 from factory.model.search import QueryPurpose, QuerySpec
 from factory.model.seed import SeedKind
 from factory.model.work import Work
+from factory.services.budgets import budget_issue, budget_issues, exhausted_unit
 from factory.services.context import Project
 from factory.services.project import project_status
 from factory.services.question import current_question
@@ -98,6 +100,7 @@ def run_probe(
         issues.append(ValidationIssue("question", "record a question before probing"))
     probers, spec_issues = _validate(project, specs, sources)
     issues.extend(spec_issues)
+    issues += budget_issues(project, actor, REQUESTS_SEARCH)
     if issues:
         raise FactoryValidationError(issues)
     assert question is not None  # the question check above refused its absence
@@ -165,6 +168,13 @@ def _work_of(project: Project, seed: SeedView) -> Work | None:
     return None if seed.work_id is None else get_work(project, seed.work_id)
 
 
+def _require_requests(project: Project) -> None:
+    """A spent request budget ends a query as a source failure does: recorded, with no recall."""
+    spent = exhausted_unit(project, project.principal, REQUESTS_SEARCH)
+    if spent is not None:
+        raise SourceError(budget_issue(spent).reason)
+
+
 def _measure(
     project: Project,
     *,
@@ -183,12 +193,14 @@ def _measure(
         keys[seed.seed_id] = None if work is None else probe_key(spec.source, work)
     keyed = sorted({key for key in keys.values() if key is not None})
     try:
+        _require_requests(project)
         reported = prober.count(spec, archive=_archiver(project, probe_id, query_id, "count"))
-        matched = (
-            prober.matching(keyed, spec, archive=_archiver(project, probe_id, query_id, "match"))
-            if keyed
-            else set()
-        )
+        matched: set[str] = set()
+        if keyed:
+            _require_requests(project)
+            matched = prober.matching(
+                keyed, spec, archive=_archiver(project, probe_id, query_id, "match")
+            )
     except SourceError as exc:
         reason = redact(f"{type(exc).__name__}: {exc}", project.settings.mailto)
         failure = ProbeFailed(

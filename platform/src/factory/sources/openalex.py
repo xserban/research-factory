@@ -33,7 +33,15 @@ from factory.model.work import (
     WorkType,
 )
 from factory.model.work_ids import arxiv_id_from_doi, normalize_doi
-from factory.sources.base import PageSink, RawPage, SearchResult, SourceError, StatusRecord
+from factory.sources.base import (
+    BUDGET_STOP_NOTE,
+    PageSink,
+    RawPage,
+    SearchResult,
+    SourceError,
+    StatusRecord,
+    budget_spent,
+)
 from factory.sources.http import PoliteClient, redact
 
 _ENDPOINT = "https://api.openalex.org/works"
@@ -211,6 +219,18 @@ class OpenAlexSource:
         cursor = resume_from or "*"
 
         while cursor:
+            if budget_spent(archive):
+                return SearchResult(
+                    source=self.name,
+                    query_sent=query_sent,
+                    reported_count=reported,
+                    works=works,
+                    pages=archived,
+                    status=RunStatus.PARTIAL,
+                    skipped=skipped,
+                    note=BUDGET_STOP_NOTE,
+                    resume_token=cursor,
+                )
             params: dict[str, str | int] = {
                 "filter": query_sent,
                 "per-page": self._page_size,
@@ -323,6 +343,18 @@ class OpenAlexSource:
         returned = 0
         cursor = "*"
         while cursor:
+            if budget_spent(archive):
+                return SearchResult(
+                    source=self.name,
+                    query_sent=query_sent,
+                    reported_count=None,
+                    works=[],
+                    pages=archived,
+                    status=RunStatus.PARTIAL,
+                    note=BUDGET_STOP_NOTE,
+                    resume_token=cursor,
+                    status_records=tuple(records),
+                )
             params: dict[str, str | int] = {
                 "filter": query_sent,
                 "per-page": self._page_size,
