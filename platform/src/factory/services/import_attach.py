@@ -29,19 +29,17 @@ Invariants:
 from __future__ import annotations
 
 import hashlib
-import io
 from dataclasses import dataclass
 
 from pydantic import Field
-from pypdf import PdfReader
 from sqlalchemy import text
 
 from factory.events.envelope import Event
 from factory.imports.model import ImportFormat
+from factory.imports.pdfs import title_on_first_page
 from factory.model.base import StrictModel
 from factory.model.imports import ImportAttachmentLinked
 from factory.model.references import LinkState
-from factory.model.work_ids import normalize_title
 from factory.services.agreement import Outcome, final_outcomes
 from factory.services.context import Project
 from factory.services.dedup import active_merges
@@ -217,15 +215,6 @@ def _document_of(project: Project, work_id: str, raw_hash: str) -> str | None:
 
 
 def _title_on_first_page(project: Project, work_id: str, data: bytes) -> bool:
-    """Whether the work's normalised title occurs in the normalised text of the PDF's first page.
-    The text is read in memory and dropped; a reader failure is a failed check."""
+    """Whether the stored work's title is on the PDF's first page."""
     work = get_work(project, work_id)
-    wanted = normalize_title(work.title) if work is not None else ""
-    if not wanted:
-        return False
-    try:
-        page = PdfReader(io.BytesIO(data)).pages[0].extract_text() or ""
-    # pypdf raises many exception types on damaged input, and none of them is fatal here.
-    except Exception:
-        return False
-    return wanted in normalize_title(page)
+    return work is not None and title_on_first_page(data, work.title)

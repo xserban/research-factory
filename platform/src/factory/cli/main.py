@@ -2269,12 +2269,18 @@ def report_evidence(
 def fulltext_import_cmd(
     ctx: typer.Context,
     folder: Annotated[Path, typer.Argument(help="A folder of PDFs, matched to promoted works.")],
+    accept: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--accept", help="A file listed as identity unchecked that you vouch for; repeatable."
+        ),
+    ] = None,
 ) -> None:
     """Import the researcher's PDFs from FOLDER by the identifiers they carry; prints every list."""
     state = _state(ctx)
     with _reporting_errors():
         project = _resolve_project(state)
-        report = fulltext_import_service.import_folder(project, folder)
+        report = fulltext_import_service.import_folder(project, folder, accept=accept or ())
     for line in render.import_lines(report):
         typer.echo(line)
 

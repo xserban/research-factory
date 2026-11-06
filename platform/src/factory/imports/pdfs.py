@@ -34,7 +34,12 @@ from factory.imports.model import (
     bounded_fields,
     outcome_of,
 )
-from factory.model.work_ids import arxiv_id_from_doi, normalize_arxiv, normalize_doi
+from factory.model.work_ids import (
+    arxiv_id_from_doi,
+    normalize_arxiv,
+    normalize_doi,
+    normalize_title,
+)
 
 PARSER = "pypdf"
 PARSER_VERSION = f"{pypdf.__version__}+rf1"
@@ -78,6 +83,20 @@ def _sniff(name: str, reader: Callable[[], PdfReader]) -> tuple[set[str], Source
         return set(), "none"
     from_text = _identifiers_in(_TEXT_ARXIV, _TEXT_DOI, text, underscore=False)
     return (from_text, "first-page") if from_text else (set(), "none")
+
+
+def title_on_first_page(data: bytes, title: str) -> bool:
+    """Whether `title`, normalised, occurs in the normalised text of the PDF's first page. The text
+    is read in memory and dropped; a reader failure is a failed check."""
+    wanted = normalize_title(title)
+    if not wanted:
+        return False
+    try:
+        page = PdfReader(io.BytesIO(data)).pages[0].extract_text() or ""
+    # pypdf raises many exception types on damaged input, and none of them is fatal here.
+    except Exception:
+        return False
+    return wanted in normalize_title(page)
 
 
 def canonical_doi_key(doi: str) -> str:

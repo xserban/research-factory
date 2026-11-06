@@ -249,6 +249,7 @@ def import_lines(report: ImportReport) -> list[str]:
         ("ambiguous", report.ambiguous),
         ("not promoted", report.not_promoted),
         ("not pdf", report.not_pdf),
+        ("identity unchecked (--accept FILE to vouch for one)", report.identity_unchecked),
     ):
         lines.append(f"{label}: {len(names)}")
         lines += [f"  {name}" for name in names]

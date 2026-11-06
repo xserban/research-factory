@@ -10,6 +10,9 @@ Each file lands in exactly one list of the report:
 - `unmatched`: no corpus work carries the file's identifiers.
 - `ambiguous`: more than one corpus work does.
 - `not_promoted`: the one matching work did not pass title/abstract screening.
+- `identity_unchecked`: the match came from first-page text and the work's title is not on that
+  page, so the identifier may be a citation (IDEA-26). `accept` names the files the researcher
+  vouches for; a filename identifier is the researcher's own naming and is not checked.
 - `already_imported`: the file's bytes already back a document of that work. No event is written.
 - `imported`: a document was recorded, with its attempt, as `(file, work, document)`.
 
@@ -18,7 +21,8 @@ Invariants:
   never to `blobs/`.
 - The actor is the researcher (`project.human_actor()`), and the source version is
   `file:<first 12 hex digits of the sha256>`.
-- Identifier sniffing is advisory. It reads no more than page 1, and a reader failure means no
+- Identifier sniffing is advisory and the title check reads the same page. It reads no more than
+  page 1, and a reader failure means no
   identifiers, never an error. `sniff_identifiers` lives in `factory.imports.pdfs` (slice 3d)
   and is re-exported here.
 """
@@ -26,13 +30,14 @@ Invariants:
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Collection, Mapping
 from pathlib import Path
 
 from pydantic import Field
 
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.imports.pdfs import Source as Source
-from factory.imports.pdfs import canonical_doi_key
+from factory.imports.pdfs import canonical_doi_key, title_on_first_page
 from factory.imports.pdfs import sniff_identifiers as sniff_identifiers
 from factory.model.base import StrictModel
 from factory.model.work import Work
@@ -58,11 +63,13 @@ class ImportReport(StrictModel):
     ambiguous: list[str] = Field(default_factory=list)
     not_promoted: list[str] = Field(default_factory=list)
     not_pdf: list[str] = Field(default_factory=list)
+    identity_unchecked: list[str] = Field(default_factory=list)
 
 
-def import_folder(project: Project, folder: Path) -> ImportReport:
+def import_folder(project: Project, folder: Path, *, accept: Collection[str] = ()) -> ImportReport:
     """Import every PDF under `folder` that matches exactly one promoted corpus work.
 
+    `accept` holds file names the researcher vouches for, listed earlier as `identity_unchecked`.
     Raises `FactoryValidationError` with nothing written if `folder` is not a directory.
     """
     if not folder.is_dir():
@@ -71,13 +78,15 @@ def import_folder(project: Project, folder: Path) -> ImportReport:
     report = ImportReport()
     with project.index.exclusive():
         project.index.sync()
-        corpus = [(work.id, _work_identifiers(work)) for work in list_works(project)]
+        works = list_works(project)
+        corpus = [(work.id, _work_identifiers(work)) for work in works]
+        titles = {work.id: work.title for work in works}
         promoted = {
             w for w, outcome in final_outcomes(project).items() if outcome is Outcome.INCLUDED
         }
 
     for path in files:
-        _import_file(project, path, corpus, promoted, report)
+        _import_file(project, path, corpus, titles, promoted, set(accept), report)
     return report
 
 
@@ -85,7 +94,9 @@ def _import_file(
     project: Project,
     path: Path,
     corpus: list[tuple[str, frozenset[str]]],
+    titles: Mapping[str, str],
     promoted: set[str],
+    accept: set[str],
     report: ImportReport,
 ) -> None:
     """Decide one file's place in the report, and record it if it is imported."""
@@ -94,7 +105,7 @@ def _import_file(
     if _PDF_HEADER not in data[:_HEADER_WINDOW]:
         report.not_pdf.append(name)
         return
-    identifiers, _ = sniff_identifiers(path)
+    identifiers, source = sniff_identifiers(path)
     matches = [work_id for work_id, keys in corpus if keys & identifiers]
     if not matches:
         report.unmatched.append(name)
@@ -105,6 +116,13 @@ def _import_file(
     work_id = matches[0]
     if work_id not in promoted:
         report.not_promoted.append(name)
+        return
+    if (
+        source == "first-page"
+        and name not in accept
+        and not title_on_first_page(data, titles[work_id])
+    ):
+        report.identity_unchecked.append(name)
         return
 
     digest = hashlib.sha256(data).hexdigest()
