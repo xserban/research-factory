@@ -136,6 +136,7 @@ from factory.services.tasks import (
     holds_live_claim,
     require_holder,
     session_in_layer,
+    session_served_kind,
     task_content,
 )
 
@@ -629,6 +630,10 @@ def _check_join(
                     "session", "this session worked for the intuition layer and cannot extract"
                 )
             ]
+        )
+    if any(session_served_kind(project, actor.session, k) for k in ("appraise_a", "appraise_b")):
+        raise FactoryValidationError(
+            [ValidationIssue("session", "this session appraised works and cannot extract")]
         )
     if joined is not None:
         raise FactoryValidationError(
