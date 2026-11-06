@@ -68,6 +68,7 @@ from factory.model.hypotheses import (
 from factory.model.imports import (
     ImportAdmissionPlanned,
     ImportAttachmentLinked,
+    ImportRecordDescribed,
     ImportRecorded,
     ImportResolutionDecided,
     ImportResolved,
@@ -271,6 +272,7 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("import.admission_planned", ImportAdmissionPlanned, 1))
     catalog.register(EventType("import.attachment_linked", ImportAttachmentLinked, 1))
     catalog.register(EventType("import.resolution_decided", ImportResolutionDecided, 1))
+    catalog.register(EventType("import.record_described", ImportRecordDescribed, 1))
     catalog.register(EventType("inbox.link_added", InboxLinkAdded, 1))
     catalog.register(EventType("inbox.link_withdrawn", InboxLinkWithdrawn, 1))
     catalog.register(EventType("inbox.link_resolved", InboxLinkResolved, 1))

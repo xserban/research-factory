@@ -9,7 +9,10 @@ Invariants:
 - Only records that parsed (`parsed`, `no-title-no-identifier`) are resolved; a record with
   neither title nor identifier is `unresolved`, listed, never dropped.
 - The same fields as a `ReferenceEntry` and as an `ImportResolvable` resolve identically.
-- A later `import.resolved` supersedes the earlier one for the import, decisions included.
+- A later `import.resolved` supersedes the earlier one for the records it names, decisions
+  included. `described_only` names just the records described since their last resolution, so the
+  decisions on the others stand.
+- A record reads through its description (`effective_records`); its stored record never changes.
 - Counts are computed from the resolutions, never supplied. Summaries carry counts only; no
   ordinal or held-out membership appears in them.
 """
@@ -38,7 +41,12 @@ from factory.model.references import (
 from factory.references.match import MATCHER, MATCHER_VERSION
 from factory.services.context import Project
 from factory.services.gates import effective_policy
-from factory.services.imports import import_records, import_row, record_key
+from factory.services.imports import (
+    effective_records,
+    import_row,
+    pending_descriptions,
+    record_key,
+)
 from factory.services.reference_resolve import (
     _rigor_mode,
     confirmer_ruling,
@@ -85,7 +93,7 @@ def surname(author: str) -> str:
 def resolvables(project: Project, import_id: str) -> list[ImportResolvable]:
     """The records of an import the resolver reads, in ordinal order."""
     out: list[ImportResolvable] = []
-    for record in import_records(project, import_id):
+    for record in effective_records(project, import_id):
         f = record.fields
         if record.outcome not in _RESOLVABLE or f is None:
             continue
@@ -110,18 +118,28 @@ def resolve_import(
     *,
     sources: Mapping[str, SourceFactory],
     actor: Actor | None = None,
+    described_only: bool = False,
 ) -> ImportResolutionSummary:
-    """Resolve every resolvable record of the import and record `import.resolved`.
+    """Resolve the resolvable records of the import and record `import.resolved`.
 
-    `actor` defaults to the researcher. Raises `FactoryValidationError` for an unknown import,
-    writing nothing.
+    `described_only` limits this to the records described since their last resolution. With no
+    record to resolve, nothing is written. `actor` defaults to the researcher. Raises
+    `FactoryValidationError` for an unknown import, writing nothing.
     """
     import_row(project, import_id)
     who = actor or project.human_actor()
+    entries = resolvables(project, import_id)
+    if described_only:
+        pending = set(pending_descriptions(project, import_id))
+        entries = [e for e in entries if e.ordinal in pending]
+    if not entries:
+        return ImportResolutionSummary(
+            import_id=import_id, counts={state: 0 for state in LinkState}, lookup_runs=()
+        )
     outcome = resolve_entries(
         project,
         who,
-        resolvables(project, import_id),
+        entries,
         sources=sources,
         corpus=load_corpus(project),
     )
@@ -355,7 +373,7 @@ def decide_import(
 
 
 def _record_title(project: Project, import_id: str, ordinal: int) -> str | None:
-    for record in import_records(project, import_id):
+    for record in effective_records(project, import_id):
         if record.ordinal == ordinal:
             title = record.fields.title if record.fields else None
             return title or None

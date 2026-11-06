@@ -10,7 +10,8 @@ work from the stored fields. A record whose work is already in the corpus needs 
 Invariants:
 - Validation precedes every write. An admission is refused, writing nothing, when the import's
   role is `reference`, when it has not been resolved, while any record is unconfirmed or
-  ambiguous (the refusal gives the count; the researcher lists them), when the protocol gate
+  ambiguous or was described since its resolution (the refusal gives the count; the researcher
+  lists them), when the protocol gate
   refuses an import query (`pilot`/`systematic`: readiness, question, PRESS), when `pilot` or
   `systematic` has no `library_sources` entry for the import's collection and format with role
   `corpus`, or when an earlier admission of the import has a run that retrieved records. A
@@ -43,7 +44,12 @@ from factory.model.work_ids import arxiv_id_from_doi
 from factory.services.context import Project
 from factory.services.dedup import active_merges
 from factory.services.import_resolve import surname
-from factory.services.imports import import_row, record_key
+from factory.services.imports import (
+    effective_records,
+    import_row,
+    pending_descriptions,
+    record_key,
+)
 from factory.services.protocol import current_protocol, search_authorization
 from factory.services.protocol_rules import library_source_gaps
 from factory.services.reference_resolve import _rigor_mode
@@ -112,37 +118,35 @@ def import_sources(
 
 
 def importlist_entries(project: Project, keys: Sequence[str]) -> dict[str, ImportlistEntry]:
-    """The stored, titled records among `keys` (`imp_<ULID>:<ordinal>`)."""
+    """The stored, titled records among `keys` (`imp_<ULID>:<ordinal>`), each read through its
+    description. A key of an unknown import names no record."""
+    wanted: dict[str, dict[int, str]] = {}
+    for key in keys:
+        import_id, _, ordinal = key.partition(":")
+        if ordinal.isdigit():
+            wanted.setdefault(import_id, {})[int(ordinal)] = key
     out: dict[str, ImportlistEntry] = {}
-    with project.index.connect() as conn:
-        for key in keys:
-            import_id, _, ordinal = key.partition(":")
-            if not ordinal.isdigit():
+    for import_id, ordinals in wanted.items():
+        try:
+            records = effective_records(project, import_id)
+        except FactoryValidationError:
+            continue
+        for record in records:
+            key_of = ordinals.get(record.ordinal)
+            f = record.fields
+            if key_of is None or record.outcome is ParseOutcome.MALFORMED or f is None:
                 continue
-            row = (
-                conn.execute(
-                    text(
-                        "SELECT title, first_author, year, doi, arxiv, url, venue, record_sha256 "
-                        "FROM import_records WHERE import_id = :i AND ordinal = :o "
-                        "AND outcome != :malformed AND title IS NOT NULL AND title != ''"
-                    ),
-                    {"i": import_id, "o": int(ordinal), "malformed": ParseOutcome.MALFORMED.value},
-                )
-                .mappings()
-                .first()
-            )
-            if row is not None:
-                first = row["first_author"]
-                out[key] = ImportlistEntry(
-                    key=key,
-                    title=str(row["title"]),
-                    first_author=(surname(str(first)) or None) if first else None,
-                    year=None if row["year"] is None else int(row["year"]),
-                    doi=row["doi"],
-                    arxiv=row["arxiv"],
-                    url=row["url"],
-                    venue=row["venue"],
-                    record_sha256=str(row["record_sha256"]),
+            if f.title:
+                out[key_of] = ImportlistEntry(
+                    key=key_of,
+                    title=f.title,
+                    first_author=(surname(f.authors[0]) or None) if f.authors else None,
+                    year=f.year,
+                    doi=f.doi,
+                    arxiv=f.arxiv,
+                    url=f.url,
+                    venue=f.venue,
+                    record_sha256=record.record_sha256,
                 )
     return out
 
@@ -151,9 +155,11 @@ def _rows(project: Project, import_id: str) -> list[_Row]:
     with project.index.connect() as conn:
         rows = conn.execute(
             text(
-                "SELECT ordinal, link_state, work_id, no_source_record, "
-                "(title IS NOT NULL AND title != '') FROM import_records "
-                "WHERE import_id = :i AND outcome != :malformed ORDER BY ordinal"
+                "SELECT r.ordinal, link_state, work_id, no_source_record, "
+                "(COALESCE(d.title, r.title, '') != '') FROM import_records r "
+                "LEFT JOIN import_descriptions d "
+                "ON d.import_id = r.import_id AND d.ordinal = r.ordinal "
+                "WHERE r.import_id = :i AND outcome != :malformed ORDER BY r.ordinal"
             ),
             {"i": import_id, "malformed": ParseOutcome.MALFORMED.value},
         ).all()
@@ -250,6 +256,15 @@ def _blocking(project: Project, import_id: str) -> list[ValidationIssue]:
                 "import_id",
                 f"{_records(open_)} unconfirmed or ambiguous; confirm or reject "
                 f"{'it' if open_ == 1 else 'them'} first (`factory import show --researcher`)",
+            )
+        )
+    described = len(pending_descriptions(project, import_id))
+    if described:
+        issues.append(
+            ValidationIssue(
+                "import_id",
+                f"{_records(described)} described since resolution; run "
+                f"`factory import resolve {import_id} --described`",
             )
         )
     return issues

@@ -14,7 +14,14 @@ from typing import Annotated, Literal, Self
 
 from pydantic import Field, StringConstraints, model_validator
 
-from factory.imports.model import ImportFormat, ImportRole, ParseOutcome
+from factory.imports.model import (
+    MAX_ABSTRACT,
+    MAX_AUTHORS,
+    ImportFormat,
+    ImportRole,
+    ParseOutcome,
+    RecordType,
+)
 from factory.model.base import StrictModel
 from factory.model.chase import WorkId
 from factory.model.fulltext import DOCUMENT_ID_RE
@@ -85,8 +92,9 @@ class ImportSplitDrawn(StrictModel):
 class ImportResolved(StrictModel):
     """How the resolvable records of an import resolved (plan Import-B task 1).
 
-    Names each ordinal once, ascending. A later event for the same import supersedes an earlier
-    one, decisions on the earlier resolution included. Records that are malformed are not named.
+    Names each ordinal once, ascending. A later event supersedes an earlier one for the ordinals
+    it names, decisions on the earlier resolution included; the others stay as they are. Records
+    that are malformed are not named.
     """
 
     import_id: str = Field(pattern=IMPORT_ID_RE)
@@ -156,6 +164,48 @@ class ImportAdmissionPlanned(StrictModel):
 
     import_id: str = Field(pattern=IMPORT_ID_RE)
     queries: tuple[PlannedImportQuery, ...] = Field(min_length=1)
+
+
+MAX_DESCRIBED_TITLE = 1_000
+MAX_DESCRIBED_NAME = 300
+MAX_DESCRIBED_ID = 300
+MAX_RECORD_ORDINAL = 10**9
+MIN_DESCRIBED_YEAR = 1000
+MAX_DESCRIBED_YEAR = 2999
+
+DESCRIBED_FIELDS = ("title", "authors", "year", "doi", "arxiv", "venue", "type", "abstract")
+"""The allow-listed fields a description may set (ruling 19, less `url` and `tags`)."""
+
+
+class RecordDescription(StrictModel):
+    """What a researcher says of a record. Every field is optional; an absent one leaves the
+    record's own value. The year stays in the range a stored date can hold."""
+
+    title: Annotated[NonBlank, Field(max_length=MAX_DESCRIBED_TITLE)] | None = None
+    authors: tuple[Annotated[NonBlank, Field(max_length=MAX_DESCRIBED_NAME)], ...] = Field(
+        default=(), max_length=MAX_AUTHORS
+    )
+    year: int | None = Field(default=None, ge=MIN_DESCRIBED_YEAR, le=MAX_DESCRIBED_YEAR)
+    doi: Annotated[NonBlank, Field(max_length=MAX_DESCRIBED_ID)] | None = None
+    arxiv: Annotated[NonBlank, Field(max_length=MAX_DESCRIBED_ID)] | None = None
+    venue: Annotated[NonBlank, Field(max_length=MAX_DESCRIBED_NAME)] | None = None
+    type: RecordType | None = None
+    abstract: Annotated[NonBlank, Field(max_length=MAX_ABSTRACT)] | None = None
+
+
+class ImportRecordDescribed(RecordDescription):
+    """The whole overlay on one record, by the researcher (PD-2). The latest event wins. The record
+    itself, its hash, outcome and part are not touched."""
+
+    import_id: str = Field(pattern=IMPORT_ID_RE)
+    ordinal: int = Field(ge=1, le=MAX_RECORD_ORDINAL)
+    rationale: Annotated[NonBlank, Field(max_length=MAX_RATIONALE)]
+
+    @model_validator(mode="after")
+    def _says_something(self) -> Self:
+        if not any(getattr(self, name) not in (None, ()) for name in DESCRIBED_FIELDS):
+            raise ValueError("a description sets at least one field")
+        return self
 
 
 class ImportAttachmentLinked(StrictModel):

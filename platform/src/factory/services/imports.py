@@ -23,6 +23,7 @@ Invariants:
 
 from __future__ import annotations
 
+import json
 import secrets
 from pathlib import Path
 from typing import Literal
@@ -32,6 +33,7 @@ from sqlalchemy import text
 
 from factory.errors import FactoryError, FactoryValidationError, ValidationIssue
 from factory.imports.model import (
+    ImportFields,
     ImportFormat,
     ImportFormatError,
     ImportRecord,
@@ -142,6 +144,68 @@ def import_records(project: Project, import_id: str) -> list[ImportRecord]:
     return [ImportRecord.model_validate(item) for item in raw]
 
 
+def stored_description(project: Project, import_id: str, ordinal: int) -> dict[str, JsonValue]:
+    """The researcher's overlay on one record, empty when there is none."""
+    return _descriptions(project, import_id, ordinal).get(ordinal, {})
+
+
+def _descriptions(
+    project: Project, import_id: str, ordinal: int | None = None
+) -> dict[int, dict[str, JsonValue]]:
+    sql = "SELECT ordinal, fields FROM import_descriptions WHERE import_id = :i"
+    params: dict[str, object] = {"i": import_id}
+    if ordinal is not None:
+        sql += " AND ordinal = :o"
+        params["o"] = ordinal
+    with project.index.connect() as conn:
+        rows = conn.execute(text(sql), params).all()
+    return {int(o): json.loads(str(f)) for o, f in rows}
+
+
+def effective_records(project: Project, import_id: str) -> list[ImportRecord]:
+    """`import_records` with each description laid over its record's fields, a described field
+    replacing the record's. Ordinal, outcome, hash, attachment and flags stay the record's."""
+    described = _descriptions(project, import_id)
+    records = import_records(project, import_id)
+    return [
+        r.model_copy(update={"fields": _overlaid(r.fields, described[r.ordinal])})
+        if r.ordinal in described and r.fields is not None
+        else r
+        for r in records
+    ]
+
+
+def _overlaid(fields: ImportFields, overlay: dict[str, JsonValue]) -> ImportFields:
+    return ImportFields.model_validate({**fields.model_dump(mode="json"), **overlay})
+
+
+def pending_descriptions(project: Project, import_id: str) -> list[int]:
+    """The ordinals described since they were last resolved."""
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT ordinal FROM import_descriptions WHERE import_id = :i AND pending = 1 "
+                "ORDER BY ordinal"
+            ),
+            {"i": import_id},
+        ).all()
+    return [int(o) for (o,) in rows]
+
+
+def admission_names(project: Project, import_id: str, ordinal: int) -> bool:
+    """Whether any admission plan of the import names the record."""
+    key = json.dumps(record_key(import_id, ordinal))
+    with project.index.connect() as conn:
+        row = conn.execute(
+            text(
+                "SELECT 1 FROM import_admission_queries WHERE import_id = :i "
+                "AND instr(record_keys, :key) > 0 LIMIT 1"
+            ),
+            {"i": import_id, "key": key},
+        ).first()
+    return row is not None
+
+
 def import_part(project: Project, import_id: str, ordinal: int) -> Part:
     """The part of one record: `unsplit` when no split was drawn or the record is malformed."""
     _import_row(project, import_id)
@@ -189,6 +253,18 @@ _IMPORT_COLUMNS = (
     "import_id, format, role, collection, parser, parser_version, file_hash, records_blob,"
     " split_mode, split_seed, recorded_at"
 )
+
+
+_DESCRIBED_COLUMNS = (
+    "COALESCE(d.title, r.title) AS title, COALESCE(d.first_author, r.first_author) AS first_author,"
+    " COALESCE(d.year, r.year) AS year, COALESCE(d.doi, r.doi) AS doi,"
+    " COALESCE(d.arxiv, r.arxiv) AS arxiv"
+)
+_DESCRIBED_FROM = (
+    "FROM import_records r LEFT JOIN import_descriptions d"
+    " ON d.import_id = r.import_id AND d.ordinal = r.ordinal"
+)
+"""A record's listed fields as the researcher's description leaves them."""
 
 
 class ImportListing(StrictModel):
@@ -257,9 +333,8 @@ def development_view(project: Project, import_id: str) -> DevelopmentView:
     with project.index.connect() as conn:
         rows = conn.execute(
             text(
-                "SELECT record_sha256, outcome, title, first_author, year, doi, arxiv"
-                " FROM import_records WHERE import_id = :i AND part != :held"
-                " ORDER BY record_sha256"
+                f"SELECT record_sha256, outcome, {_DESCRIBED_COLUMNS} {_DESCRIBED_FROM}"
+                " WHERE r.import_id = :i AND part != :held ORDER BY record_sha256"
             ),
             {"i": import_id, "held": "held-out"},
         ).mappings()
@@ -282,15 +357,15 @@ def list_import_records(
     """
     _import_row(project, import_id)
     sql = (
-        "SELECT ordinal, part, outcome, title, first_author, year, doi, arxiv, link_state"
-        " FROM import_records WHERE import_id = :i"
+        f"SELECT r.ordinal, part, outcome, {_DESCRIBED_COLUMNS}, link_state {_DESCRIBED_FROM}"
+        " WHERE r.import_id = :i"
     )
     if view == "development":
         sql += " AND part != :held"
     elif view == "held-out":
         sql += " AND part = :held"
     with project.index.connect() as conn:
-        rows = conn.execute(text(f"{sql} ORDER BY ordinal"), {"i": import_id, "held": "held-out"})
+        rows = conn.execute(text(f"{sql} ORDER BY r.ordinal"), {"i": import_id, "held": "held-out"})
         return [RecordRow.model_validate(dict(r)) for r in rows.mappings()]
 
 

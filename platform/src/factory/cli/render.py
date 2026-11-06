@@ -51,6 +51,7 @@ from factory.services.hypotheses import HypothesisView
 from factory.services.ideas import IdeaCandidate, IdeaView
 from factory.services.import_admit import AdmissionSummary
 from factory.services.import_attach import AttachReport
+from factory.services.import_describe import RowProblem
 from factory.services.import_resolve import ImportResolutionSummary
 from factory.services.imports import (
     DevelopmentView,
@@ -552,6 +553,15 @@ def import_record_lines(records: list[RecordRow], names: Mapping[int, str]) -> l
             f"{r.ordinal}  {r.part}  {r.outcome.value}  {r.link_state or '-'}  {year}"
             f"  {identifier}  {r.title or '-'}{file}"
         )
+    return lines
+
+
+def import_describe_lines(import_id: str, described: int, rejected: list[RowProblem]) -> list[str]:
+    """Descriptions applied, each CSV row refused, and the command that comes next."""
+    lines = [f"described: {described}"]
+    lines += [f"line {r.line}: {'; '.join(r.reasons)}" for r in rejected]
+    if described:
+        lines.append(f"next: factory import resolve {import_id} --described")
     return lines
 
 

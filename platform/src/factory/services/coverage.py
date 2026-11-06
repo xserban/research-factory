@@ -344,10 +344,13 @@ def _chunks(project: Project, import_id: str) -> Iterator[list[_Row]]:
             rows = (
                 conn.execute(
                     text(
-                        "SELECT ordinal, part, link_state, work_id, method, no_source_record, "
-                        "year, type, doi, arxiv FROM import_records "
-                        "WHERE import_id = :i AND ordinal > :last AND outcome != :malformed "
-                        "ORDER BY ordinal LIMIT :n"
+                        "SELECT r.ordinal, part, link_state, work_id, method, no_source_record, "
+                        "COALESCE(d.year, r.year) AS year, COALESCE(d.type, r.type) AS type, "
+                        "COALESCE(d.doi, r.doi) AS doi, COALESCE(d.arxiv, r.arxiv) AS arxiv "
+                        "FROM import_records r LEFT JOIN import_descriptions d "
+                        "ON d.import_id = r.import_id AND d.ordinal = r.ordinal "
+                        "WHERE r.import_id = :i AND r.ordinal > :last AND outcome != :malformed "
+                        "ORDER BY r.ordinal LIMIT :n"
                     ),
                     {
                         "i": import_id,

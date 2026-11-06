@@ -98,6 +98,7 @@ from factory.services import hypotheses as hypotheses_service
 from factory.services import ideas as ideas_service
 from factory.services import import_admit as import_admit_service
 from factory.services import import_attach as import_attach_service
+from factory.services import import_describe as import_describe_service
 from factory.services import import_resolve as import_resolve_service
 from factory.services import imports as imports_service
 from factory.services import inbox as inbox_service
@@ -3084,6 +3085,13 @@ def import_show_cmd(
 def import_resolve_cmd(
     ctx: typer.Context,
     import_id: Annotated[str, typer.Argument(help="An import id (imp_...).")],
+    described: Annotated[
+        bool,
+        typer.Option(
+            "--described",
+            help="Only the records described since their last resolution; other decisions stand.",
+        ),
+    ] = False,
 ) -> None:
     """Resolve the import's records to works (probe lookups, outside the corpus); prints counts
     by state. Fuzzy and ambiguous matches wait for `import confirm` or `import reject`."""
@@ -3091,7 +3099,7 @@ def import_resolve_cmd(
     with _reporting_errors():
         project = _resolve_project(state)
         summary = import_resolve_service.resolve_import(
-            project, import_id, sources=dict(default_sources())
+            project, import_id, sources=dict(default_sources()), described_only=described
         )
         tagged = labels_service.import_tags_as_labels(project, import_id)
     for line in render.import_resolve_lines(summary):
@@ -3101,6 +3109,75 @@ def import_resolve_cmd(
 
 
 RationaleOption = Annotated[str, typer.Option("--rationale", help="Why (required).")]
+
+
+@import_app.command("describe")
+def import_describe_cmd(
+    ctx: typer.Context,
+    import_id: Annotated[str, typer.Argument(help="An import id (imp_...).")],
+    ordinal: Annotated[
+        int | None,
+        typer.Argument(help="The record's ordinal (`import show --researcher`); not with --csv."),
+    ] = None,
+    rationale: RationaleOption = "",
+    title: Annotated[str | None, typer.Option("--title", help="The work's title.")] = None,
+    author: Annotated[
+        list[str] | None, typer.Option("--author", help="An author; repeat, in order.")
+    ] = None,
+    year: Annotated[int | None, typer.Option("--year", help="Year of publication.")] = None,
+    doi: Annotated[str | None, typer.Option("--doi", help="The work's DOI.")] = None,
+    arxiv: Annotated[str | None, typer.Option("--arxiv", help="The work's arXiv id.")] = None,
+    venue: Annotated[str | None, typer.Option("--venue", help="Journal or venue.")] = None,
+    record_type: Annotated[
+        str | None, typer.Option("--type", help="article, inproceedings, preprint, book, ...")
+    ] = None,
+    abstract: Annotated[str | None, typer.Option("--abstract", help="The abstract.")] = None,
+    csv_file: Annotated[
+        Path | None,
+        typer.Option(
+            "--csv",
+            help="A CSV with a header from ordinal,title,authors,year,doi,arxiv,venue; authors "
+            "separated by ';'. Read, never archived.",
+        ),
+    ] = None,
+) -> None:
+    """Say what a record is, as the researcher: an overlay on the record, which stays as it was.
+    Run `import resolve IMP --described` afterwards."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        actor = project.human_actor()
+        if csv_file is not None:
+            if ordinal is not None:
+                _fail("give an ORDINAL or --csv, not both", 1)
+            summary = import_describe_service.describe_records(
+                project, actor, import_id, csv_file, rationale=rationale
+            )
+            lines = render.import_describe_lines(import_id, summary.described, summary.rejected)
+        else:
+            if ordinal is None:
+                _fail("give an ORDINAL or --csv", 1)
+            fields = {
+                "title": title,
+                "authors": author,
+                "year": year,
+                "doi": doi,
+                "arxiv": arxiv,
+                "venue": venue,
+                "type": record_type,
+                "abstract": abstract,
+            }
+            import_describe_service.describe_record(
+                project,
+                actor,
+                import_id,
+                ordinal,
+                import_describe_service.parse_description(fields),
+                rationale=rationale,
+            )
+            lines = render.import_describe_lines(import_id, 1, [])
+    for line in lines:
+        typer.echo(line)
 
 
 def _decide_import(

@@ -4,9 +4,13 @@
 `import.split_drawn`. `import_records` keeps one row per record with the searchable allow-listed
 fields (abstract and tags stay in the records blob, read on demand, so the index stays small at
 10^5 records) and its `part`: `development` or `held-out` for a drawn split, else `unsplit`.
+`import_descriptions` keeps the researcher's overlay on a record, apart from it: the row of
+`import_records` keeps what the export said, and `pending` says the record has not been resolved
+since it was described.
 
 The projector reads the records and parts blobs from `blobs/` (never the library). Handlers are
-total and first-write-wins per key; a split for an unknown import changes nothing.
+total and first-write-wins per key; a split for an unknown import changes nothing. A description
+folds only from a human, for a record that exists, is not malformed and no admission plan names.
 """
 
 from __future__ import annotations
@@ -23,6 +27,7 @@ from sqlalchemy import (
     Table,
     and_,
     delete,
+    func,
     select,
     update,
 )
@@ -33,11 +38,13 @@ from factory.canonical import canonical_json
 from factory.clock import format_ts
 from factory.events.blobs import BlobStore
 from factory.events.envelope import Event
-from factory.imports.model import ImportRecord
+from factory.imports.model import ImportRecord, ParseOutcome
 from factory.index.projection import Handler
 from factory.model.imports import (
+    DESCRIBED_FIELDS,
     ImportAdmissionPlanned,
     ImportAttachmentLinked,
+    ImportRecordDescribed,
     ImportRecorded,
     ImportResolutionDecided,
     ImportResolved,
@@ -59,6 +66,7 @@ class ImportTables:
     decisions: Table
     admission_queries: Table
     attachments: Table
+    descriptions: Table
 
 
 def import_tables(metadata: MetaData) -> ImportTables:
@@ -147,7 +155,23 @@ def import_tables(metadata: MetaData) -> ImportTables:
         Column("document_id", String, nullable=False),
         Column("event_id", String, nullable=False),
     )
-    return ImportTables(imports, records, decisions, admission_queries, attachments)
+    descriptions = Table(
+        "import_descriptions",
+        metadata,
+        Column("import_id", String, primary_key=True),
+        Column("ordinal", Integer, primary_key=True),
+        Column("title", String),
+        Column("first_author", String),
+        Column("year", Integer),
+        Column("doi", String),
+        Column("arxiv", String),
+        Column("venue", String),
+        Column("type", String),
+        Column("fields", String, nullable=False),
+        Column("pending", Integer, nullable=False),
+        Column("event_id", String, nullable=False),
+    )
+    return ImportTables(imports, records, decisions, admission_queries, attachments, descriptions)
 
 
 def import_handlers(t: ImportTables, blobs: BlobStore | None) -> dict[str, Handler]:
@@ -158,6 +182,7 @@ def import_handlers(t: ImportTables, blobs: BlobStore | None) -> dict[str, Handl
         "import.resolution_decided": _decided(t),
         "import.admission_planned": _admission_planned(t),
         "import.attachment_linked": _attachment_linked(t),
+        "import.record_described": _described(t),
     }
 
 
@@ -223,19 +248,32 @@ def _resolved(t: ImportTables) -> Handler:
 
     def resolved(conn: Connection, event: Event) -> None:
         p = ImportResolved.model_validate(event.payload)
-        # A new resolution starts the import's links again: earlier decisions leave the live view.
-        conn.execute(delete(t.decisions).where(t.decisions.c.import_id == p.import_id))
-        conn.execute(
-            update(t.records)
-            .where(t.records.c.import_id == p.import_id)
-            .values(decision=None, confirmed_by=None, proposal=None)
-        )
         for r in p.resolutions:
             confidence = None if r.confidence is None else r.confidence.value
+            # A new resolution starts the record's link again: earlier decisions on it leave the
+            # live view, and a description now has its resolution.
+            conn.execute(
+                delete(t.decisions).where(
+                    and_(t.decisions.c.import_id == p.import_id, t.decisions.c.ordinal == r.ordinal)
+                )
+            )
+            conn.execute(
+                update(t.descriptions)
+                .where(
+                    and_(
+                        t.descriptions.c.import_id == p.import_id,
+                        t.descriptions.c.ordinal == r.ordinal,
+                    )
+                )
+                .values(pending=0)
+            )
             conn.execute(
                 update(t.records)
                 .where(and_(t.records.c.import_id == p.import_id, t.records.c.ordinal == r.ordinal))
                 .values(
+                    decision=None,
+                    confirmed_by=None,
+                    proposal=None,
                     link_state=r.state.value,
                     work_id=r.work_id,
                     method=r.method,
@@ -276,6 +314,57 @@ def _admission_planned(t: ImportTables) -> Handler:
             )
 
     return planned
+
+
+def _described(t: ImportTables) -> Handler:
+    """The researcher's overlay on a record, latest event winning; see the module docstring."""
+
+    def described(conn: Connection, event: Event) -> None:
+        p = ImportRecordDescribed.model_validate(event.payload)
+        if event.actor.kind != "human":
+            return
+        outcome = conn.execute(
+            select(t.records.c.outcome).where(
+                and_(t.records.c.import_id == p.import_id, t.records.c.ordinal == p.ordinal)
+            )
+        ).scalar()
+        if outcome is None or outcome == ParseOutcome.MALFORMED.value:
+            return
+        key = canonical_json(f"{p.import_id}:{p.ordinal}").decode()
+        planned = conn.execute(
+            select(t.admission_queries.c.event_id)
+            .where(
+                and_(
+                    t.admission_queries.c.import_id == p.import_id,
+                    func.instr(t.admission_queries.c.record_keys, key) > 0,
+                )
+            )
+            .limit(1)
+        ).first()
+        if planned is not None:
+            return
+        fields = p.model_dump(mode="json", include=set(DESCRIBED_FIELDS), exclude_none=True)
+        if not p.authors:
+            fields.pop("authors")
+        values = {
+            "title": p.title,
+            "first_author": p.authors[0] if p.authors else None,
+            "year": p.year,
+            "doi": p.doi,
+            "arxiv": p.arxiv,
+            "venue": p.venue,
+            "type": p.type,
+            "fields": canonical_json(fields).decode(),
+            "pending": 1,
+            "event_id": event.id,
+        }
+        conn.execute(
+            sqlite_insert(t.descriptions)
+            .values(import_id=p.import_id, ordinal=p.ordinal, **values)
+            .on_conflict_do_update(index_elements=["import_id", "ordinal"], set_=values)
+        )
+
+    return described
 
 
 def _attachment_linked(t: ImportTables) -> Handler:

@@ -22,6 +22,7 @@ SPEC = ModuleSpec(
         types=(
             "import.admission_planned",
             "import.attachment_linked",
+            "import.record_described",
             "import.recorded",
             "import.resolution_decided",
             "import.resolved",
@@ -31,6 +32,7 @@ SPEC = ModuleSpec(
             "import_admission_queries",
             "import_attachments",
             "import_decisions",
+            "import_descriptions",
             "import_records",
             "imports",
         ),
