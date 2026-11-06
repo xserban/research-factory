@@ -26,6 +26,9 @@ At full text the plan is the protocol's `full_text_screening` (refused on field
 title/abstract final outcome is INCLUDED. `final_outcomes(stage=FULL_TEXT)` leaves every other work
 PENDING.
 
+An absorbed record leaves the queues, so nothing waits for it. Its recorded decisions stay and
+`final_outcomes` still reads them; with none it has no outcome at all, not a PENDING one.
+
 Invariants:
 - Refusals raise FactoryValidationError with field `passes` (screen_agreement) and write nothing.
 - Every stored criterion is version-qualified against the current protocol.
@@ -56,10 +59,16 @@ from factory.model.screening import (
     Verdict,
 )
 from factory.model.task import TaskStatus
-from factory.services.calibration import calibration_items, calibration_labels, stage_population
+from factory.services.calibration import (
+    calibration_items,
+    calibration_labels,
+    recorded_population,
+    stage_population,
+)
 from factory.services.call_memo import memoised
 from factory.services.context import Project
 from factory.services.conversions import conversion_document
+from factory.services.dedup import absorbed_ids
 from factory.services.gates import gate_issues
 from factory.services.passes import shared_refusal
 from factory.services.protocol import ProtocolVersion, current_protocol, lineage_through
@@ -286,12 +295,13 @@ def final_outcomes(project: Project, *, stage: ScreeningStage = TA) -> dict[str,
     work; for any other work its resolution, else the agreed outcome of both passes, else the
     single-pass outcome of pass A. An `unsure` verdict, a disagreement, or a missing decision is
     PENDING. At full text only the promoted works (title/abstract INCLUDED) have an outcome; every
-    other work is PENDING."""
+    other work is PENDING. An absorbed record that would be PENDING is left out: it awaits nothing,
+    so read with `.get` any work that may be absorbed."""
     require_pass_stage(stage)
     labels = calibration_labels(project, stage=stage)
     calibration = set(calibration_items(project, stage=stage))
-    screen = _load(project, stage)
-    population = stage_population(project, stage)
+    screen = _load(project, stage, recorded=True)
+    population = recorded_population(project, stage)
     outcomes: dict[str, Outcome] = {}
     for work in sorted(corpus_work_ids(project)):  # ids only: no work record is parsed
         if work not in population:
@@ -302,7 +312,8 @@ def final_outcomes(project: Project, *, stage: ScreeningStage = TA) -> dict[str,
             outcomes[work] = Outcome.PENDING
         else:
             outcomes[work] = _outcome(screen, work)
-    return outcomes
+    absorbed = absorbed_ids(project)
+    return {w: o for w, o in outcomes.items() if o is not Outcome.PENDING or w not in absorbed}
 
 
 def exclusion_criteria(project: Project, *, stage: ScreeningStage = TA) -> dict[str, str | None]:
@@ -424,15 +435,18 @@ def pass_progress(project: Project, *, stage: ScreeningStage = TA) -> dict[str, 
 # --- Reading the screening state ---
 
 
-def _load(project: Project, stage: ScreeningStage = TA) -> _Screen | None:
+def _load(
+    project: Project, stage: ScreeningStage = TA, *, recorded: bool = False
+) -> _Screen | None:
     """The screening state of `stage` under the current protocol; None before a protocol is
-    recorded. Raises on field `full_text_screening` at full text without a declared plan."""
+    recorded. Raises on field `full_text_screening` at full text without a declared plan.
+    `recorded` keeps absorbed records in the queues, to read what was decided on them."""
     protocol = current_protocol(project)
     if protocol is None:
         return None
     plan = screening_plan(protocol, stage)
     calibration = set(calibration_items(project, stage=stage))
-    corpus = stage_population(project, stage)
+    corpus = recorded_population(project, stage) if recorded else stage_population(project, stage)
     ordinary = frozenset(corpus - calibration)
     queues = {label: _queue(project, label, corpus, calibration, stage) for label in PassLabel}
     decided = _decided(project, protocol.protocol_id, stage)
@@ -472,8 +486,9 @@ def _queue(
     stage: ScreeningStage = TA,
 ) -> frozenset[str] | None:
     """The ordinary works pass `label` screens at `stage`: its recorded sample, or the stage's
-    population when the pass has none, less the calibration works (a full-text sample is also
-    limited to the population now). None when the pass has not been opened."""
+    population when the pass has none, limited to `corpus` (a sample may hold a record absorbed
+    since, or at full text no longer eligible), less the calibration works. None when the pass has
+    not been opened."""
     with project.index.connect() as conn:
         opened = conn.execute(
             text("SELECT 1 FROM passes WHERE pass_label = :label AND stage = :stage"),
@@ -482,9 +497,7 @@ def _queue(
     if opened is None:
         return None
     sample = pass_b_sample(project, stage=stage) if label is PassLabel.B else None
-    base = corpus if sample is None else set(sample)
-    if stage is not TA:
-        base &= corpus
+    base = corpus if sample is None else set(sample) & corpus
     return frozenset(base - calibration)
 
 

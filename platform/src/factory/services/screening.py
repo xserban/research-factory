@@ -76,6 +76,7 @@ from factory.services.calibration import (
 )
 from factory.services.context import Project
 from factory.services.conversions import resolve_anchor
+from factory.services.dedup import dedup_current
 from factory.services.protocol import (
     ProtocolVersion,
     amendments_with_events,
@@ -358,7 +359,8 @@ def screen_next(
 ) -> ScreenNext:
     """Serve the next batch of pass `label` of `stage` to the session, or say why none is served.
 
-    Nothing is written while the protocol is not ready, while the calibration set is required and
+    Nothing is written while the protocol is not ready, while a `dedup_run` would still change the
+    merges (twins must not be drawn or queued apart), while the calibration set is required and
     not yet drawn (the human draws and labels it; an agent does not), or while pass B has no
     second pass to run. Otherwise the session joins the pass, the pass opens, the pending works are
     queued, and the next claimable batch is claimed.
@@ -377,6 +379,12 @@ def screen_next(
         if label is PassLabel.B and plan.passes == 1:
             return ScreenNext(
                 batch=None, blocked=["the protocol plans one screening pass"], remaining=0
+            )
+        if not dedup_current(project):
+            return ScreenNext(
+                batch=None,
+                blocked=["run dedup_run: the corpus has works it has not yet reconciled"],
+                remaining=0,
             )
         status = calibration_status(project, stage=stage)
         if status.required and not calibration_drawn(project, stage=stage):
@@ -535,11 +543,11 @@ def screen_record(
         answered: set[str] = set()
         for index, item in enumerate(items):
             duplicate = item.work_id in answered
-            answered.add(item.work_id)
             issues = _item_issues(project, stage, index, item, records, criteria, duplicate)
             if issues:
                 rejected.append(ItemError(index=index, issues=issues))
             else:
+                answered.add(item.work_id)
                 accepted.append(item)
         if not accepted:
             return BatchResult[str](written=[], rejected=rejected)
@@ -718,7 +726,8 @@ def _enqueue(
     seed, sample = row
     corpus = {work.id: work for work in list_works(project)}
     calibration = calibration_items(project, stage=stage)
-    base = sorted(stage_population(project, stage)) if sample is None else list(sample)
+    population = stage_population(project, stage)
+    base = sorted(population) if sample is None else [w for w in sample if w in population]
     pinned: dict[str, tuple[str, str]] = {}
     if stage is not TA:
         from factory.services.fulltext_screening import fulltext_queue  # circular at import time
@@ -853,11 +862,15 @@ def extend_sample(
 
     Writes one `screening.sample_extended` event, even when it added no work, unless there is
     nothing to draw (pass B not opened, covering the whole population, or every outside work
-    already considered); then it writes nothing and returns (). The draw is `_extend_sample`'s,
-    so `random_seed` makes it reproducible and the event records it."""
+    already considered) or a `dedup_run` would still change the merges, since twins would then be
+    drawn apart; then it writes nothing and returns (). The draw is `_extend_sample`'s, so
+    `random_seed` makes it reproducible and the event records it. `screen_next`, its other caller,
+    has refused by then."""
     require_pass_stage(stage)
     with project.index.exclusive():
         project.index.sync()
+        if not dedup_current(project):
+            return ()
         drawn = _extend_sample(project, actor, random_seed=random_seed, stage=stage)
         if drawn is None:
             return ()

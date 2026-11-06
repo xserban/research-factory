@@ -199,7 +199,7 @@ def compute_update(
     excluded: dict[str, int] = {}
     included = pending = 0
     for work in new:
-        outcome = outcomes[work]
+        outcome = outcomes.get(work, Outcome.PENDING)  # an absorbed record may have none
         if outcome is Outcome.INCLUDED:
             included += 1
         elif outcome is Outcome.PENDING:

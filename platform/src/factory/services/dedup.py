@@ -8,6 +8,7 @@ A reversal is final: its blocked pairs keep the cascade from rebuilding the merg
 
 import json
 from collections.abc import Sequence
+from dataclasses import dataclass
 
 from sqlalchemy import bindparam, text
 
@@ -42,7 +43,17 @@ def dedup_run(project: Project) -> DedupSummary:
         return _reconcile(project)
 
 
-def _reconcile(project: Project) -> DedupSummary:
+@dataclass(frozen=True)
+class _Reconciliation:
+    """What a run would do: `kept` merges stand, `stale` are reverted, `fresh` are recorded."""
+
+    works: list[Work]
+    kept: set[str]
+    stale: list[DedupMerged]
+    fresh: list[CascadeMerge]
+
+
+def _reconciliation(project: Project) -> _Reconciliation:
     works = list_works(project)
     result = dedup(
         works,
@@ -62,16 +73,33 @@ def _reconcile(project: Project) -> DedupSummary:
         else:
             kept.add(match.merge_id)
     stale = [merge for merge in active if merge.merge_id not in kept]
-    new_ids = write_reconciliation(project, stale, fresh)
+    return _Reconciliation(works, kept, stale, fresh)
+
+
+def _reconcile(project: Project) -> DedupSummary:
+    plan = _reconciliation(project)
+    new_ids = write_reconciliation(project, plan.stale, plan.fresh)
 
     return DedupSummary(
         created=new_ids,
-        reverted=[merge.merge_id for merge in stale],
-        unchanged=len(kept),
+        reverted=[merge.merge_id for merge in plan.stale],
+        unchanged=len(plan.kept),
         records=corpus_size(project)[1],
-        works=len(works),
+        works=len(plan.works),
         canonical=len(canonical_works(project)),
     )
+
+
+def dedup_current(project: Project) -> bool:
+    """Whether a `dedup_run` now would write nothing: no corpus work awaits deduplication.
+
+    Read from the cascade, not from the log: a run that changes nothing writes no event, so the log
+    cannot say when the last run was. A corpus with no duplicates is therefore current without any
+    run, and every old project reads correctly. Screening waits on this (plan PF ruling 1).
+    """
+    project.index.sync()
+    plan = _reconciliation(project)
+    return not plan.stale and not plan.fresh
 
 
 def write_reconciliation(
@@ -207,6 +235,11 @@ def list_merges(project: Project, *, named: bool = True) -> list[MergeRow]:
         )
         for merge_id, status, rule, records, primary, absorbed, reason, manual in rows
     ]
+
+
+def absorbed_ids(project: Project) -> set[str]:
+    """The works an active merge absorbed: records of a work whose primary stands for them."""
+    return {absorbed for merge in active_merges(project) for absorbed in merge.absorbed}
 
 
 def canonical_works(project: Project) -> list[Work]:

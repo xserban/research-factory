@@ -43,6 +43,7 @@ from factory.model.seed import SeedKind
 from factory.modules.presets import Enforcement, enforcement
 from factory.services import passes
 from factory.services.context import Project
+from factory.services.dedup import absorbed_ids
 from factory.services.gates import gate_issues
 from factory.services.protocol import (
     ProtocolVersion,
@@ -305,10 +306,21 @@ def calibrated_models(
     }
 
 
+def recorded_population(project: Project, stage: ScreeningStage) -> set[str]:
+    """`stage_population` with the absorbed records kept: the works whose recorded decisions still
+    read as outcomes, so `merge-verdict-conflict` keeps reporting them."""
+    return _stage_works(project, require_pass_stage(stage))
+
+
 def _calibration_population(project: Project, stage: ScreeningStage) -> set[str]:
-    """The works a calibration set of `stage` is drawn from: the corpus at title/abstract; at full
-    text, the works whose title/abstract final outcome is INCLUDED and that have a converted live
-    document (the eligible works of `fulltext_queue`)."""
+    """The works a calibration set of `stage` is drawn from: `_stage_works` less the records an
+    active merge absorbed, which a reverted merge returns."""
+    return _stage_works(project, stage) - absorbed_ids(project)
+
+
+def _stage_works(project: Project, stage: ScreeningStage) -> set[str]:
+    """The corpus at title/abstract; at full text, the works whose title/abstract final outcome is
+    INCLUDED and that have a converted live document (the eligible works of `fulltext_queue`)."""
     corpus = _corpus_ids(project)
     if stage is ScreeningStage.TITLE_ABSTRACT:
         return corpus
@@ -319,7 +331,8 @@ def _calibration_population(project: Project, stage: ScreeningStage) -> set[str]
 
 def stage_population(project: Project, stage: ScreeningStage) -> set[str]:
     """The works that `stage` screens: the corpus at title/abstract, the promoted works at full
-    text. Calibration and the passes' queues are drawn from it."""
+    text, less the absorbed records of active merges (screening one decides nothing: outcomes are
+    read from the primary). Calibration and the passes' queues are drawn from it."""
     return _calibration_population(project, require_pass_stage(stage))
 
 

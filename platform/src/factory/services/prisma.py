@@ -347,7 +347,7 @@ def full_text_boxes(project: Project, *, only: Collection[str] | None = None) ->
         outcomes = final_outcomes(project, stage=stage)
         criteria = exclusion_criteria(project, stage=stage)
         for work in eligible:
-            outcome = outcomes[work]
+            outcome = outcomes.get(work, Outcome.PENDING)  # an absorbed record may have none
             if outcome is Outcome.INCLUDED:
                 included += 1
             elif outcome is not Outcome.PENDING:
