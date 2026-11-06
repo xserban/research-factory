@@ -14,8 +14,10 @@ Invariants:
   lists them), when the protocol gate
   refuses an import query (`pilot`/`systematic`: readiness, question, PRESS), when `pilot` or
   `systematic` has no `library_sources` entry for the import's collection and format with role
-  `corpus`, or when an earlier admission of the import has a run that retrieved records. A
-  retry is a new admission, allowed only while every earlier run failed.
+  `corpus`, or when an earlier run retrieved records and none is left to admit.
+- An admission plans only records no earlier run retrieved, so a record described after the first
+  admission enters by a second one, and a re-run after a crash between two queries plans what is
+  left. A retried failed run is the same case. No record is admitted twice.
 - In `exploratory` the missing declaration is returned in `gaps`; the admission proceeds.
 - Retrieved records enter the corpus as pending works with `library-import` provenance; nothing
   is included here. Dedup (`dedup_run`) links them to searched works, and pass B's sample is
@@ -49,6 +51,7 @@ from factory.services.imports import (
     import_row,
     pending_descriptions,
     record_key,
+    retrieved_keys,
 )
 from factory.services.protocol import current_protocol, search_authorization
 from factory.services.protocol_rules import library_source_gaps
@@ -81,7 +84,8 @@ _ORDER = ("openalex", "doi", "arxiv", IMPORTLIST)
 
 class AdmissionSummary(StrictModel):
     """What one admission did, as counts: queries run, works new to the corpus, records whose work
-    was already there, runs that failed, and the promotion gaps (exploratory only)."""
+    was already there, records with nothing to admit them by (no title), runs that failed, and the
+    promotion gaps (exploratory only)."""
 
     import_id: str
     runs: list[RunSummary]
@@ -89,6 +93,7 @@ class AdmissionSummary(StrictModel):
     already_in_corpus: int
     failed_runs: int
     gaps: list[ValidationIssue]
+    unadmittable: int = 0
 
 
 @dataclass
@@ -197,9 +202,10 @@ def _plan(project: Project, import_id: str) -> _Plan:
     corpus |= {a for m in active_merges(project) if m.primary in corpus for a in m.absorbed}
     ids: dict[str, dict[str, list[str]]] = {family: {} for family in _ORDER}
     already = unadmittable = 0
+    retrieved = retrieved_keys(project, import_id)
     for row in _rows(project, import_id):
         key = record_key(import_id, row.ordinal)
-        if row.state in (None, LinkState.UNCONFIRMED, LinkState.AMBIGUOUS):
+        if key in retrieved or row.state in (None, LinkState.UNCONFIRMED, LinkState.AMBIGUOUS):
             continue
         route: tuple[str, str] | None = None
         if row.state is LinkState.RESOLVED and row.work_id is not None:
@@ -314,15 +320,13 @@ def admit_import(
             )
         issues += _blocking(project, import_id)
         done = [s for s in _admission_runs(project, import_id) if s != RunStatus.FAILED.value]
-        if done:
-            issues.append(
-                ValidationIssue("import_id", "already admitted: an earlier run succeeded")
-            )
         gaps = _library_gaps(project, row.collection, row.format)
         if gaps and _rigor_mode(project) is not RigorMode.EXPLORATORY:
             issues += gaps
             gaps = []
         plan = _plan(project, import_id)
+        if done and not plan.specs and not issues:
+            issues.append(ValidationIssue("import_id", _nothing_left(plan.unadmittable)))
         for spec in plan.specs:
             issues += query_issues(project, spec, adapters)
             # The recorded plan will waive the planned-queries rule, so only the other gates
@@ -342,6 +346,7 @@ def admit_import(
                 already_in_corpus=plan.already_in_corpus,
                 failed_runs=0,
                 gaps=gaps,
+                unadmittable=plan.unadmittable,
             )
         planned = ImportAdmissionPlanned(
             import_id=import_id,
@@ -371,6 +376,16 @@ def admit_import(
         already_in_corpus=plan.already_in_corpus,
         failed_runs=sum(1 for r in runs if r.status is RunStatus.FAILED),
         gaps=gaps,
+        unadmittable=plan.unadmittable,
+    )
+
+
+def _nothing_left(unadmittable: int) -> str:
+    if not unadmittable:
+        return "already admitted: no record is left to admit"
+    return (
+        f"already admitted: only {_records(unadmittable)} left, with no title; "
+        "`factory import describe` names them"
     )
 
 

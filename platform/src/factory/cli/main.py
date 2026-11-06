@@ -3201,8 +3201,11 @@ def _decide_import(
             work_id=work,
         )
         live = import_resolve_service.record_states(project, import_id).get(ordinal)
+        tagged = labels_service.import_tags_as_labels(project, import_id)
     for line in render.import_decision_lines(import_id, decision, live):
         typer.echo(line)
+    if tagged:
+        typer.echo(f"tags applied as labels: {tagged}")
 
 
 @import_app.command("confirm")

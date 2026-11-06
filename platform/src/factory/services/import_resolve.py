@@ -11,7 +11,7 @@ Invariants:
 - The same fields as a `ReferenceEntry` and as an `ImportResolvable` resolve identically.
 - A later `import.resolved` supersedes the earlier one for the records it names, decisions
   included. `described_only` names just the records described since their last resolution, so the
-  decisions on the others stand.
+  decisions on the others stand. A record already admitted is never named: its link stays.
 - A record reads through its description (`effective_records`); its stored record never changes.
 - Counts are computed from the resolutions, never supplied. Summaries carry counts only; no
   ordinal or held-out membership appears in them.
@@ -46,6 +46,7 @@ from factory.services.imports import (
     import_row,
     pending_descriptions,
     record_key,
+    retrieved_keys,
 )
 from factory.services.reference_resolve import (
     _rigor_mode,
@@ -128,7 +129,12 @@ def resolve_import(
     """
     import_row(project, import_id)
     who = actor or project.human_actor()
-    entries = resolvables(project, import_id)
+    admitted = retrieved_keys(project, import_id)
+    entries = [
+        e
+        for e in resolvables(project, import_id)
+        if record_key(import_id, e.ordinal) not in admitted
+    ]
     if described_only:
         pending = set(pending_descriptions(project, import_id))
         entries = [e for e in entries if e.ordinal in pending]

@@ -587,6 +587,11 @@ def import_admit_lines(summary: AdmissionSummary) -> list[str]:
         f"already in corpus: {summary.already_in_corpus}",
         f"failed runs: {summary.failed_runs}",
     ]
+    if summary.unadmittable:
+        lines.append(
+            f"not admitted, no title: {summary.unadmittable} "
+            f"(factory import show {summary.import_id} --researcher, then import describe)"
+        )
     lines += [f"gap: {g.field}: {g.reason}" for g in summary.gaps]
     return lines
 

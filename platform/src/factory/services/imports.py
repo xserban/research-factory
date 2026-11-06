@@ -49,7 +49,7 @@ from factory.model.imports import (
     ImportSplitDrawn,
     SplitMode,
 )
-from factory.model.search import QueryPurpose
+from factory.model.search import QueryPurpose, RunStatus
 from factory.services.context import Project
 from factory.services.seeds import draw_split
 
@@ -204,6 +204,25 @@ def admission_names(project: Project, import_id: str, ordinal: int) -> bool:
             {"i": import_id, "key": key},
         ).first()
     return row is not None
+
+
+def retrieved_keys(project: Project, import_id: str) -> set[str]:
+    """The record keys of every planned admission query of the import that has a run that did not
+    fail: the records already admitted."""
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT a.record_keys FROM import_admission_queries a "
+                "WHERE a.import_id = :i AND EXISTS ("
+                "SELECT 1 FROM queries q JOIN runs r ON r.query_id = q.query_id "
+                "JOIN event_refs f ON f.type = 'query.registered' AND f.position = 0 "
+                "AND f.ref = q.query_id "
+                "JOIN event_refs n ON n.event_id = f.event_id AND n.position > 0 AND n.ref = :i "
+                "WHERE q.source = a.source AND q.text = a.text AND r.status != :failed)"
+            ),
+            {"i": import_id, "failed": RunStatus.FAILED.value},
+        ).all()
+    return {str(key) for (raw,) in rows for key in json.loads(str(raw))}
 
 
 def import_part(project: Project, import_id: str, ordinal: int) -> Part:
