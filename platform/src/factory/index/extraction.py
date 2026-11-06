@@ -20,6 +20,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Connection
 
 from factory.events.envelope import Event
+from factory.index.human_channel import sign_off_counts
 from factory.index.projection import Handler
 from factory.model.extraction import (
     WHOLE_ROW_MARKER,
@@ -420,6 +421,8 @@ def _audit_sampled(t: ExtractionTables) -> Handler:
 def _audit_labelled(t: ExtractionTables) -> Handler:
     def audit_labelled(conn: Connection, event: Event) -> None:
         payload = ExtractionAuditLabelled.model_validate(event.payload)
+        if not sign_off_counts(conn, event.actor, payload.channel):
+            return
         conn.execute(
             update(t.audit_items)
             .where(t.audit_items.c.audit_id == payload.audit_id)

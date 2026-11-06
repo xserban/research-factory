@@ -62,7 +62,6 @@ from factory.model.intuition import (
     InterpretationReviewed,
     ReviewState,
 )
-from factory.model.screening import Channel
 
 LAYER_CLASS = "interpretation"
 
@@ -333,7 +332,7 @@ def _reviewed(t: IntuitionTables) -> Handler:
         # agent-written one. A review of a superseded interpretation is kept and folded as history.
         folded = (
             ev.actor.kind == "human"
-            and p.channel is not Channel.MCP
+            and not p.channel.remote
             and row is not None
             and not (row[0] == Author.AGENT.value and row[1] == ev.actor.session)
         )
@@ -598,7 +597,7 @@ def _defined(t: IntuitionTables) -> Handler:
 def _source_decided(t: IntuitionTables) -> Handler:
     def decided(conn: Connection, ev: Event) -> None:
         p = ConceptSourceDecided.model_validate(ev.payload)
-        if p.channel is Channel.MCP or not _human_not_writer(conn, ev, p.concept_id):
+        if p.channel.remote or not _human_not_writer(conn, ev, p.concept_id):
             return
         conn.execute(
             sqlite_insert(t.concept_source_decisions)
@@ -622,7 +621,7 @@ def _concept_reviewed(t: IntuitionTables) -> Handler:
         p = ConceptReviewed.model_validate(ev.payload)
         # Every review is kept; `folded` says whether it counted (a human who is not the writer
         # of an agent-written definition, for a known concept).
-        folded = p.channel is not Channel.MCP and _human_not_writer(conn, ev, p.concept_id)
+        folded = not p.channel.remote and _human_not_writer(conn, ev, p.concept_id)
         conn.execute(
             sqlite_insert(t.concept_reviews)
             .values(
@@ -684,7 +683,7 @@ def _link_proposed(t: IntuitionTables) -> Handler:
 def _link_decided(t: IntuitionTables) -> Handler:
     def decided(conn: Connection, ev: Event) -> None:
         p = ConceptLinkDecided.model_validate(ev.payload)
-        if ev.actor.kind != "human" or p.channel is Channel.MCP:
+        if ev.actor.kind != "human" or p.channel.remote:
             return
         row = conn.execute(
             text(

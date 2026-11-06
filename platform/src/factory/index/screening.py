@@ -54,6 +54,7 @@ from sqlalchemy.engine import Connection
 
 from factory.canonical import canonical_json, population_digest
 from factory.events.envelope import Event
+from factory.index.human_channel import sign_off_counts
 from factory.index.members import MEMBER_TABLES, any_grant, live_roles
 from factory.index.project import latest_host
 from factory.index.projection import Handler
@@ -506,7 +507,9 @@ def _calibration_drawn(t: ScreeningTables) -> Handler:
 def _calibration_labelled(t: ScreeningTables) -> Handler:
     def calibration_labelled(conn: Connection, event: Event) -> None:
         payload = CalibrationLabelled.model_validate(event.payload)
-        if _hosted_member(conn, event, payload.stage.value):
+        if _hosted_member(conn, event, payload.stage.value) or not sign_off_counts(
+            conn, event.actor, payload.channel
+        ):
             return
         values = {
             "stage": payload.stage.value,
@@ -585,7 +588,9 @@ def _audit_labelled(t: ScreeningTables) -> Handler:
             select(t.audits.c.stage).where(t.audits.c.audit_id == payload.audit_id)
         ).scalar_one_or_none()
         stage = payload.stage.value if drawn_at is None else str(drawn_at)
-        if _hosted_member(conn, event, stage):
+        if _hosted_member(conn, event, stage) or not sign_off_counts(
+            conn, event.actor, payload.channel
+        ):
             return
         conn.execute(
             update(t.audit_items)
@@ -603,7 +608,7 @@ def _note_label_session(
     conn: Connection, t: ScreeningTables, event: Event, channel: Channel
 ) -> None:
     """Record the session of an MCP-relayed human label, so that session cannot join a pass."""
-    if channel is not Channel.MCP:
+    if not channel.remote:
         return
     conn.execute(
         sqlite_insert(t.label_sessions)

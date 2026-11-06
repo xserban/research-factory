@@ -40,6 +40,7 @@ from factory.model.search import QueryKind, RunStatus
 from factory.model.work import Work
 from factory.services.agreement import Outcome, final_outcomes
 from factory.services.context import Project
+from factory.services.human_channel import require_human_channel
 from factory.services.protocol import current_protocol
 from factory.services.search import works_by_ids
 from factory.services.status_lookup import (
@@ -382,6 +383,7 @@ def assess_notice(
     """
     with project.index.exclusive():
         project.index.sync()
+        require_human_channel(project, actor, channel, "sign-off")
         issues: list[ValidationIssue] = []
         if actor.kind != "human":
             issues.append(ValidationIssue("actor", "a notice is assessed by a human"))

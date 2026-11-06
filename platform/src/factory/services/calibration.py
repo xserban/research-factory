@@ -47,6 +47,7 @@ from factory.services import passes
 from factory.services.context import Project
 from factory.services.dedup import absorbed_ids
 from factory.services.gates import gate_issues
+from factory.services.human_channel import require_human_channel
 from factory.services.protocol import (
     ProtocolVersion,
     current_protocol,
@@ -169,6 +170,7 @@ def label_calibration(
     with project.index.exclusive():
         project.index.sync()
         passes.require_outside_passes(project, actor.user, stage)
+        require_human_channel(project, actor, channel, "audit-label")
         issues: list[ValidationIssue] = []
         issues.extend(
             gate_issues(

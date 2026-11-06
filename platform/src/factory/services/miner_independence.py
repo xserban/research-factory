@@ -129,7 +129,7 @@ def resolve_issues(
         use = next((u for u in protocol.spec.miners or () if u.name == name), None)
     registered = None if use is None else registered_row(project, name, use.version)
     issues: list[ValidationIssue] = []
-    relayed = actor.kind != "human" or channel is Channel.MCP
+    relayed = actor.kind != "human" or channel.remote
     if (
         registered is not None
         and registered.proposer_kind == "agent"

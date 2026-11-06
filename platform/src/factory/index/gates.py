@@ -17,6 +17,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Connection
 
 from factory.events.envelope import Event
+from factory.index.human_channel import sign_off_counts
 from factory.index.projection import Handler
 from factory.model.gate_audit import GateAuditLabelled, GateAuditSampled
 
@@ -79,6 +80,8 @@ def gate_handlers(t: GateTables) -> dict[str, Handler]:
         if event.actor.kind != "human":
             return
         payload = GateAuditLabelled.model_validate(event.payload)
+        if not sign_off_counts(conn, event.actor, payload.channel):
+            return
         conn.execute(
             update(t.items)
             .where(

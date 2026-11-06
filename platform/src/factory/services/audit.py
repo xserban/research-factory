@@ -43,6 +43,7 @@ from factory.services import audit_core, passes
 from factory.services.agreement import AgreedWork, agreed_works, screen_agreement
 from factory.services.audit_core import AuditPopulation
 from factory.services.context import Project
+from factory.services.human_channel import require_human_channel
 from factory.services.protocol import current_protocol
 from factory.services.screening import decision_events, live_decisions
 from factory.services.screening_stats import (
@@ -168,6 +169,7 @@ def audit_record(
     """
     with project.index.exclusive():
         project.index.sync()
+        require_human_channel(project, actor, channel, "audit-label")
         issues = audit_core.human_gate(
             project, actor, channel, noun="screening-label", gate_id="screening.audit_label"
         )

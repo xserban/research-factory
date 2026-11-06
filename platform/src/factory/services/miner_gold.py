@@ -28,6 +28,7 @@ from factory.services.conversions import conversion_document, conversion_manifes
 from factory.services.extraction import UnitPin, calibration_closed_works
 from factory.services.extraction_verify import verify_row_in
 from factory.services.gates import gate_issues
+from factory.services.human_channel import require_human_channel
 from factory.services.miners import CalibrationRow, _registered, calibration_by_id, proposer
 from factory.services.mining import require_listed
 from factory.services.protocol import miner_extraction_schema
@@ -92,13 +93,14 @@ def label_miner_calibration(
     rows with one key (`rows.<i>`)."""
     with project.index.exclusive():
         project.index.sync()
+        require_human_channel(project, actor, channel, "audit-label")
         calibration = calibration_by_id(project, calibration_id)
         if calibration is None:
             raise FactoryValidationError(
                 [ValidationIssue("calibration_id", "is not a calibration of this project")]
             )
         owner = proposer(project, calibration.name, calibration.version)
-        relayed = actor.kind != "human" or channel is Channel.MCP
+        relayed = actor.kind != "human" or channel.remote
         issues = gate_issues(
             project,
             actor,

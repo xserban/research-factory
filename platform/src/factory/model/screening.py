@@ -71,6 +71,13 @@ class ScreeningPhase(StrEnum):
 class Channel(StrEnum):
     CLI = "cli"
     MCP = "mcp"
+    ELICIT = "elicit"
+
+    @property
+    def remote(self) -> bool:
+        """Whether the act came through an MCP session, as a relay or by elicitation. Decision 37's
+        session rules read this: they apply to `elicit` exactly as to `mcp` (ruling 11)."""
+        return self is not Channel.CLI
 
 
 def _non_blank(value: str) -> str:

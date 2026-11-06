@@ -322,7 +322,7 @@ def _decision_issues(
         issues.append(
             ValidationIssue("actor", f"the session that wrote a concept cannot {what} it")
         )
-    if channel is Channel.MCP:
+    if channel.remote:
         issues.append(ValidationIssue("channel", "no MCP tool decides; use the command line"))
     return issues
 
@@ -1068,7 +1068,7 @@ def decide_concept_link(
             issues.append(
                 ValidationIssue("actor", "the session that proposed a link cannot decide it")
             )
-        if channel is Channel.MCP:
+        if channel.remote:
             issues.append(ValidationIssue("channel", "no MCP tool decides; use the command line"))
         if not rationale.strip():
             issues.append(ValidationIssue("rationale", "state why"))

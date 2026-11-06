@@ -53,6 +53,7 @@ from factory.services.extraction import (
     require_schema,
 )
 from factory.services.extraction_agreement import extraction_agreement, final_rows
+from factory.services.human_channel import require_human_channel
 from factory.services.protocol import ProtocolVersion, current_protocol
 from factory.services.seeds import _rigor_mode
 
@@ -323,6 +324,7 @@ def extraction_audit_record(
     """
     with project.index.exclusive():
         project.index.sync()
+        require_human_channel(project, actor, channel, "audit-label")
         issues = _gate(project, actor, channel)
         if not _audit_exists(project, audit_id):
             issues.append(ValidationIssue("audit_id", "unknown audit"))

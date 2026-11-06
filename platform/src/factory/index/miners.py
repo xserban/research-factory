@@ -21,6 +21,7 @@ from sqlalchemy.engine import Connection
 
 from factory.canonical import canonical_json
 from factory.events.envelope import Event
+from factory.index.human_channel import sign_off_counts
 from factory.index.projection import Handler
 from factory.model.miner_calibration import MinerCalibrationDrawn, MinerCalibrationLabelled
 from factory.model.miners import MinerRegistered, MinerRetired
@@ -166,6 +167,8 @@ def miner_handlers(t: MinerTables) -> dict[str, Handler]:
         if event.actor.kind != "human":
             return
         payload = MinerCalibrationLabelled.model_validate(event.payload)
+        if not sign_off_counts(conn, event.actor, payload.channel):
+            return
         unit = conn.execute(
             select(t.calibration_units.c.work_id).where(
                 t.calibration_units.c.calibration_id == payload.calibration_id,

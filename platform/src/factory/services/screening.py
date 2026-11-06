@@ -1299,11 +1299,11 @@ def relayed_extraction_label(project: Project, session: str) -> bool:
             continue
         if event.type == "extraction.audit_sampled":
             return True
-        if (
-            event.type
-            in ("extraction.resolved", "extraction.audit_labelled", "miner.calibration_labelled")
-            and event.payload.get("channel") == Channel.MCP.value
-        ):
+        if event.type in (
+            "extraction.resolved",
+            "extraction.audit_labelled",
+            "miner.calibration_labelled",
+        ) and event.payload.get("channel") in (Channel.MCP.value, Channel.ELICIT.value):
             return True
     return False
 

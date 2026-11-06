@@ -99,6 +99,7 @@ from factory.services.extraction_audit import (
 from factory.services.fulltext_status import fulltext_status
 from factory.services.gates import audit_hits, gate_hits, labelled_gate_audits
 from factory.services.hosting import foreign_event_files
+from factory.services.human_channel import human_act_counts
 from factory.services.ideas import list_ideas
 from factory.services.imports import library_import_only, list_imports
 from factory.services.label_check import (
@@ -553,6 +554,7 @@ def _run_rules(project: Project) -> list[_Hit]:
         _drafts(project),
         _writer_verified(project),
         _hosting(project),
+        _relayed_acts(project),
         _future_dated(project),
         _briefings(project),
         _manuscripts(project),
@@ -795,6 +797,20 @@ def _hosting(project: Project) -> list[_Hit]:
             f"added to git by {f.author}, not by the host ({', '.join(f.expected)})",
         )
         for f in foreign
+    ]
+
+
+def _relayed_acts(project: Project) -> list[_Hit]:
+    """Human acts that came as relays (`channel = mcp`): counted from the log, never typed."""
+    counts = human_act_counts(project)
+    if counts.relayed == 0:
+        return []
+    return [
+        _Hit(
+            "human-act-relayed",
+            (),
+            f"{counts.relayed} human act(s) relayed by a model, {counts.elicited} elicited",
+        )
     ]
 
 

@@ -25,10 +25,10 @@ from sqlalchemy.engine import Connection
 from factory.canonical import canonical_json
 from factory.clock import format_ts
 from factory.events.envelope import Event
+from factory.index.human_channel import sign_off_counts
 from factory.index.projection import Handler
 from factory.model.dedup_keys import identifier_keys
 from factory.model.notices import NoticeAssessed, NoticeObserved
-from factory.model.screening import Channel
 from factory.model.versions import DocumentPreferred, VersionLinked, VersionObserved
 
 
@@ -204,6 +204,8 @@ def notice_handlers(t: NoticeTables) -> dict[str, Handler]:
 
     def assessed(conn: Connection, event: Event) -> None:
         payload = NoticeAssessed.model_validate(event.payload)
+        if not sign_off_counts(conn, event.actor, payload.channel):
+            return
         conn.execute(
             sqlite_insert(t.notice_assessments)
             .values(
@@ -218,7 +220,7 @@ def notice_handlers(t: NoticeTables) -> dict[str, Handler]:
             )
             .on_conflict_do_nothing()
         )
-        if payload.channel is Channel.MCP:  # a relaying session cannot join a pass (37.6)
+        if payload.channel.remote:  # a relaying session cannot join a pass (37.6)
             conn.execute(
                 sqlite_insert(t.label_sessions)
                 .values(session=event.actor.session)

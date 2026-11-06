@@ -184,7 +184,7 @@ def require_not_pass_session(
     reason: str = "this session has joined a pass",
 ) -> list[ValidationIssue]:
     """Issues for a human act relayed over MCP by a session in a pass of any module; else none."""
-    if channel is Channel.MCP and is_pass_session(project, actor.session):
+    if channel.remote and is_pass_session(project, actor.session):
         return [ValidationIssue(field, reason)]
     return []
 

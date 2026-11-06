@@ -31,6 +31,7 @@ from factory.mcp.conventions import (
     spec_path,
     withhold,
 )
+from factory.mcp.elicit import confirm_human_act
 from factory.mcp.sessions import (
     THIS_SESSION,
     CallContext,
@@ -529,14 +530,19 @@ def build_server(
                 raise FactoryValidationError(
                     [ValidationIssue("decision", f"must be {_choices(AssessmentDecision)}")]
                 ) from None
+            channel, said = confirm_human_act(
+                f"Assessment of notice {notice_id}",
+                {"decision": chosen.value, "rationale": rationale},
+                {"decision": tuple(d.value for d in AssessmentDecision)},
+            )
             event_id = notices_service.assess_notice(
                 opened,
                 opened.human_actor(),
                 notice_id,
-                chosen,
+                AssessmentDecision(said["decision"]),
                 fields=tuple(fields or ()),
-                rationale=rationale,
-                channel=Channel.MCP,
+                rationale=said["rationale"],
+                channel=channel,
             )
             return {"event_id": event_id}
 
@@ -868,8 +874,16 @@ def build_server(
                         )
                     ]
                 )
+            channel, said = confirm_human_act(
+                f"Calibration label for {work_id}",
+                {"verdict": verdict, "criterion": criterion or ""},
+                {"verdict": ("include", "exclude")},
+            )
+            chosen = said["criterion"] or None
+            if channel is Channel.ELICIT:
+                _check_label(work_id, said["verdict"], chosen)
             event_id = calibration_service.label_calibration(
-                opened, human, work_id, verdict, criterion, Channel.MCP, stage=run_stage
+                opened, human, work_id, said["verdict"], chosen, channel, stage=run_stage
             )
             return {"event_id": event_id}
 
@@ -920,8 +934,19 @@ def build_server(
 
         def record() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
+            channel, said = confirm_human_act(
+                f"Audit label for {work_id}",
+                {"verdict": verdict, "criterion": criterion or ""},
+                {"verdict": ("include", "exclude")},
+            )
             event_id = audit_service.audit_record(
-                opened, opened.human_actor(), audit_id, work_id, verdict, criterion, Channel.MCP
+                opened,
+                opened.human_actor(),
+                audit_id,
+                work_id,
+                said["verdict"],
+                said["criterion"] or None,
+                channel,
             )
             return {"event_id": event_id}
 
@@ -1450,6 +1475,11 @@ def build_server(
         def label() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
             _refuse_pass_session(opened)
+            channel, said = confirm_human_act(
+                f"Extraction audit label for {work_id} / {row_key} / {field}",
+                {"correct": "yes" if correct else "no", "note": note},
+                {"correct": ("yes", "no")},
+            )
             event_id = extraction_audit_service.extraction_audit_record(
                 opened,
                 opened.human_actor(),
@@ -1457,9 +1487,9 @@ def build_server(
                 work_id,
                 row_key,
                 field,
-                correct,
-                note,
-                Channel.MCP,
+                said["correct"] == "yes",
+                said["note"],
+                channel,
             )
             return {"event_id": event_id}
 

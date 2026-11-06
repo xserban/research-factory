@@ -611,7 +611,7 @@ def review_interpretation(
                     "actor", "the session that wrote an interpretation cannot review it"
                 )
             )
-        if channel is Channel.MCP:
+        if channel.remote:
             issues.append(ValidationIssue("channel", "no MCP tool reviews; use the command line"))
         if state == "wrong" and not note.strip():
             issues.append(ValidationIssue("note", "state why the interpretation is wrong"))
