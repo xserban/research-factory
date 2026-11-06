@@ -68,6 +68,9 @@ SPEC = ModuleSpec(
         CheckRule("host-mismatch-unchecked", ("warning", "warning", "warning")),
         CheckRule("member-event-unfolded", ("error", "error", "error")),
         CheckRule("future-dated-event", ("warning", "warning", "warning")),
+        CheckRule("member-missing-reviewer-of-record", (None, "warning", "error")),
+        CheckRule("review-open", ("warning", "warning", "warning")),
+        CheckRule("review-stale", ("warning", "warning", "warning")),
     ),
 )
 

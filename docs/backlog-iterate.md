@@ -215,3 +215,9 @@ Minor review findings parked during the v1 build, to address when iterating from
 - teams-A: a line written by hand in the entitled person's own name still folds as the first grant, a backdated one included; only the host check and the signed history answer it (index/members.py).
 - teams-A: `--as` attributes and does not authenticate: whoever runs as the service account can state an admin, on a `server init` re-run too. The boundary is the OS account (services/access_log.py stated_admin).
 - teams-A: if the person who hosted a project has left, `bootstrap_owner` needs a new `project.hosted` first, since the fold entitles the last hoster (services/members.py).
+- teams-B: gate acts other than protocol events have no role guard in their folds; a generic wrapper needs the act-event map below the registry (index/default.py).
+- teams-B: `trace` does not describe `rrq_` ids, so a review request is not walked (services/trace.py).
+- teams-B: `report discovery` prints JSON for a person without the full view, since the agent view is not a `DiscoveryReport` (cli/main.py).
+- teams-B: `portfolio` reads every project without a role check or the agent view (cli/main.py).
+- teams-B: `whoami` shows no budgets left until teams-D, and deploy-B's wrapper must allow its optional project (mcp/server.py).
+- teams-B: `factory project` is created here; deploy-C's `project host` joins `project_app` (cli/team.py).

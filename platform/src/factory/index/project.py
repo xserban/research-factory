@@ -1,3 +1,5 @@
+from typing import TYPE_CHECKING
+
 from pydantic import ValidationError
 from sqlalchemy import Column, MetaData, String, Table, text
 from sqlalchemy.dialects.sqlite import insert
@@ -5,11 +7,13 @@ from sqlalchemy.engine import Connection
 
 from factory.clock import format_ts
 from factory.events.envelope import Event
-from factory.index.members import MemberTables, holds_here
 from factory.index.projection import Handler
 from factory.model.hosting import ProjectHosted
 from factory.model.members import ProjectRole
 from factory.model.project import ProjectCreated, ProjectVisibilitySet, Visibility
+
+if TYPE_CHECKING:
+    from factory.index.members import MemberTables
 
 
 def project_table(metadata: MetaData) -> Table:
@@ -91,7 +95,9 @@ def latest_visibility(conn: Connection) -> Visibility:
     return "private" if row is not None and row[0] == "private" else "lab"
 
 
-def project_visibility_handler(table: Table, members: MemberTables) -> Handler:
+def project_visibility_handler(table: Table, members: "MemberTables") -> Handler:
+    from factory.index.members import holds_here  # members imports this module
+
     def visibility_set(conn: Connection, event: Event) -> None:
         """Folds an owner's act in their own name that changes the visibility. Anything else (an
         agent, another role, no change, a malformed payload) changes nothing."""

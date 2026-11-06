@@ -141,7 +141,7 @@ def proposal_of(project: Project, review_request_id: str) -> JsonValue:
         raise refuse("review_request_id", "the proposal cannot be read") from exc
 
 
-def _parsed(kind: ReviewKind, proposal: JsonValue) -> Proposal:
+def parse_proposal(kind: ReviewKind, proposal: JsonValue) -> Proposal:
     """The proposal as its kind's model reads it; every error names a path under `proposal`."""
     try:
         return PROPOSAL_MODELS[kind].model_validate(proposal)
@@ -173,7 +173,7 @@ def request_review(
 ) -> str:
     """File a request, and return its id. Needs `work:run`. The proposal must validate as `kind`'s
     model; a refusal writes nothing."""
-    parsed = _parsed(kind, proposal)
+    parsed = parse_proposal(kind, proposal)
     with project.writing():
         require_actor(project, actor, Permission.WORK_RUN)
         target, version = _target(project, kind)

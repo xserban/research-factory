@@ -17,7 +17,14 @@ from factory.cli import evidence_render, portfolio_render, render
 from factory.cli.admin import member_app, token_app, user_app
 from factory.cli.manuscripts import manuscript_app
 from factory.cli.organisation import consolidation_app, labels_app, terms_app
-from factory.cli.team import project_app, workspace_cmd
+from factory.cli.team import (
+    project_app,
+    protocol_amend_cmd,
+    protocol_deviation_cmd,
+    protocol_record_cmd,
+    review_app,
+    workspace_cmd,
+)
 from factory.clock import Clock, SystemClock
 from factory.config import Settings
 from factory.document.optional import converter_infos, override_registry
@@ -61,6 +68,7 @@ from factory.model.screening import Channel
 from factory.model.watch import CycleStatus
 from factory.model.work import ProvenanceMethod
 from factory.regions.rules import MemberType, RuleSet
+from factory.services import agent_view as agent_view_service
 from factory.services import agreement as agreement_service
 from factory.services import audit as audit_service
 from factory.services import benchmark_ledger as ledger_service
@@ -143,7 +151,7 @@ from factory.services import view_coverage as view_coverage_service
 from factory.services import views as views_service
 from factory.services import watch as watch_service
 from factory.services import xruns as xruns_service
-from factory.services.access import authorize_command
+from factory.services.access import authorize_command, full_view_allowed
 from factory.services.access_log import admin_call, audited, os_login
 from factory.services.commit import commit_hosted
 from factory.services.context import Principal, Project, list_projects, open_project
@@ -486,6 +494,10 @@ app.add_typer(user_app)
 app.add_typer(token_app)
 app.add_typer(member_app)
 app.add_typer(project_app)
+app.add_typer(review_app)
+protocol_app.command("record")(protocol_record_cmd)
+protocol_app.command("amend")(protocol_amend_cmd)
+protocol_app.command("deviation")(protocol_deviation_cmd)
 app.command("workspace")(workspace_cmd)
 
 
@@ -551,6 +563,11 @@ def _authorized(state: CliState, project: Project) -> Project:
     ):
         authorize_command(project, project.principal, state.tool)
     return project
+
+
+def _full_view(project: Project) -> bool:
+    """Whether this person reads the full view; if not, the agent view (slice 5 ruling 20)."""
+    return full_view_allowed(project, project.principal)
 
 
 def _resolve_project(state: CliState) -> Project:
@@ -654,7 +671,11 @@ def status(
     state = _state(ctx)
     with _reporting_errors():
         project = _resolve_project(state)
-        report = project_service.project_status(project)
+        report = (
+            project_service.project_status(project)
+            if _full_view(project)
+            else agent_view_service.agent_status(project)
+        )
     if as_json:
         typer.echo(report.model_dump_json())
         return
@@ -885,7 +906,8 @@ def _screening_lines(screening: ScreeningStatus) -> list[str]:
         if progress.queued is None:
             lines.append(f"pass {label}: not opened")
             continue
-        sensitivity = _rate(cal.per_pass[label].sensitivity)
+        rates = cal.per_pass.get(label)  # empty in the agent view
+        sensitivity = _rate(None if rates is None else rates.sensitivity)
         lines.append(
             f"pass {label}: queued {progress.queued}, decided {progress.decided}, "
             f"remaining {progress.remaining}; calibration sensitivity {sensitivity}"
@@ -2330,6 +2352,21 @@ def report_prisma(
         _fail("--update and --format svg are exclusive", 2)
     with _reporting_errors():
         project = _resolve_project(state)
+        if not _full_view(project) and as_json:
+            typer.echo(json.dumps(agent_view_service.prisma_view(project, update)))
+            return
+        if not _full_view(project):
+            if update is not None:
+                until = None if update == "last" else update
+                text = render.update_markdown(
+                    prisma_update_service.prisma_update(project, until=until)
+                )
+            elif fmt is PrismaFormat.SVG:
+                text = exports_service.export_prisma_svg(project)
+            else:
+                text = render.prisma_markdown(prisma_service.prisma_flow(project))
+            typer.echo(agent_view_service.scrubbed_text(project, text), nl=False)
+            return
         if update is not None:
             shown = prisma_update_service.prisma_update(
                 project, until=None if update == "last" else update
@@ -2492,7 +2529,11 @@ def report_search(ctx: typer.Context, as_json: _JSON = False) -> None:
     state = _state(ctx)
     with _reporting_errors():
         project = _resolve_project(state)
-        report = prisma_service.search_report(project)
+        report = (
+            prisma_service.search_report(project)
+            if _full_view(project)
+            else agent_view_service.agent_search(project)
+        )
     typer.echo(report.model_dump_json() if as_json else render.search_markdown(report), nl=as_json)
 
 
@@ -2502,6 +2543,12 @@ def report_methods(ctx: typer.Context, as_json: _JSON = False) -> None:
     state = _state(ctx)
     with _reporting_errors():
         project = _resolve_project(state)
+        if not _full_view(project):
+            if as_json:
+                typer.echo(json.dumps(agent_view_service.methods_view(project)))
+            else:
+                typer.echo(agent_view_service.methods_text(project), nl=False)
+            return
         report = methods_service.methods_report(project)
     typer.echo(
         report.model_dump_json() if as_json else methods_service.render_methods(report),
@@ -2515,6 +2562,9 @@ def report_discovery(ctx: typer.Context, as_json: _JSON = False) -> None:
     state = _state(ctx)
     with _reporting_errors():
         project = _resolve_project(state)
+        if not _full_view(project):
+            typer.echo(json.dumps(agent_view_service.discovery_view(project)))
+            return
         report = discovery_service.discovery_report(project)
     typer.echo(
         report.model_dump_json() if as_json else render.discovery_markdown(report), nl=as_json
@@ -2568,9 +2618,15 @@ def report_evidence(
     expectations = [_parse_expect(e) for e in expect or []]
     with _reporting_errors():
         project = _resolve_project(state)
-        report = evidence_report_service.evidence_report(
-            project, expect=expectations, include_notice_affected=include_notice_affected
-        )
+        full = _full_view(project)
+        if full:
+            report = evidence_report_service.evidence_report(
+                project, expect=expectations, include_notice_affected=include_notice_affected
+            )
+        elif include_notice_affected:
+            _fail("--include-notice-affected: researcher view only", 1)
+        else:
+            report = agent_view_service.agent_evidence(project, expectations)
     if fmt is EvidenceFormat.JSON:
         text = report.model_dump_json()
     elif fmt is EvidenceFormat.CSV_ROWS:
@@ -2578,7 +2634,9 @@ def report_evidence(
     elif fmt is EvidenceFormat.CSV_POINTS:
         text = evidence_render.points_csv(report)
     else:
-        text = evidence_render.evidence_markdown(report, show_audit=True)
+        text = evidence_render.evidence_markdown(report, show_audit=full)
+    if not full:
+        text = agent_view_service.scrubbed_text(project, text)
     if output is not None:
         try:
             output.write_text(text, encoding="utf-8")
@@ -2866,14 +2924,16 @@ def trace(
     state = _state(ctx)
     with _reporting_errors():
         project = _resolve_project(state)
-        tree = trace_service.trace(
+        full = _full_view(project)
+        read = trace_service.trace if full else agent_view_service.agent_trace
+        tree = read(
             project,
             ref,
             direction="forward" if forward else "back",
             layer="all" if with_interpretation else "evidence",
         )
     for line in render.trace_lines(tree):
-        typer.echo(line)
+        typer.echo(line if full else agent_view_service.scrubbed_text(project, line))
 
 
 def _watch_projects(state: CliState, project: str | None, all_projects: bool) -> list[str]:
@@ -3293,9 +3353,11 @@ def check(
     state = _state(ctx)
     with _reporting_errors():
         project = _resolve_project(state)
-        report = check_service.check(project, promote_to=_mode(promote_to))
+        full = _full_view(project)
+        read = check_service.check if full else check_service.agent_check
+        report = read(project, promote_to=_mode(promote_to))
     for line in render.check_lines(report):
-        typer.echo(line)
+        typer.echo(line if full else agent_view_service.scrubbed_text(project, line))
     if not report.ok:
         raise typer.Exit(1)
 

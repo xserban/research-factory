@@ -58,11 +58,14 @@ from factory.model.protocol import CriterionEffect, PressFinding, ProtocolSpec, 
 from factory.model.question import QuestionSpec
 from factory.model.references import Decision, Direction, LinkState
 from factory.model.regions import Facet, MemberBasis, RegionKind
+from factory.model.reviews import ReviewDecision, ReviewKind
+from factory.model.reviews import ReviewState as RequestState
 from factory.model.screening import CalibrationLabelled, Channel, PassLabel, ScreeningItem
 from factory.model.search import QueryKind, QueryPurpose, QuerySpec
 from factory.model.seed import SeedSpec
 from factory.modules.contract import Autonomy, PolicyKind
 from factory.regions.rules import MemberType, RuleSet
+from factory.services import agent_view as agent_view_service
 from factory.services import agreement as agreement_service
 from factory.services import audit as audit_service
 from factory.services import benchmark_ledger as ledger_service
@@ -70,7 +73,6 @@ from factory.services import briefing as briefing_service
 from factory.services import calibration as calibration_service
 from factory.services import cards as cards_service
 from factory.services import chase as chase_service
-from factory.services import check as check_service
 from factory.services import concepts as concepts_service
 from factory.services import conclusions as conclusions_service
 from factory.services import consolidation as consolidation_service
@@ -79,7 +81,6 @@ from factory.services import coverage as coverage_service
 from factory.services import dedup as dedup_service
 from factory.services import digest as digest_service
 from factory.services import directions as directions_service
-from factory.services import discovery as discovery_service
 from factory.services import document_convert as document_convert_service
 from factory.services import document_read as document_read_service
 from factory.services import draft_audit as draft_audit_service
@@ -88,7 +89,6 @@ from factory.services import draft_verify as draft_verify_service
 from factory.services import drafts as drafts_service
 from factory.services import evaluation_view as evaluation_view_service
 from factory.services import evidence as evidence_service
-from factory.services import evidence_report as evidence_report_service
 from factory.services import experiments as experiments_service
 from factory.services import exports as exports_service
 from factory.services import extraction as extraction_service
@@ -110,17 +110,13 @@ from factory.services import lineage as graph_service
 from factory.services import manuscript_verify as manuscript_verify_service
 from factory.services import manuscripts as manuscripts_service
 from factory.services import matching as matching_service
-from factory.services import methods as methods_service
 from factory.services import miner_gold as miner_gold_service
 from factory.services import mining as mining_service
 from factory.services import notices as notices_service
 from factory.services import onion as onion_service
 from factory.services import outline as outline_service
 from factory.services import passes as passes_service
-from factory.services import prisma as prisma_service
-from factory.services import prisma_update as prisma_update_service
 from factory.services import probe as probe_service
-from factory.services import project as project_service
 from factory.services import properties as properties_service
 from factory.services import protocol as protocol_service
 from factory.services import question as question_service
@@ -128,6 +124,7 @@ from factory.services import reference_resolve as reference_resolve_service
 from factory.services import references as references_service
 from factory.services import regions as regions_service
 from factory.services import relations as relations_service
+from factory.services import reviews as reviews_service
 from factory.services import screening as screening_service
 from factory.services import search as search_service
 from factory.services import seeds as seeds_service
@@ -139,6 +136,7 @@ from factory.services import trace as trace_service
 from factory.services import view_coverage as view_coverage_service
 from factory.services import watch as watch_service
 from factory.services import xruns as xruns_service
+from factory.services.agent_view import require_pass_opened as _require_pass_opened
 from factory.services.context import Principal, Project, list_projects
 from factory.services.context import open_project as open_as
 from factory.services.extraction import ExtractResult
@@ -148,7 +146,7 @@ from factory.services.living_hooks import default_hooks
 from factory.services.members import roles_of
 from factory.services.results import BatchResult, ItemError
 from factory.services.search import list_works
-from factory.services.seeds import SeedOutcome, SeedRole
+from factory.services.seeds import SeedOutcome
 from factory.services.withholding import held_out_tokens
 from factory.services.workspace import workspace_counts
 from factory.services.xrun_accounting import hidden_acceptances
@@ -237,11 +235,7 @@ def build_server(
 
         def status() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
-            report = project_service.project_status(opened, agent=True).model_dump(mode="json")
-            if passes_service.is_pass_session(opened, opened.session):
-                report["stage"] = None  # it follows the final outcomes (decisions 37 and 43)
-            hidden = hidden_acceptances(opened)
-            return _withheld(opened, _without_hidden_acts(_without_rates(report), hidden))
+            return agent_view_service.status_view(opened)
 
         return _reply(project, status)
 
@@ -912,16 +906,7 @@ def build_server(
         def report() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
             _refuse_pass_session(opened)
-            data: dict[str, JsonValue] = {
-                "flow": prisma_service.prisma_flow(opened).model_dump(mode="json"),
-                "search": prisma_service.search_report(opened).model_dump(mode="json"),
-            }
-            if update is not None:
-                until = None if update == "last" else update
-                flow = prisma_update_service.prisma_update(opened, until=until)
-                data["update"] = flow.model_dump(mode="json")
-            data = _collapsed_import_rows(opened, data)
-            return _without_record_keys(_withheld(opened, data, include_work_ids=False))
+            return agent_view_service.prisma_view(opened, update)
 
         return _reply(project, report, include_work_ids=False)
 
@@ -935,13 +920,7 @@ def build_server(
         def methods() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
             _refuse_pass_session(opened)
-            full = methods_service.methods_report(opened)
-            report, withheld = methods_service.agent_methods(opened, full)
-            data: dict[str, JsonValue] = {
-                "report": report.model_dump(mode="json"),
-                "text": methods_service.render_methods(report, withheld=withheld),
-            }
-            return _withheld(opened, data, include_work_ids=False)
+            return agent_view_service.methods_view(opened)
 
         return _reply(project, methods, include_work_ids=False)
 
@@ -1070,8 +1049,7 @@ def build_server(
         def report() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
             _refuse_pass_session(opened)
-            view = discovery_service.agent_view(discovery_service.discovery_report(opened))
-            return _withheld(opened, view, include_work_ids=False)
+            return agent_view_service.discovery_view(opened)
 
         return _reply(project, report, include_work_ids=False)
 
@@ -1088,10 +1066,7 @@ def build_server(
         def evidence() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
             _refuse_pass_session(opened)
-            report = evidence_report_service.agent_evidence(
-                evidence_report_service.evidence_report(opened, expect=_expectations(expect or []))
-            )
-            return _withheld(opened, report.model_dump(mode="json"), include_work_ids=False)
+            return agent_view_service.evidence_view(opened, _expectations(expect or []))
 
         return _reply(project, evidence, include_work_ids=False)
 
@@ -1151,15 +1126,9 @@ def build_server(
             opened = open_project(settings, project, session=session, clock=clock)
             _refuse_pass_session(opened)
             way = _direction(direction)
-            withheld = {t.lower() for t in _held_out_tokens(opened, include_work_ids=False)}
-            if ref.strip().lower() in withheld:
-                raise FactoryValidationError([ValidationIssue("ref", "unknown id")])
-            if layer == "all" or trace_service.is_region_ref(ref):
-                _require_pass_opened(opened)
-            tree = trace_service.agent_trace(
+            return agent_view_service.trace_view(
                 opened, ref, direction=way, layer=cast(trace_service.Layer, layer)
             )
-            return _withheld(opened, tree.model_dump(mode="json"), include_work_ids=False)
 
         return _reply(project, walk, include_work_ids=False)
 
@@ -1173,14 +1142,7 @@ def build_server(
         def gaps() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
             _refuse_pass_session(opened)
-            mode = _rigor_mode(promote_to)
-            report = check_service.agent_check(opened, promote_to=mode)
-            data: dict[str, JsonValue] = {
-                **report.model_dump(mode="json"),
-                "ok": report.ok,
-                "evidence_ok": report.evidence_ok,
-            }
-            return _withheld(opened, data, include_work_ids=False)
+            return agent_view_service.check_view(opened, _rigor_mode(promote_to))
 
         return _reply(project, gaps, include_work_ids=False)
 
@@ -3881,11 +3843,7 @@ def build_server(
         def report() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
             _refuse_pass_session(opened)
-            data: dict[str, JsonValue] = {
-                "search": prisma_service.search_report(opened).model_dump(mode="json")
-            }
-            data = _collapsed_import_rows(opened, data)
-            return _without_record_keys(_withheld(opened, data, include_work_ids=False))
+            return agent_view_service.search_view(opened)
 
         return _reply(project, report, include_work_ids=False)
 
@@ -4323,7 +4281,109 @@ def build_server(
 
         return _reply(project, release, include_work_ids=False)
 
+    @server.tool()
+    def review_request(
+        project: str,
+        kind: str,
+        proposal: dict[str, JsonValue],
+        reason: str,
+        role: str,
+        model: str,
+        skill: str,
+    ) -> dict[str, JsonValue]:
+        """File a review request for what you may not apply alone. `kind` is `protocol-amend`,
+        `protocol-record` or `deviation`; `proposal` holds what that tool takes. Approval applies
+        nothing: a holder of the role then runs the tool with `review_request_id`. Refused to a
+        session that has joined a pass."""
+
+        def request() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            actor = make_agent_actor(settings, session, role, model, skill)
+            filed = reviews_service.request_review(
+                opened, actor, _review_kind(kind), proposal, reason
+            )
+            return {"review_request_id": filed}
+
+        return _reply(project, request, include_work_ids=False)
+
+    @server.tool()
+    def review_list(
+        project: str,
+        state: str | None = None,
+        review_request_id: str | None = None,
+        cursor: str | None = None,
+        limit: int = PAGE_LIMIT,
+    ) -> dict[str, JsonValue]:
+        """Review requests in filing order, or those in `state` (open, approved, rejected,
+        withdrawn, consumed, stale). `review_request_id` returns that one with its proposal.
+        Read-only. Refused to a session that has joined a pass."""
+
+        def listing() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            if review_request_id is not None:
+                one: dict[str, JsonValue] = reviews_service.review(
+                    opened, review_request_id
+                ).model_dump(mode="json")
+                one["proposal"] = reviews_service.proposal_of(opened, review_request_id)
+                return _withheld(opened, one, include_work_ids=False)
+            found = reviews_service.reviews(opened, state=_request_state(state))
+            page = paginate(found, cursor, limit)
+            items: list[JsonValue] = [view.model_dump(mode="json") for view in page.items]
+            data: dict[str, JsonValue] = {"items": items, "next_cursor": page.next_cursor}
+            if not found:
+                data["notice"] = reviews_service.NO_REVIEWS_NOTICE
+            return _withheld(opened, data, include_work_ids=False)
+
+        return _reply(project, listing, include_work_ids=False)
+
+    @server.tool()
+    def review_decide(
+        project: str, review_request_id: str, decision: str, rationale: str
+    ) -> dict[str, JsonValue]:
+        """The human's decision on a review request, relayed: `approve`, `reject` or `withdraw`.
+        The requester cannot approve or reject their own request, and only the requester
+        withdraws. Refused to a session that has joined a pass."""
+
+        def decide() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            reviews_service.decide_review(
+                opened,
+                opened.human_actor(),
+                review_request_id,
+                cast(ReviewDecision, decision),
+                rationale,
+                Channel.MCP,
+            )
+            return {"review_request_id": review_request_id, "decision": decision}
+
+        return _reply(project, decide, include_work_ids=False)
+
     return server
+
+
+def _review_kind(value: str) -> ReviewKind:
+    try:
+        return ReviewKind(value)
+    except ValueError:
+        choices = ", ".join(kind.value for kind in ReviewKind)
+        raise FactoryValidationError(
+            [ValidationIssue("kind", f"must be one of: {choices}")]
+        ) from None
+
+
+def _request_state(value: str | None) -> RequestState | None:
+    if value is None:
+        return None
+    try:
+        return RequestState(value)
+    except ValueError:
+        choices = ", ".join(state.value for state in RequestState)
+        raise FactoryValidationError(
+            [ValidationIssue("state", f"must be one of: {choices}")]
+        ) from None
 
 
 def _refuse_pass_session(project: Project) -> None:
@@ -4479,14 +4539,6 @@ def _region_read(
     }
 
 
-def _require_pass_opened(project: Project, field: str = "graph") -> None:
-    """The graph tools name works, and before a screening pass opens an agent must not be able to
-    name a held-out seed's work (decision 43). Role-blind and neutral: the same message for every
-    caller, saying nothing of seeds. The CLI is unaffected."""
-    if not coverage_service.held_out_visible(project):
-        raise FactoryValidationError([ValidationIssue(field, "not available yet")])
-
-
 def _index_keys(name: str, given: Mapping[str, str]) -> dict[int, str]:
     """A `supersedes` object's keys as row indices; MCP delivers JSON keys as strings. A key that
     is not an integer is refused, with every such key named, before anything is written."""
@@ -4563,18 +4615,6 @@ def _merged(
     )
 
 
-def _without_rates(report: dict[str, JsonValue]) -> dict[str, JsonValue]:
-    """The project status for an agent: screening counts and flags only. Label-derived rates
-    (sensitivity, specificity, false-exclusion) stay in the CLI status and the human's reports."""
-    screening = report.get("screening")
-    if isinstance(screening, dict):
-        screening.pop("false_exclusion_rate", None)
-        calibration = screening.get("calibration")
-        if isinstance(calibration, dict):
-            calibration.pop("per_pass", None)
-    return report
-
-
 def _without_hidden_acceptances(row: GateStatusRow, hidden: int) -> GateStatusRow:
     """A gate row for an agent, without the acceptances of baselines whose verdict it may not read
     yet: only `not-reproduced` can be accepted (decision 94). The gate is human in every mode."""
@@ -4583,75 +4623,6 @@ def _without_hidden_acceptances(row: GateStatusRow, hidden: int) -> GateStatusRo
     human = Autonomy.HUMAN.value
     counts = {**row.counts, human: max(0, row.counts[human] - hidden)}
     return row.model_copy(update={"counts": counts})
-
-
-def _without_hidden_acts(report: dict[str, JsonValue], hidden: int) -> dict[str, JsonValue]:
-    """The event counts for an agent, without the two events of each such acceptance (the acceptance
-    and its deviation; see `_without_hidden_acceptances`)."""
-    by_type, total = report.get("events_by_type"), report.get("events_total")
-    if not hidden or not isinstance(by_type, dict) or not isinstance(total, int):
-        return report
-    for name in ("baseline.accepted", "experiment.deviation_recorded"):
-        count = by_type.get(name)
-        if isinstance(count, int):
-            left = max(0, count - hidden)
-            total -= count - left
-            if left:
-                by_type[name] = left
-            else:
-                del by_type[name]
-    report["events_total"] = total
-    return report
-
-
-def _collapsed_import_rows(project: Project, data: dict[str, JsonValue]) -> dict[str, JsonValue]:
-    """While no pass is open, one search-report row per import, without reported or retrieved
-    counts, runs or record tokens: the admission queries cover the held-out part, so their
-    counts and key lists would give its size (decision 43)."""
-    search = data.get("search")
-    if coverage_service.held_out_visible(project) or not isinstance(search, dict):
-        return data
-    rows = search.get("rows")
-    if not isinstance(rows, list):
-        return data
-    kept: list[JsonValue] = []
-    seen: set[str] = set()
-    for row in rows:
-        if not isinstance(row, dict) or row.get("purpose") != "import":
-            kept.append(row)
-            continue
-        import_id = str(row.get("import_id"))
-        if import_id in seen:
-            continue
-        seen.add(import_id)
-        kept.append(
-            {
-                **row,
-                "text": import_id,
-                "runs": [],
-                "reported": None,
-                "retrieved": 0,
-                "shortfall_reason": None,
-                "new_after_dedup": None,
-                "included": None,
-            }
-        )
-    return {**data, "search": {**search, "rows": kept}}
-
-
-_RECORD_KEY = re.compile(r"(imp_[0-9A-Z]{26}):[0-9]+")
-
-
-def _without_record_keys(value: JsonValue) -> JsonValue:
-    """`value` with every import record key `imp_<ULID>:<ordinal>` cut to the import id: an
-    ordinal names a record's place in the export, which names the held-out part (decision 43)."""
-    if isinstance(value, str):
-        return _RECORD_KEY.sub(r"\1", value)
-    if isinstance(value, list):
-        return [_without_record_keys(item) for item in value]
-    if isinstance(value, dict):
-        return {key: _without_record_keys(item) for key, item in value.items()}
-    return value
 
 
 def _withheld(

@@ -163,6 +163,9 @@ async def test_project_status_tool(settings: Settings, project: Project, clock: 
             "dedup_merges",
             "merge_revert",
             "task_release",
+            "review_request",
+            "review_list",
+            "review_decide",
         ]
         res = await client.call_tool("project_status", {"project": "demo"})
         body = _body(res)

@@ -145,6 +145,7 @@ TOOL_PERMISSIONS: Mapping[str, Permission] = {
     "experiment_view": Permission.PROJECT_READ,
     "xrun_list": Permission.PROJECT_READ,
     "whoami": Permission.PROJECT_READ,
+    "review_list": Permission.PROJECT_READ,
     # MCP tools that run work. A tool an agent acts through at a gate is here too, a decision
     # included: the gate policy, not this table, says when an agent may pass it.
     "search_run": Permission.WORK_RUN,
@@ -196,6 +197,7 @@ TOOL_PERMISSIONS: Mapping[str, Permission] = {
     "lead_decide": Permission.HUMAN_CONFIRM,
     "hypothesis_register": Permission.HUMAN_CONFIRM,
     "miner_register": Permission.PROTOCOL_CHANGE,
+    "review_request": Permission.WORK_RUN,
     # Refused to an agent on a hosted project (`AGENT_PROPOSES_ONLY`).
     "protocol_record": Permission.PROTOCOL_CHANGE,
     "protocol_amend": Permission.PROTOCOL_CHANGE,
@@ -244,6 +246,7 @@ TOOL_PERMISSIONS: Mapping[str, Permission] = {
     "merge_revert": Permission.WORK_RUN,
     "task_release": Permission.WORK_RUN,
     "mine_import": Permission.HUMAN_CONFIRM,
+    "review_decide": Permission.REVIEW_DECIDE,
     # Mutating CLI commands, as `cli:<group> <command>`. Read-only commands have no row, but for
     # the three lists of the admin groups, which are authorised like the rest of those groups.
     "cli:init": Permission.LAB_ADMIN,
@@ -258,6 +261,13 @@ TOOL_PERMISSIONS: Mapping[str, Permission] = {
     "cli:token revoke": Permission.LAB_ADMIN,
     "cli:token list": Permission.LAB_ADMIN,
     "cli:project visibility": Permission.PROJECT_GOVERN,
+    "cli:review request": Permission.WORK_RUN,
+    "cli:review decide": Permission.REVIEW_DECIDE,
+    # Needs no role (plan ruling 4); the service holds it to the requester.
+    "cli:review withdraw": Permission.PROJECT_READ,
+    "cli:protocol record": Permission.PROTOCOL_CHANGE,
+    "cli:protocol amend": Permission.PROTOCOL_CHANGE,
+    "cli:protocol deviation": Permission.PROTOCOL_CHANGE,
     "cli:member grant": Permission.PROJECT_GOVERN,
     "cli:member revoke": Permission.PROJECT_GOVERN,
     "cli:member list": Permission.PROJECT_READ,
@@ -378,6 +388,41 @@ TOOL_PERMISSIONS: Mapping[str, Permission] = {
 tool the server refuses to start with."""
 
 
+FULL_VIEW_COMMANDS: frozenset[str] = frozenset(
+    {
+        "cli:seeds",
+        "cli:gates",
+        "cli:gate audit report",
+        "cli:audit report",
+        "cli:screen disagreements",
+        "cli:extract agreement",
+        "cli:extract audit-report",
+        "cli:mine agreement",
+        "cli:mine audit report",
+        "cli:miner calibrate report",
+        "cli:contributions agreement",
+        "cli:contributions audit report",
+        "cli:snowball compare",
+        "cli:import list",
+        "cli:import show",
+        "cli:import coverage",
+        "cli:export bibtex",
+        "cli:export csl",
+        "cli:export prisma",
+        "cli:living prisma-update",
+        "cli:view onion",
+        "cli:regions list",
+        "cli:regions show",
+        "cli:regions diff",
+        "cli:regions export",
+        "cli:experiments show",
+    }
+)
+"""Reading commands that state seeds, held-out figures or label-derived rates and have no agent
+rendering at the command line: refused without the full view (ruling 20). Status, report, trace
+and check render the agent view instead."""
+
+
 @cache
 def _team_gates() -> dict[str, ProjectRole]:
     from factory.services.modules.default import default_modules  # the registry imports services
@@ -465,6 +510,8 @@ def authorize_command(project: Project, principal: Principal, tool: str) -> None
     command has a row whose permission only the gate's role holds. A command with no row reads, so
     it needs `project:read` on a `private` project. On a `lab` project no role binds yet, every
     command runs as it always has (acceptance 1)."""
+    if tool in FULL_VIEW_COMMANDS and not full_view_allowed(project, principal):
+        raise FactoryValidationError([ValidationIssue("permission", "full view not held")])
     private = visibility(project) == "private"
     permission = TOOL_PERMISSIONS.get(tool) or (Permission.PROJECT_READ if private else None)
     if permission is None or not (private or governed(project)):
@@ -535,7 +582,8 @@ def actor_holds(project: Project, actor: Actor, permission: Permission) -> bool:
         return False
     if not governed(project):
         return True
-    return _holds(project, principal_of(project, actor), actor.kind, permission, lab_of(project))
+    principal = principal_of(project, actor)
+    return _holds(project, principal, actor.kind, permission, lab_of(project), None)
 
 
 def require_actor(project: Project, actor: Actor, permission: Permission) -> None:

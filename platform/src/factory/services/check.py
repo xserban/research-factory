@@ -45,11 +45,13 @@ from factory.model.notices import NoticeKind, unassessed_notices
 from factory.model.project import RigorMode
 from factory.model.protocol import ProtocolStatus, ScreeningStage
 from factory.model.references import Direction, LinkState
+from factory.model.reviews import DECIDING_ROLES, ReviewState
 from factory.model.screening import PassLabel
 from factory.model.seed import SEED_ID_RE
 from factory.model.watch import CycleStatus
 from factory.model.work import ProvenanceMethod
 from factory.modules.contract import CheckHit
+from factory.services.access import governed
 from factory.services.agreement import Outcome, agreement_summary, final_outcomes, single_pass_works
 from factory.services.audit import audit_outstanding, audit_report, audit_shortfall
 from factory.services.briefing_served import stale_sessions
@@ -123,6 +125,7 @@ from factory.services.manuscripts import (
     units,
     verdict_rows,
 )
+from factory.services.members import members
 from factory.services.methods import MethodsReport, methods_report, render_methods
 from factory.services.miner_report import calibration_passed
 from factory.services.miners import MinerState, miner_state
@@ -146,6 +149,7 @@ from factory.services.reference_resolve import lost_human_decisions
 from factory.services.references import current_extraction, included_works
 from factory.services.region_check import AGENT_VIEW, region_findings
 from factory.services.relations import RelationView, list_relations
+from factory.services.reviews import reviews as review_requests
 from factory.services.seeds import SeedRole, _rigor_mode, seed_check
 from factory.services.shared_mining import source_state, unverified_imports
 from factory.services.slice6_check import slice6_hits
@@ -550,6 +554,7 @@ def _run_rules(project: Project) -> list[_Hit]:
         _briefings(project),
         _manuscripts(project),
         _members(project),
+        _team_review(project),
     ]
     flat = [hit for group in groups for hit in group]
     return [replace(hit, seq=seq) for seq, hit in enumerate(flat)]
@@ -584,6 +589,46 @@ def _manuscript_hits(project: Project, manuscript_id: str) -> list[_Hit]:
                 "manuscript-unverified",
                 (manuscript_id,),
                 f"{len(waiting)} unit(s) of a manuscript have no verdict",
+            )
+        )
+    return hits
+
+
+# --- Team review (slice 5) ---
+
+
+def _team_review(project: Project) -> list[_Hit]:
+    """Requests awaiting a decision, stale requests, and human reviewers the grants do not back.
+    A project no role binds yet has no grant to compare, so old projects gain no finding."""
+    views = review_requests(project)
+    hits: list[_Hit] = []
+    waiting = tuple(v.review_request_id for v in views if v.state is ReviewState.OPEN)
+    if waiting:
+        hits.append(_Hit("review-open", waiting, f"{len(waiting)} review request(s) undecided"))
+    stale = tuple(v.review_request_id for v in views if v.state is ReviewState.STALE)
+    if stale:
+        hits.append(_Hit("review-stale", stale, f"{len(stale)} review request(s) are stale"))
+    current = current_protocol(project)
+    if current is None or not governed(project):
+        return hits
+    held = members(project)
+    plans = (current.spec.screening, current.spec.full_text_screening)
+    missing = sorted(
+        {
+            reviewer.actor
+            for plan in plans
+            if plan is not None
+            for reviewer in plan.reviewers
+            if reviewer.kind == "human"
+            and not held.get(reviewer.actor, frozenset()) & DECIDING_ROLES
+        }
+    )
+    if missing:
+        hits.append(
+            _Hit(
+                "member-missing-reviewer-of-record",
+                tuple(missing),
+                f"{len(missing)} human reviewer(s) hold no owner or maintainer grant",
             )
         )
     return hits
