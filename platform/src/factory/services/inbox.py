@@ -36,6 +36,7 @@ from factory.model.inbox import (
     InboxLinkAdded,
     InboxLinkResolved,
     InboxLinkWithdrawn,
+    InboxPrioritised,
     InboxRoute,
     ResolveStatus,
 )
@@ -101,6 +102,8 @@ class InboxItemView(StrictModel):
     status: str
     last_outcome: str | None
     work_id: str | None
+    prioritised: bool = False
+    """Set only in the researcher's listing (`prioritised_first`)."""
 
 
 class InboxPage(StrictModel):
@@ -241,6 +244,32 @@ def withdraw_link(project: Project, actor: Actor, item_id: str, reason: str) -> 
         project.record(
             [project.events.make("inbox.link_withdrawn", payload, actor, refs=(item_id,))]
         )
+
+
+# --- Priority hints ---
+
+
+def prioritise(project: Project, actor: Actor, item_id: str, *, prioritised: bool = True) -> bool:
+    """Mark an open item as one to look at first, or clear the mark (human only; PD-10). The hint
+    orders `list_items(..., prioritised_first=True)` and nothing else: no resolve order, no
+    screening batch and no agent listing reads it (R-34). Returns whether an event was written;
+    a mark already in the state asked for writes nothing."""
+    if actor.kind != "human":
+        raise FactoryValidationError([ValidationIssue("actor", "a priority hint is a human act")])
+    with project.index.exclusive():
+        project.index.sync()
+        with project.index.connect() as conn:
+            row = conn.execute(
+                text("SELECT status, prioritised FROM inbox_items WHERE item_id = :item"),
+                {"item": item_id},
+            ).one_or_none()
+        if row is None or str(row[0]) != "open":
+            raise FactoryValidationError([ValidationIssue("item_id", "not an open inbox item")])
+        if bool(row[1]) == prioritised:
+            return False
+        payload = InboxPrioritised(item_id=item_id, prioritised=prioritised)
+        project.record([project.events.make("inbox.prioritised", payload, actor, refs=(item_id,))])
+        return True
 
 
 # --- Resolution ---
@@ -440,8 +469,11 @@ def list_items(
     status: str | None = None,
     cursor: str | None = None,
     limit: int = PAGE_LIMIT,
+    prioritised_first: bool = False,
 ) -> InboxPage:
-    """Items in id order with their last resolution attempt; `cursor` is a decimal offset."""
+    """Items in id order with their last resolution attempt; `cursor` is a decimal offset.
+    `prioritised_first` (the researcher's listing only) puts the items a human marked first,
+    each group in id order, and fills `prioritised`; an agent's listing never sets it."""
     issues: list[ValidationIssue] = []
     if status is not None and status not in ITEM_STATUSES:
         issues.append(ValidationIssue("status", f"must be one of: {', '.join(ITEM_STATUSES)}"))
@@ -458,14 +490,16 @@ def list_items(
         " (SELECT r.status FROM inbox_resolutions r WHERE r.item_id = i.item_id"
         "  ORDER BY r.event_id DESC LIMIT 1),"
         " (SELECT r.work_id FROM inbox_resolutions r WHERE r.item_id = i.item_id"
-        "  ORDER BY r.event_id DESC LIMIT 1)"
+        "  ORDER BY r.event_id DESC LIMIT 1),"
+        " i.prioritised"
         " FROM inbox_items i"
     )
     params: dict[str, object] = {"limit": size + 1, "offset": start}
     if status is not None:
         sql += " WHERE i.status = :status"
         params["status"] = status
-    sql += " ORDER BY i.item_id LIMIT :limit OFFSET :offset"
+    order = "i.prioritised DESC, i.item_id" if prioritised_first else "i.item_id"
+    sql += f" ORDER BY {order} LIMIT :limit OFFSET :offset"
     with project.index.connect() as conn:
         rows = conn.execute(text(sql), params).all()
     views = [
@@ -483,6 +517,7 @@ def list_items(
             status=str(r[10]),
             last_outcome=None if r[11] is None else str(r[11]),
             work_id=None if r[12] is None else str(r[12]),
+            prioritised=prioritised_first and bool(r[13]),
         )
         for r in rows
     ]

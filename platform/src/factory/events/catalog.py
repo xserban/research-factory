@@ -83,7 +83,12 @@ from factory.model.imports import (
     ImportResolved,
     ImportSplitDrawn,
 )
-from factory.model.inbox import InboxLinkAdded, InboxLinkResolved, InboxLinkWithdrawn
+from factory.model.inbox import (
+    InboxLinkAdded,
+    InboxLinkResolved,
+    InboxLinkWithdrawn,
+    InboxPrioritised,
+)
 from factory.model.intuition import (
     ConceptDefined,
     ConceptLinkDecided,
@@ -306,6 +311,7 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("import.record_described", ImportRecordDescribed, 1))
     catalog.register(EventType("inbox.link_added", InboxLinkAdded, 1))
     catalog.register(EventType("inbox.link_withdrawn", InboxLinkWithdrawn, 1))
+    catalog.register(EventType("inbox.prioritised", InboxPrioritised, 1))
     catalog.register(EventType("inbox.link_resolved", InboxLinkResolved, 1))
     catalog.register(EventType("relation.proposed", RelationProposed, 1))
     catalog.register(EventType("relation.decided", RelationDecided, 1))

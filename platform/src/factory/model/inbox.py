@@ -109,3 +109,11 @@ class InboxLinkResolved(StrictModel):
         if (self.work_id is not None) != (self.status in FOUND_STATUSES):
             raise ValueError("work_id is set exactly when status is new or in-corpus")
         return self
+
+
+class InboxPrioritised(StrictModel):
+    """A human marks an open item as one to look at first, or clears the mark. A hint for the
+    researcher's inbox listing only: it never orders a screening batch (R-34)."""
+
+    item_id: str = Field(pattern=INBOX_ID_RE)
+    prioritised: bool = True

@@ -23,6 +23,7 @@ SPEC = ModuleSpec(
             "inbox.link_added",
             "inbox.link_resolved",
             "inbox.link_withdrawn",
+            "inbox.prioritised",
         ),
         tables=(
             "inbox_items",
@@ -37,6 +38,13 @@ SPEC = ModuleSpec(
             ("inbox.link_withdrawn",),
             PolicyKind.HUMAN,
             ("slice 4a ruling 13",),
+        ),
+        GateSpec(
+            "inbox.prioritise",
+            GateKind.DECISION,
+            ("inbox.prioritised",),
+            PolicyKind.HUMAN,
+            ("plan XL PD-10", "R-34"),
         ),
     ),
     checks=(

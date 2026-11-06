@@ -2,7 +2,8 @@
 
 `inbox_items` keeps one row per captured item with its status: `open` at capture, `resolved`
 after any resolution other than `failed`, `withdrawn` after a withdrawal. `inbox_resolutions`
-keeps every attempt on an open item, failed ones included.
+keeps every attempt on an open item, failed ones included. `prioritised` is a human's listing
+hint (`inbox.prioritised`) and orders nothing but the researcher's listing.
 
 Handlers are total: a second capture under an existing id, and a resolution or withdrawal of an
 unknown or closed item, change nothing (the service refuses these before writing).
@@ -12,14 +13,20 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from sqlalchemy import Column, MetaData, String, Table, insert, select, update
+from sqlalchemy import Column, Integer, MetaData, String, Table, insert, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Connection
 
 from factory.canonical import canonical_json
 from factory.events.envelope import Event
 from factory.index.projection import Handler
-from factory.model.inbox import InboxLinkAdded, InboxLinkResolved, InboxLinkWithdrawn, ResolveStatus
+from factory.model.inbox import (
+    InboxLinkAdded,
+    InboxLinkResolved,
+    InboxLinkWithdrawn,
+    InboxPrioritised,
+    ResolveStatus,
+)
 
 OPEN = "open"
 RESOLVED = "resolved"
@@ -50,6 +57,7 @@ def inbox_tables(metadata: MetaData) -> InboxTables:
         Column("added_event_id", String, nullable=False),
         Column("status", String, nullable=False),
         Column("withdrawn_event_id", String),
+        Column("prioritised", Integer, nullable=False, server_default="0"),
     )
     resolutions = Table(
         "inbox_resolutions",
@@ -70,6 +78,7 @@ def inbox_handlers(t: InboxTables) -> dict[str, Handler]:
         "inbox.link_added": _added(t),
         "inbox.link_withdrawn": _withdrawn(t),
         "inbox.link_resolved": _resolved(t),
+        "inbox.prioritised": _prioritised(t),
     }
 
 
@@ -122,6 +131,23 @@ def _withdrawn(t: InboxTables) -> Handler:
         )
 
     return withdrawn
+
+
+def _prioritised(t: InboxTables) -> Handler:
+    """A human's hint on an open item; the latest event wins. Any other actor's changes nothing
+    (the service writes none), and a closed item is left as it is."""
+
+    def prioritised(conn: Connection, event: Event) -> None:
+        if event.actor.kind != "human":
+            return
+        payload = InboxPrioritised.model_validate(event.payload)
+        conn.execute(
+            update(t.items)
+            .where(t.items.c.item_id == payload.item_id, t.items.c.status == OPEN)
+            .values(prioritised=int(payload.prioritised))
+        )
+
+    return prioritised
 
 
 def _resolved(t: InboxTables) -> Handler:

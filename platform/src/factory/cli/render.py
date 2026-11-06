@@ -183,8 +183,9 @@ def inbox_lines(page: InboxPage) -> list[str]:
     for item in page.items:
         outcome = item.last_outcome or "-"
         work = f"  {item.work_id}" if item.work_id else ""
+        mark = "* " if item.prioritised else ""
         lines.append(
-            f"{item.item_id}  {item.status}  {outcome}  {item.identifier_kind}:"
+            f"{mark}{item.item_id}  {item.status}  {outcome}  {item.identifier_kind}:"
             f"{item.identifier_value}  {item.actor_kind}{work}"
         )
     if page.next_cursor is not None:

@@ -1277,7 +1277,9 @@ def inbox_list(
                     f"{entry.work_id}  {entry.route}  {entry.route_ref}  {entry.surfaced_at}"
                 )
             return
-        page = inbox_service.list_items(project, status=status, cursor=cursor)
+        page = inbox_service.list_items(
+            project, status=status, cursor=cursor, prioritised_first=True
+        )
     for line in render.inbox_lines(page):
         typer.echo(line)
 
@@ -1306,6 +1308,24 @@ def inbox_resolve(
         )
     for line in render.resolve_lines(outcomes):
         typer.echo(line)
+
+
+@inbox_app.command("prioritise")
+def inbox_prioritise(
+    ctx: typer.Context,
+    item_id: Annotated[str, typer.Argument(help="An open inbox item.")],
+    clear: Annotated[bool, typer.Option("--clear", help="Remove the mark instead.")] = False,
+) -> None:
+    """Mark an open item to look at first (a hint for this listing only; screening order is
+    unaffected)."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        wrote = inbox_service.prioritise(
+            project, project.human_actor(), item_id, prioritised=not clear
+        )
+    word = "cleared" if clear else "prioritised"
+    typer.echo(f"{word} {item_id}" if wrote else f"{item_id} already {word}")
 
 
 @inbox_app.command("withdraw")
