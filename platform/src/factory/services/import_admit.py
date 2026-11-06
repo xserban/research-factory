@@ -152,6 +152,7 @@ def importlist_entries(project: Project, keys: Sequence[str]) -> dict[str, Impor
                     url=f.url,
                     venue=f.venue,
                     record_sha256=record.record_sha256,
+                    abstract=f.abstract,
                 )
     return out
 

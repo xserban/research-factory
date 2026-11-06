@@ -4,12 +4,13 @@ An imported record that no OpenAlex or arXiv identifier query can name is admitt
 pseudo-source. The query text is a comma-separated list of record keys (`imp_<ULID>:<ordinal>`),
 the reader returns the stored records those keys name, and each becomes a work of type `other`
 built from the record's allow-listed fields only (title, first-author surname, year, DOI, arXiv
-id, URL, venue). Abstract, tags and the export's other fields are not used.
+id, URL, venue, abstract). Tags and the export's other fields are not used.
 
 Invariants:
 - No network: the raw page is the canonical JSON of the records' fields and `record_sha256`,
   sorted by key, archived before any work is built.
-- The work's id is `work_id()` of the title, first-author surname, year, DOI and arXiv id. Its
+- The work's id is `work_id()` of the title, first-author surname, year, DOI and arXiv id, so the
+  abstract leaves it unchanged. Its
   provenance is `source = importlist`, method `library-import`, `raw_ref` = the record key.
 - A year, when the record has one, is stored as 1 January of that year; only the year is claimed.
 - A key the reader does not return (no record, or a record without a title) is a shortfall, named
@@ -57,6 +58,7 @@ class ImportlistEntry:
     url: str | None
     venue: str | None
     record_sha256: str
+    abstract: str | None = None
 
 
 ImportlistReader = Callable[[Sequence[str]], Mapping[str, ImportlistEntry]]
@@ -128,6 +130,7 @@ class ImportlistSource:
 def _work(entry: ImportlistEntry, run_id: str, query_id: str, raw_blob: str, at: datetime) -> Work:
     return Work.build(
         title=entry.title,
+        abstract=entry.abstract,
         type=WorkType.OTHER,
         authors=[Author(name=entry.first_author)] if entry.first_author else [],
         identifiers=Identifiers(doi=entry.doi, arxiv=entry.arxiv, url=entry.url),
