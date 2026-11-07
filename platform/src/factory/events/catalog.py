@@ -159,6 +159,7 @@ from factory.model.protocol import (
     ProtocolRecorded,
 )
 from factory.model.question import GoalStated, QuestionRecorded
+from factory.model.ranking import RankingComputed
 from factory.model.references import (
     CitationContextsRecorded,
     ReferenceExtracted,
@@ -341,6 +342,7 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("watch.cycle_started", WatchCycleStarted, 1))
     catalog.register(EventType("watch.cycle_finished", WatchCycleFinished, 1))
     catalog.register(EventType("living.snapshot_recorded", SnapshotRecorded, 1))
+    catalog.register(EventType("ranking.computed", RankingComputed, 1))
     catalog.register(EventType("notice.observed", NoticeObserved, 1))
     catalog.register(EventType("notice.assessed", NoticeAssessed, 1))
     catalog.register(EventType("version.observed", VersionObserved, 1))

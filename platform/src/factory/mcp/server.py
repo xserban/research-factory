@@ -148,6 +148,8 @@ from factory.services import probe as probe_service
 from factory.services import properties as properties_service
 from factory.services import protocol as protocol_service
 from factory.services import question as question_service
+from factory.services import ranking as ranking_service
+from factory.services import ranking_model as ranking_model_service
 from factory.services import reference_resolve as reference_resolve_service
 from factory.services import references as references_service
 from factory.services import regions as regions_service
@@ -407,6 +409,23 @@ def build_server(
             return _withheld(opened, report)
 
         return _reply(project, dedup)
+
+    @server.tool()
+    def ranking_compute(project: str, role: str, model: str, skill: str) -> dict[str, JsonValue]:
+        """Rank the records still to be screened by similarity to the development seeds, with a
+        local embedding model (decision 116). The ranking only orders; it judges, includes and
+        excludes nothing, and held-out seeds are never used. Runs offline from supplied weights
+        (`FACTORY_RANKER_MODEL`); refused with the remedy when the extra or weights are missing.
+        Returns the model, the weights hash and the count, not the order."""
+
+        def rank() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            make_agent_actor(settings, session, role, model, skill)
+            embedder = ranking_model_service.Specter2Embedder()
+            event = ranking_service.compute_ranking(opened, embedder)
+            return _withheld(opened, event.model_dump(mode="json", exclude={"order"}))
+
+        return _reply(project, rank)
 
     @server.tool()
     def gate_status(project: str) -> dict[str, JsonValue]:

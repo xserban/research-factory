@@ -52,6 +52,7 @@ from factory.index.project import (
 from factory.index.projection import Handler, Projection, chain, core_tables
 from factory.index.protocol import protocol_handlers, protocol_tables
 from factory.index.question import question_handlers, question_tables
+from factory.index.ranking import ranking_handlers, ranking_tables
 from factory.index.references import reference_handlers, reference_tables
 from factory.index.regions import region_handlers, region_tables
 from factory.index.reviews import protocol_guards, review_handlers, review_tables
@@ -62,7 +63,7 @@ from factory.index.tasks import task_handlers, tasks_table
 from factory.index.watch import run_started_handler, watch_handlers, watch_tables
 
 # Bump on any change to the tables or handlers below; the index is then rebuilt.
-PROJECTION_VERSION = "67"
+PROJECTION_VERSION = "68"
 
 
 def default_projection(blobs: BlobStore | None = None) -> Projection:
@@ -107,6 +108,7 @@ def default_projection(blobs: BlobStore | None = None) -> Projection:
     findings = finding_tables(metadata)
     gates = gate_tables(metadata)
     regions = region_tables(metadata)
+    rankings = ranking_tables(metadata)
     miners = miner_tables(metadata)
     mine_imports = mine_import_tables(metadata)
     hypotheses = hypothesis_tables(metadata, protocol.protocols, project)
@@ -158,6 +160,7 @@ def default_projection(blobs: BlobStore | None = None) -> Projection:
         **finding_handlers(findings),
         **gate_handlers(gates),
         **region_handlers(regions, blobs),
+        **ranking_handlers(rankings, blobs),
         **miner_handlers(miners),
         **mine_import_handlers(mine_imports, extraction, conversions, fulltext, miners),
         **hypothesis_handlers(hypotheses),

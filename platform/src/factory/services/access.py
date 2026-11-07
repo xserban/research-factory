@@ -157,6 +157,7 @@ TOOL_PERMISSIONS: Mapping[str, Permission] = {
     "search_run": Permission.WORK_RUN,
     "search_chase": Permission.WORK_RUN,
     "dedup_run": Permission.WORK_RUN,
+    "ranking_compute": Permission.WORK_RUN,
     "watch_run": Permission.WORK_RUN,
     "question_record": Permission.WORK_RUN,
     "seed_add": Permission.WORK_RUN,

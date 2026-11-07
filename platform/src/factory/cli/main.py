@@ -152,6 +152,8 @@ from factory.services import project as project_service
 from factory.services import properties as properties_service
 from factory.services import protocol as protocol_service
 from factory.services import question as question_service
+from factory.services import ranking as ranking_service
+from factory.services import ranking_model as ranking_model_service
 from factory.services import reference_resolve as reference_resolve_service
 from factory.services import references as references_service
 from factory.services import regions as regions_service
@@ -251,6 +253,11 @@ search_app = typer.Typer(
 )
 dedup_app = typer.Typer(
     name="dedup", help="Find duplicate works, list merges and revert one.", no_args_is_help=True
+)
+rank_app = typer.Typer(
+    name="rank",
+    help="Order the records still to be screened by similarity to the development seeds.",
+    no_args_is_help=True,
 )
 audit_app = typer.Typer(
     name="audit", help="Sample, label and report the audit.", no_args_is_help=True
@@ -495,6 +502,7 @@ app.add_typer(audit_app)
 app.add_typer(gate_app)
 app.add_typer(search_app)
 app.add_typer(dedup_app)
+app.add_typer(rank_app)
 app.add_typer(fulltext_app)
 app.add_typer(library_app)
 app.add_typer(document_app)
@@ -1540,6 +1548,42 @@ def dedup_run_cmd(ctx: typer.Context) -> None:
         f"merged {len(summary.created)}, reverted {len(summary.reverted)}, "
         f"unchanged {summary.unchanged}; {summary.canonical} works from {summary.works}"
     )
+
+
+@rank_app.command("compute")
+def rank_compute_cmd(ctx: typer.Context) -> None:
+    """Rank the records still to be screened with the local embedding model (decision 116).
+
+    Needs the `ranker` extra and FACTORY_RANKER_MODEL; orders only, excludes nothing."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        event = ranking_service.compute_ranking(project, ranking_model_service.Specter2Embedder())
+    typer.echo(
+        f"ranked {event.count} records ({event.ranking_id}); model {event.model_id}, "
+        f"weights {event.weights_hash[:12]}, {len(event.parameters.references)} reference seeds"
+    )
+
+
+@rank_app.command("show")
+def rank_show_cmd(
+    ctx: typer.Context,
+    top: Annotated[int, typer.Option("--top", min=1, help="How many works to list.")] = 20,
+) -> None:
+    """The latest ranking: its model and the first works with their scores."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        view = ranking_service.latest_ranking(project, top)
+    if view is None:
+        typer.echo("no ranking yet; run `factory rank compute`")
+        return
+    typer.echo(
+        f"{view.ranking_id}: {view.count} records; model {view.model_id}, "
+        f"weights {view.weights_hash[:12]}, {view.software}"
+    )
+    for item in view.ranked:
+        typer.echo(f"{item.position:>5}  {item.score:.6f}  {item.work_id}")
 
 
 @dedup_app.command("list")

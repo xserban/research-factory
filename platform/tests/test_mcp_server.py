@@ -29,6 +29,7 @@ async def test_project_status_tool(settings: Settings, project: Project, clock: 
             "search_run",
             "search_chase",
             "dedup_run",
+            "ranking_compute",
             "gate_status",
             "watch_status",
             "watch_run",
