@@ -33,7 +33,7 @@ from factory.mcp.conventions import (
     spec_path,
     withhold,
 )
-from factory.mcp.elicit import confirm_human_act
+from factory.mcp.elicit import confirm_human_act, elicit_human_selection
 from factory.mcp.sessions import (
     THIS_SESSION,
     CallContext,
@@ -49,6 +49,7 @@ from factory.model.budgets import REQUESTS_SEARCH
 from factory.model.cards import CardKind, PropertyDef, QuoteBasis
 from factory.model.chase import ChaseDirection
 from factory.model.curation import CurationKind
+from factory.model.decisions import DecisionItem, DecisionLevel
 from factory.model.drafts import DraftKind, SupportSpan, Verdict
 from factory.model.experiments import Cell, ExperimentDesign
 from factory.model.extraction import ClaimInput, ExtractedRowInput, MinerScope
@@ -100,6 +101,7 @@ from factory.services import consolidation as consolidation_service
 from factory.services import contributions as contributions_service
 from factory.services import coverage as coverage_service
 from factory.services import curation as curation_service
+from factory.services import decisions as decisions_service
 from factory.services import dedup as dedup_service
 from factory.services import digest as digest_service
 from factory.services import directions as directions_service
@@ -4743,6 +4745,139 @@ def build_server(
 
         return _reply(project, status, include_work_ids=False)
 
+    # --- Suggest and select (slice 8, plan A4) ---------------------------------------------
+    # The agent suggests; the person selects, through an elicitation form and nowhere else over
+    # MCP (the CLI is the other way). `decision_select` takes no item ids from the caller, so an
+    # agent cannot tick for the person.
+
+    @server.tool()
+    def decision_suggest(
+        project: str,
+        level: str,
+        subject: str,
+        explanation: str,
+        items: list[dict[str, JsonValue]],
+        role: str,
+        model: str,
+        skill: str,
+        supersedes: str | None = None,
+    ) -> dict[str, JsonValue]:
+        """Suggest a set of items for a decision the scientist owns, at one `level` (goal,
+        questions, plan, seeds, probe, protocol). `subject` is a short slug (`exclusions`,
+        `tooling`); `explanation` states the step and why. Each item is `{item_id, text, grounds,
+        recommended}`: ids `I01`, `I02`, ...; `grounds` names what it rests on (a probe, a seed,
+        a document, an earlier decision). `recommended` is allowed only on a technical subject
+        (tooling, ordering, fix, model-choice, setting). `supersedes` names an earlier,
+        unsuperseded decision this one replaces. Text that names a held-out seed is refused.
+        Refused to a session that has joined a pass. Then wait: the person selects."""
+
+        def suggest() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            actor = make_agent_actor(settings, session, role, model, skill)
+            issues: list[ValidationIssue] = []
+            try:
+                chosen_level = DecisionLevel(level)
+            except ValueError:
+                chosen_level = DecisionLevel.GOAL
+                issues.append(ValidationIssue("level", f"must be {_choices(DecisionLevel)}"))
+            parsed: list[DecisionItem] = []
+            for index, raw in enumerate(items):
+                try:
+                    parsed.append(parse_input(DecisionItem, raw, f"items.{index}"))
+                except FactoryValidationError as exc:
+                    issues.extend(exc.issues)
+            if issues:
+                raise FactoryValidationError(issues)
+            decision_id = decisions_service.suggest(
+                opened, actor, chosen_level, subject, explanation, parsed, supersedes
+            )
+            return _withheld(opened, {"decision_id": decision_id}, include_work_ids=False)
+
+        return _reply(project, suggest, include_work_ids=False)
+
+    @server.tool()
+    def decision_select(project: str, decision_id: str) -> dict[str, JsonValue]:
+        """The person's selection on a decision, asked of the person through an elicitation form:
+        tick the items to keep, add items of their own, give a note. There is no way to pass
+        item ids here. Refused, with nothing asked or written, when the connection has no
+        credential or the client does not support elicitation; the person then runs
+        `factory decide select`. Refused to a session that has joined a pass."""
+
+        def choose() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            view = decisions_service.view_decision(opened, decision_id)
+            answer = elicit_human_selection(
+                f"Decision {decision_id} ({view.level}: {view.subject})",
+                view.explanation,
+                [(i.item_id, i.text) for i in view.items if i.origin == "suggested"],
+            )
+            event_id = decisions_service.select(
+                opened,
+                opened.human_actor(),
+                decision_id,
+                answer.selected,
+                answer.added,
+                answer.note,
+                Channel.ELICIT,
+            )
+            data: dict[str, JsonValue] = {
+                "event_id": event_id,
+                "selected": list(answer.selected),
+                "added": list(answer.added),
+            }
+            return _withheld(opened, data, include_work_ids=False)
+
+        return _reply(project, choose, include_work_ids=False)
+
+    @server.tool()
+    def decision_list(
+        project: str,
+        level: str | None = None,
+        open_only: bool = False,
+        cursor: str | None = None,
+        limit: int = PAGE_LIMIT,
+    ) -> dict[str, JsonValue]:
+        """The decisions, in id order, one page at a time: level, subject, state (`open` until
+        the person selects, then `selected`, or `superseded`), the number of suggested and
+        selected items. `open_only` keeps those awaiting the person. Read-only. Refused to a
+        session that has joined a pass."""
+
+        def listing() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            try:
+                chosen = None if level is None else DecisionLevel(level)
+            except ValueError:
+                raise FactoryValidationError(
+                    [ValidationIssue("level", f"must be {_choices(DecisionLevel)}")]
+                ) from None
+            found = decisions_service.list_decisions(opened, chosen, open_only)
+            page = paginate(found, cursor, limit)
+            data: dict[str, JsonValue] = {
+                "items": [row.model_dump(mode="json") for row in page.items],
+                "next_cursor": page.next_cursor,
+            }
+            return _withheld(opened, data, include_work_ids=False)
+
+        return _reply(project, listing, include_work_ids=False)
+
+    @server.tool()
+    def decision_view(project: str, decision_id: str) -> dict[str, JsonValue]:
+        """One decision: its explanation, every item with status (proposed, validated, rejected,
+        added), origin, grounds and whether it was recommended; the latest selection with the
+        person's note; and the decisions it supersedes or is superseded by. Read-only. Refused to
+        a session that has joined a pass."""
+
+        def view() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            found = decisions_service.view_decision(opened, decision_id)
+            return _withheld(opened, found.model_dump(mode="json"), include_work_ids=False)
+
+        return _reply(project, view, include_work_ids=False)
+
     return server
 
 
@@ -5200,7 +5335,9 @@ def _choices_of(values: type[ReviewState]) -> str:
     return ", ".join(v.value for v in values)
 
 
-def _choices(values: Iterable[QueryKind | QueryPurpose | AssessmentDecision]) -> str:
+def _choices(
+    values: Iterable[QueryKind | QueryPurpose | AssessmentDecision | DecisionLevel],
+) -> str:
     return ", ".join(str(value.value) for value in values)
 
 

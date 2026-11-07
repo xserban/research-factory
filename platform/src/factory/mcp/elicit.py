@@ -88,3 +88,69 @@ def confirm_human_act(
     if not outcome.accepted:
         raise FactoryValidationError([ValidationIssue("elicit", "the person did not accept")])
     return Channel.ELICIT, outcome.values
+
+
+@dataclass(frozen=True)
+class SelectionAnswer:
+    """What the person ticked and wrote: item ids, one added text per non-blank line, a note."""
+
+    selected: tuple[str, ...]
+    added: tuple[str, ...]
+    note: str
+
+
+def _selection_form(item_ids: Sequence[str]) -> type[BaseModel]:
+    choice = cast(Any, Literal)[tuple(item_ids)]
+    fields: dict[str, Any] = {
+        "selected": (cast(Any, list)[choice], Field(default_factory=list)),
+        "added": (str, Field(default="")),
+        "note": (str, Field(default="")),
+    }
+    return create_model("DecisionSelection", **fields)
+
+
+async def elicit_selection(
+    ctx: ToolContext, title: str, explanation: str, items: Sequence[tuple[str, str]]
+) -> SelectionAnswer | None:
+    """Ask the person to tick items (a multi-select over the item ids), add items of their own
+    (free text, one per line) and give a note. None when the person did not accept or the
+    exchange failed."""
+    lines = [title, explanation, *(f"{item_id}: {text}" for item_id, text in items)]
+    form = _selection_form([item_id for item_id, _ in items])
+    try:
+        answer = await ctx.elicit("\n".join(lines), form)
+    except (ValueError, MCPError):
+        return None
+    if answer.action != "accept":
+        return None
+    data = answer.data.model_dump()
+    ticked = tuple(dict.fromkeys(str(v) for v in data["selected"]))
+    added = tuple(line.strip() for line in str(data["added"]).splitlines() if line.strip())
+    return SelectionAnswer(ticked, added, str(data["note"]).strip())
+
+
+def elicit_human_selection(
+    title: str, explanation: str, items: Sequence[tuple[str, str]]
+) -> SelectionAnswer:
+    """The person's selection in the running tool call, asked through the client and never
+    relayed. Refused on field `elicit`, with nothing asked, when the call has no credential
+    (stdio, or an unauthenticated connection) or the client does not declare elicitation; refused
+    too when the person declines or cancels."""
+    call = current_call()
+    context = call.context
+    if call.principal.credential is None or context is None or not declares_elicitation(context):
+        raise FactoryValidationError(
+            [
+                ValidationIssue(
+                    "elicit",
+                    "a selection is made by the person through an elicitation form: this "
+                    "connection has no credential or the client does not support elicitation; "
+                    "use `factory decide select`",
+                )
+            ]
+        )
+    ask = partial(elicit_selection, context, title, explanation, items)
+    answer = from_thread.run(ask)
+    if answer is None:
+        raise FactoryValidationError([ValidationIssue("elicit", "the person did not accept")])
+    return answer
