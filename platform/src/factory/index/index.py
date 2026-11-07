@@ -162,7 +162,7 @@ OMITTED_WHEN_EMPTY: frozenset[str] = frozenset(
         "reviews",
         "fulltext_adoptions",
         "library_source_confirmations",
-        "decisions",
+        "decision_sets",
         "decision_items",
     }
 )

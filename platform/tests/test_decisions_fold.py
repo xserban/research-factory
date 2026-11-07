@@ -50,7 +50,7 @@ def tables(project: Project) -> tuple[Rows, Rows]:
         decisions = conn.execute(
             text(
                 "SELECT decision_id, level, subject, supersedes, superseded_by, actor "
-                "FROM decisions ORDER BY decision_id"
+                "FROM decision_sets ORDER BY decision_id"
             )
         ).all()
         items = conn.execute(

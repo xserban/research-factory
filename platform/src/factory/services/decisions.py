@@ -165,7 +165,7 @@ def suggest(
         if supersedes is not None:
             with project.index.connect() as conn:
                 prior = conn.execute(
-                    text("SELECT superseded_by FROM decisions WHERE decision_id = :d"),
+                    text("SELECT superseded_by FROM decision_sets WHERE decision_id = :d"),
                     {"d": supersedes},
                 ).first()
             if prior is None:
@@ -222,7 +222,7 @@ def select(
     with project.writing():
         with project.index.connect() as conn:
             row = conn.execute(
-                text("SELECT superseded_by FROM decisions WHERE decision_id = :d"),
+                text("SELECT superseded_by FROM decision_sets WHERE decision_id = :d"),
                 {"d": decision_id},
             ).first()
             suggested = {
@@ -272,7 +272,7 @@ def list_decisions(
                 " AND i.status = 'validated') AS n_valid, "
                 "(SELECT COUNT(*) FROM decision_items i WHERE i.decision_id = d.decision_id "
                 " AND i.status IN ('validated', 'rejected')) AS n_decided "
-                "FROM decisions d ORDER BY d.decision_id"
+                "FROM decision_sets d ORDER BY d.decision_id"
             )
         ).all()
     found = [
@@ -348,7 +348,7 @@ def view_decision(project: Project, decision_id: str) -> DecisionView:
         row = conn.execute(
             text(
                 "SELECT level, subject, explanation, suggested_at, actor, supersedes, "
-                "superseded_by FROM decisions WHERE decision_id = :d"
+                "superseded_by FROM decision_sets WHERE decision_id = :d"
             ),
             {"d": decision_id},
         ).first()

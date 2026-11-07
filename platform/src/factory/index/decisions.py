@@ -1,6 +1,7 @@
 """Projection of suggested decisions and the scientist's selections (slice 8, plan A2).
 
-`decisions` has one row per suggestion; `decision_items` one row per item, suggested or added.
+`decision_sets` (not `decisions`, which is the screening table) has one row per suggestion;
+`decision_items` one row per item, suggested or added.
 
 Folds are total and atomic: an event that fails a guard changes nothing, on rebuild too, and never
 raises. A suggestion is folded only from an agent, with a new id, and a `supersedes` naming a known
@@ -35,7 +36,7 @@ class DecisionTables:
 
 def decision_tables(metadata: MetaData) -> DecisionTables:
     decisions = Table(
-        "decisions",
+        "decision_sets",
         metadata,
         Column("decision_id", String, primary_key=True),
         Column("level", String, nullable=False),
