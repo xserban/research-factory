@@ -6,6 +6,7 @@ any change to a pack's content is a new version. No pack logic judges.
 
 from __future__ import annotations
 
+from factory.packs.ai_research_system import AI_RESEARCH_SYSTEM_V1
 from factory.packs.contribution import CONTRIBUTION_V1
 from factory.packs.ml_benchmark import ML_BENCHMARK_V1
 from factory.packs.model import (
@@ -19,7 +20,7 @@ from factory.packs.model import (
 )
 
 _PACKS: dict[tuple[str, int], Pack] = {
-    (p.name, p.version): p for p in (ML_BENCHMARK_V1, CONTRIBUTION_V1)
+    (p.name, p.version): p for p in (ML_BENCHMARK_V1, CONTRIBUTION_V1, AI_RESEARCH_SYSTEM_V1)
 }
 
 
@@ -34,6 +35,7 @@ def get_pack(name: str, version: int) -> Pack | None:
 
 
 __all__ = [
+    "AI_RESEARCH_SYSTEM_V1",
     "CONTRIBUTION_V1",
     "ML_BENCHMARK_V1",
     "NON_COMPARABLE_KEYS",
