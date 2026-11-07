@@ -364,3 +364,10 @@ Status: triaged (researcher, 2026-11-07: build before the agentic-science search
 **Why:** the agentic-science probe returns about 2,000 to 2,300 unique records for a rapid review; screening every record costs millions of tokens. The researcher asked for a cheaper local alternative.
 **Rigour notes:** ranking never excludes; unscreened records after the stop are reported as such in PRISMA, with the rule, and the stop is disclosed as a rapid-review shortcut. Held-out seeds must not be used to rank (R-20); only development seeds. Deterministic given model version and inputs.
 **Open questions:** whether a local embedding model is compatible with "the platform never calls a model" (precedent: docling, decision 49) — needs a decision entry; which model; which stopping rule; how recall of the stop is checked (held-out seeds, audit sample).
+
+### IDEA-43 — Capped forward snowballing from core papers
+Status: triaged (researcher, 2026-11-07: needed for the agentic-science search) · Added: 2026-11-07 · Slice: — · Depends on: IDEA-42 (ranker), snowballing (slice 3a)
+**What:** a forward round starts only from core papers (the positive seeds plus papers the scientist marks core at full text), keeps only citing works that match a topic filter declared in the protocol, and takes at most N citing works per core paper, ordered by similarity to the development seeds. N, the filter and the core set are protocol fields, fixed before the round.
+**Why:** forward snowballing is otherwise unbounded: in the pilot one seed (Co-Scientist) had 355 citing works in OpenAlex and another 119; a round from 200 to 500 included papers would add thousands.
+**Rigour notes:** the cap and the filter are declared shortcuts, reported with the number of citing works not taken per core paper; marking a paper core is a human event; held-out seeds are never used to rank (R-20).
+**Open questions:** whether citing works beyond N are listed for a later round; how "core" is recorded (a label or a screening field).
