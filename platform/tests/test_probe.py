@@ -769,3 +769,59 @@ def test_probe_without_arxiv_makes_no_overlap_request(
     assert report.queries[0].openalex_on_arxiv is None
     assert report.overlap_note is None
     assert not any("locations.source.id" in r.url.params.get("filter", "") for r in http_log)
+
+
+# --- arXiv date filter ---
+
+
+def _arxiv_spec(filters: dict[str, str]) -> QuerySpec:
+    return QuerySpec(source="arxiv", kind=QueryKind.KEYWORD, text="all:attention", filters=filters)
+
+
+def test_probe_accepts_listed_since_for_arxiv(
+    settings: Any,
+    clock: Any,
+    agent: Actor,
+    mock_sources: SourcesFor,
+    http_log: list[httpx.Request],
+) -> None:
+    project = _exploratory(settings, clock)
+    _question(project, agent)
+    _positives(project, agent, mock_sources, 1)
+    sources = mock_sources(arxiv=arxiv_atom([("2301.01234v1", "Linear", 2023, "Ada")]))
+    http_log.clear()
+
+    report = run_probe(
+        project, agent, [_arxiv_spec({"listed_since": "2024-01-15"})], sources=sources
+    )
+
+    assert report.queries[0].status == "measured"
+    queries = [
+        unquote(r.url.params["search_query"]) for r in http_log if "search_query" in r.url.params
+    ]
+    assert queries
+    assert all("submittedDate:[202401150000 TO" in q for q in queries)
+
+
+@pytest.mark.parametrize(
+    ("filters", "message"),
+    [
+        ({"year": "2020"}, "only the filter 'listed_since'"),
+        ({"listed_since": "last week"}, "YYYY-MM-DD"),
+    ],
+)
+def test_probe_refuses_other_arxiv_filters_and_writes_nothing(
+    settings: Any,
+    clock: Any,
+    agent: Actor,
+    mock_sources: SourcesFor,
+    filters: dict[str, str],
+    message: str,
+) -> None:
+    project = _exploratory(settings, clock)
+    _question(project, agent)
+    before = len(_events(project))
+    with pytest.raises(FactoryValidationError) as caught:
+        run_probe(project, agent, [_arxiv_spec(filters)], sources=mock_sources())
+    assert message in str(caught.value)
+    assert len(_events(project)) == before

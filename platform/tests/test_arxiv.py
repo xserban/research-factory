@@ -557,3 +557,23 @@ class TestSample:
         assert request.url.params["max_results"] == "20"
         assert request.url.params["sortBy"] == "relevance"
         assert request.url.params["search_query"] == "all:test"
+
+
+class TestProbeListedSince:
+    def test_count_matching_and_sample_send_the_date_clause(self) -> None:
+        seen: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append(request)
+            return httpx.Response(200, text=COUNT_ONLY)
+
+        spec = keyword("all:test", filters={"listed_since": "2024-01-15"})
+        source = make_source(handler)
+        source.count(spec, archive=_archive)
+        source.matching(["2301.01234"], spec, archive=_archive)
+        source.sample(spec, 5, archive=_archive)
+
+        assert len(seen) == 3
+        for request in seen:
+            query = request.url.params["search_query"]
+            assert query == "(all:test) AND submittedDate:[202401150000 TO 999912312359]"

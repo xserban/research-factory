@@ -426,7 +426,7 @@ class ArxivSource:
         """
         self._require_keyword(spec)
         _, reported, _ = self._probe_get(
-            {"search_query": spec.text, "max_results": 1, "start": 0},
+            {"search_query": _search_query(spec), "max_results": 1, "start": 0},
             ordinal=0,
             archive=archive,
         )
@@ -453,7 +453,7 @@ class ArxivSource:
             _, _, entries = self._probe_get(
                 {
                     "id_list": ",".join(batch),
-                    "search_query": spec.text,
+                    "search_query": _search_query(spec),
                     "max_results": len(batch),
                     "start": 0,
                 },
@@ -474,7 +474,7 @@ class ArxivSource:
         self._require_keyword(spec)
         _, _, entries = self._probe_get(
             {
-                "search_query": spec.text,
+                "search_query": _search_query(spec),
                 "max_results": size,
                 "start": 0,
                 "sortBy": "relevance",

@@ -9,6 +9,7 @@ The SQLite projection (`factory.index.search`) is the only place these are read 
 import dataclasses
 import json
 from collections.abc import Mapping, Sequence
+from datetime import date
 from typing import Any
 
 from pydantic import Field
@@ -520,6 +521,27 @@ def query_issues(
     return _spec_issues(project, spec, sources)
 
 
+def _arxiv_filter_issues(filters: Mapping[str, str]) -> list[ValidationIssue]:
+    """arXiv takes one filter, `listed_since` (YYYY-MM-DD), as the watch does."""
+    issues: list[ValidationIssue] = []
+    for key, value in filters.items():
+        if key != "listed_since":
+            issues.append(
+                ValidationIssue(
+                    "filters",
+                    f"arxiv takes only the filter 'listed_since' (YYYY-MM-DD), not {key!r}",
+                )
+            )
+            continue
+        try:
+            date.fromisoformat(value)
+        except ValueError:
+            issues.append(
+                ValidationIssue("filters", "arxiv 'listed_since' must be a date, YYYY-MM-DD")
+            )
+    return issues
+
+
 def _spec_issues(
     project: Project, spec: QuerySpec, sources: Mapping[str, SourceFactory]
 ) -> list[ValidationIssue]:
@@ -532,7 +554,9 @@ def _spec_issues(
         issues.append(
             ValidationIssue("kind", f"{spec.source} does not take {spec.kind.value} queries")
         )
-    if spec.filters and spec.source != "openalex":
+    if spec.filters and spec.source == "arxiv":
+        issues.extend(_arxiv_filter_issues(spec.filters))
+    elif spec.filters and spec.source != "openalex":
         issues.append(ValidationIssue("filters", f"{spec.source} does not take filters"))
     if spec.source == "openalex" and any(
         sep in part for part in (*spec.filters, *spec.filters.values()) for sep in (",", ":")

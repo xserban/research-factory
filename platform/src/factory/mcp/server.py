@@ -655,10 +655,11 @@ def build_server(
         sample: int = 20,
     ) -> dict[str, JsonValue]:
         """Measure queries against the development seeds and the negatives: recall and negative
-        hits per query and per source. Each query is {source, query, kind="keyword", filters={}}.
-        The first probe of a pilot or systematic project draws the hold-out split. Each measured
-        query also returns `sample` titles (default 20, 0 for none) to judge noise: a seeded
-        random sample from OpenAlex, the first page by relevance from arXiv (`sample_kind` says
+        hits per query and per source. Each query is {source, query, kind="keyword", filters={}};
+        arXiv takes only filters={"listed_since": "YYYY-MM-DD"}. The first probe of a pilot or
+        systematic project draws the hold-out split. Each measured query also returns `sample`
+        titles (default 20, 0 for none) to judge noise: a seeded random sample from OpenAlex, the
+        first page by relevance from arXiv (`sample_kind` says
         which). Samples are not corpus records and drop any held-out seed's work."""
 
         def probe() -> JsonValue:
