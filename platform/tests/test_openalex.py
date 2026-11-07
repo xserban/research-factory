@@ -523,3 +523,24 @@ class TestProbes:
         for request in seen:
             assert "sort" not in request.url.params
             assert "relevance" not in str(request.url).lower()
+
+
+def test_matching_sends_doi_keys_as_a_doi_filter() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if request.url.params["filter"].startswith("doi:"):
+            item = {
+                "id": "https://openalex.org/W7",
+                "doi": "https://doi.org/10.48550/arXiv.2610.04074",
+            }
+            return httpx.Response(200, text=page([item], 1, None))
+        return httpx.Response(200, text=page([{"id": "https://openalex.org/W1"}], 1, None))
+
+    ids = ["W1", "doi:10.48550/arxiv.2610.04074", "doi:10.1/missing"]
+    found = make_source(handler).matching(ids, keyword("vessel"), archive=_archive)
+    assert found == {"W1", "doi:10.48550/arxiv.2610.04074"}
+    filters = [r.url.params["filter"] for r in seen]
+    assert filters[0].startswith("openalex:W1,")
+    assert filters[1].startswith("doi:10.48550/arxiv.2610.04074|10.1/missing,")

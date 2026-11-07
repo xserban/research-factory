@@ -302,3 +302,16 @@ def test_probe_key_for_openalex_is_the_work_id(prov: Provenance) -> None:
     )
     assert probe_key("openalex", work) == "W4298183756"
     assert probe_key("openalex", Work.build(title="None", provenance=[prov])) is None
+
+
+def test_probe_key_for_openalex_falls_back_to_a_doi_key(prov: Provenance) -> None:
+    from factory.model.work import Identifiers
+    from factory.sources.base import probe_key
+
+    def work(**ids: str) -> Work:
+        return Work.build(title="T", provenance=[prov], identifiers=Identifiers(**ids))
+
+    assert probe_key("openalex", work(openalex="W9", doi="10.1/x")) == "W9"
+    assert probe_key("openalex", work(doi="https://doi.org/10.1/X")) == "doi:10.1/x"
+    assert probe_key("openalex", work(arxiv="2610.04074v2")) == "doi:10.48550/arxiv.2610.04074"
+    assert probe_key("openalex", work(doi="10.1/a,b")) is None
