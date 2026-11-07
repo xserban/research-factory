@@ -30,6 +30,7 @@ HUMAN_ACT_EVENTS: tuple[str, ...] = (
     "miner.calibration_labelled",
     "notice.assessed",
     "review.decided",
+    "decision.selected",
 )
 """The acts a person makes that a relay can carry. `review.decided` lands with teams-B."""
 
