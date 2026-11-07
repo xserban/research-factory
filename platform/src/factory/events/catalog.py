@@ -190,6 +190,7 @@ from factory.model.screening import (
     PassJoined,
     PassOpened,
 )
+from factory.model.screening_check import CheckDrawn, CheckLabelled
 from factory.model.search import (
     QueryRegistered,
     SearchPageArchived,
@@ -286,6 +287,8 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("calibration.labelled", CalibrationLabelled, 1))
     catalog.register(EventType("audit.sampled", AuditSampled, 1))
     catalog.register(EventType("audit.labelled", AuditLabelled, 1))
+    catalog.register(EventType("check.drawn", CheckDrawn, 1))
+    catalog.register(EventType("check.labelled", CheckLabelled, 1))
     catalog.register(EventType("gate.audit_sampled", GateAuditSampled, 1))
     catalog.register(EventType("gate.audit_labelled", GateAuditLabelled, 1))
     catalog.register(EventType("miner.registered", MinerRegistered, 1))

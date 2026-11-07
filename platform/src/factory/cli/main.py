@@ -22,6 +22,7 @@ from factory.cli.ledger import budget_app, ledger_cmd
 from factory.cli.library import library_app
 from factory.cli.manuscripts import manuscript_app
 from factory.cli.organisation import consolidation_app, labels_app, terms_app
+from factory.cli.screen_check import screen_check_app
 from factory.cli.team import (
     project_app,
     protocol_amend_cmd,
@@ -536,6 +537,7 @@ app.add_typer(draft_app)
 app.add_typer(manuscript_app)
 app.add_typer(decide_app)
 app.add_typer(develop_app)
+app.add_typer(screen_check_app)
 app.add_typer(graph_app)
 app.add_typer(view_app)
 app.add_typer(interpretations_app)

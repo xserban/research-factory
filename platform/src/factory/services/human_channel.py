@@ -23,6 +23,7 @@ HumanAct = Literal["sign-off", "audit-label", "label", "resolve"]
 HUMAN_ACT_EVENTS: tuple[str, ...] = (
     "calibration.labelled",
     "audit.labelled",
+    "check.labelled",
     "gate.audit_labelled",
     "screening.disagreement_resolved",
     "extraction.resolved",

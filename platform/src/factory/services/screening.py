@@ -693,12 +693,15 @@ def _claim_ranked(
     protocol_id: str,
     withheld: set[str],
 ) -> Task | None:
-    """Claim the next batch in ranked order: calibration batches first, then screening batches by
-    their best-ranked record (a batch queued before the ranking carries records of any rank), task
-    ID breaking ties. While the rule has stopped serving, a screening batch holding a withheld
-    work is passed over. Each candidate is offered to `claim_next` alone, which still decides
-    whether it is claimable."""
+    """Claim the next batch in ranked order: calibration batches first, then batches holding
+    tuning-batch records, then screening batches by their best-ranked record (a batch queued
+    before the ranking carries records of any rank), task ID breaking ties. While the rule has
+    stopped serving, a screening batch holding a withheld work is passed over. Each candidate is
+    offered to `claim_next` alone, which still decides whether it is claimable."""
+    from factory.services.screening_check import tuning_priority  # circular at import time
+
     key = rank_key(stop.positions)
+    tuning = tuning_priority(project, stage)
     candidates: list[tuple[int, tuple[int, str], str]] = []
     for task_id, status, content in _kind_tasks(project, task_kind(stage, label)):
         if status == TaskStatus.COMPLETED.value:
@@ -708,7 +711,8 @@ def _claim_ranked(
         if screening and withheld.intersection(works):
             continue
         best = min((key(w) for w in works), default=key(""))
-        candidates.append((1 if screening else 0, best, task_id))
+        tier = 0 if not screening else (1 if tuning.intersection(works) else 2)
+        candidates.append((tier, best, task_id))
     for _, _, task_id in sorted(candidates):
         task = claim_next(
             project,
@@ -1121,6 +1125,10 @@ def _enqueue(
         base = [w for w in base if w in pinned]
     positions = ranking_positions(project) if stage is TA else {}
     ordinary = sorted(set(base) - set(calibration) - set(withheld), key=rank_key(positions))
+    from factory.services.screening_check import tuning_priority  # circular at import time
+
+    first = tuning_priority(project, stage)  # tuning batches are screened before the main queue
+    ordinary = [w for w in ordinary if w in first] + [w for w in ordinary if w not in first]
     if not serve_calibration:
         calibration = []
 
@@ -1332,10 +1340,16 @@ def _criteria(
         if c.applies_at in (require_pass_stage(stage), ScreeningStage.EITHER)
     ]
     ordered = applicable if label is PassLabel.A else list(reversed(applicable))
-    return [
-        {"id": c.id, "statement": c.statement, "rule": c.rule, "kind": c.kind.value}
-        for c in ordered
-    ]
+    from factory.services.screening_check import example_texts  # circular at import time
+
+    out: list[dict[str, str]] = []
+    for c in ordered:
+        item = {"id": c.id, "statement": c.statement, "rule": c.rule, "kind": c.kind.value}
+        lines = example_texts(c)
+        if lines:  # examples found by tuning batches: text only, never a work id
+            item["examples"] = "\n".join(lines)
+        out.append(item)
+    return out
 
 
 def _done_keys(

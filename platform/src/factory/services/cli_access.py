@@ -62,6 +62,8 @@ CLI_READS: frozenset[str] = frozenset(
         "export prisma",
         "screen disagreements",
         "audit report",
+        "screen-check report",
+        "screen-check list",
         "gate audit report",
         "fulltext status",
         "document status",

@@ -90,6 +90,29 @@ independence rules apply as stated. `screen_record` takes the stage from the bat
    anchor supports the verdict, change it to `cannot-assess` or `unsure`.
 8. Do not call `screen_agreement` or the audit and calibration tools; they are human steps.
 
+## Tuning loop and checks (researcher-run; the agent only screens)
+
+The researcher improves the criteria before the main run, then checks the screener. The agent's
+part is to screen what is served; every draw, label and example below is a human act, and the
+agent never calls `screen_check_draw`, `screen_check_label` or `screen_check_example`.
+
+1. Tuning batch: the researcher draws a named batch (`screen_check_draw` with `kind="tuning"`,
+   default 20 fresh records). The tuning records are served first, before the main queue, so
+   draw it before main screening starts. Screen them as any batch.
+2. Human check: the researcher labels each tuning record include or exclude, blind to your
+   verdicts (`screen_check_label`, or `rf screen-check label`).
+3. Examples: each disagreement may become an include or exclude example of one criterion, by a
+   protocol amendment (`screen_check_example`): a title and a one-line reason, no work id. When
+   a criterion has examples, the served `criteria` carry an `examples` field; read them as
+   worked cases of that criterion, not as rules of their own.
+4. Measurement batch: after the last example change the researcher draws a fresh batch
+   (`kind="measurement"`) that overlaps no tuning batch and no example record; agreement is
+   reported only on it, and only while no example has changed since. Screen it as any batch.
+5. Band check after main screening: the researcher draws records of pass A by score band
+   (`kind="band"`, default bands 1-3, 4-7, 8-10, 10 each, seed recorded), labels them, and reads
+   the agreement per band and the records the human would add (`screen_check_report`). A low
+   band that holds includes is a finding to report, not something to hide.
+
 ## Tool arguments
 
 Every tool call also takes `project` (the project slug), `role`, and `model` (your own model

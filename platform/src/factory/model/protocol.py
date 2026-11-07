@@ -111,11 +111,36 @@ class CriterionKind(StrEnum):
     EXCLUSION = "exclusion"
 
 
+class ExampleCase(StrictModel):
+    """A corpus record that settled how a criterion reads, found by a tuning batch (H2).
+
+    `text` is what the screener sees (the title and a one-line reason, no work id); `work_id`
+    and `source` (the tuning draw) only make the example traceable, and exclude the record from
+    every measurement of agreement."""
+
+    work_id: str = Field(min_length=1)
+    text: str = Field(min_length=1)
+    source: str | None = None
+
+
 class CriterionExamples(StrictModel):
-    """Seed ids used as worked examples of the rule. Held-out seeds are never accepted here."""
+    """Seed ids used as worked examples of the rule. Held-out seeds are never accepted here.
+
+    `include_cases` and `exclude_cases` are examples taken from tuning batches; left out of every
+    dump while empty."""
 
     include: tuple[str, ...] = ()
     exclude: tuple[str, ...] = ()
+    include_cases: tuple[ExampleCase, ...] = ()
+    exclude_cases: tuple[ExampleCase, ...] = ()
+
+    @model_serializer(mode="wrap")
+    def _omit_empty_cases(self, handler: SerializerFunctionWrapHandler) -> dict[str, object]:
+        data: dict[str, object] = handler(self)
+        for key in ("include_cases", "exclude_cases"):
+            if not data.get(key):
+                data.pop(key, None)
+        return data
 
 
 class Criterion(StrictModel):

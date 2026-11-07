@@ -73,6 +73,7 @@ from factory.model.screening import (
     PassOpened,
     Verdict,
 )
+from factory.model.screening_check import CheckDrawn, CheckLabelled
 from factory.model.staleness import DecisionRef, stale_decisions
 
 
@@ -91,6 +92,9 @@ class ScreeningTables:
     audit_top_ups: Table
     audit_events: Table
     stage_judges: Table
+    check_draws: Table
+    check_items: Table
+    check_labels: Table
 
 
 TITLE_ABSTRACT = ScreeningStage.TITLE_ABSTRACT.value
@@ -223,6 +227,33 @@ def screening_tables(metadata: MetaData) -> ScreeningTables:
         _stage(key=True),
         Column("user", String, primary_key=True),
     )
+    # Band checks, tuning and measurement batches (`model/screening_check.py`): one row per draw
+    # (with its event, the order of draws), its records, and the latest human label per record.
+    check_draws = Table(
+        "check_draws",
+        metadata,
+        Column("draw_id", String, primary_key=True),
+        Column("kind", String, nullable=False),
+        _stage(key=False),
+        Column("pass_label", String, nullable=False),
+        Column("last_example_change", String),
+        Column("payload", String, nullable=False),
+        Column("event_id", String, nullable=False),
+    )
+    check_items = Table(
+        "check_items",
+        metadata,
+        Column("draw_id", String, primary_key=True),
+        Column("work_id", String, primary_key=True),
+        Column("band", String, nullable=False),
+    )
+    check_labels = Table(
+        "check_labels",
+        metadata,
+        Column("draw_id", String, primary_key=True),
+        Column("work_id", String, primary_key=True),
+        Column("verdict", String, nullable=False),
+    )
     return ScreeningTables(
         passes=passes,
         pass_sessions=pass_sessions,
@@ -237,6 +268,9 @@ def screening_tables(metadata: MetaData) -> ScreeningTables:
         audit_top_ups=audit_top_ups,
         audit_events=audit_events,
         stage_judges=stage_judges,
+        check_draws=check_draws,
+        check_items=check_items,
+        check_labels=check_labels,
     )
 
 
@@ -250,6 +284,8 @@ def screening_handlers(t: ScreeningTables) -> dict[str, Handler]:
         "calibration.labelled": _calibration_labelled(t),
         "audit.sampled": _audit_sampled(t),
         "audit.labelled": _audit_labelled(t),
+        "check.drawn": _check_drawn(t),
+        "check.labelled": _check_labelled(t),
     }
 
 
@@ -604,6 +640,52 @@ def _audit_labelled(t: ScreeningTables) -> Handler:
         _note_judge(conn, t, event, stage)
 
     return audit_labelled
+
+
+def _check_drawn(t: ScreeningTables) -> Handler:
+    def check_drawn(conn: Connection, event: Event) -> None:
+        payload = CheckDrawn.model_validate(event.payload)
+        conn.execute(
+            sqlite_insert(t.check_draws)
+            .values(
+                draw_id=payload.draw_id,
+                kind=payload.kind.value,
+                stage=payload.stage.value,
+                pass_label=payload.pass_label.value,
+                last_example_change=payload.last_example_change,
+                payload=canonical_json(payload.model_dump(mode="json")).decode(),
+                event_id=event.id,
+            )
+            .on_conflict_do_nothing(index_elements=["draw_id"])
+        )
+        for item in payload.items:
+            conn.execute(
+                sqlite_insert(t.check_items)
+                .values(draw_id=payload.draw_id, work_id=item.work_id, band=item.band)
+                .on_conflict_do_nothing(index_elements=["draw_id", "work_id"])
+            )
+
+    return check_drawn
+
+
+def _check_labelled(t: ScreeningTables) -> Handler:
+    def check_labelled(conn: Connection, event: Event) -> None:
+        payload = CheckLabelled.model_validate(event.payload)
+        if event.actor.kind != "human" or not sign_off_counts(conn, event.actor, payload.channel):
+            return
+        values = {
+            "draw_id": payload.draw_id,
+            "work_id": payload.work_id,
+            "verdict": payload.verdict,
+        }
+        conn.execute(
+            sqlite_insert(t.check_labels)
+            .values(**values)
+            .on_conflict_do_update(index_elements=["draw_id", "work_id"], set_=values)
+        )
+        _note_label_session(conn, t, event, payload.channel)
+
+    return check_labelled
 
 
 def _note_label_session(

@@ -80,6 +80,11 @@ from factory.model.regions import Facet, MemberBasis, RegionKind
 from factory.model.reviews import ReviewDecision, ReviewKind
 from factory.model.reviews import ReviewState as RequestState
 from factory.model.screening import CalibrationLabelled, Channel, PassLabel, ScreeningItem
+from factory.model.screening_check import (
+    DEFAULT_MEASUREMENT_SIZE,
+    DEFAULT_TUNING_SIZE,
+    CheckKind,
+)
 from factory.model.search import QueryKind, QueryPurpose, QuerySpec
 from factory.model.seed import SeedSpec
 from factory.modules.contract import Autonomy, PolicyKind
@@ -158,6 +163,7 @@ from factory.services import regions as regions_service
 from factory.services import relations as relations_service
 from factory.services import reviews as reviews_service
 from factory.services import screening as screening_service
+from factory.services import screening_check as check_service
 from factory.services import search as search_service
 from factory.services import seeds as seeds_service
 from factory.services import shared_mining as shared_mining_service
@@ -1025,6 +1031,159 @@ def build_server(
             return {"event_id": event_id}
 
         return _reply(project, record, include_work_ids=False)
+
+    @server.tool()
+    def screen_check_draw(
+        project: str,
+        kind: str = "band",
+        stage: str = "title-abstract",
+        bands: str = "1-3,4-7,8-10",
+        per_band: int = 10,
+        size: int | None = None,
+        name: str | None = None,
+        random_seed: int | None = None,
+    ) -> dict[str, JsonValue]:
+        """Draw records for the human to check the screener (H2). `kind` is `band` (pass A
+        decisions stratified by score: `bands` such as `1-3,4-7,8-10`, `per_band` each), `tuning`
+        (`size` fresh records, default 20, which the agent screens first) or `measurement` (`size`
+        fresh records, default 30, disjoint from tuning batches and examples). The seed, bands and
+        sizes are recorded. Items carry title and abstract, never the agent's verdict. Refused to
+        a session that has joined a pass."""
+
+        def draw() -> JsonValue:
+            run_stage = parse_stage(stage)
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            human = opened.human_actor()
+            try:
+                chosen = CheckKind(kind)
+            except ValueError:
+                raise FactoryValidationError(
+                    [ValidationIssue("kind", "must be band, tuning or measurement")]
+                ) from None
+            if chosen is CheckKind.BAND:
+                drawn = check_service.draw_band_check(
+                    opened,
+                    human,
+                    stage=run_stage,
+                    bands=check_service.parse_bands(bands),
+                    per_band=per_band,
+                    random_seed=random_seed,
+                )
+            elif chosen is CheckKind.TUNING:
+                drawn = check_service.draw_tuning_batch(
+                    opened,
+                    human,
+                    stage=run_stage,
+                    size=size or DEFAULT_TUNING_SIZE,
+                    name=name,
+                    random_seed=random_seed,
+                )
+            else:
+                drawn = check_service.draw_measurement_batch(
+                    opened,
+                    human,
+                    stage=run_stage,
+                    size=size or DEFAULT_MEASUREMENT_SIZE,
+                    name=name,
+                    random_seed=random_seed,
+                )
+            works = {work.id: work for work in list_works(opened)}
+            data: dict[str, JsonValue] = {
+                "draw_id": drawn.draw_id,
+                "kind": drawn.kind.value,
+                "random_seed": drawn.random_seed,
+                "items": [
+                    {
+                        "work_id": item.work_id,
+                        "band": item.band,
+                        "title": works[item.work_id].title if item.work_id in works else "",
+                        "abstract": (works[item.work_id].abstract or "")
+                        if item.work_id in works
+                        else "",
+                    }
+                    for item in drawn.items
+                ],
+            }
+            return _withheld(opened, data, include_work_ids=False)
+
+        return _reply(project, draw, include_work_ids=False)
+
+    @server.tool()
+    def screen_check_label(
+        project: str, draw_id: str, work_id: str, verdict: str
+    ) -> dict[str, JsonValue]:
+        """The human's include or exclude on one drawn record; the stage is the draw's."""
+
+        def label() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            channel, said = confirm_human_act(
+                f"Check label for {work_id}",
+                {"verdict": verdict},
+                {"verdict": ("include", "exclude")},
+            )
+            event_id = check_service.check_label(
+                opened, opened.human_actor(), draw_id, work_id, said["verdict"], channel
+            )
+            return {"event_id": event_id}
+
+        return _reply(project, label, include_work_ids=False)
+
+    @server.tool()
+    def screen_check_example(
+        project: str, draw_id: str, work_id: str, criterion: str, text: str
+    ) -> dict[str, JsonValue]:
+        """Make a disagreement of a tuning batch an example of `criterion` (a protocol
+        amendment). `text` is one line, a title and a reason, with no work id; the human's label
+        decides whether it is an include or an exclude example."""
+
+        def example() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            channel, said = confirm_human_act(
+                f"Example for {criterion} from {work_id}",
+                {"criterion": criterion, "text": text},
+                {},
+            )
+            result = check_service.add_tuning_example(
+                opened,
+                opened.human_actor(),
+                draw_id,
+                work_id,
+                said["criterion"],
+                said["text"],
+                channel,
+            )
+            return {"amendment_id": result.amendment_id}
+
+        return _reply(project, example, include_work_ids=False)
+
+    @server.tool()
+    def screen_check_report(
+        project: str,
+        draw_id: str | None = None,
+        kind: str = "band",
+        stage: str = "title-abstract",
+    ) -> dict[str, JsonValue]:
+        """A draw's report (the latest of `kind` when no `draw_id`): per band the labelled count,
+        agreement and the records the human would add (includes and excludes). A tuning batch
+        lists its disagreements and reports no agreement; agreement on a measurement batch is
+        reported only while no example has changed since it was drawn."""
+
+        def report() -> JsonValue:
+            run_stage = parse_stage(stage)
+            opened = open_project(settings, project, session=session, clock=clock)
+            try:
+                chosen = CheckKind(kind)
+            except ValueError:
+                raise FactoryValidationError(
+                    [ValidationIssue("kind", "must be band, tuning or measurement")]
+                ) from None
+            found = check_service.check_report(opened, draw_id, kind=chosen, stage=run_stage)
+            if found is None:
+                return {"report": None}
+            return _withheld(opened, found.model_dump(mode="json"), include_work_ids=False)
+
+        return _reply(project, report, include_work_ids=False)
 
     @server.tool()
     def protocol_deviation(
