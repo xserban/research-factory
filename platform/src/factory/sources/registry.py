@@ -4,8 +4,10 @@ A factory takes `Settings` and the project's `Clock`, so the adapter's HTTP clie
 contact address come from configuration and nowhere else. Tests substitute their own mapping.
 """
 
+import os
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 
 from factory.clock import Clock
 from factory.config import Settings
@@ -70,11 +72,27 @@ def importlist_factory(read: ImportlistReader) -> SourceFactory:
     )
 
 
+def openalex_api_key() -> str | None:
+    """The OpenAlex API key from `FACTORY_OPENALEX_API_KEY`, else the first line of
+    `~/.config/research-factory/openalex-api-key`, else None. Never stored in the repository
+    or the event log."""
+    key = os.environ.get("FACTORY_OPENALEX_API_KEY", "").strip()
+    if key:
+        return key
+    path = Path.home() / ".config" / "research-factory" / "openalex-api-key"
+    try:
+        return path.read_text(encoding="utf-8").strip().splitlines()[0] or None
+    except (OSError, IndexError):
+        return None
+
+
 def default_sources() -> dict[str, SourceFactory]:
     return {
         "openalex": SourceFactory(
             OpenAlexSource.kinds,
-            lambda s, c: OpenAlexSource(default_http(s), clock=c, mailto=s.mailto),
+            lambda s, c: OpenAlexSource(
+                default_http(s), clock=c, mailto=s.mailto, api_key=openalex_api_key()
+            ),
             window_filter=OpenAlexSource.window_filter,
         ),
         "arxiv": SourceFactory(

@@ -44,7 +44,7 @@ from factory.sources.base import (
     StatusRecord,
     budget_spent,
 )
-from factory.sources.http import PoliteClient, redact
+from factory.sources.http import PoliteClient, redact, redact_api_key
 
 _ENDPOINT = "https://api.openalex.org/works"
 _PAGE_SIZE = 200  # the documented maximum
@@ -188,6 +188,7 @@ class OpenAlexSource:
         *,
         clock: Clock,
         mailto: str | None = None,
+        api_key: str | None = None,
         page_size: int = _PAGE_SIZE,
     ) -> None:
         # The polite pool wants a contact address. The caller passes it from configuration
@@ -196,7 +197,13 @@ class OpenAlexSource:
         self._http = http
         self._clock = clock
         self._mailto = mailto
+        # OpenAlex needs a free API key for cursor paging past the first page (2026). The key
+        # comes from configuration and is redacted from every URL and note like the address.
+        self._api_key = api_key
         self._page_size = page_size
+
+    def _redact(self, text: str) -> str:
+        return redact_api_key(redact(text, self._mailto), self._api_key)
 
     def run(
         self,
@@ -244,6 +251,8 @@ class OpenAlexSource:
             }
             if self._mailto:
                 params["mailto"] = self._mailto
+            if self._api_key:
+                params["api_key"] = self._api_key
 
             try:
                 response = self._http.get(_ENDPOINT, params)
@@ -256,7 +265,7 @@ class OpenAlexSource:
                     pages=archived,
                     status=RunStatus.PARTIAL if works else RunStatus.FAILED,
                     skipped=skipped,
-                    note=redact(f"{type(exc).__name__}: {exc}", self._mailto),
+                    note=self._redact(f"{type(exc).__name__}: {exc}"),
                     resume_token=cursor,
                 )
 
@@ -266,7 +275,7 @@ class OpenAlexSource:
                 RawPage(
                     ordinal=archived,
                     body=response.text,
-                    url=redact(str(response.url), self._mailto),
+                    url=self._redact(str(response.url)),
                     fetched_at=now,
                 )
             )
@@ -284,7 +293,7 @@ class OpenAlexSource:
                     pages=archived,
                     status=RunStatus.PARTIAL if works else RunStatus.FAILED,
                     skipped=skipped,
-                    note=redact(f"SourceError: {exc}", self._mailto),
+                    note=self._redact(f"SourceError: {exc}"),
                     resume_token=cursor,
                 )
             meta = payload.get("meta") or {}
@@ -368,18 +377,20 @@ class OpenAlexSource:
             }
             if self._mailto:
                 params["mailto"] = self._mailto
+            if self._api_key:
+                params["api_key"] = self._api_key
             note: str | None = None
             payload: dict[str, Any] = {}
             try:
                 response = self._http.get(_ENDPOINT, params)
             except httpx.HTTPError as exc:
-                note = redact(f"{type(exc).__name__}: {exc}", self._mailto)
+                note = self._redact(f"{type(exc).__name__}: {exc}")
             else:
                 archive(
                     RawPage(
                         ordinal=archived,
                         body=response.text,
-                        url=redact(str(response.url), self._mailto),
+                        url=self._redact(str(response.url)),
                         fetched_at=self._clock.now(),
                     )
                 )
@@ -387,7 +398,7 @@ class OpenAlexSource:
                 try:
                     payload = _payload(response)
                 except SourceError as exc:
-                    note = redact(f"SourceError: {exc}", self._mailto)
+                    note = self._redact(f"SourceError: {exc}")
             if note is not None:
                 return SearchResult(
                     source=self.name,
@@ -536,15 +547,17 @@ class OpenAlexSource:
         """
         if self._mailto:
             params = {**params, "mailto": self._mailto}
+        if self._api_key:
+            params = {**params, "api_key": self._api_key}
         try:
             response = self._http.get(_ENDPOINT, params)
         except httpx.HTTPError as exc:
-            raise SourceError(redact(f"{type(exc).__name__}: {exc}", self._mailto)) from exc
+            raise SourceError(self._redact(f"{type(exc).__name__}: {exc}")) from exc
         archive(
             RawPage(
                 ordinal=ordinal,
                 body=response.text,
-                url=redact(str(response.url), self._mailto),
+                url=self._redact(str(response.url)),
                 fetched_at=self._clock.now(),
             )
         )

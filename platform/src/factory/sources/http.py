@@ -39,6 +39,22 @@ _MAILTO_FIRST = re.compile(r"\?mailto=[^&#\s'\"]*&")
 _MAILTO_PARAM = re.compile(r"[?&]mailto=[^&#\s'\"]*")
 
 
+_API_KEY_FIRST = re.compile(r"\?api_key=[^&#\s'\"]*&")
+_API_KEY_PARAM = re.compile(r"[?&]api_key=[^&#\s'\"]*")
+
+
+def redact_api_key(url_or_text: str, key: str | None) -> str:
+    """Remove an API key from a URL or a message built from one: the `api_key` query parameter
+    is dropped and every remaining occurrence of the key becomes `<api_key>`. Keys are sent to
+    the source but never reach the event log."""
+    text = _API_KEY_FIRST.sub("?", url_or_text)
+    text = _API_KEY_PARAM.sub("", text)
+    if key:
+        for form in {key, quote(key), quote(key, safe=""), quote_plus(key)}:
+            text = text.replace(form, "<api_key>")
+    return text
+
+
 def redact(url_or_text: str, secret: str | None) -> str:
     """Remove the contact address from a URL or a message built from one.
 
