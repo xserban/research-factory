@@ -332,3 +332,35 @@ Status: new · Added: 2026-11-04 · Slice: — (after the worked example, with I
 **Rigour notes:** autonomy is declared, never inferred: the gate policy is part of the hashed protocol and changes only by amendment; outputs produced under a weaker policy are labelled and never silently mixed with those produced under a stronger one; proposer ≠ evaluator holds at every gate (R-51), so an agent never passes a gate on its own proposal; the platform still never calls a model, so "agent" at a gate means an agent acting through MCP under its recorded identity.
 **Open questions:** how much of today's per-stage code (screening, extraction, references) can move behind the contract without changing event types; whether gate policies are per project or per run; what a scoping module's output is precisely (the slice-1 question and protocol records, or a richer scope artifact); how hypothesis and validation modules fit the event model before slice 5 specifies them.
 **Plan:** with IDEA-37, after the worked example: write the contract from the stages already built (scoping, search, screening, extraction, references), then spec new modules against it.
+
+## Research planning (added 2026-11-06)
+
+### IDEA-39 — Planning agent and a versioned study plan above the protocol
+Status: triaged ([draft slice 8](specs/slice-8-develop.md)) · Added: 2026-11-06 · Slice: 8 (draft) · Depends on: `rf-frame`, `rf-protocol`, method profiles (decision 35), IDEA-38
+**What:** a skill `rf-plan` that works with the researcher alongside framing to define the research plan: the aim and question type, a composition of methods with reasons, backward planning from the final claim, the analysis plan, risks, cost and stopping rules. A separate critic agent with no authoring context challenges the plan, and the researcher confirms it. The result is a recorded, versioned study plan with phases, each naming its method and handover, and each protocol points back to its phase. Sub-questions become a first-class part of the question.
+**Why:** a protocol fixes the procedure of one method, not the argument from question to claim. A study may combine methods, for example Design Science Research as the frame, with a scoping review under a PRISMA-P protocol as its first phase. Today nothing records that, and `method_profile` holds one value, so scoping plus living cannot be declared.
+**Rigour notes:** the plan is fixed before results and changes only by a recorded amendment with a reason. The method choice records the alternatives rejected. Only the researcher confirms a plan. A plan's phases must not weaken a phase's protocol requirements.
+**Objectives and KPIs (researcher, 2026-11-06):** a study has one overarching goal, several objectives or sub-questions, and KPIs per objective, in the style of Goal-Question-Metric. Each is traced through the process: criteria, extraction fields and report sections name their objective, progress is computed from events, and an extraction field with no objective, or an objective with no field, is a gap. The stage must also develop the question before recording it: diagnose it, scan the literature, offer real alternatives, have it challenged.
+**To revisit (researcher, 2026-11-07):** the research plan of the agentic-science pilot was accepted for now, to be developed further; come back to what a plan should contain.
+**Open questions:** one project with phases or linked projects; whether a plan gates the probe; how `factory status` shows progress against the plan; which methods the router knows. Prototype by hand in the agentic-science pilot first (`rf-plan` draft kept outside the repo) and build only what proved useful.
+
+### IDEA-40 — Evidence-backed factory design: run the factory on its own design choices
+Status: new · Added: 2026-11-06 · Slice: — (after the first agentic-science pass) · Depends on: exploratory mode, `rapid-review` profile, IDEA-39
+**What:** each substantial design choice in the factory gets a small review run by the factory itself, for example "which methods are best for research planning?". Each is a separate exploratory project that ends in a short evidence note linked from the decision it informs.
+**Why:** the researcher wants factory design to rest on literature, not on what an agent recalls; each run also exercises the factory on a small real question.
+**Rigour notes:** the factory judging its own design is circular, so results are advisory and a human decides. Methods recalled by an agent are marked unverified until such a review checks them. Keep each run small and time-boxed.
+**Open questions:** which choices merit a review; a fixed cost limit per review; how a decision row links to its evidence note.
+
+### IDEA-41 — Quick factory: a very fast mode for very small research projects
+Status: new · Added: 2026-11-06 · Slice: — (after the first agentic-science pass) · Depends on: exploratory mode, `rapid-review` profile, IDEA-40
+**What:** a very quick version of the factory for a small question: one short command or skill that goes from a question to a cited evidence note in one sitting, with a light frame, one search, single-pass screening, a small paper limit and a fixed cost limit. It is the vehicle for the small reviews of IDEA-40.
+**Why:** the researcher wants to run many very small research projects, and the full path of probe, protocol, PRESS, calibration and dual passes is too heavy for them.
+**Rigour notes:** still event-sourced and traceable, with every claim citing its source. The output states plainly that it is a quick review and which steps were skipped. A quick project can be promoted to a fuller mode without losing its record.
+**Open questions:** how much of `exploratory` already gives this; the default paper and cost limits; which steps can be skipped with no risk to traceability.
+
+### IDEA-42 — Local screening ranker with a stopping rule
+Status: triaged (researcher, 2026-11-07: build before the agentic-science search) · Added: 2026-11-07 · Slice: — · Depends on: screening, a decision on local models
+**What:** order title and abstract screening by similarity to the positive seeds, computed locally (for example an embedding model or active learning as in ASReview), so agents screen the likeliest records first and stop by a stated rule, such as a run of consecutive excluded records. The ranking, the model and the stopping point are recorded as events.
+**Why:** the agentic-science probe returns about 2,000 to 2,300 unique records for a rapid review; screening every record costs millions of tokens. The researcher asked for a cheaper local alternative.
+**Rigour notes:** ranking never excludes; unscreened records after the stop are reported as such in PRISMA, with the rule, and the stop is disclosed as a rapid-review shortcut. Held-out seeds must not be used to rank (R-20); only development seeds. Deterministic given model version and inputs.
+**Open questions:** whether a local embedding model is compatible with "the platform never calls a model" (precedent: docling, decision 49) — needs a decision entry; which model; which stopping rule; how recall of the stop is checked (held-out seeds, audit sample).
