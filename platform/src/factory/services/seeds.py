@@ -48,7 +48,7 @@ from factory.model.work import Identifiers, ProvenanceMethod, Work
 from factory.model.work_ids import arxiv_id_from_doi, normalize_arxiv
 from factory.services.budgets import budget_issues
 from factory.services.context import Project
-from factory.services.decisions import bind
+from factory.services.decision_binding import bind
 from factory.services.dedup import active_merges
 from factory.services.results import BatchResult, ItemError
 from factory.services.search import (
@@ -86,7 +86,7 @@ def add_seeds(
 
     `decision_ids` are the selected `seeds` decisions the batch implements; each written seed
     carries them. In `pilot` and `systematic` a call without one is refused whole
-    (`decision_ids`, see `decisions.bind`), before any seed is written.
+    (`decision_ids`, see `decision_binding.bind`), before any seed is written.
 
     The write lock covers each seed's id assignment, duplicate check and `seed.added` write, so
     two callers cannot take the same id. It is released before the lookup, which fetches.

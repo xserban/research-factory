@@ -53,7 +53,7 @@ from factory.model.seed import SeedKind
 from factory.model.work import Identifiers, Work
 from factory.services.budgets import budget_issue, budget_issues, exhausted_unit
 from factory.services.context import Project
-from factory.services.decisions import bind
+from factory.services.decision_binding import bind
 from factory.services.project import project_status
 from factory.services.question import current_question
 from factory.services.search import get_work, query_issues, register_query
@@ -151,7 +151,7 @@ def run_probe(
 
     `sample` is the number of titles to sample per measured query, 0 for none. `decision_ids` are
     the selected `probe` decisions this round implements; in `pilot` and `systematic` a probe
-    without one is refused (`decision_ids`, see `decisions.bind`). Each measured query carries them.
+    without one is refused (`decision_ids`, see `decision_binding.bind`). Each measured query carries them.
     """
     question = current_question(project)
     issues: list[ValidationIssue] = []

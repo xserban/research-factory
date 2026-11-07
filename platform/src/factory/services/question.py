@@ -26,7 +26,7 @@ from factory.model.question import (
     question_version,
 )
 from factory.services.context import Project
-from factory.services.decisions import bind
+from factory.services.decision_binding import bind
 
 
 class QuestionResult(StrictModel):
@@ -87,7 +87,7 @@ def record_question(
 
     `decision_ids` are the selected `questions` decisions the new version implements. In `pilot`
     and `systematic` a new version without one is refused (`decision_ids`); see
-    `decisions.bind`. A call that writes no question version needs none.
+    `decision_binding.bind`. A call that writes no question version needs none.
     """
     if raw_goal is not None and not raw_goal.strip():
         raise FactoryValidationError(
