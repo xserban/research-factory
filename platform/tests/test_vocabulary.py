@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from factory.model.probe import TermSuggestion
 from factory.model.work import Provenance, Work
-from factory.services.vocabulary import suggest_terms
+from factory.services.vocabulary import GENERIC_ACADEMIC, suggest_terms
 
 
 def _paper(prov: Provenance, title: str, abstract: str = "") -> Work:
@@ -73,3 +73,33 @@ def test_no_missed_seeds_no_suggestions(prov: Provenance) -> None:
         _paper(prov, "Shared 2", "vessel segmentation"),
     ]
     assert suggest_terms([], seeds, "all:unrelated") == []
+
+
+def test_generic_academic_words_are_not_suggested(prov: Provenance) -> None:
+    text = "we introduce a driven framework and demonstrate experiments across each task"
+    missed = [_paper(prov, "Alpha", text), _paper(prov, "Beta", text)]
+    assert suggest_terms(missed, missed, "all:unrelated") == []
+
+
+def test_phrases_edged_by_a_generic_word_are_dropped_but_content_words_stay(
+    prov: Provenance,
+) -> None:
+    missed = [
+        _paper(prov, "Alpha", "we propose human feedback calibration"),
+        _paper(prov, "Beta", "we propose human feedback calibration"),
+    ]
+    terms = _terms(suggest_terms(missed, missed, "all:unrelated"))
+
+    assert "feedback calibration" in terms
+    assert not any(
+        t.split()[0] in GENERIC_ACADEMIC or t.split()[-1] in GENERIC_ACADEMIC for t in terms
+    )
+    assert "human feedback" not in terms
+    assert "propose" not in terms
+
+
+def test_generic_list_documents_the_pilot_words() -> None:
+    pilot = {"introduce", "driven", "accelerating", "demonstrate", "experiments", "framework"}
+    pilot |= {"across", "task", "human", "propose", "present", "show", "results", "method"}
+    pilot |= {"approach", "novel", "paper", "study"}
+    assert pilot <= GENERIC_ACADEMIC

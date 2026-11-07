@@ -110,6 +110,50 @@ _NOISE = frozenset(
 )
 
 
+# Generic academic words: they describe how a paper is written, not what it is about, so a phrase
+# that begins or ends with one is never offered as a missing term block. The phrase's own content
+# words are still candidates (as shorter n-grams), so "human feedback" is lost but "feedback" is
+# not. Extend this list from pilot evidence only, each word being one a scientist rejected.
+GENERIC_ACADEMIC = frozenset(
+    {
+        "accelerating",
+        "across",
+        "approach",
+        "demonstrate",
+        "demonstrates",
+        "demonstrated",
+        "driven",
+        "experiment",
+        "experiments",
+        "framework",
+        "human",
+        "introduce",
+        "introduces",
+        "method",
+        "novel",
+        "paper",
+        "present",
+        "presents",
+        "propose",
+        "proposes",
+        "proposed",
+        "result",
+        "results",
+        "show",
+        "shows",
+        "study",
+        "task",
+        "tasks",
+    }
+)
+
+
+def _is_generic(term: str) -> bool:
+    """Whether the first or last word of `term` is a generic academic word."""
+    words = term.split()
+    return bool(words) and (words[0] in GENERIC_ACADEMIC or words[-1] in GENERIC_ACADEMIC)
+
+
 def _ngrams(text: str, max_n: int = 3) -> set[str]:
     tokens = [t for t in normalize_title(text).split() if t not in _NOISE and len(t) > 2]
     grams: set[str] = set()
@@ -150,6 +194,8 @@ def suggest_terms(
     seed_grams = {w.id: _ngrams(f"{w.title} {w.abstract or ''}") for w in all_seeds}
     scored: list[TermSuggestion] = []
     for term, _ in candidates.items():
+        if _is_generic(term):
+            continue
         if term in covered or any(term in c or c in term for c in covered if c):
             continue
         holders = tuple(w.id for w in all_seeds if term in seed_grams[w.id])
