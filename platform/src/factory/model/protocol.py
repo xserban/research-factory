@@ -296,7 +296,7 @@ class SnowballPlan(StrictModel):
         Annotated[
             str,
             StringConstraints(
-                strip_whitespace=True, min_length=1, max_length=300, pattern=r"^[^,\x00-\x1f]+$"
+                strip_whitespace=True, min_length=1, max_length=1000, pattern=r"^[^,\x00-\x1f]+$"
             ),
         ]
         | None
