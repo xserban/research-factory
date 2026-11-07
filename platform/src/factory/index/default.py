@@ -13,6 +13,7 @@ from factory.index.cards import card_handlers, card_tables
 from factory.index.chase import chase_handlers, chase_tables
 from factory.index.conclusions import conclusion_handlers, conclusion_tables
 from factory.index.curation import curation_handlers, curation_tables
+from factory.index.decisions import decision_handlers, decision_tables
 from factory.index.dedup import dedup_handlers, dedup_tables
 from factory.index.directions import chain_derived, direction_handlers, direction_tables
 from factory.index.document import document_handlers, document_tables
@@ -110,6 +111,7 @@ def default_projection(blobs: BlobStore | None = None) -> Projection:
     mine_imports = mine_import_tables(metadata)
     hypotheses = hypothesis_tables(metadata, protocol.protocols, project)
     labels = label_tables(metadata)
+    decisions = decision_tables(metadata)
     briefings = briefing_tables(metadata)
     experiments = experiment_tables(
         metadata, protocol.protocols, project, hypotheses.hypotheses, hypotheses.registrations
@@ -160,6 +162,7 @@ def default_projection(blobs: BlobStore | None = None) -> Projection:
         **mine_import_handlers(mine_imports, extraction, conversions, fulltext, miners),
         **hypothesis_handlers(hypotheses),
         **label_handlers(labels),
+        **decision_handlers(decisions),
         **experiment_handlers(experiments),
         **appraisal_handlers(appraisals),
         **evaluation_handlers(evaluations),

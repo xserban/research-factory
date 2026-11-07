@@ -23,6 +23,7 @@ from factory.model.cards import (
 from factory.model.chase import ChaseRoundStarted, SampleExtended, SeedAdmitted
 from factory.model.conclusions import ConclusionRegistered, ConclusionRetired
 from factory.model.curation import CurationDecided, CurationProposed
+from factory.model.decisions import DecisionSelected, DecisionSuggested
 from factory.model.dedup import DedupMerged, DedupReverted
 from factory.model.digest import DigestGenerated
 from factory.model.directions import DirectionClosed
@@ -374,6 +375,8 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("region.member_proposed", RegionMemberProposed, 1))
     catalog.register(EventType("region.linked", RegionLinked, 1))
     catalog.register(EventType("region.adopted", RegionAdopted, 1))
+    catalog.register(EventType("decision.suggested", DecisionSuggested, 1))
+    catalog.register(EventType("decision.selected", DecisionSelected, 1))
     catalog.register(EventType("lead.recorded", LeadRecorded, 1))
     catalog.register(EventType("lead.decided", LeadDecided, 1))
     catalog.register(EventType("hypothesis.drafted", HypothesisDrafted, 1))
