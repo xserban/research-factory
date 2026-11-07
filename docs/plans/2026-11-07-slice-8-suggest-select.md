@@ -46,7 +46,7 @@
 
 | Task | What | Tier |
 |---|---|---|
-| D0 | Decision entry (proposed): a local embedding model may rank, never judge or exclude; it runs offline from supplied weights (as docling, decision 49), behind an optional extra; model name, version and weights hash are recorded. Choice of model by the researcher. | builder |
+| D0 | Decision entry (proposed): a local embedding model may rank, never judge or exclude; it runs offline from supplied weights (as docling, decision 49), behind an optional extra; model name, version and weights hash are recorded. Model: SPECTER2 (`allenai/specter2_base`, Apache-2.0), chosen by the researcher 2026-11-07. | builder |
 | D1 | Embedding similarity of title and abstract to the development seeds only (never held-out, R-20), deterministic for fixed weights. Event `ranking.computed` (corpus snapshot, model and weights hash, parameters, order). | critical |
 | D2 | `screen_next` serves in ranked order when a ranking exists; the protocol's screening plan gains a stopping rule (`stop_after_consecutive_excludes`); PRISMA reports records left unscreened after the stop. | critical |
 
