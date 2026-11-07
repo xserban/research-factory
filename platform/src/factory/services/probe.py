@@ -8,6 +8,12 @@ propagate). Then each spec is registered with the caller's actor, with its purpo
 `Prober.matching` for which probe keys of the testable seeds the query retrieves. Every raw
 response is archived before it is measured.
 
+Each measured query also returns a small sample of titles (`sample`, default 20, 0 disables) so a
+scientist can judge noise. OpenAlex draws a seeded random sample; arXiv has none, so it gives the
+first page by relevance and says so (`sample_kind`). A sample is archived like any probe page,
+never enters the corpus or PRISMA, and drops, without saying why, any record that is a held-out
+seed's work. A failed sample request leaves the recall in place and is named in `sample_note`.
+
 Held-out seeds are never measured (R-20). Only development positives (late ones included) and
 negatives are sent to a source, and the report, events and validation messages name only those.
 The split event itself is the one place held-out ids are recorded, by `split_seeds`.
@@ -23,7 +29,7 @@ rows, which a `probe.measured` payload carries, so events written before this ru
 figures.
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Literal
 
 from factory.errors import FactoryValidationError, ValidationIssue
@@ -39,15 +45,28 @@ from factory.model.probe import (
 from factory.model.project import RigorMode
 from factory.model.search import QueryPurpose, QuerySpec
 from factory.model.seed import SeedKind
-from factory.model.work import Work
+from factory.model.work import Identifiers, Work
 from factory.services.budgets import budget_issue, budget_issues, exhausted_unit
 from factory.services.context import Project
 from factory.services.project import project_status
 from factory.services.question import current_question
 from factory.services.search import get_work, query_issues, register_query
-from factory.services.seeds import SeedView, agent_seeds, split_is_drawn, split_seeds
+from factory.services.seeds import (
+    SeedView,
+    agent_seeds,
+    held_out_identifier_matcher,
+    split_is_drawn,
+    split_seeds,
+)
 from factory.services.vocabulary import suggest_terms
-from factory.sources.base import PageSink, Prober, RawPage, SourceError, probe_key
+from factory.sources.base import (
+    PageSink,
+    Prober,
+    RawPage,
+    Sampler,
+    SourceError,
+    probe_key,
+)
 from factory.sources.http import redact
 from factory.sources.registry import SourceFactory
 
@@ -56,6 +75,10 @@ THRESHOLDS: dict[RigorMode, float] = {
     RigorMode.PILOT: 0.9,
     RigorMode.SYSTEMATIC: 1.0,
 }
+
+
+DEFAULT_SAMPLE = 20
+MAX_SAMPLE = 200
 
 
 class ProbeQueryResult(StrictModel):
@@ -73,6 +96,9 @@ class ProbeQueryResult(StrictModel):
     negatives_retrieved: tuple[str, ...]
     untestable: tuple[str, ...]
     suggestions: tuple[TermSuggestion, ...]
+    sample_titles: tuple[str, ...] = ()
+    sample_kind: Literal["random", "top"] | None = None
+    sample_note: str | None = None
     reason: str | None
 
 
@@ -104,10 +130,16 @@ def run_probe(
     specs: Sequence[QuerySpec],
     *,
     sources: Mapping[str, SourceFactory],
+    sample: int = DEFAULT_SAMPLE,
 ) -> ProbeReport:
-    """Register and measure each spec against the development seeds and the negatives."""
+    """Register and measure each spec against the development seeds and the negatives.
+
+    `sample` is the number of titles to sample per measured query, 0 for none.
+    """
     question = current_question(project)
     issues: list[ValidationIssue] = []
+    if not 0 <= sample <= MAX_SAMPLE:
+        issues.append(ValidationIssue("sample", f"must be between 0 and {MAX_SAMPLE}"))
     if question is None:
         issues.append(ValidationIssue("question", "record a question before probing"))
     probers, spec_issues = _validate(project, specs, sources)
@@ -124,6 +156,8 @@ def run_probe(
     probe_id = project.ids.new("prb")
     seeds = agent_seeds(project)
     works = {seed.seed_id: _work_of(project, seed) for seed in seeds}
+    # Built once, and only when a sample is wanted: the held-out identifiers stay in this process.
+    is_held_out = held_out_identifier_matcher(project) if sample > 0 else (lambda _ids: False)
     results: list[ProbeQueryResult] = []
     for index, spec in enumerate(specs):
         probe_spec = spec.model_copy(update={"purpose": QueryPurpose.PROBE})
@@ -138,6 +172,8 @@ def run_probe(
                 prober=probers[index],
                 seeds=seeds,
                 works=works,
+                sample=sample,
+                is_held_out=is_held_out,
             )
         )
     return _report(probe_id, question.question_id, mode, results, seeds)
@@ -197,6 +233,8 @@ def _measure(
     prober: Prober,
     seeds: list[SeedView],
     works: dict[str, Work | None],
+    sample: int,
+    is_held_out: Callable[[Identifiers], bool],
 ) -> ProbeQueryResult:
     """Measure one registered query. A source failure is recorded and claims no recall."""
     keys: dict[str, str | None] = {}
@@ -256,6 +294,20 @@ def _measure(
     untestable = tuple(sid for sid in [*development, *negatives] if keys[sid] is None)
     missed = tuple(sid for sid in development if sid not in retrieved)
     suggestions = _suggestions(spec.text, development, works, missed)
+    sample_kind: Literal["random", "top"] | None = None
+    titles: tuple[str, ...] = ()
+    sample_note: str | None = None
+    if sample > 0 and isinstance(prober, Sampler):
+        # Network outside `project.writing()`; the sample is archived page by page as it arrives.
+        try:
+            _require_requests(project)
+            kind, records = prober.sample(
+                spec, sample, archive=_archiver(project, probe_id, query_id, "sample")
+            )
+            sample_kind = kind
+            titles = tuple(r.title for r in records if not is_held_out(r.identifiers))
+        except SourceError as exc:
+            sample_note = redact(f"{type(exc).__name__}: {exc}", project.settings.mailto)
 
     payload = ProbeMeasured(
         probe_id=probe_id,
@@ -269,6 +321,8 @@ def _measure(
         negatives_retrieved=negatives_retrieved,
         untestable=untestable,
         suggestions=suggestions,
+        sample_titles=titles,
+        sample_kind=sample_kind,
     )
     with project.writing():
         project.record(
@@ -292,6 +346,9 @@ def _measure(
         negatives_retrieved=negatives_retrieved,
         untestable=untestable,
         suggestions=suggestions,
+        sample_titles=titles,
+        sample_kind=sample_kind,
+        sample_note=sample_note,
         reason=None,
     )
 
@@ -327,7 +384,7 @@ def _suggestions(
 
 
 def _archiver(
-    project: Project, probe_id: str, query_id: str, role: Literal["count", "match"]
+    project: Project, probe_id: str, query_id: str, role: Literal["count", "match", "sample"]
 ) -> PageSink:
     """Archive each raw response as it arrives, before the probe measures it (R-03)."""
 

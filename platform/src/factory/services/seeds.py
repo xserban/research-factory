@@ -43,8 +43,8 @@ from factory.model.seed import (
     SeedUnresolved,
     normalize_openalex,
 )
-from factory.model.work import ProvenanceMethod, Work
-from factory.model.work_ids import arxiv_id_from_doi
+from factory.model.work import Identifiers, ProvenanceMethod, Work
+from factory.model.work_ids import arxiv_id_from_doi, normalize_arxiv
 from factory.services.budgets import budget_issues
 from factory.services.context import Project
 from factory.services.dedup import active_merges
@@ -665,11 +665,8 @@ def _positive_matches(project: Project) -> list[tuple[_Seed, SeedRole, str | Non
     return out
 
 
-def held_out_seed_matcher(project: Project) -> Callable[[Work], bool]:
-    """Whether a work is a held-out seed's, by resolved work, merge group or identifier. Identifiers
-    count because a work the search missed need not be in the corpus. For the coverage term
-    suggestions alone, where a seed's own terms would bias R-24 upward; never to hide a work from
-    an agent view (decision 81)."""
+def _held_out_sets(project: Project) -> tuple[set[str], set[str]]:
+    """The work ids (merge groups included) and identifier keys of the held-out positive seeds."""
     groups = _merge_groups(project)
     works: set[str] = set()
     keys: set[str] = set()
@@ -680,12 +677,49 @@ def held_out_seed_matcher(project: Project) -> Callable[[Work], bool]:
         for work_id in (matched, seed.work_id):
             if work_id is not None:
                 works.update((work_id, *groups.get(work_id, ())))
+    return works, keys
+
+
+def _stated_keys(identifiers: Identifiers) -> tuple[str, ...]:
+    """The DOI, arXiv id and OpenAlex id an identifier set states, in seed-key form."""
+    arxiv = (
+        normalize_arxiv(identifiers.arxiv)
+        if identifiers.arxiv
+        else (arxiv_id_from_doi(identifiers.doi) if identifiers.doi else None)
+    )
+    openalex = normalize_openalex(identifiers.openalex) if identifiers.openalex else None
+    return tuple(value for value in (identifiers.doi, arxiv, openalex) if value)
+
+
+def held_out_seed_matcher(project: Project) -> Callable[[Work], bool]:
+    """Whether a work is a held-out seed's, by resolved work, merge group or identifier. Identifiers
+    count because a work the search missed need not be in the corpus. For the coverage term
+    suggestions alone, where a seed's own terms would bias R-24 upward; never to hide a work from
+    an agent view (decision 81)."""
+    works, keys = _held_out_sets(project)
 
     def matches(work: Work) -> bool:
-        openalex = work.identifiers.openalex
-        oa_key = normalize_openalex(openalex) if openalex else None
-        stated = (work.identifiers.doi, _work_arxiv(work), oa_key)
-        return work.id in works or any(value in keys for value in stated if value)
+        return work.id in works or any(value in keys for value in _stated_keys(work.identifiers))
+
+    return matches
+
+
+def held_out_identifier_matcher(project: Project) -> Callable[[Identifiers], bool]:
+    """Whether a source record, known only by its identifiers, is a held-out seed's work.
+
+    The identifiers of the seed itself and of its resolved works (merge groups included) count.
+    For the probe's title samples (R-20): a sampled record that matches is dropped before anything
+    is shown or written, and never from a view of the corpus (decision 81).
+    """
+    works, keys = _held_out_sets(project)
+    stated = set(keys)
+    for work_id in works:
+        work = get_work(project, work_id)
+        if work is not None:
+            stated.update(_stated_keys(work.identifiers))
+
+    def matches(identifiers: Identifiers) -> bool:
+        return any(value in stated for value in _stated_keys(identifiers))
 
     return matches
 

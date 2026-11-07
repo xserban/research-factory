@@ -40,7 +40,7 @@ class ProbePageArchived(StrictModel):
     url: str
     fetched_at: AwareDatetime
     raw_blob: str = Field(pattern=BLOB_REF_RE)
-    role: Literal["count", "match"]
+    role: Literal["count", "match", "sample"]
 
 
 class ProbeMeasured(StrictModel):
@@ -49,6 +49,11 @@ class ProbeMeasured(StrictModel):
     `development_tested` and `negatives_tested` are the seeds that carry a probe key for the
     source; `untestable` lists the rest of those roles. Untestable seeds are listed, not counted
     as misses: recall is retrieved over `development_tested`.
+
+    `sample_titles` is a small sample of the query's results, for judging noise, and
+    `sample_kind` says how it was drawn (`random`, or `top` for the first page by relevance). A
+    sample is never a corpus record and holds no held-out seed's work. Both default to empty, so
+    events written before samples fold unchanged.
     """
 
     probe_id: str = Field(pattern=PROBE_ID_RE)
@@ -62,6 +67,8 @@ class ProbeMeasured(StrictModel):
     negatives_retrieved: tuple[str, ...]
     untestable: tuple[str, ...]
     suggestions: tuple[TermSuggestion, ...]
+    sample_titles: tuple[str, ...] = ()
+    sample_kind: Literal["random", "top"] | None = None
 
 
 class ProbeFailed(StrictModel):

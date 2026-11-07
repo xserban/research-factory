@@ -544,3 +544,32 @@ def test_matching_sends_doi_keys_as_a_doi_filter() -> None:
     filters = [r.url.params["filter"] for r in seen]
     assert filters[0].startswith("openalex:W1,")
     assert filters[1].startswith("doi:10.48550/arxiv.2610.04074|10.1/missing,")
+
+
+def test_sample_is_seeded_random_over_the_query_filter() -> None:
+    seen: list[httpx.Request] = []
+    item = {
+        "id": "https://openalex.org/W9",
+        "display_name": "  A  sampled\ntitle ",
+        "doi": "https://doi.org/10.48550/arXiv.2301.01234",
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, text=page([item, {"id": "https://openalex.org/W10"}], 5, None))
+
+    kind, records = make_source(handler).sample(
+        keyword("vessel", filters={"listed_since": "2024-01-01"}), 5, archive=_archive
+    )
+
+    assert kind == "random"
+    assert [r.title for r in records] == ["A sampled title"]  # an untitled record is skipped
+    assert records[0].identifiers.openalex == "W9"
+    assert records[0].identifiers.arxiv == "2301.01234"
+    [request] = seen
+    assert request.url.params["sample"] == "5"
+    assert request.url.params["seed"].isdigit()
+    assert request.url.params["filter"] == (
+        "title_and_abstract.search:vessel,from_created_date:2024-01-01"
+    )
+    assert request.url.params["per-page"] == "5"

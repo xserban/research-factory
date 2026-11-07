@@ -185,6 +185,36 @@ class Prober(Protocol):
         ...
 
 
+@dataclass(frozen=True, slots=True)
+class SampledRecord:
+    """One record of a probe's title sample: a title and the identifiers the source gave it.
+
+    It is never a `Work`: a sample enters neither the corpus nor PRISMA.
+    """
+
+    title: str
+    identifiers: Identifiers
+
+
+SampleKind = Literal["random", "top"]
+
+
+@runtime_checkable
+class Sampler(Protocol):
+    """Draws a small sample of titles from a query's results, so a scientist can judge noise.
+
+    `random` is a seeded random sample of the whole result set; `top` is the first page by
+    relevance, for sources with no random sample. Every response goes to `archive` before it is
+    parsed.
+    """
+
+    def sample(
+        self, spec: QuerySpec, size: int, *, archive: PageSink
+    ) -> tuple[SampleKind, list[SampledRecord]]:
+        """At most `size` records of `spec`, and how they were drawn."""
+        ...
+
+
 def probe_key(source: str, work: Work) -> str | None:
     """The identity a probe matches a work by, in the source's own namespace.
 

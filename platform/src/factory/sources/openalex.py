@@ -37,6 +37,8 @@ from factory.sources.base import (
     BUDGET_STOP_NOTE,
     PageSink,
     RawPage,
+    SampledRecord,
+    SampleKind,
     SearchResult,
     SourceError,
     StatusRecord,
@@ -47,6 +49,8 @@ from factory.sources.http import PoliteClient, redact
 _ENDPOINT = "https://api.openalex.org/works"
 _PAGE_SIZE = 200  # the documented maximum
 _PROBE_BATCH = 50  # ids per probe request: one page, no cursor to follow
+_SAMPLE_SEED = 20261107  # fixed, so a repeated probe draws the same sample
+_SAMPLE_MAX = _PAGE_SIZE  # a sample is one page
 
 # OpenAlex `type` -> our vocabulary. Unmapped types become OTHER rather than guessing.
 _TYPES: dict[str, WorkType] = {
@@ -460,6 +464,45 @@ class OpenAlexSource:
                     if key.casefold() in given:
                         found.add(given[key.casefold()])
         return found
+
+    def sample(
+        self, spec: QuerySpec, size: int, *, archive: PageSink
+    ) -> tuple[SampleKind, list[SampledRecord]]:
+        """A seeded random sample of at most `size` records (`sample` with a fixed `seed`).
+
+        The sample is drawn from the records the query's filter expression selects, so it shows
+        what a run would retrieve. OpenAlex's `seed` makes it repeatable for an unchanged index.
+        """
+        self._require_known_kind(spec)
+        size = min(size, _SAMPLE_MAX)
+        _, results = self._probe_get(
+            {
+                "filter": self._filter_expression(spec),
+                "sample": size,
+                "seed": _SAMPLE_SEED,
+                "per-page": size,
+            },
+            ordinal=0,
+            archive=archive,
+        )
+        records: list[SampledRecord] = []
+        for item in results[:size]:
+            title = item.get("display_name") or item.get("title")
+            if not title:
+                continue
+            doi_url = _strip_url(item.get("doi"), "https://doi.org/")
+            doi = normalize_doi(doi_url) if doi_url else None
+            records.append(
+                SampledRecord(
+                    title=" ".join(str(title).split()),
+                    identifiers=Identifiers(
+                        openalex=_strip_url(item.get("id"), "https://openalex.org/"),
+                        doi=doi,
+                        arxiv=arxiv_id_from_doi(doi) if doi else None,
+                    ),
+                )
+            )
+        return "random", records
 
     def _require_known_kind(self, spec: QuerySpec) -> None:
         if spec.kind not in self.kinds:

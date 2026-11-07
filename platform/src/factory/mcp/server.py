@@ -647,17 +647,25 @@ def build_server(
 
     @server.tool()
     def probe_run(
-        project: str, queries: list[dict[str, JsonValue]], role: str, model: str, skill: str
+        project: str,
+        queries: list[dict[str, JsonValue]],
+        role: str,
+        model: str,
+        skill: str,
+        sample: int = 20,
     ) -> dict[str, JsonValue]:
         """Measure queries against the development seeds and the negatives: recall and negative
         hits per query and per source. Each query is {source, query, kind="keyword", filters={}}.
-        The first probe of a pilot or systematic project draws the hold-out split."""
+        The first probe of a pilot or systematic project draws the hold-out split. Each measured
+        query also returns `sample` titles (default 20, 0 for none) to judge noise: a seeded
+        random sample from OpenAlex, the first page by relevance from arXiv (`sample_kind` says
+        which). Samples are not corpus records and drop any held-out seed's work."""
 
         def probe() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
             actor = make_agent_actor(settings, session, role, model, skill)
             specs = [_probe_spec(item, index) for index, item in enumerate(queries)]
-            report = probe_service.run_probe(opened, actor, specs, sources=adapters)
+            report = probe_service.run_probe(opened, actor, specs, sources=adapters, sample=sample)
             return _withheld(opened, report.model_dump(mode="json"))
 
         return _reply(project, probe, rename=dotted)

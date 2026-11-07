@@ -21,7 +21,7 @@ from factory.model.work import ProvenanceMethod, WorkType
 from factory.sources.arxiv import ArxivSource
 from factory.sources.base import RawPage, SearchResult, SourceError
 from factory.sources.http import PoliteClient, default_http
-from tests.helpers import SESSION, T0
+from tests.helpers import SESSION, T0, arxiv_atom
 
 RUN_ID = f"run_{SESSION}"
 QUERY_ID = f"qry_{SESSION}"
@@ -536,3 +536,24 @@ class TestProbes:
         for request in seen:
             assert "sortBy" not in request.url.params
             assert "relevance" not in str(request.url).lower()
+
+
+class TestSample:
+    def test_sample_is_the_first_page_by_relevance(self) -> None:
+        seen: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append(request)
+            return httpx.Response(
+                200, text=arxiv_atom([("2301.01234v2", "Linear   attention", 2023, "Ada")])
+            )
+
+        kind, records = make_source(handler).sample(keyword("all:test"), 20, archive=_archive)
+
+        assert kind == "top"
+        assert [r.title for r in records] == ["Linear attention"]
+        assert records[0].identifiers.arxiv is not None
+        [request] = seen
+        assert request.url.params["max_results"] == "20"
+        assert request.url.params["sortBy"] == "relevance"
+        assert request.url.params["search_query"] == "all:test"

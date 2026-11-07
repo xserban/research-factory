@@ -613,3 +613,109 @@ def test_probe_kinds_come_from_the_factory(
     assert [(i.field, i.reason) for i in refused.value.issues if i.field == "queries[0].kind"] == [
         ("queries[0].kind", "openalex cannot measure filter queries")
     ]
+
+
+# --- Title samples ---
+
+
+def test_probe_returns_and_records_a_title_sample(
+    settings: Any, clock: Any, agent: Actor, mock_sources: SourcesFor
+) -> None:
+    project = _exploratory(settings, clock)
+    _question(project, agent)
+    _positives(project, agent, mock_sources, 2)
+    sources = mock_sources(openalex=[_item(1), _item(2), _item(50, "Off topic paper")])
+
+    report = run_probe(project, agent, [_probe_spec()], sources=sources, sample=5)
+
+    [query] = report.queries
+    assert query.sample_kind == "random"
+    assert query.sample_titles == ("Paper 1", "Paper 2", "Off topic paper")
+    measured = [e for e in _events(project) if e.type == "probe.measured"][-1]
+    assert measured.payload["sample_titles"] == ["Paper 1", "Paper 2", "Off topic paper"]
+    assert measured.payload["sample_kind"] == "random"
+    assert any(
+        e.type == "probe.page_archived" and e.payload["role"] == "sample" for e in _events(project)
+    )
+    assert len(list_works(project, include_probe=True)) == 2  # the sample adds no work
+
+
+def test_probe_sample_zero_sends_no_sample_request(
+    settings: Any,
+    clock: Any,
+    agent: Actor,
+    mock_sources: SourcesFor,
+    http_log: list[httpx.Request],
+) -> None:
+    project = _exploratory(settings, clock)
+    _question(project, agent)
+    _positives(project, agent, mock_sources, 2)
+    sources = mock_sources(openalex=[_item(1), _item(2)])
+    http_log.clear()
+
+    report = run_probe(project, agent, [_probe_spec()], sources=sources, sample=0)
+
+    assert report.queries[0].sample_titles == ()
+    assert report.queries[0].sample_kind is None
+    assert all("sample" not in request.url.params for request in http_log)
+    assert not any(
+        e.type == "probe.page_archived" and e.payload["role"] == "sample" for e in _events(project)
+    )
+
+
+def test_probe_sample_request_is_seeded_and_uses_the_query_filter(
+    settings: Any,
+    clock: Any,
+    agent: Actor,
+    mock_sources: SourcesFor,
+    http_log: list[httpx.Request],
+) -> None:
+    project = _exploratory(settings, clock)
+    _question(project, agent)
+    _positives(project, agent, mock_sources, 1)
+    sources = mock_sources(openalex=[_item(1)])
+    http_log.clear()
+
+    run_probe(project, agent, [_probe_spec("attention")], sources=sources, sample=7)
+
+    sampled = [r for r in http_log if "sample" in r.url.params]
+    assert len(sampled) == 1
+    assert sampled[0].url.params["sample"] == "7"
+    assert sampled[0].url.params["seed"].isdigit()
+    assert "title_and_abstract.search:attention" in sampled[0].url.params["filter"]
+
+
+def test_probe_sample_drops_held_out_records_silently(
+    project: Project, agent: Actor, mock_sources: SourcesFor
+) -> None:
+    _question(project, agent)
+    _positives(project, agent, mock_sources, 6)
+    split = split_seeds(project, random_seed=7)
+    held_out = [n for n in range(1, 7) if f"SEED{n:02d}" in split.held_out]
+    assert held_out
+    sources = mock_sources(openalex=[_item(n) for n in range(1, 7)])
+
+    report = run_probe(project, agent, [_probe_spec()], sources=sources)
+
+    titles = report.queries[0].sample_titles
+    assert titles
+    assert not any(f"Paper {n}" in titles for n in held_out)
+    assert len(titles) == 6 - len(held_out)
+
+
+@pytest.mark.parametrize("sample", [-1, 201])
+def test_probe_refuses_a_bad_sample_size_and_writes_nothing(
+    settings: Any, clock: Any, agent: Actor, mock_sources: SourcesFor, sample: int
+) -> None:
+    project = _exploratory(settings, clock)
+    _question(project, agent)
+    before = len(_events(project))
+    with pytest.raises(FactoryValidationError):
+        run_probe(
+            project,
+            agent,
+            [_probe_spec()],
+            sources=mock_sources(openalex=[_item(1)]),
+            sample=sample,
+        )
+    assert len(_events(project)) == before

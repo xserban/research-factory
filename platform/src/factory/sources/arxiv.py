@@ -35,6 +35,8 @@ from factory.sources.base import (
     BUDGET_STOP_NOTE,
     PageSink,
     RawPage,
+    SampledRecord,
+    SampleKind,
     SearchResult,
     SourceError,
     StatusRecord,
@@ -463,6 +465,35 @@ class ArxivSource:
                 if key is not None and key in given:
                     found.add(given[key])
         return found
+
+    def sample(
+        self, spec: QuerySpec, size: int, *, archive: PageSink
+    ) -> tuple[SampleKind, list[SampledRecord]]:
+        """The first `size` records by relevance. arXiv has no random sample, so the kind is `top`:
+        the titles show the best matches, which flatters the query."""
+        self._require_keyword(spec)
+        _, _, entries = self._probe_get(
+            {
+                "search_query": spec.text,
+                "max_results": size,
+                "start": 0,
+                "sortBy": "relevance",
+                "sortOrder": "descending",
+            },
+            ordinal=0,
+            archive=archive,
+        )
+        records: list[SampledRecord] = []
+        for entry in entries[:size]:
+            title = _text(entry.find("atom:title", _NS))
+            raw_id = _text(entry.find("atom:id", _NS))
+            if not title or not raw_id:
+                continue
+            doi = _text(entry.find("arxiv:doi", _NS))
+            records.append(
+                SampledRecord(title=title, identifiers=Identifiers(arxiv=raw_id, doi=doi))
+            )
+        return "top", records
 
     @staticmethod
     def _require_keyword(spec: QuerySpec) -> None:
