@@ -16,7 +16,7 @@ The map of a whole run. It records nothing: it says where to look and which skil
 
 | `stage` | What happens | Skill |
 | --- | --- | --- |
-| `scoping` | Question and protocol are not both recorded | `rf-frame`, `rf-probe`, `rf-protocol` |
+| `scoping` | Question and protocol are not both recorded | `rf-develop`, then `rf-frame`, `rf-probe`, `rf-protocol` |
 | `protocol` | The protocol is not ready, or PRESS is not confirmed | `rf-protocol` |
 | `search` | No complete search run | `search_run`, then `dedup_run` |
 | `ta-screening` | Works wait at title and abstract | `rf-screen` |
@@ -28,10 +28,21 @@ The map of a whole run. It records nothing: it says where to look and which skil
 `stage` is null in a session that has joined a pass: that session follows its own skill and its
 own batches only.
 
+## Decisions come first
+
+Before the scoping skills record anything, the scientist decides each level with `rf-develop`:
+goal, questions, plan, seeds, probe, protocol, one at a time, top-down. `decision_list` with
+`open_only` shows the suggestion sets awaiting the scientist. Selecting is the scientist's act
+(`decision_select`, or `factory decide select` in the terminal); never record one for them. In
+`pilot` and `systematic`, `question_record`, `seed_add`, `probe_run` and `protocol_record` cite
+a decision with an accepted selection (`decision_ids`). `develop_render` renders a level as a
+document.
+
 ## Read what exists
 
 A fresh session needs no ids from anyone.
 
+- Decisions: `decision_list`, `decision_view`, `develop_render`.
 - Plan: `protocol_view` (the whole spec, to read and to pass back to `protocol_amend`),
   `question_view`.
 - Corpus: `fulltext_status`, `document_status`, `extraction_status`, `contribution_status`,
@@ -64,6 +75,7 @@ No tool performs these. Print the command `project_status` gives and wait.
 
 - Imports: `factory import ...`, including resolving, confirming, admitting and attaching.
 - Conversion of documents: `factory document convert`.
+- Selections on suggested decisions (`decision_select` asks them; `factory decide select`).
 - Gate decisions, calibration and audit labels, resolving disagreements, unless the protocol's
   policy for the gate lets an agent act.
 - Registering or concluding what the protocol keeps for the researcher.

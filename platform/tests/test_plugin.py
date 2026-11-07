@@ -14,6 +14,7 @@ SKILLS = (
     "rf-contributions",
     "rf-critic",
     "rf-curate",
+    "rf-develop",
     "rf-experiment",
     "rf-extract",
     "rf-frame",

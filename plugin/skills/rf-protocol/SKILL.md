@@ -10,6 +10,13 @@ research-factory-old `stages/02-protocol.md` and `RIGOR-MODES.md`.
 
 ## Procedure
 
+0. Follow `rf-develop` at level `protocol`, and only after the plan, seeds and probe levels are
+   validated. Each decision below is a suggestion set the researcher ticks, never a whole protocol
+   to approve: inclusions; exclusions; sources; snowballing; screening plan; extraction fields.
+   Explain each step and why first. Ground each item in what the probe returned (counts, sample
+   titles, seeds, missed seeds). No `recommended` flag on criteria or sources; the tooling of the
+   screening plan may carry one. `protocol_record` cites the decisions with `decision_ids` and
+   records only what they select. Render the level with `develop_render`.
 1. Draft criteria. Every criterion has:
    - `id` (`IN01`, `EX01`, ...);
    - `parent`: a question slot or a non-goal (`NG*`). A criterion with no parent is ad hoc; either
@@ -19,6 +26,10 @@ research-factory-old `stages/02-protocol.md` and `RIGOR-MODES.md`.
    - `applies_at`: `title-abstract`, `full-text` or `either`. A title-abstract criterion must be
      answerable from title, abstract and metadata alone;
    - `priority` for exclusions: a total order with no ties, so each exclusion has one reason.
+   Ground criteria in what the probe returned. Suggest an exclusion only for records that pass
+   every inclusion and that a source actually returned (cite the sample title or probe); an
+   exclusion for papers no source returns, or that an inclusion already removes, is not
+   suggested. The pilot cut six template exclusions to three.
 2. Cite examples. In `examples`, list development seeds that sort to their known verdict under
    the criteria as a whole. Do not invent seeds to fill counters. A seed that refuses to sort
    means the criteria are wrong, not the seed.
@@ -27,6 +38,13 @@ research-factory-old `stages/02-protocol.md` and `RIGOR-MODES.md`.
 4. Write the search strategy per source with every PRISMA-S field: exact string, platform,
    filters, limits and date. Each limit carries its justification. A limit added after the probe
    counts is flagged as such.
+   Snowballing: suggest the rounds per direction (`max_backward_rounds`, `max_forward_rounds`)
+   and whether a direction stops when its previous round added no included work; a forward cap
+   field of `SnowballPlan`, if present, is its own item. Screening: suggest passes, the sample
+   double-checked and the kappa floor; the local ranker (`ranking_compute`) and its stop rule
+   (`stop_after_consecutive_excludes`, title and abstract only) are items, the stop rule is a
+   risk the researcher accepts and is reported. Extraction fields: one item per field, grounded
+   in the Key Result or sub-question it serves.
 5. Fix commitments before reading. Declare the screening plan (passes, reviewers and roles, the
    kappa floor, `kappa_enforced`, and how disagreements resolve, never automatically) and the
    extraction fields with their meanings. In `pilot` the kappa floor is advisory. In `systematic`
