@@ -12,6 +12,7 @@ from factory.document.anchors import AnchorKind, Manifest, parse_manifest
 from factory.events.envelope import Actor
 from factory.mining.select import selected_anchors
 from factory.mining.spec import Population, Selector
+from factory.model.decisions import DecisionLevel
 from factory.model.seed import SeedKind, SeedSpec
 from factory.services.context import Project
 from factory.services.document_read import default_conversion
@@ -19,7 +20,7 @@ from factory.services.mining import population, population_works
 from factory.services.search import list_works
 from factory.services.seeds import add_seeds
 from tests.contribution_helpers import screened, with_references, world  # noqa: F401
-from tests.helpers import openalex_item
+from tests.helpers import bind_ids, openalex_item
 
 DOC_V1 = """# 1 Introduction
 
@@ -137,7 +138,13 @@ def test_corpus_excludes_a_probe_only_work(
         doi="10.1000/seedonly",
     )
     seed = SeedSpec(kind=SeedKind.POSITIVE, cite="Zhou 2021", doi="10.1000/seedonly")
-    add_seeds(project, agent, [seed], sources=mock_sources(openalex=[item]))
+    add_seeds(
+        project,
+        agent,
+        [seed],
+        sources=mock_sources(openalex=[item]),
+        decision_ids=bind_ids(project, agent, DecisionLevel.SEEDS),
+    )
     hidden = {w.id for w in list_works(project, include_probe=True)} - {
         w.id for w in list_works(project)
     }

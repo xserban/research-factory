@@ -15,6 +15,7 @@ from factory.clock import FixedClock
 from factory.config import Settings
 from factory.events.envelope import Actor
 from factory.model.chase import ChaseDirection
+from factory.model.decisions import DecisionLevel
 from factory.model.screening import PassLabel
 from factory.model.search import QueryKind
 from factory.model.seed import SeedKind, SeedSpec
@@ -42,6 +43,7 @@ from tests.helpers import (
     _leaks,
     _of_type,
     _seed_item,
+    bind_ids,
     install_skill,
     open_session,
     openalex_item,
@@ -235,7 +237,13 @@ def test_seed_check_passes_after_admission(
 ) -> None:
     _corpus(project, agent, human, mock_sources)
     spec = SeedSpec(kind=SeedKind.POSITIVE, cite="Paper 7", doi="10.1000/p7")
-    [outcome] = add_seeds(project, human, [spec], sources=mock_sources()).written
+    [outcome] = add_seeds(
+        project,
+        human,
+        [spec],
+        sources=mock_sources(),
+        decision_ids=bind_ids(project, human, DecisionLevel.SEEDS),
+    ).written
     assert [c.status for c in seed_check(project) if c.seed_id == outcome.seed_id] == ["missing"]
     explain_seed_miss(
         project, human, outcome.seed_id, "not indexed", ProvenanceMethod.SEED_ADMISSION

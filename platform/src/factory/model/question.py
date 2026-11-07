@@ -15,6 +15,7 @@ from pydantic import Field, JsonValue, model_validator
 
 from factory.canonical import canonical_json
 from factory.model.base import StrictModel
+from factory.model.identity import DecisionId
 
 NON_GOAL_ID_RE = r"^NG\d{2}$"
 SUB_QUESTION_ID_RE = r"^SQ\d{1,2}$"
@@ -131,6 +132,7 @@ class QuestionRecorded(StrictModel):
     supersedes: str | None = Field(default=None, pattern=QUESTION_ID_RE)
     reason: str | None = None
     spec: QuestionSpec
+    decision_ids: tuple[DecisionId, ...] | None = None
 
     @model_validator(mode="after")
     def _id_matches_spec(self) -> Self:

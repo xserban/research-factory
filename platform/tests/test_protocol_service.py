@@ -8,6 +8,7 @@ import pytest
 from factory.errors import FactoryValidationError
 from factory.events.envelope import Actor
 from factory.events.reader import read_all
+from factory.model.decisions import DecisionLevel
 from factory.model.protocol import (
     Criterion,
     MethodProfile,
@@ -43,6 +44,7 @@ from factory.sources.registry import SourceFactory
 from tests.helpers import (
     SESSION,
     SourcesFor,
+    bind_ids,
     openalex_item,
     pilot_question_spec,
     ready_protocol,
@@ -109,7 +111,13 @@ def _question_id(project: Project, actor: Actor) -> str:
 
 def test_draft_with_gaps_is_written_and_gaps_returned(project: Project, agent: Actor) -> None:
     qid = _question_id(project, agent)
-    result = record_protocol(project, agent, _spec(qid), ready=False)
+    result = record_protocol(
+        project,
+        agent,
+        _spec(qid),
+        ready=False,
+        decision_ids=bind_ids(project, agent, DecisionLevel.PROTOCOL),
+    )
 
     assert result.created is True
     assert result.status is ProtocolStatus.DRAFT
@@ -121,7 +129,12 @@ def test_draft_with_gaps_is_written_and_gaps_returned(project: Project, agent: A
 def test_ready_with_gaps_writes_nothing(project: Project, agent: Actor) -> None:
     qid = _question_id(project, agent)
     with pytest.raises(FactoryValidationError) as raised:
-        record_protocol(project, agent, _spec(qid), ready=True)
+        record_protocol(
+            project,
+            agent,
+            _spec(qid),
+            ready=True,
+        )
 
     assert "sources[0].probe_id" in [issue.field for issue in raised.value.issues]
     assert _events(project, "protocol.recorded") == []
@@ -139,7 +152,12 @@ def test_structural_error_writes_nothing(project: Project, agent: Actor) -> None
     )
     spec = _spec(qid, criteria=(parentless,))
     with pytest.raises(FactoryValidationError) as raised:
-        record_protocol(project, agent, spec, ready=False)
+        record_protocol(
+            project,
+            agent,
+            spec,
+            ready=False,
+        )
 
     assert [issue.field for issue in raised.value.issues] == ["criteria[0].parent"]
     assert _events(project, "protocol.recorded") == []
@@ -149,17 +167,34 @@ def test_draft_can_be_replaced_ready_cannot(
     project: Project, agent: Actor, mock_sources: SourcesFor
 ) -> None:
     qid = _question_id(project, agent)
-    record_protocol(project, agent, _spec(qid), ready=False)
+    record_protocol(
+        project,
+        agent,
+        _spec(qid),
+        ready=False,
+        decision_ids=bind_ids(project, agent, DecisionLevel.PROTOCOL),
+    )
     replaced = _spec(
         qid, queries=(PlannedQuery(source="openalex", kind=QueryKind.KEYWORD, text="vision"),)
     )
-    second = record_protocol(project, agent, replaced, ready=False)
+    second = record_protocol(
+        project,
+        agent,
+        replaced,
+        ready=False,
+        decision_ids=bind_ids(project, agent, DecisionLevel.PROTOCOL),
+    )
     assert second.created is True
     assert len(_events(project, "protocol.recorded")) == 2
 
     protocol_id = ready_protocol(project, agent, project.human_actor(), mock_sources, press=False)
     with pytest.raises(FactoryValidationError) as raised:
-        record_protocol(project, agent, _spec(qid), ready=False)
+        record_protocol(
+            project,
+            agent,
+            _spec(qid),
+            ready=False,
+        )
     [issue] = raised.value.issues
     assert issue.field == "protocol"
     assert issue.reason == "protocol is ready; change it with protocol_amend"
@@ -175,14 +210,23 @@ def test_record_refused_for_stale_ready_protocol(
     old = current_protocol(project)
     assert old is not None
     record_question(
-        project, human, pilot_question_spec("Does linear attention match softmax?"), reason="reword"
+        project,
+        human,
+        pilot_question_spec("Does linear attention match softmax?"),
+        reason="reword",
+        decision_ids=bind_ids(project, human, DecisionLevel.QUESTIONS),
     )
     question = current_question(project)
     assert question is not None
 
     stale_rebuild = old.spec.model_copy(update={"question_id": question.question_id})
     with pytest.raises(FactoryValidationError) as raised:
-        record_protocol(project, agent, stale_rebuild, ready=True)
+        record_protocol(
+            project,
+            agent,
+            stale_rebuild,
+            ready=True,
+        )
 
     [issue] = raised.value.issues
     assert issue.field == "protocol"
@@ -194,8 +238,20 @@ def test_record_refused_for_stale_ready_protocol(
 
 def test_identical_resubmission_writes_nothing(project: Project, agent: Actor) -> None:
     qid = _question_id(project, agent)
-    first = record_protocol(project, agent, _spec(qid), ready=False)
-    again = record_protocol(project, agent, _spec(qid), ready=False)
+    first = record_protocol(
+        project,
+        agent,
+        _spec(qid),
+        ready=False,
+        decision_ids=bind_ids(project, agent, DecisionLevel.PROTOCOL),
+    )
+    again = record_protocol(
+        project,
+        agent,
+        _spec(qid),
+        ready=False,
+        decision_ids=bind_ids(project, agent, DecisionLevel.PROTOCOL),
+    )
 
     assert first.created is True
     assert again.created is False
@@ -347,6 +403,7 @@ def test_search_refused_when_question_changed_after_protocol(
         human,
         pilot_question_spec("Does linear attention match softmax on speech?"),
         reason="scope changed",
+        decision_ids=bind_ids(project, human, DecisionLevel.QUESTIONS),
     )
     with pytest.raises(FactoryValidationError) as raised:
         register_query(project, agent, SEARCH, sources=mock_sources(openalex=[]))
@@ -367,7 +424,11 @@ def test_amended_protocol_restores_search(
     old = current_protocol(project)
     assert old is not None
     record_question(
-        project, human, pilot_question_spec("Does linear attention match softmax?"), reason="reword"
+        project,
+        human,
+        pilot_question_spec("Does linear attention match softmax?"),
+        reason="reword",
+        decision_ids=bind_ids(project, human, DecisionLevel.QUESTIONS),
     )
     question = current_question(project)
     assert question is not None
@@ -426,7 +487,12 @@ def test_duplicate_planned_query_is_refused_at_record_but_replays_from_the_log(
     twice = PlannedQuery(source="openalex", kind=QueryKind.KEYWORD, text="attention")
     spec = _spec(qid, queries=(twice, twice))
     with pytest.raises(FactoryValidationError) as caught:
-        record_protocol(project, agent, spec, ready=False)
+        record_protocol(
+            project,
+            agent,
+            spec,
+            ready=False,
+        )
     assert [i.field for i in caught.value.issues] == ["queries[1]"]
     assert _events(project, "protocol.recorded") == []
 
@@ -502,6 +568,7 @@ def test_registered_query_is_refused_at_run_and_resume_once_the_question_is_supe
         human,
         pilot_question_spec("Does linear attention match softmax on speech?"),
         reason="scope changed",
+        decision_ids=bind_ids(project, human, DecisionLevel.QUESTIONS),
     )
     starts = len(_events(project, "search.run_started"))
     with pytest.raises(FactoryValidationError) as fresh:

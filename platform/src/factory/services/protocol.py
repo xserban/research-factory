@@ -28,6 +28,7 @@ from factory.events.envelope import Actor
 from factory.index.chase import chase_round_texts, snowball_round_texts
 from factory.living.window import window_spec
 from factory.model.base import StrictModel
+from factory.model.decisions import DecisionLevel
 from factory.model.grey import GreyMethod, structured_types
 from factory.model.miners import MinerUse
 from factory.model.project import RigorMode
@@ -56,6 +57,7 @@ from factory.model.search import QueryKind, QueryPurpose, QuerySpec
 from factory.model.watch import CycleStatus
 from factory.modules.presets import Enforcement, enforcement
 from factory.services.context import Project
+from factory.services.decisions import bind
 from factory.services.gates import gate_issues
 from factory.services.protocol_rules import (
     criterion_changes,
@@ -192,8 +194,13 @@ def record_protocol(
     *,
     ready: bool,
     review_request_id: str | None = None,
+    decision_ids: Sequence[str] | None = None,
 ) -> ProtocolResult:
     """Record the protocol as a draft or as ready. Writes nothing if the spec does not fit.
+
+    `decision_ids` are the selected `protocol` decisions this recording implements. In `pilot` and
+    `systematic` a recording that would write an event without one is refused (`decision_ids`, see
+    `decisions.bind`); an unchanged protocol writes nothing and needs none.
 
     `review_request_id` consumes an approved request whose proposal is this call."""
     with project.index.exclusive():
@@ -247,7 +254,9 @@ def record_protocol(
         if ready and check.gaps:
             raise FactoryValidationError(check.gaps)
 
+        bound = bind(project, DecisionLevel.PROTOCOL, decision_ids)
         payload = ProtocolRecorded(
+            decision_ids=bound,
             protocol_id=protocol_id,
             status=status,
             spec=spec,

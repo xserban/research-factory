@@ -33,7 +33,7 @@ from factory.model.base import StrictModel
 from factory.model.gates import GatePolicies
 from factory.model.grey import GreySource, grey_source_issues
 from factory.model.hypothesis_plan import HypothesisPlan
-from factory.model.identity import REVIEW_REQUEST_ID_RE, ULID_RE
+from factory.model.identity import REVIEW_REQUEST_ID_RE, ULID_RE, DecisionId
 from factory.model.miners import MinerUse
 from factory.model.question import QUESTION_ID_RE
 from factory.model.search import QueryKind, QuerySpec
@@ -445,6 +445,7 @@ class ProtocolRecorded(ReviewLinked):
     protocol_id: str = Field(pattern=PROTOCOL_ID_RE)
     status: ProtocolStatus
     spec: ProtocolSpec
+    decision_ids: tuple[DecisionId, ...] | None = None
 
     @model_validator(mode="after")
     def _id_matches_spec(self) -> Self:

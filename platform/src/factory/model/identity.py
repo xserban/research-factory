@@ -1,6 +1,9 @@
 import re
 import secrets
 from datetime import UTC, datetime, timedelta
+from typing import Annotated
+
+from pydantic import StringConstraints
 
 from factory.clock import Clock
 
@@ -10,6 +13,8 @@ SLUG_RE = r"^[a-z0-9]+(-[a-z0-9]+)*$"
 BLOB_REF_RE = r"^sha256:[0-9a-f]{64}$"
 CONVERSION_ID_RE = rf"^cnv_{ULID_RE}$"
 REVIEW_REQUEST_ID_RE = rf"^rrq_{ULID_RE}$"
+DECISION_ID_RE = rf"^dec_{ULID_RE}$"
+DecisionId = Annotated[str, StringConstraints(pattern=DECISION_ID_RE)]
 
 _ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)

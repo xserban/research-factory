@@ -13,6 +13,7 @@ from factory.config import Settings
 from factory.errors import FactoryValidationError
 from factory.events.envelope import Actor
 from factory.events.reader import read_all
+from factory.model.decisions import DecisionLevel
 from factory.model.project import RigorMode
 from factory.model.question import NonGoal, QuestionSpec, Slot
 from factory.model.search import QueryKind, QueryPurpose, QuerySpec
@@ -30,7 +31,7 @@ from factory.services.seeds import (
 )
 from factory.sources.base import PageSink, Prober, Source, SourceError
 from factory.sources.registry import SourceFactory
-from tests.helpers import SESSION, _leaks, arxiv_atom, openalex_item
+from tests.helpers import SESSION, _leaks, arxiv_atom, bind_ids, openalex_item
 
 SourcesFor = Callable[..., Mapping[str, SourceFactory]]
 PROBE_EVENTS = {"query.registered", "probe.page_archived", "probe.measured", "probe.failed"}
@@ -63,7 +64,12 @@ def _question_spec() -> QuestionSpec:
 
 def _question(project: Project, actor: Actor) -> None:
     state_goal(project, actor, "Compare attention on vision")
-    record_question(project, actor, _question_spec())
+    record_question(
+        project,
+        actor,
+        _question_spec(),
+        decision_ids=bind_ids(project, actor, DecisionLevel.QUESTIONS),
+    )
 
 
 def _seed(
@@ -77,7 +83,11 @@ def _seed(
 ) -> None:
     spec = SeedSpec(kind=kind, cite=f"Paper {n}", doi=f"10.1000/p{n}")
     [outcome] = add_seeds(
-        project, actor, [spec], sources=mock_sources(openalex=[_item(n, title)])
+        project,
+        actor,
+        [spec],
+        sources=mock_sources(openalex=[_item(n, title)]),
+        decision_ids=bind_ids(project, actor, DecisionLevel.SEEDS),
     ).written
     assert outcome.work_id is not None
 
@@ -137,12 +147,17 @@ def test_probe_reports_recall_per_query_and_source_and_pooled(
         agent,
         [SeedSpec(kind=SeedKind.POSITIVE, cite="Arxiv 1", arxiv="2301.01234")],
         sources=mock_sources(arxiv=arxiv_atom([("2301.01234v2", "Linear", 2023, "Ada")])),
+        decision_ids=bind_ids(project, agent, DecisionLevel.SEEDS),
     ).written
     assert outcome.work_id is not None
     sources = mock_sources(openalex=[_item(1), _item(2), _item(3)])
 
     report = run_probe(
-        project, agent, [_probe_spec("attention"), _probe_spec("transformers")], sources=sources
+        project,
+        agent,
+        [_probe_spec("attention"), _probe_spec("transformers")],
+        sources=sources,
+        decision_ids=bind_ids(project, agent, DecisionLevel.PROBE),
     )
 
     # Four development positives; SEED04 has no OpenAlex id: it is listed as untestable and is
@@ -169,7 +184,13 @@ def test_probe_reports_negative_hits(
     _seed(project, agent, mock_sources, 9, kind=SeedKind.NEGATIVE)
     sources = mock_sources(openalex=[_item(1), _item(9)])
 
-    report = run_probe(project, agent, [_probe_spec()], sources=sources)
+    report = run_probe(
+        project,
+        agent,
+        [_probe_spec()],
+        sources=sources,
+        decision_ids=bind_ids(project, agent, DecisionLevel.PROBE),
+    )
 
     [query] = report.queries
     assert query.negatives_retrieved == ("NEG01",)
@@ -184,7 +205,13 @@ def _arxiv_seed(project: Project, actor: Actor, mock_sources: SourcesFor, n: int
     arxiv_id = f"2301.{n:05d}"
     spec = SeedSpec(kind=SeedKind.POSITIVE, cite=f"Paper {n}", arxiv=arxiv_id)
     sources = mock_sources(arxiv=arxiv_atom([(f"{arxiv_id}v1", f"Paper {n}", 2020, "Ada")]))
-    [outcome] = add_seeds(project, actor, [spec], sources=sources).written
+    [outcome] = add_seeds(
+        project,
+        actor,
+        [spec],
+        sources=sources,
+        decision_ids=bind_ids(project, actor, DecisionLevel.SEEDS),
+    ).written
     assert outcome.work_id is not None
 
 
@@ -244,7 +271,11 @@ def test_probe_never_mentions_held_out_seeds(
     before = len(_events(project))
 
     report = run_probe(
-        project, agent, [_probe_spec(), _probe_spec("transformers")], sources=sources
+        project,
+        agent,
+        [_probe_spec(), _probe_spec("transformers")],
+        sources=sources,
+        decision_ids=bind_ids(project, agent, DecisionLevel.PROBE),
     )
 
     assert report.queries[0].retrieved == tuple(f"SEED{n:02d}" for n in development)
@@ -286,6 +317,7 @@ def test_probe_never_sends_held_out_arxiv_ids(
         agent,
         [QuerySpec(source="arxiv", kind=QueryKind.KEYWORD, text="linear attention")],
         sources=sources,
+        decision_ids=bind_ids(project, agent, DecisionLevel.PROBE),
     )
 
     urls = [unquote(str(request.url)) for request in http_log]
@@ -302,8 +334,20 @@ def test_probe_draws_the_split_in_pilot(
     _positives(project, agent, mock_sources, 3)
     sources = mock_sources(openalex=[_item(1)])
 
-    run_probe(project, agent, [_probe_spec()], sources=sources)
-    run_probe(project, agent, [_probe_spec("again")], sources=sources)
+    run_probe(
+        project,
+        agent,
+        [_probe_spec()],
+        sources=sources,
+        decision_ids=bind_ids(project, agent, DecisionLevel.PROBE),
+    )
+    run_probe(
+        project,
+        agent,
+        [_probe_spec("again")],
+        sources=sources,
+        decision_ids=bind_ids(project, agent, DecisionLevel.PROBE),
+    )
 
     splits = [e for e in _events(project) if e.type == "seed.split_drawn"]
     assert len(splits) == 1
@@ -319,7 +363,12 @@ def test_probe_requires_a_question(
     _positives(project, agent, mock_sources, 2)
     before = len(_events(project))
     with pytest.raises(FactoryValidationError) as refused:
-        run_probe(project, agent, [_probe_spec()], sources=mock_sources(openalex=[_item(1)]))
+        run_probe(
+            project,
+            agent,
+            [_probe_spec()],
+            sources=mock_sources(openalex=[_item(1)]),
+        )
     assert [issue.field for issue in refused.value.issues] == ["question"]
     assert _events(project)[before:] == []
 
@@ -338,7 +387,12 @@ def test_probe_validates_all_specs_before_writing(
 
     sources = mock_sources(openalex=[_item(1)], arxiv=arxiv_atom())
     with pytest.raises(FactoryValidationError) as refused:
-        run_probe(project, agent, specs, sources=sources)
+        run_probe(
+            project,
+            agent,
+            specs,
+            sources=sources,
+        )
 
     fields = [issue.field for issue in refused.value.issues]
     assert fields == ["queries[1].source", "queries[2].kind"]
@@ -350,7 +404,13 @@ def test_probe_creates_no_works(project: Project, agent: Actor, mock_sources: So
     _positives(project, agent, mock_sources, 3)
     works_before = [w.id for w in list_works(project, include_probe=True)]
 
-    run_probe(project, agent, [_probe_spec()], sources=mock_sources(openalex=[_item(1)]))
+    run_probe(
+        project,
+        agent,
+        [_probe_spec()],
+        sources=mock_sources(openalex=[_item(1)]),
+        decision_ids=bind_ids(project, agent, DecisionLevel.PROBE),
+    )
 
     assert [w.id for w in list_works(project, include_probe=True)] == works_before
     assert list_works(project) == []
@@ -366,6 +426,7 @@ def test_probe_registers_queries_with_purpose_probe(
         agent,
         [_probe_spec()],
         sources=mock_sources(openalex=[_item(1)]),
+        decision_ids=bind_ids(project, agent, DecisionLevel.PROBE),
     )
     [registered] = [
         e
@@ -385,7 +446,13 @@ def test_probe_pages_archived_before_measurement(
 ) -> None:
     _question(project, agent)
     _positives(project, agent, mock_sources, 3)
-    report = run_probe(project, agent, [_probe_spec()], sources=mock_sources(openalex=[_item(1)]))
+    report = run_probe(
+        project,
+        agent,
+        [_probe_spec()],
+        sources=mock_sources(openalex=[_item(1)]),
+        decision_ids=bind_ids(project, agent, DecisionLevel.PROBE),
+    )
     types = [e.type for e in _events(project)]
     measured = types.index("probe.measured")
     assert types[:measured].count("probe.page_archived") >= 1
@@ -434,7 +501,11 @@ def test_source_error_during_probe_is_reported(
     sources = _broken_sources(mock_sources(openalex=[_item(1), _item(2)]), "broken")
 
     report = run_probe(
-        project, agent, [_probe_spec("broken"), _probe_spec("attention")], sources=sources
+        project,
+        agent,
+        [_probe_spec("broken"), _probe_spec("attention")],
+        sources=sources,
+        decision_ids=bind_ids(project, agent, DecisionLevel.PROBE),
     )
 
     broken, good = report.queries
@@ -469,7 +540,11 @@ def test_source_error_in_the_count_request_is_reported_without_recall(
     sources = _broken_sources(mock_sources(openalex=[_item(1), _item(2)]), "broken", at="count")
 
     report = run_probe(
-        project, agent, [_probe_spec("broken"), _probe_spec("attention")], sources=sources
+        project,
+        agent,
+        [_probe_spec("broken"), _probe_spec("attention")],
+        sources=sources,
+        decision_ids=bind_ids(project, agent, DecisionLevel.PROBE),
     )
 
     broken, good = report.queries
@@ -533,6 +608,7 @@ def test_exploratory_recall_meets_its_threshold(
         agent,
         [_probe_spec()],
         sources=mock_sources(openalex=[_item(n) for n in (1, 2, 3, 4)]),
+        decision_ids=bind_ids(project, agent, DecisionLevel.PROBE),
     )
     assert report.pooled_recall == 0.8
     assert report.meets_threshold is True
@@ -548,7 +624,13 @@ def test_pilot_recall_below_threshold_is_not_met(
     assert len(development) == 5
     sources = mock_sources(openalex=[_item(n) for n in development[1:]])
 
-    report = run_probe(project, agent, [_probe_spec()], sources=sources)
+    report = run_probe(
+        project,
+        agent,
+        [_probe_spec()],
+        sources=sources,
+        decision_ids=bind_ids(project, agent, DecisionLevel.PROBE),
+    )
 
     assert report.pooled_recall == 0.8
     assert report.threshold == 0.9
@@ -561,7 +643,13 @@ def test_recall_is_none_when_nothing_measured(
     _question(project, agent)
     _positives(project, agent, mock_sources, 3)
     sources = _broken_sources(mock_sources(openalex=[_item(1)]), "attention")
-    report = run_probe(project, agent, [_probe_spec()], sources=sources)
+    report = run_probe(
+        project,
+        agent,
+        [_probe_spec()],
+        sources=sources,
+        decision_ids=bind_ids(project, agent, DecisionLevel.PROBE),
+    )
     assert report.pooled_recall is None
     assert report.per_source_recall == {"openalex": None}
     assert report.meets_threshold is False
@@ -580,7 +668,13 @@ def test_suggestions_name_development_seeds(
         _seed(project, agent, mock_sources, n, title="Graph neural network scaling")
     sources = mock_sources(openalex=[_item(1, "Linear attention")])
 
-    report = run_probe(project, agent, [_probe_spec("attention")], sources=sources)
+    report = run_probe(
+        project,
+        agent,
+        [_probe_spec("attention")],
+        sources=sources,
+        decision_ids=bind_ids(project, agent, DecisionLevel.PROBE),
+    )
 
     [query] = report.queries
     assert query.missed == ("SEED02", "SEED03", "SEED04")
@@ -595,7 +689,13 @@ def test_probe_rebuild_equals_incremental(
 ) -> None:
     _question(project, agent)
     _positives(project, agent, mock_sources, 3)
-    run_probe(project, agent, [_probe_spec()], sources=mock_sources(openalex=[_item(1)]))
+    run_probe(
+        project,
+        agent,
+        [_probe_spec()],
+        sources=mock_sources(openalex=[_item(1)]),
+        decision_ids=bind_ids(project, agent, DecisionLevel.PROBE),
+    )
     before = project.index.state_hash()
     assert project.index.rebuild() == before
 
@@ -609,7 +709,12 @@ def test_probe_kinds_come_from_the_factory(
     narrow = SourceFactory(inner.kinds, inner.build, probe_kinds=frozenset({QueryKind.KEYWORD}))
     spec = QuerySpec(source="openalex", kind=QueryKind.FILTER, text="x")
     with pytest.raises(FactoryValidationError) as refused:
-        run_probe(project, agent, [spec], sources={"openalex": narrow})
+        run_probe(
+            project,
+            agent,
+            [spec],
+            sources={"openalex": narrow},
+        )
     assert [(i.field, i.reason) for i in refused.value.issues if i.field == "queries[0].kind"] == [
         ("queries[0].kind", "openalex cannot measure filter queries")
     ]
@@ -626,7 +731,14 @@ def test_probe_returns_and_records_a_title_sample(
     _positives(project, agent, mock_sources, 2)
     sources = mock_sources(openalex=[_item(1), _item(2), _item(50, "Off topic paper")])
 
-    report = run_probe(project, agent, [_probe_spec()], sources=sources, sample=5)
+    report = run_probe(
+        project,
+        agent,
+        [_probe_spec()],
+        sources=sources,
+        sample=5,
+        decision_ids=bind_ids(project, agent, DecisionLevel.PROBE),
+    )
 
     [query] = report.queries
     assert query.sample_kind == "random"
@@ -653,7 +765,14 @@ def test_probe_sample_zero_sends_no_sample_request(
     sources = mock_sources(openalex=[_item(1), _item(2)])
     http_log.clear()
 
-    report = run_probe(project, agent, [_probe_spec()], sources=sources, sample=0)
+    report = run_probe(
+        project,
+        agent,
+        [_probe_spec()],
+        sources=sources,
+        sample=0,
+        decision_ids=bind_ids(project, agent, DecisionLevel.PROBE),
+    )
 
     assert report.queries[0].sample_titles == ()
     assert report.queries[0].sample_kind is None
@@ -676,7 +795,14 @@ def test_probe_sample_request_is_seeded_and_uses_the_query_filter(
     sources = mock_sources(openalex=[_item(1)])
     http_log.clear()
 
-    run_probe(project, agent, [_probe_spec("attention")], sources=sources, sample=7)
+    run_probe(
+        project,
+        agent,
+        [_probe_spec("attention")],
+        sources=sources,
+        sample=7,
+        decision_ids=bind_ids(project, agent, DecisionLevel.PROBE),
+    )
 
     sampled = [r for r in http_log if "sample" in r.url.params]
     assert len(sampled) == 1
@@ -695,7 +821,13 @@ def test_probe_sample_drops_held_out_records_silently(
     assert held_out
     sources = mock_sources(openalex=[_item(n) for n in range(1, 7)])
 
-    report = run_probe(project, agent, [_probe_spec()], sources=sources)
+    report = run_probe(
+        project,
+        agent,
+        [_probe_spec()],
+        sources=sources,
+        decision_ids=bind_ids(project, agent, DecisionLevel.PROBE),
+    )
 
     titles = report.queries[0].sample_titles
     assert titles
@@ -738,7 +870,14 @@ def test_probe_counts_openalex_hits_on_arxiv_when_both_sources_are_measured(
     http_log.clear()
     arxiv_spec = QuerySpec(source="arxiv", kind=QueryKind.KEYWORD, text="all:attention")
 
-    report = run_probe(project, agent, [_probe_spec(), arxiv_spec], sources=sources, sample=0)
+    report = run_probe(
+        project,
+        agent,
+        [_probe_spec(), arxiv_spec],
+        sources=sources,
+        sample=0,
+        decision_ids=bind_ids(project, agent, DecisionLevel.PROBE),
+    )
 
     openalex_query, arxiv_query = report.queries
     assert openalex_query.openalex_on_arxiv == 7
@@ -764,7 +903,14 @@ def test_probe_without_arxiv_makes_no_overlap_request(
     sources = mock_sources(openalex=[_item(1)])
     http_log.clear()
 
-    report = run_probe(project, agent, [_probe_spec()], sources=sources, sample=0)
+    report = run_probe(
+        project,
+        agent,
+        [_probe_spec()],
+        sources=sources,
+        sample=0,
+        decision_ids=bind_ids(project, agent, DecisionLevel.PROBE),
+    )
 
     assert report.queries[0].openalex_on_arxiv is None
     assert report.overlap_note is None
@@ -792,7 +938,11 @@ def test_probe_accepts_listed_since_for_arxiv(
     http_log.clear()
 
     report = run_probe(
-        project, agent, [_arxiv_spec({"listed_since": "2024-01-15"})], sources=sources
+        project,
+        agent,
+        [_arxiv_spec({"listed_since": "2024-01-15"})],
+        sources=sources,
+        decision_ids=bind_ids(project, agent, DecisionLevel.PROBE),
     )
 
     assert report.queries[0].status == "measured"
@@ -822,6 +972,11 @@ def test_probe_refuses_other_arxiv_filters_and_writes_nothing(
     _question(project, agent)
     before = len(_events(project))
     with pytest.raises(FactoryValidationError) as caught:
-        run_probe(project, agent, [_arxiv_spec(filters)], sources=mock_sources())
+        run_probe(
+            project,
+            agent,
+            [_arxiv_spec(filters)],
+            sources=mock_sources(),
+        )
     assert message in str(caught.value)
     assert len(_events(project)) == before

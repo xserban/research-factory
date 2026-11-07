@@ -19,6 +19,7 @@ from factory.cli.main import app
 from factory.config import Settings
 from factory.events.envelope import Actor
 from factory.model.chase import ChaseDirection
+from factory.model.decisions import DecisionLevel
 from factory.model.project import RigorMode
 from factory.model.protocol import SnowballPlan
 from factory.model.references import Direction, Via
@@ -39,6 +40,7 @@ from factory.services.trace import KINDS, TraceNode, trace
 from tests import test_snowball_round as rounds
 from tests.cli_helpers import _env
 from tests.document_helpers import fetched_document, make_registry, promoted_works, run_convert
+from tests.helpers import bind_ids
 from tests.references_service_helpers import bib_html
 from tests.test_snowball_compare import CHASED, CITING, REED, _backward, _pending, _screen
 from tests.test_snowball_round import ENTRIES_A, _amend, _lookups, _sources
@@ -414,7 +416,13 @@ def test_seed_found_by_snowball_labelled_in_cli_only(
 ) -> None:
     _, reed = _backward(project, agent)
     spec = SeedSpec(kind=SeedKind.POSITIVE, cite="Reed", openalex="W501")
-    [outcome] = add_seeds(project, agent, [spec], sources=_sources()).written
+    [outcome] = add_seeds(
+        project,
+        agent,
+        [spec],
+        sources=_sources(),
+        decision_ids=bind_ids(project, agent, DecisionLevel.SEEDS),
+    ).written
     [row] = [c for c in seed_check(project) if c.seed_id == outcome.seed_id]
     assert row.matched_work == reed and row.found_by == "snowball"
     others = [c for c in seed_check(project) if c.seed_id != outcome.seed_id]

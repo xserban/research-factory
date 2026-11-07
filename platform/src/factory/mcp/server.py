@@ -590,16 +590,19 @@ def build_server(
         skill: str,
         raw_goal: str | None = None,
         reason: str | None = None,
+        decision_ids: list[str] | None = None,
     ) -> dict[str, JsonValue]:
         """Record the question. `raw_goal`, when given, is stored verbatim first. A new version
-        needs a `reason`; an unchanged spec writes nothing."""
+        needs a `reason`; an unchanged spec writes nothing. `decision_ids` are the selected
+        `questions` decisions it implements; pilot and systematic projects refuse a new version
+        without one."""
 
         def record() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
             actor = make_agent_actor(settings, session, role, model, skill)
             parsed = parse_input(QuestionSpec, spec, "spec")
             result = question_service.record_question(
-                opened, actor, parsed, reason=reason, raw_goal=raw_goal
+                opened, actor, parsed, reason=reason, raw_goal=raw_goal, decision_ids=decision_ids
             )
             return {
                 "question_id": result.question_id,
@@ -611,10 +614,17 @@ def build_server(
 
     @server.tool()
     def seed_add(
-        project: str, seeds: list[dict[str, JsonValue]], role: str, model: str, skill: str
+        project: str,
+        seeds: list[dict[str, JsonValue]],
+        role: str,
+        model: str,
+        skill: str,
+        decision_ids: list[str] | None = None,
     ) -> dict[str, JsonValue]:
         """Add seeds by identifier (doi, arxiv or openalex) and look each one up. Each seed is
-        written or rejected on its own; rejections name the item by index and field."""
+        written or rejected on its own; rejections name the item by index and field.
+        `decision_ids` are the selected `seeds` decisions the batch implements; pilot and
+        systematic projects refuse the whole call without one."""
 
         def add() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
@@ -627,7 +637,11 @@ def build_server(
                 except FactoryValidationError as exc:
                     rejected.append(ItemError(index=index, issues=exc.issues))
             result = seeds_service.add_seeds(
-                opened, actor, [spec for _, spec in accepted], sources=adapters
+                opened,
+                actor,
+                [spec for _, spec in accepted],
+                sources=adapters,
+                decision_ids=decision_ids,
             )
             for error in result.rejected:
                 original = accepted[error.index][0]
@@ -672,6 +686,7 @@ def build_server(
         model: str,
         skill: str,
         sample: int = 20,
+        decision_ids: list[str] | None = None,
     ) -> dict[str, JsonValue]:
         """Measure queries against the development seeds and the negatives: recall and negative
         hits per query and per source. Each query is {source, query, kind="keyword", filters={}};
@@ -679,13 +694,17 @@ def build_server(
         systematic project draws the hold-out split. Each measured query also returns `sample`
         titles (default 20, 0 for none) to judge noise: a seeded random sample from OpenAlex, the
         first page by relevance from arXiv (`sample_kind` says
-        which). Samples are not corpus records and drop any held-out seed's work."""
+        which). Samples are not corpus records and drop any held-out seed's work. `decision_ids`
+        are the selected `probe` decisions this round implements; pilot and systematic projects
+        refuse a probe without one."""
 
         def probe() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
             actor = make_agent_actor(settings, session, role, model, skill)
             specs = [_probe_spec(item, index) for index, item in enumerate(queries)]
-            report = probe_service.run_probe(opened, actor, specs, sources=adapters, sample=sample)
+            report = probe_service.run_probe(
+                opened, actor, specs, sources=adapters, sample=sample, decision_ids=decision_ids
+            )
             return _withheld(opened, report.model_dump(mode="json"))
 
         return _reply(project, probe, rename=dotted)
@@ -699,17 +718,25 @@ def build_server(
         skill: str,
         ready: bool = False,
         review_request_id: str | None = None,
+        decision_ids: list[str] | None = None,
     ) -> dict[str, JsonValue]:
         """Record the protocol as a draft, or as ready when `ready` is true. Gaps are returned
         whether or not the protocol was written. A ready protocol changes only by protocol_amend.
-        `review_request_id` consumes an approved request whose proposal is this call."""
+        `review_request_id` consumes an approved request whose proposal is this call.
+        `decision_ids` are the selected `protocol` decisions it implements; pilot and systematic
+        projects refuse a recording without one."""
 
         def record() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
             actor = make_agent_actor(settings, session, role, model, skill)
             parsed = parse_input(ProtocolSpec, spec, "spec")
             result = protocol_service.record_protocol(
-                opened, actor, parsed, ready=ready, review_request_id=review_request_id
+                opened,
+                actor,
+                parsed,
+                ready=ready,
+                review_request_id=review_request_id,
+                decision_ids=decision_ids,
             )
             data = result.model_dump(mode="json")
             data["gaps"] = [

@@ -14,6 +14,7 @@ from typing import Self
 from pydantic import Field, model_validator
 
 from factory.model.base import StrictModel
+from factory.model.identity import DecisionId
 from factory.model.work import RUN_ID_RE, ProvenanceMethod
 from factory.model.work_ids import WORK_ID_RE, arxiv_id_from_doi, normalize_arxiv, normalize_doi
 
@@ -77,6 +78,7 @@ class SeedSpec(StrictModel):
 class SeedAdded(StrictModel):
     seed_id: str = Field(pattern=SEED_ID_RE)
     spec: SeedSpec
+    decision_ids: tuple[DecisionId, ...] | None = None
 
 
 class SeedResolved(StrictModel):

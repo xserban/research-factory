@@ -8,12 +8,20 @@ import pytest
 from factory.clock import FixedClock
 from factory.config import Settings
 from factory.events.reader import event_files, read_all
+from factory.model.decisions import DecisionLevel
 from factory.model.identity import ulid_time
 from factory.services.context import Project
 from factory.services.project import init_project
 from factory.services.question import record_question
 from tests import helpers, world_cache
-from tests.helpers import SESSION, T0, install_skill, pilot_question_spec, record_pilot_question
+from tests.helpers import (
+    SESSION,
+    T0,
+    bind_ids,
+    install_skill,
+    pilot_question_spec,
+    record_pilot_question,
+)
 from tests.world_cache import snapshot_world
 
 
@@ -69,7 +77,13 @@ def test_restored_world_is_independent(tmp_path: Path) -> None:
     _build(second, "Primary two?")
     actor = second.human_actor()
     first_log = _log(first)
-    record_question(second, actor, pilot_question_spec(primary="Another?"), reason="refined")
+    record_question(
+        second,
+        actor,
+        pilot_question_spec(primary="Another?"),
+        reason="refined",
+        decision_ids=bind_ids(second, actor, DecisionLevel.QUESTIONS),
+    )
     # The write applied incrementally to the restored index and left the template's copy alone.
     assert second.index.sync().rebuilt is False
     assert _log(first) == first_log

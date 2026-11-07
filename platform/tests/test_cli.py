@@ -11,6 +11,7 @@ from factory.clock import FixedClock
 from factory.config import Settings
 from factory.events.envelope import Actor
 from factory.events.reader import read_all
+from factory.model.decisions import DecisionLevel
 from factory.model.fulltext import Route
 from factory.model.protocol import PressElement, PressFinding
 from factory.model.screening import Channel, PassLabel, ScreeningItem, ScreeningPhase, Verdict
@@ -38,6 +39,7 @@ from tests.helpers import (
     FakeSource,
     _of_type,
     _setup,
+    bind_ids,
     openalex_item,
     ready_protocol,
     record_pilot_question,
@@ -182,7 +184,13 @@ def _seed_one(project: Project, agent: Actor, sources: Any, n: int, kind: SeedKi
         openalex_id=f"W{n}",
         doi=f"10.1000/p{n}",
     )
-    add_seeds(project, agent, [spec], sources=sources(openalex=[item]))
+    add_seeds(
+        project,
+        agent,
+        [spec],
+        sources=sources(openalex=[item]),
+        decision_ids=bind_ids(project, agent, DecisionLevel.SEEDS),
+    )
 
 
 def test_seeds_cli_shows_held_out_roles(
@@ -393,7 +401,13 @@ def test_cli_seed_admit_requires_deviation_in_pilot(
 ) -> None:
     ready_protocol(project, agent, human, mock_sources)
     spec = SeedSpec(kind=SeedKind.POSITIVE, cite="Paper 7", doi="10.1000/p7")
-    [outcome] = add_seeds(project, human, [spec], sources=mock_sources()).written
+    [outcome] = add_seeds(
+        project,
+        human,
+        [spec],
+        sources=mock_sources(),
+        decision_ids=bind_ids(project, human, DecisionLevel.SEEDS),
+    ).written
     explain_seed_miss(
         project, human, outcome.seed_id, "not indexed", ProvenanceMethod.SEED_ADMISSION
     )

@@ -9,6 +9,7 @@ import pytest
 
 from factory.clock import FixedClock
 from factory.events.envelope import Actor
+from factory.model.decisions import DecisionLevel
 from factory.model.project import RigorMode
 from factory.model.protocol import MethodProfile
 from factory.model.watch import WatchPlan, WatchSource
@@ -17,7 +18,7 @@ from factory.services.context import Project
 from factory.services.dedup import canonical_works
 from factory.services.protocol import amend_protocol, current_protocol, record_protocol
 from factory.services.watch import watch_run
-from tests.helpers import SourcesFor, pilot_protocol_spec, record_pilot_question
+from tests.helpers import SourcesFor, bind_ids, pilot_protocol_spec, record_pilot_question
 from tests.living_helpers import filler
 from tests.test_watch_window import windowed  # noqa: F401  (a fixture)
 from tests.watch_helpers import ScriptedSource, adapters, by_text, record, watch_ready
@@ -44,7 +45,13 @@ def test_finding_watch_plan_missing(explore_project: Project, agent: Actor, huma
     question_id = record_pilot_question(explore_project, agent)
     spec = pilot_protocol_spec(question_id, None, reviewer=human.id)
     living = spec.model_copy(update={"method_profile": MethodProfile.LIVING_REVIEW})
-    record_protocol(explore_project, agent, living, ready=False)
+    record_protocol(
+        explore_project,
+        agent,
+        living,
+        ready=False,
+        decision_ids=bind_ids(explore_project, agent, DecisionLevel.PROTOCOL),
+    )
     assert [
         f.severity for f in _found(explore_project, "watch-plan-missing", RigorMode.EXPLORATORY)
     ] == ["warning"]
@@ -59,7 +66,13 @@ def test_check_promote_to_pilot_lists_watch_plan_gap(
     question_id = record_pilot_question(explore_project, agent)
     spec = pilot_protocol_spec(question_id, None, reviewer=human.id)
     living = spec.model_copy(update={"method_profile": MethodProfile.LIVING_REVIEW})
-    record_protocol(explore_project, agent, living, ready=False)
+    record_protocol(
+        explore_project,
+        agent,
+        living,
+        ready=False,
+        decision_ids=bind_ids(explore_project, agent, DecisionLevel.PROTOCOL),
+    )
     assert "watch-plan-missing" not in {
         f.code for f in check(explore_project).findings if f.severity == "error"
     }

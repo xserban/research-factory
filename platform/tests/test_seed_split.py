@@ -10,6 +10,7 @@ from factory.config import Settings
 from factory.errors import FactoryValidationError
 from factory.events.envelope import Actor
 from factory.events.reader import read_all
+from factory.model.decisions import DecisionLevel
 from factory.model.search import QueryKind, QuerySpec
 from factory.model.seed import SPLIT_PROCEDURE, SeedKind, SeedMissExplained, SeedSpec
 from factory.model.work import ProvenanceMethod
@@ -29,7 +30,7 @@ from factory.services.seeds import (
     split_seeds,
 )
 from factory.sources.registry import SourceFactory
-from tests.helpers import SESSION, arxiv_atom, openalex_item
+from tests.helpers import SESSION, arxiv_atom, bind_ids, openalex_item
 
 SourcesFor = Callable[..., Mapping[str, SourceFactory]]
 
@@ -54,13 +55,25 @@ def _resolved(
 ) -> str:
     spec = SeedSpec(kind=kind, cite=f"Paper {n}", doi=f"10.1000/p{n}")
     sources = mock_sources(openalex=[_item(n, year)])
-    [outcome] = add_seeds(project, agent, [spec], sources=sources).written
+    [outcome] = add_seeds(
+        project,
+        agent,
+        [spec],
+        sources=sources,
+        decision_ids=bind_ids(project, agent, DecisionLevel.SEEDS),
+    ).written
     return outcome.seed_id
 
 
 def _unresolved(project: Project, agent: Actor, mock_sources: SourcesFor, n: int) -> str:
     spec = SeedSpec(kind=SeedKind.POSITIVE, cite=f"Gone {n}", doi=f"10.1000/gone{n}")
-    [outcome] = add_seeds(project, agent, [spec], sources=mock_sources()).written
+    [outcome] = add_seeds(
+        project,
+        agent,
+        [spec],
+        sources=mock_sources(),
+        decision_ids=bind_ids(project, agent, DecisionLevel.SEEDS),
+    ).written
     return outcome.seed_id
 
 
@@ -270,7 +283,13 @@ def test_seed_check_matches_a_bridged_identifier(
     body = arxiv_atom([("2301.01234v1", "Preprint title", 2023, "Ada Zhou")])
     spec = SeedSpec(kind=SeedKind.POSITIVE, cite="Zhou 2023", arxiv="2301.01234")
     sources = mock_sources(arxiv=body)
-    add_seeds(explore_project, agent, [spec], sources=sources)
+    add_seeds(
+        explore_project,
+        agent,
+        [spec],
+        sources=sources,
+        decision_ids=bind_ids(explore_project, agent, DecisionLevel.SEEDS),
+    )
     published = openalex_item(
         title="Published title",
         author="Ada Zhou",

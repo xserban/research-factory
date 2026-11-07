@@ -18,6 +18,7 @@ from factory.events.envelope import Actor, Event
 from factory.events.reader import read_all
 from factory.index.index import Index
 from factory.index.projection import Projection, core_tables
+from factory.model.decisions import DecisionLevel
 from factory.model.project import RigorMode
 from factory.model.protocol import (
     Criterion,
@@ -84,6 +85,7 @@ from tests.helpers import (
     _protocol,
     _random_item,
     _setup,
+    bind_ids,
     openalex_item,
     ready_protocol,
 )
@@ -434,7 +436,13 @@ def _cite(verdict: str) -> str | None:
 def _unfound_seed(project: Project, agent: Actor, mock_sources: SourcesFor) -> str:
     """Add a positive seed whose lookup finds no work; returns its id."""
     spec = SeedSpec(kind=SeedKind.POSITIVE, cite="Paper 7", doi=SEED_DOI)
-    result = add_seeds(project, agent, [spec], sources=mock_sources(openalex=[]))
+    result = add_seeds(
+        project,
+        agent,
+        [spec],
+        sources=mock_sources(openalex=[]),
+        decision_ids=bind_ids(project, agent, DecisionLevel.SEEDS),
+    )
     [outcome] = result.written
     return outcome.seed_id
 
@@ -598,12 +606,25 @@ def _calibration_setup(
     three positives; the later positives are late, and count as development. Returns the protocol
     id."""
     protocol_id = ready_protocol(project, agent, human, mock_sources)
+    seed_ids = bind_ids(project, agent, DecisionLevel.SEEDS)
     for n in range(4, POSITIVES + 1):
         spec = SeedSpec(kind=SeedKind.POSITIVE, cite=f"Paper {n}", doi=f"10.1000/p{n}")
-        add_seeds(project, agent, [spec], sources=mock_sources(openalex=[_positive_item(n)]))
+        add_seeds(
+            project,
+            agent,
+            [spec],
+            sources=mock_sources(openalex=[_positive_item(n)]),
+            decision_ids=seed_ids,
+        )
     for k in range(1, NEGATIVES + 1):
         spec = SeedSpec(kind=SeedKind.NEGATIVE, cite=f"Negative {k}", doi=f"10.1000/n{k}")
-        add_seeds(project, agent, [spec], sources=mock_sources(openalex=[_negative_item(k)]))
+        add_seeds(
+            project,
+            agent,
+            [spec],
+            sources=mock_sources(openalex=[_negative_item(k)]),
+            decision_ids=seed_ids,
+        )
     items = [_positive_item(n) for n in range(1, POSITIVES + 1)]
     items += [_negative_item(k) for k in range(1, NEGATIVES + 1)]
     items += [_random_item(k) for k in range(1, RANDOM_WORKS + 1)]

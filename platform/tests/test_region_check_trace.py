@@ -14,6 +14,7 @@ from factory.cli.main import app
 from factory.config import Settings
 from factory.errors import FactoryValidationError
 from factory.events.envelope import Actor
+from factory.model.decisions import DecisionLevel
 from factory.model.protocol import ScreeningStage
 from factory.model.question import QuestionSpec, Slot
 from factory.model.regions import EdgeBasis, Facet, RegionKind
@@ -32,7 +33,7 @@ from factory.services.regions import (
 from factory.services.trace import agent_trace, trace
 from tests.cli_helpers import _env
 from tests.contribution_helpers import ctr_a, ctr_b, world  # noqa: F401
-from tests.helpers import pilot_question_spec
+from tests.helpers import bind_ids, pilot_question_spec
 from tests.lineage_helpers import Lineage, lin  # noqa: F401
 from tests.region_helpers import RWorld, add_queries, region_project, screened  # noqa: F401
 from tests.test_cli_regions import _define, _run
@@ -144,7 +145,13 @@ def test_focus_slot_missing_finding(region_project: RWorld, human: Actor) -> Non
     renamed = QuestionSpec(
         **{**spec.model_dump(), "slots": (Slot(name="cohort", value="vision"), spec.slots[1])}
     )
-    record_question(w.project, human, renamed, reason="renamed the slot")
+    record_question(
+        w.project,
+        human,
+        renamed,
+        reason="renamed the slot",
+        decision_ids=bind_ids(w.project, human, DecisionLevel.QUESTIONS),
+    )
     assert "region-focus-slot-missing" in findings(w)
 
 

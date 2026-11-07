@@ -25,10 +25,9 @@ from typing import Annotated, Self
 from pydantic import Field, StringConstraints, model_validator
 
 from factory.model.base import StrictModel
-from factory.model.identity import ULID_RE
+from factory.model.identity import DecisionId
 from factory.model.screening import Channel, NonBlank
 
-DECISION_ID_RE = rf"^dec_{ULID_RE}$"
 ITEM_ID_RE = r"^I\d{2,}$"
 ADDED_ID_RE = r"^A\d{2,}$"
 SUBJECT_RE = r"^[a-z0-9]+(-[a-z0-9]+)*$"
@@ -40,7 +39,6 @@ MAX_NOTE = 600
 TECHNICAL_SUBJECTS = frozenset({"tooling", "ordering", "fix", "model-choice", "setting"})
 """Subjects about how the work is run, not what it asks: only these may carry `recommended`."""
 
-DecisionId = Annotated[str, StringConstraints(pattern=DECISION_ID_RE)]
 ItemId = Annotated[str, StringConstraints(pattern=ITEM_ID_RE)]
 Text = Annotated[NonBlank, StringConstraints(max_length=MAX_TEXT)]
 

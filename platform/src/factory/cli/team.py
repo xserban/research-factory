@@ -214,7 +214,18 @@ def review_withdraw_cmd(
     typer.echo(f"withdrawn {review_request_id}")
 
 
-def protocol_record_cmd(ctx: typer.Context, file: FileOption, review: ReviewOption = None) -> None:
+DecisionOption = Annotated[
+    list[str] | None,
+    typer.Option("--decision", help="A selected protocol decision this implements (repeatable)."),
+]
+
+
+def protocol_record_cmd(
+    ctx: typer.Context,
+    file: FileOption,
+    review: ReviewOption = None,
+    decision: DecisionOption = None,
+) -> None:
     """Record the protocol from a file, as a person."""
     with _project(ctx) as project:
         parsed = reviews_service.parse_proposal(ReviewKind.PROTOCOL_RECORD, _read_json(file))
@@ -225,6 +236,7 @@ def protocol_record_cmd(ctx: typer.Context, file: FileOption, review: ReviewOpti
             parsed.spec,
             ready=parsed.ready,
             review_request_id=review,
+            decision_ids=decision,
         )
     typer.echo(result.protocol_id)
 

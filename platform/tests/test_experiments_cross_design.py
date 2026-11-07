@@ -14,6 +14,7 @@ from factory.errors import FactoryValidationError
 from factory.events.envelope import Actor, Event
 from factory.events.reader import read_all
 from factory.hypotheses.design import cell_hash
+from factory.model.decisions import DecisionLevel
 from factory.model.extraction import ExtractedRowInput
 from factory.model.screening import PassLabel
 from factory.services.context import Project
@@ -38,6 +39,7 @@ from tests.experiment_helpers import (
     xw,
 )
 from tests.extraction_helpers import SESSION_A, _extractor, _r
+from tests.helpers import bind_ids
 from tests.hypothesis_helpers import DRAFTER, HW, gw, hw, make_spec
 from tests.test_finder_gaps import SourcesFor, _method
 from tests.test_reproduction import _repro
@@ -190,14 +192,36 @@ def test_an_agent_cannot_set_the_test_access_limit_by_recording_a_protocol(
     plain = pilot_protocol_spec(question, None, reviewer=human.id)
     high = plain.model_copy(update={"hypothesis_plan": HypothesisPlan(test_access_limit=50)})
     with pytest.raises(FactoryValidationError) as err:  # a first record
-        record_protocol(project, OTHER, high, ready=False)
+        record_protocol(
+            project,
+            OTHER,
+            high,
+            ready=False,
+        )
     assert _fields(err) == [("hypothesis_plan.test_access_limit", "agent-cannot-raise")]
-    record_protocol(project, OTHER, plain, ready=False)
+    record_protocol(
+        project,
+        OTHER,
+        plain,
+        ready=False,
+        decision_ids=bind_ids(project, OTHER, DecisionLevel.PROTOCOL),
+    )
     with pytest.raises(FactoryValidationError) as err:  # a re-recorded draft
-        record_protocol(project, OTHER, high, ready=False)
+        record_protocol(
+            project,
+            OTHER,
+            high,
+            ready=False,
+        )
     assert _fields(err) == [("hypothesis_plan.test_access_limit", "agent-cannot-raise")]
     assert effective_plan(project).test_access_limit == 1
-    record_protocol(project, human, high, ready=False)  # the researcher may
+    record_protocol(
+        project,
+        human,
+        high,
+        ready=False,
+        decision_ids=bind_ids(project, human, DecisionLevel.PROTOCOL),
+    )  # the researcher may
     assert effective_plan(project).test_access_limit == 50
     assert agent_admission_issues(OTHER, high, high) == []  # an agent may keep or lower it
     lower = plain.model_copy(update={"hypothesis_plan": HypothesisPlan(test_access_limit=2)})

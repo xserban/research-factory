@@ -30,6 +30,7 @@ from factory.index.chase import admitted_works
 from factory.model.base import StrictModel
 from factory.model.budgets import REQUESTS_SEARCH
 from factory.model.chase import SeedAdmitted
+from factory.model.decisions import DecisionLevel
 from factory.model.project import RigorMode
 from factory.model.search import QueryKind, QueryPurpose, QuerySpec, RunStatus
 from factory.model.seed import (
@@ -47,6 +48,7 @@ from factory.model.work import Identifiers, ProvenanceMethod, Work
 from factory.model.work_ids import arxiv_id_from_doi, normalize_arxiv
 from factory.services.budgets import budget_issues
 from factory.services.context import Project
+from factory.services.decisions import bind
 from factory.services.dedup import active_merges
 from factory.services.results import BatchResult, ItemError
 from factory.services.search import (
@@ -78,12 +80,20 @@ def add_seeds(
     specs: Sequence[SeedSpec],
     *,
     sources: Mapping[str, SourceFactory],
+    decision_ids: Sequence[str] | None = None,
 ) -> BatchResult[SeedOutcome]:
     """Add each valid seed in order and look it up. Invalid or duplicate specs write nothing.
+
+    `decision_ids` are the selected `seeds` decisions the batch implements; each written seed
+    carries them. In `pilot` and `systematic` a call without one is refused whole
+    (`decision_ids`, see `decisions.bind`), before any seed is written.
 
     The write lock covers each seed's id assignment, duplicate check and `seed.added` write, so
     two callers cannot take the same id. It is released before the lookup, which fetches.
     """
+    with project.index.exclusive():
+        project.index.sync()
+        bound = bind(project, DecisionLevel.SEEDS, decision_ids)
     written: list[SeedOutcome] = []
     rejected: list[ItemError] = []
     for index, spec in enumerate(specs):
@@ -109,7 +119,7 @@ def add_seeds(
                 [
                     project.events.make(
                         "seed.added",
-                        SeedAdded(seed_id=seed_id, spec=spec),
+                        SeedAdded(seed_id=seed_id, spec=spec, decision_ids=bound),
                         actor,
                         refs=(seed_id,),
                         input_blob=input_blob,

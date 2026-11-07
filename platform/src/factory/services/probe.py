@@ -40,6 +40,7 @@ from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
 from factory.model.base import StrictModel
 from factory.model.budgets import REQUESTS_SEARCH
+from factory.model.decisions import DecisionLevel
 from factory.model.probe import (
     ProbeFailed,
     ProbeMeasured,
@@ -52,6 +53,7 @@ from factory.model.seed import SeedKind
 from factory.model.work import Identifiers, Work
 from factory.services.budgets import budget_issue, budget_issues, exhausted_unit
 from factory.services.context import Project
+from factory.services.decisions import bind
 from factory.services.project import project_status
 from factory.services.question import current_question
 from factory.services.search import get_work, query_issues, register_query
@@ -143,10 +145,13 @@ def run_probe(
     *,
     sources: Mapping[str, SourceFactory],
     sample: int = DEFAULT_SAMPLE,
+    decision_ids: Sequence[str] | None = None,
 ) -> ProbeReport:
     """Register and measure each spec against the development seeds and the negatives.
 
-    `sample` is the number of titles to sample per measured query, 0 for none.
+    `sample` is the number of titles to sample per measured query, 0 for none. `decision_ids` are
+    the selected `probe` decisions this round implements; in `pilot` and `systematic` a probe
+    without one is refused (`decision_ids`, see `decisions.bind`). Each measured query carries them.
     """
     question = current_question(project)
     issues: list[ValidationIssue] = []
@@ -159,6 +164,7 @@ def run_probe(
     issues += budget_issues(project, actor, REQUESTS_SEARCH)
     if issues:
         raise FactoryValidationError(issues)
+    bound = bind(project, DecisionLevel.PROBE, decision_ids)  # after the other refusals
     assert question is not None  # the question check above refused its absence
 
     mode = project_status(project).rigor_mode
@@ -188,6 +194,7 @@ def run_probe(
                 sample=sample,
                 is_held_out=is_held_out,
                 count_overlap=count_overlap,
+                decision_ids=bound,
             )
         )
     return _report(probe_id, question.question_id, mode, results, seeds)
@@ -250,6 +257,7 @@ def _measure(
     sample: int,
     is_held_out: Callable[[Identifiers], bool],
     count_overlap: bool,
+    decision_ids: tuple[str, ...],
 ) -> ProbeQueryResult:
     """Measure one registered query. A source failure is recorded and claims no recall."""
     keys: dict[str, str | None] = {}
@@ -335,6 +343,7 @@ def _measure(
         except SourceError as exc:
             overlap_note = redact(f"{type(exc).__name__}: {exc}", project.settings.mailto)
     payload = ProbeMeasured(
+        decision_ids=decision_ids,
         probe_id=probe_id,
         query_id=query_id,
         source=spec.source,

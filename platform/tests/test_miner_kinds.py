@@ -36,6 +36,7 @@ from factory.mining.spec import (
     QuoteKind,
     WorkRefKind,
 )
+from factory.model.decisions import DecisionLevel
 from factory.model.extraction import FieldInput, StoredField
 from factory.model.seed import SeedKind, SeedSpec
 from factory.services.context import Project
@@ -46,6 +47,7 @@ from factory.services.extraction_verify import verify_row_in
 from factory.services.search import list_works
 from factory.services.seeds import add_seeds
 from tests.contribution_helpers import screened, with_references, world  # noqa: F401
+from tests.helpers import bind_ids
 from tests.miner_helpers import vision_result
 
 PARA = ("s3.p1", "Lorem ipsum dolor sit amet.")
@@ -322,7 +324,13 @@ def test_a_probe_only_work_is_not_a_title_reference(
         doi="10.1000/seedonly",
     )
     seed = SeedSpec(kind=SeedKind.POSITIVE, cite="Zhou 2021", doi="10.1000/seedonly")
-    add_seeds(project, agent, [seed], sources=mock_sources(openalex=[item]))
+    add_seeds(
+        project,
+        agent,
+        [seed],
+        sources=mock_sources(openalex=[item]),
+        decision_ids=bind_ids(project, agent, DecisionLevel.SEEDS),
+    )
     assert list_works(project) == []
     assert len(list_works(project, include_probe=True)) == 1
     assert kinds_module.title_candidates(project, 2020, 2022) == []

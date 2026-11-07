@@ -6,13 +6,14 @@ import pytest
 
 from factory.errors import FactoryValidationError
 from factory.events.envelope import Actor
+from factory.model.decisions import DecisionLevel
 from factory.model.protocol import ScreeningStage
 from factory.model.question import QuestionSpec, Slot
 from factory.model.regions import Facet, RegionKind
 from factory.regions.rules import CorpusRule, RuleSet
 from factory.services.context import Project
 from factory.services.question import record_question
-from tests.helpers import pilot_question_spec, record_pilot_question
+from tests.helpers import bind_ids, pilot_question_spec, record_pilot_question
 
 RULES = RuleSet(include=(CorpusRule(outcome="all", stage=ScreeningStage.TITLE_ABSTRACT),))
 
@@ -61,7 +62,13 @@ def test_second_focus_across_question_versions_refused(project: Project, human: 
     qid = record_pilot_question(project, human)
     first = focus(project, human, qid, "population")
     spec = pilot_question_spec("Does linear attention match softmax on video?")
-    newer = record_question(project, human, spec, reason="narrowed").question_id
+    newer = record_question(
+        project,
+        human,
+        spec,
+        reason="narrowed",
+        decision_ids=bind_ids(project, human, DecisionLevel.QUESTIONS),
+    ).question_id
     assert newer != qid
     with pytest.raises(FactoryValidationError) as caught:
         focus(project, human, newer, "population")
@@ -81,7 +88,13 @@ def test_focus_slot_missing_after_question_change(project: Project, human: Actor
             "slots": (Slot(name="cohort", value="vision transformers"), spec.slots[1]),
         }
     )
-    record_question(project, human, renamed, reason="renamed the slot")
+    record_question(
+        project,
+        human,
+        renamed,
+        reason="renamed the slot",
+        decision_ids=bind_ids(project, human, DecisionLevel.QUESTIONS),
+    )
     assert focus_slot_missing(project) == [region]
     assert [f.region_id for f in foci(project)] == [region]
 

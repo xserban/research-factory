@@ -15,6 +15,7 @@ from pydantic import ValidationError
 from factory.cli.render import prisma_markdown
 from factory.events.envelope import Actor
 from factory.model.chase import ChaseDirection
+from factory.model.decisions import DecisionLevel
 from factory.model.protocol import CriterionEffect, PressElement, PressFinding, ProtocolSpec
 from factory.model.search import QueryKind, QueryPurpose, QuerySpec, RunStatus
 from factory.model.seed import SeedKind, SeedSpec
@@ -36,7 +37,7 @@ from factory.services.search import list_works, register_query, run_query
 from factory.services.seeds import add_seeds, admit_seed, explain_seed_miss
 from factory.sources.base import RawPage, SearchResult
 from factory.sources.registry import INTERFACES, SourceFactory
-from tests.helpers import T0, _positive_item, _protocol, _seed_item, openalex_item
+from tests.helpers import T0, _positive_item, _protocol, _seed_item, bind_ids, openalex_item
 from tests.screening_helpers import _citing, _corpus, _decide, _merge_items, _ordinary, _settle
 
 SourcesFor = Callable[..., Mapping[str, SourceFactory]]
@@ -220,7 +221,13 @@ def test_probe_runs_never_counted(
     # A probe finds a work no search found. It is stored, but it is not in the corpus and not
     # a record of any search.
     probe = QuerySpec(source="openalex", kind=QueryKind.KEYWORD, text="attention")
-    run_probe(project, agent, [probe], sources=mock_sources(openalex=[_seed_item(999)]))
+    run_probe(
+        project,
+        agent,
+        [probe],
+        sources=mock_sources(openalex=[_seed_item(999)]),
+        decision_ids=bind_ids(project, agent, DecisionLevel.PROBE),
+    )
 
     after = prisma_flow(project)
 
@@ -387,7 +394,13 @@ class _HandSearch:
 def _admit_seed_seven(project: Project, human: Actor, mock_sources: SourcesFor) -> None:
     """Admit the positive seed `Paper 7` (DOI 10.1000/p7), missing from the corpus, by lookup."""
     spec = SeedSpec(kind=SeedKind.POSITIVE, cite="Paper 7", doi=SEED_DOI)
-    [outcome] = add_seeds(project, human, [spec], sources=mock_sources()).written
+    [outcome] = add_seeds(
+        project,
+        human,
+        [spec],
+        sources=mock_sources(),
+        decision_ids=bind_ids(project, human, DecisionLevel.SEEDS),
+    ).written
     explain_seed_miss(
         project, human, outcome.seed_id, "not indexed", ProvenanceMethod.SEED_ADMISSION
     )

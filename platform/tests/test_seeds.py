@@ -9,6 +9,7 @@ from pydantic import ValidationError
 from factory.errors import FactoryValidationError
 from factory.events.envelope import Actor
 from factory.events.reader import read_all
+from factory.model.decisions import DecisionLevel
 from factory.model.search import QueryKind, QuerySpec
 from factory.model.seed import SeedKind, SeedSpec
 from factory.model.work import ProvenanceMethod
@@ -25,7 +26,7 @@ from factory.services.seeds import (
     seed_check,
 )
 from factory.sources.registry import SourceFactory
-from tests.helpers import arxiv_atom, openalex_item
+from tests.helpers import arxiv_atom, bind_ids, openalex_item
 
 SourcesFor = Callable[..., Mapping[str, SourceFactory]]
 
@@ -57,7 +58,13 @@ def test_seed_ids_are_assigned_per_kind(
         SeedSpec(kind=SeedKind.NEGATIVE, cite="Li 2020", arxiv="2001.00001"),
         _positive(openalex="W5"),
     ]
-    result = add_seeds(project, agent, specs, sources=sources)
+    result = add_seeds(
+        project,
+        agent,
+        specs,
+        sources=sources,
+        decision_ids=bind_ids(project, agent, DecisionLevel.SEEDS),
+    )
     assert [outcome.seed_id for outcome in result.written] == ["SEED01", "NEG01", "SEED02"]
     assert result.rejected == []
 
@@ -66,7 +73,13 @@ def test_arxiv_seed_resolves_via_id_list_probe_query(
     project: Project, agent: Actor, mock_sources: SourcesFor, http_log: list[httpx.Request]
 ) -> None:
     sources = mock_sources(arxiv=arxiv_atom([("2301.01234v2", "Linear attention", 2023, "Ada")]))
-    result = add_seeds(project, agent, [_positive(arxiv="2301.01234v2")], sources=sources)
+    result = add_seeds(
+        project,
+        agent,
+        [_positive(arxiv="2301.01234v2")],
+        sources=sources,
+        decision_ids=bind_ids(project, agent, DecisionLevel.SEEDS),
+    )
     [outcome] = result.written
     assert outcome.reason is None and outcome.work_id is not None
     assert any("id_list=2301.01234" in url for url in _requested(http_log))
@@ -79,7 +92,13 @@ def test_doi_seed_resolves_via_openalex_filter(
     project: Project, agent: Actor, mock_sources: SourcesFor, http_log: list[httpx.Request]
 ) -> None:
     sources = mock_sources(openalex=[_openalex_item(doi="10.1000/xyz")])
-    result = add_seeds(project, agent, [_positive(doi="10.1000/xyz")], sources=sources)
+    result = add_seeds(
+        project,
+        agent,
+        [_positive(doi="10.1000/xyz")],
+        sources=sources,
+        decision_ids=bind_ids(project, agent, DecisionLevel.SEEDS),
+    )
     [outcome] = result.written
     assert outcome.work_id is not None and outcome.reason is None
     assert any("doi:10.1000/xyz" in url for url in _requested(http_log))
@@ -90,7 +109,11 @@ def test_datacite_doi_uses_arxiv_route(
 ) -> None:
     sources = mock_sources(arxiv=arxiv_atom([("2301.01234v1", "Linear attention", 2023, "Ada")]))
     result = add_seeds(
-        project, agent, [_positive(doi="10.48550/arXiv.2301.01234")], sources=sources
+        project,
+        agent,
+        [_positive(doi="10.48550/arXiv.2301.01234")],
+        sources=sources,
+        decision_ids=bind_ids(project, agent, DecisionLevel.SEEDS),
     )
     assert result.written[0].work_id is not None
     [url] = _requested(http_log)
@@ -101,7 +124,13 @@ def test_datacite_doi_uses_arxiv_route(
 def test_unresolvable_seed_is_recorded_with_reason(
     project: Project, agent: Actor, mock_sources: SourcesFor
 ) -> None:
-    result = add_seeds(project, agent, [_positive(openalex="W999")], sources=mock_sources())
+    result = add_seeds(
+        project,
+        agent,
+        [_positive(openalex="W999")],
+        sources=mock_sources(),
+        decision_ids=bind_ids(project, agent, DecisionLevel.SEEDS),
+    )
     [outcome] = result.written
     assert outcome.seed_id == "SEED01"
     assert outcome.work_id is None
@@ -120,6 +149,7 @@ def test_seed_without_identifier_rejected_others_written(
         agent,
         [_positive(doi="10.1000/xyz"), bare, _positive(openalex="W9")],
         sources=sources,
+        decision_ids=bind_ids(project, agent, DecisionLevel.SEEDS),
     )
     assert [item.index for item in result.rejected] == [1]
     assert result.rejected[0].issues[0].field == "identifier"
@@ -135,13 +165,20 @@ def test_duplicate_seed_in_another_form_is_rejected(
     project: Project, agent: Actor, mock_sources: SourcesFor
 ) -> None:
     sources = mock_sources()
-    first = add_seeds(project, agent, [_positive(arxiv="2301.01234v2")], sources=sources)
+    first = add_seeds(
+        project,
+        agent,
+        [_positive(arxiv="2301.01234v2")],
+        sources=sources,
+        decision_ids=bind_ids(project, agent, DecisionLevel.SEEDS),
+    )
     assert first.written[0].seed_id == "SEED01"
     result = add_seeds(
         project,
         agent,
         [_positive(doi="https://doi.org/10.48550/arXiv.2301.01234")],
         sources=sources,
+        decision_ids=bind_ids(project, agent, DecisionLevel.SEEDS),
     )
     assert result.written == []
     [item] = result.rejected
@@ -167,9 +204,19 @@ def test_duplicate_openalex_id_across_forms_is_rejected(
     project: Project, agent: Actor, mock_sources: SourcesFor
 ) -> None:
     sources = mock_sources()
-    add_seeds(project, agent, [_positive(openalex="W42")], sources=sources)
+    add_seeds(
+        project,
+        agent,
+        [_positive(openalex="W42")],
+        sources=sources,
+        decision_ids=bind_ids(project, agent, DecisionLevel.SEEDS),
+    )
     result = add_seeds(
-        project, agent, [_positive(openalex="https://openalex.org/w42")], sources=sources
+        project,
+        agent,
+        [_positive(openalex="https://openalex.org/w42")],
+        sources=sources,
+        decision_ids=bind_ids(project, agent, DecisionLevel.SEEDS),
     )
     assert result.rejected[0].issues[0].field == "openalex"
     assert result.rejected[0].issues[0].reason == "duplicate of SEED01"
@@ -179,7 +226,13 @@ def test_probe_records_stay_out_of_the_corpus(
     project: Project, agent: Actor, mock_sources: SourcesFor
 ) -> None:
     sources = mock_sources(openalex=[_openalex_item()])
-    add_seeds(project, agent, [_positive(doi="10.1000/xyz")], sources=sources)
+    add_seeds(
+        project,
+        agent,
+        [_positive(doi="10.1000/xyz")],
+        sources=sources,
+        decision_ids=bind_ids(project, agent, DecisionLevel.SEEDS),
+    )
     assert list_works(project) == []
     assert len(list_works(project, include_probe=True)) == 1
     assert dedup_run(project).works == 0
@@ -193,7 +246,13 @@ def test_agent_seed_events_keep_their_input(
     project: Project, agent: Actor, mock_sources: SourcesFor
 ) -> None:
     sources = mock_sources(openalex=[_openalex_item()])
-    add_seeds(project, agent, [_positive(doi="10.1000/xyz")], sources=sources)
+    add_seeds(
+        project,
+        agent,
+        [_positive(doi="10.1000/xyz")],
+        sources=sources,
+        decision_ids=bind_ids(project, agent, DecisionLevel.SEEDS),
+    )
     events = read_all(project.paths.events_dir, project.catalog)
     seed_events = [e for e in events if e.type.startswith("seed.")]
     assert [e.type for e in seed_events] == ["seed.added", "seed.resolved"]
@@ -209,6 +268,7 @@ def test_seed_rebuild_equals_incremental(
         agent,
         [_positive(doi="10.1000/xyz"), _positive(openalex="W404")],
         sources=sources,
+        decision_ids=bind_ids(project, agent, DecisionLevel.SEEDS),
     )
     before = project.index.state_hash()
     assert project.index.rebuild() == before
@@ -220,7 +280,13 @@ def test_seed_rebuild_equals_incremental(
 def _admission_seed(project: Project, human: Actor, mock_sources: SourcesFor, n: int) -> str:
     """A positive seed whose DOI no search finds, explained as a seed-admission miss."""
     spec = SeedSpec(kind=SeedKind.POSITIVE, cite=f"Paper {n}", doi=f"10.1000/p{n}")
-    [outcome] = add_seeds(project, human, [spec], sources=mock_sources()).written
+    [outcome] = add_seeds(
+        project,
+        human,
+        [spec],
+        sources=mock_sources(),
+        decision_ids=bind_ids(project, human, DecisionLevel.SEEDS),
+    ).written
     explain_seed_miss(
         project, human, outcome.seed_id, "not indexed", ProvenanceMethod.SEED_ADMISSION
     )
@@ -250,7 +316,13 @@ def test_admission_requires_seed_admission_route(
     explore_project: Project, human: Actor, mock_sources: SourcesFor
 ) -> None:
     spec = SeedSpec(kind=SeedKind.POSITIVE, cite="Paper 9", doi="10.1000/p9")
-    [outcome] = add_seeds(explore_project, human, [spec], sources=mock_sources()).written
+    [outcome] = add_seeds(
+        explore_project,
+        human,
+        [spec],
+        sources=mock_sources(),
+        decision_ids=bind_ids(explore_project, human, DecisionLevel.SEEDS),
+    ).written
     explain_seed_miss(explore_project, human, outcome.seed_id, "why", ProvenanceMethod.HAND_SEARCH)
     sources = mock_sources(openalex=[_openalex_for(9)])
     with pytest.raises(FactoryValidationError) as caught:
@@ -346,6 +418,7 @@ def test_lookup_source_missing_rejects_item_and_writes_nothing_for_it(
             _positive(arxiv="2301.09999"),
         ],
         sources=only_arxiv,
+        decision_ids=bind_ids(project, agent, DecisionLevel.SEEDS),
     )
     assert [item.index for item in result.rejected] == [1]
     assert result.rejected[0].issues[0].field == "source"
@@ -373,7 +446,13 @@ def test_seed_check_equals_the_pairwise_loop(
         _positive(doi="10.48550/arXiv.2302.00002"),
         _positive(doi="10.1000/absent"),
     ]
-    add_seeds(explore_project, human, specs, sources=mock_sources())
+    add_seeds(
+        explore_project,
+        human,
+        specs,
+        sources=mock_sources(),
+        decision_ids=bind_ids(explore_project, human, DecisionLevel.SEEDS),
+    )
     sources = mock_sources(
         openalex=[_openalex_for(1), _openalex_for(2)],
         arxiv=arxiv_atom(

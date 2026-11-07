@@ -6,6 +6,7 @@ read of the current version and the write that follows cannot interleave with an
 A spec identical to the current one writes nothing.
 """
 
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Any
 
@@ -16,6 +17,7 @@ from factory.clock import parse_ts
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor, Event
 from factory.model.base import StrictModel
+from factory.model.decisions import DecisionLevel
 from factory.model.project import RigorMode
 from factory.model.question import (
     GoalStated,
@@ -24,6 +26,7 @@ from factory.model.question import (
     question_version,
 )
 from factory.services.context import Project
+from factory.services.decisions import bind
 
 
 class QuestionResult(StrictModel):
@@ -74,12 +77,17 @@ def record_question(
     *,
     reason: str | None = None,
     raw_goal: str | None = None,
+    decision_ids: Sequence[str] | None = None,
 ) -> QuestionResult:
     """Record a question version, or its prose, or nothing when the spec is unchanged.
 
     `raw_goal`, when given, is the goal verbatim and is written with the question, in the same
     write. It counts as the goal the question needs, so a first question may come with its goal.
     Every check runs before anything is written: a refused question writes no goal either.
+
+    `decision_ids` are the selected `questions` decisions the new version implements. In `pilot`
+    and `systematic` a new version without one is refused (`decision_ids`); see
+    `decisions.bind`. A call that writes no question version needs none.
     """
     if raw_goal is not None and not raw_goal.strip():
         raise FactoryValidationError(
@@ -107,6 +115,7 @@ def record_question(
                 )
             supersedes = current.question_id
 
+        bound = None if unchanged else bind(project, DecisionLevel.QUESTIONS, decision_ids)
         events: list[Event] = []
         goal_event_id: str | None = None
         if raw_goal is not None:
@@ -115,7 +124,7 @@ def record_question(
             goal_event_id = goal.id
         if not unchanged:
             events.append(
-                _question_event(project, actor, spec, question_id, supersedes, clean_reason)
+                _question_event(project, actor, spec, question_id, supersedes, clean_reason, bound)
             )
         if events:
             project.record(events)
@@ -140,12 +149,14 @@ def _question_event(
     question_id: str,
     supersedes: str | None,
     reason: str | None,
+    decision_ids: tuple[str, ...] | None,
 ) -> Event:
     payload = QuestionRecorded(
         question_id=question_id,
         supersedes=supersedes,
         reason=reason,
         spec=spec,
+        decision_ids=decision_ids,
     )
     input_blob = (
         project.blobs.put_json({"spec": spec.model_dump(mode="json"), "reason": reason})

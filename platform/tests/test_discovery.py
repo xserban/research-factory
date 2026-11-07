@@ -6,6 +6,7 @@ from typing import Any
 
 from factory.events.envelope import Actor
 from factory.model.chase import ChaseDirection
+from factory.model.decisions import DecisionLevel
 from factory.model.inbox import Basis, ResolveStatus
 from factory.model.screening import Channel
 from factory.model.search import QueryKind, QuerySpec
@@ -23,7 +24,7 @@ from factory.services.prisma import prisma_flow
 from factory.services.probe import run_probe
 from factory.services.protocol import record_deviation
 from factory.services.search import register_query, run_query
-from tests.helpers import SourcesFor, openalex_item, record_pilot_question
+from tests.helpers import SourcesFor, bind_ids, openalex_item, record_pilot_question
 from tests.inbox_helpers import Keyed, capture, link_item, resolve
 from tests.screening_helpers import _citing, _corpus, _settle
 
@@ -116,7 +117,13 @@ def test_probe_runs_never_count(
     project = explore_project
     probe = QuerySpec(source="openalex", kind=QueryKind.KEYWORD, text="shared")
     record_pilot_question(project, agent)
-    run_probe(project, agent, [probe], sources=mock_sources(openalex=[_item()]))
+    run_probe(
+        project,
+        agent,
+        [probe],
+        sources=mock_sources(openalex=[_item()]),
+        decision_ids=bind_ids(project, agent, DecisionLevel.PROBE),
+    )
     assert discovery(project) == []
     _search(project, mock_sources, [_item()], human)
     [record] = discovery(project)

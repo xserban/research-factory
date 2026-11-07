@@ -11,6 +11,7 @@ import pytest
 from factory.errors import FactoryValidationError
 from factory.events.envelope import Actor
 from factory.events.reader import read_all
+from factory.model.decisions import DecisionLevel
 from factory.model.protocol import (
     ChangeKind,
     Criterion,
@@ -46,7 +47,7 @@ from factory.services.protocol_rules import (
     stale_rules,
 )
 from factory.services.search import register_query
-from tests.helpers import SourcesFor, ready_protocol, record_pilot_question
+from tests.helpers import SourcesFor, bind_ids, ready_protocol, record_pilot_question
 
 TA = ScreeningStage.TITLE_ABSTRACT
 FT = ScreeningStage.FULL_TEXT
@@ -301,7 +302,13 @@ def test_amendment_on_draft_refused(
 ) -> None:
     question_id = record_pilot_question(project, agent)
     draft = _spec(_inclusion(), _exclusion(1), question_id=question_id)
-    record_protocol(project, agent, draft, ready=False)
+    record_protocol(
+        project,
+        agent,
+        draft,
+        ready=False,
+        decision_ids=bind_ids(project, agent, DecisionLevel.PROTOCOL),
+    )
 
     with pytest.raises(FactoryValidationError) as raised:
         amend_protocol(

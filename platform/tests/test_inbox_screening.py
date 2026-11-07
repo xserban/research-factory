@@ -7,6 +7,7 @@ import pytest
 from factory.errors import FactoryValidationError
 from factory.events.envelope import Actor
 from factory.index.chase import considered_works
+from factory.model.decisions import DecisionLevel
 from factory.model.inbox import ResolveStatus
 from factory.model.screening import PassLabel
 from factory.model.search import QueryKind, QuerySpec
@@ -26,7 +27,7 @@ from factory.services.seeds import (
     split_seeds,
 )
 from factory.services.tasks import complete_task
-from tests.helpers import SourcesFor, _seed_item, _setup
+from tests.helpers import SourcesFor, _seed_item, _setup, bind_ids
 from tests.inbox_helpers import Keyed, capture, link_item, resolve
 from tests.screening_helpers import _draw
 
@@ -101,7 +102,13 @@ def _seeded(project: Project, human: Actor, mock_sources: SourcesFor) -> tuple[s
     """Three positive seeds (papers 1-3), split; returns the held-out seed and the others' n."""
     for n in (1, 2, 3):
         spec = SeedSpec(kind=SeedKind.POSITIVE, cite=f"Paper {n}", doi=f"10.1000/p{n}")
-        add_seeds(project, human, [spec], sources=mock_sources(openalex=[_seed_item(n)]))
+        add_seeds(
+            project,
+            human,
+            [spec],
+            sources=mock_sources(openalex=[_seed_item(n)]),
+            decision_ids=bind_ids(project, human, DecisionLevel.SEEDS),
+        )
     split = split_seeds(project, random_seed=7)
     [held_out] = split.held_out
     return held_out, split.development
@@ -164,7 +171,13 @@ def test_admitted_seed_is_retrieved_characterisation(
     excludes it). Spec ruling 9 leaves open whether it should read differently; unchanged here."""
     project = explore_project
     spec = SeedSpec(kind=SeedKind.POSITIVE, cite="Paper 7", doi="10.1000/p7")
-    [outcome] = add_seeds(project, human, [spec], sources=mock_sources()).written
+    [outcome] = add_seeds(
+        project,
+        human,
+        [spec],
+        sources=mock_sources(),
+        decision_ids=bind_ids(project, human, DecisionLevel.SEEDS),
+    ).written
     route = ProvenanceMethod.SEED_ADMISSION
     explain_seed_miss(project, human, outcome.seed_id, "not indexed", route)
     admit_seed(project, human, outcome.seed_id, sources=mock_sources(openalex=[_seed_item(7)]))
@@ -177,7 +190,13 @@ def test_supplied_is_not_a_seed_miss_route(
 ) -> None:
     """Controller ruling: a search miss is remedied by admission, not by a supplied link."""
     spec = SeedSpec(kind=SeedKind.POSITIVE, cite="Paper 7", doi="10.1000/p7")
-    [outcome] = add_seeds(explore_project, human, [spec], sources=mock_sources()).written
+    [outcome] = add_seeds(
+        explore_project,
+        human,
+        [spec],
+        sources=mock_sources(),
+        decision_ids=bind_ids(explore_project, human, DecisionLevel.SEEDS),
+    ).written
     with pytest.raises(FactoryValidationError) as caught:
         explain_seed_miss(
             explore_project, human, outcome.seed_id, "linked", ProvenanceMethod.SUPPLIED

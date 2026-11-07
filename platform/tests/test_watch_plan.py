@@ -28,7 +28,12 @@ from factory.services.protocol import (
     search_authorization,
 )
 from factory.services.protocol_rules import ProtocolCheck, protocol_issues, watch_plan_gaps
-from tests.helpers import SourcesFor, pilot_protocol_spec, ready_protocol, record_pilot_question
+from tests.helpers import (
+    SourcesFor,
+    pilot_protocol_spec,
+    ready_protocol,
+    record_pilot_question,
+)
 from tests.screening_helpers import KNOWN_SOURCES, PROBES, QID, QUESTION, _spec
 
 KNOWN_P_ID = "P@1e7c316e"
@@ -161,5 +166,10 @@ def test_invalid_watch_plan_writes_nothing(project: Project, agent: Actor) -> No
     spec = pilot_protocol_spec(qid, "prb_1").model_copy(update={"watch_plan": bad_plan})
     before = len(read_all(project.paths.events_dir, project.catalog))
     with pytest.raises(FactoryValidationError):
-        record_protocol(project, agent, spec, ready=False)
+        record_protocol(
+            project,
+            agent,
+            spec,
+            ready=False,
+        )
     assert len(read_all(project.paths.events_dir, project.catalog)) == before

@@ -12,7 +12,7 @@ from typing import Literal
 from pydantic import AwareDatetime, Field
 
 from factory.model.base import StrictModel
-from factory.model.identity import BLOB_REF_RE, ULID_RE
+from factory.model.identity import BLOB_REF_RE, ULID_RE, DecisionId
 from factory.model.question import QUESTION_ID_RE
 from factory.model.work import QUERY_ID_RE
 
@@ -74,6 +74,7 @@ class ProbeMeasured(StrictModel):
     sample_titles: tuple[str, ...] = ()
     sample_kind: Literal["random", "top"] | None = None
     openalex_on_arxiv: int | None = Field(default=None, ge=0)
+    decision_ids: tuple[DecisionId, ...] | None = None
 
 
 class ProbeFailed(StrictModel):

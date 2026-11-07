@@ -16,6 +16,7 @@ from typer.testing import CliRunner
 from factory.cli.main import app
 from factory.clock import FixedClock
 from factory.config import Settings
+from factory.model.decisions import DecisionLevel
 from factory.model.protocol import PressElement, PressFinding
 from factory.model.search import QueryKind, QuerySpec
 from factory.model.seed import SeedKind, SeedSpec
@@ -30,6 +31,7 @@ from tests.helpers import (
     Session,
     _leaks,
     _seed_item,
+    bind_ids,
     open_session,
     openalex_item,
     pilot_protocol_spec,
@@ -127,13 +129,31 @@ def _ready_pilot(
     question_id = record_pilot_question(project, agent)
     for n in (1, 2, 3):
         seed = SeedSpec(kind=SeedKind.POSITIVE, cite=f"Paper {n}", doi=f"10.1000/p{n}")
-        add_seeds(project, agent, [seed], sources=mock_sources(openalex=[_seed_item(n)]))
+        add_seeds(
+            project,
+            agent,
+            [seed],
+            sources=mock_sources(openalex=[_seed_item(n)]),
+            decision_ids=bind_ids(project, agent, DecisionLevel.SEEDS),
+        )
     probe = QuerySpec(source="openalex", kind=QueryKind.KEYWORD, text="attention")
-    report = run_probe(project, agent, [probe], sources=mock_sources(openalex=[_seed_item(1)]))
+    report = run_probe(
+        project,
+        agent,
+        [probe],
+        sources=mock_sources(openalex=[_seed_item(1)]),
+        decision_ids=bind_ids(project, agent, DecisionLevel.PROBE),
+    )
     spec = pilot_protocol_spec(question_id, report.probe_id, reviewer=human.id)
     screening = spec.screening.model_copy(update={"dual_sample": 1.0, "calibration_size": 8})
     spec = spec.model_copy(update={"screening": screening})
-    protocol_id = record_protocol(project, agent, spec, ready=True).protocol_id
+    protocol_id = record_protocol(
+        project,
+        agent,
+        spec,
+        ready=True,
+        decision_ids=bind_ids(project, agent, DecisionLevel.PROTOCOL),
+    ).protocol_id
     finding = PressFinding(
         element=PressElement.TEXT_WORDS, finding="Add a synonym.", severity="minor"
     )

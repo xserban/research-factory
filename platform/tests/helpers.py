@@ -15,6 +15,7 @@ from factory.events.envelope import Actor, Event
 from factory.events.reader import read_all
 from factory.mcp.server import build_server
 from factory.model.base import StrictModel
+from factory.model.decisions import DecisionItem, DecisionLevel
 from factory.model.protocol import (
     Criterion,
     MethodProfile,
@@ -29,9 +30,11 @@ from factory.model.protocol import (
     SourcePlan,
 )
 from factory.model.question import NonGoal, QuestionSpec, Slot
+from factory.model.screening import Channel
 from factory.model.search import QueryKind, QuerySpec, RunStatus
 from factory.model.seed import SeedKind, SeedSpec
 from factory.model.work import Author, Dates, Identifiers, Provenance, Work, WorkType
+from factory.services import decisions as decisions_service
 from factory.services.context import Project
 from factory.services.probe import run_probe
 from factory.services.protocol import confirm_press, press_review, record_protocol
@@ -282,11 +285,38 @@ def pilot_question_spec(
     )
 
 
+def bind_ids(project: Project, agent: Actor, level: DecisionLevel) -> list[str]:
+    """Suggest one item at `level` and have the project's human select it; returns the id in a
+    list, ready for `decision_ids=`. Pilot and systematic projects refuse a record without it."""
+    if agent.kind != "agent":  # only an agent suggests; a fixture agent stands in for a person
+        agent = Actor(
+            kind="agent",
+            id="fixture-agent",
+            user=agent.user,
+            session=agent.session,
+            model="claude-opus-5-5",
+            skill="rf-screen@1a2b3c4d",
+        )
+    decision_id = decisions_service.suggest(
+        project,
+        agent,
+        level,
+        "test-setting",
+        "Fixture decision.",
+        (DecisionItem(item_id="I01", text="Fixture item", grounds=("test fixture",)),),
+    )
+    decisions_service.select(
+        project, project.human_actor(), decision_id, ["I01"], [], "", Channel.CLI
+    )
+    return [decision_id]
+
+
 def record_pilot_question(project: Project, actor: Actor, primary: str | None = None) -> str:
     """Record the goal and the pilot question; returns the question id."""
     state_goal(project, actor, "Compare attention on vision")
     spec = pilot_question_spec() if primary is None else pilot_question_spec(primary)
-    return record_question(project, actor, spec).question_id
+    ids = bind_ids(project, actor, DecisionLevel.QUESTIONS)
+    return record_question(project, actor, spec, decision_ids=ids).question_id
 
 
 def _seed_item(n: int) -> dict[str, Any]:
@@ -357,14 +387,33 @@ def ready_protocol(
     agent confirmed by the human. Searches of the planned queries are then authorised.
     """
     question_id = record_pilot_question(project, agent)
+    seed_ids = bind_ids(project, agent, DecisionLevel.SEEDS)
     for n in (1, 2, 3):
         seed = SeedSpec(kind=SeedKind.POSITIVE, cite=f"Paper {n}", doi=f"10.1000/p{n}")
-        add_seeds(project, agent, [seed], sources=mock_sources(openalex=[_seed_item(n)]))
+        add_seeds(
+            project,
+            agent,
+            [seed],
+            sources=mock_sources(openalex=[_seed_item(n)]),
+            decision_ids=seed_ids,
+        )
     probe = QuerySpec(source="openalex", kind=QueryKind.KEYWORD, text="attention")
-    report = run_probe(project, agent, [probe], sources=mock_sources(openalex=[_seed_item(1)]))
+    report = run_probe(
+        project,
+        agent,
+        [probe],
+        sources=mock_sources(openalex=[_seed_item(1)]),
+        decision_ids=bind_ids(project, agent, DecisionLevel.PROBE),
+    )
 
     spec = pilot_protocol_spec(question_id, report.probe_id, queries=queries, reviewer=human.id)
-    protocol_id = record_protocol(project, agent, spec, ready=True).protocol_id
+    protocol_id = record_protocol(
+        project,
+        agent,
+        spec,
+        ready=True,
+        decision_ids=bind_ids(project, agent, DecisionLevel.PROTOCOL),
+    ).protocol_id
     if press:
         finding = PressFinding(
             element=PressElement.TEXT_WORDS, finding="Add a synonym.", severity="minor"
@@ -408,15 +457,34 @@ def _protocol(
 ) -> str:
     """Three positive seeds, a probe, and the pilot protocol with the given dual sample."""
     question_id = record_pilot_question(project, agent)
+    seed_ids = bind_ids(project, agent, DecisionLevel.SEEDS)
     for n in (1, 2, 3):
         seed = SeedSpec(kind=SeedKind.POSITIVE, cite=f"Paper {n}", doi=f"10.1000/p{n}")
-        add_seeds(project, agent, [seed], sources=mock_sources(openalex=[_seed_item(n)]))
+        add_seeds(
+            project,
+            agent,
+            [seed],
+            sources=mock_sources(openalex=[_seed_item(n)]),
+            decision_ids=seed_ids,
+        )
     probe = QuerySpec(source="openalex", kind=QueryKind.KEYWORD, text="attention")
-    report = run_probe(project, agent, [probe], sources=mock_sources(openalex=[_seed_item(1)]))
+    report = run_probe(
+        project,
+        agent,
+        [probe],
+        sources=mock_sources(openalex=[_seed_item(1)]),
+        decision_ids=bind_ids(project, agent, DecisionLevel.PROBE),
+    )
     spec = pilot_protocol_spec(question_id, report.probe_id, reviewer=human.id)
     screening = spec.screening.model_copy(update={"dual_sample": dual_sample})
     spec = spec.model_copy(update={"screening": screening})
-    protocol_id = record_protocol(project, agent, spec, ready=ready).protocol_id
+    protocol_id = record_protocol(
+        project,
+        agent,
+        spec,
+        ready=ready,
+        decision_ids=bind_ids(project, agent, DecisionLevel.PROTOCOL),
+    ).protocol_id
     if ready:
         finding = PressFinding(
             element=PressElement.TEXT_WORDS, finding="Add a synonym.", severity="minor"
@@ -439,12 +507,25 @@ def _setup(
 ) -> str:
     """A protocol, the seeds, and a corpus of the seed works, random works and `extra_items`."""
     protocol_id = _protocol(project, agent, human, mock_sources, dual_sample=dual_sample)
+    seed_ids = bind_ids(project, agent, DecisionLevel.SEEDS)
     for n in range(4, POSITIVES + 1):
         spec = SeedSpec(kind=SeedKind.POSITIVE, cite=f"Paper {n}", doi=f"10.1000/p{n}")
-        add_seeds(project, agent, [spec], sources=mock_sources(openalex=[_positive_item(n)]))
+        add_seeds(
+            project,
+            agent,
+            [spec],
+            sources=mock_sources(openalex=[_positive_item(n)]),
+            decision_ids=seed_ids,
+        )
     for k in range(1, NEGATIVES + 1):
         spec = SeedSpec(kind=SeedKind.NEGATIVE, cite=f"Negative {k}", doi=f"10.1000/n{k}")
-        add_seeds(project, agent, [spec], sources=mock_sources(openalex=[_negative_item(k)]))
+        add_seeds(
+            project,
+            agent,
+            [spec],
+            sources=mock_sources(openalex=[_negative_item(k)]),
+            decision_ids=seed_ids,
+        )
     items = [_positive_item(n) for n in range(1, POSITIVES + 1)]
     items += [_negative_item(k) for k in range(1, NEGATIVES + 1)]
     items += [_random_item(k) for k in range(1, random_works + 1)]

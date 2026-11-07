@@ -13,6 +13,7 @@ import pytest
 from factory.errors import FactoryValidationError
 from factory.events.envelope import Actor, Event
 from factory.events.reader import read_all
+from factory.model.decisions import DecisionLevel
 from factory.model.imports import ImportRole
 from factory.model.search import QueryKind, QueryPurpose, QuerySpec
 from factory.model.seed import SeedKind, SeedSpec
@@ -25,7 +26,7 @@ from factory.services.import_resolve import resolve_import
 from factory.services.search import corpus_size, list_works, register_query, run_query
 from factory.services.seeds import _found_by, add_seeds, seed_check, seed_recall, split_seeds
 from tests.document_helpers import events_of_type
-from tests.helpers import SourcesFor, _seed_item
+from tests.helpers import SourcesFor, _seed_item, bind_ids
 from tests.import_helpers import (
     admission_records,
     admit_lookups,
@@ -324,7 +325,13 @@ def test_held_out_seed_found_only_by_import_does_not_raise_recall(
     project = explore_project
     for n in (1, 2, 3):
         spec = SeedSpec(kind=SeedKind.POSITIVE, cite=f"Paper {n}", doi=f"10.1000/p{n}")
-        add_seeds(project, human, [spec], sources=mock_sources(openalex=[_seed_item(n)]))
+        add_seeds(
+            project,
+            human,
+            [spec],
+            sources=mock_sources(openalex=[_seed_item(n)]),
+            decision_ids=bind_ids(project, human, DecisionLevel.SEEDS),
+        )
     split = split_seeds(project, random_seed=7)
     [held_out] = split.held_out
     sources = mock_sources(

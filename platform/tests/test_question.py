@@ -7,6 +7,7 @@ from factory.clock import FixedClock
 from factory.config import Settings
 from factory.errors import FactoryValidationError
 from factory.events.envelope import Actor
+from factory.model.decisions import DecisionLevel
 from factory.model.question import NonGoal, QuestionSpec, Slot, SubQuestion, question_version
 from factory.services.context import Project
 from factory.services.project import init_project, project_status
@@ -17,7 +18,7 @@ from factory.services.question import (
     record_question,
     state_goal,
 )
-from tests.helpers import SESSION
+from tests.helpers import SESSION, bind_ids
 
 
 def _slots() -> tuple[Slot, ...]:
@@ -99,7 +100,11 @@ def test_pilot_needs_three_non_goals(project: Project, agent: Actor) -> None:
     state_goal(project, agent, "linear attention for vision")
     before = project_status(project).events_total
     with pytest.raises(FactoryValidationError) as e:
-        record_question(project, agent, spec(non_goals=_non_goals(2)))
+        record_question(
+            project,
+            agent,
+            spec(non_goals=_non_goals(2)),
+        )
     assert e.value.issues[0].field == "non_goals"
     assert project_status(project).events_total == before
 
@@ -109,7 +114,12 @@ def test_exploratory_accepts_one_non_goal(
 ) -> None:
     project = init_project(settings, "explore", "exploratory", session=SESSION, clock=clock)
     state_goal(project, agent, "linear attention for vision")
-    result = record_question(project, agent, spec(non_goals=_non_goals(1)))
+    result = record_question(
+        project,
+        agent,
+        spec(non_goals=_non_goals(1)),
+        decision_ids=bind_ids(project, agent, DecisionLevel.QUESTIONS),
+    )
     assert result.created is True
 
 
@@ -121,7 +131,11 @@ def test_open_slots_more_than_half_rejected_in_pilot(project: Project, agent: Ac
         Slot(name="c", value="z"),
     )
     with pytest.raises(FactoryValidationError) as e:
-        record_question(project, agent, spec(slots=slots))
+        record_question(
+            project,
+            agent,
+            spec(slots=slots),
+        )
     assert e.value.issues[0].field == "slots"
 
 
@@ -147,15 +161,23 @@ def test_blank_goal_rejected(project: Project, agent: Actor) -> None:
 def test_pilot_needs_rationale_and_objectives(project: Project, agent: Actor) -> None:
     state_goal(project, agent, "linear attention for vision")
     with pytest.raises(FactoryValidationError) as e:
-        record_question(project, agent, spec(objectives=" "))
+        record_question(
+            project,
+            agent,
+            spec(objectives=" "),
+        )
     assert e.value.issues[0].field == "objectives"
 
 
 def test_identical_resubmission_writes_nothing(project: Project, agent: Actor) -> None:
     state_goal(project, agent, "linear attention for vision")
-    first = record_question(project, agent, spec())
+    first = record_question(
+        project, agent, spec(), decision_ids=bind_ids(project, agent, DecisionLevel.QUESTIONS)
+    )
     before = project_status(project).events_total
-    again = record_question(project, agent, spec())
+    again = record_question(
+        project, agent, spec(), decision_ids=bind_ids(project, agent, DecisionLevel.QUESTIONS)
+    )
     assert first.created is True
     assert again.created is False
     assert again.question_id == first.question_id
@@ -164,8 +186,15 @@ def test_identical_resubmission_writes_nothing(project: Project, agent: Actor) -
 
 def test_prose_only_change_keeps_the_version(project: Project, agent: Actor) -> None:
     state_goal(project, agent, "linear attention for vision")
-    first = record_question(project, agent, spec())
-    result = record_question(project, agent, spec(rationale="A sharper reason."))
+    first = record_question(
+        project, agent, spec(), decision_ids=bind_ids(project, agent, DecisionLevel.QUESTIONS)
+    )
+    result = record_question(
+        project,
+        agent,
+        spec(rationale="A sharper reason."),
+        decision_ids=bind_ids(project, agent, DecisionLevel.QUESTIONS),
+    )
     assert result.question_id == first.question_id
     current = current_question(project)
     assert current is not None
@@ -178,13 +207,21 @@ def test_semantic_change_needs_reason_and_records_supersedes(
     project: Project, agent: Actor
 ) -> None:
     state_goal(project, agent, "linear attention for vision")
-    first = record_question(project, agent, spec())
+    first = record_question(
+        project, agent, spec(), decision_ids=bind_ids(project, agent, DecisionLevel.QUESTIONS)
+    )
     changed = spec(primary_question="Does linear attention match softmax on language?")
     with pytest.raises(FactoryValidationError) as e:
         record_question(project, agent, changed)
     assert e.value.issues[0].field == "reason"
 
-    second = record_question(project, agent, changed, reason="narrowed to language")
+    second = record_question(
+        project,
+        agent,
+        changed,
+        reason="narrowed to language",
+        decision_ids=bind_ids(project, agent, DecisionLevel.QUESTIONS),
+    )
     assert second.created is True
     assert second.question_id != first.question_id
     current = current_question(project)
@@ -198,7 +235,9 @@ def test_semantic_change_needs_reason_and_records_supersedes(
 
 def test_agent_question_carries_input_blob(project: Project, agent: Actor) -> None:
     state_goal(project, agent, "linear attention for vision")
-    record_question(project, agent, spec())
+    record_question(
+        project, agent, spec(), decision_ids=bind_ids(project, agent, DecisionLevel.QUESTIONS)
+    )
     project.index.sync()
     with project.index.connect() as conn:
         rows = conn.exec_driver_sql(
@@ -210,9 +249,22 @@ def test_agent_question_carries_input_blob(project: Project, agent: Actor) -> No
 
 def test_question_rebuild_equals_incremental(project: Project, agent: Actor) -> None:
     state_goal(project, agent, "linear attention for vision")
-    record_question(project, agent, spec())
-    record_question(project, agent, spec(rationale="A sharper reason."))
-    record_question(project, agent, spec(primary_question="Other?"), reason="changed")
+    record_question(
+        project, agent, spec(), decision_ids=bind_ids(project, agent, DecisionLevel.QUESTIONS)
+    )
+    record_question(
+        project,
+        agent,
+        spec(rationale="A sharper reason."),
+        decision_ids=bind_ids(project, agent, DecisionLevel.QUESTIONS),
+    )
+    record_question(
+        project,
+        agent,
+        spec(primary_question="Other?"),
+        reason="changed",
+        decision_ids=bind_ids(project, agent, DecisionLevel.QUESTIONS),
+    )
     before = project.index.state_hash()
     assert project.index.rebuild() == before
     current = current_question(project)
@@ -223,7 +275,12 @@ def test_raw_goal_with_rigor_failure_writes_nothing(project: Project, agent: Act
     # Invalid input writes nothing: a refused question takes its goal with it.
     before = project_status(project).events_total
     with pytest.raises(FactoryValidationError) as refused:
-        record_question(project, agent, spec(non_goals=()), raw_goal="Compare attention")
+        record_question(
+            project,
+            agent,
+            spec(non_goals=()),
+            raw_goal="Compare attention",
+        )
     assert [issue.field for issue in refused.value.issues] == ["non_goals"]
     assert project_status(project).events_total == before
     assert goals(project) == []
@@ -231,7 +288,13 @@ def test_raw_goal_with_rigor_failure_writes_nothing(project: Project, agent: Act
 
 
 def test_raw_goal_and_question_are_written_together(project: Project, agent: Actor) -> None:
-    result = record_question(project, agent, spec(), raw_goal="Compare attention on vision")
+    result = record_question(
+        project,
+        agent,
+        spec(),
+        raw_goal="Compare attention on vision",
+        decision_ids=bind_ids(project, agent, DecisionLevel.QUESTIONS),
+    )
     assert result.created is True
     assert result.goal_event_id is not None
     assert [goal.text for goal in goals(project)] == ["Compare attention on vision"]
@@ -243,7 +306,12 @@ def test_raw_goal_and_question_are_written_together(project: Project, agent: Act
 def test_blank_raw_goal_refused_before_any_write(project: Project, agent: Actor) -> None:
     before = project_status(project).events_total
     with pytest.raises(FactoryValidationError) as refused:
-        record_question(project, agent, spec(), raw_goal="   ")
+        record_question(
+            project,
+            agent,
+            spec(),
+            raw_goal="   ",
+        )
     assert [issue.field for issue in refused.value.issues] == ["raw_goal"]
     assert project_status(project).events_total == before
 
