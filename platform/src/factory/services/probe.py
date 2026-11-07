@@ -13,8 +13,14 @@ negatives are sent to a source, and the report, events and validation messages n
 The split event itself is the one place held-out ids are recorded, by `split_seeds`.
 
 A `SourceError` writes `probe.failed` for its query, with the redacted reason. Other queries are
-still measured, and the failed query claims no recall. A seed without a probe key for the source is
-untestable and counts as not retrieved.
+still measured, and the failed query claims no recall.
+
+A development seed without a probe key for a source is untestable there. It is listed, never counted
+as a miss: a source's recall is retrieved over the development seeds testable on that source (None
+when none is), and the pooled recall is the union retrieved over the development seeds testable on
+at least one measured source. `recall_figures` computes both from (source, tested, retrieved)
+rows, which a `probe.measured` payload carries, so events written before this rule give the same
+figures.
 """
 
 from collections.abc import Mapping, Sequence
@@ -61,6 +67,7 @@ class ProbeQueryResult(StrictModel):
     status: Literal["measured", "failed"]
     reported_count: int | None
     recall: float | None
+    development_tested: tuple[str, ...] = ()
     retrieved: tuple[str, ...]
     missed: tuple[str, ...]
     negatives_retrieved: tuple[str, ...]
@@ -72,16 +79,21 @@ class ProbeQueryResult(StrictModel):
 class ProbeReport(StrictModel):
     """Every query of one probe, with recall per source and pooled over all sources.
 
-    `per_source_recall` is the union of a source's measured queries over the development count;
-    `pooled_recall` is the same union over every measured query. `meets_threshold` is False
-    whenever recall is None.
+    `per_source_recall` is the union of a source's measured queries over the development seeds
+    testable on that source (None when none is); `untestable_by_source` lists the development
+    seeds that source cannot test, which are not in the denominator. `pooled_recall` is the union
+    over every measured query over the development seeds testable on at least one measured source;
+    `untestable_pooled` lists those testable on none. `meets_threshold` is False whenever recall
+    is None.
     """
 
     probe_id: str
     question_id: str
     queries: list[ProbeQueryResult]
     per_source_recall: dict[str, float | None]
+    untestable_by_source: dict[str, tuple[str, ...]]
     pooled_recall: float | None
+    untestable_pooled: tuple[str, ...]
     threshold: float
     meets_threshold: bool
 
@@ -221,6 +233,7 @@ def _measure(
             status="failed",
             reported_count=None,
             recall=None,
+            development_tested=(),
             retrieved=(),
             missed=(),
             negatives_retrieved=(),
@@ -265,7 +278,7 @@ def _measure(
                 )
             ]
         )
-    recall = len(retrieved) / len(development) if development else None
+    recall = len(retrieved) / len(tested_dev) if tested_dev else None
     return ProbeQueryResult(
         query_id=query_id,
         source=spec.source,
@@ -273,6 +286,7 @@ def _measure(
         status="measured",
         reported_count=reported,
         recall=recall,
+        development_tested=tested_dev,
         retrieved=retrieved,
         missed=missed,
         negatives_retrieved=negatives_retrieved,
@@ -341,6 +355,40 @@ def _archiver(
     return archive
 
 
+def recall_figures(
+    rows: Sequence[tuple[str, Sequence[str], Sequence[str]]], development: Sequence[str]
+) -> tuple[dict[str, float | None], dict[str, tuple[str, ...]], float | None, tuple[str, ...]]:
+    """Recall per source and pooled, from (source, development tested, development retrieved).
+
+    Only measured queries are given. A source's recall is the union retrieved over the union
+    tested on that source; the pooled recall is the union retrieved over the development seeds
+    tested on at least one source. Seeds a source cannot test are listed per source (in
+    `development` order) and are not in any denominator. Returns per-source recall, per-source
+    untestable, pooled recall and the seeds testable on no given source.
+    """
+    tested: dict[str, set[str]] = {}
+    found: dict[str, set[str]] = {}
+    for source, tested_ids, retrieved_ids in rows:
+        tested.setdefault(source, set()).update(tested_ids)
+        found.setdefault(source, set()).update(retrieved_ids)
+    per_source = {
+        source: len(found[source]) / len(ids) if ids else None for source, ids in tested.items()
+    }
+    untestable = {
+        source: tuple(sid for sid in development if sid not in ids)
+        for source, ids in tested.items()
+    }
+    testable = set().union(*tested.values()) if tested else set()
+    pooled_found = set().union(*found.values()) if found else set()
+    pooled = len(pooled_found) / len(testable) if testable else None
+    return (
+        per_source,
+        untestable,
+        pooled,
+        tuple(sid for sid in development if sid not in testable) if tested else (),
+    )
+
+
 def _report(
     probe_id: str,
     question_id: str,
@@ -348,30 +396,26 @@ def _report(
     results: list[ProbeQueryResult],
     seeds: list[SeedView],
 ) -> ProbeReport:
-    development_count = sum(1 for seed in seeds if seed.kind is SeedKind.POSITIVE)
-
-    def recall_over(rows: list[ProbeQueryResult]) -> float | None:
-        measured = [row for row in rows if row.status == "measured"]
-        if not measured or development_count == 0:
-            return None
-        union = {sid for row in measured for sid in row.retrieved}
-        return len(union) / development_count
-
-    per_source: dict[str, float | None] = {}
-    for row in results:
-        if row.source not in per_source:
-            per_source[row.source] = recall_over([r for r in results if r.source == row.source])
-    pooled = recall_over(results)
+    development = [seed.seed_id for seed in seeds if seed.kind is SeedKind.POSITIVE]
+    measured = [row for row in results if row.status == "measured"]
+    per_measured, untestable, pooled, untestable_pooled = recall_figures(
+        [(row.source, row.development_tested, row.retrieved) for row in measured], development
+    )
+    # A source whose queries all failed claims no recall, but is still named.
+    per_source: dict[str, float | None] = {row.source: None for row in results}
+    per_source.update(per_measured)
     threshold = THRESHOLDS[mode]
     return ProbeReport(
         probe_id=probe_id,
         question_id=question_id,
         queries=results,
         per_source_recall=per_source,
+        untestable_by_source=untestable,
         pooled_recall=pooled,
+        untestable_pooled=untestable_pooled,
         threshold=threshold,
         meets_threshold=pooled is not None and pooled >= threshold,
     )
 
 
-__all__ = ["THRESHOLDS", "ProbeQueryResult", "ProbeReport", "run_probe"]
+__all__ = ["THRESHOLDS", "ProbeQueryResult", "ProbeReport", "recall_figures", "run_probe"]

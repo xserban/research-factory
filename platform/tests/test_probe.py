@@ -18,7 +18,7 @@ from factory.model.question import NonGoal, QuestionSpec, Slot
 from factory.model.search import QueryKind, QueryPurpose, QuerySpec
 from factory.model.seed import SeedKind, SeedSpec
 from factory.services.context import Project
-from factory.services.probe import THRESHOLDS, ProbeReport, run_probe
+from factory.services.probe import THRESHOLDS, ProbeReport, recall_figures, run_probe
 from factory.services.project import init_project
 from factory.services.question import record_question, state_goal
 from factory.services.search import get_work, list_works
@@ -145,13 +145,17 @@ def test_probe_reports_recall_per_query_and_source_and_pooled(
         project, agent, [_probe_spec("attention"), _probe_spec("transformers")], sources=sources
     )
 
-    # Four development positives; SEED04 has no OpenAlex id, so it is untestable and missed.
-    assert [q.recall for q in report.queries] == [0.75, 0.75]
+    # Four development positives; SEED04 has no OpenAlex id: it is listed as untestable and is
+    # not in the denominator.
+    assert [q.recall for q in report.queries] == [1.0, 1.0]
     assert report.queries[0].retrieved == ("SEED01", "SEED02", "SEED03")
+    assert report.queries[0].development_tested == ("SEED01", "SEED02", "SEED03")
     assert report.queries[0].missed == ("SEED04",)
     assert report.queries[0].untestable == ("SEED04",)
-    assert report.per_source_recall == {"openalex": 0.75}
-    assert report.pooled_recall == 0.75
+    assert report.per_source_recall == {"openalex": 1.0}
+    assert report.untestable_by_source == {"openalex": ("SEED04",)}
+    assert report.pooled_recall == 1.0
+    assert report.untestable_pooled == ("SEED04",)
     assert report.threshold == 0.6
     assert report.meets_threshold is True
 
@@ -485,6 +489,29 @@ def test_source_error_in_the_count_request_is_reported_without_recall(
 
 
 # --- Thresholds (acceptance 7) ---
+
+
+def test_recall_figures_exclude_untestable_seeds() -> None:
+    development = ["S1", "S2", "S3", "S4"]
+    per_source, untestable, pooled, none_testable = recall_figures(
+        [
+            ("arxiv", ["S1", "S2"], ["S1", "S2"]),
+            ("openalex", ["S2", "S3"], ["S3"]),
+            ("openalex", ["S2", "S3"], ["S2"]),
+        ],
+        development,
+    )
+    assert per_source == {"arxiv": 1.0, "openalex": 1.0}
+    assert untestable == {"arxiv": ("S3", "S4"), "openalex": ("S1", "S4")}
+    assert pooled == 1.0  # S1, S2, S3 retrieved of the three testable somewhere
+    assert none_testable == ("S4",)
+
+
+def test_recall_figures_none_when_no_seed_is_testable() -> None:
+    per_source, _, pooled, none_testable = recall_figures([("arxiv", [], [])], ["S1"])
+    assert per_source == {"arxiv": None}
+    assert pooled is None
+    assert none_testable == ("S1",)
 
 
 def test_threshold_by_mode() -> None:

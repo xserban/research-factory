@@ -47,7 +47,8 @@ class ProbeMeasured(StrictModel):
     """A query measured against the development seeds and the negatives.
 
     `development_tested` and `negatives_tested` are the seeds that carry a probe key for the
-    source; `untestable` lists the rest of the tested roles, which count as not retrieved.
+    source; `untestable` lists the rest of those roles. Untestable seeds are listed, not counted
+    as misses: recall is retrieved over `development_tested`.
     """
 
     probe_id: str = Field(pattern=PROBE_ID_RE)
