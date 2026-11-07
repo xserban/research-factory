@@ -76,3 +76,10 @@ A1 to A3 in sequence; then A4 to A10, B, C and D1 in parallel groups of 2 or 3; 
 ## Not in this plan
 
 merging `land-wave2` to `main` (needs the researcher's approval); running the test suite (paused).
+
+## Phase H: screener scoring and tuning (researcher, 2026-11-07, before the pilot's freeze)
+
+| Task | What | Tier |
+|---|---|---|
+| H1 | `score` (1-10, optional) on agent screening decisions (model, MCP `screen_record`, index, views); `ScreeningPlan.stop_below_score` + `stop_score_run` (dropped from dumps at default); ranked serving stops on either rule; PRISMA counts. | critical |
+| H2 | Band check: draw per score band (limits and size recorded), human answers as audit records, agreement per band. Tuning loop: tuning batch, disagreements to criterion examples by protocol amendment, measurement on a fresh batch excluding example records. CLI, MCP, `rf-screen` skill. | critical |

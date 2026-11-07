@@ -90,3 +90,14 @@ From 2026-11-06, kept: a validated plan is required before the probe in `pilot` 
 ## Not in this slice
 
 The local screening ranker (IDEA-42), the quick factory (IDEA-41) and self-review of factory choices (IDEA-40), though all will use this loop.
+
+## Screener scoring and tuning (researcher, 2026-11-07)
+
+Added before the pilot's protocol is frozen, at the researcher's request during acceptance.
+
+1. **Score.** Each agent screening decision carries a relevance score, an integer from 1 to 10, beside its verdict and reason. Older decisions have none.
+2. **Check by score band.** A check draws records from the low, middle and high score bands of one pass; the scientist answers include or exclude for each, as a human audit; agreement is computed per band. Band limits and the number per band are parameters of the draw and are recorded.
+3. **Tuning loop.** Before main screening, the agent screens a small tuning batch; the scientist checks it; each disagreement may become an include or exclude example on the criterion concerned (`Criterion.examples`), recorded as a protocol amendment. Records used as examples are never used to measure agreement: agreement is measured on a fresh batch drawn after the last example change. The loop ends when the scientist accepts the agreement.
+4. **Score-based stop.** The screening plan may also set `stop_below_score` with a run length: in ranked order, serving stops when the last N scored decisions of pass A are all below the score. It combines with `stop_after_consecutive_excludes` (whichever fires first); PRISMA reports records not screened because of either.
+
+Rigour: scores are agent judgement and never exclude a record by themselves; the stop rules are declared before screening; examples changed after main screening starts are an amendment and reported.
