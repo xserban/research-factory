@@ -103,6 +103,7 @@ from factory.services import coverage as coverage_service
 from factory.services import curation as curation_service
 from factory.services import decisions as decisions_service
 from factory.services import dedup as dedup_service
+from factory.services import develop_render as develop_render_service
 from factory.services import digest as digest_service
 from factory.services import directions as directions_service
 from factory.services import document_convert as document_convert_service
@@ -4932,6 +4933,30 @@ def build_server(
             return _withheld(opened, found.model_dump(mode="json"), include_work_ids=False)
 
         return _reply(project, view, include_work_ids=False)
+
+    @server.tool()
+    def develop_render(project: str, level: str) -> dict[str, JsonValue]:
+        """One level of the develop stage (goal, questions, plan, seeds, probe, protocol) rendered
+        as a formal Markdown document from its decisions: the step and reason, each item with
+        its status (Validated, Rejected, Added, Proposed) and grounds, the person's note and the
+        supersession history; for questions and protocol also the recorded spec. Records the
+        version (nothing is written when the document is unchanged). Refused to a session that
+        has joined a pass."""
+
+        def render() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            try:
+                chosen = DecisionLevel(level)
+            except ValueError:
+                raise FactoryValidationError(
+                    [ValidationIssue("level", f"must be {_choices(DecisionLevel)}")]
+                ) from None
+            result = develop_render_service.render_level(opened, chosen)
+            data = result.model_dump(mode="json", exclude={"sources"})
+            return _withheld(opened, data, include_work_ids=False)
+
+        return _reply(project, render, include_work_ids=False)
 
     return server
 

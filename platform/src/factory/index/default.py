@@ -15,6 +15,7 @@ from factory.index.conclusions import conclusion_handlers, conclusion_tables
 from factory.index.curation import curation_handlers, curation_tables
 from factory.index.decisions import decision_handlers, decision_tables
 from factory.index.dedup import dedup_handlers, dedup_tables
+from factory.index.develop import develop_handlers, develop_tables
 from factory.index.directions import chain_derived, direction_handlers, direction_tables
 from factory.index.document import document_handlers, document_tables
 from factory.index.drafts import draft_handlers, draft_tables
@@ -63,7 +64,7 @@ from factory.index.tasks import task_handlers, tasks_table
 from factory.index.watch import run_started_handler, watch_handlers, watch_tables
 
 # Bump on any change to the tables or handlers below; the index is then rebuilt.
-PROJECTION_VERSION = "68"
+PROJECTION_VERSION = "69"
 
 
 def default_projection(blobs: BlobStore | None = None) -> Projection:
@@ -114,6 +115,7 @@ def default_projection(blobs: BlobStore | None = None) -> Projection:
     hypotheses = hypothesis_tables(metadata, protocol.protocols, project)
     labels = label_tables(metadata)
     decisions = decision_tables(metadata)
+    renders = develop_tables(metadata)
     briefings = briefing_tables(metadata)
     experiments = experiment_tables(
         metadata, protocol.protocols, project, hypotheses.hypotheses, hypotheses.registrations
@@ -166,6 +168,7 @@ def default_projection(blobs: BlobStore | None = None) -> Projection:
         **hypothesis_handlers(hypotheses),
         **label_handlers(labels),
         **decision_handlers(decisions),
+        **develop_handlers(renders),
         **experiment_handlers(experiments),
         **appraisal_handlers(appraisals),
         **evaluation_handlers(evaluations),

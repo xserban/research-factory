@@ -25,6 +25,7 @@ from factory.services.modules import (
     curation,
     decisions,
     dedup,
+    develop,
     directions,
     discovery,
     evaluation,
@@ -69,7 +70,7 @@ def default_modules() -> ModuleRegistry:
         snapshots, ranking, lineage,
         intuition, vocabulary, contradictions, discovery, coverage, finders, matching, exports,
         portfolio, regions, mining, hypotheses, labels, views, experiments,
-        evaluation, benchmark_ledger, directions, curation, decisions, writing, briefing,
+        evaluation, benchmark_ledger, directions, curation, decisions, develop, writing, briefing,
         manuscripts,
     ]  # fmt: skip
     return ModuleRegistry(
