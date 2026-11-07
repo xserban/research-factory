@@ -373,7 +373,7 @@ Status: triaged (researcher, 2026-11-07: needed for the agentic-science search) 
 **Open questions:** whether citing works beyond N are listed for a later round; how "core" is recorded (a label or a screening field).
 
 ### IDEA-44 — Progress for long operations
-Status: new · Added: 2026-11-07 · Slice: — · Depends on: slice 8 phase I (live dashboard)
+Status: taken into slice 8 (phase I2) · Added: 2026-11-07 · Slice: 8 · Depends on: slice 8 phase I (live dashboard)
 **What:** long operations (ranking embeddings, exhaustive search paging, snowball probes, deduplication) report progress while they run: done and total where known, rate, and an estimate of time left. Progress is ephemeral state (a small file or in-memory table read by the dashboard and a `progress` MCP read tool), never an event.
 **Why:** in the agentic-science pilot the SPECTER2 ranking of 4,198 records ran for minutes inside an MCP call with no sign of life; the researcher asked for progress. The same holds for 20-page OpenAlex runs.
 **Rigour notes:** progress is not provenance; nothing in it is recorded or counted. The final counts still come from the events.
