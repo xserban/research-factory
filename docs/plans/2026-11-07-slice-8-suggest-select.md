@@ -83,3 +83,9 @@ merging `land-wave2` to `main` (needs the researcher's approval); running the te
 |---|---|---|
 | H1 | `score` (1-10, optional) on agent screening decisions (model, MCP `screen_record`, index, views); `ScreeningPlan.stop_below_score` + `stop_score_run` (dropped from dumps at default); ranked serving stops on either rule; PRISMA counts. | critical |
 | H2 | Band check: draw per score band (limits and size recorded), human answers as audit records, agreement per band. Tuning loop: tuning batch, disagreements to criterion examples by protocol amendment, measurement on a fresh batch excluding example records. CLI, MCP, `rf-screen` skill. | critical |
+
+## Phase I: live dashboard (researcher, 2026-11-07)
+
+| Task | What | Tier |
+|---|---|---|
+| I1 | `services/dashboard.py`: one JSON state from the index (decisions, protocol, PRESS, probes, search and dedup, ranking, screening progress and stop status, checks, extraction, budget); development-only. `factory dashboard serve [--port]` on 127.0.0.1: page + `/api/state`, polling. Hackerman palette. | builder |

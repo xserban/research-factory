@@ -101,3 +101,7 @@ Added before the pilot's protocol is frozen, at the researcher's request during 
 4. **Score-based stop.** The screening plan may also set `stop_below_score` with a run length: in ranked order, serving stops when the last N scored decisions of pass A are all below the score. It combines with `stop_after_consecutive_excludes` (whichever fires first); PRISMA reports records not screened because of either.
 
 Rigour: scores are agent judgement and never exclude a record by themselves; the stop rules are declared before screening; examples changed after main screening starts are an amendment and reported.
+
+## Live dashboard (researcher, 2026-11-07)
+
+A local, read-only page that shows the project as the factory works: the decisions behind the protocol with drill-down, then search and deduplication, screening progress (ranking, decisions, both stop-rule counters, records left, calibration, tuning and band-check agreement), extraction and evidence, and cost and time from the budget ledger. `factory dashboard serve` binds 127.0.0.1 only, serves one page and a JSON state built from the index on each request; the page polls, so every recorded event appears within seconds. It writes nothing. It shows what a development-only view shows: no held-out seed identifiers, rates or recall (R-20). Styled with the Omarchy Hackerman palette.
