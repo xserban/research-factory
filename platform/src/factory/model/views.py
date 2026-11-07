@@ -178,6 +178,12 @@ class NonGoalBrief(StrictModel):
     text: str
 
 
+class SubQuestionBrief(StrictModel):
+    id: str
+    text: str
+    serves: str = ""
+
+
 class QuestionBrief(StrictModel):
     """Section 1. Every field is empty until a goal or a question is recorded."""
 
@@ -186,6 +192,7 @@ class QuestionBrief(StrictModel):
     primary_question: str | None = None
     elements: list[ElementBrief] = Field(default_factory=list)
     non_goals: list[NonGoalBrief] = Field(default_factory=list)
+    sub_questions: list[SubQuestionBrief] = Field(default_factory=list)
 
 
 class AmendmentBrief(StrictModel):

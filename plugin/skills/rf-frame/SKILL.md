@@ -26,6 +26,9 @@ Turns a stated goal into a recorded question. Source: research-factory-old `stag
    non-goal must describe a paper a good query would return and that the researcher does not
    want. Reject vacuous non-goals ("not about cats"). Minimum: one for `exploratory`, three for
    `pilot` or `systematic`.
+   Research questions under the primary one (`RQ1`, ...) go in `sub_questions` with ids `SQ1`,
+   `SQ2`, ... (`id`, `text`, optional `serves`), never in `slots`: slots are scope elements. A
+   criterion may name a sub-question as its `parent`.
 7. Write the rationale and objectives in two or three sentences each (PRISMA-P items 1 to 4).
 8. Propose a rigor mode with its reasoning: `exploratory` (landscape scan, single pass),
    `pilot` (dual screening on a sample, advisory kappa) or `systematic` (full PRISMA, dual

@@ -87,6 +87,7 @@ from factory.model.views import (
     PendingBrief,
     ProtocolBrief,
     QuestionBrief,
+    SubQuestionBrief,
     ViewNotice,
     WorkBrief,
 )
@@ -465,6 +466,9 @@ def _question(project: Project, notices: list[ViewNotice]) -> QuestionBrief:
             for s in spec.slots
         ],
         non_goals=[NonGoalBrief(id=g.id, text=g.text) for g in spec.non_goals],
+        sub_questions=[
+            SubQuestionBrief(id=s.id, text=s.text, serves=s.serves) for s in spec.sub_questions
+        ],
     )
 
 

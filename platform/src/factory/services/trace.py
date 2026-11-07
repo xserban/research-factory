@@ -140,7 +140,7 @@ _RANK = {kind: rank for rank, kind in enumerate(KINDS)}
 _NO_EVENT = ""
 _MISSING = "no such row"
 
-_ELEMENT_RE = r"^(Q@[0-9a-f]{8})/(slot:.+|NG\d{2})$"
+_ELEMENT_RE = r"^(Q@[0-9a-f]{8})/(slot:.+|NG\d{2}|SQ\d{1,2})$"
 _RECORD_RE = rf"^(run_{ULID_RE})/(rf:.+)$"
 _AUDIT_ITEM_RE = rf"^(aud_{ULID_RE})/(rf:.+)$"
 _ANCHOR_RE = rf"^(cnv_{ULID_RE})/([^/\s]+)$"
@@ -821,6 +821,11 @@ class _Walk:
                 if slot.value is not None
                 else f"{slot.name} (open: {slot.open})"
             )
+        elif parent.startswith("SQ"):
+            sub_q = next((s for s in row.spec.sub_questions if s.id == parent), None)
+            if sub_q is None:
+                return None
+            label = f"sub-question {sub_q.id}: {sub_q.text}"
         else:
             non_goal = next((g for g in row.spec.non_goals if g.id == parent), None)
             if non_goal is None:
@@ -1439,6 +1444,7 @@ class _Walk:
         if row is not None:
             down += [("element", f"{ident}/slot:{s.name}") for s in row.spec.slots]
             down += [("element", f"{ident}/{g.id}") for g in row.spec.non_goals]
+            down += [("element", f"{ident}/{s.id}") for s in row.spec.sub_questions]
             down += [
                 ("protocol", pid)
                 for pid, protocol in self._protocol_rows().items()

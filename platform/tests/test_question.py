@@ -7,7 +7,7 @@ from factory.clock import FixedClock
 from factory.config import Settings
 from factory.errors import FactoryValidationError
 from factory.events.envelope import Actor
-from factory.model.question import NonGoal, QuestionSpec, Slot, question_version
+from factory.model.question import NonGoal, QuestionSpec, Slot, SubQuestion, question_version
 from factory.services.context import Project
 from factory.services.project import init_project, project_status
 from factory.services.question import (
@@ -246,3 +246,54 @@ def test_blank_raw_goal_refused_before_any_write(project: Project, agent: Actor)
         record_question(project, agent, spec(), raw_goal="   ")
     assert [issue.field for issue in refused.value.issues] == ["raw_goal"]
     assert project_status(project).events_total == before
+
+
+def test_spec_without_sub_questions_hashes_as_before() -> None:
+    """The key is left out of the hashed form when empty, so old events keep their version."""
+    import hashlib
+
+    from factory.canonical import canonical_json
+
+    base = spec()
+    legacy = {
+        "scheme": base.scheme,
+        "primary_question": base.primary_question,
+        "slots": [
+            [s.name, s.value, s.open, s.resolve_in]
+            for s in sorted(base.slots, key=lambda s: s.name)
+        ],
+        "non_goals": [[g.id, g.text] for g in sorted(base.non_goals, key=lambda g: g.id)],
+    }
+    expected = "Q@" + hashlib.sha256(canonical_json(legacy)).hexdigest()[:8]
+    assert question_version(base) == expected
+
+
+def test_old_event_without_sub_questions_folds_unchanged() -> None:
+    base = spec()
+    old = base.model_dump(mode="json")
+    del old["sub_questions"]
+    assert QuestionSpec.model_validate(old) == base
+
+
+def test_sub_questions_change_the_version_but_serves_does_not() -> None:
+    one = (SubQuestion(id="SQ1", text="Which metric?", serves="KR1"),)
+    other_serves = (SubQuestion(id="SQ1", text="Which metric?", serves="KR2"),)
+    other_text = (SubQuestion(id="SQ1", text="Which cost?"),)
+    base = question_version(spec())
+    with_one = question_version(spec().model_copy(update={"sub_questions": one}))
+    assert with_one != base
+    assert with_one == question_version(spec().model_copy(update={"sub_questions": other_serves}))
+    assert with_one != question_version(spec().model_copy(update={"sub_questions": other_text}))
+
+
+def test_sub_question_ids_unique_and_well_formed() -> None:
+    first = SubQuestion(id="SQ1", text="a")
+    with pytest.raises(ValidationError):
+        QuestionSpec.model_validate(
+            {**spec().model_dump(), "sub_questions": [first.model_dump(), first.model_dump()]}
+        )
+    for bad in ("SQ", "SQ123", "RQ1"):
+        with pytest.raises(ValidationError):
+            SubQuestion(id=bad, text="a")
+    with pytest.raises(ValidationError):
+        SubQuestion(id="SQ1", text="  ")

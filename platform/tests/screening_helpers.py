@@ -564,10 +564,11 @@ def _check(
     *,
     seeds: Sequence[SeedRecord] = (),
     current: str = QID,
+    question: QuestionVersion = QUESTION,
 ) -> ProtocolCheck:
     return protocol_issues(
         spec,
-        question=QUESTION,
+        question=question,
         current_question_id=current,
         mode=mode,
         seeds=list(seeds),

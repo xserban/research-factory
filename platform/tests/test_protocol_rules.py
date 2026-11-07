@@ -5,11 +5,22 @@ from factory.model.protocol import (
     SourcePlan,
     search_strategy_hash,
 )
+from factory.model.question import SubQuestion
 from factory.model.search import QueryKind
 from factory.model.seed import SeedKind
 from factory.services.protocol_rules import other_changes
 from factory.services.seeds import SeedRecord, SeedRole
-from tests.screening_helpers import _check, _ex, _fields, _in, _reviewer, _screening, _spec
+from tests.screening_helpers import (
+    QUESTION,
+    QUESTION_SPEC,
+    _check,
+    _ex,
+    _fields,
+    _in,
+    _reviewer,
+    _screening,
+    _spec,
+)
 
 
 def _seed(seed_id: str, role: SeedRole) -> SeedRecord:
@@ -57,6 +68,26 @@ def test_parent_must_resolve_to_slot_or_non_goal() -> None:
     assert "criteria[0].parent" in _fields(check.errors)
     check = _check(_spec(criteria=(_in(parent="slot:setting"), _ex())), RigorMode.EXPLORATORY)
     assert check.errors == []
+
+
+def test_parent_may_name_a_sub_question_of_the_current_question() -> None:
+    question = QUESTION.model_copy(
+        update={
+            "spec": QUESTION_SPEC.model_copy(
+                update={"sub_questions": (SubQuestion(id="SQ1", text="Which metric?"),)}
+            )
+        }
+    )
+    ok = _check(
+        _spec(criteria=(_in(parent="SQ1"), _ex())), RigorMode.EXPLORATORY, question=question
+    )
+    assert ok.errors == []
+    missing = _check(
+        _spec(criteria=(_in(parent="SQ2"), _ex())), RigorMode.EXPLORATORY, question=question
+    )
+    assert "criteria[0].parent" in _fields(missing.errors)
+    absent = _check(_spec(criteria=(_in(parent="SQ1"), _ex())), RigorMode.EXPLORATORY)
+    assert "criteria[0].parent" in _fields(absent.errors)
 
 
 def test_held_out_seed_cannot_be_worked_example() -> None:

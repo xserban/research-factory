@@ -1,8 +1,9 @@
-"""The question: its slots, non-goals and goal, with a version hash over the semantic fields.
+"""The question: slots, non-goals, sub-questions and goal, with a version hash over semantic fields.
 
-A question version `Q@<sha256[:8]>` hashes the scheme, the primary question, the slots and the
-non-goals. Prose (rationales, objectives, scheme reasons) is never hashed, so a prose-only change
-keeps the version. Written by `factory.services.question`, folded by `factory.index.question`.
+A question version `Q@<sha256[:8]>` hashes the scheme, the primary question, the slots, the
+non-goals and, only when there are any, the sub-questions (id and text; `serves` is prose).
+Prose (rationales, objectives, scheme reasons) is never hashed, so a prose-only change keeps the
+version. Written by `factory.services.question`, folded by `factory.index.question`.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from factory.canonical import canonical_json
 from factory.model.base import StrictModel
 
 NON_GOAL_ID_RE = r"^NG\d{2}$"
+SUB_QUESTION_ID_RE = r"^SQ\d{1,2}$"
 QUESTION_ID_RE = r"^Q@[0-9a-f]{8}$"
 
 
@@ -46,6 +48,20 @@ class NonGoal(StrictModel):
     text: str = Field(min_length=1)
 
 
+class SubQuestion(StrictModel):
+    """A research question under the primary one; `serves` is free text (e.g. a key result)."""
+
+    id: str = Field(pattern=SUB_QUESTION_ID_RE)
+    text: str = Field(min_length=1)
+    serves: str = ""
+
+    @model_validator(mode="after")
+    def _text_has_content(self) -> Self:
+        if not self.text.strip():
+            raise ValueError("sub-question text must not be blank")
+        return self
+
+
 class QuestionSpec(StrictModel):
     """The question as an agent or a human states it. Slots and non-goals are unique by key."""
 
@@ -53,6 +69,7 @@ class QuestionSpec(StrictModel):
     primary_question: str = Field(min_length=1)
     slots: tuple[Slot, ...] = Field(min_length=1)
     non_goals: tuple[NonGoal, ...] = ()
+    sub_questions: tuple[SubQuestion, ...] = ()
     scheme_rationale: str = ""
     rationale: str = ""
     objectives: str = ""
@@ -65,12 +82,18 @@ class QuestionSpec(StrictModel):
         ids = [non_goal.id for non_goal in self.non_goals]
         if len(set(ids)) != len(ids):
             raise ValueError("non-goal ids must be unique")
+        sub_ids = [sub_question.id for sub_question in self.sub_questions]
+        if len(set(sub_ids)) != len(sub_ids):
+            raise ValueError("sub-question ids must be unique")
         return self
 
 
 def question_version(spec: QuestionSpec) -> str:
-    """`Q@` plus the first 8 hex digits of the hash over the semantic fields, sorted by key."""
-    payload: JsonValue = {
+    """`Q@` plus the first 8 hex digits of the hash over the semantic fields, sorted by key.
+
+    Invariant: a spec with no sub-questions hashes exactly as before the field existed, because
+    the `sub_questions` key is added to the hashed form only when the tuple is non-empty."""
+    payload: dict[str, JsonValue] = {
         "scheme": spec.scheme,
         "primary_question": spec.primary_question,
         "slots": [
@@ -81,6 +104,11 @@ def question_version(spec: QuestionSpec) -> str:
             [non_goal.id, non_goal.text] for non_goal in sorted(spec.non_goals, key=lambda g: g.id)
         ],
     }
+    if spec.sub_questions:
+        payload["sub_questions"] = [
+            [sub_question.id, sub_question.text]
+            for sub_question in sorted(spec.sub_questions, key=lambda s: s.id)
+        ]
     return "Q@" + hashlib.sha256(canonical_json(payload)).hexdigest()[:8]
 
 

@@ -40,7 +40,7 @@ from factory.model.search import QueryKind, QuerySpec
 from factory.model.watch import WatchPlan
 
 CRITERION_ID_RE = r"^(IN|EX)\d{2}$"
-PARENT_RE = r"^(slot:.+|NG\d{2})$"
+PARENT_RE = r"^(slot:.+|NG\d{2}|SQ\d{1,2})$"
 PROTOCOL_ID_RE = r"^P@[0-9a-f]{8}$"
 REVIEW_ID_RE = rf"^prs_{ULID_RE}$"
 DEVIATION_ID_RE = rf"^dev_{ULID_RE}$"

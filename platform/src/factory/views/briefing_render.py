@@ -61,6 +61,14 @@ def _question(b: Briefing) -> str:
     lines.append("Elements:\n" + "\n".join(elements))
     if q.non_goals:
         lines.append("Non-goals:\n" + "\n".join(f"- {g.id}: {g.text}" for g in q.non_goals))
+    if q.sub_questions:
+        lines.append(
+            "Sub-questions:\n"
+            + "\n".join(
+                f"- {s.id}: {s.text}" + (f" (serves {s.serves})" if s.serves else "")
+                for s in q.sub_questions
+            )
+        )
     return "\n\n".join(lines)
 
 

@@ -216,6 +216,7 @@ def _errors(
 
     slot_names = {slot.name for slot in question.spec.slots}
     non_goal_ids = {non_goal.id for non_goal in question.spec.non_goals}
+    non_goal_ids |= {sub_question.id for sub_question in question.spec.sub_questions}
     for i, criterion in enumerate(spec.criteria):
         if criterion.parent is None:
             if mode is not RigorMode.EXPLORATORY:
@@ -224,7 +225,7 @@ def _errors(
             issues.append(
                 ValidationIssue(
                     f"criteria[{i}].parent",
-                    "does not name a slot or non-goal of the current question",
+                    "does not name a slot, non-goal or sub-question of the current question",
                 )
             )
 
