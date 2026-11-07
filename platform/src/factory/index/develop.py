@@ -5,7 +5,8 @@ ids (a JSON list) and blob ref. Nothing else reads it. The table is left out of 
 while empty.
 
 The fold is total and atomic: an event that does not come from the system actor, or whose version
-is not one more than the level's latest, or whose payload does not validate, changes nothing and never raises.
+is not one more than the level's latest, or whose payload does not validate, changes nothing
+and never raises.
 """
 
 from __future__ import annotations

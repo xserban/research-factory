@@ -129,9 +129,7 @@ def test_fold_and_supersession(
         assert conn.execute(text("SELECT count(*) FROM rankings")).scalar_one() == 2
 
 
-@pytest.mark.parametrize(
-    "bad_score", [2.5, -3.0, 10**400, "0.5", True, None]
-)
+@pytest.mark.parametrize("bad_score", [2.5, -3.0, 10**400, "0.5", True, None])
 def test_a_malformed_ranking_event_changes_nothing_and_rebuild_agrees(
     project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor, bad_score: object
 ) -> None:
@@ -140,11 +138,21 @@ def test_a_malformed_ranking_event_changes_nothing_and_rebuild_agrees(
     _world(project, agent, human, mock_sources)
     good = compute_ranking(project, FakeEmbedder())
     ids = ["W1", "W2"]
-    order = project.blobs.put_json([{"work_id": ids[0], "score": bad_score}, {"work_id": ids[1], "score": 0.1}])
-    forged = RankingComputed.model_construct(
-        **{**good.model_dump(), "ranking_id": "rnk_bad", "count": 2, "corpus_hash": corpus_hash(ids), "order": order}
+    order = project.blobs.put_json(
+        [{"work_id": ids[0], "score": bad_score}, {"work_id": ids[1], "score": 0.1}]
     )
-    malformed = RankingComputed.model_construct(**{**good.model_dump(), "ranking_id": 7, "count": "x"})
+    forged = RankingComputed.model_construct(
+        **{
+            **good.model_dump(),
+            "ranking_id": "rnk_bad",
+            "count": 2,
+            "corpus_hash": corpus_hash(ids),
+            "order": order,
+        }
+    )
+    malformed = RankingComputed.model_construct(
+        **{**good.model_dump(), "ranking_id": 7, "count": "x"}
+    )
     events = [
         project.events.make("ranking.computed", forged, project.system_actor()),
         project.events.make("ranking.computed", malformed, project.system_actor()),

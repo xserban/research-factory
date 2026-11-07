@@ -12,7 +12,8 @@ Each measured query also returns a small sample of titles (`sample`, default 20,
 scientist can judge noise. OpenAlex draws a seeded random sample; arXiv has none, so it gives the
 first page by relevance and says so (`sample_kind`). A sample is archived like any probe page,
 never enters the corpus or PRISMA. A sampled title is not masked: titles do not reveal seed
-status, and a held-out seed's work is an ordinary record (decision 37.9). A failed sample request leaves the recall in place and is named in `sample_note`.
+status, and a held-out seed's work is an ordinary record (decision 37.9). A failed sample request leaves the recall in place and is named in
+`sample_note`.
 
 When a probe measures both `openalex` and `arxiv`, each OpenAlex query also counts its hits hosted
 on arXiv (`openalex_on_arxiv`). That is an estimate of the overlap between the two sources, not a
@@ -33,7 +34,7 @@ rows, which a `probe.measured` payload carries, so events written before this ru
 figures.
 """
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from typing import Literal
 
 from factory.errors import FactoryValidationError, ValidationIssue
@@ -503,7 +504,9 @@ def _report(
     per_source: dict[str, float | None] = {row.source: None for row in results}
     per_source.update(per_measured)
     threshold = THRESHOLDS[mode]
-    fraction = (len(development) - len(untestable_pooled)) / len(development) if development else None
+    fraction = (
+        (len(development) - len(untestable_pooled)) / len(development) if development else None
+    )
     note: str | None = None
     if pooled is None:
         note = "no development seed is testable on a measured source"

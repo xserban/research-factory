@@ -162,9 +162,22 @@ def test_forward_core_sources_are_marked_included_works_and_seeds(
     project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
 ) -> None:
     works = _world(project, agent, human, mock_sources)
-    seeds = set(seed_core_works(project))
-    plain = sorted(set(works) - seeds)
+    seeds = set(seed_core_works(project, development_only=True))
+    plain = sorted(set(works) - set(seed_core_works(project)))
     mark_core(project, human, plain[0])
     mark_core(project, human, plain[1])
     assert forward_core_sources(project, included=[plain[0]]) == sorted(seeds | {plain[0]})
     assert forward_core_sources(project, included=[]) == sorted(seeds)
+
+
+def test_a_held_out_seed_work_is_a_forward_source_only_when_a_human_marks_it(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    _world(project, agent, human, mock_sources)
+    seeds = all_seeds(project)
+    held = sorted({s.work_id for s in seeds if s.role is SeedRole.HELD_OUT and s.work_id})
+    assert held
+    development = set(seed_core_works(project, development_only=True))
+    assert set(forward_core_sources(project, included=held)) == development
+    mark_core(project, human, held[0])
+    assert set(forward_core_sources(project, included=held)) == development | {held[0]}

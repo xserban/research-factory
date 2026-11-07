@@ -111,6 +111,8 @@ from factory.services.budgets import budget_issues
 from factory.services.calibration import calibration_items
 from factory.services.chase import (
     ChaseStart,
+    _forward_limit_issues,
+    _pending_issues,
     chase_queries,
     chase_rounds,
     forward_chase_rounds,
@@ -1055,6 +1057,21 @@ def snowball_round(
                     )
                 ]
             )
+        if picked is not None:
+            now_refs = tuple(w.id for w in reference_works(project)[0])
+            if (
+                now_refs != picked.references
+                or picked.weights_hash != picked.selection.weights_hash
+            ):
+                raise FactoryValidationError(
+                    [
+                        ValidationIssue(
+                            "seeds",
+                            "the reference seeds or the ranker's weights changed while citing "
+                            "works were ranked; rank again by running the round again",
+                        )
+                    ]
+                )
         issues = list(plan.state.refusals)
         specs = plan.queries if picked is None else picked.specs
         issues += [issue for spec in specs for issue in query_issues(project, spec, adapters)]
@@ -1155,6 +1172,8 @@ class _Picked:
     sources: list[str]
     specs: list[QuerySpec]
     selection: ForwardSelection
+    references: tuple[str, ...]
+    weights_hash: str
 
 
 _OPENALEX_ID = re.compile(r"^W\d{1,15}$")
@@ -1170,8 +1189,14 @@ def _pick_forward(
     plan sets no cap. Writes only the probe runs that fetch the citing works' metadata.
 
     Refused, with nothing written, when the round does not plan, there is no development
-    reference, the ranker is unavailable or the request budget is spent. A fetch that did not
-    complete is refused (the counts would be wrong); its probe runs stay recorded."""
+    reference, the ranker is unavailable, the request budget is spent, the round limit or the
+    pending screening or the search authorization refuses, or a probe query is invalid; all of
+    these are checked before any fetch. A fetch that did not complete is refused (the counts would
+    be wrong); its probe runs stay recorded.
+
+    Each `CoreSelection.taken` counts the works taken for that core work. A citing work may cite
+    several core works, so the counts can overlap and their sum is not the number of distinct
+    works the round adds (the chase texts list each chosen work once)."""
     project.index.sync()
     rule = _plan_rule(project)
     if rule is None or rule.forward_max_per_work is None:
@@ -1193,23 +1218,35 @@ def _pick_forward(
     openalex = _openalex_ids(project)
     held = set(openalex.values())
     suffix = _topic_suffix(rule)
-    probe_runs: list[str] = []
-    matched: dict[str, int] = {}
-    in_corpus: dict[str, int] = {}
-    pools: dict[str, list[Work]] = {}
-    for core in plan.sources:
-        spec = QuerySpec(
+    # Every refusal that does not depend on the fetched works comes before the first request.
+    gate = _pending_issues(project) + _forward_limit_issues(project, [ChaseDirection.FORWARD])
+    gate += search_authorization(
+        project,
+        _GATE_PLACEHOLDER,
+        deviation_id=None,
+        pending_round_texts=[_GATE_PLACEHOLDER.text],
+    )
+    probes = {
+        core: QuerySpec(
             source="openalex",
             kind=QueryKind.FILTER,
             text=f"cites:{openalex[core]}{suffix}",
             purpose=QueryPurpose.PROBE,
         )
-        found = query_issues(project, spec, adapters)
-        if found:
-            raise FactoryValidationError(found)
+        for core in plan.sources
+    }
+    for probe_spec in probes.values():
+        gate += query_issues(project, probe_spec, adapters)
+    if gate:
+        raise FactoryValidationError(gate)
+    probe_runs: list[str] = []
+    matched: dict[str, int] = {}
+    in_corpus: dict[str, int] = {}
+    pools: dict[str, list[Work]] = {}
+    for core in plan.sources:
         run = run_query(
             project,
-            register_query(project, actor, spec, sources=adapters),
+            register_query(project, actor, probes[core], sources=adapters),
             sources=adapters,
             actor=actor,
         )
@@ -1278,7 +1315,13 @@ def _pick_forward(
         ),
         probe_runs=tuple(probe_runs),
     )
-    return _Picked(sources=list(plan.sources), specs=specs, selection=selection)
+    return _Picked(
+        sources=list(plan.sources),
+        specs=specs,
+        selection=selection,
+        references=tuple(w.id for w in references),
+        weights_hash=ranker.weights_hash,
+    )
 
 
 def _no_document(unextracted: Sequence[tuple[str, str]]) -> int:
