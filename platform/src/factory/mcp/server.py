@@ -626,7 +626,9 @@ def build_server(
         """Add seeds by identifier (doi, arxiv or openalex) and look each one up. Each seed is
         written or rejected on its own; rejections name the item by index and field.
         `decision_ids` are the selected `seeds` decisions the batch implements; pilot and
-        systematic projects refuse the whole call without one."""
+        systematic projects refuse the whole call without one. A failed binding (no id, an
+        unknown, wrong-level, superseded or unselected decision) refuses the whole batch, before
+        any per-item check."""
 
         def add() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
@@ -4847,7 +4849,7 @@ def build_server(
         recommended}`: ids `I01`, `I02`, ...; `grounds` names what it rests on (a probe, a seed,
         a document, an earlier decision). `recommended` is allowed only on a technical subject
         (tooling, ordering, fix, model-choice, setting). `supersedes` names an earlier,
-        unsuperseded decision this one replaces. Text that names a held-out seed is refused.
+        unsuperseded decision this one replaces.
         Refused to a session that has joined a pass. Then wait: the person selects."""
 
         def suggest() -> JsonValue:
@@ -4879,14 +4881,19 @@ def build_server(
     def decision_select(project: str, decision_id: str) -> dict[str, JsonValue]:
         """The person's selection on a decision, asked of the person through an elicitation form:
         tick the items to keep, add items of their own, give a note. There is no way to pass
-        item ids here. Refused, with nothing asked or written, when the connection has no
-        credential or the client does not support elicitation; the person then runs
-        `factory decide select`. Refused to a session that has joined a pass."""
+        item ids here. Refused, with nothing asked or written, for an unknown or superseded
+        decision, when the connection has no credential or the client does not support
+        elicitation; the person then runs `factory decide select`. Refused to a session that has
+        joined a pass."""
 
         def choose() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
             _refuse_pass_session(opened)
             view = decisions_service.view_decision(opened, decision_id)
+            if view.state == "superseded":
+                raise FactoryValidationError(
+                    [ValidationIssue("decision_id", f"superseded by {view.superseded_by}")]
+                )
             answer = elicit_human_selection(
                 f"Decision {decision_id} ({view.level}: {view.subject})",
                 view.explanation,

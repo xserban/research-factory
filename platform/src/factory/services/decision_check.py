@@ -5,9 +5,13 @@ Invariants:
   an item's text, a ground or a note.
 - `record-without-selection` fires for a question, seed, probe or protocol event whose payload
   carries `decision_ids` as an empty list: the service wrote it after slice 8 and the record cited
-  no decision (allowed in `exploratory`, where the rule is a warning). An event without the key (or
-  with null) predates the slice and is exempt. A hand-written event with an empty list is flagged
-  like a service one.
+  no decision. It is an error in `pilot` and `systematic` only for a record written while the
+  project was in a mode that required binding; one written while it was `exploratory` carries the
+  empty list legitimately and stays a warning whatever the mode is now. The mode at the event is
+  the one in the project's `project.created` event, the only record of a mode in the log (no
+  event changes it), compared with `exploratory`; a log without one falls back to the mode now.
+  An event without the key (or with null) predates the slice and is exempt. A hand-written event
+  with an empty list is flagged like a service one.
 - `selection-not-acted` looks at decisions at the four levels that feed a record (questions,
   seeds, probe, protocol) that have an accepted selection, are not superseded, and are cited by no
   record. Goal and plan decisions feed no record in this slice and are never flagged.
@@ -24,7 +28,8 @@ from sqlalchemy import text
 
 from factory.events.reader import read_all
 from factory.model.base import StrictModel
-from factory.modules.contract import CheckHit
+from factory.model.project import RigorMode
+from factory.modules.contract import CheckHit, Severity
 from factory.services.context import Project
 
 RECORD_TYPES: dict[str, tuple[str, str]] = {
@@ -46,12 +51,21 @@ class RecommendationFigure(StrictModel):
     share: float | None
 
 
-def _cited(project: Project) -> tuple[set[str], dict[str, set[str]]]:
+def _cited(project: Project) -> tuple[set[str], dict[str, set[str]], dict[str, set[str]]]:
     """The decision ids any record cites, and per event type the records that cite none (an
-    empty list, not an absent key)."""
+    empty list, not an absent key), split into those written while binding was required and those
+    written while it was not."""
     cited: set[str] = set()
-    uncited: dict[str, set[str]] = {t: set() for t in RECORD_TYPES}
+    bound: dict[str, set[str]] = {t: set() for t in RECORD_TYPES}
+    legacy: dict[str, set[str]] = {t: set() for t in RECORD_TYPES}
+    mode: RigorMode | None = None
     for event in read_all(project.paths.events_dir, project.catalog):
+        if event.type == "project.created" and mode is None:
+            try:
+                mode = RigorMode(str(event.payload.get("rigor_mode")))
+            except ValueError:
+                mode = None
+            continue
         spec = RECORD_TYPES.get(event.type)
         if spec is None:
             continue
@@ -59,23 +73,41 @@ def _cited(project: Project) -> tuple[set[str], dict[str, set[str]]]:
         if isinstance(ids, list):
             cited.update(str(i) for i in ids)
             if not ids:
-                uncited[event.type].add(str(event.payload.get(spec[0])))
-    return cited, uncited
+                required = (mode or _current_mode(project)) is not RigorMode.EXPLORATORY
+                (bound if required else legacy)[event.type].add(str(event.payload.get(spec[0])))
+    return cited, bound, legacy
+
+
+def _current_mode(project: Project) -> RigorMode:
+    with project.index.connect() as conn:
+        return RigorMode(
+            str(
+                conn.execute(
+                    text("SELECT rigor_mode FROM project WHERE slug = :slug"),
+                    {"slug": project.paths.slug},
+                ).scalar_one()
+            )
+        )
 
 
 def decision_hits(project: Project) -> list[CheckHit]:
-    cited, uncited = _cited(project)
+    cited, bound, legacy = _cited(project)
     hits: list[CheckHit] = []
     for event_type, (_, noun) in RECORD_TYPES.items():
-        refs = sorted(uncited[event_type])
-        if refs:
-            hits.append(
-                CheckHit(
-                    "record-without-selection",
-                    tuple(refs),
-                    f"{len(refs)} {noun} cite no selected decision",
+        found: tuple[tuple[list[str], Severity | None], ...] = (
+            (sorted(bound[event_type]), None),
+            (sorted(legacy[event_type]), "warning"),
+        )
+        for refs, severity in found:
+            if refs:
+                hits.append(
+                    CheckHit(
+                        "record-without-selection",
+                        tuple(refs),
+                        f"{len(refs)} {noun} cite no selected decision",
+                        severity=severity,
+                    )
                 )
-            )
     with project.index.connect() as conn:
         live = conn.execute(
             text(

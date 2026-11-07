@@ -12,6 +12,7 @@ from factory.services.context import Project
 from factory.services.decision_check import recommendation_figure
 from factory.services.project import project_status
 from factory.services.question import record_question, state_goal
+from tests.experiment_helpers import inject, raw_event
 from tests.helpers import bind_ids, pilot_question_spec
 
 CODES = {"record-without-selection", "selection-not-acted", "ungrounded-item"}
@@ -27,19 +28,33 @@ def _suggest(
     return decisions_service.suggest(project, agent, level, subject, "Why this step.", items)
 
 
-def test_a_record_citing_no_decision_is_a_warning_in_exploratory_and_an_error_after(
+def test_a_record_written_while_exploratory_stays_a_warning_in_every_mode(
     explore_project: Project, agent: Actor
 ) -> None:
     project = explore_project
     state_goal(project, agent, "Compare attention on vision")
     result = record_question(project, agent, pilot_question_spec())
+    for mode in (RigorMode.EXPLORATORY, RigorMode.PILOT, RigorMode.SYSTEMATIC):
+        found = _mine(project, mode)["record-without-selection"]
+        assert found == ("warning", [result.question_id])
+
+
+def test_a_record_written_while_binding_was_required_is_an_error_after(
+    project: Project, agent: Actor
+) -> None:
+    inject(
+        project,
+        raw_event(
+            project, "question.recorded", agent, {"question_id": "qst_1", "decision_ids": []}
+        ),
+    )
     for mode, severity in (
         (RigorMode.EXPLORATORY, "warning"),
         (RigorMode.PILOT, "error"),
         (RigorMode.SYSTEMATIC, "error"),
     ):
         found = _mine(project, mode)["record-without-selection"]
-        assert found == (severity, [result.question_id])
+        assert found == (severity, ["qst_1"])
 
 
 def test_a_record_citing_a_selection_has_no_finding_and_closes_the_selection(

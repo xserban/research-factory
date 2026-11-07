@@ -85,7 +85,7 @@ async def test_suggest_reports_every_bad_field_and_writes_nothing(
 
 
 @pytest.mark.anyio
-async def test_suggest_refuses_a_held_out_seed_and_views_scrub_it(
+async def test_suggest_scrubs_a_held_out_seed_without_a_signal_and_views_scrub_it(
     settings: Settings,
     project: Project,
     agent: Actor,
@@ -97,7 +97,7 @@ async def test_suggest_refuses_a_held_out_seed_and_views_scrub_it(
     [held, *_] = [s for s in all_seeds(project) if s.role is SeedRole.HELD_OUT]
     assert held.doi is not None
     async with open_session(settings, clock) as client:
-        refused = await _suggest(client, items=[{"item_id": "I01", "text": f"See {held.doi}"}])
+        scrubbed = await _suggest(client, items=[{"item_id": "I01", "text": f"See {held.doi}"}])
         ok = await _suggest(client)
         decision_id = ok["data"]["decision_id"]
         # A human adds text that names the held-out seed; the agent view must not show it.
@@ -105,10 +105,8 @@ async def test_suggest_refuses_a_held_out_seed_and_views_scrub_it(
             project, human, decision_id, ["I01"], [f"Check {held.doi}"], "", Channel.CLI
         )
         viewed = await client.call("decision_view", project="demo", decision_id=decision_id)
-    assert refused["ok"] is False
-    assert refused["errors"] == [
-        {"field": "items.0.text", "reason": "names a held-out seed (R-20)"}
-    ]
+    assert scrubbed["ok"] is True and set(scrubbed["data"]) == {"decision_id"}
+    assert held.doi not in json.dumps(scrubbed)
     text = json.dumps(viewed)
     assert held.doi not in text and WITHHELD in text
 
@@ -124,8 +122,12 @@ async def test_select_is_refused_without_elicitation_and_writes_nothing(
         unknown = await client.call(
             "decision_select", project="demo", decision_id="dec_01JZ9Q3K5M7N8P0R2S4T6V8W0X"
         )
+        await _suggest(client, supersedes=decision_id)
+        superseded = await client.call("decision_select", project="demo", decision_id=decision_id)
     assert out["ok"] is False
     assert [e["field"] for e in out["errors"]] == ["elicit"]
+    assert [e["field"] for e in superseded["errors"]] == ["decision_id"]
+    assert superseded["errors"][0]["reason"].startswith("superseded by ")
     assert unknown["errors"] == [{"field": "decision_id", "reason": "unknown"}]
     assert "decision.selected" not in _types(project)
 
