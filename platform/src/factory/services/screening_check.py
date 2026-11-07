@@ -312,9 +312,12 @@ def _fresh_pool(project: Project, stage: ScreeningStage) -> set[str]:
 
 
 def tuning_priority(project: Project, stage: ScreeningStage) -> set[str]:
-    """The records of tuning batches, which serving puts first (they are screened before the main
-    queue). Reads the index only."""
-    return _drawn_works(project, CheckKind.TUNING, stage)
+    """The records of tuning and measurement batches, which serving puts first (they are screened
+    before the main queue, so a measurement is not left behind a stop rule; pilot 2026-11-07).
+    Reads the index only."""
+    return _drawn_works(project, CheckKind.TUNING, stage) | _drawn_works(
+        project, CheckKind.MEASUREMENT, stage
+    )
 
 
 # --- Labels ---
