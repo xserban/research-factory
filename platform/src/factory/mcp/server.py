@@ -359,8 +359,13 @@ def build_server(
         limit: int | None = None,
         resume_run: str | None = None,
         deviation_id: str | None = None,
+        filters: dict[str, str] | None = None,
     ) -> dict[str, JsonValue]:
         """Run a literature query against OpenAlex or arXiv exhaustively; every raw page is archived and counts are recorded.
+
+        `filters` are the source's filters exactly as the protocol plans them (OpenAlex, e.g.
+        `{"from_publication_date": "2025-01-01", "language": "en"}`); a planned query matches
+        only with the same filters.
 
         Set `resume_run` to a partial or failed run of the same query to continue it from where
         it stopped; `source`, `query` and `kind` must then restate that run's query. In a pilot
@@ -371,7 +376,7 @@ def build_server(
         def search() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
             actor = make_agent_actor(settings, session, role, model, skill)
-            spec = _spec(source, query, kind, purpose, limit)
+            spec = _spec(source, query, kind, purpose, limit, filters or {})
             budget_service.require_for(opened, actor, REQUESTS_SEARCH)
             if resume_run is not None:
                 query_id = search_service.resume_query_id(opened, resume_run, spec)
@@ -5570,7 +5575,14 @@ def _effects(declared: Mapping[str, str]) -> dict[str, CriterionEffect]:
     return effects
 
 
-def _spec(source: str, query: str, kind: str, purpose: str, limit: int | None) -> QuerySpec:
+def _spec(
+    source: str,
+    query: str,
+    kind: str,
+    purpose: str,
+    limit: int | None,
+    filters: dict[str, str] | None = None,
+) -> QuerySpec:
     """A QuerySpec from tool arguments; every bad field is reported by name."""
     issues: list[ValidationIssue] = []
     try:
@@ -5589,6 +5601,7 @@ def _spec(source: str, query: str, kind: str, purpose: str, limit: int | None) -
             text=query,
             purpose=QueryPurpose.SEARCH,
             limit=limit,
+            filters=filters or {},
         )
     except ValidationError as exc:
         raise FactoryValidationError(
