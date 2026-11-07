@@ -637,6 +637,27 @@ def test_pilot_recall_below_threshold_is_not_met(
     assert report.meets_threshold is False
 
 
+def test_untestable_development_seed_blocks_the_threshold(
+    project: Project, agent: Actor, mock_sources: SourcesFor
+) -> None:
+    _question(project, agent)
+    _positives(project, agent, mock_sources, 5)
+    split_seeds(project, random_seed=7)
+    report = run_probe(
+        project,
+        agent,
+        [_probe_spec()],
+        sources=mock_sources(openalex=[_item(n) for n in range(1, 6)]),
+        decision_ids=bind_ids(project, agent, DecisionLevel.PROBE),
+    )
+    if report.untestable_pooled:
+        assert report.meets_threshold is False
+        assert report.testable_fraction is not None and report.testable_fraction < 1
+        assert report.threshold_note is not None and "untestable" in report.threshold_note
+    else:
+        assert report.testable_fraction == 1.0
+
+
 def test_recall_is_none_when_nothing_measured(
     project: Project, agent: Actor, mock_sources: SourcesFor
 ) -> None:
@@ -811,7 +832,7 @@ def test_probe_sample_request_is_seeded_and_uses_the_query_filter(
     assert "title_and_abstract.search:attention" in sampled[0].url.params["filter"]
 
 
-def test_probe_sample_drops_held_out_records_silently(
+def test_probe_sample_does_not_mask_held_out_records(
     project: Project, agent: Actor, mock_sources: SourcesFor
 ) -> None:
     _question(project, agent)
@@ -831,8 +852,8 @@ def test_probe_sample_drops_held_out_records_silently(
 
     titles = report.queries[0].sample_titles
     assert titles
-    assert not any(f"Paper {n}" in titles for n in held_out)
-    assert len(titles) == 6 - len(held_out)
+    assert all(f"Paper {n}" in titles for n in held_out)
+    assert len(titles) == 6
 
 
 @pytest.mark.parametrize("sample", [-1, 201])

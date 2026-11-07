@@ -114,6 +114,23 @@ def test_a_render_from_an_agent_or_with_a_skipped_version_changes_nothing(
     assert [r["version"] for r in svc.renders(project)] == [1]
 
 
+def test_a_malformed_render_payload_changes_nothing_and_rebuild_agrees(
+    project: Project, agent: Actor
+) -> None:
+    from factory.model.develop import DocumentRendered
+
+    result = svc.render_level(project, DecisionLevel.GOAL)
+    bad = DocumentRendered.model_construct(
+        level=DecisionLevel.GOAL, version=0, sources=(), blob=result.blob
+    )
+    event = project.events.make("document.rendered", bad, project.system_actor())
+    before = project.index.state_hash()
+    with project.writing():
+        project.record([event])
+    assert project.index.state_hash() == before
+    assert project.index.rebuild() == before
+
+
 def test_questions_level_shows_the_recorded_question(project: Project, agent: Actor) -> None:
     _suggest(project, agent, level=DecisionLevel.QUESTIONS, subject="main-question")
     md, _ = svc.render_markdown(project, DecisionLevel.QUESTIONS)

@@ -114,7 +114,16 @@ def max_cosine_scores(
     id. One embedder call, references first. Used by the ranking and by a capped forward round."""
     vectors = embedder.embed([ranking_text(w) for w in [*references, *candidates]])
     if len(vectors) != len(references) + len(candidates):
-        raise ValueError("the embedder returned a different number of vectors than texts")
+        raise FactoryValidationError(
+            [
+                ValidationIssue(
+                    "embedder",
+                    f"the embedder returned {len(vectors)} vectors for "
+                    f"{len(references) + len(candidates)} texts; check the ranker's extra and "
+                    "weights, then run it again",
+                )
+            ]
+        )
     units = [_unit(v) for v in vectors]
     reference_units, candidate_units = units[: len(references)], units[len(references) :]
     return {
@@ -139,6 +148,11 @@ def compute_ranking(project: Project, embedder: Embedder) -> RankingComputed:
     if issues:
         raise FactoryValidationError(issues)
     by_id = {work.id: work for work in list_works(project)}
+    missing = [work_id for work_id in ids if work_id not in by_id]
+    if missing:
+        raise FactoryValidationError(
+            [ValidationIssue("corpus", f"{len(missing)} works to rank are not in the corpus")]
+        )
     candidates = [by_id[work_id] for work_id in ids]
     scores = max_cosine_scores(embedder, refs, candidates)
     ordered = order_by_score(scores)

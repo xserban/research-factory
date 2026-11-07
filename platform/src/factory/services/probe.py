@@ -11,8 +11,8 @@ response is archived before it is measured.
 Each measured query also returns a small sample of titles (`sample`, default 20, 0 disables) so a
 scientist can judge noise. OpenAlex draws a seeded random sample; arXiv has none, so it gives the
 first page by relevance and says so (`sample_kind`). A sample is archived like any probe page,
-never enters the corpus or PRISMA, and drops, without saying why, any record that is a held-out
-seed's work. A failed sample request leaves the recall in place and is named in `sample_note`.
+never enters the corpus or PRISMA. A sampled title is not masked: titles do not reveal seed
+status, and a held-out seed's work is an ordinary record (decision 37.9). A failed sample request leaves the recall in place and is named in `sample_note`.
 
 When a probe measures both `openalex` and `arxiv`, each OpenAlex query also counts its hits hosted
 on arXiv (`openalex_on_arxiv`). That is an estimate of the overlap between the two sources, not a
@@ -50,7 +50,7 @@ from factory.model.probe import (
 from factory.model.project import RigorMode
 from factory.model.search import QueryPurpose, QuerySpec
 from factory.model.seed import SeedKind
-from factory.model.work import Identifiers, Work
+from factory.model.work import Work
 from factory.services.budgets import budget_issue, budget_issues, exhausted_unit
 from factory.services.context import Project
 from factory.services.decision_binding import bind
@@ -60,7 +60,6 @@ from factory.services.search import get_work, query_issues, register_query
 from factory.services.seeds import (
     SeedView,
     agent_seeds,
-    held_out_identifier_matcher,
     split_is_drawn,
     split_seeds,
 )
@@ -122,8 +121,11 @@ class ProbeReport(StrictModel):
     testable on that source (None when none is); `untestable_by_source` lists the development
     seeds that source cannot test, which are not in the denominator. `pooled_recall` is the union
     over every measured query over the development seeds testable on at least one measured source;
-    `untestable_pooled` lists those testable on none. `meets_threshold` is False whenever recall
-    is None.
+    `untestable_pooled` lists those testable on none. `testable_fraction` is the development seeds
+    testable on at least one measured source over all development seeds (None without any).
+    `meets_threshold` is False whenever recall is None and whenever any development seed is
+    untestable on every measured source (the recall would rest on a subset); `threshold_note`
+    says why.
     """
 
     probe_id: str
@@ -136,6 +138,8 @@ class ProbeReport(StrictModel):
     overlap_note: str | None = None
     threshold: float
     meets_threshold: bool
+    testable_fraction: float | None = None
+    threshold_note: str | None = None
 
 
 def run_probe(
@@ -175,8 +179,6 @@ def run_probe(
     probe_id = project.ids.new("prb")
     seeds = agent_seeds(project)
     works = {seed.seed_id: _work_of(project, seed) for seed in seeds}
-    # Built once, and only when a sample is wanted: the held-out identifiers stay in this process.
-    is_held_out = held_out_identifier_matcher(project) if sample > 0 else (lambda _ids: False)
     count_overlap = {"openalex", "arxiv"} <= {spec.source for spec in specs}
     results: list[ProbeQueryResult] = []
     for index, spec in enumerate(specs):
@@ -193,7 +195,6 @@ def run_probe(
                 seeds=seeds,
                 works=works,
                 sample=sample,
-                is_held_out=is_held_out,
                 count_overlap=count_overlap,
                 decision_ids=bound,
             )
@@ -256,7 +257,6 @@ def _measure(
     seeds: list[SeedView],
     works: dict[str, Work | None],
     sample: int,
-    is_held_out: Callable[[Identifiers], bool],
     count_overlap: bool,
     decision_ids: tuple[str, ...],
 ) -> ProbeQueryResult:
@@ -329,7 +329,7 @@ def _measure(
                 spec, sample, archive=_archiver(project, probe_id, query_id, "sample")
             )
             sample_kind = kind
-            titles = tuple(r.title for r in records if not is_held_out(r.identifiers))
+            titles = tuple(r.title for r in records)
         except SourceError as exc:
             sample_note = redact(f"{type(exc).__name__}: {exc}", project.settings.mailto)
 
@@ -503,6 +503,17 @@ def _report(
     per_source: dict[str, float | None] = {row.source: None for row in results}
     per_source.update(per_measured)
     threshold = THRESHOLDS[mode]
+    fraction = (len(development) - len(untestable_pooled)) / len(development) if development else None
+    note: str | None = None
+    if pooled is None:
+        note = "no development seed is testable on a measured source"
+    elif untestable_pooled:
+        note = (
+            f"{len(untestable_pooled)} of {len(development)} development seeds are untestable "
+            "on every measured source; recall rests on the rest, so the threshold is not met"
+        )
+    elif pooled < threshold:
+        note = f"pooled recall {pooled:.2f} is below the threshold {threshold:.2f}"
     return ProbeReport(
         probe_id=probe_id,
         question_id=question_id,
@@ -515,7 +526,9 @@ def _report(
             OVERLAP_NOTE if any(row.openalex_on_arxiv is not None for row in results) else None
         ),
         threshold=threshold,
-        meets_threshold=pooled is not None and pooled >= threshold,
+        meets_threshold=pooled is not None and pooled >= threshold and not untestable_pooled,
+        testable_fraction=fraction,
+        threshold_note=note,
     )
 
 

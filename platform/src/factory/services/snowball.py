@@ -1109,7 +1109,7 @@ def snowball_round(
                     if picked is not None or _topic_suffix(plan_rule)
                     else None
                 ),
-                extra_sources=seed_core_works(project) if core_only else (),
+                extra_sources=seed_core_works(project, development_only=True) if core_only else (),
             )
             payload = SnowballRoundStarted(
                 round_id=project.ids.new("snw"),

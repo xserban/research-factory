@@ -714,26 +714,6 @@ def held_out_seed_matcher(project: Project) -> Callable[[Work], bool]:
     return matches
 
 
-def held_out_identifier_matcher(project: Project) -> Callable[[Identifiers], bool]:
-    """Whether a source record, known only by its identifiers, is a held-out seed's work.
-
-    The identifiers of the seed itself and of its resolved works (merge groups included) count.
-    For the probe's title samples (R-20): a sampled record that matches is dropped before anything
-    is shown or written, and never from a view of the corpus (decision 81).
-    """
-    works, keys = _held_out_sets(project)
-    stated = set(keys)
-    for work_id in works:
-        work = get_work(project, work_id)
-        if work is not None:
-            stated.update(_stated_keys(work.identifiers))
-
-    def matches(identifiers: Identifiers) -> bool:
-        return any(value in stated for value in _stated_keys(identifiers))
-
-    return matches
-
-
 _NOT_SEARCH = frozenset(
     {ProvenanceMethod.SEED_ADMISSION, ProvenanceMethod.SUPPLIED, ProvenanceMethod.LIBRARY_IMPORT}
 )

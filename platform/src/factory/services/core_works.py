@@ -5,12 +5,13 @@ Invariants:
   and nothing is written; the fold ignores an agent-written event as well (`index.core_works`).
 - A mark names a work the project holds (`work_id`: `unknown`), once (`work_id`: `already-core`);
   an unmark names a marked work (`work_id`: `not-marked`).
-- A positive seed's work is core without a mark. Development and held-out seeds alike are used as
-  sources of citations: a held-out seed's work is an ordinary record (decision 37.9). Which seeds
-  are held out is never returned here; `seed_core_works` with `development_only` lists the
-  development ones, for an agent-facing view.
+- A development positive seed's work is core without a mark. A held-out seed's work is never an
+  automatic core work (R-20: it must not steer the search); it is core only if a human marks it.
+  `seed_core_works` without `development_only` lists every positive seed's work and is for the
+  researcher's own view only; no round plan, event or agent view uses it.
 - `forward_core_sources` is the core works that a forward round may start from: the marked ones
-  that are included at the last declared stage, and the seeds' works. Nothing is typed in.
+  that are included at the last declared stage, and the development seeds' works. Nothing is
+  typed in.
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
 from factory.model.base import StrictModel
 from factory.model.core_works import WorkMarkedCore, WorkUnmarkedCore
+from factory.model.search import QueryPurpose
 from factory.model.seed import SeedKind
 from factory.model.work_ids import WORK_ID_RE
 from factory.services.context import Project
@@ -65,7 +67,7 @@ def core_marks(project: Project) -> list[CoreMark]:
 
 def seed_core_works(project: Project, *, development_only: bool = False) -> list[str]:
     """The works of the positive seeds that resolved to a work, sorted. With `development_only`
-    the held-out seeds' works are left out (the list an agent sees)."""
+    the held-out seeds' works are left out (the only list a search or an agent view may use)."""
     if development_only:
         works = {
             s.work_id
@@ -83,9 +85,9 @@ def seed_core_works(project: Project, *, development_only: bool = False) -> list
 
 def forward_core_sources(project: Project, included: Collection[str]) -> list[str]:
     """The core works a forward round may start from, sorted: the marked works among `included`
-    and every positive seed's work."""
+    and every development positive seed's work (never a held-out seed's, unless marked)."""
     marked = {m.work_id for m in core_marks(project)}
-    return sorted((marked & set(included)) | set(seed_core_works(project)))
+    return sorted((marked & set(included)) | set(seed_core_works(project, development_only=True)))
 
 
 def mark_core(project: Project, actor: Actor, work_id: str, note: str | None = None) -> str:
@@ -135,9 +137,17 @@ def _payload(model: type[_Mark], work_id: str, note: str | None) -> _Mark:
 
 
 def _known(project: Project, work_id: str) -> bool:
+    """Whether the work is in the corpus (found by a non-probe query or admitted); a work only
+    a probe saw is not."""
     project.index.sync()
     with project.index.connect() as conn:
         return (
-            conn.execute(text("SELECT 1 FROM works WHERE work_id = :w"), {"w": work_id}).first()
+            conn.execute(
+                text(
+                    "SELECT 1 FROM provenance WHERE work_id = :w AND query_id NOT IN "
+                    "(SELECT query_id FROM queries WHERE purpose = :probe)"
+                ),
+                {"w": work_id, "probe": QueryPurpose.PROBE.value},
+            ).first()
             is not None
         )

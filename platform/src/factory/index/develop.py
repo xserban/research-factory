@@ -5,11 +5,12 @@ ids (a JSON list) and blob ref. Nothing else reads it. The table is left out of 
 while empty.
 
 The fold is total and atomic: an event that does not come from the system actor, or whose version
-is not one more than the level's latest, changes nothing and never raises.
+is not one more than the level's latest, or whose payload does not validate, changes nothing and never raises.
 """
 
 from __future__ import annotations
 
+from pydantic import ValidationError
 from sqlalchemy import Column, Integer, MetaData, String, Table, func, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Connection
@@ -38,7 +39,10 @@ def develop_handlers(table: Table) -> dict[str, Handler]:
     def rendered(conn: Connection, event: Event) -> None:
         if event.actor.kind != "system":
             return
-        p = DocumentRendered.model_validate(event.payload)
+        try:
+            p = DocumentRendered.model_validate(event.payload)
+        except ValidationError:
+            return
         latest = conn.execute(
             select(func.max(table.c.version)).where(table.c.level == p.level.value)
         ).scalar_one()

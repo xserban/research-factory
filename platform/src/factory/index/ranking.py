@@ -6,16 +6,19 @@ each work. Both are empty for a log without ranking events, so they are left out
 then.
 
 Handlers are total. An event that does not come from the system actor, whose order blob cannot be
-read, is not a list of distinct works matching `count` and `corpus_hash`, or repeats a known
+read, is not a list of distinct works with finite scores in [-1, 1] matching `count` and
+`corpus_hash`, whose payload does not validate, or repeats a known
 ranking id, changes nothing: a logged event can never be removed, so the fold must not raise.
 """
 
 from __future__ import annotations
 
 import hashlib
+import math
 import zlib
 from typing import NamedTuple
 
+from pydantic import ValidationError
 from sqlalchemy import Column, Float, Integer, MetaData, String, Table, delete
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Connection
@@ -29,6 +32,7 @@ from factory.index.projection import Handler
 from factory.model.ranking import RankingComputed
 
 _CHUNK = 5000
+_MAX_SCORE = 1.000001
 
 
 class RankingTables(NamedTuple):
@@ -85,7 +89,14 @@ def _order(blobs: BlobStore, p: RankingComputed) -> list[tuple[str, float]] | No
             return None
         if not isinstance(score, int | float):
             return None
-        out.append((work, float(score)))
+        try:
+            score_value = float(score)
+        except OverflowError:
+            return None
+        # A score is a cosine rounded to six decimals: finite and within [-1, 1].
+        if not math.isfinite(score_value) or abs(score_value) > _MAX_SCORE:
+            return None
+        out.append((work, score_value))
     ids = [work for work, _ in out]
     if len(set(ids)) != len(ids) or len(ids) != p.count or corpus_hash(ids) != p.corpus_hash:
         return None
@@ -98,8 +109,11 @@ def ranking_handlers(t: RankingTables, blobs: BlobStore | None) -> dict[str, Han
             raise RuntimeError("the ranking projection needs the project's blob store")
         if event.actor.kind != "system":
             return
-        p = RankingComputed.model_validate(event.payload)
-        order = _order(blobs, p)
+        try:
+            p = RankingComputed.model_validate(event.payload)
+            order = _order(blobs, p)
+        except (ValidationError, ValueError, TypeError, ArithmeticError):
+            return
         if order is None:
             return
         inserted = conn.execute(
