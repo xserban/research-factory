@@ -1,8 +1,9 @@
 """The live dashboard's state: one JSON-serialisable dict built from the index (slice 8, phase I).
 
 Invariants:
-- Read-only. Every panel calls an existing read service; nothing here opens a transaction that
-  writes, and no event file is read. The index is synced by those services, never written here.
+- Read-only, but for deleting expired ephemeral progress files (`.progress/`, never events). Every
+  panel calls an existing read service; nothing here opens a transaction that writes, and no event
+  file is read. The index is synced by those services, never written here.
 - Each panel is optional: absent data gives an empty panel, and a panel that cannot be built gives
   an empty one with a short `error` note. The state is never an error as a whole.
 - Development-only view (R-20, decision 37 item 9): the whole state passes through `withhold` with
@@ -29,6 +30,7 @@ from factory.services import dedup as dedup_service
 from factory.services import extraction as extraction_service
 from factory.services import extraction_audit as extraction_audit_service
 from factory.services import ledger as ledger_service
+from factory.services import progress as progress_service
 from factory.services import protocol as protocol_service
 from factory.services import question as question_service
 from factory.services import ranking as ranking_service
@@ -113,6 +115,7 @@ def dashboard_state(project: Project) -> dict[str, JsonValue]:
         "screening": _guard(lambda: _screening(project, status), {}),
         "extraction": _guard(lambda: _extraction(project), {}),
         "cost": _guard(lambda: _cost(project, status), {}),
+        "progress": _guard(lambda: cast(JsonValue, progress_service.progress_list(project)), []),
     }
     return cast(
         dict[str, JsonValue],

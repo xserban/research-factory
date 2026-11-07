@@ -28,6 +28,7 @@ from factory.sources.base import (
     SourceError,
     StatusRecord,
     budget_spent,
+    report_progress,
 )
 from factory.sources.http import PoliteClient, redact
 
@@ -180,6 +181,9 @@ class CrossrefSource:
             ignored.extend(page_ignored)
             seen_items += len(items)
             total = message.get("total-results")
+            report_progress(
+                archive, seen_items, total if isinstance(total, int) else None, archived
+            )
             next_cursor = message.get("next-cursor")
             if (
                 not items

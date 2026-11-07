@@ -41,6 +41,7 @@ from factory.sources.base import (
     SourceError,
     StatusRecord,
     budget_spent,
+    report_progress,
 )
 from factory.sources.http import PoliteClient, redact
 
@@ -276,6 +277,7 @@ class ArxivSource:
                 seen.add(work.id)
                 works.append(work)
 
+            report_progress(archive, len(works), reported, pages)
             exhausted = self._exhausted(spec, ids, start, len(entries))
             if spec.limit is not None and len(works) >= spec.limit:
                 # Enforce the cap here rather than trusting the server to honour max_results.

@@ -43,6 +43,7 @@ from factory.sources.base import (
     SourceError,
     StatusRecord,
     budget_spent,
+    report_progress,
 )
 from factory.sources.http import PoliteClient, redact, redact_api_key
 
@@ -316,6 +317,7 @@ class OpenAlexSource:
                 seen.add(work.id)
                 works.append(work)
 
+            report_progress(archive, len(works), reported, archived)
             next_cursor = meta.get("next_cursor") or ""
             if spec.limit is not None and len(works) >= spec.limit:
                 truncated = len(works) > spec.limit or bool(next_cursor)

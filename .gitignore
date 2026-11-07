@@ -14,6 +14,8 @@ build/
 # Factory: rebuildable index; project-local literature library (decision 39)
 projects/*/.index/
 projects/*/library/
+# Factory: ephemeral progress of long operations (slice 8, IDEA-44), never an event
+projects/*/.progress/
 projects/*/blobs/**/*.pdf
 # Factory: the rebuildable shared mining store (slice M ruling 18)
 /.mining/

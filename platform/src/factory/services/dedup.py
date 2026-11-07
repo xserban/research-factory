@@ -19,6 +19,7 @@ from factory.model.dedup import DedupMerged, DedupReverted, MergeStatus
 from factory.model.work import Work
 from factory.services.context import Project
 from factory.services.dedup_cascade import CascadeMerge, dedup, merge_works
+from factory.services.progress import track
 from factory.services.search import corpus_size, list_works
 
 
@@ -53,13 +54,17 @@ class _Reconciliation:
     fresh: list[CascadeMerge]
 
 
-def _reconciliation(project: Project) -> _Reconciliation:
+def _reconciliation(project: Project, *, report: bool = True) -> _Reconciliation:
     works = list_works(project)
-    result = dedup(
-        works,
-        blocked=blocked_pairs(project),
-        aliases=alias_keys(project, [w.id for w in works]),
-    )
+    blocked = blocked_pairs(project)
+    aliases = alias_keys(project, [w.id for w in works])
+    if report:
+        with track(
+            project, "dedup", "title comparison", unit="records", total=len(works)
+        ) as reporter:
+            result = dedup(works, blocked=blocked, aliases=aliases, progress=reporter.update)
+    else:
+        result = dedup(works, blocked=blocked, aliases=aliases)
     # Identity collapses (several records sharing one id) absorb nothing: they are not merges.
     groups = [group for group in result.merges if group.absorbed]
     active = active_merges(project)
@@ -98,7 +103,7 @@ def dedup_current(project: Project) -> bool:
     run, and every old project reads correctly. Screening waits on this (plan PF ruling 1).
     """
     project.index.sync()
-    plan = _reconciliation(project)
+    plan = _reconciliation(project, report=False)
     return not plan.stale and not plan.fresh
 
 

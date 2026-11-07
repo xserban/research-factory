@@ -2,7 +2,8 @@
 
 Invariants:
 - Bound to 127.0.0.1 only; a request whose Host header is not a loopback name is refused (a
-  rebinding guard). Only `GET /` and `GET /api/state` answer; every other method is 405.
+  rebinding guard). Only `GET /`, `GET /api/state` and `GET /api/progress` answer; every other
+  method is 405.
 - Nothing writes an event: the state is computed per request from the index (the index itself is
   synced under a lock, one request at a time).
 - No external resource: the page is one inline HTML string.
@@ -18,6 +19,7 @@ from pathlib import Path
 from factory.services.context import Project
 from factory.services.dashboard import dashboard_state
 from factory.services.dashboard_page import render_page
+from factory.services.progress import progress_list
 
 HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
@@ -55,6 +57,9 @@ def make_server(project: Project, port: int = DEFAULT_PORT) -> ThreadingHTTPServ
                 self._send(200, render_page().encode(), "text/html; charset=utf-8")
             elif path == "/api/state":
                 body = state_json(project, lock).encode()
+                self._send(200, body, "application/json; charset=utf-8")
+            elif path == "/api/progress":
+                body = json.dumps(progress_list(project), ensure_ascii=False).encode()
                 self._send(200, body, "application/json; charset=utf-8")
             else:
                 self._send(404, b"not found", "text/plain; charset=utf-8")

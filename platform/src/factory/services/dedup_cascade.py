@@ -16,7 +16,7 @@ So this module is deliberately tuned to prefer the error screening will catch.
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 
 from rapidfuzz import fuzz
@@ -180,13 +180,15 @@ def dedup(
     *,
     blocked: frozenset[frozenset[str]] = frozenset(),
     aliases: Mapping[str, Sequence[tuple[str, str]]] | None = None,
+    progress: Callable[[int, int | None], None] | None = None,
 ) -> DedupResult:
     """Merge duplicates across the corpus, returning the survivors and a reversible map.
 
     `blocked` holds pairs of work ids that must never end up in the same group, e.g. a merge a
     human reverted. The block holds even when the pair is reachable through a third record.
     `aliases` maps a work id to extra exact-match keys (the published identifiers a version link
-    attached to it), which join works by identifier like their own keys.
+    attached to it), which join works by identifier like their own keys. `progress`, when given,
+    is called with `(works compared, total)` as the title comparison advances; it changes nothing.
     """
     extra = aliases or {}
     union = _Union(blocked)
@@ -209,12 +211,16 @@ def dedup(
         by_year[work.dates.year].append(work)
 
     titles = {w.id: normalize_title(w.title) for w in works}
+    compared = 0
     for year, bucket in by_year.items():
         candidates = list(bucket)
         if year is not None:
             for offset in range(1, YEAR_WINDOW + 1):
                 candidates += by_year.get(year + offset, [])
         for i, left in enumerate(bucket):
+            compared += 1
+            if progress is not None:
+                progress(compared, len(works))
             for right in candidates[i + 1 :]:
                 if left.id == right.id or union.find(left.id) == union.find(right.id):
                     continue

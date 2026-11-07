@@ -152,6 +152,7 @@ from factory.services import onion as onion_service
 from factory.services import outline as outline_service
 from factory.services import passes as passes_service
 from factory.services import probe as probe_service
+from factory.services import progress as progress_service
 from factory.services import properties as properties_service
 from factory.services import protocol as protocol_service
 from factory.services import question as question_service
@@ -5152,6 +5153,21 @@ def build_server(
             return _withheld(opened, data, include_work_ids=False)
 
         return _reply(project, render, include_work_ids=False)
+
+    @server.tool()
+    def progress_status(project: str) -> dict[str, JsonValue]:
+        """The long operations running now or finished in the last ten minutes (ranking, search
+        paging, snowball and probe queries, deduplication): done, total, unit, state, rate per
+        second and seconds left. Ephemeral: read from small files, never an event, never stored
+        in the index. Read-only. Refused to a session that has joined a pass."""
+
+        def status() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            rows = progress_service.progress_list(opened)
+            return _withheld(opened, {"operations": cast(JsonValue, rows)}, include_work_ids=False)
+
+        return _reply(project, status, include_work_ids=False)
 
     return server
 

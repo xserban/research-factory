@@ -55,6 +55,7 @@ from factory.model.work import Work
 from factory.services.budgets import budget_issue, budget_issues, exhausted_unit
 from factory.services.context import Project
 from factory.services.decision_binding import bind
+from factory.services.progress import track
 from factory.services.project import project_status
 from factory.services.question import current_question
 from factory.services.search import get_work, query_issues, register_query
@@ -182,24 +183,26 @@ def run_probe(
     works = {seed.seed_id: _work_of(project, seed) for seed in seeds}
     count_overlap = {"openalex", "arxiv"} <= {spec.source for spec in specs}
     results: list[ProbeQueryResult] = []
-    for index, spec in enumerate(specs):
-        probe_spec = spec.model_copy(update={"purpose": QueryPurpose.PROBE})
-        query_id = register_query(project, actor, probe_spec, sources=sources)
-        results.append(
-            _measure(
-                project,
-                probe_id=probe_id,
-                query_id=query_id,
-                question_id=question.question_id,
-                spec=probe_spec,
-                prober=probers[index],
-                seeds=seeds,
-                works=works,
-                sample=sample,
-                count_overlap=count_overlap,
-                decision_ids=bound,
+    with track(project, "probe", "probe queries", unit="queries", total=len(specs)) as reporter:
+        for index, spec in enumerate(specs):
+            probe_spec = spec.model_copy(update={"purpose": QueryPurpose.PROBE})
+            query_id = register_query(project, actor, probe_spec, sources=sources)
+            results.append(
+                _measure(
+                    project,
+                    probe_id=probe_id,
+                    query_id=query_id,
+                    question_id=question.question_id,
+                    spec=probe_spec,
+                    prober=probers[index],
+                    seeds=seeds,
+                    works=works,
+                    sample=sample,
+                    count_overlap=count_overlap,
+                    decision_ids=bound,
+                )
             )
-        )
+            reporter.update(index + 1, message=f"{spec.source} query measured")
     return _report(probe_id, question.question_id, mode, results, seeds)
 
 

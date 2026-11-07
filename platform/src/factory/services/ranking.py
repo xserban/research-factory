@@ -35,14 +35,16 @@ from factory.model.seed import SeedKind
 from factory.model.work import Work
 from factory.services.calibration import stage_population
 from factory.services.context import Project
+from factory.services.progress import Callback, track
 from factory.services.ranked_queue import ranking_positions as ranking_positions
-from factory.services.ranking_model import Embedder
+from factory.services.ranking_model import BATCH, Embedder
 from factory.services.screening import live_decisions
 from factory.services.search import get_work, list_works
 from factory.services.seeds import agent_seeds
 
 SEPARATOR = "[SEP]"
 SCORE_DECIMALS = 6
+REPORT_CHUNK = 4 * BATCH
 
 
 class RankedWork(StrictModel):
@@ -107,12 +109,32 @@ def order_by_score(scores: dict[str, float]) -> list[tuple[str, float]]:
     return sorted(scores.items(), key=lambda item: (-item[1], item[0]))
 
 
+def _embed_reporting(
+    embedder: Embedder, texts: Sequence[str], progress: Callback | None
+) -> list[list[float]]:
+    """`embedder.embed(texts)`; with `progress`, in chunks of a multiple of the embedder's batch
+    (so every batch holds the same texts as in one call) reporting `(embedded, total)`."""
+    if progress is None:
+        return embedder.embed(texts)
+    out: list[list[float]] = []
+    for start in range(0, len(texts), REPORT_CHUNK):
+        out.extend(embedder.embed(texts[start : start + REPORT_CHUNK]))
+        progress(min(start + REPORT_CHUNK, len(texts)), len(texts))
+    return out
+
+
 def max_cosine_scores(
-    embedder: Embedder, references: Sequence[Work], candidates: Sequence[Work]
+    embedder: Embedder,
+    references: Sequence[Work],
+    candidates: Sequence[Work],
+    progress: Callback | None = None,
 ) -> dict[str, float]:
     """Each candidate's maximum cosine to any reference text, rounded to `SCORE_DECIMALS`, by work
-    id. One embedder call, references first. Used by the ranking and by a capped forward round."""
-    vectors = embedder.embed([ranking_text(w) for w in [*references, *candidates]])
+    id. References first; one embedder call, or chunked when `progress` (texts embedded, total)
+    is given, which does not change any vector. Used by the ranking and a capped forward round."""
+    vectors = _embed_reporting(
+        embedder, [ranking_text(w) for w in [*references, *candidates]], progress
+    )
     if len(vectors) != len(references) + len(candidates):
         raise FactoryValidationError(
             [
@@ -154,7 +176,10 @@ def compute_ranking(project: Project, embedder: Embedder) -> RankingComputed:
             [ValidationIssue("corpus", f"{len(missing)} works to rank are not in the corpus")]
         )
     candidates = [by_id[work_id] for work_id in ids]
-    scores = max_cosine_scores(embedder, refs, candidates)
+    with track(
+        project, "ranking", "SPECTER2 embedding", unit="records", total=len(refs) + len(candidates)
+    ) as reporter:
+        scores = max_cosine_scores(embedder, refs, candidates, reporter.update)
     ordered = order_by_score(scores)
     parameters = RankingParameters(references=tuple(w.id for w in refs), skipped_seeds=skipped)
     with project.writing():

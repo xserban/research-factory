@@ -142,6 +142,7 @@ TOOL_PERMISSIONS: Mapping[str, Permission] = {
     "decision_list": Permission.PROJECT_READ,
     "decision_view": Permission.PROJECT_READ,
     "develop_render": Permission.PROJECT_READ,
+    "progress_status": Permission.PROJECT_READ,
     "term_list": Permission.PROJECT_READ,
     "view_onion": Permission.PROJECT_READ,
     "view_coverage": Permission.PROJECT_READ,

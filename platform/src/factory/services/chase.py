@@ -38,6 +38,7 @@ from factory.services.agreement import Outcome, final_outcomes
 from factory.services.budgets import require_for
 from factory.services.calibration import calibration_items
 from factory.services.context import Project
+from factory.services.progress import track
 from factory.services.protocol import current_protocol, search_authorization
 from factory.services.search import (
     RunSummary,
@@ -307,7 +308,14 @@ def run_chase(
         register_query(project, actor, spec, sources=sources, round_id=round_id)
         for spec in start.specs
     ]
-    return [run_query(project, query_id, sources=sources, actor=actor) for query_id in query_ids]
+    runs: list[RunSummary] = []
+    with track(
+        project, "snowball", "chase queries", unit="queries", total=len(query_ids)
+    ) as reporter:
+        for query_id in query_ids:
+            runs.append(run_query(project, query_id, sources=sources, actor=actor))
+            reporter.update(len(runs))
+    return runs
 
 
 def _pending_issues(project: Project) -> list[ValidationIssue]:

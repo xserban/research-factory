@@ -69,9 +69,21 @@ class BudgetedSink:
 
     sink: PageSink
     spent: Callable[[], bool]
+    progress: Callable[[int, int | None, int], None] | None = None
+    """Optional `(records retrieved, reported count, pages)` hook for live progress (IDEA-44)."""
 
     def __call__(self, page: RawPage) -> str:
         return self.sink(page)
+
+
+def report_progress(archive: PageSink, retrieved: int, reported: int | None, pages: int) -> None:
+    """Tell a progress hook how far a paginating adapter is; a no-op for a plain sink, and a hook
+    that fails never breaks the fetch."""
+    if isinstance(archive, BudgetedSink) and archive.progress is not None:
+        try:
+            archive.progress(retrieved, reported, pages)
+        except Exception:
+            return
 
 
 def budget_spent(archive: PageSink) -> bool:

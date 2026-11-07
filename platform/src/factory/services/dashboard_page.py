@@ -49,11 +49,17 @@ code,.q{overflow-wrap:anywhere;font-size:.8rem}
 .kvs{display:grid;grid-template-columns:max-content 1fr;gap:2px 12px;margin:4px 0}.kvs dt{color:var(--dim)}.kvs dd{margin:0;overflow-wrap:anywhere}
 .tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;margin:8px 0}
 .tile{background:var(--lt);border:1px solid var(--mut);border-radius:6px;padding:6px 10px}.tile b{display:block;font-size:1.25rem;color:var(--ac)}
+#run{max-width:1100px;margin:0 auto;padding:0 16px}
+#run .op{background:var(--lt);border:1px solid var(--mut);border-radius:6px;padding:6px 12px;margin:8px 0}
+#run h2{margin:12px 0 0}
+.bar{height:8px;background:var(--dk);border:1px solid var(--mut);border-radius:4px;overflow:hidden;margin:4px 0}
+.bar>i{display:block;height:100%;background:var(--ac)}.op.failed .bar>i{background:var(--dim)}
 @media (max-width:600px){.kvs{grid-template-columns:1fr}main{padding:0 10px 48px}}
 </style></head><body>
 <header><h1>Factory dashboard <span class="dim" id="slug"></span></h1>
 <div class="dim"><span id="fresh">loading</span> <span id="last"></span></div>
 <nav id="tabs"></nav></header>
+<section id="run"></section>
 <main id="main"></main>
 <script>
 const STATIC=/*STATE*/null;
@@ -165,6 +171,22 @@ function renderCost(m){const C=D.cost||{};m.append(h('h2',null,'Cost and time'))
  const B=C.budget||{};m.append(h('h3',null,'Budgets'),(B.budgets||[]).length?table(['Unit','Scope','Limit','Consumed','Remaining'],B.budgets.map(b=>[b.budget.unit,E(b.budget.scope_user)||'project',b.budget.limit,b.consumed,b.remaining])):h('p',{class:'dim'},B.notice||'None declared.'));
  m.append(h('h3',null,'Reported usage'),kv(B.reported_usage||{}));
  m.append(h('h3',null,'All events by type'),kv(C.events_by_type||{}));}
+let P=(STATIC&&STATIC.progress)||[];
+function dur(s){if(s===null||s===undefined)return '-';s=Math.round(s);const m=Math.floor(s/60),x=s%60;return m?m+'m '+String(x).padStart(2,'0')+'s':x+'s';}
+function drawRun(){const box=$('#run');if(!box)return;
+ const L=(P||[]).filter(o=>o.state==='running'||o.state==='stale'||(o.idle_seconds||0)<30);
+ if(!L.length){box.replaceChildren();return;}
+ box.replaceChildren(h('h2',null,'Running now'),...L.map(o=>{
+  const pct=o.total?Math.min(100,Math.round(100*o.done/o.total)):0;
+  const bar=h('div',{class:'bar'},h('i',{style:'width:'+pct+'%'}));
+  const cnt=o.done+(o.total?' / '+o.total:'')+' '+o.unit+(o.total?' ('+pct+'%)':'');
+  const tail=o.state==='running'?[o.rate_per_second?o.rate_per_second+' '+o.unit+'/s':'',o.eta_seconds!==null&&o.eta_seconds!==undefined?'ETA '+dur(o.eta_seconds):'','elapsed '+dur(o.elapsed_seconds)].filter(x=>x).join(' / '):
+   (o.state==='finished'?'done in '+dur(o.elapsed_seconds):o.state+(o.message?': '+o.message:''));
+  return h('div',{class:'op '+o.state},h('b',null,o.label),' ',h('span',{class:'dim'},o.kind+' / '+o.state+(o.state==='running'&&o.message?' / '+o.message:'')),bar,h('div',{class:'dim'},cnt+(tail?' / '+tail:'')));}));}
+function running(){return(P||[]).some(o=>o.state==='running');}
+async function pollProgress(){
+ try{const r=await fetch('/api/progress',{cache:'no-store'});P=JSON.parse(await r.text());drawRun();}catch(e){}
+ setTimeout(pollProgress,running()?1500:5000);}
 const TABS=[['protocol','Protocol',renderProtocol],['decisions','Decisions',renderDecisions],['press','PRESS',renderPress],['probes','Probes',renderProbes],['search','Search',renderSearch],['screening','Screening',renderScreening],['extraction','Extraction',renderExtraction],['cost','Cost and time',renderCost]];
 function render(){
  const y=window.scrollY,a=document.activeElement,keep=a&&a.id==='q'?[a.selectionStart,a.selectionEnd]:null;
@@ -177,9 +199,10 @@ function stamp(){const meta=D.meta||{};$('#fresh').textContent=STATIC?'snapshot 
  $('#last').textContent=' / '+(meta.events_total===null||meta.events_total===undefined?0:meta.events_total)+' events / last '+(meta.last_event_id||'none');}
 async function poll(){
  try{const r=await fetch('/api/state',{cache:'no-store'});const t=await r.text();
-  if(t!==lastJson){lastJson=t;D=JSON.parse(t);render();}stamp();}
+  const j=JSON.parse(t);P=j.progress||[];delete j.progress;drawRun();
+  const key=JSON.stringify(j);if(key!==lastJson){lastJson=key;D=j;render();}stamp();}
  catch(e){$('#fresh').textContent='offline, retrying';}}
-if(STATIC){render();stamp();}else{render();poll();setInterval(poll,5000);}
+if(STATIC){render();drawRun();stamp();}else{render();poll();setInterval(poll,5000);pollProgress();}
 </script></body></html>
 """
 

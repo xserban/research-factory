@@ -31,6 +31,7 @@ PANELS = (
     "screening",
     "extraction",
     "cost",
+    "progress",
 )
 
 

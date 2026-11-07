@@ -37,6 +37,7 @@ from factory.model.work import Provenance, ProvenanceMethod, Work
 from factory.services.budgets import spent_for
 from factory.services.call_memo import memoised
 from factory.services.context import Project
+from factory.services.progress import track
 from factory.sources.base import BudgetedSink, RawPage, SourceError, StatusRecord
 from factory.sources.http import redact
 from factory.sources.registry import INTERFACES, SourceFactory
@@ -306,15 +307,21 @@ def run_query(
     def budget_gone() -> bool:
         return spent_for(project, started_by, REQUESTS_SEARCH) is not None
 
+    reporter = track(project, "search", f"{spec.source} {spec.purpose.value} query", unit="records")
+
+    def page_done(retrieved: int, reported: int | None, pages: int) -> None:
+        reporter.update(retrieved, reported, f"{pages} page(s) fetched")
+
     try:
         result = adapter.run(
             spec,
             run_id=run_id,
             query_id=query_id,
-            archive=BudgetedSink(archive, budget_gone),
+            archive=BudgetedSink(archive, budget_gone, page_done),
             resume_from=resume_token,
         )
     except Exception as exc:
+        reporter.fail(f"{type(exc).__name__}: {exc}")
         # The pages already archived stay recorded; nothing from them is parsed here.
         status = RunStatus.PARTIAL if archived else RunStatus.FAILED
         error_note = redact(f"{type(exc).__name__}: {exc}", project.settings.mailto)
@@ -349,6 +356,8 @@ def run_query(
             new_works=0,
         )
 
+    reporter.update(len(result.works), result.reported_count)
+    reporter.finish(f"{result.pages} page(s), {result.status.value}")
     if spec.purpose is QueryPurpose.STATUS:
         # A status lookup never yields corpus works, whatever an adapter returns.
         result = dataclasses.replace(result, works=[])

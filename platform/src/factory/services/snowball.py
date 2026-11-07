@@ -124,6 +124,7 @@ from factory.services.context import Project
 from factory.services.core_works import forward_core_sources, seed_core_works
 from factory.services.dedup import active_merges
 from factory.services.document_read import default_conversion
+from factory.services.progress import track
 from factory.services.protocol import current_protocol, search_authorization
 from factory.services.protocol_rules import snowball_plan_gaps
 from factory.services.ranking import max_cosine_scores, order_by_score, reference_works
@@ -1151,9 +1152,13 @@ def snowball_round(
             register_query(project, actor, spec, sources=adapters, round_id=payload.round_id)
             for spec in specs
         ]
-        runs = [
-            run_query(project, query_id, sources=adapters, actor=actor) for query_id in query_ids
-        ]
+        runs = []
+        with track(
+            project, "snowball", "backward round queries", unit="queries", total=len(query_ids)
+        ) as reporter:
+            for query_id in query_ids:
+                runs.append(run_query(project, query_id, sources=adapters, actor=actor))
+                reporter.update(len(runs))
     after, _ = corpus_size(project)
     result = _result(plan, payload.round_id, runs, after - before)
     if chase is None:
@@ -1273,11 +1278,18 @@ def _pick_forward(
             and _OPENALEX_ID.fullmatch(w.identifiers.openalex)
         ]
     candidates = {w.id: w for pool in pools.values() for w in pool}
-    scores = (
-        max_cosine_scores(ranker, references, [candidates[i] for i in sorted(candidates)])
-        if candidates
-        else {}
-    )
+    ordered_candidates = [candidates[i] for i in sorted(candidates)]
+    if candidates:
+        with track(
+            project,
+            "ranking",
+            "forward round: SPECTER2 embedding",
+            unit="records",
+            total=len(references) + len(ordered_candidates),
+        ) as reporter:
+            scores = max_cosine_scores(ranker, references, ordered_candidates, reporter.update)
+    else:
+        scores = {}
     taken: dict[str, list[str]] = {}
     chosen: set[str] = set()
     for core in plan.sources:
