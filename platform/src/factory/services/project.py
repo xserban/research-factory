@@ -17,6 +17,7 @@ from factory.services.audit import audit_report
 from factory.services.calibration import CalibrationStatus, calibration_status
 from factory.services.chase import chase_rounds
 from factory.services.context import Project, ProjectPaths, build_project, slug_issues
+from factory.services.decision_check import recommendation_figure
 from factory.services.human_queue import HumanQueue, human_queue
 from factory.services.prisma import has_full_text_plan
 from factory.services.project_stage import Stage, derive_stage, stage_facts
@@ -67,6 +68,18 @@ class InboxCounts(StrictModel):
     withdrawn: int = 0
 
 
+class DecisionStatus(StrictModel):
+    """Suggest and select, counted from the index. `open` are live sets awaiting the scientist;
+    `recommendation_followed` is the share of selections where every recommended item was selected
+    (None when no selection had a recommendation); see `services/decision_check.py`."""
+
+    open: int = 0
+    selected: int = 0
+    with_recommendation: int = 0
+    followed_in_full: int = 0
+    recommendation_followed: float | None = None
+
+
 class ProjectStatus(StrictModel):
     slug: str
     rigor_mode: RigorMode
@@ -88,6 +101,7 @@ class ProjectStatus(StrictModel):
     human: HumanQueue | None = None
     """Pending human decisions per gate kind; counts only."""
     inbox: InboxCounts = InboxCounts()
+    decisions: DecisionStatus = DecisionStatus()
     stage: Stage | None = None
     """The derived stage (spec 7a ruling 4); None only where an agent path takes it out."""
 
@@ -183,7 +197,27 @@ def project_status(project: Project, *, agent: bool = False) -> ProjectStatus:
         admitted_seeds=admitted_seed_count(project),
         human=human_queue(project, agent=agent),
         inbox=_inbox_counts(project),
+        decisions=_decision_status(project),
         stage=derive_stage(stage_facts(project)),
+    )
+
+
+def _decision_status(project: Project) -> DecisionStatus:
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT d.decision_id, EXISTS (SELECT 1 FROM decision_items i "
+                "WHERE i.decision_id = d.decision_id AND i.status IN ('validated', 'rejected')) "
+                "FROM decision_sets d WHERE d.superseded_by IS NULL"
+            )
+        ).all()
+    figure = recommendation_figure(project)
+    return DecisionStatus(
+        open=sum(1 for r in rows if not r[1]),
+        selected=sum(1 for r in rows if r[1]),
+        with_recommendation=figure.with_recommendation,
+        followed_in_full=figure.followed_in_full,
+        recommendation_followed=figure.share,
     )
 
 
