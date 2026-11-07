@@ -127,6 +127,8 @@ CLI_READS: frozenset[str] = frozenset(
         "library adoptable",
         "decide list",
         "decide show",
+        "dashboard serve",
+        "dashboard export",
     )
 )
 """Commands with no `TOOL_PERMISSIONS` row because they record no research fact. `rebuild` and
