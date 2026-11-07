@@ -168,6 +168,21 @@ def search_markdown(report: SearchReport) -> str:
     lines.append(f"PRESS review: {report.press_review_id or 'none'}")
     lines.append(f"PRESS confirmed: {'yes' if report.press_confirmed else 'no'}")
     lines += [f"- limit {limit.field}: {limit.value} ({limit.why})" for limit in report.limits]
+    for chosen in report.forward_selections:
+        lines.append("")
+        lines.append(
+            f"## Forward round {chosen.round_id} (round {chosen.round_no}): at most "
+            f"{chosen.max_per_work} citing works per source work, ordered by similarity to the "
+            f"development seeds ({chosen.model_id}, weights {chosen.weights_hash[:12]})"
+        )
+        if chosen.topic_filter:
+            lines.append(f"- topic filter: `{chosen.topic_filter}`")
+        lines += [
+            f"- {c.work_id}: matched {c.matched}, held {c.in_corpus}, taken {c.taken}, "
+            f"not taken {c.not_taken}"
+            for c in chosen.cores
+        ]
+        lines.append(f"- not taken in all: {chosen.not_taken}")
     return "\n".join(lines) + "\n"
 
 
@@ -893,9 +908,21 @@ def round_plan_lines(direction: str, result: RoundResult, gaps: list[ValidationI
 
 
 def round_result_lines(result: RoundResult) -> list[str]:
-    return [
+    lines = [
         f"round {result.round_id}: {len(result.runs)} queries run, {result.new_works} new works"
     ]
+    selection = result.selection
+    if selection is not None:
+        lines.append(
+            f"capped at {selection.max_per_work} per source work; model {selection.model_id}, "
+            f"weights {selection.weights_hash[:12]}"
+        )
+        lines += [
+            f"  {c.work_id}: matched {c.matched}, held {c.in_corpus}, taken {c.taken}, "
+            f"not taken {c.not_taken}"
+            for c in selection.cores
+        ]
+    return lines
 
 
 def comparison_lines(comparison: Comparison) -> list[str]:

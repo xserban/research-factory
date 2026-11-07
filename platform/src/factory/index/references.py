@@ -177,6 +177,7 @@ def reference_tables(metadata: MetaData) -> ReferenceTables:
         Column("extraction_ids", String, nullable=False),
         Column("unextracted", String, nullable=False),
         Column("event_id", String, nullable=False),
+        Column("selection", String),
     )
     queries = Table(
         "snowball_queries",
@@ -523,6 +524,9 @@ def _round_started(t: ReferenceTables) -> Handler:
                 extraction_ids=_json(list(p.extraction_ids)),
                 unextracted=_json([u.model_dump(mode="json") for u in p.unextracted]),
                 event_id=event.id,
+                selection=(
+                    None if p.selection is None else _json(p.selection.model_dump(mode="json"))
+                ),
             )
             .on_conflict_do_nothing(index_elements=["round_id"])
         )

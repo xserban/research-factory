@@ -107,6 +107,22 @@ def order_by_score(scores: dict[str, float]) -> list[tuple[str, float]]:
     return sorted(scores.items(), key=lambda item: (-item[1], item[0]))
 
 
+def max_cosine_scores(
+    embedder: Embedder, references: Sequence[Work], candidates: Sequence[Work]
+) -> dict[str, float]:
+    """Each candidate's maximum cosine to any reference text, rounded to `SCORE_DECIMALS`, by work
+    id. One embedder call, references first. Used by the ranking and by a capped forward round."""
+    vectors = embedder.embed([ranking_text(w) for w in [*references, *candidates]])
+    if len(vectors) != len(references) + len(candidates):
+        raise ValueError("the embedder returned a different number of vectors than texts")
+    units = [_unit(v) for v in vectors]
+    reference_units, candidate_units = units[: len(references)], units[len(references) :]
+    return {
+        work.id: round(max(_dot(unit, ref) for ref in reference_units), SCORE_DECIMALS)
+        for work, unit in zip(candidates, candidate_units, strict=True)
+    }
+
+
 def compute_ranking(project: Project, embedder: Embedder) -> RankingComputed:
     """Rank the works still to be screened and record `ranking.computed` as the system.
 
@@ -124,15 +140,7 @@ def compute_ranking(project: Project, embedder: Embedder) -> RankingComputed:
         raise FactoryValidationError(issues)
     by_id = {work.id: work for work in list_works(project)}
     candidates = [by_id[work_id] for work_id in ids]
-    vectors = embedder.embed([ranking_text(w) for w in [*refs, *candidates]])
-    if len(vectors) != len(refs) + len(candidates):
-        raise ValueError("the embedder returned a different number of vectors than texts")
-    units = [_unit(v) for v in vectors]
-    reference_units, candidate_units = units[: len(refs)], units[len(refs) :]
-    scores = {
-        work.id: round(max(_dot(unit, ref) for ref in reference_units), SCORE_DECIMALS)
-        for work, unit in zip(candidates, candidate_units, strict=True)
-    }
+    scores = max_cosine_scores(embedder, refs, candidates)
     ordered = order_by_score(scores)
     parameters = RankingParameters(references=tuple(w.id for w in refs), skipped_seeds=skipped)
     with project.writing():

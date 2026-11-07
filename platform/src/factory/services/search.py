@@ -714,6 +714,16 @@ def works_by_ids(project: Project, work_ids: Sequence[str]) -> list[Work]:
     return found
 
 
+def stored_works_by_ids(project: Project, work_ids: Sequence[str]) -> list[Work]:
+    """The stored works among `work_ids`, probe-only ones included (they are not corpus works),
+    with all their provenance, sorted by id. Reads by primary key in chunks."""
+    found: list[Work] = []
+    unique = sorted(set(work_ids))
+    for start in range(0, len(unique), _ID_CHUNK):
+        found.extend(_load_works(project, corpus=False, work_ids=unique[start : start + _ID_CHUNK]))
+    return found
+
+
 _ID_CHUNK = 500
 
 

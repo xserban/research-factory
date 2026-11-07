@@ -489,10 +489,20 @@ def _rule(plan: SnowballPlan) -> str:
         if plan.stop_when_no_new_included
         else "no stop on an empty round"
     )
-    return (
+    rule = (
         f"at most {plan.max_backward_rounds} backward and {plan.max_forward_rounds} forward "
         f"round(s); {stop}"
     )
+    if plan.forward_core_only:
+        rule += "; forward rounds start from the core works only"
+    if plan.forward_topic_filter is not None:
+        rule += f"; forward queries filtered by title and abstract: {plan.forward_topic_filter}"
+    if plan.forward_max_per_work is not None:
+        rule += (
+            f"; at most {plan.forward_max_per_work} citing works per source work, ordered by "
+            "similarity to the development seeds"
+        )
+    return rule
 
 
 def _supplied_links(project: Project) -> SuppliedLinks | None:

@@ -25,6 +25,25 @@ what was new after dedup and, once settled, what is included; `snowball_compare`
 round's resolved references against the `cited_by:` runs of the backward chase rounds from
 overlapping sources.
 
+The plan's forward options (slice 8, IDEA-43) narrow a forward round without changing its
+machinery. `forward_core_only` makes the sources the core works (the researcher's marks that are
+included, and every positive seed's work: `services.core_works`), not every included work.
+`forward_topic_filter` is appended to each `cites:` text as `,title_and_abstract.search:<expr>`
+(OpenAlex comma-AND), so the chase round records the filtered texts. `forward_max_per_work` caps
+the citing works taken per source work. A cap needs the citing works' metadata before the round is
+recorded, so a recorded capped round first fetches, for each source work, `cites:W[,filter]` as a
+`probe`-purpose query (recorded runs whose works join no corpus and no count), embeds the citing
+works outside `project.writing()` with the ranker's embedder and takes the top N per source by
+maximum cosine to the development seed references (`services.ranking`; ties by work id; citing
+works already in the corpus are not candidates). The round's chase texts are then the chosen
+works' `openalex:W1|W2` filters (at most `CHASE_CHUNK` ids each), so its runs stay linked to the
+round as before and only the chosen works enter the corpus. `snowball.round_started` records, in
+`selection`, the model id, weights hash and software, the cap and filter, the probe runs and, per
+source work, the citing works matched, already held and taken; the number not taken is derived
+(`CoreSelection.not_taken`), never stored (R-05). A dry run fetches nothing and says so in its
+notes. Without the `ranker` extra or the weights a capped round is refused, with nothing written
+beyond the probes already made, and the refusal names the remedy.
+
 Invariants:
 - Validation precedes every write. A round is refused, writing nothing, when the protocol declares
   no `snowball_plan` in `pilot`/`systematic` (an `exploratory` round records `rule: none`), when
@@ -56,7 +75,9 @@ Invariants:
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any, Literal
 
 from pydantic import Field
@@ -70,10 +91,12 @@ from factory.model.chase import CHASE_CHUNK, ChaseDirection
 from factory.model.project import RigorMode
 from factory.model.protocol import ScreeningStage, SnowballPlan
 from factory.model.references import (
-    FORWARD_CHASE_RE,
+    FORWARD_ROUND_RE,
     MAX_QUERY,
     CitingEntry,
+    CoreSelection,
     Direction,
+    ForwardSelection,
     LinkState,
     SnowballCandidate,
     SnowballRoundStarted,
@@ -81,6 +104,7 @@ from factory.model.references import (
     Via,
 )
 from factory.model.search import QueryKind, QueryPurpose, QuerySpec, RunStatus
+from factory.model.work import Work
 from factory.model.work_ids import arxiv_id_from_doi
 from factory.services.agreement import Outcome, final_outcomes
 from factory.services.budgets import budget_issues
@@ -95,10 +119,13 @@ from factory.services.chase import (
     start_chase,
 )
 from factory.services.context import Project
+from factory.services.core_works import forward_core_sources, seed_core_works
 from factory.services.dedup import active_merges
 from factory.services.document_read import default_conversion
 from factory.services.protocol import current_protocol, search_authorization
 from factory.services.protocol_rules import snowball_plan_gaps
+from factory.services.ranking import max_cosine_scores, order_by_score, reference_works
+from factory.services.ranking_model import Embedder, Specter2Embedder
 from factory.services.references import current_extraction, included_works
 from factory.services.search import (
     RunSummary,
@@ -109,6 +136,7 @@ from factory.services.search import (
     query_issues,
     register_query,
     run_query,
+    stored_works_by_ids,
 )
 from factory.sources.reflist import NAME as REFLIST
 from factory.sources.reflist import ReflistEntry
@@ -179,6 +207,8 @@ class RoundResult(StrictModel):
     no_document: int = 0
     chase_round_id: str | None = None
     """The delegated `search_chase` round of a recorded forward round."""
+    selection: ForwardSelection | None = None
+    """How a capped forward round chose its citing works; None for any other round."""
 
 
 class RecordedRound(StrictModel):
@@ -193,6 +223,8 @@ class RecordedRound(StrictModel):
     queries: list[str]
     extraction_ids: list[str] = Field(default_factory=list)
     chase_round_id: str | None = None
+    selection: ForwardSelection | None = None
+    """How a capped forward round chose its works (slice 8); None for any other round."""
 
 
 class RoundYield(StrictModel):
@@ -233,7 +265,7 @@ def recorded_rounds(project: Project) -> list[RecordedRound]:
         rows = conn.execute(
             text(
                 "SELECT round_id, direction, round_no, event_id, sources, unextracted, "
-                "extraction_ids, chase_round_id FROM snowball_rounds ORDER BY event_id"
+                "extraction_ids, chase_round_id, selection FROM snowball_rounds ORDER BY event_id"
             )
         ).all()
         texts: dict[str, list[str]] = {}
@@ -252,10 +284,21 @@ def recorded_rounds(project: Project) -> list[RecordedRound]:
             queries=texts.get(str(round_id), []),
             extraction_ids=[str(x) for x in json.loads(str(extractions))],
             chase_round_id=None if chase is None else str(chase),
+            selection=None
+            if selection is None
+            else ForwardSelection.model_validate_json(selection),
         )
-        for (round_id, direction, round_no, event_id, sources, unextracted, extractions, chase) in (
-            rows
-        )
+        for (
+            round_id,
+            direction,
+            round_no,
+            event_id,
+            sources,
+            unextracted,
+            extractions,
+            chase,
+            selection,
+        ) in rows
     ]
 
 
@@ -770,12 +813,27 @@ def _openalex_ids(project: Project) -> dict[str, str]:
     return {w.id: w.identifiers.openalex for w in list_works(project) if w.identifiers.openalex}
 
 
+def _plan_rule(project: Project) -> SnowballPlan | None:
+    protocol = current_protocol(project)
+    return None if protocol is None else protocol.spec.snowball_plan
+
+
+def _topic_suffix(rule: SnowballPlan | None) -> str:
+    """The clause the plan's topic filter adds to a `cites:` text (OpenAlex comma-AND)."""
+    if rule is None or rule.forward_topic_filter is None:
+        return ""
+    return f",title_and_abstract.search:{rule.forward_topic_filter}"
+
+
 def _forward_queries(project: Project, chasable: Sequence[str]) -> list[QuerySpec]:
-    """The forward chase specs `search_chase` builds for `chasable` (included works with an
-    OpenAlex id)."""
+    """The forward chase specs `search_chase` builds for `chasable` (the source works with an
+    OpenAlex id), each carrying the plan's topic filter when it has one."""
     openalex = _openalex_ids(project)
+    suffix = _topic_suffix(_plan_rule(project))
     return [
-        QuerySpec(source="openalex", kind=QueryKind.FILTER, text=t, purpose=QueryPurpose.CHASE)
+        QuerySpec(
+            source="openalex", kind=QueryKind.FILTER, text=t + suffix, purpose=QueryPurpose.CHASE
+        )
         for t in chase_queries([ChaseDirection.FORWARD], [openalex[w] for w in chasable])
     ]
 
@@ -857,14 +915,32 @@ def plan_round(project: Project, direction: Direction) -> RoundPlan:
     else:
         candidates = []
         openalex = _openalex_ids(project)
-        included = included_works(project)
-        sources = [w for w in included if w in openalex]
-        unqueryable = [w for w in included if w not in openalex]
+        core_only = rule is not None and rule.forward_core_only
+        pool = (
+            forward_core_sources(project, included_works(project))
+            if core_only
+            else included_works(project)
+        )
+        sources = [w for w in pool if w in openalex]
+        unqueryable = [w for w in pool if w not in openalex]
         extraction_ids = []
         queries = _forward_queries(project, sources)
         if not sources:
-            refusals.append(ValidationIssue("sources", "no included work with an OpenAlex id"))
-        if any(FORWARD_CHASE_RE.fullmatch(q.text) is None for q in queries):
+            refusals.append(
+                ValidationIssue(
+                    "sources",
+                    "no core work with an OpenAlex id"
+                    if core_only
+                    else "no included work with an OpenAlex id",
+                )
+            )
+        if rule is not None and rule.forward_max_per_work is not None:
+            notes.append(
+                f"capped at {rule.forward_max_per_work} citing works per source work, ordered by "
+                "similarity to the development seeds; the citing works are fetched and chosen "
+                "when the round runs, so this plan lists the unchosen cites: queries"
+            )
+        if any(FORWARD_ROUND_RE.fullmatch(q.text) is None for q in queries):
             refusals.append(
                 ValidationIssue("queries", "an OpenAlex id does not fit a forward chase text")
             )
@@ -945,24 +1021,42 @@ def snowball_round(
     *,
     sources: Mapping[str, SourceFactory],
     dry_run: bool = True,
+    embedder: Embedder | None = None,
 ) -> RoundResult:
     """Plan a round (`dry_run`, the default, writes nothing), or record and run it.
 
     A recorded round is validated in full first (see the module invariants) and refused with
     every issue at once. Under the same lock as the plan, a backward round writes
     `snowball.round_started`; a forward round starts its `search_chase` round (`start_chase`,
-    `FORWARD`, from the included works) and records it together with the `snowball.round_started`
-    naming it. The lock is then released and the queries are registered and run in order
-    (`run_chase` for a forward round).
+    `FORWARD`, from the plan's source works) and records it together with the
+    `snowball.round_started` naming it. The lock is then released and the queries are registered
+    and run in order (`run_chase` for a forward round).
+
+    A forward round under `forward_max_per_work` first chooses its citing works (`_pick_forward`,
+    outside the lock; `embedder` defaults to the SPECTER2 ranker, refused with the remedy when its
+    extra or weights are missing) and its chase texts are the chosen works' `openalex:` filters.
     """
     adapters = round_sources(project, sources)
     chase: ChaseStart | None = None
+    picked: _Picked | None = None
+    if direction is Direction.FORWARD and not dry_run:
+        picked = _pick_forward(project, actor, adapters, embedder)
     with project.index.exclusive():
         plan = plan_round(project, direction)
         if dry_run:
             return _result(plan, None, [], 0)
+        if picked is not None and picked.sources != plan.sources:
+            raise FactoryValidationError(
+                [
+                    ValidationIssue(
+                        "sources",
+                        "the source works changed while citing works were fetched; run the "
+                        "round again",
+                    )
+                ]
+            )
         issues = list(plan.state.refusals)
-        specs = plan.queries
+        specs = plan.queries if picked is None else picked.specs
         issues += [issue for spec in specs for issue in query_issues(project, spec, adapters)]
         # The gate is always asked. Every gate except the planned-query waiver is
         # text-independent, and the waiver holds for every text of the round (as in
@@ -1002,12 +1096,20 @@ def snowball_round(
         else:
             # `start_chase` validates again (writing nothing on refusal); the chase round and
             # the ledger entry naming it are recorded together, under the lock of the plan.
+            plan_rule = plan.state.rule
+            core_only = plan_rule is not None and plan_rule.forward_core_only
             chase = start_chase(
                 project,
                 actor,
                 [ChaseDirection.FORWARD],
                 sources=sources,
-                from_works=included_works(project),
+                from_works=sorted([*plan.sources, *plan.unqueryable]),
+                texts=(
+                    [spec.text for spec in specs]
+                    if picked is not None or _topic_suffix(plan_rule)
+                    else None
+                ),
+                extra_sources=seed_core_works(project) if core_only else (),
             )
             payload = SnowballRoundStarted(
                 round_id=project.ids.new("snw"),
@@ -1021,6 +1123,7 @@ def snowball_round(
                 chase_round_id=chase.payload.round_id,
                 rule=rule,
                 unextracted=_unextracted(plan),
+                selection=None if picked is None else picked.selection,
             )
             project.record([chase.event, _ledger_event(project, actor, payload)])
 
@@ -1038,7 +1141,144 @@ def snowball_round(
     result = _result(plan, payload.round_id, runs, after - before)
     if chase is None:
         return result
-    return result.model_copy(update={"chase_round_id": chase.payload.round_id})
+    update: dict[str, Any] = {"chase_round_id": chase.payload.round_id}
+    if picked is not None:
+        update |= {"selection": picked.selection, "queries": picked.specs}
+    return result.model_copy(update=update)
+
+
+@dataclass(frozen=True)
+class _Picked:
+    """A capped forward round's choice: the source works it was made for, the chase specs over
+    the chosen works and the selection to record."""
+
+    sources: list[str]
+    specs: list[QuerySpec]
+    selection: ForwardSelection
+
+
+_OPENALEX_ID = re.compile(r"^W\d{1,15}$")
+
+
+def _pick_forward(
+    project: Project,
+    actor: Actor,
+    adapters: Mapping[str, SourceFactory],
+    embedder: Embedder | None,
+) -> _Picked | None:
+    """Choose, for each source work of a forward round, its citing works to take, or None when the
+    plan sets no cap. Writes only the probe runs that fetch the citing works' metadata.
+
+    Refused, with nothing written, when the round does not plan, there is no development
+    reference, the ranker is unavailable or the request budget is spent. A fetch that did not
+    complete is refused (the counts would be wrong); its probe runs stay recorded."""
+    project.index.sync()
+    rule = _plan_rule(project)
+    if rule is None or rule.forward_max_per_work is None:
+        return None
+    cap = rule.forward_max_per_work
+    ranker = embedder if embedder is not None else Specter2Embedder()
+    identity = (ranker.model_id, ranker.weights_hash, ranker.software)
+    plan = plan_round(project, Direction.FORWARD)
+    if plan.state.refusals:
+        raise FactoryValidationError(plan.state.refusals)
+    references, _ = reference_works(project)
+    if not references:
+        raise FactoryValidationError(
+            [ValidationIssue("seeds", "no development positive seed has a title")]
+        )
+    budget = budget_issues(project, actor, REQUESTS_SEARCH)
+    if budget:
+        raise FactoryValidationError(budget)
+    openalex = _openalex_ids(project)
+    held = set(openalex.values())
+    suffix = _topic_suffix(rule)
+    probe_runs: list[str] = []
+    matched: dict[str, int] = {}
+    in_corpus: dict[str, int] = {}
+    pools: dict[str, list[Work]] = {}
+    for core in plan.sources:
+        spec = QuerySpec(
+            source="openalex",
+            kind=QueryKind.FILTER,
+            text=f"cites:{openalex[core]}{suffix}",
+            purpose=QueryPurpose.PROBE,
+        )
+        found = query_issues(project, spec, adapters)
+        if found:
+            raise FactoryValidationError(found)
+        run = run_query(
+            project,
+            register_query(project, actor, spec, sources=adapters),
+            sources=adapters,
+            actor=actor,
+        )
+        probe_runs.append(run.run_id)
+        if run.status is not RunStatus.COMPLETE:
+            raise FactoryValidationError(
+                [
+                    ValidationIssue(
+                        "citing",
+                        f"the citing works of {core} were not fetched in full "
+                        f"({run.status.value}); run the round again",
+                    )
+                ]
+            )
+        project.index.sync()
+        works = stored_works_by_ids(project, _retrieved(project, [run.run_id]))
+        matched[core] = len(works)
+        in_corpus[core] = sum(w.identifiers.openalex in held for w in works)
+        pools[core] = [
+            w
+            for w in works
+            if w.identifiers.openalex is not None
+            and w.identifiers.openalex not in held
+            and _OPENALEX_ID.fullmatch(w.identifiers.openalex)
+        ]
+    candidates = {w.id: w for pool in pools.values() for w in pool}
+    scores = (
+        max_cosine_scores(ranker, references, [candidates[i] for i in sorted(candidates)])
+        if candidates
+        else {}
+    )
+    taken: dict[str, list[str]] = {}
+    chosen: set[str] = set()
+    for core in plan.sources:
+        order = order_by_score({w.id: scores[w.id] for w in pools[core]})[:cap]
+        taken[core] = [work for work, _ in order]
+        chosen.update(str(candidates[work].identifiers.openalex) for work in taken[core])
+    if not chosen:
+        raise FactoryValidationError(
+            [ValidationIssue("citing", "no citing work to take: none matched or all are held")]
+        )
+    ids = sorted(chosen)
+    specs = [
+        QuerySpec(
+            source="openalex",
+            kind=QueryKind.FILTER,
+            text="openalex:" + "|".join(ids[i : i + CHASE_CHUNK]),
+            purpose=QueryPurpose.CHASE,
+        )
+        for i in range(0, len(ids), CHASE_CHUNK)
+    ]
+    selection = ForwardSelection(
+        model_id=identity[0],
+        weights_hash=identity[1],
+        software=identity[2],
+        max_per_work=cap,
+        topic_filter=rule.forward_topic_filter,
+        cores=tuple(
+            CoreSelection(
+                work_id=core,
+                matched=matched[core],
+                in_corpus=in_corpus[core],
+                taken=len(taken[core]),
+            )
+            for core in plan.sources
+        ),
+        probe_runs=tuple(probe_runs),
+    )
+    return _Picked(sources=list(plan.sources), specs=specs, selection=selection)
 
 
 def _no_document(unextracted: Sequence[tuple[str, str]]) -> int:

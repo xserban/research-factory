@@ -32,9 +32,15 @@ from __future__ import annotations
 
 import re
 from enum import StrEnum
-from typing import Annotated, Literal, Self
+from typing import Annotated, Any, Literal, Self
 
-from pydantic import Field, StringConstraints, model_validator
+from pydantic import (
+    Field,
+    SerializerFunctionWrapHandler,
+    StringConstraints,
+    model_serializer,
+    model_validator,
+)
 
 from factory.document.anchors import ANCHOR_RE
 from factory.model.base import StrictModel
@@ -85,7 +91,15 @@ FORWARD_CHASE_RE = re.compile(rf"^cites:W\d{{1,15}}(\|W\d{{1,15}}){{0,{CHASE_CHU
 """A forward chase text as `search_chase` builds it: `cites:` and up to `CHASE_CHUNK` bare OpenAlex
 work ids. A forward round records these delegated texts; the grammar bounds them, so they may
 exceed `MAX_QUERY` but never carry free text."""
-RoundQuery = Annotated[NonBlank, Field(max_length=len("cites:") + CHASE_CHUNK * 17)]
+FORWARD_ROUND_RE = re.compile(
+    rf"^(?:cites|openalex):W\d{{1,15}}(?:\|W\d{{1,15}}){{0,{CHASE_CHUNK - 1}}}"
+    r"(?:,title_and_abstract\.search:[^,\x00-\x1f]{1,300})?$"
+)
+"""A forward round's text (slice 8). `cites:` is a forward chase text, optionally with the plan's
+topic filter (`,title_and_abstract.search:` and an expression without a comma); `openalex:` names
+the citing works a capped round took, at most `CHASE_CHUNK` ids and no filter. Both are bounded by
+the grammar, so neither carries free text beyond the declared filter."""
+RoundQuery = Annotated[NonBlank, Field(max_length=len("cites:") + CHASE_CHUNK * 17 + 330)]
 
 
 class LinkState(StrEnum):
@@ -420,6 +434,49 @@ class ReferenceResolutionDecided(StrictModel):
         return self
 
 
+class CoreSelection(StrictModel):
+    """What a capped forward round did for one core work: `matched` citing works found,
+    `in_corpus` of them already held, `taken` of the rest put into the round. The number not taken
+    is derived (R-05), never stored."""
+
+    work_id: WorkId
+    matched: int = Field(ge=0)
+    in_corpus: int = Field(ge=0)
+    taken: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def _counts(self) -> Self:
+        if self.in_corpus + self.taken > self.matched:
+            raise ValueError("held and taken works are among the matched ones")
+        return self
+
+    @property
+    def not_taken(self) -> int:
+        return self.matched - self.in_corpus - self.taken
+
+
+class ForwardSelection(StrictModel):
+    """How a capped forward round chose its citing works (slice 8, IDEA-43): at most
+    `max_per_work` per core work, by maximum cosine to the development seed references with the
+    recorded model. `probe_runs` are the runs that fetched the citing works' metadata."""
+
+    model_id: Annotated[NonBlank, Field(max_length=MAX_VERSION)]
+    weights_hash: str = Field(pattern=SHA256_HEX_RE)
+    software: Annotated[NonBlank, Field(max_length=200)]
+    max_per_work: int = Field(ge=1)
+    topic_filter: str | None = Field(default=None, max_length=300)
+    cores: tuple[CoreSelection, ...] = Field(min_length=1)
+    probe_runs: tuple[Annotated[str, StringConstraints(pattern=RUN_ID_RE)], ...] = ()
+
+    @model_validator(mode="after")
+    def _shape(self) -> Self:
+        _unique(tuple(c.work_id for c in self.cores), "cores")
+        _unique(self.probe_runs, "probe_runs")
+        if any(c.taken > self.max_per_work for c in self.cores):
+            raise ValueError("a core work gives at most max_per_work works")
+        return self
+
+
 class SnowballRoundStarted(StrictModel):
     round_id: str = Field(pattern=SNW_ID_RE)
     direction: Direction
@@ -434,9 +491,21 @@ class SnowballRoundStarted(StrictModel):
     chase_round_id: str | None = Field(default=None, pattern=CHASE_ROUND_ID_RE)
     rule: SnowballPlan | Literal["none"]
     unextracted: tuple[Unextracted, ...] = ()
+    selection: ForwardSelection | None = None
+    """How a capped forward round chose its works; absent for any other round."""
+
+    @model_serializer(mode="wrap")
+    def _omit_empty_selection(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        """A round without a selection serialises exactly as it did before capped rounds."""
+        data: dict[str, Any] = handler(self)
+        if self.selection is None:
+            data.pop("selection", None)
+        return data
 
     @model_validator(mode="after")
     def _shape(self) -> Self:
+        if self.selection is not None and self.direction is not Direction.FORWARD:
+            raise ValueError("only a forward round has a selection")
         if self.direction is Direction.BACKWARD:
             if self.via is not Via.DOCUMENT_REFERENCE_LIST or self.chase_round_id is not None:
                 raise ValueError("a backward round goes via the reference list, without a chase")
@@ -447,8 +516,10 @@ class SnowballRoundStarted(StrictModel):
                 raise ValueError(
                     "a forward round goes via source metadata and names its chase round"
                 )
-            if any(FORWARD_CHASE_RE.fullmatch(q) is None for q in self.queries):
-                raise ValueError("a forward round's queries are its chase round's cites: texts")
+            if any(FORWARD_ROUND_RE.fullmatch(q) is None for q in self.queries):
+                raise ValueError(
+                    "a forward round's queries are its chase round's cites: or openalex: texts"
+                )
         _unique(self.sources, "sources")
         _unique(self.extraction_ids, "extraction_ids")
         _unique(tuple(c.work_key for c in self.candidates), "candidate work keys")

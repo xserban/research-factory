@@ -32,6 +32,7 @@ from factory.events.envelope import Actor, Event
 from factory.model.base import StrictModel
 from factory.model.budgets import REQUESTS_SEARCH
 from factory.model.chase import CHASE_CHUNK, ChaseDirection, ChaseRoundStarted
+from factory.model.references import FORWARD_ROUND_RE
 from factory.model.search import QueryKind, QueryPurpose, QuerySpec
 from factory.services.agreement import Outcome, final_outcomes
 from factory.services.budgets import require_for
@@ -200,6 +201,8 @@ def start_chase(
     *,
     sources: Mapping[str, SourceFactory],
     from_works: Sequence[str] | None = None,
+    texts: Sequence[str] | None = None,
+    extra_sources: Sequence[str] = (),
 ) -> ChaseStart:
     """Validate a chase round and build its event, writing nothing; the caller holds
     `project.index.exclusive()` and records `event` (with any events of its own).
@@ -210,6 +213,12 @@ def start_chase(
     waived. `from_works`, when given, names the included
     works to chase from instead of all of them: it must be a non-empty subset of the
     `chase_sources` works; those without an OpenAlex id are listed unchasable.
+
+    `extra_sources` names corpus works that may be chased although they are not included (a
+    forward round from core works takes the seeds' works). `texts`, forward rounds only, replaces
+    the platform-built texts with the given ones, each a `FORWARD_ROUND_RE` text: a capped forward
+    round names the citing works it took (`openalex:` texts), or carries a topic filter. The round
+    still records the texts, so it remains the only authority for them.
     """
     if not directions or len(set(directions)) != len(directions):
         raise FactoryValidationError(
@@ -218,6 +227,18 @@ def start_chase(
     project.index.sync()
     issues = _pending_issues(project) + _forward_limit_issues(project, directions)
     chasable, unchasable = chase_sources(project)
+    if extra_sources:
+        held = {w.id: w.identifiers.openalex for w in list_works(project)}
+        for extra in sorted(set(extra_sources) - set(chasable) - set(unchasable)):
+            if extra in held:
+                (chasable if held[extra] else unchasable).append(extra)
+        chasable, unchasable = sorted(chasable), sorted(unchasable)
+    if texts is not None:
+        if list(directions) != [ChaseDirection.FORWARD]:
+            issues.append(ValidationIssue("texts", "given texts are for a forward round only"))
+        bad = [t for t in texts if FORWARD_ROUND_RE.fullmatch(t) is None]
+        if bad or not texts:
+            issues.append(ValidationIssue("texts", "a forward round's texts fit FORWARD_ROUND_RE"))
     if from_works is not None:
         given = set(from_works)
         outside = sorted(given - set(chasable) - set(unchasable))
@@ -236,15 +257,21 @@ def start_chase(
     if issues:
         raise FactoryValidationError(issues)
     openalex = {work.id: work.identifiers.openalex for work in list_works(project)}
-    texts = chase_queries(directions, [str(openalex[work]) for work in chasable])
+    round_texts = (
+        list(texts)
+        if texts is not None
+        else chase_queries(directions, [str(openalex[work]) for work in chasable])
+    )
     specs = [
         QuerySpec(source=_CHASE_SOURCE, kind=QueryKind.FILTER, text=t, purpose=QueryPurpose.CHASE)
-        for t in texts
+        for t in round_texts
     ]
     issues = [issue for spec in specs for issue in query_issues(project, spec, sources)]
     # Authorisation is checked for the first spec only: every gate except the planned-query
     # waiver is text-independent, and the waiver holds for every text since all are pending.
-    issues += search_authorization(project, specs[0], deviation_id=None, pending_round_texts=texts)
+    issues += search_authorization(
+        project, specs[0], deviation_id=None, pending_round_texts=round_texts
+    )
     if issues:
         raise FactoryValidationError(issues)
 
@@ -255,7 +282,7 @@ def start_chase(
         directions=ordered,
         from_works=tuple(chasable),
         unchasable=tuple(unchasable),
-        queries=tuple(texts),
+        queries=tuple(round_texts),
     )
     directions_value: list[JsonValue] = [d.value for d in ordered]
     request: dict[str, JsonValue] = {"directions": directions_value}

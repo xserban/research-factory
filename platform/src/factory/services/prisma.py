@@ -13,7 +13,9 @@ services; no caller can set one. Counts follow plan 5b ruling 2 and decision #38
   and counts here) and `snowball-backward`. A work counts once, under its earliest
   `citation-chase` run (by run id). A run is told apart by its query's `query.registered` refs: a
   `snw_` ref is a backward snowball round; otherwise (a `chs_` ref, or a chase recorded before
-  queries named their round) the query text's `cites:` prefix is forward, any other backward.
+  queries named their round) the query text's `cites:` prefix is forward, any other backward,
+  except the `openalex:` texts of a chase round without a backward direction (a capped forward
+  round, slice 8), which are forward.
   Empty while no work counts under `citation-chase`, so a slice-1 flow is unchanged.
 - `duplicates_removed`: database records less the canonical works that have database provenance.
 - `screened`: canonical works. The live canonical set comes from `dedup.canonical_works`, so a
@@ -296,11 +298,50 @@ class SearchReportRow(StrictModel):
         return data
 
 
+class CoreCount(StrictModel):
+    """One source work of a capped forward round: the citing works matched, already held, taken,
+    and (derived, R-05) not taken."""
+
+    work_id: str
+    matched: int
+    in_corpus: int
+    taken: int
+    not_taken: int
+
+
+class ForwardSelectionRow(StrictModel):
+    """How a capped forward snowball round chose its citing works (slice 8, IDEA-43)."""
+
+    round_id: str
+    round_no: int
+    model_id: str
+    weights_hash: str
+    software: str
+    max_per_work: int
+    topic_filter: str | None
+    probe_runs: list[str]
+    cores: list[CoreCount]
+
+    @property
+    def not_taken(self) -> int:
+        return sum(core.not_taken for core in self.cores)
+
+
 class SearchReport(StrictModel):
     rows: list[SearchReportRow]
     press_review_id: str | None
     press_confirmed: bool
     limits: list[Limit]
+    forward_selections: list[ForwardSelectionRow] = Field(default_factory=list)
+    """The capped forward rounds, with the citing works not taken per source work. Empty (and left
+    out of the serialisation) while no round was capped."""
+
+    @model_serializer(mode="wrap")
+    def _omit_empty_selections(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        data: dict[str, Any] = handler(self)
+        if not self.forward_selections:
+            data.pop("forward_selections", None)
+        return data
 
 
 def prisma_flow(project: Project) -> PrismaFlow:
@@ -526,7 +567,36 @@ def search_report(project: Project) -> SearchReport:
         press_review_id=press_id,
         press_confirmed=confirmed,
         limits=[] if protocol is None else list(protocol.spec.limits),
+        forward_selections=_forward_selections(project),
     )
+
+
+def _forward_selections(project: Project) -> list[ForwardSelectionRow]:
+    """The selection of every capped forward round, in round order, the counts computed."""
+    return [
+        ForwardSelectionRow(
+            round_id=recorded.round_id,
+            round_no=recorded.round_no,
+            model_id=recorded.selection.model_id,
+            weights_hash=recorded.selection.weights_hash,
+            software=recorded.selection.software,
+            max_per_work=recorded.selection.max_per_work,
+            topic_filter=recorded.selection.topic_filter,
+            probe_runs=list(recorded.selection.probe_runs),
+            cores=[
+                CoreCount(
+                    work_id=c.work_id,
+                    matched=c.matched,
+                    in_corpus=c.in_corpus,
+                    taken=c.taken,
+                    not_taken=c.not_taken,
+                )
+                for c in recorded.selection.cores
+            ],
+        )
+        for recorded in recorded_rounds(project)
+        if recorded.selection is not None
+    ]
 
 
 # --- Database records and other methods ---
@@ -585,11 +655,22 @@ def _chase_mechanisms(project: Project) -> dict[str, str]:
             ),
             {"chase": QueryPurpose.CHASE.value},
         ).all()
+        # The `openalex:` texts of a capped forward round (slice 8) are forward chase texts
+        # although they do not start with `cites:`: their chase round has no backward direction.
+        picks = {
+            str(query)
+            for (query,) in conn.execute(
+                text(
+                    "SELECT cq.query FROM chase_queries cq JOIN chase_rounds cr "
+                    "ON cr.round_id = cq.round_id WHERE cr.directions NOT LIKE '%backward%'"
+                )
+            ).all()
+        }
     out: dict[str, str] = {}
     for run_id, query_text, snowball in rows:
         if snowball:
             out[str(run_id)] = SNOWBALL_BACKWARD
-        elif str(query_text).startswith("cites:"):
+        elif str(query_text).startswith("cites:") or str(query_text) in picks:
             out[str(run_id)] = CHASE_FORWARD
         else:
             out[str(run_id)] = CHASE_BACKWARD
