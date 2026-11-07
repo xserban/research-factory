@@ -35,6 +35,7 @@ from factory.model.seed import SeedKind
 from factory.model.work import Work
 from factory.services.calibration import stage_population
 from factory.services.context import Project
+from factory.services.ranked_queue import ranking_positions as ranking_positions
 from factory.services.ranking_model import Embedder
 from factory.services.screening import live_decisions
 from factory.services.search import get_work, list_works
@@ -186,11 +187,3 @@ def latest_ranking(project: Project, top: int | None = None) -> RankingView | No
         count=int(head[4]),
         ranked=[RankedWork(position=int(p), work_id=str(w), score=float(s)) for p, w, s in rows],
     )
-
-
-def ranking_positions(project: Project) -> dict[str, int]:
-    """Rank position (from 1) of each work of the latest ranking; empty before any."""
-    project.index.sync()
-    with project.index.connect() as conn:
-        rows = conn.execute(text("SELECT work_id, position FROM ranking_positions")).all()
-    return {str(work): int(position) for work, position in rows}

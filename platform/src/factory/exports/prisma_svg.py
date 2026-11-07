@@ -122,8 +122,8 @@ def prisma_svg(flow: PrismaFlow) -> str:
     boxes = flow.full_text
     ran = boxes.stage_run
     banner: str | None = None
-    if flow.pending:
-        banner = f"Provisional: {flow.pending} records pending"
+    if flow.pending - flow.not_screened_stop:
+        banner = f"Provisional: {flow.pending - flow.not_screened_stop} records pending"
     elif boxes.provisional:
         banner = f"Provisional: {boxes.pending} reports pending"
 
@@ -136,7 +136,12 @@ def prisma_svg(flow: PrismaFlow) -> str:
         _reasons(flow.identified_other) or ["none"],
     )
     duplicates = _lines(_count("Duplicate records removed", flow.duplicates_removed), [])
-    screened = _lines(_count("Records screened", flow.screened), [])
+    screened = _lines(
+        _count("Records screened", flow.screened),
+        []
+        if flow.stop_rule is None
+        else [f"{flow.not_screened_stop} not screened (stopping rule)"],
+    )
     excluded = _lines(
         _count("Records excluded", flow.excluded_total),
         _reasons(flow.excluded),

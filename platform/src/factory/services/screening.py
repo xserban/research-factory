@@ -47,10 +47,10 @@ import json
 import math
 import random
 import secrets
-from collections.abc import Mapping, Sequence
-from typing import Literal
+from collections.abc import Collection, Mapping, Sequence
+from typing import Any, Literal
 
-from pydantic import JsonValue, ValidationError
+from pydantic import JsonValue, SerializerFunctionWrapHandler, ValidationError, model_serializer
 from sqlalchemy import text
 
 from factory.document.quotes import quote_in_element
@@ -105,6 +105,14 @@ from factory.services.protocol import (
     protocol_lineage,
 )
 from factory.services.protocol_rules import DecisionRef, stale_decisions
+from factory.services.ranked_queue import (
+    StopStatus,
+    rank_key,
+    ranked_sequence,
+    ranking_positions,
+    stop_status,
+    unreached,
+)
 from factory.services.results import BatchResult, ItemError
 from factory.services.screening_stats import quote_in
 from factory.services.search import list_works
@@ -183,6 +191,17 @@ class ScreenNext(StrictModel):
     batch: ScreenBatch | None
     blocked: list[str]
     remaining: int
+    stopped: StopStatus | None = None
+    """Set exactly while the protocol's stopping rule has stopped serving new title/abstract
+    records (slice 8): the rule, N, the run and the number of ranked works not to be screened.
+    Left out of the dump while None. `remaining` then leaves those works out."""
+
+    @model_serializer(mode="wrap")
+    def _omit_unset_stop(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        data: dict[str, Any] = handler(self)
+        if data.get("stopped") is None:
+            data.pop("stopped", None)
+        return data
 
 
 def open_pass(
@@ -497,23 +516,169 @@ def screen_next(
                 extension, added = drawn
                 events.append(extension)
                 row = (row[0], tuple(sorted(set(row[1] or ()) | set(added))))
+        stop = _stop_context(
+            project, stage, protocol.spec.screening.stop_after_consecutive_excludes
+        )
+        withheld = set() if stop is None or not stop.status.stopped else stop.withheld(label)
         queued, remaining = _enqueue(
-            project, actor, label, protocol, row, stage, serve_calibration=not uncalibrated
+            project,
+            actor,
+            label,
+            protocol,
+            row,
+            stage,
+            serve_calibration=not uncalibrated,
+            withheld=withheld,
         )
         project.record([*events, *queued])
         gate_closed = status.required and not status.passed[label.value] and not uncalibrated
         blocked = _gate_reasons(project, status, label) if gate_closed else []
+        stopped = None if stop is None or not stop.status.stopped else stop.status
+        if stopped is not None:
+            blocked.append(_stop_reason(stopped))
         held = held_batch(project, actor, stage) if human else None
         if held is not None:
-            return ScreenNext(batch=held, blocked=blocked, remaining=remaining)
+            return ScreenNext(batch=held, blocked=blocked, remaining=remaining, stopped=stopped)
+        if stop is None:
+            task = claim_next(
+                project,
+                actor,
+                task_kind(stage, label),
+                accept=lambda content: _servable(content, gate_closed, protocol.protocol_id),
+            )
+        else:
+            task = _claim_ranked(
+                project, actor, label, stage, stop, gate_closed, protocol.protocol_id, withheld
+            )
+        batch = None if task is None else _claimed_batch(project, task)
+        return ScreenNext(batch=batch, blocked=blocked, remaining=remaining, stopped=stopped)
+
+
+def _stop_reason(stopped: StopStatus) -> str:
+    return (
+        f"{stopped.rule}: the last {stopped.run} ranked records were all excluded (rule: "
+        f"{stopped.n}); {stopped.not_screened} ranked records are not screened"
+    )
+
+
+class _StopContext(StrictModel):
+    """The ranking and the stopping rule as they stand: `status` is the rule evaluated, `positions`
+    the latest ranking, `sequence` its works in the pass-A queue, `verdicts` the primary's screening
+    verdicts and `served` the works of served (claimed) batches per pass."""
+
+    status: StopStatus
+    positions: dict[str, int]
+    sequence: list[str]
+    verdicts: dict[str, Verdict]
+    served: dict[str, set[str]]
+
+    def withheld(self, label: PassLabel) -> set[str]:
+        """The ranked works pass `label` may not be served now that the rule has stopped serving:
+        those pass A has not decided that no batch of this pass has been served."""
+        return unreached(self.sequence, self.verdicts, self.served[label.value])
+
+
+def _served_works(project: Project, label: PassLabel, stage: ScreeningStage) -> set[str]:
+    """The works of screening-phase batches of the pass that were claimed (a claim whose lease
+    lapsed still counts: the batch was shown)."""
+    return {
+        str(record["work_id"])
+        for _, status, content in _kind_tasks(project, task_kind(stage, label))
+        if status == TaskStatus.CLAIMED.value and content.phase is ScreeningPhase.SCREENING
+        for record in content.records
+    }
+
+
+def _primary_verdicts(project: Project, stage: ScreeningStage) -> dict[str, Verdict]:
+    """The live, non-stale screening-phase verdict of pass A per work (calibration never counts)."""
+    stale = stale_screening_decisions(project, stage=stage)
+    return {
+        d.work_id: d.verdict
+        for d in live_decisions(project, PassLabel.A, stage=stage)
+        if d.phase is ScreeningPhase.SCREENING and d.decision_id not in stale
+    }
+
+
+def _stop_context(project: Project, stage: ScreeningStage, n: int | None) -> _StopContext | None:
+    """None unless `stage` is title/abstract, the plan declares a rule and a ranking exists."""
+    if stage is not TA or n is None:
+        return None
+    positions = ranking_positions(project)
+    if not positions:
+        return None
+    queue = stage_population(project, TA) - set(calibration_items(project, stage=TA))
+    sequence = ranked_sequence(positions, queue)
+    verdicts = _primary_verdicts(project, TA)
+    served = {label.value: _served_works(project, label, TA) for label in PassLabel}
+    return _StopContext(
+        status=stop_status(sequence, verdicts, served[PassLabel.A.value], n),
+        positions=positions,
+        sequence=sequence,
+        verdicts=verdicts,
+        served=served,
+    )
+
+
+def screening_stop(project: Project, stage: ScreeningStage = TA) -> StopStatus | None:
+    """The stopping rule of pass A as the events stand, or None while the stage is not
+    title/abstract, no protocol declares a rule or no ranking exists. Used by the PRISMA flow and
+    the methods report; nothing is written."""
+    protocol = current_protocol(project)
+    if protocol is None:
+        return None
+    context = _stop_context(project, stage, protocol.spec.screening.stop_after_consecutive_excludes)
+    return None if context is None else context.status
+
+
+def stop_unscreened(project: Project) -> set[str]:
+    """The ranked works that the stopping rule has left unscreened (no pass-A decision, no batch
+    served); empty while the rule has not stopped serving."""
+    protocol = current_protocol(project)
+    if protocol is None:
+        return set()
+    context = _stop_context(project, TA, protocol.spec.screening.stop_after_consecutive_excludes)
+    if context is None or not context.status.stopped:
+        return set()
+    return context.withheld(PassLabel.A)
+
+
+def _claim_ranked(
+    project: Project,
+    actor: Actor,
+    label: PassLabel,
+    stage: ScreeningStage,
+    stop: _StopContext,
+    gate_closed: bool,
+    protocol_id: str,
+    withheld: set[str],
+) -> Task | None:
+    """Claim the next batch in ranked order: calibration batches first, then screening batches by
+    their best-ranked record (a batch queued before the ranking carries records of any rank), task
+    ID breaking ties. While the rule has stopped serving, a screening batch holding a withheld
+    work is passed over. Each candidate is offered to `claim_next` alone, which still decides
+    whether it is claimable."""
+    key = rank_key(stop.positions)
+    candidates: list[tuple[int, tuple[int, str], str]] = []
+    for task_id, status, content in _kind_tasks(project, task_kind(stage, label)):
+        if status == TaskStatus.COMPLETED.value:
+            continue
+        works = [str(record["work_id"]) for record in content.records]
+        screening = content.phase is ScreeningPhase.SCREENING
+        if screening and withheld.intersection(works):
+            continue
+        best = min((key(w) for w in works), default=key(""))
+        candidates.append((1 if screening else 0, best, task_id))
+    for _, _, task_id in sorted(candidates):
         task = claim_next(
             project,
             actor,
             task_kind(stage, label),
-            accept=lambda content: _servable(content, gate_closed, protocol.protocol_id),
+            accept=lambda content: _servable(content, gate_closed, protocol_id),
+            task_ids={task_id},
         )
-        batch = None if task is None else _claimed_batch(project, task)
-        return ScreenNext(batch=batch, blocked=blocked, remaining=remaining)
+        if task is not None:
+            return task
+    return None
 
 
 def held_batch(project: Project, actor: Actor, stage: ScreeningStage = TA) -> ScreenBatch | None:
@@ -888,12 +1053,15 @@ def _enqueue(
     stage: ScreeningStage = TA,
     *,
     serve_calibration: bool = True,
+    withheld: Collection[str] = frozenset(),
 ) -> tuple[list[Event], int]:
     """The `task.created` events of the batches for the pending works of the pass (calibration
     first), not yet recorded, and how many works of the pass's queue still lack a live,
     non-stale decision for their phase. `row` is the pass's seed and sample. Without
     `serve_calibration` (an uncalibrated human pass) the calibration works are left out of the
-    queue, and stay out of the ordinary works: their outcome is the human's label."""
+    queue, and stay out of the ordinary works: their outcome is the human's label. Ordinary works
+    are queued in ranked order (the order of work id while there is no ranking); `withheld` works,
+    which a stopping rule will not screen, are not queued and not counted."""
     seed, sample = row
     corpus = {work.id: work for work in list_works(project)}
     calibration = calibration_items(project, stage=stage)
@@ -909,7 +1077,8 @@ def _enqueue(
         }
         calibration = [w for w in calibration if w in pinned]
         base = [w for w in base if w in pinned]
-    ordinary = sorted(set(base) - set(calibration))
+    positions = ranking_positions(project) if stage is TA else {}
+    ordinary = sorted(set(base) - set(calibration) - set(withheld), key=rank_key(positions))
     if not serve_calibration:
         calibration = []
 

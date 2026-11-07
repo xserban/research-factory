@@ -52,6 +52,8 @@ from factory.services.dedup import canonical_works
 from factory.services.fulltext_screening import fulltext_queue
 from factory.services.fulltext_status import fulltext_status
 from factory.services.protocol import current_protocol, registered_deviation, registered_import
+from factory.services.ranked_queue import stop_rule_text
+from factory.services.screening import screening_stop, stop_unscreened
 from factory.services.search import RunSummary
 from factory.services.snowball import query_yields, recorded_rounds
 
@@ -197,6 +199,20 @@ class PrismaFlow(StrictModel):
     included_in_review: int | None = None
     provisional: bool
     protocol_id: str | None
+    stop_rule: str | None = None
+    """The title/abstract stopping rule in force, in words (slice 8); None, and left out of the
+    dump with `not_screened_stop`, while the protocol declares none or no ranking exists."""
+    not_screened_stop: int = 0
+    """Pending works that were not screened because the stopping rule stopped serving: a subset of
+    `pending`, computed. They do not make the flow provisional."""
+
+    @model_serializer(mode="wrap")
+    def _omit_stop(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        out: dict[str, Any] = handler(self)
+        if self.stop_rule is None:
+            out.pop("stop_rule", None)
+            out.pop("not_screened_stop", None)
+        return out
 
     @property
     def excluded_total(self) -> int:
@@ -210,7 +226,9 @@ class PrismaFlow(StrictModel):
             raise ValueError("identified less duplicates must equal screened")
         if self.excluded_total + self.pending + self.included != self.screened:
             raise ValueError("excluded, pending and included must sum to screened")
-        if self.provisional != (self.pending > 0):
+        if not 0 <= self.not_screened_stop <= self.pending:
+            raise ValueError("works not screened because of the stop are a subset of pending")
+        if self.provisional != (self.pending - self.not_screened_stop > 0):
             raise ValueError("a flow is provisional exactly while works are pending")
         chased = self.identified_other.get(ProvenanceMethod.CITATION_CHASE.value, 0)
         if self.identified_other_detail and sum(self.identified_other_detail.values()) != chased:
@@ -299,7 +317,8 @@ def prisma_flow(project: Project) -> PrismaFlow:
     detail = dict.fromkeys(OTHER_DETAIL_KEYS, 0)
     canonical_with_database = 0
     excluded: dict[str, int] = {}
-    included = pending = 0
+    included = pending = not_screened = 0
+    unscreened = stop_unscreened(project)
     for work in canonical:
         methods = {entry.method for entry in work.provenance}
         if ProvenanceMethod.DATABASE in methods:
@@ -315,12 +334,14 @@ def prisma_flow(project: Project) -> PrismaFlow:
             included += 1
         elif outcome is Outcome.PENDING:
             pending += 1
+            not_screened += work.id in unscreened
         else:
             criterion = criteria.get(work.id) or UNSPECIFIED
             excluded[criterion] = excluded.get(criterion, 0) + 1
 
     protocol = current_protocol(project)
     boxes = full_text_boxes(project)
+    stop = screening_stop(project)
     return PrismaFlow(
         identified_databases=databases,
         identified_other=other,
@@ -332,8 +353,10 @@ def prisma_flow(project: Project) -> PrismaFlow:
         included=included,
         full_text=boxes,
         included_in_review=boxes.included if boxes.stage_run else None,
-        provisional=pending > 0,
+        provisional=pending - not_screened > 0,
         protocol_id=None if protocol is None else protocol.protocol_id,
+        stop_rule=None if stop is None else stop_rule_text(stop.n),
+        not_screened_stop=not_screened,
     )
 
 

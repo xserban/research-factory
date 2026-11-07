@@ -95,6 +95,11 @@ def prisma_markdown(flow: PrismaFlow) -> str:
     lines += ["", "## Screening", f"- records screened: {flow.screened}"]
     lines += [f"- excluded, {criterion}: {n}" for criterion, n in flow.excluded.items()]
     lines.append(f"- pending: {flow.pending}")
+    if flow.stop_rule is not None:
+        lines.append(
+            f"- of which not screened because of the stop: {flow.not_screened_stop} "
+            f"(rule: {flow.stop_rule})"
+        )
     boxes = flow.full_text
     lines += ["", "## Full-text assessment"]
     lines.append(f"- reports sought: {boxes.sought}")

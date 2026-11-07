@@ -204,12 +204,18 @@ class ScreeningPlan(StrictModel):
     calibrate_humans: bool = False
     """Whether a human pass passes the same calibration gate as an agent pass (slice 5, "Human
     screening passes"). Left out of every dump, so of every hash, while false."""
+    stop_after_consecutive_excludes: int | None = Field(default=None, ge=1)
+    """Title/abstract only, and only once a ranking exists (slice 8, IDEA-42): serving stops when
+    the records of the ranking, taken in ranked order, end in this many consecutive exclusions by
+    pass A. None screens everything. Left out of every dump, so of every hash, while None."""
 
     @model_serializer(mode="wrap")
-    def _omit_calibrate_humans(self, handler: SerializerFunctionWrapHandler) -> dict[str, object]:
+    def _omit_unset_options(self, handler: SerializerFunctionWrapHandler) -> dict[str, object]:
         data: dict[str, object] = handler(self)
         if not data.get("calibrate_humans"):
             data.pop("calibrate_humans", None)
+        if data.get("stop_after_consecutive_excludes") is None:
+            data.pop("stop_after_consecutive_excludes", None)
         return data
 
 

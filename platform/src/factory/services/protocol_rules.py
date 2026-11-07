@@ -191,6 +191,7 @@ def protocol_issues(
     gate_errors, gate_gaps = _gate_policy_issues(spec, mode)
     errors.extend(gate_errors)
     errors.extend(_hypothesis_plan_errors(spec, mode))
+    errors.extend(_stop_rule_errors(spec, mode))
     gaps = _gaps(spec, question, mode, probes)
     gaps.extend(gate_gaps)
     return ProtocolCheck(errors=errors, gaps=gaps)
@@ -459,6 +460,30 @@ def gate_policy_gaps(spec: ProtocolSpec, mode: RigorMode) -> list[ValidationIssu
                 ValidationIssue(f"gate_policies.entries.{i}.policy", GATE_POLICY_BELOW_PRESET)
             )
     return gaps
+
+
+STOP_RULE_PROFILE = (
+    "a stopping rule is a rapid-review shortcut; a systematic project cannot declare it"
+)
+STOP_RULE_STAGE = "the stopping rule applies to title/abstract screening only"
+
+
+def _stop_rule_errors(spec: ProtocolSpec, mode: RigorMode) -> list[ValidationIssue]:
+    """`screening.stop_after_consecutive_excludes` (slice 8): in `systematic` only under the
+    `rapid-review` method profile (the mode-keyed pattern of `_hypothesis_plan_errors`); never in
+    the full-text plan, which has no ranked serving."""
+    issues: list[ValidationIssue] = []
+    field = "stop_after_consecutive_excludes"
+    if (
+        spec.screening.stop_after_consecutive_excludes is not None
+        and mode is RigorMode.SYSTEMATIC
+        and spec.method_profile is not MethodProfile.RAPID_REVIEW
+    ):
+        issues.append(ValidationIssue(f"screening.{field}", STOP_RULE_PROFILE))
+    full_text = spec.full_text_screening
+    if full_text is not None and full_text.stop_after_consecutive_excludes is not None:
+        issues.append(ValidationIssue(f"full_text_screening.{field}", STOP_RULE_STAGE))
+    return issues
 
 
 def _hypothesis_plan_errors(spec: ProtocolSpec, mode: RigorMode) -> list[ValidationIssue]:

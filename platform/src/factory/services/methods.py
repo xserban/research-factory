@@ -64,6 +64,7 @@ from factory.services.prisma import (
     search_report,
 )
 from factory.services.protocol import current_protocol, list_amendments, list_deviations
+from factory.services.ranking import latest_ranking
 from factory.services.references import reference_counts
 from factory.services.seeds import _rigor_mode, admitted_seed_count, seed_recall
 from factory.services.slice6_methods import (
@@ -227,6 +228,10 @@ class MethodsReport(StrictModel):
     """Resolved library imports (slice 3d); empty, and no paragraph, without imports."""
     miners: list[MinerMethods] = Field(default_factory=list)
     """Registered miner versions (slice M, M-D); empty, and no paragraph, without any."""
+    ranking_model_id: str | None = None
+    ranking_weights_hash: str | None = None
+    """The latest ranking's model and weights (slice 8, IDEA-42); None, and left out of the dump
+    with the paragraph, while no ranking was computed."""
     imported_units: int = 0
     imported_rows: int = 0
     imported_sources: list[str] = Field(default_factory=list)
@@ -238,6 +243,9 @@ class MethodsReport(StrictModel):
     def _no_imports_say_nothing(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
         """A report without imports serialises as it did before imports existed."""
         out: dict[str, Any] = handler(self)
+        if self.ranking_model_id is None:
+            out.pop("ranking_model_id", None)
+            out.pop("ranking_weights_hash", None)
         if not self.imported_rows:
             for name in (
                 "imported_units",
@@ -289,6 +297,7 @@ def methods_report(project: Project) -> MethodsReport:
     evidence = None if schema is None else evidence_report(project)
     groups = [] if evidence is None else evidence.groups
     references = _references(project, None if protocol is None else protocol.spec.snowball_plan)
+    ranking = latest_ranking(project, top=0)
     return MethodsReport(
         rigor_mode=_rigor_mode(project).value,
         method_profile=None if protocol is None else protocol.spec.method_profile.value,
@@ -316,6 +325,8 @@ def methods_report(project: Project) -> MethodsReport:
         chase_rounds=len(chase_rounds(project)),
         admitted_seeds=admitted_seed_count(project),
         prisma=flow,
+        ranking_model_id=None if ranking is None else ranking.model_id,
+        ranking_weights_hash=None if ranking is None else ranking.weights_hash,
         screening_pairs=_screening_pairs(project),
         full_text_passes=0 if full_text is None else full_text.passes,
         full_text_dual_sample=None if full_text is None else full_text.dual_sample,
@@ -676,6 +687,7 @@ def render_methods(report: MethodsReport, *, withheld: frozenset[str] = frozense
         _search(report),
         _deduplication(report),
         _screening(report),
+        *([] if report.ranking_model_id is None else [_ranking_paragraph(report)]),
         _agreement_and_audit(report, withheld),
         _full_text(report),
         *([] if not report.conversions else [_conversion_paragraph(report.conversions)]),
@@ -830,6 +842,21 @@ def _screening(report: MethodsReport) -> str:
         "Screening decisions were made by Claude models (as reported by the agent: "
         f"{_list(report.screening_models)}) following the skills {_list(report.skills)}; "
         f"the platform made no model calls.{other_steps}"
+    )
+
+
+def _ranking_paragraph(report: MethodsReport) -> str:
+    flow = report.prisma
+    ranked = (
+        "Title/abstract records were served in an order computed locally by similarity to the "
+        f"development seeds (ranker {report.ranking_model_id}, weights hash "
+        f"{report.ranking_weights_hash}); the ranking orders records and excludes none."
+    )
+    if flow.stop_rule is None:
+        return ranked
+    return (
+        f"{ranked} Stopping rule: {flow.stop_rule}. "
+        f"{flow.not_screened_stop} records were not screened because of the stop."
     )
 
 
