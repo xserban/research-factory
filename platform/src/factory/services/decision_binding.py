@@ -30,7 +30,9 @@ def bind(
     synced the index. Refused, with nothing written (`decision_ids` and `decision_ids.<i>`): a
     duplicate, an unknown id, a decision at another level; and, outside `exploratory`, no id at all
     or an id with no accepted selection (open, or superseded). A cited decision is a selection the
-    record implements; an empty result is legal only in `exploratory`."""
+    record implements; an empty result is legal only in `exploratory`. A "none of these" selection
+    (nothing ticked, with its required note) is an accepted selection: it decides every item
+    `rejected`, so a record may cite it."""
     ids = tuple(decision_ids or ())
     if len(set(ids)) != len(ids):
         raise FactoryValidationError([ValidationIssue("decision_ids", "a decision is cited once")])

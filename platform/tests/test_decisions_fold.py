@@ -16,6 +16,7 @@ from factory.model.decisions import (
 from factory.model.screening import Channel
 from factory.services.context import Project
 from factory.services.project import init_project
+from tests.experiment_helpers import inject, raw_event
 from tests.helpers import S2, SESSION
 
 DEC = "dec_01JZ9Q3K5M7N8P0R2S4T6V8W0X"
@@ -235,3 +236,54 @@ def test_rebuild_is_deterministic(project: Project, agent: Actor, human: Actor) 
     project.index.rebuild()
     assert tables(project) == before
     assert project.index.state_hash() == digest
+
+
+def selection_columns(project: Project, decision_id: str = DEC) -> tuple[Any, ...]:
+    with project.index.connect() as conn:
+        row = conn.execute(
+            text(
+                "SELECT sel_event, sel_actor, sel_channel, sel_note, sel_reconstructed, "
+                "sel_selected, sel_added FROM decision_sets WHERE decision_id = :d"
+            ),
+            {"d": decision_id},
+        ).one()
+    return tuple(row)
+
+
+def test_the_fold_stores_the_accepted_selection_on_the_decision(
+    project: Project, agent: Actor, human: Actor
+) -> None:
+    write(project, agent, "decision.suggested", suggest_payload())
+    assert selection_columns(project) == (None,) * 7
+    select(project, human, selected=("I01",), added=("Mine",), note="why", reconstructed=True)
+    [event_id, actor, channel, note, reconstructed, chosen, added] = selection_columns(project)
+    assert event_id.startswith("ev_")
+    assert (actor, channel, note, reconstructed) == ("obd", "cli", "why", 1)
+    assert (chosen, added) == ('["I01"]', '["Mine"]')
+
+
+def test_a_refused_selection_leaves_the_stored_selection_unchanged(
+    project: Project, agent: Actor, human: Actor
+) -> None:
+    write(project, agent, "decision.suggested", suggest_payload())
+    select(project, human, selected=("I01",), note="first")
+    before = selection_columns(project)
+    select(project, human, selected=("I09",), note="second")
+    assert selection_columns(project) == before
+
+
+def test_a_malformed_hand_written_event_changes_nothing_and_does_not_raise(
+    project: Project, agent: Actor, human: Actor
+) -> None:
+    write(project, agent, "decision.suggested", suggest_payload())
+    before = (tables(project), selection_columns(project))
+    inject(project, raw_event(project, "decision.suggested", agent, {"decision_id": DEC2}))
+    inject(project, raw_event(project, "decision.selected", human, {"decision_id": DEC}))
+    inject(project, raw_event(project, "decision.selected", human, {"selected": 3}))
+    project.index.sync()
+    assert (tables(project), selection_columns(project)) == before
+    state = project.index.state_hash()
+    project.index.rebuild()
+    assert project.index.state_hash() == state
+    select(project, human)
+    assert statuses(project)["I01"] == "validated"

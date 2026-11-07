@@ -5,17 +5,17 @@ Invariants:
   `ValidationIssue`s; the checks are the ones the folds of `index/decisions.py` enforce, so what the
   service accepts is what the index folds, and a hand-written event that fails one changes nothing.
 - R-20: a suggestion that names a held-out seed (its id or a stated identifier) in its subject,
-  explanation, item text or grounds is refused, not scrubbed. `held_out_tokens` is called without
-  work ids: a work's id is not a seed's identity (decisions 37 item 9 and 81).
+  explanation, item text or grounds is accepted and scrubbed before it is recorded, with the token
+  the other agent surfaces use, and nothing in the reply or an error says that anything was
+  scrubbed: a refusal would tell the agent which identifiers are held out. `held_out_tokens` is
+  called without work ids: a work's id is not a seed's identity (decisions 37 item 9 and 81).
 - A decision is `open` while it has no accepted selection and is not superseded. The latest
   accepted selection decides the item statuses; earlier ones stay in the log.
-- Binding (A7): `bind` is how the question, seed, probe and protocol records cite the decisions they
-  implement. A cited id must be a known decision at the record's level, cited once, in every mode.
-  In `pilot` and `systematic` the record must also cite at least one decision, and each cited
-  decision must have an accepted selection and not be superseded. Whether the act matches the
-  selection is a check rule, not a refusal.
-- Reads come from the index, except the selection's note, channel and flags, which the view reads
-  from the log. They are the human's view: an agent-facing surface scrubs them.
+- Binding lives in `decision_binding` (no dependency on `withholding`, which would close an
+  import cycle through `seeds`).
+- Reads come from the index only. The fold stores the accepted selection on `decision_sets`
+  (event id, channel, note, flag, time), so the view is what the fold took, whatever the rigor mode
+  or host is now. The note is the human's view: an agent-facing surface scrubs it.
 """
 
 from __future__ import annotations
@@ -27,11 +27,8 @@ from typing import Literal
 from pydantic import ValidationError
 from sqlalchemy import text
 
-from factory.clock import format_ts
 from factory.errors import FactoryValidationError, ValidationIssue
-from factory.events.envelope import Actor, Event
-from factory.events.reader import read_all
-from factory.index.human_channel import sign_off_counts
+from factory.events.envelope import Actor
 from factory.model.base import StrictModel
 from factory.model.decisions import (
     DecisionItem,
@@ -39,11 +36,10 @@ from factory.model.decisions import (
     DecisionSelected,
     DecisionSuggested,
 )
-from factory.model.project import RigorMode
 from factory.model.screening import Channel
 from factory.services.context import Project
 from factory.services.human_channel import require_human_channel
-from factory.services.withholding import held_out_tokens, withhold
+from factory.services.withholding import WITHHELD, held_out_tokens, withhold
 
 DecisionState = Literal["open", "selected", "superseded"]
 
@@ -58,7 +54,7 @@ class DecisionItemView(StrictModel):
 
 
 class SelectionView(StrictModel):
-    """The latest accepted selection, read from the log."""
+    """The latest accepted selection, as the fold took it."""
 
     event_id: str
     actor: str
@@ -118,25 +114,22 @@ def _state(superseded_by: object, validated_or_rejected: int) -> DecisionState:
 # --- Suggest ------------------------------------------------------------------------------------
 
 
-def _names_held_out(project: Project, fields: dict[str, str]) -> list[ValidationIssue]:
-    """Issues for each field that contains a held-out seed's id or stated identifier (R-20)."""
-    tokens = held_out_tokens(project, include_work_ids=False)
-    if not tokens:
-        return []
-    return [
-        ValidationIssue(name, "names a held-out seed (R-20)")
-        for name, value in fields.items()
-        if withhold(value, tokens) != value
-    ]
+def _scrub_text(value: str, tokens: set[str]) -> str:
+    cleaned = withhold(value, tokens)
+    assert isinstance(cleaned, str)
+    return cleaned
 
 
-def _grounds_fields(prefix: str, items: Sequence[DecisionItem]) -> dict[str, str]:
-    fields: dict[str, str] = {}
-    for i, item in enumerate(items):
-        fields[f"{prefix}.{i}.text"] = item.text
-        for j, ground in enumerate(item.grounds):
-            fields[f"{prefix}.{i}.grounds.{j}"] = ground
-    return fields
+def _scrub_items(items: Sequence[DecisionItem], tokens: set[str]) -> tuple[DecisionItem, ...]:
+    return tuple(
+        item.model_copy(
+            update={
+                "text": _scrub_text(item.text, tokens),
+                "grounds": tuple(_scrub_text(g, tokens) for g in item.grounds),
+            }
+        )
+        for item in items
+    )
 
 
 def suggest(
@@ -151,18 +144,20 @@ def suggest(
     """Record an agent's suggestion set and return its `dec_` id. Refused, with nothing written:
     a non-agent actor (`actor`); a payload the model rejects, such as duplicate item ids, a
     `recommended` item on a research subject or a bad subject (dotted paths); a `supersedes` that
-    is unknown or already superseded; any text that names a held-out seed (R-20)."""
+    is unknown or already superseded. Text that names a held-out seed (R-20) is scrubbed, silently,
+    before it is recorded; in `subject` (a slug) the token is `withheld`."""
     if actor.kind != "agent":
         raise _refuse("actor", "only an agent suggests a decision")
     with project.writing():
         decision_id = project.ids.new("dec")
+        tokens = held_out_tokens(project, include_work_ids=False)
         try:
             payload = DecisionSuggested(
                 decision_id=decision_id,
                 level=level,
-                subject=subject,
-                explanation=explanation,
-                items=tuple(items),
+                subject=_scrub_text(subject, tokens).replace(WITHHELD, "withheld"),
+                explanation=_scrub_text(explanation, tokens),
+                items=_scrub_items(items, tokens),
                 supersedes=supersedes,
             )
         except ValidationError as exc:
@@ -178,9 +173,6 @@ def suggest(
                 issues.append(ValidationIssue("supersedes", "unknown decision"))
             elif prior[0] is not None:
                 issues.append(ValidationIssue("supersedes", "already superseded"))
-        fields = {"subject": subject, "explanation": explanation}
-        fields.update(_grounds_fields("items", payload.items))
-        issues.extend(_names_held_out(project, fields))
         if issues:
             raise FactoryValidationError(issues)
         input_blob = project.blobs.put_json(payload.model_dump(mode="json"))
@@ -302,50 +294,6 @@ def list_decisions(
     ]
 
 
-def _latest_selection(
-    project: Project, decision_id: str, suggested: set[str], superseded_by: str | None
-) -> SelectionView | None:
-    """The last selection event that the fold accepted: from a human on an allowed channel, naming
-    only suggested items, and written before any suggestion that superseded the decision. The
-    channel rule is read at the current rigor mode and host."""
-    latest: Event | None = None
-    superseded = False
-    events = read_all(project.paths.events_dir, project.catalog)
-    with project.index.connect() as conn:
-        for event in events:
-            if event.type == "decision.suggested":
-                if (
-                    superseded_by is not None
-                    and event.payload.get("decision_id") == superseded_by
-                    and event.payload.get("supersedes") == decision_id
-                ):
-                    superseded = True
-                continue
-            if event.type != "decision.selected" or superseded:
-                continue
-            if event.payload.get("decision_id") != decision_id or event.actor.kind != "human":
-                continue
-            payload = DecisionSelected.model_validate(event.payload)
-            if (
-                sign_off_counts(conn, event.actor, payload.channel)
-                and set(payload.selected) <= suggested
-            ):
-                latest = event
-    if latest is None:
-        return None
-    payload = DecisionSelected.model_validate(latest.payload)
-    return SelectionView(
-        event_id=latest.id,
-        actor=latest.actor.id,
-        ts=format_ts(latest.ts),
-        selected=payload.selected,
-        added=payload.added,
-        note=payload.note,
-        reconstructed=payload.reconstructed,
-        channel=payload.channel.value,
-    )
-
-
 def view_decision(project: Project, decision_id: str) -> DecisionView:
     """One decision with its items (status, origin, grounds, recommended), its latest selection and
     its supersession links. Refused (`decision_id`: `unknown`) for an unknown id."""
@@ -354,7 +302,9 @@ def view_decision(project: Project, decision_id: str) -> DecisionView:
         row = conn.execute(
             text(
                 "SELECT level, subject, explanation, suggested_at, actor, supersedes, "
-                "superseded_by FROM decision_sets WHERE decision_id = :d"
+                "superseded_by, sel_event, sel_actor, sel_ts, sel_channel, sel_note, "
+                "sel_reconstructed, sel_selected, sel_added "
+                "FROM decision_sets WHERE decision_id = :d"
             ),
             {"d": decision_id},
         ).first()
@@ -379,7 +329,6 @@ def view_decision(project: Project, decision_id: str) -> DecisionView:
         for r in item_rows
     )
     decided = sum(1 for i in items if i.status in ("validated", "rejected"))
-    suggested = {i.item_id for i in items if i.origin == "suggested"}
     return DecisionView(
         decision_id=decision_id,
         level=str(row[0]),
@@ -391,7 +340,16 @@ def view_decision(project: Project, decision_id: str) -> DecisionView:
         superseded_by=None if row[6] is None else str(row[6]),
         state=_state(row[6], decided),
         items=items,
-        selection=_latest_selection(
-            project, decision_id, suggested, None if row[6] is None else str(row[6])
+        selection=None
+        if row[7] is None
+        else SelectionView(
+            event_id=str(row[7]),
+            actor=str(row[8]),
+            ts=str(row[9]),
+            selected=tuple(json.loads(str(row[13]))),
+            added=tuple(json.loads(str(row[14]))),
+            note=str(row[11]),
+            reconstructed=bool(row[12]),
+            channel=str(row[10]),
         ),
     )

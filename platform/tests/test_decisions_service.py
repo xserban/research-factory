@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from factory.errors import FactoryValidationError
@@ -12,6 +14,7 @@ from factory.model.screening import Channel
 from factory.services import decisions as svc
 from factory.services.context import Project
 from factory.services.seeds import SeedRole, all_seeds
+from factory.services.withholding import WITHHELD
 from tests.helpers import S2, SourcesFor, _setup
 
 CRED = "crd_01JZ9Q3K5M7N8P0R2S4T6V8W0X"
@@ -94,27 +97,42 @@ def test_suggest_refuses_unknown_and_superseded_supersedes(project: Project, age
     assert svc.list_decisions(project, open_only=True)[0].decision_id == second
 
 
-def test_suggest_refuses_text_naming_a_held_out_seed(
+def test_suggest_scrubs_text_naming_a_held_out_seed_and_says_nothing(
     project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
 ) -> None:
     _setup(project, agent, human, mock_sources, random_works=0)
     [held, *_] = [s for s in all_seeds(project) if s.role is SeedRole.HELD_OUT]
     assert held.doi is not None
-    before = _types(project)
-    with pytest.raises(FactoryValidationError) as in_text:
-        _suggest(project, agent, items=(DecisionItem(item_id="I01", text=f"Seed {held.doi}"),))
-    assert _fields(in_text) == [("items.0.text", "names a held-out seed (R-20)")]
-    with pytest.raises(FactoryValidationError) as in_grounds:
-        _suggest(
-            project,
-            agent,
-            items=(DecisionItem(item_id="I01", text="Fine", grounds=(held.seed_id,)),),
-        )
-    assert _fields(in_grounds) == [("items.0.grounds.0", "names a held-out seed (R-20)")]
-    with pytest.raises(FactoryValidationError) as in_explanation:
-        _suggest(project, agent, explanation=f"Because of {held.doi.upper()}")
-    assert _fields(in_explanation) == [("explanation", "names a held-out seed (R-20)")]
-    assert _types(project) == before
+    decision_id = _suggest(
+        project,
+        agent,
+        explanation=f"Because of {held.doi.upper()}",
+        items=(
+            DecisionItem(item_id="I01", text=f"Seed {held.doi}", grounds=(held.seed_id, "prb_1")),
+            DecisionItem(item_id="I02", text="Fine"),
+        ),
+    )
+    view = svc.view_decision(project, decision_id)
+    assert view.explanation == f"Because of {WITHHELD}"
+    assert view.items[0].text == f"Seed {WITHHELD}"
+    assert view.items[0].grounds == (WITHHELD, "prb_1")
+    assert view.items[1].text == "Fine"
+    logged = [
+        e
+        for e in read_all(project.paths.events_dir, project.catalog)
+        if e.type == "decision.suggested"
+    ]
+    assert held.doi not in json.dumps(logged[-1].payload)
+    assert held.seed_id not in json.dumps(logged[-1].payload)
+
+
+def test_a_subject_naming_a_held_out_seed_is_scrubbed_to_a_valid_slug(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    _setup(project, agent, human, mock_sources, random_works=0)
+    [held, *_] = [s for s in all_seeds(project) if s.role is SeedRole.HELD_OUT]
+    decision_id = _suggest(project, agent, subject=held.seed_id)
+    assert svc.view_decision(project, decision_id).subject == "withheld"
 
 
 def test_select_validates_and_updates_statuses(
@@ -213,3 +231,14 @@ def test_list_filters_by_level(project: Project, agent: Actor) -> None:
     _suggest(project, agent, level=DecisionLevel.GOAL, subject="objective")
     assert [r.level for r in svc.list_decisions(project, DecisionLevel.GOAL)] == ["goal"]
     assert len(svc.list_decisions(project)) == 2
+
+
+def test_the_view_shows_the_selection_the_fold_took_last(
+    project: Project, agent: Actor, human: Actor
+) -> None:
+    decision_id = _suggest(project, agent)
+    first = svc.select(project, human, decision_id, ["I01"], [], "first", Channel.CLI)
+    second = svc.select(project, human, decision_id, ["I02"], [], "second", Channel.CLI)
+    selection = svc.view_decision(project, decision_id).selection
+    assert selection is not None and selection.event_id == second != first
+    assert selection.note == "second"

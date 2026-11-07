@@ -9,13 +9,15 @@ decision not yet superseded. A selection is folded only from a human over an unf
 channel, on a known and unsuperseded decision, and only when every selected id is one of the
 decision's suggested items. The latest selection on a decision decides the statuses: selected
 items are `validated`, the other suggested items `rejected`, and each added text becomes an item
-`A01`, `A02`, ... with origin and status `added`. The log keeps every earlier selection.
+`A01`, `A02`, ... with origin and status `added`. The log keeps every earlier selection;
+`decision_sets` keeps the accepted one (`sel_*`).
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
+from pydantic import ValidationError
 from sqlalchemy import Column, Integer, MetaData, String, Table, delete, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Connection
@@ -46,6 +48,16 @@ def decision_tables(metadata: MetaData) -> DecisionTables:
         Column("superseded_by", String),
         Column("suggested_at", String, nullable=False),
         Column("actor", String, nullable=False),
+        # The accepted selection the fold took last (all NULL until one is folded): the view and
+        # the binding read these, never the log, so they agree with the statuses of the items.
+        Column("sel_event", String),
+        Column("sel_actor", String),
+        Column("sel_ts", String),
+        Column("sel_channel", String),
+        Column("sel_note", String),
+        Column("sel_reconstructed", Integer),
+        Column("sel_selected", String),
+        Column("sel_added", String),
     )
     items = Table(
         "decision_items",
@@ -65,7 +77,10 @@ def decision_handlers(t: DecisionTables) -> dict[str, Handler]:
     def suggested(conn: Connection, event: Event) -> None:
         if event.actor.kind != "agent":
             return
-        p = DecisionSuggested.model_validate(event.payload)
+        try:
+            p = DecisionSuggested.model_validate(event.payload)
+        except ValidationError:
+            return
         known = conn.execute(
             select(t.decisions.c.decision_id).where(t.decisions.c.decision_id == p.decision_id)
         ).first()
@@ -110,7 +125,10 @@ def decision_handlers(t: DecisionTables) -> dict[str, Handler]:
     def selected(conn: Connection, event: Event) -> None:
         if event.actor.kind != "human":
             return
-        p = DecisionSelected.model_validate(event.payload)
+        try:
+            p = DecisionSelected.model_validate(event.payload)
+        except ValidationError:
+            return
         if not sign_off_counts(conn, event.actor, p.channel):
             return
         row = conn.execute(
@@ -144,6 +162,20 @@ def decision_handlers(t: DecisionTables) -> dict[str, Handler]:
                 )
                 .values(status="validated" if item_id in p.selected else "rejected")
             )
+        conn.execute(
+            update(t.decisions)
+            .where(t.decisions.c.decision_id == p.decision_id)
+            .values(
+                sel_event=event.id,
+                sel_actor=event.actor.id,
+                sel_ts=format_ts(event.ts),
+                sel_channel=p.channel.value,
+                sel_note=p.note,
+                sel_reconstructed=int(p.reconstructed),
+                sel_selected=canonical_json(list(p.selected)).decode(),
+                sel_added=canonical_json(list(p.added)).decode(),
+            )
+        )
         for n, text in enumerate(p.added, start=1):
             conn.execute(
                 sqlite_insert(t.decision_items).values(

@@ -151,7 +151,8 @@ def run_probe(
 
     `sample` is the number of titles to sample per measured query, 0 for none. `decision_ids` are
     the selected `probe` decisions this round implements; in `pilot` and `systematic` a probe
-    without one is refused (`decision_ids`, see `decision_binding.bind`). Each measured query carries them.
+    without one is refused (`decision_ids`, see `decision_binding.bind`). Each measured query
+    carries them.
     """
     question = current_question(project)
     issues: list[ValidationIssue] = []
