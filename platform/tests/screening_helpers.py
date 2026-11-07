@@ -118,7 +118,6 @@ def decide(
         protocol_id=protocol_id,
         task_id="tsk_test",
         supersedes=supersedes,
-        score=score,
     )
     blob = project.blobs.put_json({"work_id": work_id, "verdict": verdict})
     project.record(
@@ -668,6 +667,7 @@ def _decide(
         protocol_id=protocol_id,
         task_id="tsk_test",
         supersedes=supersedes,
+        score=score,
     )
     blob = project.blobs.put_json({"work_id": work_id, "verdict": verdict})
     project.record(
