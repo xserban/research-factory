@@ -99,6 +99,7 @@ from factory.services import concepts as concepts_service
 from factory.services import conclusions as conclusions_service
 from factory.services import consolidation as consolidation_service
 from factory.services import contributions as contributions_service
+from factory.services import core_works as core_works_service
 from factory.services import coverage as coverage_service
 from factory.services import curation as curation_service
 from factory.services import decisions as decisions_service
@@ -2206,6 +2207,28 @@ def build_server(
             return _withheld(opened, result.model_dump(mode="json"), include_work_ids=False)
 
         return _reply(project, compare, include_work_ids=False)
+
+    @server.tool()
+    def snowball_core_list(project: str) -> dict[str, JsonValue]:
+        """The core works a forward snowball round with `forward_core_only` may start from: the
+        works the researcher marked, and the development seeds' works (core without a mark). Only
+        the researcher marks a work core. Read-only. Refused to a session that has joined a
+        pass."""
+
+        def listing() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            data: JsonValue = {
+                "marked": [
+                    m.model_dump(mode="json") for m in core_works_service.core_marks(opened)
+                ],
+                "seed_works": list(
+                    core_works_service.seed_core_works(opened, development_only=True)
+                ),
+            }
+            return _withheld(opened, data, include_work_ids=False)
+
+        return _reply(project, listing, include_work_ids=False)
 
     @server.tool()
     def relation_propose(

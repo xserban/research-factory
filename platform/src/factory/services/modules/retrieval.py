@@ -30,10 +30,13 @@ SPEC = ModuleSpec(
             "search.run_started",
             "seed.admitted",
             "snowball.round_started",
+            "work.marked_core",
+            "work.unmarked_core",
         ),
         tables=(
             "chase_queries",
             "chase_rounds",
+            "core_works",
             "pages",
             "provenance",
             "queries",

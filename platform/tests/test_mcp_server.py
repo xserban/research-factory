@@ -93,6 +93,7 @@ async def test_project_status_tool(settings: Settings, project: Project, clock: 
             "reference_decide",
             "snowball_round",
             "snowball_compare",
+            "snowball_core_list",
             "relation_propose",
             "idea_propose",
             "graph_status",

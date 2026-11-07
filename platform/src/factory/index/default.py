@@ -12,6 +12,7 @@ from factory.index.budgets import (
 from factory.index.cards import card_handlers, card_tables
 from factory.index.chase import chase_handlers, chase_tables
 from factory.index.conclusions import conclusion_handlers, conclusion_tables
+from factory.index.core_works import core_work_handlers, core_work_tables
 from factory.index.curation import curation_handlers, curation_tables
 from factory.index.decisions import decision_handlers, decision_tables
 from factory.index.dedup import dedup_handlers, dedup_tables
@@ -110,6 +111,7 @@ def default_projection(blobs: BlobStore | None = None) -> Projection:
     gates = gate_tables(metadata)
     regions = region_tables(metadata)
     rankings = ranking_tables(metadata)
+    core_works = core_work_tables(metadata)
     miners = miner_tables(metadata)
     mine_imports = mine_import_tables(metadata)
     hypotheses = hypothesis_tables(metadata, protocol.protocols, project)
@@ -163,6 +165,7 @@ def default_projection(blobs: BlobStore | None = None) -> Projection:
         **gate_handlers(gates),
         **region_handlers(regions, blobs),
         **ranking_handlers(rankings, blobs),
+        **core_work_handlers(core_works),
         **miner_handlers(miners),
         **mine_import_handlers(mine_imports, extraction, conversions, fulltext, miners),
         **hypothesis_handlers(hypotheses),

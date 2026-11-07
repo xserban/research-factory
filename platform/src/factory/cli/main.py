@@ -92,6 +92,7 @@ from factory.services import check as check_service
 from factory.services import concepts as concepts_service
 from factory.services import conclusions as conclusions_service
 from factory.services import contributions as contributions_service
+from factory.services import core_works as core_works_service
 from factory.services import coverage as coverage_service
 from factory.services import curation as curation_service
 from factory.services import dedup as dedup_service
@@ -484,6 +485,12 @@ curation_app = typer.Typer(
 )
 app.add_typer(curation_app)
 app.add_typer(references_app)
+snowball_core_app = typer.Typer(
+    name="core",
+    help="Core works: the works a forward snowball round may start from (a researcher's mark).",
+    no_args_is_help=True,
+)
+snowball_app.add_typer(snowball_core_app)
 app.add_typer(snowball_app)
 app.add_typer(seeds_app)
 app.add_typer(watch_app)
@@ -1777,6 +1784,50 @@ def snowball_compare_cmd(
         comparison = snowball_service.snowball_compare(project, round_id)
     for line in render.comparison_lines(comparison):
         typer.echo(line)
+
+
+@snowball_core_app.command("mark")
+def snowball_core_mark_cmd(
+    ctx: typer.Context,
+    work_id: Annotated[str, typer.Argument(help="The work to mark core.")],
+    note: Annotated[str | None, typer.Option("--note", help="Why (optional).")] = None,
+) -> None:
+    """Mark a work core: a forward round with forward_core_only may start from it."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        event_id = core_works_service.mark_core(project, project.human_actor(), work_id, note)
+    typer.echo(f"recorded {event_id}")
+
+
+@snowball_core_app.command("unmark")
+def snowball_core_unmark_cmd(
+    ctx: typer.Context,
+    work_id: Annotated[str, typer.Argument(help="The work to take the mark from.")],
+    note: Annotated[str | None, typer.Option("--note", help="Why (optional).")] = None,
+) -> None:
+    """Take a work's core mark back (a positive seed's work stays core)."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        event_id = core_works_service.unmark_core(project, project.human_actor(), work_id, note)
+    typer.echo(f"recorded {event_id}")
+
+
+@snowball_core_app.command("list")
+def snowball_core_list_cmd(ctx: typer.Context) -> None:
+    """The marked core works and the seeds' works, which are core without a mark."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        marks = core_works_service.core_marks(project)
+        seeds = core_works_service.seed_core_works(project)
+    for mark in marks:
+        typer.echo(f"{mark.work_id}  marked  {mark.note or ''}".rstrip())
+    for work in seeds:
+        typer.echo(f"{work}  seed")
+    if not marks and not seeds:
+        typer.echo("no core works")
 
 
 @server_app.command("check")

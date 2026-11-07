@@ -103,6 +103,7 @@ OMITTED_WHEN_EMPTY: frozenset[str] = frozenset(
         "region_snapshots",
         "rankings",
         "ranking_positions",
+        "core_works",
         "region_members",
         "region_reviews",
         "region_member_decisions",

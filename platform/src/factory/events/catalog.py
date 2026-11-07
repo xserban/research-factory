@@ -22,6 +22,7 @@ from factory.model.cards import (
 )
 from factory.model.chase import ChaseRoundStarted, SampleExtended, SeedAdmitted
 from factory.model.conclusions import ConclusionRegistered, ConclusionRetired
+from factory.model.core_works import WorkMarkedCore, WorkUnmarkedCore
 from factory.model.curation import CurationDecided, CurationProposed
 from factory.model.decisions import DecisionSelected, DecisionSuggested
 from factory.model.dedup import DedupMerged, DedupReverted
@@ -344,6 +345,8 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("watch.cycle_finished", WatchCycleFinished, 1))
     catalog.register(EventType("living.snapshot_recorded", SnapshotRecorded, 1))
     catalog.register(EventType("ranking.computed", RankingComputed, 1))
+    catalog.register(EventType("work.marked_core", WorkMarkedCore, 1))
+    catalog.register(EventType("work.unmarked_core", WorkUnmarkedCore, 1))
     catalog.register(EventType("notice.observed", NoticeObserved, 1))
     catalog.register(EventType("notice.assessed", NoticeAssessed, 1))
     catalog.register(EventType("version.observed", VersionObserved, 1))

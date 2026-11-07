@@ -250,6 +250,35 @@ class SnowballPlan(StrictModel):
     max_backward_rounds: int = Field(ge=0)
     max_forward_rounds: int = Field(ge=0)
     stop_when_no_new_included: bool = True
+    forward_core_only: bool = False
+    """A forward round starts only from the core works that are included or seeds (slice 8)."""
+    forward_topic_filter: (
+        Annotated[
+            str,
+            StringConstraints(
+                strip_whitespace=True, min_length=1, max_length=300, pattern=r"^[^,\x00-\x1f]+$"
+            ),
+        ]
+        | None
+    ) = None
+    """An OpenAlex `title_and_abstract.search` expression every forward query also carries
+    (comma-AND). It holds no comma, which would open another filter clause."""
+    forward_max_per_work: int | None = Field(default=None, ge=1)
+    """At most this many citing works are taken per source work of a forward round, ordered by
+    similarity to the development seeds (decision 116); the rest are counted, not dropped."""
+
+    @model_serializer(mode="wrap")
+    def _omit_forward_defaults(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        """A plan that leaves the forward options at their defaults serialises, and so hashes,
+        exactly as it did before they existed."""
+        data: dict[str, Any] = handler(self)
+        if not self.forward_core_only:
+            data.pop("forward_core_only", None)
+        if self.forward_topic_filter is None:
+            data.pop("forward_topic_filter", None)
+        if self.forward_max_per_work is None:
+            data.pop("forward_max_per_work", None)
+        return data
 
 
 SubmitterKind = Literal["human", "agent"]
