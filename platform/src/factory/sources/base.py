@@ -215,6 +215,15 @@ class Sampler(Protocol):
         ...
 
 
+@runtime_checkable
+class OverlapCounter(Protocol):
+    """Counts a query's results that are also hosted on arXiv (an estimate of the overlap)."""
+
+    def count_on_arxiv(self, spec: QuerySpec, *, archive: PageSink) -> int | None:
+        """The source's own total for `spec` restricted to records hosted on arXiv, if reported."""
+        ...
+
+
 def probe_key(source: str, work: Work) -> str | None:
     """The identity a probe matches a work by, in the source's own namespace.
 

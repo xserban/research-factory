@@ -14,6 +14,10 @@ first page by relevance and says so (`sample_kind`). A sample is archived like a
 never enters the corpus or PRISMA, and drops, without saying why, any record that is a held-out
 seed's work. A failed sample request leaves the recall in place and is named in `sample_note`.
 
+When a probe measures both `openalex` and `arxiv`, each OpenAlex query also counts its hits hosted
+on arXiv (`openalex_on_arxiv`). That is an estimate of the overlap between the two sources, not a
+dedup; the report says so in `overlap_note`.
+
 Held-out seeds are never measured (R-20). Only development positives (late ones included) and
 negatives are sent to a source, and the report, events and validation messages name only those.
 The split event itself is the one place held-out ids are recorded, by `split_seeds`.
@@ -60,6 +64,7 @@ from factory.services.seeds import (
 )
 from factory.services.vocabulary import suggest_terms
 from factory.sources.base import (
+    OverlapCounter,
     PageSink,
     Prober,
     RawPage,
@@ -77,6 +82,10 @@ THRESHOLDS: dict[RigorMode, float] = {
 }
 
 
+OVERLAP_NOTE = (
+    "openalex_on_arxiv counts an OpenAlex query's hits hosted on arXiv. It estimates how much the "
+    "two sources overlap; it is not a deduplication and does not match records one to one."
+)
 DEFAULT_SAMPLE = 20
 MAX_SAMPLE = 200
 
@@ -99,6 +108,8 @@ class ProbeQueryResult(StrictModel):
     sample_titles: tuple[str, ...] = ()
     sample_kind: Literal["random", "top"] | None = None
     sample_note: str | None = None
+    openalex_on_arxiv: int | None = None
+    overlap_note: str | None = None
     reason: str | None
 
 
@@ -120,6 +131,7 @@ class ProbeReport(StrictModel):
     untestable_by_source: dict[str, tuple[str, ...]]
     pooled_recall: float | None
     untestable_pooled: tuple[str, ...]
+    overlap_note: str | None = None
     threshold: float
     meets_threshold: bool
 
@@ -158,6 +170,7 @@ def run_probe(
     works = {seed.seed_id: _work_of(project, seed) for seed in seeds}
     # Built once, and only when a sample is wanted: the held-out identifiers stay in this process.
     is_held_out = held_out_identifier_matcher(project) if sample > 0 else (lambda _ids: False)
+    count_overlap = {"openalex", "arxiv"} <= {spec.source for spec in specs}
     results: list[ProbeQueryResult] = []
     for index, spec in enumerate(specs):
         probe_spec = spec.model_copy(update={"purpose": QueryPurpose.PROBE})
@@ -174,6 +187,7 @@ def run_probe(
                 works=works,
                 sample=sample,
                 is_held_out=is_held_out,
+                count_overlap=count_overlap,
             )
         )
     return _report(probe_id, question.question_id, mode, results, seeds)
@@ -235,6 +249,7 @@ def _measure(
     works: dict[str, Work | None],
     sample: int,
     is_held_out: Callable[[Identifiers], bool],
+    count_overlap: bool,
 ) -> ProbeQueryResult:
     """Measure one registered query. A source failure is recorded and claims no recall."""
     keys: dict[str, str | None] = {}
@@ -309,6 +324,16 @@ def _measure(
         except SourceError as exc:
             sample_note = redact(f"{type(exc).__name__}: {exc}", project.settings.mailto)
 
+    on_arxiv: int | None = None
+    overlap_note: str | None = None
+    if count_overlap and spec.source == "openalex" and isinstance(prober, OverlapCounter):
+        try:
+            _require_requests(project)
+            on_arxiv = prober.count_on_arxiv(
+                spec, archive=_archiver(project, probe_id, query_id, "overlap")
+            )
+        except SourceError as exc:
+            overlap_note = redact(f"{type(exc).__name__}: {exc}", project.settings.mailto)
     payload = ProbeMeasured(
         probe_id=probe_id,
         query_id=query_id,
@@ -323,6 +348,7 @@ def _measure(
         suggestions=suggestions,
         sample_titles=titles,
         sample_kind=sample_kind,
+        openalex_on_arxiv=on_arxiv,
     )
     with project.writing():
         project.record(
@@ -349,6 +375,8 @@ def _measure(
         sample_titles=titles,
         sample_kind=sample_kind,
         sample_note=sample_note,
+        openalex_on_arxiv=on_arxiv,
+        overlap_note=overlap_note,
         reason=None,
     )
 
@@ -384,7 +412,10 @@ def _suggestions(
 
 
 def _archiver(
-    project: Project, probe_id: str, query_id: str, role: Literal["count", "match", "sample"]
+    project: Project,
+    probe_id: str,
+    query_id: str,
+    role: Literal["count", "match", "sample", "overlap"],
 ) -> PageSink:
     """Archive each raw response as it arrives, before the probe measures it (R-03)."""
 
@@ -470,6 +501,9 @@ def _report(
         untestable_by_source=untestable,
         pooled_recall=pooled,
         untestable_pooled=untestable_pooled,
+        overlap_note=(
+            OVERLAP_NOTE if any(row.openalex_on_arxiv is not None for row in results) else None
+        ),
         threshold=threshold,
         meets_threshold=pooled is not None and pooled >= threshold,
     )

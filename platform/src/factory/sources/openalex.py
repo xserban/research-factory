@@ -51,6 +51,7 @@ _PAGE_SIZE = 200  # the documented maximum
 _PROBE_BATCH = 50  # ids per probe request: one page, no cursor to follow
 _SAMPLE_SEED = 20261107  # fixed, so a repeated probe draws the same sample
 _SAMPLE_MAX = _PAGE_SIZE  # a sample is one page
+_ARXIV_SOURCE = "S4306400194"  # OpenAlex's source id for arXiv
 
 # OpenAlex `type` -> our vocabulary. Unmapped types become OTHER rather than guessing.
 _TYPES: dict[str, WorkType] = {
@@ -503,6 +504,23 @@ class OpenAlexSource:
                 )
             )
         return "random", records
+
+    def count_on_arxiv(self, spec: QuerySpec, *, archive: PageSink) -> int | None:
+        """The total of `spec`'s results hosted on arXiv: the filter plus the arXiv source id.
+
+        An estimate of the overlap with an arXiv search of the same topic, not a dedup.
+        """
+        self._require_known_kind(spec)
+        meta, _ = self._probe_get(
+            {
+                "filter": f"{self._filter_expression(spec)},locations.source.id:{_ARXIV_SOURCE}",
+                "per-page": 1,
+            },
+            ordinal=0,
+            archive=archive,
+        )
+        count = meta.get("count")
+        return count if isinstance(count, int) else None
 
     def _require_known_kind(self, spec: QuerySpec) -> None:
         if spec.kind not in self.kinds:

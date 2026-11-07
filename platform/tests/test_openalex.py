@@ -573,3 +573,19 @@ def test_sample_is_seeded_random_over_the_query_filter() -> None:
         "title_and_abstract.search:vessel,from_created_date:2024-01-01"
     )
     assert request.url.params["per-page"] == "5"
+
+
+def test_count_on_arxiv_adds_the_arxiv_source_to_the_filter() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, text=page([], 646, None))
+
+    total = make_source(handler).count_on_arxiv(keyword("vessel"), archive=_archive)
+
+    assert total == 646
+    assert seen[0].url.params["filter"] == (
+        "title_and_abstract.search:vessel,locations.source.id:S4306400194"
+    )
+    assert seen[0].url.params["per-page"] == "1"

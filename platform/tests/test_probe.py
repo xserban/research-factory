@@ -719,3 +719,53 @@ def test_probe_refuses_a_bad_sample_size_and_writes_nothing(
             sample=sample,
         )
     assert len(_events(project)) == before
+
+
+# --- Overlap between OpenAlex and arXiv ---
+
+
+def test_probe_counts_openalex_hits_on_arxiv_when_both_sources_are_measured(
+    settings: Any,
+    clock: Any,
+    agent: Actor,
+    mock_sources: SourcesFor,
+    http_log: list[httpx.Request],
+) -> None:
+    project = _exploratory(settings, clock)
+    _question(project, agent)
+    _positives(project, agent, mock_sources, 2)
+    sources = mock_sources(openalex=[_item(1), _item(2)], openalex_count=7)
+    http_log.clear()
+    arxiv_spec = QuerySpec(source="arxiv", kind=QueryKind.KEYWORD, text="all:attention")
+
+    report = run_probe(project, agent, [_probe_spec(), arxiv_spec], sources=sources, sample=0)
+
+    openalex_query, arxiv_query = report.queries
+    assert openalex_query.openalex_on_arxiv == 7
+    assert arxiv_query.openalex_on_arxiv is None
+    assert report.overlap_note is not None
+    assert "not a deduplication" in report.overlap_note
+    filters = [r.url.params.get("filter", "") for r in http_log]
+    assert sum("locations.source.id:S4306400194" in f for f in filters) == 1
+    measured = [e for e in _events(project) if e.type == "probe.measured"]
+    assert [e.payload.get("openalex_on_arxiv") for e in measured[-2:]] == [7, None]
+
+
+def test_probe_without_arxiv_makes_no_overlap_request(
+    settings: Any,
+    clock: Any,
+    agent: Actor,
+    mock_sources: SourcesFor,
+    http_log: list[httpx.Request],
+) -> None:
+    project = _exploratory(settings, clock)
+    _question(project, agent)
+    _positives(project, agent, mock_sources, 1)
+    sources = mock_sources(openalex=[_item(1)])
+    http_log.clear()
+
+    report = run_probe(project, agent, [_probe_spec()], sources=sources, sample=0)
+
+    assert report.queries[0].openalex_on_arxiv is None
+    assert report.overlap_note is None
+    assert not any("locations.source.id" in r.url.params.get("filter", "") for r in http_log)

@@ -40,7 +40,7 @@ class ProbePageArchived(StrictModel):
     url: str
     fetched_at: AwareDatetime
     raw_blob: str = Field(pattern=BLOB_REF_RE)
-    role: Literal["count", "match", "sample"]
+    role: Literal["count", "match", "sample", "overlap"]
 
 
 class ProbeMeasured(StrictModel):
@@ -54,6 +54,10 @@ class ProbeMeasured(StrictModel):
     `sample_kind` says how it was drawn (`random`, or `top` for the first page by relevance). A
     sample is never a corpus record and holds no held-out seed's work. Both default to empty, so
     events written before samples fold unchanged.
+
+    `openalex_on_arxiv` is, for an OpenAlex query measured in a probe that also measured arXiv,
+    the query's total restricted to records hosted on arXiv: an estimate of the overlap between
+    the two sources, not a dedup.
     """
 
     probe_id: str = Field(pattern=PROBE_ID_RE)
@@ -69,6 +73,7 @@ class ProbeMeasured(StrictModel):
     suggestions: tuple[TermSuggestion, ...]
     sample_titles: tuple[str, ...] = ()
     sample_kind: Literal["random", "top"] | None = None
+    openalex_on_arxiv: int | None = Field(default=None, ge=0)
 
 
 class ProbeFailed(StrictModel):
