@@ -17,7 +17,7 @@ from factory.errors import FactoryError
 from factory.model.notices import NoticeKind
 from factory.model.search import QueryKind, QuerySpec, RunStatus
 from factory.model.work import Identifiers, Work
-from factory.model.work_ids import arxiv_id_from_doi, normalize_arxiv
+from factory.model.work_ids import arxiv_id_from_doi, normalize_arxiv, normalize_doi
 
 _RESULT_STATUSES = frozenset({RunStatus.COMPLETE, RunStatus.PARTIAL, RunStatus.FAILED})
 
@@ -167,7 +167,10 @@ def probe_key(source: str, work: Work) -> str | None:
     """The identity a probe matches a work by, in the source's own namespace.
 
     For arXiv this is the normalised id, bridged from a DataCite DOI when the record carries only
-    that. For OpenAlex it is the work id. Other sources have no probe key, so None.
+    that. For OpenAlex it is the work id; a work resolved elsewhere has none, so it falls back to
+    `doi:<normalised doi>`, the record's DOI or else the DataCite DOI of its arXiv id (which
+    OpenAlex indexes). A DOI that would break OpenAlex's filter syntax (`,` or `|`) gives no key.
+    Other sources have no probe key, so None.
     """
     if source == "arxiv":
         if work.identifiers.arxiv:
@@ -176,7 +179,16 @@ def probe_key(source: str, work: Work) -> str | None:
             return arxiv_id_from_doi(work.identifiers.doi)
         return None
     if source == "openalex":
-        return work.identifiers.openalex or None
+        if work.identifiers.openalex:
+            return work.identifiers.openalex
+        doi: str | None = None
+        if work.identifiers.doi:
+            doi = normalize_doi(work.identifiers.doi)
+        elif work.identifiers.arxiv:
+            doi = f"10.48550/arxiv.{normalize_arxiv(work.identifiers.arxiv)}"
+        if doi is None or "," in doi or "|" in doi:
+            return None
+        return f"doi:{doi}"
     return None
 
 

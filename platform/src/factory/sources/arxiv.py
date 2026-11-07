@@ -384,14 +384,15 @@ class ArxivSource:
         return entries < self._page_size
 
     def count(self, spec: QuerySpec, *, archive: PageSink) -> int | None:
-        """arXiv's own total for a keyword query, from one request that carries no records.
+        """arXiv's own total for a keyword query, from one request that carries one record.
 
-        `max_results=0` asks only for the total, so probing a query that matches 69,000 records
-        costs one small response rather than a page of them.
+        `max_results=1` costs one small response rather than a page, even for a query matching
+        69,000 records. `max_results=0` would carry none, but the API answers it with a 500
+        (observed 2026-11-07), so it is not used.
         """
         self._require_keyword(spec)
         _, reported, _ = self._probe_get(
-            {"search_query": spec.text, "max_results": 0, "start": 0},
+            {"search_query": spec.text, "max_results": 1, "start": 0},
             ordinal=0,
             archive=archive,
         )

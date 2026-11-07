@@ -464,7 +464,7 @@ class TestProbes:
         total = make_source(handler).count(keyword("all:test"), archive=archive)
         assert total == 42
         assert len(seen) == 1
-        assert seen[0].url.params["max_results"] == "0"
+        assert seen[0].url.params["max_results"] == "1"
         assert seen[0].url.params["search_query"] == "all:test"
         assert [p.body for p in archived] == [COUNT_ONLY]
 

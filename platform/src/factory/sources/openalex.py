@@ -394,26 +394,38 @@ class OpenAlexSource:
     def matching(self, ids: Sequence[str], spec: QuerySpec, *, archive: PageSink) -> set[str]:
         """Which of `ids` `spec` retrieves, measured in batches of at most 50 ids.
 
-        Each batch is `openalex:W1|W2` intersected with the query's own filter expression, so one
+        An id is a work id (`W1`) or a DOI key (`doi:10.x/y`, see `probe_key`). Each batch is
+        `openalex:W1|W2` or `doi:a|b`, intersected with the query's own filter expression, so one
         response answers for up to 50 seeds. Ids are compared case-insensitively and returned
-        in the form given.
+        in the form given. A DOI that OpenAlex does not hold as a work's DOI reads as not
+        retrieved, as an untestable seed does.
         """
         self._require_known_kind(spec)
-        given = {i.strip().casefold(): i for i in ids}
+        works = [i for i in ids if not i.strip().casefold().startswith("doi:")]
+        dois = [i for i in ids if i.strip().casefold().startswith("doi:")]
         found: set[str] = set()
-        for start in range(0, len(ids), _PROBE_BATCH):
-            batch = ids[start : start + _PROBE_BATCH]
-            # The same expression the count and the run send, so recall is measured against
-            # the query that will actually be searched.
-            params: dict[str, str | int] = {
-                "filter": f"openalex:{'|'.join(batch)},{self._filter_expression(spec)}",
-                "per-page": _PROBE_BATCH,
-            }
-            _, results = self._probe_get(params, ordinal=start // _PROBE_BATCH, archive=archive)
-            for item in results:
-                key = (_strip_url(item.get("id"), "https://openalex.org/") or "").casefold()
-                if key in given:
-                    found.add(given[key])
+        ordinal = 0
+        for field, group in (("openalex", works), ("doi", dois)):
+            given = {i.strip().casefold(): i for i in group}
+            for start in range(0, len(group), _PROBE_BATCH):
+                batch = group[start : start + _PROBE_BATCH]
+                values = [i.strip()[4:] if field == "doi" else i.strip() for i in batch]
+                # The same expression the count and the run send, so recall is measured against
+                # the query that will actually be searched.
+                params: dict[str, str | int] = {
+                    "filter": f"{field}:{'|'.join(values)},{self._filter_expression(spec)}",
+                    "per-page": _PROBE_BATCH,
+                }
+                _, results = self._probe_get(params, ordinal=ordinal, archive=archive)
+                ordinal += 1
+                for item in results:
+                    if field == "doi":
+                        doi = _strip_url(item.get("doi"), "https://doi.org/")
+                        key = f"doi:{normalize_doi(doi)}" if doi else ""
+                    else:
+                        key = (_strip_url(item.get("id"), "https://openalex.org/") or "").casefold()
+                    if key.casefold() in given:
+                        found.add(given[key.casefold()])
         return found
 
     def _require_known_kind(self, spec: QuerySpec) -> None:
