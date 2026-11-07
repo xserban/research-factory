@@ -36,14 +36,19 @@ one batch at a time. Each judgement is recorded with a verbatim quote so that it
      it to avoid a decision that the text supports.
 4. For every verdict, give `quote`: a span copied character for character from the title or the
    abstract that supports the verdict. The platform verifies it against the stored text.
-5. Call `screen_record` with the `task_id` and the items, each
-   `{work_id, verdict, criterion, quote, rationale}`. `criterion` and `rationale` are required
-   as stated above and may be omitted otherwise.
-6. Read the reply. Invalid items are reported by index and the valid ones are written. For a
+5. Give every decision a `score`: an integer from 1 to 10 for how relevant the record is
+   (10 = clearly meets every inclusion criterion; 1 = clearly irrelevant). Judge the score on its
+   own, independent of the wording of the verdict: a borderline `unsure` may score 5 or 7, and an
+   `exclude` may score 3 or 6. The score never decides the verdict, and the platform never
+   excludes a record by it alone.
+6. Call `screen_record` with the `task_id` and the items, each
+   `{work_id, verdict, criterion, quote, rationale, score}`. `criterion` and `rationale` are
+   required as stated above and may be omitted otherwise.
+7. Read the reply. Invalid items are reported by index and the valid ones are written. For a
    rejected item, re-read the title and abstract, find the span that supports the verdict and
    resubmit the item. Never retry by paraphrasing or editing the quote to pass the check; if no
    span supports the verdict, change the verdict (`cannot-assess` or `unsure`).
-7. Repeat from step 1. Stop when `batch` is null. Screen every served batch even if `blocked`
+8. Repeat from step 1. Stop when `batch` is null. Screen every served batch even if `blocked`
    is non-empty (calibration batches arrive with the gate reason).
 8. If `batch` is null and `blocked` is non-empty, report the reasons verbatim to the
    researcher. If `batch` is null, `blocked` is empty and `remaining` > 0, other sessions hold
@@ -77,7 +82,9 @@ independence rules apply as stated. `screen_record` takes the stage from the bat
 6. The verdict rules are those of title and abstract: when in doubt include; `exclude` names an
    `EX` criterion and a `rationale`; `cannot-assess` names the criterion that the text cannot
    settle; `unsure` needs a `rationale`.
-7. Call `screen_record` with items `{work_id, verdict, criterion, quote, rationale, anchor}`.
+7. Call `screen_record` with items `{work_id, verdict, criterion, quote, rationale, anchor,
+   score}`; `score` is an integer 1 to 10 for relevance, 10 = clearly meets every inclusion
+   criterion, 1 = clearly irrelevant, judged apart from the verdict.
    For a rejected item, re-read the cited anchor and resubmit with a span that occurs in it, or
    cite the anchor that does contain the support; never edit a quote to pass the check. If no
    anchor supports the verdict, change it to `cannot-assess` or `unsure`.

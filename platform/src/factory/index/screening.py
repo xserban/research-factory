@@ -140,6 +140,7 @@ def screening_tables(metadata: MetaData) -> ScreeningTables:
         Column("superseded_by", String),
         Column("anchor", String),
         Column("conversion_id", String),
+        Column("score", Integer),
         Column("event_id", String, nullable=False),
     )
     calibration_items = Table(
@@ -442,6 +443,7 @@ def _decision(t: ScreeningTables) -> Handler:
                 superseded_by=None,
                 anchor=payload.anchor,
                 conversion_id=payload.conversion_id,
+                score=payload.score,
                 event_id=event.id,
             )
             .on_conflict_do_nothing(index_elements=["decision_id"])

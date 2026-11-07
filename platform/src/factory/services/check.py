@@ -153,6 +153,7 @@ from factory.services.protocol_rules import (
     snowball_plan_gaps,
     watch_plan_gaps,
 )
+from factory.services.ranked_queue import ranking_positions
 from factory.services.reference_resolve import lost_human_decisions
 from factory.services.references import current_extraction, included_works
 from factory.services.region_check import AGENT_VIEW, region_findings
@@ -539,6 +540,7 @@ def _run_rules(project: Project) -> list[_Hit]:
         _evidence(project),
         _references(project),
         _snowball(project, outcomes),
+        _stop_unranked(project),
         _inbox(project, outcomes),
         _grey(project),
         _imports(project),
@@ -2682,6 +2684,26 @@ def _gate_policies(project: Project) -> list[_Hit]:
                 )
             )
     return hits
+
+
+def _stop_unranked(project: Project) -> list[_Hit]:
+    """`stop-rule-unranked`: the plan declares a stopping rule (excludes or score) but no ranking
+    exists, so the rule cannot act and every record is screened."""
+    protocol = current_protocol(project)
+    if protocol is None:
+        return []
+    plan = protocol.spec.screening
+    if plan.stop_after_consecutive_excludes is None and plan.stop_below_score is None:
+        return []
+    if ranking_positions(project):
+        return []
+    return [
+        _Hit(
+            "stop-rule-unranked",
+            (protocol.protocol_id,),
+            "the protocol declares a screening stopping rule but no ranking has been computed",
+        )
+    ]
 
 
 def _snowball(project: Project, outcomes: dict[str, Outcome]) -> list[_Hit]:

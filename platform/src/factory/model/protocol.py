@@ -208,6 +208,12 @@ class ScreeningPlan(StrictModel):
     """Title/abstract only, and only once a ranking exists (slice 8, IDEA-42): serving stops when
     the records of the ranking, taken in ranked order, end in this many consecutive exclusions by
     pass A. None screens everything. Left out of every dump, so of every hash, while None."""
+    stop_below_score: int | None = Field(default=None, ge=1, le=10)
+    """Title/abstract only, with a ranking: serving stops when the last `stop_score_run` scored
+    pass-A decisions, in ranked order, are all below this score (an unscored decision breaks the
+    run). Set together with `stop_score_run`; left out of every dump while None."""
+    stop_score_run: int | None = Field(default=None, ge=1)
+    """The run length of the score-based stop; see `stop_below_score`."""
 
     @model_serializer(mode="wrap")
     def _omit_unset_options(self, handler: SerializerFunctionWrapHandler) -> dict[str, object]:
@@ -216,7 +222,16 @@ class ScreeningPlan(StrictModel):
             data.pop("calibrate_humans", None)
         if data.get("stop_after_consecutive_excludes") is None:
             data.pop("stop_after_consecutive_excludes", None)
+        for key in ("stop_below_score", "stop_score_run"):
+            if data.get(key) is None:
+                data.pop(key, None)
         return data
+
+    @model_validator(mode="after")
+    def _score_stop_is_whole(self) -> Self:
+        if (self.stop_below_score is None) != (self.stop_score_run is None):
+            raise ValueError("stop_below_score and stop_score_run are set together or not at all")
+        return self
 
 
 class ExtractionSchema(StrictModel):

@@ -118,6 +118,7 @@ def decide(
         protocol_id=protocol_id,
         task_id="tsk_test",
         supersedes=supersedes,
+        score=score,
     )
     blob = project.blobs.put_json({"work_id": work_id, "verdict": verdict})
     project.record(
@@ -650,6 +651,7 @@ def _decide(
     protocol_id: str,
     *,
     supersedes: str | None = None,
+    score: int | None = None,
 ) -> str:
     """Write one decision event directly (screen_record arrives in a later task)."""
     decision_id = f"dec_{project.ids.ulid()}"

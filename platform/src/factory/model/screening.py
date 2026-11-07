@@ -144,6 +144,16 @@ class _ItemFields(StrictModel):
     criterion: str | None = Field(default=None, pattern=CRITERION_ID_RE)
     rationale: str = ""
     anchor: Anchor = None
+    score: int | None = Field(default=None, ge=1, le=10)
+    """Relevance score 1..10 an agent gives beside its verdict (10 = clearly meets every
+    inclusion, 1 = clearly irrelevant); None when not given and then left out of every dump."""
+
+    @model_serializer(mode="wrap")
+    def _omit_unset_score(self, handler: SerializerFunctionWrapHandler) -> dict[str, object]:
+        data: dict[str, object] = handler(self)
+        if data.get("score") is None:
+            data.pop("score", None)
+        return data
 
     @model_validator(mode="after")
     def _verdict_has_its_fields(self) -> Self:
@@ -225,6 +235,16 @@ class DecisionRecorded(StrictModel):
     supersedes: str | None
     anchor: Anchor = None
     conversion_id: str | None = Field(default=None, pattern=CONVERSION_ID_RE)
+    score: int | None = Field(default=None, ge=1, le=10)
+    """The relevance score the screener gave (1..10); absent on older decisions and on a decision
+    that gave none, and left out of the dump (so of the hash) then."""
+
+    @model_serializer(mode="wrap")
+    def _omit_unset_score(self, handler: SerializerFunctionWrapHandler) -> dict[str, object]:
+        data: dict[str, object] = handler(self)
+        if data.get("score") is None:
+            data.pop("score", None)
+        return data
 
     @model_validator(mode="after")
     def _anchor_matches_stage(self) -> Self:

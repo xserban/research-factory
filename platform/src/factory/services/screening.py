@@ -62,7 +62,7 @@ from factory.index.screening import join_refusal
 from factory.model.base import StrictModel
 from factory.model.chase import SampleExtended
 from factory.model.project import RigorMode
-from factory.model.protocol import ProtocolStatus, ScreeningStage
+from factory.model.protocol import ProtocolStatus, ScreeningPlan, ScreeningStage
 from factory.model.screening import (
     Channel,
     DecisionRecorded,
@@ -110,6 +110,7 @@ from factory.services.ranked_queue import (
     rank_key,
     ranked_sequence,
     ranking_positions,
+    score_status,
     stop_status,
     unreached,
 )
@@ -516,9 +517,7 @@ def screen_next(
                 extension, added = drawn
                 events.append(extension)
                 row = (row[0], tuple(sorted(set(row[1] or ()) | set(added))))
-        stop = _stop_context(
-            project, stage, protocol.spec.screening.stop_after_consecutive_excludes
-        )
+        stop = _stop_context(project, stage, protocol.spec.screening)
         withheld = set() if stop is None or not stop.status.stopped else stop.withheld(label)
         queued, remaining = _enqueue(
             project,
@@ -555,6 +554,12 @@ def screen_next(
 
 
 def _stop_reason(stopped: StopStatus) -> str:
+    if stopped.below_score is not None:
+        return (
+            f"{stopped.rule}: the last {stopped.run} ranked decisions all scored below "
+            f"{stopped.below_score} (rule: {stopped.n}); {stopped.not_screened} ranked records "
+            "are not screened"
+        )
     return (
         f"{stopped.rule}: the last {stopped.run} ranked records were all excluded (rule: "
         f"{stopped.n}); {stopped.not_screened} ranked records are not screened"
@@ -566,11 +571,17 @@ class _StopContext(StrictModel):
     the latest ranking, `sequence` its works in the pass-A queue, `verdicts` the primary's screening
     verdicts and `served` the works of served (claimed) batches per pass."""
 
-    status: StopStatus
+    statuses: list[StopStatus]
     positions: dict[str, int]
     sequence: list[str]
     verdicts: dict[str, Verdict]
     served: dict[str, set[str]]
+
+    @property
+    def status(self) -> StopStatus:
+        """The rule that has stopped serving (the excludes rule first when both have), else the
+        first rule declared."""
+        return next((s for s in self.statuses if s.stopped), self.statuses[0])
 
     def withheld(self, label: PassLabel) -> set[str]:
         """The ranked works pass `label` may not be served now that the rule has stopped serving:
@@ -599,9 +610,23 @@ def _primary_verdicts(project: Project, stage: ScreeningStage) -> dict[str, Verd
     }
 
 
-def _stop_context(project: Project, stage: ScreeningStage, n: int | None) -> _StopContext | None:
+def _primary_scores(project: Project, stage: ScreeningStage) -> dict[str, int | None]:
+    """The score of the live, non-stale screening decision of pass A per work (None: no score)."""
+    stale = stale_screening_decisions(project, stage=stage)
+    return {
+        d.work_id: d.score
+        for d in live_decisions(project, PassLabel.A, stage=stage)
+        if d.phase is ScreeningPhase.SCREENING and d.decision_id not in stale
+    }
+
+
+def _stop_context(
+    project: Project, stage: ScreeningStage, plan: ScreeningPlan
+) -> _StopContext | None:
     """None unless `stage` is title/abstract, the plan declares a rule and a ranking exists."""
-    if stage is not TA or n is None:
+    n = plan.stop_after_consecutive_excludes
+    below, run = plan.stop_below_score, plan.stop_score_run
+    if stage is not TA or (n is None and below is None):
         return None
     positions = ranking_positions(project)
     if not positions:
@@ -610,8 +635,14 @@ def _stop_context(project: Project, stage: ScreeningStage, n: int | None) -> _St
     sequence = ranked_sequence(positions, queue)
     verdicts = _primary_verdicts(project, TA)
     served = {label.value: _served_works(project, label, TA) for label in PassLabel}
+    statuses: list[StopStatus] = []
+    if n is not None:
+        statuses.append(stop_status(sequence, verdicts, served[PassLabel.A.value], n))
+    if below is not None and run is not None:
+        scores = _primary_scores(project, TA)
+        statuses.append(score_status(sequence, scores, served[PassLabel.A.value], below, run))
     return _StopContext(
-        status=stop_status(sequence, verdicts, served[PassLabel.A.value], n),
+        statuses=statuses,
         positions=positions,
         sequence=sequence,
         verdicts=verdicts,
@@ -619,25 +650,35 @@ def _stop_context(project: Project, stage: ScreeningStage, n: int | None) -> _St
     )
 
 
+def screening_stops(project: Project, stage: ScreeningStage = TA) -> list[StopStatus]:
+    """Every stopping rule the plan declares, evaluated as the events stand; empty while the stage
+    is not title/abstract, no protocol declares a rule or no ranking exists. Used by the PRISMA
+    flow and the methods report; nothing is written."""
+    protocol = current_protocol(project)
+    if protocol is None:
+        return []
+    context = _stop_context(project, stage, protocol.spec.screening)
+    return [] if context is None else context.statuses
+
+
 def screening_stop(project: Project, stage: ScreeningStage = TA) -> StopStatus | None:
-    """The stopping rule of pass A as the events stand, or None while the stage is not
-    title/abstract, no protocol declares a rule or no ranking exists. Used by the PRISMA flow and
-    the methods report; nothing is written."""
+    """The stopping rule of pass A that has stopped serving (else the first declared), or None
+    while the stage is not title/abstract, no protocol declares a rule or no ranking exists."""
     protocol = current_protocol(project)
     if protocol is None:
         return None
-    context = _stop_context(project, stage, protocol.spec.screening.stop_after_consecutive_excludes)
+    context = _stop_context(project, stage, protocol.spec.screening)
     return None if context is None else context.status
 
 
 def stop_unscreened(project: Project) -> set[str]:
-    """The ranked works that the stopping rule has left unscreened (no pass-A decision, no batch
-    served); empty while the rule has not stopped serving."""
+    """The ranked works that the stopping rules have left unscreened (no pass-A decision, no batch
+    served); empty while neither rule has stopped serving."""
     protocol = current_protocol(project)
     if protocol is None:
         return set()
-    context = _stop_context(project, TA, protocol.spec.screening.stop_after_consecutive_excludes)
-    if context is None or not context.status.stopped:
+    context = _stop_context(project, TA, protocol.spec.screening)
+    if context is None or not any(s.stopped for s in context.statuses):
         return set()
     return context.withheld(PassLabel.A)
 
@@ -733,7 +774,7 @@ def live_decisions(
     project.index.sync()
     sql = (
         "SELECT decision_id, work_id, pass_label, phase, stage, verdict, criterion, quote, "
-        "rationale, protocol_id, task_id, supersedes, anchor, conversion_id "
+        "rationale, protocol_id, task_id, supersedes, anchor, conversion_id, score "
         "FROM decisions WHERE superseded_by IS NULL"
     )
     params: dict[str, str] = {}
@@ -877,6 +918,7 @@ def screen_record(
                 supersedes=None if prior is None else prior.decision_id,
                 anchor=item.anchor if stage is FT else None,
                 conversion_id=_pinned_conversion(records[item.work_id]) if stage is FT else None,
+                score=item.score,
             )
             events.append(
                 project.events.make(

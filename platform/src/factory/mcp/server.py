@@ -843,8 +843,9 @@ def build_server(
         reported_usage: dict[str, JsonValue] | None = None,
     ) -> dict[str, JsonValue]:
         """Record verdicts for a held batch. Each item is {work_id, verdict, criterion, quote,
-        rationale}, plus `anchor` for a full-text batch (the stage is the batch's); an invalid item
-        is reported by index and the valid ones are written. `reported_usage` may state
+        rationale, score}, `score` being the relevance, an integer 1 to 10 (10 = clearly meets
+        every inclusion), plus `anchor` for a full-text batch (the stage is the batch's); an
+        invalid item is reported by index and the valid ones are written. `reported_usage` may state
         `input_tokens`, `output_tokens` and `cost_usd`: it goes on the batch's completion, is shown
         as reported and is never enforced."""
 

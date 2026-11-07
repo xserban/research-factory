@@ -162,10 +162,13 @@ def _protocol_lines(project: Project) -> list[str]:
         lines.append(f"Limit {limit.field}: {limit.value}.")
     plan = spec.screening
     stop = plan.stop_after_consecutive_excludes
+    below, run = plan.stop_below_score, plan.stop_score_run
+    score_stop = "" if below is None else f" Score stop: {run} decisions below {below}."
     lines.append(
         f"Screening: {plan.passes} pass(es); calibration {plan.calibration_size}; "
         f"audit {plan.audit_fraction} (minimum {plan.audit_minimum}); stop rule "
         + ("none." if stop is None else f"{stop} consecutive exclusions.")
+        + score_stop
     )
     snow = spec.snowball_plan
     if snow is not None:

@@ -54,8 +54,8 @@ from factory.services.dedup import canonical_works
 from factory.services.fulltext_screening import fulltext_queue
 from factory.services.fulltext_status import fulltext_status
 from factory.services.protocol import current_protocol, registered_deviation, registered_import
-from factory.services.ranked_queue import stop_rule_text
-from factory.services.screening import screening_stop, stop_unscreened
+from factory.services.ranked_queue import stop_rules_text
+from factory.services.screening import screening_stops, stop_unscreened
 from factory.services.search import RunSummary
 from factory.services.snowball import query_yields, recorded_rounds
 
@@ -202,8 +202,8 @@ class PrismaFlow(StrictModel):
     provisional: bool
     protocol_id: str | None
     stop_rule: str | None = None
-    """The title/abstract stopping rule in force, in words (slice 8); None, and left out of the
-    dump with `not_screened_stop`, while the protocol declares none or no ranking exists."""
+    """The title/abstract stopping rules in force, in words, joined (slice 8); None, and left out of
+    the dump with `not_screened_stop`, while the protocol declares none or no ranking exists."""
     not_screened_stop: int = 0
     """Pending works that were not screened because the stopping rule stopped serving: a subset of
     `pending`, computed. They do not make the flow provisional."""
@@ -382,7 +382,7 @@ def prisma_flow(project: Project) -> PrismaFlow:
 
     protocol = current_protocol(project)
     boxes = full_text_boxes(project)
-    stop = screening_stop(project)
+    stops = screening_stops(project)
     return PrismaFlow(
         identified_databases=databases,
         identified_other=other,
@@ -396,7 +396,7 @@ def prisma_flow(project: Project) -> PrismaFlow:
         included_in_review=boxes.included if boxes.stage_run else None,
         provisional=pending - not_screened > 0,
         protocol_id=None if protocol is None else protocol.protocol_id,
-        stop_rule=None if stop is None else stop_rule_text(stop.n),
+        stop_rule=stop_rules_text(stops) if stops else None,
         not_screened_stop=not_screened,
     )
 

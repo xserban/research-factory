@@ -14,6 +14,8 @@ from factory.services.protocol import amend_protocol, current_protocol
 from factory.services.ranked_queue import (
     rank_key,
     ranked_sequence,
+    score_status,
+    stop_rules_text,
     stop_status,
     unreached,
     walk,
@@ -184,3 +186,93 @@ def test_without_a_stop_rule_nothing_is_reported(
     assert screening_stop(project) is None
     flow = prisma_flow(project)
     assert flow.stop_rule is None and "stop_rule" not in flow.model_dump(mode="json")
+
+
+def test_score_rule_counts_trailing_scored_decisions_below_the_threshold() -> None:
+    sequence = ["a", "b", "c", "d", "e"]
+    scores: dict[str, int | None] = {"a": 9, "b": 2, "c": 3}
+    status = score_status(sequence, scores, set(), 4, 2)
+    assert status.stopped and status.run == 2 and status.not_screened == 2
+    assert status.rule == "stop_below_score" and status.below_score == 4
+    # A score at the threshold breaks the run; so does a decision without a score.
+    assert not score_status(sequence, {"a": 1, "b": 4, "c": 3}, set(), 4, 2).stopped
+    assert not score_status(sequence, {"a": 1, "b": None, "c": 3}, set(), 4, 2).stopped
+    # No frontier inside the ranking: nothing stops. A served batch is not unscreened.
+    done = {"a": 1, "b": 1, "c": 1, "d": 1, "e": 1}
+    assert not score_status(sequence, done, set(), 4, 2).stopped
+    assert score_status(sequence, scores, {"d"}, 4, 2).not_screened == 1
+
+
+def test_rules_text_states_each_declared_rule() -> None:
+    both = [
+        stop_status(["a"], {}, set(), 5),
+        score_status(["a"], {}, set(), 3, 4),
+    ]
+    text = stop_rules_text(both)
+    assert "5 consecutive exclusions" in text and "last 4 scored decisions" in text
+
+
+def test_a_score_stop_is_whole_and_leaves_hashes_alone_while_unset() -> None:
+    plain = _spec()
+    assert "stop_below_score" not in plain.model_dump(mode="json")["screening"]
+    assert "stop_score_run" not in plain.model_dump(mode="json")["screening"]
+    ruled = _spec(screening=_screening(stop_below_score=4, stop_score_run=10))
+    assert protocol_version(ruled) != protocol_version(plain)
+    with pytest.raises(ValidationError):
+        _screening(stop_below_score=4)
+    with pytest.raises(ValidationError):
+        _screening(stop_score_run=3)
+    with pytest.raises(ValidationError):
+        _screening(stop_below_score=11, stop_score_run=3)
+    with pytest.raises(ValidationError):
+        _screening(stop_below_score=4, stop_score_run=0)
+
+
+def test_systematic_refuses_a_score_stop_unless_rapid_review() -> None:
+    plan = _screening(kappa_enforced=True, dual_sample=1.0, stop_below_score=4, stop_score_run=10)
+    systematic = _spec(screening=plan, method_profile=MethodProfile.SYSTEMATIC_REVIEW)
+    assert "screening.stop_below_score" in _fields(_check(systematic, RigorMode.SYSTEMATIC).errors)
+    rapid = _spec(screening=plan, method_profile=MethodProfile.RAPID_REVIEW)
+    assert _check(rapid, RigorMode.SYSTEMATIC).errors == []
+
+
+def test_score_stop_withholds_unscreened_works_and_is_stored(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    from factory.services.screening import live_decisions, screening_stops
+    from tests.screening_helpers import _decide
+
+    protocol_id, ordered = _ranked_world(project, agent, human, mock_sources, None)
+    old = current_protocol(project)
+    assert old is not None
+    plan = old.spec.screening.model_copy(update={"stop_below_score": 4, "stop_score_run": 2})
+    amend_protocol(
+        project,
+        agent,
+        old.spec.model_copy(update={"screening": plan}),
+        reason="score stop",
+        semantic=False,
+        effects={},
+    )
+    current = current_protocol(project)
+    assert current is not None
+    protocol_id = current.protocol_id
+    assert len(ordered) > 3
+    for work, score in zip(ordered, [8, 2, 3], strict=False):
+        _decide(project, agent, work, "A", "screening", "exclude", "EX01", protocol_id, score=score)
+    assert [d.score for d in live_decisions(project, PassLabel.A)] == [8, 2, 3]
+    status = screening_stop(project)
+    assert status is not None and status.stopped and status.rule == "stop_below_score"
+    assert status.run == 2 and status.not_screened == len(ordered) - 3
+    assert [s.rule for s in screening_stops(project)] == ["stop_below_score"]
+    result = screen_next(project, agent, PassLabel.A)
+    assert result.batch is None and result.stopped is not None
+    assert result.stopped.rule == "stop_below_score"
+    flow = prisma_flow(project)
+    assert flow.not_screened_stop == len(ordered) - 3
+    assert flow.stop_rule is not None and "relevance score of 4" in flow.stop_rule
+
+
+def test_an_unscored_decision_breaks_the_score_run() -> None:
+    sequence = ["a", "b", "c"]
+    assert not score_status(sequence, {"a": 1, "b": None}, set(), 4, 2).stopped

@@ -96,6 +96,7 @@ SPEC = ModuleSpec(
     checks=(
         CheckRule("screening-pending", ("warning", "warning", "warning")),
         CheckRule("single-pass", (None, "warning", "error")),
+        CheckRule("stop-rule-unranked", ("warning", "warning", "warning")),
         CheckRule("calibration-missing", (None, "error", "error")),
         CheckRule("kappa-below-floor", ("warning", "warning", "warning")),
         CheckRule("audit-missing", (None, "warning", "error")),

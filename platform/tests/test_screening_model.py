@@ -247,3 +247,22 @@ def test_cell_anchor_with_trailing_newline_rejected() -> None:
     for bad in ("t2.r5.c3\n", "s1.p1\n"):
         with pytest.raises(ValidationError):
             ScreeningItem.model_validate({**item, "anchor": bad})
+
+
+def test_score_is_one_to_ten_and_absent_by_default() -> None:
+    item = ScreeningItem(work_id="rf:1", verdict=Verdict.INCLUDE, quote="q", rationale="", score=10)
+    assert item.model_dump(mode="json")["score"] == 10
+    for bad in (0, 11, -1):
+        with pytest.raises(ValidationError):
+            ScreeningItem(work_id="rf:1", verdict=Verdict.INCLUDE, quote="q", score=bad)
+    plain = ScreeningItem(work_id="rf:1", verdict=Verdict.INCLUDE, quote="q")
+    assert "score" not in plain.model_dump(mode="json")
+
+
+def test_decision_without_a_score_dumps_as_before() -> None:
+    plain = DecisionRecorded(**_decision())
+    assert plain.score is None and "score" not in plain.model_dump(mode="json")
+    scored = DecisionRecorded(**_decision(score=7))
+    assert scored.model_dump(mode="json")["score"] == 7
+    with pytest.raises(ValidationError):
+        DecisionRecorded(**_decision(score=11))

@@ -15,6 +15,13 @@ sequence. Serving has stopped exactly when the walk ended at a frontier, so the 
 unscreened works, and the run is at least N. A frontier at the end of the ranking is no stop:
 records the ranking does not cover are served in the existing order. The state is recomputed from
 the decisions, so a corrected decision that breaks the run lifts the stop.
+
+Score rule (`ScreeningPlan.stop_below_score` S with `stop_score_run` N). The same walk, over the
+same sequence and with the same frontier, but the run counts the trailing decisions whose relevance
+score is present and below S; a decision without a score, or with a score of S or more, resets it.
+Serving has stopped when the walk ended at a frontier with a run of at least N. The two rules
+share the frontier, so they withhold the same works; whichever holds first stops serving, and
+`StopStatus.rule` names it (the excludes rule when both hold).
 """
 
 from __future__ import annotations
@@ -29,6 +36,7 @@ from factory.model.screening import Verdict
 from factory.services.context import Project
 
 RULE = "stop_after_consecutive_excludes"
+SCORE_RULE = "stop_below_score"
 
 _UNRANKED = 1 << 62
 
@@ -40,6 +48,8 @@ class StopStatus(StrictModel):
 
     rule: str = RULE
     n: int = Field(ge=1)
+    below_score: int | None = Field(default=None, ge=1, le=10)
+    """The score threshold of the score rule; None for the excludes rule."""
     run: int = Field(ge=0)
     stopped: bool
     not_screened: int = Field(ge=0)
@@ -57,6 +67,23 @@ def stop_rule_text(n: int) -> str:
     return (
         f"title/abstract screening stops after {n} consecutive exclusions in ranked order "
         "(a rapid-review shortcut; ranked records not screened are reported as such)"
+    )
+
+
+def score_rule_text(below: int, n: int) -> str:
+    """The score rule in words."""
+    return (
+        f"title/abstract screening stops when the last {n} scored decisions in ranked order are "
+        f"all below a relevance score of {below} (a rapid-review shortcut; ranked records not "
+        "screened are reported as such)"
+    )
+
+
+def stop_rules_text(statuses: Sequence[StopStatus]) -> str:
+    """Every declared rule in words, joined; the PRISMA flow and the methods statement state it."""
+    return "; ".join(
+        stop_rule_text(s.n) if s.below_score is None else score_rule_text(s.below_score, s.n)
+        for s in statuses
     )
 
 
@@ -113,3 +140,31 @@ def stop_status(
     stopped = bool(result.rest) and result.run >= n
     count = len(unreached(result.rest, verdicts, served)) if stopped else 0
     return StopStatus(n=n, run=result.run, stopped=stopped, not_screened=count)
+
+
+def score_status(
+    sequence: Sequence[str],
+    scores: Mapping[str, int | None],
+    served: set[str],
+    below: int,
+    n: int,
+) -> StopStatus:
+    """The score rule over a ranked sequence: `scores` holds the live pass-A decision of each
+    decided work (None when it gave no score). The run counts the trailing decisions before the
+    frontier that are scored and below `below`; stopped when the walk ends at a frontier with a
+    run of at least `n`. Works not screened are those from the frontier on with no decision and no
+    served batch."""
+    run = 0
+    frontier: int | None = None
+    for i, work_id in enumerate(sequence):
+        if work_id not in scores:
+            frontier = i
+            break
+        score = scores[work_id]
+        run = run + 1 if score is not None and score < below else 0
+    rest = [] if frontier is None else list(sequence[frontier:])
+    stopped = bool(rest) and run >= n
+    count = len([w for w in rest if w not in scores and w not in served]) if stopped else 0
+    return StopStatus(
+        rule=SCORE_RULE, n=n, below_score=below, run=run, stopped=stopped, not_screened=count
+    )

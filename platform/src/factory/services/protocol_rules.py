@@ -483,6 +483,14 @@ def _stop_rule_errors(spec: ProtocolSpec, mode: RigorMode) -> list[ValidationIss
     full_text = spec.full_text_screening
     if full_text is not None and full_text.stop_after_consecutive_excludes is not None:
         issues.append(ValidationIssue(f"full_text_screening.{field}", STOP_RULE_STAGE))
+    if (
+        spec.screening.stop_below_score is not None
+        and mode is RigorMode.SYSTEMATIC
+        and spec.method_profile is not MethodProfile.RAPID_REVIEW
+    ):
+        issues.append(ValidationIssue("screening.stop_below_score", STOP_RULE_PROFILE))
+    if full_text is not None and full_text.stop_below_score is not None:
+        issues.append(ValidationIssue("full_text_screening.stop_below_score", STOP_RULE_STAGE))
     return issues
 
 

@@ -124,6 +124,9 @@ class DecisionView(StrictModel):
     """Full text only: the anchor the quote was verified in (None at title/abstract)."""
     conversion_id: str | None = None
     document_id: str | None = None
+    score: int | None = None
+    """The relevance score (1..10) the screener gave; None for older decisions and for a
+    decision that gave none."""
 
 
 class Disagreement(StrictModel):
@@ -755,6 +758,7 @@ def _view(project: Project, decision: DecisionRecorded) -> DecisionView:
         criterion=_bare(decision.criterion),
         quote=decision.quote,
         rationale=decision.rationale,
+        score=decision.score,
     )
 
 
