@@ -205,12 +205,38 @@ class Index:
         self._engine = _make_engine(db_path)
         self._identity = _file_identity(db_path)
         self._holding = False
+        self._snapshot = False
         self._on_exclusive = on_exclusive
 
     def sync(self) -> SyncResult:
-        """Apply new events incrementally, or rebuild when the index can't be trusted."""
+        """Apply new events incrementally, or rebuild when the index can't be trusted.
+
+        Inside `snapshot()` it applies nothing: the snapshot synced on entry and holds only the
+        shared lock, under which this process must not write.
+        """
+        if self._snapshot:
+            return SyncResult(applied=0, rebuilt=False)
         with self._locked():
             return self._sync()
+
+    @contextmanager
+    def snapshot(self) -> Iterator[None]:
+        """Sync once, then hold the shared lock across many reads (a read-only view such as the
+        dashboard), so each `connect()` inside does not queue again behind writers.
+
+        Invariant: nothing is written inside; nested `sync()` is a no-op and `exclusive()` is
+        refused. Writers wait until the block exits, so keep it short.
+        """
+        if self._holding:
+            yield
+            return
+        self.sync()
+        with self._locked(shared=True):
+            self._snapshot = True
+            try:
+                yield
+            finally:
+                self._snapshot = False
 
     @contextmanager
     def exclusive(self) -> Iterator[None]:
@@ -220,6 +246,8 @@ class Index:
         With `on_exclusive`, the outermost hold syncs first and hands it the last applied event id
         (the ID floor of a hosted project, slice 5 ruling 3).
         """
+        if self._snapshot:
+            raise RuntimeError("exclusive() inside a read-only snapshot")
         outermost = not self._holding
         with self._locked():
             if outermost and self._on_exclusive is not None:

@@ -102,7 +102,15 @@ Panel = dict[str, JsonValue]
 
 
 def dashboard_state(project: Project) -> dict[str, JsonValue]:
-    """The whole dashboard state of `project`, as JSON-ready data with held-out ids withheld."""
+    """The whole dashboard state of `project`, as JSON-ready data with held-out ids withheld.
+
+    Built inside one index snapshot, so live screeners do not make each read queue on the lock.
+    """
+    with project.index.snapshot():
+        return _dashboard_state(project)
+
+
+def _dashboard_state(project: Project) -> dict[str, JsonValue]:
     status = _guard(lambda: _status(project), {})
     state: dict[str, JsonValue] = {
         "meta": _meta(project, status),
@@ -133,7 +141,8 @@ def dashboard_state(project: Project) -> dict[str, JsonValue]:
 
 def screening_live(project: Project) -> dict[str, JsonValue]:
     """The live screening panel alone, withheld like the whole state (the light endpoint)."""
-    panel = _guard(lambda: _live_raw(project), {})
+    with project.index.snapshot():
+        panel = _guard(lambda: _live_raw(project), {})
     return cast(
         dict[str, JsonValue],
         withhold(panel, held_out_tokens(project, include_work_ids=False)),
