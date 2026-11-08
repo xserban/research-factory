@@ -90,3 +90,4 @@ merging `land-wave2` to `main` (needs the researcher's approval); running the te
 |---|---|---|
 | I1 | `services/dashboard.py`: one JSON state from the index (decisions, protocol, PRESS, probes, search and dedup, ranking, screening progress and stop status, checks, extraction, budget); development-only. `factory dashboard serve [--port]` on 127.0.0.1: page + `/api/state`, polling. Hackerman palette. | builder |
 | I2 | Progress (IDEA-44): ephemeral progress for ranking, search paging, snowball probes and dedup; shown live on the dashboard. | builder |
+| I3 | Live screening panel (researcher, 2026-11-08): recent decisions stream (title, verdict, score, criterion, quote), per-screener-session counts and rate, verdict totals, stop-rule progress; read from the index; development-only. | builder |
