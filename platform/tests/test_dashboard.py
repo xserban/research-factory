@@ -18,6 +18,7 @@ from factory.services.context import Project
 from factory.services.dashboard_page import render_page
 from factory.services.seeds import SeedRole, all_seeds
 from tests.helpers import SourcesFor, _setup
+from tests.screening_helpers import _calibrate, _partial_corpus, _screen_ordinary
 
 PANELS = (
     "meta",
@@ -29,6 +30,7 @@ PANELS = (
     "search",
     "dedup",
     "screening",
+    "screening_live",
     "extraction",
     "cost",
     "progress",
@@ -144,3 +146,57 @@ def test_export_writes_one_file_and_no_event(project: Project, tmp_path: Path) -
     out = dashboard_server.export_snapshot(project, tmp_path / "dash.html")
     assert out.read_text(encoding="utf-8").startswith("<!doctype html>")
     assert _events(project) == before
+
+
+def _screened(project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor) -> None:
+    protocol_id = _partial_corpus(project, agent, human, mock_sources)
+    _calibrate(project, agent, human, protocol_id)
+    _screen_ordinary(project, agent, protocol_id, pass_a="exclude")
+
+
+def test_screening_live_on_empty_project(project: Project) -> None:
+    live = dashboard_service.screening_live(project)
+    json.dumps(live)
+    assert not live.get("recent") and not live.get("sessions")
+
+
+def test_screening_live_lists_recent_sessions_and_totals(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    _screened(project, agent, human, mock_sources)
+    live = dashboard_service.screening_live(project)
+    recent = live["recent"]
+    assert isinstance(recent, list) and 0 < len(recent) <= 50
+    assert all(r["pass"] in ("A", "B") for r in recent)  # type: ignore[index]
+    assert set(recent[0]) >= {"ts", "session", "title", "verdict", "score", "criterion", "quote"}  # type: ignore[arg-type]
+    totals = live["totals"]
+    assert isinstance(totals, dict) and "exclude" in totals["A"]  # type: ignore[operator]
+    assert isinstance(live["sessions"], list) and live["sessions"]
+
+
+def test_screening_live_withholds_held_out_identifiers(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    _screened(project, agent, human, mock_sources)
+    [held, *_] = [s for s in all_seeds(project) if s.role is SeedRole.HELD_OUT]
+    assert held.doi is not None
+    text = json.dumps(dashboard_service.screening_live(project)) + json.dumps(
+        dashboard_service.dashboard_state(project)["screening_live"]
+    )
+    assert held.doi.lower() not in text.lower() and held.seed_id not in text
+
+
+def test_screening_endpoint_returns_json(project: Project) -> None:
+    httpd = dashboard_server.make_server(project, 0)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        base = f"http://127.0.0.1:{httpd.server_port}"
+        with urllib.request.urlopen(base + "/api/screening") as api:
+            data = json.loads(api.read())
+        assert isinstance(data, dict)
+        with urllib.request.urlopen(base + "/") as page:
+            assert b"/api/screening" in page.read()
+    finally:
+        httpd.shutdown()
+        httpd.server_close()

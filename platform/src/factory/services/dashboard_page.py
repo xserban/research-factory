@@ -54,12 +54,18 @@ code,.q{overflow-wrap:anywhere;font-size:.8rem}
 #run h2{margin:12px 0 0}
 .bar{height:8px;background:var(--dk);border:1px solid var(--mut);border-radius:4px;overflow:hidden;margin:4px 0}
 .bar>i{display:block;height:100%;background:var(--ac)}.op.failed .bar>i{background:var(--dim)}
+#live{max-width:1100px;margin:0 auto;padding:0 16px}
+.chip{display:inline-block;border:1px solid var(--mut);border-radius:12px;padding:1px 10px;margin:2px 6px 2px 0;font-size:.8rem;color:var(--dim)}
+.chip.act{color:var(--ac);border-color:var(--ac)}
+.v-include{color:var(--ac)}.v-exclude{color:var(--dim)}.v-unsure{color:var(--blue)}.v-cannot-assess{color:var(--cyan)}
+.lscroll{max-height:360px;overflow:auto;border:1px solid var(--mut);border-radius:4px}
 @media (max-width:600px){.kvs{grid-template-columns:1fr}main{padding:0 10px 48px}}
 </style></head><body>
 <header><h1>Factory dashboard <span class="dim" id="slug"></span></h1>
 <div class="dim"><span id="fresh">loading</span> <span id="last"></span></div>
 <nav id="tabs"></nav></header>
 <section id="run"></section>
+<section id="live"></section>
 <main id="main"></main>
 <script>
 const STATIC=/*STATE*/null;
@@ -187,6 +193,25 @@ function running(){return(P||[]).some(o=>o.state==='running');}
 async function pollProgress(){
  try{const r=await fetch('/api/progress',{cache:'no-store'});P=JSON.parse(await r.text());drawRun();}catch(e){}
  setTimeout(pollProgress,running()?1500:5000);}
+let L=(STATIC&&STATIC.screening_live)||null;
+function drawLive(){const box=$('#live');if(!box)return;
+ if(!L||L.error||(!(L.recent||[]).length&&!(L.sessions||[]).length)){box.replaceChildren();return;}
+ const old=box.querySelector('.lscroll'),top=old?old.scrollTop:0;
+ const tot=L.totals||{},rem=L.remaining!==null&&L.remaining!==undefined?L.remaining:((D.screening||{}).records_left);
+ const tl=Object.keys(tot).sort().map(k=>h('div',{class:'tile'},h('b',null,Object.values(tot[k]).reduce((a,b)=>a+b,0)),'pass '+k.toUpperCase()+': '+Object.keys(tot[k]).sort().map(v=>v+' '+tot[k][v]).join(', ')));
+ if(rem!==null&&rem!==undefined)tl.push(h('div',{class:'tile'},h('b',null,rem),'in queue (pass A)'));
+ const chips=(L.sessions||[]).map(s=>h('span',{class:'chip'+(s.active?' act':'')},s.session+' '+s.actor+' / '+s.decisions+' dec / '+s.includes+' inc / '+(s.rate_per_minute===null||s.rate_per_minute===undefined?'-':s.rate_per_minute+'/min')+' / last '+fmt(s.last_at).slice(11,19)));
+ const stops=(L.stops||[]).map(s=>{const pct=s.n?Math.min(100,Math.round(100*s.run/s.n)):0;
+  return h('div',null,h('span',{class:'dim'},s.rule+(s.below_score?' (<'+s.below_score+')':'')+': '+s.progress+(s.stopped?' stopped':'')),h('div',{class:'bar'},h('i',{style:'width:'+pct+'%'})));});
+ const rows=(L.recent||[]).map(r=>h('tr',null,h('td',null,fmt(r.ts).slice(11,19)),h('td',null,r.pass),h('td',null,r.session),h('td',null,E(r.title)),
+  h('td',{class:'v-'+r.verdict},r.verdict),h('td',null,E(r.score)),h('td',null,E(r.criterion)),h('td',null,r.quote),h('td',{class:'dim'},r.rationale)));
+ box.replaceChildren(h('h2',null,'Screening live'),h('div',null,chips),h('div',{class:'tiles'},tl),...stops,
+  h('div',{class:'lscroll'},h('table',null,h('tr',null,['Time','Pass','Session','Work','Verdict','Score','Criterion','Quote','Rationale'].map(x=>h('th',null,x))),rows)));
+ const n=box.querySelector('.lscroll');if(n)n.scrollTop=top;}
+function liveActive(){return L&&(L.sessions||[]).some(s=>s.active);}
+async function pollLive(){
+ try{const r=await fetch('/api/screening',{cache:'no-store'});L=JSON.parse(await r.text());drawLive();}catch(e){}
+ setTimeout(pollLive,liveActive()?3000:15000);}
 const TABS=[['protocol','Protocol',renderProtocol],['decisions','Decisions',renderDecisions],['press','PRESS',renderPress],['probes','Probes',renderProbes],['search','Search',renderSearch],['screening','Screening',renderScreening],['extraction','Extraction',renderExtraction],['cost','Cost and time',renderCost]];
 function render(){
  const y=window.scrollY,a=document.activeElement,keep=a&&a.id==='q'?[a.selectionStart,a.selectionEnd]:null;
@@ -199,10 +224,10 @@ function stamp(){const meta=D.meta||{};$('#fresh').textContent=STATIC?'snapshot 
  $('#last').textContent=' / '+(meta.events_total===null||meta.events_total===undefined?0:meta.events_total)+' events / last '+(meta.last_event_id||'none');}
 async function poll(){
  try{const r=await fetch('/api/state',{cache:'no-store'});const t=await r.text();
-  const j=JSON.parse(t);P=j.progress||[];delete j.progress;drawRun();
+  const j=JSON.parse(t);P=j.progress||[];delete j.progress;if(j.screening_live&&!L)L=j.screening_live;delete j.screening_live;drawRun();drawLive();
   const key=JSON.stringify(j);if(key!==lastJson){lastJson=key;D=j;render();}stamp();}
  catch(e){$('#fresh').textContent='offline, retrying';}}
-if(STATIC){render();drawRun();stamp();}else{render();poll();setInterval(poll,5000);pollProgress();}
+if(STATIC){render();drawRun();drawLive();stamp();}else{render();poll();setInterval(poll,5000);pollProgress();pollLive();}
 </script></body></html>
 """
 

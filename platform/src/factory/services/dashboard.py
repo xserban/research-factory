@@ -14,14 +14,17 @@ Invariants:
 
 from __future__ import annotations
 
+import re
 from collections import Counter
 from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 from typing import cast
 
 from pydantic import JsonValue
 from sqlalchemy import text
 
 from factory.errors import FactoryValidationError
+from factory.model.protocol import ScreeningStage
 from factory.model.screening import PassLabel
 from factory.services import agent_view as agent_view_service
 from factory.services import budgets as budgets_service
@@ -113,13 +116,27 @@ def dashboard_state(project: Project) -> dict[str, JsonValue]:
         "search": _guard(lambda: _search(project), {}),
         "dedup": _guard(lambda: _dedup(project), {}),
         "screening": _guard(lambda: _screening(project, status), {}),
+        "screening_live": _guard(lambda: _live_raw(project), {}),
         "extraction": _guard(lambda: _extraction(project), {}),
         "cost": _guard(lambda: _cost(project, status), {}),
         "progress": _guard(lambda: cast(JsonValue, progress_service.progress_list(project)), []),
     }
+    live = state["screening_live"]
+    if isinstance(live, dict) and "error" not in live:
+        screening = state["screening"]
+        live["remaining"] = screening.get("records_left") if isinstance(screening, dict) else None
     return cast(
         dict[str, JsonValue],
         withhold(state, held_out_tokens(project, include_work_ids=False)),
+    )
+
+
+def screening_live(project: Project) -> dict[str, JsonValue]:
+    """The live screening panel alone, withheld like the whole state (the light endpoint)."""
+    panel = _guard(lambda: _live_raw(project), {})
+    return cast(
+        dict[str, JsonValue],
+        withhold(panel, held_out_tokens(project, include_work_ids=False)),
     )
 
 
@@ -351,6 +368,124 @@ def _screening(project: Project, status: JsonValue) -> JsonValue:
         },
         "stale_decisions": screening.get("stale_decisions"),
         "checks": checks,
+    }
+
+
+RECENT_LIMIT = 50
+SESSION_WINDOW = timedelta(minutes=60)
+ACTIVE_WITHIN = timedelta(minutes=3)
+_QUOTE_CAP = 200
+_RATIONALE_CAP = 160
+_CRITERION_ID = re.compile(r"[A-Za-z]+\d+")
+
+
+def _clip(value: object, cap: int) -> str:
+    cleaned = " ".join(str(value or "").split())
+    return cleaned if len(cleaned) <= cap else cleaned[: cap - 1] + "\u2026"
+
+
+def _bare_criterion(value: object) -> str | None:
+    if not value:
+        return None
+    found = _CRITERION_ID.search(str(value))
+    return found.group(0) if found else str(value)
+
+
+def _parse_ts(value: str) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
+_LIVE_SQL = (
+    "SELECT d.decision_id, d.work_id, d.pass_label, d.verdict, d.score, d.criterion, d.quote, "
+    "d.rationale, d.protocol_id, d.superseded_by, e.ts, e.session, e.actor_id, "
+    "json_extract(w.data, '$.title') AS title "
+    "FROM decisions d JOIN events e ON e.id = d.event_id "
+    "LEFT JOIN works w ON w.work_id = d.work_id "
+    "WHERE d.stage = :stage AND d.phase = :phase ORDER BY d.event_id DESC LIMIT :limit"
+)
+
+
+def _live_raw(project: Project) -> JsonValue:
+    """Title/abstract screening-phase decisions as the index holds them: the latest 50 live ones
+    under the current protocol lineage, per-session rates over the last hour, live totals and the
+    stop rules. Read-only; `remaining` is filled by the caller when the full state is built."""
+    project.index.sync()
+    current = protocol_service.current_protocol(project)
+    lineage = (
+        protocol_service.lineage_through(project, current.protocol_id) if current else frozenset()
+    )
+    now = project.clock.now()
+    with project.index.connect() as conn:
+        rows = [
+            dict(r)
+            for r in conn.execute(
+                text(_LIVE_SQL),
+                {"stage": ScreeningStage.TITLE_ABSTRACT.value, "phase": "screening", "limit": 3000},
+            )
+            .mappings()
+            .all()
+        ]
+    live = [r for r in rows if r["superseded_by"] is None and r["protocol_id"] in lineage]
+    recent = [
+        {
+            "decision_id": r["decision_id"],
+            "ts": r["ts"],
+            "pass": r["pass_label"],
+            "session": str(r["session"])[-8:],
+            "actor": r["actor_id"],
+            "title": r["title"],
+            "verdict": r["verdict"],
+            "score": r["score"],
+            "criterion": _bare_criterion(r["criterion"]),
+            "quote": _clip(r["quote"], _QUOTE_CAP),
+            "rationale": _clip(r["rationale"], _RATIONALE_CAP),
+        }
+        for r in live[:RECENT_LIMIT]
+    ]
+    spans: dict[str, list[tuple[datetime, str]]] = {}
+    actors: dict[str, str] = {}
+    for r in rows:
+        stamp = _parse_ts(str(r["ts"]))
+        if stamp is not None and now - stamp <= SESSION_WINDOW:
+            spans.setdefault(str(r["session"]), []).append((stamp, str(r["verdict"])))
+            actors.setdefault(str(r["session"]), str(r["actor_id"]))
+    sessions: list[dict[str, JsonValue]] = []
+    for session, items in spans.items():
+        times = [t for t, _ in items]
+        first, last = min(times), max(times)
+        span = max((last - first).total_seconds(), 1.0)
+        sessions.append(
+            {
+                "session": session[-8:],
+                "actor": actors[session],
+                "decisions": len(items),
+                "includes": sum(1 for _, v in items if v == "include"),
+                "last_at": last.isoformat(),
+                "rate_per_minute": round(len(items) / span * 60, 2) if len(items) > 1 else None,
+                "active": now - last < ACTIVE_WITHIN,
+            }
+        )
+    sessions.sort(key=lambda x: str(x["last_at"]), reverse=True)
+    totals: dict[str, dict[str, int]] = {}
+    for r in live:
+        slot = totals.setdefault(str(r["pass_label"]), {})
+        slot[str(r["verdict"])] = slot.get(str(r["verdict"]), 0) + 1
+    stops: list[JsonValue] = []
+    for stop in screening_service.screening_stops(project):
+        row = stop.model_dump(mode="json")
+        row["progress"] = f"{stop.run} / {stop.n}"
+        stops.append(row)
+    return {
+        "recent": cast(JsonValue, recent),
+        "sessions": cast(JsonValue, sessions),
+        "totals": cast(JsonValue, totals),
+        "stops": stops,
+        "remaining": None,
+        "any_active": any(bool(s["active"]) for s in sessions),
     }
 
 
