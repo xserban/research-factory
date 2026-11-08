@@ -30,9 +30,8 @@ def test_snapshot_syncs_on_entry_and_nested_sync_applies_nothing(tmp_path: Path)
 
 def test_exclusive_is_refused_inside_a_snapshot(tmp_path: Path) -> None:
     project = _project(tmp_path)
-    with project.index.snapshot(), pytest.raises(RuntimeError):
-        with project.index.exclusive():
-            pass
+    with project.index.snapshot(), pytest.raises(RuntimeError), project.index.exclusive():
+        pass
 
 
 def test_snapshot_is_reentrant_and_sync_works_after_it(tmp_path: Path) -> None:
