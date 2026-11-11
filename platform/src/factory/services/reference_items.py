@@ -4,9 +4,13 @@ Invariants: read-only (writes no event, only syncs the index); deterministic for
 ordering (by citing count, then key) never judges relevance. A cited item is computed on read,
 never stored.
 
-An entry with any clean-up flag (see `flags_for`) is not grouped: it is reported as unassessable
-with its reasons. Entries that carry a DOI or arXiv id but no usable title are later given a title
-by resolution, after which they can be grouped.
+An entry with any clean-up flag (see `flags_for`) whose own title is unusable borrows a title from
+the project's own data when it carries a DOI or arXiv id, in this order: the work its live link
+resolves to; a work record with the same identifier; another entry with the same identifier and a
+usable title (the most common such title, ties to the shortest, then lexicographic). A borrowed
+title must itself pass `flags_for`. No source is called. An entry that borrows nothing is reported
+as unassessable with its reasons. `ItemsReport.borrowed` counts the entries by where their title
+came from.
 """
 
 from __future__ import annotations
@@ -22,7 +26,8 @@ from sqlalchemy import text
 
 from factory.services.context import Project
 
-ITEM_RULES_VERSION: Final = "1"
+ITEM_RULES_VERSION: Final = "2"
+"""2: titles borrowed for identifier-only entries."""
 
 _MIN_WORDS: Final = 3
 _MIN_CHARS: Final = 12
@@ -118,6 +123,17 @@ class ItemsReport:
     unassessable: list[Unassessable] = field(default_factory=list)
     entries_total: int = 0
     rules_version: str = ITEM_RULES_VERSION
+    borrowed: dict[str, int] = field(default_factory=dict)
+    """Entries whose title was borrowed, by source: `resolved-link`, `work-record`, `entry`."""
+
+
+def _most_common(titles: list[str]) -> str:
+    counts = Counter(titles)
+    return min(counts, key=lambda t: (-counts[t], len(t), t))
+
+
+def _usable(title: object) -> str | None:
+    return title.strip() if isinstance(title, str) and not flags_for(title) else None
 
 
 def cited_items(project: Project) -> ItemsReport:
@@ -132,6 +148,63 @@ def cited_items(project: Project) -> ItemsReport:
                 "ORDER BY e.extraction_id, e.ordinal"
             )
         ).all()
+        linked = {
+            (str(e), int(o)): str(w)
+            for e, o, w in conn.execute(
+                text(
+                    "SELECT l.extraction_id, l.ordinal, l.work_id FROM reference_links l "
+                    "JOIN reference_extractions x ON x.extraction_id = l.extraction_id "
+                    "WHERE x.live = 1 AND l.state = 'resolved' AND l.work_id IS NOT NULL"
+                )
+            ).all()
+        }
+        work_rows = conn.execute(
+            text(
+                "SELECT work_id, json_extract(data, '$.title'), "
+                "lower(json_extract(data, '$.identifiers.doi')), "
+                "json_extract(data, '$.identifiers.arxiv') FROM works"
+            )
+        ).all()
+    work_title: dict[str, str] = {}
+    by_id: dict[str, str] = {}
+    for wid, wtitle, wdoi, warxiv in sorted(work_rows, key=lambda r: str(r[0])):
+        usable = _usable(wtitle)
+        if usable is None:
+            continue
+        work_title[str(wid)] = usable
+        for ident in (f"doi:{wdoi}" if wdoi else None, f"arxiv:{warxiv}" if warxiv else None):
+            if ident:
+                by_id.setdefault(ident, usable)
+    seen: dict[str, list[str]] = defaultdict(list)
+    for _, _, _, title, _, doi, arxiv in rows:
+        usable = _usable(title)
+        if usable is None:
+            continue
+        if doi:
+            seen[f"doi:{str(doi).lower()}"].append(usable)
+        if arxiv:
+            seen[f"arxiv:{arxiv}"].append(usable)
+    by_entry = {ident: _most_common(titles) for ident, titles in seen.items()}
+
+    def borrow(
+        eid: str, ordinal: int, doi: str | None, arxiv: str | None
+    ) -> tuple[str, str] | None:
+        wid = linked.get((eid, ordinal))
+        if wid is not None and wid in work_title:
+            return work_title[wid], "resolved-link"
+        idents = [
+            i
+            for i in (f"doi:{doi.lower()}" if doi else None, f"arxiv:{arxiv}" if arxiv else None)
+            if i
+        ]
+        for ident in idents:
+            if ident in by_id:
+                return by_id[ident], "work-record"
+        for ident in idents:
+            if ident in by_entry:
+                return by_entry[ident], "entry"
+        return None
+
     report = ItemsReport(entries_total=len(rows))
     groups: dict[str, list[tuple[ItemEntry, str, int | None, str | None, str | None]]] = (
         defaultdict(list)
@@ -140,15 +213,18 @@ def cited_items(project: Project) -> ItemsReport:
     for eid, ordinal, wid, title, year, doi, arxiv in rows:
         flags = flags_for(title)
         if flags:
-            report.unassessable.append(Unassessable(eid, ordinal, wid, flags, doi, arxiv))
-            continue
+            got = borrow(eid, ordinal, doi, arxiv) if (doi or arxiv) else None
+            if got is None:
+                report.unassessable.append(Unassessable(eid, ordinal, wid, flags, doi, arxiv))
+                continue
+            title, source = got
+            report.borrowed[source] = report.borrowed.get(source, 0) + 1
         norm = normalise_title(title)
         key = item_key(norm)
         norms[key] = norm
         groups[key].append((ItemEntry(eid, ordinal, wid), title.strip(), year, doi, arxiv))
     for key, members in groups.items():
-        counts = Counter(m[1] for m in members)
-        best = min(counts, key=lambda t: (-counts[t], len(t), t))
+        best = _most_common([m[1] for m in members])
         years = [m[2] for m in members if m[2] is not None]
         report.items.append(
             CitedItem(

@@ -307,6 +307,16 @@ def _labels(project: Project, scheme_version: int) -> dict[str, str]:
     return {str(k): str(v) for k, v in rows}
 
 
+def researcher_labels(project: Project, scheme_version: int) -> dict[str, str]:
+    """Item key to the researcher's calibration label under `scheme_version`."""
+    return _labels(project, scheme_version)
+
+
+def agent_layers(project: Project, stage: LayerStage, scheme_version: int) -> dict[str, str]:
+    """Item key to the latest agent layer at `stage` under `scheme_version`."""
+    return _latest_layers(project, stage, scheme_version)
+
+
 def _calibration(
     sample_keys: set[str],
     scheme: LayerSchemeRecorded,

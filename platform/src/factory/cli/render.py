@@ -74,6 +74,7 @@ from factory.services.prisma_update import UpdateFlow
 from factory.services.properties import PropertyView
 from factory.services.protocol import ProtocolView
 from factory.services.question import QuestionView
+from factory.services.reference_layers import LayerStatus
 from factory.services.references import ExtractSummary, Page, ReferenceCounts, ReResolveSummary
 from factory.services.regions import ExportRow, RegionState, VersionInfo
 from factory.services.relations import RelationView
@@ -1784,4 +1785,37 @@ def mine_import_lines(result: BatchResult[str]) -> list[str]:
     lines = [f"imported {len(result.written)} unit(s)"]
     for error in result.rejected:
         lines += [f"unit {error.index}: {i.field}: {i.reason}" for i in error.issues]
+    return lines
+
+
+def layer_status_lines(status: LayerStatus) -> list[str]:
+    """The reference-layer status as a readable table."""
+    lines = [
+        f"rules {status.rules_version}; scheme "
+        + (
+            "none recorded" if status.scheme_version is None else f"version {status.scheme_version}"
+        ),
+        f"entries {status.entries_total}; assessable items {status.assessable}; "
+        f"in corpus {status.in_corpus}",
+    ]
+    if status.unassessable:
+        lines.append(
+            "unassessable: " + ", ".join(f"{r} {n}" for r, n in status.unassessable.items())
+        )
+    for stage in ("title", "abstract"):
+        counts = status.by_stage.get(stage, {})
+        by_layer = ", ".join(f"{k} {v}" for k, v in counts.items()) or "none yet"
+        left = status.left.get(stage)
+        lines.append(f"{stage}: {by_layer}" + ("" if left is None else f"; left {left}"))
+    if status.scheme_version is not None:
+        lines.append(f"awaiting resolution (abstract stage): {status.awaiting_resolution}")
+    cal = status.calibration
+    if cal is not None:
+        agreement = "n/a" if cal.agreement is None else f"{cal.agreement:.2f}"
+        kappa = "n/a" if cal.kappa is None else f"{cal.kappa:.2f}"
+        lines.append(
+            f"calibration: sample {cal.sample_size}, labelled {cal.labelled}, "
+            f"assigned {cal.assigned}, compared {cal.compared}; agreement {agreement}; "
+            f"kappa {kappa} vs floor {cal.floor:.2f}; " + ("passed" if cal.passed else "not passed")
+        )
     return lines
