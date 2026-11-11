@@ -15,9 +15,11 @@ Invariants:
   that stopped on a timeout). A run is left out when a later run of the same stage was `complete`
   (the work was resumed). `stage_pending` says whether its stage still has pending units.
 - A run the CLI's usage limit stopped (`usage_limit`: it exits 0, so it is recorded `complete`) is
-  reported with kind `limit`, with `limit_reset_text` / `limit_reset_at` from its log. It does not
+  reported with kind `limit`, with `limit_reset_text` / `limit_reset_at` from its log (when the text
+  is missing or unparsable, `limit_reset_at` is the run's end plus 5 hours and
+  `limit_reset_estimated` is true). It does not
   supersede older interrupted runs of its stage. `resume` does not start a run for a stage whose
-  limit-stopped run has a reset in the future, or a reset text that could not be parsed; it lists
+  limit-stopped run has a reset (parsed or estimated) in the future; it lists
   the run in `ResumePlan.waiting` (a dry run too) and in `refused`.
 - A pipeline is interrupted when it is `orphaned` (open, and no process holds the pipeline lock),
   `lost`, or stopped `failed` / `timeout`. It is left out when a later pipeline was `complete` or
@@ -104,6 +106,8 @@ class InterruptedRun(StrictModel):
     """For kind `limit`: the raw text after `resets` in the log, when there is one."""
     limit_reset_at: str | None = None
     """For kind `limit`: the reset time as a stored timestamp, None when unknown."""
+    limit_reset_estimated: bool = False
+    """For kind `limit`: `limit_reset_at` is the estimate (run end plus 5 hours), not parsed."""
 
 
 class InterruptedPipeline(StrictModel):
@@ -279,6 +283,7 @@ def _runs(
                 limit_reason=None if stop is None else stop.reason,
                 limit_reset_text=None if stop is None else stop.reset_text,
                 limit_reset_at=None if stop is None else stop.reset_at,
+                limit_reset_estimated=False if stop is None else stop.reset_estimated,
             )
         )
     return found
@@ -505,6 +510,7 @@ def _waiting(found: Interrupted, now: datetime) -> dict[str, str]:
             reason=run.limit_reason or "log",
             reset_text=run.limit_reset_text,
             reset_at=run.limit_reset_at,
+            reset_estimated=run.limit_reset_estimated,
         )
         why = usage_limit.hold_until(stop, now)
         if why is not None:

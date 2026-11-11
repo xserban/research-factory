@@ -347,7 +347,10 @@ def test_an_errored_result_that_closed_no_unit_is_a_limit_stop_without_a_reset(
     run = _started(project)
     _finished_with_log(project, run, '{"type":"result","is_error":true,"result":"x"}\n')
     [found] = interrupted(project).runs
-    assert (found.kind, found.limit_reason, found.limit_reset_at) == ("limit", "no-units", None)
+    assert (found.kind, found.limit_reason) == ("limit", "no-units")
+    assert found.limit_reset_text is None
+    assert found.limit_reset_estimated is True  # run end plus 5 hours
+    assert found.limit_reset_at is not None
 
 
 def test_a_limit_log_that_closed_units_is_still_a_limit_stop(project: Project) -> None:
@@ -368,3 +371,38 @@ def test_parse_reset_reads_clock_times_dates_and_zones() -> None:
     assert parse_reset("Nov 12, 3:30pm (UTC)", after) == datetime(2026, 11, 12, 15, 30, tzinfo=UTC)
     assert parse_reset("soon", after) is None
     assert parse_reset("3pm (No/Such_Zone)", after) is None
+
+
+def test_a_parsed_reset_beats_the_estimate_and_an_unparsed_one_is_estimated() -> None:
+    from datetime import UTC, datetime
+
+    from factory.clock import format_ts
+    from factory.services.usage_limit import FALLBACK_HOLD, detect
+
+    assert timedelta(hours=5) == FALLBACK_HOLD
+    end = datetime(2026, 11, 11, 10, 0, tzinfo=UTC)
+
+    def stop(message: str) -> Any:
+        found = detect([message], units=1, stage_pending=True, finished_at=end)
+        assert found is not None
+        return found
+
+    parsed = stop("You've hit your 5-hour limit \u00b7 resets 11pm (UTC)")
+    assert (parsed.reset_at, parsed.reset_estimated) == (
+        format_ts(datetime(2026, 11, 11, 23, 0, tzinfo=UTC)),
+        False,
+    )
+    for message in (
+        "You've hit your 5-hour limit \u00b7 resets when the moon is full",
+        "You've hit your 5-hour limit",
+    ):
+        guessed = stop(message)
+        assert guessed.reset_at == format_ts(end + FALLBACK_HOLD)
+        assert guessed.reset_estimated is True
+    no_units = detect([], units=0, stage_pending=True, finished_at=end, result_error=True)
+    assert no_units is not None and no_units.reset_estimated is True
+    assert no_units.reset_at == format_ts(end + FALLBACK_HOLD)
+    unknown_end = detect(
+        ["You've hit your 5-hour limit"], units=1, stage_pending=True, finished_at=None
+    )
+    assert unknown_end is not None and unknown_end.reset_at is None

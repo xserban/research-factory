@@ -84,7 +84,7 @@ function textOf(el,lines){
 function summary(d){
   var lines=[];
   (d.runs||[]).forEach(function(r){lines.push('run '+r.run_id+' ('+r.stage+'): '+r.kind
-    +(r.kind==='limit'?(r.limit_reset_at||r.limit_reset_text?' (usage limit; resets '+(r.limit_reset_at||r.limit_reset_text)+')':' (usage limit; reset unknown)'):'')
+    +(r.kind==='limit'?(r.limit_reset_at?' (usage limit; resets '+r.limit_reset_at+(r.limit_reset_estimated?' (estimated)':'')+')':r.limit_reset_text?' (usage limit; resets '+r.limit_reset_text+')':' (usage limit; reset unknown)'):'')
     +(r.stage_pending?'':', no pending units'));});
   (d.pipelines||[]).forEach(function(p){lines.push('pipeline '+p.pipeline_id+': '+p.kind
     +'; stages left: '+((p.stages_left||[]).join(', ')||'none'));});
@@ -216,7 +216,10 @@ def _limit_note(run: InterruptedRun) -> str:
     if run.kind != "limit":
         return ""
     when = run.limit_reset_at or run.limit_reset_text
-    return f" (usage limit; resets {when})" if when else " (usage limit; reset unknown)"
+    if not when:
+        return " (usage limit; reset unknown)"
+    estimated = " (estimated)" if run.limit_reset_at and run.limit_reset_estimated else ""
+    return f" (usage limit; resets {when}{estimated})"
 
 
 def summary_lines(found: Interrupted) -> list[str]:

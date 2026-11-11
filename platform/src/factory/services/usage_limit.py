@@ -14,8 +14,10 @@ A complete run is limit-stopped when
   stop: it may have found nothing to do.
 
 `reset_text` is the raw text after `resets` (`RESET_PATTERN`) and `reset_at` the stored timestamp
-parsed from it by `parse_reset` (a clock time with an optional date and an optional `(Zone)`),
-None when the text does not parse. The time is the next occurrence after the run finished.
+parsed from it by `parse_reset` (a clock time with an optional date and an optional `(Zone)`).
+The time is the next occurrence after the run finished. When the text is missing or does not
+parse (and for the `no-units` reason, which has none), `reset_at` is the run's end plus
+`FALLBACK_HOLD` and `reset_estimated` is true; a parsed time always wins over the estimate.
 """
 
 from __future__ import annotations
@@ -32,6 +34,10 @@ from factory.clock import format_ts, parse_ts
 from factory.model.base import StrictModel
 from factory.services import run_costs
 from factory.services.context import Project
+
+FALLBACK_HOLD: Final = timedelta(hours=5)
+"""How long after the run's end a limit stop without a parsable reset time holds the resume (the
+length of the 5-hour window)."""
 
 LIMIT_PATTERN: Final = re.compile(
     r"you(?:'|\u2019)?ve\s+hit\s+your\b[^\n.\u00b7|]{0,40}?\blimit\b", re.IGNORECASE
@@ -63,7 +69,10 @@ class LimitStop(StrictModel):
     reset_text: str | None = None
     """The raw text after `resets` in the log, None when absent."""
     reset_at: str | None = None
-    """The reset time as a stored timestamp, None when unknown or unparsed."""
+    """The reset time as a stored timestamp: parsed from the log, else the run's end plus
+    `FALLBACK_HOLD`; None only when the run's end is unknown."""
+    reset_estimated: bool = False
+    """True when `reset_at` is the fallback estimate, not a time the log gave."""
 
 
 def parse_reset(raw: str, after: datetime) -> datetime | None:
@@ -116,14 +125,24 @@ def detect(
             continue
         reset = RESET_PATTERN.search(message)
         raw = None if reset is None else reset["when"].strip()
-        at = None
-        if raw and finished_at is not None:
-            parsed = parse_reset(raw, finished_at)
-            at = None if parsed is None else format_ts(parsed)
-        return LimitStop(reason="log", reset_text=raw, reset_at=at)
+        at, estimated = _reset_at(raw, finished_at)
+        return LimitStop(reason="log", reset_text=raw, reset_at=at, reset_estimated=estimated)
     if result_error and units == 0 and stage_pending:
-        return LimitStop(reason="no-units")
+        at, estimated = _reset_at(None, finished_at)
+        return LimitStop(reason="no-units", reset_at=at, reset_estimated=estimated)
     return None
+
+
+def _reset_at(raw: str | None, finished_at: datetime | None) -> tuple[str | None, bool]:
+    """(stored reset time, estimated): the parsed time when `raw` parses, else the run's end plus
+    `FALLBACK_HOLD`, else (None, False) when the run's end is unknown."""
+    if finished_at is None:
+        return None, False
+    if raw:
+        parsed = parse_reset(raw, finished_at)
+        if parsed is not None:
+            return format_ts(parsed), False
+    return format_ts(finished_at + FALLBACK_HOLD), True
 
 
 def limit_stop(project: Project, run_id: str, *, stage_pending: bool) -> LimitStop | None:
@@ -162,17 +181,17 @@ def limit_stop(project: Project, run_id: str, *, stage_pending: bool) -> LimitSt
 
 
 def hold_until(stop: LimitStop, now: datetime) -> str | None:
-    """Why a resume must wait, or None when it may go ahead: the reset is in the future, or the
-    log named a reset time that could not be parsed (its raw text is returned). A stop with no
-    reset text (reason `no-units`) never holds."""
-    if stop.reset_at is not None:
-        return f"usage limit resets {stop.reset_at}" if stop.reset_at > format_ts(now) else None
-    if stop.reset_text is not None:
-        return f"usage limit, reset time unknown: resets {stop.reset_text}"
+    """Why a resume must wait, or None when it may go ahead: the reset time (parsed, else the
+    estimate of run end plus `FALLBACK_HOLD`, marked `(estimated)`) is still in the future. A stop
+    whose run end is unknown has no time and never holds."""
+    if stop.reset_at is not None and stop.reset_at > format_ts(now):
+        suffix = " (estimated)" if stop.reset_estimated else ""
+        return f"usage limit: waiting until {stop.reset_at}{suffix}"
     return None
 
 
 __all__ = [
+    "FALLBACK_HOLD",
     "LIMIT_PATTERN",
     "RESET_PATTERN",
     "LimitStop",

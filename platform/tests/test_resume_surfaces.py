@@ -382,7 +382,56 @@ def test_dashboard_counts_the_interrupted_work(project: Project) -> None:
         "resolve": 0,
         "fetch": 0,
         "convert": 0,
+        "limit_runs": [],
     }
+
+
+def test_dashboard_lists_limit_runs_with_stage_and_reset(
+    project: Project, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def run(stage: str, kind: str, **extra: Any) -> InterruptedRun:
+        return InterruptedRun(
+            run_id=f"rnr_{stage}",
+            stage=stage,
+            model="haiku",
+            prompt_blob="b",
+            started_at="t",
+            kind=kind,
+            stage_pending=True,
+            **extra,
+        )
+
+    found = Interrupted(
+        runs=[
+            run("screen", "limit", limit_reset_at="2026-11-11T13:00:00Z"),
+            run(
+                "extract",
+                "limit",
+                limit_reset_at="2026-11-11T17:00:00Z",
+                limit_reset_estimated=True,
+            ),
+            run("convert", "lost"),
+        ],
+        pipelines=[],
+        leases=[],
+        passes=[],
+        automatic=AutomaticLeft(),
+    )
+    monkeypatch.setattr(resume_service, "interrupted", lambda p, **_: found)
+    payload = dashboard_service._interrupted(project)
+    assert isinstance(payload, dict)
+    assert payload["limit_runs"] == [
+        {"stage": "screen", "reset": "2026-11-11T13:00:00Z", "estimated": False},
+        {"stage": "extract", "reset": "2026-11-11T17:00:00Z", "estimated": True},
+    ]
+
+
+def test_dashboard_page_renders_limit_runs_through_text_nodes_only() -> None:
+    from factory.services import dashboard_page
+
+    page = dashboard_page.render_page({"feed": {"interrupted": {"clean": False, "limit_runs": []}}})
+    assert "usage limit, '+r.stage+'" in page and "(estimated)" in page
+    assert "innerHTML" not in page.split("usage limit, ")[1].split("}));}));")[0]
 
 
 def test_dashboard_reads_that_fail_show_unavailable(

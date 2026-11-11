@@ -237,7 +237,8 @@ function renderFeed(m){const F=D.feed;if(!F)return;m.append(h('h2',null,'Feed an
   b.append(st.length?table(['Stage','Added papers'],st.map(k=>[k,f.stages[k]])):h('p',{class:'dim'},'no added papers'));
   const pk=Object.keys(f.pending||{});b.append(table(['Pending kind','Open units'],pk.map(k=>[k,f.pending[k]])));}));
  m.append(feedPart('Interrupted (factory resume --dry-run shows the plan)',F.interrupted,(b,f)=>{
-  b.append(f.clean?h('p',{class:'dim'},'Nothing is interrupted.'):kv({runs:f.runs,pipelines:f.pipelines,expired_leases:f.leases,stale_passes:f.passes,papers_never_looked_up:f.resolve,screened_in_without_full_text:f.fetch,full_texts_not_converted:f.convert}));}));
+  b.append(f.clean?h('p',{class:'dim'},'Nothing is interrupted.'):kv({runs:f.runs,pipelines:f.pipelines,expired_leases:f.leases,stale_passes:f.passes,papers_never_looked_up:f.resolve,screened_in_without_full_text:f.fetch,full_texts_not_converted:f.convert}));
+  (f.limit_runs||[]).forEach(r=>b.append(h('p',{class:'dim'},'usage limit, '+r.stage+': '+(r.reset?'resets '+r.reset+(r.estimated?' (estimated)':''):'reset unknown'))));}));
  m.append(feedPart('Last run',F.run,(b,f)=>{const L=f.last;b.append(kv({run_open:f.run_open?'yes':'no',pipeline_open:f.pipeline_open?'yes':'no'}));
   b.append(L?kv({stage:L.stage,outcome:L.outcome,finished_at:L.finished_at||'not finished'}):h('p',{class:'dim'},'no run yet'));}));
 }

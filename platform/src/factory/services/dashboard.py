@@ -446,6 +446,15 @@ def _interrupted(project: Project) -> JsonValue:
         "resolve": found.automatic.resolve,
         "fetch": found.automatic.fetch,
         "convert": found.automatic.convert,
+        "limit_runs": [
+            {
+                "stage": run.stage,
+                "reset": run.limit_reset_at or run.limit_reset_text,
+                "estimated": run.limit_reset_estimated,
+            }
+            for run in found.runs
+            if run.kind == "limit"
+        ],
     }
 
 

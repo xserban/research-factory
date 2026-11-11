@@ -440,9 +440,34 @@ def test_resume_starts_a_limit_stopped_run_after_the_reset(
     assert _row(project, "runner_runs", "run_id", result.run_id)["resumes"] == run_id
 
 
-def test_an_unparsed_reset_text_holds_the_resume_with_the_raw_text(project: Project) -> None:
+def test_an_unparsed_reset_text_waits_run_end_plus_five_hours_estimated(
+    project: Project, clock: FixedClock
+) -> None:
     _limit_run(project, _limit_log("when the moon is full"))
+    plan = resume.resume(project, dry_run=True)
+    assert isinstance(plan, resume.ResumePlan)
+    assert len(plan.waiting) == 1 and "(estimated)" in plan.waiting[0]
+    assert "waiting until" in plan.waiting[0]
     result = resume.resume(project, launcher=FakeLauncher())
     assert isinstance(result, resume.ResumeResult)
     assert result.run_id is None
-    assert any("when the moon is full" in r for r in result.refused)
+    assert any("(estimated)" in r for r in result.refused)
+
+
+def test_a_parsed_reset_is_not_marked_estimated(project: Project) -> None:
+    _limit_run(project, _limit_log("11pm (UTC)"))
+    plan = resume.resume(project, dry_run=True)
+    assert isinstance(plan, resume.ResumePlan)
+    assert len(plan.waiting) == 1 and "(estimated)" not in plan.waiting[0]
+
+
+def test_resume_may_start_once_the_estimate_has_expired(
+    project: Project, clock: FixedClock
+) -> None:
+    run_id = _limit_run(project, _limit_log("when the moon is full"))
+    clock.advance(timedelta(hours=5, minutes=1))
+    result = resume.resume(project, launcher=FakeLauncher())
+    assert isinstance(result, resume.ResumeResult)
+    assert result.refused == [] and result.run_id is not None
+    assert runner.wait(result.run_id, 10)
+    assert _row(project, "runner_runs", "run_id", result.run_id)["resumes"] == run_id
