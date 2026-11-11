@@ -99,6 +99,7 @@ from factory.services.extraction_audit import (
     extraction_audit_outstanding,
     extraction_audit_report,
 )
+from factory.services.feed_read import scope_drift
 from factory.services.fulltext_status import fulltext_status
 from factory.services.gates import audit_hits, gate_hits, labelled_gate_audits
 from factory.services.hosting import foreign_event_files
@@ -542,6 +543,7 @@ def _run_rules(project: Project) -> list[_Hit]:
         _snowball(project, outcomes),
         _stop_unranked(project),
         _inbox(project, outcomes),
+        _feed_drift(project, outcomes),
         _grey(project),
         _imports(project),
         _living(project),
@@ -1944,6 +1946,23 @@ def _protocol_gates(project: Project) -> list[_Hit]:
 
 
 # --- Screening (R-31 to R-38) ---
+
+
+def _feed_drift(project: Project, outcomes: Mapping[str, Outcome]) -> list[_Hit]:
+    """Sent feed works mostly excluded at title/abstract (slice 4c, ruling 12). A warning in every
+    mode: the count points to a protocol amendment, and the feed never changes the criteria."""
+    drift = scope_drift(project, outcomes)
+    if drift is None or not drift.holds:
+        return []
+    return [
+        _Hit(
+            "feed-scope-drift",
+            drift.excluded_works,
+            f"{drift.excluded} of {drift.screened} sent feed works were excluded at title/abstract "
+            f"(threshold {drift.threshold} over at least {drift.min_count} screened); consider a "
+            "protocol amendment through suggest and select",
+        )
+    ]
 
 
 def _screening(project: Project, outcomes: dict[str, Outcome]) -> list[_Hit]:

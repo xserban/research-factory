@@ -100,6 +100,7 @@ FEED_SPEC = ModuleSpec(
             "human sends one through the inbox. configured, reacted and sent are human acts."
         ),
     ),
+    checks=(CheckRule("feed-scope-drift", ("warning", "warning", "warning")),),
 )
 
 FEED_MODULE = RuleModule(FEED_SPEC)

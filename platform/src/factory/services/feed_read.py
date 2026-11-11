@@ -19,13 +19,16 @@ Invariants:
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 
 from sqlalchemy import text
 
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.model.base import StrictModel
 from factory.model.feed import FeedReaction, FeedShown
+from factory.services.agreement import Outcome
 from factory.services.context import Project
+from factory.services.feed import current_config
 from factory.services.search import get_work
 
 
@@ -149,3 +152,74 @@ def feed_list(
         reason=None,
         items=tuple(items),
     )
+
+
+class ScopeDrift(StrictModel):
+    """The scope-drift count (ruling 12): sent works screened at title/abstract, those excluded,
+    the declared threshold and minimum count, and whether the finding holds."""
+
+    screened: int
+    excluded: int
+    excluded_works: tuple[str, ...]
+    threshold: float
+    min_count: int
+    holds: bool
+
+
+def feed_work_ids(project: Project) -> frozenset[str]:
+    """The works that came through a feed send: the work each resolved send's inbox item resolved
+    to. A send whose item is not resolved yet has no work."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT DISTINCT r.work_id FROM feed_sends s JOIN inbox_resolutions r"
+                " ON r.item_id = s.inbox_item_id"
+                " WHERE r.status = 'resolved' AND r.work_id IS NOT NULL"
+            )
+        ).all()
+    return frozenset(str(row[0]) for row in rows)
+
+
+def pending_sends(project: Project) -> int:
+    """Sends whose inbox item is still open (awaiting resolution)."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        count = conn.execute(
+            text(
+                "SELECT COUNT(*) FROM feed_sends s JOIN inbox_items i"
+                " ON i.item_id = s.inbox_item_id WHERE i.status = 'open'"
+            )
+        ).scalar_one()
+    return int(count)
+
+
+def scope_drift(project: Project, outcomes: Mapping[str, Outcome]) -> ScopeDrift | None:
+    """The drift count of the project's feed, or None without a feed configuration.
+
+    Among the works sent through the feed, those screened at title/abstract (an outcome other
+    than pending) are counted, and those excluded. The finding holds when the screened count is at
+    least `drift_min_count` and the excluded share is at least `drift_threshold`. A count, not a
+    judgement: the feed never changes the criteria. `outcomes` is the title/abstract outcome of
+    every corpus work; a work without one counts as pending."""
+    config = current_config(project)
+    if config is None:
+        return None
+    screened = [w for w in sorted(feed_work_ids(project)) if _screened(outcomes.get(w))]
+    excluded = tuple(w for w in screened if outcomes[w] is Outcome.EXCLUDED)
+    # min_count >= 1 makes screened non-empty before the division.
+    holds = len(screened) >= config.drift_min_count and (
+        len(excluded) / len(screened) >= config.drift_threshold
+    )
+    return ScopeDrift(
+        screened=len(screened),
+        excluded=len(excluded),
+        excluded_works=excluded,
+        threshold=config.drift_threshold,
+        min_count=config.drift_min_count,
+        holds=holds,
+    )
+
+
+def _screened(outcome: Outcome | None) -> bool:
+    return outcome is not None and outcome is not Outcome.PENDING

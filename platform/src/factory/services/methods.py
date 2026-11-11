@@ -48,7 +48,7 @@ from factory.services.coverage import (
     held_out_visible,
     resolved_import_ids,
 )
-from factory.services.discovery import supplied_only_included
+from factory.services.discovery import feed_only_included, supplied_only_included
 from factory.services.document_convert import ConverterCount, conversion_census
 from factory.services.evidence_report import evidence_report
 from factory.services.extraction_agreement import agreement_overall
@@ -88,6 +88,7 @@ class SuppliedLinks(StrictModel):
     captured: dict[str, int]
     resolved: dict[str, int]
     included: dict[str, int]
+    feed_included: int
 
 
 class ImportMethods(StrictModel):
@@ -521,7 +522,10 @@ def _supplied_links(project: Project) -> SuppliedLinks | None:
         if status == "resolved":
             resolved[str(kind)] += int(count)
     included = supplied_only_included(project)
-    return SuppliedLinks(captured=captured, resolved=resolved, included=included)
+    feed_included = feed_only_included(project)
+    return SuppliedLinks(
+        captured=captured, resolved=resolved, included=included, feed_included=feed_included
+    )
 
 
 def _screening_pairs(project: Project) -> list[ScreeningPair]:
@@ -1010,6 +1014,8 @@ def _supplied(links: SuppliedLinks) -> str:
         f"Supplied links. Links captured: {_counts(links.captured)}. "
         f"Links resolved: {_counts(links.resolved)}. "
         f"Included works that came only through supplied links: {_counts(links.included)}. "
+        f"Of these, included works that came only through the discovery feed: "
+        f"{links.feed_included}. "
         "Supplied works were screened under the same protocol, criteria and passes as every "
         "other record; screeners did not see how a work was found."
     )

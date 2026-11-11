@@ -32,7 +32,9 @@ from factory.model.conclusions import ConclusionDiff
 from factory.model.digest import (
     CandidateRow,
     CycleSummaryRow,
+    DigestFeed,
     DigestGenerated,
+    FeedRow,
     Listing,
     NoticeRow,
     VersionRow,
@@ -40,8 +42,11 @@ from factory.model.digest import (
 from factory.model.notices import unassessed_notices
 from factory.model.watch import CycleStatus
 from factory.regions.rules import MemberType
+from factory.services.agreement import Outcome, final_outcomes
 from factory.services.conclusions import conclusion_diff
 from factory.services.context import Project
+from factory.services.feed import current_config
+from factory.services.feed_read import feed_list, pending_sends, scope_drift
 from factory.services.human_queue import Gate, human_queue
 from factory.services.inbox_watch import route_labels
 from factory.services.notices import assessments, observed_notices
@@ -84,6 +89,7 @@ class DigestProject(StrictModel):
     failures: tuple[str, ...]
     overdue: tuple[str, ...]
     update_flow: UpdateFlow | None
+    feed: DigestFeed | None = None
 
 
 class Digest(StrictModel):
@@ -258,6 +264,7 @@ def _project_digest(
             overdue.append(f"source:{item.source}")
     cycles = _cycles(project, since_event, cutoff)
     failures += [f"cycle:{c.cycle_id}:{c.status.value}" for c in cycles if c.status in _BAD]
+    outcomes = final_outcomes(project)
     return DigestProject(
         slug=project.paths.slug,
         status=state,
@@ -272,6 +279,26 @@ def _project_digest(
         failures=tuple(sorted(failures)),
         overdue=tuple(sorted(overdue)),
         update_flow=None if members is not None else _update_flow(project, since_event, cutoff),
+        feed=None if members is not None else _feed(project, outcomes, cap),
+    )
+
+
+def _feed(project: Project, outcomes: dict[str, Outcome], cap: int) -> DigestFeed | None:
+    """The feed section, or None for a project without a feed configuration. Titles and scores
+    are those the latest ranking shows; the listing is capped like the other listings."""
+    if current_config(project) is None:
+        return None
+    listing = feed_list(project)
+    rows = tuple(
+        FeedRow(entry_id=i.entry_id, title=i.title, score=i.score, explore=i.explore)
+        for i in listing.items[:cap]
+    )
+    drift = scope_drift(project, outcomes)
+    return DigestFeed(
+        ranking_id=listing.ranking_id,
+        items=Listing[FeedRow](items=rows, more=max(len(listing.items) - cap, 0)),
+        pending_sends=pending_sends(project),
+        drift=drift is not None and drift.holds,
     )
 
 
