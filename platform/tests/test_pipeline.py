@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import json
 import os
+import signal
+import threading
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -26,6 +28,8 @@ from factory.services.context import Project
 from factory.services.mining import MinerListing
 from factory.services.work_queue import QueueItem
 from tests.helpers import install_skill
+
+_REAL_STEPS = pipeline.automatic_steps
 
 SKILLS = ("rf-screen", "rf-extract", "rf-mine", "rf-appraise", "rf-contributions", "rf-intuition")
 
@@ -91,7 +95,7 @@ def configured(project: Project, monkeypatch: pytest.MonkeyPatch) -> dict[str, i
     monkeypatch.setattr(runner, "claude_path", lambda: "/usr/bin/claude")
     monkeypatch.setattr(runner, "_factory_executable", lambda: "/venv/bin/factory")
     monkeypatch.setattr(runner, "_advance_after", lambda p: None)
-    monkeypatch.setattr(pipeline, "automatic_steps", lambda p: None)
+    monkeypatch.setattr(pipeline, "automatic_steps", lambda p, **kw: None)
     return pending
 
 
@@ -491,3 +495,238 @@ def test_cells_read_done_pending_not_applicable_and_stopped() -> None:
     assert pipeline._cell(_item("converted"), "extract", {"wrk_1": False}) == "pending"
     assert pipeline._cell(_item("extracted"), "extract", {"wrk_1": True}) == "done"
     assert pipeline._cell(_item("converted"), "mine:m-alpha", {}) == "n/a"
+
+
+# --- The hard unit cap ---
+
+
+def test_reserve_refuses_a_batch_that_would_pass_the_cap_and_counts_in_one_step() -> None:
+    cap = UnitCap(25, "rnr_R")
+    assert cap.remaining() == 25 and UnitCap().remaining() is None
+    assert cap.reserve(10) == 10 and cap.reserve(10) == 10
+    assert cap.remaining() == 5
+    with pytest.raises(FactoryValidationError) as caught:  # cap - 1 served, a 10-record batch
+        cap.reserve(10)
+    assert caught.value.issues[0].field == "cap-reached"
+    assert cap.served == 20  # the refusal counted nothing
+    assert cap.reserve(5) == 5 and cap.remaining() == 0
+
+
+def test_cap_minus_one_served_refuses_a_multi_record_batch_but_serves_a_single_unit() -> None:
+    cap = UnitCap(10)
+    cap.served = 9
+    with pytest.raises(FactoryValidationError):
+        cap.reserve(10, whole=10)
+    assert cap.reserve(1) == 1
+
+
+def test_serving_settles_to_the_records_served_and_releases_on_failure() -> None:
+    cap = UnitCap(30)
+    with cap.serving(10, whole=10) as done:
+        done({"batch": {"records": [{}, {}, {}]}})
+    assert cap.served == 3
+    with cap.serving(10, whole=10) as done:
+        done({"batch": None})
+    assert cap.served == 3
+    with pytest.raises(RuntimeError), cap.serving(10, whole=10):
+        raise RuntimeError("the service failed")
+    assert cap.served == 3
+    with cap.serving() as done:
+        done({"batch": {"task_id": "t"}})
+    assert cap.served == 4
+
+
+def test_a_cap_smaller_than_one_batch_serves_one_batch_when_nothing_is_served() -> None:
+    cap = UnitCap(3)
+    assert cap.reserve(10, whole=10) == 3
+    with pytest.raises(FactoryValidationError):
+        cap.reserve(10, whole=10)
+
+
+@pytest.mark.anyio
+async def test_screen_next_refuses_when_a_batch_would_pass_the_cap(
+    settings: Settings, project: Project, clock: FixedClock
+) -> None:
+    cap = UnitCap(15, "rnr_S")
+    cap.served = 6  # 9 left, a batch is up to 10 records
+    server = build_server(settings, clock=clock, sources={}, cap=cap)
+    args = {
+        "project": project.paths.slug,
+        "pass_label": "A",
+        "role": "screener",
+        "model": "claude-haiku-5-5",
+        "skill": "rf-screen",
+    }
+    async with Client(server) as client:
+        result = await client.call_tool("screen_next", args)
+    block: Any = result.content[0]
+    body = json.loads(block.text)
+    assert [e["field"] for e in body["errors"]] == ["cap-reached"]
+    assert cap.served == 6
+
+
+# --- The prompts ---
+
+
+def test_the_screen_prompt_runs_title_abstract_then_full_text(
+    project: Project, configured: dict[str, int]
+) -> None:
+    _, _, prompt = runner.build_command(project, "screen")
+    assert prompt.index('stage="title-abstract"') < prompt.index('stage="full-text"')
+    assert "overridden" in prompt and "pass A" in prompt
+
+
+def test_the_intuition_prompt_puts_concepts_out_of_scope(
+    project: Project, configured: dict[str, int]
+) -> None:
+    _, _, prompt = runner.build_command(project, "intuition")
+    assert "out of scope" in prompt and "concept_propose" in prompt
+    spec = runner.STAGES["intuition"]
+    assert "mcp__factory__concept_propose" not in spec.tools
+    assert "mcp__factory__concept_link" not in spec.tools
+
+
+# --- The time limit of a run ---
+
+
+class StuckProcess:
+    """A child that exits only when it is released (by a signal the test delivers)."""
+
+    def __init__(self) -> None:
+        self.pid = os.getpid()
+        self.done = threading.Event()
+        self.code = 0
+
+    def wait(self) -> int:
+        self.done.wait(30)
+        return self.code
+
+
+class StuckLauncher:
+    def __init__(self) -> None:
+        self.processes: list[StuckProcess] = []
+
+    def __call__(self, argv: Sequence[str], log_path: Path) -> StuckProcess:
+        log_path.write_text('{"type":"result"}\n', encoding="utf-8")
+        process = StuckProcess()
+        self.processes.append(process)
+        return process
+
+
+def test_the_time_limit_is_per_unit_plus_a_base() -> None:
+    assert runner.run_time_limit(25) == 25 * 120 + 600
+
+
+@pytest.mark.parametrize("ignores_term", [False, True])
+def test_a_run_past_its_limit_is_killed_recorded_failed_and_stops_the_pipeline(
+    project: Project,
+    configured: dict[str, int],
+    monkeypatch: pytest.MonkeyPatch,
+    ignores_term: bool,
+) -> None:
+    launcher = StuckLauncher()
+    signals: list[int] = []
+
+    def deliver(pid: int, sig: int) -> None:
+        signals.append(sig)
+        if sig == signal.SIGKILL or not ignores_term:
+            launcher.processes[0].code = -sig
+            launcher.processes[0].done.set()
+
+    monkeypatch.setattr(runner, "run_time_limit", lambda cap: 0.2)
+    monkeypatch.setattr(runner, "KILL_GRACE", 0.3)
+    monkeypatch.setattr(runner, "_signal_group", deliver)
+    pipeline_id = pipeline.run_pipeline(project, unit_cap=3, launcher=launcher)
+    assert signals == ([signal.SIGTERM, signal.SIGKILL] if ignores_term else [signal.SIGTERM])
+    assert len(launcher.processes) == 1  # the pipeline stopped at the first stage
+    [view] = pipeline.pipeline_status(project)
+    assert view.pipeline_id == pipeline_id
+    assert view.status == "failed" and view.stopped_at == "screen"
+    assert view.reason is not None and view.reason.startswith("timeout")
+    [run_id] = view.run_ids
+    assert runner.run_outcome(project, run_id) == "failed"
+
+
+def test_wait_until_closed_uses_a_patched_clock(
+    project: Project, configured: dict[str, int], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    launcher = StuckLauncher()
+    run_id = runner.start_run(project, "screen", unit_cap=2, launcher=launcher, pipeline=True)
+    ticks = iter([0.0, 5.0, 10_000.0])
+    monkeypatch.setattr(runner, "_monotonic", lambda: next(ticks))
+    monkeypatch.setattr(runner, "_signal_group", lambda pid, sig: launcher.processes[0].done.set())
+    assert runner.wait_until_closed(project, run_id, 0.05, limit=runner.run_time_limit(2)) is False
+    assert runner.run_outcome(project, run_id) is not None
+
+
+# --- The reference step of the automatic steps ---
+
+
+def _steps_env(monkeypatch: pytest.MonkeyPatch, works: list[str], failing: set[str]) -> list[str]:
+    calls: list[str] = []
+
+    def extract(project: Project, actor: Actor, work_ids: Sequence[str], **kw: Any) -> None:
+        [work] = work_ids
+        calls.append(work)
+        if work in failing:
+            raise RuntimeError("the parser failed")
+
+    monkeypatch.setattr("factory.services.references.included_works", lambda p: list(works))
+    monkeypatch.setattr("factory.services.references.current_extraction", lambda p, w: None)
+    monkeypatch.setattr("factory.services.references.extract_references", extract)
+    monkeypatch.setattr("factory.services.document_read.default_conversion", lambda p, w: object())
+    monkeypatch.setattr(runner, "_advance_after", lambda p: None)
+    return calls
+
+
+def test_a_failing_reference_extraction_does_not_block_the_next_work(
+    project: Project, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = _steps_env(monkeypatch, ["wrk_3", "wrk_1", "wrk_2"], {"wrk_1"})
+    failed: set[str] = set()
+    _REAL_STEPS(project, unit_cap=2, failed=failed)
+    assert calls == ["wrk_1", "wrk_2"] and failed == {"wrk_1"}
+    calls.clear()
+    _REAL_STEPS(project, unit_cap=2, failed=failed)  # wrk_1 is not tried again
+    assert calls == ["wrk_2", "wrk_3"]
+
+
+def test_reference_extraction_is_bounded_by_the_unit_cap(
+    project: Project, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = _steps_env(monkeypatch, ["wrk_1", "wrk_2", "wrk_3"], set())
+    _REAL_STEPS(project, unit_cap=1)
+    assert calls == ["wrk_1"]
+
+
+# --- The pipeline thread and its probe ---
+
+
+def test_a_thread_that_does_not_start_releases_the_lock_and_closes_the_pipeline(
+    project: Project, configured: dict[str, int], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def refuse(self: threading.Thread) -> None:
+        raise RuntimeError("can't start new thread")
+
+    monkeypatch.setattr(threading.Thread, "start", refuse)
+    with pytest.raises(RuntimeError):
+        pipeline.start_pipeline(project, launcher=CodedLauncher())
+    monkeypatch.undo()
+    assert not pipeline.pipeline_active(project)
+    [finished] = _events(project, "runner.pipeline_finished")
+    assert finished.payload["outcome"] == "failed"
+    plan = pipeline.begin_pipeline(project)  # the lock is free again
+    pipeline.execute_pipeline(project, plan, launcher=CodedLauncher(*[0] * 6))
+
+
+def test_the_active_probe_follows_the_open_pipeline_row(
+    project: Project, configured: dict[str, int]
+) -> None:
+    assert not pipeline.pipeline_active(project)
+    plan = pipeline.begin_pipeline(project)
+    try:
+        assert pipeline.pipeline_active(project)
+        assert pipeline.pipeline_active(project)  # probing twice leaves the lock held by the plan
+    finally:
+        pipeline.execute_pipeline(project, plan, launcher=CodedLauncher(*[0] * 6))
+    assert not pipeline.pipeline_active(project)

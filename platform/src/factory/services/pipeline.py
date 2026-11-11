@@ -34,6 +34,7 @@ from __future__ import annotations
 import fcntl
 import json
 import logging
+import os
 import threading
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -275,15 +276,22 @@ def _lock_path(project: Project) -> str:
 
 
 def pipeline_active(project: Project) -> bool:
-    """Whether a pipeline holds the project's pipeline lock (this process or another). Takes
-    and releases the lock to find out."""
-    with open(_lock_path(project), "a") as handle:
+    """Whether a pipeline of the project is open: a `runner.pipeline_started` with no
+    `runner.pipeline_finished` whose process still holds the pipeline lock, or is this process.
+    Reads the lock without taking it, so that it never makes a concurrent `begin_pipeline` fail:
+    the open pipeline row decides, and the lock only tells a live pipeline from an orphan."""
+    if not _open_pipelines(project):
+        return False
+    probe = os.open(_lock_path(project), os.O_RDONLY | os.O_CREAT)
+    try:
         try:
-            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(probe, fcntl.LOCK_SH | fcntl.LOCK_NB)
         except OSError:
-            return True
-        fcntl.flock(handle, fcntl.LOCK_UN)
-    return False
+            return True  # an exclusive holder: a pipeline is running
+        fcntl.flock(probe, fcntl.LOCK_UN)
+        return False
+    finally:
+        os.close(probe)
 
 
 def _acquire(project: Project) -> IO[str]:
@@ -386,18 +394,48 @@ def begin_pipeline(project: Project, *, unit_cap: int = runner.DEFAULT_UNIT_CAP)
     return PipelinePlan(pipeline_id, tuple(s.key for s in planned), unit_cap, handle)
 
 
-def automatic_steps(project: Project) -> None:
+def automatic_steps(
+    project: Project,
+    *,
+    unit_cap: int = runner.DEFAULT_UNIT_CAP,
+    failed: set[str] | None = None,
+) -> None:
     """The deterministic steps between stages: `work_queue.advance` for the added papers and
-    `references_extract` for the included works with a conversion and no current reference
-    extraction. An exception is logged and never stops the pipeline."""
-    from factory.services.references import extract_references
+    `extract_references`, one work at a time, for the included works with a conversion and no
+    current reference extraction, at most `unit_cap` works per call in work id order. A work
+    whose extraction raises is logged and skipped, and added to `failed` (one set per pipeline)
+    so that it is not tried again in the same pipeline. An exception never stops the pipeline."""
+    from factory.services.document_read import default_conversion
+    from factory.services.references import (
+        current_extraction,
+        extract_references,
+        included_works,
+    )
     from factory.sources.registry import default_sources
 
     runner.advance_after(project)
+    skip = failed if failed is not None else set()
     try:
-        extract_references(project, project.system_actor(), None, sources=dict(default_sources()))
+        project.index.sync()
+        todo = [
+            w
+            for w in sorted(included_works(project))
+            if w not in skip
+            and default_conversion(project, w) is not None
+            and current_extraction(project, w) is None
+        ][:unit_cap]
     except Exception:
-        _LOG.exception("the reference extraction step failed for %s", project.paths.slug)
+        _LOG.exception(
+            "listing the works for reference extraction failed for %s", project.paths.slug
+        )
+        return
+    sources = dict(default_sources())
+    for work in todo:
+        try:
+            extract_references(project, project.system_actor(), [work], sources=sources)
+        except Exception:
+            skip.add(work)
+            _LOG.exception("the reference extraction of %s failed; skipped", work)
 
 
 def execute_pipeline(
@@ -406,11 +444,12 @@ def execute_pipeline(
     """Run the stages of `plan` in order and record `runner.pipeline_finished`; returns the
     pipeline id. Releases the pipeline lock at the end, whatever happens."""
     run_ids: list[str] = []
+    failed: set[str] = set()
     outcome: PipelineOutcome = "idle"
     stopped_at: str | None = None
     reason: str | None = None
     try:
-        automatic_steps(project)
+        automatic_steps(project, unit_cap=plan.unit_cap, failed=failed)
         for key in plan.keys:
             if stage_pending(project, key) == 0:
                 continue
@@ -423,7 +462,11 @@ def execute_pipeline(
                 reason = "; ".join(f"{i.field}: {i.reason}" for i in exc.issues)
                 break
             run_ids.append(run_id)
-            runner.wait_until_closed(project, run_id)
+            limit = runner.run_time_limit(plan.unit_cap)
+            if not runner.wait_until_closed(project, run_id, limit=limit):
+                outcome, stopped_at = "failed", key
+                reason = f"timeout: the run {run_id} passed its {limit:.0f} s limit and was killed"
+                break
             result = runner.run_outcome(project, run_id)
             if result != "complete":
                 outcome = "lost" if result == "lost" else "failed"
@@ -431,7 +474,7 @@ def execute_pipeline(
                 reason = f"the run {run_id} ended {result or 'without a record'}"
                 break
             outcome = "complete"
-            automatic_steps(project)
+            automatic_steps(project, unit_cap=plan.unit_cap, failed=failed)
     except BaseException as exc:
         outcome, reason = "failed", f"{type(exc).__name__}: {exc}"
         _LOG.exception("pipeline %s failed", plan.pipeline_id)
@@ -474,7 +517,13 @@ def start_pipeline(
         daemon=True,
     )
     _THREADS[plan.pipeline_id] = thread
-    thread.start()
+    try:
+        thread.start()
+    except BaseException:
+        _THREADS.pop(plan.pipeline_id, None)
+        _record_finish(project, plan.pipeline_id, "failed", (), reason="the thread did not start")
+        _release(plan.lock)
+        raise
     return plan.pipeline_id
 
 

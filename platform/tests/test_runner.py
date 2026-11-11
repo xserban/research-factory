@@ -514,3 +514,111 @@ def _start_unwatched(project: Project) -> str:
     )
     project.record([project.events.make("runner.started", payload, project.system_actor())])
     return run_id
+
+
+# --- Screening pending under the calibration gate ---
+
+
+def _gate(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    required: bool,
+    drawn: bool,
+    passed: bool,
+    calibration: set[str],
+    population: set[str],
+    decided: set[str],
+    dedup: bool = True,
+) -> None:
+    from types import SimpleNamespace
+
+    status = SimpleNamespace(required=required, passed={"A": passed, "B": passed})
+    monkeypatch.setattr("factory.services.dedup.dedup_current", lambda p: dedup)
+    monkeypatch.setattr("factory.services.calibration.calibration_status", lambda p, stage: status)
+    monkeypatch.setattr("factory.services.calibration.calibration_drawn", lambda p, stage: drawn)
+    monkeypatch.setattr(
+        "factory.services.calibration.calibration_items", lambda p, stage: sorted(calibration)
+    )
+    monkeypatch.setattr(
+        "factory.services.calibration.stage_population", lambda p, stage: population
+    )
+    monkeypatch.setattr(
+        "factory.services.screening.live_decisions",
+        lambda p, label, stage: [SimpleNamespace(work_id=w) for w in sorted(decided)],
+    )
+
+
+def test_screen_pending_is_zero_until_the_calibration_set_is_drawn(
+    project: Project, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pop = {"w1", "w2", "w3"}
+    _gate(
+        monkeypatch,
+        required=True,
+        drawn=False,
+        passed=False,
+        calibration=set(),
+        population=pop,
+        decided=set(),
+    )
+    assert sum(runner.pending_units(project, "screen").values()) == 0
+
+
+def test_screen_pending_counts_only_calibration_while_the_gate_is_closed(
+    project: Project, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pop = {"w1", "w2", "w3", "w4"}
+    _gate(
+        monkeypatch,
+        required=True,
+        drawn=True,
+        passed=False,
+        calibration={"w1", "w2"},
+        population=pop,
+        decided={"w1"},
+    )
+    counts = runner.pending_units(project, "screen")
+    assert sum(counts.values()) == 2  # w2 per stage; the open tasks of ordinary work do not count
+    assert counts[runner.STAGES["screen"].kinds[0]] == 1
+
+
+def test_screen_pending_counts_everything_once_the_gate_is_passed_or_absent(
+    project: Project, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pop = {"w1", "w2", "w3", "w4", "w5"}
+    _gate(
+        monkeypatch,
+        required=True,
+        drawn=True,
+        passed=True,
+        calibration={"w1"},
+        population=pop,
+        decided={"w1"},
+    )
+    assert runner.pending_units(project, "screen")[runner.STAGES["screen"].kinds[0]] == 4
+    _gate(
+        monkeypatch,
+        required=False,
+        drawn=False,
+        passed=False,
+        calibration=set(),
+        population=pop,
+        decided=set(),
+    )
+    assert runner.pending_units(project, "screen")[runner.STAGES["screen"].kinds[0]] == 5
+
+
+def test_screen_pending_is_zero_while_dedup_is_not_current(
+    project: Project, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _gate(
+        monkeypatch,
+        required=False,
+        drawn=False,
+        passed=True,
+        calibration=set(),
+        population={"w1"},
+        decided=set(),
+        dedup=False,
+    )
+    assert sum(runner.pending_units(project, "screen").values()) == 0

@@ -41,6 +41,7 @@ import json
 import logging
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import threading
@@ -115,6 +116,7 @@ STAGES: Final[dict[str, StageSpec]] = {
             "mcp__factory__screen_next",
             "mcp__factory__screen_record",
             "mcp__factory__document_read",  # full-text screening reads the converted document
+            "mcp__factory__project_status",  # optional read named by the skill
         ),
         kinds=(
             task_kind(ScreeningStage.TITLE_ABSTRACT, PassLabel.A),
@@ -130,6 +132,7 @@ STAGES: Final[dict[str, StageSpec]] = {
             "mcp__factory__extract_next",
             "mcp__factory__extract_record",
             "mcp__factory__document_read",
+            "mcp__factory__project_status",
         ),
         kinds=(EXTRACT_KINDS[PassLabel.A],),
         unit="work extracted",
@@ -142,6 +145,7 @@ STAGES: Final[dict[str, StageSpec]] = {
             "mcp__factory__appraisal_next",
             "mcp__factory__appraisal_record",
             "mcp__factory__document_read",
+            "mcp__factory__appraisal_status",
         ),
         kinds=(),
         unit="work appraised",
@@ -154,6 +158,7 @@ STAGES: Final[dict[str, StageSpec]] = {
             "mcp__factory__contribution_next",
             "mcp__factory__contribution_record",
             "mcp__factory__document_read",
+            "mcp__factory__project_status",
         ),
         kinds=(),
         unit="work read for contributions",
@@ -181,6 +186,8 @@ MINE_SPEC: Final = StageSpec(
         "mcp__factory__mine_next",
         "mcp__factory__mine_record",
         "mcp__factory__document_read",
+        "mcp__factory__mine_status",
+        "mcp__factory__miner_list",
     ),
     kinds=(),
     unit="work mined",
@@ -278,11 +285,32 @@ def _prompt(project: Project, stage: str, spec: StageSpec, unit_cap: int) -> str
         miner = f" of miner `{spec.miner}` (version {spec.miner_version})"
     if spec.skill == "rf-intuition":
         parameters = f"project `{slug}`, role `{spec.role}`, model `{spec.model}`, "
+    extra = ""
+    if spec.skill == "rf-screen":
+        from factory.services.screening import SCREEN_BATCH  # screening imports much
+
+        extra = (
+            "Screening order for this run: the skill says full-text mode runs only when the "
+            "researcher asks; for this run that is overridden, the researcher has asked for it. "
+            'First screen at title and abstract: call `screen_next` with `stage="title-abstract"` '
+            "and screen every batch served, until it serves no batch. Then screen at full text: "
+            'call `screen_next` with `stage="full-text"` and follow the skill\'s full-text mode '
+            "until it serves no batch. Both stages are pass A, and a batch of up to "
+            f"{SCREEN_BATCH} records is {SCREEN_BATCH} units. If a stage serves no batch because "
+            "of a `blocked` reason, report it verbatim and go on to the next stage.\n\n"
+        )
+    if spec.skill == "rf-intuition":
+        extra = (
+            "Proposing background concepts (`concept_propose`, `concept_link`) is out of scope "
+            "for this run: interpret the served ideas only, and ignore the skill's concept "
+            "steps.\n\n"
+        )
     return (
         f"You are pass A of stage `{stage}`{miner} for the Research Factory project `{slug}`. "
         "Work through the factory MCP tools and follow exactly the skill below "
         "(you are pass `A`).\n\n"
         f"Parameters for every factory call: {parameters}skill `{spec.skill}`.\n\n"
+        f"{extra}"
         f"Limit: stop after {unit_cap} units or when the queue is empty, whichever comes first. "
         f"A unit is one {spec.unit}. The server refuses further units with `cap-reached` once "
         "the limit is served: then stop. Use no other tools. Finally print "
@@ -350,6 +378,34 @@ def build_command(
     return argv, mcp_config(project, unit_cap, run_id), prompt
 
 
+def _screen_servable(project: Project, stage: ScreeningStage) -> tuple[int, bool]:
+    """`(records, blocked)`: the records `screen_next` would serve a pass A agent at `stage` now,
+    and whether a gate limits it. Undecided works of the stage's population, but none while the
+    corpus awaits `dedup_run` or while a required calibration set is not drawn, and only the
+    undecided calibration works while the calibration gate of pass A is closed (ordinary batches
+    wait, open tasks of them included; see `screening.screen_next`). Read-only."""
+    from factory.services.calibration import (
+        calibration_drawn,
+        calibration_items,
+        calibration_status,
+        stage_population,
+    )
+    from factory.services.dedup import dedup_current
+    from factory.services.screening import live_decisions
+
+    if not dedup_current(project):
+        return 0, True
+    status = calibration_status(project, stage=stage)
+    if status.required and not calibration_drawn(project, stage=stage):
+        return 0, True
+    population = stage_population(project, stage)
+    decided = {d.work_id for d in live_decisions(project, PassLabel.A, stage=stage)}
+    gated = status.required and not status.passed[PassLabel.A.value]
+    if gated:
+        population = population & set(calibration_items(project, stage=stage))
+    return len(population - decided), gated
+
+
 def pending_units(project: Project, stage: str) -> dict[str, int]:
     """The pending units of `stage` (pass A): per task kind for `screen` and `extract`; for the
     other stages (`factory.services.pipeline.pending_by_stage`) one count under the stage key."""
@@ -363,17 +419,11 @@ def pending_units(project: Project, stage: str) -> dict[str, int]:
     pending = pending_work(project)
     counts = {kind: pending.get(kind, 0) for kind in spec.kinds}
     if stage == "screen":  # a screening task is made only when `screen_next` serves the record
-        from factory.services.calibration import stage_population
-        from factory.services.screening import live_decisions
-
         for kind, screening_stage in zip(
             spec.kinds, (ScreeningStage.TITLE_ABSTRACT, ScreeningStage.FULL_TEXT), strict=True
         ):
-            decided = {
-                d.work_id for d in live_decisions(project, PassLabel.A, stage=screening_stage)
-            }
-            undecided = len(stage_population(project, screening_stage) - decided)
-            counts[kind] = max(counts[kind], undecided)
+            servable, blocked = _screen_servable(project, screening_stage)
+            counts[kind] = servable if blocked else max(counts[kind], servable)
     if stage == "extract":  # a task is made only when a session asks for the unit
         from factory.services.pipeline import unit_pending
 
@@ -483,14 +533,64 @@ def run_outcome(project: Project, run_id: str) -> str | None:
     return None if row is None or row[0] is None else str(row[0])
 
 
-def wait_until_closed(project: Project, run_id: str, poll: float = 1.0) -> None:
+RUN_SECONDS_PER_UNIT: Final = 120
+RUN_SECONDS_BASE: Final = 600
+KILL_GRACE: Final = 10.0
+"""Seconds between SIGTERM and SIGKILL of a run that has passed its time limit."""
+_monotonic: Callable[[], float] = time.monotonic
+_PROCESSES: dict[str, Process] = {}
+
+
+def run_time_limit(unit_cap: int) -> float:
+    """The wall-clock limit of one run in seconds: `unit_cap * 120 + 600`."""
+    return float(unit_cap * RUN_SECONDS_PER_UNIT + RUN_SECONDS_BASE)
+
+
+def _signal_group(pid: int, sig: int) -> None:
+    """Signal the process group of `pid` (the run was started in its own session); never this
+    process's own group; a process already gone is ignored."""
+    try:
+        group = os.getpgid(pid)
+        if group == os.getpgrp():
+            return
+        os.killpg(group, sig)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+def _terminate(project: Project, run_id: str) -> None:
+    """Kill the process group of `run_id`: SIGTERM, then SIGKILL after KILL_GRACE seconds, and
+    make sure the run is recorded `failed` (the watcher records it from the exit status; a run
+    with no watcher here is closed directly)."""
+    process = _PROCESSES.get(run_id)
+    pid = process.pid if process is not None else _read_pid(_run_dir(project, run_id))
+    if pid is not None:
+        _signal_group(pid, signal.SIGTERM)
+        if not wait(run_id, KILL_GRACE):
+            _signal_group(pid, signal.SIGKILL)
+            wait(run_id, KILL_GRACE)
+    if run_outcome(project, run_id) is None:
+        for row in _rows(project, "WHERE r.outcome IS NULL"):
+            if str(row[0]) == run_id:
+                _finish(project, run_id, str(row[1]), "failed", None)
+
+
+def wait_until_closed(
+    project: Project, run_id: str, poll: float = 1.0, *, limit: float | None = None
+) -> bool:
     """Block until `run_id` is closed: its watcher thread (this process) ends, else the run is
-    reconciled by `finish_lost` once its process is gone."""
+    reconciled by `finish_lost` once its process is gone. Returns True. After `limit` seconds
+    the process group is killed (see `_terminate`), the run is recorded `failed`, and the result
+    is False."""
+    deadline = None if limit is None else _monotonic() + limit
     while True:
         if wait(run_id, poll) or run_outcome(project, run_id) is not None:
-            return
+            return True
         if _THREADS.get(run_id) is None:
             finish_lost(project)
+        if deadline is not None and _monotonic() >= deadline:
+            _terminate(project, run_id)
+            return False
 
 
 def _starting(folder: Path) -> bool:
@@ -591,6 +691,7 @@ def _watch(project: Project, run_id: str, stage: str, process: Process) -> None:
                     time.sleep(_RETRY_PAUSE)
     finally:
         _WATCHING.discard((str(project.paths.root), run_id))
+        _PROCESSES.pop(run_id, None)
     if recorded:
         _advance_after(project)
 
@@ -676,6 +777,7 @@ def start_run(
             target=_watch, args=(project, run_id, stage, process), name=run_id, daemon=True
         )
         _THREADS[run_id] = thread
+        _PROCESSES[run_id] = process
         thread.start()
     return run_id
 
