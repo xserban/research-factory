@@ -324,7 +324,8 @@ def mcp_config(
 ) -> dict[str, JsonValue]:
     """The strict MCP config: this factory, with the root, plugin dir, PYTHONPATH and ranker
     model (when set) as its only environment, and, for a run, `FACTORY_UNIT_CAP` and
-    `FACTORY_RUN_ID` (the MCP server then serves at most that many units: see `mcp.unit_cap`)."""
+    `FACTORY_RUN_ID` and `FACTORY_RUN_DIR` (the MCP server then serves at most that many units and
+    writes its count to the run folder: see `mcp.unit_cap`)."""
     env: dict[str, JsonValue] = {
         "PYTHONPATH": os.environ.get("PYTHONPATH") or str(Path(factory.__file__).parents[1]),
         "FACTORY_PLUGIN_DIR": str(project.settings.plugin_dir),
@@ -337,6 +338,7 @@ def mcp_config(
         env["FACTORY_UNIT_CAP"] = str(unit_cap)
     if run_id is not None:
         env["FACTORY_RUN_ID"] = run_id
+        env["FACTORY_RUN_DIR"] = str(_run_dir(project, run_id))
     return {
         "mcpServers": {"factory": {"command": _factory_executable(), "args": ["serve"], "env": env}}
     }

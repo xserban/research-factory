@@ -131,6 +131,10 @@ def test_mcp_config_carries_only_the_named_env_keys(project: Project) -> None:
     }
     assert server["env"]["FACTORY_ROOT"] == str(project.settings.root)
     assert "sk-secret" not in json.dumps(loaded)
+    _, with_run, _ = runner.build_command(project, "screen", run_id="rnr_R")
+    run_env = with_run["mcpServers"]["factory"]["env"]
+    assert set(run_env) == set(server["env"]) | {"FACTORY_RUN_ID", "FACTORY_RUN_DIR"}
+    assert run_env["FACTORY_RUN_DIR"] == str(project.paths.dir / "runs" / "rnr_R")
 
 
 def test_unit_cap_and_stage_are_validated(project: Project) -> None:

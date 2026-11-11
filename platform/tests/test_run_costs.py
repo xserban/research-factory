@@ -253,3 +253,39 @@ def test_reading_writes_nothing(project: Project) -> None:
     run_costs.run_cost(project, RUN_A)
     after = sorted(p.name for p in project.paths.events_dir.rglob("*") if p.is_file())
     assert before == after
+
+
+def test_run_cost_prefers_the_mcp_counter_file(project: Project) -> None:
+    blob = project.blobs.put(_log_bytes(_synthetic_log()))
+    _start(project, RUN_A, "screen", {"screen": 10})
+    _finish(project, RUN_A, {"screen": 6}, blob)
+    folder = project.paths.dir / "runs" / RUN_A
+    folder.mkdir(parents=True)
+    record = {"run_id": RUN_A, "served": 3, "cap": 25, "updated_at": "2026-11-11T00:00:00+00:00"}
+    (folder / "units.json").write_text(json.dumps(record), encoding="utf-8")
+
+    cost = run_costs.run_cost(project, RUN_A)
+    assert cost.units == 3
+    assert cost.units_source == "mcp-counter"
+    assert cost.cost_per_unit_usd == pytest.approx(0.5 / 3)
+
+
+def test_run_cost_counter_file_is_used_for_an_open_run(project: Project) -> None:
+    _start(project, RUN_B, "screen", {"screen": 10})
+    folder = project.paths.dir / "runs" / RUN_B
+    folder.mkdir(parents=True)
+    (folder / "units.json").write_text(json.dumps({"served": 2}), encoding="utf-8")
+    cost = run_costs.run_cost(project, RUN_B)
+    assert cost.units == 2 and cost.units_source == "mcp-counter"
+
+
+def test_run_cost_malformed_counter_file_falls_back_to_the_counts(project: Project) -> None:
+    blob = project.blobs.put(_log_bytes(_synthetic_log()))
+    _start(project, RUN_A, "screen", {"screen": 10})
+    _finish(project, RUN_A, {"screen": 6}, blob)
+    folder = project.paths.dir / "runs" / RUN_A
+    folder.mkdir(parents=True)
+    for bad in ("not json", "[1]", json.dumps({"served": True}), json.dumps({"served": -1})):
+        (folder / "units.json").write_text(bad, encoding="utf-8")
+        cost = run_costs.run_cost(project, RUN_A)
+        assert cost.units == 4 and cost.units_source == "counts-before-after"

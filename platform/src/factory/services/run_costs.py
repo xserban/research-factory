@@ -12,10 +12,11 @@ Sources of each figure:
 - Tokens (per kind, and per turn): summed from the `usage` of the `assistant` lines of the log.
   A message split over several content blocks repeats its usage on each block; consecutive lines
   with the same message id are counted once.
-- `units`: `counts_before` total minus `counts_after` total of the run (floor 0), both computed by
-  the runner from the queue. No unit counter file is written by the MCP server, so there is no
-  second source. An open run has no `counts_after`; its units are 0 with `units_source`
-  `unavailable`.
+- `units`: when the run folder holds `units.json` (written by the MCP unit counter, see
+  `mcp.unit_cap`), its `served` total, `units_source` `mcp-counter`. Otherwise `counts_before`
+  total minus `counts_after` total of the run (floor 0), both computed by the runner from the
+  queue, `counts-before-after`. An open run without a counter file has no `counts_after`; its
+  units are 0 with `units_source` `unavailable`.
 
 Invariants:
 - Read-only: no event is written, no blob is put, no file is changed.
@@ -40,6 +41,7 @@ from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.blobs import BlobIntegrityError, BlobNotFoundError
 from factory.events.envelope import Event
 from factory.events.reader import read_all
+from factory.mcp.unit_cap import UNITS_FILE
 from factory.model.base import StrictModel
 from factory.model.runner import RunnerFinished, RunnerStarted
 from factory.services.context import Project
@@ -49,7 +51,7 @@ COST_SOURCE = "reported-by-cli"
 """The `cost_source` of a figure taken from the CLI's result line (the API-equivalent price)."""
 
 LogSource = Literal["blob", "file", "none"]
-UnitsSource = Literal["counts-before-after", "unavailable"]
+UnitsSource = Literal["mcp-counter", "counts-before-after", "unavailable"]
 
 
 class TurnUsage(StrictModel):
@@ -211,6 +213,21 @@ def _log_text(
         return "", "none"
 
 
+def _counter_served(project: Project, run_id: str) -> int | None:
+    """The `served` total of the run's `units.json`, None when the file is absent or malformed."""
+    path = project.paths.dir / "runs" / run_id / UNITS_FILE
+    try:
+        record: JsonValue = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(record, dict):
+        return None
+    served = record.get("served")
+    if isinstance(served, bool) or not isinstance(served, int) or served < 0:
+        return None
+    return served
+
+
 def _cost(
     project: Project,
     run_id: str,
@@ -221,7 +238,10 @@ def _cost(
     text, log_source = _log_text(project, run_id, finished)
     log = parse_log(text.splitlines())
     before = sum(started.counts_before.values())
-    if finished is None:
+    counted = _counter_served(project, run_id)
+    if counted is not None:
+        units, units_source = counted, "mcp-counter"
+    elif finished is None:
         units, units_source = 0, "unavailable"
     else:
         units = max(before - sum(finished.counts_after.values()), 0)

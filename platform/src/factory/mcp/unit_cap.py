@@ -13,13 +13,21 @@ Invariants:
   work-and-miner, a target). `remaining()` is the units still servable (None without a cap).
 - A refusal is one `FactoryValidationError` on field `cap-reached`; it writes nothing.
 - A value that is not a positive integer is read as no cap (a stray variable never blocks work).
+- With `FACTORY_RUN_DIR` (the run folder) set and a cap, every change of the served total made by
+  `settle` or `count` rewrites `<run dir>/units.json` (`run_id`, `served`, `cap`, `updated_at`)
+  atomically: a temp file and `os.replace`, under the lock. An OSError is swallowed; the file is
+  evidence for the cost reader (`services.run_costs`) and serving never depends on it.
 """
 
 from __future__ import annotations
 
+import json
+import os
 import threading
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
+from datetime import UTC, datetime
+from pathlib import Path
 
 from pydantic import JsonValue
 
@@ -27,14 +35,19 @@ from factory.errors import FactoryValidationError, ValidationIssue
 
 CAP_ENV = "FACTORY_UNIT_CAP"
 RUN_ENV = "FACTORY_RUN_ID"
+RUN_DIR_ENV = "FACTORY_RUN_DIR"
+UNITS_FILE = "units.json"
 
 
 class UnitCap:
     """The units served by this process against the cap of its run."""
 
-    def __init__(self, cap: int | None = None, run_id: str | None = None) -> None:
+    def __init__(
+        self, cap: int | None = None, run_id: str | None = None, run_dir: Path | None = None
+    ) -> None:
         self.cap = cap
         self.run_id = run_id
+        self.run_dir = run_dir
         self.served = 0
         self._lock = threading.Lock()
 
@@ -42,7 +55,27 @@ class UnitCap:
     def from_env(cls, env: Mapping[str, str]) -> UnitCap:
         raw = env.get(CAP_ENV, "").strip()
         cap = int(raw) if raw.isdecimal() and int(raw) >= 1 else None
-        return cls(cap, env.get(RUN_ENV) or None)
+        run_dir = env.get(RUN_DIR_ENV) or None
+        return cls(cap, env.get(RUN_ENV) or None, Path(run_dir) if run_dir else None)
+
+    def _write_units(self) -> None:
+        """Rewrite `units.json` in the run folder with the served total (caller holds the lock).
+        Swallows OSError: a counter file never breaks serving."""
+        if self.run_dir is None or self.cap is None:
+            return
+        record = {
+            "run_id": self.run_id,
+            "served": self.served,
+            "cap": self.cap,
+            "updated_at": datetime.now(UTC).isoformat(),
+        }
+        target = self.run_dir / UNITS_FILE
+        temp = self.run_dir / f"{UNITS_FILE}.tmp"
+        try:
+            temp.write_text(json.dumps(record), encoding="utf-8")
+            os.replace(temp, target)
+        except OSError:
+            return
 
     def remaining(self) -> int | None:
         """The units still servable, or None when there is no cap."""
@@ -88,6 +121,7 @@ class UnitCap:
         used = min(reserved, self.units(served))
         with self._lock:
             self.served = max(self.served - (reserved - used), 0)
+            self._write_units()
 
     @staticmethod
     def units(served: JsonValue) -> int:
@@ -142,3 +176,4 @@ class UnitCap:
         units = self.units(served)
         with self._lock:
             self.served += units
+            self._write_units()

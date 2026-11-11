@@ -198,6 +198,7 @@ def test_the_prompt_names_the_miner_and_the_stage_skill(
     loaded: Any = config
     env = loaded["mcpServers"]["factory"]["env"]
     assert env["FACTORY_UNIT_CAP"] == "4" and env["FACTORY_RUN_ID"] == "rnr_X"
+    assert env["FACTORY_RUN_DIR"] == str(project.paths.dir / "runs" / "rnr_X")
     _, _, appraisal = runner.build_command(project, "appraise")
     assert "role `appraiser`" in appraisal and "rf-appraise body" in appraisal
 
@@ -235,7 +236,37 @@ def test_no_cap_variable_means_no_cap() -> None:
     assert UnitCap.from_env({"FACTORY_UNIT_CAP": "abc"}).cap is None
     assert UnitCap.from_env({"FACTORY_UNIT_CAP": "0"}).cap is None
     from_env = UnitCap.from_env({"FACTORY_UNIT_CAP": "5", "FACTORY_RUN_ID": "rnr_Y"})
-    assert from_env.cap == 5 and from_env.run_id == "rnr_Y"
+    assert from_env.cap == 5 and from_env.run_id == "rnr_Y" and from_env.run_dir is None
+
+
+def test_the_counter_writes_units_json_in_the_run_folder(tmp_path: Path) -> None:
+    folder = tmp_path / "rnr_W"
+    folder.mkdir()
+    cap = UnitCap.from_env(
+        {"FACTORY_UNIT_CAP": "5", "FACTORY_RUN_ID": "rnr_W", "FACTORY_RUN_DIR": str(folder)}
+    )
+    cap.count({"batch": {"records": [{}, {}]}})
+    record = json.loads((folder / "units.json").read_text(encoding="utf-8"))
+    assert record["run_id"] == "rnr_W" and record["served"] == 2 and record["cap"] == 5
+    assert "updated_at" in record
+    reserved = cap.reserve(3)
+    cap.settle(reserved, {"batch": {"records": [{}]}})
+    record = json.loads((folder / "units.json").read_text(encoding="utf-8"))
+    assert record["served"] == 1
+    assert not (folder / "units.json.tmp").exists()
+
+
+def test_the_counter_without_a_run_dir_writes_nothing(tmp_path: Path) -> None:
+    UnitCap(3, "rnr_V").count({"batch": {"records": [{}]}})
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_the_counter_swallows_a_failed_write(tmp_path: Path) -> None:
+    missing = tmp_path / "no-such-folder"
+    cap = UnitCap(3, "rnr_U", missing)
+    cap.count({"batch": {"records": [{}]}})
+    assert cap.served == 1
+    assert not missing.exists()
 
 
 NEXT_CALLS: dict[str, dict[str, Any]] = {
