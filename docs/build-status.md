@@ -12,7 +12,7 @@ Update this file in the landing commit of every plan, together with the backlog 
 | `plan-reference-layers` | Reference layers T1–T5 (plan 2026-11-11-reference-layers); branched from `plan-8-suggest-select` at a67690b, so it lacks aec35cf | yes | yes (one Sonnet review) | no | no |
 | `plan-feed` | Slice 4c discovery feed v1, F1–F10 (decision 117) | yes | yes (Sonnet review, fixes cec877c) | no | no |
 | `plan-feed-hub` | Feed in the hub (decision 118): Daily updates page, write path, one-click add, work queue, Process now (H1–H7); full ingestion pipeline Process all, the hard MCP unit cap and a per-run time limit (H8); dashboard feed and queue panel | yes | H1–H7 yes (fixes to 62d5c7b); H8 yes (fixes a4d2bb8); dashboard panel (91fc18a) not reviewed | no | no |
-| `plan-restart-costs` | Restartable LLM steps (IDEA-59: interruption finder, `factory resume`, hub Resume, `runs adopt`) and the run cost model (IDEA-45: cost reader, unit counter file, `factory costs`, hub Run costs page, pilot baseline); also the light theme (on `plan-feed-hub`, 7746eeb, 78e67b8) | yes | not yet (review pending) | no | no |
+| `plan-restart-costs` | Restartable LLM steps (IDEA-59: interruption finder, `factory resume`, hub Resume, `runs adopt`) and the run cost model (IDEA-45: cost reader, unit counter file, `factory costs`, hub Run costs page, pilot baseline); also the light theme (on `plan-feed-hub`, 7746eeb, 78e67b8) | yes | yes (Sonnet review, fixes fc2c23e, 73a1ef3) | no | no |
 
 ## Before merging this line
 
