@@ -7,10 +7,16 @@ seconds after the previous one: the snapshot of the dashboard takes about a minu
 that is being mined makes it stale all the time.
 
 Invariants:
-- Read-only for the browser except three allow-listed acts (decision 118): `POST /api/feed/react`,
-  `POST /api/feed/add` and `POST /api/queue/process` (starts the headless runner, which records its
-  own system events). Any other POST path is 404; PUT, DELETE and PATCH are 405. Apart from those
-  acts the server writes nothing but the site folder, through `site.build`.
+- Read-only for the browser except four allow-listed acts (decision 118): `POST /api/feed/react`,
+  `POST /api/feed/add`, `POST /api/queue/process` (starts the headless runner, which records its
+  own system events) and `POST /api/queue/resume` (plan restart-and-costs, R3). Any other POST
+  path is 404; PUT, DELETE and PATCH are 405. Apart from those acts the server writes nothing but
+  the site folder, through `site.build`.
+- `POST /api/queue/resume` with `dry_run` plans in the request and writes nothing. A real resume
+  runs `services.resume.resume` in a daemon thread, one at a time (`ResumeRunner`), because its
+  deterministic steps look papers up and convert them and must not run in a request; the reply is
+  202 and the outcome (ids, refusals) is kept as `last_resume` in `GET /api/queue/interrupted`.
+  `GET /api/queue/interrupted` reads `interrupted()` and reconciles nothing.
 - After a successful `POST /api/feed/add` the deterministic steps (`work_queue.advance`) start in
   a daemon thread, at most one per server; the reply is not delayed. A thread already running
   means the new call is skipped. Conversion runs only in that thread, never in a request.
@@ -21,7 +27,7 @@ Invariants:
   written. The token is made at server start, is injected into `/feed/` and `/queue/` pages only
   and is never written to the files on disk.
 - The actor is the local human principal and each act is authorised by its command row
-  (`cli:feed react`, `cli:feed add`, `cli:queue process`), as the CLI does.
+  (`cli:feed react`, `cli:feed add`, `cli:queue process`, `cli:queue resume`), as the CLI does.
 - Loopback only: a request whose Host is not 127.0.0.1, localhost or [::1] is refused.
 - One build runs at a time; a product that fails is recorded by `site.build` and the others go on.
 """
@@ -34,6 +40,7 @@ import logging
 import secrets
 import threading
 import time
+from collections.abc import Callable
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -46,6 +53,7 @@ from factory.errors import FactoryError, FactoryValidationError, ValidationIssue
 from factory.model.feed import FeedNote, FeedReaction
 from factory.services import feed as feed_service
 from factory.services import pipeline as pipeline_service
+from factory.services import resume as resume_service
 from factory.services import runner as runner_service
 from factory.services import site as site_service
 from factory.services import work_queue
@@ -162,6 +170,73 @@ def feed_add(project: Project, body: dict[str, Any]) -> tuple[int, dict[str, obj
     return 200, {"ok": True, **result.model_dump(mode="json")}
 
 
+class ResumeRunner:
+    """Starts `services.resume.resume` in a daemon thread, one at a time, and keeps the outcome of
+    the last one (or its error) for the page. The thread is the only writer of `last`."""
+
+    def __init__(self) -> None:
+        self._gate = threading.Lock()
+        self.last: dict[str, object] | None = None
+
+    def start(self, project: Project, unit_cap: int | None) -> bool:
+        """True when a resume was started; False while another one is still running."""
+        if not self._gate.acquire(blocking=False):
+            return False
+
+        def run() -> None:
+            try:
+                outcome = resume_service.resume(project, unit_cap=unit_cap)
+                self.last = outcome.model_dump(mode="json")
+            except Exception as exc:  # the reply has gone; the page shows the error
+                _LOG.exception("the resume from the hub failed")
+                self.last = {"error": str(exc)}
+            finally:
+                self._gate.release()
+
+        try:
+            threading.Thread(target=run, name="queue-resume", daemon=True).start()
+        except RuntimeError:
+            self._gate.release()
+            return False
+        return True
+
+
+def queue_resume(
+    project: Project, body: dict[str, Any], runner: ResumeRunner
+) -> tuple[int, dict[str, object]]:
+    """Plan (`dry_run`) or start the resume of the interrupted work, as the local human."""
+    dry_run = body.get("dry_run", False)
+    cap = body.get("unit_cap")
+    bad: list[ValidationIssue] = []
+    if not isinstance(dry_run, bool):
+        bad.append(ValidationIssue("dry_run", "must be true or false"))
+    if cap is not None and (isinstance(cap, bool) or not isinstance(cap, int) or cap < 1):
+        bad.append(ValidationIssue("unit_cap", "must be an integer of at least 1"))
+    if bad:
+        return 400, _issues(*bad)
+    try:
+        authorize_command(project, project.principal, "cli:queue resume")
+    except FactoryValidationError as exc:
+        return 403, _issues(*exc.issues)
+    except FactoryError as exc:
+        return 403, _issues(ValidationIssue("permission", str(exc)))
+    if dry_run is True:
+        try:
+            plan = resume_service.resume(project, dry_run=True)
+        except FactoryError as exc:
+            return 403, _issues(ValidationIssue("permission", str(exc)))
+        return 200, {"ok": True, "dry_run": True, "plan": plan.model_dump(mode="json")}
+    if not runner.start(project, cap):
+        return 409, _issues(ValidationIssue("resume", "another resume is still running"))
+    return 202, {"ok": True, "dry_run": False, "started": True}
+
+
+def interrupted_payload(project: Project) -> dict[str, object]:
+    """`interrupted(project)` as JSON, with `is_clean`; read-only (no reconcile)."""
+    found = resume_service.interrupted(project)
+    return {**found.model_dump(mode="json"), "is_clean": found.is_clean}
+
+
 def queue_process(project: Project, body: dict[str, Any]) -> tuple[int, dict[str, object]]:
     """Start the headless runner for one stage as the local human; returns (status, body)."""
     stage = body.get("stage")
@@ -192,10 +267,11 @@ def queue_process(project: Project, body: dict[str, Any]) -> tuple[int, dict[str
     return 200, {"ok": True, "run_id": run_id, "stage": stage, "unit_cap": cap}
 
 
-_ROUTES: Final = {
+_ROUTES: Final[dict[str, Callable[..., tuple[int, dict[str, object]]]]] = {
     "/api/feed/react": feed_react,
     "/api/feed/add": feed_add,
     "/api/queue/process": queue_process,
+    "/api/queue/resume": queue_resume,
 }
 
 
@@ -260,6 +336,7 @@ def make_server(
     token = secrets.token_urlsafe(32)
     write_lock = threading.Lock()
     advance_gate = threading.Lock()
+    resumer = ResumeRunner()
 
     class Handler(SimpleHTTPRequestHandler):
         def _deny(self, code: int, message: str) -> None:
@@ -338,6 +415,14 @@ def make_server(
                 self.end_headers()
                 self.wfile.write(body)
                 return
+            if self.path.split("?", 1)[0] == "/api/queue/interrupted":
+                try:
+                    payload = interrupted_payload(project)
+                except FactoryError as exc:
+                    self._json(500, _issues(ValidationIssue("interrupted", str(exc))))
+                    return
+                self._json(200, {**payload, "last_resume": resumer.last})
+                return
             if self.path.split("?", 1)[0] == "/api/queue/runs":
                 runs = runner_service.run_status(project, reconcile=False)
                 pipelines = pipeline_service.pipeline_status(project)
@@ -389,6 +474,8 @@ def make_server(
             if route is feed_react:
                 with write_lock:
                     code, payload = route(project, body)
+            elif route is queue_resume:
+                code, payload = queue_resume(project, body, resumer)
             else:
                 # no lock: `feed add` looks the paper up over the network, and each service
                 # serialises its own index work (`send` and the lookup take the index lock)

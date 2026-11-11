@@ -47,6 +47,7 @@ from factory.services import progress as progress_service
 from factory.services import protocol as protocol_service
 from factory.services import question as question_service
 from factory.services import ranking as ranking_service
+from factory.services import resume as resume_service
 from factory.services import runner as runner_service
 from factory.services import screening as screening_service
 from factory.services import screening_check as check_service
@@ -425,6 +426,26 @@ def _feed(project: Project) -> JsonValue:
         "top": _part(lambda: _feed_top(project, now)),
         "queue": _part(lambda: _feed_queue(project)),
         "run": _part(lambda: _feed_run(project)),
+        "interrupted": _interrupted(project),
+    }
+
+
+def _interrupted(project: Project) -> JsonValue:
+    """The counts of interrupted work per category (`resume.interrupted`, read-only), or the word
+    `unavailable` when the read fails."""
+    try:
+        found = resume_service.interrupted(project)
+    except Exception:  # a panel must never take the page down
+        return UNAVAILABLE
+    return {
+        "clean": found.is_clean,
+        "runs": len(found.runs),
+        "pipelines": len(found.pipelines),
+        "leases": sum(lease.count for lease in found.leases),
+        "passes": len(found.passes),
+        "resolve": found.automatic.resolve,
+        "fetch": found.automatic.fetch,
+        "convert": found.automatic.convert,
     }
 
 

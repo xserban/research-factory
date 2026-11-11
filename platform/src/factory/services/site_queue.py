@@ -10,8 +10,13 @@ Invariants:
   one stage each; the stages shown are those that apply to the project, one per registered miner.
   The per-paper progress table has one column per applicable stage with a per-paper reading; each
   cell is `done`, `pending`, `n/a` or `stopped`, read by `pipeline.paper_progress`.
+- The "Interrupted" panel (plan restart-and-costs, R3) is rendered from `resume.interrupted` at
+  build time and refreshed by the script from `GET /api/queue/interrupted`. `Preview` posts a dry
+  run; `Resume` posts a real one (`POST /api/queue/resume`, a 202 when started) and stays disabled
+  when nothing is interrupted, when a run is open, or when the page is not served by the hub.
 - Text from the entries and the inbox is escaped; the page has no external resources.
 """
+# ruff: noqa: E501 (the page script is one JS string; its lines are long by nature)
 
 from __future__ import annotations
 
@@ -20,6 +25,7 @@ from pathlib import Path
 
 from factory.services.context import Project
 from factory.services.pipeline import CellState, PipelineStage, paper_progress, stages
+from factory.services.resume import Interrupted, interrupted
 from factory.services.work_queue import STAGES, QueueItem, WorkQueue, queue
 
 QUEUE_CSS = (
@@ -31,6 +37,8 @@ QUEUE_CSS = (
     ".proc{margin:6px 0 14px}.proc button{padding:4px 12px;margin-right:8px}"
     ".proc button:disabled{opacity:.45;cursor:not-allowed}"
     ".dim{color:var(--dim)}"
+    ".intr{margin:6px 0}.intr li{margin:2px 0}"
+    "#resume-out{white-space:pre-wrap;margin:8px 0 0;font-size:12px;color:var(--light)}"
 )
 
 QUEUE_CSS += (
@@ -64,6 +72,93 @@ function poll(){
     if(busy)setTimeout(poll,5000);
   }).catch(function(e){say('status unavailable: '+e);});
 }
+var intrBox=document.getElementById('interrupted'),
+  preview=document.getElementById('resume-preview'),
+  go=document.getElementById('resume-go'),
+  out=document.getElementById('resume-out'),
+  clean=true,resumeLast=null;
+function textOf(el,lines){
+  el.replaceChildren();
+  lines.forEach(function(t){var li=document.createElement('li');li.textContent=t;el.appendChild(li);});
+}
+function summary(d){
+  var lines=[];
+  (d.runs||[]).forEach(function(r){lines.push('run '+r.run_id+' ('+r.stage+'): '+r.kind
+    +(r.stage_pending?'':', no pending units'));});
+  (d.pipelines||[]).forEach(function(p){lines.push('pipeline '+p.pipeline_id+': '+p.kind
+    +'; stages left: '+((p.stages_left||[]).join(', ')||'none'));});
+  (d.leases||[]).forEach(function(l){lines.push('expired leases, '+l.kind+': '+l.count);});
+  (d.passes||[]).forEach(function(p){
+    var where=p.module==='screening'?p.stage:p.scope;
+    lines.push('stale pass '+where+' '+p.label+': '+p.pending+' pending, session '+p.session
+      +' silent since '+p.last_activity);});
+  var a=d.automatic||{};
+  if(a.resolve)lines.push('papers never looked up: '+a.resolve);
+  if(a.fetch)lines.push('screened-in papers without full text sought: '+a.fetch);
+  if(a.convert)lines.push('full texts not converted: '+a.convert);
+  if(!lines.length)lines.push('Nothing is interrupted.');
+  return lines;
+}
+function planLines(p){
+  var lines=[];
+  if(p.reconcile&&p.reconcile.length)lines.push('reconciled (process gone): '+p.reconcile.join(', '));
+  (p.leases||[]).forEach(function(l){lines.push('leases lapsed, released by expiry: '+l.kind+' x'+l.count);});
+  if(p.pipeline)lines.push('pipeline '+p.pipeline.resumes+' resumed from stage '+p.pipeline.from_stage
+    +' ('+p.pipeline.stages.join(', ')+')');
+  if(p.run)lines.push('run '+p.run.resumes+' resumed: stage '+p.run.stage+' with model '+p.run.model);
+  if(p.queued&&p.queued.length)lines.push('queued (resumed by a later call): '+p.queued.join(', '));
+  (p.stale_passes||[]).forEach(function(s){
+    var where=s.module==='screening'?s.stage:s.scope;
+    lines.push('stale pass (not resumed): '+s.module+' '+where+' '+s.label+', '+s.pending
+      +' pending, session '+s.session);});
+  var a=p.automatic||{};
+  if(a.resolve||a.fetch||a.convert)lines.push('automatic steps undone: resolve '+(a.resolve||0)
+    +', fetch '+(a.fetch||0)+', convert '+(a.convert||0));
+  return lines.length?lines:['nothing interrupted'];
+}
+function resultLines(r){
+  if(r.error)return ['error: '+r.error];
+  var lines=[];
+  (r.reconciled||[]).forEach(function(x){lines.push('reconciled run '+x);});
+  if(r.pipeline_id)lines.push('started pipeline '+r.pipeline_id);
+  if(r.run_id)lines.push('started run '+r.run_id);
+  (r.refused||[]).forEach(function(x){lines.push('refused: '+x);});
+  return lines.length?lines:['nothing started'];
+}
+function refreshInterrupted(){
+  fetch('/api/queue/interrupted').then(function(r){return r.json();}).then(function(d){
+    if(intrBox)textOf(intrBox,summary(d));
+    clean=!!d.is_clean;resumeLast=d.last_resume||null;
+    if(go)go.disabled=!token||clean||busy;
+  }).catch(function(e){if(intrBox)textOf(intrBox,['unavailable: '+e]);});
+}
+function postResume(body){
+  return fetch('/api/queue/resume',{method:'POST',
+    headers:{'Content-Type':'application/json','X-Factory-Token':token},
+    body:JSON.stringify(body)})
+  .then(function(r){
+    return r.json().catch(function(){
+      return {ok:false,issues:[{field:'response',reason:'status '+r.status}]};
+    });
+  });
+}
+if(preview)preview.addEventListener('click',function(){
+  if(out)out.textContent='planning...';
+  postResume({dry_run:true}).then(function(r){
+    if(!r.ok){if(out)out.textContent=issues(r);return;}
+    if(out)out.textContent=planLines(r.plan).join('\n');
+  }).catch(function(e){if(out)out.textContent='request failed: '+e;});
+});
+if(go)go.addEventListener('click',function(){
+  go.disabled=true;
+  postResume({}).then(function(r){
+    if(!r.ok){if(out)out.textContent=issues(r);refreshInterrupted();return;}
+    if(out)out.textContent='resume started; the outcome appears here when it ends.';
+    setTimeout(refreshInterrupted,3000);
+  }).catch(function(e){if(out)out.textContent='request failed: '+e;go.disabled=false;});
+});
+if(preview)preview.disabled=false;
+if(token&&location.protocol!=='file:'){refreshInterrupted();setInterval(refreshInterrupted,15000);}
 btns.forEach(function(b){
   b.addEventListener('click',function(){
     btns.forEach(function(x){x.disabled=true;});
@@ -110,7 +205,53 @@ def _body(work: WorkQueue, plan: list[PipelineStage], project: Project) -> str:
         + _progress_html(work.items, plan, progress)
         + "<h2>Pending work</h2>"
         + _pending_html(work.pending, plan)
+        + _interrupted_html(project)
     )
+
+
+def summary_lines(found: Interrupted) -> list[str]:
+    """The panel's lines for `found` (the script builds the same lines from the JSON)."""
+    lines: list[str] = []
+    for run in found.runs:
+        pending = "" if run.stage_pending else ", no pending units"
+        lines.append(f"run {run.run_id} ({run.stage}): {run.kind}{pending}")
+    for pipe in found.pipelines:
+        left = ", ".join(pipe.stages_left) or "none"
+        lines.append(f"pipeline {pipe.pipeline_id}: {pipe.kind}; stages left: {left}")
+    for lease in found.leases:
+        lines.append(f"expired leases, {lease.kind}: {lease.count}")
+    for item in found.passes:
+        where = item.stage if item.module == "screening" else item.scope
+        lines.append(
+            f"stale pass {where} {item.label}: {item.pending} pending, session {item.session} "
+            f"silent since {item.last_activity}"
+        )
+    a = found.automatic
+    if a.resolve:
+        lines.append(f"papers never looked up: {a.resolve}")
+    if a.fetch:
+        lines.append(f"screened-in papers without full text sought: {a.fetch}")
+    if a.convert:
+        lines.append(f"full texts not converted: {a.convert}")
+    return lines or ["Nothing is interrupted."]
+
+
+def _interrupted_html(project: Project) -> str:
+    """The Interrupted panel: the lines of `interrupted`, and the Preview and Resume buttons. Both
+    buttons start disabled; the script enables them when served by the hub."""
+    try:
+        found = interrupted(project)
+    except Exception:  # a panel must never take the page down
+        body = "<ul id=interrupted class=intr><li>unavailable</li></ul>"
+    else:
+        items = "".join(f"<li>{escape(line)}</li>" for line in summary_lines(found))
+        body = f"<ul id=interrupted class='intr dim'>{items}</ul>"
+    controls = (
+        "<div class=proc><button type=button id=resume-preview disabled>Preview</button> "
+        "<button type=button id=resume-go disabled>Resume</button>"
+        "<pre id=resume-out></pre></div>"
+    )
+    return "<h2>Interrupted</h2>" + body + controls
 
 
 def _progress_html(
