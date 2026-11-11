@@ -89,8 +89,9 @@ def held_matches(project: Project, works: Sequence[Work]) -> dict[str, str]:
 
     Read-only: nothing is written. The rules are those of `dedup_new` (strong identifiers, then
     year-blocked title similarity, confirmed by the cascade, respecting blocked pairs); the works
-    need not be recorded. A match with an absorbed work resolves to that work's primary. Works
-    that match nothing are absent from the result.
+    need not be recorded. Linked identifiers (work aliases) match like a work's own. A match with
+    an absorbed work resolves to that work's primary. Works that match nothing are absent from the
+    result.
     """
     project.index.sync()
     canonical = {a: m.primary for m in active_merges(project) for a in m.absorbed}
@@ -101,7 +102,13 @@ def held_matches(project: Project, works: Sequence[Work]) -> dict[str, str]:
             ids = (_key_candidates(conn, [work]) | _title_candidates(conn, [work])) - {work.id}
         if not ids:
             continue
-        match = cascade_match(work, works_by_ids(project, sorted(ids)), blocked)
+        candidates = works_by_ids(project, sorted(ids))
+        match = cascade_match(
+            work,
+            candidates,
+            blocked,
+            aliases=alias_keys(project, [work.id, *(c.id for c in candidates)]),
+        )
         if match is None:
             continue
         others = [m for m in (match.primary, *match.absorbed) if m != work.id]

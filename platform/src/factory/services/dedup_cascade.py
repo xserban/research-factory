@@ -264,13 +264,18 @@ def dedup(
 
 
 def cascade_match(
-    new: Work, candidates: list[Work], blocked: frozenset[frozenset[str]] = frozenset()
+    new: Work,
+    candidates: list[Work],
+    blocked: frozenset[frozenset[str]] = frozenset(),
+    aliases: Mapping[str, Sequence[tuple[str, str]]] | None = None,
 ) -> CascadeMerge | None:
     """The merge `new` joins when the cascade runs over `new` and `candidates`, or None.
 
     The group is the one containing `new`; it is reported only when it absorbs another work.
     """
-    result = dedup([new, *[c for c in candidates if c.id != new.id]], blocked=blocked)
+    result = dedup(
+        [new, *[c for c in candidates if c.id != new.id]], blocked=blocked, aliases=aliases
+    )
     for merge in result.merges:
         if merge.absorbed and new.id in (merge.primary, *merge.absorbed):
             return merge
