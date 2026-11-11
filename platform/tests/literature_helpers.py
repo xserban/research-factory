@@ -2,7 +2,6 @@
 each report both methods in one group, through the true extraction passes. The group's metric is
 `low`, the metric cell of the fixture document, so `LOW` is the hypothesis metric that matches."""
 
-
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence

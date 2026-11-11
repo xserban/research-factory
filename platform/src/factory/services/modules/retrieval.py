@@ -75,3 +75,31 @@ SPEC = ModuleSpec(
 )
 
 MODULE = RuleModule(SPEC)
+
+FEED_SPEC = ModuleSpec(
+    name="feed",
+    kind=ModuleKind.RETRIEVAL,
+    events=EventFamily(
+        types=(
+            "feed.configured",
+            "feed.fetched",
+            "feed.ranked",
+            "feed.reacted",
+            "feed.sent",
+        ),
+        tables=(
+            "feed_configs",
+            "feed_entries",
+            "feed_fetches",
+            "feed_rankings",
+            "feed_reactions",
+            "feed_sends",
+        ),
+        note=(
+            "Discovery feed (slice 4c, decision 117): entries stay outside the corpus until a "
+            "human sends one through the inbox. configured, reacted and sent are human acts."
+        ),
+    ),
+)
+
+FEED_MODULE = RuleModule(FEED_SPEC)
