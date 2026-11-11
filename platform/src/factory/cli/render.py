@@ -1840,8 +1840,16 @@ def layer_status_lines(status: LayerStatus) -> list[str]:
         by_layer = ", ".join(f"{k} {v}" for k, v in counts.items()) or "none yet"
         left = status.left.get(stage)
         lines.append(f"{stage}: {by_layer}" + ("" if left is None else f"; left {left}"))
+        extras = [
+            f"{layer} {status.precursors.get(stage, {}).get(layer, 0)} precursor, "
+            f"{status.unknown_year.get(stage, {}).get(layer, 0)} year unknown"
+            for layer in counts
+        ]
+        if extras:
+            lines.append("  by layer: " + "; ".join(extras))
     if status.scheme_version is not None:
         lines.append(f"awaiting resolution (abstract stage): {status.awaiting_resolution}")
+        lines.append(f"snowball candidates: {status.snowball_candidates}")
     cal = status.calibration
     if isinstance(cal, CalibrationState):
         agreement = "n/a" if cal.agreement is None else f"{cal.agreement:.2f}"

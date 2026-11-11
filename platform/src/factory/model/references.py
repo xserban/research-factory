@@ -557,9 +557,16 @@ LayerStage = Literal["title", "abstract"]
 
 
 class LayerDef(StrictModel):
-    """One layer of a scheme: its id, name, criteria and example titles."""
+    """One layer of a scheme: its id, name, ring, flags, criteria and example titles.
+
+    `ring` orders layers from the inner core (0) outwards. `snowball`: items of this layer are
+    snowball candidates. `abstract`: items given this layer at the title stage go on to the
+    abstract stage."""
 
     id: LayerId
+    ring: int = Field(ge=0, le=20)
+    snowball: bool = False
+    abstract: bool = False
     name: Annotated[NonBlank, Field(max_length=MAX_LAYER_NAME)]
     criteria: Annotated[NonBlank, Field(max_length=MAX_LAYER_CRITERIA)]
     include_examples: tuple[LayerExample, ...] = Field(default=(), max_length=MAX_LAYER_EXAMPLES)
@@ -567,16 +574,26 @@ class LayerDef(StrictModel):
 
 
 class LayerSchemeRecorded(StrictModel):
-    """The researcher's layer scheme, version `version`; first write wins per version."""
+    """The researcher's layer scheme, version `version`; first write wins per version.
+
+    Invariants: ids unique, rings unique, at least one snowball layer. `precursor_before_year`
+    is the cutoff for the computed precursor status: an item whose year is known and earlier is
+    a precursor (never a judged layer)."""
 
     version: int = Field(ge=1)
     layers: tuple[LayerDef, ...] = Field(min_length=MIN_LAYERS, max_length=MAX_LAYERS)
+    precursor_before_year: int | None = Field(default=None, ge=1900, le=2099)
 
     @model_validator(mode="after")
     def _unique_ids(self) -> Self:
         ids = [layer.id for layer in self.layers]
         if len(set(ids)) != len(ids):
             raise ValueError("layer ids must be unique")
+        rings = [layer.ring for layer in self.layers]
+        if len(set(rings)) != len(rings):
+            raise ValueError("layer rings must be unique")
+        if not any(layer.snowball for layer in self.layers):
+            raise ValueError("at least one layer must have snowball=true")
         return self
 
 
