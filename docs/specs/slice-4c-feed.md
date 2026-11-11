@@ -63,7 +63,7 @@ Projection: `feed_entries`, `feed_rankings`, `feed_reactions`. `PROJECTION_VERSI
 - CLI: `factory feed configure | run | show | react | send | status`.
 - MCP: `feed_list` (agent view: no held-out information; refused to pass sessions as in decision 101), `feed_run`, `feed_status`. There is no MCP `feed_react` or `feed_send`, since both are human acts. Where the client supports MCP elicitation, they may be offered as in slice 8.
 - Digest (4b): a feed section per project with the top items, exploration picks, open sends awaiting resolution and the drift finding.
-- Site hub (IDEA-54, IDEA-55): a feed page per project. Later.
+- Site hub (IDEA-54, IDEA-55): the Daily updates page with react and one-click add, the work queue and Process now are built by plan `2026-11-11-feed-hub.md` under decision 118.
 
 ## Proposed requirements (numbered at acceptance)
 

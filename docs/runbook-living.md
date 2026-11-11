@@ -85,6 +85,17 @@ The feed ranks each configured project's daily arXiv listing against its core wo
 
 The run needs the ranker extra and local SPECTER2 weights (`FACTORY_RANKER_MODEL`, decision 116); without them it refuses and names the remedy. Raw listings are cached under `<root>/.feed-cache`; deleting the cache changes no project. Exit codes are those of `watch run`. Reacting and sending are the researcher's acts and are never scheduled: `factory feed show`, `factory feed react ID like|dislike|save|dismiss`, `factory feed send ID`, then `factory inbox resolve` to bring sent papers into screening.
 
+## The feed in the hub: Daily updates, work queue, Process now (decision 118)
+
+`factory --project SLUG site serve` serves the hub on 127.0.0.1. Two pages act, the others only read:
+
+- **Daily updates** (`/feed/`): the latest ranking. Like, Dislike, Save and Dismiss record `feed.reacted`; **Add to project** records `feed.sent` and the inbox item and looks the paper up at once (`supplied`), so it enters the corpus pending screening. A failed lookup is shown and can be retried with `factory inbox resolve`.
+- **Work queue** (`/queue/`): every added paper and its stage (added, in corpus, screened in or out, full text, converted, extracted, or stopped), and pending units per kind. The queue is computed from events and stores nothing.
+- **Process now** (on the queue page, or `factory queue process --stage screen|extract [--cap N] --wait`): starts the Claude Code CLI as an outside process, `claude -p` with the factory MCP server only and the stage's tools only (screen: Haiku, `rf-screen`; extract: Sonnet, `rf-extract`), one run per project, at most `--cap` units. Each run is recorded (`runner.started`, `runner.finished`) with its prompt, tools, model, log and counts; its files are in `projects/<slug>/runs/<run_id>/`. `factory queue runs` lists runs. The platform calls no model API: `claude` uses the researcher's own installation and subscription.
+- **Automatic steps:** after an add and after each run, the hub resolves never-tried lookups, fetches full text for papers included at title/abstract and converts them (`factory queue advance` does the same by hand).
+
+The write endpoints accept only these acts, only from the page the server served (a per-start token, loopback Host and same Origin), and authorise them through the same access rows as the CLI. Built pages on disk carry no token.
+
 ## Conclusions
 
 `factory conclusions register --statement TEXT --basis KIND:REF ... [--predicate JSON]` records a conclusion with its basis (cell, row, group, work); every reference must resolve. `factory conclusions status|diff [--since SNAPSHOT]` show how each stands against a snapshot: `unchanged`, `changed`, `basis-affected` or `new`, all computed. Take a snapshot with `factory living snapshot` (or `snapshot_every` in the watch plan) so that later cycles have a reference.
