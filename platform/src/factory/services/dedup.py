@@ -57,14 +57,17 @@ class _Reconciliation:
 def _reconciliation(project: Project, *, report: bool = True) -> _Reconciliation:
     works = list_works(project)
     blocked = blocked_pairs(project)
+    joined = joined_pairs(project)
     aliases = alias_keys(project, [w.id for w in works])
     if report:
         with track(
             project, "dedup", "title comparison", unit="records", total=len(works)
         ) as reporter:
-            result = dedup(works, blocked=blocked, aliases=aliases, progress=reporter.update)
+            result = dedup(
+                works, blocked=blocked, joined=joined, aliases=aliases, progress=reporter.update
+            )
     else:
-        result = dedup(works, blocked=blocked, aliases=aliases)
+        result = dedup(works, blocked=blocked, joined=joined, aliases=aliases)
     # Identity collapses (several records sharing one id) absorb nothing: they are not merges.
     groups = [group for group in result.merges if group.absorbed]
     active = active_merges(project)
@@ -279,9 +282,23 @@ def alias_keys(project: Project, work_ids: Sequence[str]) -> dict[str, list[tupl
 
 
 def blocked_pairs(project: Project) -> frozenset[frozenset[str]]:
+    """Reverted merges' pairs plus the pairs the researcher ruled `different`."""
     project.index.sync()
     with project.index.connect() as conn:
         rows = conn.execute(text("SELECT a, b FROM blocked_pairs ORDER BY a, b")).all()
+        ruled = conn.execute(
+            text("SELECT work_a, work_b FROM dedup_pair_decisions WHERE decision = 'different'")
+        ).all()
+    return frozenset(frozenset({str(a), str(b)}) for a, b in [*rows, *ruled])
+
+
+def joined_pairs(project: Project) -> frozenset[frozenset[str]]:
+    """Pairs the researcher ruled `same`."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text("SELECT work_a, work_b FROM dedup_pair_decisions WHERE decision = 'same'")
+        ).all()
     return frozenset(frozenset({str(a), str(b)}) for a, b in rows)
 
 

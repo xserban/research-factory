@@ -29,6 +29,7 @@ from factory.services.dedup import (
     DedupSummary,
     alias_keys,
     blocked_pairs,
+    joined_pairs,
     matching_merge,
     write_reconciliation,
 )
@@ -97,6 +98,7 @@ def _reconcile_batch(project: Project, batch: Sequence[str]) -> DedupSummary:
     result = dedup(
         works,
         blocked=blocked_pairs(project),
+        joined=joined_pairs(project),
         aliases=alias_keys(project, [w.id for w in works]),
     )
     # Only groups that contain a new work are ours to reconcile; identity collapses absorb nothing.
@@ -129,7 +131,9 @@ def _considered(
 ) -> tuple[list[Work], list[DedupMerged]]:
     """New works plus candidates plus merge members, and the active merges that touch them."""
     with project.index.connect() as conn:
-        candidate_ids = _key_candidates(conn, new) | _title_candidates(conn, new)
+        candidate_ids = (
+            _key_candidates(conn, new) | _title_candidates(conn, new) | _joined_partners(conn, new)
+        )
         touching = _active_merges_touching(conn, new_ids | candidate_ids)
     member_ids = {m for merge in touching for m in (merge.primary, *merge.absorbed)}
     works = works_by_ids(project, sorted(new_ids | candidate_ids | member_ids))
@@ -159,6 +163,21 @@ def _key_candidates(conn: Connection, new: Sequence[Work]) -> set[str]:
         # it by them; its own aliases find the works that carry those identifiers.
         for kind, value in [*strong_keys(work), *aliases.get(work.id, ())]:
             found.update(str(r[0]) for r in conn.execute(statement, {"kind": kind, "value": value}))
+    return found
+
+
+def _joined_partners(conn: Connection, new: Sequence[Work]) -> set[str]:
+    """The other side of every pair the researcher ruled `same` that has a new work on one side."""
+    found: set[str] = set()
+    ids = sorted({w.id for w in new})
+    for column, other in (("work_a", "work_b"), ("work_b", "work_a")):
+        statement = text(
+            f"SELECT {other} FROM dedup_pair_decisions WHERE decision = 'same' AND {column} IN :ids"
+        ).bindparams(bindparam("ids", expanding=True))
+        for start in range(0, len(ids), _ID_CHUNK):
+            found.update(
+                str(r[0]) for r in conn.execute(statement, {"ids": ids[start : start + _ID_CHUNK]})
+            )
     return found
 
 
