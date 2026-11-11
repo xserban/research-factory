@@ -5,6 +5,10 @@ It parses input, calls `factory.services.resume` and formats its answer. The com
 `TOOL_PERMISSIONS` row (`cli:resume`) is applied through `factory.cli.main`, which imports this
 module to register the command; its helpers are imported inside the function for that reason.
 
+The command runs in the foreground: a resumed pipeline or run is waited for (with its time
+limit) before the command returns, so the process does not exit under it; with `--all` the
+projects go one after another.
+
 Exit codes: 0 when nothing is to do, or the work started; 1 when something was refused; 2 for
 invalid input (nothing is written on that path).
 """
@@ -29,6 +33,10 @@ def _print_plan(plan: resume_service.ResumePlan) -> None:
     if plan.is_empty:
         typer.echo("  nothing interrupted")
         return
+    if plan.blocked:
+        typer.echo(f"  blocked: {plan.blocked}")
+    for run_id in plan.failed_to_start:
+        typer.echo(f"  run {run_id} never started (launcher failed): not resumed")
     if plan.reconcile:
         typer.echo(f"  reconciled (process gone): {', '.join(plan.reconcile)}")
     for lease in plan.leases:
@@ -42,6 +50,8 @@ def _print_plan(plan: resume_service.ResumePlan) -> None:
         typer.echo(
             f"  run {plan.run.resumes} resumed: stage {plan.run.stage} with model {plan.run.model}"
         )
+        if plan.run.adopted:
+            typer.echo("    (adopted driver: the resumed run uses the full tools of the stage)")
     if plan.queued:
         typer.echo(f"  queued (resumed by a later call): {', '.join(plan.queued)}")
     for item in plan.stale_passes:
@@ -74,7 +84,7 @@ def _print_result(result: resume_service.ResumeResult) -> bool:
 
 def _one(project: Project, cap: int | None, dry_run: bool) -> bool:
     """Plan (or resume) one project; True when something was refused."""
-    outcome = resume_service.resume(project, dry_run=dry_run, unit_cap=cap)
+    outcome = resume_service.resume(project, dry_run=dry_run, unit_cap=cap, foreground=True)
     if isinstance(outcome, resume_service.ResumePlan):
         _print_plan(outcome)
         typer.echo("dry run: nothing written")

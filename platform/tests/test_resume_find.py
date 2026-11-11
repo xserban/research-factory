@@ -242,3 +242,50 @@ def test_automatic_steps_left_undone_are_counted(
     monkeypatch.setattr(resume, "added_papers", lambda p: items)
     auto = interrupted(project).automatic
     assert (auto.resolve, auto.fetch, auto.convert) == (1, 1, 2)
+
+
+def _started_chain(project: Project, resumes: str | None, *, pid: bool = True) -> str:
+    run_id = project.ids.new("rnr")
+    folder = project.paths.dir / "runs" / run_id
+    folder.mkdir(parents=True)
+    if pid:
+        (folder / "pid").write_text("999999", encoding="utf-8")
+    payload = RunnerStarted(
+        run_id=run_id,
+        stage="screen",
+        model="claude-haiku-5-5",
+        allowed_tools=("mcp__factory__screen_next",),
+        prompt_blob=project.blobs.put(b"prompt"),
+        unit_cap=1,
+        counts_before={"screen_a": 2},
+        command=("claude",),
+        resumes=resumes,
+    )
+    project.record([project.events.make("runner.started", payload, project.system_actor())])
+    return run_id
+
+
+def test_a_run_resumed_by_a_later_run_is_superseded(project: Project) -> None:
+    first = _started_chain(project, None)
+    _finished(project, first, "lost", None)
+    second = _started_chain(project, first)
+    _finished(project, second, "lost", None)
+    third = _started_chain(project, second)
+    _finished(project, third, "failed", -15)
+    assert [r.run_id for r in interrupted(project).runs] == [third]
+
+
+def test_a_launcher_failure_is_failed_to_start_and_not_offered_for_resume(
+    project: Project,
+) -> None:
+    never = _started_chain(project, None, pid=False)
+    _finished(project, never, "failed", None)
+    killed = _started_chain(project, None)  # has a pid file: a real kill is a timeout
+    _finished(project, killed, "failed", None)
+    kinds = {r.run_id: r.kind for r in interrupted(project).runs}
+    assert kinds == {never: "failed-to-start", killed: "timeout"}
+    plan = resume.resume(project, dry_run=True)
+    assert isinstance(plan, resume.ResumePlan)
+    assert plan.failed_to_start == [never]
+    assert plan.run is not None and plan.run.resumes == killed
+    assert never not in plan.queued

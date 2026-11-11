@@ -4,6 +4,7 @@ launcher stands in for the process; events and run folders are written directly.
 from __future__ import annotations
 
 import os
+import time
 from collections.abc import Sequence
 from datetime import timedelta
 from pathlib import Path
@@ -271,3 +272,124 @@ def test_the_fold_drops_an_unknown_resumes_and_keeps_the_run(project: Project) -
     )
     project.record([project.events.make("runner.started", payload, project.system_actor())])
     assert _row(project, "runner_runs", "run_id", run_id)["resumes"] is None
+
+
+# --- review fixes: foreground, live runs, caps ----------------------------------------------
+
+
+class SlowLauncher:
+    """The process ends only after a pause: a caller that does not wait sees the run still open."""
+
+    def __call__(self, argv: Sequence[str], log_path: Path) -> FakeProcess:
+        log_path.write_text('{"type":"result"}\n', encoding="utf-8")
+        process = FakeProcess()
+        process.wait = lambda: (time.sleep(0.3), 0)[1]  # type: ignore[method-assign]
+        return process
+
+
+def _lost_pipeline(project: Project, cap: int) -> str:
+    old = project.ids.new("rpl")
+    project.record(
+        [
+            project.events.make(
+                "runner.pipeline_started",
+                PipelineStarted(
+                    pipeline_id=old,
+                    stages=("screen", "extract"),
+                    unit_cap=cap,
+                    counts_before={"screen": 2, "extract": 2},
+                ),
+                project.system_actor(),
+            ),
+            project.events.make(
+                "runner.pipeline_finished",
+                PipelineFinished(pipeline_id=old, outcome="lost", stopped_at="screen"),
+                project.system_actor(),
+            ),
+        ]
+    )
+    return old
+
+
+def test_foreground_resume_of_a_run_waits_until_it_is_closed(project: Project) -> None:
+    _started(project)
+    result = resume.resume(project, launcher=SlowLauncher(), foreground=True)
+    assert isinstance(result, resume.ResumeResult) and result.run_id is not None
+    assert result.refused == []
+    # Without a wait here the 0.3 s process would still be open.
+    assert runner.run_outcome(project, result.run_id) == "complete"
+
+
+def test_foreground_resume_of_a_pipeline_runs_it_in_the_calling_thread(
+    project: Project, _env: dict[str, int], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _env["extract_a"] = 2
+    _plan_stages(monkeypatch, ("screen", "extract"))
+    _lost_pipeline(project, 5)
+
+    def never(*a: object, **k: object) -> str:
+        raise AssertionError("the background start must not be used")
+
+    monkeypatch.setattr(pipeline, "start_pipeline", never)
+    result = resume.resume(project, launcher=FakeLauncher(), foreground=True)
+    assert isinstance(result, resume.ResumeResult) and result.pipeline_id is not None
+    new = _row(project, "runner_pipelines", "pipeline_id", result.pipeline_id)
+    assert new["outcome"] == "complete"  # already recorded: nothing runs in a thread
+
+
+def test_a_resumed_pipeline_keeps_the_cap_of_the_pipeline_it_resumes(
+    project: Project, _env: dict[str, int], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _env["extract_a"] = 2
+    _plan_stages(monkeypatch, ("screen", "extract"))
+    _lost_pipeline(project, 7)
+    plan = resume.resume(project, dry_run=True)
+    assert isinstance(plan, resume.ResumePlan) and plan.pipeline is not None
+    assert plan.pipeline.unit_cap == 7
+    kept = resume.resume(project, launcher=FakeLauncher(), foreground=True)
+    assert isinstance(kept, resume.ResumeResult) and kept.pipeline_id is not None
+    assert _row(project, "runner_pipelines", "pipeline_id", kept.pipeline_id)["unit_cap"] == 7
+    _lost_pipeline(project, 7)  # a newer interrupted pipeline
+    over = resume.resume(project, launcher=FakeLauncher(), foreground=True, unit_cap=3)
+    assert isinstance(over, resume.ResumeResult) and over.pipeline_id is not None
+    assert _row(project, "runner_pipelines", "pipeline_id", over.pipeline_id)["unit_cap"] == 3
+
+
+def _live_run(project: Project) -> str:
+    """An open run whose process (this one) is alive."""
+    run_id = _started(project)
+    (project.paths.dir / "runs" / run_id / "pid").write_text(str(os.getpid()), encoding="utf-8")
+    return run_id
+
+
+def test_a_live_run_blocks_the_resume_and_no_step_runs(
+    project: Project, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    live = _live_run(project)
+    advanced: list[int] = []
+    monkeypatch.setattr(runner, "_advance_after", lambda p: advanced.append(1))
+    launcher = FakeLauncher()
+    before = len(_events(project))
+    result = resume.resume(project, launcher=launcher)
+    assert isinstance(result, resume.ResumeResult)
+    assert result.refused == [f"blocked: live run {live}"]
+    assert result.plan.blocked == f"live run {live}"
+    assert advanced == [] and launcher.calls == [] and result.run_id is None
+    assert len(_events(project)) == before
+    dry = resume.resume(project, dry_run=True)
+    assert isinstance(dry, resume.ResumePlan) and dry.blocked == f"live run {live}"
+    assert not dry.is_empty
+
+
+def test_the_steps_run_once_when_the_reconcile_already_ran_them(
+    project: Project, _env: dict[str, int], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _env["screen_a"] = 0  # nothing to start: no watcher thread advances in the background
+    _started(project)  # open, its process gone: finish_lost closes it and advances
+    advanced: list[int] = []
+    monkeypatch.setattr(runner, "_advance_after", lambda p: advanced.append(1))
+    resume.resume(project, launcher=FakeLauncher())
+    assert advanced == [1]
+    advanced.clear()
+    resume.resume(project, launcher=FakeLauncher())  # nothing to reconcile now
+    assert advanced == [1]

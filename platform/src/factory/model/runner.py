@@ -51,6 +51,9 @@ class RunnerStarted(StrictModel):
     resumes: str | None = Field(default=None, pattern=RUNNER_RUN_ID_RE)
     """The earlier run this one resumes (plan restart-and-costs R2): a new run with the same
     prompt blob, tools and model. The earlier run's events are never edited."""
+    adopted: bool = False
+    """True for a driver started outside the runner and recorded afterwards (`adopt_driver`);
+    `allowed_tools` is then what that driver really had. Absent in older events (False)."""
 
 
 class RunnerFinished(StrictModel):

@@ -4,15 +4,20 @@ as a run folder. No real `claude` is started; the files are temporary."""
 from __future__ import annotations
 
 import json
+import os
+from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 import pytest
+from sqlalchemy import text
 from typer.testing import CliRunner
 
 from factory.errors import FactoryValidationError
 from factory.services import resume, runner
 from factory.services.context import Project
 from tests.cli_helpers import _env
+from tests.helpers import install_skill
 
 SCREEN_TOOLS = ("mcp__factory__screen_next", "mcp__factory__screen_record")
 PROMPT = "Screen the batch.\nLimit: stop after 5 units.\n"
@@ -176,3 +181,117 @@ def test_cli_adopts_and_prints_the_run_id(project: Project, tmp_path: Path) -> N
     assert result.exit_code == 0, result.output
     run_id = result.output.strip().splitlines()[-1]
     assert runner.run_outcome(project, run_id) == "lost"
+
+
+def _row(project: Project, run_id: str) -> Any:
+    project.index.sync()
+    with project.index.connect() as conn:
+        return (
+            conn.execute(text("SELECT * FROM runner_runs WHERE run_id = :r"), {"r": run_id})
+            .mappings()
+            .one()
+        )
+
+
+def test_the_event_is_marked_adopted_with_the_tools_the_driver_had(
+    project: Project, tmp_path: Path
+) -> None:
+    run_id = _adopt(project, _prompt(tmp_path), log_file=_log(tmp_path))
+    row = _row(project, run_id)
+    assert row["adopted"] == 1
+    assert json.loads(row["allowed_tools"]) == list(SCREEN_TOOLS)
+    record = runner.run_record(project, run_id)
+    assert record is not None and record.adopted is True
+
+
+def test_the_cap_is_read_from_the_prompt(project: Project, tmp_path: Path) -> None:
+    run_id = _adopt(project, _prompt(tmp_path), log_file=_log(tmp_path))
+    assert _row(project, run_id)["unit_cap"] == 5  # "stop after 5 units"
+
+
+def test_a_prompt_without_a_cap_gets_the_default_and_the_sentence_in_the_copy_only(
+    project: Project, tmp_path: Path
+) -> None:
+    source = tmp_path / "bare.txt"
+    source.write_text("Screen the batch.\n", encoding="utf-8")
+    run_id = _adopt(project, source, log_file=_log(tmp_path))
+    assert _row(project, run_id)["unit_cap"] == runner.DEFAULT_UNIT_CAP
+    stored = (project.paths.dir / "runs" / run_id / "prompt.txt").read_text(encoding="utf-8")
+    assert f"Limit: stop after {runner.DEFAULT_UNIT_CAP} units" in stored
+    record = runner.run_record(project, run_id)
+    assert record is not None
+    assert project.blobs.get(record.prompt_blob).decode("utf-8") == stored
+    assert source.read_text(encoding="utf-8") == "Screen the batch.\n"  # the source is unchanged
+
+
+def test_the_mcp_config_keeps_only_command_args_and_allowed_env(
+    project: Project, tmp_path: Path
+) -> None:
+    source = tmp_path / "mcp.json"
+    server = {
+        "command": "factory",
+        "args": ["serve", "--api-key", "sk-1", "--token=t-2", "--port", "8000", "--PassWord", "pw"],
+        "url": "https://example.test/mcp",
+        "headers": {"Authorization": "Bearer abc"},
+        "env": {"FACTORY_ROOT": "/r", "OTHER": "x"},
+    }
+    source.write_text(json.dumps({"mcpServers": {"f": server}}), encoding="utf-8")
+    run_id = _adopt(project, _prompt(tmp_path), mcp_config=source)
+    raw = (project.paths.dir / "runs" / run_id / "mcp.json").read_text(encoding="utf-8")
+    kept = json.loads(raw)["mcpServers"]["f"]
+    assert kept == {
+        "command": "factory",
+        "args": ["serve", "--port", "8000"],
+        "env": {"FACTORY_ROOT": "/r"},
+    }
+    for leaked in ("sk-1", "t-2", "pw", "Bearer", "example.test"):
+        assert leaked not in raw
+
+
+def test_the_recorded_prompt_path_is_relative_inside_the_project_else_a_name(
+    project: Project, tmp_path: Path
+) -> None:
+    inside = project.paths.dir / "inputs" / "pass.txt"
+    inside.parent.mkdir(parents=True)
+    inside.write_text(PROMPT, encoding="utf-8")
+    first = _adopt(project, inside, log_file=_log(tmp_path))
+    assert json.loads(_row(project, first)["command"]) == ["adopted", "inputs/pass.txt"]
+    second = _adopt(project, _prompt(tmp_path), log_file=_log(tmp_path))
+    assert json.loads(_row(project, second)["command"]) == ["adopted", "pass.txt"]
+
+
+class _Done:
+    pid = os.getpid()
+
+    def wait(self) -> int:
+        return 0
+
+
+def test_an_adopted_run_resumes_with_the_full_stage_tools(
+    project: Project, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    install_skill(project.settings, "rf-screen", "SCREEN SKILL BODY")
+    monkeypatch.setattr(runner, "pending_work", lambda p: {"screen_a": 2})
+    monkeypatch.setattr(resume, "pending_work", lambda p: {"screen_a": 2})
+    monkeypatch.setattr(runner, "claude_path", lambda: "/usr/bin/claude")
+    monkeypatch.setattr(runner, "_factory_executable", lambda: "/venv/bin/factory")
+    monkeypatch.setattr(runner, "_advance_after", lambda p: None)
+    spec = runner.STAGES["screen"]
+    assert set(SCREEN_TOOLS) < set(spec.tools)  # the driver had a subset
+    adopted = _adopt(
+        project, _prompt(tmp_path), log_file=_log(tmp_path), model=spec.model, tools=SCREEN_TOOLS
+    )
+    plan = resume.resume(project, dry_run=True)
+    assert isinstance(plan, resume.ResumePlan)
+    assert plan.run is not None and plan.run.adopted is True
+
+    def launch(argv: Sequence[str], log_path: Path) -> _Done:
+        log_path.write_text('{"type":"result"}\n', encoding="utf-8")
+        return _Done()
+
+    result = resume.resume(project, launcher=launch, foreground=True)
+    assert isinstance(result, resume.ResumeResult) and result.refused == []
+    assert result.run_id is not None
+    new = _row(project, result.run_id)
+    assert new["resumes"] == adopted and new["adopted"] == 0
+    assert json.loads(new["allowed_tools"]) == list(spec.tools)

@@ -36,11 +36,21 @@ Resuming (plan restart-and-costs R2): `resume` acts on `interrupted`.
 - A stale agent pass is reported and never resumed: its session is a past process, and its
   identity (session, pass label) is not carried over. The remaining work is done by a new runner
   run, a new session, which the pass and independence rules govern as for any run.
-- Order: reconcile open runs whose process is gone (`runner.finish_lost`, recording), the
-  deterministic steps (`runner.advance_after`), then read `interrupted`. The newest interrupted
+- A live run (open, its process alive) or a live pipeline (its lock held) blocks everything: the
+  call reports `blocked: live run <id>` (or pipeline), runs no deterministic step, starts nothing.
+  A dry run marks the plan `blocked` in the same way.
+- Order: reconcile open runs whose process is gone (`runner.finish_lost`, recording; it runs the
+  deterministic steps itself when it closed a run), the deterministic steps (`runner.advance_after`,
+  only when nothing was reconciled), then read `interrupted`. The newest interrupted
   pipeline is resumed; if none, the newest interrupted run of each stage with pending units is a
   resume candidate, but only one run starts (one run per project): the others are `queued`.
   Refusals (a live run or pipeline, a changed spec) are reported in `refused`, never raised.
+- A run adopted from an outside driver (`RunnerStarted.adopted`) is resumed with the full tools of
+  its stage, not the subset the driver had; the plan says so (`RunResume.adopted`).
+- A resumed pipeline keeps the cap of the pipeline it resumes unless `unit_cap` overrides it.
+- `foreground` (the CLI): a resumed pipeline runs in the calling thread, and a resumed run is
+  waited for (with its time limit), so the process does not exit under it. Without it (the hub)
+  both start in background daemon threads.
 - `dry_run` writes nothing, not even the reconcile, and starts nothing.
 """
 
@@ -79,9 +89,10 @@ class InterruptedRun(StrictModel):
     model: str
     prompt_blob: str
     started_at: str
-    kind: Literal["open-gone", "lost", "timeout"]
+    kind: Literal["open-gone", "lost", "timeout", "failed-to-start"]
     stage_pending: bool
     """Whether the run's stage still has pending units (`runner.pending_units`)."""
+    adopted: bool = False
 
 
 class InterruptedPipeline(StrictModel):
@@ -91,6 +102,7 @@ class InterruptedPipeline(StrictModel):
     stopped_at: str | None
     stages_left: list[str]
     reason: str | None
+    unit_cap: int = runner.DEFAULT_UNIT_CAP
 
 
 class ExpiredLeases(StrictModel):
@@ -156,11 +168,37 @@ def interrupted(project: Project, *, now: datetime | None = None) -> Interrupted
     )
 
 
-def _prompt_blobs(project: Project) -> dict[str, str]:
+class _RunFacts(StrictModel):
+    prompt_blob: str
+    adopted: bool
+    resumes: str | None
+
+
+def _run_facts(project: Project) -> dict[str, _RunFacts]:
     project.index.sync()
     with project.index.connect() as conn:
-        rows = conn.execute(text("SELECT run_id, prompt_blob FROM runner_runs")).all()
-    return {str(r[0]): str(r[1]) for r in rows}
+        rows = conn.execute(
+            text("SELECT run_id, prompt_blob, adopted, resumes FROM runner_runs")
+        ).all()
+    return {
+        str(r[0]): _RunFacts(
+            prompt_blob=str(r[1]),
+            adopted=bool(r[2]),
+            resumes=None if r[3] is None else str(r[3]),
+        )
+        for r in rows
+    }
+
+
+def _never_started(project: Project, run_id: str) -> bool:
+    """No pid file and no log: the launcher raised before a process existed."""
+    folder = project.paths.dir / "runs" / run_id
+    if (folder / "pid").exists():
+        return False
+    try:
+        return (folder / "log.jsonl").stat().st_size == 0
+    except OSError:
+        return True
 
 
 def _runs(
@@ -169,36 +207,56 @@ def _runs(
     pipelines: tuple[list[InterruptedPipeline], list[str]],
 ) -> list[InterruptedRun]:
     timeout_reasons = pipelines[1]
-    blobs = _prompt_blobs(project)
+    facts = _run_facts(project)
     found: list[InterruptedRun] = []
-    # `views` are newest first: a stage seen complete earlier in the walk supersedes older runs.
+    pending_cache: dict[str, bool] = {}
+
+    def stage_pending(stage: str) -> bool:
+        if stage not in pending_cache:
+            pending_cache[stage] = any(runner.pending_units(project, stage).values())
+        return pending_cache[stage]
+
+    # `views` are newest first: a stage seen complete earlier in the walk supersedes older runs,
+    # and so does a run named by the `resumes` of a newer one.
     resumed: set[str] = set()
+    superseded: set[str] = set()
     for view in views:
+        fact = facts.get(view.run_id)
+        was_superseded = view.run_id in superseded
+        if fact is not None and fact.resumes is not None:
+            superseded.add(fact.resumes)
         if view.status == "complete":
             resumed.add(view.stage)
             continue
-        kind: Literal["open-gone", "lost", "timeout"] | None = None
+        kind: Literal["open-gone", "lost", "timeout", "failed-to-start"] | None = None
         if view.status == "lost?":
             kind = "open-gone"
         elif view.status == "lost":
             kind = "lost"
+        elif (
+            view.status == "failed"
+            and view.exit_status is None
+            and _never_started(project, view.run_id)
+        ):
+            kind = "failed-to-start"
         elif view.status == "failed" and (
             view.exit_status is None
             or view.exit_status in _KILL_STATUSES
             or any(view.run_id in reason for reason in timeout_reasons)
         ):
             kind = "timeout"
-        if kind is None or view.stage in resumed:
+        if kind is None or view.stage in resumed or was_superseded:
             continue
         found.append(
             InterruptedRun(
                 run_id=view.run_id,
                 stage=view.stage,
                 model=view.model,
-                prompt_blob=blobs.get(view.run_id, ""),
+                prompt_blob="" if fact is None else fact.prompt_blob,
                 started_at=view.started_at,
                 kind=kind,
-                stage_pending=any(runner.pending_units(project, view.stage).values()),
+                stage_pending=stage_pending(view.stage),
+                adopted=False if fact is None else fact.adopted,
             )
         )
     return found
@@ -250,6 +308,7 @@ def _pipelines(
                 stopped_at=view.stopped_at,
                 stages_left=left,
                 reason=view.reason,
+                unit_cap=view.unit_cap,
             )
         )
     return found, timeouts
@@ -340,12 +399,16 @@ class PipelineResume(StrictModel):
     from_stage: str
     stages: list[str]
     """The planned stages from `from_stage` that still apply."""
+    unit_cap: int = runner.DEFAULT_UNIT_CAP
+    """The cap of the pipeline resumed, kept unless `resume` is given another."""
 
 
 class RunResume(StrictModel):
     resumes: str
     stage: str
     model: str
+    adopted: bool = False
+    """The run resumed was adopted from an outside driver: the new run uses the full stage tools."""
 
 
 class ResumePlan(StrictModel):
@@ -361,12 +424,18 @@ class ResumePlan(StrictModel):
     """Other interrupted runs with pending units, resumed by a later call."""
     stale_passes: list[StalePass]
     automatic: AutomaticLeft
+    failed_to_start: list[str] = Field(default_factory=list)
+    """Runs whose launcher failed before a process existed: reported, never resumed."""
+    blocked: str | None = None
+    """`live run <id>` / `live pipeline <id>` when one is live: nothing is done then."""
 
     @property
     def is_empty(self) -> bool:
         a = self.automatic
         return not (
-            self.reconcile
+            self.blocked
+            or self.failed_to_start
+            or self.reconcile
             or self.leases
             or self.pipeline
             or self.run
@@ -386,7 +455,24 @@ class ResumeResult(StrictModel):
     refused: list[str] = Field(default_factory=list)
 
 
-def _plan(project: Project, found: Interrupted, reconcile: list[str]) -> ResumePlan:
+def _live(project: Project) -> str | None:
+    """`live run <id>` or `live pipeline <id>` when one is running now, else None. Read-only."""
+    for run in runner.run_status(project, reconcile=False, limit=_RECENT_ALL):
+        if run.status == "running":
+            return f"live run {run.run_id}"
+    if pipeline.pipeline_active(project):
+        open_ones = [
+            p.pipeline_id
+            for p in pipeline.pipeline_status(project, limit=_RECENT_ALL)
+            if p.status == "running"
+        ]
+        return f"live pipeline {open_ones[0]}" if open_ones else "live pipeline"
+    return None
+
+
+def _plan(
+    project: Project, found: Interrupted, reconcile: list[str], blocked: str | None = None
+) -> ResumePlan:
     pipeline_plan: PipelineResume | None = None
     covered: set[str] = set()
     if found.pipelines:
@@ -396,12 +482,18 @@ def _plan(project: Project, found: Interrupted, reconcile: list[str]) -> ResumeP
         if left:
             first = applicable.index(left[0])
             pipeline_plan = PipelineResume(
-                resumes=newest.pipeline_id, from_stage=left[0], stages=applicable[first:]
+                resumes=newest.pipeline_id,
+                from_stage=left[0],
+                stages=applicable[first:],
+                unit_cap=newest.unit_cap,
             )
             covered = set(applicable[first:])
     candidates: list[InterruptedRun] = []
     seen: set[str] = set()
+    failed_to_start = [r.run_id for r in found.runs if r.kind == "failed-to-start"]
     for run in found.runs:  # newest first: one candidate per stage
+        if run.kind == "failed-to-start":
+            continue
         if run.stage in seen or not run.stage_pending or run.stage in covered:
             continue
         seen.add(run.stage)
@@ -410,7 +502,9 @@ def _plan(project: Project, found: Interrupted, reconcile: list[str]) -> ResumeP
     queued: list[str] = []
     if pipeline_plan is None and candidates:
         head = candidates[0]
-        run_plan = RunResume(resumes=head.run_id, stage=head.stage, model=head.model)
+        run_plan = RunResume(
+            resumes=head.run_id, stage=head.stage, model=head.model, adopted=head.adopted
+        )
         queued = [r.run_id for r in candidates[1:]]
     return ResumePlan(
         reconcile=reconcile,
@@ -420,6 +514,8 @@ def _plan(project: Project, found: Interrupted, reconcile: list[str]) -> ResumeP
         queued=queued,
         stale_passes=found.passes,
         automatic=found.automatic,
+        failed_to_start=failed_to_start,
+        blocked=blocked,
     )
 
 
@@ -429,18 +525,25 @@ def resume(
     dry_run: bool = False,
     unit_cap: int | None = None,
     launcher: runner.Launcher | None = None,
+    foreground: bool = False,
 ) -> ResumePlan | ResumeResult:
     """Resume the project's interrupted work (see the module docstring). A dry run returns the
     `ResumePlan` and writes nothing; otherwise the plan is carried out and a `ResumeResult`
-    returned. Pipelines and runs start in the background (their threads record the end);
-    `pipeline_id` / `run_id` name what started. `unit_cap` defaults to the earlier run's (a run)
-    or the default (a pipeline)."""
+    returned. By default pipelines and runs start in the background (their threads record the
+    end); with `foreground` a pipeline runs in this thread and a run is waited for, so the caller
+    returns when the work has ended. `pipeline_id` / `run_id` name what started. `unit_cap`
+    defaults to the earlier run's (a run) or pipeline's cap."""
+    live = _live(project)
     if dry_run:
         found = interrupted(project)
         gone = [r.run_id for r in found.runs if r.kind == "open-gone"]
-        return _plan(project, found, gone)
-    reconciled = runner.finish_lost(project)
-    runner.advance_after(project)
+        return _plan(project, found, gone, live)
+    if live is not None:
+        plan = _plan(project, interrupted(project), [], live)
+        return ResumeResult(plan=plan, reconciled=[], refused=[f"blocked: {live}"])
+    reconciled = runner.finish_lost(project)  # runs the deterministic steps if it closed a run
+    if not reconciled:
+        runner.advance_after(project)
     found = interrupted(project)
     plan = _plan(project, found, [])
     pipeline_id: str | None = None
@@ -448,9 +551,11 @@ def resume(
     refused: list[str] = []
     try:
         if plan.pipeline is not None:
-            pipeline_id = pipeline.start_pipeline(
+            cap = unit_cap or plan.pipeline.unit_cap
+            start = pipeline.run_pipeline if foreground else pipeline.start_pipeline
+            pipeline_id = start(
                 project,
-                unit_cap=unit_cap or runner.DEFAULT_UNIT_CAP,
+                unit_cap=cap,
                 launcher=launcher,
                 from_stage=plan.pipeline.from_stage,
                 resumes=plan.pipeline.resumes,
@@ -463,6 +568,12 @@ def resume(
                 launcher=launcher,
                 resumes=plan.run.resumes,
             )
+            if foreground:
+                record = runner.run_record(project, run_id)
+                cap = runner.DEFAULT_UNIT_CAP if record is None else record.unit_cap
+                limit = runner.run_time_limit(cap)
+                if not runner.wait_until_closed(project, run_id, limit=limit):
+                    refused.append(f"timeout: run {run_id} passed its {limit:.0f} s limit")
     except FactoryValidationError as exc:
         refused = [f"{i.field}: {i.reason}" for i in exc.issues]
     return ResumeResult(

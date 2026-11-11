@@ -10,6 +10,7 @@ Folded only if (a hand-written event failing a guard changes nothing on rebuild)
 - `runner.finished`: the actor is the system, the run is known and still open (the first finish
   stands).
 - `runner.pipeline_started` and `runner.pipeline_finished`: the same two guards for a pipeline.
+- `adopted` (optional, R4; False when absent) marks a driver recorded after the fact.
 - `resumes` (optional, R2) is stored only if it names a run (pipeline) already folded; otherwise
   the run (pipeline) is kept with `resumes` NULL. The index is per project, so "known" means
   known to this project.
@@ -57,6 +58,7 @@ def runner_tables(metadata: MetaData) -> RunnerTables:
         Column("counts_after", String),
         Column("finished_event_id", String),
         Column("resumes", String),
+        Column("adopted", Integer, nullable=False, default=0),
     )
     pipelines = Table(
         "runner_pipelines",
@@ -116,6 +118,7 @@ def runner_handlers(t: RunnerTables) -> dict[str, Handler]:
                 counts_before=canonical_json(_counts(p.counts_before)).decode(),
                 started_event_id=event.id,
                 resumes=_known(conn, t.runs, "run_id", p.resumes),
+                adopted=int(p.adopted),
             )
             .on_conflict_do_nothing(index_elements=["run_id"])
         )

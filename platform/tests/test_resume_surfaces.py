@@ -400,3 +400,18 @@ def test_dashboard_page_has_the_interrupted_line() -> None:
 
     page = dashboard_page.render_page({"feed": {"interrupted": {"clean": True}}})
     assert "Interrupted (factory resume --dry-run shows the plan)" in page
+
+
+def test_the_cli_resumes_in_the_foreground(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _init(tmp_path, SLUG)
+    calls: list[dict[str, Any]] = []
+    outcome = ResumeResult(plan=_plan(), reconciled=[], run_id="run_9")
+
+    def fake(project: Project, **kwargs: Any) -> ResumeResult:
+        calls.append(kwargs)
+        return outcome
+
+    monkeypatch.setattr(resume_service, "resume", fake)
+    result = runner.invoke(app, ["resume", "--project", SLUG], env=_env(tmp_path))
+    assert result.exit_code == 0, result.output
+    assert calls[0]["foreground"] is True  # the process waits for the run it starts

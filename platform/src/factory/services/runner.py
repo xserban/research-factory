@@ -40,6 +40,7 @@ import fcntl
 import json
 import logging
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -727,6 +728,7 @@ class RunRecord(StrictModel):
     prompt_blob: str
     unit_cap: int
     outcome: str | None
+    adopted: bool = False
 
 
 def run_record(project: Project, run_id: str) -> RunRecord | None:
@@ -736,7 +738,7 @@ def run_record(project: Project, run_id: str) -> RunRecord | None:
     with project.index.connect() as conn:
         row = conn.execute(
             text(
-                "SELECT stage, model, allowed_tools, prompt_blob, unit_cap, outcome "
+                "SELECT stage, model, allowed_tools, prompt_blob, unit_cap, outcome, adopted "
                 "FROM runner_runs WHERE run_id = :r"
             ),
             {"r": run_id},
@@ -751,14 +753,22 @@ def run_record(project: Project, run_id: str) -> RunRecord | None:
         prompt_blob=str(row[3]),
         unit_cap=int(row[4]),
         outcome=None if row[5] is None else str(row[5]),
+        adopted=bool(row[6]),
     )
 
 
 def _resumed_prompt(project: Project, earlier: RunRecord, spec: StageSpec, unit_cap: int) -> str:
     """The earlier run's recorded prompt, for a run that resumes it. Refuses when the stage's
     model or tools are no longer the recorded ones: a changed spec is a fresh run, never a
-    silent change. A cap different from the recorded one changes only the limit sentence."""
-    if earlier.model != spec.model or earlier.allowed_tools != spec.tools:
+    silent change. For an adopted run (`RunRecord.adopted`) the recorded tools are what the outside
+    driver had, so they need only be a subset of the stage's tools; the resumed run then uses the
+    full stage tools (the recorded event says so). Any other run needs equal tools. A cap different
+    from the recorded one changes only the limit sentence."""
+    if earlier.adopted:
+        tools_ok = set(earlier.allowed_tools) <= set(spec.tools)
+    else:
+        tools_ok = earlier.allowed_tools == spec.tools
+    if earlier.model != spec.model or not tools_ok:
         raise _refuse(
             "resumes",
             f"the model or tools of stage {earlier.stage!r} changed since run {earlier.run_id}; "
@@ -766,10 +776,10 @@ def _resumed_prompt(project: Project, earlier: RunRecord, spec: StageSpec, unit_
         )
     prompt = project.blobs.get(earlier.prompt_blob).decode("utf-8")
     if unit_cap != earlier.unit_cap:
-        old = f"Limit: stop after {earlier.unit_cap} units"
+        old = f"stop after {earlier.unit_cap} units"
         if old not in prompt:
             raise _refuse("unit_cap", "the recorded prompt names no cap to change; use the same")
-        prompt = prompt.replace(old, f"Limit: stop after {unit_cap} units", 1)
+        prompt = prompt.replace(old, f"stop after {unit_cap} units", 1)
     return prompt
 
 
@@ -896,9 +906,38 @@ only these; any other key, a secret among them, is dropped."""
 _standard_mcp_config: Final = mcp_config
 
 
+_SECRET_WORDS: Final = ("key", "token", "secret", "password")
+
+
+def _looks_secret(arg: str) -> bool:
+    lowered = arg.lower()
+    return any(word in lowered for word in _SECRET_WORDS)
+
+
+def _safe_args(args: Sequence[object]) -> list[JsonValue]:
+    """`args` without any that looks like a secret (contains `key`, `token`, `secret` or
+    `password`, any case) and, for such a flag without `=`, the value that follows it."""
+    kept: list[JsonValue] = []
+    skip_value = False
+    for arg in args:
+        if not isinstance(arg, str):
+            continue
+        if skip_value:
+            skip_value = False
+            if not arg.startswith("-"):
+                continue
+        if _looks_secret(arg):
+            skip_value = "=" not in arg
+            continue
+        kept.append(arg)
+    return kept
+
+
 def _adopted_mcp_config(source: Path) -> dict[str, JsonValue]:
-    """The MCP config of an outside driver, with only the allowed environment keys kept. Reads
-    `source` and writes nothing to it."""
+    """The MCP config of an outside driver, reduced to what is safe to keep: per server only
+    `command`, `args` (any that looks like a secret dropped, with its value) and the allowed
+    environment keys; `url`, `headers` and every other field are dropped. Reads `source` and
+    writes nothing to it."""
     try:
         data = json.loads(source.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
@@ -913,10 +952,37 @@ def _adopted_mcp_config(source: Path) -> dict[str, JsonValue]:
         env = server.get("env", {})
         if not isinstance(env, dict):
             raise _refuse("mcp_config", f"server {name!r} has an `env` that is not an object")
-        entry: dict[str, JsonValue] = {k: v for k, v in server.items() if k != "env"}
+        entry: dict[str, JsonValue] = {}
+        if isinstance(server.get("command"), str):
+            entry["command"] = server["command"]
+        args = server.get("args")
+        if isinstance(args, list):
+            entry["args"] = _safe_args(args)
         entry["env"] = {k: v for k, v in env.items() if k in _ADOPTED_ENV_KEYS}
         kept[str(name)] = entry
     return {"mcpServers": kept}
+
+
+_CAP_SENTENCE_RE: Final = re.compile(r"stop after (\d+) units")
+
+
+def _adopted_cap(prompt: str) -> int | None:
+    """The cap the prompt's `stop after N units` sentence states, None when it has none."""
+    found = _CAP_SENTENCE_RE.search(prompt)
+    if found is None:
+        return None
+    cap = int(found.group(1))
+    if not 1 <= cap <= MAX_UNIT_CAP:
+        raise _refuse("prompt", f"its cap {cap} is not between 1 and {MAX_UNIT_CAP}")
+    return cap
+
+
+def _project_relative(project: Project, path: Path) -> str:
+    """`path` relative to the project folder when it lies inside it, else just its file name."""
+    try:
+        return str(path.resolve().relative_to(project.paths.dir.resolve()))
+    except ValueError:
+        return path.name
 
 
 def adopt_driver(
@@ -934,7 +1000,12 @@ def adopt_driver(
     so `resume` can restart it. Returns the new `run_id`.
 
     The prompt is copied into the run folder and stored as a blob; `runner.started` records the
-    prompt blob, the given tools and model, and the command `["adopted", <prompt path>]`. With a
+    prompt blob, the given tools and model (what the driver really had; the event is marked
+    `adopted`, and a resume of it uses the full stage tools), and the command
+    `["adopted", <prompt path>]`, the path relative to the project folder when inside it, else
+    the file name. The cap is the prompt's `stop after N units` sentence; a prompt without one gets
+    the default cap and the standard limit sentence appended to the stored copy (the source file is
+    never changed). With a
     `log_file`, the log is copied in and `runner.finished` is recorded at once with outcome `lost`
     (the status of the outside process is unknown). Without one, the run is closed as `lost` by
     the next reconcile, as any run whose process is gone. `started_at` is kept in the run folder
@@ -958,9 +1029,18 @@ def adopt_driver(
         raise _refuse("prompt", f"{prompt_file} is not a file")
     prompt_bytes = prompt_file.read_bytes()
     try:
-        prompt_bytes.decode("utf-8")
+        prompt_text = prompt_bytes.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise _refuse("prompt", "is not UTF-8 text") from exc
+    unit_cap = _adopted_cap(prompt_text)
+    if unit_cap is None:
+        unit_cap = DEFAULT_UNIT_CAP
+        prompt_bytes = (
+            prompt_text
+            + f"\n\nLimit: stop after {unit_cap} units or when the queue is empty, whichever "
+            f"comes first. A unit is one {spec.unit}. The server refuses further units with "
+            "`cap-reached` once the limit is served: then stop.\n"
+        ).encode("utf-8")
     if log_file is not None and not log_file.is_file():
         raise _refuse("log", f"{log_file} is not a file")
     config: dict[str, JsonValue] | None = (
@@ -993,9 +1073,10 @@ def adopt_driver(
             model=model,
             allowed_tools=names,
             prompt_blob=project.blobs.put(prompt_bytes),
-            unit_cap=DEFAULT_UNIT_CAP,
+            unit_cap=unit_cap,
             counts_before=counts,
-            command=("adopted", str(prompt_file.resolve())),
+            command=("adopted", _project_relative(project, prompt_file)),
+            adopted=True,
         )
         project.record([project.events.make("runner.started", started, project.system_actor())])
         if log_file is not None:
