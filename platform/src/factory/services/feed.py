@@ -58,7 +58,12 @@ from sqlalchemy import text
 from factory.canonical import canonical_json
 from factory.clock import Clock
 from factory.config import Settings
-from factory.errors import FactoryValidationError, ProjectNotFoundError, ValidationIssue
+from factory.errors import (
+    FactoryError,
+    FactoryValidationError,
+    ProjectNotFoundError,
+    ValidationIssue,
+)
 from factory.events.envelope import Actor
 from factory.index.ranking import corpus_hash
 from factory.model.base import StrictModel
@@ -82,12 +87,13 @@ from factory.model.work_ids import normalize_arxiv
 from factory.services.context import Project, list_projects, open_project
 from factory.services.core_works import core_marks, forward_core_sources, seed_core_works
 from factory.services.dedup_incremental import held_matches
-from factory.services.inbox import LinkInput, _refuse_actor, link_event
+from factory.services.inbox import LinkInput, _refuse_actor, link_event, resolve_links
 from factory.services.ranking import _dot, _unit, max_cosine_scores, order_by_score, ranking_text
 from factory.services.ranking_model import Embedder
 from factory.services.references import included_works
 from factory.services.search import get_work
 from factory.sources.base import PageSink, RawPage, SearchResult
+from factory.sources.registry import SourceFactory
 
 SOURCE = "arxiv"
 CACHE_DIR = ".feed-cache"
@@ -925,3 +931,60 @@ def send(
         event = project.events.make("feed.sent", payload, actor, refs=(entry_id, item_id))
         project.record([added, event])
     return item_id
+
+
+AddOutcome = Literal["new", "in-corpus", "not-found", "ambiguous", "lookup-failed", "refused"]
+
+
+class FeedAddResult(StrictModel):
+    """What `add` did: the send always stands once `inbox_item_id` is set. `outcome` is the
+    resolve status (`new`, `in-corpus`, `not-found`, `ambiguous`), `lookup-failed` (the lookup
+    failed or could not finish; the item stays open and may be resolved again) or `refused` (the
+    protocol gate or another check refused the lookup; nothing was looked up). `reason` is set
+    for the last two; `work_id` only when the work is in the corpus."""
+
+    inbox_item_id: str
+    outcome: AddOutcome
+    work_id: str | None = None
+    run_id: str | None = None
+    reason: str | None = None
+
+
+def add(
+    project: Project,
+    actor: Actor,
+    entry_id: str,
+    *,
+    sources: Mapping[str, SourceFactory],
+    note: FeedNote | None = None,
+    ranking_id: str | None = None,
+) -> FeedAddResult:
+    """One-click add: `send` the shown entry, then resolve exactly its inbox item. Human only.
+    A refusal of the send raises as `send` does and writes nothing. Once the send has succeeded it
+    is never rolled back: a lookup that fails, is refused by the gate or raises a refusal is
+    reported in the result (`lookup-failed`, `refused`) and the item stays open for
+    `factory inbox resolve`."""
+    item_id = send(project, actor, entry_id, note=note, ranking_id=ranking_id)
+    try:
+        [outcome] = resolve_links(project, actor, sources=sources, item_ids=[item_id])
+    except FactoryError as exc:
+        return FeedAddResult(inbox_item_id=item_id, outcome="refused", reason=str(exc))
+    if outcome.status is None:
+        reason = "; ".join(f"{i.field}: {i.reason}" for i in outcome.issues)
+        kind: AddOutcome = "refused" if outcome.run_id is None else "lookup-failed"
+        return FeedAddResult(
+            inbox_item_id=item_id, outcome=kind, run_id=outcome.run_id, reason=reason or None
+        )
+    if outcome.status.value == "failed":
+        return FeedAddResult(
+            inbox_item_id=item_id,
+            outcome="lookup-failed",
+            run_id=outcome.run_id,
+            reason="the lookup did not complete",
+        )
+    return FeedAddResult(
+        inbox_item_id=item_id,
+        outcome=outcome.status.value,
+        work_id=outcome.work_id,
+        run_id=outcome.run_id,
+    )

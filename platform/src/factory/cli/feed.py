@@ -28,6 +28,7 @@ from factory.services.context import Project, list_projects, open_project
 from factory.services.ranking_model import Specter2Embedder
 from factory.sources.arxiv import ArxivSource
 from factory.sources.http import default_http
+from factory.sources.registry import default_sources
 
 if TYPE_CHECKING:
     from factory.cli.main import CliState
@@ -72,6 +73,17 @@ def _cut(text: str | None, width: int) -> str:
     if text is None or text == "":
         return "-"
     return text if len(text) <= width else text[: width - 1] + "…"
+
+
+def _note(note: str | None) -> FeedNote | None:
+    """The `--note` text validated as a feed note; an invalid one exits 2."""
+    if note is None:
+        return None
+    try:
+        value: FeedNote = TypeAdapter(FeedNote).validate_python(note)
+    except PydanticValidationError as exc:
+        _exit_with_issues([ValidationIssue("note", str(exc.errors()[0]["msg"]))])
+    return value
 
 
 def _categories(values: list[str]) -> tuple[str, ...]:
@@ -271,17 +283,39 @@ def feed_send_cmd(
     note: Annotated[str | None, typer.Option("--note", help="A note for the inbox item.")] = None,
 ) -> None:
     """Send a shown entry to the inbox as its arXiv link. Human only."""
-    note_value: FeedNote | None = None
-    if note is not None:
-        try:
-            note_value = TypeAdapter(FeedNote).validate_python(note)
-        except PydanticValidationError as exc:
-            _exit_with_issues([ValidationIssue("note", str(exc.errors()[0]["msg"]))])
+    note_value = _note(note)
     opened = _open(ctx, project)
     with _refusals():
         item_id = feed_service.send(opened, opened.human_actor(), entry_id, note=note_value)
     typer.echo(f"sent {entry_id} to the inbox as {item_id}")
     typer.echo("resolve it with `factory inbox resolve` once it is screened or dropped")
+
+
+@feed_app.command("add")
+def feed_add_cmd(
+    ctx: typer.Context,
+    entry_id: EntryArg,
+    project: ProjectOpt = None,
+    note: Annotated[str | None, typer.Option("--note", help="A note for the inbox item.")] = None,
+) -> None:
+    """Send a shown entry to the inbox and look it up at once. Human only. The send stands even
+    if the lookup fails or is refused; resolve it later with `factory inbox resolve`."""
+    note_value = _note(note)
+    opened = _open(ctx, project)
+    with _refusals():
+        result = feed_service.add(
+            opened,
+            opened.human_actor(),
+            entry_id,
+            sources=dict(default_sources()),
+            note=note_value,
+        )
+    typer.echo(f"sent {entry_id} to the inbox as {result.inbox_item_id}: {result.outcome}")
+    if result.work_id is not None:
+        typer.echo(f"work {result.work_id}")
+    if result.reason is not None:
+        typer.echo(result.reason, err=True)
+        typer.echo("the send stands; retry with `factory inbox resolve`", err=True)
 
 
 @feed_app.command("status")

@@ -330,6 +330,7 @@ TOOL_PERMISSIONS: Mapping[str, Permission] = {
     "cli:feed configure": Permission.HUMAN_CONFIRM,
     "cli:feed react": Permission.HUMAN_CONFIRM,
     "cli:feed send": Permission.HUMAN_CONFIRM,
+    "cli:feed add": Permission.HUMAN_CONFIRM,
     "cli:feed show": Permission.PROJECT_READ,
     "cli:feed status": Permission.PROJECT_READ,
     "cli:living snapshot": Permission.WORK_RUN,
