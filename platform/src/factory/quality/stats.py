@@ -53,6 +53,27 @@ def cohen_kappa(pairs: Sequence[tuple[bool, bool]]) -> float | None:
     return (agree * n - expected) / (n * n - expected)
 
 
+def cohen_kappa_nominal(pairs: Sequence[tuple[str, str]]) -> float | None:
+    """Cohen's kappa for two raters over nominal categories; `None` when undefined (no pairs or
+    chance agreement 1). With two categories it equals `cohen_kappa`.
+
+    Computed in integers and divided once, so the result is exact for the given counts.
+    """
+    n = len(pairs)
+    if n == 0:
+        return None
+    agree = sum(1 for a, b in pairs if a == b)
+    first: dict[str, int] = {}
+    second: dict[str, int] = {}
+    for a, b in pairs:
+        first[a] = first.get(a, 0) + 1
+        second[b] = second.get(b, 0) + 1
+    expected = sum(count * second.get(cat, 0) for cat, count in first.items())
+    if n * n == expected:
+        return None
+    return (agree * n - expected) / (n * n - expected)
+
+
 def kappa_by_criterion(
     pairs: Sequence[tuple[str | None, str | None]],
     criteria: Sequence[str],
