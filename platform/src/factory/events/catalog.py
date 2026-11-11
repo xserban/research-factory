@@ -185,7 +185,7 @@ from factory.model.regions import (
     RegionSnapshotTaken,
 )
 from factory.model.reviews import ReviewDecided, ReviewRequested
-from factory.model.runner import RunnerFinished, RunnerStarted
+from factory.model.runner import PipelineFinished, PipelineStarted, RunnerFinished, RunnerStarted
 from factory.model.screening import (
     AuditLabelled,
     AuditSampled,
@@ -365,6 +365,8 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("feed.sent", FeedSent, 1))
     catalog.register(EventType("runner.started", RunnerStarted, 1))
     catalog.register(EventType("runner.finished", RunnerFinished, 1))
+    catalog.register(EventType("runner.pipeline_started", PipelineStarted, 1))
+    catalog.register(EventType("runner.pipeline_finished", PipelineFinished, 1))
     catalog.register(EventType("work.marked_core", WorkMarkedCore, 1))
     catalog.register(EventType("work.unmarked_core", WorkUnmarkedCore, 1))
     catalog.register(EventType("notice.observed", NoticeObserved, 1))

@@ -109,8 +109,13 @@ RUNNER_SPEC = ModuleSpec(
     name="runner",
     kind=ModuleKind.RETRIEVAL,
     events=EventFamily(
-        types=("runner.started", "runner.finished"),
-        tables=("runner_runs",),
+        types=(
+            "runner.started",
+            "runner.finished",
+            "runner.pipeline_started",
+            "runner.pipeline_finished",
+        ),
+        tables=("runner_runs", "runner_pipelines"),
         note=(
             "Headless runner (plan feed-hub H5, decision 118): the platform starts the installed "
             "`claude` executable for one stage; both events are system acts, and every judgement "

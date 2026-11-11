@@ -114,6 +114,7 @@ OMITTED_WHEN_EMPTY: frozenset[str] = frozenset(
         "feed_reactions",
         "feed_sends",
         "runner_runs",
+        "runner_pipelines",
         "region_members",
         "region_reviews",
         "region_member_decisions",
