@@ -16,8 +16,10 @@ Invariants:
   in the recorded command (the command names `prompt.txt` instead); the MCP config carries only
   the root, plugin dir, PYTHONPATH and ranker model paths, never a secret.
 - A daemon watcher thread records `runner.finished` when the process exits: `complete` for exit
-  status 0, otherwise `failed`. Started from the CLI without waiting, the process may outlive
-  this one; its end is then recorded `lost` by the next reconcile.
+  status 0, otherwise `failed`. Once that is recorded the same thread runs the deterministic steps
+  (`work_queue.advance`, H6); an exception there is logged and never reaches the run. Started from
+  the CLI without waiting, the process may outlive this one; its end is then recorded `lost` by the
+  next reconcile.
 - The run folder `projects/<slug>/runs/<run_id>/` holds `prompt.txt`, `mcp.json`, `pid` and
   `log.jsonl`; it is evidence, not state: the events are the record.
 """
@@ -25,6 +27,7 @@ Invariants:
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
 import subprocess
@@ -46,7 +49,9 @@ from factory.model.runner import RunnerFinished, RunnerOutcome, RunnerStage, Run
 from factory.model.screening import PassLabel
 from factory.services.context import Project
 from factory.services.stages import EXTRACT_KINDS, task_kind
-from factory.services.work_queue import pending_work
+from factory.services.work_queue import advance, pending_work
+from factory.sources.fulltext.registry import default_routes
+from factory.sources.registry import default_sources
 
 MAX_UNIT_CAP: Final = 200
 DEFAULT_UNIT_CAP: Final = 25
@@ -320,17 +325,33 @@ def finish_lost(project: Project) -> list[str]:
     return closed
 
 
+_LOG: Final = logging.getLogger(__name__)
+
+
 def _watch(project: Project, run_id: str, stage: str, process: Process) -> None:
     try:
         code = process.wait()
     except OSError:
         code = None
+    recorded = False
     try:
         _finish(project, run_id, stage, "complete" if code == 0 else "failed", code)
+        recorded = True
     except (FactoryError, OSError):
         pass
     finally:
         _WATCHING.discard((str(project.paths.root), run_id))
+    if recorded:
+        _advance_after(project)
+
+
+def _advance_after(project: Project) -> None:
+    """The deterministic steps for the added papers, after a run has been recorded (H6). Any
+    exception is logged: the run is already closed and the steps are retried by the next call."""
+    try:
+        advance(project, sources=dict(default_sources()), fetchers=default_routes(project.settings))
+    except Exception:
+        _LOG.exception("the automatic steps after run %s failed", project.paths.slug)
 
 
 def start_run(

@@ -10,8 +10,11 @@ Invariants:
 - Read-only for the browser except three allow-listed acts (decision 118): `POST /api/feed/react`,
   `POST /api/feed/add` and `POST /api/queue/process` (starts the headless runner, which records its
   own system events). Any other POST path is 404; PUT, DELETE and PATCH are 405. Apart from those
-  acts the server writes nothing but the site folder, through `site.build`. `GET /api/queue/runs`
-  reads the runs and reconciles nothing.
+  acts the server writes nothing but the site folder, through `site.build`.
+- After a successful `POST /api/feed/add` the deterministic steps (`work_queue.advance`) start in
+  a daemon thread, at most one per server; the reply is not delayed. A thread already running
+  means the new call is skipped. Conversion runs only in that thread, never in a request.
+  `GET /api/queue/runs` reads the runs and reconciles nothing.
 - A POST needs, all at once: a loopback Host, the per-start token in `X-Factory-Token` (compared in
   constant time), `Content-Type: application/json`, a body of at most 16 KiB and, if an Origin is
   sent, this server's own origin. Otherwise 403 (413 or 415 for size or type) and nothing is
@@ -27,6 +30,7 @@ from __future__ import annotations
 
 import hmac
 import json
+import logging
 import secrets
 import threading
 import time
@@ -43,8 +47,10 @@ from factory.model.feed import FeedNote, FeedReaction
 from factory.services import feed as feed_service
 from factory.services import runner as runner_service
 from factory.services import site as site_service
+from factory.services import work_queue
 from factory.services.access import authorize_command
 from factory.services.context import Project
+from factory.sources.fulltext.registry import default_routes
 from factory.sources.registry import default_sources
 
 HOST: Final = "127.0.0.1"
@@ -54,11 +60,36 @@ MAX_BODY: Final = 16 * 1024
 TOKEN_HEADER: Final = "X-Factory-Token"
 _ACTION_PAGES: Final = ("feed", "queue")
 _TOKEN_META: Final = "<meta name='factory-token' content='{}'>"
+_LOG: Final = logging.getLogger(__name__)
 
 
 def _sources() -> Any:
     """The source factories `feed add` resolves with (as `factory feed add` builds them)."""
     return dict(default_sources())
+
+
+def _start_advance(project: Project, gate: threading.Lock) -> bool:
+    """Run `work_queue.advance` in a daemon thread unless `gate` is held; True when started.
+    The thread releases `gate` when it ends, whatever happens; a failure is logged, not raised."""
+    if not gate.acquire(blocking=False):
+        return False
+
+    def run() -> None:
+        try:
+            work_queue.advance(
+                project, sources=_sources(), fetchers=default_routes(project.settings)
+            )
+        except Exception:  # the reply to the add has already gone; nothing else to tell
+            _LOG.exception("the automatic steps after a feed add failed")
+        finally:
+            gate.release()
+
+    try:
+        threading.Thread(target=run, name="queue-advance", daemon=True).start()
+    except RuntimeError:
+        gate.release()
+        return False
+    return True
 
 
 def _issues(*issues: ValidationIssue) -> dict[str, object]:
@@ -224,6 +255,7 @@ def make_server(
     rebuilder = Rebuilder(project, min_gap=min_gap)
     token = secrets.token_urlsafe(32)
     write_lock = threading.Lock()
+    advance_gate = threading.Lock()
 
     class Handler(SimpleHTTPRequestHandler):
         def _deny(self, code: int, message: str) -> None:
@@ -343,6 +375,8 @@ def make_server(
                 return
             with write_lock:
                 code, payload = route(project, body)
+            if code == 200 and route is feed_add:
+                _start_advance(project, advance_gate)
             # the feed product turns stale by the event log; the background rebuild picks it up
             self._json(code, payload)
 

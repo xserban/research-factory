@@ -1,11 +1,12 @@
-"""`factory queue` (plan 2026-11-11-feed-hub, steps H4 and H5): the papers added from the feed with
+"""`factory queue` (plan 2026-11-11-feed-hub, steps H4 to H6): the papers added from the feed with
 their stage and the open units of work per task kind (read-only), `queue process` (start the
-headless runner for a stage) and `queue runs` (list the runs).
+headless runner for a stage), `queue runs` (list the runs) and `queue advance` (the deterministic
+steps for the added papers).
 
 It parses input, calls `factory.services.work_queue` and formats its answer. Each command's
-`TOOL_PERMISSIONS` row (`cli:queue`, `cli:queue process`, `cli:queue runs`) is applied through
-`factory.cli.main`, which imports this module to register the group; its helpers are imported
-inside the functions for that reason.
+`TOOL_PERMISSIONS` row (`cli:queue`, `cli:queue process`, `cli:queue runs`, `cli:queue advance`)
+is applied through `factory.cli.main`, which imports this module to register the group; its
+helpers are imported inside the functions for that reason.
 """
 
 from __future__ import annotations
@@ -129,3 +130,45 @@ def queue_runs_cmd(
             f"before {sum(v.counts_before.values())}  "
             f"after {'-' if v.counts_after is None else sum(v.counts_after.values())}"
         )
+
+
+@queue_app.command("advance")
+def queue_advance_cmd(
+    ctx: typer.Context,
+    project: ProjectOpt = None,
+    no_convert: Annotated[
+        bool, typer.Option("--no-convert", help="Skip the conversion step (docling is slow).")
+    ] = False,
+    limit: Annotated[
+        int, typer.Option("--limit", help="At most this many papers per step (1 to 200).")
+    ] = 20,
+) -> None:
+    """Run the deterministic steps for the papers added from the feed: resolve the open items
+    never looked up, fetch full text for the promoted papers, convert the retrieved ones."""
+    from factory.sources.fulltext.registry import default_routes
+    from factory.sources.registry import default_sources
+
+    opened = _open(ctx, project)
+    try:
+        result = work_queue.advance(
+            opened,
+            sources=dict(default_sources()),
+            fetchers=default_routes(opened.settings),
+            convert=not no_convert,
+            limit=limit,
+        )
+    except FactoryValidationError as exc:
+        for issue in exc.issues:
+            typer.echo(f"{issue.field}: {issue.reason}", err=True)
+        raise typer.Exit(2) from exc
+    typer.echo(
+        f"resolve: {result.resolved} of {result.resolve_attempted} resolved; "
+        f"fetch: {result.fetched} of {result.fetch_attempted} retrieved; "
+        + (
+            "convert: skipped"
+            if result.convert_skipped
+            else f"convert: {result.converted} documents for {result.convert_attempted} papers"
+        )
+    )
+    for error in result.errors:
+        typer.echo(f"{error.step}: {error.item_id}: {error.reason}", err=True)

@@ -3,7 +3,15 @@ and the open units of work per kind. Computed from the projections; it stores no
 no event.
 
 Invariants:
-- Read-only. The index is synced before it is read; no event, blob or table is written.
+- Read-only, except `advance`. The index is synced before it is read; no event, blob or table is
+  written by `queue`, `added_papers` or `pending_work`.
+- `advance` runs only the deterministic steps for feed-added papers, each through the existing
+  service as the local human (`project.human_actor()`), so everything it writes is recorded as
+  that service records it: resolve the open items never looked up (never a `lookup-failed` one),
+  fetch full text for `screened-in` papers, convert `full-text` papers with the default converter.
+  Each paper is one call; one paper's error is recorded and the others go on. A process-wide lock
+  serialises calls, so the hub and the runner watcher never overlap. Capped by `limit` per step.
+  No model is called and no judgement is made.
 - One `QueueItem` per `feed_sends` row, newest first. Its stage is read from the existing reads
   and never re-derived here: the inbox projection (`list_items`) for the item and its last lookup,
   `final_outcomes` at title/abstract, `fulltext_status` and `fulltext_queue` for the document and
@@ -23,24 +31,35 @@ Invariants:
 
 from __future__ import annotations
 
+import threading
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal
 
+from pydantic import Field
 from sqlalchemy import text
 
+from factory.document.registry import default_converters
+from factory.errors import FactoryValidationError, ValidationIssue
 from factory.index.inbox import OPEN, WITHDRAWN
 from factory.model.base import StrictModel
+from factory.model.fulltext import Route
+from factory.model.inbox import ResolveStatus
 from factory.model.protocol import ScreeningStage
 from factory.model.screening import PassLabel
 from factory.services.agreement import Outcome, exclusion_criteria, final_outcomes
 from factory.services.context import Project
+from factory.services.document_convert import convert_documents
 from factory.services.extraction import abandoned_task_ids, all_scopes, unit_states
+from factory.services.fulltext import MAX_LIMIT, fetch_fulltext
 from factory.services.fulltext_screening import fulltext_queue
 from factory.services.fulltext_status import WorkFulltext, fulltext_status
-from factory.services.inbox import InboxItemView, list_items
+from factory.services.inbox import InboxItemView, list_items, resolve_links
 from factory.services.screening import stop_unscreened
 from factory.services.stages import kinds_for, task_kind
 from factory.services.tasks import open_task_ids
+from factory.sources.fulltext.base import FullTextRoute
+from factory.sources.registry import SourceFactory
 
 Stage = Literal[
     "added",
@@ -231,3 +250,136 @@ def pending_work(project: Project) -> dict[str, int]:
 def queue(project: Project) -> WorkQueue:
     """The added papers and the pending work together. Read-only."""
     return WorkQueue(items=added_papers(project), pending=pending_work(project))
+
+
+# --- Automatic steps (H6) ---
+
+AdvanceStep = Literal["resolve", "fetch", "convert"]
+
+_ADVANCE_LOCK = threading.Lock()
+"""Serialises `advance` across threads of this process: the hub's add and the runner's watcher."""
+
+
+class AdvanceError(StrictModel):
+    """One paper's failed step. `work_id` is None for a resolve, which has no work yet."""
+
+    step: AdvanceStep
+    item_id: str
+    work_id: str | None
+    reason: str
+
+
+class AdvanceResult(StrictModel):
+    """What one `advance` did: papers attempted and done per step, and the errors. `converted`
+    counts documents with the `converted` status, `fetched` works whose full text was retrieved,
+    `resolved` items whose lookup recorded a resolution (not a failure)."""
+
+    resolve_attempted: int = 0
+    resolved: int = 0
+    fetch_attempted: int = 0
+    fetched: int = 0
+    convert_attempted: int = 0
+    converted: int = 0
+    convert_skipped: bool = False
+    errors: list[AdvanceError] = Field(default_factory=list)
+
+
+def advance(
+    project: Project,
+    *,
+    sources: Mapping[str, SourceFactory],
+    fetchers: Mapping[Route, FullTextRoute],
+    convert: bool = True,
+    limit: int = 20,
+) -> AdvanceResult:
+    """Run the due deterministic steps for the papers added from the feed, at most `limit` papers
+    per step, as the local human. Refuses, with nothing written, a `limit` outside 1..MAX_LIMIT.
+
+    Resolve: each open item never looked up (stage `added`, not stopped) through `resolve_links`
+    with `item_ids`; a `lookup-failed` item is not retried. Fetch: each `screened-in` paper through
+    `fetch_fulltext` with its work id, under its own gating and budget. Convert (unless `convert`
+    is False): each `full-text` paper through `convert_documents` with `default_converters()`.
+    The stage is read again before the fetch and before the convert step, so a paper that moved
+    on is seen. A paper's error is recorded and the next paper goes on.
+    """
+    if not 1 <= limit <= MAX_LIMIT:
+        raise FactoryValidationError([ValidationIssue("limit", f"must be 1 to {MAX_LIMIT}")])
+    with _ADVANCE_LOCK:
+        return _advance(project, sources, fetchers, convert, limit)
+
+
+def _advance(
+    project: Project,
+    sources: Mapping[str, SourceFactory],
+    fetchers: Mapping[Route, FullTextRoute],
+    convert: bool,
+    limit: int,
+) -> AdvanceResult:
+    actor = project.human_actor()
+    errors: list[AdvanceError] = Field(default_factory=list)
+    counts = {"resolve": 0, "resolved": 0, "fetch": 0, "fetched": 0, "convert": 0, "converted": 0}
+
+    for paper in [p for p in added_papers(project) if p.stage == "added" and not p.stopped][:limit]:
+        counts["resolve"] += 1
+        try:
+            [outcome] = resolve_links(
+                project, actor, sources=sources, item_ids=[paper.inbox_item_id]
+            )
+        except Exception as exc:  # one paper's error never stops the others
+            errors.append(_error("resolve", paper, f"{type(exc).__name__}: {exc}"))
+            continue
+        if outcome.status is None:
+            reason = "; ".join(f"{i.field}: {i.reason}" for i in outcome.issues)
+            errors.append(_error("resolve", paper, reason or "refused"))
+        elif outcome.status is ResolveStatus.FAILED:
+            errors.append(_error("resolve", paper, "lookup failed; the link stays open"))
+        else:
+            counts["resolved"] += 1
+
+    for paper in [p for p in added_papers(project) if p.stage == "screened-in"][:limit]:
+        counts["fetch"] += 1
+        if paper.work_id is None:
+            continue
+        try:
+            summary = fetch_fulltext(
+                project, routes=fetchers, work_ids=[paper.work_id], limit=limit, actor=actor
+            )
+        except Exception as exc:  # one paper's error never stops the others
+            errors.append(_error("fetch", paper, f"{type(exc).__name__}: {exc}"))
+            continue
+        if any(work.status == "retrieved" for work in summary.works):
+            counts["fetched"] += 1
+
+    if convert:
+        registry = default_converters()
+        for paper in [p for p in added_papers(project) if p.stage == "full-text"][:limit]:
+            counts["convert"] += 1
+            if paper.work_id is None:
+                continue
+            try:
+                done = convert_documents(project, registry, work_ids=[paper.work_id])
+            except Exception as exc:  # one paper's error never stops the others
+                errors.append(_error("convert", paper, f"{type(exc).__name__}: {exc}"))
+                continue
+            counts["converted"] += done.converted
+            for doc in done.outcomes:
+                if doc.status in ("failed", "raw-missing"):
+                    reason = doc.reason or doc.status
+                    errors.append(_error("convert", paper, f"{doc.document_id}: {reason}"))
+
+    return AdvanceResult(
+        resolve_attempted=counts["resolve"],
+        resolved=counts["resolved"],
+        fetch_attempted=counts["fetch"],
+        fetched=counts["fetched"],
+        convert_attempted=counts["convert"],
+        converted=counts["converted"],
+        convert_skipped=not convert,
+        errors=errors,
+    )
+
+
+def _error(step: AdvanceStep, paper: QueueItem, reason: str) -> AdvanceError:
+    return AdvanceError(
+        step=step, item_id=paper.inbox_item_id, work_id=paper.work_id, reason=reason
+    )
