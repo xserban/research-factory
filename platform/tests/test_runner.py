@@ -84,7 +84,11 @@ def test_build_command_names_model_tools_skill_and_cap(project: Project) -> None
     assert argv[argv.index("--model") + 1] == "claude-haiku-5-5"
     assert "--strict-mcp-config" in argv
     tools = argv[argv.index("--allowedTools") + 1 : argv.index("--disallowedTools")]
-    assert tools == ["mcp__factory__screen_next", "mcp__factory__screen_record"]
+    assert tools == [
+        "mcp__factory__screen_next",
+        "mcp__factory__screen_record",
+        "mcp__factory__document_read",
+    ]
     assert "SCREEN SKILL BODY" in prompt
     assert "stop after 7 units or when the queue is empty" in prompt
     assert "project `demo`" in prompt and "role `screener`" in prompt

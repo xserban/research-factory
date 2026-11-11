@@ -111,7 +111,11 @@ STAGES: Final[dict[str, StageSpec]] = {
         model="claude-haiku-5-5",
         skill="rf-screen",
         role="screener",
-        tools=("mcp__factory__screen_next", "mcp__factory__screen_record"),
+        tools=(
+            "mcp__factory__screen_next",
+            "mcp__factory__screen_record",
+            "mcp__factory__document_read",  # full-text screening reads the converted document
+        ),
         kinds=(
             task_kind(ScreeningStage.TITLE_ABSTRACT, PassLabel.A),
             task_kind(ScreeningStage.FULL_TEXT, PassLabel.A),
@@ -358,6 +362,18 @@ def pending_units(project: Project, stage: str) -> dict[str, int]:
         return {stage: unit_pending(project, stage) or 0}
     pending = pending_work(project)
     counts = {kind: pending.get(kind, 0) for kind in spec.kinds}
+    if stage == "screen":  # a screening task is made only when `screen_next` serves the record
+        from factory.services.calibration import stage_population
+        from factory.services.screening import live_decisions
+
+        for kind, screening_stage in zip(
+            spec.kinds, (ScreeningStage.TITLE_ABSTRACT, ScreeningStage.FULL_TEXT), strict=True
+        ):
+            decided = {
+                d.work_id for d in live_decisions(project, PassLabel.A, stage=screening_stage)
+            }
+            undecided = len(stage_population(project, screening_stage) - decided)
+            counts[kind] = max(counts[kind], undecided)
     if stage == "extract":  # a task is made only when a session asks for the unit
         from factory.services.pipeline import unit_pending
 
