@@ -26,6 +26,16 @@ the extraction whose contexts are recorded. `snowball_rounds`, `snowball_queries
 `snowball_candidates` keep each round, its query texts in order and its candidates, with
 `cited_by_included` derived as the number of distinct source works citing the candidate.
 
+Reference layers (cited items grouped by normalised title): `reference_layer_schemes` keeps the
+researcher's scheme per version (`layers` is canonical JSON), first write wins; only a human
+actor's `reference.layer_scheme_recorded` is folded. `reference_layers` keeps an agent's layer per
+(item_key, stage, actor), last write wins; only an agent actor's `reference.layer_assigned` is
+folded. `reference_layer_labels` keeps the researcher's own label per item, last write wins; only
+a human actor's `reference.layer_labelled` is folded. An event that fails the actor guard or its
+payload validation changes nothing. Neither the scheme version nor the layer is checked against a
+recorded scheme here: the service refuses unknown ones at the boundary, and an event naming one
+is stored.
+
 Handlers are total: an event naming an unknown extraction is stored, never refused. Extractions,
 entries, links, context sets, rounds, queries and candidates are first-write-wins per key; a
 decision replaces the earlier one of its kind for the entry (last write wins).
@@ -35,7 +45,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from pydantic import JsonValue
+from pydantic import JsonValue, ValidationError
 from sqlalchemy import Column, Float, Index, Integer, MetaData, String, Table, and_, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Connection
@@ -49,6 +59,9 @@ from factory.model.references import (
     CitationContextsRecorded,
     Confidence,
     Decision,
+    LayerAssigned,
+    LayerLabelled,
+    LayerSchemeRecorded,
     LinkState,
     ReferenceExtracted,
     ReferenceReResolved,
@@ -73,6 +86,9 @@ class ReferenceTables:
     rounds: Table
     queries: Table
     candidates: Table
+    layer_schemes: Table
+    layers: Table
+    layer_labels: Table
 
 
 def reference_tables(metadata: MetaData) -> ReferenceTables:
@@ -195,8 +211,46 @@ def reference_tables(metadata: MetaData) -> ReferenceTables:
         Column("cited_by", String, nullable=False),
         Column("no_source_record", Integer, nullable=False),
     )
+    layer_schemes = Table(
+        "reference_layer_schemes",
+        metadata,
+        Column("version", Integer, primary_key=True),
+        Column("layers", String, nullable=False),
+        Column("event_id", String, nullable=False),
+    )
+    layers = Table(
+        "reference_layers",
+        metadata,
+        Column("item_key", String, primary_key=True),
+        Column("stage", String, primary_key=True),
+        Column("actor", String, primary_key=True),
+        Column("scheme_version", Integer, nullable=False),
+        Column("layer", String, nullable=False),
+        Column("event_id", String, nullable=False),
+        Index("ix_reference_layers_item_key", "item_key"),
+    )
+    layer_labels = Table(
+        "reference_layer_labels",
+        metadata,
+        Column("item_key", String, primary_key=True),
+        Column("scheme_version", Integer, nullable=False),
+        Column("layer", String, nullable=False),
+        Column("actor", String, nullable=False),
+        Column("event_id", String, nullable=False),
+    )
     return ReferenceTables(
-        extractions, entries, links, decisions, context_sets, contexts, rounds, queries, candidates
+        extractions,
+        entries,
+        links,
+        decisions,
+        context_sets,
+        contexts,
+        rounds,
+        queries,
+        candidates,
+        layer_schemes,
+        layers,
+        layer_labels,
     )
 
 
@@ -208,6 +262,9 @@ def reference_handlers(t: ReferenceTables) -> dict[str, Handler]:
         "reference.re_resolved": _re_resolved(t),
         "reference.resolution_decided": _decided(t),
         "snowball.round_started": _round_started(t),
+        "reference.layer_scheme_recorded": _layer_scheme_recorded(t),
+        "reference.layer_assigned": _layer_assigned(t),
+        "reference.layer_labelled": _layer_labelled(t),
     }
 
 
@@ -552,3 +609,73 @@ def _round_started(t: ReferenceTables) -> Handler:
             )
 
     return round_started
+
+
+def _layer_scheme_recorded(t: ReferenceTables) -> Handler:
+    def layer_scheme_recorded(conn: Connection, event: Event) -> None:
+        if event.actor.kind != "human":
+            return
+        try:
+            p = LayerSchemeRecorded.model_validate(event.payload)
+        except ValidationError:
+            return
+        conn.execute(
+            sqlite_insert(t.layer_schemes)
+            .values(
+                version=p.version,
+                layers=_json([layer.model_dump(mode="json") for layer in p.layers]),
+                event_id=event.id,
+            )
+            .on_conflict_do_nothing(index_elements=["version"])
+        )
+
+    return layer_scheme_recorded
+
+
+def _layer_assigned(t: ReferenceTables) -> Handler:
+    def layer_assigned(conn: Connection, event: Event) -> None:
+        if event.actor.kind != "agent":
+            return
+        try:
+            p = LayerAssigned.model_validate(event.payload)
+        except ValidationError:
+            return
+        values = {
+            "item_key": p.item_key,
+            "stage": p.stage,
+            "actor": event.actor.id,
+            "scheme_version": p.scheme_version,
+            "layer": p.layer,
+            "event_id": event.id,
+        }
+        conn.execute(
+            sqlite_insert(t.layers)
+            .values(**values)
+            .on_conflict_do_update(index_elements=["item_key", "stage", "actor"], set_=values)
+        )
+
+    return layer_assigned
+
+
+def _layer_labelled(t: ReferenceTables) -> Handler:
+    def layer_labelled(conn: Connection, event: Event) -> None:
+        if event.actor.kind != "human":
+            return
+        try:
+            p = LayerLabelled.model_validate(event.payload)
+        except ValidationError:
+            return
+        values = {
+            "item_key": p.item_key,
+            "scheme_version": p.scheme_version,
+            "layer": p.layer,
+            "actor": event.actor.id,
+            "event_id": event.id,
+        }
+        conn.execute(
+            sqlite_insert(t.layer_labels)
+            .values(**values)
+            .on_conflict_do_update(index_elements=["item_key"], set_=values)
+        )
+
+    return layer_labelled

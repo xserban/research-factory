@@ -165,6 +165,9 @@ from factory.model.question import GoalStated, QuestionRecorded
 from factory.model.ranking import RankingComputed
 from factory.model.references import (
     CitationContextsRecorded,
+    LayerAssigned,
+    LayerLabelled,
+    LayerSchemeRecorded,
     ReferenceExtracted,
     ReferenceReResolved,
     ReferenceResolutionDecided,
@@ -327,6 +330,9 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("reference.resolved", ReferenceResolved, 1))
     catalog.register(EventType("reference.re_resolved", ReferenceReResolved, 1))
     catalog.register(EventType("reference.resolution_decided", ReferenceResolutionDecided, 1))
+    catalog.register(EventType("reference.layer_scheme_recorded", LayerSchemeRecorded, 1))
+    catalog.register(EventType("reference.layer_assigned", LayerAssigned, 1))
+    catalog.register(EventType("reference.layer_labelled", LayerLabelled, 1))
     catalog.register(EventType("snowball.round_started", SnowballRoundStarted, 1))
     catalog.register(EventType("import.recorded", ImportRecorded, 1))
     catalog.register(EventType("import.split_drawn", ImportSplitDrawn, 1))

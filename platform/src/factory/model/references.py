@@ -20,6 +20,10 @@ Invariants enforced here (validated at the boundary, before any event is written
   both the entry and the candidate. A confirmation names its work.
 - A carried decision is a human's binding decision taken over by a new extraction for the entry
   with the same `entry_sha256`; it names the event that made it. An agent's decision never carries.
+- Reference layers (relevance classes of cited items): a scheme version names 2 to 12 layers with
+  unique slug ids; `layer_scheme_recorded` and `layer_labelled` are the researcher's (human actor,
+  enforced by the projector), `layer_assigned` an agent's, with the usual provenance. Whether a
+  layer or scheme version is known is the service's check, never the event's.
 - A backward round goes via the document reference list and has no chase round; a forward round
   goes via source metadata and names the delegated chase round. A candidate's citers are among
   the round's source works and cite it through the round's extractions. Counts are never fields: the
@@ -32,7 +36,7 @@ from __future__ import annotations
 
 import re
 from enum import StrEnum
-from typing import Annotated, Any, Literal, Self
+from typing import Annotated, Any, Final, Literal, Self
 
 from pydantic import (
     Field,
@@ -74,6 +78,18 @@ MAX_CANDIDATES = 3
 MAX_VERSION = 80
 MAX_REASON = 300
 MAX_QUERY = 400
+
+ITEM_KEY_RE: Final = r"^ci-[0-9a-f]{16}$"
+"""A cited item key: `ci-` and 16 hex characters of the SHA-256 of the normalised title."""
+LAYER_ID_RE: Final = r"^[a-z][a-z0-9-]{0,31}$"
+MIN_LAYERS: Final = 2
+MAX_LAYERS: Final = 12
+MAX_LAYER_NAME: Final = 80
+MAX_LAYER_CRITERIA: Final = 2000
+MAX_LAYER_EXAMPLE: Final = 300
+MAX_LAYER_EXAMPLES: Final = 10
+MAX_LAYER_RATIONALE: Final = 300
+MAX_LAYER_NOTE: Final = 300
 
 Flag = Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9-]*$", max_length=64)]
 Anchor = Annotated[str, StringConstraints(pattern=ANCHOR_RE.pattern)]
@@ -532,3 +548,52 @@ class SnowballRoundStarted(StrictModel):
             if any(c.extraction_id not in extractions for c in candidate.cited_by):
                 raise ValueError("a candidate is cited only through the round's extractions")
         return self
+
+
+ItemKey = Annotated[str, StringConstraints(pattern=ITEM_KEY_RE)]
+LayerId = Annotated[str, StringConstraints(pattern=LAYER_ID_RE)]
+LayerExample = Annotated[NonBlank, Field(max_length=MAX_LAYER_EXAMPLE)]
+LayerStage = Literal["title", "abstract"]
+
+
+class LayerDef(StrictModel):
+    """One layer of a scheme: its id, name, criteria and example titles."""
+
+    id: LayerId
+    name: Annotated[NonBlank, Field(max_length=MAX_LAYER_NAME)]
+    criteria: Annotated[NonBlank, Field(max_length=MAX_LAYER_CRITERIA)]
+    include_examples: tuple[LayerExample, ...] = Field(default=(), max_length=MAX_LAYER_EXAMPLES)
+    exclude_examples: tuple[LayerExample, ...] = Field(default=(), max_length=MAX_LAYER_EXAMPLES)
+
+
+class LayerSchemeRecorded(StrictModel):
+    """The researcher's layer scheme, version `version`; first write wins per version."""
+
+    version: int = Field(ge=1)
+    layers: tuple[LayerDef, ...] = Field(min_length=MIN_LAYERS, max_length=MAX_LAYERS)
+
+    @model_validator(mode="after")
+    def _unique_ids(self) -> Self:
+        ids = [layer.id for layer in self.layers]
+        if len(set(ids)) != len(ids):
+            raise ValueError("layer ids must be unique")
+        return self
+
+
+class LayerAssigned(StrictModel):
+    """An agent's layer for a cited item at a stage, with a short rationale."""
+
+    item_key: ItemKey
+    scheme_version: int = Field(ge=1)
+    stage: LayerStage
+    layer: LayerId
+    rationale: Annotated[NonBlank, Field(max_length=MAX_LAYER_RATIONALE)]
+
+
+class LayerLabelled(StrictModel):
+    """The researcher's own layer for a cited item (the calibration sample)."""
+
+    item_key: ItemKey
+    scheme_version: int = Field(ge=1)
+    layer: LayerId
+    note: str | None = Field(default=None, max_length=MAX_LAYER_NOTE)
