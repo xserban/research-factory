@@ -166,6 +166,19 @@ def _done(project: Project, unit: Unit, found: InstrumentInForce, label: PassLab
     return row is not None
 
 
+def appraisal_progress(project: Project) -> dict[str, bool] | None:
+    """For each work with a unit in pass A, whether the pass finished it under the instrument and
+    conversion in force; None when the protocol declares no instrument. Read-only; syncs."""
+    project.index.sync()
+    found = instrument_in_force(project)
+    if found is None:
+        return None
+    return {
+        u.work_id: _done(project, u, found, PassLabel.A)
+        for u in _units(project, found, PassLabel.A)
+    }
+
+
 def _check_pass_actor(project: Project, actor: Actor, label: PassLabel) -> None:
     """Refuse a non-agent, a session in a screening or extraction pass, a session that gave the
     other pass's answers and a model that did (independence, decision 37)."""

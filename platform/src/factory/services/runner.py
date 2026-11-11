@@ -21,6 +21,11 @@ Invariants:
   the CLI without waiting, the process may outlive this one; its end is then recorded by the next
   reconcile (`finish_lost`): from the exit status that the launch wrapper (`sh -c`) wrote to the
   `exit` file (`complete` or `failed`), `lost` only when there is none; the same steps follow.
+- Stages: `screen`, `extract`, `appraise`, `contributions`, `intuition` and `mine:<miner id>`; the
+  derivation of which apply and the pipeline over them are in `factory.services.pipeline`. The
+  child's MCP config carries `FACTORY_UNIT_CAP` and `FACTORY_RUN_ID`: the MCP server then refuses
+  the `*_next` tools with `cap-reached` once it has served that many units (`mcp.unit_cap`). A
+  per-stage run is refused while a pipeline holds the project.
 - The child may use only the stage's factory tools: the built-in tools are disallowed, permission
   mode is `dontAsk`, and it runs with the run folder as working directory.
 - Run bookkeeping is serialised across processes by `flock` on `runs/.lock`. A `starting` marker
@@ -42,7 +47,7 @@ import threading
 import time
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Final, Protocol
 
@@ -92,7 +97,13 @@ class StageSpec:
     role: str
     tools: tuple[str, ...]
     kinds: tuple[str, ...]
-    """The task kinds whose pending units the stage works on (pass A)."""
+    """The task kinds whose pending units the stage works on (pass A). Empty for a stage whose
+    pending units `factory.services.pipeline` counts from the unit states."""
+    unit: str = "unit"
+    """What one unit is, for the prompt (`record screened`, `work extracted`, ...)."""
+    miner: str | None = None
+    miner_version: int | None = None
+    """For a `mine:<id>` stage: the miner and the version the protocol lists."""
 
 
 STAGES: Final[dict[str, StageSpec]] = {
@@ -105,6 +116,7 @@ STAGES: Final[dict[str, StageSpec]] = {
             task_kind(ScreeningStage.TITLE_ABSTRACT, PassLabel.A),
             task_kind(ScreeningStage.FULL_TEXT, PassLabel.A),
         ),
+        unit="record screened",
     ),
     "extract": StageSpec(
         model="claude-sonnet-5-5",
@@ -116,8 +128,59 @@ STAGES: Final[dict[str, StageSpec]] = {
             "mcp__factory__document_read",
         ),
         kinds=(EXTRACT_KINDS[PassLabel.A],),
+        unit="work extracted",
+    ),
+    "appraise": StageSpec(
+        model="claude-sonnet-5-5",
+        skill="rf-appraise",
+        role="appraiser",
+        tools=(
+            "mcp__factory__appraisal_next",
+            "mcp__factory__appraisal_record",
+            "mcp__factory__document_read",
+        ),
+        kinds=(),
+        unit="work appraised",
+    ),
+    "contributions": StageSpec(
+        model="claude-sonnet-5-5",
+        skill="rf-contributions",
+        role="contributor",
+        tools=(
+            "mcp__factory__contribution_next",
+            "mcp__factory__contribution_record",
+            "mcp__factory__document_read",
+        ),
+        kinds=(),
+        unit="work read for contributions",
+    ),
+    "intuition": StageSpec(
+        model="claude-sonnet-5-5",
+        skill="rf-intuition",
+        role="interpreter",
+        tools=(
+            "mcp__factory__intuition_next",
+            "mcp__factory__interpretation_record",
+            "mcp__factory__interpretation_list",
+            "mcp__factory__document_read",
+        ),
+        kinds=(),
+        unit="target interpreted",
     ),
 }
+MINE_PREFIX: Final = "mine:"
+MINE_SPEC: Final = StageSpec(
+    model="claude-haiku-5-5",
+    skill="rf-mine",
+    role="miner",
+    tools=(
+        "mcp__factory__mine_next",
+        "mcp__factory__mine_record",
+        "mcp__factory__document_read",
+    ),
+    kinds=(),
+    unit="work mined",
+)
 
 
 class Process(Protocol):
@@ -163,11 +226,36 @@ def _factory_executable() -> str:
     return found
 
 
-def _stage(stage: str) -> StageSpec:
+def stage_keys() -> str:
+    """The valid stage keys, for a refusal."""
+    return ", ".join([*STAGES, f"{MINE_PREFIX}<miner id>"])
+
+
+def is_stage_key(stage: str) -> bool:
+    """Whether `stage` names a stage: a fixed one or `mine:<miner id>` (the miner is looked up
+    when the stage is used)."""
+    return stage in STAGES or (stage.startswith(MINE_PREFIX) and len(stage) > len(MINE_PREFIX))
+
+
+def _mine_use(project: Project, miner: str) -> int:
+    """The version of `miner` the current protocol lists; refuses when none."""
+    from factory.services.mining import miner_listing  # mining imports the extraction stack
+
+    versions = [m.version for m in miner_listing(project) if m.name == miner and m.listed]
+    if not versions:
+        raise _refuse("stage", f"miner {miner!r} is not registered and listed in the protocol")
+    return max(versions)
+
+
+def stage_spec(project: Project, stage: str) -> StageSpec:
+    """The spec of `stage`; for `mine:<id>` the miner and the version the protocol lists."""
     spec = STAGES.get(stage)
-    if spec is None:
-        raise _refuse("stage", "must be one of " + ", ".join(STAGES))
-    return spec
+    if spec is not None:
+        return spec
+    if stage.startswith(MINE_PREFIX) and len(stage) > len(MINE_PREFIX):
+        miner = stage[len(MINE_PREFIX) :]
+        return replace(MINE_SPEC, miner=miner, miner_version=_mine_use(project, miner))
+    raise _refuse("stage", "must be one of " + stage_keys())
 
 
 def _skill_text(project: Project, skill: str) -> str:
@@ -179,23 +267,32 @@ def _skill_text(project: Project, skill: str) -> str:
 
 def _prompt(project: Project, stage: str, spec: StageSpec, unit_cap: int) -> str:
     slug = project.paths.slug
+    parameters = f"project `{slug}`, pass_label `A`, role `{spec.role}`, model `{spec.model}`, "
+    miner = ""
+    if spec.miner is not None:
+        parameters += f"miner `{spec.miner}`, version {spec.miner_version}, "
+        miner = f" of miner `{spec.miner}` (version {spec.miner_version})"
+    if spec.skill == "rf-intuition":
+        parameters = f"project `{slug}`, role `{spec.role}`, model `{spec.model}`, "
     return (
-        f"You are pass A of stage `{stage}` for the Research Factory project `{slug}`. "
+        f"You are pass A of stage `{stage}`{miner} for the Research Factory project `{slug}`. "
         "Work through the factory MCP tools and follow exactly the skill below "
         "(you are pass `A`).\n\n"
-        f"Parameters for every factory call: project `{slug}`, pass_label `A`, "
-        f"role `{spec.role}`, "
-        f"model `{spec.model}`, skill `{spec.skill}`.\n\n"
+        f"Parameters for every factory call: {parameters}skill `{spec.skill}`.\n\n"
         f"Limit: stop after {unit_cap} units or when the queue is empty, whichever comes first. "
-        "A unit is one record screened or one work extracted. Use no other tools. Finally print "
+        f"A unit is one {spec.unit}. The server refuses further units with `cap-reached` once "
+        "the limit is served: then stop. Use no other tools. Finally print "
         "how many units you handled and any `blocked` text or error verbatim.\n\n"
         f"=== SKILL {spec.skill} ===\n{_skill_text(project, spec.skill)}"
     )
 
 
-def mcp_config(project: Project) -> dict[str, JsonValue]:
+def mcp_config(
+    project: Project, unit_cap: int | None = None, run_id: str | None = None
+) -> dict[str, JsonValue]:
     """The strict MCP config: this factory, with the root, plugin dir, PYTHONPATH and ranker
-    model (when set) as its only environment."""
+    model (when set) as its only environment, and, for a run, `FACTORY_UNIT_CAP` and
+    `FACTORY_RUN_ID` (the MCP server then serves at most that many units: see `mcp.unit_cap`)."""
     env: dict[str, JsonValue] = {
         "PYTHONPATH": os.environ.get("PYTHONPATH") or str(Path(factory.__file__).parents[1]),
         "FACTORY_PLUGIN_DIR": str(project.settings.plugin_dir),
@@ -204,6 +301,10 @@ def mcp_config(project: Project) -> dict[str, JsonValue]:
     ranker = os.environ.get("FACTORY_RANKER_MODEL")
     if ranker:
         env["FACTORY_RANKER_MODEL"] = ranker
+    if unit_cap is not None:
+        env["FACTORY_UNIT_CAP"] = str(unit_cap)
+    if run_id is not None:
+        env["FACTORY_RUN_ID"] = run_id
     return {
         "mcpServers": {"factory": {"command": _factory_executable(), "args": ["serve"], "env": env}}
     }
@@ -216,9 +317,10 @@ def build_command(
     *,
     mcp_path: Path = Path("mcp.json"),
     claude: str = "claude",
+    run_id: str | None = None,
 ) -> tuple[list[str], dict[str, JsonValue], str]:
     """`(argv, mcp config, prompt)` for one run of `stage`. Pure: starts and writes nothing."""
-    spec = _stage(stage)
+    spec = stage_spec(project, stage)
     if not 1 <= unit_cap <= MAX_UNIT_CAP:
         raise _refuse("unit_cap", f"must be between 1 and {MAX_UNIT_CAP}")
     prompt = _prompt(project, stage, spec, unit_cap)
@@ -241,13 +343,26 @@ def build_command(
         "stream-json",
         "--verbose",
     ]
-    return argv, mcp_config(project), prompt
+    return argv, mcp_config(project, unit_cap, run_id), prompt
 
 
 def pending_units(project: Project, stage: str) -> dict[str, int]:
-    """The pending units per task kind of `stage` (pass A)."""
+    """The pending units of `stage` (pass A): per task kind for `screen` and `extract`; for the
+    other stages (`factory.services.pipeline.pending_by_stage`) one count under the stage key."""
+    spec = STAGES.get(stage)
+    if spec is None or not spec.kinds:
+        if not is_stage_key(stage):
+            raise _refuse("stage", "must be one of " + stage_keys())
+        from factory.services.pipeline import unit_pending  # pipeline imports this module
+
+        return {stage: unit_pending(project, stage) or 0}
     pending = pending_work(project)
-    return {kind: pending.get(kind, 0) for kind in _stage(stage).kinds}
+    counts = {kind: pending.get(kind, 0) for kind in spec.kinds}
+    if stage == "extract":  # a task is made only when a session asks for the unit
+        from factory.services.pipeline import unit_pending
+
+        counts[spec.kinds[0]] = max(counts[spec.kinds[0]], unit_pending(project, stage) or 0)
+    return counts
 
 
 def _run_dir(project: Project, run_id: str) -> Path:
@@ -335,6 +450,31 @@ def _rows(project: Project, where: str = "") -> list[tuple[str, ...]]:
 
 def _open_run_ids(project: Project) -> list[str]:
     return [str(r[0]) for r in _rows(project, "WHERE r.outcome IS NULL")]
+
+
+def has_open_run(project: Project) -> bool:
+    """Whether a run of the project is open (recorded started, not finished)."""
+    return bool(_open_run_ids(project))
+
+
+def run_outcome(project: Project, run_id: str) -> str | None:
+    """The recorded outcome of `run_id` (`complete`, `failed`, `lost`), None while it is open."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        row = conn.execute(
+            text("SELECT outcome FROM runner_runs WHERE run_id = :r"), {"r": run_id}
+        ).first()
+    return None if row is None or row[0] is None else str(row[0])
+
+
+def wait_until_closed(project: Project, run_id: str, poll: float = 1.0) -> None:
+    """Block until `run_id` is closed: its watcher thread (this process) ends, else the run is
+    reconciled by `finish_lost` once its process is gone."""
+    while True:
+        if wait(run_id, poll) or run_outcome(project, run_id) is not None:
+            return
+        if _THREADS.get(run_id) is None:
+            finish_lost(project)
 
 
 def _starting(folder: Path) -> bool:
@@ -439,6 +579,11 @@ def _watch(project: Project, run_id: str, stage: str, process: Process) -> None:
         _advance_after(project)
 
 
+def advance_after(project: Project) -> None:
+    """The deterministic steps for the added papers (`work_queue.advance`), errors logged."""
+    _advance_after(project)
+
+
 def _advance_after(project: Project) -> None:
     """The deterministic steps for the added papers, after a run has been recorded (H6). Any
     exception is logged: the run is already closed and the steps are retried by the next call."""
@@ -454,9 +599,11 @@ def start_run(
     *,
     unit_cap: int = DEFAULT_UNIT_CAP,
     launcher: Launcher | None = None,
+    pipeline: bool = False,
 ) -> str:
-    """Start one run of `stage`; returns its `run_id` once the process is started and recorded."""
-    spec = _stage(stage)
+    """Start one run of `stage`; returns its `run_id` once the process is started and recorded.
+    Refused while a pipeline runs, unless `pipeline` (the pipeline's own call)."""
+    spec = stage_spec(project, stage)
     if not 1 <= unit_cap <= MAX_UNIT_CAP:
         raise _refuse("unit_cap", f"must be between 1 and {MAX_UNIT_CAP}")
     claude = claude_path()
@@ -465,6 +612,11 @@ def start_run(
             "claude",
             "the `claude` executable is not on PATH; install Claude Code and log in, then retry",
         )
+    if not pipeline:
+        from factory.services.pipeline import pipeline_active
+
+        if pipeline_active(project):
+            raise _refuse("pipeline", "a pipeline of this project is running; wait for it to end")
     finish_lost(project)
     with _runs_lock(project):
         finish_lost(project, advance_after=False)
@@ -477,7 +629,7 @@ def start_run(
         folder = _run_dir(project, run_id)
         mcp_path = folder / "mcp.json"
         argv, config, prompt = build_command(
-            project, stage, unit_cap, mcp_path=mcp_path, claude=claude
+            project, stage, unit_cap, mcp_path=mcp_path, claude=claude, run_id=run_id
         )
         folder.mkdir(parents=True, exist_ok=True)
         (folder / "starting").write_text(str(time.time()), encoding="utf-8")
@@ -513,11 +665,10 @@ def start_run(
 
 
 def _as_stage(stage: str) -> RunnerStage:
-    if stage == "screen":
-        return "screen"
-    if stage == "extract":
-        return "extract"
-    raise _refuse("stage", "must be one of " + ", ".join(STAGES))
+    """`stage` as the event's stage key; refuses an unknown key."""
+    if not is_stage_key(stage):
+        raise _refuse("stage", "must be one of " + stage_keys())
+    return stage
 
 
 def wait(run_id: str, timeout: float | None = None) -> bool:
