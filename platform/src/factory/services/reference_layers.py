@@ -54,6 +54,8 @@ screening (`protocol_rules.KAPPA_FLOOR_MIN`)."""
 ABSTRACT_LAYERS: Final = ("in-scope", "adjacent")
 """Title-stage layers whose items go on to the abstract stage."""
 DEFAULT_LIMIT: Final = 25
+MAX_LIMIT: Final = 100
+"""Most items `next_items` serves in one call."""
 
 
 @dataclass(frozen=True)
@@ -107,6 +109,22 @@ class CalibrationState:
     measure."""
     floor: float
     passed: bool
+    dropped: int = 0
+    """Labelled items left out of the sample because they are no longer assessable candidates
+    (not assessable, or now in the corpus)."""
+
+
+@dataclass(frozen=True)
+class AgentCalibration:
+    """The calibration as an agent may see it: counts and the verdict only, never the researcher's
+    agreement, kappa or which items are labelled."""
+
+    scheme_version: int
+    sample_size: int
+    labelled: int
+    assigned: int
+    dropped: int
+    passed: bool
 
 
 @dataclass(frozen=True)
@@ -126,7 +144,7 @@ class LayerStatus:
     by_stage: dict[str, dict[str, int]]
     left: dict[str, int]
     awaiting_resolution: int
-    calibration: CalibrationState | None
+    calibration: CalibrationState | AgentCalibration | None
 
 
 def _refuse(field_: str, message: str) -> FactoryValidationError:
@@ -161,9 +179,13 @@ def current_scheme(project: Project) -> LayerSchemeRecorded | None:
 
 def record_scheme(project: Project, actor: Actor, scheme: LayerSchemeRecorded) -> SchemeResult:
     """Record the researcher's scheme. Refused for a non-human actor, and for a version already
-    recorded with different content; the identical content again writes nothing."""
+    recorded with different content, and for a scheme lacking an id in
+    `ABSTRACT_LAYERS`; the identical content again writes nothing."""
     if actor.kind != "human":
         raise _refuse("actor", "only the researcher records a layer scheme")
+    missing = [i for i in ABSTRACT_LAYERS if i not in {d.id for d in scheme.layers}]
+    if missing:
+        raise _refuse("layers", f"the scheme lacks the required layer ids: {', '.join(missing)}")
     with project.index.exclusive():
         existing = _scheme(project, scheme.version)
         if existing is not None:
@@ -227,29 +249,43 @@ def _sample_from(candidates: Sequence[CitedItem], scheme_version: int) -> list[C
     return sorted(picked, key=lambda i: (-i.citing_count, i.key))
 
 
-def _draw(project: Project, scheme_version: int) -> list[CitedItem]:
-    """The fresh draw: assessable, not-in-corpus items in three equal strata by queue order (top,
-    middle, bottom third by citing count); in each, the ten items with the smallest SHA-256 of
-    `<version>:<key>`. A stratum with fewer than ten items gives all of them."""
-    return _sample_from(_pool(project).candidates, scheme_version)
+@dataclass(frozen=True)
+class _Sample:
+    keys: frozenset[str]
+    dropped: int
 
 
-def _sample_keys(project: Project, scheme_version: int) -> set[str]:
-    """The calibration sample's keys. Items the researcher labelled always stay in it, so new
-    extractions (which move the strata) never drop a labelled item; the fresh draw only fills it
-    while fewer than `CALIBRATION_SIZE` items are labelled."""
-    labelled = set(_labels(project, scheme_version))
-    if len(labelled) >= CALIBRATION_SIZE:
-        return labelled
-    return labelled | {i.key for i in _draw(project, scheme_version)}
+def _sample(pool: _Pool, labels: dict[str, str], scheme_version: int) -> _Sample:
+    """The calibration sample: the labelled items that are still candidates, filled up to exactly
+    `CALIBRATION_SIZE` (or the whole pool, if smaller) from the fresh draw (`_sample_from`, in its
+    order, skipping labelled items), then, if the draw falls short, from the remaining candidates
+    in SHA-256 draw order. Labelled items that are no longer candidates are left out and counted
+    in `dropped`."""
+    candidates = {i.key for i in pool.candidates}
+    kept = {k for k in labels if k in candidates}
+    chosen = set(kept)
+    need = CALIBRATION_SIZE - len(chosen)
+    for item in _sample_from(pool.candidates, scheme_version):
+        if need <= 0:
+            break
+        if item.key not in chosen:
+            chosen.add(item.key)
+            need -= 1
+    if need > 0:
+        rest = sorted(
+            (i for i in pool.candidates if i.key not in chosen),
+            key=lambda i: _draw_order(scheme_version, i.key),
+        )
+        chosen.update(i.key for i in rest[:need])
+    return _Sample(frozenset(chosen), len(labels) - len(kept))
 
 
 def calibration_sample(project: Project, scheme_version: int) -> list[CitedItem]:
-    """The calibration sample in queue order: the labelled items plus, while fewer than
-    `CALIBRATION_SIZE` are labelled, the fresh draw (`_draw`). A labelled item that is no longer
-    an assessable candidate is left out of the items but kept in the state's key set."""
-    keys = _sample_keys(project, scheme_version)
-    return [i for i in _pool(project).candidates if i.key in keys]
+    """The calibration sample in queue order (see `_sample`)."""
+    with project.index.exclusive():
+        pool = _pool(project)
+        keys = _sample(pool, _labels(project, scheme_version), scheme_version).keys
+    return [i for i in pool.candidates if i.key in keys]
 
 
 def record_label(
@@ -270,7 +306,8 @@ def record_label(
             raise _refuse("scheme_version", "unknown-scheme-version")
         if layer not in {d.id for d in scheme.layers}:
             raise _refuse("layer", "unknown-layer")
-        if item_key not in _sample_keys(project, scheme_version):
+        pool = _pool(project)
+        if item_key not in _sample(pool, _labels(project, scheme_version), scheme_version).keys:
             raise _refuse("item_key", "not in the calibration sample")
         event = project.events.make(
             "reference.layer_labelled",
@@ -318,11 +355,12 @@ def agent_layers(project: Project, stage: LayerStage, scheme_version: int) -> di
 
 
 def _calibration(
-    sample_keys: set[str],
+    sample: _Sample,
     scheme: LayerSchemeRecorded,
     labels: dict[str, str],
     title: dict[str, str],
 ) -> CalibrationState:
+    sample_keys = sample.keys
     labelled = {k: v for k, v in labels.items() if k in sample_keys}
     assigned = {k: v for k, v in title.items() if k in sample_keys}
     both = sorted(set(labelled) & set(assigned))
@@ -344,6 +382,7 @@ def _calibration(
         kappa=kappa,
         kappa_by_layer=by_layer,
         floor=CALIBRATION_FLOOR,
+        dropped=sample.dropped,
         passed=bool(sample_keys)
         and len(labelled) == len(sample_keys)
         and len(assigned) == len(sample_keys)
@@ -352,19 +391,38 @@ def _calibration(
     )
 
 
+def _calibration_for(
+    project: Project, scheme: LayerSchemeRecorded, pool: _Pool
+) -> CalibrationState:
+    """The one calibration computation (gate, status and `calibration_state` all use it). The
+    caller holds `project.index.exclusive()`."""
+    v = scheme.version
+    labels = _labels(project, v)
+    return _calibration(
+        _sample(pool, labels, v), scheme, labels, _latest_layers(project, "title", v)
+    )
+
+
 def calibration_state(project: Project, scheme_version: int) -> CalibrationState:
     """Labelled and assigned counts, percent agreement and kappa on the sample items having both
     the researcher's label and an agent title-stage layer. Passed when every sample item has both
-    and kappa reaches `CALIBRATION_FLOOR`. Refused for an unknown version."""
-    scheme = _scheme(project, scheme_version)
-    if scheme is None:
-        raise _refuse("scheme_version", "unknown-scheme-version")
-    keys = _sample_keys(project, scheme_version)
-    return _calibration(
-        keys,
-        scheme,
-        _labels(project, scheme_version),
-        _latest_layers(project, "title", scheme_version),
+    and kappa reaches `CALIBRATION_FLOOR`. Refused for an unknown version. One consistent read."""
+    with project.index.exclusive():
+        scheme = _scheme(project, scheme_version)
+        if scheme is None:
+            raise _refuse("scheme_version", "unknown-scheme-version")
+        return _calibration_for(project, scheme, _pool(project))
+
+
+def agent_view(state: CalibrationState) -> AgentCalibration:
+    """The redacted form of `state` for an agent."""
+    return AgentCalibration(
+        scheme_version=state.scheme_version,
+        sample_size=state.sample_size,
+        labelled=state.labelled,
+        assigned=state.assigned,
+        dropped=state.dropped,
+        passed=state.passed,
     )
 
 
@@ -409,16 +467,17 @@ def _served(item: CitedItem, abstract: str | None = None) -> ServedItem:
 def _stage_queue(
     project: Project, pool: _Pool, scheme: LayerSchemeRecorded, stage: LayerStage
 ) -> tuple[list[CitedItem], bool]:
-    """Items still to assign at `stage` (in queue order) and whether the calibration gates them."""
+    """Items still to assign at `stage` (in queue order) and whether the calibration gates them.
+    The caller holds `project.index.exclusive()`."""
     v = scheme.version
     if stage == "title":
         done = set(_latest_layers(project, "title", v))
         left = [i for i in pool.candidates if i.key not in done]
-        state = calibration_state(project, v)
-        if state.passed:
+        labels = _labels(project, v)
+        sample = _sample(pool, labels, v)
+        if _calibration_for(project, scheme, pool).passed:
             return left, False
-        sample = _sample_keys(project, v)
-        return [i for i in left if i.key in sample], True
+        return [i for i in left if i.key in sample.keys], True
     title = _latest_layers(project, "title", v)
     done = set(_latest_layers(project, "abstract", v))
     return [
@@ -437,6 +496,13 @@ def next_items(project: Project, *, stage: LayerStage, limit: int = DEFAULT_LIMI
     `input_blob`); nothing is stored when nothing is served. Refused with no scheme recorded."""
     if limit < 1:
         raise _refuse("limit", "limit must be at least 1")
+    if limit > MAX_LIMIT:
+        raise _refuse("limit", f"limit must be at most {MAX_LIMIT}")
+    with project.index.exclusive():
+        return _next_items(project, stage, limit)
+
+
+def _next_items(project: Project, stage: LayerStage, limit: int) -> NextBatch:
     scheme = current_scheme(project)
     if scheme is None:
         raise _refuse("scheme", "no layer scheme is recorded; the researcher records one first")
@@ -487,11 +553,28 @@ def record_assignments(
         issues.append(ValidationIssue("actor", "only an agent assigns layers"))
     if not assignments:
         issues.append(ValidationIssue("assignments", "no assignments"))
-    try:
-        project.blobs.get_json(input_blob)
-    except (BlobNotFoundError, BlobIntegrityError, ValueError):
-        issues.append(ValidationIssue("input_blob", "unknown or unreadable input blob"))
     with project.index.exclusive():
+        served: set[str] | None = None
+        try:
+            blob = project.blobs.get_json(input_blob)
+        except (BlobNotFoundError, BlobIntegrityError, ValueError):
+            issues.append(ValidationIssue("input_blob", "unknown or unreadable input blob"))
+        else:
+            keys = blob.get("item_keys") if isinstance(blob, dict) else None
+            if (
+                not isinstance(blob, dict)
+                or not isinstance(keys, list)
+                or not all(isinstance(k, str) for k in keys)
+            ):
+                issues.append(ValidationIssue("input_blob", "not a served batch of items"))
+            else:
+                served = {str(k) for k in keys}
+                if blob.get("stage") != stage:
+                    issues.append(ValidationIssue("input_blob", "served for a different stage"))
+                if blob.get("scheme_version") != scheme_version:
+                    issues.append(
+                        ValidationIssue("input_blob", "served under a different scheme version")
+                    )
         scheme = _scheme(project, scheme_version)
         if scheme is None:
             issues.append(ValidationIssue("scheme_version", "unknown-scheme-version"))
@@ -499,9 +582,12 @@ def record_assignments(
         known = {i.key for i in pool.report.items}
         in_corpus = set(pool.in_corpus)
         layers = {d.id for d in scheme.layers} if scheme else set()
-        titled = (
-            set(_latest_layers(project, "title", scheme_version)) if stage == "abstract" else set()
-        )
+        allowed: set[str] | None = None
+        calibrating = False
+        if scheme is not None:
+            queue, calibrating = _stage_queue(project, pool, scheme, stage)
+            allowed = {i.key for i in queue}
+        titled = _latest_layers(project, "title", scheme_version) if stage == "abstract" else {}
         seen: set[str] = set()
         for n, (key, layer, _rationale) in enumerate(assignments):
             where = f"assignments[{n}]"
@@ -514,6 +600,17 @@ def record_assignments(
                 issues.append(ValidationIssue(where, f"item {key} is in the corpus"))
             elif stage == "abstract" and key not in titled:
                 issues.append(ValidationIssue(where, f"item {key} has no title-stage layer"))
+            elif stage == "abstract" and titled[key] not in ABSTRACT_LAYERS:
+                issues.append(
+                    ValidationIssue(
+                        where, f"item {key} has title-stage layer {titled[key]}, not shortlisted"
+                    )
+                )
+            elif served is not None and key not in served:
+                issues.append(ValidationIssue(where, f"item {key} was not served in input_blob"))
+            elif allowed is not None and key not in allowed:
+                why = "outside the calibration sample" if calibrating else "not in the queue"
+                issues.append(ValidationIssue(where, f"item {key} is not servable now: {why}"))
             if scheme is not None and layer not in layers:
                 issues.append(ValidationIssue(where, f"unknown-layer {layer}"))
         if issues:
@@ -541,9 +638,16 @@ def record_assignments(
 # --- status -------------------------------------------------------------------------------------
 
 
-def status(project: Project) -> LayerStatus:
+def status(project: Project, *, agent: bool = False) -> LayerStatus:
     """Counts only: items by assessability, layers per stage, items left per stage, abstracts
-    awaiting resolution, the calibration state, the entry total and the rules version."""
+    awaiting resolution, the calibration state, the entry total and the rules version. One
+    consistent read. With `agent`, the calibration is the redacted `AgentCalibration` (no
+    agreement, kappa or labelled-item information)."""
+    with project.index.exclusive():
+        return _status(project, agent)
+
+
+def _status(project: Project, agent: bool) -> LayerStatus:
     pool = _pool(project)
     reasons: Counter[str] = Counter(r for u in pool.report.unassessable for r in u.reasons)
     scheme = current_scheme(project)
@@ -567,8 +671,8 @@ def status(project: Project) -> LayerStatus:
             sorted(Counter(_latest_layers(project, stage, v).values()).items())
         )
     title = _latest_layers(project, "title", v)
-    sample = {i.key for i in _sample_from(pool.candidates, v)}
-    result.calibration = _calibration(sample, scheme, _labels(project, v), title)
+    state = _calibration_for(project, scheme, pool)
+    result.calibration = agent_view(state) if agent else state
     result.left["title"] = sum(1 for i in pool.candidates if i.key not in title)
     queue, _ = _stage_queue(project, pool, scheme, "abstract")
     result.left["abstract"] = len(queue)

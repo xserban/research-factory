@@ -74,7 +74,7 @@ from factory.services.prisma_update import UpdateFlow
 from factory.services.properties import PropertyView
 from factory.services.protocol import ProtocolView
 from factory.services.question import QuestionView
-from factory.services.reference_layers import LayerStatus
+from factory.services.reference_layers import CalibrationState, LayerStatus
 from factory.services.references import ExtractSummary, Page, ReferenceCounts, ReResolveSummary
 from factory.services.regions import ExportRow, RegionState, VersionInfo
 from factory.services.relations import RelationView
@@ -1810,12 +1810,13 @@ def layer_status_lines(status: LayerStatus) -> list[str]:
     if status.scheme_version is not None:
         lines.append(f"awaiting resolution (abstract stage): {status.awaiting_resolution}")
     cal = status.calibration
-    if cal is not None:
+    if isinstance(cal, CalibrationState):
         agreement = "n/a" if cal.agreement is None else f"{cal.agreement:.2f}"
         kappa = "n/a" if cal.kappa is None else f"{cal.kappa:.2f}"
         lines.append(
             f"calibration: sample {cal.sample_size}, labelled {cal.labelled}, "
             f"assigned {cal.assigned}, compared {cal.compared}; agreement {agreement}; "
-            f"kappa {kappa} vs floor {cal.floor:.2f}; " + ("passed" if cal.passed else "not passed")
+            f"kappa {kappa} vs floor {cal.floor:.2f}; dropped {cal.dropped}; "
+            + ("passed" if cal.passed else "not passed")
         )
     return lines
