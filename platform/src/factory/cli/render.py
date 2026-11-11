@@ -93,6 +93,10 @@ def prisma_markdown(flow: PrismaFlow) -> str:
     lines += [f"- {source}: {n}" for source, n in flow.identified_databases.items()]
     lines += [f"- other methods, {method}: {n}" for method, n in flow.identified_other.items()]
     lines.append(f"- duplicates removed: {flow.duplicates_removed}")
+    if flow.version_pair_merges > 0:
+        lines.append(
+            f"  - of which {flow.version_pair_merges} rest on the researcher's version-pair ruling"
+        )
     lines += ["", "## Screening", f"- records screened: {flow.screened}"]
     lines += [f"- excluded, {criterion}: {n}" for criterion, n in flow.excluded.items()]
     lines.append(f"- pending: {flow.pending}")

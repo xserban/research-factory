@@ -21,6 +21,7 @@ from factory.errors import FactoryValidationError
 from factory.model.base import StrictModel
 from factory.model.members import ProjectRole
 from factory.model.protocol import ScreeningStage
+from factory.services import version_pairs
 from factory.services.agreement import screen_agreement
 from factory.services.audit import audit_report
 from factory.services.calibration import calibration_status
@@ -47,6 +48,7 @@ class Gate(StrEnum):
     ATTACHMENTS_WAITING = "attachments-waiting"
     DOCUMENTS_UNCONVERTED = "documents-unconverted"
     INBOX_OPEN = "inbox-open"
+    VERSION_PAIRS = "version-pairs"
 
 
 INTAKE_COMMANDS: dict[Gate, str] = {
@@ -73,6 +75,7 @@ GATE_ROLES: dict[Gate, tuple[ProjectRole, ...]] = {
     Gate.ATTACHMENTS_WAITING: _STEWARDS,
     Gate.DOCUMENTS_UNCONVERTED: _STEWARDS,
     Gate.INBOX_OPEN: _STEWARDS,
+    Gate.VERSION_PAIRS: _STEWARDS,
 }
 """The project roles responsible for each gate, in order of preference (PD-8 routing): the first
 role that has a holder supplies the assignee. Labelling gates go to a screener, then a maintainer
@@ -179,6 +182,7 @@ def human_queue(project: Project, *, agent: bool = False) -> HumanQueue:
         (Gate.INBOX_OPEN, intake.inbox),
     ):
         add(gate, None, count, f"{base} {INTAKE_COMMANDS[gate]}")
+    add(Gate.VERSION_PAIRS, None, len(version_pairs.candidates(project)), f"{base} dedup pairs")
     return HumanQueue(items=items)
 
 

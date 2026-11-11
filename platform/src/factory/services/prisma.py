@@ -50,7 +50,7 @@ from factory.model.search import QueryKind, QueryPurpose, RunStatus
 from factory.model.work import ProvenanceMethod, Work
 from factory.services.agreement import Outcome, exclusion_criteria, final_outcomes
 from factory.services.context import Project
-from factory.services.dedup import canonical_works
+from factory.services.dedup import active_merges, canonical_works
 from factory.services.fulltext_screening import fulltext_queue
 from factory.services.fulltext_status import fulltext_status
 from factory.services.protocol import current_protocol, registered_deviation, registered_import
@@ -193,6 +193,9 @@ class PrismaFlow(StrictModel):
     identified_other: dict[str, int]
     identified_other_detail: dict[str, int] = Field(default_factory=dict)
     duplicates_removed: int
+    version_pair_merges: int = 0
+    """Active merges resting on the researcher's version-pair ruling (decision 117), computed: a
+    note on `duplicates_removed`, which it does not change."""
     screened: int
     excluded: dict[str, int]
     pending: int
@@ -388,6 +391,7 @@ def prisma_flow(project: Project) -> PrismaFlow:
         identified_other=other,
         identified_other_detail=detail if other[ProvenanceMethod.CITATION_CHASE.value] else {},
         duplicates_removed=sum(databases.values()) - canonical_with_database,
+        version_pair_merges=sum("version-pair" in merge.rule for merge in active_merges(project)),
         screened=len(canonical),
         excluded=dict(sorted(excluded.items())),
         pending=pending,
