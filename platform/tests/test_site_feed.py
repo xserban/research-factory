@@ -137,9 +137,7 @@ def test_abstract_and_authors_come_from_the_fetch_blob(
     assert "A. Author" not in cards[SECOND]
 
 
-def test_no_config_says_so_and_shows_the_command(
-    project: Project, tmp_path: Path
-) -> None:
+def test_no_config_says_so_and_shows_the_command(project: Project, tmp_path: Path) -> None:
     html = _html(project, tmp_path)
     assert "no feed configuration" in html
     assert "factory feed configure" in html
