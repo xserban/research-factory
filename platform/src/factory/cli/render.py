@@ -279,8 +279,13 @@ def import_lines(report: ImportReport) -> list[str]:
         ("identity unchecked (--accept FILE to vouch for one)", report.identity_unchecked),
     ):
         lines.append(f"{label}: {len(names)}")
-        lines += [f"  {name}" for name in names]
+        lines += [_import_entry(name, report.candidates.get(name, [])) for name in names]
     return lines
+
+
+def _import_entry(name: str, candidates: list[str]) -> str:
+    """One file of an import list, with the works it matched when the list names them."""
+    return f"  {name}  -> {', '.join(candidates)}" if candidates else f"  {name}"
 
 
 def fetch_lines(summary: FetchSummary) -> list[str]:
