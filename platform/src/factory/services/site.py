@@ -127,6 +127,12 @@ def _build_dashboard(project: Project, out: Path) -> None:
     export_snapshot(project, out / "index.html")
 
 
+def _build_feed(project: Project, out: Path) -> None:
+    from factory.services.site_feed import build_feed
+
+    build_feed(project, out)
+
+
 def _build_prisma(project: Project, out: Path) -> None:
     from factory.services.site_prisma import build_prisma
 
@@ -338,6 +344,17 @@ def products() -> list[Product]:
             entry="index.html",
             inputs=CORPUS_EVENTS,
             build=_build_bibliography,
+        ),
+        Product(
+            id="feed",
+            title="Daily updates",
+            group="Corpus",
+            description="The latest discovery feed ranking: each shown paper with its score, "
+            "whether it explores beyond the core, its nearest core paper, its abstract and its "
+            "reaction. Read-only in this version.",
+            entry="index.html",
+            inputs=("feed.%", "inbox.%"),
+            build=_build_feed,
         ),
     ]
 
