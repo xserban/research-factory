@@ -25,6 +25,7 @@ from factory.cli.library import library_app
 from factory.cli.manuscripts import manuscript_app
 from factory.cli.organisation import consolidation_app, labels_app, terms_app
 from factory.cli.pages import pages_app
+from factory.cli.queue import queue_cmd
 from factory.cli.screen_check import screen_check_app
 from factory.cli.site import site_app
 from factory.cli.team import (
@@ -580,6 +581,7 @@ protocol_app.command("amend")(protocol_amend_cmd)
 protocol_app.command("deviation")(protocol_deviation_cmd)
 app.command("workspace")(workspace_cmd)
 app.command("ledger")(ledger_cmd)
+app.command("queue")(queue_cmd)
 app.add_typer(budget_app)
 
 

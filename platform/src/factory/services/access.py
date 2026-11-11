@@ -333,6 +333,7 @@ TOOL_PERMISSIONS: Mapping[str, Permission] = {
     "cli:feed add": Permission.HUMAN_CONFIRM,
     "cli:feed show": Permission.PROJECT_READ,
     "cli:feed status": Permission.PROJECT_READ,
+    "cli:queue": Permission.PROJECT_READ,
     "cli:living snapshot": Permission.WORK_RUN,
     "cli:digest": Permission.WORK_RUN,
     "cli:import bib": Permission.WORK_RUN,

@@ -133,6 +133,12 @@ def _build_feed(project: Project, out: Path) -> None:
     build_feed(project, out)
 
 
+def _build_queue(project: Project, out: Path) -> None:
+    from factory.services.site_queue import build_queue
+
+    build_queue(project, out)
+
+
 def _build_prisma(project: Project, out: Path) -> None:
     from factory.services.site_prisma import build_prisma
 
@@ -355,6 +361,25 @@ def products() -> list[Product]:
             entry="index.html",
             inputs=("feed.%", "inbox.%"),
             build=_build_feed,
+        ),
+        Product(
+            id="queue",
+            title="Work queue",
+            group="Corpus",
+            description="The papers added from the feed, each with the stage it stands at "
+            "(lookup, screening, full text, conversion, extraction), and the open units of work "
+            "per task kind.",
+            entry="index.html",
+            inputs=(
+                "feed.%",
+                "inbox.%",
+                "screening.%",
+                "fulltext.%",
+                "document.%",
+                "extraction.%",
+                "task.%",
+            ),
+            build=_build_queue,
         ),
     ]
 
