@@ -18,14 +18,20 @@ Invariants:
 - A daemon watcher thread records `runner.finished` when the process exits: `complete` for exit
   status 0, otherwise `failed`. Once that is recorded the same thread runs the deterministic steps
   (`work_queue.advance`, H6); an exception there is logged and never reaches the run. Started from
-  the CLI without waiting, the process may outlive this one; its end is then recorded `lost` by the
-  next reconcile.
-- The run folder `projects/<slug>/runs/<run_id>/` holds `prompt.txt`, `mcp.json`, `pid` and
-  `log.jsonl`; it is evidence, not state: the events are the record.
+  the CLI without waiting, the process may outlive this one; its end is then recorded by the next
+  reconcile (`finish_lost`): from the exit status that the launch wrapper (`sh -c`) wrote to the
+  `exit` file (`complete` or `failed`), `lost` only when there is none; the same steps follow.
+- The child may use only the stage's factory tools: the built-in tools are disallowed, permission
+  mode is `dontAsk`, and it runs with the run folder as working directory.
+- Run bookkeeping is serialised across processes by `flock` on `runs/.lock`. A `starting` marker
+  younger than 60 s without a pid keeps a run alive for other processes.
+- The run folder `projects/<slug>/runs/<run_id>/` holds `prompt.txt`, `mcp.json`, `starting`,
+  `pid`, `exit` and `log.jsonl`; it is evidence, not state: the events are the record.
 """
 
 from __future__ import annotations
 
+import fcntl
 import json
 import logging
 import os
@@ -33,7 +39,9 @@ import shutil
 import subprocess
 import sys
 import threading
-from collections.abc import Callable, Sequence
+import time
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, Protocol
@@ -57,6 +65,24 @@ MAX_UNIT_CAP: Final = 200
 DEFAULT_UNIT_CAP: Final = 25
 _RECENT: Final = 10
 _PROMPT_PLACEHOLDER: Final = "<prompt: see prompt.txt in the run folder>"
+STARTING_GRACE: Final = 60.0
+"""Seconds a `starting` marker without a pid keeps a run alive (another process is launching it)."""
+_RETRY_PAUSE: Final = 1.0
+BUILTIN_TOOLS: Final = (
+    "Bash",
+    "Edit",
+    "Write",
+    "Read",
+    "Glob",
+    "Grep",
+    "WebFetch",
+    "WebSearch",
+    "Task",
+    "Agent",
+    "NotebookEdit",
+)
+"""The built-in tools the child is denied: it may use only the factory tools of its stage."""
+_WRAPPER: Final = 'EXIT="$1"; shift; "$@"; echo $? > "$EXIT"'
 
 
 @dataclass(frozen=True)
@@ -105,7 +131,8 @@ Launcher = Callable[[Sequence[str], Path], Process]
 
 
 def default_launcher(argv: Sequence[str], log_path: Path) -> Process:
-    """Start `argv` detached from this terminal: stdin from /dev/null, a new session."""
+    """Start `argv` detached from this terminal: stdin from /dev/null, a new session, working
+    directory the run folder (the folder of `log_path`)."""
     with log_path.open("wb") as log:
         return subprocess.Popen(
             list(argv),
@@ -113,6 +140,7 @@ def default_launcher(argv: Sequence[str], log_path: Path) -> Process:
             stdout=log,
             stderr=subprocess.STDOUT,
             start_new_session=True,
+            cwd=log_path.parent,
         )
 
 
@@ -205,6 +233,10 @@ def build_command(
         str(mcp_path),
         "--allowedTools",
         *spec.tools,
+        "--disallowedTools",
+        *BUILTIN_TOOLS,
+        "--permission-mode",
+        "dontAsk",
         "--output-format",
         "stream-json",
         "--verbose",
@@ -240,6 +272,34 @@ def _read_pid(folder: Path) -> int | None:
 
 
 _LOCK = threading.RLock()
+_FLOCK_DEPTH = 0
+
+
+@contextmanager
+def _runs_lock(project: Project) -> Iterator[None]:
+    """Serialise run bookkeeping across threads (`_LOCK`) and processes (`flock` on
+    `runs/.lock`). Re-entrant: only the outermost entry takes the file lock."""
+    global _FLOCK_DEPTH
+    with _LOCK:
+        if _FLOCK_DEPTH > 0:
+            _FLOCK_DEPTH += 1
+            try:
+                yield
+            finally:
+                _FLOCK_DEPTH -= 1
+            return
+        runs = project.paths.dir / "runs"
+        runs.mkdir(parents=True, exist_ok=True)
+        with (runs / ".lock").open("a") as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            _FLOCK_DEPTH = 1
+            try:
+                yield
+            finally:
+                _FLOCK_DEPTH = 0
+                fcntl.flock(handle, fcntl.LOCK_UN)
+
+
 _WATCHING: set[tuple[str, str]] = set()
 _THREADS: dict[str, threading.Thread] = {}
 
@@ -277,11 +337,30 @@ def _open_run_ids(project: Project) -> list[str]:
     return [str(r[0]) for r in _rows(project, "WHERE r.outcome IS NULL")]
 
 
+def _starting(folder: Path) -> bool:
+    """True when a `starting` marker younger than STARTING_GRACE says a launch is under way."""
+    try:
+        return time.time() - (folder / "starting").stat().st_mtime < STARTING_GRACE
+    except OSError:
+        return False
+
+
+def _read_exit(folder: Path) -> int | None:
+    """The exit status the launch wrapper recorded, or None when absent or incomplete."""
+    try:
+        return int((folder / "exit").read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return None
+
+
 def _is_gone(project: Project, run_id: str) -> bool:
     if (str(project.paths.root), run_id) in _WATCHING:
         return False
-    pid = _read_pid(_run_dir(project, run_id))
-    return pid is None or not _pid_alive(pid)
+    folder = _run_dir(project, run_id)
+    pid = _read_pid(folder)
+    if pid is None:
+        return not _starting(folder)
+    return not _pid_alive(pid)
 
 
 def _log_blob(project: Project, folder: Path) -> str:
@@ -307,21 +386,31 @@ def _finish(
         log_blob=_log_blob(project, folder),
         counts_after=pending_units(project, stage),
     )
-    with _LOCK:
+    with _runs_lock(project):
         if run_id not in _open_run_ids(project):
             return
         project.record([project.events.make("runner.finished", payload, project.system_actor())])
 
 
-def finish_lost(project: Project) -> list[str]:
-    """Close, as `lost`, each open run whose process is gone. Returns the run ids closed."""
+def finish_lost(project: Project, *, advance_after: bool = True) -> list[str]:
+    """Close each open run whose process is gone. With the exit status the launch wrapper left in
+    the run folder the run is `complete` (0) or `failed`; without it, `lost`. Returns the run ids
+    closed. When `advance_after` and a run was closed, the deterministic steps run afterwards
+    (outside the lock), as the watcher does."""
     closed: list[str] = []
-    with _LOCK:
+    with _runs_lock(project):
         for row in _rows(project, "WHERE r.outcome IS NULL"):
             run_id = str(row[0])
-            if _is_gone(project, run_id):
-                _finish(project, run_id, str(row[1]), "lost", None)
-                closed.append(run_id)
+            if not _is_gone(project, run_id):
+                continue
+            code = _read_exit(_run_dir(project, run_id))
+            outcome: RunnerOutcome = (
+                "lost" if code is None else ("complete" if code == 0 else "failed")
+            )
+            _finish(project, run_id, str(row[1]), outcome, code)
+            closed.append(run_id)
+    if closed and advance_after:
+        _advance_after(project)
     return closed
 
 
@@ -335,10 +424,15 @@ def _watch(project: Project, run_id: str, stage: str, process: Process) -> None:
         code = None
     recorded = False
     try:
-        _finish(project, run_id, stage, "complete" if code == 0 else "failed", code)
-        recorded = True
-    except (FactoryError, OSError):
-        pass
+        for attempt in (1, 2):
+            try:
+                _finish(project, run_id, stage, "complete" if code == 0 else "failed", code)
+                recorded = True
+                break
+            except Exception:
+                _LOG.exception("recording the end of run %s failed (attempt %d)", run_id, attempt)
+                if attempt == 1:
+                    time.sleep(_RETRY_PAUSE)
     finally:
         _WATCHING.discard((str(project.paths.root), run_id))
     if recorded:
@@ -371,8 +465,9 @@ def start_run(
             "claude",
             "the `claude` executable is not on PATH; install Claude Code and log in, then retry",
         )
-    with _LOCK:
-        finish_lost(project)
+    finish_lost(project)
+    with _runs_lock(project):
+        finish_lost(project, advance_after=False)
         if _open_run_ids(project):
             raise _refuse("run", "a run of this project is already open; wait for it to finish")
         counts = pending_units(project, stage)
@@ -385,6 +480,7 @@ def start_run(
             project, stage, unit_cap, mcp_path=mcp_path, claude=claude
         )
         folder.mkdir(parents=True, exist_ok=True)
+        (folder / "starting").write_text(str(time.time()), encoding="utf-8")
         (folder / "prompt.txt").write_text(prompt, encoding="utf-8")
         mcp_path.write_text(json.dumps(config, indent=1), encoding="utf-8")
         recorded = [_PROMPT_PLACEHOLDER if part == prompt else part for part in argv]
@@ -401,7 +497,8 @@ def start_run(
         project.record([project.events.make("runner.started", started, project.system_actor())])
         launch = launcher or default_launcher
         try:
-            process = launch(argv, folder / "log.jsonl")
+            wrapped = ["sh", "-c", _WRAPPER, "sh", str(folder / "exit"), *argv]
+            process = launch(wrapped, folder / "log.jsonl")
         except OSError as exc:
             _finish(project, run_id, stage, "failed", None)
             raise _refuse("claude", f"could not start `claude`: {exc}") from exc

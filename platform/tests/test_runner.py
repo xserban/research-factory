@@ -8,6 +8,7 @@ import json
 import os
 import re
 import threading
+import time
 from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import Any
@@ -82,7 +83,7 @@ def test_build_command_names_model_tools_skill_and_cap(project: Project) -> None
     assert argv[:2] == ["claude", "-p"] and argv[2] == prompt
     assert argv[argv.index("--model") + 1] == "claude-haiku-5-5"
     assert "--strict-mcp-config" in argv
-    tools = argv[argv.index("--allowedTools") + 1 : argv.index("--output-format")]
+    tools = argv[argv.index("--allowedTools") + 1 : argv.index("--disallowedTools")]
     assert tools == ["mcp__factory__screen_next", "mcp__factory__screen_record"]
     assert "SCREEN SKILL BODY" in prompt
     assert "stop after 7 units or when the queue is empty" in prompt
@@ -92,10 +93,18 @@ def test_build_command_names_model_tools_skill_and_cap(project: Project) -> None
     assert loaded["mcpServers"]["factory"]["args"] == ["serve"]
 
 
+def test_child_is_denied_the_builtin_tools_and_asks_nothing(project: Project) -> None:
+    argv, _, _ = runner.build_command(project, "screen")
+    start = argv.index("--disallowedTools") + 1
+    assert argv[start : argv.index("--permission-mode")] == list(runner.BUILTIN_TOOLS)
+    assert argv[argv.index("--permission-mode") + 1] == "dontAsk"
+    assert "Bash" in runner.BUILTIN_TOOLS and "Write" in runner.BUILTIN_TOOLS
+
+
 def test_extract_stage_uses_sonnet_and_the_skills_tools(project: Project) -> None:
     argv, _, prompt = runner.build_command(project, "extract", 3)
     assert argv[argv.index("--model") + 1] == "claude-sonnet-5-5"
-    tools = argv[argv.index("--allowedTools") + 1 : argv.index("--output-format")]
+    tools = argv[argv.index("--allowedTools") + 1 : argv.index("--disallowedTools")]
     assert tools == [
         "mcp__factory__extract_next",
         "mcp__factory__extract_record",
@@ -133,7 +142,10 @@ def test_start_run_records_started_then_finished(project: Project) -> None:
     assert re.fullmatch(r"rnr_[0-9A-HJKMNP-TV-Z]{26}", run_id)
     [(argv, log_path)] = launcher.calls
     folder = log_path.parent
-    assert (folder / "prompt.txt").read_text(encoding="utf-8") == argv[2]
+    assert argv[:4] == ["sh", "-c", runner._WRAPPER, "sh"] and argv[4] == str(folder / "exit")
+    claude_argv = argv[5:]
+    assert claude_argv[:2] == ["/usr/bin/claude", "-p"]
+    assert (folder / "prompt.txt").read_text(encoding="utf-8") == claude_argv[2]
     assert json.loads((folder / "mcp.json").read_text(encoding="utf-8"))["mcpServers"]
     assert (folder / "pid").read_text(encoding="utf-8") == str(os.getpid())
     [open_run] = runner.run_status(project)
@@ -145,10 +157,12 @@ def test_start_run_records_started_then_finished(project: Project) -> None:
     assert [e.type for e in events] == ["runner.started", "runner.finished"]
     assert all(e.actor.kind == "system" for e in events)
     started = events[0].payload
+    assert started["command"][:2] == ["/usr/bin/claude", "-p"]
     assert started["command"][2] == "<prompt: see prompt.txt in the run folder>"
-    assert argv[2] not in json.dumps(started["command"])
+    assert "--permission-mode" in started["command"] and "--disallowedTools" in started["command"]
+    assert claude_argv[2] not in json.dumps(started["command"])
     assert started["model"] == "claude-haiku-5-5" and started["unit_cap"] == 5
-    assert project.blobs.get(started["prompt_blob"]).decode() == argv[2]
+    assert project.blobs.get(started["prompt_blob"]).decode() == claude_argv[2]
     assert project.blobs.get(events[1].payload["log_blob"]) == b'{"type":"result"}\n'
 
 
@@ -193,6 +207,64 @@ def test_lost_run_is_reconciled_by_status_and_by_start(
     fresh = runner.start_run(project, "extract", launcher=new_launcher)
     assert _outcome(project, again) == ("lost", None)
     _finish_all(new_launcher, fresh)
+
+
+@pytest.mark.parametrize(("code", "outcome"), [(0, "complete"), (3, "failed")])
+def test_reconcile_uses_the_recorded_exit_status(
+    project: Project, monkeypatch: pytest.MonkeyPatch, code: int, outcome: str
+) -> None:
+    monkeypatch.setattr(runner, "_pid_alive", lambda pid: False)
+    advanced: list[int] = []
+    monkeypatch.setattr(runner, "_advance_after", lambda p: advanced.append(1))
+    run_id = _start_unwatched(project)
+    (project.paths.dir / "runs" / run_id / "exit").write_text(f"{code}\n", encoding="utf-8")
+    assert runner.run_status(project)[0].status == outcome
+    assert _outcome(project, run_id) == (outcome, code)
+    assert advanced == [1]
+
+
+def test_lost_without_exit_file_runs_no_steps(
+    project: Project, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(runner, "_pid_alive", lambda pid: False)
+    run_id = _start_unwatched(project)
+    (project.paths.dir / "runs" / run_id / "exit").write_text("", encoding="utf-8")
+    assert runner.finish_lost(project, advance_after=False) == [run_id]
+    assert _outcome(project, run_id) == ("lost", None)
+
+
+def test_a_young_starting_marker_without_a_pid_keeps_the_run_alive(project: Project) -> None:
+    run_id = _start_unwatched(project)
+    folder = project.paths.dir / "runs" / run_id
+    (folder / "pid").unlink()
+    (folder / "starting").write_text("now", encoding="utf-8")
+    assert runner.finish_lost(project) == []
+    assert runner.run_status(project, reconcile=False)[0].status == "running"
+    old = time.time() - runner.STARTING_GRACE - 5
+    os.utime(folder / "starting", (old, old))
+    assert runner.finish_lost(project, advance_after=False) == [run_id]
+
+
+def test_watcher_retries_a_failed_record_once(
+    project: Project, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(runner, "_RETRY_PAUSE", 0.0)
+    monkeypatch.setattr(runner, "_advance_after", lambda p: None)
+    real = runner._finish
+    calls: list[int] = []
+
+    def flaky(*args: Any) -> None:
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("disk")
+        real(*args)
+
+    monkeypatch.setattr(runner, "_finish", flaky)
+    launcher = FakeLauncher()
+    run_id = runner.start_run(project, "screen", launcher=launcher)
+    _finish_all(launcher, run_id)
+    assert len(calls) == 2
+    assert runner.run_status(project, reconcile=False)[0].status == "complete"
 
 
 def test_refusals_write_nothing(project: Project, monkeypatch: pytest.MonkeyPatch) -> None:
