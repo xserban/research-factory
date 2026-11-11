@@ -21,6 +21,27 @@ Invariants:
 - A pass is stale when an agent session joined it, units of its task kind are still pending, and
   the session has recorded no event for `PASS_IDLE` (a task lease, 30 minutes: a session silent
   for longer holds no live claim). Human sessions are never reported.
+
+Resuming (plan restart-and-costs R2): `resume` acts on `interrupted`.
+- Resuming never edits an event. A resumed run (pipeline) is a new run (pipeline) that names the
+  one it resumes in `resumes`; a run resumed with `start_run(resumes=...)` reuses the earlier run's
+  recorded prompt blob, tools and model, and is refused when the stage's model or tools have
+  changed since (a fresh run is then the researcher's call). A resumed pipeline re-plans the
+  applicable stages from the first of `stages_left` that still applies, with fresh stage runs.
+- Expired leases are not released by an event. The existing release path (`tasks.release_task`,
+  and the fold of `task.released`) accepts only the session that holds a live claim, so a release
+  of a lapsed lease, by the system or anyone, would be ignored; and a lapsed claim is claimable
+  again by `claim_next`. `resume` therefore reports the lapsed leases as released-by-expiry and
+  writes nothing for them.
+- A stale agent pass is reported and never resumed: its session is a past process, and its
+  identity (session, pass label) is not carried over. The remaining work is done by a new runner
+  run, a new session, which the pass and independence rules govern as for any run.
+- Order: reconcile open runs whose process is gone (`runner.finish_lost`, recording), the
+  deterministic steps (`runner.advance_after`), then read `interrupted`. The newest interrupted
+  pipeline is resumed; if none, the newest interrupted run of each stage with pending units is a
+  resume candidate, but only one run starts (one run per project): the others are `queued`.
+  Refusals (a live run or pipeline, a changed spec) are reported in `refused`, never raised.
+- `dry_run` writes nothing, not even the reconcile, and starts nothing.
 """
 
 from __future__ import annotations
@@ -28,9 +49,11 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Final, Literal
 
+from pydantic import Field
 from sqlalchemy import text
 
 from factory.clock import format_ts
+from factory.errors import FactoryValidationError
 from factory.model.base import StrictModel
 from factory.model.extraction import scope_from_value
 from factory.model.protocol import ScreeningStage
@@ -312,6 +335,141 @@ def _automatic(project: Project) -> AutomaticLeft:
     )
 
 
+class PipelineResume(StrictModel):
+    resumes: str
+    from_stage: str
+    stages: list[str]
+    """The planned stages from `from_stage` that still apply."""
+
+
+class RunResume(StrictModel):
+    resumes: str
+    stage: str
+    model: str
+
+
+class ResumePlan(StrictModel):
+    """What `resume` does (or would do, for a dry run)."""
+
+    reconcile: list[str]
+    """Open runs whose process is gone, closed first."""
+    leases: list[ExpiredLeases]
+    """Lapsed leases: released by expiry, no event (see the module docstring)."""
+    pipeline: PipelineResume | None
+    run: RunResume | None
+    queued: list[str]
+    """Other interrupted runs with pending units, resumed by a later call."""
+    stale_passes: list[StalePass]
+    automatic: AutomaticLeft
+
+    @property
+    def is_empty(self) -> bool:
+        a = self.automatic
+        return not (
+            self.reconcile
+            or self.leases
+            or self.pipeline
+            or self.run
+            or self.queued
+            or self.stale_passes
+            or a.resolve
+            or a.fetch
+            or a.convert
+        )
+
+
+class ResumeResult(StrictModel):
+    plan: ResumePlan
+    reconciled: list[str]
+    pipeline_id: str | None = None
+    run_id: str | None = None
+    refused: list[str] = Field(default_factory=list)
+
+
+def _plan(project: Project, found: Interrupted, reconcile: list[str]) -> ResumePlan:
+    pipeline_plan: PipelineResume | None = None
+    covered: set[str] = set()
+    if found.pipelines:
+        newest = found.pipelines[0]
+        applicable = [s.key for s in pipeline.stages(project) if s.applies]
+        left = [k for k in newest.stages_left if k in applicable]
+        if left:
+            first = applicable.index(left[0])
+            pipeline_plan = PipelineResume(
+                resumes=newest.pipeline_id, from_stage=left[0], stages=applicable[first:]
+            )
+            covered = set(applicable[first:])
+    candidates: list[InterruptedRun] = []
+    seen: set[str] = set()
+    for run in found.runs:  # newest first: one candidate per stage
+        if run.stage in seen or not run.stage_pending or run.stage in covered:
+            continue
+        seen.add(run.stage)
+        candidates.append(run)
+    run_plan: RunResume | None = None
+    queued: list[str] = []
+    if pipeline_plan is None and candidates:
+        head = candidates[0]
+        run_plan = RunResume(resumes=head.run_id, stage=head.stage, model=head.model)
+        queued = [r.run_id for r in candidates[1:]]
+    return ResumePlan(
+        reconcile=reconcile,
+        leases=found.leases,
+        pipeline=pipeline_plan,
+        run=run_plan,
+        queued=queued,
+        stale_passes=found.passes,
+        automatic=found.automatic,
+    )
+
+
+def resume(
+    project: Project,
+    *,
+    dry_run: bool = False,
+    unit_cap: int | None = None,
+    launcher: runner.Launcher | None = None,
+) -> ResumePlan | ResumeResult:
+    """Resume the project's interrupted work (see the module docstring). A dry run returns the
+    `ResumePlan` and writes nothing; otherwise the plan is carried out and a `ResumeResult`
+    returned. Pipelines and runs start in the background (their threads record the end);
+    `pipeline_id` / `run_id` name what started. `unit_cap` defaults to the earlier run's (a run)
+    or the default (a pipeline)."""
+    if dry_run:
+        found = interrupted(project)
+        gone = [r.run_id for r in found.runs if r.kind == "open-gone"]
+        return _plan(project, found, gone)
+    reconciled = runner.finish_lost(project)
+    runner.advance_after(project)
+    found = interrupted(project)
+    plan = _plan(project, found, [])
+    pipeline_id: str | None = None
+    run_id: str | None = None
+    refused: list[str] = []
+    try:
+        if plan.pipeline is not None:
+            pipeline_id = pipeline.start_pipeline(
+                project,
+                unit_cap=unit_cap or runner.DEFAULT_UNIT_CAP,
+                launcher=launcher,
+                from_stage=plan.pipeline.from_stage,
+                resumes=plan.pipeline.resumes,
+            )
+        elif plan.run is not None:
+            run_id = runner.start_run(
+                project,
+                plan.run.stage,
+                unit_cap=unit_cap,
+                launcher=launcher,
+                resumes=plan.run.resumes,
+            )
+    except FactoryValidationError as exc:
+        refused = [f"{i.field}: {i.reason}" for i in exc.issues]
+    return ResumeResult(
+        plan=plan, reconciled=reconciled, pipeline_id=pipeline_id, run_id=run_id, refused=refused
+    )
+
+
 __all__ = [
     "PASS_IDLE",
     "AutomaticLeft",
@@ -319,6 +477,11 @@ __all__ = [
     "Interrupted",
     "InterruptedPipeline",
     "InterruptedRun",
+    "PipelineResume",
+    "ResumePlan",
+    "ResumeResult",
+    "RunResume",
     "StalePass",
     "interrupted",
+    "resume",
 ]

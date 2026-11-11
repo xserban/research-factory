@@ -353,13 +353,32 @@ class PipelinePlan:
     lock: IO[str]
 
 
-def begin_pipeline(project: Project, *, unit_cap: int = runner.DEFAULT_UNIT_CAP) -> PipelinePlan:
+def _known_pipeline(project: Project, pipeline_id: str) -> bool:
+    project.index.sync()
+    with project.index.connect() as conn:
+        return (
+            conn.execute(
+                text("SELECT 1 FROM runner_pipelines WHERE pipeline_id = :p"), {"p": pipeline_id}
+            ).first()
+            is not None
+        )
+
+
+def begin_pipeline(
+    project: Project,
+    *,
+    unit_cap: int = runner.DEFAULT_UNIT_CAP,
+    from_stage: str | None = None,
+    resumes: str | None = None,
+) -> PipelinePlan:
     """Check that a pipeline can start and record `runner.pipeline_started`.
 
     Refuses, with nothing written, when `claude` is not on PATH, the cap is not 1..MAX_UNIT_CAP, a
     pipeline or a run is open, or no stage has pending work. A pipeline row left open by a process
     that is gone is closed as `lost` first. The returned plan holds the pipeline lock; the caller
-    must pass it to `execute_pipeline`, which releases it."""
+    must pass it to `execute_pipeline`, which releases it. `from_stage` drops the planned stages
+    before it (it must be an applicable stage); `resumes` names the earlier pipeline this one
+    resumes (it must be a pipeline of this project)."""
     if not 1 <= unit_cap <= runner.MAX_UNIT_CAP:
         raise _refuse("unit_cap", f"must be between 1 and {runner.MAX_UNIT_CAP}")
     if runner.claude_path() is None:
@@ -367,6 +386,8 @@ def begin_pipeline(project: Project, *, unit_cap: int = runner.DEFAULT_UNIT_CAP)
             "claude",
             "the `claude` executable is not on PATH; install Claude Code and log in, then retry",
         )
+    if resumes is not None and not _known_pipeline(project, resumes):
+        raise _refuse("resumes", f"{resumes} is not a pipeline of this project")
     handle = _acquire(project)
     try:
         for orphan in _open_pipelines(project):
@@ -375,6 +396,11 @@ def begin_pipeline(project: Project, *, unit_cap: int = runner.DEFAULT_UNIT_CAP)
         if runner.has_open_run(project):
             raise _refuse("run", "a run of this project is already open; wait for it to finish")
         planned = [s for s in stages(project) if s.applies]
+        if from_stage is not None:
+            keys = [s.key for s in planned]
+            if from_stage not in keys:
+                raise _refuse("from_stage", f"{from_stage!r} is not an applicable stage")
+            planned = planned[keys.index(from_stage) :]
         if not planned:
             raise _refuse("pipeline", "no stage applies to this project")
         before = {s.key: s.pending for s in planned}
@@ -384,6 +410,7 @@ def begin_pipeline(project: Project, *, unit_cap: int = runner.DEFAULT_UNIT_CAP)
             stages=tuple(s.key for s in planned),
             unit_cap=unit_cap,
             counts_before=before,
+            resumes=resumes,
         )
         project.record(
             [project.events.make("runner.pipeline_started", started, project.system_actor())]
@@ -493,10 +520,12 @@ def run_pipeline(
     *,
     unit_cap: int = runner.DEFAULT_UNIT_CAP,
     launcher: runner.Launcher | None = None,
+    from_stage: str | None = None,
+    resumes: str | None = None,
 ) -> str:
     """Process all in the foreground: begin, run every stage with pending work, record the end;
     returns the pipeline id. Refusals are `FactoryValidationError`, nothing written."""
-    plan = begin_pipeline(project, unit_cap=unit_cap)
+    plan = begin_pipeline(project, unit_cap=unit_cap, from_stage=from_stage, resumes=resumes)
     return execute_pipeline(project, plan, launcher=launcher)
 
 
@@ -505,10 +534,12 @@ def start_pipeline(
     *,
     unit_cap: int = runner.DEFAULT_UNIT_CAP,
     launcher: runner.Launcher | None = None,
+    from_stage: str | None = None,
+    resumes: str | None = None,
 ) -> str:
     """Process all in a background daemon thread (the hub): the checks and `pipeline_started`
     happen now, the stages in the thread; returns the pipeline id."""
-    plan = begin_pipeline(project, unit_cap=unit_cap)
+    plan = begin_pipeline(project, unit_cap=unit_cap, from_stage=from_stage, resumes=resumes)
     thread = threading.Thread(
         target=execute_pipeline,
         args=(project, plan),

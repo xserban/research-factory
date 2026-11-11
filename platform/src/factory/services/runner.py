@@ -352,12 +352,16 @@ def build_command(
     mcp_path: Path = Path("mcp.json"),
     claude: str = "claude",
     run_id: str | None = None,
+    prompt_override: str | None = None,
 ) -> tuple[list[str], dict[str, JsonValue], str]:
-    """`(argv, mcp config, prompt)` for one run of `stage`. Pure: starts and writes nothing."""
+    """`(argv, mcp config, prompt)` for one run of `stage`. Pure: starts and writes nothing.
+    `prompt_override` is used in place of the built prompt (a resumed run's recorded prompt)."""
     spec = stage_spec(project, stage)
     if not 1 <= unit_cap <= MAX_UNIT_CAP:
         raise _refuse("unit_cap", f"must be between 1 and {MAX_UNIT_CAP}")
-    prompt = _prompt(project, stage, spec, unit_cap)
+    prompt = (
+        prompt_override if prompt_override is not None else _prompt(project, stage, spec, unit_cap)
+    )
     argv = [
         claude,
         "-p",
@@ -712,17 +716,94 @@ def _advance_after(project: Project) -> None:
         _LOG.exception("the automatic steps after run %s failed", project.paths.slug)
 
 
+class RunRecord(StrictModel):
+    """The recorded start of a run: what a resumed run reuses."""
+
+    run_id: str
+    stage: str
+    model: str
+    allowed_tools: tuple[str, ...]
+    prompt_blob: str
+    unit_cap: int
+    outcome: str | None
+
+
+def run_record(project: Project, run_id: str) -> RunRecord | None:
+    """The `runner.started` facts of `run_id` as folded, or None when it is not a run of this
+    project. Read-only."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        row = conn.execute(
+            text(
+                "SELECT stage, model, allowed_tools, prompt_blob, unit_cap, outcome "
+                "FROM runner_runs WHERE run_id = :r"
+            ),
+            {"r": run_id},
+        ).first()
+    if row is None:
+        return None
+    return RunRecord(
+        run_id=run_id,
+        stage=str(row[0]),
+        model=str(row[1]),
+        allowed_tools=tuple(json.loads(str(row[2]))),
+        prompt_blob=str(row[3]),
+        unit_cap=int(row[4]),
+        outcome=None if row[5] is None else str(row[5]),
+    )
+
+
+def _resumed_prompt(project: Project, earlier: RunRecord, spec: StageSpec, unit_cap: int) -> str:
+    """The earlier run's recorded prompt, for a run that resumes it. Refuses when the stage's
+    model or tools are no longer the recorded ones: a changed spec is a fresh run, never a
+    silent change. A cap different from the recorded one changes only the limit sentence."""
+    if earlier.model != spec.model or earlier.allowed_tools != spec.tools:
+        raise _refuse(
+            "resumes",
+            f"the model or tools of stage {earlier.stage!r} changed since run {earlier.run_id}; "
+            "start a fresh run instead of resuming it",
+        )
+    prompt = project.blobs.get(earlier.prompt_blob).decode("utf-8")
+    if unit_cap != earlier.unit_cap:
+        old = f"Limit: stop after {earlier.unit_cap} units"
+        if old not in prompt:
+            raise _refuse("unit_cap", "the recorded prompt names no cap to change; use the same")
+        prompt = prompt.replace(old, f"Limit: stop after {unit_cap} units", 1)
+    return prompt
+
+
 def start_run(
     project: Project,
     stage: str,
     *,
-    unit_cap: int = DEFAULT_UNIT_CAP,
+    unit_cap: int | None = None,
     launcher: Launcher | None = None,
     pipeline: bool = False,
+    resumes: str | None = None,
+    prompt_override: str | None = None,
 ) -> str:
     """Start one run of `stage`; returns its `run_id` once the process is started and recorded.
-    Refused while a pipeline runs, unless `pipeline` (the pipeline's own call)."""
+    Refused while a pipeline runs, unless `pipeline` (the pipeline's own call).
+
+    `resumes` names an earlier, not complete run of the same stage (plan restart-and-costs R2): the
+    new run is a new run (the earlier run's events are never edited) that reuses the earlier
+    run's recorded prompt, tools and model, and names it in `runner.started`. `unit_cap` then
+    defaults to the earlier run's. `prompt_override` replaces the built prompt (and is what a
+    resume passes after reading the blob)."""
     spec = stage_spec(project, stage)
+    earlier = None
+    if resumes is not None:
+        earlier = run_record(project, resumes)
+        if earlier is None:
+            raise _refuse("resumes", f"{resumes} is not a run of this project")
+        if earlier.stage != stage:
+            raise _refuse("resumes", f"{resumes} ran stage {earlier.stage!r}, not {stage!r}")
+        if earlier.outcome == "complete":
+            raise _refuse("resumes", f"{resumes} completed; there is nothing to resume")
+    if unit_cap is None:
+        unit_cap = DEFAULT_UNIT_CAP if earlier is None else earlier.unit_cap
+    if earlier is not None and prompt_override is None:
+        prompt_override = _resumed_prompt(project, earlier, spec, unit_cap)
     if not 1 <= unit_cap <= MAX_UNIT_CAP:
         raise _refuse("unit_cap", f"must be between 1 and {MAX_UNIT_CAP}")
     claude = claude_path()
@@ -748,7 +829,13 @@ def start_run(
         folder = _run_dir(project, run_id)
         mcp_path = folder / "mcp.json"
         argv, config, prompt = build_command(
-            project, stage, unit_cap, mcp_path=mcp_path, claude=claude, run_id=run_id
+            project,
+            stage,
+            unit_cap,
+            mcp_path=mcp_path,
+            claude=claude,
+            run_id=run_id,
+            prompt_override=prompt_override,
         )
         folder.mkdir(parents=True, exist_ok=True)
         (folder / "starting").write_text(str(time.time()), encoding="utf-8")
@@ -764,6 +851,7 @@ def start_run(
             unit_cap=unit_cap,
             counts_before=counts,
             command=tuple(recorded),
+            resumes=resumes,
         )
         project.record([project.events.make("runner.started", started, project.system_actor())])
         launch = launcher or default_launcher

@@ -48,6 +48,9 @@ class RunnerStarted(StrictModel):
     unit_cap: int = Field(ge=1)
     counts_before: dict[str, Annotated[int, Field(ge=0)]]
     command: tuple[str, ...] = Field(min_length=1)
+    resumes: str | None = Field(default=None, pattern=RUNNER_RUN_ID_RE)
+    """The earlier run this one resumes (plan restart-and-costs R2): a new run with the same
+    prompt blob, tools and model. The earlier run's events are never edited."""
 
 
 class RunnerFinished(StrictModel):
@@ -68,6 +71,9 @@ class PipelineStarted(StrictModel):
     stages: tuple[RunnerStage, ...]
     unit_cap: int = Field(ge=1)
     counts_before: dict[str, Annotated[int, Field(ge=0)]]
+    resumes: str | None = Field(default=None, pattern=RUNNER_PIPELINE_ID_RE)
+    """The earlier pipeline this one resumes (`stages` then start at the stage that did not
+    finish)."""
 
 
 class PipelineFinished(StrictModel):
