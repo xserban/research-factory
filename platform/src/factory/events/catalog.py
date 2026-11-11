@@ -63,6 +63,7 @@ from factory.model.extraction import (
     ExtractionRejected,
     ExtractionResolved,
 )
+from factory.model.feed import FeedConfigured, FeedFetched, FeedRanked, FeedReacted, FeedSent
 from factory.model.findings import ContradictionDecided, ContradictionProposed
 from factory.model.fulltext import (
     Attempted,
@@ -356,6 +357,11 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("watch.cycle_finished", WatchCycleFinished, 1))
     catalog.register(EventType("living.snapshot_recorded", SnapshotRecorded, 1))
     catalog.register(EventType("ranking.computed", RankingComputed, 1))
+    catalog.register(EventType("feed.configured", FeedConfigured, 1))
+    catalog.register(EventType("feed.fetched", FeedFetched, 1))
+    catalog.register(EventType("feed.ranked", FeedRanked, 1))
+    catalog.register(EventType("feed.reacted", FeedReacted, 1))
+    catalog.register(EventType("feed.sent", FeedSent, 1))
     catalog.register(EventType("work.marked_core", WorkMarkedCore, 1))
     catalog.register(EventType("work.unmarked_core", WorkUnmarkedCore, 1))
     catalog.register(EventType("notice.observed", NoticeObserved, 1))
