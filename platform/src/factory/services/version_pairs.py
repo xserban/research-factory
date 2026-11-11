@@ -211,8 +211,8 @@ def decide_pair(
         basis=basis,
         score=score,
     )
-    event = project.events.make("dedup.pair_decided", payload, actor)
-    with project.writing():
+    with project.writing():  # minted under the lock, so on a hosted project it sorts last
+        event = project.events.make("dedup.pair_decided", payload, actor)
         project.record([event])
     dedup_run(project)
     return event.id
