@@ -75,7 +75,7 @@ from factory.model.intuition import (
 from factory.model.notices import AssessmentDecision
 from factory.model.project import RigorMode
 from factory.model.protocol import ScreeningStage
-from factory.model.references import Decision, Direction, LinkState
+from factory.model.references import Decision, Direction, LayerSchemeRecorded, LinkState
 from factory.model.regions import Facet, RegionKind
 from factory.model.screening import Channel, HumanRecordFile, HumanScreeningItem, PassLabel
 from factory.model.watch import CycleStatus
@@ -161,6 +161,7 @@ from factory.services import protocol as protocol_service
 from factory.services import question as question_service
 from factory.services import ranking as ranking_service
 from factory.services import ranking_model as ranking_model_service
+from factory.services import reference_layers as layers_service
 from factory.services import reference_resolve as reference_resolve_service
 from factory.services import references as references_service
 from factory.services import regions as regions_service
@@ -489,6 +490,16 @@ curation_app = typer.Typer(
     help="Curation proposals made from audit findings: list lessons and proposals, decide.",
     no_args_is_help=True,
 )
+scheme_app = typer.Typer(
+    name="scheme", help="The researcher's reference-layer scheme.", no_args_is_help=True
+)
+layers_app = typer.Typer(
+    name="layers",
+    help="Reference layers: status, the calibration sample, the researcher's labels.",
+    no_args_is_help=True,
+)
+references_app.add_typer(scheme_app)
+references_app.add_typer(layers_app)
 app.add_typer(curation_app)
 app.add_typer(references_app)
 snowball_core_app = typer.Typer(
@@ -1723,6 +1734,132 @@ def references_status_cmd(ctx: typer.Context) -> None:
         counts = references_service.reference_counts(project)
     for line in render.reference_counts_lines(counts):
         typer.echo(line)
+
+
+@scheme_app.command("record")
+def references_scheme_record_cmd(
+    ctx: typer.Context,
+    file: Annotated[Path, typer.Argument(help="A JSON file: {version, layers: [...]}.")],
+) -> None:
+    """Record the layer scheme (the researcher's act, before any agent assigns a layer)."""
+    state = _state(ctx)
+    try:
+        scheme = LayerSchemeRecorded.model_validate_json(file.read_text(encoding="utf-8"))
+    except OSError as exc:
+        _fail(f"{file}: cannot read ({exc})", 1)
+    except PydanticValidationError as exc:
+        for error in exc.errors():
+            where = ".".join(str(p) for p in error["loc"])
+            typer.echo(f"{file}{'.' + where if where else ''}: {error['msg']}", err=True)
+        raise typer.Exit(1) from None
+    with _reporting_errors():
+        project = _resolve_project(state)
+        result = layers_service.record_scheme(project, project.human_actor(), scheme)
+    if result.recorded:
+        typer.echo(f"recorded scheme version {result.version} ({result.event_id})")
+    else:
+        typer.echo(f"scheme version {result.version} already recorded; nothing written")
+
+
+@layers_app.command("status")
+def references_layers_status_cmd(ctx: typer.Context) -> None:
+    """Items by assessability, layers per stage, items left and the calibration state."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        result = layers_service.status(project)
+    for line in render.layer_status_lines(result):
+        typer.echo(line)
+
+
+def _current_scheme_or_refuse(project: Project) -> LayerSchemeRecorded:
+    scheme = layers_service.current_scheme(project)
+    if scheme is None:
+        raise FactoryValidationError(
+            [ValidationIssue("scheme", "no layer scheme is recorded; record one first")]
+        )
+    return scheme
+
+
+@layers_app.command("sample")
+def references_layers_sample_cmd(ctx: typer.Context) -> None:
+    """The calibration sample: key, citing count, title and whether you have labelled it."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        scheme = _current_scheme_or_refuse(project)
+        sample = layers_service.calibration_sample(project, scheme.version)
+        labelled = layers_service.researcher_labels(project, scheme.version)
+    typer.echo(f"scheme version {scheme.version}; {len(sample)} item(s)")
+    for item in sample:
+        mark = "labelled" if item.key in labelled else "-"
+        typer.echo(f"{item.key}\t{item.citing_count}\t{mark}\t{item.title}")
+
+
+@layers_app.command("label")
+def references_layers_label_cmd(
+    ctx: typer.Context,
+    item: Annotated[
+        str | None, typer.Option("--item", help="One item key (non-interactive).")
+    ] = None,
+    layer: Annotated[str | None, typer.Option("--layer", help="Its layer id.")] = None,
+    note: Annotated[str | None, typer.Option("--note", help="An optional note.")] = None,
+) -> None:
+    """Label calibration items with your own layer. Without --item it asks for each unlabelled
+    item in turn (number or id, `s` to skip, `q` to quit); the agent's layer, if any, is shown
+    only after you have chosen."""
+    state = _state(ctx)
+    if (item is None) != (layer is None):
+        _fail("give --item and --layer together, or neither", 2)
+    if item is None and note is not None:
+        _fail("--note needs --item and --layer", 2)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        scheme = _current_scheme_or_refuse(project)
+        actor = project.human_actor()
+        if item is not None and layer is not None:
+            event_id = layers_service.record_label(
+                project, actor, item, scheme.version, layer, note
+            )
+            typer.echo(f"labelled {item} as {layer} ({event_id})")
+            return
+        labelled = layers_service.researcher_labels(project, scheme.version)
+        todo = [
+            i
+            for i in layers_service.calibration_sample(project, scheme.version)
+            if i.key not in labelled
+        ]
+        ids = [d.id for d in scheme.layers]
+        typer.echo(f"{len(todo)} item(s) to label under scheme version {scheme.version}")
+        for n, entry in enumerate(todo, start=1):
+            year = "n.d." if entry.year is None else str(entry.year)
+            typer.echo(f"\n[{n}/{len(todo)}] {entry.title} ({year}), cited {entry.citing_count}x")
+            for number, d in enumerate(scheme.layers, start=1):
+                typer.echo(f"  {number}. {d.id}: {d.name}")
+            chosen = _ask_layer(ids)
+            if chosen == "q":
+                break
+            if chosen == "s":
+                continue
+            text = typer.prompt("note (optional)", default="", show_default=False).strip()
+            layers_service.record_label(
+                project, actor, entry.key, scheme.version, chosen, text or None
+            )
+            theirs = layers_service.agent_layers(project, "title", scheme.version).get(entry.key)
+            typer.echo(f"recorded {chosen}" + ("" if theirs is None else f"; agent chose {theirs}"))
+
+
+def _ask_layer(ids: list[str]) -> str:
+    """A layer id from a number or an id; `s` or `q` pass through. Asks again on bad input."""
+    while True:
+        answer = str(typer.prompt("layer (number or id, s skip, q quit)")).strip()
+        if answer in ("s", "q") and answer not in ids:
+            return answer
+        if answer in ids:
+            return answer
+        if answer.isdigit() and 1 <= int(answer) <= len(ids):
+            return ids[int(answer) - 1]
+        typer.echo("not a layer of this scheme", err=True)
 
 
 @references_app.command("list")

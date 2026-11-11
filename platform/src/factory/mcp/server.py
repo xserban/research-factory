@@ -75,7 +75,7 @@ from factory.model.notices import AssessmentDecision
 from factory.model.project import RigorMode
 from factory.model.protocol import CriterionEffect, PressFinding, ProtocolSpec, ScreeningStage
 from factory.model.question import QuestionSpec
-from factory.model.references import Decision, Direction, LinkState
+from factory.model.references import Decision, Direction, LayerAssigned, LinkState
 from factory.model.regions import Facet, MemberBasis, RegionKind
 from factory.model.reviews import ReviewDecision, ReviewKind
 from factory.model.reviews import ReviewState as RequestState
@@ -159,6 +159,7 @@ from factory.services import protocol as protocol_service
 from factory.services import question as question_service
 from factory.services import ranking as ranking_service
 from factory.services import ranking_model as ranking_model_service
+from factory.services import reference_layers as layers_service
 from factory.services import reference_resolve as reference_resolve_service
 from factory.services import references as references_service
 from factory.services import regions as regions_service
@@ -2323,6 +2324,88 @@ def build_server(
             _refuse_pass_session(opened)
             counts = references_service.reference_counts(opened)
             return _withheld(opened, counts.model_dump(mode="json"), include_work_ids=False)
+
+        return _reply(project, status, include_work_ids=False)
+
+    @server.tool()
+    def reference_layer_next(
+        project: str, stage: Literal["title", "abstract"], limit: int = 25
+    ) -> dict[str, JsonValue]:
+        """Serve the next cited items to assign a relevance layer at `stage`, under the
+        researcher's current scheme (its version and each layer's id, name, criteria and
+        examples are in `scheme`). Until the calibration passes, the title stage serves only
+        calibration-sample items (`calibrating`). Cite `input_blob` when recording. `remaining`
+        counts items still to assign; at stage `abstract`, `awaiting_resolution` counts shortlisted
+        items with no abstract yet. Read-only. Refused to a session that has joined a pass, and
+        when no scheme is recorded."""
+
+        def serve() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            batch = layers_service.next_items(opened, stage=stage, limit=limit)
+            scheme = layers_service.current_scheme(opened)
+            data = _plain(asdict(batch))
+            if isinstance(data, dict) and scheme is not None:
+                data["scheme"] = _plain(scheme.model_dump(mode="json"))
+            return _withheld(opened, data, include_work_ids=False)
+
+        return _reply(project, serve, include_work_ids=False)
+
+    @server.tool()
+    def reference_layer_record(
+        project: str,
+        scheme_version: int,
+        stage: Literal["title", "abstract"],
+        assignments: list[dict[str, JsonValue]],
+        input_blob: str,
+        role: str,
+        model: str,
+        skill: str,
+    ) -> dict[str, JsonValue]:
+        """Record layers for served items. Each assignment is {item_key, layer, rationale}; the
+        layer is an id of the scheme version named. The whole batch is validated first and any
+        issue refuses it with nothing written. `input_blob` is the one `reference_layer_next`
+        returned. The scheme and the researcher's calibration labels are not recorded through
+        this tool. Refused to a session that has joined a pass."""
+
+        def record() -> JsonValue:
+            issues: list[ValidationIssue] = []
+            triples: list[tuple[str, str, str]] = []
+            for index, row in enumerate(assignments):
+                try:
+                    parsed = parse_input(
+                        LayerAssigned,
+                        {**row, "scheme_version": scheme_version, "stage": stage},
+                        f"assignments.{index}",
+                    )
+                except FactoryValidationError as exc:
+                    issues.extend(exc.issues)
+                    continue
+                triples.append((parsed.item_key, parsed.layer, parsed.rationale))
+            if issues:
+                raise FactoryValidationError(issues)
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            actor = make_agent_actor(settings, session, role, model, skill)
+            result = layers_service.record_assignments(
+                opened, actor, scheme_version, stage, triples, input_blob
+            )
+            return _withheld(opened, _plain(asdict(result)), include_work_ids=False)
+
+        return _reply(project, record, include_work_ids=False)
+
+    @server.tool()
+    def reference_layer_status(project: str) -> dict[str, JsonValue]:
+        """Counts of the reference layers: items by assessability, layers per stage, items left,
+        abstracts awaiting resolution, and the calibration state (labelled, assigned, agreement,
+        kappa against the floor). Read-only. Refused to a session that has joined a pass."""
+
+        def status() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            return _withheld(
+                opened, _plain(asdict(layers_service.status(opened))), include_work_ids=False
+            )
 
         return _reply(project, status, include_work_ids=False)
 
@@ -5444,6 +5527,11 @@ def _expectations(items: list[dict[str, JsonValue]]) -> list[dict[str, str]]:
     if issues:
         raise FactoryValidationError(issues)
     return parsed
+
+
+def _plain(value: object) -> JsonValue:
+    """`value` as plain JSON (tuples become lists), for a dataclass turned by `asdict`."""
+    return cast(JsonValue, json.loads(json.dumps(value)))
 
 
 def _parse_all(
