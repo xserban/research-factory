@@ -45,6 +45,7 @@ from pydantic import ValidationError as PydanticValidationError
 from factory.errors import FactoryError, FactoryValidationError, ValidationIssue
 from factory.model.feed import FeedNote, FeedReaction
 from factory.services import feed as feed_service
+from factory.services import pipeline as pipeline_service
 from factory.services import runner as runner_service
 from factory.services import site as site_service
 from factory.services import work_queue
@@ -166,8 +167,8 @@ def queue_process(project: Project, body: dict[str, Any]) -> tuple[int, dict[str
     stage = body.get("stage")
     cap = body.get("unit_cap", runner_service.DEFAULT_UNIT_CAP)
     bad: list[ValidationIssue] = []
-    if not isinstance(stage, str) or stage not in runner_service.STAGES:
-        bad.append(ValidationIssue("stage", "must be one of " + ", ".join(runner_service.STAGES)))
+    if not isinstance(stage, str) or not (stage == "all" or runner_service.is_stage_key(stage)):
+        bad.append(ValidationIssue("stage", "must be all or one of " + runner_service.stage_keys()))
     if isinstance(cap, bool) or not isinstance(cap, int):
         bad.append(ValidationIssue("unit_cap", "must be an integer"))
     if bad:
@@ -180,6 +181,9 @@ def queue_process(project: Project, body: dict[str, Any]) -> tuple[int, dict[str
     except FactoryError as exc:
         return 403, _issues(ValidationIssue("permission", str(exc)))
     try:
+        if stage == "all":
+            pipeline_id = pipeline_service.start_pipeline(project, unit_cap=cap)
+            return 200, {"ok": True, "pipeline_id": pipeline_id, "stage": stage, "unit_cap": cap}
         run_id = runner_service.start_run(project, stage, unit_cap=cap)
     except FactoryValidationError as exc:
         return 400, _issues(*exc.issues)
@@ -336,7 +340,14 @@ def make_server(
                 return
             if self.path.split("?", 1)[0] == "/api/queue/runs":
                 runs = runner_service.run_status(project, reconcile=False)
-                self._json(200, {"runs": [r.model_dump(mode="json") for r in runs]})
+                pipelines = pipeline_service.pipeline_status(project)
+                self._json(
+                    200,
+                    {
+                        "runs": [r.model_dump(mode="json") for r in runs],
+                        "pipelines": [p.model_dump(mode="json") for p in pipelines],
+                    },
+                )
                 return
             super().do_GET()
 

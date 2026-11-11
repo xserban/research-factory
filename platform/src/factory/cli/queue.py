@@ -1,7 +1,7 @@
 """`factory queue` (plan 2026-11-11-feed-hub, steps H4 to H6): the papers added from the feed with
 their stage and the open units of work per task kind (read-only), `queue process` (start the
-headless runner for a stage), `queue runs` (list the runs) and `queue advance` (the deterministic
-steps for the added papers).
+headless runner for a stage, or `--all` for the pipeline), `queue runs` (list the runs) and
+`queue advance` (the deterministic steps for the added papers).
 
 It parses input, calls `factory.services.work_queue` and formats its answer. Each command's
 `TOOL_PERMISSIONS` row (`cli:queue`, `cli:queue process`, `cli:queue runs`, `cli:queue advance`)
@@ -17,7 +17,7 @@ from typing import Annotated
 import typer
 
 from factory.errors import FactoryValidationError
-from factory.services import runner, work_queue
+from factory.services import pipeline, runner, work_queue
 from factory.services.context import Project
 
 ProjectOpt = Annotated[str | None, typer.Option("--project", help="Project slug.")]
@@ -83,15 +83,46 @@ def queue_cmd(
 @queue_app.command("process")
 def queue_process_cmd(
     ctx: typer.Context,
-    stage: Annotated[str, typer.Option("--stage", help="screen or extract.")],
+    stage: Annotated[
+        str | None,
+        typer.Option(
+            "--stage",
+            help="screen, extract, appraise, contributions, intuition or mine:<miner id>.",
+        ),
+    ] = None,
     project: ProjectOpt = None,
+    all_stages: Annotated[
+        bool,
+        typer.Option(
+            "--all", help="Run the whole pipeline in the foreground, every stage with pending work."
+        ),
+    ] = False,
     cap: Annotated[
         int, typer.Option("--cap", help="Units the run may handle before it stops.")
     ] = runner.DEFAULT_UNIT_CAP,
     wait: Annotated[bool, typer.Option("--wait", help="Block until the process exits.")] = False,
 ) -> None:
-    """Start the headless `claude -p` runner for one stage of the project."""
+    """Start the headless `claude -p` runner for one stage of the project, or with `--all` for
+    every stage in order (foreground, the automatic steps between stages, stops at the first
+    failed run)."""
     opened = _open(ctx, project)
+    if all_stages == (stage is not None):
+        typer.echo("give exactly one of --stage and --all", err=True)
+        raise typer.Exit(2)
+    if all_stages:
+        try:
+            pipeline.run_pipeline(opened, unit_cap=cap)
+        except FactoryValidationError as exc:
+            for issue in exc.issues:
+                typer.echo(f"{issue.field}: {issue.reason}", err=True)
+            raise typer.Exit(2) from exc
+        for ended in pipeline.pipeline_status(opened, limit=1):
+            typer.echo(
+                f"{ended.pipeline_id}: {ended.status}; runs: {', '.join(ended.run_ids) or 'none'}"
+                + (f"; stopped at {ended.stopped_at}: {ended.reason}" if ended.stopped_at else "")
+            )
+        return
+    assert stage is not None
     try:
         run_id = runner.start_run(opened, stage, unit_cap=cap)
     except FactoryValidationError as exc:
@@ -126,7 +157,7 @@ def queue_runs_cmd(
         typer.echo("no run yet")
     for v in views:
         typer.echo(
-            f"{v.run_id}  {v.stage:<8}  {v.status:<9}  cap {v.unit_cap:<3}  "
+            f"{v.run_id}  {v.stage:<16}  {v.status:<9}  cap {v.unit_cap:<3}  "
             f"before {sum(v.counts_before.values())}  "
             f"after {'-' if v.counts_after is None else sum(v.counts_after.values())}"
         )

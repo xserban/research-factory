@@ -6,6 +6,10 @@ Invariants:
 - The "Process now" buttons start disabled. A small inline script enables them only when the page
   was served by `factory site serve` (token meta injected) and no run is open; one click is one
   `POST /api/queue/process`. Opened as a file the buttons stay disabled.
+- `Process all` (stage `all`) starts the whole pipeline (`services.pipeline`), the per-stage buttons
+  one stage each; the stages shown are those that apply to the project, one per registered miner.
+  The per-paper progress table has one column per applicable stage with a per-paper reading; each
+  cell is `done`, `pending`, `n/a` or `stopped`, read by `pipeline.paper_progress`.
 - Text from the entries and the inbox is escaped; the page has no external resources.
 """
 
@@ -15,6 +19,7 @@ from html import escape
 from pathlib import Path
 
 from factory.services.context import Project
+from factory.services.pipeline import CellState, PipelineStage, paper_progress, stages
 from factory.services.work_queue import STAGES, QueueItem, WorkQueue, queue
 
 QUEUE_CSS = (
@@ -28,10 +33,10 @@ QUEUE_CSS = (
     ".dim{color:var(--dim)}"
 )
 
-# Stages the runner (H5) processes, with the pending kinds each one serves.
-PROCESS_STAGES: tuple[tuple[str, str, str], ...] = (
-    ("screen", "Screening", "Screen the open units of title/abstract and full-text screening."),
-    ("extract", "Extraction", "Extract the open units of extraction and mining."),
+QUEUE_CSS += (
+    ".cell{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--dim)}"
+    ".cell.done{color:var(--ac)}.cell.pending{color:var(--light)}"
+    ".cell.stopped{color:var(--amber)}"
 )
 
 
@@ -48,10 +53,14 @@ function issues(r){
 function poll(){
   fetch('/api/queue/runs').then(function(r){return r.json();}).then(function(r){
     var runs=r.runs||[],open=runs.filter(function(x){return x.status==='running';})[0];
-    busy=!!open;
+    var pls=r.pipelines||[],pl=pls.filter(function(x){return x.status==='running';})[0];
+    busy=!!open||!!pl;
     btns.forEach(function(b){b.disabled=busy;});
     var last=open||runs[0];
-    if(last)say('run '+last.run_id+' ('+last.stage+'): '+last.status);
+    var cur=last?' ('+last.stage+': '+last.status+')':'';
+    if(pl)say('pipeline '+pl.pipeline_id+': running'+cur);
+    else if(last)say('run '+last.run_id+' ('+last.stage+'): '+last.status
+      +(pls[0]?'; pipeline '+pls[0].pipeline_id+': '+pls[0].status:''));
     if(busy)setTimeout(poll,5000);
   }).catch(function(e){say('status unavailable: '+e);});
 }
@@ -68,7 +77,8 @@ btns.forEach(function(b){
     })
     .then(function(r){
       if(!r.ok){say(issues(r));btns.forEach(function(x){x.disabled=false;});return;}
-      say('run '+r.run_id+' ('+r.stage+'): running');setTimeout(poll,3000);
+      say(r.pipeline_id?'pipeline '+r.pipeline_id+': running'
+        :'run '+r.run_id+' ('+r.stage+'): running');setTimeout(poll,3000);
     })
     .catch(function(e){say('request failed: '+e);btns.forEach(function(x){x.disabled=false;});});
   });
@@ -83,17 +93,46 @@ def build_queue(project: Project, out: Path) -> None:
     from factory.services.site import page
 
     (out / "index.html").write_text(
-        page("Work queue", _body(queue(project)) + f"<script>{QUEUE_SCRIPT}</script>", QUEUE_CSS),
+        page(
+            "Work queue",
+            _body(queue(project), stages(project), project) + f"<script>{QUEUE_SCRIPT}</script>",
+            QUEUE_CSS,
+        ),
         encoding="utf-8",
     )
 
 
-def _body(work: WorkQueue) -> str:
+def _body(work: WorkQueue, plan: list[PipelineStage], project: Project) -> str:
+    progress = paper_progress(project, work.items, plan) if work.items else {}
     return (
         "<h1>Work queue</h1>"
         + _added_html(work.items)
+        + _progress_html(work.items, plan, progress)
         + "<h2>Pending work</h2>"
-        + _pending_html(work.pending)
+        + _pending_html(work.pending, plan)
+    )
+
+
+def _progress_html(
+    items: list[QueueItem], plan: list[PipelineStage], progress: dict[str, dict[str, CellState]]
+) -> str:
+    """One row per added paper, one column per applicable stage with a per-paper reading."""
+    columns = [s for s in plan if s.applies and s.key != "intuition"]
+    if not items or not columns:
+        return ""
+    head = "".join(f"<th>{escape(s.label)}</th>" for s in columns)
+    rows = "".join(
+        f"<tr><td>{escape(item.title or item.entry_id)}</td>"
+        + "".join(
+            f"<td><span class='cell {cell}'>{escape(cell)}</span></td>"
+            for cell in (progress.get(item.entry_id, {}).get(s.key, "n/a") for s in columns)
+        )
+        + "</tr>"
+        for item in items
+    )
+    return (
+        "<h2>Progress per paper</h2><table class=qtable>"
+        f"<tr><th>Paper</th>{head}</tr>{rows}</table>"
     )
 
 
@@ -125,7 +164,7 @@ def _stage_badge(item: QueueItem) -> str:
     return f"<span class='{css}'>{escape(item.stage)}</span>"
 
 
-def _pending_html(pending: dict[str, int]) -> str:
+def _pending_html(pending: dict[str, int], plan: list[PipelineStage]) -> str:
     rows = "".join(
         f"<tr><td>{escape(kind)}</td><td>{count}</td></tr>"
         for kind, count in sorted(pending.items())
@@ -135,10 +174,17 @@ def _pending_html(pending: dict[str, int]) -> str:
         if rows
         else "<p class=dim>No unit of work is defined yet.</p>"
     )
-    buttons = "".join(
-        f"<div class=proc><strong>{escape(title)}</strong> <span class=dim>{escape(text)}</span>"
-        f"<br><button type=button disabled data-stage='{stage}'>Process now</button></div>"
-        for stage, title, text in PROCESS_STAGES
+    every = (
+        "<div class=proc><strong>All stages</strong> <span class=dim>Run each stage with pending "
+        "work in order, the automatic steps between them; stops at the first failed run.</span>"
+        "<br><button type=button disabled data-stage='all'>Process all</button></div>"
+    )
+    buttons = every + "".join(
+        f"<div class=proc><strong>{escape(s.label)}</strong> "
+        f"<span class=dim>{s.pending} pending ({escape(s.model)}).</span>"
+        f"<br><button type=button disabled data-stage='{escape(s.key)}'>Process now</button></div>"
+        for s in plan
+        if s.applies
     )
     hint = (
         "<p class=dim id=runstatus>Process now works when this page is opened with "
