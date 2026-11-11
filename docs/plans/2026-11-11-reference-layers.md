@@ -168,3 +168,27 @@ labels; scheme examples never include calibration-sample items.
   the explorer and every hub product, computed from each work's provenance (search purpose), never
   typed. The in-corpus citing count is shown beside the layer as a signal of core (computed, not a
   judgement).
+
+## Calibration round 2 (2026-11-11)
+
+The researcher labelled the 30-item sample in a session, item by item; the scheme was revised at each
+disagreement with its own criteria (rulings: domain science without AI, single-task scientific ML,
+engineering design automation, publishing economics, LLM security and generic ML methods are not
+relevant; LLM agents and how LLMs work are background; reasoning and search stay in the mantle only
+as agent techniques). Labels: 22 not relevant, 6 background, 1 adjacent, 1 applied, 0 core. The
+scheme examples contain no sample title. Because the criteria were sharpened on this sample, the
+calibration kappa is optimistic; the audit below is the fair test.
+
+Calibration was run on a scratch copy of the pilot (the MCP servers in use load older code and would
+rebuild the index back), and the agent pass by Haiku that had never seen the labels, through a helper
+calling the same service functions as the MCP tools.
+
+## Closing tasks (promotion to the factory, researcher request 2026-11-11)
+
+| # | Task | Who |
+|---|---|---|
+| P1 | Skill `rf-reference-layers` (plugin/skills): the judging procedure | done |
+| P2 | Default earth-layers scheme template shipped with the platform (`platform/.../data/layer-schemes/earth-v1.json`, generic wording; a project copies and adapts it to its protocol) | rf-builder |
+| P3 | Record the final scheme and the researcher's 30 labels in the real pilot as human events (from `reference-layers-calibration-labels.tsv`, notes kept), once this branch is the code the servers load | researcher + me |
+| P4 | **Audit (required):** after the full title pass, a fresh sample of 30 items (not the calibration sample) labelled by the researcher without seeing the agent's layer; plus every item the agent placed in either core, and the 30 most-cited items it placed outside. Reported with kappa and the core recall | researcher + me |
+| P5 | Docs: the procedure in the methods report and `docs/MAP.md` regenerated after merge | rf-builder |
