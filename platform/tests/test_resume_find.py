@@ -12,6 +12,7 @@ from factory.clock import FixedClock
 from factory.events.envelope import Actor
 from factory.events.reader import read_all
 from factory.model.extraction import ExtractionPassJoined
+from factory.model.protocol import ScreeningStage
 from factory.model.runner import (
     PipelineFinished,
     PipelineStarted,
@@ -27,13 +28,28 @@ from factory.services.stages import EXTRACT_KINDS
 from factory.services.tasks import TaskSpec, claim_next, create_tasks
 from factory.services.work_queue import QueueItem
 
+_PLACEHOLDER_PIPELINE = "rpl_01HZX3Y5K6M7N8P9Q0R1S2T3V4"
+"""Replaced by the pipeline the helper starts; only has to pass the id pattern."""
+
 
 @pytest.fixture(autouse=True)
 def _pending(monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
     pending = {"screen_a": 2, "extract_a": 0}
     monkeypatch.setattr(runner, "pending_work", lambda p: dict(pending))
     monkeypatch.setattr(resume, "pending_work", lambda p: dict(pending))
+    monkeypatch.setattr(
+        runner, "_screen_servable", lambda p, stage: (_servable(pending, stage), False)
+    )
     return pending
+
+
+def _servable(pending: dict[str, int], stage: object) -> int:
+    """The stubbed screening count for a stage, so `pending_units` does not read the real DB."""
+    return (
+        pending["screen_a"]
+        if stage == ScreeningStage.TITLE_ABSTRACT
+        else pending.get("screen_ft_a", 0)
+    )
 
 
 def _event_count(project: Project) -> int:
@@ -140,7 +156,7 @@ def test_pipelines_orphaned_lost_and_timed_out(project: Project) -> None:
     timeout = _pipeline(
         project,
         finish=PipelineFinished(
-            pipeline_id="x",
+            pipeline_id=_PLACEHOLDER_PIPELINE,
             outcome="failed",
             stopped_at="screen",
             reason="timeout: the run rnr_x passed its 700 s limit and was killed",
@@ -148,7 +164,9 @@ def test_pipelines_orphaned_lost_and_timed_out(project: Project) -> None:
     )
     lost = _pipeline(
         project,
-        finish=PipelineFinished(pipeline_id="x", outcome="lost", stopped_at="extract"),
+        finish=PipelineFinished(
+            pipeline_id=_PLACEHOLDER_PIPELINE, outcome="lost", stopped_at="extract"
+        ),
     )
     orphan = _pipeline(project)  # open, nobody holds the lock
     found = {p.pipeline_id: p for p in interrupted(project).pipelines}
@@ -159,9 +177,14 @@ def test_pipelines_orphaned_lost_and_timed_out(project: Project) -> None:
 
 def test_a_later_complete_pipeline_supersedes_older_ones(project: Project) -> None:
     _pipeline(
-        project, finish=PipelineFinished(pipeline_id="x", outcome="lost", stopped_at="screen")
+        project,
+        finish=PipelineFinished(
+            pipeline_id=_PLACEHOLDER_PIPELINE, outcome="lost", stopped_at="screen"
+        ),
     )
-    _pipeline(project, finish=PipelineFinished(pipeline_id="x", outcome="complete"))
+    _pipeline(
+        project, finish=PipelineFinished(pipeline_id=_PLACEHOLDER_PIPELINE, outcome="complete")
+    )
     assert interrupted(project).pipelines == []
 
 

@@ -17,6 +17,7 @@ from factory.clock import FixedClock
 from factory.errors import FactoryValidationError
 from factory.events.envelope import Actor, Event
 from factory.events.reader import read_all
+from factory.model.protocol import ScreeningStage
 from factory.model.runner import PipelineFinished, PipelineStarted, RunnerFinished, RunnerStarted
 from factory.services import pipeline, resume, runner
 from factory.services.context import Project
@@ -43,6 +44,15 @@ class FakeLauncher:
         return FakeProcess()
 
 
+def _servable(pending: dict[str, int], stage: object) -> int:
+    """The stubbed screening count for a stage, so `pending_units` does not read the real DB."""
+    return (
+        pending["screen_a"]
+        if stage == ScreeningStage.TITLE_ABSTRACT
+        else pending.get("screen_ft_a", 0)
+    )
+
+
 @pytest.fixture(autouse=True)
 def _env(project: Project, monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
     install_skill(project.settings, "rf-extract", "EXTRACT SKILL BODY")
@@ -50,6 +60,9 @@ def _env(project: Project, monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
     pending = {"screen_a": 2, "screen_ft_a": 0, "extract_a": 0}
     monkeypatch.setattr(runner, "pending_work", lambda p: dict(pending))
     monkeypatch.setattr(resume, "pending_work", lambda p: dict(pending))
+    monkeypatch.setattr(
+        runner, "_screen_servable", lambda p, stage: (_servable(pending, stage), False)
+    )
     monkeypatch.setattr(runner, "claude_path", lambda: "/usr/bin/claude")
     monkeypatch.setattr(runner, "_factory_executable", lambda: "/venv/bin/factory")
     monkeypatch.setattr(runner, "_advance_after", lambda p: None)

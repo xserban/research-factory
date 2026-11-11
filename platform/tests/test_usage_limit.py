@@ -60,6 +60,12 @@ def _assistant(text: str) -> str:
     )
 
 
+def _utc(stamp: str | None) -> datetime:
+    """The reset stamp as an aware datetime (the code writes milliseconds and `Z`)."""
+    assert stamp is not None
+    return datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+
+
 def _result(text: str, *, is_error: bool) -> str:
     return json.dumps({"type": "result", "is_error": is_error, "result": text})
 
@@ -72,7 +78,7 @@ def test_the_line_in_a_result_record_goes_through_the_log_reader() -> None:
     )
     assert stop is not None and stop.reason == "log"
     assert stop.reset_text == "1pm (Europe/Bucharest)"
-    assert stop.reset_at == "2026-11-11T11:00:00Z" and stop.reset_estimated is False
+    assert _utc(stop.reset_at) == END.replace(hour=11) and stop.reset_estimated is False
 
 
 def test_the_line_as_assistant_text_goes_through_the_log_reader() -> None:
@@ -80,7 +86,7 @@ def test_the_line_as_assistant_text_goes_through_the_log_reader() -> None:
     stop = detect(log.texts, units=1, stage_pending=True, finished_at=END)
     assert stop is not None and stop.reason == "log"
     assert stop.reset_text == "1pm (Europe/Bucharest)"
-    assert stop.reset_at == "2026-11-11T11:00:00Z"
+    assert _utc(stop.reset_at) == END.replace(hour=11)
 
 
 def test_a_normal_log_is_not_a_limit_stop() -> None:

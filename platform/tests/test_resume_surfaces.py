@@ -103,7 +103,7 @@ def test_dry_run_prints_the_plan_and_writes_nothing(
 
     monkeypatch.setattr(resume_service, "resume", fake)
     before = _events(tmp_path, SLUG)
-    result = runner.invoke(app, ["resume", "--project", SLUG, "--dry-run"], env=_env(tmp_path))
+    result = runner.invoke(app, ["--project", SLUG, "resume", "--dry-run"], env=_env(tmp_path))
     assert result.exit_code == 0, result.output
     assert calls == [(SLUG, True, None)]
     assert "reconciled (process gone): run_0" in result.output
@@ -117,7 +117,7 @@ def test_real_run_prints_what_started(tmp_path: Path, monkeypatch: pytest.Monkey
     _init(tmp_path, SLUG)
     outcome = ResumeResult(plan=_plan(), reconciled=[], run_id="run_9")
     monkeypatch.setattr(resume_service, "resume", lambda project, **_: outcome)
-    result = runner.invoke(app, ["resume", "--project", SLUG, "--cap", "4"], env=_env(tmp_path))
+    result = runner.invoke(app, ["--project", SLUG, "resume", "--cap", "4"], env=_env(tmp_path))
     assert result.exit_code == 0, result.output
     assert "started run run_9" in result.output
 
@@ -126,7 +126,7 @@ def test_a_refusal_exits_one(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     _init(tmp_path, SLUG)
     outcome = ResumeResult(plan=_plan(), reconciled=[], refused=["unit_cap: too high"])
     monkeypatch.setattr(resume_service, "resume", lambda project, **_: outcome)
-    result = runner.invoke(app, ["resume", "--project", SLUG], env=_env(tmp_path))
+    result = runner.invoke(app, ["--project", SLUG, "resume"], env=_env(tmp_path))
     assert result.exit_code == 1
     assert "unit_cap: too high" in result.output
 
@@ -145,14 +145,14 @@ def test_nothing_to_do_exits_zero(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(
         resume_service, "resume", lambda project, **_: ResumeResult(plan=empty, reconciled=[])
     )
-    result = runner.invoke(app, ["resume", "--project", SLUG], env=_env(tmp_path))
+    result = runner.invoke(app, ["--project", SLUG, "resume"], env=_env(tmp_path))
     assert result.exit_code == 0, result.output
     assert "nothing interrupted" in result.output
 
 
 def test_a_cap_below_one_is_invalid_input(tmp_path: Path) -> None:
     _init(tmp_path, SLUG)
-    result = runner.invoke(app, ["resume", "--project", SLUG, "--cap", "0"], env=_env(tmp_path))
+    result = runner.invoke(app, ["--project", SLUG, "resume", "--cap", "0"], env=_env(tmp_path))
     assert result.exit_code == 2
     assert "cap: must be at least 1" in result.output
 
@@ -431,7 +431,7 @@ def test_dashboard_page_renders_limit_runs_through_text_nodes_only() -> None:
 
     page = dashboard_page.render_page({"feed": {"interrupted": {"clean": False, "limit_runs": []}}})
     assert "usage limit, '+r.stage+'" in page and "(estimated)" in page
-    assert "innerHTML" not in page.split("usage limit, ")[1].split("}));}));")[0]
+    assert "innerHTML" not in page.split("usage limit, ")[1].split("\n")[0]
 
 
 def test_dashboard_reads_that_fail_show_unavailable(
@@ -461,6 +461,6 @@ def test_the_cli_resumes_in_the_foreground(tmp_path: Path, monkeypatch: pytest.M
         return outcome
 
     monkeypatch.setattr(resume_service, "resume", fake)
-    result = runner.invoke(app, ["resume", "--project", SLUG], env=_env(tmp_path))
+    result = runner.invoke(app, ["--project", SLUG, "resume"], env=_env(tmp_path))
     assert result.exit_code == 0, result.output
     assert calls[0]["foreground"] is True  # the process waits for the run it starts
