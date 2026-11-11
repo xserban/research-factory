@@ -134,3 +134,37 @@ protocol, never included by their layer; unassessable entries are declared with 
    with the calibration (L2) and an audit sample.
 2. Whether a cited item that matches a corpus work by title is excluded from the queue (already in the
    corpus) or kept and counted as an in-corpus citation (the citations product needs it).
+
+## Calibration round 1 and scheme v2 (2026-11-11, with the researcher)
+
+The first four calibration items exposed three faults, so labelling stopped and the scheme was revised
+before anything was recorded in the pilot (the first scheme existed only in a scratch copy):
+
+1. **Years were not shown.** 96% of titled entries carry a parsed year (6,683 of 6,939); the sample now
+   shows it.
+2. **Author fragments survived clean-up** ("Haoyang Su et al"; 330 titled entries contain "et al").
+   Rules v3 add an `et-al` flag and extend `author-list`; titles are HTML-unescaped.
+3. **Earth layers.** The researcher's model: concentric rings, inner to outer — inner core (general AI
+   research system, any domain), applied core (AI research system in one science), mantle (adjacent
+   techniques), crust (background), outside (off-topic or invalid). Both cores are in scope and are
+   snowball candidates; whether a system does two or more research stages is not judged from a title
+   and is checked at full text by the snowball screening. Rationale: about 209 of the included works
+   are domain systems, so treating domain work as context would make the snowball miss the corpus's
+   own majority type.
+4. **Precursor is computed, not judged:** an item whose year is before `precursor_before_year` (2025,
+   IN03) is marked as a precursor and not snowballed; an unknown year counts as not a precursor
+   (the snowball screening checks IN03 on the record).
+
+Each layer in the scheme now carries `ring` (inner to outer), `snowball` and `abstract` flags; no layer id
+is hard-coded. The calibration agent's pass is run by a fresh agent that has not seen the researcher's
+labels; scheme examples never include calibration-sample items.
+
+## For the citations and hub plan (requirements from the researcher)
+
+- **Earth-layers view** in the dashboard and hub: concentric rings sized by cited items, inner core at
+  the centre; clicking a ring lists its items with citing counts; precursors shaded inside each ring;
+  unassessable entries counted outside.
+- **Snowball filter:** works that entered through a snowball round are filterable (show only, hide) in
+  the explorer and every hub product, computed from each work's provenance (search purpose), never
+  typed. The in-corpus citing count is shown beside the layer as a signal of core (computed, not a
+  judgement).
