@@ -534,7 +534,6 @@ def _run_rules(project: Project) -> list[_Hit]:
         _chase_unattributed(project),
         _checklist(project),
         _merge_conflicts(project, outcomes),
-        _version_pair_conflicts(project, outcomes),
         _fulltext(project),
         _conversion_choice(project),
         _extraction(project),
@@ -2144,30 +2143,6 @@ def _merge_conflicts(project: Project, outcomes: dict[str, Outcome]) -> list[_Hi
                     "merge-verdict-conflict",
                     (merge.primary, *conflicting),
                     f"merge {merge.merge_id}: absorbed record(s) carry a different outcome",
-                )
-            )
-    return hits
-
-
-def _version_pair_conflicts(project: Project, outcomes: dict[str, Outcome]) -> list[_Hit]:
-    """A merge resting on a version-pair ruling or an identical title (decision 117) whose
-    members carry different decided outcomes.
-
-    Compared at title/abstract; a pending member is not a verdict. Absorbed records are read with
-    `.get` because `final_outcomes` leaves out a pending absorbed record.
-    """
-    hits: list[_Hit] = []
-    for merge in active_merges(project):
-        if "version-pair" not in merge.rule and "title-identical" not in merge.rule:
-            continue
-        members = (merge.primary, *merge.absorbed)
-        decided = {member: outcomes.get(member) for member in members}
-        if len({o for o in decided.values() if o in _DECIDED}) > 1:
-            hits.append(
-                _Hit(
-                    "version-pair-outcome-conflict",
-                    members,
-                    f"merge {merge.merge_id}: versions of one work carry different outcomes",
                 )
             )
     return hits

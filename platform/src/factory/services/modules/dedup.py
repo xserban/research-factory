@@ -34,7 +34,6 @@ SPEC = ModuleSpec(
     ),
     checks=(
         CheckRule("merge-verdict-conflict", ("warning", "warning", "warning")),
-        CheckRule("version-pair-outcome-conflict", ("warning", "warning", "warning")),
     ),
     gates=(
         GateSpec(

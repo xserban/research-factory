@@ -1067,6 +1067,21 @@ class _Walk:
             return None
         return _Described(f"anchor {anchor}", described.event_id)
 
+    def _decision_set(self, ident: str) -> _Described | None:
+        """A develop decision (slice 8): it shares the `dec_` prefix with screening decisions,
+        so it is looked up here when the screening table has no such row."""
+        rows = self._all(
+            "SELECT d.level, d.subject, e.id FROM decision_sets d "
+            "LEFT JOIN events e ON e.type = 'decision.suggested' "
+            "AND json_extract(e.refs, '$[0]') = d.decision_id "
+            "WHERE d.decision_id = :d",
+            d=ident,
+        )
+        if not rows:
+            return None
+        level, subject, event_id = rows[0]
+        return _Described(f"{level} decision: {subject}", str(event_id or _NO_EVENT))
+
     def _decision(self, ident: str) -> _Described | None:
         rows = self._all(
             "SELECT pass_label, phase, verdict, criterion, superseded_by, event_id "
@@ -1074,7 +1089,7 @@ class _Walk:
             d=ident,
         )
         if not rows:
-            return None
+            return self._decision_set(ident)
         pass_label, phase, verdict, criterion, superseded_by, event_id = rows[0]
         label = f"pass {pass_label}, {phase}: {verdict}"
         if criterion is not None:
