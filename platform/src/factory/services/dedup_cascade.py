@@ -133,20 +133,58 @@ def _rank(work: Work) -> tuple[int, int, int, str]:
     return (int(is_preprint), -identifier_count, -len(work.abstract or ""), work.id)
 
 
+_PUBLISHED_TYPES = frozenset(
+    {
+        WorkType.JOURNAL_ARTICLE,
+        WorkType.CONFERENCE_PAPER,
+        WorkType.BOOK_CHAPTER,
+        WorkType.THESIS,
+        WorkType.TECH_REPORT,
+        WorkType.STANDARD,
+        WorkType.PATENT,
+    }
+)
+_NOT_A_PERSON = ("association", "inc", "society", "university", "conference", "committee")
+
+
+def _description_rank(work: Work) -> tuple[int, int, tuple[int, int, int, str]]:
+    """Sort key choosing the record whose metadata describes a merged work.
+
+    Not the primary: the primary keeps its id, so decisions recorded on it stay put. A published
+    type beats a preprint, which beats a talk record or an untyped one; a first "author" that is
+    an organisation or carries a year (broken metadata) ranks below a person; then `_rank`.
+    """
+    tier = 0 if work.type in _PUBLISHED_TYPES else 1 if work.type is WorkType.PREPRINT else 2
+    first = (work.authors[0].name or "").lower() if work.authors else ""
+    broken = int(
+        not first
+        or any(ch.isdigit() for ch in first)
+        or any(word in first.replace(",", " ").replace(".", " ").split() for word in _NOT_A_PERSON)
+    )
+    return (tier, broken, _rank(work))
+
+
 def merge_works(group: list[Work]) -> Work:
-    """Fold a group into one record, keeping every identifier and every provenance entry."""
+    """Fold a group into one record, keeping every identifier and every provenance entry.
+
+    Invariant: the result carries the primary's id (chosen by `_rank`, which also decides the
+    merge event's primary); its description comes from `_description_rank`'s choice."""
     ordered = sorted(group, key=_rank)
     primary, others = ordered[0], ordered[1:]
 
-    # Fill the primary's empty identifiers from the others. Collected as a dict and applied in
-    # one `model_copy`, because `Identifiers` is frozen.
-    primary_ids = primary.identifiers.model_dump()
+    # The descriptive metadata (title, authors, venue, type, dates, identifiers first) come from
+    # the best-described record; the id and the decisions stay with the primary.
+    described = min(group, key=_description_rank)
+
+    # Fill the described record's empty identifiers from the others, primary first. Collected as
+    # a dict and applied in one `model_copy`, because `Identifiers` is frozen.
+    described_ids = described.identifiers.model_dump()
     filled: dict[str, str] = {}
-    for other in others:
+    for other in ordered:
         for field_name, value in other.identifiers.model_dump().items():
-            if value is not None and primary_ids[field_name] is None and field_name not in filled:
+            if value is not None and described_ids[field_name] is None and field_name not in filled:
                 filled[field_name] = value
-    identifiers = primary.identifiers.model_copy(update=filled)
+    identifiers = described.identifiers.model_copy(update=filled)
 
     # Ordered by discovery, not by which record happened to win the primary slot: PRISMA
     # attributes a record to the pass that found it first, and that must not depend on an
@@ -172,6 +210,12 @@ def merge_works(group: list[Work]) -> Work:
     return primary.model_copy(
         update={
             "identifiers": identifiers,
+            "title": described.title,
+            "authors": described.authors,
+            "venue": described.venue,
+            "type": described.type,
+            "dates": described.dates,
+            "language": described.language or primary.language,
             "provenance": provenance,
             "absorbed": sorted({*primary.absorbed, *absorbed_ids}),
             "supersedes": sorted({*primary.supersedes, *superseded}),
