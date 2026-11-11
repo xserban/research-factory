@@ -147,10 +147,22 @@ def test_without_a_log_the_run_is_open_until_reconciled(project: Project, tmp_pa
     assert [(r.run_id, r.kind) for r in found.runs] == [(run_id, "open-gone")]
 
 
-def test_a_second_adoption_while_one_is_open_is_refused(project: Project, tmp_path: Path) -> None:
-    _adopt(project, _prompt(tmp_path))
+def test_a_second_adoption_reconciles_a_dead_first_run(project: Project, tmp_path: Path) -> None:
+    first = _adopt(project, _prompt(tmp_path))  # no log, no process: open until reconciled
+    second = _adopt(project, _prompt(tmp_path))
+    assert second != first
+    assert runner.run_outcome(project, first) == "lost"
+    assert runner.run_outcome(project, second) is None
+
+
+def test_a_second_adoption_while_a_live_run_is_open_is_refused(
+    project: Project, tmp_path: Path
+) -> None:
+    first = _adopt(project, _prompt(tmp_path))
+    (project.paths.dir / "runs" / first / "pid").write_text(str(os.getpid()), encoding="utf-8")
     with pytest.raises(FactoryValidationError):
         _adopt(project, _prompt(tmp_path))
+    assert runner.run_outcome(project, first) is None  # still open
 
 
 def test_cli_adopts_and_prints_the_run_id(project: Project, tmp_path: Path) -> None:
@@ -273,6 +285,7 @@ def test_an_adopted_run_resumes_with_the_full_stage_tools(
     install_skill(project.settings, "rf-screen", "SCREEN SKILL BODY")
     monkeypatch.setattr(runner, "pending_work", lambda p: {"screen_a": 2})
     monkeypatch.setattr(resume, "pending_work", lambda p: {"screen_a": 2})
+    monkeypatch.setattr(runner, "_screen_servable", lambda p, stage: (2, False))
     monkeypatch.setattr(runner, "claude_path", lambda: "/usr/bin/claude")
     monkeypatch.setattr(runner, "_factory_executable", lambda: "/venv/bin/factory")
     monkeypatch.setattr(runner, "_advance_after", lambda p: None)

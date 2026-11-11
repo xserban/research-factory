@@ -216,11 +216,11 @@ def test_the_page_escapes_a_malicious_stage_label(
         total_reported_cost_usd=0.1,
         groups=[group],
     )
-    monkeypatch.setattr(site_costs, "cost_report", lambda _project: report)
+    monkeypatch.setattr(site_costs, "cost_report", lambda _project, runs=None: report)
     monkeypatch.setattr(
         site_costs,
         "token_growth",
-        lambda _project, _stage: [TurnPoint(turn=1, runs=1, mean_context_tokens=110.0)],
+        lambda _project, _stage, runs=None: [TurnPoint(turn=1, runs=1, mean_context_tokens=110.0)],
     )
     site_costs.build_costs(project, tmp_path)
     page = (tmp_path / "index.html").read_text(encoding="utf-8")

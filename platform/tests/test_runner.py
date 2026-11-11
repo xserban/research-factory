@@ -18,6 +18,7 @@ from sqlalchemy import text
 
 from factory.errors import FactoryValidationError
 from factory.events.envelope import Actor
+from factory.model.protocol import ScreeningStage
 from factory.services import runner, site_server
 from factory.services.context import Project
 from factory.services.site import site_dir
@@ -68,6 +69,18 @@ def runner_env(project: Project, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     return pending
 
 
+@pytest.fixture
+def stub_servable(runner_env: dict[str, int], monkeypatch: pytest.MonkeyPatch) -> None:
+    """For tests that start a run: `pending_units` takes the stage's servable count from the
+    fixture's pending counts instead of the real DB (the gate tests below use the real function)."""
+
+    def servable(project: Project, stage: ScreeningStage) -> tuple[int, bool]:
+        key = "screen_a" if stage == ScreeningStage.TITLE_ABSTRACT else "screen_ft_a"
+        return runner_env[key], False
+
+    monkeypatch.setattr(runner, "_screen_servable", servable)
+
+
 def _finish_all(launcher: FakeLauncher, run_id: str) -> None:
     for process in launcher.processes:
         process.release()
@@ -88,6 +101,7 @@ def test_build_command_names_model_tools_skill_and_cap(project: Project) -> None
         "mcp__factory__screen_next",
         "mcp__factory__screen_record",
         "mcp__factory__document_read",
+        "mcp__factory__project_status",  # optional read named by the skill (a4d2bb8)
     ]
     assert "SCREEN SKILL BODY" in prompt
     assert "stop after 7 units or when the queue is empty" in prompt
@@ -113,6 +127,7 @@ def test_extract_stage_uses_sonnet_and_the_skills_tools(project: Project) -> Non
         "mcp__factory__extract_next",
         "mcp__factory__extract_record",
         "mcp__factory__document_read",
+        "mcp__factory__project_status",  # optional read named by the skill (a4d2bb8)
     ]
     assert "EXTRACT SKILL BODY" in prompt
 
@@ -145,6 +160,7 @@ def test_unit_cap_and_stage_are_validated(project: Project) -> None:
         runner.build_command(project, "nonsense")
 
 
+@pytest.mark.usefixtures("stub_servable")
 def test_start_run_records_started_then_finished(project: Project) -> None:
     launcher = FakeLauncher()
     run_id = runner.start_run(project, "screen", unit_cap=5, launcher=launcher)
@@ -183,6 +199,7 @@ def test_nonzero_exit_is_failed(project: Project) -> None:
     assert view.status == "failed" and view.exit_status == 3
 
 
+@pytest.mark.usefixtures("stub_servable")
 def test_one_run_per_project(project: Project) -> None:
     launcher = FakeLauncher()
     first = runner.start_run(project, "screen", launcher=launcher)
@@ -196,6 +213,7 @@ def test_one_run_per_project(project: Project) -> None:
     _finish_all(launcher, second)
 
 
+@pytest.mark.usefixtures("stub_servable")
 def test_lost_run_is_reconciled_by_status_and_by_start(
     project: Project, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -254,6 +272,7 @@ def test_a_young_starting_marker_without_a_pid_keeps_the_run_alive(project: Proj
     assert runner.finish_lost(project, advance_after=False) == [run_id]
 
 
+@pytest.mark.usefixtures("stub_servable")
 def test_watcher_retries_a_failed_record_once(
     project: Project, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -443,6 +462,7 @@ def test_process_endpoint_needs_the_token_and_writes_nothing_without_it(
     assert _started_events(project) == [] and launcher.calls == []
 
 
+@pytest.mark.usefixtures("stub_servable")
 def test_process_endpoint_starts_a_run_and_validates(
     project: Project, served: tuple[int, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:

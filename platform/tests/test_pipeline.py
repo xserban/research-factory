@@ -252,7 +252,7 @@ def test_the_counter_writes_units_json_in_the_run_folder(tmp_path: Path) -> None
     reserved = cap.reserve(3)
     cap.settle(reserved, {"batch": {"records": [{}]}})
     record = json.loads((folder / "units.json").read_text(encoding="utf-8"))
-    assert record["served"] == 1
+    assert record["served"] == 3  # 2 counted + 1 of the 3 reserved served; the other 2 returned
     assert not (folder / "units.json.tmp").exists()
 
 
@@ -739,10 +739,10 @@ def test_a_thread_that_does_not_start_releases_the_lock_and_closes_the_pipeline(
     def refuse(self: threading.Thread) -> None:
         raise RuntimeError("can't start new thread")
 
-    monkeypatch.setattr(threading.Thread, "start", refuse)
-    with pytest.raises(RuntimeError):
-        pipeline.start_pipeline(project, launcher=CodedLauncher())
-    monkeypatch.undo()
+    with monkeypatch.context() as patched:  # undo only this patch, not the fixture's
+        patched.setattr(threading.Thread, "start", refuse)
+        with pytest.raises(RuntimeError):
+            pipeline.start_pipeline(project, launcher=CodedLauncher())
     assert not pipeline.pipeline_active(project)
     [finished] = _events(project, "runner.pipeline_finished")
     assert finished.payload["outcome"] == "failed"
