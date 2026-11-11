@@ -149,8 +149,11 @@ def inbox_sessions(project: Project) -> set[str]:
     return {str(row[0]) for row in rows}
 
 
-def _refuse_actor(project: Project, actor: Actor) -> None:
-    """Refuse a system actor and any session that joined a screening or extraction pass."""
+def _refuse_actor(project: Project, actor: Actor, *, automatic: bool = False) -> None:
+    """Refuse a system actor (unless `automatic`, the platform's own lookups) and any session
+    that joined a screening or extraction pass."""
+    if automatic and actor.kind == "system":
+        return
     if actor.kind not in ("human", "agent"):
         raise FactoryValidationError([ValidationIssue("actor", "a human or an agent")])
     if passes.is_pass_session(project, actor.session):
@@ -333,6 +336,7 @@ def resolve_links(
     item_ids: Sequence[str] | None = None,
     deviation_id: str | None = None,
     page_fetch: Callable[[str], httpx.Response] | None = None,
+    automatic: bool = False,
 ) -> list[ResolveOutcome]:
     """Look up open items (all, or `item_ids`) in id order, one recorded `supplied` query each.
 
@@ -344,8 +348,10 @@ def resolve_links(
     run (the item stays open and may be resolved again).
 
     An `item_ids` entry that is not an open item refuses the whole call before anything runs.
+    `automatic=True` lets the platform's own deterministic step pass the system actor; the lookup
+    is then recorded as the system's. Without it a system actor is refused.
     """
-    _refuse_actor(project, actor)
+    _refuse_actor(project, actor, automatic=automatic)
     project.index.sync()
     items = _open_items(project)
     if item_ids is not None:

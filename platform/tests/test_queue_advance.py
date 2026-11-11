@@ -15,12 +15,14 @@ from factory.services import work_queue
 from factory.services.inbox import ResolveOutcome
 from factory.services.work_queue import QueueItem
 
+SYSTEM = object()
+
 
 class _StubProject:
-    """Only what `advance` reads from a project: the human actor."""
+    """Only what `advance` reads from a project: the system actor."""
 
-    def human_actor(self) -> object:
-        return object()
+    def system_actor(self) -> object:
+        return SYSTEM
 
 
 def _paper(
@@ -56,11 +58,14 @@ def calls(monkeypatch: pytest.MonkeyPatch) -> dict[str, list[Any]]:
     log: dict[str, list[Any]] = {"resolve": [], "fetch": [], "convert": []}
     registry = object()
 
-    def fake_resolve(project: Any, actor: Any, *, sources: Any, item_ids: Any) -> list[Any]:
+    def fake_resolve(
+        project: Any, actor: Any, *, sources: Any, item_ids: Any, automatic: bool = False
+    ) -> list[Any]:
+        assert actor is SYSTEM and automatic is True
         log["resolve"].append(list(item_ids))
         return [ResolveOutcome(item_id=item_ids[0], status=ResolveStatus.NEW, work_id="w-new")]
 
-    def fake_fetch(project: Any, *, routes: Any, work_ids: Any, limit: int, actor: Any) -> Any:
+    def fake_fetch(project: Any, *, routes: Any, work_ids: Any, limit: int) -> Any:
         log["fetch"].append(list(work_ids))
         return _fetch_summary("retrieved")
 
@@ -115,7 +120,9 @@ def test_withdrawn_item_is_not_resolved(
 def test_refused_resolve_is_an_error_for_that_paper(
     monkeypatch: pytest.MonkeyPatch, calls: dict[str, list[Any]]
 ) -> None:
-    def refused(project: Any, actor: Any, *, sources: Any, item_ids: Any) -> list[Any]:
+    def refused(
+        project: Any, actor: Any, *, sources: Any, item_ids: Any, automatic: bool = False
+    ) -> list[Any]:
         return [ResolveOutcome(item_id=item_ids[0], status=None, issues=[])]
 
     monkeypatch.setattr(work_queue, "resolve_links", refused)
@@ -175,7 +182,7 @@ def test_failed_conversion_document_is_an_error(
 def test_one_paper_error_does_not_stop_the_next(
     monkeypatch: pytest.MonkeyPatch, calls: dict[str, list[Any]]
 ) -> None:
-    def fetch(project: Any, *, routes: Any, work_ids: Any, limit: int, actor: Any) -> Any:
+    def fetch(project: Any, *, routes: Any, work_ids: Any, limit: int) -> Any:
         calls["fetch"].append(list(work_ids))
         if work_ids == ["w1"]:
             raise RuntimeError("route exploded")

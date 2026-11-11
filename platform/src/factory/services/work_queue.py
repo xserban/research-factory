@@ -6,9 +6,9 @@ Invariants:
 - Read-only, except `advance`. The index is synced before it is read; no event, blob or table is
   written by `queue`, `added_papers` or `pending_work`.
 - `advance` runs only the deterministic steps for feed-added papers, each through the existing
-  service as the local human (`project.human_actor()`), so everything it writes is recorded as
-  that service records it: resolve the open items never looked up (never a `lookup-failed` one),
-  fetch full text for `screened-in` papers, convert `full-text` papers with the default converter.
+  service as the system (`project.system_actor()`; the resolve passes `automatic=True`), so
+  everything it writes is recorded as that service records it: resolve the open items never
+  looked up (never a `lookup-failed` one), fetch full text for `screened-in` papers, convert `full-text` papers with the default converter.
   Each paper is one call; one paper's error is recorded and the others go on. A process-wide lock
   serialises calls, so the hub and the runner watcher never overlap. Capped by `limit` per step.
   No model is called and no judgement is made.
@@ -293,7 +293,7 @@ def advance(
     limit: int = 20,
 ) -> AdvanceResult:
     """Run the due deterministic steps for the papers added from the feed, at most `limit` papers
-    per step, as the local human. Refuses, with nothing written, a `limit` outside 1..MAX_LIMIT.
+    per step, as the system. Refuses, with nothing written, a `limit` outside 1..MAX_LIMIT.
 
     Resolve: each open item never looked up (stage `added`, not stopped) through `resolve_links`
     with `item_ids`; a `lookup-failed` item is not retried. Fetch: each `screened-in` paper through
@@ -315,7 +315,7 @@ def _advance(
     convert: bool,
     limit: int,
 ) -> AdvanceResult:
-    actor = project.human_actor()
+    system = project.system_actor()
     errors: list[AdvanceError] = []
     counts = {"resolve": 0, "resolved": 0, "fetch": 0, "fetched": 0, "convert": 0, "converted": 0}
 
@@ -323,7 +323,7 @@ def _advance(
         counts["resolve"] += 1
         try:
             [outcome] = resolve_links(
-                project, actor, sources=sources, item_ids=[paper.inbox_item_id]
+                project, system, sources=sources, item_ids=[paper.inbox_item_id], automatic=True
             )
         except Exception as exc:  # one paper's error never stops the others
             errors.append(_error("resolve", paper, f"{type(exc).__name__}: {exc}"))
@@ -342,7 +342,7 @@ def _advance(
             continue
         try:
             summary = fetch_fulltext(
-                project, routes=fetchers, work_ids=[paper.work_id], limit=limit, actor=actor
+                project, routes=fetchers, work_ids=[paper.work_id], limit=limit
             )
         except Exception as exc:  # one paper's error never stops the others
             errors.append(_error("fetch", paper, f"{type(exc).__name__}: {exc}"))
