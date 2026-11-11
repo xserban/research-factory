@@ -217,3 +217,15 @@ rebuild it against each other. Resume when no wave runs:
 4. Run the Haiku calibration pass in the pilot (skill `rf-reference-layers`, MCP tools), check kappa,
    then the full title pass (about 3,750 items, batches of 100).
 5. Audit (P4), then the citations product with the earth-layers view.
+
+## Snowball dry run (2026-11-11, scratch copy)
+
+`factory snowball plan backward` works on the pilot's data: 506 candidates (resolved links not in the
+corpus), ranked by citing works; the top is the core and its precursors (The AI Scientist 2024 cited
+by 8 included works; Coscientist, ChemCrow, FunSearch by 4; AlphaEvolve by 3). `snowball run` is
+refused because 8 included works are still pending in screening (the round needs a settled corpus).
+Not yet exercised: the round's search, merge into works, hand-off to screening and the PRISMA update.
+Findings for T7: candidates come only from resolved links and include background and noise (model
+reports, the Protein Data Bank, docking software), so the layer filter is what makes the round small;
+a round cannot be limited to chosen sources. Resume step: settle the 8 pending screening decisions in
+the pilot, then run one backward round after the layer pass and T7.
