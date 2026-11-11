@@ -24,9 +24,14 @@ from factory.model.search import QuerySpec, RunStatus
 from factory.model.versions import VersionLinked
 from factory.model.work import Author, Dates, Identifiers, Provenance, Work
 from factory.services.context import Project
-from factory.services.core_works import forward_core_sources
+from factory.services.core_works import (
+    forward_core_sources,
+    mark_core,
+    seed_core_works,
+)
 from factory.services.dedup_incremental import held_matches
 from factory.services.feed import (
+    _reference_ids,
     configure,
     current_config,
     exploration_seed,
@@ -404,6 +409,56 @@ def test_dry_run_fetches_and_writes_nothing(
     result = feed_run(project, embedder, source, dry_run=True, today=TODAY)
     assert result.status == "dry-run" and result.note and "cat:cs.AI OR cat:cs.LG" in result.note
     assert source.specs == [] and _count(project) == 0
+
+
+# --- references and held-out seeds ---
+
+
+def _held_out_works(project: Project) -> list[str]:
+    return sorted(
+        set(seed_core_works(project)) - set(seed_core_works(project, development_only=True))
+    )
+
+
+def test_core_included_references_leave_out_held_out_seed_works(
+    project: Project,
+    agent: Actor,
+    human: Actor,
+    mock_sources: SourcesFor,
+    embedder: FakeEmbedder,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _world(project, agent, human, mock_sources, held_to=0)
+    held_out = _held_out_works(project)
+    assert held_out
+    plain = sorted(set(w.id for w in list_works(project)) - set(seed_core_works(project)))[0]
+    monkeypatch.setattr(
+        "factory.services.feed.included_works", lambda _project: sorted([*held_out, plain])
+    )
+    configure(project, human, _config(references="core+included"))
+    ids = _reference_ids(project, current_config(project))  # type: ignore[arg-type]
+    assert plain in ids and not set(held_out) & set(ids)
+    result = feed_run(project, embedder, FakeFeedSource(size=30), today=TODAY)
+    assert result.status == "complete"
+    [ranked] = _of_type(project, "feed.ranked")
+    nearest = {s.nearest_reference for s in FeedRanked.model_validate(ranked.payload).shown}
+    assert not set(held_out) & nearest
+
+
+def test_a_marked_core_held_out_work_is_a_reference(
+    project: Project,
+    agent: Actor,
+    human: Actor,
+    mock_sources: SourcesFor,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _world(project, agent, human, mock_sources, held_to=0)
+    held_out = _held_out_works(project)
+    mark_core(project, human, held_out[0])
+    monkeypatch.setattr("factory.services.feed.included_works", lambda _project: held_out)
+    configure(project, human, _config(references="core+included"))
+    ids = _reference_ids(project, current_config(project))  # type: ignore[arg-type]
+    assert held_out[0] in ids and not set(held_out[1:]) & set(ids)
 
 
 # --- aliases ---

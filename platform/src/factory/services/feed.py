@@ -19,6 +19,8 @@ Invariants:
 - An entry already in `feed_entries` is not ranked again. An entry whose work the corpus holds
   (`held_matches`: identifiers, aliases, title) is recorded with `held_work_id` and never ranked
   or shown, held-out seeds' works included (R-F4).
+- With `core+included` references, a held-out seed's work is left out of the included works
+  unless the researcher marked it core, as `forward_core_sources` does (R-20, R-F4).
 - The score is the maximum cosine to any reference (`max_cosine_scores`), ties broken by arXiv id.
   The shown list is the top `round(shown * (1 - exploration_share))` plus a seeded random draw
   from the rest. The seed is derived from the reference hash and the order, so equal inputs give
@@ -76,7 +78,7 @@ from factory.model.search import QueryKind, QueryPurpose, QuerySpec, RunStatus
 from factory.model.work import Work
 from factory.model.work_ids import normalize_arxiv
 from factory.services.context import Project, list_projects, open_project
-from factory.services.core_works import forward_core_sources
+from factory.services.core_works import core_marks, forward_core_sources, seed_core_works
 from factory.services.dedup_incremental import held_matches
 from factory.services.inbox import LinkInput, _refuse_actor, link_event
 from factory.services.ranking import _dot, _unit, max_cosine_scores, order_by_score, ranking_text
@@ -440,7 +442,11 @@ def _reference_ids(project: Project, config: FeedConfigured) -> list[str]:
     included = included_works(project)
     ids = set(forward_core_sources(project, included))
     if config.references is FeedReferences.CORE_INCLUDED:
-        ids.update(included)
+        marked = {m.work_id for m in core_marks(project)}
+        held_out = set(seed_core_works(project)) - set(
+            seed_core_works(project, development_only=True)
+        )
+        ids.update(set(included) - (held_out - marked))
     return sorted(ids)
 
 
