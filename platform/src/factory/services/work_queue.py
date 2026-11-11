@@ -8,7 +8,8 @@ Invariants:
 - `advance` runs only the deterministic steps for feed-added papers, each through the existing
   service as the system (`project.system_actor()`; the resolve passes `automatic=True`), so
   everything it writes is recorded as that service records it: resolve the open items never
-  looked up (never a `lookup-failed` one), fetch full text for `screened-in` papers, convert `full-text` papers with the default converter.
+  looked up (never a `lookup-failed` one), fetch full text for `screened-in` papers, convert `full-text`
+  papers with the default converter.
   Each paper is one call; one paper's error is recorded and the others go on. A process-wide lock
   serialises calls, so the hub and the runner watcher never overlap. Capped by `limit` per step.
   No model is called and no judgement is made.
