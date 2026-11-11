@@ -33,7 +33,9 @@ Invariants:
 - Embedding happens outside `project.writing()`. Inside it the inputs (configuration, known
   entries, held matches, references) are read again; if any changed nothing is written and the
   caller is told to run again. `feed.fetched` and `feed.ranked` are written in one batch, as the
-  system, so a fetch never exists without the ranking of its new entries.
+  system or, when an agent triggers the run over MCP, as that agent with its provenance (model,
+  skill, `input_blob` of the call's arguments); a human actor is refused (`actor`). A fetch never
+  exists without the ranking of its new entries.
 """
 
 from __future__ import annotations
@@ -539,15 +541,20 @@ def feed_run(
     dry_run: bool = False,
     cache_root: Path | None = None,
     today: date | None = None,
+    actor: Actor | None = None,
 ) -> FeedRunResult:
     """Fetch the window's listings and rank the new entries; write `feed.fetched` and
-    `feed.ranked` as the system.
+    `feed.ranked` as `actor` (default the system; an agent actor also records the call's
+    arguments as its `input_blob`). A human actor is refused (`actor`: `no-human`).
 
     `due=True` runs only when the cadence says so (otherwise status `not-due`, nothing written);
     `due=False` runs now. `dry_run` fetches and writes nothing and says what it would do. Refused,
     with nothing written, with no configuration or no reference work, and when the inputs changed
     while embedding. A missing ranker surfaces as the embedder's own `ranker_unavailable` refusal.
     """
+    who = actor or project.system_actor()
+    if who.kind == "human":
+        raise _refuse("actor", "the feed is fetched by the system or an agent, not a human")
     with _feed_lock(project):
         project.index.sync()
         config = current_config(project)
@@ -615,9 +622,18 @@ def feed_run(
                 held_count=len(held),
                 complete=ok,
             )
+            input_blob = (
+                project.blobs.put_json({"due": due, "dry_run": dry_run})
+                if who.kind == "agent"
+                else None
+            )
             events = [
                 project.events.make(
-                    "feed.fetched", fetched_payload, project.system_actor(), refs=(fetch_id,)
+                    "feed.fetched",
+                    fetched_payload,
+                    who,
+                    refs=(fetch_id,),
+                    input_blob=input_blob,
                 )
             ]
             ranking_id: str | None = None
@@ -662,8 +678,9 @@ def feed_run(
                     project.events.make(
                         "feed.ranked",
                         ranked_payload,
-                        project.system_actor(),
+                        who,
                         refs=(ranking_id, fetch_id),
+                        input_blob=input_blob,
                     )
                 )
                 shown_count = len(picks)
@@ -694,7 +711,7 @@ def feed_run(
         )
 
 
-class _LazyEmbedder:
+class LazyEmbedder:
     """An embedder built on first use, so a run that is not due never needs the weights."""
 
     def __init__(self, built: Embedder | None, build: Callable[[], Embedder] | None) -> None:
@@ -737,6 +754,7 @@ def feed_run_all(
     dry_run: bool = False,
     cache_root: Path | None = None,
     today: date | None = None,
+    actor: Actor | None = None,
 ) -> FeedRunAll:
     """Run the feed of each project (all of the root's when `slugs` is None), one failure never
     stopping the others. Projects without a configuration are skipped (`not-configured`, code 0).
@@ -747,7 +765,7 @@ def feed_run_all(
     actually ranks. The cache defaults to `<root>/.feed-cache`."""
     names = list(list_projects(settings) if slugs is None else slugs)
     cache = cache_root if cache_root is not None else settings.root / CACHE_DIR
-    lazy = _LazyEmbedder(embedder, embedder_factory)
+    lazy = LazyEmbedder(embedder, embedder_factory)
     outcomes: list[FeedProjectOutcome] = []
     for slug in names:
         try:
@@ -762,7 +780,14 @@ def feed_run_all(
                 )
                 continue
             result = feed_run(
-                project, lazy, source, due=due, dry_run=dry_run, cache_root=cache, today=today
+                project,
+                lazy,
+                source,
+                due=due,
+                dry_run=dry_run,
+                cache_root=cache,
+                today=today,
+                actor=actor,
             )
         except FactoryValidationError as exc:
             outcomes.append(FeedProjectOutcome(slug=slug, code=2, error=str(exc)))

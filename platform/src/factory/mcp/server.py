@@ -539,18 +539,22 @@ def build_server(
         project: str, role: str, model: str, skill: str, dry_run: bool = False
     ) -> dict[str, JsonValue]:
         """Run the project's feed cycle now: fetch the listings of the window, then rank the new
-        entries against the reference works with the local embedding model. The feed's events
-        are recorded as the system, as the feed's own cadence; the agent's arguments are checked
-        and named in the reply but not recorded on those events. `dry_run` fetches and writes
-        nothing. Refused to a session that has joined a pass."""
+        entries against the reference works with the local embedding model. Runs only when the
+        cadence says it is due. The feed's events are recorded as this agent, with its model,
+        skill and the call's arguments as input. `dry_run` fetches and writes nothing. Refused to
+        a session that has joined a pass."""
 
         def run_cycle() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
             _refuse_pass_session(opened)
-            make_agent_actor(settings, session, role, model, skill)
-            embedder = ranking_model_service.Specter2Embedder()
+            actor = make_agent_actor(settings, session, role, model, skill)
             result = feed_service.feed_run(
-                opened, embedder, _feed_source(), due=True, dry_run=dry_run
+                opened,
+                feed_service.LazyEmbedder(None, ranking_model_service.Specter2Embedder),
+                _feed_source(),
+                due=True,
+                dry_run=dry_run,
+                actor=actor,
             )
             return _withheld(opened, result.model_dump(mode="json"))
 

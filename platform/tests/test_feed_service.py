@@ -461,6 +461,35 @@ def test_a_marked_core_held_out_work_is_a_reference(
     assert held_out[0] in ids and not set(held_out[1:]) & set(ids)
 
 
+# --- provenance of an agent-triggered run ---
+
+
+def test_an_agent_run_is_recorded_with_its_provenance(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor, embedder: FakeEmbedder
+) -> None:
+    _world(project, agent, human, mock_sources)
+    configure(project, human, _config())
+    result = feed_run(project, embedder, FakeFeedSource(size=20), today=TODAY, actor=agent)
+    assert result.status == "complete"
+    for kind in ("feed.fetched", "feed.ranked"):
+        [event] = _of_type(project, kind)
+        assert event.actor.kind == "agent" and event.actor.model == agent.model
+        assert event.actor.skill == agent.skill and event.input_blob is not None
+    with project.index.connect() as conn:
+        assert conn.execute(text("SELECT COUNT(*) FROM feed_entries")).scalar_one() == 20
+        assert conn.execute(text("SELECT COUNT(*) FROM feed_rankings")).scalar_one() == 1
+
+
+def test_a_human_cannot_run_the_feed(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor, embedder: FakeEmbedder
+) -> None:
+    _world(project, agent, human, mock_sources)
+    configure(project, human, _config())
+    with pytest.raises(FactoryValidationError) as refused:
+        feed_run(project, embedder, FakeFeedSource(size=5), today=TODAY, actor=human)
+    assert refused.value.issues[0].field == "actor" and _count(project) == 0
+
+
 # --- aliases ---
 
 

@@ -8,9 +8,10 @@ the latest), `feed_reactions` (every reaction is kept) and `feed_sends` (one row
 
 Folded only if (a hand-written event failing a guard changes nothing on rebuild):
 - `feed.configured`: the actor is a human. The row replaces the previous configuration.
-- `feed.fetched`: the actor is the system and the entries blob is a readable list. An entry that
-  is not valid, or already known, is skipped (the first fetch that saw it stands).
-- `feed.ranked`: the actor is the system.
+- `feed.fetched`: the actor is the system or an agent (never a human) and the entries blob is
+  a readable list. An entry that is not valid, or already known, is skipped (the first fetch
+  that saw it stands).
+- `feed.ranked`: the actor is the system or an agent (never a human).
 - `feed.reacted`: the actor is a human; the entry and the ranking are known.
 - `feed.sent`: the actor is a human; the entry is known; the inbox item exists in the inbox
   projection; the entry is not already sent (the first send stands).
@@ -182,7 +183,7 @@ def feed_handlers(t: FeedTables, blobs: BlobStore | None) -> dict[str, Handler]:
     def fetched(conn: Connection, event: Event) -> None:
         if blobs is None:
             raise RuntimeError("the feed projection needs the project's blob store")
-        if event.actor.kind != "system":
+        if event.actor.kind not in ("system", "agent"):
             return
         p = FeedFetched.model_validate(event.payload)
         entries = _parsed_entries(blobs, p.entries_blob)
@@ -216,7 +217,7 @@ def feed_handlers(t: FeedTables, blobs: BlobStore | None) -> dict[str, Handler]:
 
     def ranked(conn: Connection, event: Event) -> None:
         p = FeedRanked.model_validate(event.payload)
-        if event.actor.kind != "system":
+        if event.actor.kind not in ("system", "agent"):
             return
         shown: list[JsonValue] = [s.model_dump(mode="json") for s in p.shown]
         conn.execute(
