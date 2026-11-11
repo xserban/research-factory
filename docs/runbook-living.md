@@ -75,6 +75,16 @@ The platform has no scheduler and no delivery channel (decision 63). One working
 
 The `;` is deliberate: a failed or partial cycle exits 1, and the digest must still run, since it lists failed and overdue watches. `--record` makes the next digest start where this one ended; run it from one schedule only, or two schedules split the window between them. Delivery stays a step outside the platform: mail or post the files in `digests/`, or let the routine above do it. For a weekly meeting, `factory pack` reads the same log and prints counts and titles only.
 
+## The discovery feed (slice 4c)
+
+The feed ranks each configured project's daily arXiv listing against its core works and records what it showed; it adds nothing to the corpus (decision 117). Configure once per project (`factory feed configure --project SLUG --categories cs.AI,cs.LG --shown 30 --explore 0.1`), then add the run to the same schedule, before the digest so that the digest's Feed section is current:
+
+```
+30 5 * * *  cd /path/to/research-factory/platform && uv run factory --root /path/to/factory-root watch run --due --all >> /path/to/factory-root/watch.log 2>&1; uv run factory --root /path/to/factory-root feed run --due --all >> /path/to/factory-root/watch.log 2>&1; uv run factory --root /path/to/factory-root digest --all --record --format md --out /path/to/factory-root/digests >> /path/to/factory-root/watch.log 2>&1
+```
+
+The run needs the ranker extra and local SPECTER2 weights (`FACTORY_RANKER_MODEL`, decision 116); without them it refuses and names the remedy. Raw listings are cached under `<root>/.feed-cache`; deleting the cache changes no project. Exit codes are those of `watch run`. Reacting and sending are the researcher's acts and are never scheduled: `factory feed show`, `factory feed react ID like|dislike|save|dismiss`, `factory feed send ID`, then `factory inbox resolve` to bring sent papers into screening.
+
 ## Conclusions
 
 `factory conclusions register --statement TEXT --basis KIND:REF ... [--predicate JSON]` records a conclusion with its basis (cell, row, group, work); every reference must resolve. `factory conclusions status|diff [--since SNAPSHOT]` show how each stands against a snapshot: `unchanged`, `changed`, `basis-affected` or `new`, all computed. Take a snapshot with `factory living snapshot` (or `snapshot_every` in the watch plan) so that later cycles have a reference.
