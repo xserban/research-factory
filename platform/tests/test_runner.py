@@ -334,6 +334,37 @@ def test_runner_events_by_a_human_or_agent_fold_to_nothing(project: Project, age
     assert _outcome(project, str(started["run_id"])) is None
 
 
+def test_duplicate_started_is_ignored_and_the_first_finish_stands(project: Project) -> None:
+    from factory.model.runner import RunnerFinished, RunnerStarted
+
+    run_id = _start_unwatched(project)
+    first = project.blobs.put(b"first")
+    again = RunnerStarted(
+        run_id=run_id,
+        stage="extract",
+        model="claude-sonnet-5-5",
+        allowed_tools=("mcp__factory__extract_next",),
+        prompt_blob=first,
+        unit_cap=9,
+        counts_before={"extract_a": 9},
+        command=("other",),
+    )
+    project.record([project.events.make("runner.started", again, project.system_actor())])
+    assert _count(project) == 1
+    [view] = runner.run_status(project, reconcile=False)
+    assert (view.stage, view.unit_cap, view.model) == ("screen", 1, "claude-haiku-5-5")
+    for outcome, code in (("failed", 5), ("complete", 0)):
+        finished = RunnerFinished(
+            run_id=run_id,
+            exit_status=code,
+            outcome=outcome,  # type: ignore[arg-type]
+            log_blob=first,
+            counts_after={},
+        )
+        project.record([project.events.make("runner.finished", finished, project.system_actor())])
+    assert _outcome(project, run_id) == ("failed", 5)
+
+
 # --- POST /api/queue/process ---
 
 

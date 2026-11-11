@@ -184,7 +184,7 @@ def queue_process(project: Project, body: dict[str, Any]) -> tuple[int, dict[str
     except FactoryValidationError as exc:
         return 400, _issues(*exc.issues)
     except FactoryError as exc:
-        return 400, _issues(ValidationIssue("run", str(exc)))
+        return 403, _issues(ValidationIssue("permission", str(exc)))
     return 200, {"ok": True, "run_id": run_id, "stage": stage, "unit_cap": cap}
 
 
@@ -271,7 +271,9 @@ def make_server(
             super().end_headers()
 
         def _host_ok(self) -> bool:
-            return (self.headers.get("Host") or "").rsplit(":", 1)[0] in _LOOPBACK
+            host = self.headers.get("Host") or ""
+            name = host.split("]", 1)[0] + "]" if host.startswith("[") else host.rsplit(":", 1)[0]
+            return name in _LOOPBACK
 
         def _json(self, code: int, payload: dict[str, object]) -> None:
             body = json.dumps(payload).encode()
@@ -373,7 +375,12 @@ def make_server(
             if not isinstance(body, dict):
                 self._json(400, _issues(ValidationIssue("body", "must be a JSON object")))
                 return
-            with write_lock:
+            if route is feed_react:
+                with write_lock:
+                    code, payload = route(project, body)
+            else:
+                # no lock: `feed add` looks the paper up over the network, and each service
+                # serialises its own index work (`send` and the lookup take the index lock)
                 code, payload = route(project, body)
             if code == 200 and route is feed_add:
                 _start_advance(project, advance_gate)

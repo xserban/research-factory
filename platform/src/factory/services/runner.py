@@ -515,7 +515,9 @@ def start_run(
 def _as_stage(stage: str) -> RunnerStage:
     if stage == "screen":
         return "screen"
-    return "extract"
+    if stage == "extract":
+        return "extract"
+    raise _refuse("stage", "must be one of " + ", ".join(STAGES))
 
 
 def wait(run_id: str, timeout: float | None = None) -> bool:

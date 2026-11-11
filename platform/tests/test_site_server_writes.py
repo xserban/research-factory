@@ -7,6 +7,7 @@ from __future__ import annotations
 import http.client
 import json
 import re
+import socket
 import threading
 from collections.abc import Iterator
 from types import SimpleNamespace
@@ -14,9 +15,10 @@ from typing import Any
 
 import pytest
 
+from factory.errors import FactoryError
 from factory.events.reader import read_all
 from factory.services import feed as feed_service
-from factory.services import feed_read, site_server
+from factory.services import feed_read, site_server, work_queue
 from factory.services.context import Project
 from factory.services.site import site_dir
 from factory.services.site_feed import build_feed
@@ -152,3 +154,120 @@ def test_built_files_hold_no_token(project: Project, served: tuple[int, str]) ->
     for path in site_dir(project).rglob("*"):
         if path.is_file():
             assert token not in path.read_text(encoding="utf-8", errors="ignore")
+
+
+# --- the guards of the write path ---
+
+
+def _raw(port: int, request: bytes) -> int:
+    """Send `request` as it is and return the status code of the reply."""
+    with socket.create_connection(("127.0.0.1", port), timeout=10) as conn:
+        conn.sendall(request)
+        reply = b""
+        while b"\r\n" not in reply:
+            chunk = conn.recv(4096)
+            if not chunk:
+                break
+            reply += chunk
+    return int(reply.split(b" ", 2)[1])
+
+
+def _post(port: int, token: str, headers: dict[str, str], body: bytes = b"") -> int:
+    lines = {
+        "Host": f"127.0.0.1:{port}",
+        "X-Factory-Token": token,
+        "Content-Type": "application/json",
+        **headers,
+    }
+    head = "".join(f"{k}: {v}\r\n" for k, v in lines.items() if v)
+    return _raw(port, f"POST /api/feed/react HTTP/1.1\r\n{head}\r\n".encode() + body)
+
+
+def test_wrong_content_type_is_415(project: Project, served: tuple[int, str]) -> None:
+    port, token = served
+    body = json.dumps(REACT).encode()
+    status = _post(
+        port, token, {"Content-Type": "text/plain", "Content-Length": str(len(body))}, body
+    )
+    assert status == 415
+    assert _reactions(project) == []
+
+
+def test_missing_content_length_is_411(project: Project, served: tuple[int, str]) -> None:
+    port, token = served
+    assert _post(port, token, {}) == 411
+    assert _reactions(project) == []
+
+
+def test_body_over_16_kib_is_413(project: Project, served: tuple[int, str]) -> None:
+    port, token = served
+    size = site_server.MAX_BODY + 1
+    assert _post(port, token, {"Content-Length": str(size)}, b"x" * size) == 413
+    assert _reactions(project) == []
+
+
+def test_invalid_json_and_non_object_body_are_400(
+    project: Project, served: tuple[int, str]
+) -> None:
+    port, token = served
+    for body in (b"{not json", b"[1, 2]", b'"text"'):
+        assert _post(port, token, {"Content-Length": str(len(body))}, body) == 400
+    assert _reactions(project) == []
+
+
+def test_bare_ipv6_loopback_host_is_accepted(served: tuple[int, str]) -> None:
+    port, _ = served
+    request = b"GET /feed/ HTTP/1.1\r\nHost: [::1]\r\nConnection: close\r\n\r\n"
+    assert _raw(port, request) == 200
+    other = b"GET /feed/ HTTP/1.1\r\nHost: evil.example\r\nConnection: close\r\n\r\n"
+    assert _raw(port, other) == 403
+
+
+def test_refused_command_is_403_for_react_and_add(
+    project: Project, served: tuple[int, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    port, token = served
+    refused: list[str] = []
+
+    def refuse(project: Project, principal: Any, tool: str) -> None:
+        refused.append(tool)
+        raise FactoryError("not allowed")
+
+    def never(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("the service must not run")
+
+    monkeypatch.setattr(site_server, "authorize_command", refuse)
+    monkeypatch.setattr(feed_service, "add", never)
+    monkeypatch.setattr(feed_service, "react", never)
+    auth = {"X-Factory-Token": token}
+    assert _request(port, "POST", "/api/feed/react", REACT, auth)[0] == 403
+    assert _request(port, "POST", "/api/feed/add", {"entry_id": FIRST}, auth)[0] == 403
+    assert refused == ["cli:feed react", "cli:feed add"]
+    assert _reactions(project) == []
+
+
+def test_advance_is_single_flight(project: Project, monkeypatch: pytest.MonkeyPatch) -> None:
+    ran = threading.Event()
+    monkeypatch.setattr(work_queue, "advance", lambda *a, **k: ran.set())
+    monkeypatch.setattr(site_server, "default_routes", lambda settings: {})
+    monkeypatch.setattr(site_server, "_sources", lambda: {})
+    gate = threading.Lock()
+    gate.acquire()
+    assert site_server._start_advance(project, gate) is False
+    assert not ran.wait(0.2)
+    gate.release()
+    assert site_server._start_advance(project, gate) is True
+    assert ran.wait(10)
+    assert gate.acquire(timeout=10)  # the thread released it when it ended
+
+
+def test_token_is_injected_only_into_feed_and_queue_pages(
+    project: Project, served: tuple[int, str]
+) -> None:
+    port, token = served
+    (site_dir(project) / "other.html").write_text("<html><head></head><body>x</body></html>")
+    for path in ("/other.html", "/", "/api/status"):
+        _, body = _request(port, "GET", path)
+        assert token not in body, path
+        assert "factory-token" not in body, path
+    assert token in _request(port, "GET", "/feed/")[1]
