@@ -28,6 +28,7 @@ from factory.cli.organisation import consolidation_app, labels_app, terms_app
 from factory.cli.pages import pages_app
 from factory.cli.queue import queue_app
 from factory.cli.resume import resume_cmd
+from factory.cli.runs import adopt_cmd
 from factory.cli.screen_check import screen_check_app
 from factory.cli.site import site_app
 from factory.cli.team import (
@@ -553,6 +554,7 @@ app.add_typer(models_app)
 app.add_typer(directions_app)
 app.add_typer(experiments_app)
 app.add_typer(runs_app)
+runs_app.command("adopt")(adopt_cmd)
 app.add_typer(draft_app)
 app.add_typer(manuscript_app)
 app.add_typer(decide_app)

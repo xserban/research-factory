@@ -49,6 +49,7 @@ import time
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
+from datetime import datetime
 from pathlib import Path
 from typing import Final, Protocol
 
@@ -877,6 +878,129 @@ def _as_stage(stage: str) -> RunnerStage:
     if not is_stage_key(stage):
         raise _refuse("stage", "must be one of " + stage_keys())
     return stage
+
+
+_ADOPTED_ENV_KEYS: Final = frozenset(
+    {
+        "PYTHONPATH",
+        "FACTORY_PLUGIN_DIR",
+        "FACTORY_ROOT",
+        "FACTORY_RANKER_MODEL",
+        "FACTORY_UNIT_CAP",
+        "FACTORY_RUN_ID",
+        "FACTORY_RUN_DIR",
+    }
+)
+"""The environment keys a run's MCP config may carry (see `mcp_config`). An adopted config keeps
+only these; any other key, a secret among them, is dropped."""
+_standard_mcp_config: Final = mcp_config
+
+
+def _adopted_mcp_config(source: Path) -> dict[str, JsonValue]:
+    """The MCP config of an outside driver, with only the allowed environment keys kept. Reads
+    `source` and writes nothing to it."""
+    try:
+        data = json.loads(source.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise _refuse("mcp_config", f"not a readable JSON file: {exc}") from exc
+    servers = data.get("mcpServers") if isinstance(data, dict) else None
+    if not isinstance(servers, dict):
+        raise _refuse("mcp_config", "has no `mcpServers` object")
+    kept: dict[str, JsonValue] = {}
+    for name, server in servers.items():
+        if not isinstance(server, dict):
+            raise _refuse("mcp_config", f"server {name!r} is not an object")
+        env = server.get("env", {})
+        if not isinstance(env, dict):
+            raise _refuse("mcp_config", f"server {name!r} has an `env` that is not an object")
+        entry: dict[str, JsonValue] = {k: v for k, v in server.items() if k != "env"}
+        entry["env"] = {k: v for k, v in env.items() if k in _ADOPTED_ENV_KEYS}
+        kept[str(name)] = entry
+    return {"mcpServers": kept}
+
+
+def adopt_driver(
+    project: Project,
+    *,
+    stage: str,
+    prompt_file: Path,
+    model: str,
+    tools: Sequence[str],
+    mcp_config: Path | None,
+    log_file: Path | None,
+    started_at: datetime | None,
+) -> str:
+    """Record a driver started outside the runner (plan restart-and-costs R4) as a run of `stage`,
+    so `resume` can restart it. Returns the new `run_id`.
+
+    The prompt is copied into the run folder and stored as a blob; `runner.started` records the
+    prompt blob, the given tools and model, and the command `["adopted", <prompt path>]`. With a
+    `log_file`, the log is copied in and `runner.finished` is recorded at once with outcome `lost`
+    (the status of the outside process is unknown). Without one, the run is closed as `lost` by
+    the next reconcile, as any run whose process is gone. `started_at` is kept in the run folder
+    (`adopted.json`): an event carries no time of its own here.
+
+    Refused, with nothing written: an unknown stage, a blank model, no tools, tools outside the
+    stage's spec (named), a missing prompt or log file, an unreadable MCP config, an open run.
+    Reads the source files only."""
+    if not is_stage_key(stage):
+        raise _refuse("stage", "must be one of " + stage_keys())
+    spec = stage_spec(project, stage)
+    if not model.strip():
+        raise _refuse("model", "must not be blank")
+    names = tuple(tools)
+    if not names:
+        raise _refuse("tools", "name at least one tool of the stage")
+    extra = [tool for tool in names if tool not in spec.tools]
+    if extra:
+        raise _refuse("tools", f"not tools of stage {stage!r}: " + ", ".join(extra))
+    if not prompt_file.is_file():
+        raise _refuse("prompt", f"{prompt_file} is not a file")
+    prompt_bytes = prompt_file.read_bytes()
+    try:
+        prompt_bytes.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise _refuse("prompt", "is not UTF-8 text") from exc
+    if log_file is not None and not log_file.is_file():
+        raise _refuse("log", f"{log_file} is not a file")
+    config: dict[str, JsonValue] | None = (
+        None if mcp_config is None else _adopted_mcp_config(mcp_config)
+    )
+    with _runs_lock(project):
+        finish_lost(project, advance_after=False)
+        if _open_run_ids(project):
+            raise _refuse("run", "a run of this project is already open; wait for it to finish")
+        counts = pending_units(project, stage)
+        run_id = project.ids.new("rnr")
+        folder = _run_dir(project, run_id)
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "prompt.txt").write_bytes(prompt_bytes)
+        if config is None:
+            config = _standard_mcp_config(project, DEFAULT_UNIT_CAP, run_id)
+        (folder / "mcp.json").write_text(json.dumps(config, indent=1), encoding="utf-8")
+        if log_file is not None:
+            shutil.copyfile(log_file, folder / "log.jsonl")
+        adopted = {
+            "prompt_source": str(prompt_file.resolve()),
+            "mcp_config_source": None if mcp_config is None else str(mcp_config.resolve()),
+            "log_source": None if log_file is None else str(log_file.resolve()),
+            "started_at": None if started_at is None else started_at.isoformat(),
+        }
+        (folder / "adopted.json").write_text(json.dumps(adopted, indent=1), encoding="utf-8")
+        started = RunnerStarted(
+            run_id=run_id,
+            stage=_as_stage(stage),
+            model=model,
+            allowed_tools=names,
+            prompt_blob=project.blobs.put(prompt_bytes),
+            unit_cap=DEFAULT_UNIT_CAP,
+            counts_before=counts,
+            command=("adopted", str(prompt_file.resolve())),
+        )
+        project.record([project.events.make("runner.started", started, project.system_actor())])
+        if log_file is not None:
+            _finish(project, run_id, stage, "lost", None)
+    return run_id
 
 
 def wait(run_id: str, timeout: float | None = None) -> bool:
