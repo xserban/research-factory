@@ -31,7 +31,7 @@ from factory.services.feed import FeedStatus, feed_status
 from factory.services.feed_read import FeedListItem, feed_list
 
 FEED_CSS = (
-    ".card{background:rgba(21,24,40,.85);border:1px solid var(--mut);border-left:3px solid var(--ac);"
+    ".card{background:var(--card);border:1px solid var(--mut);border-left:3px solid var(--ac);"
     "padding:12px 16px;margin:10px 0;line-height:1.5}"
     ".card h3{margin:2px 0 6px;font-size:14px;letter-spacing:.02em}"
     ".card h3 a{color:var(--blue)}"
@@ -47,7 +47,7 @@ FEED_CSS = (
     ".acts{margin-top:8px}.acts button{margin-right:6px;padding:3px 9px}"
     ".acts button:disabled{opacity:.45;cursor:not-allowed}"
     ".hint{color:var(--amber);font-size:12px;margin:6px 0}.msg{color:var(--dim);font-size:12px}"
-    ".status{background:rgba(21,24,40,.85);border:1px solid var(--mut);padding:10px 14px;margin:8px 0}"
+    ".status{background:var(--card);border:1px solid var(--mut);padding:10px 14px;margin:8px 0}"
     ".status span{display:inline-block;margin-right:18px;color:var(--light)}"
 )
 

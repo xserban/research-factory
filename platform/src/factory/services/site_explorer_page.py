@@ -9,17 +9,20 @@ dashboard's (Omarchy Hackerman, dark only).
 
 from __future__ import annotations
 
+from factory.services.site_theme import LIGHT_CSS, THEME_SCRIPT, THEME_TOGGLE
+
 DATA_MARKER = "/*DATA*/null"
 
 PAGE = r"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<!--THEME-->
 <title>Corpus explorer</title>
 <style>
-:root{color-scheme:dark;--bg:#0B0C16;--panel:#151828;--ink:#ddf7ff;--dim:#6a6e95;--line:#2d3450;--acc:#82FB9C;--hi:#1f253a}
+:root{color-scheme:dark;--bg:#0B0C16;--panel:#151828;--ink:#ddf7ff;--dim:#6a6e95;--line:#2d3450;--acc:#82FB9C;--ac:#82FB9C;--red:#ff8a80;--green:#4fe88f;--hi:#1f253a}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',Inter,system-ui,sans-serif;height:100vh;display:flex;flex-direction:column}
 header{display:flex;gap:10px;align-items:center;padding:8px 12px;border-bottom:1px solid var(--line);background:var(--panel);flex-wrap:wrap}
 header h1{font-size:15px;margin:0 8px 0 0}input,select,button{font:inherit;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:4px 8px}
-button{cursor:pointer}button.on{background:var(--acc);color:#0B0C16;border-color:var(--acc)}
+button{cursor:pointer}button.on{background:var(--acc);color:var(--bg);border-color:var(--acc)}
 main{flex:1;display:flex;min-height:0}
 #side{width:250px;overflow:auto;border-right:1px solid var(--line);padding:8px 10px;background:var(--panel)}
 #side h3{margin:10px 0 4px;font-size:12px;text-transform:uppercase;color:var(--dim);letter-spacing:.04em}
@@ -40,7 +43,7 @@ tr.w:hover{background:var(--hi);cursor:pointer}th{position:sticky;top:0;backgrou
 .sd{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:2px;vertical-align:middle}
 #ln{position:relative;overflow:auto;height:100%}#ln svg{position:absolute;left:0;top:0;pointer-events:none;z-index:2}
 .nd{position:absolute;width:176px;height:54px;border:1px solid var(--line);border-left:5px solid var(--acc);background:var(--panel);border-radius:6px;padding:3px 6px;font-size:11.5px;line-height:1.25;overflow:hidden;cursor:pointer}
-.nd:hover{outline:2px solid var(--acc);z-index:3}.nd.dim{opacity:.18}.nd.sel{outline:3px solid #d33;z-index:4}.nd.anc{outline:2px solid #d33}.nd.desc{outline:2px solid #2a8}
+.nd:hover{outline:2px solid var(--acc);z-index:3}.nd.dim{opacity:.18}.nd.sel{outline:3px solid var(--red);z-index:4}.nd.anc{outline:2px solid var(--red)}.nd.desc{outline:2px solid var(--green)}
 .nd .d{color:var(--dim);font-size:10.5px}.mh{position:absolute;top:2px;font-size:12px;font-weight:600;color:var(--dim)}
 .sumrow{margin:3px 0}.sumrow b{font-size:12px;color:var(--dim);display:block}
 #chips{padding:6px 16px;border-bottom:1px solid var(--line);background:var(--panel)}#chips .chip{margin:0 6px 0 0;border-radius:12px;font-size:12px}#helpbox{padding:10px 16px;border-bottom:1px solid var(--line);background:var(--panel);color:var(--dim);font-size:13px;line-height:1.5}#helpbox b{color:var(--ink)}#helpbox li{margin:3px 0}
@@ -50,13 +53,13 @@ canvas{display:block;width:100%;height:100%}#tl{padding:10px}
 .dot{display:block;height:9px;margin:1px 0;border-radius:3px;cursor:pointer;opacity:.9}.dot:hover{outline:2px solid var(--ink)}
 .axis{display:flex;margin-left:210px;font-size:11px;color:var(--dim)}.axis div{flex:1;min-width:26px;border-left:1px dashed var(--line);padding-left:2px}
 a{color:var(--acc)}.note{padding:8px 12px;color:var(--dim)}
-FUTURE_OVERLAY</style></head><body>
+FUTURE_OVERLAY/*LIGHT*/</style></head><body>
 <header><h1>Corpus Explorer</h1>
 <input id="q" placeholder="Search title, abstract, quotes…" size="34">
 <span class="dim">View</span>
 <button data-v="list" class="on">List</button><button data-v="timeline">Timeline</button><button data-v="chrono">Chronology</button><button data-v="lineage">Lineage</button><button data-v="graph">Graph</button>
 <span class="dim">Group by</span><select id="grp"></select>
-<button id="helpbtn">Help</button><span id="count" class="dim"></span><span class="dim" style="margin-left:auto" id="gen"></span></header>
+<button id="helpbtn">Help</button><!--TOGGLE--><span id="count" class="dim"></span><span class="dim" style="margin-left:auto" id="gen"></span></header>
 <div id="chips" hidden></div>
 <div id="helpbox" hidden><b>What this is.</b> The corpus of the review: every paper included after full-text screening, with what the miners read from it. Every value shown has a quote from the paper behind it.
 <ul><li><b>List</b>: titles by date, grouped by any dimension (Group by). <b>Timeline</b>: one lane per group, one block per paper by month. <b>Chronology</b>: months side by side, newest on the left, a card per paper. <b>Lineage</b>: papers by month with an arrow to each earlier paper in the corpus that they cite; click a paper to light up what it builds on (red) and what builds on it (green). <b>Graph</b>: papers linked to techniques, stages and other categories.</li>
@@ -205,3 +208,9 @@ gs.onchange=()=>{grp=gs.value;render();};$('#helpbtn').onclick=()=>{const b=$('#
 $('#gen').textContent='Generated '+DATA.generated;document.querySelectorAll('header button[data-v]').forEach(x=>x.classList.toggle('on',x.dataset.v===view));if(H.get('grp')){grp=H.get('grp');gs.value=grp;}drawSide();render();if(H.get('open')&&BYS[H.get('open')]!==undefined)openWork(W[BYS[H.get('open')]]);else if(H.get('openfirst')){const w=W.find(x=>x.sum&&Object.keys(x.sum).length>6);if(w)openWork(w);}
 </script></body></html>
 """
+
+PAGE = (
+    PAGE.replace("<!--THEME-->", THEME_SCRIPT)
+    .replace("/*LIGHT*/", LIGHT_CSS)
+    .replace("<!--TOGGLE-->", THEME_TOGGLE)
+)

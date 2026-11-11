@@ -17,7 +17,7 @@ REPORT_CSS = CHART_CSS + (
     "th{color:var(--dim);font-weight:600;font-size:10.5px;letter-spacing:.14em;"
     "text-transform:uppercase;position:sticky;top:0;background:var(--dk);"
     "border-bottom:1px solid var(--ac)}"
-    "tr:hover td{background:rgba(31,37,58,.55)}"
+    "tr:hover td{background:var(--hov)}"
     "td.n{text-align:right;font-variant-numeric:tabular-nums;width:56px;color:var(--ac)}"
     "td.bar{width:42%}.bar i{display:block;height:10px;min-width:3px;"
     "background:repeating-linear-gradient(90deg,var(--ac) 0 6px,transparent 6px 8px)}"
@@ -28,11 +28,11 @@ REPORT_CSS = CHART_CSS + (
     ".grid td{text-align:center;min-width:34px}"
     ".grid th:first-child,.grid td:first-child{text-align:left}"
     "small{color:var(--dim);font-weight:400}"
-    ".note{background:rgba(21,24,40,.85);border:1px solid var(--mut);"
+    ".note{background:var(--card);border:1px solid var(--mut);"
     "border-left:3px solid var(--ac);"
     "padding:10px 14px;color:var(--light);margin:8px 0;line-height:1.6}"
     ".good{color:var(--ac)}.warn{color:var(--amber)}"
-    "tr.clk{cursor:pointer}tr.clk:hover td{background:rgba(31,37,58,.8)}td a{color:var(--blue)}"
+    "tr.clk{cursor:pointer}tr.clk:hover td{background:var(--hov)}td a{color:var(--blue)}"
 )
 
 
@@ -82,7 +82,9 @@ def heat_grid(
         tds = ""
         for c in cols:
             n = cell.get((r, c), 0)
-            style = f" style='background:rgba(130,157,212,{0.08 + 0.7 * n / top:.2f})'" if n else ""
+            pct = 100 * (0.08 + 0.7 * n / top)
+            mix = f"color-mix(in srgb,var(--heat) {pct:.0f}%,transparent)"
+            style = f" style='background:{mix}'" if n else ""
             href = link(r, c) if link and n else None
             inner = f"<a href='{html.escape(href, quote=True)}'>{n}</a>" if href else f"{n or ''}"
             tds += f"<td{style}>{inner}</td>"
@@ -102,11 +104,12 @@ FUTURE_CSS = (
     "*{border-radius:0!important}"
     "body{background-image:linear-gradient(rgba(130,251,156,.035) 1px,transparent 1px),"
     "linear-gradient(90deg,rgba(130,251,156,.035) 1px,transparent 1px);background-size:28px 28px}"
-    "button{background:transparent;color:var(--ac,#82FB9C);border:1px solid rgba(130,251,156,.45);"
+    "button{background:transparent;color:var(--ac);"
+    "border:1px solid color-mix(in srgb,var(--ac) 45%,transparent);"
     "font-family:ui-monospace,'JetBrains Mono',monospace;font-weight:600;font-size:11px;"
     "letter-spacing:.1em;text-transform:uppercase;cursor:pointer}"
-    "button:hover{background:#82FB9C;color:#0B0C16}"
-    "button.on{background:#82FB9C;color:#0B0C16}"
+    "button:hover{background:var(--ac);color:var(--bg)}"
+    "button.on{background:var(--ac);color:var(--bg)}"
     "h1,h2,h3,th,header{font-family:ui-monospace,'JetBrains Mono',monospace}"
     "th{font-size:10.5px;letter-spacing:.14em;text-transform:uppercase}"
 )

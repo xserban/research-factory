@@ -12,10 +12,10 @@ import html
 from collections.abc import Sequence
 
 CHART_CSS = (
-    ".ch{width:100%;max-width:980px;height:auto;display:block;margin:6px 0 14px;background:rgba(8,9,16,.55);"
+    ".ch{width:100%;max-width:980px;height:auto;display:block;margin:6px 0 14px;background:var(--chart);"
     "border:1px solid var(--mut)}.ch text{fill:var(--dim);font:10px ui-monospace,monospace}"
     ".ch .v{fill:var(--light)}.ch .grid{stroke:var(--mut);stroke-width:1}"
-    ".ch .mk{fill:var(--ac)}.ch a:hover .mk,.ch a:focus .mk{fill:#fff}"
+    ".ch .mk{fill:var(--ac)}.ch a:hover .mk,.ch a:focus .mk{fill:var(--fg)}"
     ".ch .warn{stroke:var(--amber);stroke-dasharray:3 3;fill:none}.ch .lo{fill:var(--amber)}"
     ".c2{fill:var(--cyan)}.c3{fill:var(--blue)}.ch .bad{fill:var(--red)}.ch .lbl{fill:var(--fg)}.ch a:hover text{fill:var(--ac)}"
 )
