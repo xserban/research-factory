@@ -10,7 +10,9 @@ Invariants:
   (the first fetch stands, as in the feed projection). An entry with no readable blob has neither,
   and its card omits them.
 - Without a feed configuration the page says so and shows the command that configures one.
-- The action buttons are placeholders (`disabled`): the hub's write path wires them in step H2.
+- The action buttons start `disabled`. A small inline script enables them only when the page was
+  served by `factory site serve` (which injects `<meta name=factory-token>`); the built file holds no
+  token. Opened as a file, the buttons stay disabled and a hint names the command.
 - The page has no external resources; its styles are the site theme and this module's CSS.
 """
 
@@ -44,6 +46,7 @@ FEED_CSS = (
     "details p{color:var(--light);font-size:13px}"
     ".acts{margin-top:8px}.acts button{margin-right:6px;padding:3px 9px}"
     ".acts button:disabled{opacity:.45;cursor:not-allowed}"
+    ".hint{color:var(--amber);font-size:12px;margin:6px 0}.msg{color:var(--dim);font-size:12px}"
     ".status{background:rgba(21,24,40,.85);border:1px solid var(--mut);padding:10px 14px;margin:8px 0}"
     ".status span{display:inline-block;margin-right:18px;color:var(--light)}"
 )
@@ -55,6 +58,51 @@ ACTIONS: tuple[tuple[str, str], ...] = (
     ("dismiss", "Dismiss"),
     ("add", "Add to project"),
 )
+
+# Enables the buttons only when the server injected its token; sends one JSON POST per click and
+# shows the answer on the card. Text goes in through textContent, never as markup.
+FEED_SCRIPT = """
+(function(){
+var m=document.querySelector('meta[name=factory-token]');
+var feed=document.getElementById('feed');
+if(!m||!feed||location.protocol==='file:')return;
+var token=m.content,ranking=feed.dataset.rankingId;
+var hint=document.getElementById('feed-hint');if(hint)hint.remove();
+function show(card,text){
+  var el=card.querySelector('.msg');
+  if(!el){el=document.createElement('p');el.className='msg';card.appendChild(el);}
+  el.textContent=text;
+}
+function issues(r){return (r.issues||[]).map(function(i){return i.field+': '+i.reason;}).join('; ')||'refused';}
+feed.querySelectorAll('button[data-act]').forEach(function(b){
+  b.disabled=false;
+  b.addEventListener('click',function(){
+    var card=b.closest('.card'),act=b.dataset.act,add=act==='add';
+    var body={entry_id:card.dataset.entryId,ranking_id:ranking};
+    if(!add)body.reaction=act;
+    var btns=card.querySelectorAll('button');
+    btns.forEach(function(x){x.disabled=true;});
+    fetch(add?'/api/feed/add':'/api/feed/react',{method:'POST',
+      headers:{'Content-Type':'application/json','X-Factory-Token':token},body:JSON.stringify(body)})
+    .then(function(r){return r.json().catch(function(){return {ok:false,issues:[{field:'response',reason:'status '+r.status}]};});})
+    .then(function(r){
+      if(!r.ok){show(card,issues(r));return;}
+      if(add){
+        var d=card.firstElementChild;
+        if(!d.querySelector('.badge.added')){var s=document.createElement('span');s.className='badge added';s.textContent='added';d.appendChild(s);}
+        show(card,'added: '+r.outcome+(r.reason?' ('+r.reason+')':''));
+      }else{
+        var meta=Array.prototype.find.call(card.querySelectorAll('.meta'),function(p){return p.textContent.indexOf('reaction:')===0;});
+        if(meta)meta.textContent='reaction: '+r.reaction;
+        show(card,'saved: '+r.reaction);
+      }
+    })
+    .catch(function(e){show(card,'request failed: '+e);})
+    .then(function(){btns.forEach(function(x){x.disabled=false;});});
+  });
+});
+})();
+"""
 
 
 def build_feed(project: Project, out: Path) -> None:
@@ -84,7 +132,9 @@ def _body(project: Project) -> str:
     return (
         head
         + f"<p class=dim>Ranking <code>{escape(listing.ranking_id)}</code>, {len(listing.items)} items.</p>"
-        + cards
+        + "<p class=hint id=feed-hint>Actions are off: open this page with <code>factory site serve</code>.</p>"
+        + f"<div id=feed data-ranking-id='{escape(listing.ranking_id)}'>{cards}</div>"
+        + f"<script>{FEED_SCRIPT}</script>"
     )
 
 
