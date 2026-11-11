@@ -192,3 +192,28 @@ calling the same service functions as the MCP tools.
 | P3 | Record the final scheme and the researcher's 30 labels in the real pilot as human events (from `reference-layers-calibration-labels.tsv`, notes kept), once this branch is the code the servers load | researcher + me |
 | P4 | **Audit (required):** after the full title pass, a fresh sample of 30 items (not the calibration sample) labelled by the researcher without seeing the agent's layer; plus every item the agent placed in either core, and the 30 most-cited items it placed outside. Reported with kappa and the core recall | researcher + me |
 | P5 | Docs: the procedure in the methods report and `docs/MAP.md` regenerated after merge | rf-builder |
+
+## Parked: the pilot run (2026-11-11, researcher decision)
+
+Calibration on the scratch copy passed: Haiku (`claude-haiku-5-5`, skill `rf-reference-layers`) agreed
+with the researcher on 28 of 30 items, kappa 0.84 (floor 0.70); per layer: applied 1.00, background
+0.89, off-topic 0.83, adjacent 0.65. The two disagreements are search methods ("Illuminating search
+spaces by mapping elites": researcher background, Haiku off-topic; "Stream of search": researcher
+off-topic, Haiku adjacent). Nothing is recorded in the pilot yet.
+
+The pilot run waits because miner waves (`screeners/run_pass_m.sh`, `screeners/factory-mcp.json`) and
+older sessions load the plan-8 code; two codes with different projection versions on one index
+rebuild it against each other. Resume when no wave runs:
+
+1. Rebase `plan-reference-layers` onto the current `plan-8-suggest-select` (it moved on; its
+   PROJECTION_VERSION is 75): resolve `index/default.py` to the next free version, re-run mypy and
+   ruff.
+2. Point `.mcp.json` and `research-factory-pilot/screeners/factory-mcp.json` at the
+   `plan-reference-layers` worktree (or merge it into the plan-8 line); every open session reconnects
+   `factory`; verify with `/proc/<pid>/environ` that no `factory serve` loads other code.
+3. Record `research-factory-pilot/reference-layers-scheme-v1.json` (`factory references scheme
+   record`) and the 30 labels from `reference-layers-calibration-labels.tsv` (`factory references
+   layers label --item --layer --note`).
+4. Run the Haiku calibration pass in the pilot (skill `rf-reference-layers`, MCP tools), check kappa,
+   then the full title pass (about 3,750 items, batches of 100).
+5. Audit (P4), then the citations product with the earth-layers view.
