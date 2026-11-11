@@ -123,6 +123,7 @@ def test_mcp_config_carries_only_the_named_env_keys(project: Project) -> None:
         "FACTORY_RANKER_MODEL",
         "FACTORY_PLUGIN_DIR",
         "FACTORY_ROOT",
+        "FACTORY_UNIT_CAP",
     }
     assert server["env"]["FACTORY_ROOT"] == str(project.settings.root)
     assert "sk-secret" not in json.dumps(loaded)
