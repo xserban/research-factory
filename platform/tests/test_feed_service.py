@@ -326,6 +326,14 @@ def test_no_exploration_share_shows_only_the_top() -> None:
     assert len(few) == 5 and not any(p[3] for p in few)
 
 
+def test_an_order_no_longer_than_the_slots_is_shown_whole_without_exploration() -> None:
+    order = [(f"2611.{n:05d}", 1.0 - n / 1000) for n in range(1, 9)]
+    for count in (8, 9):
+        picks = select_shown(order, count, 0.3, seed=7)
+        assert [p[1] for p in picks] == [e for e, _ in order]
+        assert [p[0] for p in picks] == list(range(1, 9)) and not any(p[3] for p in picks)
+
+
 def test_same_inputs_give_the_same_order_and_payloads(
     project: Project,
     agent: Actor,
@@ -488,6 +496,58 @@ def test_a_human_cannot_run_the_feed(
     with pytest.raises(FactoryValidationError) as refused:
         feed_run(project, embedder, FakeFeedSource(size=5), today=TODAY, actor=human)
     assert refused.value.issues[0].field == "actor" and _count(project) == 0
+
+
+def test_reference_hash_and_count_cover_the_works_actually_embedded(
+    project: Project,
+    agent: Actor,
+    human: Actor,
+    mock_sources: SourcesFor,
+    embedder: FakeEmbedder,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from factory.index.ranking import corpus_hash
+
+    _world(project, agent, human, mock_sources, held_to=0)
+    configure(project, human, _config())
+    real = _reference_ids(project, current_config(project))  # type: ignore[arg-type]
+    monkeypatch.setattr(
+        "factory.services.feed._reference_ids", lambda _p, _c: [*real, "rf:missing-00000000"]
+    )
+    feed_run(project, embedder, FakeFeedSource(size=15), today=TODAY)
+    [ranked] = _of_type(project, "feed.ranked")
+    payload = FeedRanked.model_validate(ranked.payload)
+    assert payload.reference_count == len(real)
+    assert payload.reference_hash == corpus_hash(real)
+
+
+def test_send_refuses_an_entry_whose_paper_entered_the_corpus_after_the_fetch(
+    project: Project,
+    agent: Actor,
+    human: Actor,
+    mock_sources: SourcesFor,
+    embedder: FakeEmbedder,
+) -> None:
+    from factory.services.feed import send
+
+    _world(project, agent, human, mock_sources, held_to=0)
+    configure(project, human, _config(shown_per_cycle=20))
+    feed_run(project, embedder, FakeFeedSource(size=10), today=TODAY)
+    target = list_works(project)[0].id
+    link = VersionLinked(
+        work_id=target,
+        identifiers=Identifiers(arxiv="2611.00003"),
+        source="crossref",
+        run_id=project.ids.new("run"),
+    )
+    project.record([project.events.make("version.linked", link, project.system_actor())])
+    before = len(_of_type(project, "feed.sent"))
+    with pytest.raises(FactoryValidationError) as refused:
+        send(project, human, "2611.00003")
+    assert [(i.field, i.reason) for i in refused.value.issues] == [("entry_id", "held")]
+    assert len(_of_type(project, "feed.sent")) == before
+    send(project, human, "2611.00004")
+    assert len(_of_type(project, "feed.sent")) == before + 1
 
 
 # --- aliases ---

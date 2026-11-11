@@ -77,7 +77,7 @@ from factory.model.feed import (
 )
 from factory.model.screening import Channel
 from factory.model.search import QueryKind, QueryPurpose, QuerySpec, RunStatus
-from factory.model.work import Work
+from factory.model.work import Identifiers, Provenance, Work
 from factory.model.work_ids import normalize_arxiv
 from factory.services.context import Project, list_projects, open_project
 from factory.services.core_works import core_marks, forward_core_sources, seed_core_works
@@ -515,6 +515,8 @@ def select_shown(
     """`(rank, entry_id, score, explore)` of the shown items, by rank: the top
     `round(shown * (1 - share))` of `order`, then `shown - top` picks drawn by `Random(seed)` from
     the rest. With fewer items than slots, all are shown and none is an exploration pick."""
+    if len(order) <= shown_per_cycle:
+        return [(i + 1, entry, score, False) for i, (entry, score) in enumerate(order)]
     top_n = min(len(order), round(shown_per_cycle * (1 - share)))
     rest = list(range(top_n, len(order)))
     picks = min(len(rest), shown_per_cycle - top_n)
@@ -601,6 +603,7 @@ def feed_run(
         with project.writing():
             project.index.sync()
             again = _reference_ids(project, config)
+            embedded_ids = [w.id for w in references]
             if (
                 current_config(project) != config
                 or _known_entries(project) != known
@@ -639,7 +642,7 @@ def feed_run(
             ranking_id: str | None = None
             shown_count = explore_count = 0
             if order:
-                reference_hash = corpus_hash(reference_ids)
+                reference_hash = corpus_hash(embedded_ids)
                 seed = exploration_seed(reference_hash, order)
                 picks = select_shown(order, config.shown_per_cycle, config.exploration_share, seed)
                 ranking_id = project.ids.new("fdr")
@@ -647,7 +650,7 @@ def feed_run(
                     ranking_id=ranking_id,
                     fetch_ids=(fetch_id,),
                     reference_hash=reference_hash,
-                    reference_count=len(reference_ids),
+                    reference_count=len(embedded_ids),
                     model=recorded.model_id,
                     weights_hash=recorded.weights_hash,
                     software=recorded.software,
@@ -860,6 +863,33 @@ def react(
     return event.id
 
 
+def _in_corpus_now(project: Project, entry_id: str) -> bool:
+    """Whether the corpus holds the entry's paper now (a work, alias or title match), checked on a
+    minimal work rebuilt from the entry's arXiv id and stored title; the fetch-time
+    `held_work_id` cannot know of works added since."""
+    with project.index.connect() as conn:
+        row = conn.execute(
+            text("SELECT title FROM feed_entries WHERE entry_id = :e"), {"e": entry_id}
+        ).first()
+    if row is None:
+        return False
+    arxiv = f"https://arxiv.org/abs/{entry_id}"
+    probe = Work.build(
+        title=str(row[0]),
+        identifiers=Identifiers(arxiv=entry_id, url=arxiv),
+        provenance=[
+            Provenance(
+                source="arxiv",
+                run_id="run_" + "0" * 26,
+                query_id="qry_" + "0" * 26,
+                at=project.clock.now(),
+                raw_blob="sha256:" + "0" * 64,
+            )
+        ],
+    )
+    return bool(held_matches(project, [probe]))
+
+
 def send(
     project: Project,
     actor: Actor,
@@ -871,14 +901,15 @@ def send(
     """Send a shown entry to the inbox as its arXiv link and return the inbox item id. Human only.
     The inbox item (channel CLI) and `feed.sent` are written in one batch under one lock, so
     neither exists without the other. Refused with nothing written for an unknown or unshown
-    entry, a held one (`held`) and one already sent (`already-sent`)."""
+    entry, a held one (`held`: held at fetch, or the corpus holds the paper at send time) and one
+    already sent (`already-sent`)."""
     if actor.kind != "human":
         raise _refuse("actor", "human-only")
     with project.writing():
         project.index.sync()
         _refuse_actor(project, actor)
         ranking, _, _, held = _shown_in(project, entry_id, ranking_id)
-        if held is not None:
+        if held is not None or _in_corpus_now(project, entry_id):
             raise _refuse("entry_id", "held")
         with project.index.connect() as conn:
             sent = conn.execute(
