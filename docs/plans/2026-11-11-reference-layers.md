@@ -130,7 +130,7 @@ protocol, never included by their layer; unassessable entries are declared with 
 
 ## Open questions
 
-1. Whether two passes (A and B) are needed at the title stage, or one pass with the calibration and an
-   audit sample, as accepted for pass A elsewhere (researcher rulings of the pilot).
+1. ~~Two passes at the title stage?~~ Ruled 2026-11-11 by the researcher: one pass at the title stage,
+   with the calibration (L2) and an audit sample.
 2. Whether a cited item that matches a corpus work by title is excluded from the queue (already in the
    corpus) or kept and counted as an in-corpus citation (the citations product needs it).
