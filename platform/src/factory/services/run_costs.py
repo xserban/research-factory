@@ -27,11 +27,20 @@ Invariants:
   check, from `projects/<slug>/runs/<run_id>/log.jsonl`; when neither exists the log is empty
   (zeros, `complete` False, `log_source` `none`).
 - Per-unit figures are None unless units > 0 (and, for cost, a reported cost exists).
+
+The report (`cost_report`, task C2) groups the runs by stage and model; a miner run's stage is
+`mine:<id>`, so its group is per miner. `token_growth` gives, per turn index, the mean of
+`input + cache_read` tokens across a stage's runs: how much each turn re-reads the transcript.
+
+Cost caveat: `cost_usd` is the API-equivalent price of the tokens (`total_cost_usd`, as the CLI
+reports it). A subscription is not charged per token, so these figures compare stages and runs
+with one another; they are not a bill. Every report carries `cost_source` and this caveat.
 """
 
 from __future__ import annotations
 
 import json
+import statistics
 from collections.abc import Iterable
 from typing import Literal
 
@@ -49,6 +58,13 @@ from factory.services.runner import MINE_PREFIX
 
 COST_SOURCE = "reported-by-cli"
 """The `cost_source` of a figure taken from the CLI's result line (the API-equivalent price)."""
+
+CAVEAT = (
+    "Costs are the API-equivalent price of the tokens each run used, as the CLI reports them. "
+    "A subscription is not charged per token: read these figures to compare stages and runs, "
+    "not as a bill."
+)
+"""The caveat every cost report carries (see the module docstring)."""
 
 LogSource = Literal["blob", "file", "none"]
 UnitsSource = Literal["mcp-counter", "counts-before-after", "unavailable"]
@@ -106,6 +122,46 @@ class RunCost(StrictModel):
     complete: bool
     malformed_lines: int
     log_source: LogSource
+
+
+class CostGroup(StrictModel):
+    """The runs of one stage and model. `miner` is set for a `mine:<id>` stage. Units, cost and
+    tokens are sums over the group; the per-unit figures are None without units (or without a
+    reported cost). `tokens_per_unit` is keyed by token kind (`input`, `output`, `cache_read`,
+    `cache_write`) and sums only the runs with units."""
+
+    stage: str
+    miner: str | None
+    model: str
+    runs: int
+    complete_runs: int
+    units: int
+    reported_cost_usd: float | None
+    cost_per_unit_usd: float | None
+    median_turns: float | None
+    median_duration_ms: float | None
+    tokens_per_unit: dict[str, float | None]
+
+
+class CostReport(StrictModel):
+    """The cost report of a project: one row per stage and model, in stage then model order, and
+    the totals. `cost_source` and `caveat` travel with the figures (see the module docstring)."""
+
+    cost_source: str
+    caveat: str
+    runs: int
+    total_units: int
+    total_reported_cost_usd: float | None
+    groups: list[CostGroup]
+
+
+class TurnPoint(StrictModel):
+    """The mean `input + cache_read` tokens of one turn index (1-based) across `runs` runs that
+    have that turn. Each later turn re-reads the transcript, so this rises with the turn."""
+
+    turn: int
+    runs: int
+    mean_context_tokens: float
 
 
 def _count(value: JsonValue | None) -> int:
@@ -228,13 +284,13 @@ def _counter_served(project: Project, run_id: str) -> int | None:
     return served
 
 
-def _cost(
+def _cost_and_log(
     project: Project,
     run_id: str,
     started: RunnerStarted,
     started_at: str,
     finished: RunnerFinished | None,
-) -> RunCost:
+) -> tuple[RunCost, LogCost]:
     text, log_source = _log_text(project, run_id, finished)
     log = parse_log(text.splitlines())
     before = sum(started.counts_before.values())
@@ -249,7 +305,7 @@ def _cost(
     cost = log.reported_cost_usd
     tokens = log.input_tokens + log.output_tokens + log.cache_read_tokens + log.cache_write_tokens
     miner = started.stage[len(MINE_PREFIX) :] if started.stage.startswith(MINE_PREFIX) else None
-    return RunCost(
+    cost_row = RunCost(
         run_id=run_id,
         stage=started.stage,
         model=started.model,
@@ -273,6 +329,7 @@ def _cost(
         malformed_lines=log.malformed_lines,
         log_source=log_source,
     )
+    return cost_row, log
 
 
 def run_cost(project: Project, run_id: str) -> RunCost:
@@ -284,14 +341,93 @@ def run_cost(project: Project, run_id: str) -> RunCost:
             [ValidationIssue("run_id", f"no runner.started event for run {run_id}")]
         )
     event, payload = started[run_id]
-    return _cost(project, run_id, payload, event.ts.isoformat(), finished.get(run_id))
+    return _cost_and_log(project, run_id, payload, event.ts.isoformat(), finished.get(run_id))[0]
+
+
+def _runs_with_logs(project: Project) -> list[tuple[RunCost, LogCost]]:
+    """Every run's cost with its parsed log, in the order their `runner.started` events were
+    recorded."""
+    started, finished = _index_runs(project)
+    return [
+        _cost_and_log(project, run_id, payload, event.ts.isoformat(), finished.get(run_id))
+        for run_id, (event, payload) in started.items()
+    ]
 
 
 def all_run_costs(project: Project) -> list[RunCost]:
     """The costs of every run of the project, in the order their `runner.started` events were
     recorded."""
-    started, finished = _index_runs(project)
+    return [cost for cost, _ in _runs_with_logs(project)]
+
+
+def _median(values: list[float]) -> float | None:
+    return float(statistics.median(values)) if values else None
+
+
+def _group(stage: str, model: str, rows: list[RunCost]) -> CostGroup:
+    priced = [r for r in rows if r.cost_usd is not None]
+    cost_total = sum(r.cost_usd for r in priced if r.cost_usd is not None) if priced else None
+    priced_units = sum(r.units for r in priced)
+    counted = [r for r in rows if r.units > 0]
+    units = sum(r.units for r in counted)
+    kinds = {
+        "input": [r.input_tokens for r in counted],
+        "output": [r.output_tokens for r in counted],
+        "cache_read": [r.cache_read_tokens for r in counted],
+        "cache_write": [r.cache_write_tokens for r in counted],
+    }
+    per_unit: dict[str, float | None] = {
+        kind: sum(values) / units if units > 0 else None for kind, values in kinds.items()
+    }
+    complete = [r for r in rows if r.complete]
+    return CostGroup(
+        stage=stage,
+        miner=rows[0].miner,
+        model=model,
+        runs=len(rows),
+        complete_runs=len(complete),
+        units=sum(r.units for r in rows),
+        reported_cost_usd=cost_total,
+        cost_per_unit_usd=cost_total / priced_units
+        if cost_total is not None and priced_units
+        else None,
+        median_turns=_median([float(r.turns) for r in complete]),
+        median_duration_ms=_median(
+            [float(r.duration_ms) for r in complete if r.duration_ms is not None]
+        ),
+        tokens_per_unit=per_unit,
+    )
+
+
+def cost_report(project: Project, stage: str | None = None) -> CostReport:
+    """The cost report of the project: runs grouped by stage and model (`stage` narrows it to one
+    stage key). Read-only; computed from the events and the logs."""
+    rows = [cost for cost, _ in _runs_with_logs(project) if stage is None or cost.stage == stage]
+    buckets: dict[tuple[str, str], list[RunCost]] = {}
+    for row in rows:
+        buckets.setdefault((row.stage, row.model), []).append(row)
+    groups = [_group(s, m, members) for (s, m), members in sorted(buckets.items())]
+    priced = [r.cost_usd for r in rows if r.cost_usd is not None]
+    return CostReport(
+        cost_source=COST_SOURCE,
+        caveat=CAVEAT,
+        runs=len(rows),
+        total_units=sum(r.units for r in rows),
+        total_reported_cost_usd=sum(priced) if priced else None,
+        groups=groups,
+    )
+
+
+def token_growth(project: Project, stage: str) -> list[TurnPoint]:
+    """Per turn index (1-based), the mean `input + cache_read` tokens across the runs of `stage`
+    that have that turn. Empty when the stage has no logged turns."""
+    sums: dict[int, list[int]] = {}
+    for cost, log in _runs_with_logs(project):
+        if cost.stage != stage:
+            continue
+        for index, turn in enumerate(log.turns, start=1):
+            sums.setdefault(index, []).append(turn.input_tokens + turn.cache_read_tokens)
     return [
-        _cost(project, run_id, payload, event.ts.isoformat(), finished.get(run_id))
-        for run_id, (event, payload) in started.items()
+        TurnPoint(turn=index, runs=len(values), mean_context_tokens=sum(values) / len(values))
+        for index, values in sorted(sums.items())
     ]

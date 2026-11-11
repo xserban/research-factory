@@ -227,6 +227,12 @@ def _build_acquisition(project: Project, out: Path) -> None:
     build_acquisition(project, out)
 
 
+def _build_costs(project: Project, out: Path) -> None:
+    from factory.services.site_costs import build_costs
+
+    build_costs(project, out)
+
+
 def products() -> list[Product]:
     """The registered products, in hub order."""
     return [
@@ -332,6 +338,17 @@ def products() -> list[Product]:
             entry="index.html",
             inputs=("fulltext.%", "document.%", "protocol.%", "screening.%"),
             build=_build_acquisition,
+        ),
+        Product(
+            id="costs",
+            title="Run costs",
+            group="Overview",
+            description="What each headless run cost, per stage, model and miner: runs, units, "
+            "reported cost, cost per unit, median turns and duration, tokens per unit, and how "
+            "much each turn re-reads the transcript. The cost is the API-equivalent price.",
+            entry="index.html",
+            inputs=("runner.%",),
+            build=_build_costs,
         ),
         Product(
             id="prisma",
