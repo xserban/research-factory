@@ -1690,6 +1690,13 @@ def references_re_resolve_cmd(
             "Default: source-error.",
         ),
     ] = None,
+    only_identifiers: Annotated[
+        bool,
+        typer.Option(
+            "--only-identifiers",
+            help="Retry only entries with a DOI or arXiv id (identifier lookup, no title search).",
+        ),
+    ] = False,
 ) -> None:
     """Look up again links whose lookup failed or whose matcher changed; extraction ids stay."""
     state = _state(ctx)
@@ -1701,6 +1708,7 @@ def references_re_resolve_cmd(
             work_ids=work,
             states=states or ("source-error",),
             sources=dict(default_sources()),
+            only_identifiers=only_identifiers,
         )
     for line in render.re_resolve_summary_lines(summary):
         typer.echo(line)
