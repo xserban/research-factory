@@ -28,7 +28,7 @@ from pydantic import JsonValue
 from sqlalchemy import text
 
 from factory.errors import FactoryValidationError, ValidationIssue
-from factory.events.envelope import Actor
+from factory.events.envelope import Actor, Event
 from factory.inbox.links import (
     IdentifierKind,
     LinkIdentifier,
@@ -195,6 +195,35 @@ def _as_sent(item: LinkInput) -> dict[str, JsonValue]:
     return sent
 
 
+def link_event(
+    project: Project, actor: Actor, item: LinkInput, channel: Channel
+) -> tuple[Event | None, str | None, list[ValidationIssue]]:
+    """Build the `inbox.link_added` event of one link without recording it: `(event, item_id,
+    [])`, or `(None, None, issues)` when the item is invalid. Mints the item id and, for an agent,
+    puts the input blob; the caller holds the write lock and records the event."""
+    identifier, issues = _item_issues(actor, item)
+    if issues or identifier is None:
+        return None, None, issues
+    note = item.note.strip() if item.note is not None and item.note.strip() else None
+    item_id = project.ids.new("inb")
+    payload = InboxLinkAdded(
+        item_id=item_id,
+        route=InboxRoute.LINK,
+        link=stored_link(item.link),
+        identifier_kind=identifier.kind,
+        identifier_value=identifier.value,
+        identifier_version=identifier.version,
+        note=note,
+        basis=item.basis,
+        channel=channel,
+    )
+    input_blob = project.blobs.put_json(_as_sent(item)) if actor.kind == "agent" else None
+    event = project.events.make(
+        "inbox.link_added", payload, actor, refs=(item_id,), input_blob=input_blob
+    )
+    return event, item_id, []
+
+
 def add_links(
     project: Project, actor: Actor, items: Sequence[LinkInput], channel: Channel
 ) -> BatchResult[str]:
@@ -210,29 +239,11 @@ def add_links(
         project.index.sync()
         events = []
         for index, item in enumerate(items):
-            identifier, issues = _item_issues(actor, item)
-            if issues or identifier is None:
+            event, item_id, issues = link_event(project, actor, item, channel)
+            if event is None or item_id is None:
                 rejected.append(ItemError(index=index, issues=issues))
                 continue
-            note = item.note.strip() if item.note is not None and item.note.strip() else None
-            item_id = project.ids.new("inb")
-            payload = InboxLinkAdded(
-                item_id=item_id,
-                route=InboxRoute.LINK,
-                link=stored_link(item.link),
-                identifier_kind=identifier.kind,
-                identifier_value=identifier.value,
-                identifier_version=identifier.version,
-                note=note,
-                basis=item.basis,
-                channel=channel,
-            )
-            input_blob = project.blobs.put_json(_as_sent(item)) if actor.kind == "agent" else None
-            events.append(
-                project.events.make(
-                    "inbox.link_added", payload, actor, refs=(item_id,), input_blob=input_blob
-                )
-            )
+            events.append(event)
             written.append(item_id)
         if events:
             project.record(events)

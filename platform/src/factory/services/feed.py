@@ -23,6 +23,11 @@ Invariants:
   The shown list is the top `round(shown * (1 - exploration_share))` plus a seeded random draw
   from the rest. The seed is derived from the reference hash and the order, so equal inputs give
   equal payloads; it is recorded. Each shown item records its nearest reference work.
+- `react` and `send` are human acts (`actor`: `human-only`, nothing written). The entry must be
+  known (`entry_id`: `unknown`) and shown in the ranking given, by default the latest ranking that
+  showed it (`not-shown`). A reaction records the rank and score shown; several are allowed and
+  the latest counts. `send` refuses a held entry (`held`) and a second send (`already-sent`); it
+  writes the inbox `inbox.link_added` (channel CLI) and `feed.sent` in one batch under one lock.
 - Embedding happens outside `project.writing()`. Inside it the inputs (configuration, known
   entries, held matches, references) are read again; if any changed nothing is written and the
   caller is told to run again. `feed.fetched` and `feed.ranked` are written in one batch, as the
@@ -57,17 +62,23 @@ from factory.model.feed import (
     FEED_ENTRY_RE,
     FeedConfigured,
     FeedFetched,
+    FeedNote,
     FeedRanked,
     FeedRankParameters,
+    FeedReacted,
+    FeedReaction,
     FeedReferences,
+    FeedSent,
     FeedShown,
 )
+from factory.model.screening import Channel
 from factory.model.search import QueryKind, QueryPurpose, QuerySpec, RunStatus
 from factory.model.work import Work
 from factory.model.work_ids import normalize_arxiv
 from factory.services.context import Project, list_projects, open_project
 from factory.services.core_works import forward_core_sources
 from factory.services.dedup_incremental import held_matches
+from factory.services.inbox import LinkInput, _refuse_actor, link_event
 from factory.services.ranking import _dot, _unit, max_cosine_scores, order_by_score, ranking_text
 from factory.services.ranking_model import Embedder
 from factory.services.references import included_works
@@ -761,3 +772,94 @@ def feed_run_all(
     return FeedRunAll(
         exit_code=max((o.code for o in outcomes), default=0), outcomes=tuple(outcomes)
     )
+
+
+# --- reactions and send ---
+
+
+def _shown_in(
+    project: Project, entry_id: str, ranking_id: str | None
+) -> tuple[str, int, float, str | None]:
+    """`(ranking_id, rank, score, held_work_id)` of the entry in the ranking asked for, or the
+    latest ranking that showed it. Refuses an unknown entry and one not shown. The caller holds the
+    write lock and has synced."""
+    with project.index.connect() as conn:
+        entry = conn.execute(
+            text("SELECT held_work_id FROM feed_entries WHERE entry_id = :e"), {"e": entry_id}
+        ).first()
+        if entry is None:
+            raise _refuse("entry_id", "unknown")
+        rows = conn.execute(
+            text("SELECT ranking_id, shown FROM feed_rankings ORDER BY event_id DESC")
+        ).all()
+    for ranking, shown in rows:
+        if ranking_id is not None and str(ranking) != ranking_id:
+            continue
+        for item in json.loads(str(shown)):
+            if item["entry_id"] == entry_id:
+                held = None if entry[0] is None else str(entry[0])
+                return str(ranking), int(item["rank"]), float(item["score"]), held
+    raise _refuse("entry_id", "not-shown")
+
+
+def react(
+    project: Project,
+    actor: Actor,
+    entry_id: str,
+    reaction: FeedReaction,
+    *,
+    ranking_id: str | None = None,
+) -> str:
+    """Record a reaction (`feed.reacted`) to a shown entry and return its event id. Human only;
+    refused with nothing written for an unknown entry or one not shown in the ranking."""
+    if actor.kind != "human":
+        raise _refuse("actor", "human-only")
+    with project.writing():
+        project.index.sync()
+        ranking, rank, score, _ = _shown_in(project, entry_id, ranking_id)
+        payload = FeedReacted(
+            entry_id=entry_id,
+            reaction=FeedReaction(reaction),
+            ranking_id=ranking,
+            rank_shown=rank,
+            score_shown=score,
+        )
+        event = project.events.make("feed.reacted", payload, actor, refs=(entry_id,))
+        project.record([event])
+    return event.id
+
+
+def send(
+    project: Project,
+    actor: Actor,
+    entry_id: str,
+    *,
+    note: FeedNote | None = None,
+    ranking_id: str | None = None,
+) -> str:
+    """Send a shown entry to the inbox as its arXiv link and return the inbox item id. Human only.
+    The inbox item (channel CLI) and `feed.sent` are written in one batch under one lock, so
+    neither exists without the other. Refused with nothing written for an unknown or unshown
+    entry, a held one (`held`) and one already sent (`already-sent`)."""
+    if actor.kind != "human":
+        raise _refuse("actor", "human-only")
+    with project.writing():
+        project.index.sync()
+        _refuse_actor(project, actor)
+        ranking, _, _, held = _shown_in(project, entry_id, ranking_id)
+        if held is not None:
+            raise _refuse("entry_id", "held")
+        with project.index.connect() as conn:
+            sent = conn.execute(
+                text("SELECT 1 FROM feed_sends WHERE entry_id = :e"), {"e": entry_id}
+            ).first()
+        if sent is not None:
+            raise _refuse("entry_id", "already-sent")
+        link = LinkInput(f"https://arxiv.org/abs/{entry_id}", note=note)
+        added, item_id, issues = link_event(project, actor, link, Channel.CLI)
+        if added is None or item_id is None:
+            raise FactoryValidationError(issues)
+        payload = FeedSent(entry_id=entry_id, ranking_id=ranking, inbox_item_id=item_id, note=note)
+        event = project.events.make("feed.sent", payload, actor, refs=(entry_id, item_id))
+        project.record([added, event])
+    return item_id

@@ -12,8 +12,8 @@ Folded only if (a hand-written event failing a guard changes nothing on rebuild)
   is not valid, or already known, is skipped (the first fetch that saw it stands).
 - `feed.ranked`: the actor is the system.
 - `feed.reacted`: the actor is a human; the entry and the ranking are known.
-- `feed.sent`: the actor is a human; the inbox item exists in the inbox projection; the entry is
-  not already sent (the first send stands).
+- `feed.sent`: the actor is a human; the entry is known; the inbox item exists in the inbox
+  projection; the entry is not already sent (the first send stands).
 
 Handlers are total: an event that does not validate, or whose blob is unreadable, changes nothing.
 """
@@ -260,10 +260,13 @@ def feed_handlers(t: FeedTables, blobs: BlobStore | None) -> dict[str, Handler]:
         p = FeedSent.model_validate(event.payload)
         if event.actor.kind != "human":
             return
+        entry = conn.execute(
+            text("SELECT 1 FROM feed_entries WHERE entry_id = :e"), {"e": p.entry_id}
+        ).first()
         item = conn.execute(
             text("SELECT 1 FROM inbox_items WHERE item_id = :i"), {"i": p.inbox_item_id}
         ).first()
-        if item is None:
+        if entry is None or item is None:
             return
         conn.execute(
             sqlite_insert(t.sends)
