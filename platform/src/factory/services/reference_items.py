@@ -16,6 +16,7 @@ came from.
 from __future__ import annotations
 
 import hashlib
+import html
 import re
 import unicodedata
 from collections import Counter, defaultdict
@@ -26,8 +27,10 @@ from sqlalchemy import text
 
 from factory.services.context import Project
 
-ITEM_RULES_VERSION: Final = "2"
-"""2: titles borrowed for identifier-only entries."""
+ITEM_RULES_VERSION: Final = "3"
+"""2: titles borrowed for identifier-only entries. 3: display titles HTML-unescaped before flags
+and normalisation; flag `et-al`; `author-list` also matches four or more single-surname parts and
+"Name Name and Name Name"."""
 
 _MIN_WORDS: Final = 3
 _MIN_CHARS: Final = 12
@@ -35,6 +38,25 @@ _NOISE_START: Final = "[](){}.,;:-"
 _NAME_SPLIT: Final = re.compile(r"\s*(?:,|;|&|\band\b)\s*", re.IGNORECASE)
 _NAME_TOKEN: Final = re.compile(r"^(?:[A-Z]\.?|[A-Z][a-z]+(?:[-'][A-Z]?[a-z]+)*\.?)$")
 _INITIAL: Final = re.compile(r"^[A-Z]\.?$")
+_ET_AL: Final = re.compile(r"\bet\s+al\b", re.IGNORECASE)
+_SURNAME: Final = re.compile(r"^[A-Z][a-z]+(?:[-'][A-Z]?[a-z]+)*$")
+_TITLE_WORD_TEXT: Final = (
+    "a an the and of for in on to with by from at as into via using towards toward "
+    "learning machine deep data mining science sciences research scientific systems system "
+    "model models modeling modelling network networks neural language large artificial "
+    "intelligence agent agents automated automatic discovery knowledge reasoning "
+    "computing computational analysis design optimization optimisation generation "
+    "algorithms algorithm methods method theory theories experiments experimental "
+    "natural processing vision graph graphs quantum chemistry physics biology materials "
+    "software engineering information scientists scientist laboratory laboratories"
+)
+_TITLE_WORDS: Final = frozenset(_TITLE_WORD_TEXT.split())
+"""Common title words: a two-name pair containing one is not read as two authors."""
+
+
+def clean_title(title: str) -> str:
+    """The display title: HTML entities unescaped (`&amp;` to `&`)."""
+    return html.unescape(title)
 
 
 def normalise_title(title: str) -> str:
@@ -50,13 +72,29 @@ def item_key(normalised: str) -> str:
 
 
 def _looks_like_author_list(raw: str) -> bool:
-    """Conservative: the raw title splits on `,` `;` `&` or `and` into at least two parts,
-    every part is a personal name (2 to 4 capitalised tokens, initials allowed), and the list is
-    either three or more names or contains an initial ("M. Smith, J. Doe"; "Dylan M Anstine and
-    Olexandr Isayev"). Two plain full names ("Machine Learning, Deep Learning") are not flagged."""
+    """Conservative: the raw title splits on `,` `;` `&` or `and` into parts, every part is a
+    personal name, and one of these holds:
+    - two or more names, each of 2 to 4 capitalised tokens (initials allowed), three or more of
+      them or containing an initial ("M. Smith, J. Doe"; "Dylan M Anstine and Olexandr Isayev");
+    - four or more parts that are each one capitalised word ("Yang, Hu, Zhou, Liu, Shi, Li");
+    - exactly two names of two plain tokens joined by `and` or `&`, none a common title word
+      ("Yatao Li and Jianfeng Zhan").
+    Known limits: two plain full names ("Machine Learning, Deep Learning") are not flagged; a
+    title that is a bare list of four or more single capitalised words ("Python, Java, Rust, Go")
+    is; a pair of names made only of words outside the stop list ("Graph Theory and Quantum
+    Gravity" is protected, "Bayesian Inference and Gaussian Processes" is not)."""
     parts = [p for p in _NAME_SPLIT.split(raw.strip()) if p]
     if len(parts) < 2:
         return False
+    if len(parts) >= 4 and all(_SURNAME.match(p) for p in parts):
+        return True
+    if len(parts) == 2 and re.search(r"\s(?:and|&)\s", raw, re.IGNORECASE):
+        pair = [p.split() for p in parts]
+        if all(
+            len(t) == 2 and all(_SURNAME.match(w) and w.casefold() not in _TITLE_WORDS for w in t)
+            for t in pair
+        ):
+            return True
     has_initial = False
     for part in parts:
         tokens = part.split()
@@ -69,7 +107,7 @@ def _looks_like_author_list(raw: str) -> bool:
 
 
 def flags_for(title: str | None) -> tuple[str, ...]:
-    """Computed clean-up flags, sorted: author-list, leading-noise, no-title, too-short."""
+    """Computed clean-up flags, sorted: author-list, et-al, leading-noise, no-title, too-short."""
     if title is None or not title.strip():
         return ("no-title",)
     flags: set[str] = set()
@@ -81,6 +119,8 @@ def flags_for(title: str | None) -> tuple[str, ...]:
         flags.add("leading-noise")
     if _looks_like_author_list(raw):
         flags.add("author-list")
+    if _ET_AL.search(raw):
+        flags.add("et-al")
     return tuple(sorted(flags))
 
 
@@ -138,7 +178,10 @@ def _arxiv_base(arxiv: str) -> str:
 
 
 def _usable(title: object) -> str | None:
-    return title.strip() if isinstance(title, str) and not flags_for(title) else None
+    if not isinstance(title, str):
+        return None
+    cleaned = clean_title(title)
+    return cleaned.strip() if not flags_for(cleaned) else None
 
 
 def cited_items(project: Project) -> ItemsReport:
@@ -222,6 +265,8 @@ def cited_items(project: Project) -> ItemsReport:
     )
     norms: dict[str, str] = {}
     for eid, ordinal, wid, title, year, doi, arxiv in rows:
+        if isinstance(title, str):
+            title = clean_title(title)
         flags = flags_for(title)
         if flags:
             got = borrow(eid, ordinal, doi, arxiv) if (doi or arxiv) else None

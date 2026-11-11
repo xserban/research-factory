@@ -8,6 +8,9 @@ Invariants:
   naming an unrecorded version or a layer outside it is refused at the boundary.
 - Nothing is masked (decision 37.9): an item is withheld from assignment only when its title is
   the title of a corpus work (`in_corpus`, counted, never dropped from the counts).
+- A layer's flags (`snowball`, `abstract`) come from the recorded scheme; "precursor" is never a
+  judged layer but computed from an item's year and the scheme's `precursor_before_year`.
+  An unknown year is not a precursor.
 - Writes are all or nothing: a batch is validated in full before one event is appended.
 - Reads write no event; `next_items` stores the served batch as a blob that `record_assignments`
   cites as `input_blob`.
@@ -51,8 +54,6 @@ CALIBRATION_SIZE: Final = 30
 CALIBRATION_FLOOR: Final = KAPPA_FLOOR_MIN
 """Kappa floor for the calibration: the lowest floor a protocol may declare for title and abstract
 screening (`protocol_rules.KAPPA_FLOOR_MIN`)."""
-ABSTRACT_LAYERS: Final = ("in-scope", "adjacent")
-"""Title-stage layers whose items go on to the abstract stage."""
 DEFAULT_LIMIT: Final = 25
 MAX_LIMIT: Final = 100
 """Most items `next_items` serves in one call."""
@@ -71,6 +72,7 @@ class ServedItem:
     key: str
     title: str
     year: int | None
+    precursor: bool
     citing_count: int
     dois: tuple[str, ...]
     arxivs: tuple[str, ...]
@@ -145,6 +147,12 @@ class LayerStatus:
     left: dict[str, int]
     awaiting_resolution: int
     calibration: CalibrationState | AgentCalibration | None
+    precursors: dict[str, dict[str, int]] = field(default_factory=dict)
+    """Per stage, per layer: items that are precursors (year before the scheme's cutoff)."""
+    unknown_year: dict[str, dict[str, int]] = field(default_factory=dict)
+    """Per stage, per layer: items with no known year."""
+    snowball_candidates: int = 0
+    """Items whose latest layer has `snowball` and that are not precursors."""
 
 
 def _refuse(field_: str, message: str) -> FactoryValidationError:
@@ -157,7 +165,7 @@ def _refuse(field_: str, message: str) -> FactoryValidationError:
 def _scheme(project: Project, version: int | None = None) -> LayerSchemeRecorded | None:
     """The recorded scheme of `version`, or the highest version when `version` is None."""
     project.index.sync()
-    sql = "SELECT version, layers FROM reference_layer_schemes "
+    sql = "SELECT version, layers, precursor_before_year FROM reference_layer_schemes "
     params: dict[str, int] = {}
     if version is None:
         sql += "ORDER BY version DESC LIMIT 1"
@@ -169,7 +177,8 @@ def _scheme(project: Project, version: int | None = None) -> LayerSchemeRecorded
     if row is None:
         return None
     layers = tuple(LayerDef.model_validate(d) for d in json.loads(str(row[1])))
-    return LayerSchemeRecorded(version=int(row[0]), layers=layers)
+    cutoff = None if row[2] is None else int(row[2])
+    return LayerSchemeRecorded(version=int(row[0]), layers=layers, precursor_before_year=cutoff)
 
 
 def current_scheme(project: Project) -> LayerSchemeRecorded | None:
@@ -179,22 +188,37 @@ def current_scheme(project: Project) -> LayerSchemeRecorded | None:
 
 def record_scheme(project: Project, actor: Actor, scheme: LayerSchemeRecorded) -> SchemeResult:
     """Record the researcher's scheme. Refused for a non-human actor, and for a version already
-    recorded with different content, and for a scheme lacking an id in
-    `ABSTRACT_LAYERS`; the identical content again writes nothing."""
+    recorded with different content; the identical content again writes nothing."""
     if actor.kind != "human":
         raise _refuse("actor", "only the researcher records a layer scheme")
-    missing = [i for i in ABSTRACT_LAYERS if i not in {d.id for d in scheme.layers}]
-    if missing:
-        raise _refuse("layers", f"the scheme lacks the required layer ids: {', '.join(missing)}")
     with project.index.exclusive():
         existing = _scheme(project, scheme.version)
         if existing is not None:
-            if existing.layers == scheme.layers:
+            if (
+                existing.layers == scheme.layers
+                and existing.precursor_before_year == scheme.precursor_before_year
+            ):
                 return SchemeResult(scheme.version, False, None)
             raise _refuse("version", f"version {scheme.version} is recorded with different content")
         event = project.events.make("reference.layer_scheme_recorded", scheme, actor)
         project.record([event])
     return SchemeResult(scheme.version, True, event.id)
+
+
+def is_precursor(item: CitedItem, scheme: LayerSchemeRecorded) -> bool:
+    """True when the item's year is known and before the scheme's `precursor_before_year`.
+    False with no cutoff or an unknown year."""
+    cutoff = scheme.precursor_before_year
+    return cutoff is not None and item.year is not None and item.year < cutoff
+
+
+def _abstract_ids(scheme: LayerSchemeRecorded) -> frozenset[str]:
+    """Ids of the layers whose items go on to the abstract stage."""
+    return frozenset(d.id for d in scheme.layers if d.abstract)
+
+
+def _snowball_ids(scheme: LayerSchemeRecorded) -> frozenset[str]:
+    return frozenset(d.id for d in scheme.layers if d.snowball)
 
 
 # --- items and corpus ---------------------------------------------------------------------------
@@ -458,9 +482,18 @@ def _abstracts(project: Project, items: Sequence[CitedItem]) -> dict[str, str]:
     return out
 
 
-def _served(item: CitedItem, abstract: str | None = None) -> ServedItem:
+def _served(
+    item: CitedItem, scheme: LayerSchemeRecorded, abstract: str | None = None
+) -> ServedItem:
     return ServedItem(
-        item.key, item.title, item.year, item.citing_count, item.dois, item.arxivs, abstract
+        item.key,
+        item.title,
+        item.year,
+        is_precursor(item, scheme),
+        item.citing_count,
+        item.dois,
+        item.arxivs,
+        abstract,
     )
 
 
@@ -480,8 +513,9 @@ def _stage_queue(
         return [i for i in left if i.key in sample.keys], True
     title = _latest_layers(project, "title", v)
     done = set(_latest_layers(project, "abstract", v))
+    shortlisted = _abstract_ids(scheme)
     return [
-        i for i in pool.candidates if title.get(i.key) in ABSTRACT_LAYERS and i.key not in done
+        i for i in pool.candidates if title.get(i.key) in shortlisted and i.key not in done
     ], False
 
 
@@ -490,8 +524,8 @@ def next_items(project: Project, *, stage: LayerStage, limit: int = DEFAULT_LIMI
 
     Title stage: until the calibration passes, only calibration-sample items without an agent
     assignment; afterwards every assessable, not-in-corpus item without one, by citing count then
-    key. Abstract stage: items whose latest title layer is `in-scope` or `adjacent` and that have
-    no abstract-stage layer, served with an abstract when a resolved entry's work has one; the
+    key. Abstract stage: items whose latest title layer has `abstract=True` in the scheme and that
+    have no abstract-stage layer, served with an abstract when a resolved entry's work has one; the
     others are counted in `awaiting_resolution`. The served batch is stored as a blob (its ref is
     `input_blob`); nothing is stored when nothing is served. Refused with no scheme recorded."""
     if limit < 1:
@@ -514,9 +548,9 @@ def _next_items(project: Project, stage: LayerStage, limit: int) -> NextBatch:
     if stage == "abstract":
         abstracts = _abstracts(project, queue)
         batch.awaiting_resolution = sum(1 for i in queue if i.key not in abstracts)
-        served = [_served(i, abstracts[i.key]) for i in queue if i.key in abstracts][:limit]
+        served = [_served(i, scheme, abstracts[i.key]) for i in queue if i.key in abstracts][:limit]
     else:
-        served = [_served(i) for i in queue[:limit]]
+        served = [_served(i, scheme) for i in queue[:limit]]
     batch.items = served
     if served:
         batch.input_blob = project.blobs.put_json(
@@ -582,6 +616,7 @@ def record_assignments(
         known = {i.key for i in pool.report.items}
         in_corpus = set(pool.in_corpus)
         layers = {d.id for d in scheme.layers} if scheme else set()
+        shortlisted = _abstract_ids(scheme) if scheme else frozenset[str]()
         allowed: set[str] | None = None
         calibrating = False
         if scheme is not None:
@@ -600,7 +635,7 @@ def record_assignments(
                 issues.append(ValidationIssue(where, f"item {key} is in the corpus"))
             elif stage == "abstract" and key not in titled:
                 issues.append(ValidationIssue(where, f"item {key} has no title-stage layer"))
-            elif stage == "abstract" and titled[key] not in ABSTRACT_LAYERS:
+            elif stage == "abstract" and titled[key] not in shortlisted:
                 issues.append(
                     ValidationIssue(
                         where, f"item {key} has title-stage layer {titled[key]}, not shortlisted"
@@ -638,9 +673,36 @@ def record_assignments(
 # --- status -------------------------------------------------------------------------------------
 
 
+def _snowball_items(project: Project, pool: _Pool, scheme: LayerSchemeRecorded) -> list[CitedItem]:
+    """Candidates whose latest layer (abstract stage if present, else title) has `snowball` and
+    that are not precursors. The caller holds `project.index.exclusive()`."""
+    v = scheme.version
+    title = _latest_layers(project, "title", v)
+    abstract = _latest_layers(project, "abstract", v)
+    wanted = _snowball_ids(scheme)
+    out: list[CitedItem] = []
+    for item in pool.candidates:
+        layer = abstract.get(item.key) or title.get(item.key)
+        if layer in wanted and not is_precursor(item, scheme):
+            out.append(item)
+    return out
+
+
+def snowball_candidates(project: Project) -> list[CitedItem]:
+    """Cited items to snowball from: latest layer (abstract stage if present, else title) has
+    `snowball=True` in the current scheme and the item is not a precursor (an unknown year is not
+    a precursor). In queue order. Empty with no scheme."""
+    with project.index.exclusive():
+        scheme = current_scheme(project)
+        if scheme is None:
+            return []
+        return _snowball_items(project, _pool(project), scheme)
+
+
 def status(project: Project, *, agent: bool = False) -> LayerStatus:
     """Counts only: items by assessability, layers per stage, items left per stage, abstracts
-    awaiting resolution, the calibration state, the entry total and the rules version. One
+    awaiting resolution, per layer the precursors and unknown-year items, the snowball-candidate
+    count, the calibration state, the entry total and the rules version. One
     consistent read. With `agent`, the calibration is the redacted `AgentCalibration` (no
     agreement, kappa or labelled-item information)."""
     with project.index.exclusive():
@@ -676,6 +738,21 @@ def _status(project: Project, agent: bool) -> LayerStatus:
     result.left["title"] = sum(1 for i in pool.candidates if i.key not in title)
     queue, _ = _stage_queue(project, pool, scheme, "abstract")
     result.left["abstract"] = len(queue)
+    by_key = {i.key: i for i in pool.report.items}
+    for stage in ("title", "abstract"):
+        precursors: Counter[str] = Counter()
+        unknown: Counter[str] = Counter()
+        for key, layer in _latest_layers(project, stage, v).items():
+            item = by_key.get(key)
+            if item is None:
+                continue
+            if item.year is None:
+                unknown[layer] += 1
+            elif is_precursor(item, scheme):
+                precursors[layer] += 1
+        result.precursors[stage] = dict(sorted(precursors.items()))
+        result.unknown_year[stage] = dict(sorted(unknown.items()))
+    result.snowball_candidates = len(_snowball_items(project, pool, scheme))
     abstracts = _abstracts(project, queue)
     result.awaiting_resolution = sum(1 for i in queue if i.key not in abstracts)
     return result

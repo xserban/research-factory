@@ -1747,7 +1747,8 @@ def _current_scheme_or_refuse(project: Project) -> LayerSchemeRecorded:
 
 @layers_app.command("sample")
 def references_layers_sample_cmd(ctx: typer.Context) -> None:
-    """The calibration sample: key, citing count, title and whether you have labelled it."""
+    """The calibration sample: key, citing count, year (`?` if unknown), `P` for a precursor,
+    whether you have labelled it, and the title."""
     state = _state(ctx)
     with _reporting_errors():
         project = _resolve_project(state)
@@ -1757,7 +1758,9 @@ def references_layers_sample_cmd(ctx: typer.Context) -> None:
     typer.echo(f"scheme version {scheme.version}; {len(sample)} item(s)")
     for item in sample:
         mark = "labelled" if item.key in labelled else "-"
-        typer.echo(f"{item.key}\t{item.citing_count}\t{mark}\t{item.title}")
+        year = "?" if item.year is None else str(item.year)
+        pre = "P" if layers_service.is_precursor(item, scheme) else "-"
+        typer.echo(f"{item.key}\t{item.citing_count}\t{year}\t{pre}\t{mark}\t{item.title}")
 
 
 @layers_app.command("label")
@@ -1793,13 +1796,18 @@ def references_layers_label_cmd(
             for i in layers_service.calibration_sample(project, scheme.version)
             if i.key not in labelled
         ]
-        ids = [d.id for d in scheme.layers]
+        ordered = sorted(scheme.layers, key=lambda d: d.ring)
+        ids = [d.id for d in ordered]
         typer.echo(f"{len(todo)} item(s) to label under scheme version {scheme.version}")
         for n, entry in enumerate(todo, start=1):
             year = "n.d." if entry.year is None else str(entry.year)
-            typer.echo(f"\n[{n}/{len(todo)}] {entry.title} ({year}), cited {entry.citing_count}x")
-            for number, d in enumerate(scheme.layers, start=1):
-                typer.echo(f"  {number}. {d.id}: {d.name}")
+            precursor = ", precursor" if layers_service.is_precursor(entry, scheme) else ""
+            typer.echo(
+                f"\n[{n}/{len(todo)}] {entry.title} ({year}{precursor}), "
+                f"cited {entry.citing_count}x"
+            )
+            for number, d in enumerate(ordered, start=1):
+                typer.echo(f"  {number}. [ring {d.ring}] {d.id}: {d.name}")
             chosen = _ask_layer(ids)
             if chosen == "q":
                 break
