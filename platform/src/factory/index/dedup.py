@@ -9,14 +9,15 @@ import json
 from dataclasses import dataclass
 from itertools import combinations
 
-from sqlalchemy import Boolean, Column, Integer, MetaData, String, Table, select, update
+from pydantic import ValidationError
+from sqlalchemy import Boolean, Column, Float, Integer, MetaData, String, Table, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Connection
 
 from factory.canonical import canonical_json
 from factory.events.envelope import Event
 from factory.index.projection import Handler
-from factory.model.dedup import DedupMerged, DedupReverted, MergeStatus
+from factory.model.dedup import DedupMerged, DedupReverted, MergeStatus, PairDecided
 
 
 @dataclass(frozen=True)
@@ -24,6 +25,7 @@ class DedupTables:
     merges: Table
     blocked: Table
     members: Table
+    pair_decisions: Table
 
 
 def dedup_tables(metadata: MetaData) -> DedupTables:
@@ -53,11 +55,52 @@ def dedup_tables(metadata: MetaData) -> DedupTables:
         Column("work_id", String, primary_key=True),
         Column("merge_id", String, primary_key=True),
     )
-    return DedupTables(merges, blocked, members)
+    # The researcher's latest ruling per candidate version pair (`work_a < work_b`).
+    pair_decisions = Table(
+        "dedup_pair_decisions",
+        metadata,
+        Column("work_a", String, primary_key=True),
+        Column("work_b", String, primary_key=True),
+        Column("decision", String, nullable=False),
+        Column("rationale", String, nullable=False),
+        Column("basis", String, nullable=False),
+        Column("score", Float),
+        Column("event_id", String, nullable=False),
+    )
+    return DedupTables(merges, blocked, members, pair_decisions)
 
 
 def dedup_handlers(t: DedupTables) -> dict[str, Handler]:
-    return {"dedup.merged": _merged(t), "dedup.reverted": _reverted(t)}
+    return {
+        "dedup.merged": _merged(t),
+        "dedup.reverted": _reverted(t),
+        "dedup.pair_decided": _pair_decided(t),
+    }
+
+
+def _pair_decided(t: DedupTables) -> Handler:
+    def pair_decided(conn: Connection, event: Event) -> None:
+        # The platform writes this as the researcher; any other actor is inert.
+        if event.actor.kind != "human":
+            return
+        try:
+            p = PairDecided.model_validate(event.payload)
+        except ValidationError:
+            return
+        values = {
+            "decision": p.decision.value,
+            "rationale": p.rationale,
+            "basis": p.basis,
+            "score": p.score,
+            "event_id": event.id,
+        }
+        conn.execute(
+            sqlite_insert(t.pair_decisions)
+            .values(work_a=p.work_a, work_b=p.work_b, **values)
+            .on_conflict_do_update(index_elements=["work_a", "work_b"], set_=values)
+        )
+
+    return pair_decided
 
 
 def _merged(t: DedupTables) -> Handler:

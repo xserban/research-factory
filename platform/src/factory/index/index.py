@@ -41,6 +41,7 @@ NON_STATE_TABLES: frozenset[str] = frozenset(
 OMITTED_WHEN_EMPTY: frozenset[str] = frozenset(
     {
         "ledger_confirmations",
+        "dedup_pair_decisions",
         "budgets",
         "task_usage",
         "appraisal_answers",

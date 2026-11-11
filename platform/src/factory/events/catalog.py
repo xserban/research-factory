@@ -25,7 +25,7 @@ from factory.model.conclusions import ConclusionRegistered, ConclusionRetired
 from factory.model.core_works import WorkMarkedCore, WorkUnmarkedCore
 from factory.model.curation import CurationDecided, CurationProposed
 from factory.model.decisions import DecisionSelected, DecisionSuggested
-from factory.model.dedup import DedupMerged, DedupReverted
+from factory.model.dedup import DedupMerged, DedupReverted, PairDecided
 from factory.model.develop import DocumentRendered
 from factory.model.digest import DigestGenerated
 from factory.model.directions import DirectionClosed
@@ -262,6 +262,7 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("search.run_finished", SearchRunFinished, 1))
     catalog.register(EventType("dedup.merged", DedupMerged, 1))
     catalog.register(EventType("dedup.reverted", DedupReverted, 1))
+    catalog.register(EventType("dedup.pair_decided", PairDecided, 1))
     catalog.register(EventType("question.goal_stated", GoalStated, 1))
     catalog.register(EventType("question.recorded", QuestionRecorded, 1))
     catalog.register(EventType("seed.added", SeedAdded, 1))

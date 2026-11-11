@@ -23,6 +23,30 @@ class MergeStatus(StrEnum):
     REVERTED = "reverted"
 
 
+class PairDecision(StrEnum):
+    SAME = "same"
+    DIFFERENT = "different"
+
+
+class PairDecided(StrictModel):
+    """The researcher's ruling on a candidate version pair (`work_a < work_b`)."""
+
+    work_a: str = Field(pattern=WORK_ID_RE)
+    work_b: str = Field(pattern=WORK_ID_RE)
+    decision: PairDecision
+    rationale: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=2000)
+    ]
+    basis: str = Field(min_length=1)
+    score: float | None = None
+
+    @model_validator(mode="after")
+    def _pair_is_ordered(self) -> Self:
+        if not self.work_a < self.work_b:
+            raise ValueError("work_a must sort before work_b")
+        return self
+
+
 class DedupMerged(StrictModel):
     """Works that the cascade judged to be one paper: `primary` absorbs the rest."""
 
