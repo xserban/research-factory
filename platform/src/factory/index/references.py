@@ -29,9 +29,10 @@ the extraction whose contexts are recorded. `snowball_rounds`, `snowball_queries
 Reference layers (cited items grouped by normalised title): `reference_layer_schemes` keeps the
 researcher's scheme per version (`layers` is canonical JSON), first write wins; only a human
 actor's `reference.layer_scheme_recorded` is folded. `reference_layers` keeps an agent's layer per
-(item_key, stage, actor), last write wins; only an agent actor's `reference.layer_assigned` is
-folded. `reference_layer_labels` keeps the researcher's own label per item, last write wins; only
-a human actor's `reference.layer_labelled` is folded. An event that fails the actor guard or its
+(item_key, stage, actor, scheme_version), last write wins; only an agent actor's
+`reference.layer_assigned` is folded. `reference_layer_labels` keeps the researcher's own label per
+(item_key, scheme_version), last write wins; only a human actor's
+`reference.layer_labelled` is folded. An event that fails the actor guard or its
 payload validation changes nothing. Neither the scheme version nor the layer is checked against a
 recorded scheme here: the service refuses unknown ones at the boundary, and an event naming one
 is stored.
@@ -224,7 +225,7 @@ def reference_tables(metadata: MetaData) -> ReferenceTables:
         Column("item_key", String, primary_key=True),
         Column("stage", String, primary_key=True),
         Column("actor", String, primary_key=True),
-        Column("scheme_version", Integer, nullable=False),
+        Column("scheme_version", Integer, primary_key=True),
         Column("layer", String, nullable=False),
         Column("event_id", String, nullable=False),
         Index("ix_reference_layers_item_key", "item_key"),
@@ -233,7 +234,7 @@ def reference_tables(metadata: MetaData) -> ReferenceTables:
         "reference_layer_labels",
         metadata,
         Column("item_key", String, primary_key=True),
-        Column("scheme_version", Integer, nullable=False),
+        Column("scheme_version", Integer, primary_key=True),
         Column("layer", String, nullable=False),
         Column("actor", String, nullable=False),
         Column("event_id", String, nullable=False),
@@ -651,7 +652,9 @@ def _layer_assigned(t: ReferenceTables) -> Handler:
         conn.execute(
             sqlite_insert(t.layers)
             .values(**values)
-            .on_conflict_do_update(index_elements=["item_key", "stage", "actor"], set_=values)
+            .on_conflict_do_update(
+                index_elements=["item_key", "stage", "actor", "scheme_version"], set_=values
+            )
         )
 
     return layer_assigned
@@ -675,7 +678,7 @@ def _layer_labelled(t: ReferenceTables) -> Handler:
         conn.execute(
             sqlite_insert(t.layer_labels)
             .values(**values)
-            .on_conflict_do_update(index_elements=["item_key"], set_=values)
+            .on_conflict_do_update(index_elements=["item_key", "scheme_version"], set_=values)
         )
 
     return layer_labelled

@@ -132,6 +132,11 @@ def _most_common(titles: list[str]) -> str:
     return min(counts, key=lambda t: (-counts[t], len(t), t))
 
 
+def _arxiv_base(arxiv: str) -> str:
+    """The arXiv id without a trailing version suffix (`v2`)."""
+    return re.sub(r"v\d+$", "", str(arxiv).strip())
+
+
 def _usable(title: object) -> str | None:
     return title.strip() if isinstance(title, str) and not flags_for(title) else None
 
@@ -172,7 +177,10 @@ def cited_items(project: Project) -> ItemsReport:
         if usable is None:
             continue
         work_title[str(wid)] = usable
-        for ident in (f"doi:{wdoi}" if wdoi else None, f"arxiv:{warxiv}" if warxiv else None):
+        for ident in (
+            f"doi:{wdoi}" if wdoi else None,
+            f"arxiv:{_arxiv_base(warxiv)}" if warxiv else None,
+        ):
             if ident:
                 by_id.setdefault(ident, usable)
     seen: dict[str, list[str]] = defaultdict(list)
@@ -183,7 +191,7 @@ def cited_items(project: Project) -> ItemsReport:
         if doi:
             seen[f"doi:{str(doi).lower()}"].append(usable)
         if arxiv:
-            seen[f"arxiv:{arxiv}"].append(usable)
+            seen[f"arxiv:{_arxiv_base(arxiv)}"].append(usable)
     by_entry = {ident: _most_common(titles) for ident, titles in seen.items()}
 
     def borrow(
@@ -194,7 +202,10 @@ def cited_items(project: Project) -> ItemsReport:
             return work_title[wid], "resolved-link"
         idents = [
             i
-            for i in (f"doi:{doi.lower()}" if doi else None, f"arxiv:{arxiv}" if arxiv else None)
+            for i in (
+                f"doi:{doi.lower()}" if doi else None,
+                f"arxiv:{_arxiv_base(arxiv)}" if arxiv else None,
+            )
             if i
         ]
         for ident in idents:

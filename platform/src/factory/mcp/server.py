@@ -2397,14 +2397,17 @@ def build_server(
     @server.tool()
     def reference_layer_status(project: str) -> dict[str, JsonValue]:
         """Counts of the reference layers: items by assessability, layers per stage, items left,
-        abstracts awaiting resolution, and the calibration state (labelled, assigned, agreement,
-        kappa against the floor). Read-only. Refused to a session that has joined a pass."""
+        abstracts awaiting resolution, and the calibration counts (sample size, labelled, assigned,
+        dropped) with whether it has passed; agreement and kappa are the researcher's.
+        Read-only. Refused to a session that has joined a pass."""
 
         def status() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
             _refuse_pass_session(opened)
             return _withheld(
-                opened, _plain(asdict(layers_service.status(opened))), include_work_ids=False
+                opened,
+                _plain(asdict(layers_service.status(opened, agent=True))),
+                include_work_ids=False,
             )
 
         return _reply(project, status, include_work_ids=False)

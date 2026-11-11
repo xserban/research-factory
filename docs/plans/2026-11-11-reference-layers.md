@@ -1,6 +1,6 @@
 # Plan: reference layers — group, clean and triage the corpus's references by relevance
 
-Date: 2026-11-11 · Status: proposed; awaiting the researcher's validation · Branch: `plan-reference-layers` (from `plan-8-suggest-select` at a67690b, the site hub) · Origin: pilot `agentic-science`, IDEA-57 discussion · Precedes: the citations product (IDEA-57, a later plan)
+Date: 2026-11-11 · Status: T1–T5 built and reviewed (one Sonnet review, findings fixed; mypy and ruff only, testing paused; tests to write listed in the commit messages); L1 scheme v1 drafted at `research-factory-pilot/reference-layers-scheme-v1.json`; next: the researcher records it and labels the calibration sample · Branch: `plan-reference-layers` (from `plan-8-suggest-select` at a67690b, the site hub) · Origin: pilot `agentic-science`, IDEA-57 discussion · Precedes: the citations product (IDEA-57, a later plan)
 
 ## Problem
 
