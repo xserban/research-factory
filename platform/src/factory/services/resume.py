@@ -454,7 +454,8 @@ class ResumePlan(StrictModel):
     failed_to_start: list[str] = Field(default_factory=list)
     """Runs whose launcher failed before a process existed: reported, never resumed."""
     waiting: list[str] = Field(default_factory=list)
-    """Limit-stopped runs not resumed yet: `run <id> (<stage>): usage limit: waiting until <time>[ (estimated)]`."""
+    """Limit-stopped runs not resumed yet, one line each:
+    `run <id> (<stage>): usage limit: waiting until <time>[ (estimated)]`."""
     blocked: str | None = None
     """`live run <id>` / `live pipeline <id>` when one is live: nothing is done then."""
 
