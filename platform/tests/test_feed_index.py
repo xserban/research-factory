@@ -42,7 +42,7 @@ def _config() -> dict[str, Any]:
     return {"config_id": CONFIG, "categories": ["cs.AI"]}
 
 
-def _fetch(project: Project) -> Event:
+def _fetch(project: Project, actor: Actor | None = None) -> Event:
     entries = [
         {"id": ENTRY, "version": "v1", "title": "A paper"},
         {"id": OTHER, "version": "v2", "title": "Another paper", "held_work_id": None},
@@ -58,10 +58,10 @@ def _fetch(project: Project) -> Event:
         "held_count": 0,
         "complete": True,
     }
-    return _record(project, "feed.fetched", payload, project.system_actor())
+    return _record(project, "feed.fetched", payload, actor or project.system_actor())
 
 
-def _ranked(project: Project) -> Event:
+def _ranked(project: Project, actor: Actor | None = None) -> Event:
     payload = {
         "ranking_id": RANKING,
         "fetch_ids": [FETCH],
@@ -75,7 +75,7 @@ def _ranked(project: Project) -> Event:
         "order_blob": project.blobs.put_json([]),
         "shown": [{"entry_id": ENTRY, "rank": 1, "score": 0.5, "explore": False}],
     }
-    return _record(project, "feed.ranked", payload, project.system_actor())
+    return _record(project, "feed.ranked", payload, actor or project.system_actor())
 
 
 def _reaction(entry: str = ENTRY, ranking: str = RANKING) -> dict[str, Any]:
@@ -129,6 +129,23 @@ def test_agent_written_events_fold_to_nothing(project: Project, agent: Actor) ->
     assert _rows(project, "SELECT config_id FROM feed_configs") == [(CONFIG,)]
     assert _count(project, "feed_reactions") == 0
     assert _count(project, "feed_sends") == 0
+
+
+def test_human_written_fetched_and_ranked_events_fold_to_nothing(project: Project) -> None:
+    human = project.human_actor()
+    _fetch(project, human)
+    _ranked(project, human)
+    assert _count(project, "feed_fetches") == 0
+    assert _count(project, "feed_entries") == 0
+    assert _count(project, "feed_rankings") == 0
+
+
+def test_agent_written_fetched_and_ranked_events_fold(project: Project, agent: Actor) -> None:
+    _fetch(project, agent)
+    _ranked(project, agent)
+    assert _count(project, "feed_fetches") == 1
+    assert _count(project, "feed_entries") == 2
+    assert _count(project, "feed_rankings") == 1
 
 
 def test_send_of_unknown_inbox_item_folds_to_nothing(project: Project) -> None:
