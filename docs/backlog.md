@@ -394,6 +394,8 @@ Status: built, reviewed (fixes in), untested (2026-11-11; branch `plan-restart-c
 **Open questions:** whether batch size is a protocol field or fixed; serving criteria once per session instead of per batch (a factory change); whether in-process subagents using the CLI can hold distinct session identities; per-run cost as a recorded figure (token counts are not events today).
 
 ### IDEA-59 — Restartable steps: persistent drivers and a resume command
+> Numbering note: this entry is IDEA-44 in the main checkout's `docs/backlog.md`; on this branch IDEA-44 is "Progress for long operations". The next merge must reconcile the two backlog files by hand.
+
 Status: built, reviewed (fixes in), untested (2026-11-11; branch `plan-restart-costs`: run drivers persisted in `projects/<slug>/runs/<id>/` since decision 118; `interrupted()` finder, `factory resume [--dry-run]`, resume button and Interrupted panel in the hub, `factory runs adopt` for pilot-style drivers). Numbered IDEA-44 in the main checkout until 2026-11-11 · Added: 2026-11-08 · Slice: — · Depends on: project status, task leases, pilot log
 **What:** every long-running step (screening waves, searches, ranking, conversion) keeps its driver script, prompts and MCP configuration in a persistent project folder, never in a session scratchpad or `/tmp`. A `factory resume <project>` command reads the derived stage, releases expired leases, and prints (or runs) the recorded runbook command for the step in flight.
 **Why:** on 2026-11-08 a power loss left the events and leases intact but destroyed the screening driver, prompt and live-log scripts, which lived in `/tmp`; they were rebuilt from a session transcript. The platform restarts cleanly, the orchestration around it does not.

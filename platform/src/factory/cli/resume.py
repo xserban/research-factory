@@ -37,6 +37,8 @@ def _print_plan(plan: resume_service.ResumePlan) -> None:
         typer.echo(f"  blocked: {plan.blocked}")
     for run_id in plan.failed_to_start:
         typer.echo(f"  run {run_id} never started (launcher failed): not resumed")
+    for line in plan.waiting:
+        typer.echo(f"  waiting (not resumed): {line}")
     if plan.reconcile:
         typer.echo(f"  reconciled (process gone): {', '.join(plan.reconcile)}")
     for lease in plan.leases:

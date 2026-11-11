@@ -17,7 +17,7 @@ from factory.clock import FixedClock
 from factory.errors import FactoryValidationError
 from factory.events.envelope import Actor, Event
 from factory.events.reader import read_all
-from factory.model.runner import PipelineFinished, PipelineStarted, RunnerStarted
+from factory.model.runner import PipelineFinished, PipelineStarted, RunnerFinished, RunnerStarted
 from factory.services import pipeline, resume, runner
 from factory.services.context import Project
 from factory.services.pipeline import PipelineStage
@@ -393,3 +393,56 @@ def test_the_steps_run_once_when_the_reconcile_already_ran_them(
     advanced.clear()
     resume.resume(project, launcher=FakeLauncher())  # nothing to reconcile now
     assert advanced == [1]
+
+
+def _limit_run(project: Project, log: str) -> str:
+    run_id = _started(project)
+    payload = RunnerFinished(
+        run_id=run_id,
+        exit_status=0,
+        outcome="complete",
+        log_blob=project.blobs.put(log.encode()),
+        counts_after={"screen_a": 2},
+    )
+    project.record([project.events.make("runner.finished", payload, project.system_actor())])
+    return run_id
+
+
+def _limit_log(reset: str) -> str:
+    message = f"You've hit your 5-hour limit \\u00b7 resets {reset}"
+    return f'{{"type":"result","is_error":true,"result":"{message}"}}\n'
+
+
+def test_resume_waits_for_the_limit_reset_and_a_dry_run_says_so(
+    project: Project, clock: FixedClock
+) -> None:
+    run_id = _limit_run(project, _limit_log("11pm (UTC)"))
+    launcher = FakeLauncher()
+    plan = resume.resume(project, dry_run=True)
+    assert isinstance(plan, resume.ResumePlan)
+    assert plan.run is None and len(plan.waiting) == 1 and run_id in plan.waiting[0]
+    result = resume.resume(project, launcher=launcher)
+    assert isinstance(result, resume.ResumeResult)
+    assert result.run_id is None and launcher.calls == []
+    assert any(r.startswith("waiting: ") and run_id in r for r in result.refused)
+
+
+def test_resume_starts_a_limit_stopped_run_after_the_reset(
+    project: Project, clock: FixedClock
+) -> None:
+    run_id = _limit_run(project, _limit_log("11pm (UTC)"))
+    clock.advance(timedelta(days=1))
+    launcher = FakeLauncher()
+    result = resume.resume(project, launcher=launcher)
+    assert isinstance(result, resume.ResumeResult)
+    assert result.refused == [] and result.run_id is not None
+    assert runner.wait(result.run_id, 10)
+    assert _row(project, "runner_runs", "run_id", result.run_id)["resumes"] == run_id
+
+
+def test_an_unparsed_reset_text_holds_the_resume_with_the_raw_text(project: Project) -> None:
+    _limit_run(project, _limit_log("when the moon is full"))
+    result = resume.resume(project, launcher=FakeLauncher())
+    assert isinstance(result, resume.ResumeResult)
+    assert result.run_id is None
+    assert any("when the moon is full" in r for r in result.refused)

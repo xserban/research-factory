@@ -289,3 +289,82 @@ def test_a_launcher_failure_is_failed_to_start_and_not_offered_for_resume(
     assert plan.failed_to_start == [never]
     assert plan.run is not None and plan.run.resumes == killed
     assert never not in plan.queued
+
+
+_LIMIT_LOG = (
+    '{"type":"assistant","message":{"id":"m1","content":[{"type":"text","text":'
+    '"You\'ve hit your 5-hour limit \\u00b7 resets 3pm (Europe/Bucharest)"}]}}\n'
+    '{"type":"result","is_error":true,"result":'
+    '"You\'ve hit your 5-hour limit \\u00b7 resets 3pm (Europe/Bucharest)"}\n'
+)
+
+
+def _finished_with_log(project: Project, run_id: str, log: str, after: int = 2) -> None:
+    payload = RunnerFinished(
+        run_id=run_id,
+        exit_status=0,
+        outcome="complete",
+        log_blob=project.blobs.put(log.encode()),
+        counts_after={"screen_a": after},
+    )
+    project.record([project.events.make("runner.finished", payload, project.system_actor())])
+
+
+def test_a_limit_stopped_run_exiting_zero_is_reported_and_hides_nothing(project: Project) -> None:
+    lost = _started(project)
+    _finished(project, lost, "lost", None)
+    limited = _started(project)
+    _finished_with_log(project, limited, _LIMIT_LOG)
+    before = _event_count(project)
+    runs = {r.run_id: r for r in interrupted(project).runs}
+    assert set(runs) == {lost, limited}  # the older interrupted run is not hidden
+    assert runs[limited].kind == "limit" and runs[lost].kind == "lost"
+    assert runs[limited].limit_reason == "log"
+    assert runs[limited].limit_reset_text == "3pm (Europe/Bucharest)"
+    assert runs[limited].limit_reset_at is not None
+    assert _event_count(project) == before
+
+
+def test_a_normal_complete_run_still_supersedes_older_interrupted_runs(project: Project) -> None:
+    lost = _started(project)
+    _finished(project, lost, "lost", None)
+    ok = _started(project)
+    _finished_with_log(project, ok, '{"type":"result","is_error":false,"result":"done"}\n')
+    assert interrupted(project).runs == []
+
+
+def test_a_normal_complete_run_after_a_limit_stop_supersedes_it(project: Project) -> None:
+    limited = _started(project)
+    _finished_with_log(project, limited, _LIMIT_LOG)
+    ok = _started(project)
+    _finished_with_log(project, ok, '{"type":"result","is_error":false,"result":"done"}\n', after=0)
+    assert interrupted(project).runs == []
+
+
+def test_an_errored_result_that_closed_no_unit_is_a_limit_stop_without_a_reset(
+    project: Project,
+) -> None:
+    run = _started(project)
+    _finished_with_log(project, run, '{"type":"result","is_error":true,"result":"x"}\n')
+    [found] = interrupted(project).runs
+    assert (found.kind, found.limit_reason, found.limit_reset_at) == ("limit", "no-units", None)
+
+
+def test_a_limit_log_that_closed_units_is_still_a_limit_stop(project: Project) -> None:
+    run = _started(project)
+    _finished_with_log(project, run, _LIMIT_LOG, after=1)  # one unit done before the limit
+    [found] = interrupted(project).runs
+    assert found.kind == "limit"
+
+
+def test_parse_reset_reads_clock_times_dates_and_zones() -> None:
+    from datetime import UTC, datetime
+
+    from factory.services.usage_limit import parse_reset
+
+    after = datetime(2026, 11, 11, 10, 0, tzinfo=UTC)  # 12:00 in Bucharest (UTC+2)
+    assert parse_reset("3pm (Europe/Bucharest)", after) == datetime(2026, 11, 11, 13, 0, tzinfo=UTC)
+    assert parse_reset("11am (Europe/Bucharest)", after) == datetime(2026, 11, 12, 9, 0, tzinfo=UTC)
+    assert parse_reset("Nov 12, 3:30pm (UTC)", after) == datetime(2026, 11, 12, 15, 30, tzinfo=UTC)
+    assert parse_reset("soon", after) is None
+    assert parse_reset("3pm (No/Such_Zone)", after) is None

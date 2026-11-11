@@ -14,6 +14,11 @@ Invariants:
   (`failed`, with no exit status or a kill-signal status, or named by the reason of a pipeline
   that stopped on a timeout). A run is left out when a later run of the same stage was `complete`
   (the work was resumed). `stage_pending` says whether its stage still has pending units.
+- A run the CLI's usage limit stopped (`usage_limit`: it exits 0, so it is recorded `complete`) is
+  reported with kind `limit`, with `limit_reset_text` / `limit_reset_at` from its log. It does not
+  supersede older interrupted runs of its stage. `resume` does not start a run for a stage whose
+  limit-stopped run has a reset in the future, or a reset text that could not be parsed; it lists
+  the run in `ResumePlan.waiting` (a dry run too) and in `refused`.
 - A pipeline is interrupted when it is `orphaned` (open, and no process holds the pipeline lock),
   `lost`, or stopped `failed` / `timeout`. It is left out when a later pipeline was `complete` or
   `idle`. `stages_left` are its planned stages from the one it stopped at (or, with none recorded,
@@ -69,7 +74,7 @@ from factory.model.extraction import scope_from_value
 from factory.model.protocol import ScreeningStage
 from factory.model.screening import PassLabel
 from factory.model.task import TASK_LEASE, TaskStatus
-from factory.services import pipeline, runner
+from factory.services import pipeline, runner, usage_limit
 from factory.services.context import Project
 from factory.services.extraction import abandoned_task_ids
 from factory.services.stages import kinds_for, task_kind
@@ -89,10 +94,16 @@ class InterruptedRun(StrictModel):
     model: str
     prompt_blob: str
     started_at: str
-    kind: Literal["open-gone", "lost", "timeout", "failed-to-start"]
+    kind: Literal["open-gone", "lost", "timeout", "failed-to-start", "limit"]
     stage_pending: bool
     """Whether the run's stage still has pending units (`runner.pending_units`)."""
     adopted: bool = False
+    limit_reason: Literal["log", "no-units"] | None = None
+    """For kind `limit`: how the stop was detected (`usage_limit.LimitStop.reason`)."""
+    limit_reset_text: str | None = None
+    """For kind `limit`: the raw text after `resets` in the log, when there is one."""
+    limit_reset_at: str | None = None
+    """For kind `limit`: the reset time as a stored timestamp, None when unknown."""
 
 
 class InterruptedPipeline(StrictModel):
@@ -225,11 +236,19 @@ def _runs(
         was_superseded = view.run_id in superseded
         if fact is not None and fact.resumes is not None:
             superseded.add(fact.resumes)
+        kind: Literal["open-gone", "lost", "timeout", "failed-to-start", "limit"] | None = None
+        stop: usage_limit.LimitStop | None = None
         if view.status == "complete":
-            resumed.add(view.stage)
-            continue
-        kind: Literal["open-gone", "lost", "timeout", "failed-to-start"] | None = None
-        if view.status == "lost?":
+            if view.stage in resumed:
+                continue
+            stop = usage_limit.limit_stop(
+                project, view.run_id, stage_pending=stage_pending(view.stage)
+            )
+            if stop is None:
+                resumed.add(view.stage)
+                continue
+            kind = "limit"
+        elif view.status == "lost?":
             kind = "open-gone"
         elif view.status == "lost":
             kind = "lost"
@@ -257,6 +276,9 @@ def _runs(
                 kind=kind,
                 stage_pending=stage_pending(view.stage),
                 adopted=False if fact is None else fact.adopted,
+                limit_reason=None if stop is None else stop.reason,
+                limit_reset_text=None if stop is None else stop.reset_text,
+                limit_reset_at=None if stop is None else stop.reset_at,
             )
         )
     return found
@@ -426,6 +448,8 @@ class ResumePlan(StrictModel):
     automatic: AutomaticLeft
     failed_to_start: list[str] = Field(default_factory=list)
     """Runs whose launcher failed before a process existed: reported, never resumed."""
+    waiting: list[str] = Field(default_factory=list)
+    """Limit-stopped runs not resumed yet: `run <id> (<stage>): usage limit resets <time>`."""
     blocked: str | None = None
     """`live run <id>` / `live pipeline <id>` when one is live: nothing is done then."""
 
@@ -435,6 +459,7 @@ class ResumePlan(StrictModel):
         return not (
             self.blocked
             or self.failed_to_start
+            or self.waiting
             or self.reconcile
             or self.leases
             or self.pipeline
@@ -470,16 +495,38 @@ def _live(project: Project) -> str | None:
     return None
 
 
+def _waiting(found: Interrupted, now: datetime) -> dict[str, str]:
+    """Stage -> `run <id> (<stage>): <why>` for the stages whose limit-stopped run still holds."""
+    held: dict[str, str] = {}
+    for run in found.runs:  # newest first
+        if run.kind != "limit" or run.stage in held or not run.stage_pending:
+            continue
+        stop = usage_limit.LimitStop(
+            reason=run.limit_reason or "log",
+            reset_text=run.limit_reset_text,
+            reset_at=run.limit_reset_at,
+        )
+        why = usage_limit.hold_until(stop, now)
+        if why is not None:
+            held[run.stage] = f"run {run.run_id} ({run.stage}): {why}"
+    return held
+
+
 def _plan(
-    project: Project, found: Interrupted, reconcile: list[str], blocked: str | None = None
+    project: Project,
+    found: Interrupted,
+    reconcile: list[str],
+    blocked: str | None = None,
+    now: datetime | None = None,
 ) -> ResumePlan:
+    held = _waiting(found, project.clock.now() if now is None else now)
     pipeline_plan: PipelineResume | None = None
     covered: set[str] = set()
     if found.pipelines:
         newest = found.pipelines[0]
         applicable = [s.key for s in pipeline.stages(project) if s.applies]
         left = [k for k in newest.stages_left if k in applicable]
-        if left:
+        if left and not held.keys() & set(applicable[applicable.index(left[0]) :]):
             first = applicable.index(left[0])
             pipeline_plan = PipelineResume(
                 resumes=newest.pipeline_id,
@@ -495,6 +542,9 @@ def _plan(
         if run.kind == "failed-to-start":
             continue
         if run.stage in seen or not run.stage_pending or run.stage in covered:
+            continue
+        if run.stage in held:
+            seen.add(run.stage)
             continue
         seen.add(run.stage)
         candidates.append(run)
@@ -515,6 +565,7 @@ def _plan(
         stale_passes=found.passes,
         automatic=found.automatic,
         failed_to_start=failed_to_start,
+        waiting=list(held.values()),
         blocked=blocked,
     )
 
@@ -576,6 +627,7 @@ def resume(
                     refused.append(f"timeout: run {run_id} passed its {limit:.0f} s limit")
     except FactoryValidationError as exc:
         refused = [f"{i.field}: {i.reason}" for i in exc.issues]
+    refused.extend(f"waiting: {line}" for line in plan.waiting)
     return ResumeResult(
         plan=plan, reconciled=reconciled, pipeline_id=pipeline_id, run_id=run_id, refused=refused
     )

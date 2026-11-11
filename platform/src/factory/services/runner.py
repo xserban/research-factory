@@ -810,7 +810,11 @@ def start_run(
         if earlier.stage != stage:
             raise _refuse("resumes", f"{resumes} ran stage {earlier.stage!r}, not {stage!r}")
         if earlier.outcome == "complete":
-            raise _refuse("resumes", f"{resumes} completed; there is nothing to resume")
+            from factory.services.usage_limit import limit_stop
+
+            # a run the usage limit stopped exits 0 and is recorded complete, but is resumable
+            if limit_stop(project, resumes, stage_pending=True) is None:
+                raise _refuse("resumes", f"{resumes} completed; there is nothing to resume")
     if unit_cap is None:
         unit_cap = DEFAULT_UNIT_CAP if earlier is None else earlier.unit_cap
     if earlier is not None and prompt_override is None:

@@ -50,7 +50,7 @@ import statistics
 from collections.abc import Iterable
 from typing import Literal
 
-from pydantic import JsonValue
+from pydantic import Field, JsonValue
 from sqlalchemy import text
 
 from factory.errors import FactoryValidationError, ValidationIssue
@@ -69,6 +69,9 @@ CAVEAT = (
     "not as a bill."
 )
 """The caveat every cost report carries (see the module docstring)."""
+
+TEXT_LIMIT = 400
+"""Longest message text `parse_log` keeps in `LogCost.texts`: a usage-limit notice is one line."""
 
 LogSource = Literal["blob", "file", "none"]
 UnitsSource = Literal["mcp-counter", "counts-before-after", "unavailable"]
@@ -98,6 +101,11 @@ class LogCost(StrictModel):
     cache_write_tokens: int
     turns: list[TurnUsage]
     malformed_lines: int
+    is_error: bool = False
+    """The result line's `is_error` flag (False when absent or no result line)."""
+    texts: list[str] = Field(default_factory=list)
+    """Short texts of the log (the result line's `result` and the assistant text blocks, each at
+    most `TEXT_LIMIT` characters), kept for `usage_limit` so the log is parsed once."""
 
 
 class RunCost(StrictModel):
@@ -193,6 +201,20 @@ def _turn(usage: dict[str, JsonValue]) -> TurnUsage:
     )
 
 
+def _keep_text(value: JsonValue | None, texts: list[str]) -> None:
+    if isinstance(value, str) and 0 < len(value) <= TEXT_LIMIT:
+        texts.append(value)
+
+
+def _keep_texts(content: JsonValue | None, texts: list[str]) -> None:
+    if isinstance(content, str):
+        _keep_text(content, texts)
+    elif isinstance(content, list):
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                _keep_text(block.get("text"), texts)
+
+
 def parse_log(lines: Iterable[str]) -> LogCost:
     """Read a stream-json log. Assistant lines give the per-turn usage in order; the last `result`
     line gives the reported cost, turn count and durations. `complete` is True when a result line
@@ -201,6 +223,7 @@ def parse_log(lines: Iterable[str]) -> LogCost:
     malformed = 0
     result: dict[str, JsonValue] | None = None
     last_id: str | None = None
+    texts: list[str] = []
     for raw in lines:
         line = raw.strip()
         if not line:
@@ -218,6 +241,7 @@ def parse_log(lines: Iterable[str]) -> LogCost:
             message = obj.get("message")
             if not isinstance(message, dict):
                 continue
+            _keep_texts(message.get("content"), texts)
             usage = message.get("usage")
             if not isinstance(usage, dict):
                 continue
@@ -229,6 +253,7 @@ def parse_log(lines: Iterable[str]) -> LogCost:
             turns.append(_turn(usage))
         elif kind == "result":
             result = obj
+            _keep_text(obj.get("result"), texts)
     return LogCost(
         complete=result is not None,
         reported_cost_usd=None if result is None else _optional_float(result.get("total_cost_usd")),
@@ -241,6 +266,8 @@ def parse_log(lines: Iterable[str]) -> LogCost:
         cache_write_tokens=sum(t.cache_write_tokens for t in turns),
         turns=turns,
         malformed_lines=malformed,
+        is_error=result is not None and result.get("is_error") is True,
+        texts=texts,
     )
 
 

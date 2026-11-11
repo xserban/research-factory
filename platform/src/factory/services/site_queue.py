@@ -25,7 +25,7 @@ from pathlib import Path
 
 from factory.services.context import Project
 from factory.services.pipeline import CellState, PipelineStage, paper_progress, stages
-from factory.services.resume import Interrupted, interrupted
+from factory.services.resume import Interrupted, InterruptedRun, interrupted
 from factory.services.work_queue import STAGES, QueueItem, WorkQueue, queue
 
 QUEUE_CSS = (
@@ -84,6 +84,7 @@ function textOf(el,lines){
 function summary(d){
   var lines=[];
   (d.runs||[]).forEach(function(r){lines.push('run '+r.run_id+' ('+r.stage+'): '+r.kind
+    +(r.kind==='limit'?(r.limit_reset_at||r.limit_reset_text?' (usage limit; resets '+(r.limit_reset_at||r.limit_reset_text)+')':' (usage limit; reset unknown)'):'')
     +(r.stage_pending?'':', no pending units'));});
   (d.pipelines||[]).forEach(function(p){lines.push('pipeline '+p.pipeline_id+': '+p.kind
     +'; stages left: '+((p.stages_left||[]).join(', ')||'none'));});
@@ -106,6 +107,7 @@ function planLines(p){
   if(p.pipeline)lines.push('pipeline '+p.pipeline.resumes+' resumed from stage '+p.pipeline.from_stage
     +' ('+p.pipeline.stages.join(', ')+')');
   if(p.run)lines.push('run '+p.run.resumes+' resumed: stage '+p.run.stage+' with model '+p.run.model);
+  (p.waiting||[]).forEach(function(w){lines.push('waiting (not resumed): '+w);});
   if(p.queued&&p.queued.length)lines.push('queued (resumed by a later call): '+p.queued.join(', '));
   (p.stale_passes||[]).forEach(function(s){
     var where=s.module==='screening'?s.stage:s.scope;
@@ -209,12 +211,20 @@ def _body(work: WorkQueue, plan: list[PipelineStage], project: Project) -> str:
     )
 
 
+def _limit_note(run: InterruptedRun) -> str:
+    """For a limit-stopped run: the usage-limit stop and its reset, when the log gives one."""
+    if run.kind != "limit":
+        return ""
+    when = run.limit_reset_at or run.limit_reset_text
+    return f" (usage limit; resets {when})" if when else " (usage limit; reset unknown)"
+
+
 def summary_lines(found: Interrupted) -> list[str]:
     """The panel's lines for `found` (the script builds the same lines from the JSON)."""
     lines: list[str] = []
     for run in found.runs:
         pending = "" if run.stage_pending else ", no pending units"
-        lines.append(f"run {run.run_id} ({run.stage}): {run.kind}{pending}")
+        lines.append(f"run {run.run_id} ({run.stage}): {run.kind}{_limit_note(run)}{pending}")
     for pipe in found.pipelines:
         left = ", ".join(pipe.stages_left) or "none"
         lines.append(f"pipeline {pipe.pipeline_id}: {pipe.kind}; stages left: {left}")
