@@ -50,7 +50,7 @@ from pydantic import JsonValue
 from sqlalchemy import text
 
 import factory
-from factory.errors import FactoryError, FactoryValidationError, ValidationIssue
+from factory.errors import FactoryValidationError, ValidationIssue
 from factory.model.base import StrictModel
 from factory.model.protocol import ScreeningStage
 from factory.model.runner import RunnerFinished, RunnerOutcome, RunnerStage, RunnerStarted

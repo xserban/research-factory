@@ -105,8 +105,8 @@ def queue_process_cmd(
             typer.echo(f"{view.run_id}: {view.status}")
         return
     typer.echo(
-        "the process runs in the background; use --wait (or the hub) so its end is recorded "
-        "here, otherwise it is closed as lost on the next `queue runs`"
+        "the process runs in the background; its end is recorded by the hub or by the next "
+        "`queue runs`, from the exit status it leaves"
     )
 
 
