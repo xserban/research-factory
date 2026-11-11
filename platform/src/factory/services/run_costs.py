@@ -27,9 +27,15 @@ Invariants:
   check, from `projects/<slug>/runs/<run_id>/log.jsonl`; when neither exists the log is empty
   (zeros, `complete` False, `log_source` `none`).
 - Per-unit figures are None unless units > 0 (and, for cost, a reported cost exists).
+- The runs are read from the `runner_runs` projection, which folds the first `runner.started` and
+  the first `runner.finished` of each run id (a later duplicate is ignored) and skips a malformed
+  event; this module therefore never validates an event payload itself.
 
 The report (`cost_report`, task C2) groups the runs by stage and model; a miner run's stage is
-`mine:<id>`, so its group is per miner. `token_growth` gives, per turn index, the mean of
+`mine:<id>`, so its group is per miner. A group's `reported_cost_usd` is the total cost of its
+priced runs; its `cost_per_unit_usd` is the cost of the priced runs that served units divided by
+those units (a priced run with no units adds to the total, not to the per-unit figure).
+`token_growth` gives, per turn index, the mean of
 `input + cache_read` tokens across a stage's runs: how much each turn re-reads the transcript.
 
 Cost caveat: `cost_usd` is the API-equivalent price of the tokens (`total_cost_usd`, as the CLI
@@ -45,14 +51,12 @@ from collections.abc import Iterable
 from typing import Literal
 
 from pydantic import JsonValue
+from sqlalchemy import text
 
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.blobs import BlobIntegrityError, BlobNotFoundError
-from factory.events.envelope import Event
-from factory.events.reader import read_all
 from factory.mcp.unit_cap import UNITS_FILE
 from factory.model.base import StrictModel
-from factory.model.runner import RunnerFinished, RunnerStarted
 from factory.services.context import Project
 from factory.services.runner import MINE_PREFIX
 
@@ -126,9 +130,11 @@ class RunCost(StrictModel):
 
 class CostGroup(StrictModel):
     """The runs of one stage and model. `miner` is set for a `mine:<id>` stage. Units, cost and
-    tokens are sums over the group; the per-unit figures are None without units (or without a
-    reported cost). `tokens_per_unit` is keyed by token kind (`input`, `output`, `cache_read`,
-    `cache_write`) and sums only the runs with units."""
+    tokens are sums over the group; `cost_per_unit_usd` is the cost of the priced runs with units
+    over those units (`reported_cost_usd` stays the total of all priced runs); the per-unit
+    figures are None without units (or without a reported cost). `tokens_per_unit` is keyed by
+    token kind (`input`, `output`,
+    `cache_read`, `cache_write`) and sums only the runs with units."""
 
     stage: str
     miner: str | None
@@ -238,28 +244,52 @@ def parse_log(lines: Iterable[str]) -> LogCost:
     )
 
 
-def _index_runs(
-    project: Project,
-) -> tuple[dict[str, tuple[Event, RunnerStarted]], dict[str, RunnerFinished]]:
-    """The started events (with their event, in log order) and the finished payloads by run id."""
-    started: dict[str, tuple[Event, RunnerStarted]] = {}
-    finished: dict[str, RunnerFinished] = {}
-    for event in read_all(project.paths.events_dir, project.catalog):
-        if event.type == "runner.started":
-            payload = RunnerStarted.model_validate(event.payload)
-            started[payload.run_id] = (event, payload)
-        elif event.type == "runner.finished":
-            done = RunnerFinished.model_validate(event.payload)
-            finished[done.run_id] = done
-    return started, finished
+class _Row(StrictModel):
+    """One run as folded into `runner_runs`."""
+
+    run_id: str
+    stage: str
+    model: str
+    started_at: str
+    counts_before: dict[str, int]
+    outcome: str | None
+    exit_status: int | None
+    log_blob: str | None
+    counts_after: dict[str, int] | None
 
 
-def _log_text(
-    project: Project, run_id: str, finished: RunnerFinished | None
-) -> tuple[str, LogSource]:
-    if finished is not None:
+def _index_runs(project: Project) -> list[_Row]:
+    """The runs of the project in the order their `runner.started` events were recorded, from the
+    index (first start and first finish of each run id win, as in the fold)."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT r.run_id, r.stage, r.model, ev.ts, r.counts_before, r.outcome, "
+                "r.exit_status, r.log_blob, r.counts_after FROM runner_runs r "
+                "JOIN events ev ON ev.id = r.started_event_id ORDER BY r.started_event_id"
+            )
+        ).all()
+    return [
+        _Row(
+            run_id=str(r[0]),
+            stage=str(r[1]),
+            model=str(r[2]),
+            started_at=str(r[3]),
+            counts_before=json.loads(str(r[4])),
+            outcome=None if r[5] is None else str(r[5]),
+            exit_status=None if r[6] is None else int(r[6]),
+            log_blob=None if r[7] is None else str(r[7]),
+            counts_after=None if r[8] is None else json.loads(str(r[8])),
+        )
+        for r in rows
+    ]
+
+
+def _log_text(project: Project, run_id: str, log_blob: str | None) -> tuple[str, LogSource]:
+    if log_blob is not None:
         try:
-            return project.blobs.get(finished.log_blob).decode("utf-8", "replace"), "blob"
+            return project.blobs.get(log_blob).decode("utf-8", "replace"), "blob"
         except (BlobNotFoundError, BlobIntegrityError):
             pass
     path = project.paths.dir / "runs" / run_id / "log.jsonl"
@@ -284,35 +314,30 @@ def _counter_served(project: Project, run_id: str) -> int | None:
     return served
 
 
-def _cost_and_log(
-    project: Project,
-    run_id: str,
-    started: RunnerStarted,
-    started_at: str,
-    finished: RunnerFinished | None,
-) -> tuple[RunCost, LogCost]:
-    text, log_source = _log_text(project, run_id, finished)
-    log = parse_log(text.splitlines())
-    before = sum(started.counts_before.values())
+def _cost_and_log(project: Project, row: _Row) -> tuple[RunCost, LogCost]:
+    run_id = row.run_id
+    log_text, log_source = _log_text(project, run_id, row.log_blob)
+    log = parse_log(log_text.splitlines())
+    before = sum(row.counts_before.values())
     counted = _counter_served(project, run_id)
     if counted is not None:
         units, units_source = counted, "mcp-counter"
-    elif finished is None:
+    elif row.counts_after is None:
         units, units_source = 0, "unavailable"
     else:
-        units = max(before - sum(finished.counts_after.values()), 0)
+        units = max(before - sum(row.counts_after.values()), 0)
         units_source = "counts-before-after"
     cost = log.reported_cost_usd
     tokens = log.input_tokens + log.output_tokens + log.cache_read_tokens + log.cache_write_tokens
-    miner = started.stage[len(MINE_PREFIX) :] if started.stage.startswith(MINE_PREFIX) else None
+    miner = row.stage[len(MINE_PREFIX) :] if row.stage.startswith(MINE_PREFIX) else None
     cost_row = RunCost(
         run_id=run_id,
-        stage=started.stage,
-        model=started.model,
+        stage=row.stage,
+        model=row.model,
         miner=miner,
-        started_at=started_at,
-        outcome=None if finished is None else finished.outcome,
-        exit_status=None if finished is None else finished.exit_status,
+        started_at=row.started_at,
+        outcome=row.outcome,
+        exit_status=row.exit_status,
         units=units,
         units_source=units_source,
         cost_usd=cost,
@@ -335,23 +360,18 @@ def _cost_and_log(
 def run_cost(project: Project, run_id: str) -> RunCost:
     """The cost of run `run_id`. Refuses with one `FactoryValidationError` when the project has no
     `runner.started` event for it."""
-    started, finished = _index_runs(project)
-    if run_id not in started:
-        raise FactoryValidationError(
-            [ValidationIssue("run_id", f"no runner.started event for run {run_id}")]
-        )
-    event, payload = started[run_id]
-    return _cost_and_log(project, run_id, payload, event.ts.isoformat(), finished.get(run_id))[0]
+    for row in _index_runs(project):
+        if row.run_id == run_id:
+            return _cost_and_log(project, row)[0]
+    raise FactoryValidationError(
+        [ValidationIssue("run_id", f"no runner.started event for run {run_id}")]
+    )
 
 
 def _runs_with_logs(project: Project) -> list[tuple[RunCost, LogCost]]:
     """Every run's cost with its parsed log, in the order their `runner.started` events were
-    recorded."""
-    started, finished = _index_runs(project)
-    return [
-        _cost_and_log(project, run_id, payload, event.ts.isoformat(), finished.get(run_id))
-        for run_id, (event, payload) in started.items()
-    ]
+    recorded. Each log is read and parsed once."""
+    return [_cost_and_log(project, row) for row in _index_runs(project)]
 
 
 def all_run_costs(project: Project) -> list[RunCost]:
@@ -367,7 +387,9 @@ def _median(values: list[float]) -> float | None:
 def _group(stage: str, model: str, rows: list[RunCost]) -> CostGroup:
     priced = [r for r in rows if r.cost_usd is not None]
     cost_total = sum(r.cost_usd for r in priced if r.cost_usd is not None) if priced else None
-    priced_units = sum(r.units for r in priced)
+    per_unit_rows = [r for r in priced if r.units > 0]
+    per_unit_cost = sum(r.cost_usd for r in per_unit_rows if r.cost_usd is not None)
+    per_unit_units = sum(r.units for r in per_unit_rows)
     counted = [r for r in rows if r.units > 0]
     units = sum(r.units for r in counted)
     kinds = {
@@ -388,9 +410,7 @@ def _group(stage: str, model: str, rows: list[RunCost]) -> CostGroup:
         complete_runs=len(complete),
         units=sum(r.units for r in rows),
         reported_cost_usd=cost_total,
-        cost_per_unit_usd=cost_total / priced_units
-        if cost_total is not None and priced_units
-        else None,
+        cost_per_unit_usd=per_unit_cost / per_unit_units if per_unit_units else None,
         median_turns=_median([float(r.turns) for r in complete]),
         median_duration_ms=_median(
             [float(r.duration_ms) for r in complete if r.duration_ms is not None]
@@ -399,10 +419,23 @@ def _group(stage: str, model: str, rows: list[RunCost]) -> CostGroup:
     )
 
 
-def cost_report(project: Project, stage: str | None = None) -> CostReport:
+def runs_with_logs(project: Project) -> list[tuple[RunCost, LogCost]]:
+    """Every run's cost with its parsed log; pass the result as `runs` to `cost_report` and
+    `token_growth` to read each log once for several figures."""
+    return _runs_with_logs(project)
+
+
+def cost_report(
+    project: Project,
+    stage: str | None = None,
+    *,
+    runs: list[tuple[RunCost, LogCost]] | None = None,
+) -> CostReport:
     """The cost report of the project: runs grouped by stage and model (`stage` narrows it to one
-    stage key). Read-only; computed from the events and the logs."""
-    rows = [cost for cost, _ in _runs_with_logs(project) if stage is None or cost.stage == stage]
+    stage key). Read-only; computed from the index and the logs (or from `runs`, as returned by
+    `runs_with_logs`)."""
+    everything = _runs_with_logs(project) if runs is None else runs
+    rows = [cost for cost, _ in everything if stage is None or cost.stage == stage]
     buckets: dict[tuple[str, str], list[RunCost]] = {}
     for row in rows:
         buckets.setdefault((row.stage, row.model), []).append(row)
@@ -418,11 +451,13 @@ def cost_report(project: Project, stage: str | None = None) -> CostReport:
     )
 
 
-def token_growth(project: Project, stage: str) -> list[TurnPoint]:
+def token_growth(
+    project: Project, stage: str, *, runs: list[tuple[RunCost, LogCost]] | None = None
+) -> list[TurnPoint]:
     """Per turn index (1-based), the mean `input + cache_read` tokens across the runs of `stage`
     that have that turn. Empty when the stage has no logged turns."""
     sums: dict[int, list[int]] = {}
-    for cost, log in _runs_with_logs(project):
+    for cost, log in _runs_with_logs(project) if runs is None else runs:
         if cost.stage != stage:
             continue
         for index, turn in enumerate(log.turns, start=1):

@@ -8,7 +8,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from factory.services.context import Project
-from factory.services.run_costs import CostGroup, cost_report, token_growth
+from factory.services.run_costs import CostGroup, cost_report, runs_with_logs, token_growth
 from factory.services.site_charts import line_chart
 from factory.services.site_widgets import REPORT_CSS, note, section, table
 
@@ -59,7 +59,8 @@ def _row(group: CostGroup) -> list[object]:
 def build_costs(project: Project, out: Path) -> None:
     from factory.services.site import page
 
-    report = cost_report(project)
+    runs = runs_with_logs(project)  # each log is read and parsed once
+    report = cost_report(project, runs=runs)
     if not report.groups:
         body = (
             "<h1>Run costs</h1>"
@@ -70,7 +71,10 @@ def build_costs(project: Project, out: Path) -> None:
         stages = sorted({g.stage for g in report.groups})
         charts = []
         for stage in stages:
-            points = [(float(p.turn), p.mean_context_tokens) for p in token_growth(project, stage)]
+            points = [
+                (float(p.turn), p.mean_context_tokens)
+                for p in token_growth(project, stage, runs=runs)
+            ]
             svg = line_chart(points, "turn", "input + cache read tokens")
             if svg:
                 charts.append(section(f"Token growth: {stage}", svg))
@@ -87,8 +91,10 @@ def build_costs(project: Project, out: Path) -> None:
                 "What the columns mean",
                 "<ul><li><b>Units</b>: the records or tasks the run served, counted by the MCP "
                 "unit counter when it wrote one, else from the queue counts.</li>"
-                "<li><b>Cost per unit</b>: the reported cost of the runs with units, divided by "
-                "those units.</li>"
+                "<li><b>Reported cost</b>: the total of the runs that reported a cost.</li>"
+                "<li><b>Cost per unit</b>: the reported cost of the runs that reported a cost "
+                "and served units, divided by those units; a priced run with no units is in the "
+                "total but not in this figure.</li>"
                 "<li><b>Per unit</b> token columns: tokens of each kind over the units of the "
                 "runs that served any.</li>"
                 "<li><b>Token growth</b>: each turn re-reads the transcript, so the input and "

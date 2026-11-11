@@ -289,3 +289,30 @@ def test_run_cost_malformed_counter_file_falls_back_to_the_counts(project: Proje
         (folder / "units.json").write_text(bad, encoding="utf-8")
         cost = run_costs.run_cost(project, RUN_A)
         assert cost.units == 4 and cost.units_source == "counts-before-after"
+
+
+def test_cost_per_unit_uses_only_priced_runs_that_served_units(project: Project) -> None:
+    one_dollar = project.blobs.put(_log_bytes([_result(1.0)]))
+    _start(project, RUN_A, "screen", {"screen": 5})
+    _finish(project, RUN_A, {"screen": 5}, one_dollar)  # $1, 0 units
+    _start(project, RUN_B, "screen", {"screen": 10})
+    _finish(project, RUN_B, {"screen": 0}, one_dollar)  # $1, 10 units
+    [group] = run_costs.cost_report(project).groups
+    assert group.reported_cost_usd == pytest.approx(2.0)  # the total stays
+    assert group.units == 10
+    assert group.cost_per_unit_usd == pytest.approx(0.10)
+
+
+def test_the_first_started_and_the_first_finished_of_a_run_win(project: Project) -> None:
+    first = project.blobs.put(_log_bytes([_result(1.0)]))
+    later = project.blobs.put(_log_bytes([_result(9.0)]))
+    _start(project, RUN_A, "screen", {"screen": 10})
+    _start(project, RUN_A, "extract", {"extract": 99})  # a duplicate start is ignored
+    _finish(project, RUN_A, {"screen": 6}, first)
+    _finish(project, RUN_A, {"screen": 0}, later, outcome="failed")  # so is a second finish
+    costs = run_costs.all_run_costs(project)
+    assert [c.run_id for c in costs] == [RUN_A]
+    cost = costs[0]
+    assert (cost.stage, cost.outcome, cost.units) == ("screen", "complete", 4)
+    assert cost.cost_usd == pytest.approx(1.0)
+    assert run_costs.run_cost(project, RUN_A).cost_usd == pytest.approx(1.0)
