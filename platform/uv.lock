@@ -964,6 +964,13 @@ pymupdf = [
     { name = "pymupdf" },
     { name = "pymupdf4llm" },
 ]
+ranker = [
+    { name = "torch" },
+    { name = "transformers" },
+]
+server = [
+    { name = "uvicorn" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -990,9 +997,12 @@ requires-dist = [
     { name = "pypdf", specifier = ">=5" },
     { name = "rapidfuzz", specifier = ">=3.10" },
     { name = "sqlalchemy", specifier = ">=2.0" },
+    { name = "torch", marker = "extra == 'ranker'", specifier = ">=2.2" },
+    { name = "transformers", marker = "extra == 'ranker'", specifier = ">=4.40" },
     { name = "typer", specifier = ">=0.12" },
+    { name = "uvicorn", marker = "extra == 'server'", specifier = ">=0.30" },
 ]
-provides-extras = ["docling", "pymupdf"]
+provides-extras = ["docling", "ranker", "server", "pymupdf"]
 
 [package.metadata.requires-dev]
 dev = [

@@ -372,6 +372,16 @@ def _state_after(state: LinkState, carried: Decision | None) -> LinkState:
     return LinkState.RESOLVED if carried is Decision.CONFIRM else LinkState.UNRESOLVED
 
 
+_CELL_ANCHOR_RE = re.compile(r"^(t\d+)\.r\d+\.c\d+$")
+
+
+def _citing_anchor(anchor: str) -> str:
+    """The anchor a citation context is recorded against: a marker inside a table cell is
+    recorded against its table, since a context names a paragraph-level anchor."""
+    cell = _CELL_ANCHOR_RE.match(anchor)
+    return cell.group(1) if cell else anchor
+
+
 def _extract_one(
     project: Project,
     actor: Actor,
@@ -417,7 +427,7 @@ def _extract_one(
         extraction_id=extraction_id,
         contexts=tuple(
             CitationContext(
-                citing_anchor=c.citing_anchor,
+                citing_anchor=_citing_anchor(c.citing_anchor),
                 entry=c.entry,
                 marker=c.marker,
                 method=c.method,

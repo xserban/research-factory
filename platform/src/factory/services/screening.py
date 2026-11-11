@@ -47,6 +47,7 @@ import json
 import math
 import random
 import secrets
+import unicodedata
 from collections.abc import Collection, Mapping, Sequence
 from typing import Any, Literal
 
@@ -880,7 +881,9 @@ def screen_record(
         rejected: list[ItemError] = []
         accepted: list[ScreeningItem | HumanScreeningItem] = []
         answered: set[str] = set()
-        for index, item in enumerate(items):
+        sent = items
+        for index, original in enumerate(items):
+            item = _as_stored(original, records)
             duplicate = item.work_id in answered
             issues = _item_issues(
                 project, stage, index, item, records, criteria, duplicate, human=human
@@ -894,7 +897,7 @@ def screen_record(
             return BatchResult[str](written=[], rejected=rejected)
 
         blob = project.blobs.put_json(
-            {"task_id": task_id, "items": [item.model_dump(mode="json") for item in items]}
+            {"task_id": task_id, "items": [item.model_dump(mode="json") for item in sent]}
         )
         live = {
             decision.work_id: decision
@@ -963,7 +966,14 @@ def item_issues(
     records = {str(record["work_id"]): record for record in batch.records}
     criteria = {str(criterion["id"]) for criterion in batch.criteria}
     return _item_issues(
-        project, _stage_of_task(task), 0, item, records, criteria, False, human=True
+        project,
+        _stage_of_task(task),
+        0,
+        _as_stored(item, records),
+        records,
+        criteria,
+        False,
+        human=True,
     )
 
 
@@ -993,6 +1003,23 @@ def _stage_of_task(task: Task) -> ScreeningStage:
 def _pinned_conversion(record: Mapping[str, str | None]) -> str | None:
     """The conversion a full-text record pins, or None."""
     return record.get("conversion_id")
+
+
+def _as_stored(
+    item: ScreeningItem | HumanScreeningItem, records: dict[str, dict[str, str | None]]
+) -> ScreeningItem | HumanScreeningItem:
+    """The item with its work id spelled as the batch stores it.
+
+    A model writes a non-Latin name in composed form (NFC) where the stored id may be decomposed
+    (NFD), so the two look identical and differ as strings. When the id is not a record of the
+    batch but its NFC form equals the NFC form of exactly one stored id, the stored spelling is
+    used. An id that matches nothing is returned unchanged and refused as before.
+    """
+    if item.work_id in records:
+        return item
+    folded = unicodedata.normalize("NFC", item.work_id)
+    matches = [w for w in records if unicodedata.normalize("NFC", w) == folded]
+    return item if len(matches) != 1 else item.model_copy(update={"work_id": matches[0]})
 
 
 def _item_issues(
