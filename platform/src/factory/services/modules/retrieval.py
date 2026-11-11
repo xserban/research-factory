@@ -104,3 +104,19 @@ FEED_SPEC = ModuleSpec(
 )
 
 FEED_MODULE = RuleModule(FEED_SPEC)
+
+RUNNER_SPEC = ModuleSpec(
+    name="runner",
+    kind=ModuleKind.RETRIEVAL,
+    events=EventFamily(
+        types=("runner.started", "runner.finished"),
+        tables=("runner_runs",),
+        note=(
+            "Headless runner (plan feed-hub H5, decision 118): the platform starts the installed "
+            "`claude` executable for one stage; both events are system acts, and every judgement "
+            "is written through MCP with the agent's provenance."
+        ),
+    ),
+)
+
+RUNNER_MODULE = RuleModule(RUNNER_SPEC)

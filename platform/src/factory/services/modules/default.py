@@ -75,7 +75,7 @@ def default_modules() -> ModuleRegistry:
         manuscripts,
     ]  # fmt: skip
     return ModuleRegistry(
-        [*(m.MODULE for m in modules), retrieval.FEED_MODULE],
+        [*(m.MODULE for m in modules), retrieval.FEED_MODULE, retrieval.RUNNER_MODULE],
         catalog_names=default_catalog().names(),
         table_names=list(default_projection().metadata.tables),
     )
