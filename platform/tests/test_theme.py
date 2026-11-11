@@ -23,11 +23,11 @@ PALETTE = (
     "#D9E1EC",
     "#1B2333",
     "#5B6478",
-    "#2563EB",
+    "#1E40AF",
     "#1D4ED8",
     "#DBEAFE",
-    "#15803D",
-    "#B45309",
+    "#166534",
+    "#92400E",
     "#B91C1C",
 )
 
@@ -67,7 +67,7 @@ def test_palette_values_are_in_the_light_block() -> None:
     for value in PALETTE:
         assert value in LIGHT_CSS
     assert LIGHT["bg"] == "#FFFFFF"
-    assert LIGHT["ac"] == "#2563EB"
+    assert LIGHT["ac"] == "#1D4ED8"
     assert LIGHT["dim"] == "#5B6478"
 
 

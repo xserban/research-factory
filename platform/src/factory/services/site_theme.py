@@ -40,17 +40,17 @@ LIGHT: Final[dict[str, str]] = {
     "ink": "#1B2333",  # text (explorer name)
     "light": "#2E3850",  # secondary prose
     "dim": "#5B6478",  # muted text
-    "ac": "#2563EB",  # accent blue
-    "acc": "#2563EB",  # accent (explorer name)
-    "bright": "#1D4ED8",  # accent hover; headings in the dashboard
-    "blue": "#1D4ED8",  # links
+    "ac": "#1D4ED8",  # accent blue
+    "acc": "#1D4ED8",  # accent (explorer name)
+    "bright": "#1E40AF",  # accent hover; headings in the dashboard
+    "blue": "#1E40AF",  # links
     "soft": "#DBEAFE",  # soft accent fill
     "heat": "#93C5FD",  # tint of counts in heat grids
     "mag": "#6D28D9",
     "cyan": "#0E7490",
-    "green": "#15803D",  # success
-    "brown": "#15803D",
-    "amber": "#B45309",  # warning
+    "green": "#166534",  # success
+    "brown": "#166534",
+    "amber": "#92400E",  # warning
     "red": "#B91C1C",  # error
 }
 
