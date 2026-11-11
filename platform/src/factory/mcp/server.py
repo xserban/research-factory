@@ -125,6 +125,8 @@ from factory.services import exports as exports_service
 from factory.services import extraction as extraction_service
 from factory.services import extraction_agreement as extraction_agreement_service
 from factory.services import extraction_audit as extraction_audit_service
+from factory.services import feed as feed_service
+from factory.services import feed_read as feed_read_service
 from factory.services import finders as findings_service
 from factory.services import fulltext as fulltext_service
 from factory.services import fulltext_status as fulltext_status_service
@@ -502,6 +504,72 @@ def build_server(
             return _withheld(opened, {"cycle": report})
 
         return _reply(project, run_cycle)
+
+    def _feed_source() -> feed_service.FeedSource:
+        """The arXiv adapter the feed fetches with: the watch's own factory, so an injected
+        adapter is honoured in tests."""
+        factory = adapters["arxiv"] if "arxiv" in adapters else default_sources()["arxiv"]
+        return cast(feed_service.FeedSource, factory(settings, clock))
+
+    @server.tool()
+    def feed_list(
+        project: str,
+        role: str,
+        model: str,
+        skill: str,
+        top: int = 30,
+        ranking_id: str | None = None,
+    ) -> dict[str, JsonValue]:
+        """The latest feed ranking (or `ranking_id`) as at most `top` items: rank, score, whether
+        the item is an exploration pick, its nearest reference work, the researcher's reaction and
+        whether it was sent to the inbox. Read-only; the reactions and sends are the researcher's
+        acts on the CLI, there is no tool for them. Refused to a session that has joined a pass."""
+
+        def listing() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            make_agent_actor(settings, session, role, model, skill)
+            report = feed_read_service.feed_list(opened, ranking_id=ranking_id, top=top)
+            return _withheld(opened, report.model_dump(mode="json"), include_work_ids=False)
+
+        return _reply(project, listing, include_work_ids=False)
+
+    @server.tool()
+    def feed_run(
+        project: str, role: str, model: str, skill: str, dry_run: bool = False
+    ) -> dict[str, JsonValue]:
+        """Run the project's feed cycle now: fetch the listings of the window, then rank the new
+        entries against the reference works with the local embedding model. The feed's events
+        are recorded as the system, as the feed's own cadence; the agent's arguments are checked
+        and named in the reply but not recorded on those events. `dry_run` fetches and writes
+        nothing. Refused to a session that has joined a pass."""
+
+        def run_cycle() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            make_agent_actor(settings, session, role, model, skill)
+            embedder = ranking_model_service.Specter2Embedder()
+            result = feed_service.feed_run(
+                opened, embedder, _feed_source(), due=True, dry_run=dry_run
+            )
+            return _withheld(opened, result.model_dump(mode="json"))
+
+        return _reply(project, run_cycle)
+
+    @server.tool()
+    def feed_status(project: str, role: str, model: str, skill: str) -> dict[str, JsonValue]:
+        """The feed's configuration, the last complete fetch window, whether a run is due, the
+        last ranking and the counts of entries, fetches, rankings, reactions and sends. Read-only.
+        Refused to a session that has joined a pass."""
+
+        def status() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            make_agent_actor(settings, session, role, model, skill)
+            report = feed_service.feed_status(opened)
+            return _withheld(opened, report.model_dump(mode="json"), include_work_ids=False)
+
+        return _reply(project, status, include_work_ids=False)
 
     @server.tool()
     def notice_list(project: str) -> dict[str, JsonValue]:
