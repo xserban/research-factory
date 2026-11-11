@@ -2278,6 +2278,7 @@ def build_server(
         work_ids: list[str] | None = None,
         re_resolve: bool = False,
         states: list[str] | None = None,
+        only_identifiers: bool = False,
     ) -> dict[str, JsonValue]:
         """Extract and resolve the reference lists of included works from their converted
         documents. With no `work_ids`: every included work with a conversion and no current
@@ -2287,7 +2288,8 @@ def build_server(
         are recorded. With `re_resolve` nothing is parsed: the links of the live extractions
         selected by `states` (default `source-error`; an unresolved reason or a link state) are
         looked up again under the same extraction ids, where the lookup failed or the matcher has
-        changed. Refused to a session that has joined a pass."""
+        changed. With `only_identifiers` (re-resolution only) just the entries with a DOI or arXiv
+        id are retried, by identifier lookup. Refused to a session that has joined a pass."""
 
         def extract() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
@@ -2300,6 +2302,7 @@ def build_server(
                     work_ids=work_ids,
                     states=states or ("source-error",),
                     sources=adapters,
+                    only_identifiers=only_identifiers,
                 )
                 return _withheld(opened, retried.model_dump(mode="json"), include_work_ids=False)
             summary = references_service.extract_references(

@@ -25,6 +25,8 @@ Invariants:
 - `re_resolve` retries links of live extractions (a failed lookup, or an older `MATCHER_VERSION`)
   in one `reference.re_resolved` event per extraction. The extraction id stays, so nothing that
   cites the extraction goes stale; a link holding a decision or a proposal is left alone.
+  With `only_identifiers` only entries stating a DOI or arXiv id are retried (identifier lookups,
+  never a title search); the others wait for a later call.
 - Counts are computed from the live extractions, in SQL; the link states sum to the entry count.
 - Listing is paged in SQL with a fixed cap (`MAX_PAGE`).
 - Nothing here knows the seeds: a held-out seed's work reads as any corpus work in every link,
@@ -502,8 +504,11 @@ def _retryable(
     project: Project,
     work_ids: Sequence[str] | None,
     states: Sequence[str],
+    *,
+    only_identifiers: bool = False,
 ) -> dict[tuple[str, str], list[ReferenceEntry]]:
-    """(extraction, citing work) -> the entries to retry, over the live extractions."""
+    """(extraction, citing work) -> the entries to retry, over the live extractions; with
+    `only_identifiers`, only those stating a DOI or an arXiv id."""
     with project.index.connect() as conn:
         rows = (
             conn.execute(
@@ -530,6 +535,8 @@ def _retryable(
             decision=row["decision"],
             proposal=row["proposal"],
         ):
+            continue
+        if only_identifiers and row["doi"] is None and row["arxiv"] is None:
             continue
         entry = ReferenceEntry(
             ordinal=int(row["ordinal"]),
@@ -558,13 +565,16 @@ def _re_resolve_one(
     sources: Mapping[str, SourceFactory],
     corpus: Corpus,
     states: Sequence[str],
+    only_identifiers: bool = False,
 ) -> ReResolved | None:
     """Look the entries up, then write under the lock what is still retryable: a decision, or a
     new extraction, may have landed during the lookups. None when nothing is left to write."""
     outcome = resolve_entries(project, actor, entries, sources=sources, corpus=corpus)
     with project.index.exclusive():
         project.index.sync()
-        still = _retryable(project, [work], states).get((extraction_id, work), [])
+        still = _retryable(project, [work], states, only_identifiers=only_identifiers).get(
+            (extraction_id, work), []
+        )
         ordinals = {e.ordinal for e in still}
         resolutions = tuple(r for r in outcome.resolutions if r.ordinal in ordinals)
         if not resolutions:
@@ -619,6 +629,7 @@ def re_resolve(
     work_ids: Sequence[str] | None = None,
     states: Sequence[str] = ("source-error",),
     sources: Mapping[str, SourceFactory],
+    only_identifiers: bool = False,
 ) -> ReResolveSummary:
     """Resolve again the links of the live extractions selected by `states` (`RE_RESOLVE_STATES`:
     an unresolved reason, or a link state), in `work_ids` or everywhere.
@@ -627,6 +638,8 @@ def re_resolve(
     (`re_resolvable`), so a repeat with nothing to retry writes nothing. A malformed work id or an
     unknown state refuses the call, writing nothing; a named work with no live extraction is
     skipped with a reason. The entries are not parsed again: their stored fields are looked up.
+    With `only_identifiers`, only entries with a DOI or arXiv id are retried, by identifier
+    lookup; entries without one are left as recorded.
     """
     issues: list[ValidationIssue] = []
     if work_ids is not None:
@@ -655,7 +668,7 @@ def re_resolve(
         for w in dict.fromkeys(work_ids or ())
         if w not in extracted
     ]
-    scope = _retryable(project, work_ids, states)
+    scope = _retryable(project, work_ids, states, only_identifiers=only_identifiers)
     corpus = load_corpus(project) if scope else Corpus()
     results = [
         result
@@ -670,6 +683,7 @@ def re_resolve(
                 sources=sources,
                 corpus=corpus,
                 states=states,
+                only_identifiers=only_identifiers,
             )
         )
         is not None
