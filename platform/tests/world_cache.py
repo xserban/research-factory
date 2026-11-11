@@ -43,8 +43,6 @@ from pydantic import BaseModel
 
 from factory.clock import FixedClock
 from factory.events.reader import read_all
-from factory.index.default import default_projection
-from factory.index.index import Index
 from factory.services.context import Project
 
 P = ParamSpec("P")
@@ -251,15 +249,11 @@ def _clear(root: Path) -> None:
 
 
 def _reopen_index(project: Project) -> None:
-    """Point the project at the restored database; the old engine held the replaced file."""
-    old = project.index
-    project.index = Index(
-        project.paths.index_path,
-        project.paths.events_dir,
-        project.catalog,
-        default_projection(project.blobs),
-    )
-    old._engine.dispose()
+    """Point the project at the restored database; the old engine held the replaced file.
+
+    The `Index` object is kept: the writer's host guard and the ID floor close over it, and a second
+    instance on the same file would not share its lock hold (self-deadlock)."""
+    project.index.reopen()
 
 
 def snapshot_world(build: Callable[P, R]) -> Callable[P, R]:

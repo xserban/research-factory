@@ -1,5 +1,6 @@
 """The test-world snapshot cache restores an identical, independent world (tests/world_cache.py)."""
 
+import threading
 from datetime import timedelta
 from pathlib import Path
 
@@ -147,3 +148,23 @@ def test_environment_variable_builds_again(tmp_path: Path, monkeypatch: pytest.M
     monkeypatch.setenv("FACTORY_SOMETHING", "1")
     _build(_project(tmp_path / "b"), "Primary six?")
     assert _counts("_build").get("miss", 0) == before + 2
+
+
+def test_restored_world_has_one_lock_holder(tmp_path: Path) -> None:
+    """After a restore the writer's host guard shares the project's lock hold.
+
+    A second `Index` on the same file did not see the hold of `writing()` and waited on it forever,
+    so the check runs in a thread with a bounded join: a regression fails instead of hanging."""
+    project = _project(tmp_path / "a")
+    world_cache._reopen_index(project)
+    outcome: list[object] = []
+
+    def guard_inside_writing() -> None:
+        with project.writing():
+            outcome.append(project.writer._host_guard())  # type: ignore[misc]
+
+    worker = threading.Thread(target=guard_inside_writing, daemon=True)
+    worker.start()
+    worker.join(timeout=10)
+    assert not worker.is_alive(), "the host guard waits on a lock this process already holds"
+    assert outcome == [None]

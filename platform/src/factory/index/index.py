@@ -274,7 +274,8 @@ class Index:
         """Hold the cross-process lock, with an engine on the current DB file.
 
         Writers take it exclusively; readers share it so they wait for any rebuild in progress.
-        Limit: the hold is per instance, ignores `shared` once held, and is not thread-safe.
+        Limit: the hold is per instance (two instances on one file in one process deadlock), ignores
+        `shared` once held, and is not thread-safe.
         """
         if self._holding:
             yield
@@ -289,6 +290,19 @@ class Index:
             finally:
                 self._holding = False
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+    def reopen(self) -> None:
+        """Point this instance at the DB file now on disk, after it was replaced by copy.
+
+        Invariant: one project has one `Index` per process. The lock hold lives on the instance, so
+        a second `Index` on the same file does not see a hold taken through the first and would
+        wait on it forever. Whoever swaps the file refreshes the engine here; it never builds a
+        second instance (the writer's host guard and the ID floor are wired to this one).
+        """
+        with self._locked():
+            self._engine.dispose()
+            self._engine = _make_engine(self._db_path)
+            self._identity = _file_identity(self._db_path)
 
     def _refresh_engine(self) -> None:
         """Replace the engine if another process swapped in a new DB file."""
