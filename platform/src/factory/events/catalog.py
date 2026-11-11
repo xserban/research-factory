@@ -151,6 +151,7 @@ from factory.model.mine_imports import MineImported
 from factory.model.miner_calibration import MinerCalibrationDrawn, MinerCalibrationLabelled
 from factory.model.miners import MinerRegistered, MinerRetired
 from factory.model.notices import NoticeAssessed, NoticeObserved
+from factory.model.pages import PageRecorded
 from factory.model.probe import ProbeFailed, ProbeMeasured, ProbePageArchived
 from factory.model.project import ProjectCreated, ProjectVisibilitySet
 from factory.model.protocol import (
@@ -293,6 +294,7 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("gate.audit_labelled", GateAuditLabelled, 1))
     catalog.register(EventType("miner.registered", MinerRegistered, 1))
     catalog.register(EventType("miner.retired", MinerRetired, 1))
+    catalog.register(EventType("page.recorded", PageRecorded, 1))
     catalog.register(EventType("miner.calibration_drawn", MinerCalibrationDrawn, 1))
     catalog.register(EventType("miner.calibration_labelled", MinerCalibrationLabelled, 1))
     catalog.register(EventType("mine.imported", MineImported, 1))

@@ -150,6 +150,7 @@ from factory.services import mining as mining_service
 from factory.services import notices as notices_service
 from factory.services import onion as onion_service
 from factory.services import outline as outline_service
+from factory.services import pages as pages_service
 from factory.services import passes as passes_service
 from factory.services import probe as probe_service
 from factory.services import progress as progress_service
@@ -1957,6 +1958,69 @@ def build_server(
             opened = open_project(settings, project, session=session, clock=clock)
             data: dict[str, JsonValue] = {
                 "miners": [m.model_dump(mode="json") for m in mining_service.miner_listing(opened)]
+            }
+            return _withheld(opened, data, include_work_ids=False)
+
+        return _reply(project, listing, include_work_ids=False)
+
+    @server.tool()
+    def page_brief(project: str, scope: str, part: int = 0) -> dict[str, JsonValue]:
+        """The brief a synthesis page is written from, computed from the recorded rows: for a
+        scope (`overview`, `technique=<value>`, `stage=<value>` or `field=<value>`) the statistics
+        and rules (part 0) and a digest of quoted rows, paged by `part`. Read it all before
+        writing. Refused to a session that joined a pass."""
+
+        def read() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            return _withheld(
+                opened, pages_service.brief(opened, scope, part), include_work_ids=False
+            )
+
+        return _reply(project, read, include_work_ids=False)
+
+    @server.tool()
+    def page_record(
+        project: str,
+        scope: str,
+        title: str,
+        body: str,
+        role: str,
+        model: str,
+        skill: str,
+        supersedes: str | None = None,
+    ) -> dict[str, JsonValue]:
+        """Record a synthesis page written from `page_brief`. The platform checks it: every cited
+        work exists, every quotation is verbatim from a cited work's recorded quotes, every number
+        is a statistic of the brief or a year. A failing page is refused with the sentences named;
+        soft flags (a generalisation with no number or citation) are recorded with the page.
+        `supersedes` names the page of the same scope that this one replaces. Refused to a session
+        that joined a pass."""
+
+        def record() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            actor = make_agent_actor(settings, session, role, model, skill)
+            payload, check = pages_service.record_page(
+                opened, actor, scope, title, body, supersedes
+            )
+            data: dict[str, JsonValue] = {
+                "page": payload.model_dump(mode="json"),
+                "check": check.model_dump(mode="json"),
+            }
+            return _withheld(opened, data, include_work_ids=False)
+
+        return _reply(project, record, include_work_ids=False)
+
+    @server.tool()
+    def page_list(project: str) -> dict[str, JsonValue]:
+        """The recorded pages (the latest of each scope) with their provenance, flags and whether
+        the brief has changed since (stale). Read-only."""
+
+        def listing() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            data: dict[str, JsonValue] = {
+                "pages": [p.model_dump(mode="json") for p in pages_service.list_pages(opened)]
             }
             return _withheld(opened, data, include_work_ids=False)
 

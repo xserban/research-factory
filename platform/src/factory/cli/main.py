@@ -23,7 +23,9 @@ from factory.cli.ledger import budget_app, ledger_cmd
 from factory.cli.library import library_app
 from factory.cli.manuscripts import manuscript_app
 from factory.cli.organisation import consolidation_app, labels_app, terms_app
+from factory.cli.pages import pages_app
 from factory.cli.screen_check import screen_check_app
+from factory.cli.site import site_app
 from factory.cli.team import (
     project_app,
     protocol_amend_cmd,
@@ -94,6 +96,7 @@ from factory.services import check as check_service
 from factory.services import concepts as concepts_service
 from factory.services import conclusions as conclusions_service
 from factory.services import contributions as contributions_service
+from factory.services import conversion_coverage as conversion_coverage_service
 from factory.services import core_works as core_works_service
 from factory.services import coverage as coverage_service
 from factory.services import curation as curation_service
@@ -538,6 +541,8 @@ app.add_typer(draft_app)
 app.add_typer(manuscript_app)
 app.add_typer(decide_app)
 app.add_typer(dashboard_app)
+app.add_typer(site_app)
+app.add_typer(pages_app)
 app.add_typer(develop_app)
 app.add_typer(screen_check_app)
 app.add_typer(graph_app)
@@ -1538,13 +1543,24 @@ def references_extract_cmd(
     work: Annotated[
         list[str] | None, typer.Option("--work", help="A work to extract; repeatable.")
     ] = None,
+    corpus_only: Annotated[
+        bool,
+        typer.Option(
+            "--corpus-only",
+            help="Match entries against the corpus only, asking no external source. Entries "
+            "that need a lookup are recorded as source-error; `references re-resolve` asks again.",
+        ),
+    ] = False,
 ) -> None:
     """Extract and resolve the reference lists; default: every included work not yet extracted."""
     state = _state(ctx)
     with _reporting_errors():
         project = _resolve_project(state)
         summary = references_service.extract_references(
-            project, project.human_actor(), work, sources=dict(default_sources())
+            project,
+            project.human_actor(),
+            work,
+            sources={} if corpus_only else dict(default_sources()),
         )
     for line in render.extract_summary_lines(summary):
         typer.echo(line)
@@ -3589,6 +3605,19 @@ def document_converters_cmd() -> None:
     """List the converters, which ones decision 49 chose, and whether each can run here."""
     for line in render.converter_lines(converter_infos()):
         typer.echo(line)
+
+
+@document_app.command("coverage")
+def document_coverage_cmd(ctx: typer.Context) -> None:
+    """Compare each converted document's original text with its Markdown (word 5-grams) and store
+    the result as a derived cache that the dashboard shows. A triage aid; it decides nothing."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        report = conversion_coverage_service.refresh(project)
+    typer.echo(
+        f"measured {len(report.rows)} documents; not measured: {report.not_measured or 'none'}"
+    )
 
 
 @document_app.command("status")

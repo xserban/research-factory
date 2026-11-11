@@ -28,17 +28,21 @@ from factory.model.protocol import ScreeningStage
 from factory.model.screening import PassLabel
 from factory.services import agent_view as agent_view_service
 from factory.services import budgets as budgets_service
+from factory.services import conversion_coverage as conversion_coverage_service
 from factory.services import decisions as decisions_service
 from factory.services import dedup as dedup_service
 from factory.services import extraction as extraction_service
 from factory.services import extraction_audit as extraction_audit_service
 from factory.services import ledger as ledger_service
+from factory.services import miner_info as miner_info_service
+from factory.services import mining as mining_service
 from factory.services import progress as progress_service
 from factory.services import protocol as protocol_service
 from factory.services import question as question_service
 from factory.services import ranking as ranking_service
 from factory.services import screening as screening_service
 from factory.services import screening_check as check_service
+from factory.services import site as site_service
 from factory.services.context import Project
 from factory.services.withholding import held_out_tokens, withhold
 
@@ -126,6 +130,9 @@ def _dashboard_state(project: Project) -> dict[str, JsonValue]:
         "screening": _guard(lambda: _screening(project, status), {}),
         "screening_live": _guard(lambda: _live_raw(project), {}),
         "extraction": _guard(lambda: _extraction(project), {}),
+        "conversion": _guard(lambda: _conversion(project), {}),
+        "miners": _guard(lambda: _miners(project), []),
+        "products": _guard(lambda: _products(project), []),
         "cost": _guard(lambda: _cost(project, status), {}),
         "progress": _guard(lambda: cast(JsonValue, progress_service.progress_list(project)), []),
     }
@@ -496,6 +503,27 @@ def _live_raw(project: Project) -> JsonValue:
         "remaining": None,
         "any_active": any(bool(s["active"]) for s in sessions),
     }
+
+
+def _conversion(project: Project) -> JsonValue:
+    return cast(JsonValue, conversion_coverage_service.panel(project))
+
+
+def _miners(project: Project) -> JsonValue:
+    """Every listed miner's units and rows, with its spec and use described. Agreement is left
+    out: computing it for every miner takes tens of seconds on a full project, so it belongs to
+    the hub's Miners product."""
+    out: list[JsonValue] = []
+    for s in mining_service.mine_status(project, with_agreement=False):
+        row = s.model_dump(mode="json")
+        row["detail"] = miner_info_service.miner_detail(project, s.name, s.version)
+        out.append(cast(JsonValue, row))
+    return out
+
+
+def _products(project: Project) -> JsonValue:
+    """Every product of the site hub with its build time and staleness (no product is built)."""
+    return [cast(JsonValue, s.model_dump(mode="json")) for s in site_service.status(project)]
 
 
 def _extraction(project: Project) -> JsonValue:

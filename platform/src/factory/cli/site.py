@@ -1,0 +1,88 @@
+"""`factory site`: the project's hub of products, built from the events (plan 2026-11-10-site-hub).
+
+Business logic stays in `services/site.py`. Nothing here writes an event. The shared helpers of
+`factory.cli.main` are imported inside the commands, because that module imports this one.
+"""
+
+from __future__ import annotations
+
+from typing import Annotated
+
+import typer
+
+from factory.services import site as site_service
+from factory.services import site_server as server_service
+
+site_app = typer.Typer(
+    name="site",
+    help="The project hub: every product of the factory in one place, rebuilt from the events.",
+    no_args_is_help=True,
+)
+
+
+@site_app.command("build")
+def site_build_cmd(
+    ctx: typer.Context,
+    only: Annotated[
+        list[str] | None, typer.Option("--only", help="Build only this product; repeatable.")
+    ] = None,
+    force: Annotated[
+        bool, typer.Option("--force", help="Rebuild even when a product is up to date.")
+    ] = False,
+) -> None:
+    """Build every stale product and the hub page (`<project>/site/index.html`)."""
+    from factory.cli.main import _reporting_errors, _resolve_project, _state
+
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        try:
+            results = site_service.build(project, only=only or (), force=force)
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
+    for r in results:
+        what = "up to date" if r.skipped else "built" if r.built else f"FAILED: {r.error}"
+        typer.echo(f"{r.id}: {what}")
+    typer.echo(f"hub: {site_service.site_dir(project) / 'index.html'}")
+
+
+@site_app.command("status")
+def site_status_cmd(ctx: typer.Context) -> None:
+    """Each product with its build time and whether it is stale."""
+    from factory.cli.main import _reporting_errors, _resolve_project, _state
+
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        rows = site_service.status(project)
+    for s in rows:
+        flag = "failed" if s.error else "stale" if s.stale else "up to date"
+        typer.echo(f"{s.id}: {flag} (built {s.built_at or 'never'}) {s.error or ''}".rstrip())
+
+
+@site_app.command("serve")
+def site_serve_cmd(
+    ctx: typer.Context,
+    port: Annotated[int, typer.Option("--port", help="Port on 127.0.0.1.")] = (
+        server_service.DEFAULT_PORT
+    ),
+    every: Annotated[
+        int,
+        typer.Option("--every", help="Seconds between background rebuilds of stale products."),
+    ] = 300,
+) -> None:
+    """Serve the hub on 127.0.0.1 and rebuild stale products in the background."""
+    from factory.cli.main import _reporting_errors, _resolve_project, _state
+
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+    httpd, rebuilder = server_service.make_server(project, port, min_gap=float(every))
+    typer.echo(f"site on http://{server_service.HOST}:{httpd.server_port}/ (Ctrl-C to stop)")
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        rebuilder.stop()
+        httpd.server_close()
