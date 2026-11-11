@@ -15,9 +15,9 @@ Invariants:
 
 from __future__ import annotations
 
-from itertools import combinations
+from collections import defaultdict
 
-from rapidfuzz import fuzz
+from rapidfuzz import fuzz, process
 from sqlalchemy import text
 
 from factory.errors import FactoryValidationError, ValidationIssue
@@ -36,7 +36,6 @@ GATE = "dedup.version_pair"
 TITLE_SCORE = 95.0
 MIN_TOKENS = 4
 YEAR_GAP = 2
-_BLOCK_TOKENS = 3
 
 BASIS_TITLE = "title"
 BASIS_LINK = "version-link"
@@ -88,11 +87,6 @@ def _title_score(a: Work, b: Work) -> float:
     return float(fuzz.token_sort_ratio(normalize_title(a.title), normalize_title(b.title)))
 
 
-def _years_close(a: Work, b: Work) -> bool:
-    ya, yb = a.dates.year, b.dates.year
-    return ya is None or yb is None or abs(ya - yb) <= YEAR_GAP
-
-
 def _decided_pairs(project: Project) -> frozenset[frozenset[str]]:
     project.index.sync()
     with project.index.connect() as conn:
@@ -123,28 +117,43 @@ def candidates(project: Project, *, limit: int | None = None) -> list[PairCandid
     by_id = {work.id: work for work in works}
     excluded = blocked_pairs(project) | _decided_pairs(project)
 
-    tokens = {work.id: normalize_title(work.title).split() for work in works}
-    buckets: dict[str, list[str]] = {}
-    for work in works:
-        for token in set(tokens[work.id][:_BLOCK_TOKENS]):
-            buckets.setdefault(token, []).append(work.id)
+    titles = {work.id: normalize_title(work.title) for work in works}
+    # token_sort_ratio is `ratio` over token-sorted strings; sorting once here, not per comparison,
+    # lets rapidfuzz prune by length against the cutoff (the scores are identical).
+    sorted_titles = {wid: " ".join(sorted(title.split())) for wid, title in titles.items()}
+    eligible = [work for work in works if len(titles[work.id].split()) >= MIN_TOKENS]
+    by_year: dict[int | None, list[Work]] = defaultdict(list)
+    for work in eligible:
+        by_year[work.dates.year].append(work)
 
-    seen: set[frozenset[str]] = set()
     found: dict[frozenset[str], PairCandidate] = {}
-    for members in buckets.values():
-        for id_a, id_b in combinations(sorted(members), 2):
-            key = frozenset({id_a, id_b})
-            if key in seen:
-                continue
-            seen.add(key)
-            if key in excluded:
-                continue
-            a, b = by_id[id_a], by_id[id_b]
-            if min(len(tokens[id_a]), len(tokens[id_b])) < MIN_TOKENS or not _years_close(a, b):
-                continue
-            score = _title_score(a, b)
-            if score >= TITLE_SCORE:
-                found[key] = _candidate(a, b, score, BASIS_TITLE)
+
+    def compare(left: list[Work], right: list[Work]) -> None:
+        """Score each left title against all right titles in one rapidfuzz call (in C)."""
+        choices = [sorted_titles[w.id] for w in right]
+        for a in left:
+            hits = process.extract(
+                sorted_titles[a.id],
+                choices,
+                scorer=fuzz.ratio,
+                score_cutoff=TITLE_SCORE,
+                limit=None,
+            )
+            for _, score, index in hits:
+                b = right[index]
+                key = frozenset({a.id, b.id})
+                if a.id == b.id or key in found or key in excluded:
+                    continue
+                found[key] = _candidate(a, b, float(score), BASIS_TITLE)
+
+    # Years differ by at most YEAR_GAP: each year against itself and the next YEAR_GAP years; a
+    # work with no year against every eligible work.
+    for year, bucket in by_year.items():
+        if year is None:
+            compare(bucket, eligible)
+            continue
+        window = [w for gap in range(YEAR_GAP + 1) for w in by_year.get(year + gap, [])]
+        compare(bucket, window)
 
     for conflict in link_conflicts(project):
         key = frozenset({conflict.work_id, conflict.other_work_id})
