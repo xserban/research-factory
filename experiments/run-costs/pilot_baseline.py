@@ -28,8 +28,8 @@ from pathlib import Path
 REPORT_NAME = "pilot-baseline-2026-11-11.md"
 
 FIN_RE = re.compile(r"== finished: (\S+)\s+cost \$([0-9.]+)\s+turns (\d+)")
-TOOL_RE = re.compile(r"^\d{2}:\d{2}:\d{2} > (\w+)", re.M)
-VERDICT_RE = re.compile(r"^\d{2}:\d{2}:\d{2} {3}(include|exclude|cannot-assess|unsure) ", re.M)
+TOOL_RE = re.compile(r"^\d{2}:\d{2}:\d{2} > (\w+)", re.MULTILINE)
+VERDICT_RE = re.compile(r"^\d{2}:\d{2}:\d{2} {3}(include|exclude|cannot-assess|unsure) ", re.MULTILINE)
 WRITTEN_RE = re.compile(r'written\\":\[([^\]]*)\]')
 REJECTED_RE = re.compile(r'rejected\\":\[\{')
 NOBATCH = "(no batch served)"
