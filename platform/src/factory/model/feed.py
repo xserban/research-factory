@@ -20,11 +20,9 @@ from pydantic import Field, StringConstraints, field_validator, model_validator
 
 from factory.model.base import StrictModel
 from factory.model.identity import BLOB_REF_RE, ULID_RE
-from factory.model.inbox import INBOX_ID_RE
+from factory.model.inbox import INBOX_ID_RE, MAX_NOTE  # a sent note becomes the inbox note
 from factory.model.screening import NonBlank
 from factory.model.work_ids import WORK_ID_RE
-
-MAX_NOTE = 500
 
 FEED_CONFIG_ID_RE = rf"^fdc_{ULID_RE}$"
 FEED_FETCH_ID_RE = rf"^fdf_{ULID_RE}$"

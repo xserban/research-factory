@@ -13,20 +13,24 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import replace
-from typing import Annotated, NoReturn
+from typing import TYPE_CHECKING, Annotated, NoReturn
 
 import typer
 from pydantic import TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
 
-from factory.errors import FactoryValidationError, ValidationIssue
+from factory.errors import FactoryError, FactoryValidationError, ValidationIssue
 from factory.model.feed import FeedNote, FeedReaction
 from factory.services import feed as feed_service
 from factory.services import feed_read
-from factory.services.context import Project
+from factory.services.access import authorize_command
+from factory.services.context import Project, list_projects, open_project
 from factory.services.ranking_model import Specter2Embedder
 from factory.sources.arxiv import ArxivSource
 from factory.sources.http import default_http
+
+if TYPE_CHECKING:
+    from factory.cli.main import CliState
 
 feed_app = typer.Typer(
     name="feed",
@@ -148,7 +152,10 @@ def feed_run_cmd(
     if all_projects and project is not None:
         _exit_with_issues([ValidationIssue("project", "--all and --project are exclusive")])
     slugs: list[str] | None = None
-    if not all_projects:
+    refused = 0
+    if all_projects:
+        slugs, refused = _authorised_feed_projects(state)
+    else:
         chosen = project if project is not None else state.project
         if chosen is None:
             _exit_with_issues([ValidationIssue("project", "give --project SLUG or --all")])
@@ -184,7 +191,25 @@ def feed_run_cmd(
         )
         note = "" if result.note is None else f" {result.note}"
         typer.echo(f"{outcome.slug}: {result.status}{detail}{counts}{note}")
-    raise typer.Exit(run.exit_code)
+    raise typer.Exit(max(run.exit_code, 1 if refused else 0))
+
+
+def _authorised_feed_projects(state: CliState) -> tuple[list[str], int]:
+    """Every configured project the running command is allowed on (as `watch run --all` checks
+    each project), and how many were refused; a refusal is printed and the others still run."""
+    allowed: list[str] = []
+    refused = 0
+    for slug in list_projects(state.settings):
+        try:
+            opened = open_project(state.settings, slug, session=state.session, clock=state.clock)
+            authorize_command(opened, opened.principal, state.tool)
+        except FactoryError as exc:
+            typer.echo(f"{slug}: {exc}", err=True)
+            refused += 1
+            continue
+        if feed_service.current_config(opened) is not None:
+            allowed.append(slug)
+    return allowed, refused
 
 
 @feed_app.command("show")
