@@ -19,6 +19,7 @@ from factory.cli.admin import member_app, token_app, user_app
 from factory.cli.dashboard import dashboard_app
 from factory.cli.decisions import decide_app
 from factory.cli.develop import develop_app
+from factory.cli.feed import feed_app
 from factory.cli.ledger import budget_app, ledger_cmd
 from factory.cli.library import library_app
 from factory.cli.manuscripts import manuscript_app
@@ -529,6 +530,7 @@ app.add_typer(dedup_app)
 app.add_typer(rank_app)
 app.add_typer(fulltext_app)
 app.add_typer(library_app)
+app.add_typer(feed_app)
 app.add_typer(document_app)
 app.add_typer(extract_app)
 app.add_typer(miner_app)
