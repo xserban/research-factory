@@ -222,6 +222,21 @@ function renderProducts(m){const R=D.products||[];m.append(h('h2',null,'Products
  m.append(h('p',{class:'dim'},'Every product of the factory for this project, rebuilt from the events. Open the hub with: factory site serve (http://127.0.0.1:8766/). Rebuild with: factory site build.'));
  if(!R.length){m.append(h('p',{class:'dim'},'No product is registered.'));return;}
  m.append(table(['Product','Group','State','Built','Model-written'],R.map(r=>[h('a',{href:'http://127.0.0.1:8766/#'+r.id,target:'_blank'},r.title),r.group,r.error?'build failed':(r.stale?'stale':'up to date'),r.built_at||'not built yet',r.needs_model?'yes':''])));}
+function feedPart(title,v,f){const box=h('div',null,h('h3',null,title));if(v==='unavailable')box.append(h('p',{class:'dim'},'unavailable'));else f(box,v);return box;}
+function renderFeed(m){const F=D.feed;if(!F)return;m.append(h('h2',null,'Feed and queue'));
+ if(F.error){m.append(h('p',{class:'dim'},'unavailable'));return;}
+ m.append(h('div',{class:'row'},h('a',{href:'http://127.0.0.1:8766/feed/',target:'_blank'},'Feed (hub)'),h('a',{href:'http://127.0.0.1:8766/queue/',target:'_blank'},'Queue (hub)')));
+ m.append(h('p',{class:'dim'},'Categories: '+(F.categories||[]).join(', ')+' \u00b7 shown per cycle '+E(F.shown_per_cycle)+' \u00b7 every '+E(F.interval_days)+' day(s)'));
+ m.append(feedPart('Last fetch',F.fetch,(b,f)=>b.append(kv({last_window_from:f.last_window_from,last_window_to:f.last_window_to,next_due:f.next_due,due_now:f.due?'yes':'no'}))));
+ m.append(feedPart('Latest ranking',F.ranking,(b,f)=>b.append(kv({ranking_id:f.ranking_id,shown:f.shown,explore:f.explore}))));
+ m.append(feedPart('Top shown titles (last 7 days for reactions and adds)',F.top,(b,f)=>b.append(table(['Title','Score','Reaction','Sent','Reactions 7d','Adds 7d'],f.map(t=>[t.title||t.entry_id,E(t.score),E(t.reaction),t.sent?'yes':'',t.reactions_7d,t.adds_7d])))));
+ m.append(feedPart('Work queue',F.queue,(b,f)=>{b.append(kv({added_papers:f.added}));const st=Object.keys(f.stages||{});
+  b.append(st.length?table(['Stage','Added papers'],st.map(k=>[k,f.stages[k]])):h('p',{class:'dim'},'no added papers'));
+  const pk=Object.keys(f.pending||{});b.append(table(['Pending kind','Open units'],pk.map(k=>[k,f.pending[k]])));}));
+ m.append(feedPart('Last run',F.run,(b,f)=>{const L=f.last;b.append(kv({run_open:f.run_open?'yes':'no',pipeline_open:f.pipeline_open?'yes':'no'}));
+  b.append(L?kv({stage:L.stage,outcome:L.outcome,finished_at:L.finished_at||'not finished'}):h('p',{class:'dim'},'no run yet'));}));
+}
+function tabs(){return D.feed?TABS.concat([['feed','Feed and queue',renderFeed]]):TABS;}
 function renderCost(m){const C=D.cost||{};m.append(h('h2',null,'Cost and time'));
  m.append(kv({first_event:fmt(C.first_event_at),last_event:fmt(C.last_event_at)}));
  m.append(h('h3',null,'Agent events by stage'),kv(C.events_per_stage||{}));
@@ -296,8 +311,8 @@ cost:{cmds:['budget --help','report methods'],hub:[['Results (events per model)'
 const TABS=[['protocol','Protocol',renderProtocol],['decisions','Decisions',renderDecisions],['press','PRESS',renderPress],['probes','Probes',renderProbes],['search','Search',renderSearch],['screening','Screening',renderScreening],['extraction','Extraction',renderExtraction],['conversion','Conversion',renderConversion],['miners','Miners',renderMiners],['products','Products',renderProducts],['cost','Cost and time',renderCost]];
 function render(){
  const y=window.scrollY,a=document.activeElement,keep=a&&a.id==='q'?[a.selectionStart,a.selectionEnd]:null;
- $('#tabs').replaceChildren(...TABS.map(([k,l])=>h('button',{class:ui.tab===k?'on':'',onclick:()=>{ui.tab=k;render();}},l)));
- const m=$('#main');m.replaceChildren();if(TAB_HELP[ui.tab]){const hp=h('div',{class:'help'});hp.innerHTML=TAB_HELP[ui.tab];m.append(hp);}const ta=TAB_ACTIONS[ui.tab];if(ta){const slug=(D.meta||{}).slug||'PROJECT';const bx=h('div',{class:'help'},h('b',null,'What you can do'),h('div',{class:'dim'},'Run these in a terminal (the dashboard is read-only).'),ta.cmds.map(c=>cmdRow('factory --project '+slug+' '+c)));if(ta.hub.length)bx.append(h('div',{class:'dim'},'In the hub (factory site serve): ',ta.hub.map(x=>h('a',{href:'http://127.0.0.1:8766/#'+x[1],target:'_blank',style:'margin-right:12px'},x[0]))));m.append(bx);}(TABS.find(t=>t[0]===ui.tab)||TABS[0])[2](m);
+ $('#tabs').replaceChildren(...tabs().map(([k,l])=>h('button',{class:ui.tab===k?'on':'',onclick:()=>{ui.tab=k;render();}},l)));
+ const m=$('#main');m.replaceChildren();if(TAB_HELP[ui.tab]){const hp=h('div',{class:'help'});hp.innerHTML=TAB_HELP[ui.tab];m.append(hp);}const ta=TAB_ACTIONS[ui.tab];if(ta){const slug=(D.meta||{}).slug||'PROJECT';const bx=h('div',{class:'help'},h('b',null,'What you can do'),h('div',{class:'dim'},'Run these in a terminal (the dashboard is read-only).'),ta.cmds.map(c=>cmdRow('factory --project '+slug+' '+c)));if(ta.hub.length)bx.append(h('div',{class:'dim'},'In the hub (factory site serve): ',ta.hub.map(x=>h('a',{href:'http://127.0.0.1:8766/#'+x[1],target:'_blank',style:'margin-right:12px'},x[0]))));m.append(bx);}(tabs().find(t=>t[0]===ui.tab)||TABS[0])[2](m);
  $('#slug').textContent=(D.meta||{}).slug||'';
  window.scrollTo(0,y);
  if(keep){const q=$('#q');if(q){q.focus();q.setSelectionRange(keep[0],keep[1]);}}}
