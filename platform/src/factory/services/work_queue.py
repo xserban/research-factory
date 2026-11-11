@@ -316,7 +316,7 @@ def _advance(
     limit: int,
 ) -> AdvanceResult:
     actor = project.human_actor()
-    errors: list[AdvanceError] = Field(default_factory=list)
+    errors: list[AdvanceError] = []
     counts = {"resolve": 0, "resolved": 0, "fetch": 0, "fetched": 0, "convert": 0, "converted": 0}
 
     for paper in [p for p in added_papers(project) if p.stage == "added" and not p.stopped][:limit]:
