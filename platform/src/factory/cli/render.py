@@ -97,6 +97,11 @@ def prisma_markdown(flow: PrismaFlow) -> str:
         lines.append(
             f"  - of which {flow.version_pair_merges} rest on the researcher's version-pair ruling"
         )
+    if flow.identical_title_merges > 0:
+        lines.append(
+            "  - merge groups joined (in part) by an identical title: "
+            f"{flow.identical_title_merges}"
+        )
     lines += ["", "## Screening", f"- records screened: {flow.screened}"]
     lines += [f"- excluded, {criterion}: {n}" for criterion, n in flow.excluded.items()]
     lines.append(f"- pending: {flow.pending}")

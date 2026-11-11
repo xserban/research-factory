@@ -196,6 +196,9 @@ class PrismaFlow(StrictModel):
     version_pair_merges: int = 0
     """Active merges resting on the researcher's version-pair ruling (decision 117), computed: a
     note on `duplicates_removed`, which it does not change."""
+    identical_title_merges: int = 0
+    """Active merges joined by an identical title without author agreement (rule
+    `title-identical`, decision 117), computed: a note like `version_pair_merges`."""
     screened: int
     excluded: dict[str, int]
     pending: int
@@ -392,6 +395,9 @@ def prisma_flow(project: Project) -> PrismaFlow:
         identified_other_detail=detail if other[ProvenanceMethod.CITATION_CHASE.value] else {},
         duplicates_removed=sum(databases.values()) - canonical_with_database,
         version_pair_merges=sum("version-pair" in merge.rule for merge in active_merges(project)),
+        identical_title_merges=sum(
+            "title-identical" in merge.rule for merge in active_merges(project)
+        ),
         screened=len(canonical),
         excluded=dict(sorted(excluded.items())),
         pending=pending,

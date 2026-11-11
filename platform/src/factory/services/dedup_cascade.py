@@ -10,7 +10,10 @@ The two error directions are not symmetric, and the threshold is set accordingly
 - a **false merge** (two papers unified) silently deletes a paper, and nothing downstream can
   detect it — the corpus is simply missing something and says nothing.
 
-So this module is deliberately tuned to prefer the error screening will catch.
+So this module is deliberately tuned to prefer the error screening will catch. One exception,
+ruled by the researcher (decision 117): an identical normalised title of at least
+`IDENTICAL_TITLE_TOKENS` tokens in the same year merges with rule `title-identical` even when
+the first authors disagree (talk records and published papers with broken author metadata).
 
 The researcher's pair decisions enter as `joined` (merge) and `blocked` (never merge) pairs.
 Invariant: a joined pair is merged unless a block spans it, directly or through a third work;
@@ -31,6 +34,8 @@ from factory.model.work_ids import normalize_title
 
 TITLE_SIMILARITY_THRESHOLD = 92.0
 YEAR_WINDOW = 1
+IDENTICAL_TITLE_TOKENS = 6
+"""An identical normalised title of at least this many tokens, same year, merges without author."""
 
 _strong_keys = strong_keys  # the private names before they were shared; kept as aliases
 
@@ -237,6 +242,16 @@ def dedup(
             for right in candidates[i + 1 :]:
                 if left.id == right.id or union.find(left.id) == union.find(right.id):
                     continue
+                if (
+                    titles[left.id] == titles[right.id]
+                    and len(titles[left.id].split()) >= IDENTICAL_TITLE_TOKENS
+                    and left.dates.year is not None
+                    and left.dates.year == right.dates.year
+                ):
+                    # Researcher's ruling (decision 117, amended): an identical long title in
+                    # the same year is one work even when the author metadata disagrees.
+                    union.union(left.id, right.id, "title-identical")
+                    continue
                 score = fuzz.token_sort_ratio(titles[left.id], titles[right.id])
                 if score < TITLE_SIMILARITY_THRESHOLD:
                     continue
@@ -297,6 +312,7 @@ def cascade_match(
 
 
 __all__ = [
+    "IDENTICAL_TITLE_TOKENS",
     "TITLE_SIMILARITY_THRESHOLD",
     "YEAR_WINDOW",
     "CascadeMerge",

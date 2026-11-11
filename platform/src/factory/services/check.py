@@ -2150,14 +2150,15 @@ def _merge_conflicts(project: Project, outcomes: dict[str, Outcome]) -> list[_Hi
 
 
 def _version_pair_conflicts(project: Project, outcomes: dict[str, Outcome]) -> list[_Hit]:
-    """A merge resting on a version-pair ruling whose members carry different decided outcomes.
+    """A merge resting on a version-pair ruling or an identical title (decision 117) whose
+    members carry different decided outcomes.
 
     Compared at title/abstract; a pending member is not a verdict. Absorbed records are read with
     `.get` because `final_outcomes` leaves out a pending absorbed record.
     """
     hits: list[_Hit] = []
     for merge in active_merges(project):
-        if "version-pair" not in merge.rule:
+        if "version-pair" not in merge.rule and "title-identical" not in merge.rule:
             continue
         members = (merge.primary, *merge.absorbed)
         decided = {member: outcomes.get(member) for member in members}

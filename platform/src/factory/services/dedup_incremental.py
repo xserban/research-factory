@@ -34,6 +34,7 @@ from factory.services.dedup import (
     write_reconciliation,
 )
 from factory.services.dedup_cascade import (
+    IDENTICAL_TITLE_TOKENS,
     TITLE_SIMILARITY_THRESHOLD,
     YEAR_WINDOW,
     CascadeMerge,
@@ -183,22 +184,35 @@ def _joined_partners(conn: Connection, new: Sequence[Work]) -> set[str]:
 
 def _title_candidates(conn: Connection, new: Sequence[Work]) -> set[str]:
     """Works whose year is within `YEAR_WINDOW` of a new work's, with the same first surname and
-    a title scoring at least the cascade threshold. `None` years pair only with `None`."""
+    a title scoring at least the cascade threshold (`None` years pair only with `None`); and works
+    of the same year with an identical title of at least `IDENTICAL_TITLE_TOKENS` tokens,
+    whatever their authors (the cascade's `title-identical` rule)."""
     keys = [(w.id, *title_bucket_key(w)) for w in new]
-    keys = [k for k in keys if k[3]]  # a missing first surname never matches
     found: set[str] = set()
     for year in _window_years({k[1] for k in keys}):
         wanted = [k for k in keys if _near(k[1], year)]
         by_surname: dict[str, list[tuple[str, str]]] = {}
-        for work_id, _year, title, surname in wanted:
-            by_surname.setdefault(surname, []).append((work_id, title))
+        identical: dict[str, list[str]] = {}
+        for work_id, own_year, title, surname in wanted:
+            if surname:  # a missing first surname never matches on similarity
+                by_surname.setdefault(surname, []).append((work_id, title))
+            if (
+                own_year is not None
+                and own_year == year
+                and len(title.split()) >= IDENTICAL_TITLE_TOKENS
+            ):
+                identical.setdefault(title, []).append(work_id)
         for rows in _bucket_rows(conn, year):
             for other_id, other_title, other_surname in rows:
+                if any(w != other_id for w in identical.get(other_title, ())):
+                    found.add(other_id)
+                    continue
                 for work_id, title in by_surname.get(other_surname, ()):
                     if other_id != work_id and (
                         fuzz.token_sort_ratio(title, other_title) >= TITLE_SIMILARITY_THRESHOLD
                     ):
                         found.add(other_id)
+
     return found
 
 
