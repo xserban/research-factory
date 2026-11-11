@@ -11,7 +11,7 @@ Update this file in the landing commit of every plan, together with the backlog 
 | `plan-8-suggest-select` | Slice 8: suggest and select, screening ranker (decision 116), core works and forward snowballing, the site hub (plan 2026-11-10-site-hub); backlog ideas 45–59 (aec35cf) | yes | per plan | no | no (359 commits ahead of `main`) |
 | `plan-reference-layers` | Reference layers T1–T5 (plan 2026-11-11-reference-layers); branched from `plan-8-suggest-select` at a67690b, so it lacks aec35cf | yes | yes (one Sonnet review) | no | no |
 | `plan-feed` | Slice 4c discovery feed v1, F1–F10 (decision 117) | yes | yes (Sonnet review, fixes cec877c) | no | no |
-| `plan-feed-hub` | Feed in the hub (decision 118): Daily updates page, write path, one-click add, work queue, Process now (H1–H7); full ingestion pipeline Process all and the MCP unit cap (H8); dashboard feed and queue panel | yes | H1–H7 yes (fixes to 62d5c7b); H8 reviewed, fixes in progress; dashboard panel not reviewed | no | no |
+| `plan-feed-hub` | Feed in the hub (decision 118): Daily updates page, write path, one-click add, work queue, Process now (H1–H7); full ingestion pipeline Process all, the hard MCP unit cap and a per-run time limit (H8); dashboard feed and queue panel | yes | H1–H7 yes (fixes to 62d5c7b); H8 yes (fixes a4d2bb8); dashboard panel (91fc18a) not reviewed | no | no |
 
 ## Before merging this line
 
