@@ -1,6 +1,6 @@
 # Plan (design): taxonomies as declared, versioned objects (IDEA-50)
 
-Date: 2026-11-12 · Status: design ruled (§8: Q1 A2, the rest as recommended; Q11 open); no code · Branch:
+Date: 2026-11-12 · Status: design ruled (§8); no code · Branch:
 `plan-taxonomies` (from `main` at 5bc9879) · Unblocks: IDEA-51, 52, 53, 55 (the taxonomy product),
 64 · Related: reference layers (plan 2026-11-11-reference-layers; the layers themselves belong to
 IDEA-57 and are not redesigned here) · Provisional decision number: 120 (fixed at landing)
@@ -231,28 +231,60 @@ version is a new taxonomy version. Cardinality `single`.
 An included work placed in `adjacent`, `background` or `off-topic` contradicts its inclusion: it is
 a finding for the researcher (a screening check), never an exclusion and never a skip of screening.
 
-**Layer as a filter and a priority for mining.** The layer of a work is its **final** dimension-zero
-row (agreed, or resolved by the researcher); until then the work is "layer pending" and receives no
-layer-filtered miner. The protocol's miner listing gains two optional fields (new):
+**The layer of a work.** It is the researcher's move if there is one (below), otherwise the
+**final** dimension-zero row (agreed, or resolved by the researcher). Until one exists the work is
+"layer pending" and receives no layer-filtered miner.
 
-- `MinerUse.layers`: the layers whose works the miner serves (a filter on the population, computed);
+**Automatic and on-demand mining (ruled 2026-11-12).** Every listed miner runs automatically on
+the works of **core** and **adjacent**. Works of every other layer (benchmark, applied, background,
+off-topic) are mined **only on demand**, from the hub, for one work or for a whole layer. The
+protocol's miner listing gains three optional fields (new):
+
+- `MinerUse.layers`: the layers mined automatically (`[core, adjacent]` in the pilot);
+- `MinerUse.on_demand`: true allows the researcher's requests to add works beyond those layers.
+  The protocol declares the rule once; each request is a recorded act, not an amendment;
 - `MinerUse.order`: `by-layer` serves works by ring, then work id (a priority, never a judgement).
 
-A depth table the researcher fills (illustrative; the researcher decides the cells):
+A miner's population is therefore computed as: included works whose layer is in `layers`, plus
+works named by live `mining.requested` events. Nothing is typed by an agent.
 
-| Layer | Classification dimensions | Other miners | Passes, reading mode |
-|---|---|---|---|
-| core | all | descriptors, release, summary, design-approach | two; whole text when IDEA-64 lands |
-| benchmark | field, data, evaluation | release, summary | two; headings |
-| applied | all | release | two; headings |
-| adjacent, background | none beyond layer | none | — |
-| off-topic | none | none | finding for the researcher |
+**On-demand requests.** `mining.requested` (human only): target either a list of work ids or a
+layer; the miners (default: every miner the protocol lists with `on_demand`); an optional reason. A
+layer request is resolved to its work ids when recorded, and the event stores both, so the request
+is reproducible and a later move does not silently widen it; "mine this layer" again picks up works
+moved in since. Requested works follow the miner's regime (two passes, dual sample, audit) like any
+other. Reports separate automatic from requested works per layer: requested works are a selection
+by the researcher, not a sample of their layer, and no per-layer statistic treats them as one.
+
+**Moving a work to another layer.** `work.layer_set` (human only): work id, layer scheme version,
+the new layer, a reason. The latest move wins over the miner's row and is shown as "moved by the
+researcher" with the miner's layer beside it. Effects, all computed:
+
+- moved **into** an automatic layer: the work enters the miners' population and the queue;
+- moved **out of** one: its existing rows are kept and count as requested (nothing is lost or made
+  stale); no further miners are served unless requested;
+- every move is also a gold label for the dimension-zero miner (it feeds that miner's calibration
+  and audit, as `miner.calibration_labelled` does), and the methods report counts the moves per pair
+  of layers.
+
+**Hub.** Both acts are allow-listed human POST acts under decision 119 (loopback, per-start token,
+the local human principal, same services as the CLI): on a work, "mine this work" and "move to
+layer"; on the layer view, "mine this layer". Requested works appear in the hub's work queue at a
+stage `mining`, and **Process now** starts a mining run for them (stage tools `mine_next`,
+`mine_record`, `document_read`; a declared model per pass; a cap on works per run). This is the
+runner IDEA-51 item 1 asks for, served through the existing runner rather than the pilot's wave
+scripts. CLI equivalents: `factory mine request (--work ID… | --layer L) [--miner M…]`,
+`factory layers move WORK LAYER --reason R`.
+
+**Depth.** Within the automatic layers every listed miner runs; there is no per-layer subset of
+miners or dimensions in v1. Dimensions still skip layers they do not apply to (`applies_to_layers`,
+§3.3); for an on-demand request this is what makes "mine this benchmark paper" skip autonomy.
 
 ## 5. The refinement loop, mapped to existing machinery
 
 | Step | What | Existing machinery | New |
 |---|---|---|---|
-| 0 | Layer assigned (§4) | derived miner on `mine_next`/`mine_record`; agreement; `extraction.resolved` | `MinerUse.layers`, `order` |
+| 0 | Layer assigned (§4) | derived miner on `mine_next`/`mine_record`; agreement; `extraction.resolved` | `MinerUse.layers`, `on_demand`, `order`; `mining.requested`, `work.layer_set` |
 | 1 | Descriptor miner quotes how papers describe each dimension | `m-descriptors` (registered miner) | — |
 | 2 | Frequency and keyword coverage: per candidate pattern, works matched, works matching nothing, sample quotes | the logic of `taxo_report.py`, today a pilot script | a service `taxonomy_coverage(project, taxonomy, version)` (computed, no event) and a hub page; port of the script |
 | 3 | The researcher accepts, renames, merges or adds; version N registered | — (today a JSON file and a page with local storage) | `taxonomy.registered` (human actor only); CLI `factory taxonomy register FILE`, `factory taxonomy diff A B` |
@@ -288,12 +320,14 @@ Every acceptance or rejection of a proposal is recorded in version N+1's registr
 |---|---|---|---|
 | `taxonomy.registered` | human only | **new type** | name, version, digest, spec blob, `accepts`, `rejects`; first write wins per version |
 | `taxonomy.change_proposed` | agent | **new type** | taxonomy, base version, kind, target and new category drafts, evidence rows and works, optional cluster id, rationale; provenance (model, skill version, `input_blob`) |
+| `mining.requested` | human only | **new type** | target works or layer (resolved work ids stored), miners, reason |
+| `work.layer_set` | human only | **new type** | work id, layer scheme version, layer, reason |
 | `clusters.computed` | system | **new type, later (D3)** | as `ranking.computed`, plus assignments blob |
 | `miner.registered` | as today | existing | derived miners; spec blob gains `taxonomy` ref and `evidence.absence_values` (**blob schema change**) |
 | `extraction.recorded`, `.closed`, `.resolved`, audit and calibration events | as today | existing | unchanged |
-| `protocol.amended` / protocol recording | human | existing | `taxonomies` listing; `MinerUse.layers`, `order`; `MinerStale.rule.values` (**payload schema changes**) |
+| `protocol.amended` / protocol recording | human | existing | `taxonomies` listing; `MinerUse.layers`, `on_demand`, `order`; `MinerStale.rule.values` (**payload schema changes**) |
 
-So: two new types for v1, one later, and three changes to existing payloads or blobs. Counts,
+So: four new types for v1, one later, and three changes to existing payloads or blobs. Counts,
 coverage lists and diffs are computed, never events.
 
 ### 6.2 Why each of these breaks a code line that lacks it
@@ -342,7 +376,7 @@ Each row is one decision; the recommended option is first.
 | Q8 | Layer of corpus works (§4) | **L1** dimension-zero derived miner · L2 extend reference-layer tools · L3 cited-item layer |
 | Q9 | Granularity of derived miners | **one per group of dimensions** (layer; core dimensions; human-role dimensions) · one for all · one per dimension |
 | Q10 | Merge of categories | **alias, carried, not re-read** · re-read rows of both |
-| Q11 | Depth table (§4) | the researcher fills the cells |
+| Q11 | Which layers are mined, and how the rest are reached (§4) | ruled: automatic for core and adjacent; on demand per work or per layer; the researcher can move a work between layers |
 | Q12 | Introducing new events (§6.3) | **I1 + I3** · I2 · I4 |
 | Q13 | v0 → v1 | **the agent drafts definitions, cues and examples for the 69 categories as proposals; the researcher edits and registers v1** · the researcher writes them · register v0 as is (names and patterns only) |
 
@@ -354,8 +388,10 @@ Each row is one decision; the recommended option is first.
   amendment whose stale rows are computed (§5). Making that amendment one command, without
   rewriting the protocol file, is IDEA-51 item 2 and applies to taxonomies as to miners.
 - **Q2–Q10, Q12, Q13:** the recommended options are accepted ("the rest seem okay").
-- **Q11 (depth table):** open; the researcher fills the cells before dimension-zero results
-  drive mining.
+- **Q11 (replaces the depth table):** every listed miner runs automatically on core and adjacent
+  works; every other layer is mined on demand from the hub, for one work or a whole layer, through
+  the work queue and Process now; the researcher can move a work between layers (§4). Not asked:
+  which miners a request runs; the default is every miner listed with `on_demand`.
 
 ## 9. After the rulings (sketch, not tasks yet)
 
