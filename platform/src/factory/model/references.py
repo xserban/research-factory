@@ -586,6 +586,10 @@ class InnerSample(StrictModel):
 
     from_version: int = Field(ge=1)
     draw: dict[LayerId, Annotated[int, Field(ge=1)]] = Field(min_length=1)
+    seed_version: int | None = Field(default=None, ge=1)
+    """When set, the whole calibration draw (base and inner) uses the draw order of this earlier
+    scheme version instead of the scheme's own, so a revised scheme keeps the same sample and the
+    researcher's labels can be recorded again under it. Below `version`."""
 
     @model_validator(mode="after")
     def _total(self) -> Self:
@@ -619,6 +623,9 @@ class LayerSchemeRecorded(StrictModel):
             raise ValueError("at least one layer must have snowball=true")
         if self.inner_sample is not None and self.inner_sample.from_version >= self.version:
             raise ValueError("an inner sample draws from an earlier scheme version")
+        seed = None if self.inner_sample is None else self.inner_sample.seed_version
+        if seed is not None and seed >= self.version:
+            raise ValueError("an inner sample's seed_version is an earlier scheme version")
         return self
 
 

@@ -291,6 +291,13 @@ def _pool(project: Project) -> _Pool:
 # --- calibration --------------------------------------------------------------------------------
 
 
+def _seed(scheme: LayerSchemeRecorded) -> int:
+    """The version whose draw order the calibration sample of `scheme` uses: the inner sample's
+    `seed_version` when set (a revised scheme reusing an earlier sample), else its own version."""
+    inner = scheme.inner_sample
+    return scheme.version if inner is None or inner.seed_version is None else inner.seed_version
+
+
 def _draw_order(scheme_version: int, key: str) -> str:
     return hashlib.sha256(f"{scheme_version}:{key}".encode()).hexdigest()
 
@@ -382,7 +389,7 @@ def _inner_draw(
             and (i.key in members or any(a in members for a in i.aliases))
         ]
         matching.sort(
-            key=lambda i: hashlib.sha256(f"{scheme.version}:{layer}:{i.key}".encode()).hexdigest()
+            key=lambda i: hashlib.sha256(f"{_seed(scheme)}:{layer}:{i.key}".encode()).hexdigest()
         )
         picked = [i.key for i in matching if i.key in force]
         picked += [i.key for i in matching if i.key not in force][
@@ -407,7 +414,7 @@ def _sample(
     them in (labelled items outside both strata stay in the base), so labelling never reshuffles
     the draw. Labelled items that are no longer candidates are left out and counted in
     `dropped`."""
-    v = scheme.version
+    v = _seed(scheme)
     candidates = {i.key for i in pool.candidates}
     kept = {k for k in labels if k in candidates}
     fresh_inner, _ = _inner_draw(pool, scheme, prior, _base_keys(pool, set(), v), frozenset())
