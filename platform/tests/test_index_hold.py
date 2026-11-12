@@ -23,6 +23,10 @@ from factory.index.index import (
     code_path,
     holder_blocks,
 )
+from factory.index.index import (
+    _holder as read_holder,
+)
+from factory.mcp.conventions import guarded
 from tests.screening_helpers import demo_catalog, demo_projection
 
 _SPAWN = multiprocessing.get_context("spawn")
@@ -134,6 +138,28 @@ def test_a_crashed_holder_does_not_block(tmp_path: Path) -> None:
         assert older.sync().rebuilt
 
 
+def test_a_short_lived_same_version_process_does_not_take_the_hold(tmp_path: Path) -> None:
+    """Review item 1: a second process of the holder's version renews the hold but keeps the
+    live holder named, so its own exit does not look like the holder's crash."""
+    with _holder(tmp_path, "84") as pid:
+        later = datetime.now(UTC) + timedelta(minutes=2)  # past the refresh step
+        later = later.replace(microsecond=later.microsecond // 1000 * 1000)  # stored in ms
+        visitor = _index(tmp_path, "84", now=lambda: later)
+        assert not visitor.sync().rebuilt
+        held = visitor.holder()
+        assert held is not None and held.pid == pid and held.held_at == later
+        with pytest.raises(IndexHeldError):
+            _index(tmp_path, "83", now=lambda: later).sync()
+
+
+def test_the_refusal_is_a_structured_mcp_error(tmp_path: Path) -> None:
+    with _holder(tmp_path, "84"):
+        older = _index(tmp_path, "83")
+        result = guarded(lambda: older.sync().applied)
+    assert result["ok"] is False
+    assert "version 84" in str(result)
+
+
 def test_an_index_without_a_marker_is_not_held(tmp_path: Path) -> None:
     """An index built before the marker existed carries a version but no hold."""
     first = _index(tmp_path, "84")
@@ -226,3 +252,22 @@ def test_rule_a_holder_on_another_host_is_trusted_until_the_window_ends() -> Non
 def test_rule_versions_without_order() -> None:
     assert _blocks(_held("t1"), "t2")
     assert _blocks(_held("84"), "t2")
+
+
+def test_rule_a_held_at_far_in_the_future_does_not_hold_for_ever() -> None:
+    assert _blocks(_held(ago=-timedelta(minutes=5)))  # small skew still holds
+    assert not _blocks(_held(ago=-timedelta(minutes=11)))
+
+
+def test_rule_non_ascii_digits_are_unordered_not_a_crash() -> None:
+    assert _blocks(_held("\u00b2"), "83")
+    assert _blocks(_held("84"), "\u00b2")
+
+
+def test_damaged_markers_are_read_as_unmarked() -> None:
+    naive = read_holder(
+        {"projection_version": "84", "held_at": "2026-11-12T12:00:00", "holder_pid": "\u00b2"}
+    )
+    assert naive is not None and naive.held_at is None and naive.pid is None
+    garbage = read_holder({"projection_version": "84", "held_at": "not a time"})
+    assert garbage is not None and garbage.held_at is None

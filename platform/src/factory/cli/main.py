@@ -51,6 +51,7 @@ from factory.errors import (
 )
 from factory.events.envelope import Actor
 from factory.imports.model import ImportFormat, ImportRole
+from factory.index.index import IndexHeldError
 from factory.lineage.graph import GraphFilter
 from factory.living.digest_render import to_json as digest_json
 from factory.living.digest_render import to_markdown as digest_markdown
@@ -635,6 +636,8 @@ def _reporting_errors() -> Iterator[None]:
             typer.echo(f"{issue.field}: {issue.reason}", err=True)
         raise typer.Exit(1) from None
     except ProjectNotFoundError as exc:
+        _fail(str(exc), 1)
+    except IndexHeldError as exc:  # another code line holds the index (IDEA-62)
         _fail(str(exc), 1)
 
 

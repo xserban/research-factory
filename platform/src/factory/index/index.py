@@ -230,7 +230,7 @@ def code_path() -> str:
 
 
 def _version_key(version: str) -> int | None:
-    return int(version) if version.isdigit() else None
+    return int(version) if version.isascii() and version.isdigit() else None
 
 
 def holder_blocks(
@@ -252,11 +252,14 @@ def holder_blocks(
 
     Never blocks: the same version; an unmarked index (built before the marker existed); a hold
     older than `window` (a holder that crashed on another host ages out); this very process; a
-    holder on this host whose process is gone (a crash frees the index at once); a zero window.
+    holder on this host whose process is gone (a crash frees the index at once); a zero window; a
+    `held_at` more than a window ahead of `now` (clock skew or a damaged value must not hold the
+    index for ever).
     """
     if holder.version == version or holder.held_at is None or window <= timedelta(0):
         return False
-    if now - holder.held_at >= window:
+    age = now - holder.held_at
+    if age >= window or -age > window:
         return False
     if (
         holder.host == host
@@ -286,11 +289,13 @@ def _holder(meta: dict[str, str]) -> Holder | None:
     held_at = meta.get(_HELD_AT)
     try:
         when = parse_ts(held_at) if held_at is not None else None
-    except ValueError:
+    except (ValueError, TypeError, OverflowError):
         when = None
+    if when is not None and when.utcoffset() is None:
+        when = None  # a naive time cannot be compared; an unmarked index holds nothing
     return Holder(
         version=version,
-        pid=int(pid) if pid is not None and pid.isdigit() else None,
+        pid=int(pid) if pid is not None and pid.isascii() and pid.isdigit() else None,
         host=meta.get(_HOLDER_HOST),
         code=meta.get(_HOLDER_CODE),
         held_at=when,
@@ -475,7 +480,7 @@ class Index:
         with self._engine.begin() as conn:
             self._write(conn, new, offsets)
             self._set_meta(conn, _LAST_EVENT_ID, new[-1].id)
-            self._mark_holder(conn)
+            self._mark_holder(conn, _holder(meta))
         return SyncResult(applied=len(new), rebuilt=False)
 
     def holder(self) -> Holder | None:
@@ -492,9 +497,9 @@ class Index:
             return None  # an unreadable index is rebuilt; it holds nothing
         return None if stored is None else _holder(stored[0])
 
-    def _guard(self) -> None:
-        """Refuse to rebuild while another code line holds the index (IDEA-62, `holder_blocks`).
-        Callers hold the write lock."""
+    def _guard(self) -> Holder | None:
+        """Refuse to rebuild while another code line holds the index (IDEA-62, `holder_blocks`);
+        otherwise return the stored marker. Callers hold the write lock."""
         holder = self._stored_holder()
         if holder is None or not holder_blocks(
             holder,
@@ -505,7 +510,7 @@ class Index:
             host=self._host,
             alive=_pid_alive,
         ):
-            return
+            return holder
         assert holder.held_at is not None  # holder_blocks is False without it
         until = format_ts(holder.held_at + self._hold_window)
         raise IndexHeldError(
@@ -518,19 +523,48 @@ class Index:
 
     def _refresh_hold(self, meta: dict[str, str]) -> None:
         """Renew this version's hold when it is older than a minute (or half the window), so an
-        index in use stays held while a sync writes nothing else."""
+        index in use stays held while a sync writes nothing else. Best effort: an index that cannot
+        be written (a read-only file system) is read as before, unrenewed."""
         held = _holder(meta)
         step = min(_MAX_REFRESH, self._hold_window / 2)
-        if held is not None and held.held_at is not None and self._now() - held.held_at < step:
+        if held is not None and held.held_at is not None:
+            age = self._now() - held.held_at
+            if timedelta(0) <= age < step:
+                return
+        try:
+            with self._engine.begin() as conn:
+                self._mark_holder(conn, held)
+        except DBAPIError:
             return
-        with self._engine.begin() as conn:
-            self._mark_holder(conn)
 
-    def _mark_holder(self, conn: Connection) -> None:
-        self._set_meta(conn, _HOLDER_PID, str(self._pid))
-        self._set_meta(conn, _HOLDER_HOST, self._host)
-        self._set_meta(conn, _HOLDER_CODE, self._code)
-        self._set_meta(conn, _HELD_AT, format_ts(self._now()))
+    def _mark_holder(self, conn: Connection, stored: Holder | None) -> None:
+        """Write this version's hold. The process named stays the one already named when it runs
+        the same version and is still alive (on this host) or still fresh (on another host), so
+        that a short-lived command of the same version, once exited, does not look like a crash
+        of the long-lived holder and free the index to an older version."""
+        now = self._now()
+        keep = (
+            stored is not None
+            and stored.version == self._projection.version
+            and stored.pid is not None
+            and stored.pid != self._pid
+            and (
+                _pid_alive(stored.pid)
+                if stored.host == self._host
+                else stored.held_at is not None
+                and timedelta(0) <= now - stored.held_at < self._hold_window
+            )
+        )
+        if not keep:
+            self._set_meta(conn, _HOLDER_PID, str(self._pid))
+            self._set_meta(conn, _HOLDER_HOST, self._host)
+            self._set_meta(conn, _HOLDER_CODE, self._code)
+        else:
+            assert stored is not None
+            self._set_meta(conn, _HOLDER_PID, str(stored.pid))
+            self._set_meta(conn, _HOLDER_HOST, stored.host or "")
+            self._set_meta(conn, _HOLDER_CODE, stored.code or "")
+        self._set_meta(conn, _HELD_AT, format_ts(now))
 
     def last_event_id(self) -> str | None:
         """The greatest event id folded into the index, or None while it is empty."""
@@ -590,7 +624,7 @@ class Index:
         """Build a fresh DB beside the live one, then atomically swap it in.
 
         Refused (`IndexHeldError`) while another code line holds the index (IDEA-62)."""
-        self._guard()
+        stored = self._guard()
         events, offsets = self._read_everything()
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self._db_path.with_name(f"{self._db_path.name}.tmp-{os.getpid()}")
@@ -602,7 +636,7 @@ class Index:
             with engine.begin() as conn:
                 self._write(conn, events, offsets)
                 self._set_meta(conn, _PROJECTION_VERSION, self._projection.version)
-                self._mark_holder(conn)
+                self._mark_holder(conn, stored)
                 if events:
                     self._set_meta(conn, _LAST_EVENT_ID, events[-1].id)
         except BaseException:

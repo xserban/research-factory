@@ -1,4 +1,5 @@
 import getpass
+import math
 import os
 import re
 from datetime import timedelta
@@ -86,9 +87,11 @@ class Settings(StrictModel):
         try:
             hold_minutes = 10.0 if not hold else float(hold)
         except ValueError:
+            hold_minutes = math.nan
+        if not math.isfinite(hold_minutes) or hold_minutes < 0:
             raise FactoryValidationError(
-                [ValidationIssue("index_hold_minutes", f"must be a number, got {hold!r}")]
-            ) from None
+                [ValidationIssue("index_hold_minutes", f"must be a number >= 0, got {hold!r}")]
+            )
         configs = os.environ.get("FACTORY_MCP_CONFIGS", "")
         return cls(
             root=root,

@@ -5,10 +5,15 @@ separator) and those listed in `<root>/mcp-configs.txt` (one path per line; blan
 comments ignored; a relative path is read against the root). No list, no finding: the check
 never guesses where configs live.
 
-The code line of a `factory` server entry, first rule that applies:
-1. an entry of its `PYTHONPATH` that is a `factory` source directory (`.../platform/src`);
-2. the directory after `--project` or `--directory` in its arguments, read against the config's
-   own directory (a session starts in the directory that holds its `.mcp.json`);
+A server entry is a `factory` server when its name, its command's file name or one of its
+arguments starts with `factory` (`factory serve`, `factory-mcp`, `python -m factory.…`); a config
+with none is reported as unresolved. Relative paths in an entry are read against its `cwd` (itself
+read against the config's directory) or, without one, the config's directory: a session starts in
+the directory that holds its `.mcp.json`. `~` is expanded. The code line of a `factory` server,
+first rule that applies:
+1. an entry of its `PYTHONPATH` (split on the path separator) that is a `factory` source
+   directory (`.../platform/src`);
+2. the directory after `--project` or `--directory` in its arguments;
 3. its command, when it is a path inside a `platform/.venv`.
 A `.../platform` directory stands for the worktree that holds it. Configs whose servers resolve to
 more than one directory are reported together, with each directory's git commit when git can
@@ -17,6 +22,7 @@ read it. Read-only; nothing is written.
 
 import itertools
 import json
+import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -73,40 +79,50 @@ def _resolved(path: Path) -> Path:
         return path
 
 
+def _against(text: str, base: Path) -> Path:
+    path = Path(text).expanduser()
+    return path if path.is_absolute() else base / path
+
+
 def server_code(config: Path, entry: dict[str, object]) -> Path | None:
     """The code line one server entry runs, by the rules in the module docstring."""
+    cwd = entry.get("cwd")
+    base = _against(cwd, config.parent) if isinstance(cwd, str) and cwd else config.parent
     env = entry.get("env")
     if isinstance(env, dict):
         pythonpath = env.get("PYTHONPATH")
         if isinstance(pythonpath, str):
-            for part in pythonpath.split(":"):
-                candidate = Path(part)
-                if part and candidate.name == "src" and candidate.parent.name == "platform":
+            for part in pythonpath.split(os.pathsep):
+                candidate = _against(part, base) if part else None
+                if (
+                    candidate is not None
+                    and candidate.name == "src"
+                    and candidate.parent.name == "platform"
+                ):
                     return _resolved(worktree_of(candidate))
     args = entry.get("args")
     if isinstance(args, list):
         for flag, value in itertools.pairwise(args):
             if flag in ("--project", "--directory") and isinstance(value, str):
-                directory = Path(value).expanduser()
-                if not directory.is_absolute():
-                    directory = config.parent / directory
-                return _resolved(worktree_of(directory))
+                return _resolved(worktree_of(_against(value, base)))
     command = entry.get("command")
     if isinstance(command, str):
-        path = Path(command)
+        path = _against(command, base) if "/" in command else Path(command)
         for parent in path.parents:
             if parent.name == ".venv" and parent.parent.name == "platform":
                 return _resolved(parent.parent.parent)
     return None
 
 
-def _is_factory(entry: dict[str, object]) -> bool:
+def _is_factory(name: str, entry: dict[str, object]) -> bool:
     command = entry.get("command")
     args = entry.get("args")
-    words = [command] if isinstance(command, str) else []
+    words = [name]
+    if isinstance(command, str):
+        words.append(Path(command).name)
     if isinstance(args, list):
         words += [a for a in args if isinstance(a, str)]
-    return any(Path(word).name == "factory" for word in words)
+    return any(word.startswith("factory") for word in words)
 
 
 def read_config(config: Path) -> list[ServerLine] | str:
@@ -120,11 +136,12 @@ def read_config(config: Path) -> list[ServerLine] | str:
     servers = data.get("mcpServers") if isinstance(data, dict) else None
     if not isinstance(servers, dict):
         return "no mcpServers object"
-    return [
+    lines = [
         ServerLine(config, name, server_code(config, entry))
         for name, entry in sorted(servers.items())
-        if isinstance(entry, dict) and _is_factory(entry)
+        if isinstance(entry, dict) and _is_factory(name, entry)
     ]
+    return lines or "no factory server in it"
 
 
 def git_head(directory: Path) -> str | None:

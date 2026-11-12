@@ -57,6 +57,31 @@ def test_the_code_line_of_each_config_form(tmp_path: Path) -> None:
     assert c.code == runtime.resolve()
 
 
+def test_other_server_forms_and_relative_paths(tmp_path: Path) -> None:
+    config = _write(
+        tmp_path / "cfg" / "m.json",
+        {
+            "rf": {
+                "command": "python",
+                "args": ["-m", "factory.cli", "serve"],
+                "env": {"PYTHONPATH": os.pathsep.join(["other", "../w/platform/src"])},
+            },
+            "tool": {"command": "factory-mcp", "cwd": "../w2", "args": ["--project", "platform"]},
+            "home": {"command": "uv", "args": ["--directory", "~/w3/platform", "run", "factory"]},
+        },
+    )
+    home, rf, tool = (line.code for line in read_config(config))  # type: ignore[union-attr]
+    assert rf == (tmp_path / "w").resolve()
+    assert tool == (tmp_path / "w2").resolve()
+    assert home == (Path.home() / "w3").resolve()
+
+
+def test_a_config_without_a_factory_server_is_unresolved(tmp_path: Path) -> None:
+    other = _write(tmp_path / "other.json", {"git": {"command": "git-mcp"}})
+    [hit] = mcp_line_hits(Settings(root=tmp_path, user="obd", mcp_configs=(other,)))
+    assert hit.code == "mcp-config-unresolved" and "no factory server" in hit.message
+
+
 def test_one_code_line_gives_no_finding(tmp_path: Path) -> None:
     runtime = tmp_path / "runtime"
     first = _write(tmp_path / "a.json", {"factory": _pythonpath(runtime)})
@@ -83,8 +108,7 @@ def test_unreadable_and_unresolved_configs_are_reported(tmp_path: Path) -> None:
     broken = tmp_path / "broken.json"
     broken.write_text("{not json")
     opaque = _write(tmp_path / "opaque.json", {"factory": {"command": "factory", "args": []}})
-    other = _write(tmp_path / "other.json", {"git": {"command": "git-mcp"}})
-    settings = Settings(root=tmp_path, user="obd", mcp_configs=(missing, broken, opaque, other))
+    settings = Settings(root=tmp_path, user="obd", mcp_configs=(missing, broken, opaque))
     hits = mcp_line_hits(settings)
     assert [h.code for h in hits] == ["mcp-config-unresolved"] * 3
     assert [h.refs for h in hits] == [(str(missing),), (str(broken),), (str(opaque),)]
@@ -110,9 +134,10 @@ def test_settings_from_the_environment(tmp_path: Path, monkeypatch: pytest.Monke
     assert settings.index_hold.total_seconds() == 150
     monkeypatch.delenv("FACTORY_INDEX_HOLD_MINUTES")
     assert Settings.load(root=tmp_path, user="obd").index_hold_minutes == 10
-    monkeypatch.setenv("FACTORY_INDEX_HOLD_MINUTES", "soon")
-    with pytest.raises(FactoryValidationError):
-        Settings.load(root=tmp_path, user="obd")
+    for bad in ("soon", "nan", "-1", "inf"):
+        monkeypatch.setenv("FACTORY_INDEX_HOLD_MINUTES", bad)
+        with pytest.raises(FactoryValidationError):
+            Settings.load(root=tmp_path, user="obd")
 
 
 def test_check_reports_the_finding_as_a_warning(tmp_path: Path, clock: FixedClock) -> None:
