@@ -13,7 +13,9 @@ P="$DATA/projects/$SLUG"
 MODE="${1:---dry}"
 
 # (source, destination) pairs: the data root as it is, then the researcher's files into the project
-copy() { # src dst
+CARRIED=" "
+copy() { # src dst (also remembers which top-level pilot name it carried)
+  CARRIED="$CARRIED$(basename "${1%/}") "
   local flags=(-a --human-readable); [ "$MODE" = "--run" ] && flags+=(--info=stats1) || flags+=(--dry-run --itemize-changes)
   [ "$MODE" = "--run" ] && mkdir -p "$2"
   rsync "${flags[@]}" "$1" "$2"
@@ -47,15 +49,24 @@ echo "== 2. the researcher's documents -> project docs/"
 for f in research-plan.md research-plan.pdf research-plan-v1-draft.md research-plan-v2-draft.md research-plan-v3-rejected.md research-plan-v3-rejected.pdf research-questions.md research-questions.pdf review-protocol.md review-protocol.pdf goal-definition.md goal-definition.pdf rf-plan-draft.md develop-part-a.md demo-log.md STATUS-2026-11-09.md; do
   [ -e "$PILOT/$f" ] && copy "$PILOT/$f" "$P/docs/"
 done
+for f in demo-log.md STATUS-2026-11-09.md goal-definition.md goal-definition.pdf review-protocol.md review-protocol.pdf rf-plan-draft.md develop-part-a.md; do
+  [ -e "$PILOT/$f" ] && copy "$PILOT/$f" "$P/docs/"
+done
 echo "== 3. inputs and evidence"
 for d in staging-7 staging-13 staging-named staging-pdfs pdfs; do [ -d "$PILOT/$d" ] && copy "$PILOT/$d/" "$P/inputs/$d/"; done
 [ -d "$PILOT/validation" ] && copy "$PILOT/validation/" "$P/validation/"
 [ -e "$PILOT/validation-cases.json" ] && copy "$PILOT/validation-cases.json" "$P/validation/"
+echo "== 3b. reference layers: schemes, samples and the calibration labels (some labels exist only here, not in the events)"
+for f in "$PILOT"/reference-layers-*; do [ -e "$f" ] && copy "$f" "$P/inputs/reference-layers/"; done
 echo "== 4. run history and tooling -> ops/ (until factory mine run replaces them)"
 copy "$PILOT/screeners/" "$P/ops/screeners/"
+for f in hub.sh deleted-branches-2026-11-12.txt; do [ -e "$PILOT/$f" ] && copy "$PILOT/$f" "$P/ops/"; done
 echo "== 5. old product copies and backfill -> archive/ (superseded by the hub)"
 for d in explorer dashboard superseded backfill; do [ -d "$PILOT/$d" ] && copy "$PILOT/$d/" "$P/archive/$d/"; done
 echo "root-backup-2026-11-07 is left where it is (a backup: archive it outside the tree)."
+echo "== 6. top-level pilot entries this script does not carry (read them; decide before archiving the pilot)"
+KNOWN=" root projects staging-7 staging-13 staging-named staging-pdfs pdfs validation validation-cases.json screeners explorer dashboard superseded backfill root-backup-2026-11-07 "
+for f in "$PILOT"/* "$PILOT"/.[!.]*; do b=$(basename "$f"); case "$b" in reference-layers-*|"*"|".[!.]*") continue;; esac; case "$KNOWN$CARRIED" in *" $b "*) ;; *) echo "  NOT CARRIED: $b";; esac; done
 
 if [ "$MODE" = "--run" ]; then
   cat <<N
