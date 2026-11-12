@@ -1,16 +1,28 @@
-"""Cited items: reference entries of all live extractions grouped by normalised title.
+"""Cited items: reference entries of all live extractions grouped into items (rules version 4).
 
 Invariants: read-only (writes no event, only syncs the index); deterministic for a given index;
 ordering (by citing count, then key) never judges relevance. A cited item is computed on read,
 never stored.
 
-An entry with any clean-up flag (see `flags_for`) whose own title is unusable borrows a title from
-the project's own data when it carries a DOI or arXiv id, in this order: the work its live link
-resolves to; a work record with the same identifier; another entry with the same identifier and a
-usable title (the most common such title, ties to the shortest, then lexicographic). A borrowed
-title must itself pass `flags_for`. No source is called. An entry that borrows nothing is reported
-as unassessable with its reasons. `ItemsReport.borrowed` counts the entries by where their title
-came from.
+Rules version 4:
+1. Identifier wins. An entry with a DOI or arXiv id and a title known for it takes that title
+   instead of its parsed one, flagged or not, in this order: the work its live link resolves to; a
+   work record with the same identifier; the most common usable (unflagged) parsed title among the
+   entries with the same identifier (ties to the shortest, then lexicographic). A borrowed title
+   must itself pass `flags_for`. No source is called. An entry without an identifier keeps its
+   parsed title; if that is flagged it is unassessable with its reasons.
+2. Merge. Entries are united (union-find) when they share a DOI (case-folded) or an arXiv id
+   (version suffix stripped); when their titles are equal after `strip_title_notes`; or when their
+   stripped titles of at least five words have `fuzz.ratio` >= 95 and years within one of each
+   other (see `_fuzzy_pairs`). Each union is an item.
+3. The item title is the identifier-known title if any member has one, else the most common member
+   title, preferring members whose title carries no strippable note. The key is
+   `item_key(normalise_title(title))`, deterministic for a given index.
+4. `CitedItem.aliases` holds the keys rules version 3 gave to the members and the item's own key.
+
+`ItemsReport.borrowed` counts entries by where their identifier title came from; `replaced` counts
+entries with a usable parsed title that the identifier title changed (after normalisation);
+`merged` is the number of distinct normalised titles before step 2 minus the number of items.
 """
 
 from __future__ import annotations
@@ -23,14 +35,16 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from typing import Final
 
+from rapidfuzz import fuzz, process
 from sqlalchemy import text
 
 from factory.services.context import Project
 
-ITEM_RULES_VERSION: Final = "3"
+ITEM_RULES_VERSION: Final = "4"
 """2: titles borrowed for identifier-only entries. 3: display titles HTML-unescaped before flags
 and normalisation; flag `et-al`; `author-list` also matches four or more single-surname parts and
-"Name Name and Name Name"."""
+"Name Name and Name Name". 4: identifier titles replace parsed ones for every entry with an
+identifier; merged items; `aliases`."""
 
 _MIN_WORDS: Final = 3
 _MIN_CHARS: Final = 12
@@ -167,7 +181,117 @@ class ItemsReport:
     entries_total: int = 0
     rules_version: str = ITEM_RULES_VERSION
     borrowed: dict[str, int] = field(default_factory=dict)
-    """Entries whose title was borrowed, by source: `resolved-link`, `work-record`, `entry`."""
+    """Entries whose title came from an identifier, by source: `resolved-link`, `work-record`,
+    `entry`."""
+    replaced: int = 0
+    """Entries with a usable parsed title that the identifier title changed (normalised)."""
+    merged: int = 0
+    """Distinct normalised titles before merging minus the number of items."""
+
+
+_MONTHS: Final = (
+    "january|february|march|april|may|june|july|august|september|october|november|december|"
+    "jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec"
+)
+_VENUES: Final = (
+    "neurips|nips|icml|iclr|acl|emnlp|naacl|aaai|ijcai|cvpr|iccv|eccv|kdd|www|sigir|colm|"
+    "tmlr|jmlr|nature|science"
+)
+_YEAR: Final = r"(?:(?:" + _MONTHS + r")\.?\s+)?(?:19|20)\d\d"
+_NOTE_PATTERNS: Final = (
+    # In: ... / Proceedings of ... after the title (a separator is required, so a title that
+    # starts with these words is untouched).
+    re.compile(r"[\s,.;:]+(?:in:|in\s+proceedings\b|proceedings\s+of\b).*$", re.IGNORECASE),
+    # arXiv preprint arXiv:2401.00001 / arXiv:2401.00001v2 / arXiv preprint
+    re.compile(
+        r"[\s,.;:(\[]+arxiv(?:\s+preprint)?[\s:]*(?:arxiv[\s:]*)?(?:\d{4}\.\d{4,5}(?:v\d+)?)?"
+        r"[\s)\]]*$",
+        re.IGNORECASE,
+    ),
+    # bracketed or separated preprint / technical report notes
+    re.compile(
+        r"(?:[\s]*[\[(]\s*(?:preprint|technical report|tech\.? report)\s*[\])]"
+        r"|[,.;:]\s*(?:preprint|technical report|tech\.? report))[\s.]*$",
+        re.IGNORECASE,
+    ),
+    # venue with optional year, only after a separator or in brackets
+    re.compile(
+        r"(?:[,.;:]\s*|\s*[\[(]\s*)(?:" + _VENUES + r")\s*['\u2019]?\d{0,4}\s*[\])]?[\s.]*$",
+        re.IGNORECASE,
+    ),
+    # year note: ", 2024", ", September 2024", "(2024)", "[2024]", ". 2024"
+    re.compile(
+        r"(?:[,.;:]\s*" + _YEAR + r"|\s*[\[(]\s*" + _YEAR + r"\s*[\])])[\s.]*$",
+        re.IGNORECASE,
+    ),
+    # a parenthesised year inside the title
+    re.compile(r"\s*\(\s*(?:19|20)\d\d\s*\)", re.IGNORECASE),
+    # trailing punctuation
+    re.compile(r"[\s,.;:/-]+$"),
+)
+"""Patterns removed by `strip_title_notes`, each replaced by the empty string."""
+
+
+def strip_title_notes(title: str) -> str:
+    """The title without trailing or embedded notes that are not part of it: year notes
+    (", 2024", "(2024)", ", September 2024"), "arXiv preprint arXiv:...", "[Preprint]",
+    ", preprint", "technical report" in brackets or after a separator, venue notes after a
+    separator ("In: ...", "Proceedings of ...", ", NeurIPS 2024") and trailing punctuation.
+    Patterns (`_NOTE_PATTERNS`) are applied until nothing changes. Words inside the title proper
+    are never removed: every note needs a separator or brackets before it. A result of fewer than
+    three words is discarded and the clean title returned."""
+    out = title.strip()
+    for _ in range(6):
+        before = out
+        for pattern in _NOTE_PATTERNS:
+            out = pattern.sub("", out)
+        if out == before:
+            break
+    return out if len(normalise_title(out).split()) >= _MIN_WORDS else title.strip()
+
+
+_FUZZY_MIN_WORDS: Final = 5
+_FUZZY_CUTOFF: Final = 95.0
+_ARTICLES: Final = frozenset({"the", "a", "an"})
+
+
+def _digit_tokens(norm: str) -> list[str]:
+    """Sorted words containing a digit: titles that differ in a number ("Claude Opus 4.6" and
+    "4.8", "GPT-4" and "GPT-5") are different works whatever the edit similarity."""
+    return sorted(w for w in norm.split() if any(c.isdigit() for c in w))
+
+
+def _fuzzy_pairs(stripped: dict[str, set[int]]) -> list[tuple[str, str]]:
+    """Pairs of normalised stripped titles to merge. `fuzz.ratio` (order-sensitive edit
+    similarity) is used rather than `token_sort_ratio`: re-ordered words usually name another
+    work, and the cutoff of 95 on at least five words allows about one character in twenty
+    to differ ("The AI Scientist-v2: ..." stays apart from "The AI Scientist: ..."). Both titles
+    need a known year, the two within one, and the same numeric words. Candidates are blocked by
+    the first non-article word and by the last word, so a title meets few others."""
+    cands = sorted(t for t, ys in stripped.items() if ys and len(t.split()) >= _FUZZY_MIN_WORDS)
+    blocks: dict[tuple[str, str], list[str]] = defaultdict(list)
+    for t in cands:
+        words = t.split()
+        first = next((w for w in words if w not in _ARTICLES), words[0])
+        blocks[("f", first)].append(t)
+        blocks[("l", words[-1])].append(t)
+    seen: set[tuple[str, str]] = set()
+    pairs: list[tuple[str, str]] = []
+    for members in blocks.values():
+        if len(members) < 2:
+            continue
+        for a in members:
+            for b, _score, _idx in process.extract(
+                a, members, scorer=fuzz.ratio, score_cutoff=_FUZZY_CUTOFF, limit=None
+            ):
+                if b <= a or (a, b) in seen:
+                    continue
+                seen.add((a, b))
+                if _digit_tokens(a) == _digit_tokens(b) and any(
+                    abs(x - y) <= 1 for x in stripped[a] for y in stripped[b]
+                ):
+                    pairs.append((a, b))
+    return pairs
 
 
 def _most_common(titles: list[str]) -> str:
@@ -185,6 +309,33 @@ def _usable(title: object) -> str | None:
         return None
     cleaned = clean_title(title)
     return cleaned.strip() if not flags_for(cleaned) else None
+
+
+class _Union:
+    def __init__(self, n: int) -> None:
+        self.parent = list(range(n))
+
+    def find(self, x: int) -> int:
+        while self.parent[x] != x:
+            self.parent[x] = self.parent[self.parent[x]]
+            x = self.parent[x]
+        return x
+
+    def union(self, a: int, b: int) -> None:
+        ra, rb = self.find(a), self.find(b)
+        if ra != rb:
+            self.parent[max(ra, rb)] = min(ra, rb)
+
+
+@dataclass
+class _Member:
+    entry: ItemEntry
+    title: str
+    year: int | None
+    doi: str | None
+    arxiv: str | None
+    known: bool  # title came from an identifier
+    alias: str | None  # the key rules version 3 gave this entry
 
 
 def cited_items(project: Project) -> ItemsReport:
@@ -263,41 +414,101 @@ def cited_items(project: Project) -> ItemsReport:
         return None
 
     report = ItemsReport(entries_total=len(rows))
-    groups: dict[str, list[tuple[ItemEntry, str, int | None, str | None, str | None]]] = (
-        defaultdict(list)
-    )
-    norms: dict[str, str] = {}
+    members: list[_Member] = []
     for eid, ordinal, wid, title, year, doi, arxiv in rows:
-        if isinstance(title, str):
-            title = clean_title(title)
-        flags = flags_for(title)
-        if flags:
-            got = borrow(eid, ordinal, doi, arxiv) if (doi or arxiv) else None
-            if got is None:
+        parsed = clean_title(title) if isinstance(title, str) else title
+        flags = flags_for(parsed)
+        got = borrow(eid, ordinal, doi, arxiv) if (doi or arxiv) else None
+        if got is None:
+            if flags:
                 report.unassessable.append(Unassessable(eid, ordinal, wid, flags, doi, arxiv))
                 continue
-            title, source = got
-            report.borrowed[source] = report.borrowed.get(source, 0) + 1
-        norm = normalise_title(title)
-        key = item_key(norm)
-        norms[key] = norm
-        groups[key].append((ItemEntry(eid, ordinal, wid), title.strip(), year, doi, arxiv))
-    for key, members in groups.items():
-        best = _most_common([m[1] for m in members])
-        years = [m[2] for m in members if m[2] is not None]
+            assert isinstance(parsed, str)
+            members.append(
+                _Member(
+                    ItemEntry(eid, ordinal, wid),
+                    parsed.strip(),
+                    year,
+                    doi,
+                    arxiv,
+                    False,
+                    item_key(normalise_title(parsed)),
+                )
+            )
+            continue
+        new_title, source = got
+        report.borrowed[source] = report.borrowed.get(source, 0) + 1
+        if flags:
+            v3_key = item_key(normalise_title(new_title))
+        else:
+            assert isinstance(parsed, str)
+            v3_key = item_key(normalise_title(parsed))
+            if normalise_title(parsed) != normalise_title(new_title):
+                report.replaced += 1
+        members.append(
+            _Member(ItemEntry(eid, ordinal, wid), new_title.strip(), year, doi, arxiv, True, v3_key)
+        )
+
+    uf = _Union(len(members))
+    first_by_ident: dict[str, int] = {}
+    stripped_of: list[str] = []
+    first_by_stripped: dict[str, int] = {}
+    stripped_years: dict[str, set[int]] = defaultdict(set)
+    for i, m in enumerate(members):
+        for ident in (
+            f"doi:{m.doi.lower()}" if m.doi else None,
+            f"arxiv:{_arxiv_base(m.arxiv)}" if m.arxiv else None,
+        ):
+            if ident:
+                uf.union(i, first_by_ident.setdefault(ident, i))
+        st = normalise_title(strip_title_notes(m.title))
+        stripped_of.append(st)
+        uf.union(i, first_by_stripped.setdefault(st, i))
+        if m.year is not None:
+            stripped_years[st].add(int(m.year))
+    for a, b in _fuzzy_pairs(stripped_years):
+        uf.union(first_by_stripped[a], first_by_stripped[b])
+
+    clusters: dict[int, list[int]] = defaultdict(list)
+    for i in range(len(members)):
+        clusters[uf.find(i)].append(i)
+    pre_merge = len({normalise_title(m.title) for m in members})
+    by_key: dict[str, list[_Member]] = defaultdict(list)
+    chosen: dict[str, str] = {}
+    for idxs in clusters.values():
+        group = [members[i] for i in idxs]
+        known = [m.title for m in group if m.known]
+        if known:
+            title = _most_common(known)
+        else:
+            plain = [
+                m.title
+                for m in group
+                if normalise_title(strip_title_notes(m.title)) == normalise_title(m.title)
+            ]
+            title = _most_common(plain or [m.title for m in group])
+        key = item_key(normalise_title(title))
+        by_key[key].extend(group)
+        chosen.setdefault(key, title)
+    for key, group in by_key.items():
+        title = chosen[key]
+        years = [m.year for m in group if m.year is not None]
+        aliases = {key} | {m.alias for m in group if m.alias}
         report.items.append(
             CitedItem(
                 key=key,
-                title=best,
-                normalised=norms[key],
-                citing_works=tuple(sorted({m[0].work_id for m in members})),
+                title=title,
+                normalised=normalise_title(title),
+                citing_works=tuple(sorted({m.entry.work_id for m in group})),
                 entries=tuple(
-                    sorted((m[0] for m in members), key=lambda e: (e.extraction_id, e.ordinal))
+                    sorted((m.entry for m in group), key=lambda e: (e.extraction_id, e.ordinal))
                 ),
                 year=min(years) if years else None,
-                dois=tuple(sorted({m[3] for m in members if m[3]})),
-                arxivs=tuple(sorted({m[4] for m in members if m[4]})),
+                dois=tuple(sorted({m.doi for m in group if m.doi})),
+                arxivs=tuple(sorted({m.arxiv for m in group if m.arxiv})),
+                aliases=tuple(sorted(aliases)),
             )
         )
+    report.merged = pre_merge - len(report.items)
     report.items.sort(key=lambda i: (-i.citing_count, i.key))
     return report
