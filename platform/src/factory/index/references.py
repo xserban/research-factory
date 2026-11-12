@@ -218,6 +218,7 @@ def reference_tables(metadata: MetaData) -> ReferenceTables:
         Column("version", Integer, primary_key=True),
         Column("layers", String, nullable=False),
         Column("precursor_before_year", Integer, nullable=True),
+        Column("inner_sample", String, nullable=True),
         Column("event_id", String, nullable=False),
     )
     layers = Table(
@@ -627,6 +628,11 @@ def _layer_scheme_recorded(t: ReferenceTables) -> Handler:
                 version=p.version,
                 layers=_json([layer.model_dump(mode="json") for layer in p.layers]),
                 precursor_before_year=p.precursor_before_year,
+                inner_sample=(
+                    None
+                    if p.inner_sample is None
+                    else _json(p.inner_sample.model_dump(mode="json"))
+                ),
                 event_id=event.id,
             )
             .on_conflict_do_nothing(index_elements=["version"])

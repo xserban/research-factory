@@ -1739,7 +1739,12 @@ def references_status_cmd(ctx: typer.Context) -> None:
 @scheme_app.command("record")
 def references_scheme_record_cmd(
     ctx: typer.Context,
-    file: Annotated[Path, typer.Argument(help="A JSON file: {version, layers: [...]}.")],
+    file: Annotated[
+        Path,
+        typer.Argument(
+            help="A JSON file: {version, layers, inner_sample?: {from_version, draw: {layer: n}}}."
+        ),
+    ],
 ) -> None:
     """Record the layer scheme (the researcher's act, before any agent assigns a layer)."""
     state = _state(ctx)
@@ -1783,20 +1788,23 @@ def _current_scheme_or_refuse(project: Project) -> LayerSchemeRecorded:
 
 @layers_app.command("sample")
 def references_layers_sample_cmd(ctx: typer.Context) -> None:
-    """The calibration sample: key, citing count, year (`?` if unknown), `P` for a precursor,
-    whether you have labelled it, and the title."""
+    """The calibration sample: key, stratum (`base`, or `inner:<layer>` of the earlier scheme),
+    citing count, year (`?` if unknown), `P` for a precursor, whether you have labelled it, and
+    the title."""
     state = _state(ctx)
     with _reporting_errors():
         project = _resolve_project(state)
         scheme = _current_scheme_or_refuse(project)
-        sample = layers_service.calibration_sample(project, scheme.version)
+        sample = layers_service.calibration_sample_strata(project, scheme.version)
         labelled = layers_service.researcher_labels(project, scheme.version)
     typer.echo(f"scheme version {scheme.version}; {len(sample)} item(s)")
-    for item in sample:
+    for item, stratum in sample:
         mark = "labelled" if item.key in labelled else "-"
         year = "?" if item.year is None else str(item.year)
         pre = "P" if layers_service.is_precursor(item, scheme) else "-"
-        typer.echo(f"{item.key}\t{item.citing_count}\t{year}\t{pre}\t{mark}\t{item.title}")
+        typer.echo(
+            f"{item.key}\t{stratum}\t{item.citing_count}\t{year}\t{pre}\t{mark}\t{item.title}"
+        )
 
 
 @layers_app.command("label")

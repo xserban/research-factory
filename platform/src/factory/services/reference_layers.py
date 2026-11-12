@@ -31,6 +31,7 @@ from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.blobs import BlobIntegrityError, BlobNotFoundError
 from factory.events.envelope import Actor
 from factory.model.references import (
+    InnerSample,
     LayerAssigned,
     LayerDef,
     LayerLabelled,
@@ -114,6 +115,15 @@ class CalibrationState:
     dropped: int = 0
     """Labelled items left out of the sample because they are no longer assessable candidates
     (not assessable, or now in the corpus)."""
+    agreement_by_layer: dict[str, float | None] = field(default_factory=dict)
+    """Per layer, over compared items the researcher or the agent put in it: the share both put
+    there."""
+    strata: dict[str, int] = field(default_factory=dict)
+    """Sample items per stratum: `base`, and `inner` when the scheme has an inner sample."""
+    inner_by_layer: dict[str, int] = field(default_factory=dict)
+    """Inner items per drawn layer of the earlier scheme."""
+    inner_shortfall: dict[str, int] = field(default_factory=dict)
+    """Per drawn layer, items the pool could not supply."""
 
 
 @dataclass(frozen=True)
@@ -165,7 +175,9 @@ def _refuse(field_: str, message: str) -> FactoryValidationError:
 def _scheme(project: Project, version: int | None = None) -> LayerSchemeRecorded | None:
     """The recorded scheme of `version`, or the highest version when `version` is None."""
     project.index.sync()
-    sql = "SELECT version, layers, precursor_before_year FROM reference_layer_schemes "
+    sql = (
+        "SELECT version, layers, precursor_before_year, inner_sample FROM reference_layer_schemes "
+    )
     params: dict[str, int] = {}
     if version is None:
         sql += "ORDER BY version DESC LIMIT 1"
@@ -178,7 +190,10 @@ def _scheme(project: Project, version: int | None = None) -> LayerSchemeRecorded
         return None
     layers = tuple(LayerDef.model_validate(d) for d in json.loads(str(row[1])))
     cutoff = None if row[2] is None else int(row[2])
-    return LayerSchemeRecorded(version=int(row[0]), layers=layers, precursor_before_year=cutoff)
+    inner = None if row[3] is None else InnerSample.model_validate(json.loads(str(row[3])))
+    return LayerSchemeRecorded(
+        version=int(row[0]), layers=layers, precursor_before_year=cutoff, inner_sample=inner
+    )
 
 
 def current_scheme(project: Project) -> LayerSchemeRecorded | None:
@@ -197,9 +212,27 @@ def record_scheme(project: Project, actor: Actor, scheme: LayerSchemeRecorded) -
             if (
                 existing.layers == scheme.layers
                 and existing.precursor_before_year == scheme.precursor_before_year
+                and existing.inner_sample == scheme.inner_sample
             ):
                 return SchemeResult(scheme.version, False, None)
             raise _refuse("version", f"version {scheme.version} is recorded with different content")
+        inner = scheme.inner_sample
+        if inner is not None:
+            earlier = _scheme(project, inner.from_version)
+            if earlier is None:
+                raise _refuse("inner_sample.from_version", "unknown-scheme-version")
+            known = {d.id for d in earlier.layers}
+            unknown = sorted(set(inner.draw) - known)
+            if unknown:
+                raise FactoryValidationError(
+                    [
+                        ValidationIssue(
+                            f"inner_sample.draw.{layer}",
+                            f"unknown-layer: not a layer of version {inner.from_version}",
+                        )
+                        for layer in unknown
+                    ]
+                )
         event = project.events.make("reference.layer_scheme_recorded", scheme, actor)
         project.record([event])
     return SchemeResult(scheme.version, True, event.id)
@@ -276,17 +309,22 @@ def _sample_from(candidates: Sequence[CitedItem], scheme_version: int) -> list[C
 @dataclass(frozen=True)
 class _Sample:
     keys: frozenset[str]
+    """Every sample item: base and inner."""
+    inner: dict[str, str]
+    """Inner-stratum item key to the earlier scheme's layer it was drawn from."""
     dropped: int
+    shortfall: dict[str, int]
+    """Per drawn layer of the inner sample, how many items the pool could not supply."""
+
+    @property
+    def base(self) -> frozenset[str]:
+        return self.keys - self.inner.keys()
 
 
-def _sample(pool: _Pool, labels: dict[str, str], scheme_version: int) -> _Sample:
-    """The calibration sample: the labelled items that are still candidates, filled up to exactly
-    `CALIBRATION_SIZE` (or the whole pool, if smaller) from the fresh draw (`_sample_from`, in its
-    order, skipping labelled items), then, if the draw falls short, from the remaining candidates
-    in SHA-256 draw order. Labelled items that are no longer candidates are left out and counted
-    in `dropped`."""
-    candidates = {i.key for i in pool.candidates}
-    kept = {k for k in labels if k in candidates}
+def _base_keys(pool: _Pool, kept: set[str], scheme_version: int) -> set[str]:
+    """The base stratum: `kept` (labelled items), filled up to exactly `CALIBRATION_SIZE` (or the
+    whole pool, if smaller) from the fresh draw (`_sample_from`, in its order), then, if the draw
+    falls short, from the remaining candidates in SHA-256 draw order."""
     chosen = set(kept)
     need = CALIBRATION_SIZE - len(chosen)
     for item in _sample_from(pool.candidates, scheme_version):
@@ -301,15 +339,109 @@ def _sample(pool: _Pool, labels: dict[str, str], scheme_version: int) -> _Sample
             key=lambda i: _draw_order(scheme_version, i.key),
         )
         chosen.update(i.key for i in rest[:need])
-    return _Sample(frozenset(chosen), len(labels) - len(kept))
+    return chosen
+
+
+def _prior_layers(project: Project, scheme: LayerSchemeRecorded) -> dict[str, frozenset[str]]:
+    """For a scheme with an inner sample: each drawn layer of the earlier scheme to the item keys
+    an agent placed there at the title stage. Empty without an inner sample."""
+    inner = scheme.inner_sample
+    if inner is None:
+        return {}
+    pools: dict[str, set[str]] = {layer: set() for layer in inner.draw}
+    for key, layer in _latest_layers(project, "title", inner.from_version).items():
+        if layer in pools:
+            pools[layer].add(key)
+    return {layer: frozenset(keys) for layer, keys in pools.items()}
+
+
+def _inner_draw(
+    pool: _Pool,
+    scheme: LayerSchemeRecorded,
+    prior: dict[str, frozenset[str]],
+    skip: set[str],
+    force: frozenset[str],
+) -> tuple[dict[str, str], dict[str, int]]:
+    """The inner stratum: per drawn layer, `count` candidates that the earlier scheme's agent
+    placed there (matched by item key or by membership of `item.aliases`), in SHA-256 order of
+    (scheme version, layer id, item key). Items in `skip` (the base stratum) or already drawn for
+    an earlier layer are passed over; `force` (labelled inner items) are taken first. Returns the
+    item-to-layer map and the per-layer shortfall."""
+    inner = scheme.inner_sample
+    drawn: dict[str, str] = {}
+    shortfall: dict[str, int] = {}
+    if inner is None:
+        return drawn, shortfall
+    for layer in sorted(inner.draw):
+        members = prior.get(layer, frozenset())
+        matching = [
+            i
+            for i in pool.candidates
+            if i.key not in skip
+            and i.key not in drawn
+            and (i.key in members or any(a in members for a in i.aliases))
+        ]
+        matching.sort(
+            key=lambda i: hashlib.sha256(f"{scheme.version}:{layer}:{i.key}".encode()).hexdigest()
+        )
+        picked = [i.key for i in matching if i.key in force]
+        picked += [i.key for i in matching if i.key not in force][
+            : max(0, inner.draw[layer] - len(picked))
+        ]
+        for key in picked:
+            drawn[key] = layer
+        if len(picked) < inner.draw[layer]:
+            shortfall[layer] = inner.draw[layer] - len(picked)
+    return drawn, shortfall
+
+
+def _sample(
+    pool: _Pool,
+    labels: dict[str, str],
+    scheme: LayerSchemeRecorded,
+    prior: dict[str, frozenset[str]],
+) -> _Sample:
+    """The calibration sample: the base stratum (`CALIBRATION_SIZE` items, see `_base_keys`) plus,
+    when the scheme has an `inner_sample`, the inner stratum (`_inner_draw`, skipping base items).
+    Labelled items that are still candidates stay in the stratum a fresh, label-free draw puts
+    them in (labelled items outside both strata stay in the base), so labelling never reshuffles
+    the draw. Labelled items that are no longer candidates are left out and counted in
+    `dropped`."""
+    v = scheme.version
+    candidates = {i.key for i in pool.candidates}
+    kept = {k for k in labels if k in candidates}
+    fresh_inner, _ = _inner_draw(pool, scheme, prior, _base_keys(pool, set(), v), frozenset())
+    forced = frozenset(kept & fresh_inner.keys())
+    base = _base_keys(pool, kept - forced, v)
+    inner, shortfall = _inner_draw(pool, scheme, prior, base, forced)
+    return _Sample(frozenset(base | inner.keys()), inner, len(labels) - len(kept), shortfall)
+
+
+def _sample_for(project: Project, pool: _Pool, scheme: LayerSchemeRecorded) -> _Sample:
+    """The sample of `scheme` now. The caller holds `project.index.exclusive()`."""
+    return _sample(pool, _labels(project, scheme.version), scheme, _prior_layers(project, scheme))
 
 
 def calibration_sample(project: Project, scheme_version: int) -> list[CitedItem]:
     """The calibration sample in queue order (see `_sample`)."""
+    return [i for i, _ in calibration_sample_strata(project, scheme_version)]
+
+
+def calibration_sample_strata(project: Project, scheme_version: int) -> list[tuple[CitedItem, str]]:
+    """The calibration sample in queue order, each item with its stratum: "base", or
+    "inner:<layer>" (the layer of the earlier scheme it was drawn from). Refused for an unknown
+    version."""
     with project.index.exclusive():
+        scheme = _scheme(project, scheme_version)
+        if scheme is None:
+            raise _refuse("scheme_version", "unknown-scheme-version")
         pool = _pool(project)
-        keys = _sample(pool, _labels(project, scheme_version), scheme_version).keys
-    return [i for i in pool.candidates if i.key in keys]
+        sample = _sample_for(project, pool, scheme)
+    return [
+        (i, f"inner:{sample.inner[i.key]}" if i.key in sample.inner else "base")
+        for i in pool.candidates
+        if i.key in sample.keys
+    ]
 
 
 def record_label(
@@ -331,7 +463,7 @@ def record_label(
         if layer not in {d.id for d in scheme.layers}:
             raise _refuse("layer", "unknown-layer")
         pool = _pool(project)
-        if item_key not in _sample(pool, _labels(project, scheme_version), scheme_version).keys:
+        if item_key not in _sample_for(project, pool, scheme).keys:
             raise _refuse("item_key", "not in the calibration sample")
         event = project.events.make(
             "reference.layer_labelled",
@@ -390,10 +522,15 @@ def _calibration(
     both = sorted(set(labelled) & set(assigned))
     agree = sum(1 for k in both if labelled[k] == assigned[k])
     by_layer: dict[str, float | None] = {}
+    agree_by_layer: dict[str, float | None] = {}
     for layer in (d.id for d in scheme.layers):
-        if any(layer in (labelled[k], assigned[k]) for k in both):
+        touched = [k for k in both if layer in (labelled[k], assigned[k])]
+        if touched:
             by_layer[layer] = cohen_kappa(
                 [(labelled[k] == layer, assigned[k] == layer) for k in both]
+            )
+            agree_by_layer[layer] = sum(1 for k in touched if labelled[k] == assigned[k]) / len(
+                touched
             )
     kappa = cohen_kappa_nominal([(labelled[k], assigned[k]) for k in both])
     return CalibrationState(
@@ -405,6 +542,14 @@ def _calibration(
         agreement=agree / len(both) if both else None,
         kappa=kappa,
         kappa_by_layer=by_layer,
+        agreement_by_layer=agree_by_layer,
+        strata=(
+            {"base": len(sample.base), "inner": len(sample.inner)}
+            if scheme.inner_sample is not None
+            else {"base": len(sample.base)}
+        ),
+        inner_by_layer=dict(sorted(Counter(sample.inner.values()).items())),
+        inner_shortfall=dict(sample.shortfall),
         floor=CALIBRATION_FLOOR,
         dropped=sample.dropped,
         passed=bool(sample_keys)
@@ -421,9 +566,11 @@ def _calibration_for(
     """The one calibration computation (gate, status and `calibration_state` all use it). The
     caller holds `project.index.exclusive()`."""
     v = scheme.version
-    labels = _labels(project, v)
     return _calibration(
-        _sample(pool, labels, v), scheme, labels, _latest_layers(project, "title", v)
+        _sample_for(project, pool, scheme),
+        scheme,
+        _labels(project, v),
+        _latest_layers(project, "title", v),
     )
 
 
@@ -506,8 +653,7 @@ def _stage_queue(
     if stage == "title":
         done = set(_latest_layers(project, "title", v))
         left = [i for i in pool.candidates if i.key not in done]
-        labels = _labels(project, v)
-        sample = _sample(pool, labels, v)
+        sample = _sample_for(project, pool, scheme)
         if _calibration_for(project, scheme, pool).passed:
             return left, False
         return [i for i in left if i.key in sample.keys], True

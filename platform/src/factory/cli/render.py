@@ -1860,4 +1860,27 @@ def layer_status_lines(status: LayerStatus) -> list[str]:
             f"kappa {kappa} vs floor {cal.floor:.2f}; dropped {cal.dropped}; "
             + ("passed" if cal.passed else "not passed")
         )
+        if cal.strata:
+            lines.append(
+                "  strata: "
+                + ", ".join(f"{k} {v}" for k, v in cal.strata.items())
+                + (
+                    " (inner from: "
+                    + ", ".join(f"{k} {v}" for k, v in cal.inner_by_layer.items())
+                    + ")"
+                    if cal.inner_by_layer
+                    else ""
+                )
+            )
+        if cal.inner_shortfall:
+            lines.append(
+                "  inner shortfall: "
+                + ", ".join(f"{k} {v}" for k, v in cal.inner_shortfall.items())
+            )
+        for layer, k in cal.kappa_by_layer.items():
+            a = cal.agreement_by_layer.get(layer)
+            lines.append(
+                f"  ring {layer}: kappa {'n/a' if k is None else f'{k:.2f}'}, "
+                f"agreement {'n/a' if a is None else f'{a:.2f}'}"
+            )
     return lines

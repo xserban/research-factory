@@ -573,6 +573,27 @@ class LayerDef(StrictModel):
     exclude_examples: tuple[LayerExample, ...] = Field(default=(), max_length=MAX_LAYER_EXAMPLES)
 
 
+MAX_INNER_SAMPLE: Final = 50
+"""Most items an inner sample may add to the calibration sample."""
+
+
+class InnerSample(StrictModel):
+    """Extra calibration items drawn from an earlier scheme's agent title-stage layers:
+    `draw` maps a layer id of scheme `from_version` to how many items to draw from it.
+
+    Invariants: every count at least 1, the total at most `MAX_INNER_SAMPLE`, at least one layer.
+    Whether the earlier scheme exists and has the layers is checked by the service."""
+
+    from_version: int = Field(ge=1)
+    draw: dict[LayerId, Annotated[int, Field(ge=1)]] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _total(self) -> Self:
+        if sum(self.draw.values()) > MAX_INNER_SAMPLE:
+            raise ValueError(f"an inner sample draws at most {MAX_INNER_SAMPLE} items")
+        return self
+
+
 class LayerSchemeRecorded(StrictModel):
     """The researcher's layer scheme, version `version`; first write wins per version.
 
@@ -583,6 +604,8 @@ class LayerSchemeRecorded(StrictModel):
     version: int = Field(ge=1)
     layers: tuple[LayerDef, ...] = Field(min_length=MIN_LAYERS, max_length=MAX_LAYERS)
     precursor_before_year: int | None = Field(default=None, ge=1900, le=2099)
+    inner_sample: InnerSample | None = None
+    """Optional inner stratum of the calibration sample (`from_version` below `version`)."""
 
     @model_validator(mode="after")
     def _unique_ids(self) -> Self:
@@ -594,6 +617,8 @@ class LayerSchemeRecorded(StrictModel):
             raise ValueError("layer rings must be unique")
         if not any(layer.snowball for layer in self.layers):
             raise ValueError("at least one layer must have snowball=true")
+        if self.inner_sample is not None and self.inner_sample.from_version >= self.version:
+            raise ValueError("an inner sample draws from an earlier scheme version")
         return self
 
 
