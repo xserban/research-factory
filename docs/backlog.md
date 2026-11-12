@@ -520,7 +520,7 @@ Status: built, reviewed (Sonnet review, fixes 714d31b), not tested: 11 tests wri
 - Next step needs: a test run of `test_site_catalog.py`; one look at the page with the researcher; rulings on IDEA-61 (which of the 46 orphan tools get a skill or are marked researcher- or CLI-facing). No other branch is needed.
 
 ### IDEA-61 — Catalog follow-ups: sharper flag rules, orphan tools, review minors
-Status: proposed (2026-11-12; orphan-tool groups ruled 2026-11-12, marker and group C follow-ups open) · Added: 2026-11-12 · Slice: — · Depends on: IDEA-60
+Status: items 1, 2 and 3 (marker) built on branch `idea-61-catalog`, not reviewed; catalog tests run and pass (21); group C and three marker mismatches await rulings (2026-11-12) · Added: 2026-11-12 · Slice: — · Depends on: IDEA-60
 **What:**
 1. Clash rule: pair sentences only when both govern the same act. "Do not read … `check`" (pass independence in rf-appraise, rf-contributions, rf-extract) and "Never act on a `check` finding to clear it" (rf-run) are not opposites of "call `check` and report every finding" (rf-search). These 4 flags are false positives.
 2. Unknown-input rule: in "`mine_resolve` with `a`, `b` or `neither`" (rf-mine line 46) the backticked words are values, not inputs. Check them against the schema's enum values before flagging. These 3 flags are false positives.
@@ -533,6 +533,37 @@ Status: proposed (2026-11-12; orphan-tool groups ruled 2026-11-12, marker and gr
    - de-duplicate `catalog.tools` when the server lists a name twice;
    - check that `site_widgets.table` escapes its cells;
    - check whether `build_server` creates directories during a catalog build.
+**Built (2026-11-12, branch `idea-61-catalog`, not reviewed):**
+- *Marker:* a declared table `MARKERS` in `services/site_catalog.py` (kinds `read-only`, group A, 24 tools; `human-only`, group B, 9 tools), each kind with its reason (`MARKER_KINDS`). Never derived from a name. A marked tool no skill names is not an orphan. Each marker is cross-checked against the tool's access row (`access.TOOL_PERMISSIONS`, `HUMAN_ONLY`, `GATED_AGENT_ACTS`): a disagreement is flag `marker-access-mismatch`; a skill that names a human-only tool is flag `skill-names-human-only`; a marked name that is not a listed tool is flag `marker-unknown-tool`. The page has a "Marked tools" table (tool, marker, why, access row, skills naming it) and a badge on each marked tool; the header counts marked and orphan tools.
+- *Clash rule:* two sentences clash only when they govern the same act: the verb after the negation (`do not read`, `never act`) against the verb after `always`/`must`, or `call`. A sentence whose act cannot be read still pairs with any.
+- *Unknown-input rule:* a backticked word after "`tool` with" is a value, not an input, when it is a string `enum`/`const` of the tool's schema or a backticked word of the tool's own description that is not an input name (`mine_resolve` takes `choice: str`; its docstring declares `a`, `b`, `neither`). Cleaner later: type `choice` as a `Literal` in `mcp/server.py` (outside this branch's scope).
+- *`reference_layer_record`:* a false positive, confirmed. The call in rf-reference-layers step 4 wraps over two lines and the backtick pattern stopped at a line break. A backticked span may now wrap onto the next line (never across a blank line).
+- *Minors:* `catalog.tools` de-duplicated (the count check still reports the duplicate); a skill with no valid stage is rendered under Unassigned; `site_widgets.table` already escapes headers and cells (test added). Not done: "also used in" links, the negative-sentence stage rule, the `build_server` directory check.
+- *Run:* `tests/test_site_catalog.py` 21 passed (11 earlier, 10 new; each new rule checked by a mutation that makes its test fail); ruff and mypy --strict clean on the touched files. Built on a reflink copy of `agentic-science` (`research-factory-pilot/catalog-copy-2026-11-12`, not the real root): before (main fb9b27d) 173 tools, 27 skills, 96 examples, 54 flags (46 orphan-tool, 4 clash, 3 unknown-input, 1 orphan-skill); after 173 tools, 33 marked, 54 → 16 flags (12 orphan-tool, 3 marker-access-mismatch, 1 orphan-skill). Count check passes. No index or event change.
+- *Note:* the shell exports `FACTORY_PLUGIN_DIR` to the bare checkout's old `plugin/` (21 skills, no `stage:`); a catalog built with it shows 21 skills and 21 `skill-no-stage` flags. Set it to the worktree's `plugin/` when building.
+
+**Marker mismatches for a ruling (the ruling was made from names; the access rows say otherwise):**
+- `grey_search_report` (group A) is an agent write: "Report a web search you ran yourself", access `work:run`. Proposed: move to group C and name it in rf-search (grey sources).
+- `lead_decide` (group B) is a gated agent act (`GATED_AGENT_ACTS`). Proposed: keep human-only for the catalog; an agent acts only where the gate allows, which no skill yet covers.
+- `extract_agreement` (group B) is read-only (`project:read`), refused to pass sessions. Proposed: move to group A.
+
+**Group C proposals (12 tools; no skill edited without a ruling):**
+| Tool | Access row | Proposal |
+|---|---|---|
+| `draft_release` | work:run | Mention in rf-write, last step: call it when `draft_status` shows no stale sentence; refused in systematic mode. |
+| `draft_reorder` | work:run | Mention in rf-write: reorder a section's live sentences after writing. |
+| `draft_repin` | work:run | Mention in rf-write: repin when `writing_outline` changes, then ask `draft_next` again. |
+| `contradiction_propose` | work:run | Mention in rf-ideate after `finder_contradictions`: propose a contradiction between two claims, which stays inferred until the researcher confirms. |
+| `hypothesis_register` | human:confirm, gated | Mention in rf-critic for a `register` recommendation, only when `gate_status` lets an agent pass `hypotheses.register`; else leave to the researcher. |
+| `mine_import` | human:confirm | Docstring: "The human's import". Proposed: mark human-only (group B), no skill. |
+| `notice_assess` | human:confirm | Docstring: "The human's assessment … relayed". Proposed: mark human-only (group B), no skill. |
+| `library_adoptable` | project:read | Read-only; mark read-only (group A), or name it with `library_adopt`. |
+| `library_adopt` | work:run | Mention in rf-run's acquisition stage: before `fulltext_fetch`, check `library_adoptable` and adopt a lab copy. |
+| `review_request` | work:run | Mention in rf-protocol step 8: on a hosted project an agent's amendment, record or deviation is filed as a review request. |
+| `watch_run` | work:run | Recorded decision to leave it unnamed: rf-living runs `factory watch run` (CLI) in scheduled sessions; a new marker kind `cli-equivalent` would cover it. |
+| `feed_run` | work:run | Recorded decision to leave it unnamed: the feed runs from the hub's "Process now" and its cadence; or name it in rf-living beside the watch cycle. |
+| `reference_layer_record` | — | Resolved: false positive of the backtick rule (above); named by rf-reference-layers. |
+
 **Why:** the first build's 7 conflict flags were all false positives, which teaches the researcher to ignore the flags table. The orphan count hides which tools have no instructions.
 **Rigour notes:** the rules stay mechanical; the platform still never rules on a clash.
 **Open questions:** whether orphan status needs a declared `audience` (agent, researcher, CLI) on each tool.

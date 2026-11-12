@@ -8,7 +8,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from factory.services.context import Project
-from factory.services.site_catalog import LIFECYCLE, Catalog, SkillInfo, ToolInfo, build_catalog
+from factory.services.site_catalog import (
+    LIFECYCLE,
+    MARKER_KINDS,
+    Catalog,
+    SkillInfo,
+    ToolInfo,
+    build_catalog,
+)
 from factory.services.site_widgets import REPORT_CSS, esc, note, table
 
 CATALOG_CSS = (
@@ -19,6 +26,7 @@ CATALOG_CSS = (
     ".bad{background:var(--card);border:1px solid #c33;border-left:3px solid #c33;color:#e55;padding:10px 14px;margin:8px 0}"
     ".dim{color:var(--dim)}.ex{color:var(--light);margin:2px 0;font-size:12px}"
     "summary{cursor:pointer;color:var(--dim)}"
+    ".mark{border:1px solid var(--mut);color:var(--amber);font-size:10.5px;padding:0 5px}"
 )
 
 
@@ -48,8 +56,9 @@ def _tool(tool: ToolInfo, catalog: Catalog) -> str:
         if tool.also_used_in
         else ""
     )
+    badge = f" <span class=mark>{esc(tool.marker)}</span>" if tool.marker else ""
     return (
-        f"<div class=tool id='{esc(tool.name)}'><b>{esc(tool.name)}</b> "
+        f"<div class=tool id='{esc(tool.name)}'><b>{esc(tool.name)}</b>{badge} "
         f"<small>({esc(', '.join(tool.params) or 'no inputs')})</small>"
         f"<div>{esc(tool.description)}</div>"
         f"<details><summary>inputs</summary><pre>{esc(tool.input_schema_json)}</pre></details>"
@@ -60,7 +69,16 @@ def _tool(tool: ToolInfo, catalog: Catalog) -> str:
 def render(catalog: Catalog, built_at: str, code: str) -> str:
     c = catalog.count_check
     header = "<h1>Capability catalog</h1>" + table(
-        ["tools registered", "tools listed", "skills", "prompts", "examples", "flags"],
+        [
+            "tools registered",
+            "tools listed",
+            "skills",
+            "prompts",
+            "examples",
+            "marked",
+            "orphan tools",
+            "flags",
+        ],
         [
             [
                 c.registered,
@@ -68,6 +86,8 @@ def render(catalog: Catalog, built_at: str, code: str) -> str:
                 len(catalog.skills),
                 "not derived" if catalog.prompts is None else catalog.prompts,
                 catalog.examples,
+                sum(1 for t in catalog.tools if t.marker),
+                catalog.flag_counts()["orphan-tool"],
                 len(catalog.flags),
             ]
         ],
@@ -102,10 +122,39 @@ def render(catalog: Catalog, built_at: str, code: str) -> str:
             or "<p class=dim>No tool is assigned here.</p>"
         )
         body.append(sec)
-    orphans = [t for t in catalog.tools if t.stage is None]
+    orphans = [t for t in catalog.tools if t.stage is None and t.marker is None]
+    stageless = [s for s in catalog.skills if not s.stages]
     body.append(
         "<h2>Unassigned</h2>"
-        + ("".join(_tool(t, catalog) for t in orphans) or "<p class=dim>None.</p>")
+        + note(
+            "Tools no skill names and no marker covers (orphans), and skills with no valid stage."
+        )
+        + (
+            "".join(_skill_card(s) for s in stageless) + "".join(_tool(t, catalog) for t in orphans)
+            or "<p class=dim>None.</p>"
+        )
+    )
+
+    marked_rows = [
+        [
+            t.name,
+            t.marker,
+            MARKER_KINDS.get(t.marker or "", ""),
+            t.access or "no access row",
+            ", ".join(t.skills) or "none",
+        ]
+        for kind in MARKER_KINDS
+        for t in catalog.tools
+        if t.marker == kind
+    ]
+    body.append(
+        "<h2>Marked tools</h2>"
+        + note(
+            "Declared in services/site_catalog.py (MARKERS), never inferred from a name. A marked tool "
+            "that no skill names is not an orphan. A human-only tool named by a skill, or a marker "
+            "that disagrees with the tool's access row, is flagged below."
+        )
+        + table(["tool", "marker", "why", "access row", "named by skills"], marked_rows)
     )
 
     rows = [
