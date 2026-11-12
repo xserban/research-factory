@@ -179,6 +179,7 @@ def protocol_issues(
     window_sources: Collection[str] = (),
     registered_miners: Collection[tuple[str, int]] = (),
     calibrated_miners: Collection[tuple[str, int]] = (),
+    layer_miners: Collection[tuple[str, int]] = (),
 ) -> ProtocolCheck:
     """Check a protocol against the current question, its seeds, its probes and its mode.
 
@@ -188,6 +189,7 @@ def protocol_issues(
     errors = _errors(spec, question, current_question_id, mode, seeds, known_sources)
     errors.extend(_watch_plan_errors(spec, window_sources))
     errors.extend(_miner_errors(spec.miners, registered_miners, calibrated_miners))
+    errors.extend(_layer_errors(spec.miners, layer_miners))
     gate_errors, gate_gaps = _gate_policy_issues(spec, mode)
     errors.extend(gate_errors)
     errors.extend(_hypothesis_plan_errors(spec, mode))
@@ -317,6 +319,39 @@ def _miner_errors(
         seen.add(use.name)
         if use.evidence and (use.name, use.version) not in calibrated:
             issues.append(ValidationIssue(f"{where}.evidence", EVIDENCE_NEEDS_CALIBRATION))
+    return issues
+
+
+def _layer_errors(
+    uses: Sequence[MinerUse] | None, layer_miners: Collection[tuple[str, int]]
+) -> list[ValidationIssue]:
+    """`MinerUse.layers` (the layer filter). Invariants: a use with `layers` needs the protocol to
+    list a layer miner (a derived miner whose taxonomy has a dimension-zero dimension, passed as
+    `layer_miners`, computed by the service); the layer miner itself carries no `layers`, since
+    its reading assigns the layers the others filter by. Whether each entry is a layer id of a
+    recorded scheme is not checked here (the scheme is not reachable from this pure module)."""
+    listed = list(uses or ())
+    filtered = [(i, u) for i, u in enumerate(listed) if u.layers]
+    if not filtered:
+        return []
+    issues: list[ValidationIssue] = []
+    layer_uses = [u for u in listed if (u.name, u.version) in layer_miners]
+    if not layer_uses:
+        issues.append(
+            ValidationIssue(
+                f"{MINERS_SECTION}.{filtered[0][0]}.layers",
+                "layers need a listed derived miner whose taxonomy has a dimension-zero "
+                "(layer scheme) dimension",
+            )
+        )
+    for i, use in filtered:
+        if (use.name, use.version) in layer_miners:
+            issues.append(
+                ValidationIssue(
+                    f"{MINERS_SECTION}.{i}.layers",
+                    "the layer miner assigns the layers and may not itself be filtered by them",
+                )
+            )
     return issues
 
 

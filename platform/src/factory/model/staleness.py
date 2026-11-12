@@ -90,12 +90,37 @@ class RowRef(StrictModel):
     row_id: str
     fields: tuple[str, ...]
     at: str
+    values: Mapping[str, str] = {}
+    """The row's stored value of each field (canonical when the platform computed one, else the
+    stored text), read only by a value-level rule (`ExtractionStale.values`). Empty is allowed:
+    such a row is never value-staled."""
 
 
-def touches(rule: ExtractionStale, fields: Sequence[str]) -> bool:
-    """Whether `rule` stales a row carrying `fields` (ruling 12): every row, or one carrying a
-    removed field."""
-    return rule.all_records or bool(set(rule.fields) & set(fields))
+def touches(
+    rule: ExtractionStale, fields: Sequence[str], values: Mapping[str, str] | None = None
+) -> bool:
+    """Whether `rule` stales a row carrying `fields` (ruling 12): every row, one carrying a
+    removed field, or, for a value-level rule, one whose stored value of a named field is among
+    the rule's values for it. `values` maps a row's field to its stored value; without it a
+    value-level rule stales nothing."""
+    if rule.all_records or set(rule.fields) & set(fields):
+        return True
+    if rule.values and values:
+        return any(values.get(name) in wanted for name, wanted in rule.values.items())
+    return False
+
+
+def stored_values(fields: Mapping[str, object]) -> dict[str, str]:
+    """The comparable value of each stored field: its `canonical` when set, else its `value` as
+    text. Takes a row's `fields` (`StoredField` by name); anything without a `value` is skipped."""
+    out: dict[str, str] = {}
+    for name, stored in fields.items():
+        value = getattr(stored, "value", None)
+        if value is None:
+            continue
+        canonical = getattr(stored, "canonical", None)
+        out[name] = canonical if isinstance(canonical, str) else str(value)
+    return out
 
 
 def scope_rule(amendment: ProtocolAmended, scope: ScopeKey) -> ExtractionStale | None:
@@ -127,7 +152,9 @@ def stale_rows(
         rule = scope_rule(amendment, scope)
         if rule is None:
             continue
-        stale.update(row.row_id for row in rows if row.at < when and touches(rule, row.fields))
+        stale.update(
+            row.row_id for row in rows if row.at < when and touches(rule, row.fields, row.values)
+        )
     return sorted(stale)
 
 
