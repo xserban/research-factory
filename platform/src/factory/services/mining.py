@@ -72,6 +72,7 @@ from factory.services.stages import is_mine_kind
 from factory.services.tasks import get_task, task_content
 
 __all__ = [
+    "DERIVED_INSTRUCTIONS",
     "MINE_INSTRUCTIONS",
     "MineStatus",
     "MinerListing",
@@ -430,6 +431,88 @@ MINE_INSTRUCTIONS = (
 )
 
 
+DERIVED_INSTRUCTIONS = (
+    "Classify the pinned document by the dimensions listed below. Read it with document_read, at "
+    "the listed anchors first. Every applicable dimension gets a row. A row has the category as "
+    "its full id `dimension/category`, an anchor and a verbatim quote that supports it. When the "
+    "text you read says nothing on a dimension, give `<dimension>/not-stated` with no quote; "
+    "never the nearest sentence. When it fits no category, give `<dimension>/other` with "
+    "`described_as`. A `single` dimension takes exactly one row, a `multi` dimension at most its "
+    "label limit; a not-stated or not-applicable row stands alone in its dimension. Never compute "
+    "or convert a value. Follow skill rf-taxonomy."
+)
+MAX_EXAMPLES = 3
+"""Most examples served per category."""
+
+
+def _category_text(
+    cid: str,
+    name: str,
+    definition: str,
+    inc: Sequence[str],
+    exc: Sequence[str],
+    examples: Sequence[str],
+) -> str:
+    parts = [f"- {cid} ({name}): {definition}"]
+    if inc:
+        parts.append("  include: " + "; ".join(inc))
+    if exc:
+        parts.append("  exclude: " + "; ".join(exc))
+    parts.extend(f"  example: {e}" for e in examples[:MAX_EXAMPLES])
+    return "\n".join(parts)
+
+
+def derived_task_text(project: Project, spec: MinerSpec, work_id: str) -> str:
+    """The dimensions a derived miner's task asks about for `work_id`: the applicable ones
+    (`applicable_dimensions` for the work's layer) with question, cardinality, residual rule and
+    each category's full id, name, definition, cues and at most `MAX_EXAMPLES` examples; dimension
+    zero lists the layer ids with the scheme's criteria. Bounded text; empty when the miner has
+    no taxonomy or the taxonomy is not registered."""
+    from factory.mining.kinds import applicable_dimensions
+    from factory.mining.taxonomy import full_id
+    from factory.services.reference_layers import _scheme
+    from factory.services.taxonomies import registered_taxonomy
+    from factory.services.work_layers import layer_of
+
+    ref = spec.taxonomy
+    if ref is None:
+        return ""
+    taxonomy = registered_taxonomy(project, ref.name, ref.version)
+    if taxonomy is None:
+        return ""
+    layer = layer_of(project, work_id).layer
+    blocks: list[str] = []
+    for dim in applicable_dimensions(taxonomy, ref.dimensions, layer):
+        head = (
+            f"Dimension {dim.id} ({dim.title}), {dim.cardinality}"
+            + (f", at most {dim.max_labels} labels" if dim.max_labels is not None else "")
+            + f": {dim.question}\nresiduals: "
+            + ", ".join(full_id(dim.id, r) for r in dim.residuals)
+        )
+        lines = [head]
+        if dim.layer_scheme is not None:
+            scheme = _scheme(project, dim.layer_scheme)
+            for entry in () if scheme is None else scheme.layers:
+                lines.append(
+                    _category_text(
+                        full_id(dim.id, entry.id), entry.name, entry.criteria, (), (), ()
+                    )
+                )
+        for cat in dim.categories:
+            lines.append(
+                _category_text(
+                    full_id(dim.id, cat.id),
+                    cat.name,
+                    cat.definition,
+                    cat.include_cues,
+                    cat.exclude_cues,
+                    [e.quote for e in cat.examples],
+                )
+            )
+        blocks.append("\n".join(lines))
+    return "\n\n".join(blocks)
+
+
 def _kind_note(kind: object) -> str:
     """The rule an agent follows for one field kind, as a fixed sentence."""
     if isinstance(kind, NumberKind):
@@ -509,8 +592,15 @@ def mine_next(
     def content(proj: Project, base: ExtractBatchContent) -> ExtractBatchContent:
         conversion = base.records[0]["conversion_id"]
         anchors = selected_anchors(conversion_manifest(proj, conversion), spec.selector)
+        instructions = MINE_INSTRUCTIONS
+        if spec.taxonomy is not None:
+            instructions = (
+                DERIVED_INSTRUCTIONS
+                + "\n\n"
+                + derived_task_text(proj, spec, base.records[0]["work_id"])
+            )
         return MineBatchContent(
-            **{**base.model_dump(), "instructions": MINE_INSTRUCTIONS},
+            **{**base.model_dump(), "instructions": instructions},
             miner=name,
             version=version,
             digest=digest,

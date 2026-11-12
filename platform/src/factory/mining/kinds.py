@@ -13,6 +13,15 @@ the kinds promise beyond that, each by the existing verifier and never by a copy
 - `enum`: an evidence quote and anchor accompany the value (when the evidence rule asks).
 - evidence rule: at least `min_quotes_per_record` fields of the row carry a verified quote.
 
+Derived miners (spec.taxonomy set) differ in two ways and only those; every other miner is
+unchanged:
+- a row whose `category` is in `evidence.absence_values` is exempt from the quote rules
+  (`min_quotes_per_record`, `enum_needs_quote`); every other row keeps them.
+- `close_checks` also judges the unit as a whole, per work and pass, against the taxonomy and the
+  work's layer (`unit_issues`): each applicable dimension has a row, `single` exactly one, `multi`
+  at most `max_labels`, an absence row stands alone in its dimension, no row in a non-applicable
+  dimension, no category twice.
+
 Invariants:
 - Reasons come from a fixed vocabulary (`NO_CITATION_MARKER` ...) and never carry document text.
 - Issues are located `fields.<name>.<attr>`; the quote count is located `fields`.
@@ -42,6 +51,7 @@ from factory.mining.spec import (
     MinerSpec,
     WorkRefKind,
 )
+from factory.mining.taxonomy import Dimension, TaxonomySpec
 from factory.model.extraction import CitedEntry, StoredField
 from factory.model.references import Confidence, LinkState
 from factory.model.search import QueryPurpose
@@ -67,6 +77,13 @@ ENTRY_NOT_FOUND = "entry-not-found"
 WORK_NOT_FOUND = "work-not-found"
 TOO_FEW_QUOTES = "too-few-quotes"
 ENUM_NEEDS_QUOTE = "enum-needs-quote"
+DIMENSION_UNFILLED = "dimension-unfilled"
+DIMENSION_NOT_APPLICABLE = "dimension-not-applicable"
+SINGLE_NEEDS_ONE = "single-dimension-needs-one-row"
+TOO_MANY_LABELS = "too-many-labels"
+ABSENCE_NOT_ALONE = "absence-row-not-alone"
+DUPLICATE_CATEGORY = "duplicate-category"
+CATEGORY_FIELD = "category"
 
 _YEAR = re.compile(r"\b(1[89]\d{2}|20\d{2})\b")
 YEAR_WINDOW = 1
@@ -164,6 +181,79 @@ def _quotes(fields: Mapping[str, StoredField]) -> int:
     return sum(1 for f in fields.values() if f.quote is not None)
 
 
+def _is_absence(spec: MinerSpec, fields: Mapping[str, StoredField]) -> bool:
+    """True for a row of a derived miner whose category says the text states nothing; such a row
+    needs no quote. A miner without a taxonomy never has an absence row."""
+    if spec.taxonomy is None:
+        return False
+    cell = fields.get(CATEGORY_FIELD)
+    return cell is not None and str(cell.value) in spec.evidence.absence_values
+
+
+def applicable_dimensions(
+    taxonomy: TaxonomySpec, chosen: Sequence[str], layer: str | None
+) -> list[Dimension]:
+    """The chosen dimensions that apply to a work of `layer` (None: pending), in taxonomy order:
+    those with empty `applies_to_layers`, or listing the layer, and always dimension zero."""
+    wanted = set(chosen)
+    return [
+        d
+        for d in taxonomy.dimensions
+        if d.id in wanted
+        and (
+            d.layer_scheme is not None
+            or not d.applies_to_layers
+            or (layer is not None and layer in d.applies_to_layers)
+        )
+    ]
+
+
+def unit_issues(
+    spec: MinerSpec,
+    taxonomy: TaxonomySpec,
+    layer: str | None,
+    rows: Sequence[ExtractionRow],
+) -> list[ValidationIssue]:
+    """The closing issues of one unit of a derived miner (see the module docstring). Pure; the
+    reasons are fixed and located `finish.<dimension>`, never carrying document text."""
+    assert spec.taxonomy is not None
+    applicable = {d.id: d for d in applicable_dimensions(taxonomy, spec.taxonomy.dimensions, layer)}
+    chosen = set(spec.taxonomy.dimensions)
+    by_dimension: dict[str, list[str]] = {}
+    issues: list[ValidationIssue] = []
+    for row in rows:
+        cell = row.fields.get(CATEGORY_FIELD)
+        if cell is None:
+            continue
+        value = str(cell.value)
+        dimension_id = value.split("/", 1)[0]
+        if dimension_id not in chosen:
+            continue
+        by_dimension.setdefault(dimension_id, []).append(value)
+    for dimension_id, values in by_dimension.items():
+        if dimension_id not in applicable:
+            issues.append(ValidationIssue(f"finish.{dimension_id}", DIMENSION_NOT_APPLICABLE))
+        if len(set(values)) != len(values):
+            issues.append(ValidationIssue(f"finish.{dimension_id}", DUPLICATE_CATEGORY))
+    for dimension_id, dimension in applicable.items():
+        values = by_dimension.get(dimension_id, [])
+        where = f"finish.{dimension_id}"
+        if not values:
+            issues.append(ValidationIssue(where, DIMENSION_UNFILLED))
+            continue
+        if dimension.cardinality == "single" and len(values) != 1:
+            issues.append(ValidationIssue(where, SINGLE_NEEDS_ONE))
+        if (
+            dimension.cardinality == "multi"
+            and dimension.max_labels is not None
+            and len(values) > dimension.max_labels
+        ):
+            issues.append(ValidationIssue(where, TOO_MANY_LABELS))
+        if len(values) > 1 and any(v in spec.evidence.absence_values for v in values):
+            issues.append(ValidationIssue(where, ABSENCE_NOT_ALONE))
+    return issues
+
+
 def kind_checks(spec: MinerSpec) -> ExtraCheck:
     """The `ExtraCheck` of `spec` (see the module docstring). It holds no state across calls
     but a per-unit cache of the manifest and the reference view."""
@@ -188,6 +278,7 @@ def kind_checks(spec: MinerSpec) -> ExtraCheck:
         del seen
         issues: list[ValidationIssue] = []
         cited: CitedEntry | None = None
+        absent = _is_absence(spec, fields)
         for declared in spec.fields:
             stored = fields.get(declared.name)
             if stored is None:
@@ -226,10 +317,11 @@ def kind_checks(spec: MinerSpec) -> ExtraCheck:
             elif (
                 isinstance(kind, EnumKind)
                 and spec.evidence.enum_needs_quote
+                and not absent
                 and (stored.quote is None or stored.anchor is None)
             ):
                 issues.append(ValidationIssue(f"{where}.quote", ENUM_NEEDS_QUOTE))
-        if _quotes(fields) < spec.evidence.min_quotes_per_record:
+        if not absent and _quotes(fields) < spec.evidence.min_quotes_per_record:
             issues.append(ValidationIssue("fields", TOO_FEW_QUOTES))
         return ExtraVerdict(cited=cited, issues=issues)
 
@@ -238,13 +330,30 @@ def kind_checks(spec: MinerSpec) -> ExtraCheck:
 
 def close_checks(spec: MinerSpec) -> CloseCheck:
     """The `CloseCheck` of `spec`: every row live after a closing call carries at least
-    `min_quotes_per_record` verified quotes (issue on `finish`)."""
+    `min_quotes_per_record` verified quotes (issue on `finish`), an absence row of a derived miner
+    excepted. For a derived miner the unit is also judged by `unit_issues`, against the registered
+    taxonomy and the work's layer; an unregistered taxonomy adds no unit issue (registration of the
+    miner already required it)."""
 
     def close(
         project: Project, pin: UnitPin, rows: Sequence[ExtractionRow], reason: str | None
     ) -> list[ValidationIssue]:
-        del project, pin, reason
-        short = [r for r in rows if _quotes(r.fields) < spec.evidence.min_quotes_per_record]
-        return [ValidationIssue("finish", TOO_FEW_QUOTES)] if short else []
+        del reason
+        short = [
+            r
+            for r in rows
+            if _quotes(r.fields) < spec.evidence.min_quotes_per_record
+            and not _is_absence(spec, r.fields)
+        ]
+        issues = [ValidationIssue("finish", TOO_FEW_QUOTES)] if short else []
+        if spec.taxonomy is not None:
+            from factory.services.taxonomies import registered_taxonomy
+            from factory.services.work_layers import layer_of
+
+            taxonomy = registered_taxonomy(project, spec.taxonomy.name, spec.taxonomy.version)
+            if taxonomy is not None:
+                layer = layer_of(project, pin.work_id).layer
+                issues.extend(unit_issues(spec, taxonomy, layer, rows))
+        return issues
 
     return close
