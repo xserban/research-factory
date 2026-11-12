@@ -410,6 +410,7 @@ Status: built, reviewed (fixes in), not tested: tests written, not run (testing 
 **Why:** the researcher cannot see what the factory can do at each stage; 173 tools and 27 skills had no single view.
 **Rigour notes:** nothing on the page is typed except stage labels and layout; flags (skill vs tool, skill vs skill, skill vs decisions, orphans, missing stage) are mechanical and never ruled on. First build: 46 orphan tools, 4 clash and 3 unknown-input flags, all 7 judged false positives by hand.
 **Open questions:** tighten the clash rule (context of "do not read") and the "`tool` with `a`" rule (values vs inputs); move to the factory hub when it exists; skills for the 46 orphan tools.
+**Pending (2026-11-12):** run `tests/test_site_catalog.py` (11 tests, never run) when testing resumes; the line is local, not pushed, main untouched; the `stage:` lines change every skill's `name@sha8`, effective when the plugin is reinstalled; remove the merged `plan-catalog` worktree and the uncommitted copy of the plan in the main checkout. Follow-ups: IDEA-61.
 
 ### IDEA-61 — Catalog follow-ups: sharper flag rules, orphan tools, review minors
 Status: proposed (2026-11-12) · Added: 2026-11-12 · Slice: — · Depends on: IDEA-60
