@@ -180,16 +180,21 @@ def protocol_issues(
     registered_miners: Collection[tuple[str, int]] = (),
     calibrated_miners: Collection[tuple[str, int]] = (),
     layer_miners: Collection[tuple[str, int]] = (),
+    registered_taxonomies: Collection[tuple[str, int]] = (),
+    miner_taxonomies: Mapping[tuple[str, int], tuple[str, int]] | None = None,
 ) -> ProtocolCheck:
     """Check a protocol against the current question, its seeds, its probes and its mode.
 
     `window_sources` names the sources whose adapter declares a listing-date filter; a
-    `watch_plan` may use `window` mode only for those.
+    `watch_plan` may use `window` mode only for those. `registered_taxonomies` and
+    `miner_taxonomies` (listed miner version to the taxonomy version its spec references) feed the
+    `taxonomies` section check.
     """
     errors = _errors(spec, question, current_question_id, mode, seeds, known_sources)
     errors.extend(_watch_plan_errors(spec, window_sources))
     errors.extend(_miner_errors(spec.miners, registered_miners, calibrated_miners))
     errors.extend(_layer_errors(spec.miners, layer_miners))
+    errors.extend(_taxonomy_errors(spec, registered_taxonomies, miner_taxonomies or {}))
     gate_errors, gate_gaps = _gate_policy_issues(spec, mode)
     errors.extend(gate_errors)
     errors.extend(_hypothesis_plan_errors(spec, mode))
@@ -319,6 +324,42 @@ def _miner_errors(
         seen.add(use.name)
         if use.evidence and (use.name, use.version) not in calibrated:
             issues.append(ValidationIssue(f"{where}.evidence", EVIDENCE_NEEDS_CALIBRATION))
+    return issues
+
+
+TAXONOMIES_SECTION = "taxonomies"
+
+
+def _taxonomy_errors(
+    spec: ProtocolSpec,
+    registered: Collection[tuple[str, int]],
+    miner_taxonomies: Mapping[tuple[str, int], tuple[str, int]],
+) -> list[ValidationIssue]:
+    """The `taxonomies` section: each use names a registered `(name, version)`, a name is listed
+    once, and every listed miner whose registered spec references a taxonomy version has that
+    version listed (reported on `miners.<i>.name`)."""
+    issues: list[ValidationIssue] = []
+    seen: set[str] = set()
+    for i, use in enumerate(spec.taxonomies or ()):
+        where = f"{TAXONOMIES_SECTION}.{i}.name"
+        if (use.name, use.version) not in registered:
+            issues.append(
+                ValidationIssue(where, "not a registered taxonomy version; register it first")
+            )
+        if use.name in seen:
+            issues.append(ValidationIssue(where, "a taxonomy is listed once"))
+        seen.add(use.name)
+    listed = {(u.name, u.version) for u in spec.taxonomies or ()}
+    for i, miner in enumerate(spec.miners or ()):
+        ref = miner_taxonomies.get((miner.name, miner.version))
+        if ref is not None and ref not in listed:
+            issues.append(
+                ValidationIssue(
+                    f"{MINERS_SECTION}.{i}.name",
+                    f"the miner derives from taxonomy {ref[0]} version {ref[1]}, which the "
+                    "protocol must list in `taxonomies`",
+                )
+            )
     return issues
 
 

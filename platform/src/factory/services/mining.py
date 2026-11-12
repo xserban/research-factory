@@ -36,6 +36,7 @@ from factory.mining.spec import (
     spec_from_json,
     spec_to_json,
 )
+from factory.mining.taxonomy import taxonomy_from_json
 from factory.mining.validate import validate_miner
 from factory.model.base import StrictModel
 from factory.model.extraction import ExtractedRowInput, MinerScope
@@ -200,6 +201,49 @@ def registered_miner(project: Project, name: str, version: int) -> MinerSpec | N
     return None if row is None else spec_from_json(project.blobs.get_json(row.spec_blob))
 
 
+def _taxonomy_issues(project: Project, spec: MinerSpec) -> list[ValidationIssue]:
+    """Issues of a spec's taxonomy reference (empty when it has none). A derived miner is exactly
+    the derivation of its registered taxonomy: compared as JSON, ignoring `rationale`."""
+    ref = spec.taxonomy
+    if ref is None:
+        return []
+    # late imports: services.taxonomies imports this package's peers
+    from factory.mining.derive import derive_miner
+    from factory.services.taxonomies import layer_categories, taxonomy_row
+
+    field = "spec.taxonomy"
+    row = taxonomy_row(project, ref.name, ref.version)
+    if row is None:
+        return [
+            ValidationIssue(field, f"taxonomy {ref.name} version {ref.version} is not registered")
+        ]
+    if row.digest != ref.digest:
+        return [ValidationIssue(field, "the digest differs from the registered taxonomy digest")]
+    taxonomy = taxonomy_from_json(project.blobs.get_json(row.spec_blob))
+    known = {d.id for d in taxonomy.dimensions}
+    missing = [d for d in ref.dimensions if d not in known]
+    if missing:
+        return [ValidationIssue(field, f"the taxonomy has no dimension {d}") for d in missing]
+    try:
+        derived = derive_miner(
+            taxonomy,
+            ref.dimensions,
+            name=spec.name,
+            version=spec.version,
+            selector=spec.selector,
+            regime=spec.regime,
+            layer_ids=layer_categories(project, taxonomy),
+            procedure=spec.procedure,
+        )
+    except ValueError as error:
+        return [ValidationIssue(field, f"the taxonomy cannot be derived: {error}")]
+    mine = {**spec_to_json(spec), "rationale": ""}
+    theirs = {**spec_to_json(derived), "rationale": ""}
+    if mine != theirs:
+        return [ValidationIssue(field, "the spec is not what its taxonomy derives")]
+    return []
+
+
 def register_miner(
     project: Project,
     actor: Actor,
@@ -213,7 +257,11 @@ def register_miner(
 
     Refused, with nothing written: for a system actor (`actor`); a spec of the wrong shape or
     meaning (the issues of `spec_from_json` and `validate_miner`, dotted); a `(name, version)` that
-    exists with another digest (`version`: a change is a new version). Registering the same spec
+    exists with another digest (`version`: a change is a new version); a spec with a taxonomy
+    reference (`spec.taxonomy`) whose taxonomy version is not registered, whose digest differs
+    from the registered one, that names a dimension the taxonomy lacks, or that differs (other than
+    in `rationale`) from what `derive_miner` produces for that taxonomy, those dimensions and the
+    spec's own name, version, selector, regime and procedure. Registering the same spec
     again writes nothing and returns the earlier registration."""
     if actor.kind == "system":
         raise FactoryValidationError(
@@ -223,6 +271,9 @@ def register_miner(
     issues = validate_miner(spec)
     if issues:
         raise FactoryValidationError(issues)
+    taxonomy_issues = _taxonomy_issues(project, spec)
+    if taxonomy_issues:
+        raise FactoryValidationError(taxonomy_issues)
     digest = miner_digest(spec)
     if imported_from is not None and imported_from.digest != digest:
         raise FactoryValidationError(
@@ -362,19 +413,21 @@ def miner_population(project: Project, name: str) -> list[str]:
     population less the units drawn into a calibration (M-D ruling 2: a calibration unit is never
     mined by a production pass, so no resolution can have fixed it).
 
-    A `MinerUse` without `layers` is exactly that and nothing else. With `layers`, only the selector
-    population's works whose layer (`work_layers.layer_of`) is one of them are kept, at most
-    `selector.max_units` of them, and, when the use is `on_demand`, the works of the researcher's
-    mining requests are added: they are included works and are served even outside the selector
-    population or the layers (still with a default conversion, still never a calibration unit), and
-    they do not count towards `max_units`. Order is work id, or with `order: by-layer` by the
-    layer's ring in the latest scheme, then work id (pending and unknown layers last). Refused on
-    field `miners` when a derived layer miner (one projecting dimension zero) lists `layers`: it
-    classifies every work and is never layer-filtered. `work_layers` is imported here, not at the
-    top, because it imports this module."""
+    With `layers`, only the selector population's works whose layer (`work_layers.layer_of`) is
+    one of them are kept; the population is capped by `selector.max_units` as `population` caps
+    it (the first works with a conversion, before the layer filter). When the use is `on_demand`,
+    with or without `layers`, the works of the researcher's mining requests are added: they are
+    included works and are served even outside the selector population or the layers (still with
+    a default conversion, still never a calibration unit), and they do not count towards
+    `max_units`. A use with neither `layers` nor `on_demand` is the base population only,
+    unchanged. Order is work id, or with `order: by-layer` by the layer's ring in the latest
+    scheme, then work id (pending and unknown layers last). Refused on field `miners` when a
+    derived layer miner (one projecting dimension zero) lists `layers`: it classifies every work
+    and is never layer-filtered. `work_layers` is imported here, not at the top, because it
+    imports this module."""
     _, use, spec = _listed(project, name)
     apart = calibration_sample(project, name)
-    if not use.layers:
+    if not use.layers and not use.on_demand:
         return [work for work, _ in population(project, spec.selector) if work not in apart]
     from factory.services.work_layers import (
         layer_dimension,
@@ -382,26 +435,22 @@ def miner_population(project: Project, name: str) -> list[str]:
         requested_works,
     )
 
-    if layer_dimension(project, spec) is not None:
-        raise FactoryValidationError(
-            [
-                ValidationIssue(
-                    "miners",
-                    f"miner {name} projects the layer dimension and is never layer-filtered; "
-                    "its protocol use must not list layers",
-                )
-            ]
-        )
     layers = layers_of(project)
-    wanted = set(use.layers)
-    chosen: list[str] = []
-    for work in population_works(project, spec.selector.population):
-        if spec.selector.max_units is not None and len(chosen) >= spec.selector.max_units:
-            break
-        if work in apart or work not in layers or layers[work].layer not in wanted:
-            continue
-        if default_conversion(project, work) is not None:
-            chosen.append(work)
+    # `population` caps at `max_units` works with a conversion; the layer filter then applies
+    chosen = [work for work, _ in population(project, spec.selector) if work not in apart]
+    if use.layers:
+        if layer_dimension(project, spec) is not None:
+            raise FactoryValidationError(
+                [
+                    ValidationIssue(
+                        "miners",
+                        f"miner {name} projects the layer dimension and is never "
+                        "layer-filtered; its protocol use must not list layers",
+                    )
+                ]
+            )
+        wanted = set(use.layers)
+        chosen = [w for w in chosen if w in layers and layers[w].layer in wanted]
     if use.on_demand:
         extra = requested_works(project, name) - set(chosen) - apart
         chosen.extend(w for w in extra if default_conversion(project, w) is not None)

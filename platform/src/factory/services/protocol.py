@@ -181,6 +181,28 @@ def _registered_spec(project: Project, name: str, version: int) -> MinerSpec | N
     return None if blob is None else spec_from_json(project.blobs.get_json(str(blob)))
 
 
+def registered_taxonomy_versions(project: Project) -> set[tuple[str, int]]:
+    """Every registered taxonomy `(name, version)` (the `taxonomies` table, read directly like
+    `miner_fields`)."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        rows = conn.execute(text("SELECT name, version FROM taxonomies")).all()
+    return {(str(name), int(version)) for name, version in rows}
+
+
+def miner_taxonomy_refs(
+    project: Project, spec: ProtocolSpec
+) -> dict[tuple[str, int], tuple[str, int]]:
+    """For each listed miner whose registered spec has a taxonomy reference, the referenced
+    `(name, version)`."""
+    out: dict[tuple[str, int], tuple[str, int]] = {}
+    for use in spec.miners or ():
+        miner = _registered_spec(project, use.name, use.version)
+        if miner is not None and miner.taxonomy is not None:
+            out[(use.name, use.version)] = (miner.taxonomy.name, miner.taxonomy.version)
+    return out
+
+
 def layer_miner_versions(project: Project, spec: ProtocolSpec) -> set[tuple[str, int]]:
     """The listed miner versions that are layer miners: derived miners whose taxonomy includes a
     dimension of layer scheme (dimension zero)."""
@@ -375,6 +397,8 @@ def record_protocol(
             registered_miners=set(miner_fields(project)),
             calibrated_miners=calibrated_miners(project, spec),
             layer_miners=layer_miner_versions(project, spec),
+            registered_taxonomies=registered_taxonomy_versions(project),
+            miner_taxonomies=miner_taxonomy_refs(project, spec),
         )
         if check.errors:
             raise FactoryValidationError(check.errors)
@@ -527,6 +551,8 @@ def amend_protocol(
             registered_miners=set(miner_fields(project)),
             calibrated_miners=calibrated_miners(project, spec),
             layer_miners=layer_miner_versions(project, spec),
+            registered_taxonomies=registered_taxonomy_versions(project),
+            miner_taxonomies=miner_taxonomy_refs(project, spec),
         )
         if check.errors or check.gaps:
             raise FactoryValidationError([*check.errors, *check.gaps])

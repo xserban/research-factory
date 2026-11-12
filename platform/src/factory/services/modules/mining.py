@@ -56,7 +56,7 @@ SPEC = ModuleSpec(
         " requests and the researcher's layer moves decide which works a listed miner reads.",
     ),
     task_kinds=default_task_kinds().kinds_of("mining"),
-    protocol_sections=("miners",),
+    protocol_sections=("miners", "taxonomies"),
     gates=(
         GateSpec(
             "miner.calibration_label",
