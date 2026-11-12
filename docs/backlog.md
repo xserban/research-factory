@@ -496,12 +496,19 @@ Status: built, partly reviewed, untested (2026-11-11). Feed engine v1: slice 4c,
 **Open questions:** whether the feed lives in one project or across projects (IDEA-04); whether the MiniLM or SPECTER2 encoder is used (one encoder per factory is simpler); how reactions are collected in a static hub (the dashboard server is GET-only; a small POST endpoint with a project token, or a CLI `factory feed react`); which of the tool's tests port.
 
 ### IDEA-60 — Capability catalog: tools and skills by lifecycle stage, with instruction flags
-Status: built, reviewed (fixes in), not tested: tests written, not run (testing paused); built once on a copy of `agentic-science` (2026-11-12; merged into `plan-feed-hub`; built on branch `plan-catalog`, plan `docs/plans/2026-11-12-catalog.md`) · Added: 2026-11-12 · Slice: — · Depends on: site hub (IDEA-55), skill frontmatter
+Status: built, reviewed (Sonnet review, fixes 714d31b), not tested: 11 tests written, none run; built once on a copy of `agentic-science`; merged into `main` with the unified line (ae5f5b5, 2026-11-12; branch `plan-catalog`, plan `docs/plans/2026-11-12-catalog.md`) · Added: 2026-11-12 · Slice: — · Depends on: site hub (IDEA-55), skill frontmatter
 **What:** a project-hub product `catalog` (`factory site build --only catalog`) that lists every registered MCP tool once, under a nine-stage research-development lifecycle (Frame to Maintain, plus Cross-cutting). Each skill declares `stage:` in its SKILL.md; a tool takes the earliest stage of the skills that name it. Prompts are the skills' "when to use" lines; examples are numbered skill steps that call a tool. A count check compares the `@server.tool()` decorators with the built server's tool list.
 **Why:** the researcher cannot see what the factory can do at each stage; 173 tools and 27 skills had no single view.
 **Rigour notes:** nothing on the page is typed except stage labels and layout; flags (skill vs tool, skill vs skill, skill vs decisions, orphans, missing stage) are mechanical and never ruled on. First build: 46 orphan tools, 4 clash and 3 unknown-input flags, all 7 judged false positives by hand.
 **Open questions:** tighten the clash rule (context of "do not read") and the "`tool` with `a`" rule (values vs inputs); move to the factory hub when it exists; skills for the 46 orphan tools.
-**Pending (2026-11-12):** run `tests/test_site_catalog.py` (11 tests, never run) when testing resumes; the line is local, not pushed, main untouched; the `stage:` lines change every skill's `name@sha8`, effective when the plugin is reinstalled; remove the merged `plan-catalog` worktree and the uncommitted copy of the plan in the main checkout. Follow-ups: IDEA-61.
+**Wrap-up (2026-11-12, at main ae5f5b5):**
+- Built: `services/site_catalog.py` (derivation, count check, flags), `services/site_catalog_page.py`, product `catalog` in `services/site.py` with an optional `Product.stamp` (hash of the SKILL.md files and `docs/decisions.md`, part of the catalog's fingerprint only); `stage:` frontmatter in all 27 `plugin/skills/rf-*/SKILL.md`.
+- Not built: the factory-hub placement; MCP prompts (none registered); the IDEA-61 follow-ups.
+- Run: ruff (clean), ruff format (clean), mypy --strict on the touched files (clean; the whole tree has 2 pre-existing errors in `services/ranking_model.py`, optional `transformers`), `factory site build --only catalog` on a copy of `agentic-science` (built; 173 tools registered and listed, 27 skills, 0 prompts, 96 examples, 54 flags: 46 orphan-tool, 4 clash, 3 unknown-input, 1 orphan-skill).
+- Not run: `platform/tests/test_site_catalog.py` (11 tests); no live check in a browser.
+- Index and events: none changed. PROJECTION_VERSION unchanged (83); no new event type (the catalog reads code and skill files, not the log).
+- Side effect: the `stage:` lines change every skill's `name@sha8`; a session pinned to an old hash is refused after the plugin is reinstalled.
+- Next step needs: a test run of `test_site_catalog.py`; one look at the page with the researcher; rulings on IDEA-61 (which of the 46 orphan tools get a skill or are marked researcher- or CLI-facing). No other branch is needed.
 
 ### IDEA-61 — Catalog follow-ups: sharper flag rules, orphan tools, review minors
 Status: proposed (2026-11-12) · Added: 2026-11-12 · Slice: — · Depends on: IDEA-60

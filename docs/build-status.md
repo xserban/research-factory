@@ -13,6 +13,7 @@ Update this file in the landing commit of every plan, together with the backlog 
 | `plan-feed` | Slice 4c discovery feed v1, F1–F10 (decision 118) | yes | yes (Sonnet review, fixes cec877c) | no | no |
 | `plan-feed-hub` (now includes `plan-restart-costs`) | Feed in the hub (decision 119): Daily updates page, write path, one-click add, work queue, Process now (H1–H7); full ingestion pipeline Process all, the hard MCP unit cap and a per-run time limit (H8); dashboard feed and queue panel | yes | H1–H7 yes (fixes to 62d5c7b); H8 yes (fixes a4d2bb8); dashboard panel (91fc18a) not reviewed | partly (2026-11-12: feed, inbox, hub, dashboard files pass one by one; not tried live) | no |
 | `plan-restart-costs` | Restartable LLM steps (IDEA-59: interruption finder, `factory resume`, hub Resume, `runs adopt`) and the run cost model (IDEA-45: cost reader, unit counter file, `factory costs`, hub Run costs page, pilot baseline); also the light theme (on `plan-feed-hub`, 7746eeb, 78e67b8) | yes | yes (Sonnet review, fixes fc2c23e, 73a1ef3) | partly (2026-11-12: resume, runner, pipeline, costs, adopt, usage-limit files pass; not tried live); merged into `plan-feed-hub` 2026-11-12 | no |
+| `plan-catalog` | Capability catalog (IDEA-60): hub product `catalog`, MCP tools and skills by lifecycle stage, count check, mechanical instruction flags; `stage:` in every SKILL.md. Follow-ups IDEA-61 | yes | yes (Sonnet review, fixes 714d31b) | no (11 tests written, not run; one build on a pilot copy) | yes, in `main` at ae5f5b5 (2026-11-12) |
 
 ## Before merging this line
 
