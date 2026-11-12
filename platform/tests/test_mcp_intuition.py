@@ -67,7 +67,11 @@ async def test_tool_list_serves_records_and_lists_but_never_reviews(
     assert all(name in names for name in (*TOOLS, *LIST_TOOLS))
     banned = ("review", "supersede", "approve", "confirm", "decide")
     assert not [n for n in names if "interpretation" in n and any(b in n for b in banned)]
-    assert not [n for n in names if n.startswith(("concept", "intuition")) and n not in (*TOOLS, *LIST_TOOLS)]
+    assert not [
+        n
+        for n in names
+        if n.startswith(("concept", "intuition")) and n not in (*TOOLS, *LIST_TOOLS)
+    ]
 
 
 @pytest.mark.anyio

@@ -6,9 +6,9 @@ from factory.clock import FixedClock
 from factory.config import Settings
 from factory.events.envelope import Actor
 from factory.events.reader import read_all
-from factory.mcp import server as mcp_server
 from factory.mcp import sessions as mcp_sessions
 from factory.model.project import RigorMode
+from factory.services import agent_view as agent_view_service
 from factory.services import check as check_service
 from factory.services import evidence_report as evidence_report_service
 from factory.services.check import CheckReport, Finding
@@ -74,7 +74,11 @@ async def test_agent_view_has_no_audit_rate(
     clock: FixedClock,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(evidence_report_service, "evidence_report", lambda _p, expect=(): _full())
+    monkeypatch.setattr(
+        evidence_report_service,
+        "evidence_report",
+        lambda _p, expect=(), *, without_grey=False: _full(),
+    )
     async with open_session(settings, clock) as client:
         out = await client.call("report_evidence", project="demo")
     assert out["ok"] is True, out
@@ -104,10 +108,15 @@ async def test_held_out_identifiers_are_withheld(
     clock: FixedClock,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(evidence_report_service, "evidence_report", lambda _p, expect=(): _full())
+    monkeypatch.setattr(
+        evidence_report_service,
+        "evidence_report",
+        lambda _p, expect=(), *, without_grey=False: _full(),
+    )
     # A held-out seed's DOI or identifier can reach the report only through a work title (work ids
     # stay visible by design, as in screening), so the scrub is exercised on a title token.
-    monkeypatch.setattr(mcp_server, "_held_out_tokens", lambda _p, _w=True: {"Title 1"})
+    # the evidence view is scrubbed in services.agent_view (a23f2eb), not in the MCP server
+    monkeypatch.setattr(agent_view_service, "held_out_tokens", lambda _p, _w=True: {"Title 1"})
     async with open_session(settings, clock) as client:
         out = await client.call("report_evidence", project="demo")
     assert out["ok"] is True, out
