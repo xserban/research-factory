@@ -35,7 +35,8 @@ from tests.helpers import install_skill, open_session
 from tests.hypothesis_helpers import HW, gw, hw
 from tests.test_mcp_cards import SESSION_E, _session
 
-TOOLS = ("experiment_design", "experiment_view", "xrun_register", "xrun_list")
+# experiment_list: the read-only list tool (b299847, PROJECT_READ in services/access.py).
+TOOLS = ("experiment_design", "experiment_view", "experiment_list", "xrun_register", "xrun_list")
 EXPERIMENT = {"role": "designer", "model": "claude-opus-5-5", "skill": "rf-experiment"}
 
 

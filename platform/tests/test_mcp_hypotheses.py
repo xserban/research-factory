@@ -45,6 +45,9 @@ TOOLS = (
     "hypothesis_review_next",
     "hypothesis_review",
     "hypothesis_register",
+    # The read-only list tools (b299847, PROJECT_READ in services/access.py).
+    "lead_list",
+    "hypothesis_list",
 )
 SESSION_F = "01JZ9Q3K5M7N8P0R2S4T6V8W1F"
 IDEATE = {"role": "ideator", "model": "claude-opus-5-5", "skill": "rf-ideate"}

@@ -52,6 +52,7 @@ async def test_tool_list_has_the_two_tools_and_no_decision_tool(
         [
             "concept_propose",
             "concept_link",
+            "concept_list",  # read-only list (f6d6541, PROJECT_READ in services/access.py)
             "intuition_next",
             "interpretation_record",
             "interpretation_list",

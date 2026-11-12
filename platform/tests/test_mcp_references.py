@@ -39,6 +39,7 @@ NEW_TOOLS = [
     "snowball_round",
     "snowball_compare",
 ]
+LAYER_TOOLS = ["reference_layer_next", "reference_layer_record", "reference_layer_status"]
 
 
 def _count(project: Project) -> int:
@@ -72,7 +73,9 @@ async def test_tools_registered_and_named_area_verb(settings: Settings, clock: F
     async with Client(server) as client:
         names = [t.name for t in (await client.list_tools()).tools]
     start = names.index(NEW_TOOLS[0])  # tools of later plans register after these
-    assert names[start : start + len(NEW_TOOLS)] == NEW_TOOLS
+    # The reference-layer plan (1962194) registers its three tools after references_status.
+    block = [*NEW_TOOLS[:2], *LAYER_TOOLS, *NEW_TOOLS[2:]]
+    assert names[start : start + len(block)] == block
     assert "seed_check" not in names
     assert all(name.split("_")[0] in {"references", "reference", "snowball"} for name in NEW_TOOLS)
 
@@ -553,10 +556,12 @@ async def test_status_tools_name_a_held_out_work_as_any_work(
 ) -> None:
     """A `[withheld]` in place of one `rf:` id among the others would mark the seed."""
     from factory.mcp import server as mcp_server
+    from factory.services import prisma_update as prisma_update_service
 
     target = _held(project).work_id
     flow = prisma_update(project).model_copy(update={"changed_previous": (target,)})
-    monkeypatch.setattr(mcp_server.prisma_update_service, "prisma_update", lambda *_, **__: flow)
+    # report_prisma reads the update through services/agent_view.py since a23f2eb.
+    monkeypatch.setattr(prisma_update_service, "prisma_update", lambda *_, **__: flow)
     monkeypatch.setattr(
         mcp_server.coverage_service,
         "agent_coverage",
