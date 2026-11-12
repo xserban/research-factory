@@ -599,6 +599,17 @@ class ExtractionStale(StrictModel):
 
     all_records: bool
     fields: tuple[str, ...] = ()
+    values: dict[str, tuple[str, ...]] | None = None
+    """Value-level staleness: field name -> values whose rows are stale. A row is stale when it
+    carries one of these values; `all_records` is False when used. Omitted from serialisation
+    when None, so events written before it existed replay identically."""
+
+    @model_serializer(mode="wrap")
+    def _no_values_says_nothing(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        out: dict[str, Any] = handler(self)
+        if self.values is None:
+            out.pop("values", None)
+        return out
 
 
 class MinerStale(StrictModel):
