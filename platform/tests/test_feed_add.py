@@ -19,15 +19,13 @@ from tests.helpers import SourcesFor, ready_protocol
 from tests.inbox_helpers import Keyed, capture, link_item, raising_sources
 from tests.test_feed_actions import (
     ENTRY,
-    FETCH,
     HELD_WORK,
     OTHER,
-    RANKING,
     UNSHOWN,
     _ranking,
-    _record,
     _shown,
 )
+from tests.test_feed_index import FETCH, RANKING, _record
 
 HELD = "2611.01236"
 
