@@ -1,6 +1,6 @@
 # Plan (design): taxonomies as declared, versioned objects (IDEA-50)
 
-Date: 2026-11-12 · Status: design ruled (§8); no code · Branch:
+Date: 2026-11-12 · Status: built and merged into `main` (decision 120 proposed); untested, see §11; runtime not yet moved (pilot pause) · Branch:
 `plan-taxonomies` (from `main` at 5bc9879) · Unblocks: IDEA-51, 52, 53, 55 (the taxonomy product),
 64 · Related: reference layers (plan 2026-11-11-reference-layers; the layers themselves belong to
 IDEA-57 and are not redesigned here) · Provisional decision number: 120 (fixed at landing)
