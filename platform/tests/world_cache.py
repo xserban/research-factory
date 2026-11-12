@@ -151,9 +151,26 @@ def _object_tag(value: Any) -> str:
     return f"{id(value)}:{_kind_tag(value)}"
 
 
+def _is_pydantic_internal(key: object) -> bool:
+    """Dunder state the model machinery fills in lazily (completing a forward reference changes
+    `__pydantic_*`, `__signature__`); it is not source, so a patch never lives there."""
+    return str(key).startswith(("__pydantic_", "__signature__"))
+
+
+# Stdlib bindings created on first use (not by a patch): `tempfile` builds its name sequence lazily.
+_LAZY_BINDINGS = frozenset({"_name_sequence"})
+
+
 def _namespace_items(namespace: Any) -> list[tuple[str, Any]]:
     try:
-        return sorted(vars(namespace).items(), key=lambda kv: str(kv[0]))
+        return sorted(
+            (
+                (k, v)
+                for k, v in vars(namespace).items()
+                if not _is_pydantic_internal(k) and k not in _LAZY_BINDINGS
+            ),
+            key=lambda kv: str(kv[0]),
+        )
     except TypeError:
         return []
 
