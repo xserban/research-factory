@@ -123,8 +123,10 @@ ACCEPTED_MISMATCH: Final[dict[str, str]] = {
 the page shows the reason."""
 
 _TOOL_SHAPE = r"[a-z]+(?:_[a-z]+)+"
-_BACKTICK = re.compile(r"`((?:[^`\n]|\n(?![ \t]*\n))+)`")
-"""A backticked span; it may wrap onto the next line, never across a blank line."""
+_BACKTICK = re.compile(r"`([a-z_][a-z0-9_]*\((?:[^`\n]|\n(?![ \t]*\n))*|[^`\n]+)`")
+"""A backticked span on one line, or a call form `tool(...)` that wraps onto further lines of its
+paragraph (never across a blank line). A code fence or a stray backtick cannot open a wrapped
+span."""
 _NAME_SHAPE = r"[a-z][a-z0-9]*(?:_[a-z0-9]+)*"
 """Any identifier, single-word tools (`check`, `trace`, `whoami`) included; callers keep only
 registered names."""
@@ -140,20 +142,43 @@ _ARG_NAME = re.compile(r"\b([a-z_][a-z0-9_]*)\s*=")
 _DECISION = re.compile(r"\bdecisions?\s+(\d+(?:\s*(?:,|and|&)\s*\d+)*)", re.I)
 _NEGATIVE = re.compile(r"\b(never|do not|don't|must not|should not|may not)\b", re.I)
 _POSITIVE = re.compile(r"\b(always|must|call|calls)\b", re.I)
+_FILLER = r"(?:(?:[a-z]+ly|also|first|then|again|yet|ever|just|even|be|been|get)\s+)*"
 _NEG_ACT = re.compile(
-    r"\b(?:never|do not|don't|must not|should not|may not)\s+(?:[a-z]+ly\s+)?([a-z]+)", re.I
+    rf"\b(?:never|do not|don't|must not|should not|may not)\s+{_FILLER}([a-z]+)", re.I
 )
-_POS_ACT = re.compile(r"\b(?:always|must)\s+(?:[a-z]+ly\s+)?([a-z]+)|\b(calls?)\b", re.I)
+_POS_ACT = re.compile(rf"\b(?:always|must)\s+{_FILLER}([a-z]+)|\b(calls?)\b", re.I)
+_ACTS: Final[dict[str, str]] = {
+    **dict.fromkeys(("call", "run", "use", "invoke", "start"), "call"),
+    **dict.fromkeys(("read", "open", "view", "look", "inspect", "consult"), "read"),
+    **dict.fromkeys(("act", "clear", "fix", "resolve"), "act"),
+    **dict.fromkeys(("ask", "request"), "ask"),
+    **dict.fromkeys(("name", "mention", "cite"), "name"),
+    **dict.fromkeys(("record", "write", "register"), "record"),
+}
+"""Verb -> act. Synonyms share an act; a verb not listed reads as unknown (`None`), which pairs
+with any act, so an unread sentence can only add a clash, never hide one."""
+
+
+def _lemma(verb: str) -> str:
+    """The listed verb an inflected form stands for (`calls`, `called`, `running` -> call, run)."""
+    for cut in (0, 1, 2, 3):
+        stem = verb[: len(verb) - cut] if cut else verb
+        if cut and verb[len(verb) - cut :] not in ("s", "d", "ed", "ing"):
+            continue
+        for candidate in (stem, stem[:-1] if len(stem) > 2 and stem[-1] == stem[-2] else ""):
+            if candidate in _ACTS:
+                return candidate
+    return verb
 
 
 def _act(sentence: str, negative: bool) -> str | None:
-    """The act a sentence governs: the verb after its negation (`do not read` -> `read`) or after
-    `always`/`must`, else `call` for a sentence that calls. Inflection `-s` is dropped."""
+    """The act a sentence governs: the verb after its negation (`do not read` -> read) or after
+    `always`/`must`, skipping adverbs and fillers (`must first call`, `must be called` -> call),
+    else `call` for a sentence that calls; mapped through `_ACTS`, `None` when not listed."""
     m = (_NEG_ACT if negative else _POS_ACT).search(sentence)
     if m is None:
         return None
-    verb = next(g for g in m.groups() if g).lower()
-    return verb[:-1] if len(verb) > 3 and verb.endswith("s") and not verb.endswith("ss") else verb
+    return _ACTS.get(_lemma(next(g for g in m.groups() if g).lower()))
 
 
 _STEP = re.compile(r"^\s*\d+\.\s")
@@ -306,12 +331,12 @@ def collect_tools(settings: Settings) -> tuple[list[ToolSpec], int]:
 
 
 def marker_access(tool: str, kind: str) -> str | None:
-    """Why the tool's access row disagrees with its marker, or `None` when it agrees or the tool has
-    no row. Read-only expects `project:read`; human-only expects a permission an agent never holds
+    """Why the tool's access row disagrees with its marker (or is missing), or `None` when it
+    agrees; other kinds (`scheduled`) need only a row. Read-only expects `project:read`; human-only expects a permission an agent never holds
     and no gate through which an agent may act."""
     permission = TOOL_PERMISSIONS.get(tool)
     if permission is None:
-        return None
+        return f"marked {kind} but it has no access row to check the marker against"
     if kind == "read-only" and permission is not Permission.PROJECT_READ:
         return f"marked read-only but its access row is `{permission.value}`"
     if kind == "human-only":
@@ -320,6 +345,18 @@ def marker_access(tool: str, kind: str) -> str | None:
         if tool in GATED_AGENT_ACTS:
             return "marked human-only but it is a gated agent act (`GATED_AGENT_ACTS`)"
     return None
+
+
+_MARKER_FILE: Final = "platform/src/factory/services/site_catalog.py"
+
+
+def _marker_line(tool: str) -> int:
+    """The line of the tool's entry in this file's marker lists, else that of `MARKERS`."""
+    lines = Path(__file__).read_text(encoding="utf-8").splitlines()
+    for i, line in enumerate(lines, 1):
+        if line.strip() == f'"{tool}",':
+            return i
+    return next((i for i, line in enumerate(lines, 1) if line.startswith("MARKERS:")), 1)
 
 
 def enum_values(schema_json: str) -> frozenset[str]:
@@ -348,12 +385,21 @@ def enum_values(schema_json: str) -> frozenset[str]:
     return frozenset(found)
 
 
-def declared_values(spec: ToolSpec) -> frozenset[str]:
-    """Values a tool declares for its inputs: the schema's enum and const values, and the backticked
-    words of its own description that are not input names (a `str` input such as `mine_resolve`'s
-    `choice` lists its values there)."""
-    described = {m.group(1).strip() for m in _BACKTICK.finditer(spec.description)}
-    return enum_values(spec.input_schema_json) | frozenset(described - set(spec.params))
+_VALUE_LIST = re.compile(r"`[^`\n]+`(?:,\s*`[^`\n]+`)*,?\s+(?:or|and)\s+`[^`\n]+`")
+
+
+def declared_values(spec: ToolSpec, tool_names: frozenset[str] = frozenset()) -> frozenset[str]:
+    """Values a tool declares for its inputs: the schema's enum and const values, and the words of
+    a backticked list in its own description ("`a`, `b` or `neither`": a `str` input such as
+    `mine_resolve`'s `choice` lists its values so) that are neither input nor tool names."""
+    described = {
+        tok.strip()
+        for lst in _VALUE_LIST.finditer(spec.description)
+        for tok in _BACKTICK.findall(lst.group(0))
+    }
+    return enum_values(spec.input_schema_json) | frozenset(
+        described - set(spec.params) - tool_names
+    )
 
 
 # --- parsing ---
@@ -591,7 +637,7 @@ def derive_catalog(
             tool = m.group(1)
             if tool not in spec_by_name:
                 continue
-            values = declared_values(spec_by_name[tool])
+            values = declared_values(spec_by_name[tool], frozenset(spec_by_name))
             for tok in _BACKTICK.findall(m.group(2)):
                 arg = re.match(r"[a-z_][a-z0-9_]*", tok)
                 if arg and tok in values:
@@ -711,8 +757,8 @@ def derive_catalog(
                 flags.append(
                     Flag(
                         code="marker-access-mismatch",
-                        file="services/site_catalog.py",
-                        line=1,
+                        file=_MARKER_FILE,
+                        line=_marker_line(spec.name),
                         message=f"`{spec.name}` {mismatch}",
                     )
                 )
@@ -740,8 +786,8 @@ def derive_catalog(
         flags.append(
             Flag(
                 code="marker-unknown-tool",
-                file="services/site_catalog.py",
-                line=1,
+                file=_MARKER_FILE,
+                line=_marker_line(name),
                 message=f"`{name}` is marked {markers[name]} but is not a listed tool",
             )
         )

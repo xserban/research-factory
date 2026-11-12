@@ -367,3 +367,69 @@ def test_stageless_skill_rendered_under_unassigned(tmp_path: Path) -> None:
     unassigned = html_text.split("<h2>Unassigned</h2>")[1].split("<h2>")[0]
     assert "rf-lost" in unassigned
     assert cat.flag_counts()["skill-no-stage"] == 1
+
+
+# --- review fixes (2026-11-12) ---
+
+
+def test_code_fence_and_stray_backtick_do_not_shift_mentions(tmp_path: Path) -> None:
+    _skill(
+        tmp_path,
+        "rf-a",
+        "frame",
+        "```python\nx = 1\n```\n\nPress the ` key,\nthen call `tool_one` now.\n",
+    )
+    cat = _derive(tmp_path, [_tool("tool_one")])
+    assert cat.tools[0].stage == "frame"
+    assert cat.flag_counts()["orphan-tool"] == 0
+
+
+def test_act_skips_fillers_and_maps_synonyms() -> None:
+    from factory.services.site_catalog import _act
+
+    assert _act("You must first call `x`.", False) == "call"
+    assert _act("It must be called before the round.", False) == "call"
+    assert _act("Always run `check`.", False) == "call"
+    assert _act("Do not also call `x`.", True) == "call"
+    assert _act("Never ponder `x`.", True) is None
+
+
+def test_clash_found_through_filler_and_synonym(tmp_path: Path) -> None:
+    _skill(tmp_path, "rf-a", "frame", "Never call `tool_one` here.\n")
+    _skill(tmp_path, "rf-b", "frame", "You must first run `tool_one`.\n")
+    cat = _derive(tmp_path, [_tool("tool_one")])
+    assert cat.flag_counts()["skill-skill-clash"] == 1
+
+
+def test_description_values_need_a_list_and_exclude_tool_names(tmp_path: Path) -> None:
+    _skill(
+        tmp_path,
+        "rf-a",
+        "frame",
+        "Call `tool_one` with `tool_two` and `stale`.\n\nCall `tool_two` once.\n",
+    )
+    one = ToolSpec(
+        name="tool_one",
+        description="Like `tool_two`; `stale` is not an input. Mode `x`, `y` or `tool_two`.",
+        input_schema_json="{}",
+        params=("mode",),
+    )
+    args = sorted(
+        f.message
+        for f in _derive(tmp_path, [one, _tool("tool_two")]).flags
+        if f.code == "skill-unknown-arg"
+    )
+    assert args == ["`tool_one` has no input `stale`", "`tool_one` has no input `tool_two`"]
+
+
+def test_marker_flags_point_at_the_marker_entry(tmp_path: Path) -> None:
+    _skill(tmp_path, "rf-a", "frame", "Nothing.\n")
+    cat = _derive(
+        tmp_path,
+        [_tool("grey_search_report"), _tool("no_row_tool")],
+        markers={"grey_search_report": "read-only", "no_row_tool": "scheduled"},
+    )
+    flags = [f for f in cat.flags if f.code == "marker-access-mismatch"]
+    assert len(flags) == 2
+    assert all(f.file.endswith("services/site_catalog.py") and f.line > 1 for f in flags)
+    assert any("no access row" in f.message for f in flags)

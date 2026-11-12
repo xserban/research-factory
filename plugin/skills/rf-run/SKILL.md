@@ -27,7 +27,8 @@ The map of a whole run. It records nothing: it says where to look and which skil
 | `reporting` | Nothing above is open | the reports below, then `rf-lineage`, `rf-write` |
 
 At `full-text`, read `library_adoptable` for a work before fetching it: when another project of the
-lab already holds its document, adopt that copy with `library_adopt` instead of fetching again.
+lab already holds its document, adopt that copy with `library_adopt` instead of fetching again,
+passing the row's `source_project` and its `document_id` as `source_doc`.
 
 `stage` is null in a session that has joined a pass: that session follows its own skill and its
 own batches only.

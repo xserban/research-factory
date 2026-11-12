@@ -52,8 +52,9 @@ round and routes the new works back into screening.
   researcher asks: run the web search yourself, then report it with `grey_search_report`, giving
   that entry as `target`, the `engine`, the `query` as you ran it, a `timestamp` in ISO 8601 with a
   zone, the `urls` you took from it and the `stopping_rule` you followed.
-- The platform cannot verify the search and enrols no work from it: the links go to the inbox.
-  Report the search exactly as it ran.
+- The platform cannot verify the search and enrols no work from it. The `urls` are offered to the
+  inbox: arXiv, DOI and OpenAlex links parse, the rest are listed as unparsed. Report the search
+  exactly as it ran. The call is refused to a session that has joined a pass.
 
 ## Supplied links (`inbox_add`)
 
