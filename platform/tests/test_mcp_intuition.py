@@ -33,6 +33,7 @@ TOOLS = (
     "concept_propose",
     "concept_link",
 )
+LIST_TOOLS = ("concept_list",)  # f6d6541: read-only list of concepts
 
 
 def _session(monkeypatch: pytest.MonkeyPatch, session: str) -> None:
@@ -63,10 +64,10 @@ async def test_tool_list_serves_records_and_lists_but_never_reviews(
 ) -> None:
     async with Client(build_server(settings, clock=clock)) as client:
         names = [t.name for t in (await client.list_tools()).tools]
-    assert all(name in names for name in TOOLS)
+    assert all(name in names for name in (*TOOLS, *LIST_TOOLS))
     banned = ("review", "supersede", "approve", "confirm", "decide")
     assert not [n for n in names if "interpretation" in n and any(b in n for b in banned)]
-    assert not [n for n in names if n.startswith(("concept", "intuition")) and n not in TOOLS]
+    assert not [n for n in names if n.startswith(("concept", "intuition")) and n not in (*TOOLS, *LIST_TOOLS)]
 
 
 @pytest.mark.anyio
