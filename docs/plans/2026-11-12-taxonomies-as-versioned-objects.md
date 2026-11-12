@@ -1,6 +1,6 @@
 # Plan (design): taxonomies as declared, versioned objects (IDEA-50)
 
-Date: 2026-11-12 · Status: design written, awaiting the researcher's rulings (§8); no code · Branch:
+Date: 2026-11-12 · Status: design ruled (§8: Q1 A2, the rest as recommended; Q11 open); no code · Branch:
 `plan-taxonomies` (from `main` at 5bc9879) · Unblocks: IDEA-51, 52, 53, 55 (the taxonomy product),
 64 · Related: reference layers (plan 2026-11-11-reference-layers; the layers themselves belong to
 IDEA-57 and are not redesigned here) · Provisional decision number: 120 (fixed at landing)
@@ -345,6 +345,17 @@ Each row is one decision; the recommended option is first.
 | Q11 | Depth table (§4) | the researcher fills the cells |
 | Q12 | Introducing new events (§6.3) | **I1 + I3** · I2 · I4 |
 | Q13 | v0 → v1 | **the agent drafts definitions, cues and examples for the 69 categories as proposals; the researcher edits and registers v1** · the researcher writes them · register v0 as is (names and patterns only) |
+
+### Rulings recorded (researcher, 2026-11-12)
+
+- **Q1: A2.** "The same as miners." The researcher notes that adding taxonomy categories or a new
+  miner then requires a protocol change. That follows from A2: a new category is a new taxonomy
+  version, and using it as evidence means listing that version in the protocol, which is a semantic
+  amendment whose stale rows are computed (§5). Making that amendment one command, without
+  rewriting the protocol file, is IDEA-51 item 2 and applies to taxonomies as to miners.
+- **Q2–Q10, Q12, Q13:** the recommended options are accepted ("the rest seem okay").
+- **Q11 (depth table):** open; the researcher fills the cells before dimension-zero results
+  drive mining.
 
 ## 9. After the rulings (sketch, not tasks yet)
 
