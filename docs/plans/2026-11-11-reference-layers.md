@@ -229,3 +229,43 @@ Findings for T7: candidates come only from resolved links and include background
 reports, the Protein Data Bank, docking software), so the layer filter is what makes the round small;
 a round cannot be limited to chosen sources. Resume step: settle the 8 pending screening decisions in
 the pilot, then run one backward round after the layer pass and T7.
+
+## Pilot title pass, first run, and round 3 rulings (2026-11-12)
+
+Resumed run: branch rebased onto plan-8 (projection 77 kept, no other branch uses it); both MCP configs
+point at this worktree; scheme v1 and the 30 labels recorded in the pilot; Haiku calibration passed
+(28/30, kappa 0.84). First run of the title pass: 498 most-cited items, core 38, applied 52,
+adjacent 102, background 122, off-topic 184. Paused for six problems:
+
+1. Title variants split one work (The AI Scientist as four items: trailing years, "arXiv preprint",
+   "[Preprint]").
+2. Core broader than the researcher's expectation; a third of it benchmarks of research agents.
+3. The calibration sample held 0 core and 1 applied item: kappa says little about the inner rings.
+4. Parsed "titles" that are author lists (DeepSeekMath, SWE-bench, cited by 11 and 6) went off-topic;
+   most carry an arXiv ID.
+5. Core/applied boundary from titles (Coscientist names no science).
+6. Robot scientists and self-driving labs without an LLM went off-topic.
+
+Researcher rulings (round 3):
+
+- **R3.1 Merge duplicates** (reuse the works-dedup tools): items merge when they share an arXiv ID or
+  DOI, when their titles are equal after stripping years, venue and preprint notes, or when titles
+  are near-equal (rapidfuzz, high threshold, year within one). Automatic; merged counts reported.
+- **R3.2 Benchmark ring.** Benchmarks and evaluations of AI research systems get their own ring
+  inside the core, snowballed. Order: core, benchmark, applied, adjacent, background, off-topic.
+- **R3.3 Identifier wins.** For every entry with an arXiv ID or DOI whose title is known (corpus work,
+  resolved link, another entry, or a lookup of the identifier), that title replaces the parsed one.
+  Entries without an identifier keep the parsed title and the clean-up flags.
+- **R3.4 Core/applied from the title**; the P4 audit corrects known cases (Coscientist).
+- **R3.5 Robot scientists and lab automation without an LLM** are background.
+- **R3.6 Inner-ring calibration.** Scheme v2 adds 20 items to the sample, drawn from items an agent
+  placed in an inner ring under an earlier scheme (10 from v1 core, 5 applied, 5 adjacent); kappa per
+  ring is reported. Everything is redone under v2: the researcher relabels the sample, Haiku
+  recalibrates, the 498 items are rejudged.
+
+Tasks:
+
+- **T8 (rules v4):** identifier-wins titles and item merging in `services/reference_items.py`.
+- **T9 (inner sample):** optional `inner_sample` on the scheme event; the sample's inner stratum.
+- **S2:** `research-factory-pilot/reference-layers-scheme-v2.json` (drafted by Claude, confirmed by the
+  researcher).
