@@ -18,6 +18,7 @@ from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
 from factory.events.reader import read_all
 from factory.mcp.server import build_server
+from factory.model.decisions import DecisionLevel
 from factory.services import protocol as protocol_service
 from factory.services.context import Project
 from factory.services.protocol import current_protocol
@@ -25,6 +26,7 @@ from factory.services.question import current_question
 from factory.services.seeds import SeedRole, all_seeds
 from factory.sources.registry import SourceFactory
 from tests.helpers import (
+    bind_ids,
     openalex_item,
     pilot_protocol_spec,
     pilot_question_spec,
@@ -80,7 +82,7 @@ def _event_types(project: Project) -> list[str]:
 
 @pytest.mark.anyio
 async def test_question_record_states_goal_and_records_question(
-    settings: Settings, project: Project, clock: FixedClock
+    settings: Settings, project: Project, clock: FixedClock, agent: Actor
 ) -> None:
     spec = pilot_question_spec().model_dump(mode="json")
     body = await _call(
@@ -88,10 +90,16 @@ async def test_question_record_states_goal_and_records_question(
         clock,
         {},
         "question_record",
-        {"project": "demo", "spec": spec, "raw_goal": "Compare attention on vision", **AGENT},
+        {
+            "project": "demo",
+            "spec": spec,
+            "raw_goal": "Compare attention on vision",
+            "decision_ids": bind_ids(project, agent, DecisionLevel.QUESTIONS),
+            **AGENT,
+        },
     )
 
-    assert body["ok"] is True
+    assert body["ok"] is True, body
     assert body["data"]["created"] is True
     assert body["data"]["question_id"].startswith("Q@")
     types = _event_types(project)
@@ -163,6 +171,7 @@ async def test_seed_add_reports_each_rejection_by_its_index(
         {
             "project": "demo",
             "seeds": [_positive(1), {"kind": "positive", "cite": ""}, _positive(1)],
+            "decision_ids": bind_ids(project, agent, DecisionLevel.SEEDS),
             **AGENT,
         },
     )
@@ -366,9 +375,15 @@ async def test_protocol_record_draft_is_returned_with_its_version(
         clock,
         {},
         "protocol_record",
-        {"project": "demo", "spec": spec, "ready": False, **AGENT},
+        {
+            "project": "demo",
+            "spec": spec,
+            "ready": False,
+            "decision_ids": bind_ids(project, agent, DecisionLevel.PROTOCOL),
+            **AGENT,
+        },
     )
-    assert body["ok"] is True
+    assert body["ok"] is True, body
     assert body["data"]["protocol_id"].startswith("P@")
     assert body["data"]["status"] == "draft" and body["data"]["created"] is True
 
@@ -390,14 +405,24 @@ async def test_refusal_payloads_are_scrubbed_of_held_out_identifiers(
             clock,
             dict(mock_sources(openalex=[_item(n)])),
             "seed_add",
-            {"project": "demo", "seeds": [_positive(n)], **AGENT},
+            {
+                "project": "demo",
+                "seeds": [_positive(n)],
+                "decision_ids": bind_ids(project, agent, DecisionLevel.SEEDS),
+                **AGENT,
+            },
         )
     await _call(
         settings,
         clock,
         dict(mock_sources(openalex=[_item(1)])),
         "probe_run",
-        {"project": "demo", "queries": [{"source": "openalex", "query": "attention"}], **AGENT},
+        {
+            "project": "demo",
+            "queries": [{"source": "openalex", "query": "attention"}],
+            "decision_ids": bind_ids(project, agent, DecisionLevel.PROBE),
+            **AGENT,
+        },
     )
     held = next(seed.seed_id for seed in all_seeds(project) if seed.role is SeedRole.HELD_OUT)
 
@@ -416,6 +441,7 @@ async def test_refusal_payloads_are_scrubbed_of_held_out_identifiers(
             "project": "demo",
             "spec": pilot_protocol_spec(question_id, None).model_dump(mode="json"),
             "ready": False,
+            "decision_ids": bind_ids(project, agent, DecisionLevel.PROTOCOL),
             **AGENT,
         },
     )

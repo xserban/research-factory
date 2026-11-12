@@ -160,17 +160,17 @@ def test_probe_reports_recall_per_query_and_source_and_pooled(
         decision_ids=bind_ids(project, agent, DecisionLevel.PROBE),
     )
 
-    # Four development positives; SEED04 has no OpenAlex id: it is listed as untestable and is
-    # not in the denominator.
-    assert [q.recall for q in report.queries] == [1.0, 1.0]
+    # Four development positives. SEED04 has no OpenAlex id, but its arXiv id bridges to the
+    # DataCite DOI OpenAlex indexes (commit 9bef7c0), so it is testable and counted as a miss.
+    assert [q.recall for q in report.queries] == [0.75, 0.75]
     assert report.queries[0].retrieved == ("SEED01", "SEED02", "SEED03")
-    assert report.queries[0].development_tested == ("SEED01", "SEED02", "SEED03")
+    assert report.queries[0].development_tested == ("SEED01", "SEED02", "SEED03", "SEED04")
     assert report.queries[0].missed == ("SEED04",)
-    assert report.queries[0].untestable == ("SEED04",)
-    assert report.per_source_recall == {"openalex": 1.0}
-    assert report.untestable_by_source == {"openalex": ("SEED04",)}
-    assert report.pooled_recall == 1.0
-    assert report.untestable_pooled == ("SEED04",)
+    assert report.queries[0].untestable == ()
+    assert report.per_source_recall == {"openalex": 0.75}
+    assert report.untestable_by_source == {"openalex": ()}
+    assert report.pooled_recall == 0.75
+    assert report.untestable_pooled == ()
     assert report.threshold == 0.6
     assert report.meets_threshold is True
 

@@ -11,14 +11,20 @@ from factory.model.project import RigorMode
 from factory.modules.contract import CheckHit
 from factory.services import check as check_module
 from factory.services.agreement import final_outcomes
+from factory.services.appraisal_report import appraisal_hits
 from factory.services.context import Project
+from factory.services.copied_check import copied_hits
+from factory.services.decision_check import decision_hits
+from factory.services.gates import audit_hits, gate_hits
 from factory.services.modules import default_modules
+from factory.services.slice6_check import slice6_hits
 from tests.helpers import SourcesFor, _setup
 from tests.screening_helpers import _calibrate, _corpus, _partial_corpus, _screen_ordinary
 
 
 def _legacy_hits(project: Project) -> list[CheckHit]:
-    """The rules in the order `_hits` called them before the modules composed it."""
+    """The rules called one after the other in report order: the order `_hits` had before the
+    modules composed it, with the rules added since (`_run_rules` lists them) in their places."""
     c = check_module
     project.index.sync()
     outcomes = final_outcomes(project)
@@ -32,20 +38,48 @@ def _legacy_hits(project: Project) -> list[CheckHit]:
     hits += c._calibration_and_agreement(project)
     hits += c._audit(project)
     hits += c._chase(project, outcomes)
+    hits += c._chase_unattributed(project)
     hits += c._checklist(project)
     hits += c._merge_conflicts(project, outcomes)
     hits += c._fulltext(project)
+    hits += c._conversion_choice(project)
     hits += c._extraction(project)
     hits += c._evidence(project)
     hits += c._references(project)
     hits += c._snowball(project, outcomes)
+    hits += c._stop_unranked(project)
     hits += c._inbox(project, outcomes)
+    hits += c._feed_drift(project, outcomes)
+    hits += c._grey(project)
     hits += c._imports(project)
     hits += c._living(project)
     hits += c._notices(project, outcomes)
     hits += c._conclusions(project)
     hits += c._lineage(project)
     hits += c._layer(project)
+    hits += c._regions(project)
+    hits += c._organisation(project)
+    hits += gate_hits(project)
+    hits += audit_hits(project)
+    hits += c._gate_policies(project)
+    hits += c._mining(project)
+    hits += c._miner_lifecycle(project)
+    hits += slice6_hits(project)
+    hits += c._mine_imports(project)
+    hits += c._drafts(project)
+    hits += c._writer_verified(project)
+    hits += c._hosting(project)
+    hits += c._relayed_acts(project)
+    hits += c._future_dated(project)
+    hits += c._briefings(project)
+    hits += c._manuscripts(project)
+    hits += c._members(project)
+    hits += c._team_review(project)
+    hits += c._ledger_gaps(project)
+    hits += c._budgets_spent(project)
+    hits += appraisal_hits(project)
+    hits += copied_hits(project)
+    hits += decision_hits(project)
     return hits
 
 

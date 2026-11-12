@@ -27,7 +27,7 @@ def test_a_cited_decision_suggestion_is_resolved_not_broken(project: Project, ag
     assert _broken(project) == []
     assert dangling_refs(project, ids) == []
     node = trace(project, ids[0], direction="forward")
-    assert node.kind == "decision" and node.label.startswith("suggestion")
+    assert node.kind == "decision" and node.label == "questions decision: test-setting"
     assert node.event_id.startswith("ev_")
 
 

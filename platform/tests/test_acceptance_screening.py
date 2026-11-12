@@ -22,6 +22,7 @@ from factory.model.search import QueryKind, QuerySpec
 from factory.model.seed import SeedKind, SeedSpec
 from factory.services.audit import audit_report
 from factory.services.context import Project
+from factory.services.dedup import dedup_run
 from factory.services.probe import run_probe
 from factory.services.protocol import confirm_press, press_review, record_protocol
 from factory.services.search import list_works
@@ -50,7 +51,9 @@ def _works() -> list[dict[str, Any]]:
     items += [
         openalex_item(
             title=f"Study {n:02d}: linear attention on vision",
-            author="Ada Zhou",
+            # A distinct author per study: screening waits for dedup (commit 69528b3), and two
+            # titles differing in one digit would otherwise merge on the fuzzy cascade.
+            author=f"{chr(64 + n % 26 + 1)}{chr(96 + n // 26 + 1)} Zhou{'x' * n}",
             published="2021-01-01",
             openalex_id=f"W{n}",
             doi=f"10.1000/s{n}",
@@ -182,6 +185,7 @@ async def test_screening_agreement_and_audit_over_two_sessions(
         )
     assert found["ok"] is True, found
     assert len(list_works(project)) == 40
+    assert dedup_run(project).created == []  # screening waits for dedup; the works are distinct
 
     # The human labels the calibration set; the first work is excluded, the rest included.
     async with open_session(settings, clock) as reviewer:

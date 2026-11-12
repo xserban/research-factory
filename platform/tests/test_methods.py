@@ -87,11 +87,15 @@ def test_methods_reports_held_out_before_development() -> None:
 def test_methods_discloses_models_as_agent_reported(
     project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
 ) -> None:
-    _protocol(project, agent, human, mock_sources)
+    # The screening sentence names the models of screening decisions only (commit 889450b), so
+    # the corpus is screened before the disclosure is read.
+    protocol_id = _corpus(project, agent, human, mock_sources)
+    _settle(project, agent, human, protocol_id)
 
     report = methods_report(project)
     text = render_methods(report)
 
+    assert report.screening_models == ["claude-opus-5-5"]
     assert report.models == ["claude-opus-5-5"]
     assert report.skills == ["rf-screen@1a2b3c4d"]
     assert (

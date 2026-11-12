@@ -171,13 +171,10 @@ def test_pilot_needs_rationale_and_objectives(project: Project, agent: Actor) ->
 
 def test_identical_resubmission_writes_nothing(project: Project, agent: Actor) -> None:
     state_goal(project, agent, "linear attention for vision")
-    first = record_question(
-        project, agent, spec(), decision_ids=bind_ids(project, agent, DecisionLevel.QUESTIONS)
-    )
+    ids = bind_ids(project, agent, DecisionLevel.QUESTIONS)
+    first = record_question(project, agent, spec(), decision_ids=ids)
     before = project_status(project).events_total
-    again = record_question(
-        project, agent, spec(), decision_ids=bind_ids(project, agent, DecisionLevel.QUESTIONS)
-    )
+    again = record_question(project, agent, spec(), decision_ids=ids)
     assert first.created is True
     assert again.created is False
     assert again.question_id == first.question_id

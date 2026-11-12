@@ -21,6 +21,7 @@ from factory.config import Settings
 from factory.events.envelope import Actor
 from factory.events.reader import read_all
 from factory.mcp.server import build_server
+from factory.model.decisions import DecisionLevel
 from factory.model.search import QueryKind, QuerySpec
 from factory.services import dedup as dedup_service
 from factory.services import project as project_service
@@ -37,6 +38,7 @@ from factory.services.seeds import SeedRole, all_seeds
 from factory.sources.base import SearchResult, Source, SourceError
 from factory.sources.registry import SourceFactory
 from tests.helpers import (
+    bind_ids,
     openalex_item,
     pilot_protocol_spec,
     pilot_question_spec,
@@ -85,6 +87,8 @@ def _seed(n: int, kind: str = "positive") -> dict[str, Any]:
 
 
 async def _add_seed(
+    project: Project,
+    agent: Actor,
     settings: Settings,
     clock: FixedClock,
     mock_sources: MockSources,
@@ -97,7 +101,12 @@ async def _add_seed(
         clock,
         dict(mock_sources(openalex=[_item(n)])),
         "seed_add",
-        {"project": "demo", "seeds": [_seed(n, kind)], **AGENT},
+        {
+            "project": "demo",
+            "seeds": [_seed(n, kind)],
+            "decision_ids": bind_ids(project, agent, DecisionLevel.SEEDS),
+            **AGENT,
+        },
     )
     assert body["ok"] is True and len(body["data"]["written"]) == 1, body
     return body
@@ -186,8 +195,8 @@ async def test_probe_run_reports_recall_and_negative_hits_per_query_and_source(
     # Acceptance 7: recall and negative hits are reported for each query and each source.
     record_pilot_question(project, agent)
     for n in (1, 2, 3):
-        await _add_seed(settings, clock, mock_sources, n)
-    await _add_seed(settings, clock, mock_sources, 9, kind="negative")
+        await _add_seed(project, agent, settings, clock, mock_sources, n)
+    await _add_seed(project, agent, settings, clock, mock_sources, 9, kind="negative")
 
     everything = dict(mock_sources(openalex=[_item(n) for n in (1, 2, 3, 9)]))
     body = await _call(
@@ -198,6 +207,7 @@ async def test_probe_run_reports_recall_and_negative_hits_per_query_and_source(
         {
             "project": "demo",
             "queries": [{"source": "openalex", "query": "attention"}],
+            "decision_ids": bind_ids(project, agent, DecisionLevel.PROBE),
             **AGENT,
         },
     )
@@ -226,7 +236,13 @@ async def test_parentless_criterion_is_rejected_and_nothing_written(
         clock,
         {},
         "protocol_record",
-        {"project": "demo", "spec": spec, "ready": False, **AGENT},
+        {
+            "project": "demo",
+            "spec": spec,
+            "ready": False,
+            "decision_ids": bind_ids(project, agent, DecisionLevel.PROTOCOL),
+            **AGENT,
+        },
     )
     assert body["ok"] is False
     assert "spec.criteria.0.parent" in [error["field"] for error in body["errors"]]
@@ -300,8 +316,8 @@ async def test_agent_tools_never_reveal_held_out_seeds(
     # Acceptance 22 (R-20): no agent-facing response carries a held-out seed id or identifier.
     question_id = record_pilot_question(project, agent)
     for n in (1, 2, 3):
-        await _add_seed(settings, clock, mock_sources, n)
-    await _add_seed(settings, clock, mock_sources, 9, kind="negative")
+        await _add_seed(project, agent, settings, clock, mock_sources, n)
+    await _add_seed(project, agent, settings, clock, mock_sources, 9, kind="negative")
 
     responses: list[dict[str, Any]] = []
     probe = await _call(
@@ -309,7 +325,12 @@ async def test_agent_tools_never_reveal_held_out_seeds(
         clock,
         dict(mock_sources(openalex=[_item(n) for n in (1, 2, 3, 9)])),
         "probe_run",
-        {"project": "demo", "queries": [{"source": "openalex", "query": "attention"}], **AGENT},
+        {
+            "project": "demo",
+            "queries": [{"source": "openalex", "query": "attention"}],
+            "decision_ids": bind_ids(project, agent, DecisionLevel.PROBE),
+            **AGENT,
+        },
     )
     responses.append(probe)
     probe_id = probe["data"]["probe_id"]
@@ -334,7 +355,13 @@ async def test_agent_tools_never_reveal_held_out_seeds(
         clock,
         {},
         "protocol_record",
-        {"project": "demo", "spec": spec, "ready": False, **AGENT},
+        {
+            "project": "demo",
+            "spec": spec,
+            "ready": False,
+            "decision_ids": bind_ids(project, agent, DecisionLevel.PROTOCOL),
+            **AGENT,
+        },
     )
     responses.append(draft)
     review = await _call(
@@ -359,7 +386,13 @@ async def test_agent_tools_never_reveal_held_out_seeds(
         clock,
         {},
         "protocol_record",
-        {"project": "demo", "spec": spec, "ready": True, **AGENT},
+        {
+            "project": "demo",
+            "spec": spec,
+            "ready": True,
+            "decision_ids": bind_ids(project, agent, DecisionLevel.PROTOCOL),
+            **AGENT,
+        },
     )
     responses.append(ready)
     amended = await _call(
@@ -395,6 +428,7 @@ async def test_agent_tools_never_reveal_held_out_seeds(
         {
             "project": "demo",
             "seeds": [{"kind": "positive", "cite": "Again", "doi": "10.1000/p1"}],
+            "decision_ids": bind_ids(project, agent, DecisionLevel.SEEDS),
             **AGENT,
         },
     )
@@ -473,7 +507,13 @@ async def test_agent_tools_never_reveal_held_out_seeds(
             clock,
             {},
             "protocol_record",
-            {"project": "demo", "spec": candidate, "ready": False, **AGENT},
+            {
+                "project": "demo",
+                "spec": candidate,
+                "ready": False,
+                "decision_ids": bind_ids(project, agent, DecisionLevel.PROTOCOL),
+                **AGENT,
+            },
         )
         for candidate in (parentless, with_held, with_unknown)
     ]
@@ -504,19 +544,25 @@ async def test_question_to_gated_search_flow(
             "project": "demo",
             "spec": pilot_question_spec().model_dump(mode="json"),
             "raw_goal": "Compare attention on vision",
+            "decision_ids": bind_ids(project, agent, DecisionLevel.QUESTIONS),
             **AGENT,
         },
     )
     assert record_question_body["ok"] is True
     for n in (1, 2, 3):
-        await _add_seed(settings, clock, mock_sources, n)
+        await _add_seed(project, agent, settings, clock, mock_sources, n)
 
     probe = await _call(
         settings,
         clock,
         dict(mock_sources(openalex=[_item(1)])),
         "probe_run",
-        {"project": "demo", "queries": [{"source": "openalex", "query": "attention"}], **AGENT},
+        {
+            "project": "demo",
+            "queries": [{"source": "openalex", "query": "attention"}],
+            "decision_ids": bind_ids(project, agent, DecisionLevel.PROBE),
+            **AGENT,
+        },
     )
     assert probe["ok"] is True
     question = current_question(project)
@@ -530,7 +576,13 @@ async def test_question_to_gated_search_flow(
         clock,
         {},
         "protocol_record",
-        {"project": "demo", "spec": spec, "ready": False, **AGENT},
+        {
+            "project": "demo",
+            "spec": spec,
+            "ready": False,
+            "decision_ids": bind_ids(project, agent, DecisionLevel.PROTOCOL),
+            **AGENT,
+        },
     )
     assert draft["ok"] is True and draft["data"]["status"] == "draft"
     review = await _call(
@@ -564,7 +616,13 @@ async def test_question_to_gated_search_flow(
         clock,
         {},
         "protocol_record",
-        {"project": "demo", "spec": spec, "ready": True, **AGENT},
+        {
+            "project": "demo",
+            "spec": spec,
+            "ready": True,
+            "decision_ids": bind_ids(project, agent, DecisionLevel.PROTOCOL),
+            **AGENT,
+        },
     )
     assert ready["ok"] is True and ready["data"]["status"] == "ready"
 
@@ -689,7 +747,7 @@ async def test_search_run_and_dedup_run_outputs_are_scrubbed_of_held_out_identif
 
     leaking = SimpleNamespace(model_dump=lambda mode: {"note": f"touched {held.doi}"})
     monkeypatch.setattr(dedup_service, "dedup_run", lambda _project: leaking)
-    monkeypatch.setattr(project_service, "project_status", lambda _project: leaking)
+    monkeypatch.setattr(project_service, "project_status", lambda _project, **_kw: leaking)
     for name in ("dedup_run", "project_status"):
         body = await _call(settings, clock, {}, name, {"project": "demo", **AGENT})
         assert body["ok"] is True, body
