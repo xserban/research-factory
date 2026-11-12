@@ -408,3 +408,20 @@ Status: built, reviewed (fixes in), not tested: tests written, not run (testing 
 **Why:** the researcher cannot see what the factory can do at each stage; 173 tools and 27 skills had no single view.
 **Rigour notes:** nothing on the page is typed except stage labels and layout; flags (skill vs tool, skill vs skill, skill vs decisions, orphans, missing stage) are mechanical and never ruled on. First build: 46 orphan tools, 4 clash and 3 unknown-input flags, all 7 judged false positives by hand.
 **Open questions:** tighten the clash rule (context of "do not read") and the "`tool` with `a`" rule (values vs inputs); move to the factory hub when it exists; skills for the 46 orphan tools.
+
+### IDEA-61 — Catalog follow-ups: sharper flag rules, orphan tools, review minors
+Status: proposed (2026-11-12) · Added: 2026-11-12 · Slice: — · Depends on: IDEA-60
+**What:**
+1. Clash rule: pair sentences only when both govern the same act. "Do not read … `check`" (pass independence in rf-appraise, rf-contributions, rf-extract) and "Never act on a `check` finding to clear it" (rf-run) are not opposites of "call `check` and report every finding" (rf-search). These 4 flags are false positives.
+2. Unknown-input rule: in "`mine_resolve` with `a`, `b` or `neither`" (rf-mine line 46) the backticked words are values, not inputs. Check them against the schema's enum values before flagging. These 3 flags are false positives.
+3. Orphan tools: 46 registered tools are named by no skill. Decide per tool whether it gets a skill, gets a mention in an existing skill, or is marked as researcher- or CLI-facing so it is no longer counted as an orphan.
+4. Review minors (plan-catalog review, 2026-11-12):
+   - make "also used in" links to the stage sections;
+   - stop a tool named only in a negative sentence ("never call X") from taking that skill's stage;
+   - render a skill whose stages are all invalid under Unassigned as well as flagging it;
+   - de-duplicate `catalog.tools` when the server lists a name twice;
+   - check that `site_widgets.table` escapes its cells;
+   - check whether `build_server` creates directories during a catalog build.
+**Why:** the first build's 7 conflict flags were all false positives, which teaches the researcher to ignore the flags table. The orphan count hides which tools have no instructions.
+**Rigour notes:** the rules stay mechanical; the platform still never rules on a clash.
+**Open questions:** whether orphan status needs a declared `audience` (agent, researcher, CLI) on each tool.
