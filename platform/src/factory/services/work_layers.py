@@ -5,7 +5,15 @@ Invariants:
   move, source `moved`); else the layer in the FINAL row of the first protocol-listed derived miner
   that projects a dimension-zero dimension (source `miner`): agreed, resolved, or single (a work
   outside the dual sample has one pass, which is its final value), never an unresolved
-  disagreement; else none (source `pending`). A move always beats a miner.
+  disagreement; else none (source `pending`). A move beats a miner, but only while its layer is
+  an id of the latest recorded scheme: a move to any other layer is not effective, the next rule
+  applies, and the move stays visible as `WorkLayer.ignored_move`. A miner row whose value is
+  `<dim>/not-stated`, `<dim>/other` or `<dim>/not-applicable` is no layer: the work is `pending`
+  and `miner_layer` holds that value for display.
+- `layers_of` is memoised per process, per project directory, keyed on the index's last folded
+  event id (read after `sync`): the layers are a function of the log alone, so any new event
+  changes the key and drops the entry; a rebuild to the same log gives the same key and the same
+  answer. At most `_CACHE_MAX` projects are held (oldest dropped); nothing is persisted.
 - `move_layer` and `request_mining` are the researcher's acts: a non-human actor is refused with
   nothing written. Every refusal writes nothing.
 - A layer request stores the work ids it resolved to when recorded, so a later move never widens it.
@@ -63,6 +71,15 @@ class WorkLayer:
     source: LayerSource
     scheme_version: int | None
     miner_layer: str | None
+    ignored_move: str | None = None
+    """The layer of a latest move that is not in the latest scheme and so does not apply."""
+
+
+_ABSENT_LAYERS = frozenset({"not-stated", "other", "not-applicable"})
+"""The category ids of a dimension that say the text gives no category (never a layer)."""
+_CACHE_MAX = 8
+_CACHE: dict[str, tuple[str | None, dict[str, WorkLayer]]] = {}
+"""Project directory -> (last folded event id, layers_of result)."""
 
 
 def _refuse(field_: str, message: str) -> FactoryValidationError:
@@ -83,11 +100,12 @@ def layer_dimension(project: Project, spec: MinerSpec) -> Dimension | None:
     return None
 
 
-def _miner_layers(project: Project) -> dict[str, tuple[str, int]]:
-    """`work_id -> (layer, scheme_version)` from the final rows of the listed layer miners, the
-    first listed miner with a final row for a work winning."""
+def _miner_layers(project: Project) -> dict[str, tuple[str, int, bool]]:
+    """`work_id -> (value, scheme_version, is_layer)` from the final rows of the listed layer
+    miners, the first listed miner with a final row for a work winning. `is_layer` is False for an
+    absence value (`not-stated`, `other`, `not-applicable`)."""
     protocol = current_protocol(project)
-    found: dict[str, tuple[str, int]] = {}
+    found: dict[str, tuple[str, int, bool]] = {}
     if protocol is None:
         return found
     for use in protocol.spec.miners or ():
@@ -101,7 +119,11 @@ def _miner_layers(project: Project) -> dict[str, tuple[str, int]]:
             if cell is None or not isinstance(cell.value, str):
                 continue
             if cell.value.startswith(prefix) and len(cell.value) > len(prefix):
-                found.setdefault(row.work_id, (cell.value[len(prefix) :], dimension.layer_scheme))
+                value = cell.value[len(prefix) :]
+                found.setdefault(
+                    row.work_id,
+                    (value, dimension.layer_scheme, value not in _ABSENT_LAYERS),
+                )
     return found
 
 
@@ -117,20 +139,43 @@ def _moves(project: Project) -> dict[str, tuple[str, int]]:
 
 
 def layers_of(project: Project) -> dict[str, WorkLayer]:
-    """The layer of every work that has a move or a miner layer, computed in one pass; a work
-    absent from the result is pending. Read-only."""
+    """The layer of every work that has a move or a miner row, computed in one pass and memoised
+    (see the module invariants); a work absent from the result is pending. Read-only. The result
+    is a copy the caller may change."""
     project.index.sync()
+    key = str(project.paths.dir)
+    head = project.index.last_event_id()
+    hit = _CACHE.get(key)
+    if hit is not None and hit[0] == head:
+        return dict(hit[1])
+    out = _compute(project)
+    _CACHE.pop(key, None)
+    while len(_CACHE) >= _CACHE_MAX:
+        _CACHE.pop(next(iter(_CACHE)))
+    _CACHE[key] = (head, out)
+    return dict(out)
+
+
+def _compute(project: Project) -> dict[str, WorkLayer]:
     moved = _moves(project)
     mined = _miner_layers(project)
+    scheme = current_scheme(project)
+    valid = set() if scheme is None else {d.id for d in scheme.layers}
     out: dict[str, WorkLayer] = {}
     for work in moved.keys() | mined.keys():
-        miner_layer = mined[work][0] if work in mined else None
+        found = mined.get(work)
+        miner_layer = None if found is None else found[0]
+        ignored: str | None = None
         if work in moved:
             layer, version = moved[work]
-            out[work] = WorkLayer(layer, "moved", version, miner_layer)
+            if layer in valid:
+                out[work] = WorkLayer(layer, "moved", version, miner_layer)
+                continue
+            ignored = layer
+        if found is not None and found[2]:
+            out[work] = WorkLayer(found[0], "miner", found[1], found[0], ignored)
         else:
-            layer, version = mined[work]
-            out[work] = WorkLayer(layer, "miner", version, layer)
+            out[work] = WorkLayer(None, "pending", None, miner_layer, ignored)
     return out
 
 

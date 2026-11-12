@@ -76,6 +76,7 @@ ANCHOR_KIND = "anchor-kind"
 ENTRY_NOT_FOUND = "entry-not-found"
 WORK_NOT_FOUND = "work-not-found"
 TOO_FEW_QUOTES = "too-few-quotes"
+TAXONOMY_UNREGISTERED = "taxonomy-unregistered"
 ENUM_NEEDS_QUOTE = "enum-needs-quote"
 DIMENSION_UNFILLED = "dimension-unfilled"
 DIMENSION_NOT_APPLICABLE = "dimension-not-applicable"
@@ -332,8 +333,8 @@ def close_checks(spec: MinerSpec) -> CloseCheck:
     """The `CloseCheck` of `spec`: every row live after a closing call carries at least
     `min_quotes_per_record` verified quotes (issue on `finish`), an absence row of a derived miner
     excepted. For a derived miner the unit is also judged by `unit_issues`, against the registered
-    taxonomy and the work's layer; an unregistered taxonomy adds no unit issue (registration of the
-    miner already required it)."""
+    taxonomy and the work's layer. A taxonomy version that is not registered refuses the close
+    (`taxonomy-unregistered`, located `finish`): the unit cannot be judged, so it cannot close."""
 
     def close(
         project: Project, pin: UnitPin, rows: Sequence[ExtractionRow], reason: str | None
@@ -351,7 +352,9 @@ def close_checks(spec: MinerSpec) -> CloseCheck:
             from factory.services.work_layers import layer_of
 
             taxonomy = registered_taxonomy(project, spec.taxonomy.name, spec.taxonomy.version)
-            if taxonomy is not None:
+            if taxonomy is None:
+                issues.append(ValidationIssue("finish", TAXONOMY_UNREGISTERED))
+            else:
                 layer = layer_of(project, pin.work_id).layer
                 issues.extend(unit_issues(spec, taxonomy, layer, rows))
         return issues
