@@ -108,8 +108,9 @@ FORWARD_CHASE_RE = re.compile(rf"^cites:W\d{{1,15}}(\|W\d{{1,15}}){{0,{CHASE_CHU
 work ids. A forward round records these delegated texts; the grammar bounds them, so they may
 exceed `MAX_QUERY` but never carry free text."""
 FORWARD_ROUND_RE = re.compile(
-    rf"^(?:cites|openalex):W\d{{1,15}}(?:\|W\d{{1,15}}){{0,{CHASE_CHUNK - 1}}}"
-    r"(?:,title_and_abstract\.search:[^,\x00-\x1f]{1,300})?$"
+    rf"^(?:cites:W\d{{1,15}}(?:\|W\d{{1,15}}){{0,{CHASE_CHUNK - 1}}}"
+    r"(?:,title_and_abstract\.search:[^,\x00-\x1f]{1,300})?"
+    rf"|openalex:W\d{{1,15}}(?:\|W\d{{1,15}}){{0,{CHASE_CHUNK - 1}}})$"
 )
 """A forward round's text (slice 8). `cites:` is a forward chase text, optionally with the plan's
 topic filter (`,title_and_abstract.search:` and an expression without a comma); `openalex:` names
