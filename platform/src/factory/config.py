@@ -1,6 +1,7 @@
 import getpass
 import os
 import re
+from datetime import timedelta
 from pathlib import Path
 from typing import Self
 
@@ -22,7 +23,11 @@ class Settings(StrictModel):
     machine as a host of projects (slice 5 ruling 2): from the argument, `FACTORY_HOST_ID` or
     `<root>/.server/host_id`; None on a personal machine. `orcid`, `licence` and `vocab` name the
     researcher, the project's licence and the RDF vocabulary in exports (plan X-B); they come from
-    the environment and the export that uses them checks them.
+    the environment and the export that uses them checks them. `index_hold_minutes` is how long
+    one code version's use of an index keeps another from rebuilding it (IDEA-62;
+    `FACTORY_INDEX_HOLD_MINUTES`, default 10, 0 turns the guard off). `mcp_configs` are the MCP
+    config files `check` compares (IDEA-62; `FACTORY_MCP_CONFIGS`, paths joined by the path
+    separator), besides those listed in `<root>/mcp-configs.txt`.
     """
 
     root: Path
@@ -33,6 +38,12 @@ class Settings(StrictModel):
     orcid: str | None = None
     licence: str | None = None
     vocab: str = DEFAULT_VOCAB
+    index_hold_minutes: float = Field(default=10.0, ge=0)
+    mcp_configs: tuple[Path, ...] = ()
+
+    @property
+    def index_hold(self) -> timedelta:
+        return timedelta(minutes=self.index_hold_minutes)
 
     @property
     def plugin_dir(self) -> Path:
@@ -71,6 +82,14 @@ class Settings(StrictModel):
             raise FactoryValidationError(
                 [ValidationIssue("host_id", f"must match {ACTOR_ID_RE}, got {host_id!r}")]
             )
+        hold = os.environ.get("FACTORY_INDEX_HOLD_MINUTES")
+        try:
+            hold_minutes = 10.0 if not hold else float(hold)
+        except ValueError:
+            raise FactoryValidationError(
+                [ValidationIssue("index_hold_minutes", f"must be a number, got {hold!r}")]
+            ) from None
+        configs = os.environ.get("FACTORY_MCP_CONFIGS", "")
         return cls(
             root=root,
             user=user,
@@ -80,6 +99,8 @@ class Settings(StrictModel):
             orcid=os.environ.get("FACTORY_ORCID") or None,
             licence=os.environ.get("FACTORY_LICENCE") or None,
             vocab=os.environ.get("FACTORY_VOCAB") or DEFAULT_VOCAB,
+            index_hold_minutes=hold_minutes,
+            mcp_configs=tuple(Path(p) for p in configs.split(os.pathsep) if p),
         )
 
 
