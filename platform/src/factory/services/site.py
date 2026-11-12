@@ -85,6 +85,9 @@ class Product:
     build: Build
     version: int = 1
     needs_model: bool = False
+    stamp: Callable[[Project], str] | None = None
+    """Extra fingerprint text for a product that reads files rather than events (the catalog
+    reads SKILL.md files and the decision log)."""
 
 
 @dataclass(frozen=True)
@@ -233,6 +236,18 @@ def _build_costs(project: Project, out: Path) -> None:
     build_costs(project, out)
 
 
+def _build_catalog(project: Project, out: Path) -> None:
+    from factory.services.site_catalog_page import build_catalog_product
+
+    build_catalog_product(project, out)
+
+
+def _stamp_catalog(project: Project) -> str:
+    from factory.services.site_catalog import source_hash
+
+    return source_hash(project.settings)
+
+
 def products() -> list[Product]:
     """The registered products, in hub order."""
     return [
@@ -351,6 +366,18 @@ def products() -> list[Product]:
             build=_build_costs,
         ),
         Product(
+            id="catalog",
+            title="Capability catalog",
+            group="Overview",
+            description="The factory's tools and skills by lifecycle stage: which skill to use "
+            "when, the tools it calls and the steps that call them, with mechanical flags where "
+            "a skill disagrees with the code, the decision log or another skill.",
+            entry="index.html",
+            inputs=(),
+            build=_build_catalog,
+            stamp=_stamp_catalog,
+        ),
+        Product(
             id="prisma",
             title="PRISMA 2020 flow",
             group="Overview",
@@ -439,6 +466,8 @@ def fingerprint(project: Project, product: Product) -> str:
                 {"p": pattern},
             ).one()
             parts.append(f"{pattern}:{row[0]}:{row[1]}")
+    if product.stamp is not None:
+        parts.append(f"files:{product.stamp(project)}")
     return hashlib.sha256("|".join(parts).encode()).hexdigest()[:16]
 
 
