@@ -281,3 +281,10 @@ looks identifiers up per entry, so an id cited by many works is fetched many tim
 collect the distinct identifiers across all live extractions, look them up in batches (OpenAlex
 filter with up to 50 DOIs per request; arXiv `id_list`), then write one re-resolve event per
 extraction from the shared results. Same events, minutes instead of an hour.
+
+Researcher ruling (2026-11-12): **lookups are targeted, not for all.** T10 looks up only (a) entries
+whose parsed title fails a plausibility check (mostly personal names, too few content words,
+venue-like) and has a DOI or arXiv id, and (b) core items before a snowball round; both batched.
+The full re-resolve was stopped after 195 extractions: identifier entries resolved 3,359 of 4,006
+(from 1,122), 647 left; one lookup run was left open by the interrupt (started, not finished).
+Assessable items rose to 4,671 (rules v4).
