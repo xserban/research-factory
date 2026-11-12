@@ -118,6 +118,7 @@ def document_read(
     limit: int = DEFAULT_LIMIT,
     max_chars: int = DEFAULT_MAX_CHARS,
     session: str | None = None,
+    selected: bool = False,
 ) -> DocumentPage:
     """One page of a promoted work's conversion, or the single anchor `anchor`.
 
@@ -129,8 +130,21 @@ def document_read(
 
     `session` is the caller's session when it is an agent's (see the module invariants); a
     full-text screener that names no document or conversion reads the one its batch pins.
+
+    `selected` reads only the anchors the session's own miner task selected for `work_id` (the
+    ids stored in the task; no new text is stored), so a miner can read what it is to mine in a
+    few large pages. It is refused without an agent `session`, for a session that holds no miner
+    task of the work, and together with `anchor`.
     """
     _check_arguments(limit, max_chars, after, anchor)
+    if selected and (session is None or anchor is not None):
+        raise FactoryValidationError(
+            [
+                ValidationIssue(
+                    "selected", "needs an agent session and cannot be combined with anchor"
+                )
+            ]
+        )
     project.index.sync()
     if session is not None:
         document_id, conversion_id = _gate(project, session, work_id, document_id, conversion_id)
@@ -141,14 +155,21 @@ def document_read(
     conversion = _select(project, work_id, document_id, conversion_id)
     manifest = _load(project, conversion)
     anchors = manifest.anchors
-    total = sum(1 for a in anchors if a.kind is not AnchorKind.CELL)
+    only = (
+        _held_selection(project, session, work_id, conversion.conversion_id) if selected else None
+    )
+    total = sum(
+        1 for a in anchors if a.kind is not AnchorKind.CELL and (only is None or a.id in only)
+    )
 
     if anchor is not None:
         target = _anchor_or_refuse(manifest, anchor, conversion.conversion_id)
         segments = [_segment(target, ANCHOR_MAX_CHARS)]
         next_after = None
     else:
-        segments, next_after = _page(manifest, after, limit, max_chars, conversion.conversion_id)
+        segments, next_after = _page(
+            manifest, after, limit, max_chars, conversion.conversion_id, only
+        )
 
     return DocumentPage(
         work_id=conversion.work_id,
@@ -232,6 +253,49 @@ def _gate(
             [ValidationIssue("document_id", f"{document_id}: not the document pinned")]
         )
     return pinned
+
+
+def _held_selection(
+    project: Project, session: str | None, work_id: str, conversion_id: str
+) -> frozenset[str]:
+    """The anchor ids a miner task held (or completed) by `session` selected for `work_id` at
+    `conversion_id`, from the task content (ids only). Refused on `selected` when there is none."""
+    extracting = None if session is None else _extraction_pass(project, session)
+    if session is None or extracting is None:
+        raise FactoryValidationError(
+            [ValidationIssue("selected", "this session holds no miner task")]
+        )
+    kind = kinds_for(extracting[0])[extracting[1]]
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT content_blob FROM tasks WHERE kind = :kind AND claim_session = :s "
+                "AND status IN ('claimed', 'completed') ORDER BY task_id DESC"
+            ),
+            {"kind": kind, "s": session},
+        ).all()
+    for (blob,) in rows:
+        content = project.blobs.get_json(str(blob))
+        if not isinstance(content, dict):
+            continue
+        anchor_ids = content.get("anchors")
+        if not isinstance(anchor_ids, list):
+            continue
+        records = content.get("records")
+        for record in records if isinstance(records, list) else []:
+            if (
+                isinstance(record, dict)
+                and record.get("work_id") == work_id
+                and record.get("conversion_id") == conversion_id
+            ):
+                return frozenset(str(a) for a in anchor_ids)
+    raise FactoryValidationError(
+        [
+            ValidationIssue(
+                "selected", f"{work_id}: no selection among the miner tasks this session holds"
+            )
+        ]
+    )
 
 
 def _full_text_pass(project: Project, session: str) -> PassLabel | None:
@@ -456,8 +520,10 @@ def _page(
     limit: int,
     max_chars: int,
     conversion_id: str,
+    only: frozenset[str] | None = None,
 ) -> tuple[list[Segment], str | None]:
-    """The segments after `after` (all, if None), and the `next_after` of the page."""
+    """The segments after `after` (all, if None), and the `next_after` of the page. With `only`,
+    just the anchors whose id it holds (a miner's selected anchors)."""
     anchors = manifest.anchors
     if after is None:
         start = -1
@@ -476,7 +542,7 @@ def _page(
     while index < end:
         anchor = anchors[index]
         index += 1
-        if anchor.kind is AnchorKind.CELL:
+        if anchor.kind is AnchorKind.CELL or (only is not None and anchor.id not in only):
             continue
         if len(segments) == limit:
             index -= 1
@@ -489,6 +555,9 @@ def _page(
         used += len(segment.text)
 
     # `index` is the first anchor not consumed; more output exists iff a non-cell one follows.
-    more = any(a.kind is not AnchorKind.CELL for a in islice(anchors, index, end))
+    more = any(
+        a.kind is not AnchorKind.CELL and (only is None or a.id in only)
+        for a in islice(anchors, index, end)
+    )
     next_after = segments[-1].anchor if segments and more else None
     return segments, next_after

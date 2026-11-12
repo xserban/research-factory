@@ -523,3 +523,21 @@ def test_after_cell_anchor_resumes_at_next_non_cell_anchor() -> None:
     segments, after = _page(manifest, "t1r1c2", 10, 1000, "c1")
     assert [s.anchor for s in segments] == ["p2"]
     assert after is None
+
+
+def test_page_with_only_serves_just_the_selected_anchors_and_pages_through_them() -> None:
+    from factory.document.anchorise import anchorise
+    from factory.document.anchors import AnchorKind, parse_manifest
+    from factory.services.document_read import _page
+
+    manifest = parse_manifest(
+        anchorise("# 1 Intro\n\nFirst.\n\nSecond.\n\nThird.\n\n# 2 End\n\nLast.\n")
+    )
+    paragraphs = [a.id for a in manifest.anchors if a.kind is AnchorKind.PARAGRAPH]
+    only = frozenset({paragraphs[0], paragraphs[2], paragraphs[3]})
+    first, nxt = _page(manifest, None, 2, 20_000, "c", only)
+    assert [s.anchor for s in first] == [paragraphs[0], paragraphs[2]]
+    assert nxt == paragraphs[2]
+    second, done = _page(manifest, nxt, 2, 20_000, "c", only)
+    assert [s.anchor for s in second] == [paragraphs[3]]
+    assert done is None

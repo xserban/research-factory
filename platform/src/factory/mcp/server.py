@@ -1753,6 +1753,7 @@ def build_server(
         anchor: str | None = None,
         limit: int = document_read_service.DEFAULT_LIMIT,
         max_chars: int = document_read_service.DEFAULT_MAX_CHARS,
+        selected: bool = False,
     ) -> dict[str, JsonValue]:
         """One page of a promoted work's converted document: its segments in document order, each
         with its anchor, kind and text (cut and flagged when long), and `next_after` for the next
@@ -1760,7 +1761,9 @@ def build_server(
         tool. Conversion is the researcher's act (`factory document convert`); there is no MCP
         convert tool. Only works promoted at title/abstract are read. Read-only. Refused to a
         title/abstract pass session; a full-text screener reads only the works of its own batches,
-        at the conversion each pins."""
+        at the conversion each pins. `selected` returns only the anchors the miner task you hold
+        selected for the work: with `limit` 200 and `max_chars` 60000 a whole selection is usually
+        one or two pages."""
 
         def read() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
@@ -1774,6 +1777,7 @@ def build_server(
                 limit=limit,
                 max_chars=max_chars,
                 session=opened.session,
+                selected=selected,
             )
             return _withheld(opened, page.model_dump(mode="json"), include_work_ids=False)
 
