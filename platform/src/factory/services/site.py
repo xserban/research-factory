@@ -149,6 +149,18 @@ def _build_prisma(project: Project, out: Path) -> None:
     build_prisma(project, out)
 
 
+def _build_backlog(project: Project, out: Path) -> None:
+    from factory.services.site_backlog import build_backlog
+
+    build_backlog(project, out)
+
+
+def _backlog_stamp(project: Project) -> str:
+    from factory.services.site_backlog import backlog_digest
+
+    return backlog_digest()  # the file the board reads outside the event log
+
+
 def _build_bibliography(project: Project, out: Path) -> None:
     from factory.services.site_bibliography import build_bibliography
 
@@ -430,6 +442,16 @@ def products() -> list[Product]:
                 "task.%",
             ),
             build=_build_queue,
+        ),
+        Product(
+            id="backlog",
+            title="Backlog board",
+            group="Process",
+            description="Every idea of docs/backlog.md as a board (ready, blocked, specified, done) and a dependency tree; select ideas to build and copy the brief.",
+            entry="index.html",
+            inputs=(),
+            build=_build_backlog,
+            stamp=_backlog_stamp,
         ),
     ]
 
