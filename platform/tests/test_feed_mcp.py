@@ -12,6 +12,7 @@ from factory.config import Settings
 from factory.events.envelope import Actor
 from factory.mcp.server import build_server
 from factory.services.context import Project
+from factory.services.dedup import dedup_run
 from tests.helpers import SourcesFor, _setup, open_session
 from tests.screening_helpers import _draw
 from tests.watch_helpers import ScriptedSource, adapters, by_text
@@ -47,6 +48,7 @@ async def test_feed_list_refused_to_pass_session(
 ) -> None:
     _setup(project, agent, human, mock_sources)
     _draw(project)
+    dedup_run(project)
     source = ScriptedSource(by_text({}))
     async with open_session(settings, clock, dict(adapters(source))) as screener:
         joined = await screener.call("screen_next", project="demo", pass_label="A", **AGENT)

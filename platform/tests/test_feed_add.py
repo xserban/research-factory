@@ -117,7 +117,8 @@ def test_unavailable_source_reports_lookup_failed_and_keeps_the_send(
 
     assert result.outcome == "lookup-failed" and result.work_id is None
     assert len(_types(open_world, "feed.sent")) == 1
-    assert _types(open_world, "inbox.link_resolved") == []
+    [resolved] = _types(open_world, "inbox.link_resolved")
+    assert resolved.payload["status"] == "failed"
     assert list_items(open_world).items[0].status == "open"
 
 

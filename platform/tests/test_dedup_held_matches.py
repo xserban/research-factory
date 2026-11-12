@@ -17,8 +17,13 @@ from tests.screening_helpers import PREPRINT, PUBLISHED, _ingest
 SourcesFor = Callable[..., Mapping[str, SourceFactory]]
 
 
-def _held(record: dict[str, Any]) -> Work:
-    return _work(record, run_id="run-held", query_id="q-held", raw_blob="blob-held")
+def _held(project: Project, record: dict[str, Any]) -> Work:
+    return _work(
+        record,
+        run_id=project.ids.new("run"),
+        query_id=project.ids.new("qry"),
+        raw_blob="sha256:" + "0" * 64,
+    )
 
 
 def _seed(project: Project, fake_sources: SourcesFor, records: list[dict[str, Any]]) -> list[str]:
@@ -32,7 +37,8 @@ def test_arxiv_id_match(explore_project: Project, fake_sources: SourcesFor) -> N
     _seed(explore_project, fake_sources, [PREPRINT])
     [stored] = list_works(explore_project)
     held = _held(
-        {"title": "Unrelated wording", "authors": ["Zed Q"], "year": 1999, "arxiv": "2301.00001"}
+        explore_project,
+        {"title": "Unrelated wording", "authors": ["Zed Q"], "year": 1999, "arxiv": "2301.00001"},
     )
     assert held_matches(explore_project, [held]) == {held.id: stored.id}
 
@@ -40,14 +46,17 @@ def test_arxiv_id_match(explore_project: Project, fake_sources: SourcesFor) -> N
 def test_doi_match(explore_project: Project, fake_sources: SourcesFor) -> None:
     _seed(explore_project, fake_sources, [PUBLISHED])
     [stored] = list_works(explore_project)
-    held = _held({"title": "Other title", "authors": ["Zed Q"], "year": 1999, "doi": "10.1000/x"})
+    held = _held(
+        explore_project,
+        {"title": "Other title", "authors": ["Zed Q"], "year": 1999, "doi": "10.1000/x"},
+    )
     assert held_matches(explore_project, [held]) == {held.id: stored.id}
 
 
 def test_title_and_year_match(explore_project: Project, fake_sources: SourcesFor) -> None:
     _seed(explore_project, fake_sources, [PUBLISHED])
     [stored] = list_works(explore_project)
-    held = _held({**PUBLISHED, "doi": None, "year": 2025})
+    held = _held(explore_project, {**PUBLISHED, "doi": None, "year": 2025})
     assert held_matches(explore_project, [held]) == {held.id: stored.id}
 
 
@@ -55,14 +64,14 @@ def test_title_outside_year_window_is_not_a_match(
     explore_project: Project, fake_sources: SourcesFor
 ) -> None:
     _seed(explore_project, fake_sources, [PUBLISHED])
-    held = _held({**PUBLISHED, "doi": None, "year": 2015})
+    held = _held(explore_project, {**PUBLISHED, "doi": None, "year": 2015})
     assert held_matches(explore_project, [held]) == {}
 
 
 def test_no_match_and_nothing_written(explore_project: Project, fake_sources: SourcesFor) -> None:
     _seed(explore_project, fake_sources, [PUBLISHED])
     before = len(_of_type(explore_project, "dedup.merged"))
-    held = _held({"title": "Quantum gravity", "authors": ["Zed Q"], "year": 2024})
+    held = _held(explore_project, {"title": "Quantum gravity", "authors": ["Zed Q"], "year": 2024})
     assert held_matches(explore_project, [held]) == {}
     assert len(_of_type(explore_project, "dedup.merged")) == before
 
@@ -75,12 +84,13 @@ def test_absorbed_work_maps_to_canonical(
     [absorbed] = merge.absorbed
     absorbed_work = next(w for w in list_works(explore_project) if w.id == absorbed)
     held = _held(
+        explore_project,
         {
             "title": "Different",
             "authors": ["Zed Q"],
             "year": 1999,
             "doi": absorbed_work.identifiers.doi,
             "arxiv": absorbed_work.identifiers.arxiv,
-        }
+        },
     )
     assert held_matches(explore_project, [held]) == {held.id: merge.primary}

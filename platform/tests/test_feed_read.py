@@ -23,7 +23,7 @@ from tests.test_inbox_model import ITEM, added
 ULID = "01HZX3K4M5N6P7Q8R9S0TVWXYZ"
 FETCH = f"fdf_{ULID}"
 RANKING = f"fdr_{ULID}"
-UNKNOWN_RANKING = f"fdr_{ULID[:-1]}Z"
+UNKNOWN_RANKING = f"fdr_{ULID[:-1]}A"
 FIRST = "2611.01234"
 SECOND = "2611.01235"
 HELD = "2611.01236"

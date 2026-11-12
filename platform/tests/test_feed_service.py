@@ -9,6 +9,7 @@ import hashlib
 from collections.abc import Sequence
 from datetime import date
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -23,6 +24,7 @@ from factory.model.feed import FeedFetched, FeedRanked
 from factory.model.search import QuerySpec, RunStatus
 from factory.model.versions import VersionLinked
 from factory.model.work import Author, Dates, Identifiers, Provenance, Work
+from factory.services import seeds as seeds_service
 from factory.services.context import Project
 from factory.services.core_works import (
     forward_core_sources,
@@ -344,7 +346,11 @@ def test_same_inputs_give_the_same_order_and_payloads(
     settings: Settings,
     clock: FixedClock,
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # The seed development/held-out split is drawn from `secrets.randbits` and fixes which
+    # references the ranking sees; draw it identically for both projects.
+    monkeypatch.setattr(seeds_service, "secrets", SimpleNamespace(randbits=lambda bits: 1234567))
     other = init_project(settings, "demo2", "pilot", session=SESSION, clock=clock)
     payloads: list[tuple[dict[str, Any], dict[str, Any]]] = []
     cache = tmp_path / "cache"

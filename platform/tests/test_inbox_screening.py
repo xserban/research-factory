@@ -15,6 +15,7 @@ from factory.model.seed import SeedKind, SeedMissExplained, SeedSpec
 from factory.model.work import ProvenanceMethod
 from factory.services.check import check
 from factory.services.context import Project
+from factory.services.dedup import dedup_run
 from factory.services.protocol import record_deviation
 from factory.services.screening import open_pass, screen_next
 from factory.services.search import register_query, run_query
@@ -88,6 +89,7 @@ def test_supplied_work_enters_pass_b_extension(
     _draw(project)
     open_pass(project, agent, PassLabel.B)
     supplied = _supply_after_setup(project, other_session_human)
+    dedup_run(project)
 
     screen_next(project, agent, PassLabel.B)
 
