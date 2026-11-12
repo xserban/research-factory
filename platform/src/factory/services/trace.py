@@ -133,8 +133,9 @@ KINDS: tuple[str, ...] = (
     lab_trace.ADOPTION_KIND,
 )
 """Node kinds in chain order. The layer's kinds come last (G2's pinned order after `claim` is
-unchanged; `appraisal` sits before `claim` so that stays true). Sibling nodes are listed in this order (reversed for back traces, so
-the work branch of a decision comes before its cited criterion)."""
+unchanged; `appraisal` sits before `claim` so that stays true). Sibling nodes are listed in
+this order (reversed for back traces, so the work branch of a decision comes before its
+cited criterion)."""
 
 _RANK = {kind: rank for rank, kind in enumerate(KINDS)}
 _NO_EVENT = ""
