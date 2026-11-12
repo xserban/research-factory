@@ -1068,13 +1068,15 @@ class _Walk:
         return _Described(f"anchor {anchor}", described.event_id)
 
     def _decision(self, ident: str) -> _Described | None:
+        """A `dec_` id names a screening decision or, failing that, a decision suggestion (the
+        two share the namespace; records cite suggestions). An id of neither has no node."""
         rows = self._all(
             "SELECT pass_label, phase, verdict, criterion, superseded_by, event_id "
             "FROM decisions WHERE decision_id = :d",
             d=ident,
         )
         if not rows:
-            return None
+            return self._suggestion(ident)
         pass_label, phase, verdict, criterion, superseded_by, event_id = rows[0]
         label = f"pass {pass_label}, {phase}: {verdict}"
         if criterion is not None:
@@ -1082,6 +1084,21 @@ class _Walk:
         if superseded_by is not None:
             label += " (superseded)"
         return _Described(label, str(event_id))
+
+    def _suggestion(self, ident: str) -> _Described | None:
+        """A decision suggestion: its level and whether a selection was accepted, or superseded.
+        Never the items' text. Its event is the `decision.suggested` event."""
+        rows = self._all(
+            "SELECT level, sel_event, superseded_by FROM decision_sets WHERE decision_id = :d",
+            d=ident,
+        )
+        if not rows:
+            return None
+        level, sel_event, superseded_by = rows[0]
+        label = f"suggestion, {level}: " + ("selected" if sel_event is not None else "open")
+        if superseded_by is not None:
+            label += " (superseded)"
+        return _Described(label, self._event_of_ref("decision.suggested", ident))
 
     def _extraction(self, ident: str) -> _Described | None:
         """An extraction row. The label gives its pass and field count, never a value; a row of
