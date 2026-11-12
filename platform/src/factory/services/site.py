@@ -243,9 +243,14 @@ def _build_catalog(project: Project, out: Path) -> None:
 
 
 def _stamp_catalog(project: Project) -> str:
+    """Never raises: `fingerprint` runs outside the per-product isolation, so an unreadable skill
+    file must make the catalog stale, not abort the build of every product."""
     from factory.services.site_catalog import source_hash
 
-    return source_hash(project.settings)
+    try:
+        return source_hash(project.settings)
+    except OSError as exc:
+        return f"unreadable:{type(exc).__name__}"
 
 
 def products() -> list[Product]:

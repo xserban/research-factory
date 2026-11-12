@@ -55,6 +55,9 @@ FLAG_CODES: Final = (
 
 _TOOL_SHAPE = r"[a-z]+(?:_[a-z]+)+"
 _BACKTICK = re.compile(r"`([^`\n]+)`")
+_NAME_SHAPE = r"[a-z][a-z0-9]*(?:_[a-z0-9]+)*"
+"""Any identifier, single-word tools (`check`, `trace`, `whoami`) included; callers keep only
+registered names."""
 _CALL_NAME = re.compile(
     rf"\b(?:call|calls|called|use|uses|using)\s+(?:the\s+)?(?:(?:MCP\s+)?tool\s+)?`({_TOOL_SHAPE})[`(]",
     re.I,
@@ -254,10 +257,11 @@ def _line_of(text: str, pos: int) -> int:
 
 
 def _mentions(text: str) -> dict[str, int]:
-    """Each backticked token that starts with a tool-shaped name, with its first line."""
+    """Each backticked token that starts with an identifier, with its first line; the caller keeps
+    only registered tool names."""
     found: dict[str, int] = {}
     for m in _BACKTICK.finditer(text):
-        name = re.match(rf"({_TOOL_SHAPE})\b", m.group(1))
+        name = re.match(rf"({_NAME_SHAPE})\b", m.group(1))
         if name and name.group(1) not in found:
             found[name.group(1)] = _line_of(text, m.start())
     return found

@@ -6,6 +6,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from factory.services.site_catalog import (
     Catalog,
     ToolSpec,
@@ -131,3 +133,25 @@ def test_page_escapes(tmp_path: Path) -> None:
     _skill(tmp_path, "rf-a", "frame", "1. Call `tool_one` <script>.\n")
     html_text = render(_derive(tmp_path, [_tool("tool_one")]), "now", "code")
     assert "<script>." not in html_text.split("<body>")[1]
+
+
+def test_single_word_tools_are_matched_to_skills(tmp_path: Path) -> None:
+    _skill(tmp_path, "rf-a", "[cross]", "1. Call `check` and then `whoami`.\n")
+    cat = _derive(tmp_path, [_tool("check"), _tool("whoami")])
+    by = {t.name: t for t in cat.tools}
+    assert by["check"].stage == "cross"
+    assert by["whoami"].stage == "cross"
+    assert not [f for f in cat.flags if f.code == "orphan-tool"]
+
+
+def test_catalog_stamp_never_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    from types import SimpleNamespace
+
+    from factory.services import site, site_catalog
+
+    def boom(_settings: object) -> str:
+        raise OSError("unreadable")
+
+    monkeypatch.setattr(site_catalog, "source_hash", boom)
+    project = SimpleNamespace(settings=None)
+    assert site._stamp_catalog(project).startswith("unreadable:")  # type: ignore[arg-type]
