@@ -17,7 +17,7 @@ from factory.clock import FixedClock
 from factory.config import Settings
 from factory.events.envelope import Actor, Event
 from factory.events.reader import read_all
-from factory.mcp import server as mcp_server
+from factory.mcp import sessions as mcp_sessions
 from factory.mcp.server import build_server
 from factory.services.context import Project
 from tests.extraction_helpers import SESSION_A
@@ -42,7 +42,7 @@ def _session(monkeypatch: pytest.MonkeyPatch, session: str) -> None:
         def ulid(self) -> str:
             return session
 
-    monkeypatch.setattr(mcp_server, "IdGenerator", Ids)
+    monkeypatch.setattr(mcp_sessions, "IdGenerator", Ids)
 
 
 def _layer(project: Project) -> list[Event]:

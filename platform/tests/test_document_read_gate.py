@@ -17,7 +17,7 @@ from factory.clock import FixedClock
 from factory.config import Settings
 from factory.errors import FactoryValidationError
 from factory.events.envelope import Actor
-from factory.mcp import server as mcp_server
+from factory.mcp import sessions as mcp_sessions
 from factory.mcp.server import build_server
 from factory.model.protocol import ScreeningStage
 from factory.model.screening import Channel, PassLabel, ScreeningItem, Verdict
@@ -228,7 +228,7 @@ async def test_mcp_document_read_gate(
         def ulid(self) -> str:
             return SESSION
 
-    monkeypatch.setattr(mcp_server, "IdGenerator", _FixedIds)
+    monkeypatch.setattr(mcp_sessions, "IdGenerator", _FixedIds)
     server = build_server(settings, clock=clock)
     pinned = str(world.a.records[0]["conversion_id"])
 
