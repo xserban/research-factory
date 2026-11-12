@@ -36,7 +36,8 @@ Invariants:
   whose work has a need is shown at stage `mining`. Limit: the queue has one item per feed send,
   so a work that did not come through the feed never appears as a queue item; its needs are still
   counted in `pending_work["mining"]` and listed by `mining_needs`. A use with `on_demand` and
-  no `layers` has a need only for requested works.
+  no `layers` reads its whole population automatically plus the requested works, so all of them
+  can be needs.
 """
 
 from __future__ import annotations
@@ -255,7 +256,6 @@ def mining_needs(project: Project) -> dict[str, tuple[str, ...]]:
     miner whose population is refused (see `miner_population`) is skipped, not raised."""
     from factory.services.mining import miner_population  # mining imports the extraction stack
     from factory.services.protocol import current_protocol
-    from factory.services.work_layers import requested_works
 
     project.index.sync()
     protocol = current_protocol(project)
@@ -269,8 +269,6 @@ def mining_needs(project: Project) -> dict[str, tuple[str, ...]]:
             population = miner_population(project, use.name)
         except FactoryValidationError:
             continue
-        if use.on_demand and not use.layers:
-            population = [w for w in population if w in requested_works(project, use.name)]
         current = {
             s.work_id
             for s in unit_states(project, scope=MinerScope(use.name))
