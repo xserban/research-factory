@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -287,10 +287,20 @@ def _world(
     *,
     dual_sample: float = 1.0,
     calibration: int = 0,
+    extra_items: Sequence[dict[str, Any]] = (),
 ) -> None:
     """The `corpus` fixture with a full-text plan declared first: the plan is a semantic
-    amendment, so it precedes the title/abstract decisions that must stay current."""
-    _setup(project, agent, human, mock_sources, dual_sample=0.5, random_works=0)
+    amendment, so it precedes the title/abstract decisions that must stay current.
+    `extra_items` are further OpenAlex results added to the corpus."""
+    _setup(
+        project,
+        agent,
+        human,
+        mock_sources,
+        dual_sample=0.5,
+        random_works=0,
+        extra_items=extra_items,
+    )
     current = current_protocol(project)
     assert current is not None
     plan = ScreeningPlan(
