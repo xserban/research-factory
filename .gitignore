@@ -36,3 +36,4 @@ experiments/*/tools/
 
 # Local scratch, never committed
 tmp/
+/data/
