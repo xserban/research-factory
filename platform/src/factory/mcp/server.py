@@ -45,6 +45,7 @@ from factory.mcp.sessions import (
     stdio_provider,
 )
 from factory.mcp.unit_cap import UnitCap
+from factory.mining.taxonomy import taxonomy_to_json
 from factory.model.appraisal_events import AnswerInput
 from factory.model.base import StrictModel
 from factory.model.budgets import REQUESTS_SEARCH
@@ -89,6 +90,7 @@ from factory.model.screening_check import (
 )
 from factory.model.search import QueryKind, QueryPurpose, QuerySpec
 from factory.model.seed import SeedSpec
+from factory.model.taxonomies import ProposalKind
 from factory.modules.contract import Autonomy, PolicyKind
 from factory.regions.rules import MemberType, RuleSet
 from factory.services import agent_view as agent_view_service
@@ -176,6 +178,8 @@ from factory.services import seeds as seeds_service
 from factory.services import shared_mining as shared_mining_service
 from factory.services import snowball as snowball_service
 from factory.services import tasks as tasks_service
+from factory.services import taxonomies as taxonomies_service
+from factory.services import taxonomy_agreement as taxonomy_agreement_service
 from factory.services import terms as terms_service
 from factory.services import trace as trace_service
 from factory.services import view_coverage as view_coverage_service
@@ -2057,6 +2061,155 @@ def build_server(
             return _withheld(opened, data, include_work_ids=False)
 
         return _reply(project, listing, include_work_ids=False)
+
+    @server.tool()
+    def taxonomy_view(project: str, name: str, version: int) -> dict[str, JsonValue]:
+        """The registered taxonomy `name` at `version`: its registration row (digest, the
+        proposals it accepts and rejects) and its specification in canonical form. Refused when
+        that version is not registered. Read-only."""
+
+        def view() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            row = taxonomies_service.taxonomy_row(opened, name, version)
+            spec = taxonomies_service.registered_taxonomy(opened, name, version)
+            if row is None or spec is None:
+                raise FactoryValidationError(
+                    [ValidationIssue("version", f"{name} version {version} is not registered")]
+                )
+            data: dict[str, JsonValue] = {
+                "row": _plain(asdict(row)),
+                "spec": _plain(taxonomy_to_json(spec)),
+            }
+            return _withheld(opened, data)
+
+        return _reply(project, view)
+
+    @server.tool()
+    def taxonomy_list(project: str) -> dict[str, JsonValue]:
+        """Every registered taxonomy version, by name then version: digest and the proposals each
+        names. Read-only."""
+
+        def listing() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            rows = [_plain(asdict(row)) for row in taxonomies_service.list_taxonomies(opened)]
+            return _withheld(opened, {"taxonomies": rows})
+
+        return _reply(project, listing)
+
+    @server.tool()
+    def taxonomy_diff(project: str, name: str, a: int, b: int) -> dict[str, JsonValue]:
+        """The computed difference from version `a` to version `b` of taxonomy `name`: added,
+        removed, redefined, renamed, split and merged categories, and changed cardinality. Both
+        versions must be registered. Read-only."""
+
+        def difference() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            found = taxonomies_service.taxonomy_diff(opened, name, a, b)
+            return _withheld(opened, _plain(asdict(found)))
+
+        return _reply(project, difference)
+
+    @server.tool()
+    def taxonomy_coverage(
+        project: str,
+        name: str,
+        version: int,
+        miner: str,
+        miner_version: int,
+        fields: dict[str, list[str]],
+    ) -> dict[str, JsonValue]:
+        """Pattern coverage of taxonomy `name` at `version` over a descriptor miner's live pass-A
+        quotes: per dimension, the works with quotes, and per category with a pattern, the works
+        matching it with sample quotes, and the works matching no pattern. `fields` maps a
+        dimension id to the miner's field names read for it. Computed; counts never classify.
+        Refused to a session that has joined a pass."""
+
+        def coverage() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            report = taxonomies_service.taxonomy_coverage(
+                opened,
+                name,
+                version,
+                miner=miner,
+                miner_version=miner_version,
+                fields={dimension: tuple(names) for dimension, names in fields.items()},
+            )
+            return _withheld(opened, _plain(asdict(report)))
+
+        return _reply(project, coverage)
+
+    @server.tool()
+    def taxonomy_propose(
+        project: str,
+        name: str,
+        base_version: int,
+        kind: str,
+        rationale: str,
+        role: str,
+        model: str,
+        skill: str,
+        targets: list[str] | None = None,
+        works: list[str] | None = None,
+        rows: list[str] | None = None,
+        drafts: dict[str, JsonValue] | None = None,
+        cluster_id: str | None = None,
+    ) -> dict[str, JsonValue]:
+        """Propose a change to taxonomy `name` at `base_version`. `kind` is add, split, merge,
+        redefine, rename or retire; every kind but add names its `targets` as full ids
+        `dimension/category` of the base version. `works` and `rows` cite what the change rests
+        on; `drafts` is an optional object stored as a blob. The proposal changes no taxonomy: the
+        researcher registers a new version or refuses it. All problems are reported together and
+        nothing is written on any. Refused to a session that has joined a pass."""
+
+        def propose() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            actor = make_agent_actor(settings, session, role, model, skill)
+            proposal_id = taxonomies_service.propose_change(
+                opened,
+                actor,
+                taxonomy=name,
+                base_version=base_version,
+                kind=_proposal_kind(kind),
+                targets=tuple(targets or ()),
+                drafts=drafts,
+                works=tuple(works or ()),
+                rows=tuple(rows or ()),
+                cluster_id=cluster_id,
+                rationale=rationale,
+            )
+            return _withheld(opened, {"proposal_id": proposal_id})
+
+        return _reply(project, propose)
+
+    @server.tool()
+    def taxonomy_proposals(project: str, name: str) -> dict[str, JsonValue]:
+        """The change proposals against taxonomy `name`, by id, each with its status: open,
+        accepted, or rejected with the reason and the version that settled it. Read-only."""
+
+        def proposals() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            rows = [_plain(asdict(row)) for row in taxonomies_service.list_proposals(opened, name)]
+            return _withheld(opened, {"proposals": rows})
+
+        return _reply(project, proposals)
+
+    @server.tool()
+    def taxonomy_agreement(project: str, miner: str) -> dict[str, JsonValue]:
+        """Agreement of the two passes of a miner derived from a taxonomy, per dimension: exact
+        category for single dimensions, per-category presence and per-work Jaccard for multi
+        dimensions; one pass `not-stated` against a category is completeness, not disagreement.
+        Computed from the rows; quotes are never compared. Refused to a session that joined a
+        pass. Read-only."""
+
+        def read() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            report = taxonomy_agreement_service.taxonomy_agreement(opened, miner)
+            return _withheld(opened, _plain(asdict(report)))
+
+        return _reply(project, read)
 
     @server.tool()
     def page_brief(project: str, scope: str, part: int = 0) -> dict[str, JsonValue]:
@@ -5436,6 +5589,14 @@ def _review_kind(value: str) -> ReviewKind:
         raise FactoryValidationError(
             [ValidationIssue("kind", f"must be one of: {choices}")]
         ) from None
+
+
+def _proposal_kind(value: str) -> ProposalKind:
+    """A taxonomy change kind; any other word is refused with the choices named."""
+    kinds = get_args(ProposalKind)
+    if value in kinds:
+        return cast(ProposalKind, value)
+    raise FactoryValidationError([ValidationIssue("kind", f"must be one of: {', '.join(kinds)}")])
 
 
 def _request_state(value: str | None) -> RequestState | None:

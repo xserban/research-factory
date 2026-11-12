@@ -212,6 +212,12 @@ from factory.model.seed import (
     SeedUnresolved,
 )
 from factory.model.task import TaskClaimed, TaskCompleted, TaskCreated, TaskReleased
+from factory.model.taxonomies import (
+    MiningRequested,
+    TaxonomyChangeProposed,
+    TaxonomyRegistered,
+    WorkLayerSet,
+)
 from factory.model.versions import DocumentPreferred, VersionLinked, VersionObserved
 from factory.model.views import BriefingServed
 from factory.model.watch import WatchCycleFinished, WatchCycleStarted
@@ -300,6 +306,10 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("gate.audit_labelled", GateAuditLabelled, 1))
     catalog.register(EventType("miner.registered", MinerRegistered, 1))
     catalog.register(EventType("miner.retired", MinerRetired, 1))
+    catalog.register(EventType("taxonomy.registered", TaxonomyRegistered, 1))
+    catalog.register(EventType("taxonomy.change_proposed", TaxonomyChangeProposed, 1))
+    catalog.register(EventType("mining.requested", MiningRequested, 1))
+    catalog.register(EventType("work.layer_set", WorkLayerSet, 1))
     catalog.register(EventType("page.recorded", PageRecorded, 1))
     catalog.register(EventType("miner.calibration_drawn", MinerCalibrationDrawn, 1))
     catalog.register(EventType("miner.calibration_labelled", MinerCalibrationLabelled, 1))

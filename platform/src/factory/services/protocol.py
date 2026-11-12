@@ -27,6 +27,9 @@ from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
 from factory.index.chase import chase_round_texts, snowball_round_texts
 from factory.living.window import window_spec
+from factory.mining.spec import MinerSpec, TaxonomyRef
+from factory.mining.taxonomy import TaxonomyDiff, TaxonomySpec, full_id
+from factory.mining.taxonomy import diff as taxonomy_diff
 from factory.model.base import StrictModel
 from factory.model.decisions import DecisionLevel
 from factory.model.grey import GreyMethod, structured_types
@@ -38,6 +41,7 @@ from factory.model.protocol import (
     CriterionEffect,
     DeviationRecorded,
     ExtractionSchema,
+    ExtractionStale,
     MinerStale,
     PressConfirmed,
     PressFinding,
@@ -164,6 +168,157 @@ def calibrated_miners(project: Project, spec: ProtocolSpec) -> set[tuple[str, in
     }
 
 
+def _registered_spec(project: Project, name: str, version: int) -> MinerSpec | None:
+    """The registered spec of miner `(name, version)`, or None. Reads the `miners` table directly
+    (as `miner_fields` does): `services.miners` and `services.taxonomies` import this module."""
+    from factory.mining.spec import spec_from_json
+
+    with project.index.connect() as conn:
+        blob = conn.execute(
+            text("SELECT spec_blob FROM miners WHERE name = :n AND version = :v"),
+            {"n": name, "v": version},
+        ).scalar()
+    return None if blob is None else spec_from_json(project.blobs.get_json(str(blob)))
+
+
+def registered_taxonomy_versions(project: Project) -> set[tuple[str, int]]:
+    """Every registered taxonomy `(name, version)` (the `taxonomies` table, read directly like
+    `miner_fields`)."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        rows = conn.execute(text("SELECT name, version FROM taxonomies")).all()
+    return {(str(name), int(version)) for name, version in rows}
+
+
+def miner_taxonomy_refs(
+    project: Project, spec: ProtocolSpec
+) -> dict[tuple[str, int], tuple[str, int]]:
+    """For each listed miner whose registered spec has a taxonomy reference, the referenced
+    `(name, version)`."""
+    out: dict[tuple[str, int], tuple[str, int]] = {}
+    for use in spec.miners or ():
+        miner = _registered_spec(project, use.name, use.version)
+        if miner is not None and miner.taxonomy is not None:
+            out[(use.name, use.version)] = (miner.taxonomy.name, miner.taxonomy.version)
+    return out
+
+
+def layer_miner_versions(project: Project, spec: ProtocolSpec) -> set[tuple[str, int]]:
+    """The listed miner versions that are layer miners: derived miners whose taxonomy includes a
+    dimension of layer scheme (dimension zero)."""
+    from factory.services.taxonomies import registered_taxonomy  # imports this module's peers
+
+    out: set[tuple[str, int]] = set()
+    for use in spec.miners or ():
+        miner = _registered_spec(project, use.name, use.version)
+        ref = None if miner is None else miner.taxonomy
+        if ref is None:
+            continue
+        tax = registered_taxonomy(project, ref.name, ref.version)
+        if tax is not None and any(
+            d.layer_scheme is not None and d.id in ref.dimensions for d in tax.dimensions
+        ):
+            out.add((use.name, use.version))
+    return out
+
+
+def category_aliases(diff: TaxonomyDiff) -> dict[str, str]:
+    """Merged parent full id -> the merged child's full id: the alias a report shows for rows
+    carried (not re-read) across a merge. Pure."""
+    return {parent: child for parents, child in diff.merged for parent in parents}
+
+
+_DIMENSION_RESETTING = frozenset(
+    {
+        "cardinality",
+        "max_labels",
+        "residuals",
+        "question",
+        "read_scope",
+        "applies_to_layers",
+        "layer_scheme",
+    }
+)
+CATEGORY_FIELD = "category"
+
+
+def _dimension_values(taxonomy: TaxonomySpec, dimension_id: str) -> set[str]:
+    """Every category and residual full id of one dimension of the old spec."""
+    dim = taxonomy.dimension_named(dimension_id)
+    if dim is None:
+        return set()
+    return {full_id(dim.id, c.id) for c in dim.categories} | {
+        full_id(dim.id, r) for r in dim.residuals
+    }
+
+
+def taxonomy_stale_rule(
+    old_ref: TaxonomyRef, new_ref: TaxonomyRef, old: TaxonomySpec, new: TaxonomySpec
+) -> ExtractionStale | None:
+    """The value-level stale rule from a taxonomy diff, for a miner projecting the same taxonomy.
+
+    Invariants: a dimension the new miner takes but the old did not -> every row (all units must
+    be re-read); otherwise rows whose `category` is in the computed set: redefined X -> X and
+    `dim/other`; added X -> `dim/other`; split parent and removed non-merge-parent -> itself;
+    merge parents and renames -> nothing; a dimension-resetting change -> the old dimension's
+    categories and residuals; a dimension dropped from the miner -> its old values. Only
+    dimensions the old miner projected count. None when nothing is stale."""
+    if set(new_ref.dimensions) - set(old_ref.dimensions):
+        return ExtractionStale(all_records=True)
+    taken = set(old_ref.dimensions)
+    delta = taxonomy_diff(old, new)
+    merge_parents = {p for parents, _ in delta.merged for p in parents}
+    values: set[str] = set()
+
+    def dim_of(fid: str) -> str:
+        return fid.split("/", 1)[0]
+
+    for fid in delta.redefined:
+        if dim_of(fid) in taken:
+            values.update({fid, full_id(dim_of(fid), "other")})
+    for fid in delta.added:
+        if dim_of(fid) in taken:
+            values.add(full_id(dim_of(fid), "other"))
+    for parent, _kids in delta.split:
+        if dim_of(parent) in taken:
+            values.add(parent)
+    for fid in delta.removed:
+        if fid not in merge_parents and dim_of(fid) in taken:
+            values.add(fid)
+    for dim_id, kind in delta.dimension_changes:
+        if dim_id in taken and kind in _DIMENSION_RESETTING:
+            values.update(_dimension_values(old, dim_id))
+    for dim_id in taken - set(new_ref.dimensions):
+        values.update(_dimension_values(old, dim_id))
+    if not values:
+        return None
+    return ExtractionStale(all_records=False, values={CATEGORY_FIELD: tuple(sorted(values))})
+
+
+def _derived_rule(
+    project: Project, old: MinerUse, new: MinerUse
+) -> tuple[ExtractionStale | None] | None:
+    """`(taxonomy rule,)` when the old and new listing both resolve to registered specs that
+    reference the same taxonomy name (a 1-tuple, so a None rule, meaning nothing stale, is kept
+    apart from "not a derived pair"); None when the pair is not derived and the general rule
+    applies. Reads the taxonomy through `registered_taxonomy` (imported late: the taxonomy
+    service imports this module's peers)."""
+    from factory.services.taxonomies import registered_taxonomy
+
+    before = _registered_spec(project, old.name, old.version)
+    after = _registered_spec(project, new.name, new.version)
+    if before is None or after is None or before.taxonomy is None or after.taxonomy is None:
+        return None
+    a, b = before.taxonomy, after.taxonomy
+    if a.name != b.name:
+        return None
+    old_tax = registered_taxonomy(project, a.name, a.version)
+    new_tax = registered_taxonomy(project, b.name, b.version)
+    if old_tax is None or new_tax is None:
+        return None
+    return (taxonomy_stale_rule(a, b, old_tax, new_tax),)
+
+
 def miner_stale(project: Project, old: ProtocolSpec, new: ProtocolSpec) -> tuple[MinerStale, ...]:
     """The rows each listed miner's amendment stales, by plan D's `extraction_stale` on the miner's
     schema: a miner left out of the protocol, or listed at another version, stales all its rows;
@@ -178,9 +333,14 @@ def miner_stale(project: Project, old: ProtocolSpec, new: ProtocolSpec) -> tuple
             continue
         after = new_uses.get(use.name)
         later = None if after is None else fields.get((after.name, after.version))
-        rule = extraction_stale(
-            miner_extraction_schema(use, known),
-            None if after is None or later is None else miner_extraction_schema(after, later),
+        derived = None if after is None else _derived_rule(project, use, after)
+        rule = (
+            derived[0]
+            if derived is not None
+            else extraction_stale(
+                miner_extraction_schema(use, known),
+                None if after is None or later is None else miner_extraction_schema(after, later),
+            )
         )
         if rule is not None:
             out.append(MinerStale(name=use.name, rule=rule))
@@ -236,6 +396,9 @@ def record_protocol(
             window_sources=window_filter_sources(),
             registered_miners=set(miner_fields(project)),
             calibrated_miners=calibrated_miners(project, spec),
+            layer_miners=layer_miner_versions(project, spec),
+            registered_taxonomies=registered_taxonomy_versions(project),
+            miner_taxonomies=miner_taxonomy_refs(project, spec),
         )
         if check.errors:
             raise FactoryValidationError(check.errors)
@@ -387,6 +550,9 @@ def amend_protocol(
             window_sources=window_filter_sources(),
             registered_miners=set(miner_fields(project)),
             calibrated_miners=calibrated_miners(project, spec),
+            layer_miners=layer_miner_versions(project, spec),
+            registered_taxonomies=registered_taxonomy_versions(project),
+            miner_taxonomies=miner_taxonomy_refs(project, spec),
         )
         if check.errors or check.gaps:
             raise FactoryValidationError([*check.errors, *check.gaps])

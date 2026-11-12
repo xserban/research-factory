@@ -31,6 +31,7 @@ from factory.cli.resume import resume_cmd
 from factory.cli.runs import adopt_cmd
 from factory.cli.screen_check import screen_check_app
 from factory.cli.site import site_app
+from factory.cli.taxonomy import mine_request_cmd, taxonomy_app, work_layers_app
 from factory.cli.team import (
     project_app,
     protocol_amend_cmd,
@@ -565,6 +566,9 @@ app.add_typer(costs_app)
 app.add_typer(pages_app)
 app.add_typer(develop_app)
 app.add_typer(screen_check_app)
+app.add_typer(taxonomy_app)
+app.add_typer(work_layers_app)
+mine_app.command("request")(mine_request_cmd)
 app.add_typer(graph_app)
 app.add_typer(view_app)
 app.add_typer(interpretations_app)
@@ -2324,13 +2328,17 @@ def screen_record_cmd(
 def screen_disagreements(
     ctx: typer.Context, stage: StageOption = StageChoice.TITLE_ABSTRACT
 ) -> None:
-    """List the works the two passes disagree on, each pass's decision and quote."""
+    """List the works the two passes disagree on, each pass's decision and quote; at full text,
+    also the unresolved cannot-assess works a human may settle with `screen resolve`."""
     state = _state(ctx)
     with _reporting_errors():
         project = _resolve_project(state)
         agreement = agreement_service.screen_agreement(
             project, project.human_actor(), stage=_stage(stage)
         )
+        cannot_assess = agreement_service.cannot_assess_open(project, stage=_stage(stage))
+    for work in cannot_assess:
+        typer.echo(f"{work}  cannot-assess (promoted until resolved)")
     if not agreement.disagreements:
         typer.echo("no unresolved disagreements")
         return
@@ -2349,7 +2357,9 @@ def screen_disagreements(
 @screen_app.command("resolve")
 def screen_resolve(
     ctx: typer.Context,
-    work: Annotated[str, typer.Argument(help="A disputed work.")],
+    work: Annotated[
+        str, typer.Argument(help="A disputed work, or a cannot-assess work at full text.")
+    ],
     verdict: Annotated[str, typer.Argument(help="include or exclude.")],
     reason: Annotated[str, typer.Option("--reason", help="Why the human decided.")],
     criterion: Annotated[
@@ -2357,7 +2367,8 @@ def screen_resolve(
     ] = None,
     stage: StageOption = StageChoice.TITLE_ABSTRACT,
 ) -> None:
-    """The human's verdict on a disagreement, or on an unsure single-pass work."""
+    """The human's verdict on a disagreement, on an unsure single-pass work, or, at full text, on
+    a cannot-assess work (single-pass or dual-pass). An exclusion needs an EX criterion."""
     state = _state(ctx)
     with _reporting_errors():
         project = _resolve_project(state)
