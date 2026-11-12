@@ -592,6 +592,8 @@ Status: items 1–3 and the cheap minors built on branch `idea-61-catalog`; grou
 
 **Review fixes (2026-11-12, Sonnet review of the branch):** the wrapped backtick span is limited to a call form `tool(` (a code fence or a stray backtick no longer opens one); `_act` skips fillers (`first`, `also`, `be`) and maps synonyms to one act (call/run/use; read/open/view; …), and a verb not listed reads as unknown, which pairs with any act; description values count only from a backticked list ("`a`, `b` or `neither`") and never a tool name; a marked tool without an access row is flagged; marker flags point at the marker's line; rf-search, rf-protocol and rf-run wording matched to the docstrings. 27 catalog tests pass.
 
+**After merging main (2026-11-12, taxonomies and IDEA-62 in):** 180 tools, 28 skills, 6 flags: 1 orphan skill (`rf-portfolio-page`) and 5 new orphan tools from the taxonomy work, which `rf-taxonomy` does not name: `taxonomy_agreement`, `taxonomy_diff`, `taxonomy_list`, `taxonomy_proposals`, `taxonomy_view`. Proposed (needs a ruling): mark the read-only ones (`taxonomy_list`, `taxonomy_view`, `taxonomy_diff`, `taxonomy_proposals`) read-only after checking their access rows, and name `taxonomy_agreement` in rf-taxonomy or mark it like `extract_agreement`.
+
 **Why:** the first build's 7 conflict flags were all false positives, which teaches the researcher to ignore the flags table. The orphan count hides which tools have no instructions.
 **Rigour notes:** the rules stay mechanical; the platform still never rules on a clash.
 **Open questions:** whether orphan status needs a declared `audience` (agent, researcher, CLI) on each tool.
