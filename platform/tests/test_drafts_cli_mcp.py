@@ -54,6 +54,9 @@ TOOLS = (
     "draft_verify_record",
     "draft_render",
     "draft_release",
+    "draft_list",  # read-only list (b299847, PROJECT_READ in services/access.py)
+    "draft_repin",  # c0504e1, WORK_RUN
+    "draft_reorder",  # c0504e1, WORK_RUN
 )
 WRITER = "01JZ9Q3K5M7N8P0R2S4T6V8W1W"
 AS = {"role": "writer", "model": "claude-sonnet-5-5", "skill": "rf-write"}
@@ -334,6 +337,11 @@ WRITING_IMPORTERS = frozenset(
         "factory.services.check",  # the draft findings (plan W-B)
         "factory.writing.checks",  # a type-only import of ResolvedSupport
         "factory.writing.render",  # a type-only import of DraftView and StatusRow
+        # Not evidence outputs (slice 3c acceptance 3 lists them; slice 7b makes briefings
+        # builders): the briefing lists draft status (d486034), and trace refuses a verifying
+        # session the drafts it would walk (5941c14).
+        "factory.services.briefing",
+        "factory.services.trace",
         "factory.mcp.server",
         "factory.cli.main",
         "factory.cli.render",

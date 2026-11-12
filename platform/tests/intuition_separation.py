@@ -78,6 +78,11 @@ ALLOWED_IMPORTERS = frozenset(
         "factory.services.consolidation",  # Regions-C: merges concepts and reads their names
         "factory.services.lineage",
         "factory.services.supports",  # W-A: the reviewed state of an interpretation or concept
+        # Not evidence outputs (slice 3c acceptance 3; slice 7b makes briefings builders): the
+        # briefing lists unreviewed interpretations as a human item, and the pipeline counts
+        # pending intuition work to plan a run.
+        "factory.services.briefing",
+        "factory.services.pipeline",
         "factory.services.check",
         "factory.services.trace",
         "factory.index.default",
@@ -118,6 +123,14 @@ TABLE_READERS = frozenset(
         # them as words; neither holds SQL (`test_cli_modules_hold_no_sql`).
         "factory.cli.main",
         "factory.cli.render",
+        # Name layer words only, in no SQL on a layer table (checked 2026-11-12): tool and command
+        # names (`access`, `cli_access`, `runner`'s allowed tools and prompt), a queue item's kind
+        # and command (`briefing`), and prose (`site_synthesis`).
+        "factory.services.access",
+        "factory.services.cli_access",
+        "factory.services.runner",
+        "factory.services.briefing",
+        "factory.services.site_synthesis",
     }
 )
 
