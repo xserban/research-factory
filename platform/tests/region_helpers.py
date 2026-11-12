@@ -135,7 +135,11 @@ def region_project(project: Project, screened: list[str]) -> RWorld:  # noqa: F8
     return RWorld(project, included, corpus, idea, concept, outside, extra)
 
 
-def merge_works(project: Project, primary: str, *absorbed: str, merge_id: str = "mrg_1") -> None:
+MERGE_ID = "mrg_01HZX3K4M5N6P7Q8R9S0TVWXY1"
+"""A well-formed merge id: the readers validate rows as `DedupMerged`, whose id is a ULID."""
+
+
+def merge_works(project: Project, primary: str, *absorbed: str, merge_id: str = MERGE_ID) -> None:
     """An active dedup merge written straight into the index (the evaluator reads the lookups)."""
     members = [primary, *absorbed]
     with project.index.connect() as conn:

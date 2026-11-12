@@ -25,6 +25,7 @@ from factory.regions.rules import (
 )
 from factory.regions.version import compress, members_text
 from tests.region_helpers import (  # noqa: F401
+    MERGE_ID,
     RWorld,
     cite,
     merge_works,
@@ -219,13 +220,13 @@ def test_merged_work_maps_to_canonical(region_project: RWorld) -> None:
         conn.execute(
             text(
                 'INSERT INTO merges (merge_id, "primary", absorbed, rule, records, status) '
-                "VALUES ('mrg_1', :p, :a, 'x', 2, 'active')"
+                "VALUES (:m, :p, :a, 'x', 2, 'active')"
             ),
-            {"p": a, "a": f'["{b}"]'},
+            {"m": MERGE_ID, "p": a, "a": f'["{b}"]'},
         )
         conn.execute(
-            text("INSERT INTO merge_members (merge_id, work_id) VALUES ('mrg_1', :w)"),
-            [{"w": a}, {"w": b}],
+            text("INSERT INTO merge_members (merge_id, work_id) VALUES (:m, :w)"),
+            [{"m": MERGE_ID, "w": a}, {"m": MERGE_ID, "w": b}],
         )
         conn.commit()
     ev = run(region_project, RuleSet(include=(FT_INCLUDED,)))
