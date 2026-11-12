@@ -406,3 +406,35 @@ Each row is one decision; the recommended option is first.
 
 Critical modules (events, index, protocol) go to `rf-builder-critical`; one `rf-reviewer` review
 before landing. Testing is paused (test-run policy); tests are listed per task for later.
+
+## 10. Build tasks (2026-11-12)
+
+Branch `plan-taxonomies`, worktree `.claude/worktrees/plan-taxonomies`. Testing is paused: each task
+passes `uv run --project platform mypy --strict` on the files it touches and `ruff`; it writes no
+tests and lists the tests to write in its commit message (recorded in the untested-work list).
+Builders share the worktree: no `git commit --amend`, `reset` or rebase; each commits only its own
+files. Nothing reaches the pilot until the branch is merged into `main` at a pause (I1, I3).
+
+**Compatibility rule for every task.** Old logs replay identically: every new optional field on an
+existing model (`MinerUse`, `ExtractionStale`, `MinerSpec` JSON) is omitted from serialisation when
+it has its default (the `model_serializer(mode="wrap")` pattern of `FinalRow._local_says_nothing`
+in `services/extraction_agreement.py`; `spec_to_json` writes new keys only when not default), so
+existing protocol version hashes and miner digests do not change.
+
+| # | Task | Agent | Files | After |
+|---|---|---|---|---|
+| T1 | Events and fold: payload models for `taxonomy.registered`, `taxonomy.change_proposed`, `mining.requested`, `work.layer_set`; catalog entries; index tables `taxonomies`, `taxonomy_proposals`, `mining_requests`, `work_layer_moves`; human-only actor guard on the three human events (as `reference.layer_scheme_recorded`); optional `MinerUse.layers`, `on_demand`, `order` and `ExtractionStale.values`, omitted when default; `PROJECTION_VERSION` 84 | rf-builder-critical | `model/taxonomies.py`, `model/miners.py`, `model/protocol.py`, `events/catalog.py`, `index/taxonomies.py`, `index/default.py` | — |
+| T2 | Taxonomy spec, pure: dataclasses, JSON form (`taxonomy_from_json`, `taxonomy_to_json`), meaning checks, digest and category digests (prose, names, patterns, lineage excluded), `diff(old, new)` naming added, removed, redefined, renamed, split, merged categories and changed cardinality, read scope or layer scheme | rf-builder | `mining/taxonomy.py` | — |
+| T3 | Miner spec additions and derivation, pure: `MinerSpec.taxonomy` reference and `EvidenceRule.absence_values` (JSON only when set; old blobs read unchanged); `max_works` read as an alias of `max_units`; `validate_miner` refuses a key field whose anchor is a row anchor for derived miners and exempts absence-value rows from the quote rule; `derive_miner(taxonomy, dimensions, selector, regime, version)` as §2.2 | rf-builder | `mining/spec.py`, `mining/validate.py`, `mining/derive.py` | T2 |
+| T4 | Taxonomy service: register (human only, first write wins, spec blob), list, view, diff, coverage (port of `taxo_report.py`: pattern counts over a descriptor miner's live pass-A quotes, unmatched works, seeded sample quotes; computed, no event), propose (agent, provenance with `input_blob`), proposals | rf-builder-critical | `services/taxonomies.py` | T1, T2 |
+| T5 | Layers and requests: `layer_of(work)` (latest `work.layer_set`, else the final dimension-zero row, else pending), `move_layer` (human), `request_mining` (human; a layer resolved to work ids at recording), and the miner population of §4 (`MinerUse.layers` ∪ live requests, `order: by-layer`) in `services/mining.py` | rf-builder-critical | `services/work_layers.py`, `services/mining.py` | T1, T3 |
+| T6 | Close checks for derived miners: every applicable dimension has a row; `single` exactly one; `not-stated` excludes other rows of its dimension; dimensions skipped by `applies_to_layers`; task content carries definitions, cues, examples and the residual rule (replacing the contrary `MINE_INSTRUCTIONS` sentence for such miners) | rf-builder-critical | `mining/kinds.py`, `services/mining.py` | T3, T5 |
+| T7 | Value-level staleness: for two miners derived from the same taxonomy, `miner_stale` uses the taxonomy diff (table in §5) to produce `ExtractionStale(values=…)`; staleness applies it to rows whose `category` is in the set | rf-builder-critical | `services/protocol.py`, `services/protocol_rules.py`, `model/staleness.py` | T1, T2, T3 |
+| T8 | MCP and CLI wiring (parse, call, format): `taxonomy_register`, `taxonomy_view`, `taxonomy_diff`, `taxonomy_coverage`, `taxonomy_propose`, `taxonomy_proposals`; `factory taxonomy register|view|diff|coverage|proposals`, `factory mine request`, `factory layers move`; access rows | rf-builder | `mcp/server.py`, `cli/taxonomy.py`, `cli/main.py`, `services/access.py` | T4, T5 |
+| T9 | Hub: POST acts `mine-work`, `mine-layer`, `move-layer` (decision 119 rules); work-queue stage `mining`; Process now runner stage `mining` (`mine_next`, `mine_record`, `document_read`) | rf-builder-critical | `site_server.py`, `services/work_queue.py`, `services/runner.py` | T5 |
+| T10 | Agreement for derived miners: per dimension; `single` exact, `multi` per-category presence and per-work Jaccard; one pass `not-stated`, the other a category, reported as completeness | rf-builder-critical | `services/extraction_agreement.py` (or a new `services/taxonomy_agreement.py`) | T3 |
+| T11 | Skill `rf-taxonomy`: classification procedure and how to write a proposal | sonnet (prose) | `plugin/skills/rf-taxonomy/SKILL.md` | T4 |
+| R | One review of the branch (guard mutation reasoned, not run) | rf-reviewer | — | all |
+
+Waves (at most three agents at once): T1 ∥ T2; then T3 ∥ T4; then T5 ∥ T7; then T6 ∥ T10 ∥ T11;
+then T8 ∥ T9; then R.
