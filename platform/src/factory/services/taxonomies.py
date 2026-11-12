@@ -311,7 +311,10 @@ def propose_change(
     registered (`base_version`); a `kind` other than `add` with no target, or a target that is
     not a full id `dimension/category` of the base version (`targets[i]`); a work that is not a
     corpus work (`works[i]`); a blank rationale. `drafts` is stored as a blob. The proposal
-    changes no taxonomy; its provenance is the envelope's (model, skill, input blob)."""
+    changes no taxonomy. The event's `input_blob` is a JSON blob of what the proposal rests on,
+    not the payload: the base taxonomy's name, version and digest, the `targets`, and the cited
+    `works` and `rows` (extraction ids), which are the evidence the agent read and cites. Its
+    provenance is the envelope's (model, skill, input blob)."""
     if actor.kind != "agent":
         raise _refuse("actor", "an agent proposes a taxonomy change")
     issues: list[ValidationIssue] = []
@@ -353,13 +356,20 @@ def propose_change(
             cluster_id=cluster_id,
             rationale=rationale,
         )
-        body: JsonValue = json.loads(payload.model_dump_json())
+        evidence: JsonValue = {
+            "taxonomy": taxonomy,
+            "base_version": base_version,
+            "base_digest": taxonomy_digest(spec),
+            "targets": list(targets),
+            "works": list(works),
+            "rows": list(rows),
+        }
         event = project.events.make(
             "taxonomy.change_proposed",
             payload,
             actor,
             refs=(proposal_id,),
-            input_blob=project.blobs.put_json(body),
+            input_blob=project.blobs.put_json(evidence),
         )
         project.record([event])
     return proposal_id

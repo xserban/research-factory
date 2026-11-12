@@ -16,6 +16,10 @@ from typing import Annotated
 
 import typer
 
+from factory.document.anchors import AnchorKind
+from factory.errors import FactoryValidationError, ValidationIssue
+from factory.mining.derive import derive_miner
+from factory.mining.spec import MinerRegime, Population, Selector, spec_to_json
 from factory.mining.taxonomy import taxonomy_to_json
 from factory.services import taxonomies as taxonomies_service
 from factory.services import taxonomy_agreement as taxonomy_agreement_service
@@ -180,6 +184,97 @@ def taxonomy_proposals_cmd(
             f"{p.proposal_id} {p.kind} on version {p.base_version} "
             f"targets {', '.join(p.targets) or '-'}: {p.status}{reason}"
         )
+
+
+_REGIME_DEFAULTS = MinerRegime()
+
+
+@taxonomy_app.command("derive")
+def taxonomy_derive_cmd(
+    ctx: typer.Context,
+    name: Annotated[str, typer.Argument(help="The taxonomy's name.")],
+    version: Annotated[int, typer.Argument(help="The registered version.")],
+    miner_name: Annotated[
+        str, typer.Option("--miner-name", help="The derived miner's name, m-....")
+    ],
+    miner_version: Annotated[int, typer.Option("--miner-version", help="Its version.")],
+    dimension: Annotated[
+        list[str] | None,
+        typer.Option("--dimension", help="A dimension to classify; repeatable."),
+    ] = None,
+    population: Annotated[
+        str, typer.Option("--population", help="The population the miner reads.")
+    ] = "included-ft",
+    heading: Annotated[
+        list[str] | None,
+        typer.Option("--heading", help="A section heading pattern; repeatable. None means all."),
+    ] = None,
+    passes: Annotated[int, typer.Option("--passes", help="Passes: 1 or 2.")] = (
+        _REGIME_DEFAULTS.passes
+    ),
+    calibration_size: Annotated[
+        int, typer.Option("--calibration-size", help="Calibration sample size.")
+    ] = _REGIME_DEFAULTS.calibration_size,
+    recall_min: Annotated[
+        float, typer.Option("--recall-min", help="Minimum recall for calibration.")
+    ] = _REGIME_DEFAULTS.recall_min,
+    field_agreement_min: Annotated[
+        float, typer.Option("--field-agreement-min", help="Minimum field agreement.")
+    ] = _REGIME_DEFAULTS.field_agreement_min,
+    out: Annotated[
+        Path | None, typer.Option("--out", help="Write the miner specification to this file.")
+    ] = None,
+) -> None:
+    """Derive a classification miner from a registered taxonomy and print its specification
+    JSON, ready for `factory miner register`. Records nothing; the derivation is pure."""
+    from factory.cli.main import _fail, _reporting_errors, _resolve_project, _state
+
+    if not dimension:
+        _fail("--dimension: give at least one dimension", 2)
+    if passes not in (1, 2):
+        _fail(f"--passes {passes}: must be 1 or 2", 2)
+    try:
+        chosen = Population(population)
+    except ValueError:
+        _fail(f"--population {population}: not a population", 2)
+    regime = MinerRegime(
+        passes=2 if passes == 2 else 1,
+        calibration_size=calibration_size,
+        recall_min=recall_min,
+        field_agreement_min=field_agreement_min,
+    )
+    selector = Selector(
+        population=chosen,
+        elements=(AnchorKind.PARAGRAPH,),
+        heading_patterns=tuple(heading or ()),
+    )
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        spec = taxonomies_service.registered_taxonomy(project, name, version)
+        if spec is None:
+            raise FactoryValidationError(
+                [ValidationIssue("version", f"{name} version {version} is not registered")]
+            )
+        layer_ids = taxonomies_service.layer_categories(project, spec)
+        try:
+            miner = derive_miner(
+                spec,
+                dimension,
+                name=miner_name,
+                version=miner_version,
+                selector=selector,
+                regime=regime,
+                layer_ids=layer_ids,
+            )
+        except ValueError as exc:
+            raise FactoryValidationError([ValidationIssue("dimension", str(exc))]) from exc
+    body = _json(spec_to_json(miner))
+    if out is None:
+        typer.echo(body)
+    else:
+        out.write_text(body + "\n", encoding="utf-8")
+        typer.echo(f"wrote {out}")
 
 
 @taxonomy_app.command("agreement")
