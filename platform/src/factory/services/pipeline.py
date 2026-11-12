@@ -338,9 +338,10 @@ def _record_finish(
         stopped_at=stopped_at,
         reason=reason,
     )
-    project.record(
-        [project.events.make("runner.pipeline_finished", payload, project.system_actor())]
-    )
+    with project.writing():  # mint under the lock: append order is ID order (slice 5 ruling 3)
+        project.record(
+            [project.events.make("runner.pipeline_finished", payload, project.system_actor())]
+        )
 
 
 @dataclass(frozen=True)
@@ -412,9 +413,10 @@ def begin_pipeline(
             counts_before=before,
             resumes=resumes,
         )
-        project.record(
-            [project.events.make("runner.pipeline_started", started, project.system_actor())]
-        )
+        with project.writing():  # mint under the lock (slice 5 ruling 3)
+            project.record(
+                [project.events.make("runner.pipeline_started", started, project.system_actor())]
+            )
     except BaseException:
         _release(handle)
         raise

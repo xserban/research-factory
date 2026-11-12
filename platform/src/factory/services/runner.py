@@ -653,7 +653,10 @@ def _finish(
     with _runs_lock(project):
         if run_id not in _open_run_ids(project):
             return
-        project.record([project.events.make("runner.finished", payload, project.system_actor())])
+        with project.writing():  # mint under the lock (slice 5 ruling 3)
+            project.record(
+                [project.events.make("runner.finished", payload, project.system_actor())]
+            )
 
 
 def finish_lost(project: Project, *, advance_after: bool = True) -> list[str]:
@@ -868,7 +871,8 @@ def start_run(
             command=tuple(recorded),
             resumes=resumes,
         )
-        project.record([project.events.make("runner.started", started, project.system_actor())])
+        with project.writing():  # mint under the lock (slice 5 ruling 3)
+            project.record([project.events.make("runner.started", started, project.system_actor())])
         launch = launcher or default_launcher
         try:
             wrapped = ["sh", "-c", _WRAPPER, "sh", str(folder / "exit"), *argv]
@@ -1082,7 +1086,8 @@ def adopt_driver(
             command=("adopted", _project_relative(project, prompt_file)),
             adopted=True,
         )
-        project.record([project.events.make("runner.started", started, project.system_actor())])
+        with project.writing():  # mint under the lock (slice 5 ruling 3)
+            project.record([project.events.make("runner.started", started, project.system_actor())])
         if log_file is not None:
             _finish(project, run_id, stage, "lost", None)
     return run_id
