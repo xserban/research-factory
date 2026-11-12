@@ -20,6 +20,7 @@ from factory.model.protocol import (
 from factory.model.search import QueryKind, QueryPurpose, QuerySpec
 from factory.model.work import Provenance, ProvenanceMethod, Work
 from factory.services.context import Project
+from factory.services.prisma import GREY_METHODS
 from factory.services.protocol import amend_protocol, current_protocol, search_authorization
 from tests.extraction_helpers import PINNED_P_ID
 from tests.helpers import T0, SourcesFor, pilot_protocol_spec, ready_protocol
@@ -142,7 +143,10 @@ def test_import_plan_keeps_other_gates(
 
 def test_provenance_method_round_trip() -> None:
     assert ProvenanceMethod("library-import") is ProvenanceMethod.LIBRARY_IMPORT
-    assert list(ProvenanceMethod)[-1] is ProvenanceMethod.LIBRARY_IMPORT
+    # Last of the methods before the grey ones (decision 75 item 2, 489e70d).
+    assert [m for m in ProvenanceMethod if m not in GREY_METHODS][-1] is (
+        ProvenanceMethod.LIBRARY_IMPORT
+    )
     assert QueryPurpose("import") is QueryPurpose.IMPORT
     work = Work.build(
         title="Made-Up Pears",

@@ -36,6 +36,8 @@ def test_kinds_unchanged() -> None:
         "extract_b",
         "contrib_a",
         "contrib_b",
+        "appraise_a",  # appraisal (5643492)
+        "appraise_b",
         "mine_a",
         "mine_b",
         INTUITION_TASK_KIND,

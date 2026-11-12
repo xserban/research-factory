@@ -211,6 +211,7 @@ def test_enum_values_are_lowercase_strings() -> None:
         "supplied",
         "import",
         "status",
+        "grey",  # reported grey searches (489e70d)
     }
     assert {s.value for s in RunStatus} == {
         "running",

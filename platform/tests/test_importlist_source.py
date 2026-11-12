@@ -103,6 +103,7 @@ def test_importlist_builds_works_from_fields_only() -> None:
         "arxiv",
         "url",
         "venue",
+        "abstract",  # the record's abstract is kept (9d84d59, PD-4)
         "record_sha256",
     }
     assert page.url.startswith("importlist:") and page.ordinal == 0

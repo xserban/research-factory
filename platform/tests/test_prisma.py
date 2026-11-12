@@ -25,7 +25,13 @@ from factory.services.chase import search_chase
 from factory.services.context import Project
 from factory.services.dedup import active_merges, dedup_run, revert_merge
 from factory.services.methods import methods_report, render_methods
-from factory.services.prisma import OTHER_METHODS, PrismaFlow, prisma_flow, search_report
+from factory.services.prisma import (
+    GREY_METHODS,
+    OTHER_METHODS,
+    PrismaFlow,
+    prisma_flow,
+    search_report,
+)
 from factory.services.probe import run_probe
 from factory.services.protocol import (
     amend_protocol,
@@ -557,7 +563,13 @@ def test_supplied_counts_under_its_method(
 
 
 def test_library_import_ranks_last_among_other_methods() -> None:
-    assert OTHER_METHODS[-2:] == (ProvenanceMethod.SUPPLIED, ProvenanceMethod.LIBRARY_IMPORT)
+    # The grey methods come after it, so no existing count moves (decision 75 item 2, 489e70d).
+    grey = len(GREY_METHODS)
+    assert set(OTHER_METHODS[-grey:]) == GREY_METHODS
+    assert OTHER_METHODS[-grey - 2 : -grey] == (
+        ProvenanceMethod.SUPPLIED,
+        ProvenanceMethod.LIBRARY_IMPORT,
+    )
 
 
 def test_prisma_supplied_and_database_counts_database(
