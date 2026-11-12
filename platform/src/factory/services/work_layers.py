@@ -2,9 +2,10 @@
 
 Invariants:
 - The layer of a work is, in this order: the latest `work.layer_set` of the work (the researcher's
-  move, source `moved`); else the layer in the FINAL row (status agreed or resolved, never a single
-  or unresolved pass) of the first protocol-listed derived miner that projects a dimension-zero
-  dimension (source `miner`); else none (source `pending`). A move always beats a miner.
+  move, source `moved`); else the layer in the FINAL row of the first protocol-listed derived miner
+  that projects a dimension-zero dimension (source `miner`): agreed, resolved, or single (a work
+  outside the dual sample has one pass, which is its final value), never an unresolved
+  disagreement; else none (source `pending`). A move always beats a miner.
 - `move_layer` and `request_mining` are the researcher's acts: a non-human actor is refused with
   nothing written. Every refusal writes nothing.
 - A layer request stores the work ids it resolved to when recorded, so a later move never widens it.
@@ -97,7 +98,7 @@ def _miner_layers(project: Project) -> dict[str, tuple[str, int]]:
         prefix = f"{dimension.id}/"
         for row in final_rows(project, scope=MinerScope(use.name)):
             cell = row.fields.get(_LAYER_FIELD)
-            if row.status == "single" or cell is None or not isinstance(cell.value, str):
+            if cell is None or not isinstance(cell.value, str):
                 continue
             if cell.value.startswith(prefix) and len(cell.value) > len(prefix):
                 found.setdefault(row.work_id, (cell.value[len(prefix) :], dimension.layer_scheme))
