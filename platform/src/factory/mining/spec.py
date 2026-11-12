@@ -9,6 +9,9 @@ Invariants:
   declaration order, enums as their values).
 - `spec_from_json` raises `FactoryValidationError` with dotted field names and writes nothing;
   it checks shape only, `validate_miner` checks meaning.
+- Keys added after the first registered miners (`taxonomy`, `evidence.absence_values`) are written
+  only when not default, so existing spec blobs and miner digests do not change. `max_works` is an
+  input alias of `max_units`; `spec_to_json` keeps writing `max_units`.
 """
 
 from __future__ import annotations
@@ -107,6 +110,9 @@ class MinerField:
 
 @dataclass(frozen=True)
 class Selector:
+    """`max_units` caps the number of WORKS a miner reads, not paragraphs (JSON key `max_works`
+    is accepted as its alias; `spec_to_json` writes `max_units`)."""
+
     population: Population
     elements: tuple[AnchorKind, ...] = ()
     heading_patterns: tuple[str, ...] = ()
@@ -115,8 +121,12 @@ class Selector:
 
 @dataclass(frozen=True)
 class EvidenceRule:
+    """`absence_values` are enum values that say the document does not state the fact (for
+    example `<dim>/not-stated`); a record carrying one is exempt from the quote rule."""
+
     min_quotes_per_record: int = 1
     enum_needs_quote: bool = True
+    absence_values: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -125,6 +135,17 @@ class MinerRegime:
     calibration_size: int = 10
     recall_min: float = 0.8
     field_agreement_min: float = 0.9
+
+
+@dataclass(frozen=True)
+class TaxonomyRef:
+    """The taxonomy version a derived miner projects: its name, version, digest (the taxonomy
+    digest at derivation) and the dimensions chosen, in taxonomy order."""
+
+    name: str
+    version: int
+    digest: str
+    dimensions: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -148,6 +169,7 @@ class MinerSpec:
     comparability_keys: tuple[str, ...] = ()
     citation_patterns: tuple[str, ...] = ()
     report: ReportSpec | None = field(default=None, repr=False, compare=False, hash=False)
+    taxonomy: TaxonomyRef | None = None
 
     def field_named(self, name: str) -> MinerField | None:
         for f in self.fields:
@@ -178,7 +200,8 @@ def kind_to_json(kind: FieldKindSpec) -> dict[str, JsonValue]:
 
 
 def spec_to_json(spec: MinerSpec) -> dict[str, JsonValue]:
-    """The canonical JSON form of `spec` (everything but `report`)."""
+    """The canonical JSON form of `spec` (everything but `report`). `taxonomy` and
+    `evidence.absence_values` appear only when set."""
     fields: list[JsonValue] = [
         {
             "name": f.name,
@@ -194,7 +217,13 @@ def spec_to_json(spec: MinerSpec) -> dict[str, JsonValue]:
         {"field": c.field, "when": c.when, "values": list(c.values), "rule": c.rule}
         for c in spec.conditionals
     ]
-    return {
+    evidence: dict[str, JsonValue] = {
+        "min_quotes_per_record": spec.evidence.min_quotes_per_record,
+        "enum_needs_quote": spec.evidence.enum_needs_quote,
+    }
+    if spec.evidence.absence_values:
+        evidence["absence_values"] = list(spec.evidence.absence_values)
+    body: dict[str, JsonValue] = {
         "name": spec.name,
         "version": spec.version,
         "selector": {
@@ -207,10 +236,7 @@ def spec_to_json(spec: MinerSpec) -> dict[str, JsonValue]:
         "row_key_fields": list(spec.row_key_fields),
         "row_anchor_fields": list(spec.row_anchor_fields),
         "conditionals": conditionals,
-        "evidence": {
-            "min_quotes_per_record": spec.evidence.min_quotes_per_record,
-            "enum_needs_quote": spec.evidence.enum_needs_quote,
-        },
+        "evidence": evidence,
         "procedure": spec.procedure,
         "regime": {
             "passes": spec.regime.passes,
@@ -222,6 +248,14 @@ def spec_to_json(spec: MinerSpec) -> dict[str, JsonValue]:
         "comparability_keys": list(spec.comparability_keys),
         "citation_patterns": list(spec.citation_patterns),
     }
+    if spec.taxonomy is not None:
+        body["taxonomy"] = {
+            "name": spec.taxonomy.name,
+            "version": spec.taxonomy.version,
+            "digest": spec.taxonomy.digest,
+            "dimensions": list(spec.taxonomy.dimensions),
+        }
+    return body
 
 
 class _Reader:
@@ -353,7 +387,11 @@ def _kind_from_json(r: _Reader, value: object, path: str) -> FieldKindSpec:
 
 
 def _selector_from_json(r: _Reader, value: object) -> Selector:
-    data = r.obj(value, "selector", {"population", "elements", "heading_patterns", "max_units"})
+    data = r.obj(
+        value,
+        "selector",
+        {"population", "elements", "heading_patterns", "max_units", "max_works"},
+    )
     population = r.text(data, "population", "selector", None)
     pop = Population.CORPUS
     if population:
@@ -368,16 +406,29 @@ def _selector_from_json(r: _Reader, value: object) -> Selector:
         except ValueError:
             r.bad("selector.elements", f"not an anchor kind: {name}")
     maximum: int | None = None
-    if data.get("max_units") is not None:
-        maximum = r.integer(data, "max_units", "selector", None)
+    if "max_units" in data and "max_works" in data:
+        r.bad("selector", "give max_units or max_works, not both")
+    key = "max_works" if "max_works" in data else "max_units"
+    if data.get(key) is not None:
+        maximum = r.integer(data, key, "selector", None)
     return Selector(pop, tuple(elements), r.strings(data, "heading_patterns", "selector"), maximum)
 
 
 _TOP_KEYS = {
     "name", "version", "selector", "fields", "row_key_fields", "row_anchor_fields",
     "conditionals", "evidence", "procedure", "regime", "rationale", "comparability_keys",
-    "citation_patterns",
+    "citation_patterns", "taxonomy",
 }  # fmt: skip
+
+
+def _taxonomy_ref_from_json(r: _Reader, value: object) -> TaxonomyRef:
+    data = r.obj(value, "taxonomy", {"name", "version", "digest", "dimensions"})
+    return TaxonomyRef(
+        name=r.text(data, "name", "taxonomy", None),
+        version=r.integer(data, "version", "taxonomy", None),
+        digest=r.text(data, "digest", "taxonomy", None),
+        dimensions=r.strings(data, "dimensions", "taxonomy", required=True),
+    )
 
 
 def spec_from_json(value: object) -> MinerSpec:
@@ -426,12 +477,16 @@ def spec_from_json(value: object) -> MinerSpec:
             )
         )
     evidence_data = r.obj(
-        top.get("evidence", {}), "evidence", {"min_quotes_per_record", "enum_needs_quote"}
+        top.get("evidence", {}),
+        "evidence",
+        {"min_quotes_per_record", "enum_needs_quote", "absence_values"},
     )
     evidence = EvidenceRule(
         r.integer(evidence_data, "min_quotes_per_record", "evidence", 1),
         r.boolean(evidence_data, "enum_needs_quote", "evidence", True),
+        r.strings(evidence_data, "absence_values", "evidence"),
     )
+    taxonomy = _taxonomy_ref_from_json(r, top["taxonomy"]) if "taxonomy" in top else None
     regime_data = r.obj(
         top.get("regime", {}),
         "regime",
@@ -460,6 +515,7 @@ def spec_from_json(value: object) -> MinerSpec:
         rationale=r.text(top, "rationale", "", ""),
         comparability_keys=r.strings(top, "comparability_keys", ""),
         citation_patterns=r.strings(top, "citation_patterns", ""),
+        taxonomy=taxonomy,
     )
     if r.issues:
         raise FactoryValidationError(r.issues)

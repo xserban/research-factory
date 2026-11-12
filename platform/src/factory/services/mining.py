@@ -36,6 +36,7 @@ from factory.mining.spec import (
     spec_from_json,
     spec_to_json,
 )
+from factory.mining.taxonomy import taxonomy_from_json
 from factory.mining.validate import validate_miner
 from factory.model.base import StrictModel
 from factory.model.extraction import ExtractedRowInput, MinerScope
@@ -72,6 +73,7 @@ from factory.services.stages import is_mine_kind
 from factory.services.tasks import get_task, task_content
 
 __all__ = [
+    "DERIVED_INSTRUCTIONS",
     "MINE_INSTRUCTIONS",
     "MineStatus",
     "MinerListing",
@@ -199,6 +201,49 @@ def registered_miner(project: Project, name: str, version: int) -> MinerSpec | N
     return None if row is None else spec_from_json(project.blobs.get_json(row.spec_blob))
 
 
+def _taxonomy_issues(project: Project, spec: MinerSpec) -> list[ValidationIssue]:
+    """Issues of a spec's taxonomy reference (empty when it has none). A derived miner is exactly
+    the derivation of its registered taxonomy: compared as JSON, ignoring `rationale`."""
+    ref = spec.taxonomy
+    if ref is None:
+        return []
+    # late imports: services.taxonomies imports this package's peers
+    from factory.mining.derive import derive_miner
+    from factory.services.taxonomies import layer_categories, taxonomy_row
+
+    field = "spec.taxonomy"
+    row = taxonomy_row(project, ref.name, ref.version)
+    if row is None:
+        return [
+            ValidationIssue(field, f"taxonomy {ref.name} version {ref.version} is not registered")
+        ]
+    if row.digest != ref.digest:
+        return [ValidationIssue(field, "the digest differs from the registered taxonomy digest")]
+    taxonomy = taxonomy_from_json(project.blobs.get_json(row.spec_blob))
+    known = {d.id for d in taxonomy.dimensions}
+    missing = [d for d in ref.dimensions if d not in known]
+    if missing:
+        return [ValidationIssue(field, f"the taxonomy has no dimension {d}") for d in missing]
+    try:
+        derived = derive_miner(
+            taxonomy,
+            ref.dimensions,
+            name=spec.name,
+            version=spec.version,
+            selector=spec.selector,
+            regime=spec.regime,
+            layer_ids=layer_categories(project, taxonomy),
+            procedure=spec.procedure,
+        )
+    except ValueError as error:
+        return [ValidationIssue(field, f"the taxonomy cannot be derived: {error}")]
+    mine = {**spec_to_json(spec), "rationale": ""}
+    theirs = {**spec_to_json(derived), "rationale": ""}
+    if mine != theirs:
+        return [ValidationIssue(field, "the spec is not what its taxonomy derives")]
+    return []
+
+
 def register_miner(
     project: Project,
     actor: Actor,
@@ -212,7 +257,11 @@ def register_miner(
 
     Refused, with nothing written: for a system actor (`actor`); a spec of the wrong shape or
     meaning (the issues of `spec_from_json` and `validate_miner`, dotted); a `(name, version)` that
-    exists with another digest (`version`: a change is a new version). Registering the same spec
+    exists with another digest (`version`: a change is a new version); a spec with a taxonomy
+    reference (`spec.taxonomy`) whose taxonomy version is not registered, whose digest differs
+    from the registered one, that names a dimension the taxonomy lacks, or that differs (other than
+    in `rationale`) from what `derive_miner` produces for that taxonomy, those dimensions and the
+    spec's own name, version, selector, regime and procedure. Registering the same spec
     again writes nothing and returns the earlier registration."""
     if actor.kind == "system":
         raise FactoryValidationError(
@@ -222,6 +271,9 @@ def register_miner(
     issues = validate_miner(spec)
     if issues:
         raise FactoryValidationError(issues)
+    taxonomy_issues = _taxonomy_issues(project, spec)
+    if taxonomy_issues:
+        raise FactoryValidationError(taxonomy_issues)
     digest = miner_digest(spec)
     if imported_from is not None and imported_from.digest != digest:
         raise FactoryValidationError(
@@ -359,10 +411,62 @@ def calibration_sample(project: Project, name: str) -> set[str]:
 def miner_population(project: Project, name: str) -> list[str]:
     """The works the listed miner `name` mines in production, in work-id order: its selector's
     population less the units drawn into a calibration (M-D ruling 2: a calibration unit is never
-    mined by a production pass, so no resolution can have fixed it)."""
-    _, _, spec = _listed(project, name)
+    mined by a production pass, so no resolution can have fixed it).
+
+    With `layers`, only the selector population's works whose layer (`work_layers.layer_of`) is
+    one of them are kept; the population is capped by `selector.max_units` as `population` caps
+    it (the first works with a conversion, before the layer filter). When the use is `on_demand`,
+    with or without `layers`, the works of the researcher's mining requests are added: they are
+    included works and are served even outside the selector population or the layers (still with
+    a default conversion, still never a calibration unit), and they do not count towards
+    `max_units`. A use with neither `layers` nor `on_demand` is the base population only,
+    unchanged. Order is work id, or with `order: by-layer` by the layer's ring in the latest
+    scheme, then work id (pending and unknown layers last). Refused on field `miners` when a
+    derived layer miner (one projecting dimension zero) lists `layers`: it classifies every work
+    and is never layer-filtered. `work_layers` is imported here, not at the top, because it
+    imports this module."""
+    _, use, spec = _listed(project, name)
     apart = calibration_sample(project, name)
-    return [work for work, _ in population(project, spec.selector) if work not in apart]
+    if not use.layers and not use.on_demand:
+        return [work for work, _ in population(project, spec.selector) if work not in apart]
+    from factory.services.work_layers import (
+        layer_dimension,
+        layers_of,
+        requested_works,
+    )
+
+    layers = layers_of(project)
+    # `population` caps at `max_units` works with a conversion; the layer filter then applies
+    chosen = [work for work, _ in population(project, spec.selector) if work not in apart]
+    if use.layers:
+        if layer_dimension(project, spec) is not None:
+            raise FactoryValidationError(
+                [
+                    ValidationIssue(
+                        "miners",
+                        f"miner {name} projects the layer dimension and is never "
+                        "layer-filtered; its protocol use must not list layers",
+                    )
+                ]
+            )
+        wanted = set(use.layers)
+        chosen = [w for w in chosen if w in layers and layers[w].layer in wanted]
+    if use.on_demand:
+        extra = requested_works(project, name) - set(chosen) - apart
+        chosen.extend(w for w in extra if default_conversion(project, w) is not None)
+    if use.order == "by-layer":
+        from factory.services.reference_layers import current_scheme
+
+        scheme = current_scheme(project)
+        rings = {} if scheme is None else {d.id: d.ring for d in scheme.layers}
+        last = max(rings.values(), default=0) + 1
+
+        def key(work: str) -> tuple[int, str]:
+            found = layers.get(work)
+            return (rings.get(found.layer, last) if found and found.layer else last, work)
+
+        return sorted(chosen, key=key)
+    return sorted(chosen)
 
 
 # --- The generic mine path ---
@@ -374,6 +478,88 @@ MINE_INSTRUCTIONS = (
     "work_ref follows the rule listed for it. Never compute, round or convert a value, and leave "
     "out a field the document does not state."
 )
+
+
+DERIVED_INSTRUCTIONS = (
+    "Classify the pinned document by the dimensions listed below. Read it with document_read, at "
+    "the listed anchors first. Every applicable dimension gets a row. A row has the category as "
+    "its full id `dimension/category`, an anchor and a verbatim quote that supports it. When the "
+    "text you read says nothing on a dimension, give `<dimension>/not-stated` with no quote; "
+    "never the nearest sentence. When it fits no category, give `<dimension>/other` with "
+    "`described_as`. A `single` dimension takes exactly one row, a `multi` dimension at most its "
+    "label limit; a not-stated or not-applicable row stands alone in its dimension. Never compute "
+    "or convert a value. Follow skill rf-taxonomy."
+)
+MAX_EXAMPLES = 3
+"""Most examples served per category."""
+
+
+def _category_text(
+    cid: str,
+    name: str,
+    definition: str,
+    inc: Sequence[str],
+    exc: Sequence[str],
+    examples: Sequence[str],
+) -> str:
+    parts = [f"- {cid} ({name}): {definition}"]
+    if inc:
+        parts.append("  include: " + "; ".join(inc))
+    if exc:
+        parts.append("  exclude: " + "; ".join(exc))
+    parts.extend(f"  example: {e}" for e in examples[:MAX_EXAMPLES])
+    return "\n".join(parts)
+
+
+def derived_task_text(project: Project, spec: MinerSpec, work_id: str) -> str:
+    """The dimensions a derived miner's task asks about for `work_id`: the applicable ones
+    (`applicable_dimensions` for the work's layer) with question, cardinality, residual rule and
+    each category's full id, name, definition, cues and at most `MAX_EXAMPLES` examples; dimension
+    zero lists the layer ids with the scheme's criteria. Bounded text; empty when the miner has
+    no taxonomy or the taxonomy is not registered."""
+    from factory.mining.kinds import applicable_dimensions
+    from factory.mining.taxonomy import full_id
+    from factory.services.reference_layers import _scheme
+    from factory.services.taxonomies import registered_taxonomy
+    from factory.services.work_layers import layer_of
+
+    ref = spec.taxonomy
+    if ref is None:
+        return ""
+    taxonomy = registered_taxonomy(project, ref.name, ref.version)
+    if taxonomy is None:
+        return ""
+    layer = layer_of(project, work_id).layer
+    blocks: list[str] = []
+    for dim in applicable_dimensions(taxonomy, ref.dimensions, layer):
+        head = (
+            f"Dimension {dim.id} ({dim.title}), {dim.cardinality}"
+            + (f", at most {dim.max_labels} labels" if dim.max_labels is not None else "")
+            + f": {dim.question}\nresiduals: "
+            + ", ".join(full_id(dim.id, r) for r in dim.residuals)
+        )
+        lines = [head]
+        if dim.layer_scheme is not None:
+            scheme = _scheme(project, dim.layer_scheme)
+            for entry in () if scheme is None else scheme.layers:
+                lines.append(
+                    _category_text(
+                        full_id(dim.id, entry.id), entry.name, entry.criteria, (), (), ()
+                    )
+                )
+        for cat in dim.categories:
+            lines.append(
+                _category_text(
+                    full_id(dim.id, cat.id),
+                    cat.name,
+                    cat.definition,
+                    cat.include_cues,
+                    cat.exclude_cues,
+                    [e.quote for e in cat.examples],
+                )
+            )
+        blocks.append("\n".join(lines))
+    return "\n\n".join(blocks)
 
 
 def _kind_note(kind: object) -> str:
@@ -455,8 +641,15 @@ def mine_next(
     def content(proj: Project, base: ExtractBatchContent) -> ExtractBatchContent:
         conversion = base.records[0]["conversion_id"]
         anchors = selected_anchors(conversion_manifest(proj, conversion), spec.selector)
+        instructions = MINE_INSTRUCTIONS
+        if spec.taxonomy is not None:
+            instructions = (
+                DERIVED_INSTRUCTIONS
+                + "\n\n"
+                + derived_task_text(proj, spec, base.records[0]["work_id"])
+            )
         return MineBatchContent(
-            **{**base.model_dump(), "instructions": MINE_INSTRUCTIONS},
+            **{**base.model_dump(), "instructions": instructions},
             miner=name,
             version=version,
             digest=digest,

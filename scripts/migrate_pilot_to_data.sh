@@ -4,11 +4,12 @@
 #   scripts/migrate_pilot_to_data.sh              dry run
 #   scripts/migrate_pilot_to_data.sh --run        copy
 #   scripts/migrate_pilot_to_data.sh --verify     compare the copy with the pilot (read-only)
+#   DATA=$HOME/Documents/Projects/research-factory/data scripts/migrate_pilot_to_data.sh --run   (from a worktree)
 set -euo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 PILOT="${PILOT:-$HOME/Documents/research-factory-pilot}"
 SLUG="${SLUG:-agentic-science}"
-DATA="$REPO/data"
+DATA="${DATA:-$REPO/data}"   # override with DATA=<dir> when the script runs from a worktree: data/ must live where it survives the worktree
 P="$DATA/projects/$SLUG"
 MODE="${1:---dry}"
 

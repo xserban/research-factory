@@ -30,6 +30,10 @@ SPEC = ModuleSpec(
             "miner.calibration_drawn",
             "miner.calibration_labelled",
             "mine.imported",
+            "taxonomy.registered",
+            "taxonomy.change_proposed",
+            "mining.requested",
+            "work.layer_set",
         ),
         tables=(
             "miners",
@@ -39,13 +43,20 @@ SPEC = ModuleSpec(
             "miner_calibration_label_sessions",
             "mine_imports",
             "mine_import_items",
+            "taxonomies",
+            "taxonomy_proposals",
+            "mining_requests",
+            "mining_request_works",
+            "work_layer_moves",
         ),
         note="registered miners are data; their records are written in the extraction.* family"
         " (the pack on each event is the miner's name); mine.resolve is the gate of the"
-        " extraction.resolved events whose pack is a miner's.",
+        " extraction.resolved events whose pack is a miner's. Taxonomies (IDEA-50) are miner-like"
+        " data: a classification miner is derived from a registered taxonomy version; on-demand"
+        " requests and the researcher's layer moves decide which works a listed miner reads.",
     ),
     task_kinds=default_task_kinds().kinds_of("mining"),
-    protocol_sections=("miners",),
+    protocol_sections=("miners", "taxonomies"),
     gates=(
         GateSpec(
             "miner.calibration_label",

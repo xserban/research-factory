@@ -10,6 +10,7 @@ from pydantic import BaseModel, JsonValue, ValidationError
 from factory.config import Settings
 from factory.errors import FactoryValidationError, ProjectNotFoundError, ValidationIssue
 from factory.events.envelope import Actor
+from factory.index.index import IndexHeldError
 from factory.model.fulltext import ROUTE_ORDER, Route
 from factory.model.protocol import ProtocolSpec, ScreeningStage
 from factory.model.question import QuestionSpec
@@ -177,6 +178,8 @@ def guarded(
         return fail([ValidationIssue(rename(i.field), i.reason) for i in exc.issues])
     except ProjectNotFoundError:
         return fail([ValidationIssue("project", "unknown project")])
+    except IndexHeldError as exc:  # another code line holds the index (IDEA-62)
+        return fail([ValidationIssue("index", str(exc))])
 
 
 def parse_stage(value: str) -> ScreeningStage:

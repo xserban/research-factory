@@ -140,7 +140,14 @@ def _build_lab(settings: Settings, *, session: str, clock: Clock) -> Lab:
         ids=ids,
         events=EventFactory(LAB_SLUG, catalog, ids),
         writer=EventWriter(paths.events_dir, project=LAB_SLUG, catalog=catalog, blobs=blobs),
-        index=Index(paths.index_path, paths.events_dir, catalog, projection, on_exclusive=floor),
+        index=Index(
+            paths.index_path,
+            paths.events_dir,
+            catalog,
+            projection,
+            on_exclusive=floor,
+            hold_window=settings.index_hold,
+        ),
         tables=tables,
     )
 

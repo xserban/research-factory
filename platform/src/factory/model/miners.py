@@ -11,9 +11,9 @@ Written by `factory.services.mining`, folded by `factory.index.miners`.
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import Field
+from pydantic import Field, SerializerFunctionWrapHandler, StringConstraints, model_serializer
 
 from factory.events.blobs import BLOB_REF_RE
 from factory.events.envelope import ActorKind
@@ -25,6 +25,10 @@ MINER_NAME_RE = r"^m-[a-z0-9]+(?:-[a-z0-9]+)*$"
 stays a pure function of its `pack` (slice M ruling 11)."""
 MINER_ID_RE = rf"^mnr_{ULID_RE}$"
 DIGEST_RE = r"^[0-9a-f]{16}$"
+_LAYER_ID_RE = r"^[a-z][a-z0-9-]{0,31}$"
+"""Same pattern as `factory.model.references.LAYER_ID_RE`, repeated because that module imports the
+protocol model, which imports this one."""
+_LayerId = Annotated[str, StringConstraints(pattern=_LAYER_ID_RE)]
 
 
 class ImportedFrom(StrictModel):
@@ -70,3 +74,22 @@ class MinerUse(StrictModel):
     audit_minimum: int = Field(default=50, ge=0)
     evidence: bool = False
     imports: Literal["allow", "deny", "audit"] = "deny"
+    layers: tuple[_LayerId, ...] = ()
+    """The layers mined automatically (empty: no layer filter). Omitted from serialisation when
+    empty, so protocol version hashes written before it existed do not change."""
+    on_demand: bool = False
+    """True lets the researcher's mining requests add works beyond `layers`. Omitted when false."""
+    order: Literal["id", "by-layer"] = "id"
+    """`by-layer` serves works by ring, then work id. Omitted when `id`."""
+
+    @model_serializer(mode="wrap")
+    def _defaults_say_nothing(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        """A use without layer fields serialises as it did before they existed."""
+        out: dict[str, Any] = handler(self)
+        if not self.layers:
+            out.pop("layers", None)
+        if not self.on_demand:
+            out.pop("on_demand", None)
+        if self.order == "id":
+            out.pop("order", None)
+        return out
