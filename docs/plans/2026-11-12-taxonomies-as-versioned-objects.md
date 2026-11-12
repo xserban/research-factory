@@ -390,8 +390,10 @@ Each row is one decision; the recommended option is first.
 - **Q2–Q10, Q12, Q13:** the recommended options are accepted ("the rest seem okay").
 - **Q11 (replaces the depth table):** every listed miner runs automatically on core and adjacent
   works; every other layer is mined on demand from the hub, for one work or a whole layer, through
-  the work queue and Process now; the researcher can move a work between layers (§4). Not asked:
-  which miners a request runs; the default is every miner listed with `on_demand`.
+  the work queue and Process now; the researcher can move a work between layers (§4). A request
+  runs every miner listed with `on_demand` (confirmed by the researcher).
+- **Timing of the schema-first commit (I1):** when the pilot can pause, i.e. when no miner wave or
+  other session is writing; the runtime worktree then moves to `main` and every session reconnects.
 
 ## 9. After the rulings (sketch, not tasks yet)
 
