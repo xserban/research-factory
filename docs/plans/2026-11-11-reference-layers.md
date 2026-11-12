@@ -288,3 +288,19 @@ venue-like) and has a DOI or arXiv id, and (b) core items before a snowball roun
 The full re-resolve was stopped after 195 extractions: identifier entries resolved 3,359 of 4,006
 (from 1,122), 647 left; one lookup run was left open by the interrupt (started, not finished).
 Assessable items rose to 4,671 (rules v4).
+
+### State at the hand-over to unification (2026-11-12, 11:00)
+
+- Pilot: scheme v1, v2 and v3 recorded. v3 = v2 plus round-4 rulings from labelling: bibliometrics and
+  citation analysis, evolutionary computation and quality-diversity search, and psychology-style
+  studies of cognitive biases in LLMs are off-topic; general LLM and agent benchmarks (reasoning,
+  coding, tool and skill use; SWE-bench) are background; robot labs without an LLM are background (R3.5,
+  item 8). v3 reuses the v2 sample through `inner_sample.seed_version` = 2 (verified identical, 50 items).
+- Researcher's 50 v2-sample labels: `research-factory-pilot/reference-layers-calibration-labels-v2.tsv`
+  (by row number of `reference-layers-calibration-sample-v2.tsv`); 9 recorded under v3, 41 to record
+  (the recording script stopped because another worktree at projection 77 rebuilt the index on each
+  call). Distribution: off-topic 20, adjacent 8, background 8, core 6, applied 4, benchmark 4.
+- Next: after `plan-8-suggest-select` takes this branch and every config points at one worktree,
+  record the 41 labels (`record_label`, human actor, scheme 3), run the Haiku calibration (50 items),
+  report kappa overall and per ring, then the title pass under v3 (v1 assignments are not reused).
+- Snowball: core only (R3.7); the 8 pending screenings still gate a round.
