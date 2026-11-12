@@ -4,8 +4,10 @@ Unresolved, a `cannot-assess` work still promotes (as before); a resolution with
 its outcome, and an exclusion needs an EX criterion. At title/abstract nothing changes.
 """
 
-from collections.abc import Callable, Mapping
+import unicodedata
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from typing import Any
 
 import pytest
 from typer.testing import CliRunner
@@ -31,7 +33,7 @@ from factory.sources.registry import SourceFactory
 from tests.cli_helpers import _env
 from tests.document_helpers import promoted_works
 from tests.fulltext_helpers import _convert, _decide_at, _world
-from tests.helpers import _of_type
+from tests.helpers import _of_type, openalex_item
 
 FT = ScreeningStage.FULL_TEXT
 TA = ScreeningStage.TITLE_ABSTRACT
@@ -47,10 +49,15 @@ class _Passes:
     single: list[str]
 
 
-@pytest.fixture
-def passes(project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor) -> _Passes:
+def _open_passes(
+    project: Project,
+    agent: Actor,
+    human: Actor,
+    mock_sources: SourcesFor,
+    extra_items: Sequence[dict[str, Any]] = (),
+) -> _Passes:
     """Full-text passes open on a partly dual-coded plan; no full-text decision yet."""
-    _world(project, agent, human, mock_sources, dual_sample=0.2)
+    _world(project, agent, human, mock_sources, dual_sample=0.2, extra_items=extra_items)
     promoted = promoted_works(project)
     _convert(project, promoted)
     draw_calibration(project, project.system_actor(), random_seed=3, stage=FT)
@@ -65,6 +72,11 @@ def passes(project: Project, agent: Actor, human: Actor, mock_sources: SourcesFo
     single = [w for w in ordinary if w not in sample]
     assert dual and single, "the world needs dual-coded and single-pass works"
     return _Passes(protocol.protocol_id, dual, single)
+
+
+@pytest.fixture
+def passes(project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor) -> _Passes:
+    return _open_passes(project, agent, human, mock_sources)
 
 
 def _decide_all(
@@ -187,3 +199,29 @@ def test_cli_resolves_a_cannot_assess_work(
     assert result.exit_code == 0, result.stderr
     assert result.stdout == f"resolved {work} (exclude)\n"
     assert final_outcomes(project, stage=FT)[work] is Outcome.EXCLUDED
+
+
+KOREAN = openalex_item(
+    title="Agents 과학 discovery",
+    author="Minsu Ahn",
+    published="2021-01-01",
+    openalex_id="W901",
+    doi="10.1000/k1",
+)
+
+
+def test_resolve_accepts_a_decomposed_work_named_composed(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    """The stored id of a work with a Hangul title word is decomposed (jamo); the researcher
+    types or pastes it composed. The resolution is recorded under the stored spelling."""
+    passes = _open_passes(project, agent, human, mock_sources, extra_items=[KOREAN])
+    (stored,) = [w for w in passes.dual + passes.single if unicodedata.normalize("NFC", w) != w]
+    _decide_all(project, agent, passes, stored)
+    composed = unicodedata.normalize("NFC", stored)
+    resolve_disagreement(
+        project, human, composed, "exclude", "EX01", "not in English", Channel.CLI, stage=FT
+    )
+    (event,) = _of_type(project, RESOLVED)
+    assert event.payload["work_id"] == stored
+    assert final_outcomes(project, stage=FT)[stored] is Outcome.EXCLUDED

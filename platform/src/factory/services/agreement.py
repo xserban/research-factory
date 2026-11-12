@@ -44,6 +44,7 @@ Invariants:
 
 from __future__ import annotations
 
+import unicodedata
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Literal
@@ -254,7 +255,8 @@ def resolve_disagreement(
     exclusion needs an EX criterion. Refused, with nothing written, for an agent actor, a work
     that is not open for resolution, an unknown criterion, an invalid verdict or reason, an
     MCP-relayed resolution from a session that has joined a pass, or, on a hosted project, a member
-    of either pass of the stage.
+    of either pass of the stage. `work_id` matches after NFC normalisation (IDEA-49): an id typed
+    composed names the one resolvable work stored decomposed, and is recorded as stored.
     """
     require_pass_stage(stage)
     with project.index.exclusive():
@@ -273,7 +275,9 @@ def resolve_disagreement(
                 agent_text="disagreements are resolved by a human",
             )
         )
-        if work_id not in _open_for_resolution(screen) | _cannot_assess_open(screen):
+        resolvable = _open_for_resolution(screen) | _cannot_assess_open(screen)
+        work_id = _as_stored(work_id, resolvable)
+        if work_id not in resolvable:
             issues.append(
                 ValidationIssue(
                     "work_id",
@@ -828,6 +832,16 @@ def _open_for_resolution(screen: _Screen) -> set[str]:
         if a is not None and a.verdict is Verdict.UNSURE and work not in screen.resolutions:
             open_works.add(work)
     return open_works
+
+
+def _as_stored(work_id: str, works: set[str]) -> str:
+    """`work_id` spelled as stored: itself when in `works`, else the one work of `works` whose
+    NFC form equals its NFC form, else itself unchanged (and refused as before)."""
+    if work_id in works:
+        return work_id
+    folded = unicodedata.normalize("NFC", work_id)
+    matches = [w for w in works if unicodedata.normalize("NFC", w) == folded]
+    return matches[0] if len(matches) == 1 else work_id
 
 
 def _cannot_assess_open(screen: _Screen) -> set[str]:
