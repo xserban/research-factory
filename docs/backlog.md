@@ -520,7 +520,7 @@ Status: built, reviewed (Sonnet review, fixes 714d31b), not tested: 11 tests wri
 - Next step needs: a test run of `test_site_catalog.py`; one look at the page with the researcher; rulings on IDEA-61 (which of the 46 orphan tools get a skill or are marked researcher- or CLI-facing). No other branch is needed.
 
 ### IDEA-61 — Catalog follow-ups: sharper flag rules, orphan tools, review minors
-Status: items 1, 2 and 3 (marker) built on branch `idea-61-catalog`, not reviewed; catalog tests run and pass (21); group C and three marker mismatches await rulings (2026-11-12) · Added: 2026-11-12 · Slice: — · Depends on: IDEA-60
+Status: items 1–3 and the cheap minors built on branch `idea-61-catalog`; group C and mismatch rulings applied (2026-11-12); catalog tests pass (22); review and merge follow · Added: 2026-11-12 · Slice: — · Depends on: IDEA-60
 **What:**
 1. Clash rule: pair sentences only when both govern the same act. "Do not read … `check`" (pass independence in rf-appraise, rf-contributions, rf-extract) and "Never act on a `check` finding to clear it" (rf-run) are not opposites of "call `check` and report every finding" (rf-search). These 4 flags are false positives.
 2. Unknown-input rule: in "`mine_resolve` with `a`, `b` or `neither`" (rf-mine line 46) the backticked words are values, not inputs. Check them against the schema's enum values before flagging. These 3 flags are false positives.
@@ -563,6 +563,13 @@ Status: items 1, 2 and 3 (marker) built on branch `idea-61-catalog`, not reviewe
 | `watch_run` | work:run | Recorded decision to leave it unnamed: rf-living runs `factory watch run` (CLI) in scheduled sessions; a new marker kind `cli-equivalent` would cover it. |
 | `feed_run` | work:run | Recorded decision to leave it unnamed: the feed runs from the hub's "Process now" and its cadence; or name it in rf-living beside the watch cycle. |
 | `reference_layer_record` | — | Resolved: false positive of the backtick rule (above); named by rf-reference-layers. |
+
+**Rulings applied (2026-11-12, researcher accepted the recommendations):**
+- Mismatches: `grey_search_report` unmarked and named in rf-search (new section "Grey literature"); `extract_agreement` moved to read-only; `lead_decide` kept human-only, its access-row difference declared in `ACCEPTED_MISMATCH`.
+- Group C, skill mentions: `draft_reorder`, `draft_repin` (rf-write steps 10–11); `draft_release` named in rf-write's "Stopping and human steps" as another session's step, since rf-write already says releasing is not the writer's; `contradiction_propose` (rf-ideate step 1); `library_adoptable`, `library_adopt` (rf-run, stage `full-text`); `review_request` (rf-protocol step 8).
+- Group C, markers: `mine_import`, `notice_assess` human-only; `watch_run`, `feed_run` a new kind `scheduled` (run by a schedule, the CLI or the hub).
+- `hypothesis_register`: changed from the proposal. Naming it in rf-critic would contradict rf-critic ("whether a hypothesis is registered is not yours to decide") and rf-ideate ("never register"); marked human-only like `lead_decide`, with its gate difference declared in `ACCEPTED_MISMATCH`.
+- Result on the pilot copy: 173 tools, 27 skills, 98 examples, 37 marked, 0 orphan tools, 1 flag (orphan skill `rf-portfolio-page`). The skill edits change the `name@sha8` of rf-write, rf-ideate, rf-run, rf-protocol and rf-search.
 
 **Why:** the first build's 7 conflict flags were all false positives, which teaches the researcher to ignore the flags table. The orphan count hides which tools have no instructions.
 **Rigour notes:** the rules stay mechanical; the platform still never rules on a clash.

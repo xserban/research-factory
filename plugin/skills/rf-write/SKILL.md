@@ -55,10 +55,15 @@ citation key.
    `single-source-generalisation`, `off-outline`) is shown to the verifier: rewrite the sentence
    when you can. Check the draft with `draft_status`.
 9. To revise a sentence, write a new one whose `supersedes` names it.
+10. When the researcher asks for another order of a section, set it with `draft_reorder`: `order`
+    lists every live sentence of the section, once each.
+11. When the outline has changed, pin the draft to the fresh one with `draft_repin` and pull
+    slots again with `draft_next`; the old slot tasks are retired.
 
 ## Stopping and human steps
 
-Verifying, auditing, rendering and releasing a draft are other steps and other sessions. If a call
+Verifying, auditing, rendering and releasing a draft (`draft_release`, through the gate
+`writing.release`) are other steps and other sessions. If a call
 is refused, report the reason verbatim and stop; do not retry with altered input to obtain a
 different answer.
 

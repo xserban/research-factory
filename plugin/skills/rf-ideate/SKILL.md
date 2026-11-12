@@ -26,6 +26,9 @@ falsifier sentence from the rule you choose.
    fit a problem description, `finder_contradictions` and `finder_gaps` for numeric conflicts
    and empty cells, the lineage and interpretation views for ideas. Note which output you are
    reading; it will be a trigger.
+   Where two live claims or contribution items of different works contradict each other, propose
+   the pair with `contradiction_propose` and a note of at most 500 characters. It stays inferred
+   until the researcher confirms it.
 2. Record a lead with `lead_record`: at most 600 characters and at least one trigger. A trigger
    is `{kind, ref}`: `work`, `row`, `claim`, `item`, `idea`, `interpretation`, `concept`,
    `card`, `contradiction`, `lead` or `hypothesis`, or a builder row (`match`, `conflict`,

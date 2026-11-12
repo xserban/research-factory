@@ -46,6 +46,15 @@ round and routes the new works back into screening.
 - Never retry a refused round by changing what the platform computed. Report the refusal
   message to the researcher.
 
+## Grey literature (`grey_search_report`)
+
+- Only for a source the protocol's `grey_sources` declares as `agent-web-search`, and only when the
+  researcher asks: run the web search yourself, then report it with `grey_search_report`, giving
+  that entry as `target`, the `engine`, the `query` as you ran it, a `timestamp` in ISO 8601 with a
+  zone, the `urls` you took from it and the `stopping_rule` you followed.
+- The platform cannot verify the search and enrols no work from it: the links go to the inbox.
+  Report the search exactly as it ran.
+
 ## Supplied links (`inbox_add`)
 
 - Use `inbox_add` with `channel` `agent` only when a document you read cites a paper the corpus

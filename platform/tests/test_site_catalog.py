@@ -55,6 +55,7 @@ def _derive(
         0,
         root=tmp_path,
         markers=markers if markers is not None else {},
+        accepted={},
     )
 
 
@@ -320,8 +321,28 @@ def test_declared_markers_cover_the_ruling() -> None:
     from factory.services.site_catalog import MARKER_KINDS, MARKERS
 
     assert sum(1 for k in MARKERS.values() if k == "read-only") == 24
-    assert sum(1 for k in MARKERS.values() if k == "human-only") == 9
+    assert sum(1 for k in MARKERS.values() if k == "human-only") == 11
+    assert sum(1 for k in MARKERS.values() if k == "scheduled") == 2
     assert set(MARKERS.values()) <= set(MARKER_KINDS)
+    assert "grey_search_report" not in MARKERS
+
+
+def test_accepted_mismatch_is_not_flagged(tmp_path: Path) -> None:
+    _skill(tmp_path, "rf-a", "frame", "Nothing.\n")
+    tools = [_tool("lead_decide"), _tool("grey_search_report")]
+    markers = {"lead_decide": "human-only", "grey_search_report": "read-only"}
+    cat = derive_catalog(
+        tools,
+        tmp_path / "skills",
+        None,
+        [t.name for t in tools],
+        0,
+        root=tmp_path,
+        markers=markers,
+        accepted={"lead_decide": "ruled"},
+    )
+    mismatched = [f.message for f in cat.flags if f.code == "marker-access-mismatch"]
+    assert len(mismatched) == 1 and "grey_search_report" in mismatched[0]
 
 
 def test_tools_deduplicated_when_listed_twice(tmp_path: Path) -> None:

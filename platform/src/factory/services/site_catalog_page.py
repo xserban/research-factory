@@ -9,6 +9,7 @@ from pathlib import Path
 
 from factory.services.context import Project
 from factory.services.site_catalog import (
+    ACCEPTED_MISMATCH,
     LIFECYCLE,
     MARKER_KINDS,
     Catalog,
@@ -139,7 +140,12 @@ def render(catalog: Catalog, built_at: str, code: str) -> str:
         [
             t.name,
             t.marker,
-            MARKER_KINDS.get(t.marker or "", ""),
+            MARKER_KINDS.get(t.marker or "", "")
+            + (
+                f" Access row differs: {ACCEPTED_MISMATCH[t.name]}"
+                if t.name in ACCEPTED_MISMATCH
+                else ""
+            ),
             t.access or "no access row",
             ", ".join(t.skills) or "none",
         ]

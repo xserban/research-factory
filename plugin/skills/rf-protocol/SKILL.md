@@ -67,6 +67,10 @@ research-factory-old `stages/02-protocol.md` and `RIGOR-MODES.md`.
    - The platform computes the stale decisions from the effects.
    Use `protocol_deviation` for a protocol that was not followed. Deviations are kept separate from
    amendments and need a `reason`.
+   Where the platform refuses an agent the amendment, the record or the deviation itself (a hosted
+   project, where an agent only proposes), file it with `review_request` instead: `kind` names the
+   tool's act and `proposal` holds what that tool takes. Approval applies nothing; a holder of the
+   role runs the tool.
 9. Search. `search_run` takes no protocol argument; the current ready protocol is implicit. In
    `pilot` or `systematic` mode, a query the protocol does not plan needs `protocol_deviation`
    first. Then pass the returned `deviation_id` to `search_run`. In `exploratory` mode no

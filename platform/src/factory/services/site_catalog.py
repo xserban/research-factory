@@ -62,6 +62,7 @@ FLAG_CODES: Final = (
 MARKER_KINDS: Final[dict[str, str]] = {
     "read-only": "Read-only status, list or view tool: needs no skill (IDEA-61 ruling, group A, 2026-11-12).",
     "human-only": "Human-only act: deliberately unnamed in agent skills (IDEA-61 ruling, group B, 2026-11-12).",
+    "scheduled": "Run by a schedule, the CLI or the hub, not by a skill: deliberately unnamed (IDEA-61 ruling, group C, 2026-11-12).",
 }
 """The kinds of marker and why a marked tool is not counted as an orphan."""
 
@@ -87,9 +88,9 @@ _READ_ONLY: Final = [
     "review_list",
     "reference_layer_status",
     "snowball_core_list",
-    "grey_search_report",
     "export_bibliography",
     "graph_export",
+    "extract_agreement",
 ]
 _HUMAN_ONLY: Final = [
     "calibration_label",
@@ -100,14 +101,26 @@ _HUMAN_ONLY: Final = [
     "audit_sample",
     "extract_audit_record",
     "extract_audit_sample",
-    "extract_agreement",
+    "mine_import",
+    "notice_assess",
+    "hypothesis_register",
 ]
+_SCHEDULED: Final = ["watch_run", "feed_run"]
 MARKERS: Final[dict[str, str]] = {
     **{t: "read-only" for t in _READ_ONLY},
     **{t: "human-only" for t in _HUMAN_ONLY},
+    **{t: "scheduled" for t in _SCHEDULED},
 }
-"""Tool -> marker kind, declared from the researcher's ruling on IDEA-61 (item 3). Edited by hand
-only on a ruling; never derived from a tool's name. `marker_access` cross-checks each entry."""
+"""Tool -> marker kind, declared from the researcher's rulings on IDEA-61 (item 3 and its group C
+and mismatch rulings). Edited by hand only on a ruling; never derived from a tool's name.
+`marker_access` cross-checks each entry."""
+
+ACCEPTED_MISMATCH: Final[dict[str, str]] = {
+    "lead_decide": "Gated agent act kept human-only: no skill covers acting at the gate (IDEA-61 ruling, 2026-11-12).",
+    "hypothesis_register": "Gated agent act kept human-only: rf-ideate and rf-critic leave registration to the researcher (IDEA-61 ruling, 2026-11-12).",
+}
+"""Markers whose disagreement with the access row was ruled on: no `marker-access-mismatch` flag;
+the page shows the reason."""
 
 _TOOL_SHAPE = r"[a-z]+(?:_[a-z]+)+"
 _BACKTICK = re.compile(r"`((?:[^`\n]|\n(?![ \t]*\n))+)`")
@@ -454,11 +467,13 @@ def derive_catalog(
     prompts: int | None,
     root: Path | None = None,
     markers: dict[str, str] | None = None,
+    accepted: dict[str, str] | None = None,
 ) -> Catalog:
     """The catalog. `registered` are the AST names of the `@server.tool()` functions; `root` is
     the base for the file paths shown (default: the skills' parent's parent); `markers` defaults to
-    `MARKERS`."""
+    `MARKERS` and `accepted` (mismatches ruled on) to `ACCEPTED_MISMATCH`."""
     markers = MARKERS if markers is None else markers
+    accepted = ACCEPTED_MISMATCH if accepted is None else accepted
     skipped: dict[str, str] = {}
     spec_by_name = {t.name: t for t in tools}
     listed = [t.name for t in tools]
@@ -692,7 +707,7 @@ def derive_catalog(
         )
         if marker is not None:
             mismatch = marker_access(spec.name, marker)
-            if mismatch:
+            if mismatch and spec.name not in accepted:
                 flags.append(
                     Flag(
                         code="marker-access-mismatch",
