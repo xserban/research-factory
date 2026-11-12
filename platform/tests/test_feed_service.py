@@ -31,6 +31,7 @@ from factory.services.core_works import (
 )
 from factory.services.dedup_incremental import held_matches
 from factory.services.feed import (
+    _entries,
     _reference_ids,
     configure,
     current_config,
@@ -621,3 +622,37 @@ def test_run_all_exit_status(
         clock=clock, today=TODAY,
     )  # fmt: skip
     assert refused.exit_code == 2
+
+
+def test_entry_version_comes_from_the_raw_record_not_the_normalised_id() -> None:
+    def build(identifiers: Identifiers, raw_ref: str | None) -> Work:
+        return Work.build(
+            title="T",
+            identifiers=identifiers,
+            provenance=[
+                Provenance(
+                    source="arxiv",
+                    run_id="run_00000000000000000000000000",
+                    query_id="qry_00000000000000000000000000",
+                    at=T0,
+                    raw_blob="sha256:" + "a" * 64,
+                    raw_ref=raw_ref,
+                )
+            ],
+        )
+
+    raw = "http://arxiv.org/abs/2401.01234v2"
+    # As sources/arxiv.py builds it: versioned raw id as arxiv, url and raw_ref.
+    adapter = build(Identifiers(arxiv=raw, url=raw), raw)
+    assert adapter.identifiers.arxiv == "2401.01234"  # normalised, version stripped
+    [entry], _skipped = _entries([adapter])
+    assert entry.version == "v2" and entry.entry_id == "2401.01234"
+    # Only the url survives, or only the provenance ref survives.
+    assert _entries([build(Identifiers(arxiv=raw, url=raw), None)])[0][0].version == "v2"
+    assert _entries([build(Identifiers(arxiv=raw), raw)])[0][0].version == "v2"
+    # Unversioned id: None.
+    plain = "http://arxiv.org/abs/2401.01234"
+    assert _entries([build(Identifiers(arxiv=plain, url=plain), plain)])[0][0].version is None
+    # A non-arXiv url is never read as a version.
+    other = build(Identifiers(arxiv="2401.01234", url="https://example.org/paper-v3"), None)
+    assert _entries([other])[0][0].version is None

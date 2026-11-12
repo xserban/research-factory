@@ -419,11 +419,25 @@ def _entries(works: Sequence[Work]) -> tuple[list[_Entry], int]:
         if entry_id is None or not _ENTRY.match(entry_id) or not work.title.strip():
             skipped += 1
             continue
-        match = _VERSION.search(raw.strip()) if raw else None
-        found.setdefault(
-            entry_id, _Entry(entry_id, None if match is None else f"v{match.group(1)}", work)
-        )
+        found.setdefault(entry_id, _Entry(entry_id, _entry_version(work), work))
     return [found[k] for k in sorted(found)], skipped
+
+
+def _entry_version(work: Work) -> str | None:
+    """The arXiv version ("v2") the work's record states, or None if none survives.
+
+    `Identifiers.arxiv` is normalised with the version stripped, so it cannot carry it. The
+    arXiv adapter keeps the raw `atom:id` (versioned) as the `raw_ref` of its provenance entry
+    and, again, as `identifiers.url`; the provenance reference is read first (it is the source's
+    own record of what it returned and is not rewritten by later merges), then the URL.
+    """
+    candidates = [p.raw_ref for p in work.provenance if p.source == SOURCE]
+    candidates.append(work.identifiers.url)
+    for candidate in candidates:
+        match = _VERSION.search(candidate.strip()) if candidate else None
+        if match is not None and normalize_arxiv(candidate or "") == work.identifiers.arxiv:
+            return f"v{match.group(1)}"
+    return None
 
 
 def _entry_record(entry: _Entry, held: str | None) -> dict[str, JsonValue]:
