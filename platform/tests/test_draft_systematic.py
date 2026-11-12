@@ -16,6 +16,7 @@ from factory.clock import FixedClock
 from factory.config import Settings
 from factory.errors import FactoryValidationError
 from factory.events.envelope import Actor
+from factory.model.decisions import DecisionLevel
 from factory.model.drafts import (
     AuditLabel,
     DraftAuditReport,
@@ -44,7 +45,7 @@ from tests.draft_b_helpers import (
     verify_one,
     writer,
 )
-from tests.helpers import pilot_protocol_spec, record_pilot_question
+from tests.helpers import bind_ids, pilot_protocol_spec, record_pilot_question
 
 SESSION = "01JZ9Q3K5M7N8P0R2S4T6V8W0X"
 ULID = "01JZ9Q3K5M7N8P0R2S4T6V8W"
@@ -148,7 +149,13 @@ def with_reviewer(
     if gates:  # a protocol that lets agents pass the gate: it may not reach `systematic`
         entries = (GatePolicyEntry(gate="writing.release", policy=PolicyKind.AGENT),)
         spec = spec.model_copy(update={"gate_policies": GatePolicies(entries=entries)})
-    record_protocol(project, project.human_actor(), spec, ready=False)
+    record_protocol(
+        project,
+        project.human_actor(),
+        spec,
+        ready=False,
+        decision_ids=bind_ids(project, agent, DecisionLevel.PROTOCOL),
+    )
 
 
 def audited(project: Project, draft: str, *, wrong: int = 0) -> None:
@@ -231,7 +238,11 @@ def test_systematic_refuses_stale(
     verify_all(project, sd.draft)
     audited(project, sd.draft)
     monkeypatch.setattr(stats, "confirmed_ideas", lambda _p: ["a"])
-    assert refusal(project, sd.draft, project.human_actor()) == [("stale", "2 stale sentence(s)")]
+    # both sentences are stale, so none is live-supported either (cc3a08f)
+    assert refusal(project, sd.draft, project.human_actor()) == [
+        ("audit", "no live sentence is supported"),
+        ("stale", "2 stale sentence(s)"),
+    ]
 
 
 def test_systematic_needs_the_audit(project: Project, sd: SysDraft, agent: Actor) -> None:

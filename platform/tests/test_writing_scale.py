@@ -11,10 +11,12 @@ leaves open.
 
 from __future__ import annotations
 
+import hashlib
 import re
 import time
 
 import pytest
+from sqlalchemy import text
 
 from factory.events.envelope import Actor
 from factory.model.drafts import DraftKind, SentenceClass
@@ -34,10 +36,28 @@ COPIES = 400  # per stored row: 12 works x 2 passes x 400 = 9,600 live rows
 LIMIT_SECONDS = 120.0
 
 
+def _valid_row_keys(project: Project) -> None:
+    """`_multiply` suffixes the copy number onto each row key, which `AuditItemRef` (the evidence
+    outline reads the audit population) refuses as no longer `rk_` plus 12 hex digits. The new key
+    is a hash of the old, so the rows of pass A and pass B still share it."""
+    with project.index.connect() as conn:
+        keys = [
+            str(k)
+            for (k,) in conn.execute(text("SELECT DISTINCT row_key FROM extraction_rows")).all()
+            if not re.fullmatch(ROW_KEY_RE, str(k))
+        ]
+        conn.execute(
+            text("UPDATE extraction_rows SET row_key = :new WHERE row_key = :old"),
+            [{"old": k, "new": "rk_" + hashlib.sha256(k.encode()).hexdigest()[:12]} for k in keys],
+        )
+        conn.commit()
+
+
 def test_real_path_cost(project: Project, ext_a: Actor, ext_b: Actor, declared: list[str]) -> None:
     run_both(project, ext_a, ext_b, lambda _w: [acc("2")])
     row = next(r for r in final_rows(project) if re.fullmatch(ROW_KEY_RE, r.row_key))
     rows = _multiply(project, COPIES)
+    _valid_row_keys(project)
     started = time.perf_counter()
     outline = build_outline(project)
     t_outline = time.perf_counter() - started

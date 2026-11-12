@@ -53,6 +53,7 @@ from tests.helpers import install_skill, open_session
 from tests.test_mcp_cards import _session
 from tests.writing_helpers import WWorld
 
+READER = "01JZ9Q3K5M7N8P0R2S4T6V8W31"
 AS = {"role": "verifier", "model": "claude-opus-5-5", "skill": "rf-verify"}
 runner = CliRunner()
 
@@ -95,6 +96,9 @@ async def test_verify_status_render_release_flow(
             assert recorded["ok"] is True, recorded
         done = await client.call("draft_verify_next", project="demo", draft_id=wd.draft, **AS)
         assert done["data"]["unit"] is None
+    # a session that verified the draft may not read its status or rendering (70b3d98): another does
+    _session(monkeypatch, READER)
+    async with open_session(settings, clock) as client:
         status = await client.call("draft_status", project="demo", draft_id=wd.draft)
         assert [s["status"] for s in status["data"]["sentences"]] == [
             "supported",
@@ -112,6 +116,10 @@ async def test_verify_status_render_release_flow(
             "rate": None,
             "above_ceiling": None,
             "outdated": False,
+            "all_drawn": 2,
+            "all_labelled": 2,
+            "all_incorrect": None,
+            "all_rate": None,
         }
         assert "flagged" not in repr(status["data"]["sentences"])  # the label stays withheld
         clean = await client.call("draft_render", project="demo", draft_id=wd.draft, mode="clean")
@@ -292,7 +300,15 @@ def test_cli_human_verifies_an_agents_sentence(
     settings: Settings, project: Project, wd: Written
 ) -> None:
     root = settings.root
-    args = ("draft", "verify", wd.draft, "--verdict", "unsupported", "--sentence-span", "Lorem")
+    args = (
+        "draft",
+        "verify",
+        wd.draft,
+        "--verdict",
+        "unsupported",
+        "--sentence-span",
+        "Lorem is described",
+    )
     code, out, _ = _run(root, *args)
     assert code == 0 and LOREM in out and "recorded svd_" in out
     verdicts = [
@@ -316,9 +332,22 @@ def test_cli_human_verifies_an_agents_sentence(
 
 def test_cli_verify_refusals(settings: Settings, project: Project, wd: Written) -> None:
     root = settings.root
-    code, _, err = _run(root, "draft", "verify", wd.draft, "--verdict", "maybe")
+    # the spans are asked for after the unit is shown (bf5c7d0): pass them, or no refusal is reached
+    both = ("--sentence-span", "Lorem is described", "--support-span", "x=Lorem ipsum")
+    code, _, err = _run(root, "draft", "verify", wd.draft, "--verdict", "maybe", *both)
     assert code != 0 and "verdict" in err
-    code, _, err = _run(root, "draft", "verify", wd.draft, "--verdict", "partial")
+    code, _, err = _run(
+        root,
+        "draft",
+        "verify",
+        wd.draft,
+        "--verdict",
+        "partial",
+        "--sentence-span",
+        "",
+        "--support-span",
+        "x=Lorem ipsum",
+    )
     assert code != 0 and "sentence_span" in err
 
 

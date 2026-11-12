@@ -170,7 +170,8 @@ def test_pilot_marks_flagged_and_unchecked_but_releases(project: Project, agent:
 
 def test_pilot_rate_above_the_ceiling_is_advisory(project: Project, agent: Actor) -> None:
     """The refusals an agent can reach do not depend on an audit's result."""
-    draft = stat_draft(project, 2)
+    # a sentence the audit marks incorrect is no longer supported (cc3a08f), so one stays unlabelled
+    draft = stat_draft(project, 3)
     verify_all(project, draft)
     audited(project, draft, wrong=2)
     assert release(project, draft, actor=agent)

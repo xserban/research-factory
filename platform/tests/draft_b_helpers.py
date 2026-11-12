@@ -28,7 +28,7 @@ CLAIM, SYNTH, STRUCT = SentenceClass.CLAIM, SentenceClass.SYNTHESIS, SentenceCla
 INTERP = SentenceClass.INTERPRETIVE
 LOREM = "Lorem is described in the method section"
 IPSUM = "Ipsum is described in the second section"
-QUOTE = "Lorem ipsum"
+QUOTE = "Lorem ipsum dolor sit amet."
 WRITER_MODEL = "claude-sonnet-5-5"
 VERIFIER_MODEL = "claude-opus-5-5"
 
@@ -104,7 +104,7 @@ def wd(project: Project, ww: WWorld) -> Written:
 
 def verdict_on(unit: VerifyUnit, verdict: Verdict = Verdict.SUPPORTED) -> VerdictInput:
     """A verdict with substrings that hold for `unit`."""
-    span = None if verdict is Verdict.SUPPORTED else unit.text.split()[0]
+    span = None if verdict is Verdict.SUPPORTED else unit.text
     support = unit.supports[0]
     spans = (
         []

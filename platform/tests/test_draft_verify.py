@@ -136,7 +136,16 @@ def test_unit_content_has_no_writer_material(project: Project, wd: Written) -> N
     unit = verify_next(project, wd.draft, actor=verifier())
     assert unit is not None
     dumped = unit.model_dump()
-    assert set(dumped) == {"sentence_id", "text", "cls", "context_previous", "supports", "task_id"}
+    # `flags` joined the unit in 921c057: the platform's flags, a pointer and never a verdict
+    assert set(dumped) == {
+        "sentence_id",
+        "text",
+        "cls",
+        "context_previous",
+        "supports",
+        "task_id",
+        "flags",
+    }
     assert unit.text == LOREM and unit.context_previous is None
     assert QUOTE in unit.supports[0].spans[0]
     assert "writer" not in repr(dumped) and WRITER_MODEL not in repr(dumped)
@@ -366,7 +375,16 @@ def _forged(
     }
     body.update(over)
     payload = SentenceVerified.model_validate(body)
-    project.record([project.events.make("draft.verified", payload, actor, input_blob=blob)])
+    event = project.events.make("draft.verified", payload, actor, input_blob=blob)
+    if blob is not None and not project.blobs.exists(blob):
+        # The writer refuses a missing blob (a67d972); a hand-edited log is how one gets in.
+        path = project.paths.events_dir / actor.id / f"{actor.session}.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("ab") as handle:
+            handle.write(event.to_line())
+        project.index.sync()
+    else:
+        project.record([event])
     return payload
 
 

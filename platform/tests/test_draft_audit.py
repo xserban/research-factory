@@ -238,7 +238,7 @@ def test_a_later_label_replaces_the_earlier(project: Project) -> None:
 def test_report_counts_and_ceiling(project: Project) -> None:
     draft = new_draft(project, 3)
     assert audit_report(project, draft) == DraftAuditReport(
-        drawn=0, labelled=0, incorrect=0, rate=None, above_ceiling=None
+        drawn=0, labelled=0, incorrect=0, rate=None, above_ceiling=None, all_incorrect=0
     )
     draw_audit(project, draft)
     label_all(project, draft, wrong=1)
