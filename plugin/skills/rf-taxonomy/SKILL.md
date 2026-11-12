@@ -39,8 +39,9 @@ average, hedge or write both into a `single` dimension.
 
 ## Writing a change proposal
 
-Proposals are written when asked, from the cluster and disagreement views (`mine_disagreements`,
-the coverage and `other` listings of the taxonomy). Call `taxonomy_propose(project, taxonomy,
+Proposals are written when asked, from the disagreement and coverage views (`mine_disagreements`,
+`taxonomy_coverage` and the `other` rows of the taxonomy). Clusters are not built yet; leave
+`cluster_id` empty. Call `taxonomy_propose(project, taxonomy,
 base_version, kind, targets, drafts, works, rows, cluster_id, rationale)`; it records a proposal
 against version N, for the researcher to settle into version N+1.
 
@@ -65,6 +66,6 @@ states what you saw and why the change follows from it.
 - A proposal is a suggestion; the researcher decides, and only a registered version changes the
   taxonomy. Do not register, and do not treat a proposal as in force.
 - Counts, rates and coverage are computed by the platform; never type them into a rationale as
-  findings. Cite the cluster or row ids and let the platform's numbers speak.
+  findings. Cite the row ids and let the platform's numbers speak.
 - Record through the tools only; if a call is refused, read the structured errors and fix it.
 - Never use calibration labels you were not shown, and never ask for them.
