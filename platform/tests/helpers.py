@@ -437,7 +437,10 @@ def _negative_item(k: int) -> dict[str, Any]:
 
 
 def _random_item(k: int) -> dict[str, Any]:
-    return _screen_work(200 + k, doi=f"10.1000/r{k}", title=f"Random {k}")
+    # Zero-padded so no two titles reach the dedup cascade's fuzzy threshold ("Random 1" and
+    # "Random 10" score 94 with the same author and year): screening waits for dedup, and these
+    # works are meant to be distinct.
+    return _screen_work(200 + k, doi=f"10.1000/r{k}", title=f"Random {k:04d}")
 
 
 def _screen_work(n: int, *, doi: str, title: str) -> dict[str, Any]:
