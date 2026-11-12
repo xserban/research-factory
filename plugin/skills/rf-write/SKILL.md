@@ -1,6 +1,7 @@
 ---
 name: rf-write
 description: Use when a draft (related work, review, grant background or horizon note) is to be written sentence by sentence from the verified material of a project, in a Claude Code session that did not read a screening or extraction pass.
+stage: [write]
 ---
 
 # rf-write

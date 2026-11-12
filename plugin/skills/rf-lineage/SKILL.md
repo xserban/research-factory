@@ -1,6 +1,7 @@
 ---
 name: rf-lineage
 description: Use when recorded contribution items of the included works must be turned into lineage relations (builds-on, improves-on) between works, or into named ideas, as proposals for the researcher to confirm, in a Claude Code session that did not read a contribution or screening pass.
+stage: [understand]
 ---
 
 # rf-lineage

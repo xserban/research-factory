@@ -1,6 +1,7 @@
 ---
 name: rf-extract
 description: Use when the included works of a ready protocol must be extracted into schema rows (and, in pass A, claims) from their pinned converted full text, as pass A or pass B of the dual extraction, in a Claude Code session dedicated to that pass.
+stage: [extract]
 ---
 
 # rf-extract

@@ -1,6 +1,7 @@
 ---
 name: rf-cards
 description: Use when method cards (for a confirmed lineage idea or a work) or problem descriptions (for the project's question) must be drafted as verified property assertions, in a Claude Code session that did not read a screening or extraction pass.
+stage: [understand]
 ---
 
 # rf-cards

@@ -1,6 +1,7 @@
 ---
 name: rf-synthesize
 description: Use when a synthesis page about the corpus (one technique, one lifecycle stage, one field of science, or the whole corpus) must be written from the project's recorded, quoted miner rows and recorded in the project, in a Claude Code session that did not run a screening or extraction pass.
+stage: [understand]
 ---
 
 # rf-synthesize

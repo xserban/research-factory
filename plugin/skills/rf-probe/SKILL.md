@@ -1,6 +1,7 @@
 ---
 name: rf-probe
 description: Use when a recorded question must be checked for searchability before a protocol is drafted, using known in-scope and out-of-scope papers (seeds) and candidate queries.
+stage: [frame]
 ---
 
 # rf-probe

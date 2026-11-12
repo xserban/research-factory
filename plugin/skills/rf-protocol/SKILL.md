@@ -1,6 +1,7 @@
 ---
 name: rf-protocol
 description: Use when a probed question must become a versioned review protocol with parented eligibility criteria, sources, search strategy and screening plan, or when a ready protocol needs an amendment or a deviation is recorded.
+stage: [frame]
 ---
 
 # rf-protocol

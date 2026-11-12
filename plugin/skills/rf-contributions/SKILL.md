@@ -1,6 +1,7 @@
 ---
 name: rf-contributions
 description: Use when the included works of a ready protocol must be read for what they build on, add, report and concede, as contribution items from their pinned converted full text, as pass A or pass B of the dual contribution reading, in a Claude Code session dedicated to that pass.
+stage: [extract]
 ---
 
 # rf-contributions

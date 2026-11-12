@@ -1,6 +1,7 @@
 ---
 name: rf-portfolio-page
 description: Use when the researcher asks for a shareable page of every project's stage, open work and pending human decisions: read the portfolio as JSON and publish it as a page. A reading step; it records nothing.
+stage: [cross]
 ---
 
 # rf-portfolio-page

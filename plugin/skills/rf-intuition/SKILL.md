@@ -1,6 +1,7 @@
 ---
 name: rf-intuition
 description: Use when a confirmed idea or a corpus paper needs a short, source-bound interpretation of why it works, to be reviewed by the researcher, in a Claude Code session that did not read a screening, extraction or contribution pass.
+stage: [understand]
 ---
 
 # rf-intuition

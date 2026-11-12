@@ -1,6 +1,7 @@
 ---
 name: rf-search
 description: Use when screening of the corpus has finished and agreement is recorded, and the included works must be chased backward and forward for further candidates.
+stage: [gather]
 ---
 
 # rf-search

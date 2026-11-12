@@ -1,6 +1,7 @@
 ---
 name: rf-run
 description: Use when a session starts on a project, or when it is unclear what comes next: states the order of stages, which session runs which pass, which steps are the researcher's, and how to read the next step from the tools.
+stage: [cross]
 ---
 
 # rf-run

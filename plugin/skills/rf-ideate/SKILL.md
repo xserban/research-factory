@@ -1,6 +1,7 @@
 ---
 name: rf-ideate
 description: Use when research ideas must be captured as leads tied to triggers in the corpus and turned into pre-registrable hypothesis drafts, in a Claude Code session that did not read a screening or extraction pass and is not the session that will review or register them.
+stage: [develop]
 ---
 
 # rf-ideate

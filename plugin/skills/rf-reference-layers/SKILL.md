@@ -1,6 +1,7 @@
 ---
 name: rf-reference-layers
 description: Assign relevance layers (earth rings) to the cited items of a project's reference lists, from titles, under the researcher's recorded scheme. Use when asked to run the title or abstract stage of reference layers, or the calibration pass.
+stage: [gather]
 version: 1
 ---
 

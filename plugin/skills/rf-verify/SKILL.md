@@ -1,6 +1,7 @@
 ---
 name: rf-verify
 description: Use when the sentences of a draft are to be checked against the spans they cite, in a Claude Code session that wrote no sentence of that draft and joined no screening or extraction pass.
+stage: [write]
 ---
 
 # rf-verify
