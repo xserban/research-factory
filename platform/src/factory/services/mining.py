@@ -359,10 +359,64 @@ def calibration_sample(project: Project, name: str) -> set[str]:
 def miner_population(project: Project, name: str) -> list[str]:
     """The works the listed miner `name` mines in production, in work-id order: its selector's
     population less the units drawn into a calibration (M-D ruling 2: a calibration unit is never
-    mined by a production pass, so no resolution can have fixed it)."""
-    _, _, spec = _listed(project, name)
+    mined by a production pass, so no resolution can have fixed it).
+
+    A `MinerUse` without `layers` is exactly that and nothing else. With `layers`, only the selector
+    population's works whose layer (`work_layers.layer_of`) is one of them are kept, at most
+    `selector.max_units` of them, and, when the use is `on_demand`, the works of the researcher's
+    mining requests are added: they are included works and are served even outside the selector
+    population or the layers (still with a default conversion, still never a calibration unit), and
+    they do not count towards `max_units`. Order is work id, or with `order: by-layer` by the
+    layer's ring in the latest scheme, then work id (pending and unknown layers last). Refused on
+    field `miners` when a derived layer miner (one projecting dimension zero) lists `layers`: it
+    classifies every work and is never layer-filtered. `work_layers` is imported here, not at the
+    top, because it imports this module."""
+    _, use, spec = _listed(project, name)
     apart = calibration_sample(project, name)
-    return [work for work, _ in population(project, spec.selector) if work not in apart]
+    if not use.layers:
+        return [work for work, _ in population(project, spec.selector) if work not in apart]
+    from factory.services.work_layers import (
+        layer_dimension,
+        layers_of,
+        requested_works,
+    )
+
+    if layer_dimension(project, spec) is not None:
+        raise FactoryValidationError(
+            [
+                ValidationIssue(
+                    "miners",
+                    f"miner {name} projects the layer dimension and is never layer-filtered; "
+                    "its protocol use must not list layers",
+                )
+            ]
+        )
+    layers = layers_of(project)
+    wanted = set(use.layers)
+    chosen: list[str] = []
+    for work in population_works(project, spec.selector.population):
+        if spec.selector.max_units is not None and len(chosen) >= spec.selector.max_units:
+            break
+        if work in apart or work not in layers or layers[work].layer not in wanted:
+            continue
+        if default_conversion(project, work) is not None:
+            chosen.append(work)
+    if use.on_demand:
+        extra = requested_works(project, name) - set(chosen) - apart
+        chosen.extend(w for w in extra if default_conversion(project, w) is not None)
+    if use.order == "by-layer":
+        from factory.services.reference_layers import current_scheme
+
+        scheme = current_scheme(project)
+        rings = {} if scheme is None else {d.id: d.ring for d in scheme.layers}
+        last = max(rings.values(), default=0) + 1
+
+        def key(work: str) -> tuple[int, str]:
+            found = layers.get(work)
+            return (rings.get(found.layer, last) if found and found.layer else last, work)
+
+        return sorted(chosen, key=key)
+    return sorted(chosen)
 
 
 # --- The generic mine path ---
