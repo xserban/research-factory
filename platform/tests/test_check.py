@@ -866,7 +866,8 @@ def test_pending_record_in_a_merge_is_not_a_conflict(
     _decide_outcomes(project, agent, human, protocol_id, excluded=set(), skip=absorbed)
 
     outcomes = final_outcomes(project)
-    assert all(outcomes[work] is Outcome.PENDING for work in absorbed)
+    # An absorbed record with no verdict awaits nothing: left out of `final_outcomes`, not PENDING.
+    assert all(work not in outcomes for work in absorbed)
     assert outcomes[merge.primary] is Outcome.INCLUDED
     assert [
         f for f in _findings_as(project, RigorMode.PILOT) if f.code == "merge-verdict-conflict"

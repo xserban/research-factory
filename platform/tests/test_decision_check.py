@@ -5,6 +5,7 @@ from __future__ import annotations
 from factory.events.envelope import Actor
 from factory.model.decisions import DecisionItem, DecisionLevel
 from factory.model.project import RigorMode
+from factory.model.question import QuestionRecorded, question_version
 from factory.model.screening import Channel
 from factory.services import decisions as decisions_service
 from factory.services.check import _findings_as
@@ -42,19 +43,17 @@ def test_a_record_written_while_exploratory_stays_a_warning_in_every_mode(
 def test_a_record_written_while_binding_was_required_is_an_error_after(
     project: Project, agent: Actor
 ) -> None:
-    inject(
-        project,
-        raw_event(
-            project, "question.recorded", agent, {"question_id": "qst_1", "decision_ids": []}
-        ),
-    )
+    spec = pilot_question_spec()
+    question_id = question_version(spec)
+    payload = QuestionRecorded(question_id=question_id, spec=spec, decision_ids=())
+    inject(project, raw_event(project, "question.recorded", agent, payload.model_dump(mode="json")))
     for mode, severity in (
         (RigorMode.EXPLORATORY, "warning"),
         (RigorMode.PILOT, "error"),
         (RigorMode.SYSTEMATIC, "error"),
     ):
         found = _mine(project, mode)["record-without-selection"]
-        assert found == (severity, ["qst_1"])
+        assert found == (severity, [question_id])
 
 
 def test_a_record_citing_a_selection_has_no_finding_and_closes_the_selection(

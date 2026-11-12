@@ -19,6 +19,7 @@ from factory.model.question import QuestionRecorded, question_version
 from factory.model.screening import Channel
 from factory.model.search import QueryKind, QuerySpec
 from factory.model.seed import SeedKind, SeedSpec
+from factory.services import decision_binding
 from factory.services import decisions as decisions_service
 from factory.services.context import Project
 from factory.services.probe import run_probe
@@ -205,4 +206,4 @@ def test_a_none_of_these_selection_still_counts_as_selected(
 ) -> None:
     decision_id = _open(project, agent)
     decisions_service.select(project, human, decision_id, [], [], "none fit", Channel.CLI)
-    assert decisions_service.bind(project, LEVELS.QUESTIONS, [decision_id]) == (decision_id,)
+    assert decision_binding.bind(project, LEVELS.QUESTIONS, [decision_id]) == (decision_id,)

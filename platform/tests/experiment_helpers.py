@@ -187,10 +187,12 @@ def raw_event(project: Project, type_: str, actor: Actor, payload: dict[str, Any
     """An event of `type_` whose payload is exactly `payload`, valid or not."""
     from factory.model.hypotheses import ModelCutoffDeclared
 
+    blob = project.blobs.put_json({}) if actor.kind == "agent" else None  # agent events need one
     shell = project.events.make(
         "model.cutoff_declared",
         ModelCutoffDeclared(model="m", cutoff="2020-01-01", source="s"),  # type: ignore[arg-type]
         actor,
+        input_blob=blob,
     )
     return shell.model_copy(update={"type": type_, "payload": payload})
 
