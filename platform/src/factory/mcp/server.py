@@ -179,6 +179,7 @@ from factory.services import shared_mining as shared_mining_service
 from factory.services import snowball as snowball_service
 from factory.services import tasks as tasks_service
 from factory.services import taxonomies as taxonomies_service
+from factory.services import taxonomy_agreement as taxonomy_agreement_service
 from factory.services import terms as terms_service
 from factory.services import trace as trace_service
 from factory.services import view_coverage as view_coverage_service
@@ -2193,6 +2194,22 @@ def build_server(
             return _withheld(opened, {"proposals": rows})
 
         return _reply(project, proposals)
+
+    @server.tool()
+    def taxonomy_agreement(project: str, miner: str) -> dict[str, JsonValue]:
+        """Agreement of the two passes of a miner derived from a taxonomy, per dimension: exact
+        category for single dimensions, per-category presence and per-work Jaccard for multi
+        dimensions; one pass `not-stated` against a category is completeness, not disagreement.
+        Computed from the rows; quotes are never compared. Refused to a session that joined a
+        pass. Read-only."""
+
+        def read() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            report = taxonomy_agreement_service.taxonomy_agreement(opened, miner)
+            return _withheld(opened, _plain(asdict(report)))
+
+        return _reply(project, read)
 
     @server.tool()
     def page_brief(project: str, scope: str, part: int = 0) -> dict[str, JsonValue]:

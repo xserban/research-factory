@@ -18,6 +18,7 @@ import typer
 
 from factory.mining.taxonomy import taxonomy_to_json
 from factory.services import taxonomies as taxonomies_service
+from factory.services import taxonomy_agreement as taxonomy_agreement_service
 from factory.services import work_layers as work_layers_service
 
 taxonomy_app = typer.Typer(
@@ -179,6 +180,21 @@ def taxonomy_proposals_cmd(
             f"{p.proposal_id} {p.kind} on version {p.base_version} "
             f"targets {', '.join(p.targets) or '-'}: {p.status}{reason}"
         )
+
+
+@taxonomy_app.command("agreement")
+def taxonomy_agreement_cmd(
+    ctx: typer.Context,
+    miner: Annotated[str, typer.Argument(help="A listed miner derived from a taxonomy.")],
+) -> None:
+    """Agreement of the two passes per dimension (computed; quotes are never compared)."""
+    from factory.cli.main import _reporting_errors, _resolve_project, _state
+
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        report = taxonomy_agreement_service.taxonomy_agreement(project, miner)
+    typer.echo(_json(asdict(report)))
 
 
 @work_layers_app.command("move")
