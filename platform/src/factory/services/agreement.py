@@ -17,8 +17,11 @@ who screens each pass; `agreement_by_pair_type` groups the stages by it. `PassCo
 people, so an agent reads `agent_agreement`, which leaves them out.
 
 `resolve_disagreement` records a human verdict on a disputed work, or on an `unsure` single-pass
-work. It is human-only, and an MCP-relayed resolution is refused from a session that has joined a
-pass.
+work, or, at full text, on a `cannot-assess` work (IDEA-49): a single-pass work pass A could not
+assess, or a dual-coded work both passes promote where either could not assess. It is human-only,
+and an MCP-relayed resolution is refused from a session that has joined a pass. An unresolved
+`cannot-assess` work still promotes (it is not PENDING and does not hold the passes open); the
+resolution, when recorded, decides its outcome.
 
 `final_outcomes` gives each work of the corpus its outcome: a calibration work takes the human's
 label; any other work takes its resolution, else the agreed outcome, else the single-pass outcome.
@@ -245,7 +248,8 @@ def resolve_disagreement(
 ) -> str:
     """Record the human's verdict on a disputed work of `stage` and return the event id (R-36).
 
-    The work must be an unresolved disagreement, or an `unsure` single-pass work. The criterion,
+    The work must be an unresolved disagreement, an `unsure` single-pass work, or, at full text, an
+    unresolved `cannot-assess` work (`cannot_assess_open`). The criterion,
     when given, is a criterion of the current protocol and is stored version-qualified; an
     exclusion needs an EX criterion. Refused, with nothing written, for an agent actor, a work
     that is not open for resolution, an unknown criterion, an invalid verdict or reason, an
@@ -269,11 +273,12 @@ def resolve_disagreement(
                 agent_text="disagreements are resolved by a human",
             )
         )
-        if work_id not in _open_for_resolution(screen):
+        if work_id not in _open_for_resolution(screen) | _cannot_assess_open(screen):
             issues.append(
                 ValidationIssue(
                     "work_id",
-                    "is not an unresolved disagreement or an unsure single-pass work",
+                    "is not an unresolved disagreement, an unsure single-pass work or, at full "
+                    "text, an unresolved cannot-assess work",
                 )
             )
         protocol = screen.protocol
@@ -299,6 +304,16 @@ def resolve_disagreement(
         event = project.events.make("screening.disagreement_resolved", payload, actor)
         project.record([event])
     return event.id
+
+
+def cannot_assess_open(project: Project, *, stage: ScreeningStage = TA) -> list[str]:
+    """The unresolved `cannot-assess` works a human may resolve at `stage`, sorted: empty at
+    title/abstract (a cannot-assess work goes on to be read in full) and before the passes can be
+    told apart. Read-only."""
+    require_pass_stage(stage)
+    project.index.sync()
+    screen = _load(project, stage)
+    return [] if screen is None else sorted(_cannot_assess_open(screen))
 
 
 class AgreedWork(StrictModel):
@@ -811,6 +826,29 @@ def _open_for_resolution(screen: _Screen) -> set[str]:
     for work in screen.single:
         a = screen.decided[PassLabel.A].get(work)
         if a is not None and a.verdict is Verdict.UNSURE and work not in screen.resolutions:
+            open_works.add(work)
+    return open_works
+
+
+def _cannot_assess_open(screen: _Screen) -> set[str]:
+    """Full text only: unresolved works whose screening promotes them only because a pass could
+    not assess them. A single-pass work whose pass A verdict is `cannot-assess`; a dual-coded work
+    the passes do not disagree on (so both promote) where either verdict is `cannot-assess`. A
+    work in disagreement is already open through `_open_for_resolution`."""
+    if screen.stage is not ScreeningStage.FULL_TEXT or not screen.known:
+        return set()
+    cannot = Verdict.CANNOT_ASSESS
+    open_works = set()
+    for work in screen.dual - screen.resolutions.keys():
+        a = screen.decided[PassLabel.A].get(work)
+        b = screen.decided[PassLabel.B].get(work)
+        if a is None or b is None or _disagreement(a.verdict, b.verdict) is not None:
+            continue
+        if cannot in (a.verdict, b.verdict):
+            open_works.add(work)
+    for work in screen.single - screen.resolutions.keys():
+        a = screen.decided[PassLabel.A].get(work)
+        if a is not None and a.verdict is cannot:
             open_works.add(work)
     return open_works
 

@@ -405,6 +405,27 @@ def test_single_pass_unsure_is_pending_until_resolved(
     assert final_outcomes(project)[single] is Outcome.EXCLUDED
 
 
+def test_title_abstract_cannot_assess_is_not_resolvable(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    """IDEA-49 opens cannot-assess works to resolution at full text only: at title/abstract
+    such a work goes on to be read in full."""
+    protocol_id = _ready(project, agent, human, mock_sources, dual_sample=0.25)
+    ordinary = _ordinary(project)
+    queue_b = _b_queue(project)
+    single = sorted(set(ordinary) - queue_b)[0]
+    for work in ordinary:
+        verdict, criterion = ("cannot-assess", "EX01") if work == single else ("include", None)
+        _decide(project, agent, work, "A", "screening", verdict, criterion, protocol_id)
+    for work in queue_b:
+        _decide(project, agent, work, "B", "screening", "include", None, protocol_id)
+
+    assert final_outcomes(project)[single] is Outcome.INCLUDED
+    with pytest.raises(FactoryValidationError) as exc:
+        resolve_disagreement(project, human, single, "exclude", "EX01", "no", Channel.CLI)
+    assert _fields(exc) == ["work_id"]
+
+
 def test_calibration_labels_set_final_outcome(
     project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
 ) -> None:
