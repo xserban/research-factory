@@ -31,6 +31,7 @@ from factory.cli.resume import resume_cmd
 from factory.cli.runs import adopt_cmd
 from factory.cli.screen_check import screen_check_app
 from factory.cli.site import site_app
+from factory.cli.taxonomy import mine_request_cmd, taxonomy_app, work_layers_app
 from factory.cli.team import (
     project_app,
     protocol_amend_cmd,
@@ -564,6 +565,9 @@ app.add_typer(costs_app)
 app.add_typer(pages_app)
 app.add_typer(develop_app)
 app.add_typer(screen_check_app)
+app.add_typer(taxonomy_app)
+app.add_typer(work_layers_app)
+mine_app.command("request")(mine_request_cmd)
 app.add_typer(graph_app)
 app.add_typer(view_app)
 app.add_typer(interpretations_app)
