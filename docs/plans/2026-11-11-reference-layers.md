@@ -252,7 +252,10 @@ Researcher rulings (round 3):
   DOI, when their titles are equal after stripping years, venue and preprint notes, or when titles
   are near-equal (rapidfuzz, high threshold, year within one). Automatic; merged counts reported.
 - **R3.2 Benchmark ring.** Benchmarks and evaluations of AI research systems get their own ring
-  inside the core, snowballed. Order: core, benchmark, applied, adjacent, background, off-topic.
+  inside the core. Order: core, benchmark, applied, adjacent, background, off-topic.
+- **R3.7 Snowball core only** (researcher, 2026-11-12): only the core ring is snowballed; benchmark and
+  applied items stay in the citations product. Estimate from the first 500 items: about 6-10 new core
+  systems after merging, against about 20 applied and 60 adjacent.
 - **R3.3 Identifier wins.** For every entry with an arXiv ID or DOI whose title is known (corpus work,
   resolved link, another entry, or a lookup of the identifier), that title replaces the parsed one.
   Entries without an identifier keep the parsed title and the clean-up flags.
