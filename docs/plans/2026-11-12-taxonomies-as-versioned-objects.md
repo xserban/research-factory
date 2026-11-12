@@ -438,3 +438,28 @@ existing protocol version hashes and miner digests do not change.
 
 Waves (at most three agents at once): T1 ∥ T2; then T3 ∥ T4; then T5 ∥ T7; then T6 ∥ T10 ∥ T11;
 then T8 ∥ T9; then R.
+
+## 11. Build state (2026-11-12)
+
+T1–T11 built on `plan-taxonomies` (mypy and ruff only; nothing run under pytest; tests to write are
+in each commit message). One review (`rf-reviewer`, Sonnet): no Critical finding; six Important,
+fixed in rounds F1–F3: the protocol `taxonomies` listing (Q1), registration of a derived miner
+checked against its registered taxonomy (and `factory taxonomy derive` to produce it), on-demand
+requests honoured when a miner has no automatic layers, the layer map computed once per log state,
+close checks refusing an unregistered taxonomy, `cli:mine request` a human permission, and the
+proposal's `input_blob` holding the evidence it cites.
+
+Minor findings left open (for the researcher's attention, not fixed):
+
+- The runner's `mining` stage runs the first miner with an open need; other miners wait for the
+  next run.
+- A layer move after a unit closed stales nothing, although the applicable dimensions depend on the
+  layer; the work keeps rows for the old layer's dimensions.
+- `validate_miner` now refuses a row-key field that is also a row anchor for every registered miner,
+  not only derived ones (intended: it is the cause of the 14-of-56 alignment in `m-classification`).
+- Coverage reads descriptor rows of every version of the named miner (rows carry no version).
+
+First tests when testing resumes (reviewer's order): golden replay of old protocol and miner events
+(hashes and digests unchanged); agent-written human events change nothing in the index; miner
+population with and without layers, requests and `max_units`; the stale rule per diff kind; close
+checks per rule and the absence exemption; hub POST refusals; `layers_of` precedence.
