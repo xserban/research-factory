@@ -141,6 +141,9 @@ class CitedItem:
     year: int | None
     dois: tuple[str, ...]
     arxivs: tuple[str, ...]
+    aliases: tuple[str, ...] = ()
+    """Item keys the members had under rules version 3 (one per distinct member title, parsed or
+    borrowed), so assignments and labels keyed by an earlier rules version can be found again."""
 
     @property
     def citing_count(self) -> int:
