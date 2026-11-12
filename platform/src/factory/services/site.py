@@ -84,6 +84,9 @@ class Product:
     build: Build
     version: int = 1
     needs_model: bool = False
+    # a string that changes when a file the product reads outside the event log changes (the
+    # backlog document); folded into the fingerprint so the product is rebuilt after an edit
+    extra: Callable[[], str] | None = None
 
 
 @dataclass(frozen=True)
@@ -131,6 +134,18 @@ def _build_prisma(project: Project, out: Path) -> None:
     from factory.services.site_prisma import build_prisma
 
     build_prisma(project, out)
+
+
+def _build_backlog(project: Project, out: Path) -> None:
+    from factory.services.site_backlog import build_backlog
+
+    build_backlog(project, out)
+
+
+def _backlog_extra() -> str:
+    from factory.services.site_backlog import backlog_digest
+
+    return backlog_digest()
 
 
 def _build_bibliography(project: Project, out: Path) -> None:
@@ -339,6 +354,16 @@ def products() -> list[Product]:
             inputs=CORPUS_EVENTS,
             build=_build_bibliography,
         ),
+        Product(
+            id="backlog",
+            title="Backlog board",
+            group="Process",
+            description="Every idea of docs/backlog.md as a board (ready, blocked, specified, done) and a dependency tree; select ideas to build and copy the brief.",
+            entry="index.html",
+            inputs=(),
+            build=_build_backlog,
+            extra=_backlog_extra,
+        ),
     ]
 
 
@@ -379,6 +404,8 @@ def fingerprint(project: Project, product: Product) -> str:
                 {"p": pattern},
             ).one()
             parts.append(f"{pattern}:{row[0]}:{row[1]}")
+    if product.extra is not None:
+        parts.append(f"extra:{product.extra()}")
     return hashlib.sha256("|".join(parts).encode()).hexdigest()[:16]
 
 
