@@ -11,7 +11,7 @@ from factory.cli.render import contribution_status_lines
 from factory.clock import FixedClock
 from factory.config import Settings
 from factory.events.envelope import Actor
-from factory.mcp import server as mcp_server
+from factory.mcp import sessions as mcp_sessions
 from factory.model.lineage import (
     EdgeStatus,
     LineageDecision,
@@ -396,7 +396,7 @@ async def test_check_is_refused_to_a_pass_session(
         def ulid(self) -> str:
             return ctr_a.session
 
-    monkeypatch.setattr(mcp_server, "IdGenerator", Ids)  # this session read a contribution pass
+    monkeypatch.setattr(mcp_sessions, "IdGenerator", Ids)  # this session read a contribution pass
     async with open_session(settings, clock) as client:
         out = await client.call("check", project="demo")
     assert out["ok"] is False and out["errors"][0]["field"] == "session"

@@ -10,7 +10,7 @@ from factory.clock import FixedClock
 from factory.config import Settings
 from factory.events.envelope import Actor
 from factory.events.reader import read_all
-from factory.mcp import server as mcp_server
+from factory.mcp import sessions as mcp_sessions
 from factory.mcp.server import build_server
 from factory.model.protocol import ScreeningStage
 from factory.model.screening import PassLabel, ScreeningItem, Verdict
@@ -57,7 +57,7 @@ async def test_full_text_screen_next_serves_a_pinned_batch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _make(project, agent, human, mock_sources)
-    monkeypatch.setattr(mcp_server, "IdGenerator", _FixedIds)
+    monkeypatch.setattr(mcp_sessions, "IdGenerator", _FixedIds)
     async with open_session(settings, clock) as client:
         served = await client.call(
             "screen_next", project="demo", pass_label="A", stage="full-text", **AGENT
@@ -111,7 +111,7 @@ async def test_trace_of_a_full_text_decision_reaches_conversion_and_anchor(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _make(project, agent, human, mock_sources)
-    monkeypatch.setattr(mcp_server, "IdGenerator", _FixedIds)
+    monkeypatch.setattr(mcp_sessions, "IdGenerator", _FixedIds)
     async with open_session(settings, clock) as client:
         served = await client.call(
             "screen_next", project="demo", pass_label="A", stage="full-text", **AGENT
@@ -141,7 +141,7 @@ async def test_trace_of_a_full_text_decision_reaches_conversion_and_anchor(
         def ulid(self) -> str:
             return "01JZ9Q3K5M7N8P0R2S4T6V8W1C"
 
-    monkeypatch.setattr(mcp_server, "IdGenerator", _OtherSession)
+    monkeypatch.setattr(mcp_sessions, "IdGenerator", _OtherSession)
     async with open_session(settings, clock) as client:
         traced = await client.call("trace", project="demo", ref=decision)
     assert traced["ok"] is True, traced
@@ -159,7 +159,7 @@ async def test_screen_record_reports_a_bad_anchor_by_index(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _make(project, agent, human, mock_sources)
-    monkeypatch.setattr(mcp_server, "IdGenerator", _FixedIds)
+    monkeypatch.setattr(mcp_sessions, "IdGenerator", _FixedIds)
     async with open_session(settings, clock) as client:
         served = await client.call(
             "screen_next", project="demo", pass_label="A", stage="full-text", **AGENT
@@ -198,7 +198,7 @@ async def test_unknown_stage_is_a_structured_error_and_writes_nothing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _make(project, agent, human, mock_sources)
-    monkeypatch.setattr(mcp_server, "IdGenerator", _FixedIds)
+    monkeypatch.setattr(mcp_sessions, "IdGenerator", _FixedIds)
     before = _count(project)
     calls: list[tuple[str, dict[str, JsonValue]]] = [
         ("screen_next", {"pass_label": "A", **AGENT}),

@@ -78,3 +78,24 @@ class DigestGenerated(StrictModel):
     blob: str = Field(pattern=BLOB_REF_RE)
     markdown_blob: str = Field(pattern=BLOB_REF_RE)
     counts: dict[str, int]
+
+
+class FeedRow(StrictModel):
+    """A shown feed item of the latest ranking: its title, score and exploration label. No
+    abstract; the title is bibliographic metadata."""
+
+    entry_id: str
+    title: str | None
+    score: float
+    explore: bool
+
+
+class DigestFeed(StrictModel):
+    """The discovery feed of one project (slice 4c, ruling 12): the latest ranking, its top items,
+    the sends not yet resolved in the inbox, and whether `feed-scope-drift` holds. `ranking_id`
+    is None before any ranking."""
+
+    ranking_id: str | None
+    items: Listing[FeedRow]
+    pending_sends: int = Field(ge=0)
+    drift: bool

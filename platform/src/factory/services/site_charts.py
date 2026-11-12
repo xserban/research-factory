@@ -12,12 +12,13 @@ import html
 from collections.abc import Sequence
 
 CHART_CSS = (
-    ".ch{width:100%;max-width:980px;height:auto;display:block;margin:6px 0 14px;background:rgba(8,9,16,.55);"
+    ".ch{width:100%;max-width:980px;height:auto;display:block;margin:6px 0 14px;background:var(--chart);"
     "border:1px solid var(--mut)}.ch text{fill:var(--dim);font:10px ui-monospace,monospace}"
     ".ch .v{fill:var(--light)}.ch .grid{stroke:var(--mut);stroke-width:1}"
-    ".ch .mk{fill:var(--ac)}.ch a:hover .mk,.ch a:focus .mk{fill:#fff}"
+    ".ch .mk{fill:var(--ac)}.ch a:hover .mk,.ch a:focus .mk{fill:var(--fg)}"
     ".ch .warn{stroke:var(--amber);stroke-dasharray:3 3;fill:none}.ch .lo{fill:var(--amber)}"
     ".c2{fill:var(--cyan)}.c3{fill:var(--blue)}.ch .bad{fill:var(--red)}.ch .lbl{fill:var(--fg)}.ch a:hover text{fill:var(--ac)}"
+    ".ch .ln{fill:none;stroke:var(--ac);stroke-width:2}"
 )
 
 
@@ -179,3 +180,44 @@ def activity(days: Sequence[tuple[str, int]], height: int = 90) -> str:
         f"<svg class=ch style='max-width:{cap:.0f}px' viewBox='0 0 {width} {height}' role=img>"
         f"{''.join(parts)}</svg>"
     )
+
+
+def line_chart(
+    points: Sequence[tuple[float, float]],
+    xlabel: str,
+    ylabel: str,
+    height: int = 220,
+) -> str:
+    """One polyline through (x, y) points, a dot at each, from zero on the y axis. Each dot has a
+    title with its values. Empty input gives an empty string."""
+    if not points:
+        return ""
+    w, h, pl, pb, pt, pr = 900, height, 56, 40, 16, 14
+    pw, ph = w - pl - pr, h - pb - pt
+    xs = [x for x, _ in points]
+    x0, x1 = min(xs), max(xs)
+    span = (x1 - x0) or 1.0
+    top = max((y for _, y in points), default=1.0) or 1.0
+    parts: list[str] = []
+    for k in (0.0, 0.5, 1.0):
+        y = pt + ph - ph * k
+        parts.append(
+            f"<line class=grid x1={pl} y1={y:.1f} x2={pl + pw} y2={y:.1f} opacity=.5></line>"
+        )
+        parts.append(f"<text x={pl - 6} y={y + 3:.1f} text-anchor=end>{round(top * k):,}</text>")
+    coords: list[tuple[float, float]] = []
+    for x, y in points:
+        cx = pl + pw * (x - x0) / span if len(points) > 1 else pl + pw / 2
+        cy = pt + ph - ph * max(y, 0) / top
+        coords.append((cx, cy))
+    line = " ".join(f"{cx:.1f},{cy:.1f}" for cx, cy in coords)
+    parts.append(f"<polyline class=ln points='{line}'></polyline>")
+    for (x, y), (cx, cy) in zip(points, coords, strict=True):
+        mark = f"<rect class=mk x={cx - 3:.1f} y={cy - 3:.1f} width=6 height=6></rect>"
+        parts.append(_wrap(None, mark, f"turn {x:g}: {y:,.0f} tokens"))
+    for x, _ in points:
+        cx = pl + pw * (x - x0) / span if len(points) > 1 else pl + pw / 2
+        parts.append(f"<text x={cx:.1f} y={h - 18} text-anchor=middle>{x:g}</text>")
+    parts.append(f"<text x={pl + pw / 2:.1f} y={h - 4} text-anchor=middle>{_e(xlabel)}</text>")
+    parts.append(f"<text x={pl} y=12>{_e(ylabel)} (up)</text>")
+    return f"<svg class=ch viewBox='0 0 {w} {h}' role=img>{''.join(parts)}</svg>"

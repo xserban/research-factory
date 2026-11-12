@@ -16,14 +16,19 @@ from pydantic import ValidationError as PydanticValidationError
 
 from factory.cli import appraisal_render, evidence_render, portfolio_render, render
 from factory.cli.admin import member_app, token_app, user_app
+from factory.cli.costs import costs_app
 from factory.cli.dashboard import dashboard_app
 from factory.cli.decisions import decide_app
 from factory.cli.develop import develop_app
+from factory.cli.feed import feed_app
 from factory.cli.ledger import budget_app, ledger_cmd
 from factory.cli.library import library_app
 from factory.cli.manuscripts import manuscript_app
 from factory.cli.organisation import consolidation_app, labels_app, terms_app
 from factory.cli.pages import pages_app
+from factory.cli.queue import queue_app
+from factory.cli.resume import resume_cmd
+from factory.cli.runs import adopt_cmd
 from factory.cli.screen_check import screen_check_app
 from factory.cli.site import site_app
 from factory.cli.team import (
@@ -174,7 +179,6 @@ from factory.services import snapshots as snapshot_service
 from factory.services import snowball as snowball_service
 from factory.services import suggestions as suggestions_service
 from factory.services import trace as trace_service
-from factory.services import version_pairs as version_pairs_service
 from factory.services import versions as versions_service
 from factory.services import view_coverage as view_coverage_service
 from factory.services import views as views_service
@@ -530,6 +534,7 @@ app.add_typer(dedup_app)
 app.add_typer(rank_app)
 app.add_typer(fulltext_app)
 app.add_typer(library_app)
+app.add_typer(feed_app)
 app.add_typer(document_app)
 app.add_typer(extract_app)
 app.add_typer(miner_app)
@@ -549,11 +554,13 @@ app.add_typer(models_app)
 app.add_typer(directions_app)
 app.add_typer(experiments_app)
 app.add_typer(runs_app)
+runs_app.command("adopt")(adopt_cmd)
 app.add_typer(draft_app)
 app.add_typer(manuscript_app)
 app.add_typer(decide_app)
 app.add_typer(dashboard_app)
 app.add_typer(site_app)
+app.add_typer(costs_app)
 app.add_typer(pages_app)
 app.add_typer(develop_app)
 app.add_typer(screen_check_app)
@@ -579,6 +586,8 @@ protocol_app.command("amend")(protocol_amend_cmd)
 protocol_app.command("deviation")(protocol_deviation_cmd)
 app.command("workspace")(workspace_cmd)
 app.command("ledger")(ledger_cmd)
+app.add_typer(queue_app)
+app.command("resume")(resume_cmd)
 app.add_typer(budget_app)
 
 
@@ -1636,41 +1645,6 @@ def dedup_list_cmd(ctx: typer.Context) -> None:
         merges = dedup_service.list_merges(project)
     for line in render.merge_lines(merges):
         typer.echo(line)
-
-
-@dedup_app.command("pairs")
-def dedup_pairs_cmd(
-    ctx: typer.Context,
-    limit: Annotated[int, typer.Option("--limit", min=1, help="How many candidates to show.")] = 50,
-) -> None:
-    """Candidate version pairs, best first, for the researcher to rule on."""
-    state = _state(ctx)
-    with _reporting_errors():
-        project = _resolve_project(state)
-        found = version_pairs_service.candidates(project, limit=limit)
-    for line in render.pair_lines(found):
-        typer.echo(line)
-
-
-@dedup_app.command("pair")
-def dedup_pair_cmd(
-    ctx: typer.Context,
-    work_a: Annotated[str, typer.Argument(help="One work id.")],
-    work_b: Annotated[str, typer.Argument(help="The other work id.")],
-    decision: Annotated[str, typer.Argument(help="same or different.")],
-    rationale: Annotated[
-        str, typer.Option("--rationale", help="Why the works are or are not one.")
-    ],
-) -> None:
-    """Record the researcher's ruling on a pair and apply it at once."""
-    state = _state(ctx)
-    with _reporting_errors():
-        project = _resolve_project(state)
-        event_id = version_pairs_service.decide_pair(
-            project, project.human_actor(), work_a, work_b, decision, rationale
-        )
-    typer.echo(f"recorded {event_id}")
-    typer.echo("dedup applied")
 
 
 @dedup_app.command("revert")

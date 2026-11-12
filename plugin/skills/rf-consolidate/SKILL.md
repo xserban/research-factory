@@ -1,6 +1,7 @@
 ---
 name: rf-consolidate
 description: Use when free labels must be applied to works, ideas or concepts, or when candidate clusters of labels, ideas or concepts that may name the same thing must be read and a merge, keep or split proposed for the researcher to decide, in a Claude Code session that did not read a screening, extraction or contribution pass.
+stage: [understand]
 ---
 
 # rf-consolidate

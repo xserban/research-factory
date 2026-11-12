@@ -10,7 +10,7 @@ from factory.clock import FixedClock
 from factory.config import Settings
 from factory.events.envelope import Actor
 from factory.events.reader import read_all
-from factory.mcp import server as mcp_server
+from factory.mcp import sessions as mcp_sessions
 from factory.mcp.conventions import WITHHELD
 from factory.model.screening import PassLabel
 from factory.services.context import Project
@@ -34,7 +34,7 @@ def _session(monkeypatch: pytest.MonkeyPatch, session: str) -> None:
         def ulid(self) -> str:
             return session
 
-    monkeypatch.setattr(mcp_server, "IdGenerator", Ids)
+    monkeypatch.setattr(mcp_sessions, "IdGenerator", Ids)
 
 
 def _added(project: Project) -> list[dict[str, object]]:
@@ -170,8 +170,10 @@ def test_agent_view_reports_seed_admission_as_other() -> None:
         by_first_actor={"human": counts},
         overlaps={"database+seed-admission": 1},
         totals=counts,
+        by_channel={"feed": counts},
     )
     view = agent_view(report)
     assert view["by_first_route"] == {"database": counts, "other": counts}
     assert view["overlaps"] == {"database+other": 1}
+    assert view["by_channel"] == {"feed": counts}
     assert "seed" not in str(view)

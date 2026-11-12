@@ -168,6 +168,31 @@ def test_ac3_exploratory_resolves_without_protocol(explore_project: Project, hum
     assert outcome.status is ResolveStatus.NEW
 
 
+def test_automatic_resolve_records_the_system_actor(explore_project: Project, human: Actor) -> None:
+    project = explore_project
+    capture(project, human, DOI_URL)
+    [outcome] = resolve_links(
+        project,
+        project.system_actor(),
+        sources=_keyed().sources(),
+        automatic=True,
+    )
+    assert outcome.status is ResolveStatus.NEW
+    [registered] = _events(project, "query.registered")
+    [resolved] = _events(project, "inbox.link_resolved")
+    assert registered.actor.kind == "system" and resolved.actor.kind == "system"
+
+
+def test_system_actor_without_automatic_is_still_refused_by_resolve(
+    explore_project: Project, human: Actor
+) -> None:
+    capture(explore_project, human, DOI_URL)
+    with pytest.raises(FactoryValidationError) as caught:
+        resolve_links(explore_project, explore_project.system_actor(), sources=_keyed().sources())
+    assert caught.value.issues[0].field == "actor"
+    assert _events(explore_project, "inbox.link_resolved") == []
+
+
 def test_ac4_new_work_has_supplied_provenance_and_archived_pages(
     explore_project: Project, human: Actor
 ) -> None:

@@ -1,6 +1,7 @@
 ---
 name: rf-frame
 description: Use when a researcher starts a review or states a goal, and the factory needs a recorded, versioned research question with its framing and non-goals.
+stage: [frame]
 ---
 
 # rf-frame

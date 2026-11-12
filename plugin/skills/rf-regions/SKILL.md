@@ -1,6 +1,7 @@
 ---
 name: rf-regions
 description: Use when a region or focus of the corpus and the graph must be drafted as typed selection rules, or when a single work, idea or concept should be proposed for a hand-built region with a verified quote or edge, in a Claude Code session that did not read a screening or extraction pass.
+stage: [understand]
 ---
 
 # rf-regions

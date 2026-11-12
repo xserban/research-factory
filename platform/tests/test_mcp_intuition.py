@@ -17,7 +17,7 @@ from factory.clock import FixedClock
 from factory.config import Settings
 from factory.events.envelope import Actor, Event
 from factory.events.reader import read_all
-from factory.mcp import server as mcp_server
+from factory.mcp import sessions as mcp_sessions
 from factory.mcp.server import build_server
 from factory.services.context import Project
 from tests.extraction_helpers import SESSION_A
@@ -33,6 +33,7 @@ TOOLS = (
     "concept_propose",
     "concept_link",
 )
+LIST_TOOLS = ("concept_list",)  # f6d6541: read-only list of concepts
 
 
 def _session(monkeypatch: pytest.MonkeyPatch, session: str) -> None:
@@ -42,7 +43,7 @@ def _session(monkeypatch: pytest.MonkeyPatch, session: str) -> None:
         def ulid(self) -> str:
             return session
 
-    monkeypatch.setattr(mcp_server, "IdGenerator", Ids)
+    monkeypatch.setattr(mcp_sessions, "IdGenerator", Ids)
 
 
 def _layer(project: Project) -> list[Event]:
@@ -63,10 +64,14 @@ async def test_tool_list_serves_records_and_lists_but_never_reviews(
 ) -> None:
     async with Client(build_server(settings, clock=clock)) as client:
         names = [t.name for t in (await client.list_tools()).tools]
-    assert all(name in names for name in TOOLS)
+    assert all(name in names for name in (*TOOLS, *LIST_TOOLS))
     banned = ("review", "supersede", "approve", "confirm", "decide")
     assert not [n for n in names if "interpretation" in n and any(b in n for b in banned)]
-    assert not [n for n in names if n.startswith(("concept", "intuition")) and n not in TOOLS]
+    assert not [
+        n
+        for n in names
+        if n.startswith(("concept", "intuition")) and n not in (*TOOLS, *LIST_TOOLS)
+    ]
 
 
 @pytest.mark.anyio

@@ -82,7 +82,6 @@ from factory.services.results import BatchResult
 from factory.services.shared_mining import SharedProject, SharedUnit
 from factory.services.snowball import Comparison, RoundCandidate, RoundResult
 from factory.services.trace import TraceNode
-from factory.services.version_pairs import PairCandidate
 from factory.services.watch import CycleSummary, WatchStatus
 from factory.services.xruns import XrunView
 
@@ -94,15 +93,6 @@ def prisma_markdown(flow: PrismaFlow) -> str:
     lines += [f"- {source}: {n}" for source, n in flow.identified_databases.items()]
     lines += [f"- other methods, {method}: {n}" for method, n in flow.identified_other.items()]
     lines.append(f"- duplicates removed: {flow.duplicates_removed}")
-    if flow.version_pair_merges > 0:
-        lines.append(
-            f"  - of which {flow.version_pair_merges} rest on the researcher's version-pair ruling"
-        )
-    if flow.identical_title_merges > 0:
-        lines.append(
-            "  - merge groups joined (in part) by an identical title: "
-            f"{flow.identical_title_merges}"
-        )
     lines += ["", "## Screening", f"- records screened: {flow.screened}"]
     lines += [f"- excluded, {criterion}: {n}" for criterion, n in flow.excluded.items()]
     lines.append(f"- pending: {flow.pending}")
@@ -290,13 +280,8 @@ def import_lines(report: ImportReport) -> list[str]:
         ("identity unchecked (--accept FILE to vouch for one)", report.identity_unchecked),
     ):
         lines.append(f"{label}: {len(names)}")
-        lines += [_import_entry(name, report.candidates.get(name, [])) for name in names]
+        lines += [f"  {name}" for name in names]
     return lines
-
-
-def _import_entry(name: str, candidates: list[str]) -> str:
-    """One file of an import list, with the works it matched when the list names them."""
-    return f"  {name}  -> {', '.join(candidates)}" if candidates else f"  {name}"
 
 
 def fetch_lines(summary: FetchSummary) -> list[str]:
@@ -1800,24 +1785,6 @@ def mine_import_lines(result: BatchResult[str]) -> list[str]:
     lines = [f"imported {len(result.written)} unit(s)"]
     for error in result.rejected:
         lines += [f"unit {error.index}: {i.field}: {i.reason}" for i in error.issues]
-    return lines
-
-
-def pair_lines(found: Sequence[PairCandidate]) -> list[str]:
-    """The count, each candidate pair best first with its evidence, and the deciding command."""
-    if not found:
-        return ["no candidate pairs"]
-    lines = [f"{len(found)} candidate pairs"]
-    for c in found:
-        shared = ", ".join(c.shared_surnames) if c.shared_surnames else "none"
-        lines.append(f"{c.score:.2f}  {c.basis}  {c.work_a}  {c.work_b}")
-        for year, title, ids in (
-            (c.year_a, c.title_a, c.identifiers_a),
-            (c.year_b, c.title_b, c.identifiers_b),
-        ):
-            lines.append(f"    {year if year is not None else 'n.d.'}  {title}  [{ids}]")
-        lines.append(f"    shared surnames: {shared}")
-    lines.append("decide: factory dedup pair <work_a> <work_b> same|different --rationale TEXT")
     return lines
 
 

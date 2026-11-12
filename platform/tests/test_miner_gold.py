@@ -14,7 +14,7 @@ from factory.config import Settings
 from factory.errors import FactoryValidationError
 from factory.events.envelope import Actor
 from factory.events.reader import read_all
-from factory.mcp import server as mcp_server
+from factory.mcp import sessions as mcp_sessions
 from factory.model.extraction import ExtractedRowInput, FieldInput
 from factory.model.screening import Channel, PassLabel
 from factory.services.context import Project
@@ -222,7 +222,7 @@ def _session(monkeypatch: pytest.MonkeyPatch, session: str) -> None:
         def ulid(self) -> str:
             return session
 
-    monkeypatch.setattr(mcp_server, "IdGenerator", Ids)
+    monkeypatch.setattr(mcp_sessions, "IdGenerator", Ids)
 
 
 async def _relay(

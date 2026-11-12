@@ -255,7 +255,15 @@ def test_the_fold_stores_the_accepted_selection_on_the_decision(
 ) -> None:
     write(project, agent, "decision.suggested", suggest_payload())
     assert selection_columns(project) == (None,) * 7
-    select(project, human, selected=("I01",), added=("Mine",), note="why", reconstructed=True)
+    select(
+        project,
+        human,
+        selected=("I01",),
+        added=("Mine",),
+        note="why",
+        reconstructed=True,
+        channel=Channel.CLI,
+    )
     [event_id, actor, channel, note, reconstructed, chosen, added] = selection_columns(project)
     assert event_id.startswith("ev_")
     assert (actor, channel, note, reconstructed) == ("obd", "cli", "why", 1)

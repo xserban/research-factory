@@ -1,6 +1,7 @@
 ---
 name: rf-experiment
 description: Use when a registered or drafted experiment hypothesis needs a pre-registered experiment design, or planned runs must be registered against a frozen design, in a Claude Code session that did not read a screening or extraction pass.
+stage: [develop]
 ---
 
 # rf-experiment

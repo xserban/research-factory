@@ -12,7 +12,7 @@ from factory.clock import FixedClock
 from factory.config import Settings
 from factory.errors import FactoryValidationError
 from factory.events.envelope import Actor
-from factory.mcp import server as mcp_server
+from factory.mcp import sessions as mcp_sessions
 from factory.model.extraction import MinerScope
 from factory.model.project import RigorMode
 from factory.model.screening import Channel, PassLabel
@@ -313,7 +313,7 @@ async def _call(
         def ulid(self) -> str:
             return session
 
-    monkeypatch.setattr(mcp_server, "IdGenerator", Ids)
+    monkeypatch.setattr(mcp_sessions, "IdGenerator", Ids)
     async with open_session(settings, clock) as client:
         return await client.call(tool, project="demo", **AGENT, **args)
 

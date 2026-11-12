@@ -6,6 +6,9 @@ Invariants:
   file is read. The index is synced by those services, never written here.
 - Each panel is optional: absent data gives an empty panel, and a panel that cannot be built gives
   an empty one with a short `error` note. The state is never an error as a whole.
+- The feed panel (`feed`) is None without a feed configuration. Its runs are read with
+  `reconcile=False`, so an open run whose process is gone shows as `lost?` and nothing is written.
+  Each part of it is read on its own: a part that raises a `FactoryError` is `unavailable`.
 - Development-only view (R-20, decision 37 item 9): the whole state passes through `withhold` with
   every held-out seed's own id and stated identifiers; works are not masked. Label-derived rates
   (calibration sensitivity, false-exclusion, extraction audit error rate) are left out, and the
@@ -14,6 +17,7 @@ Invariants:
 
 from __future__ import annotations
 
+import json
 import re
 from collections import Counter
 from collections.abc import Callable
@@ -23,7 +27,7 @@ from typing import cast
 from pydantic import JsonValue
 from sqlalchemy import text
 
-from factory.errors import FactoryValidationError
+from factory.errors import FactoryError, FactoryValidationError
 from factory.model.protocol import ScreeningStage
 from factory.model.screening import PassLabel
 from factory.services import agent_view as agent_view_service
@@ -33,16 +37,22 @@ from factory.services import decisions as decisions_service
 from factory.services import dedup as dedup_service
 from factory.services import extraction as extraction_service
 from factory.services import extraction_audit as extraction_audit_service
+from factory.services import feed as feed_service
+from factory.services import feed_read as feed_read_service
 from factory.services import ledger as ledger_service
 from factory.services import miner_info as miner_info_service
 from factory.services import mining as mining_service
+from factory.services import pipeline as pipeline_service
 from factory.services import progress as progress_service
 from factory.services import protocol as protocol_service
 from factory.services import question as question_service
 from factory.services import ranking as ranking_service
+from factory.services import resume as resume_service
+from factory.services import runner as runner_service
 from factory.services import screening as screening_service
 from factory.services import screening_check as check_service
 from factory.services import site as site_service
+from factory.services import work_queue as work_queue_service
 from factory.services.context import Project
 from factory.services.withholding import held_out_tokens, withhold
 
@@ -135,6 +145,7 @@ def _dashboard_state(project: Project) -> dict[str, JsonValue]:
         "products": _guard(lambda: _products(project), []),
         "cost": _guard(lambda: _cost(project, status), {}),
         "progress": _guard(lambda: cast(JsonValue, progress_service.progress_list(project)), []),
+        "feed": _guard(lambda: _feed(project), {"error": UNAVAILABLE}),
     }
     live = state["screening_live"]
     if isinstance(live, dict) and "error" not in live:
@@ -384,6 +395,188 @@ def _screening(project: Project, status: JsonValue) -> JsonValue:
         },
         "stale_decisions": screening.get("stale_decisions"),
         "checks": checks,
+    }
+
+
+FEED_TOP = 5
+FEED_ACTIVITY = timedelta(days=7)
+UNAVAILABLE = "unavailable"
+
+
+def _part(build: Callable[[], JsonValue]) -> JsonValue:
+    """`build()`, or the word `unavailable` when a read refuses with a `FactoryError`."""
+    try:
+        return build()
+    except FactoryError:
+        return UNAVAILABLE
+
+
+def _feed(project: Project) -> JsonValue:
+    """The feed and work-queue panel, or None when the project has no feed configuration."""
+    config = feed_service.current_config(project)
+    if config is None:
+        return None
+    now = project.clock.now()
+    return {
+        "categories": list(config.categories),
+        "shown_per_cycle": config.shown_per_cycle,
+        "interval_days": config.interval_days,
+        "fetch": _part(lambda: _feed_fetch(project, config.interval_days, now)),
+        "ranking": _part(lambda: _feed_ranking(project)),
+        "top": _part(lambda: _feed_top(project, now)),
+        "queue": _part(lambda: _feed_queue(project)),
+        "run": _part(lambda: _feed_run(project)),
+        "interrupted": _interrupted(project),
+    }
+
+
+def _interrupted(project: Project) -> JsonValue:
+    """The counts of interrupted work per category (`resume.interrupted`, read-only), or the word
+    `unavailable` when the read fails."""
+    try:
+        found = resume_service.interrupted(project)
+    except Exception:  # a panel must never take the page down
+        return UNAVAILABLE
+    return {
+        "clean": found.is_clean,
+        "runs": len(found.runs),
+        "pipelines": len(found.pipelines),
+        "leases": sum(lease.count for lease in found.leases),
+        "passes": len(found.passes),
+        "resolve": found.automatic.resolve,
+        "fetch": found.automatic.fetch,
+        "convert": found.automatic.convert,
+        "limit_runs": [
+            {
+                "stage": run.stage,
+                "reset": run.limit_reset_at or run.limit_reset_text,
+                "estimated": run.limit_reset_estimated,
+            }
+            for run in found.runs
+            if run.kind == "limit"
+        ],
+    }
+
+
+def _feed_fetch(project: Project, interval_days: int, now: datetime) -> JsonValue:
+    """The last complete fetch window, the next due day and whether a run is due now."""
+    project.index.sync()
+    status = feed_service.feed_status(project, today=now.date())
+    with project.index.connect() as conn:
+        row = conn.execute(
+            text(
+                "SELECT window_from, window_to FROM feed_fetches WHERE complete = 1 "
+                "ORDER BY event_id DESC LIMIT 1"
+            )
+        ).first()
+    last_to = status.last_complete_window_to
+    return {
+        "last_window_from": None if row is None else str(row[0]),
+        "last_window_to": None if row is None else str(row[1]),
+        "next_due": None
+        if last_to is None
+        else (last_to + timedelta(days=interval_days)).isoformat(),
+        "due": status.due,
+    }
+
+
+def _feed_ranking(project: Project) -> JsonValue:
+    """The latest ranking's shown and exploration counts, as the ranking recorded them."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        row = conn.execute(
+            text("SELECT ranking_id, shown FROM feed_rankings ORDER BY event_id DESC LIMIT 1")
+        ).first()
+    if row is None:
+        return {"ranking_id": None, "shown": 0, "explore": 0}
+    shown = json.loads(str(row[1]))
+    return {
+        "ranking_id": str(row[0]),
+        "shown": len(shown),
+        "explore": sum(1 for item in shown if item.get("explore") is True),
+    }
+
+
+def _feed_activity(project: Project, now: datetime) -> tuple[Counter[str], Counter[str]]:
+    """Reactions and sends per entry within the last `FEED_ACTIVITY`, by event time."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        reacted = conn.execute(
+            text(
+                "SELECT r.entry_id, ev.ts FROM feed_reactions r "
+                "JOIN events ev ON ev.id = r.event_id"
+            )
+        ).all()
+        sent = conn.execute(
+            text("SELECT s.entry_id, ev.ts FROM feed_sends s JOIN events ev ON ev.id = s.event_id")
+        ).all()
+    since = now - FEED_ACTIVITY
+
+    def within(rows: list[tuple[object, ...]]) -> Counter[str]:
+        counts: Counter[str] = Counter()
+        for entry_id, ts in rows:
+            stamp = _parse_ts(str(ts))
+            if stamp is not None and since <= stamp <= now:
+                counts[str(entry_id)] += 1
+        return counts
+
+    return within(list(reacted)), within(list(sent))
+
+
+def _feed_top(project: Project, now: datetime) -> JsonValue:
+    """The top shown titles with score, reaction, sent state and 7-day reaction and add counts."""
+    listing = feed_read_service.feed_list(project, top=FEED_TOP)
+    reactions, adds = _feed_activity(project, now)
+    return [
+        {
+            "entry_id": item.entry_id,
+            "title": item.title,
+            "score": item.score,
+            "reaction": None if item.reaction is None else item.reaction.value,
+            "sent": item.sent,
+            "reactions_7d": reactions.get(item.entry_id, 0),
+            "adds_7d": adds.get(item.entry_id, 0),
+        }
+        for item in listing.items
+    ]
+
+
+def _feed_queue(project: Project) -> JsonValue:
+    """Added papers per stage and the open units per task kind."""
+    queue = work_queue_service.queue(project)
+    stages: Counter[str] = Counter(item.stage for item in queue.items)
+    return {
+        "added": len(queue.items),
+        "stages": cast(JsonValue, dict(stages)),
+        "pending": cast(JsonValue, queue.pending),
+    }
+
+
+def _feed_run(project: Project) -> JsonValue:
+    """The last runner run (stage, outcome, finished time) and whether a run or pipeline is open.
+    Read with `reconcile=False`, so nothing is written."""
+    last: JsonValue = None
+    views = runner_service.run_status(project, reconcile=False, limit=1)
+    if views:
+        view = views[0]
+        with project.index.connect() as conn:
+            finished = conn.execute(
+                text(
+                    "SELECT ev.ts FROM runner_runs r "
+                    "LEFT JOIN events ev ON ev.id = r.finished_event_id WHERE r.run_id = :r"
+                ),
+                {"r": view.run_id},
+            ).first()
+        last = {
+            "stage": view.stage,
+            "outcome": view.status,
+            "finished_at": None if finished is None or finished[0] is None else str(finished[0]),
+        }
+    pipelines = pipeline_service.pipeline_status(project, limit=1)
+    return {
+        "last": last,
+        "run_open": runner_service.has_open_run(project),
+        "pipeline_open": any(p.status == "running" for p in pipelines),
     }
 
 

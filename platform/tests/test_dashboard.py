@@ -100,7 +100,10 @@ def test_held_out_seed_identifiers_are_withheld(
 
 def test_page_is_self_contained_and_snapshot_embeds_state(project: Project) -> None:
     page = render_page()
-    assert "http://" not in page and "https://" not in page
+    # Self-contained: no external resource. The only absolute URLs allowed are
+    # the loopback hub links (a67690b, `factory site serve`), which are anchors.
+    external = page.replace("http://127.0.0.1:8766/", "")
+    assert "http://" not in external and "https://" not in external
     assert "/api/state" in page and "#0B0C16" in page
     snapshot = render_page(dashboard_service.dashboard_state(project))
     assert '"slug": "demo"' in snapshot and "STATE" not in snapshot.split("const STATIC=")[1][:12]

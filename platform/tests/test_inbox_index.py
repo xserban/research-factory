@@ -43,7 +43,8 @@ def _status(project: Project, item_id: str = ITEM) -> str:
 
 
 def test_projection_version_bumped() -> None:
-    assert PROJECTION_VERSION == "67"
+    # 67 is the version that added the inbox tables; later bumps must not lower it.
+    assert int(PROJECTION_VERSION) >= 67
 
 
 def test_added_item_is_open(project: Project) -> None:

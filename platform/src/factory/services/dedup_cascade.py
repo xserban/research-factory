@@ -341,13 +341,17 @@ def cascade_match(
     blocked: frozenset[frozenset[str]] = frozenset(),
     *,
     joined: frozenset[frozenset[str]] = frozenset(),
+    aliases: Mapping[str, Sequence[tuple[str, str]]] | None = None,
 ) -> CascadeMerge | None:
     """The merge `new` joins when the cascade runs over `new` and `candidates`, or None.
 
     The group is the one containing `new`; it is reported only when it absorbs another work.
     """
     result = dedup(
-        [new, *[c for c in candidates if c.id != new.id]], blocked=blocked, joined=joined
+        [new, *[c for c in candidates if c.id != new.id]],
+        blocked=blocked,
+        joined=joined,
+        aliases=aliases,
     )
     for merge in result.merges:
         if merge.absorbed and new.id in (merge.primary, *merge.absorbed):

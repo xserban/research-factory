@@ -12,7 +12,7 @@ from factory.clock import FixedClock
 from factory.config import Settings
 from factory.events.envelope import Actor, Event
 from factory.events.reader import read_all
-from factory.mcp import server as mcp_server
+from factory.mcp import sessions as mcp_sessions
 from factory.mcp.server import build_server
 from factory.services.cards import create_card
 from factory.services.context import Project
@@ -23,6 +23,7 @@ from tests.lineage_helpers import ctr_a, ctr_b, lin, screened, world
 SESSION_E = "01JZ9Q3K5M7N8P0R2S4T6V8W1E"
 AGENT = {"role": "cards", "model": "claude-opus-5-5", "skill": "rf-cards"}
 TOOLS = ("vocabulary_propose", "card_create", "card_assert", "card_view")
+READ_ONLY_LIST = "card_list"  # b299847: a read-only list of cards, not a decision tool
 
 
 def _session(monkeypatch: pytest.MonkeyPatch, session: str) -> None:
@@ -32,7 +33,7 @@ def _session(monkeypatch: pytest.MonkeyPatch, session: str) -> None:
         def ulid(self) -> str:
             return session
 
-    monkeypatch.setattr(mcp_server, "IdGenerator", Ids)
+    monkeypatch.setattr(mcp_sessions, "IdGenerator", Ids)
 
 
 def _of(project: Project, *kinds: str) -> list[Event]:
@@ -56,7 +57,7 @@ def _quote_item(cw: CardWorld, **over: Any) -> dict[str, Any]:
 
 
 @pytest.mark.anyio
-async def test_tool_list_has_four_card_tools_and_no_decisions(
+async def test_tool_list_has_four_card_tools_plus_the_card_list_and_no_decisions(
     settings: Settings, project: Project, clock: FixedClock
 ) -> None:
     async with Client(build_server(settings, clock=clock)) as client:
@@ -64,7 +65,7 @@ async def test_tool_list_has_four_card_tools_and_no_decisions(
     assert all(tool in names for tool in TOOLS)
     banned = ("confirm", "approve", "decide", "merge", "reject", "import")
     related = [n for n in names if n.startswith(("vocabulary_", "card_"))]
-    assert sorted(related) == sorted(TOOLS)
+    assert sorted(related) == sorted((*TOOLS, READ_ONLY_LIST))
     assert not [n for n in related if any(b in n for b in banned)]
 
 

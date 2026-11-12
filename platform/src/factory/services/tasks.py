@@ -299,6 +299,14 @@ def task_counts(project: Project) -> TaskCounts:
     return TaskCounts(**counts)
 
 
+def open_task_ids(project: Project, kind: str) -> list[str]:
+    """The ids of the tasks of `kind` a session could claim now: open, or claimed with a lapsed
+    lease (the rule `claim_next` serves). Units replaced by a newer task are not excluded here;
+    a caller that counts extraction units leaves `abandoned_task_ids` out itself. Read-only."""
+    project.index.sync()
+    return [task_id for task_id, _ in _claimable(project, kind, _now(project))]
+
+
 def session_in_layer(project: Project, session: str) -> bool:
     """Whether `session` worked for the intuition layer: it claimed an intuition task, or wrote a
     `concept.defined` or `concept.link_proposed` event (the concept tools claim no task). One

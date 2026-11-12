@@ -1,6 +1,7 @@
 ---
 name: rf-mine
 description: Use when a registered miner must be run over the corpus, or a miner must be registered: serves miner tasks, records the rows read from the pinned document, and settles disagreements where the gate allows it. Name this skill as a miner's `procedure`.
+stage: [extract]
 ---
 
 # rf-mine

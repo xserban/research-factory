@@ -11,15 +11,18 @@ import json
 
 from pydantic import JsonValue
 
+from factory.services.site_theme import LIGHT_CSS, THEME_SCRIPT, THEME_TOGGLE
+
 POLL_MARKER = "/*STATE*/null"
 
 PAGE = r"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<!--THEME-->
 <title>Factory dashboard</title>
 <style>
 :root{color-scheme:dark;--bg:#0B0C16;--dk:#080910;--lt:#151828;--sel:#1f253a;--mut:#2d3450;--fg:#ddf7ff;--dim:#6a6e95;--light:#b5c5db;
---ac:#82FB9C;--green:#4fe88f;--cyan:#7cf8f7;--blue:#829dd4;--mag:#86a7df;--brown:#287b51;--bright:#9cf7c2}
+--ac:#82FB9C;--green:#4fe88f;--cyan:#7cf8f7;--blue:#829dd4;--mag:#86a7df;--brown:#287b51;--bright:#9cf7c2;--soft:rgba(130,251,156,.12)}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 ui-monospace,"JetBrains Mono","Fira Code",SFMono-Regular,Menlo,Consolas,monospace}
 header{background:var(--dk);border-bottom:1px solid var(--mut);padding:8px 16px;position:sticky;top:0;z-index:2}
@@ -61,13 +64,13 @@ code,.q{overflow-wrap:anywhere;font-size:.8rem}
 #live{max-width:1100px;margin:0 auto;padding:0 16px}
 .fold{cursor:pointer;user-select:none;margin:8px 0;font-size:1rem}.fold .dim{font-weight:normal;margin-left:8px}
 .chip{display:inline-block;border:1px solid var(--mut);border-radius:12px;padding:1px 10px;margin:2px 6px 2px 0;font-size:.8rem;color:var(--dim)}
-.chip.act{color:var(--ac);border-color:var(--ac)}
+.chip.act{color:var(--ac);border-color:var(--ac);background:var(--soft)}
 .v-include{color:var(--ac)}.v-exclude{color:var(--dim)}.v-unsure{color:var(--blue)}.v-cannot-assess{color:var(--cyan)}
 .lscroll{max-height:360px;overflow:auto;border:1px solid var(--mut);border-radius:4px}
 @media (max-width:600px){.kvs{grid-template-columns:1fr}main{padding:0 10px 48px}}
 *{border-radius:0!important}body{background-image:linear-gradient(rgba(130,251,156,.035) 1px,transparent 1px),linear-gradient(90deg,rgba(130,251,156,.035) 1px,transparent 1px);background-size:28px 28px}button{background:transparent;color:var(--ac);border:1px solid rgba(130,251,156,.45);font-weight:600;font-size:11px;letter-spacing:.1em;text-transform:uppercase;cursor:pointer}button:hover,button.on{background:var(--ac);color:var(--bg)}th{font-size:10.5px;letter-spacing:.14em;text-transform:uppercase}.help,.card,.tile{border-left:3px solid var(--ac)}h2::before{content:'▮';color:var(--ac);margin-right:8px}
-</style></head><body>
-<header><h1>Factory dashboard <span class="dim" id="slug"></span></h1>
+/*LIGHT*/</style></head><body>
+<header><h1>Factory dashboard <span class="dim" id="slug"></span></h1><!--TOGGLE-->
 <div class="dim"><span id="fresh">loading</span> <span id="last"></span></div>
 <nav id="tabs"></nav></header>
 <section id="run"></section>
@@ -222,6 +225,24 @@ function renderProducts(m){const R=D.products||[];m.append(h('h2',null,'Products
  m.append(h('p',{class:'dim'},'Every product of the factory for this project, rebuilt from the events. Open the hub with: factory site serve (http://127.0.0.1:8766/). Rebuild with: factory site build.'));
  if(!R.length){m.append(h('p',{class:'dim'},'No product is registered.'));return;}
  m.append(table(['Product','Group','State','Built','Model-written'],R.map(r=>[h('a',{href:'http://127.0.0.1:8766/#'+r.id,target:'_blank'},r.title),r.group,r.error?'build failed':(r.stale?'stale':'up to date'),r.built_at||'not built yet',r.needs_model?'yes':''])));}
+function feedPart(title,v,f){const box=h('div',null,h('h3',null,title));if(v==='unavailable')box.append(h('p',{class:'dim'},'unavailable'));else f(box,v);return box;}
+function renderFeed(m){const F=D.feed;if(!F)return;m.append(h('h2',null,'Feed and queue'));
+ if(F.error){m.append(h('p',{class:'dim'},'unavailable'));return;}
+ m.append(h('div',{class:'row'},h('a',{href:'http://127.0.0.1:8766/feed/',target:'_blank'},'Feed (hub)'),h('a',{href:'http://127.0.0.1:8766/queue/',target:'_blank'},'Queue (hub)')));
+ m.append(h('p',{class:'dim'},'Categories: '+(F.categories||[]).join(', ')+' \u00b7 shown per cycle '+E(F.shown_per_cycle)+' \u00b7 every '+E(F.interval_days)+' day(s)'));
+ m.append(feedPart('Last fetch',F.fetch,(b,f)=>b.append(kv({last_window_from:f.last_window_from,last_window_to:f.last_window_to,next_due:f.next_due,due_now:f.due?'yes':'no'}))));
+ m.append(feedPart('Latest ranking',F.ranking,(b,f)=>b.append(kv({ranking_id:f.ranking_id,shown:f.shown,explore:f.explore}))));
+ m.append(feedPart('Top shown titles (last 7 days for reactions and adds)',F.top,(b,f)=>b.append(table(['Title','Score','Reaction','Sent','Reactions 7d','Adds 7d'],f.map(t=>[t.title||t.entry_id,E(t.score),E(t.reaction),t.sent?'yes':'',t.reactions_7d,t.adds_7d])))));
+ m.append(feedPart('Work queue',F.queue,(b,f)=>{b.append(kv({added_papers:f.added}));const st=Object.keys(f.stages||{});
+  b.append(st.length?table(['Stage','Added papers'],st.map(k=>[k,f.stages[k]])):h('p',{class:'dim'},'no added papers'));
+  const pk=Object.keys(f.pending||{});b.append(table(['Pending kind','Open units'],pk.map(k=>[k,f.pending[k]])));}));
+ m.append(feedPart('Interrupted (factory resume --dry-run shows the plan)',F.interrupted,(b,f)=>{
+  b.append(f.clean?h('p',{class:'dim'},'Nothing is interrupted.'):kv({runs:f.runs,pipelines:f.pipelines,expired_leases:f.leases,stale_passes:f.passes,papers_never_looked_up:f.resolve,screened_in_without_full_text:f.fetch,full_texts_not_converted:f.convert}));
+  (f.limit_runs||[]).forEach(r=>b.append(h('p',{class:'dim'},'usage limit, '+r.stage+': '+(r.reset?'resets '+r.reset+(r.estimated?' (estimated)':''):'reset unknown'))));}));
+ m.append(feedPart('Last run',F.run,(b,f)=>{const L=f.last;b.append(kv({run_open:f.run_open?'yes':'no',pipeline_open:f.pipeline_open?'yes':'no'}));
+  b.append(L?kv({stage:L.stage,outcome:L.outcome,finished_at:L.finished_at||'not finished'}):h('p',{class:'dim'},'no run yet'));}));
+}
+function tabs(){return D.feed?TABS.concat([['feed','Feed and queue',renderFeed]]):TABS;}
 function renderCost(m){const C=D.cost||{};m.append(h('h2',null,'Cost and time'));
  m.append(kv({first_event:fmt(C.first_event_at),last_event:fmt(C.last_event_at)}));
  m.append(h('h3',null,'Agent events by stage'),kv(C.events_per_stage||{}));
@@ -296,8 +317,8 @@ cost:{cmds:['budget --help','report methods'],hub:[['Results (events per model)'
 const TABS=[['protocol','Protocol',renderProtocol],['decisions','Decisions',renderDecisions],['press','PRESS',renderPress],['probes','Probes',renderProbes],['search','Search',renderSearch],['screening','Screening',renderScreening],['extraction','Extraction',renderExtraction],['conversion','Conversion',renderConversion],['miners','Miners',renderMiners],['products','Products',renderProducts],['cost','Cost and time',renderCost]];
 function render(){
  const y=window.scrollY,a=document.activeElement,keep=a&&a.id==='q'?[a.selectionStart,a.selectionEnd]:null;
- $('#tabs').replaceChildren(...TABS.map(([k,l])=>h('button',{class:ui.tab===k?'on':'',onclick:()=>{ui.tab=k;render();}},l)));
- const m=$('#main');m.replaceChildren();if(TAB_HELP[ui.tab]){const hp=h('div',{class:'help'});hp.innerHTML=TAB_HELP[ui.tab];m.append(hp);}const ta=TAB_ACTIONS[ui.tab];if(ta){const slug=(D.meta||{}).slug||'PROJECT';const bx=h('div',{class:'help'},h('b',null,'What you can do'),h('div',{class:'dim'},'Run these in a terminal (the dashboard is read-only).'),ta.cmds.map(c=>cmdRow('factory --project '+slug+' '+c)));if(ta.hub.length)bx.append(h('div',{class:'dim'},'In the hub (factory site serve): ',ta.hub.map(x=>h('a',{href:'http://127.0.0.1:8766/#'+x[1],target:'_blank',style:'margin-right:12px'},x[0]))));m.append(bx);}(TABS.find(t=>t[0]===ui.tab)||TABS[0])[2](m);
+ $('#tabs').replaceChildren(...tabs().map(([k,l])=>h('button',{class:ui.tab===k?'on':'',onclick:()=>{ui.tab=k;render();}},l)));
+ const m=$('#main');m.replaceChildren();if(TAB_HELP[ui.tab]){const hp=h('div',{class:'help'});hp.innerHTML=TAB_HELP[ui.tab];m.append(hp);}const ta=TAB_ACTIONS[ui.tab];if(ta){const slug=(D.meta||{}).slug||'PROJECT';const bx=h('div',{class:'help'},h('b',null,'What you can do'),h('div',{class:'dim'},'Run these in a terminal (the dashboard is read-only).'),ta.cmds.map(c=>cmdRow('factory --project '+slug+' '+c)));if(ta.hub.length)bx.append(h('div',{class:'dim'},'In the hub (factory site serve): ',ta.hub.map(x=>h('a',{href:'http://127.0.0.1:8766/#'+x[1],target:'_blank',style:'margin-right:12px'},x[0]))));m.append(bx);}(tabs().find(t=>t[0]===ui.tab)||TABS[0])[2](m);
  $('#slug').textContent=(D.meta||{}).slug||'';
  window.scrollTo(0,y);
  if(keep){const q=$('#q');if(q){q.focus();q.setSelectionRange(keep[0],keep[1]);}}}
@@ -311,6 +332,12 @@ async function poll(){
 if(STATIC){render();drawRun();drawLive();stamp();}else{render();poll();setInterval(poll,5000);pollProgress();pollLive();}
 </script></body></html>
 """
+
+PAGE = (
+    PAGE.replace("<!--THEME-->", THEME_SCRIPT)
+    .replace("/*LIGHT*/", LIGHT_CSS)
+    .replace("<!--TOGGLE-->", THEME_TOGGLE)
+)
 
 
 def render_page(state: dict[str, JsonValue] | None = None) -> str:

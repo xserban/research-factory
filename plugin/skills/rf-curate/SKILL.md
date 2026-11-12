@@ -1,6 +1,7 @@
 ---
 name: rf-curate
 description: Use when the researcher asks what the audits, disagreements and failed runs of a project teach: read the computed lessons and record a proposal (an amendment, a worked example or a skill revision) for a human to decide.
+stage: [maintain]
 ---
 
 # rf-curate

@@ -2,6 +2,7 @@
 principal and session its transport names (`factory.mcp.sessions`)."""
 
 import json
+import os
 import re
 from collections import Counter
 from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -43,6 +44,7 @@ from factory.mcp.sessions import (
     current_call,
     stdio_provider,
 )
+from factory.mcp.unit_cap import UnitCap
 from factory.model.appraisal_events import AnswerInput
 from factory.model.base import StrictModel
 from factory.model.budgets import REQUESTS_SEARCH
@@ -125,6 +127,8 @@ from factory.services import exports as exports_service
 from factory.services import extraction as extraction_service
 from factory.services import extraction_agreement as extraction_agreement_service
 from factory.services import extraction_audit as extraction_audit_service
+from factory.services import feed as feed_service
+from factory.services import feed_read as feed_read_service
 from factory.services import finders as findings_service
 from factory.services import fulltext as fulltext_service
 from factory.services import fulltext_status as fulltext_status_service
@@ -234,16 +238,19 @@ def build_server(
     auth: AuthSettings | None = None,
     token_verifier: TokenVerifier | None = None,
     limiter: RateLimiter | None = None,
+    cap: UnitCap | None = None,
 ) -> MCPServer:
     """The factory's MCP server. `context` names each call's principal and session; by default the
     local user and one session per process, as on stdio. `auth` and `token_verifier` are the HTTP
-    transport's (`factory.mcp.http`).
+    transport's (`factory.mcp.http`). `cap` is the unit cap of a headless run; by default it is
+    read from `FACTORY_UNIT_CAP` and `FACTORY_RUN_ID` (none: no cap).
 
     `fulltext_routes`, when given, is called once per `fulltext_fetch` call to build that call's
     routes; tests use it to supply stubs. By default each call builds `default_routes(settings)`,
     so no arXiv version answer outlives the call that asked for it.
     """
     provider = stdio_provider(settings, clock) if context is None else context
+    unit_cap = UnitCap.from_env(os.environ) if cap is None else cap
     adapters = dict(default_sources() if sources is None else sources)
     session = THIS_SESSION
 
@@ -502,6 +509,76 @@ def build_server(
             return _withheld(opened, {"cycle": report})
 
         return _reply(project, run_cycle)
+
+    def _feed_source() -> feed_service.FeedSource:
+        """The arXiv adapter the feed fetches with: the watch's own factory, so an injected
+        adapter is honoured in tests."""
+        factory = adapters["arxiv"] if "arxiv" in adapters else default_sources()["arxiv"]
+        return cast(feed_service.FeedSource, factory(settings, clock))
+
+    @server.tool()
+    def feed_list(
+        project: str,
+        role: str,
+        model: str,
+        skill: str,
+        top: int = 30,
+        ranking_id: str | None = None,
+    ) -> dict[str, JsonValue]:
+        """The latest feed ranking (or `ranking_id`) as at most `top` items: rank, score, whether
+        the item is an exploration pick, its nearest reference work, the researcher's reaction and
+        whether it was sent to the inbox. Read-only; the reactions and sends are the researcher's
+        acts on the CLI, there is no tool for them. Refused to a session that has joined a pass."""
+
+        def listing() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            make_agent_actor(settings, session, role, model, skill)
+            report = feed_read_service.feed_list(opened, ranking_id=ranking_id, top=top)
+            return _withheld(opened, report.model_dump(mode="json"), include_work_ids=False)
+
+        return _reply(project, listing, include_work_ids=False)
+
+    @server.tool()
+    def feed_run(
+        project: str, role: str, model: str, skill: str, dry_run: bool = False
+    ) -> dict[str, JsonValue]:
+        """Run the project's feed cycle now: fetch the listings of the window, then rank the new
+        entries against the reference works with the local embedding model. Runs only when the
+        cadence says it is due. The feed's events are recorded as this agent, with its model,
+        skill and the call's arguments as input. `dry_run` fetches and writes nothing. Refused to
+        a session that has joined a pass."""
+
+        def run_cycle() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            actor = make_agent_actor(settings, session, role, model, skill)
+            result = feed_service.feed_run(
+                opened,
+                feed_service.LazyEmbedder(None, ranking_model_service.Specter2Embedder),
+                _feed_source(),
+                due=True,
+                dry_run=dry_run,
+                actor=actor,
+            )
+            return _withheld(opened, result.model_dump(mode="json"))
+
+        return _reply(project, run_cycle)
+
+    @server.tool()
+    def feed_status(project: str, role: str, model: str, skill: str) -> dict[str, JsonValue]:
+        """The feed's configuration, the last complete fetch window, whether a run is due, the
+        last ranking and the counts of entries, fetches, rankings, reactions and sends. Read-only.
+        Refused to a session that has joined a pass."""
+
+        def status() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            make_agent_actor(settings, session, role, model, skill)
+            report = feed_service.feed_status(opened)
+            return _withheld(opened, report.model_dump(mode="json"), include_work_ids=False)
+
+        return _reply(project, status, include_work_ids=False)
 
     @server.tool()
     def notice_list(project: str) -> dict[str, JsonValue]:
@@ -839,10 +916,17 @@ def build_server(
             run_stage = parse_stage(stage)
             opened = open_project(settings, project, session=session, clock=clock)
             actor = make_agent_actor(settings, session, role, model, skill)
-            result = screening_service.screen_next(
-                opened, actor, _pass_label(pass_label), stage=run_stage
-            )
-            return _withheld(opened, result.model_dump(mode="json"), include_work_ids=False)
+            # A batch is served whole, up to SCREEN_BATCH records: reserve them all first, so
+            # that the cap is never passed, and give back what the batch does not use.
+            with unit_cap.serving(
+                screening_service.SCREEN_BATCH, whole=screening_service.SCREEN_BATCH
+            ) as done:
+                result = screening_service.screen_next(
+                    opened, actor, _pass_label(pass_label), stage=run_stage
+                )
+                dumped = result.model_dump(mode="json")
+                done(dumped)
+            return _withheld(opened, dumped, include_work_ids=False)
 
         return _reply(project, screen, include_work_ids=False)
 
@@ -1705,11 +1789,14 @@ def build_server(
         pass on its first call."""
 
         def serve() -> JsonValue:
-            label = _pass_label(pass_label)
-            opened = open_project(settings, project, session=session, clock=clock)
-            actor = make_agent_actor(settings, session, role, model, skill)
-            served = extraction_service.extract_next(opened, actor, label)
-            return _withheld(opened, served.model_dump(mode="json"), include_work_ids=False)
+            with unit_cap.serving() as done:
+                label = _pass_label(pass_label)
+                opened = open_project(settings, project, session=session, clock=clock)
+                actor = make_agent_actor(settings, session, role, model, skill)
+                served = extraction_service.extract_next(opened, actor, label)
+                dumped = served.model_dump(mode="json")
+                done(dumped)
+            return _withheld(opened, dumped, include_work_ids=False)
 
         return _reply(project, serve, include_work_ids=False)
 
@@ -1861,14 +1948,17 @@ def build_server(
         part in a production pass, nor recorded a gold label."""
 
         def serve() -> JsonValue:
-            label = _pass_label(pass_label)
-            opened = open_project(settings, project, session=session, clock=clock)
-            _require_pass_opened(opened, "miner")
-            actor = make_agent_actor(settings, session, role, model, skill)
-            served = mining_service.mine_next(
-                opened, actor, miner, version, label, calibration=calibration
-            )
-            return _withheld(opened, served.model_dump(mode="json"), include_work_ids=False)
+            with unit_cap.serving() as done:
+                label = _pass_label(pass_label)
+                opened = open_project(settings, project, session=session, clock=clock)
+                _require_pass_opened(opened, "miner")
+                actor = make_agent_actor(settings, session, role, model, skill)
+                served = mining_service.mine_next(
+                    opened, actor, miner, version, label, calibration=calibration
+                )
+                dumped = served.model_dump(mode="json")
+                done(dumped)
+            return _withheld(opened, dumped, include_work_ids=False)
 
         return _reply(project, serve, include_work_ids=False)
 
@@ -2219,11 +2309,14 @@ def build_server(
         pass on its first call."""
 
         def serve() -> JsonValue:
-            label = _pass_label(pass_label)
-            opened = open_project(settings, project, session=session, clock=clock)
-            actor = make_agent_actor(settings, session, role, model, skill)
-            served = contributions_service.contribution_next(opened, actor, label)
-            return _withheld(opened, served.model_dump(mode="json"), include_work_ids=False)
+            with unit_cap.serving() as done:
+                label = _pass_label(pass_label)
+                opened = open_project(settings, project, session=session, clock=clock)
+                actor = make_agent_actor(settings, session, role, model, skill)
+                served = contributions_service.contribution_next(opened, actor, label)
+                dumped = served.model_dump(mode="json")
+                done(dumped)
+            return _withheld(opened, dumped, include_work_ids=False)
 
         return _reply(project, serve, include_work_ids=False)
 
@@ -2846,14 +2939,17 @@ def build_server(
         a session that has joined a pass."""
 
         def serve() -> JsonValue:
-            opened = open_project(settings, project, session=session, clock=clock)
-            _refuse_pass_session(opened)
-            _require_pass_opened(opened)
-            actor = make_agent_actor(settings, session, role, model, skill)
-            served = interpretations_service.intuition_next(
-                opened, actor, targets=list(targets) if targets else None
-            )
-            return _withheld(opened, served.model_dump(mode="json"), include_work_ids=False)
+            with unit_cap.serving() as done:
+                opened = open_project(settings, project, session=session, clock=clock)
+                _refuse_pass_session(opened)
+                _require_pass_opened(opened)
+                actor = make_agent_actor(settings, session, role, model, skill)
+                served = interpretations_service.intuition_next(
+                    opened, actor, targets=list(targets) if targets else None
+                )
+                dumped = served.model_dump(mode="json")
+                done(dumped)
+            return _withheld(opened, dumped, include_work_ids=False)
 
         return _reply(project, serve, include_work_ids=False)
 
@@ -5076,11 +5172,14 @@ def build_server(
         gave the other pass, and to a session that appraised and then extracts."""
 
         def serve() -> JsonValue:
-            label = _pass_label(pass_label)
-            opened = open_project(settings, project, session=session, clock=clock)
-            actor = make_agent_actor(settings, session, role, model, skill)
-            served = appraisal_passes_service.appraisal_next(opened, actor, label)
-            return _withheld(opened, served.model_dump(mode="json"), include_work_ids=False)
+            with unit_cap.serving() as done:
+                label = _pass_label(pass_label)
+                opened = open_project(settings, project, session=session, clock=clock)
+                actor = make_agent_actor(settings, session, role, model, skill)
+                served = appraisal_passes_service.appraisal_next(opened, actor, label)
+                dumped = served.model_dump(mode="json")
+                done(dumped)
+            return _withheld(opened, dumped, include_work_ids=False)
 
         return _reply(project, serve, include_work_ids=False)
 

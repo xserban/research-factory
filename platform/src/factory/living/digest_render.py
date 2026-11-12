@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 from factory.clock import format_ts
 
 if TYPE_CHECKING:
+    from factory.model.digest import DigestFeed
     from factory.services.digest import Digest, DigestProject
 
 
@@ -93,6 +94,25 @@ def _project(p: DigestProject) -> list[str]:
             f"- screened: {flow.screened}; pending: {flow.pending}; included: {flow.included}",
             f"- total included: {flow.total_included}",
         ]
+    if p.feed is not None:
+        lines += _feed(p.feed)
+    return lines
+
+
+def _feed(f: DigestFeed) -> list[str]:
+    lines = ["", "### Feed", ""]
+    if f.ranking_id is None:
+        lines.append("No ranking yet.")
+    else:
+        lines.append(f"Ranking {f.ranking_id}.")
+    for row in f.items.items:
+        tag = " [explore]" if row.explore else ""
+        lines.append(
+            f"- {row.entry_id} {row.title or '(title unknown)'} score {row.score:.3f}{tag}"
+        )
+    lines += _more(f.items.more)
+    lines.append(f"- sends awaiting resolution: {f.pending_sends}")
+    lines.append(f"- feed-scope-drift: {'holds' if f.drift else 'not raised'}")
     return lines
 
 

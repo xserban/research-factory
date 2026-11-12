@@ -43,8 +43,6 @@ from pydantic import BaseModel
 
 from factory.clock import FixedClock
 from factory.events.reader import read_all
-from factory.index.default import default_projection
-from factory.index.index import Index
 from factory.services.context import Project
 
 P = ParamSpec("P")
@@ -153,9 +151,26 @@ def _object_tag(value: Any) -> str:
     return f"{id(value)}:{_kind_tag(value)}"
 
 
+def _is_pydantic_internal(key: object) -> bool:
+    """Dunder state the model machinery fills in lazily (completing a forward reference changes
+    `__pydantic_*`, `__signature__`); it is not source, so a patch never lives there."""
+    return str(key).startswith(("__pydantic_", "__signature__"))
+
+
+# Stdlib bindings created on first use (not by a patch): `tempfile` builds its name sequence lazily.
+_LAZY_BINDINGS = frozenset({"_name_sequence"})
+
+
 def _namespace_items(namespace: Any) -> list[tuple[str, Any]]:
     try:
-        return sorted(vars(namespace).items(), key=lambda kv: str(kv[0]))
+        return sorted(
+            (
+                (k, v)
+                for k, v in vars(namespace).items()
+                if not _is_pydantic_internal(k) and k not in _LAZY_BINDINGS
+            ),
+            key=lambda kv: str(kv[0]),
+        )
     except TypeError:
         return []
 
@@ -251,15 +266,11 @@ def _clear(root: Path) -> None:
 
 
 def _reopen_index(project: Project) -> None:
-    """Point the project at the restored database; the old engine held the replaced file."""
-    old = project.index
-    project.index = Index(
-        project.paths.index_path,
-        project.paths.events_dir,
-        project.catalog,
-        default_projection(project.blobs),
-    )
-    old._engine.dispose()
+    """Point the project at the restored database; the old engine held the replaced file.
+
+    The `Index` object is kept: the writer's host guard and the ID floor close over it, and a second
+    instance on the same file would not share its lock hold (self-deadlock)."""
+    project.index.reopen()
 
 
 def snapshot_world(build: Callable[P, R]) -> Callable[P, R]:

@@ -11,6 +11,7 @@ from factory.config import Settings
 from factory.events.envelope import Actor
 from factory.events.reader import read_all
 from factory.services.context import Project
+from factory.services.dedup import dedup_run
 from tests.helpers import SourcesFor, _setup, open_session
 from tests.screening_helpers import _draw
 from tests.watch_helpers import ScriptedSource, adapters, by_text, record, watch_ready
@@ -66,6 +67,7 @@ async def test_mcp_watch_refused_to_pass_session(
 ) -> None:
     _setup(project, agent, human, mock_sources)
     _draw(project)
+    dedup_run(project)
     before = len(read_all(project.paths.events_dir, project.catalog))
     source = ScriptedSource(by_text({}))
     async with open_session(settings, clock, dict(adapters(source))) as screener:

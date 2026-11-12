@@ -91,8 +91,8 @@ KINDS: tuple[str, ...] = (
     "anchor",
     "decision",
     "extraction",
-    "claim",
     "appraisal",
+    "claim",
     "relation",
     "idea",
     "cites",
@@ -133,8 +133,9 @@ KINDS: tuple[str, ...] = (
     lab_trace.ADOPTION_KIND,
 )
 """Node kinds in chain order. The layer's kinds come last (G2's pinned order after `claim` is
-unchanged). Sibling nodes are listed in this order (reversed for back traces, so
-the work branch of a decision comes before its cited criterion)."""
+unchanged; `appraisal` sits before `claim` so that stays true). Sibling nodes are listed in
+this order (reversed for back traces, so the work branch of a decision comes before its
+cited criterion)."""
 
 _RANK = {kind: rank for rank, kind in enumerate(KINDS)}
 _NO_EVENT = ""
@@ -1083,6 +1084,8 @@ class _Walk:
         return _Described(f"{level} decision: {subject}", str(event_id or _NO_EVENT))
 
     def _decision(self, ident: str) -> _Described | None:
+        """A `dec_` id names a screening decision or, failing that, a decision suggestion (the
+        two share the namespace; records cite suggestions). An id of neither has no node."""
         rows = self._all(
             "SELECT pass_label, phase, verdict, criterion, superseded_by, event_id "
             "FROM decisions WHERE decision_id = :d",

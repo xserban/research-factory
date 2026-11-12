@@ -9,7 +9,7 @@ from factory.clock import FixedClock
 from factory.config import Settings
 from factory.errors import FactoryValidationError
 from factory.events.envelope import Actor
-from factory.mcp import server as mcp_server
+from factory.mcp import sessions as mcp_sessions
 from factory.model.lineage import RelationProposal
 from factory.model.references import ReferenceResolutionDecided
 from factory.services.context import Project
@@ -168,7 +168,7 @@ async def test_trace_refused_to_pass_session(
         def ulid(self) -> str:
             return ctr_a.session
 
-    monkeypatch.setattr(mcp_server, "IdGenerator", Ids)
+    monkeypatch.setattr(mcp_sessions, "IdGenerator", Ids)
     async with open_session(settings, clock) as client:
         out = await client.call("trace", project="demo", ref=rid)
     assert out["ok"] is False and out["errors"][0]["field"] == "session"

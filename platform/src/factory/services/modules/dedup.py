@@ -32,9 +32,7 @@ SPEC = ModuleSpec(
             "merges",
         ),
     ),
-    checks=(
-        CheckRule("merge-verdict-conflict", ("warning", "warning", "warning")),
-    ),
+    checks=(CheckRule("merge-verdict-conflict", ("warning", "warning", "warning")),),
     gates=(
         GateSpec(
             "dedup.version_pair",

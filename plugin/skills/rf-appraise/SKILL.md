@@ -1,6 +1,7 @@
 ---
 name: rf-appraise
 description: Use when the included works of a ready protocol that declares an appraisal instrument must be read for the span items of that instrument (does the paper report its seeds, hyperparameters, variance, limitations), as pass A or pass B of the dual appraisal, in a Claude Code session dedicated to that pass.
+stage: [extract]
 ---
 
 # rf-appraise

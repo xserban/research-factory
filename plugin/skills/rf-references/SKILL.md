@@ -1,6 +1,7 @@
 ---
 name: rf-references
 description: Use when works have been included after full-text screening and converted to Markdown, and their reference lists must be extracted, linked to the corpus, and snowballed for further candidates.
+stage: [gather]
 ---
 
 # rf-references

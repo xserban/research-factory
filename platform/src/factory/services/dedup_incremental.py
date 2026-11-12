@@ -27,6 +27,7 @@ from factory.model.work import Work
 from factory.services.context import Project
 from factory.services.dedup import (
     DedupSummary,
+    active_merges,
     alias_keys,
     blocked_pairs,
     joined_pairs,
@@ -38,6 +39,7 @@ from factory.services.dedup_cascade import (
     TITLE_SIMILARITY_THRESHOLD,
     YEAR_WINDOW,
     CascadeMerge,
+    cascade_match,
     dedup,
 )
 from factory.services.search import corpus_size, works_by_ids
@@ -82,6 +84,40 @@ def considered_works(project: Project, work_ids: Sequence[str]) -> list[Work]:
     project.index.sync()
     new = works_by_ids(project, work_ids)
     return _considered(project, new, {w.id for w in new})[0]
+
+
+def held_matches(project: Project, works: Sequence[Work]) -> dict[str, str]:
+    """Map each given work's id to the id of the canonical corpus work it would merge with.
+
+    Read-only: nothing is written. The rules are those of `dedup_new` (strong identifiers, then
+    year-blocked title similarity, confirmed by the cascade, respecting blocked pairs); the works
+    need not be recorded. Linked identifiers (work aliases) match like a work's own. A match with
+    an absorbed work resolves to that work's primary. Works that match nothing are absent from the
+    result.
+    """
+    project.index.sync()
+    canonical = {a: m.primary for m in active_merges(project) for a in m.absorbed}
+    blocked = blocked_pairs(project)
+    found: dict[str, str] = {}
+    for work in works:
+        with project.index.connect() as conn:
+            ids = (_key_candidates(conn, [work]) | _title_candidates(conn, [work])) - {work.id}
+        if not ids:
+            continue
+        candidates = works_by_ids(project, sorted(ids))
+        match = cascade_match(
+            work,
+            candidates,
+            blocked,
+            aliases=alias_keys(project, [work.id, *(c.id for c in candidates)]),
+        )
+        if match is None:
+            continue
+        others = [m for m in (match.primary, *match.absorbed) if m != work.id]
+        if others:
+            target = others[0]
+            found[work.id] = canonical.get(target, target)
+    return found
 
 
 def _batches(ids: list[str], size: int) -> Iterator[list[str]]:

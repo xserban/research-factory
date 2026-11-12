@@ -28,7 +28,7 @@ from pydantic import JsonValue
 from sqlalchemy import text
 
 from factory.errors import FactoryValidationError, ValidationIssue
-from factory.events.envelope import Actor
+from factory.events.envelope import Actor, Event
 from factory.inbox.links import (
     IdentifierKind,
     LinkIdentifier,
@@ -149,8 +149,11 @@ def inbox_sessions(project: Project) -> set[str]:
     return {str(row[0]) for row in rows}
 
 
-def _refuse_actor(project: Project, actor: Actor) -> None:
-    """Refuse a system actor and any session that joined a screening or extraction pass."""
+def _refuse_actor(project: Project, actor: Actor, *, automatic: bool = False) -> None:
+    """Refuse a system actor (unless `automatic`, the platform's own lookups) and any session
+    that joined a screening or extraction pass."""
+    if automatic and actor.kind == "system":
+        return
     if actor.kind not in ("human", "agent"):
         raise FactoryValidationError([ValidationIssue("actor", "a human or an agent")])
     if passes.is_pass_session(project, actor.session):
@@ -195,6 +198,35 @@ def _as_sent(item: LinkInput) -> dict[str, JsonValue]:
     return sent
 
 
+def link_event(
+    project: Project, actor: Actor, item: LinkInput, channel: Channel
+) -> tuple[Event | None, str | None, list[ValidationIssue]]:
+    """Build the `inbox.link_added` event of one link without recording it: `(event, item_id,
+    [])`, or `(None, None, issues)` when the item is invalid. Mints the item id and, for an agent,
+    puts the input blob; the caller holds the write lock and records the event."""
+    identifier, issues = _item_issues(actor, item)
+    if issues or identifier is None:
+        return None, None, issues
+    note = item.note.strip() if item.note is not None and item.note.strip() else None
+    item_id = project.ids.new("inb")
+    payload = InboxLinkAdded(
+        item_id=item_id,
+        route=InboxRoute.LINK,
+        link=stored_link(item.link),
+        identifier_kind=identifier.kind,
+        identifier_value=identifier.value,
+        identifier_version=identifier.version,
+        note=note,
+        basis=item.basis,
+        channel=channel,
+    )
+    input_blob = project.blobs.put_json(_as_sent(item)) if actor.kind == "agent" else None
+    event = project.events.make(
+        "inbox.link_added", payload, actor, refs=(item_id,), input_blob=input_blob
+    )
+    return event, item_id, []
+
+
 def add_links(
     project: Project, actor: Actor, items: Sequence[LinkInput], channel: Channel
 ) -> BatchResult[str]:
@@ -210,29 +242,11 @@ def add_links(
         project.index.sync()
         events = []
         for index, item in enumerate(items):
-            identifier, issues = _item_issues(actor, item)
-            if issues or identifier is None:
+            event, item_id, issues = link_event(project, actor, item, channel)
+            if event is None or item_id is None:
                 rejected.append(ItemError(index=index, issues=issues))
                 continue
-            note = item.note.strip() if item.note is not None and item.note.strip() else None
-            item_id = project.ids.new("inb")
-            payload = InboxLinkAdded(
-                item_id=item_id,
-                route=InboxRoute.LINK,
-                link=stored_link(item.link),
-                identifier_kind=identifier.kind,
-                identifier_value=identifier.value,
-                identifier_version=identifier.version,
-                note=note,
-                basis=item.basis,
-                channel=channel,
-            )
-            input_blob = project.blobs.put_json(_as_sent(item)) if actor.kind == "agent" else None
-            events.append(
-                project.events.make(
-                    "inbox.link_added", payload, actor, refs=(item_id,), input_blob=input_blob
-                )
-            )
+            events.append(event)
             written.append(item_id)
         if events:
             project.record(events)
@@ -322,6 +336,7 @@ def resolve_links(
     item_ids: Sequence[str] | None = None,
     deviation_id: str | None = None,
     page_fetch: Callable[[str], httpx.Response] | None = None,
+    automatic: bool = False,
 ) -> list[ResolveOutcome]:
     """Look up open items (all, or `item_ids`) in id order, one recorded `supplied` query each.
 
@@ -333,8 +348,10 @@ def resolve_links(
     run (the item stays open and may be resolved again).
 
     An `item_ids` entry that is not an open item refuses the whole call before anything runs.
+    `automatic=True` lets the platform's own deterministic step pass the system actor; the lookup
+    is then recorded as the system's. Without it a system actor is refused.
     """
-    _refuse_actor(project, actor)
+    _refuse_actor(project, actor, automatic=automatic)
     project.index.sync()
     items = _open_items(project)
     if item_ids is not None:

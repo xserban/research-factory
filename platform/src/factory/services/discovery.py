@@ -39,6 +39,7 @@ from factory.services.agreement import Outcome, final_outcomes
 from factory.services.context import Project
 from factory.services.dedup import active_merges, canonical_works
 from factory.services.extraction_agreement import final_rows
+from factory.services.feed_read import feed_work_ids
 from factory.services.protocol import current_protocol
 
 ActorKind = Literal["human", "agent", "system"]
@@ -83,6 +84,10 @@ class DiscoveryReport(StrictModel):
     by_first_actor: dict[str, dict[str, int]]
     overlaps: dict[str, int]
     totals: dict[str, int]
+    by_channel: dict[str, dict[str, int]]
+    """Works that came through a channel, by level, whatever their first route. The channel
+    `feed` (slice 4c) is a feed send's supplied link, so its works also count under the supplied
+    routes of `by_first_route`; this is a sub-count and does not sum to `totals`."""
 
 
 @dataclass(frozen=True)
@@ -262,6 +267,8 @@ def discovery_report(project: Project) -> DiscoveryReport:
     by_route: dict[Route, dict[str, int]] = {}
     by_actor: dict[str, dict[str, int]] = {}
     totals = dict.fromkeys(levels, 0)
+    feed = feed_work_ids(project)
+    by_channel = {"feed": {level: len(members[level] & feed) for level in levels}}
     for record in records:
         for level in levels:
             if record.work_id not in members[level]:
@@ -275,6 +282,7 @@ def discovery_report(project: Project) -> DiscoveryReport:
         by_first_actor=dict(sorted(by_actor.items())),
         overlaps=_overlaps(records),
         totals=totals,
+        by_channel=by_channel,
     )
 
 
@@ -287,23 +295,36 @@ _SEARCH_FREE = frozenset({*_SUPPLIED_KINDS, Route.SEED_ADMISSION})
 """Routes that are not a search: a work whose routes all lie here came without any search."""
 
 
-def supplied_only_included(project: Project) -> dict[str, int]:
-    """Included works (at the last declared stage) that came only through supplied links, by
-    submitter kind (R-39). A work counts when every route is supplied or seed admission and at
+def _supplied_only(project: Project) -> dict[str, str]:
+    """Included works (at the last declared stage) that came only through supplied links, mapped
+    to their submitter kind. A work counts when every route is supplied or seed admission and at
     least one is supplied; any database, chase, snowball or hand-search route excludes it. A
     work supplied by both kinds counts under `human`."""
     protocol = current_protocol(project)
     full_text = protocol is not None and protocol.spec.full_text_screening is not None
     stage = ScreeningStage.FULL_TEXT if full_text else ScreeningStage.TITLE_ABSTRACT
     included = _included(final_outcomes(project, stage=stage))
-    counts = {"human": 0, "agent": 0}
+    kinds: dict[str, str] = {}
     for record in discovery(project):
         routes = set(record.routes)
         supplied = routes & set(_SUPPLIED_KINDS)
         if record.work_id in included and supplied and routes <= _SEARCH_FREE:
-            kind = "human" if Route.SUPPLIED_HUMAN in supplied else "agent"
-            counts[kind] += 1
+            kinds[record.work_id] = "human" if Route.SUPPLIED_HUMAN in supplied else "agent"
+    return kinds
+
+
+def supplied_only_included(project: Project) -> dict[str, int]:
+    """The supplied-only included works by submitter kind (R-39); see `_supplied_only`."""
+    counts = {"human": 0, "agent": 0}
+    for kind in _supplied_only(project).values():
+        counts[kind] += 1
     return counts
+
+
+def feed_only_included(project: Project) -> int:
+    """The supplied-only included works that came through a feed send (slice 4c, ruling 10)."""
+    feed = feed_work_ids(project)
+    return sum(1 for work_id in _supplied_only(project) if work_id in feed)
 
 
 def _bump(counts: dict[str, int], level: str) -> None:
@@ -344,5 +365,6 @@ def agent_view(report: DiscoveryReport) -> dict[str, JsonValue]:
         "by_first_actor": {k: dict(v) for k, v in report.by_first_actor.items()},
         "overlaps": dict(sorted(overlaps.items())),
         "totals": dict(report.totals),
+        "by_channel": {k: dict(v) for k, v in report.by_channel.items()},
     }
     return view

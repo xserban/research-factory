@@ -1,6 +1,7 @@
 ---
 name: rf-screen
 description: Use when records of a ready protocol must be screened, on title and abstract or (full-text mode) on the converted full text, as pass A or pass B of the two-pass screen, in a Claude Code session dedicated to that pass.
+stage: [screen, acquire]
 ---
 
 # rf-screen

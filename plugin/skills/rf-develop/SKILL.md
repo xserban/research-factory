@@ -1,6 +1,7 @@
 ---
 name: rf-develop
 description: Use when the scientist's goal, research questions, plan, seeds, probe or protocol must be decided: it runs the suggest-and-select loop at each decision, one level at a time, and renders each level as a formal document.
+stage: [frame]
 ---
 
 # rf-develop

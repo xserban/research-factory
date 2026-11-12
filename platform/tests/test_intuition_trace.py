@@ -90,6 +90,10 @@ def test_the_layer_kinds_close_the_chain_order() -> None:
         "assertion",
         "contradiction",
         "direction",
+        "briefing",
+        "served",
+        "session",
+        "adoption",
     )
     i = KINDS.index("claim")  # G2's order after claim is unchanged
     assert KINDS[i + 1 : i + 5] == ("relation", "idea", "cites", "quote")

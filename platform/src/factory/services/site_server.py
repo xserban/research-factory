@@ -7,27 +7,272 @@ seconds after the previous one: the snapshot of the dashboard takes about a minu
 that is being mined makes it stale all the time.
 
 Invariants:
-- Read-only for the browser: only GET is served; a POST, PUT, DELETE or PATCH is refused (as the
-  dashboard server does). The server writes nothing but the site folder, through `site.build`.
+- Read-only for the browser except four allow-listed acts (decision 119): `POST /api/feed/react`,
+  `POST /api/feed/add`, `POST /api/queue/process` (starts the headless runner, which records its
+  own system events) and `POST /api/queue/resume` (plan restart-and-costs, R3). Any other POST
+  path is 404; PUT, DELETE and PATCH are 405. Apart from those acts the server writes nothing but
+  the site folder, through `site.build`.
+- `POST /api/queue/resume` with `dry_run` plans in the request and writes nothing. A real resume
+  runs `services.resume.resume` in a daemon thread, one at a time (`ResumeRunner`), because its
+  deterministic steps look papers up and convert them and must not run in a request; the reply is
+  202 and the outcome (ids, refusals) is kept as `last_resume` in `GET /api/queue/interrupted`.
+  `GET /api/queue/interrupted` reads `interrupted()` and reconciles nothing.
+- After a successful `POST /api/feed/add` the deterministic steps (`work_queue.advance`) start in
+  a daemon thread, at most one per server; the reply is not delayed. A thread already running
+  means the new call is skipped. Conversion runs only in that thread, never in a request.
+  `GET /api/queue/runs` reads the runs and reconciles nothing.
+- A POST needs, all at once: a loopback Host, the per-start token in `X-Factory-Token` (compared in
+  constant time), `Content-Type: application/json`, a body of at most 16 KiB and, if an Origin is
+  sent, this server's own origin. Otherwise 403 (413 or 415 for size or type) and nothing is
+  written. The token is made at server start, is injected into `/feed/` and `/queue/` pages only
+  and is never written to the files on disk.
+- The actor is the local human principal and each act is authorised by its command row
+  (`cli:feed react`, `cli:feed add`, `cli:queue process`, `cli:queue resume`), as the CLI does.
 - Loopback only: a request whose Host is not 127.0.0.1, localhost or [::1] is refused.
 - One build runs at a time; a product that fails is recorded by `site.build` and the others go on.
 """
 
 from __future__ import annotations
 
+import hmac
 import json
+import logging
+import secrets
 import threading
 import time
+from collections.abc import Callable
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
-from typing import Final
+from pathlib import Path
+from typing import Any, Final
 
+from pydantic import TypeAdapter
+from pydantic import ValidationError as PydanticValidationError
+
+from factory.errors import FactoryError, FactoryValidationError, ValidationIssue
+from factory.model.feed import FeedNote, FeedReaction
+from factory.services import feed as feed_service
+from factory.services import pipeline as pipeline_service
+from factory.services import resume as resume_service
+from factory.services import runner as runner_service
 from factory.services import site as site_service
+from factory.services import work_queue
+from factory.services.access import authorize_command
 from factory.services.context import Project
+from factory.sources.fulltext.registry import default_routes
+from factory.sources.registry import default_sources
 
 HOST: Final = "127.0.0.1"
 DEFAULT_PORT: Final = 8766
 _LOOPBACK: Final = {"127.0.0.1", "localhost", "[::1]"}
+MAX_BODY: Final = 16 * 1024
+TOKEN_HEADER: Final = "X-Factory-Token"
+_ACTION_PAGES: Final = ("feed", "queue")
+_TOKEN_META: Final = "<meta name='factory-token' content='{}'>"
+_LOG: Final = logging.getLogger(__name__)
+
+
+def _sources() -> Any:
+    """The source factories `feed add` resolves with (as `factory feed add` builds them)."""
+    return dict(default_sources())
+
+
+def _start_advance(project: Project, gate: threading.Lock) -> bool:
+    """Run `work_queue.advance` in a daemon thread unless `gate` is held; True when started.
+    The thread releases `gate` when it ends, whatever happens; a failure is logged, not raised."""
+    if not gate.acquire(blocking=False):
+        return False
+
+    def run() -> None:
+        try:
+            work_queue.advance(
+                project, sources=_sources(), fetchers=default_routes(project.settings)
+            )
+        except Exception:  # the reply to the add has already gone; nothing else to tell
+            _LOG.exception("the automatic steps after a feed add failed")
+        finally:
+            gate.release()
+
+    try:
+        threading.Thread(target=run, name="queue-advance", daemon=True).start()
+    except RuntimeError:
+        gate.release()
+        return False
+    return True
+
+
+def _issues(*issues: ValidationIssue) -> dict[str, object]:
+    return {"ok": False, "issues": [{"field": i.field, "reason": i.reason} for i in issues]}
+
+
+def _optional_str(body: dict[str, Any], key: str) -> tuple[str | None, list[ValidationIssue]]:
+    value = body.get(key)
+    if value is None or isinstance(value, str):
+        return value, []
+    return None, [ValidationIssue(key, "must be a string")]
+
+
+def feed_react(project: Project, body: dict[str, Any]) -> tuple[int, dict[str, object]]:
+    """Record a reaction as the local human; returns (status, JSON body)."""
+    entry_id = body.get("entry_id")
+    ranking_id, bad = _optional_str(body, "ranking_id")
+    if not isinstance(entry_id, str) or not entry_id:
+        bad.append(ValidationIssue("entry_id", "required"))
+    try:
+        reaction = FeedReaction(str(body.get("reaction")))
+    except ValueError:
+        bad.append(
+            ValidationIssue(
+                "reaction", "must be one of " + ", ".join(r.value for r in FeedReaction)
+            )
+        )
+    if bad:
+        return 400, _issues(*bad)
+    assert isinstance(entry_id, str)
+    try:
+        actor = project.human_actor()
+        authorize_command(project, project.principal, "cli:feed react")
+        event_id = feed_service.react(project, actor, entry_id, reaction, ranking_id=ranking_id)
+    except FactoryValidationError as exc:
+        return 400, _issues(*exc.issues)
+    except FactoryError as exc:
+        return 403, _issues(ValidationIssue("permission", str(exc)))
+    return 200, {"ok": True, "event_id": event_id, "reaction": reaction.value}
+
+
+def feed_add(project: Project, body: dict[str, Any]) -> tuple[int, dict[str, object]]:
+    """Send the entry to the inbox and look it up, as the local human; returns (status, body)."""
+    entry_id = body.get("entry_id")
+    ranking_id, bad = _optional_str(body, "ranking_id")
+    note_text, more = _optional_str(body, "note")
+    bad += more
+    if not isinstance(entry_id, str) or not entry_id:
+        bad.append(ValidationIssue("entry_id", "required"))
+    note: FeedNote | None = None
+    if note_text is not None and not more:
+        try:
+            note = TypeAdapter(FeedNote).validate_python(note_text)
+        except PydanticValidationError as exc:
+            bad.append(ValidationIssue("note", str(exc.errors()[0]["msg"])))
+    if bad:
+        return 400, _issues(*bad)
+    assert isinstance(entry_id, str)
+    try:
+        actor = project.human_actor()
+        authorize_command(project, project.principal, "cli:feed add")
+        result = feed_service.add(
+            project, actor, entry_id, sources=_sources(), note=note, ranking_id=ranking_id
+        )
+    except FactoryValidationError as exc:
+        return 400, _issues(*exc.issues)
+    except FactoryError as exc:
+        return 403, _issues(ValidationIssue("permission", str(exc)))
+    return 200, {"ok": True, **result.model_dump(mode="json")}
+
+
+class ResumeRunner:
+    """Starts `services.resume.resume` in a daemon thread, one at a time, and keeps the outcome of
+    the last one (or its error) for the page. The thread is the only writer of `last`."""
+
+    def __init__(self) -> None:
+        self._gate = threading.Lock()
+        self.last: dict[str, object] | None = None
+
+    def start(self, project: Project, unit_cap: int | None) -> bool:
+        """True when a resume was started; False while another one is still running."""
+        if not self._gate.acquire(blocking=False):
+            return False
+
+        def run() -> None:
+            try:
+                outcome = resume_service.resume(project, unit_cap=unit_cap)
+                self.last = outcome.model_dump(mode="json")
+            except Exception as exc:  # the reply has gone; the page shows the error
+                _LOG.exception("the resume from the hub failed")
+                self.last = {"error": str(exc)}
+            finally:
+                self._gate.release()
+
+        try:
+            threading.Thread(target=run, name="queue-resume", daemon=True).start()
+        except RuntimeError:
+            self._gate.release()
+            return False
+        return True
+
+
+def queue_resume(
+    project: Project, body: dict[str, Any], runner: ResumeRunner
+) -> tuple[int, dict[str, object]]:
+    """Plan (`dry_run`) or start the resume of the interrupted work, as the local human."""
+    dry_run = body.get("dry_run", False)
+    cap = body.get("unit_cap")
+    bad: list[ValidationIssue] = []
+    if not isinstance(dry_run, bool):
+        bad.append(ValidationIssue("dry_run", "must be true or false"))
+    if cap is not None and (isinstance(cap, bool) or not isinstance(cap, int) or cap < 1):
+        bad.append(ValidationIssue("unit_cap", "must be an integer of at least 1"))
+    if bad:
+        return 400, _issues(*bad)
+    try:
+        authorize_command(project, project.principal, "cli:queue resume")
+    except FactoryValidationError as exc:
+        return 403, _issues(*exc.issues)
+    except FactoryError as exc:
+        return 403, _issues(ValidationIssue("permission", str(exc)))
+    if dry_run is True:
+        try:
+            plan = resume_service.resume(project, dry_run=True)
+        except FactoryError as exc:
+            return 403, _issues(ValidationIssue("permission", str(exc)))
+        return 200, {"ok": True, "dry_run": True, "plan": plan.model_dump(mode="json")}
+    if not runner.start(project, cap):
+        return 409, _issues(ValidationIssue("resume", "another resume is still running"))
+    return 202, {"ok": True, "dry_run": False, "started": True}
+
+
+def interrupted_payload(project: Project) -> dict[str, object]:
+    """`interrupted(project)` as JSON, with `is_clean`; read-only (no reconcile)."""
+    found = resume_service.interrupted(project)
+    return {**found.model_dump(mode="json"), "is_clean": found.is_clean}
+
+
+def queue_process(project: Project, body: dict[str, Any]) -> tuple[int, dict[str, object]]:
+    """Start the headless runner for one stage as the local human; returns (status, body)."""
+    stage = body.get("stage")
+    cap = body.get("unit_cap", runner_service.DEFAULT_UNIT_CAP)
+    bad: list[ValidationIssue] = []
+    if not isinstance(stage, str) or not (stage == "all" or runner_service.is_stage_key(stage)):
+        bad.append(ValidationIssue("stage", "must be all or one of " + runner_service.stage_keys()))
+    if isinstance(cap, bool) or not isinstance(cap, int):
+        bad.append(ValidationIssue("unit_cap", "must be an integer"))
+    if bad:
+        return 400, _issues(*bad)
+    assert isinstance(stage, str) and isinstance(cap, int)
+    try:
+        authorize_command(project, project.principal, "cli:queue process")
+    except FactoryValidationError as exc:
+        return 403, _issues(*exc.issues)
+    except FactoryError as exc:
+        return 403, _issues(ValidationIssue("permission", str(exc)))
+    try:
+        if stage == "all":
+            pipeline_id = pipeline_service.start_pipeline(project, unit_cap=cap)
+            return 200, {"ok": True, "pipeline_id": pipeline_id, "stage": stage, "unit_cap": cap}
+        run_id = runner_service.start_run(project, stage, unit_cap=cap)
+    except FactoryValidationError as exc:
+        return 400, _issues(*exc.issues)
+    except FactoryError as exc:
+        return 403, _issues(ValidationIssue("permission", str(exc)))
+    return 200, {"ok": True, "run_id": run_id, "stage": stage, "unit_cap": cap}
+
+
+_ROUTES: Final[dict[str, Callable[..., tuple[int, dict[str, object]]]]] = {
+    "/api/feed/react": feed_react,
+    "/api/feed/add": feed_add,
+    "/api/queue/process": queue_process,
+    "/api/queue/resume": queue_resume,
+}
 
 
 class Rebuilder:
@@ -88,6 +333,10 @@ def make_server(
     root.mkdir(parents=True, exist_ok=True)
     site_service.render_hub(project)
     rebuilder = Rebuilder(project, min_gap=min_gap)
+    token = secrets.token_urlsafe(32)
+    write_lock = threading.Lock()
+    advance_gate = threading.Lock()
+    resumer = ResumeRunner()
 
     class Handler(SimpleHTTPRequestHandler):
         def _deny(self, code: int, message: str) -> None:
@@ -102,10 +351,55 @@ def make_server(
             self.send_header("Cache-Control", "no-store")
             super().end_headers()
 
+        def _host_ok(self) -> bool:
+            host = self.headers.get("Host") or ""
+            name = host.split("]", 1)[0] + "]" if host.startswith("[") else host.rsplit(":", 1)[0]
+            return name in _LOOPBACK
+
+        def _json(self, code: int, payload: dict[str, object]) -> None:
+            body = json.dumps(payload).encode()
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _origin_ok(self) -> bool:
+            origin = self.headers.get("Origin")
+            if origin is None:
+                return True
+            port = httpd.server_address[1]
+            return origin in {f"http://{name}:{port}" for name in _LOOPBACK}
+
+        def _feed_page(self) -> Path | None:
+            """The built HTML file this GET names under `/feed/` or `/queue/`, if it is one."""
+            url = self.path.split("?", 1)[0].split("#", 1)[0]
+            if not any(url == f"/{name}" or url.startswith(f"/{name}/") for name in _ACTION_PAGES):
+                return None
+            target = Path(self.translate_path(url))
+            if target.is_dir():
+                target = target / "index.html"
+            if target.suffix != ".html" or not target.is_file():
+                return None
+            return target
+
         def do_GET(self) -> None:
-            host = (self.headers.get("Host") or "").rsplit(":", 1)[0]
-            if host not in _LOOPBACK:
+            if not self._host_ok():
                 self._deny(403, "forbidden")
+                return
+            page = self._feed_page()
+            if page is not None:
+                text = page.read_text(encoding="utf-8")
+                meta = _TOKEN_META.format(token)
+                text = (
+                    text.replace("<head>", "<head>" + meta, 1) if "<head>" in text else meta + text
+                )
+                body = text.encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
                 return
             if self.path.split("?", 1)[0] == "/api/status":
                 body = json.dumps(
@@ -121,12 +415,77 @@ def make_server(
                 self.end_headers()
                 self.wfile.write(body)
                 return
+            if self.path.split("?", 1)[0] == "/api/queue/interrupted":
+                try:
+                    payload = interrupted_payload(project)
+                except FactoryError as exc:
+                    self._json(500, _issues(ValidationIssue("interrupted", str(exc))))
+                    return
+                self._json(200, {**payload, "last_resume": resumer.last})
+                return
+            if self.path.split("?", 1)[0] == "/api/queue/runs":
+                runs = runner_service.run_status(project, reconcile=False)
+                pipelines = pipeline_service.pipeline_status(project)
+                self._json(
+                    200,
+                    {
+                        "runs": [r.model_dump(mode="json") for r in runs],
+                        "pipelines": [p.model_dump(mode="json") for p in pipelines],
+                    },
+                )
+                return
             super().do_GET()
 
         def _refuse(self) -> None:
             self._deny(405, "read-only")
 
-        do_POST = do_PUT = do_DELETE = do_PATCH = _refuse
+        def do_POST(self) -> None:
+            route = _ROUTES.get(self.path.split("?", 1)[0])
+            if not self._host_ok() or not self._origin_ok():
+                self._deny(403, "forbidden")
+                return
+            if route is None:
+                self._deny(404, "not found")
+                return
+            sent = self.headers.get(TOKEN_HEADER) or ""
+            if not hmac.compare_digest(sent.encode(), token.encode()):
+                self._deny(403, "forbidden")
+                return
+            kind = (self.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+            if kind != "application/json":
+                self._deny(415, "json only")
+                return
+            try:
+                length = int(self.headers.get("Content-Length") or "")
+            except ValueError:
+                self._deny(411, "length required")
+                return
+            if length < 0 or length > MAX_BODY:
+                self._deny(413, "body too large")
+                return
+            try:
+                body = json.loads(self.rfile.read(length))
+            except ValueError:
+                self._json(400, _issues(ValidationIssue("body", "not valid JSON")))
+                return
+            if not isinstance(body, dict):
+                self._json(400, _issues(ValidationIssue("body", "must be a JSON object")))
+                return
+            if route is feed_react:
+                with write_lock:
+                    code, payload = route(project, body)
+            elif route is queue_resume:
+                code, payload = queue_resume(project, body, resumer)
+            else:
+                # no lock: `feed add` looks the paper up over the network, and each service
+                # serialises its own index work (`send` and the lookup take the index lock)
+                code, payload = route(project, body)
+            if code == 200 and route is feed_add:
+                _start_advance(project, advance_gate)
+            # the feed product turns stale by the event log; the background rebuild picks it up
+            self._json(code, payload)
+
+        do_PUT = do_DELETE = do_PATCH = _refuse
 
         def log_message(self, format: str, *args: object) -> None:
             return

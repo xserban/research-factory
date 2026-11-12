@@ -200,6 +200,13 @@ def _open_task_targets(project: Project) -> set[str]:
     return {str(r[0]) for r in rows}
 
 
+def intuition_pending(project: Project) -> int:
+    """The confirmed, unmerged ideas with no live interpretation (an idea held by an open task
+    counts: its task is served again). Read-only; syncs."""
+    project.index.sync()
+    return _free_count(project, set())
+
+
 def _items_of(project: Project, members: Sequence[str]) -> tuple[list[ServedItem], bool]:
     """The live, non-stale final contribution items of `members` (at most `MAX_SERVED_ITEMS`),
     from `final_item` so a resolved field shows its final value, and whether more were left out."""

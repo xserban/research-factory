@@ -1,6 +1,7 @@
 ---
 name: rf-living
 description: Use when a scheduled agent session keeps a living review current: run the due watch cycles, produce the digest for each project, and hand the digest file to the channel the researcher configured.
+stage: [maintain]
 ---
 
 # rf-living

@@ -75,3 +75,53 @@ SPEC = ModuleSpec(
 )
 
 MODULE = RuleModule(SPEC)
+
+FEED_SPEC = ModuleSpec(
+    name="feed",
+    kind=ModuleKind.RETRIEVAL,
+    events=EventFamily(
+        types=(
+            "feed.configured",
+            "feed.fetched",
+            "feed.ranked",
+            "feed.reacted",
+            "feed.sent",
+        ),
+        tables=(
+            "feed_configs",
+            "feed_entries",
+            "feed_fetches",
+            "feed_rankings",
+            "feed_reactions",
+            "feed_sends",
+        ),
+        note=(
+            "Discovery feed (slice 4c, decision 118): entries stay outside the corpus until a "
+            "human sends one through the inbox. configured, reacted and sent are human acts."
+        ),
+    ),
+    checks=(CheckRule("feed-scope-drift", ("warning", "warning", "warning")),),
+)
+
+FEED_MODULE = RuleModule(FEED_SPEC)
+
+RUNNER_SPEC = ModuleSpec(
+    name="runner",
+    kind=ModuleKind.RETRIEVAL,
+    events=EventFamily(
+        types=(
+            "runner.started",
+            "runner.finished",
+            "runner.pipeline_started",
+            "runner.pipeline_finished",
+        ),
+        tables=("runner_runs", "runner_pipelines"),
+        note=(
+            "Headless runner (plan feed-hub H5, decision 119): the platform starts the installed "
+            "`claude` executable for one stage; both events are system acts, and every judgement "
+            "is written through MCP with the agent's provenance."
+        ),
+    ),
+)
+
+RUNNER_MODULE = RuleModule(RUNNER_SPEC)

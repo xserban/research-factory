@@ -38,6 +38,7 @@ from sqlalchemy import text
 from factory.model.base import StrictModel
 from factory.services.context import Project
 from factory.services.site_charts import CHART_CSS, activity
+from factory.services.site_theme import LIGHT_CSS, THEME_SCRIPT, THEME_TOGGLE
 
 SITE_DIR: Final = "site"
 MANIFEST: Final = "manifest.json"
@@ -84,6 +85,9 @@ class Product:
     build: Build
     version: int = 1
     needs_model: bool = False
+    stamp: Callable[[Project], str] | None = None
+    """Extra fingerprint text for a product that reads files rather than events (the catalog
+    reads SKILL.md files and the decision log)."""
 
 
 @dataclass(frozen=True)
@@ -125,6 +129,18 @@ def _build_dashboard(project: Project, out: Path) -> None:
     from factory.services.dashboard_server import export_snapshot
 
     export_snapshot(project, out / "index.html")
+
+
+def _build_feed(project: Project, out: Path) -> None:
+    from factory.services.site_feed import build_feed
+
+    build_feed(project, out)
+
+
+def _build_queue(project: Project, out: Path) -> None:
+    from factory.services.site_queue import build_queue
+
+    build_queue(project, out)
 
 
 def _build_prisma(project: Project, out: Path) -> None:
@@ -212,6 +228,29 @@ def _build_acquisition(project: Project, out: Path) -> None:
     from factory.services.site_quality import build_acquisition
 
     build_acquisition(project, out)
+
+
+def _build_costs(project: Project, out: Path) -> None:
+    from factory.services.site_costs import build_costs
+
+    build_costs(project, out)
+
+
+def _build_catalog(project: Project, out: Path) -> None:
+    from factory.services.site_catalog_page import build_catalog_product
+
+    build_catalog_product(project, out)
+
+
+def _stamp_catalog(project: Project) -> str:
+    """Never raises: `fingerprint` runs outside the per-product isolation, so an unreadable skill
+    file must make the catalog stale, not abort the build of every product."""
+    from factory.services.site_catalog import source_hash
+
+    try:
+        return source_hash(project.settings)
+    except OSError as exc:
+        return f"unreadable:{type(exc).__name__}"
 
 
 def products() -> list[Product]:
@@ -321,6 +360,29 @@ def products() -> list[Product]:
             build=_build_acquisition,
         ),
         Product(
+            id="costs",
+            title="Run costs",
+            group="Overview",
+            description="What each headless run cost, per stage, model and miner: runs, units, "
+            "reported cost, cost per unit, median turns and duration, tokens per unit, and how "
+            "much each turn re-reads the transcript. The cost is the API-equivalent price.",
+            entry="index.html",
+            inputs=("runner.%",),
+            build=_build_costs,
+        ),
+        Product(
+            id="catalog",
+            title="Capability catalog",
+            group="Overview",
+            description="The factory's tools and skills by lifecycle stage: which skill to use "
+            "when, the tools it calls and the steps that call them, with mechanical flags where "
+            "a skill disagrees with the code, the decision log or another skill.",
+            entry="index.html",
+            inputs=(),
+            build=_build_catalog,
+            stamp=_stamp_catalog,
+        ),
+        Product(
             id="prisma",
             title="PRISMA 2020 flow",
             group="Overview",
@@ -338,6 +400,36 @@ def products() -> list[Product]:
             entry="index.html",
             inputs=CORPUS_EVENTS,
             build=_build_bibliography,
+        ),
+        Product(
+            id="feed",
+            title="Daily updates",
+            group="Corpus",
+            description="The latest discovery feed ranking: each shown paper with its score, "
+            "whether it explores beyond the core, its nearest core paper, its abstract and its "
+            "reaction. Read-only in this version.",
+            entry="index.html",
+            inputs=("feed.%", "inbox.%"),
+            build=_build_feed,
+        ),
+        Product(
+            id="queue",
+            title="Work queue",
+            group="Corpus",
+            description="The papers added from the feed, each with the stage it stands at "
+            "(lookup, screening, full text, conversion, extraction), and the open units of work "
+            "per task kind.",
+            entry="index.html",
+            inputs=(
+                "feed.%",
+                "inbox.%",
+                "screening.%",
+                "fulltext.%",
+                "document.%",
+                "extraction.%",
+                "task.%",
+            ),
+            build=_build_queue,
         ),
     ]
 
@@ -379,6 +471,8 @@ def fingerprint(project: Project, product: Product) -> str:
                 {"p": pattern},
             ).one()
             parts.append(f"{pattern}:{row[0]}:{row[1]}")
+    if product.stamp is not None:
+        parts.append(f"files:{product.stamp(project)}")
     return hashlib.sha256("|".join(parts).encode()).hexdigest()[:16]
 
 
@@ -494,7 +588,8 @@ THEME_CSS: Final = (
     # panels with title bars, corner brackets, status lights, mono for data and sans for prose
     ":root{color-scheme:dark;--bg:#0B0C16;--dk:#080910;--lt:#151828;--sel:#1f253a;--mut:#2d3450;"
     "--fg:#ddf7ff;--dim:#6a6e95;--light:#b5c5db;--ac:#82FB9C;--green:#4fe88f;--cyan:#7cf8f7;"
-    "--blue:#829dd4;--amber:#e8b45a;--red:#ff8a80;"
+    "--blue:#829dd4;--amber:#e8b45a;--red:#ff8a80;--card:rgba(21,24,40,.85);"
+    "--navbg:rgba(8,9,16,.92);--hov:rgba(31,37,58,.55);--chart:rgba(8,9,16,.55);--heat:#829dd4;"
     "--mono:ui-monospace,'JetBrains Mono','Fira Code',SFMono-Regular,Menlo,Consolas,monospace}"
     "*{box-sizing:border-box;border-radius:0!important}html,body{height:100%}"
     "body{margin:0;color:var(--fg);font:14px/1.6 -apple-system,BlinkMacSystemFont,'Segoe UI',"
@@ -506,7 +601,7 @@ THEME_CSS: Final = (
     "code,pre{font-size:.88em}.dim{color:var(--dim)}"
     "h1{font-size:19px;margin:0 0 8px;letter-spacing:.08em;text-transform:uppercase;font-weight:700}"
     "h1::before{content:'// ';color:var(--ac)}"
-    "button,.btn{background:transparent;color:var(--ac);border:1px solid rgba(130,251,156,.45);"
+    "button,.btn{background:transparent;color:var(--ac);border:1px solid color-mix(in srgb,var(--ac) 45%,transparent);"
     "font:600 11px var(--mono);letter-spacing:.1em;text-transform:uppercase;padding:4px 12px;"
     "cursor:pointer;display:inline-block}button:hover,.btn:hover{background:var(--ac);"
     "color:var(--bg)}"
@@ -516,7 +611,7 @@ THEME_CSS: Final = (
     "height:10px;border:2px solid var(--ac);pointer-events:none}"
     ".br::before{top:-1px;left:-1px;border-right:0;border-bottom:0}"
     ".br::after{bottom:-1px;right:-1px;border-left:0;border-top:0}"
-    ".panel{position:relative;background:rgba(21,24,40,.85);border:1px solid var(--mut);padding:12px}"
+    ".panel{position:relative;background:var(--card);border:1px solid var(--mut);padding:12px}"
     "pre.panel{white-space:pre-wrap;overflow:auto}"
     ".tg{display:inline-block;font:600 10.5px var(--mono);letter-spacing:.12em;"
     "text-transform:uppercase;padding:1px 7px;border:1px solid currentColor;color:var(--dim)}"
@@ -535,9 +630,10 @@ def page(title: str, body: str, css: str = "") -> str:
     return (
         "<!doctype html><html lang=en><head><meta charset=utf-8>"
         "<meta name=viewport content='width=device-width,initial-scale=1'>"
-        f"<title>{html.escape(title)}</title><style>{THEME_CSS}"
-        f"body{{padding:20px 24px;max-width:1100px;margin:0 auto}}{css}</style></head>"
-        f"<body>{body}</body></html>"
+        f"{THEME_SCRIPT}<title>{html.escape(title)}</title><style>{THEME_CSS}"
+        f"body{{padding:20px 24px;max-width:1100px;margin:0 auto}}.theme-row{{display:flex;justify-content:flex-end;margin:0 0 6px}}"
+        f"{css}{LIGHT_CSS}</style></head>"
+        f"<body><div class=theme-row>{THEME_TOGGLE}</div>{body}</body></html>"
     )
 
 
@@ -553,7 +649,7 @@ _HUB_CSS: Final = (
     "header input{width:220px}"
     ".shell{display:flex;flex:1;min-height:0}"
     "nav{width:268px;flex:none;overflow:auto;border-right:1px solid var(--mut);"
-    "background:rgba(8,9,16,.92);padding:6px 0 24px}"
+    "background:var(--navbg);padding:6px 0 24px}"
     "nav h3{margin:16px 14px 4px;font-size:10.5px;font-weight:600;letter-spacing:.16em;"
     "text-transform:uppercase;color:var(--dim)}"
     "nav a.i{display:flex;align-items:center;gap:10px;padding:6px 14px;color:var(--light);"
@@ -570,7 +666,7 @@ _HUB_CSS: Final = (
     ".sec::after{content:'';flex:1;height:1px;background:var(--mut)}"
     ".line{display:flex;align-items:stretch;overflow-x:auto;padding:4px 2px 8px}"
     ".st{position:relative;flex:1;min-width:104px;margin-right:16px;padding:8px 10px;"
-    "background:rgba(21,24,40,.9);border:1px solid var(--mut);cursor:pointer}"
+    "background:var(--card);border:1px solid var(--mut);cursor:pointer}"
     ".st:last-child{margin-right:0}.st:not(:last-child)::after{content:'\\25B8';position:absolute;"
     "right:-15px;top:50%;margin-top:-9px;color:var(--ac);font-size:13px}"
     ".st:hover{border-color:var(--ac)}.st .k{display:flex;gap:6px;align-items:center;"
@@ -578,7 +674,7 @@ _HUB_CSS: Final = (
     ".st .k .led{margin-left:auto}.st .v{font:700 21px var(--mono);color:var(--ac);"
     "letter-spacing:.02em;line-height:1.25}.st .s{font:11px var(--mono);color:var(--dim)}"
     ".mods{display:grid;grid-template-columns:repeat(auto-fill,minmax(310px,1fr));gap:14px}"
-    ".pn{position:relative;display:flex;flex-direction:column;background:rgba(21,24,40,.88);"
+    ".pn{position:relative;display:flex;flex-direction:column;background:var(--card);"
     "border:1px solid var(--mut);cursor:pointer}.pn:hover{border-color:var(--ac)}"
     ".pn .pt{display:flex;align-items:center;gap:9px;padding:5px 10px;background:var(--sel);"
     "border-bottom:1px solid var(--mut);font:600 11px var(--mono);letter-spacing:.12em;"
@@ -589,7 +685,7 @@ _HUB_CSS: Final = (
     ".pn .pf .go{color:var(--ac);letter-spacing:.1em}"
     ".pn.plan{opacity:.55;cursor:default}.pn.plan:hover{border-color:var(--mut)}"
     ".guide{position:relative;border:1px solid var(--mut);border-left:3px solid var(--ac);"
-    "background:rgba(21,24,40,.85);padding:10px 14px;margin:6px 0;color:var(--light);"
+    "background:var(--card);padding:10px 14px;margin:6px 0;color:var(--light);"
     "font-size:13.5px;line-height:1.6}.guide b{color:var(--fg)}"
     ".hint{color:var(--dim);font:12px var(--mono);margin:8px 0 0}.hint code{background:var(--dk);"
     "padding:1px 6px;border:1px solid var(--mut);color:var(--ac)}"
@@ -766,11 +862,11 @@ def render_hub(
     doc = (
         "<!doctype html><html lang=en><head><meta charset=utf-8>"
         "<meta name=viewport content='width=device-width,initial-scale=1'>"
-        f"<title>{slug}</title><style>{THEME_CSS}{_HUB_CSS}{CHART_CSS}</style></head><body>"
+        f"{THEME_SCRIPT}<title>{slug}</title><style>{THEME_CSS}{_HUB_CSS}{CHART_CSS}{LIGHT_CSS}</style></head><body>"
         f"<header><span class=logo></span><b>Factory</b><span class=crumb>// {slug}</span>"
         f"<span class=sp></span><span class=ro>{ready} &middot; EVENTS <b>{num.get('events', 0):,}</b>"
         " &middot; <b id=live>SNAPSHOT</b></span>"
-        "<input id=q placeholder='filter modules'></header>"
+        f"{THEME_TOGGLE}<input id=q placeholder='filter modules'></header>"
         f"<div class=shell><nav>{''.join(nav)}</nav><main>"
         "<iframe id=frame style='display:none' title='product'></iframe>"
         "<div id=home><div class=wrap><h1>Control room</h1>"

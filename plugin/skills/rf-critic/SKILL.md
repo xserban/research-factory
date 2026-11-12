@@ -1,6 +1,7 @@
 ---
 name: rf-critic
 description: Use when a hypothesis draft must be reviewed against the checklist as an artefact, in a Claude Code session that neither drafted it nor wrote its lead, and, where the protocol asks, runs on another model than the drafter.
+stage: [develop]
 ---
 
 # rf-critic
