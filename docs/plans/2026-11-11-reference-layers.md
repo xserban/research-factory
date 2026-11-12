@@ -272,3 +272,12 @@ Tasks:
 - **T9 (inner sample):** optional `inner_sample` on the scheme event; the sample's inner stratum.
 - **S2:** `research-factory-pilot/reference-layers-scheme-v2.json` (drafted by Claude, confirmed by the
   researcher).
+
+### Follow-up: batched identifier lookup (observed 2026-11-12)
+
+`factory references re-resolve --only-identifiers` on the pilot (about 2,900 entries with a DOI or
+arXiv id whose first lookup failed) ran for more than an hour: it walks extraction by extraction and
+looks identifiers up per entry, so an id cited by many works is fetched many times. Task **T10**:
+collect the distinct identifiers across all live extractions, look them up in batches (OpenAlex
+filter with up to 50 DOIs per request; arXiv `id_list`), then write one re-resolve event per
+extraction from the shared results. Same events, minutes instead of an hour.
