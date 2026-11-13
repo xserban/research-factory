@@ -184,7 +184,7 @@ Status: triaged · Added: 2026-11-03 · Slice: first biomedical project (TAVI, N
 **What:** PubMed source adapter (PRISMA-S fields, no truncation) and PMC OA JATS route to Markdown.
 
 ### IDEA-23 — Consistency check of copied results
-Status: new · Added: 2026-11-03 · Slice: after slice 2 · Depends on: copied-result flag
+Status: built (services/copied_check.py, commit 99754a1; plan EQ task 7; not reviewed) · Added: 2026-11-03 · Slice: after slice 2 · Depends on: copied-result flag
 **What:** when a paper reports a baseline number copied from another paper in the corpus, compare it with that paper's own extracted value and flag mismatches (including version mismatches).
 
 ---
