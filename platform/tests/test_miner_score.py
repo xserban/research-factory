@@ -302,3 +302,31 @@ def test_rate_over_all_rows_equals_aligned_rate_when_everything_aligns() -> None
     result = score(GOLD, GOLD, PACK)
     assert result.unmatched == 0 and result.field_agreement_all == 1.0
     assert score({}, {}, PACK).field_agreement_all is None
+
+
+def test_report_and_status_lines_show_the_rate_over_all_rows() -> None:
+    from factory.cli.render import mine_status_lines, miner_calibration_lines
+    from factory.services.miner_report import MinerCalibrationReport
+    from factory.services.mining import MineStatus
+
+    gold = {"w1": (_row("rk_00000000000a"),), "w2": (_row("rk_00000000000b"),)}
+    agent = {"w1": (_row("rk_00000000000a"),), "w2": (_row("rk_00000000000c"),)}
+    report = MinerCalibrationReport(
+        "cal", 2, 2, 2, score(gold, agent, PACK), (0.8, 0.9), False, None
+    )
+    text = "\n".join(miner_calibration_lines(report))
+    assert "unmatched 1" in text and "over all rows 0.500" in text
+    status = MineStatus(
+        name="m",
+        version=1,
+        digest="d",
+        units=2,
+        open=0,
+        closed=2,
+        rows=2,
+        stale=0,
+        agreement=0.85,
+        agreement_aligned=1.0,
+    )
+    (line,) = mine_status_lines([status])
+    assert "agreement 0.850 over all rows (1.000 over aligned rows)" in line
