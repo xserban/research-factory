@@ -36,7 +36,7 @@ For each step of the lifecycle, show how it is done (for the literature review: 
 
 | Choice | Ruling |
 |---|---|
-| Scope of the first run | Literature review only; the other stages after the comparison has been judged useful |
+| Scope of the first run | ~~Literature review only~~ Superseded the same evening: every stage, run overnight as an **exploratory** pass (see below) |
 | Comparators | Two columns beside our process: the core AI-scientist papers, and the methods literature on how people do a review (PRISMA, Cochrane, rapid-review guidance). The methods sources are chosen and listed by the researcher before part 2 for that column |
 | Our process | An agent drafts the rows from specs and protocol, each citing its section; the researcher checks |
 | Step granularity | Free text, grouped afterwards into step types the researcher registers |
@@ -46,3 +46,12 @@ For each step of the lifecycle, show how it is done (for the literature review: 
 
 1. The list of methods sources for the human-methods column (researcher).
 2. The `m-lifecycle` calibration (gold stages for 10 papers), which gates part 2.
+
+## 8. Change of ruling: all stages, overnight, exploratory (researcher, 2026-11-13)
+
+The researcher asked to run the step miner for each lifecycle step overnight "to understand how it is done". Consequences, taken as the recommendation:
+
+- **Axis.** The stages are the 9 of `m-stages` v1 (listed, agreement 0.981, the stages of the hub's lifecycle page), not the bottom-up common lifecycle: that taxonomy needs the `m-lifecycle` production pass and the researcher's acceptance, neither of which can happen unattended. The common lifecycle replaces the axis later and the step rows are re-mapped, not re-mined.
+- **Exploratory.** The step miner has no calibration. Its rows are for reading, not evidence: recorded as exploratory in the wrap-up and on every page that shows them; no count from them goes into a report until the miner is calibrated against gold sub-steps. The platform does not yet refuse a production pass without calibration (IDEA-69 (3)); the guard is built the same night, and the run is labelled exploratory by the run, not by the platform.
+- **Selection.** Works of the core layer with an `m-stages` row for the stage in mode automated or human-assisted.
+- **Not changed.** Our process rows (part 1) and the human-methods column still need the researcher's check and source list.
