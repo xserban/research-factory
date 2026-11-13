@@ -37,9 +37,6 @@ from factory.services.site_portal import _CSS as PORTAL_CSS
 if TYPE_CHECKING:
     from factory.services.site_server import FeedRunner
 
-HUB_TOKEN_SLUG: Final = "hub:feed"
-"""The slug the hub's own token is derived from; no project folder can have a colon."""
-
 ACTIONS: Final[tuple[tuple[str, str], ...]] = (
     ("like", "Like"),
     ("dislike", "Dislike"),

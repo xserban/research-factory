@@ -114,6 +114,7 @@ def site_serve_cmd(
     """Serve the hub on 127.0.0.1 and rebuild stale products in the background."""
     from factory.cli.main import _authorized, _reporting_errors, _resolve_project, _state
     from factory.services.context import list_projects, open_project
+    from factory.services.site_create import create_project
 
     state = _state(ctx)
     if all_projects:
@@ -128,6 +129,9 @@ def site_serve_cmd(
             min_gap=float(every),
             background=True,
             feed=runner,
+            create=lambda slug, title, profile: create_project(
+                state.settings, slug, title, profile, session=state.session, clock=state.clock
+            ),
         )
         with _reporting_errors():
             main_server = server_service.make_main_server(hub, port)
