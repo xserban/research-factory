@@ -6,7 +6,7 @@ Business logic stays in `services/site.py`. Nothing here writes an event. The sh
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Any
 
 import typer
 
@@ -60,6 +60,31 @@ def site_status_cmd(ctx: typer.Context) -> None:
         typer.echo(f"{s.id}: {flag} (built {s.built_at or 'never'}) {s.error or ''}".rstrip())
 
 
+def _feed_runner(state: Any) -> server_service.FeedRunner:
+    """The hub's feed runner: `feed_run_all` over every configured project with one shared
+    fetch (`refetch` skips the shared cache). Built lazily: the source and the ranker are only
+    created when a run starts."""
+    from factory.services import feed as feed_service
+    from factory.services.ranking_model import Specter2Embedder
+    from factory.sources.arxiv import ArxivSource
+    from factory.sources.http import default_http
+
+    def run(refetch: bool) -> feed_service.FeedRunAll:
+        source = ArxivSource(
+            default_http(state.settings), clock=state.clock, mailto=state.settings.mailto
+        )
+        return feed_service.feed_run_all(
+            state.settings,
+            embedder_factory=Specter2Embedder,
+            source=source,
+            session=state.session,
+            clock=state.clock,
+            bypass_cache=refetch,
+        )
+
+    return server_service.FeedRunner(run)
+
+
 @site_app.command("serve")
 def site_serve_cmd(
     ctx: typer.Context,
@@ -77,6 +102,14 @@ def site_serve_cmd(
             help="Serve every project under the root: a portal at / and each hub at /p/<slug>/.",
         ),
     ] = False,
+    feed: Annotated[
+        bool,
+        typer.Option(
+            "--feed/--no-feed",
+            help="With --all: run the arXiv feed of the configured projects once a day while "
+            "the hub is up (a run is due once per the feed's interval).",
+        ),
+    ] = True,
 ) -> None:
     """Serve the hub on 127.0.0.1 and rebuild stale products in the background."""
     from factory.cli.main import _authorized, _reporting_errors, _resolve_project, _state
@@ -84,6 +117,7 @@ def site_serve_cmd(
 
     state = _state(ctx)
     if all_projects:
+        runner = _feed_runner(state) if feed else None
         hub = server_service.MainHub(
             state.settings.root,
             lambda: list_projects(state.settings),
@@ -93,6 +127,7 @@ def site_serve_cmd(
             ),
             min_gap=float(every),
             background=True,
+            feed=runner,
         )
         with _reporting_errors():
             main_server = server_service.make_main_server(hub, port)

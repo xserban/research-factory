@@ -45,8 +45,9 @@ import hashlib
 import json
 import random
 import re
+import shutil
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -92,6 +93,7 @@ from factory.services.ranking import _dot, _unit, max_cosine_scores, order_by_sc
 from factory.services.ranking_model import Embedder
 from factory.services.references import included_works
 from factory.services.search import get_work
+from factory.services.work_layers import layers_of
 from factory.sources.base import PageSink, RawPage, SearchResult
 from factory.sources.registry import SourceFactory
 
@@ -152,6 +154,8 @@ class FeedRunResult(StrictModel):
     shown: int = 0
     explore: int = 0
     note: str | None = None
+    cached: bool = False
+    """The fetch was replayed from the shared cache (nothing was requested from arXiv)."""
 
 
 class FeedProjectOutcome(StrictModel):
@@ -335,6 +339,40 @@ def _read_cache(directory: Path, sink: PageSink) -> _Fetched | None:
     return _Fetched(works, pages, blobs, RunStatus.COMPLETE, None, True)
 
 
+CACHE_MAX_AGE = timedelta(hours=24)
+"""How long a cached window is kept (the pages are also in each project's blobs)."""
+
+
+def prune_cache(root: Path, *, now: datetime, max_age: timedelta = CACHE_MAX_AGE) -> int:
+    """Remove the cached windows under `root` last written more than `max_age` before `now`;
+    returns how many. Best effort: an unreadable or busy entry is left for the next call, and a
+    window without `meta.json` (an unfinished write) is judged by its own directory."""
+    removed = 0
+    base = root / SOURCE
+    try:
+        keys = [d for d in base.iterdir() if d.is_dir()]
+    except OSError:
+        return 0
+    cutoff = (now - max_age).timestamp()
+    for key in keys:
+        for window in key.iterdir():
+            if not window.is_dir():
+                continue
+            try:
+                written = (window / "meta.json").stat().st_mtime
+            except OSError:
+                try:
+                    written = window.stat().st_mtime
+                except OSError:
+                    continue
+            if written < cutoff:
+                shutil.rmtree(window, ignore_errors=True)
+                removed += not window.exists()
+        with suppress(OSError):
+            key.rmdir()  # only when empty
+    return removed
+
+
 def _write_cache(directory: Path, fetched: _Fetched) -> None:
     """Best effort, and only for a complete fetch; `meta.json` goes last so a hit is whole."""
     try:
@@ -370,6 +408,7 @@ def _fetch(
     start: date,
     end: date,
     cache_root: Path | None,
+    bypass_cache: bool = False,
 ) -> _Fetched:
     pages: list[RawPage] = []
     blobs: list[str] = []
@@ -383,7 +422,7 @@ def _fetch(
     directory = (
         None if cache_root is None else _cache_dir(cache_root, config.categories, start, end)
     )
-    if directory is not None:
+    if directory is not None and not bypass_cache:
         hit = _read_cache(directory, sink)
         if hit is not None:
             return hit
@@ -460,7 +499,18 @@ def _known_entries(project: Project) -> set[str]:
         return {str(r[0]) for r in conn.execute(text("SELECT entry_id FROM feed_entries"))}
 
 
+def _core_layer_ids(project: Project) -> set[str]:
+    """The works whose current layer is `core`, without the held-out seeds' works the researcher
+    did not mark core (R-20, R-F4), as for `core+included`."""
+    core = {work for work, found in layers_of(project).items() if found.layer == "core"}
+    marked = {m.work_id for m in core_marks(project)}
+    held_out = set(seed_core_works(project)) - set(seed_core_works(project, development_only=True))
+    return core - (held_out - marked)
+
+
 def _reference_ids(project: Project, config: FeedConfigured) -> list[str]:
+    if config.references is FeedReferences.CORE_LAYER:
+        return sorted(_core_layer_ids(project))
     included = included_works(project)
     ids = set(forward_core_sources(project, included))
     if config.references is FeedReferences.CORE_INCLUDED:
@@ -564,6 +614,7 @@ def feed_run(
     cache_root: Path | None = None,
     today: date | None = None,
     actor: Actor | None = None,
+    bypass_cache: bool = False,
 ) -> FeedRunResult:
     """Fetch the window's listings and rank the new entries; write `feed.fetched` and
     `feed.ranked` as `actor` (default the system; an agent actor also records the call's
@@ -573,6 +624,8 @@ def feed_run(
     `due=False` runs now. `dry_run` fetches and writes nothing and says what it would do. Refused,
     with nothing written, with no configuration or no reference work, and when the inputs changed
     while embedding. A missing ranker surfaces as the embedder's own `ranker_unavailable` refusal.
+    `bypass_cache` fetches from arXiv even when the shared cache holds the window (the fresh result
+    still replaces the cache entry).
     """
     who = actor or project.system_actor()
     if who.kind == "human":
@@ -592,7 +645,8 @@ def feed_run(
         if not references:
             raise _refuse(
                 "references",
-                "no reference work: mark a work core or add a development positive seed first",
+                "no reference work: mark a work core, give it the core layer or add a development "
+                "positive seed first",
             )
         if dry_run:
             return FeedRunResult(
@@ -601,7 +655,7 @@ def feed_run(
                 window_to=end,
                 note=_describe(config, start, end, len(references)),
             )
-        fetched = _fetch(project, source, config, start, end, cache_root)
+        fetched = _fetch(project, source, config, start, end, cache_root, bypass_cache)
         if fetched.status is not RunStatus.COMPLETE and not fetched.works:
             return FeedRunResult(
                 status="failed", window_from=start, window_to=end, note=fetched.note or "no records"
@@ -731,6 +785,7 @@ def feed_run(
             shown=shown_count,
             explore=explore_count,
             note="; ".join(notes) or None,
+            cached=fetched.cached,
         )
 
 
@@ -778,6 +833,7 @@ def feed_run_all(
     cache_root: Path | None = None,
     today: date | None = None,
     actor: Actor | None = None,
+    bypass_cache: bool = False,
 ) -> FeedRunAll:
     """Run the feed of each project (all of the root's when `slugs` is None), one failure never
     stopping the others. Projects without a configuration are skipped (`not-configured`, code 0).
@@ -785,9 +841,12 @@ def feed_run_all(
     Exit code, as `watch run`: 0 every project not due, nothing new or complete; 1 a partial or
     failed fetch, or an unexpected error; 2 a refusal (invalid input, no reference, no ranker).
     Pass `embedder`, or `embedder_factory` (a callable) to build the ranker only when a project
-    actually ranks. The cache defaults to `<root>/.feed-cache`."""
+    actually ranks. The cache defaults to `<root>/.feed-cache`, is pruned to `CACHE_MAX_AGE` before
+    the run (not on a dry run) and is skipped when reading by `bypass_cache` (a refetch)."""
     names = list(list_projects(settings) if slugs is None else slugs)
     cache = cache_root if cache_root is not None else settings.root / CACHE_DIR
+    if not dry_run:
+        prune_cache(cache, now=clock.now())
     lazy = LazyEmbedder(embedder, embedder_factory)
     outcomes: list[FeedProjectOutcome] = []
     for slug in names:
@@ -811,6 +870,7 @@ def feed_run_all(
                 cache_root=cache,
                 today=today,
                 actor=actor,
+                bypass_cache=bypass_cache,
             )
         except FactoryValidationError as exc:
             outcomes.append(FeedProjectOutcome(slug=slug, code=2, error=str(exc)))

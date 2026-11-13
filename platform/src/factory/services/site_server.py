@@ -686,6 +686,67 @@ def make_server(
 
 
 PROJECT_PREFIX: Final = "/p/"
+FEED_CHECK_EVERY: Final = 1800.0
+"""Seconds between the timer's looks at whether the feed is due (a run is due once per
+`interval_days`, so most looks do nothing)."""
+
+
+class FeedRunner:
+    """Runs the feed of every project in a daemon thread, one run at a time, and keeps the outcome
+    of the last one for the page. `run(refetch)` does the work (`feed_run_all`; `refetch` skips the
+    shared cache). The thread is the only writer of `last`."""
+
+    def __init__(self, run: Callable[[bool], feed_service.FeedRunAll]) -> None:
+        self._run = run
+        self._gate = threading.Lock()
+        self.last: dict[str, object] | None = None
+        self.running = False
+
+    def start(self, *, refetch: bool = False) -> bool:
+        """True when a run was started; False while another one is still running."""
+        if not self._gate.acquire(blocking=False):
+            return False
+
+        def work() -> None:
+            self.running = True
+            try:
+                outcome = self._run(refetch)
+                self.last = {"refetch": refetch, **outcome.model_dump(mode="json")}
+            except Exception as exc:  # the caller has gone; the page shows the error
+                _LOG.exception("the feed run failed")
+                self.last = {"refetch": refetch, "error": f"{type(exc).__name__}: {exc}"}
+            finally:
+                self.running = False
+                self._gate.release()
+
+        try:
+            threading.Thread(target=work, name="feed-run", daemon=True).start()
+        except RuntimeError:
+            self._gate.release()
+            return False
+        return True
+
+
+class FeedTimer:
+    """Starts a due feed run when the hub starts and then every `every` seconds while it runs. It
+    only asks the runner; whether anything is fetched is the feed's own cadence (`due`)."""
+
+    def __init__(self, runner: FeedRunner, *, every: float = FEED_CHECK_EVERY) -> None:
+        self._runner = runner
+        self._every = every
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._loop, name="feed-timer", daemon=True)
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+
+    def _loop(self) -> None:
+        while not self._stop.is_set():
+            self._runner.start()
+            self._stop.wait(self._every)
 
 
 class MainHub:
@@ -701,7 +762,11 @@ class MainHub:
         *,
         min_gap: float,
         background: bool,
+        feed: FeedRunner | None = None,
+        feed_every: float = FEED_CHECK_EVERY,
     ) -> None:
+        self.feed = feed
+        self._timer = FeedTimer(feed, every=feed_every) if feed is not None and background else None
         self._root = root
         self._slugs = slugs
         self._open = open_project
@@ -792,7 +857,14 @@ class MainHub:
                 return 301, f"{PROJECT_PREFIX}{slug}/", b""
         return None
 
+    def start_feed(self) -> None:
+        """Start the feed timer (a due run now, then every `feed_every` seconds), if any."""
+        if self._timer is not None:
+            self._timer.start()
+
     def stop(self) -> None:
+        if self._timer is not None:
+            self._timer.stop()
         for found in list(self._slots.values()):
             found.rebuilder.stop()
 
@@ -804,6 +876,7 @@ def make_main_server(
     Every scanned project's hub is written before the first request. Each project has its own
     write token, so a token from one project's pages writes to no other."""
     hub.prepare_all()
+    hub.start_feed()
     holder: list[ThreadingHTTPServer] = []
     handler = _handler_class(
         hub.resolve,

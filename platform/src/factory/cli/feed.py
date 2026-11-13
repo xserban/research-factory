@@ -106,8 +106,12 @@ def feed_configure_cmd(
         ),
     ] = None,
     references: Annotated[
-        str | None, typer.Option("--references", help="core (default) or core+included.")
-    ] = None,
+        str,
+        typer.Option(
+            "--references",
+            help="core-layer (default: the works of the core layer), core or core+included.",
+        ),
+    ] = "core-layer",
     shown: Annotated[int | None, typer.Option("--shown", help="Items shown per cycle.")] = None,
     explore: Annotated[
         float | None, typer.Option("--explore", help="Share of shown items drawn at random.")

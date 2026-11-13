@@ -46,6 +46,8 @@ def _no_duplicates(categories: tuple[str, ...]) -> tuple[str, ...]:
 class FeedReferences(StrEnum):
     CORE = "core"
     CORE_INCLUDED = "core+included"
+    CORE_LAYER = "core-layer"
+    """The works whose current layer is `core` (the researcher's move, else the layer miner)."""
 
 
 class FeedReaction(StrEnum):
