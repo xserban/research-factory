@@ -1,0 +1,1787 @@
+{
+ "document": "our-process-v0",
+ "status": "draft v0 for the researcher's check; not accepted",
+ "drafted": "2026-11-14 (overnight run, lane E)",
+ "stage_axis": "the 9 stages of m-stages v1 (data/projects/agentic-science/ops/screeners/m-stages-spec.json, read only)",
+ "stages": [
+  "literature-review",
+  "ideation-hypothesis",
+  "experiment-design",
+  "implementation-execution",
+  "data-analysis",
+  "paper-writing",
+  "review-verification",
+  "lab-automation",
+  "other"
+ ],
+ "quote_rule": "Every quote is verbatim in its source file after removing Markdown emphasis asterisks and collapsing whitespace; checked by a script at drafting time. inputs and outputs are the drafter's wording and carry no quote. 'not-stated' means no passage was found, not that the step does not exist.",
+ "actor_values": [
+  "automated",
+  "human-assisted",
+  "human",
+  "not-stated"
+ ],
+ "practice_values": {
+  "differs": "a passage in the repository documents a difference between spec and practice",
+  "not-piloted": "the spec marks the step proposed or Later",
+  "unknown": "practice not checked; this drafter did not read the pilot's events"
+ },
+ "stage_coverage": {
+  "lab-automation": "No row. The factory has no step that drives instruments or laboratories. slice-6 states that the platform never executes experiment code, and the slice-1 and slice-2 out-of-scope lists name none. Absence is recorded here, not guessed into a row."
+ },
+ "rows": [
+  {
+   "id": "L01",
+   "stage": "literature-review",
+   "step": {
+    "quote": "the raw goal (verbatim), the decomposed question elements and explicit non-goals are recorded",
+    "source": "docs/specs/slice-1.md §User flow 2"
+   },
+   "inputs": "Raw goal from the researcher",
+   "outputs": "Question version Q@sha8 with elements and non-goals",
+   "method": {
+    "quote": "Claude interviews the researcher (≤5 questions)",
+    "source": "docs/specs/slice-1.md §User flow 2"
+   },
+   "actor": "human-assisted",
+   "check": {
+    "quote": "`open` is allowed, `TBD` is not",
+    "source": "docs/specs/01-rigour.md §B, R-10"
+   },
+   "limits": {
+    "quote": "The goal was taken as typed, the plan was drafted without the scientist",
+    "source": "docs/specs/slice-8-develop.md §Problem"
+   },
+   "practice": {
+    "status": "differs",
+    "note": "Spec: Claude interviews the researcher in at most five questions. Pilot: the goal was taken as typed and the plan drafted without the scientist; slice 8 replaces this with suggest-and-select, one level at a time.",
+    "evidence": {
+     "quote": "The goal was taken as typed, the plan was drafted without the scientist",
+     "source": "docs/specs/slice-8-develop.md §Problem"
+    }
+   }
+  },
+  {
+   "id": "L02",
+   "stage": "literature-review",
+   "step": {
+    "quote": "the researcher names known in-scope papers (positive) and known out-of-scope look-alikes (negative)",
+    "source": "docs/specs/slice-1.md §User flow 3"
+   },
+   "inputs": "Seed papers named by the researcher",
+   "outputs": "Seeds resolved to works; recorded development/held-out split of the positives",
+   "method": {
+    "quote": "the platform resolves them to works and draws a recorded random development/held-out split of the positives (R-20)",
+    "source": "docs/specs/slice-1.md §User flow 3"
+   },
+   "actor": "human-assisted",
+   "check": {
+    "quote": "the split is drawn by the platform with a recorded random seed",
+    "source": "docs/specs/slice-1.md §Acceptance criteria 22"
+   },
+   "limits": {
+    "quote": "Drawing session had seen all candidates (limitation)",
+    "source": "docs/pilot/log.md §Row 3"
+   },
+   "practice": {
+    "status": "differs",
+    "note": "Spec: the researcher names the seeds. Pilot log (linear-attention-vision): seeds were proposed by the agent, to be confirmed; the drawing session had seen all candidates.",
+    "evidence": {
+     "quote": "Seeds proposed by the agent, not the researcher",
+     "source": "docs/pilot/log.md §Row 2"
+    }
+   }
+  },
+  {
+   "id": "L03",
+   "stage": "literature-review",
+   "step": {
+    "quote": "Claude proposes candidate queries per source; the platform runs them and reports recall on positive seeds, hits on negative seeds, result counts and harvested vocabulary",
+    "source": "docs/specs/slice-1.md §User flow 4"
+   },
+   "inputs": "Candidate queries, development seeds",
+   "outputs": "Probe report per query and source (recall, negatives hit, counts, vocabulary)",
+   "method": {
+    "quote": "iterate until recall is acceptable",
+    "source": "docs/specs/slice-1.md §User flow 4"
+   },
+   "actor": "human-assisted",
+   "check": {
+    "quote": "Threshold for acceptable seed recall in the probe (proposal: ≥ 0.9 in `pilot`, 1.0 in `systematic`)",
+    "source": "docs/specs/slice-1.md §Open questions"
+   },
+   "limits": {
+    "quote": "probe rounds were the agent's alone",
+    "source": "docs/specs/slice-8-develop.md §Problem"
+   },
+   "practice": {
+    "status": "differs",
+    "note": "Spec: Claude proposes, the platform measures, the scientist iterates. Pilot: rounds were the agent's alone until the suggest-and-select loop was used.",
+    "evidence": {
+     "quote": "probe rounds were the agent's alone",
+     "source": "docs/specs/slice-8-develop.md §Problem"
+    }
+   }
+  },
+  {
+   "id": "L04",
+   "stage": "literature-review",
+   "step": {
+    "quote": "criteria with IDs (`IN01`, `EX03`), each naming its parent question element or non-goal, with `applies_at` and priority",
+    "source": "docs/specs/slice-1.md §User flow 5"
+   },
+   "inputs": "Question, probe results",
+   "outputs": "Protocol version P@sha8 (criteria, sources, queries, limits, screening plan, kappa floor)",
+   "method": {
+    "quote": "screening plan, reviewer roles and κ floor declared before screening",
+    "source": "docs/specs/slice-1.md §User flow 5"
+   },
+   "actor": "human-assisted",
+   "check": {
+    "quote": "a parentless criterion is rejected",
+    "source": "docs/specs/01-rigour.md §B, R-11"
+   },
+   "limits": {
+    "quote": "the criteria were drafted whole",
+    "source": "docs/specs/slice-8-develop.md §Problem"
+   },
+   "practice": {
+    "status": "differs",
+    "note": "Spec: criteria with parents. Pilot: criteria were drafted whole by the agent; in the slice 8 loop the exclusions were cut from six to three by the scientist.",
+    "evidence": {
+     "quote": "the exclusions were cut from six to three",
+     "source": "docs/specs/slice-8-develop.md §Problem"
+    }
+   }
+  },
+  {
+   "id": "L05",
+   "stage": "literature-review",
+   "step": {
+    "quote": "Amendments are allowed at any time, with reason and `semantic` flag; affected earlier decisions are computed and marked stale.",
+    "source": "docs/specs/slice-1.md §User flow 5"
+   },
+   "inputs": "Proposed protocol change with reason",
+   "outputs": "New protocol version; stale decisions listed",
+   "method": {
+    "quote": "an amendment computes which earlier decisions are stale",
+    "source": "docs/specs/01-rigour.md §B, R-15"
+   },
+   "actor": "human-assisted",
+   "check": {
+    "quote": "stale decisions must be re-screened",
+    "source": "docs/specs/01-rigour.md §B, R-15"
+   },
+   "limits": "not-stated",
+   "practice": {
+    "status": "unknown",
+    "note": "",
+    "evidence": null
+   }
+  },
+  {
+   "id": "L06",
+   "stage": "literature-review",
+   "step": {
+    "quote": "a reviewer agent applies the PRESS checklist, a human confirms; findings and responses are recorded",
+    "source": "docs/specs/01-rigour.md §H, R-61"
+   },
+   "inputs": "Search strategy",
+   "outputs": "PRESS findings, responses and human confirmation",
+   "method": {
+    "quote": "PRESS review",
+    "source": "docs/specs/01-rigour.md §H, R-61"
+   },
+   "actor": "human-assisted",
+   "check": {
+    "quote": "a human confirms",
+    "source": "docs/specs/01-rigour.md §H, R-61"
+   },
+   "limits": {
+    "quote": "Method profiles (proposed)",
+    "source": "docs/specs/01-rigour.md §H heading"
+   },
+   "practice": {
+    "status": "unknown",
+    "note": "",
+    "evidence": null
+   }
+  },
+  {
+   "id": "L07",
+   "stage": "literature-review",
+   "step": {
+    "quote": "queries run on OpenAlex and arXiv; raw responses archived as blobs; reported vs. retrieved counts recorded",
+    "source": "docs/specs/slice-1.md §User flow 6"
+   },
+   "inputs": "Confirmed protocol queries",
+   "outputs": "Search runs, raw blobs, reported and retrieved counts",
+   "method": {
+    "quote": "no relevance ranking, truncation or \"top N\"",
+    "source": "docs/specs/01-rigour.md §C, R-21"
+   },
+   "actor": "automated",
+   "check": {
+    "quote": "a test fails if retrieved < reported without a recorded reason",
+    "source": "docs/specs/slice-1.md §Acceptance criteria 14"
+   },
+   "limits": {
+    "quote": "PubMed and other sources",
+    "source": "docs/specs/slice-1.md §Out of scope"
+   },
+   "practice": {
+    "status": "unknown",
+    "note": "",
+    "evidence": null
+   }
+  },
+  {
+   "id": "L08",
+   "stage": "literature-review",
+   "step": {
+    "quote": "cascade merge; every merge recorded and reversible",
+    "source": "docs/specs/slice-1.md §User flow 7"
+   },
+   "inputs": "Retrieved records",
+   "outputs": "Works with merges listed; PRISMA identification counts",
+   "method": {
+    "quote": "4-stage cascade, union-find, reversible merges",
+    "source": "docs/specs/slice-1.md §In scope, Dedup"
+   },
+   "actor": "automated",
+   "check": {
+    "quote": "seeds detect false merges (a seed vanishes) and false splits (a seed appears twice)",
+    "source": "docs/specs/01-rigour.md §C, R-26"
+   },
+   "limits": {
+    "quote": "A later merge would leave the canonical work considered-not-added while its twin was sampled.",
+    "source": "docs/backlog.md §IDEA-20"
+   },
+   "practice": {
+    "status": "unknown",
+    "note": "",
+    "evidence": null
+   }
+  },
+  {
+   "id": "L09",
+   "stage": "literature-review",
+   "step": {
+    "quote": "two independent passes (A: inclusion framing, B: exclusion framing, reversed criterion order, different Claude models, separate sessions)",
+    "source": "docs/specs/slice-1.md §User flow 8"
+   },
+   "inputs": "Title and abstract of each record, protocol, seeds as worked examples",
+   "outputs": "Verdicts (include, exclude, cannot-assess, unsure) with quoted rationale per pass",
+   "method": {
+    "quote": "fresh context and randomised order per batch; seeds pinned as worked examples",
+    "source": "docs/specs/slice-1.md §User flow 8"
+   },
+   "actor": "automated",
+   "check": {
+    "quote": "a screening rationale whose quote is not verbatim in the title/abstract is rejected",
+    "source": "docs/specs/slice-1.md §Acceptance criteria 16"
+   },
+   "limits": {
+    "quote": "some pass A works have no live decision, because the work could not be screened for a stated technical reason",
+    "source": "docs/backlog.md §IDEA-46"
+   },
+   "practice": {
+    "status": "differs",
+    "note": "Spec: second pass on every record in systematic mode, a recorded sample in pilot. Pilot: a tolerance for unscreenable pass A records (researcher: always accept 1% errors for pass A).",
+    "evidence": {
+     "quote": "The researcher: always accept 1% errors for pass A.",
+     "source": "docs/backlog.md §IDEA-46"
+    }
+   }
+  },
+  {
+   "id": "L10",
+   "stage": "literature-review",
+   "step": {
+    "quote": "before each batch both passes screen ~30 human-labelled records (incl. seeds)",
+    "source": "docs/specs/01-rigour.md §D, R-35"
+   },
+   "inputs": "Human-labelled calibration records",
+   "outputs": "Sensitivity and specificity per pass; batch released or blocked",
+   "method": {
+    "quote": "screening is blocked until the calibration set is labelled",
+    "source": "docs/specs/slice-1.md §Acceptance criteria 18"
+   },
+   "actor": "human-assisted",
+   "check": {
+    "quote": "sensitivity and specificity reported; below threshold blocks the batch",
+    "source": "docs/specs/01-rigour.md §D, R-35"
+   },
+   "limits": "not-stated",
+   "practice": {
+    "status": "unknown",
+    "note": "",
+    "evidence": null
+   }
+  },
+  {
+   "id": "L11",
+   "stage": "literature-review",
+   "step": {
+    "quote": "Cohen's κ per pass pair and per criterion",
+    "source": "docs/specs/01-rigour.md §D, R-36"
+   },
+   "inputs": "Decisions of passes A and B",
+   "outputs": "kappa per criterion; list of disagreements",
+   "method": {
+    "quote": "`screen_agreement` refuses to compute κ for two passes with identical configuration",
+    "source": "docs/specs/slice-1.md §Acceptance criteria 17"
+   },
+   "actor": "automated",
+   "check": {
+    "quote": "disagreements never auto-resolved",
+    "source": "docs/specs/01-rigour.md §D, R-36"
+   },
+   "limits": {
+    "quote": "κ floor in `pilot` mode (proposal: advisory; floor 0.7 in `systematic`)",
+    "source": "docs/specs/slice-1.md §Open questions"
+   },
+   "practice": {
+    "status": "unknown",
+    "note": "",
+    "evidence": null
+   }
+  },
+  {
+   "id": "L12",
+   "stage": "literature-review",
+   "step": {
+    "quote": "human audits ≥2% (min. 50) of agreed decisions, weighted 3:1 towards agreed exclusions",
+    "source": "docs/specs/01-rigour.md §D, R-37"
+   },
+   "inputs": "Agreed decisions; disagreements and unsure records",
+   "outputs": "Human labels, error rate, human resolutions",
+   "method": {
+    "quote": "`audit_sample` draws ≥2% (min. 50) of agreed decisions, 3:1 towards exclusions",
+    "source": "docs/specs/slice-1.md §Acceptance criteria 18"
+   },
+   "actor": "human",
+   "check": {
+    "quote": "error rate above the declared floor sends criteria back to the protocol",
+    "source": "docs/specs/01-rigour.md §D, R-37"
+   },
+   "limits": {
+    "quote": "audit labels for unsampled pairs are dropped silently",
+    "source": "docs/backlog.md §IDEA-18"
+   },
+   "practice": {
+    "status": "unknown",
+    "note": "",
+    "evidence": null
+   }
+  },
+  {
+   "id": "L13",
+   "stage": "literature-review",
+   "step": {
+    "quote": "backward and forward citation chasing from included works; seed admission for explained misses (R-24, R-25)",
+    "source": "docs/specs/slice-1.md §User flow 10"
+   },
+   "inputs": "Included works, seed misses",
+   "outputs": "Recorded supplementary search rounds; new-after-dedup counts under other methods",
+   "method": {
+    "quote": "Supplementary searches (backward/forward citation chasing, seed admission, hand search) are separate runs",
+    "source": "docs/specs/01-rigour.md §C, R-25"
+   },
+   "actor": "automated",
+   "check": {
+    "quote": "every positive seed is retrieved, or the miss is explained and an admission route planned",
+    "source": "docs/specs/01-rigour.md §C, R-24"
+   },
+   "limits": "not-stated",
+   "practice": {
+    "status": "unknown",
+    "note": "",
+    "evidence": null
+   }
+  },
+  {
+   "id": "L14",
+   "stage": "literature-review",
+   "step": {
+    "quote": "trying legal routes in a fixed order; every attempt is recorded",
+    "source": "docs/specs/slice-2.md §User flow 2"
+   },
+   "inputs": "Works promoted at title/abstract screening",
+   "outputs": "Fetch attempts per work; documents in the local library; not-retrieved reasons",
+   "method": {
+    "quote": "literature is stored locally per project and never in git",
+    "source": "docs/specs/slice-2.md §Design, Storage and licensing"
+   },
+   "actor": "automated",
+   "check": {
+    "quote": "each not-retrieved work lists per-route reasons",
+    "source": "docs/specs/slice-2.md §Acceptance criteria 1"
+   },
+   "limits": {
+    "quote": "Legal routes only.",
+    "source": "docs/specs/slice-2.md §Design, route order"
+   },
+   "practice": {
+    "status": "unknown",
+    "note": "",
+    "evidence": null
+   }
+  },
+  {
+   "id": "L15",
+   "stage": "literature-review",
+   "step": {
+    "quote": "Everything is converted to Markdown",
+    "source": "docs/specs/slice-2.md §Design, Canonical document"
+   },
+   "inputs": "Raw source (HTML, LaTeX, PDF)",
+   "outputs": "Canonical Markdown with stable anchors, pinned converter version",
+   "method": {
+    "quote": "the same raw blob and converter version always give the same document hash",
+    "source": "docs/specs/slice-2.md §Design, Canonical document"
+   },
+   "actor": "automated",
+   "check": {
+    "quote": "converting the same raw blob twice with the same converter version yields identical document hash and anchors",
+    "source": "docs/specs/slice-2.md §Acceptance criteria 2"
+   },
+   "limits": {
+    "quote": "each line number became its own paragraph with its own anchor",
+    "source": "docs/backlog.md §IDEA-48"
+   },
+   "practice": {
+    "status": "differs",
+    "note": "Spec: deterministic conversion with stable anchors. Practice: line-numbered preprints gave one anchored paragraph per margin line number; the researcher chose to leave the conversions as they are.",
+    "evidence": {
+     "quote": "The researcher chose to leave the conversions as they are for now.",
+     "source": "docs/backlog.md §IDEA-48"
+    }
+   }
+  },
+  {
+   "id": "L16",
+   "stage": "literature-review",
+   "step": {
+    "quote": "criteria with `applies_at = full-text | either` are applied with the slice-1 machinery (two passes, calibration, κ, audit, verified quotes)",
+    "source": "docs/specs/slice-2.md §User flow 4"
+   },
+   "inputs": "Canonical documents, protocol criteria",
+   "outputs": "Full-text verdicts anchored to the pinned conversion; PRISMA full-text boxes",
+   "method": {
+    "quote": "quotes now cite anchors",
+    "source": "docs/specs/slice-2.md §User flow 4"
+   },
+   "actor": "automated",
+   "check": {
+    "quote": "a quote that is not verbatim in the anchored element is rejected",
+    "source": "docs/specs/slice-2.md §Acceptance criteria 4"
+   },
+   "limits": {
+    "quote": "Today `cannot-assess` counts as promote",
+    "source": "docs/backlog.md §IDEA-49"
+   },
+   "practice": {
+    "status": "differs",
+    "note": "Spec and code: cannot-assess promotes to extraction. Researcher ruling 2026-11-13 (IDEA-67): an unresolved full-text cannot-assess work is pending until resolved; not yet built.",
+    "evidence": {
+     "quote": "an unresolved full-text cannot-assess work is pending until resolved",
+     "source": "docs/backlog.md §IDEA-67"
+    }
+   }
+  },
+  {
+   "id": "L17",
+   "stage": "literature-review",
+   "step": {
+    "quote": "`references_extract` runs for an included work (or all of them). The platform parses the bibliography of the work's pinned conversion",
+    "source": "docs/specs/slice-3a-references.md §User flow 1"
+   },
+   "inputs": "Pinned conversion of an included work",
+   "outputs": "Parsed reference entries, marker links, resolved works, parse quality flags",
+   "method": {
+    "quote": "resolves each entry by identifier, then by title/year match",
+    "source": "docs/specs/slice-3a-references.md §User flow 1"
+   },
+   "actor": "automated",
+   "check": {
+    "quote": "the counts resolved, unconfirmed, ambiguous and unresolved sum to the entry count",
+    "source": "docs/specs/01-rigour.md §J, R-80"
+   },
+   "limits": {
+    "quote": "G1 ships with recorded quality flags and no layout-model parser",
+    "source": "docs/specs/slice-3a-references.md §Rulings 5"
+   },
+   "practice": {
+    "status": "unknown",
+    "note": "",
+    "evidence": null
+   }
+  },
+  {
+   "id": "L18",
+   "stage": "literature-review",
+   "step": {
+    "quote": "An agent may propose, never confirm",
+    "source": "docs/specs/slice-3a-references.md §Rulings 3"
+   },
+   "inputs": "Ambiguous and unconfirmed reference links",
+   "outputs": "Confirmed or rejected links",
+   "method": {
+    "quote": "The agent may propose (`reference_decide`, a recorded act quoting both entries); a human confirms or rejects (CLI)",
+    "source": "docs/specs/slice-3a-references.md §User flow 3"
+   },
+   "actor": "human-assisted",
+   "check": {
+    "quote": "An agent proposes and never confirms",
+    "source": "docs/specs/01-rigour.md §J, R-81"
+   },
+   "limits": "not-stated",
+   "practice": {
+    "status": "unknown",
+    "note": "",
+    "evidence": null
+   }
+  },
+  {
+   "id": "L19",
+   "stage": "literature-review",
+   "step": {
+    "quote": "`snowball_round` plans a round (dry run: sources, candidates ranked by derived citation count, the stopping-rule state) and, on go-ahead, registers it and runs its queries as supplementary searches",
+    "source": "docs/specs/slice-3a-references.md §User flow 4"
+   },
+   "inputs": "Resolved references missing from the corpus; protocol stopping rule",
+   "outputs": "Snowball round record; new records entering dedup and screening",
+   "method": {
+    "quote": "nothing is auto-included",
+    "source": "docs/specs/slice-3a-references.md §User flow 4"
+   },
+   "actor": "human-assisted",
+   "check": {
+    "quote": "a candidate is never included without screening",
+    "source": "docs/specs/01-rigour.md §J, R-82"
+   },
+   "limits": {
+    "quote": "a maximum of two backward rounds and one forward round for `pilot`",
+    "source": "docs/specs/slice-3a-references.md §Rulings 6"
+   },
+   "practice": {
+    "status": "unknown",
+    "note": "",
+    "evidence": null
+   }
+  },
+  {
+   "id": "L20",
+   "stage": "literature-review",
+   "step": {
+    "quote": "Each link is parsed to one identifier (arXiv id, DOI or OpenAlex id) at the boundary; an unparseable link writes nothing and is returned with a reason.",
+    "source": "docs/specs/slice-4a-inbox-discovery.md §User flow 1"
+   },
+   "inputs": "A link given by the researcher",
+   "outputs": "Inbox item with one identifier",
+   "method": {
+    "quote": "Capture is offline and allowed at any time",
+    "source": "docs/specs/slice-4a-inbox-discovery.md §User flow 1"
+   },
+   "actor": "human",
+   "check": "not-stated",
+   "limits": "not-stated",
+   "practice": {
+    "status": "unknown",
+    "note": "",
+    "evidence": null
+   }
+  },
+  {
+   "id": "L21",
+   "stage": "literature-review",
+   "step": {
+    "quote": "looks up each open item by identifier as a recorded query of purpose `supplied`",
+    "source": "docs/specs/slice-4a-inbox-discovery.md §User flow 2"
+   },
+   "inputs": "Open inbox items",
+   "outputs": "Works with provenance method supplied; item outcome (new, in-corpus, not-found, ambiguous, failed)",
+   "method": {
+    "quote": "Screeners never see the route or the note",
+    "source": "docs/specs/slice-4a-inbox-discovery.md §User flow 3"
+   },
+   "actor": "automated",
+   "check": {
+    "quote": "Screening and extraction tasks never carry how a work was discovered",
+    "source": "docs/specs/01-rigour.md §L, R-101"
+   },
+   "limits": {
+    "quote": "publisher-page resolution (`citation_doi`), the pilot run on real links",
+    "source": "docs/specs/slice-4a-inbox-discovery.md §v1 scope"
+   },
+   "practice": {
+    "status": "unknown",
+    "note": "",
+    "evidence": null
+   }
+  },
+  {
+   "id": "L22",
+   "stage": "literature-review",
+   "step": {
+    "quote": "One feed engine, configured per project, that ranks new arXiv listings against the project's own core works.",
+    "source": "docs/specs/slice-4c-feed.md §Goal"
+   },
+   "inputs": "Declared arXiv categories, the project's reference set (core works)",
+   "outputs": "Ranked feed entries with nearest reference work",
+   "method": {
+    "quote": "embeds the remainder with the ranker model of decision 116, scores each against the reference set",
+    "source": "docs/specs/slice-4c-feed.md §User flow 2"
+   },
+   "actor": "automated",
+   "check": {
+    "quote": "Fixed inputs give the same order.",
+    "source": "docs/specs/slice-4c-feed.md §Rulings 5"
+   },
+   "limits": {
+    "quote": "Free-text feed queries and other sources (OpenAlex concepts, bioRxiv) come Later.",
+    "source": "docs/specs/slice-4c-feed.md §Rulings 2"
+   },
+   "practice": {
+    "status": "unknown",
+    "note": "",
+    "evidence": null
+   }
+  },
+  {
+   "id": "L23",
+   "stage": "literature-review",
+   "step": {
+    "quote": "The researcher records `like`, `dislike`, `save` or `dismiss`",
+    "source": "docs/specs/slice-4c-feed.md §User flow 4"
+   },
+   "inputs": "Ranked feed entries",
+   "outputs": "Reactions; papers sent to the inbox",
+   "method": {
+    "quote": "The feed suggests and the researcher selects; the feed never includes, excludes or extracts.",
+    "source": "docs/specs/slice-4c-feed.md §Goal"
+   },
+   "actor": "human",
+   "check": {
+    "quote": "Reactions are human events and record the rank and score that were shown.",
+    "source": "docs/specs/slice-4c-feed.md §User flow 4"
+   },
+   "limits": {
+    "quote": "no; disclosed as discovery",
+    "source": "docs/specs/slice-4c-feed.md §Two intake channels"
+   },
+   "practice": {
+    "status": "unknown",
+    "note": "",
+    "evidence": null
+   }
+  },
+  {
+   "id": "L24",
+   "stage": "literature-review",
+   "step": {
+    "quote": "the platform re-runs the project's recorded searches, deduplicates what is new against the corpus and routes it into the project's screening protocol",
+    "source": "docs/specs/slice-4b-living-corpus.md §Goal"
+   },
+   "inputs": "Recorded protocol queries, schedule set outside the platform",
+   "outputs": "Watch cycles as search runs; new pending works",
+   "method": {
+    "quote": "Watch runs are search runs.",
+    "source": "docs/specs/01-rigour.md §L, R-102"
+   },
+   "actor": "automated",
+   "check": {
+    "quote": "A living review reports, per update, a PRISMA flow over the records first identified in it",
+    "source": "docs/specs/01-rigour.md §L, R-103"
+   },
+   "limits": "not-stated",
+   "practice": {
+    "status": "unknown",
+    "note": "",
+    "evidence": null
+   }
+  },
+  {
+   "id": "L25",
+   "stage": "literature-review",
+   "step": {
+    "quote": "Read every included paper for what it builds on, what it adds, what it reports and what it concedes, record each statement as an anchored, verified quote",
+    "source": "docs/specs/slice-3b-lineage.md §Goal"
+   },
+   "inputs": "Included works with a current reference extraction",
+   "outputs": "Contribution items (base-idea, addition, result, limitation, not-stated)",
+   "method": {
+    "quote": "Each item carries an anchor and a verbatim quote; the platform verifies both.",
+    "source": "docs/specs/slice-3b-lineage.md §User flow 2"
+   },
+   "actor": "automated",
+   "check": {
+    "quote": "The platform cannot check absence; the audit sample includes `not-stated` items.",
+    "source": "docs/specs/slice-3b-lineage.md §Rulings 8"
+   },
+   "limits": {
+    "quote": "no edge may exist without a basis",
+    "source": "docs/specs/slice-3b-lineage.md §Goal"
+   },
+   "practice": {
+    "status": "unknown",
+    "note": "",
+    "evidence": null
+   }
+  },
+  {
+   "id": "L26",
+   "stage": "literature-review",
+   "step": {
+    "quote": "A relation whose target the platform can resolve deterministically (the item cites a reference entry that G1 resolved)",
+    "source": "docs/specs/slice-3b-lineage.md §User flow 4"
+   },
+   "inputs": "Contribution items, reference links",
+   "outputs": "Relations (builds-on, improves-on), each stated or inferred",
+   "method": {
+    "quote": "(target chosen by the agent, or no basis quote)",
+    "source": "docs/specs/slice-3b-lineage.md §User flow 4"
+   },
+   "actor": "human-assisted",
+   "check": {
+    "quote": "Inferred edges need human confirmation",
+    "source": "docs/specs/01-rigour.md §J, R-84"
+   },
+   "limits": {
+    "quote": "no second-agent confirmation exists for inferred relations or ideas, in any mode",
+    "source": "docs/specs/slice-3b-lineage.md §Rulings 3"
+   },
+   "practice": {
+    "status": "unknown",
+    "note": "",
+    "evidence": null
+   }
+  },
+  {
+   "id": "L27",
+   "stage": "literature-review",
+   "step": {
+    "quote": "a short text, one target, and between one and five",
+    "source": "docs/specs/slice-3c-intuition.md §User flow 2"
+   },
+   "inputs": "Idea or paper node with its contribution items and verified quotes",
+   "outputs": "Interpretation with sources and review state (never evidence)",
+   "method": {
+    "quote": "A text with no source is refused.",
+    "source": "docs/specs/slice-3c-intuition.md §User flow 2"
+   },
+   "actor": "human-assisted",
+   "check": {
+    "quote": "Only a human sets `reviewed` or `wrong`",
+    "source": "docs/specs/slice-3c-intuition.md §Rulings 6"
+   },
+   "limits": {
+    "quote": "the platform checks length, targets and quotes, not whether the text is correct",
+    "source": "docs/specs/slice-3c-intuition.md §Rulings 4"
+   },
+   "practice": {
+    "status": "unknown",
+    "note": "",
+    "evidence": null
+   }
+  },
+  {
+   "id": "L28",
+   "stage": "literature-review",
+   "step": {
+    "quote": "The researcher supplies or approves the first source for each concept",
+    "source": "docs/specs/slice-3c-intuition.md §Rulings 2"
+   },
+   "inputs": "Proposed background concepts",
+   "outputs": "Concepts with approved source; uses links",
+   "method": {
+    "quote": "Claude drafts the concept's explanation from that source, with quotes",
+    "source": "docs/specs/slice-3c-intuition.md §User flow 3"
+   },
+   "actor": "human-assisted",
+   "check": {
+    "quote": "A concept without an approved source stays `unreviewed`",
+    "source": "docs/specs/slice-3c-intuition.md §Rulings 2"
+   },
+   "limits": "not-stated",
+   "practice": {
+    "status": "unknown",
+    "note": "",
+    "evidence": null
+   }
+  },
+  {
+   "id": "L29",
+   "stage": "literature-review",
+   "step": {
+    "quote": "Every number in a report (PRISMA counts, κ, error rates) is derived from events; none is typed by a human or an agent",
+    "source": "docs/specs/01-rigour.md §A, R-05"
+   },
+   "inputs": "Event log",
+   "outputs": "PRISMA 2020 flow, PRISMA-S search report, methods statement, discovery report",
+   "method": {
+    "quote": "PRISMA 2020 flow and PRISMA-S search report derived from events; methods statement disclosing automation",
+    "source": "docs/specs/slice-1.md §User flow 11"
+   },
+   "actor": "automated",
+   "check": {
+    "quote": "every PRISMA number is derived from events; none is entered by hand",
+    "source": "docs/specs/slice-1.md §Acceptance criteria 10"
+   },
+   "limits": {
+    "quote": "but no mechanism does this",
+    "source": "docs/backlog.md §IDEA-47"
+   },
+   "practice": {
+    "status": "differs",
+    "note": "Spec (protocol criterion EX02 text): surveys are recorded as background and snowball sources. Backlog IDEA-47: no mechanism does this.",
+    "evidence": {
+     "quote": "but no mechanism does this",
+     "source": "docs/backlog.md §IDEA-47"
+    }
+   }
+  },
+  {
+   "id": "H01",
+   "stage": "ideation-hypothesis",
+   "step": {
+    "quote": "A controlled vocabulary of typed properties (`enum`, `set`, `bool`, `number` with unit family), human-approved",
+    "source": "docs/specs/slice-6-hypotheses.md §Ruling 4"
+   },
+   "inputs": "Properties proposed from the corpus",
+   "outputs": "Approved property vocabulary V@sha8",
+   "method": {
+    "quote": "cards a `miner` (single pass with human confirmation and audit, declared quality regime)",
+    "source": "docs/specs/slice-6-hypotheses.md §Reconciliation 5"
+   },
+   "actor": "human-assisted",
+   "check": {
+    "quote": "Hypotheses cite triggers.",
+    "source": "docs/specs/01-rigour.md §N, R-120"
+   },
+   "limits": {
+    "quote": "free labels fragment",
+    "source": "docs/specs/slice-6-hypotheses.md §Ruling 4"
+   },
+   "practice": {
+    "status": "unknown",
+    "note": "",
+    "evidence": null
+   }
+  },
+  {
+   "id": "H02",
+   "stage": "ideation-hypothesis",
+   "step": {
+    "quote": "`match_query` computes, per problem description, which method cards satisfy, conflict with or leave unknown each required property",
+    "source": "docs/specs/slice-6-hypotheses.md §Builders 3"
+   },
+   "inputs": "Method cards, problem description",
+   "outputs": "Match rows with transfer-candidate flag",
+   "method": {
+    "quote": "Per required property the rule yields `satisfied | conflicting | unknown`.",
+    "source": "docs/specs/slice-6-hypotheses.md §Matching"
+   },
+   "actor": "automated",
+   "check": {
+    "quote": "Every result carries `match_key = sha256(problem state, card states, V@, builder version)`",
+    "source": "docs/specs/slice-6-hypotheses.md §Matching"
+   },
+   "limits": {
+    "quote": "v1 keeps the project as the vocabulary scope",
+    "source": "docs/specs/slice-6-hypotheses.md §Reconciliation 6"
+   },
+   "practice": {
+    "status": "unknown",
+    "note": "",
+    "evidence": null
+   }
+  },
+  {
+   "id": "H03",
+   "stage": "ideation-hypothesis",
+   "step": {
+    "quote": "`finder_contradictions` lists numeric conflicts inside comparability groups with the conditions that differ; `finder_gaps` lists empty cells of a declared method × condition grid (\"not found in corpus\")",
+    "source": "docs/specs/slice-6-hypotheses.md §Builders 3"
+   },
+   "inputs": "Evidence report, declared grid",
+   "outputs": "Contradiction pairs; empty grid cells with corpus definition",
+   "method": {
+    "quote": "bounded at 10,000 cells per query",
+    "source": "docs/specs/slice-6-hypotheses.md §Ruling 10"
+   },
+   "actor": "automated",
+   "check": {
+    "quote": "claim-level contradictions are proposed by an agent (`contradiction_propose`, two live claims or items with quotes), stay inferred and need a human",
+    "source": "docs/specs/slice-6-hypotheses.md §Ruling 9"
+   },
+   "limits": {
+    "quote": "not found in this corpus",
+    "source": "docs/specs/slice-6-hypotheses.md §Ruling 10"
+   },
+   "practice": {
+    "status": "unknown",
+    "note": "",
+    "evidence": null
+   }
+  },
+  {
+   "id": "H04",
+   "stage": "ideation-hypothesis",
+   "step": {
+    "quote": "Claude records a lead (≤ 600 characters) with at least one trigger (a match row, a finding, a work, a row, a claim, an `ida_`, an `int_`).",
+    "source": "docs/specs/slice-6-hypotheses.md §Leads 4"
+   },
+   "inputs": "Match rows, findings, works, claims",
+   "outputs": "Lead with triggers and the failed directions that share a trigger",
+   "method": {
+    "quote": "so that dead ends are seen before proposing",
+    "source": "docs/specs/slice-6-hypotheses.md §Leads 4"
+   },
+   "actor": "human-assisted",
+   "check": {
+    "quote": "A lead or hypothesis without at least one resolvable trigger cannot be written",
+    "source": "docs/specs/01-rigour.md §N, R-120"
+   },
+   "limits": {
+    "quote": "where idea notes live (this backlog is for the platform; research ideas belong in each project)",
+    "source": "docs/backlog.md §IDEA-05"
+   },
+   "practice": {
+    "status": "unknown",
+    "note": "",
+    "evidence": null
+   }
+  },
+  {
+   "id": "H05",
+   "stage": "ideation-hypothesis",
+   "step": {
+    "quote": "`promote | park | discard` by a human (pilot, systematic) or by an agent session other than the lead's author (exploratory)",
+    "source": "docs/specs/slice-6-hypotheses.md §Ruling 11"
+   },
+   "inputs": "Lead",
+   "outputs": "Decision (promote, park, discard with reason)",
+   "method": {
+    "quote": "`discard` needs a reason from {`duplicate`, `prior-failure`, `out-of-scope`, `infeasible`, `not-falsifiable`, `other`} plus a note",
+    "source": "docs/specs/slice-6-hypotheses.md §Ruling 11"
+   },
+   "actor": "human-assisted",
+   "check": {
+    "quote": "Refuted hypotheses and null results are recorded and reported",
+    "source": "docs/specs/01-rigour.md §F, R-52"
+   },
+   "limits": "not-stated",
+   "practice": {
+    "status": "unknown",
+    "note": "",
+    "evidence": null
+   }
+  },
+  {
+   "id": "H06",
+   "stage": "ideation-hypothesis",
+   "step": {
+    "quote": "A promoted lead becomes a hypothesis draft: statement, variables, conditions, prediction with a smallest effect of interest, a decision rule from a fixed menu, and a test reference",
+    "source": "docs/specs/slice-6-hypotheses.md §Hypotheses 5"
+   },
+   "inputs": "Promoted lead",
+   "outputs": "Hypothesis draft",
+   "method": {
+    "quote": "A critic session that neither drafted the hypothesis nor wrote the lead reviews the artefact (not the proposer's reasoning) against a checklist.",
+    "source": "docs/specs/slice-6-hypotheses.md §Hypotheses 5"
+   },
+   "actor": "human-assisted",
+   "check": {
+    "quote": "Proposer never evaluates; critic sees artefacts, not the proposer's reasoning",
+    "source": "docs/specs/01-rigour.md §F, R-51"
+   },
+   "limits": "not-stated",
+   "practice": {
+    "status": "unknown",
+    "note": "",
+    "evidence": null
+   }
+  },
+  {
+   "id": "H07",
+   "stage": "ideation-hypothesis",
+   "step": {
+    "quote": "The gate holder registers it; `H@` is then frozen.",
+    "source": "docs/specs/slice-6-hypotheses.md §Hypotheses 5"
+   },
+   "inputs": "Reviewed hypothesis draft",
+   "outputs": "Registered hypothesis H@sha8",
+   "method": {
+    "quote": "Hypotheses and their falsification tests are registered before evidence is examined",
+    "source": "docs/specs/01-rigour.md §F, R-50"
+   },
+   "actor": "human-assisted",
+   "check": {
+    "quote": "blocks rescue-by-revision (R-52)",
+    "source": "docs/specs/slice-6-hypotheses.md §Ruling 12"
+   },
+   "limits": {
+    "quote": "A hypothesis registered under the exploratory policy is labelled and is never reported as confirmatory",
+    "source": "docs/specs/slice-6-hypotheses.md §Ruling 14"
+   },
+   "practice": {
+    "status": "unknown",
+    "note": "",
+    "evidence": null
+   }
+  },
+  {
+   "id": "H08",
+   "stage": "ideation-hypothesis",
+   "step": {
+    "quote": "the platform flags `contaminated` when the drafter's or critic's model cut-off is on or after the window start",
+    "source": "docs/specs/slice-6-hypotheses.md §Ruling 15"
+   },
+   "inputs": "Declared model cut-offs, window start",
+   "outputs": "contaminated or cutoff-unknown flag",
+   "method": {
+    "quote": "when hypotheses are scored against later literature, the model's training cut-off must precede the hold-out window",
+    "source": "docs/specs/01-rigour.md §F, R-53"
+   },
+   "actor": "automated",
+   "check": {
+    "quote": "`cutoff-unknown` when undeclared (error in systematic)",
+    "source": "docs/specs/slice-6-hypotheses.md §Ruling 15"
+   },
+   "limits": {
+    "quote": "experiment hypotheses are not affected",
+    "source": "docs/specs/slice-6-hypotheses.md §Ruling 15"
+   },
+   "practice": {
+    "status": "unknown",
+    "note": "",
+    "evidence": null
+   }
+  },
+  {
+   "id": "E01",
+   "stage": "experiment-design",
+   "step": {
+    "quote": "`ExperimentDesign`: `hypothesis` (`hyp_`, must be registered or draft-linked), `factor` (configuration keys that change between treatment and baseline)",
+    "source": "docs/specs/slice-6-hypotheses.md §Design, ExperimentDesign"
+   },
+   "inputs": "Registered hypothesis, evidence rows of baselines",
+   "outputs": "Experiment design E@sha8",
+   "method": {
+    "quote": "Validation at the boundary: product of axes ≤ 256; each ablation differs in one key; the primary universe is in the product",
+    "source": "docs/specs/slice-6-hypotheses.md §Design, ExperimentDesign"
+   },
+   "actor": "human-assisted",
+   "check": {
+    "quote": "baselines resolve to final evidence rows whose comparability key matches the hypothesis conditions",
+    "source": "docs/specs/slice-6-hypotheses.md §Design, ExperimentDesign"
+   },
+   "limits": {
+    "quote": "the pilot with real runs supplied by the researcher (acceptance 25)",
+    "source": "docs/specs/slice-6-hypotheses.md §v1 scope"
+   },
+   "practice": {
+    "status": "unknown",
+    "note": "",
+    "evidence": null
+   }
+  },
+  {
+   "id": "E02",
+   "stage": "experiment-design",
+   "step": {
+    "quote": "after freeze, changes are deviations (R-14); after unlock, a semantic change flags the outcome `deviated`",
+    "source": "docs/specs/slice-6-hypotheses.md §Design, ExperimentDesign"
+   },
+   "inputs": "Experiment design",
+   "outputs": "Frozen design; deviations recorded separately",
+   "method": {
+    "quote": "`experiments.freeze_unlock` (floor `agent`; exploratory preset `agent` with the non-author/non-drafter rule as the module's `proposer_of` hook; pilot and systematic `human`)",
+    "source": "docs/specs/slice-6-hypotheses.md §Reconciliation 1"
+   },
+   "actor": "human-assisted",
+   "check": {
+    "quote": "Confirmatory runs need every declared baseline resolved",
+    "source": "docs/specs/01-rigour.md §N, R-122"
+   },
+   "limits": "not-stated",
+   "practice": {
+    "status": "unknown",
+    "note": "",
+    "evidence": null
+   }
+  },
+  {
+   "id": "E03",
+   "stage": "experiment-design",
+   "step": {
+    "quote": "Positive and negative controls measure the pipeline's sensitivity and false-positive rate",
+    "source": "docs/specs/01-rigour.md §F, R-54"
+   },
+   "inputs": "Design controls",
+   "outputs": "Control cells with expected outcome",
+   "method": {
+    "quote": "`controls` (positive and negative cells with expected outcome)",
+    "source": "docs/specs/slice-6-hypotheses.md §Design, ExperimentDesign"
+   },
+   "actor": "human-assisted",
+   "check": "not-stated",
+   "limits": "not-stated",
+   "practice": {
+    "status": "unknown",
+    "note": "",
+    "evidence": null
+   }
+  },
+  {
+   "id": "X01",
+   "stage": "implementation-execution",
+   "step": {
+    "quote": "It never calls a model and never executes experiment code.",
+    "source": "docs/specs/slice-6-hypotheses.md §Goal"
+   },
+   "inputs": "Frozen design",
+   "outputs": "Nothing: execution happens outside the platform",
+   "method": {
+    "quote": "runs executed by the researcher outside the platform are ingested",
+    "source": "docs/specs/slice-6-hypotheses.md §Pilot for acceptance"
+   },
+   "actor": "human",
+   "check": "not-stated",
+   "limits": {
+    "quote": "never executes experiment code",
+    "source": "docs/specs/slice-6-hypotheses.md §Goal"
+   },
+   "practice": {
+    "status": "unknown",
+    "note": "",
+    "evidence": null
+   }
+  },
+  {
+   "id": "X02",
+   "stage": "implementation-execution",
+   "step": {
+    "quote": "runs executed by the researcher outside the platform are ingested",
+    "source": "docs/specs/slice-6-hypotheses.md §Pilot for acceptance"
+   },
+   "inputs": "Run results produced elsewhere",
+   "outputs": "Ingested runs tied to design and hypothesis",
+   "method": {
+    "quote": "Confirmatory results carry the unlock nonce issued after registration and freeze; results without it are refused",
+    "source": "docs/specs/01-rigour.md §N, R-123"
+   },
+   "actor": "human-assisted",
+   "check": {
+    "quote": "a confirmatory result without the nonce is refused",
+    "source": "docs/specs/slice-6-hypotheses.md §Ruling 18"
+   },
+   "limits": {
+    "quote": "The platform cannot detect evaluation that is never recorded; the nonce and the git timestamps of registration events evidence order only.",
+    "source": "docs/specs/slice-6-hypotheses.md §Ruling 18"
+   },
+   "practice": {
+    "status": "unknown",
+    "note": "",
+    "evidence": null
+   }
+  },
+  {
+   "id": "X03",
+   "stage": "implementation-execution",
+   "step": {
+    "quote": "`budget` (GPU-hours, per-run cap, maximum runs)",
+    "source": "docs/specs/slice-6-hypotheses.md §Design, ExperimentDesign"
+   },
+   "inputs": "Design budget, ingested runs",
+   "outputs": "Budget status; compute-budget-exceeded finding",
+   "method": {
+    "quote": "`compute-budget-exhausted`",
+    "source": "docs/specs/slice-6-hypotheses.md §Reconciliation 3"
+   },
+   "actor": "automated",
+   "check": "not-stated",
+   "limits": "not-stated",
+   "practice": {
+    "status": "unknown",
+    "note": "",
+    "evidence": null
+   }
+  },
+  {
+   "id": "D01",
+   "stage": "data-analysis",
+   "step": {
+    "quote": "Claude extracts schema rows (results, settings) and atomic claims through `extract_next` / `extract_record`; the platform verifies every quote and every number against the anchored source.",
+    "source": "docs/specs/slice-2.md §User flow 5"
+   },
+   "inputs": "Included documents, protocol extraction schema",
+   "outputs": "Extraction rows and claims with anchors and quotes",
+   "method": {
+    "quote": "Plus atomic claims (R-40): statement, type (finding / mechanism / limitation / negative result), evidence type, strength, anchor, quote.",
+    "source": "docs/specs/slice-2.md §Design, Extraction schema"
+   },
+   "actor": "automated",
+   "check": {
+    "quote": "every extracted numeric value must occur in its verified quote or anchored table cell",
+    "source": "docs/specs/01-rigour.md §E, R-44"
+   },
+   "limits": {
+    "quote": "OCR of scanned PDFs; figures as data (plots digitised)",
+    "source": "docs/specs/slice-2.md §Out of scope"
+   },
+   "practice": {
+    "status": "unknown",
+    "note": "",
+    "evidence": null
+   }
+  },
+  {
+   "id": "D02",
+   "stage": "data-analysis",
+   "step": {
+    "quote": "dual extraction on a declared sample; field-level agreement; disagreements to the human; human audit sample of extracted values",
+    "source": "docs/specs/slice-2.md §User flow 6"
+   },
+   "inputs": "Extraction rows of two independent sessions",
+   "outputs": "Agreement per field; human resolutions; audit error rate",
+   "method": {
+    "quote": "numbers must match exactly after normalisation; disagreements routed to the human",
+    "source": "docs/specs/slice-2.md §Design, Extraction quality"
+   },
+   "actor": "human-assisted",
+   "check": {
+    "quote": "above ceiling → schema or skill amendment",
+    "source": "docs/specs/slice-2.md §Design, Extraction quality"
+   },
+   "limits": {
+    "quote": "The same sentence cited with a different span boundary counted as a disagreement",
+    "source": "docs/backlog.md §IDEA-52"
+   },
+   "practice": {
+    "status": "unknown",
+    "note": "",
+    "evidence": null
+   }
+  },
+  {
+   "id": "D03",
+   "stage": "data-analysis",
+   "step": {
+    "quote": "Rows are grouped only by identical keys; no ranking crosses groups.",
+    "source": "docs/specs/slice-2.md §Design, Comparability and evidence report"
+   },
+   "inputs": "Final extraction rows, comparability keys",
+   "outputs": "Evidence report: groups, frontiers, counts of independent and copied results",
+   "method": {
+    "quote": "cross-paper frontiers use hardware-independent measures only (params, FLOPs/MACs, at the group's resolution)",
+    "source": "docs/specs/slice-2.md §Design, Comparability and evidence report"
+   },
+   "actor": "automated",
+   "check": {
+    "quote": "each frontier point traces to its rows; empty or single-source groups are stated",
+    "source": "docs/specs/slice-2.md §Acceptance criteria 12"
+   },
+   "limits": {
+    "quote": "consistency check of copied results against the cited paper (IDEA-23)",
+    "source": "docs/specs/slice-2.md §Out of scope"
+   },
+   "practice": {
+    "status": "unknown",
+    "note": "",
+    "evidence": null
+   }
+  },
+  {
+   "id": "D04",
+   "stage": "data-analysis",
+   "step": {
+    "quote": "a value extracted from a comparison table that cites another paper is marked `reported-in = cited`",
+    "source": "docs/specs/slice-2.md §Design, Verification"
+   },
+   "inputs": "Extracted comparison-table values",
+   "outputs": "Copied-result flags",
+   "method": {
+    "quote": "not counted as an independent result",
+    "source": "docs/specs/slice-2.md §Design, Verification"
+   },
+   "actor": "automated",
+   "check": {
+    "quote": "values from comparison tables citing other papers are flagged and excluded from independent-result counts",
+    "source": "docs/specs/slice-2.md §Acceptance criteria 8"
+   },
+   "limits": {
+    "quote": "compare it with that paper's own extracted value and flag mismatches (including version mismatches)",
+    "source": "docs/backlog.md §IDEA-23"
+   },
+   "practice": {
+    "status": "unknown",
+    "note": "",
+    "evidence": null
+   }
+  },
+  {
+   "id": "D05",
+   "stage": "data-analysis",
+   "step": {
+    "quote": "M-C (miner spec, built-in miners, generic `mine_*` path), M-D (agent-authored miners, calibration, evidence admission",
+    "source": "docs/specs/slice-M-modules.md §v1 scope"
+   },
+   "inputs": "Miner spec, works selected by the protocol",
+   "outputs": "Quoted rows per work, agreement, calibration report",
+   "method": {
+    "quote": "A registered miner uses only verifiable field kinds; every record carries at least one verified quote; free text is refused",
+    "source": "docs/specs/01-rigour.md §P, R-141"
+   },
+   "actor": "automated",
+   "check": {
+    "quote": "A registered miner's records count as evidence only after a human-labelled calibration in the same project passed declared thresholds above platform floors",
+    "source": "docs/specs/01-rigour.md §P, R-142"
+   },
+   "limits": {
+    "quote": "the layer pass (`m-layer` v1, 2026-11-13, 371 works, Haiku pass A, Sonnet pass B on 40) reported `agreement 1.000` with 34 aligned rows and 12 unmatched",
+    "source": "docs/backlog.md §IDEA-69"
+   },
+   "practice": {
+    "status": "differs",
+    "note": "Spec (R-142): calibrated before evidence. Practice: the layer pass consumed every unit before a calibration was drawn; the guard (refuse production without a passed calibration) is a researcher ruling of 2026-11-13, not yet built.",
+    "evidence": {
+     "quote": "(a), refuse a production `mine_next` for a version with no passed calibration unless the protocol declares it exploratory",
+     "source": "docs/backlog.md §IDEA-69"
+    }
+   }
+  },
+  {
+   "id": "D06",
+   "stage": "data-analysis",
+   "step": {
+    "quote": "The outcome of a registered hypothesis is computed from recorded results by its registered decision rule; no actor sets it",
+    "source": "docs/specs/01-rigour.md §N, R-121"
+   },
+   "inputs": "Registered hypothesis, ingested runs",
+   "outputs": "hypothesis.evaluated by the system; human conclusion text",
+   "method": {
+    "quote": "applying a pre-registered numeric rule is bookkeeping, not judgement",
+    "source": "docs/specs/slice-6-hypotheses.md §Ruling 17"
+   },
+   "actor": "automated",
+   "check": {
+    "quote": "Own and reproduced results are never merged with reported results in groups, frontiers or counts",
+    "source": "docs/specs/01-rigour.md §N, R-125"
+   },
+   "limits": "not-stated",
+   "practice": {
+    "status": "unknown",
+    "note": "",
+    "evidence": null
+   }
+  },
+  {
+   "id": "D07",
+   "stage": "data-analysis",
+   "step": {
+    "quote": "Slice 2 builds no appraisal tools.",
+    "source": "docs/specs/slice-2.md §Appraisal"
+   },
+   "inputs": "Included works",
+   "outputs": "Not built: per-paper appraisal is deferred",
+   "method": {
+    "quote": "items typed `platform` (deterministic), `agent-span` (agent with verified quote, dual on a sample, audited), `judgement` (agent proposes, human decides)",
+    "source": "docs/backlog.md §IDEA-21"
+   },
+   "actor": "not-stated",
+   "check": "not-stated",
+   "limits": {
+    "quote": "Deferred (2026-11-03)",
+    "source": "docs/specs/slice-2.md §Appraisal"
+   },
+   "practice": {
+    "status": "differs",
+    "note": "Rigour R-41 requires item-level appraisal in systematic mode; the platform builds none (deferred, IDEA-21).",
+    "evidence": {
+     "quote": "Slice 2 builds no appraisal tools.",
+     "source": "docs/specs/slice-2.md §Appraisal"
+    }
+   }
+  },
+  {
+   "id": "W01",
+   "stage": "paper-writing",
+   "step": {
+    "quote": "the platform assembles verified claims, quotes, cells and lineage edges into a structured outline",
+    "source": "docs/specs/slice-7b-views-writing.md §Goal"
+   },
+   "inputs": "Verified claims, cells, lineage edges",
+   "outputs": "Structured outline",
+   "method": {
+    "quote": "Claude writes prose sentence by sentence through MCP; every claim-bearing sentence names its supports; deterministic checks run at write time",
+    "source": "docs/specs/slice-7b-views-writing.md §Goal"
+   },
+   "actor": "human-assisted",
+   "check": {
+    "quote": "A claim-bearing sentence in any factory-produced text cites supports that resolve to verified spans or computed figures",
+    "source": "docs/specs/01-rigour.md §O, R-130"
+   },
+   "limits": {
+    "quote": "the pilot related-work section written for real (acceptance 18)",
+    "source": "docs/specs/slice-7b-views-writing.md §v1 scope"
+   },
+   "practice": {
+    "status": "not-piloted",
+    "note": "The spec's pilot related-work section is listed as Later.",
+    "evidence": {
+     "quote": "the pilot related-work section written for real (acceptance 18)",
+     "source": "docs/specs/slice-7b-views-writing.md §v1 scope"
+    }
+   }
+  },
+  {
+   "id": "W02",
+   "stage": "paper-writing",
+   "step": {
+    "quote": "BibTeX, CSL-JSON, a PRISMA 2020 flow diagram (SVG), an RO-Crate of the project, and nanopublications of claims and stated edges, all derived, deterministic, and free of library text",
+    "source": "docs/specs/slice-7b-views-writing.md §Goal"
+   },
+   "inputs": "Event log, corpus",
+   "outputs": "Exports",
+   "method": {
+    "quote": "Exports and views are deterministic builders that name their scope and log position",
+    "source": "docs/specs/01-rigour.md §O, R-132"
+   },
+   "actor": "automated",
+   "check": {
+    "quote": "byte-identical for the same log",
+    "source": "docs/specs/01-rigour.md §O, R-132"
+   },
+   "limits": {
+    "quote": "RO-Crate and nanopublications (X-B)",
+    "source": "docs/specs/slice-7b-views-writing.md §v1 scope"
+   },
+   "practice": {
+    "status": "unknown",
+    "note": "",
+    "evidence": null
+   }
+  },
+  {
+   "id": "W03",
+   "stage": "paper-writing",
+   "step": {
+    "quote": "Views",
+    "source": "docs/specs/slice-7b-views-writing.md §Goal"
+   },
+   "inputs": "Corpus and graph",
+   "outputs": "Onion, coverage map, timelines, horizon views",
+   "method": {
+    "quote": "each a deterministic builder output that names its filter and the event log position it was computed at",
+    "source": "docs/specs/slice-7b-views-writing.md §Goal"
+   },
+   "actor": "automated",
+   "check": "not-stated",
+   "limits": {
+    "quote": "is empty with a stated notice otherwise",
+    "source": "docs/specs/slice-7b-views-writing.md §Reconciliation 5"
+   },
+   "practice": {
+    "status": "unknown",
+    "note": "",
+    "evidence": null
+   }
+  },
+  {
+   "id": "V01",
+   "stage": "review-verification",
+   "step": {
+    "quote": "Semantic support is judged by a verifier that did not write the sentence and sees only the sentence and its spans",
+    "source": "docs/specs/01-rigour.md §O, R-131"
+   },
+   "inputs": "Sentence and its cited spans",
+   "outputs": "Verdict per sentence; stale and unsupported marks",
+   "method": {
+    "quote": "an independent verifier session judges whether each sentence is supported by the spans it cites",
+    "source": "docs/specs/slice-7b-views-writing.md §Goal"
+   },
+   "actor": "automated",
+   "check": {
+    "quote": "a human audits a sample of positive verdicts and the error rate is reported",
+    "source": "docs/specs/01-rigour.md §O, R-131"
+   },
+   "limits": {
+    "quote": "`organisation` items (regions, labels, terms) and `test` items (slice 6 outcomes) are not supports in v1",
+    "source": "docs/specs/slice-7b-views-writing.md §Reconciliation 6"
+   },
+   "practice": {
+    "status": "unknown",
+    "note": "",
+    "evidence": null
+   }
+  },
+  {
+   "id": "V02",
+   "stage": "review-verification",
+   "step": {
+    "quote": "The release gate is slice M's `writing.release`",
+    "source": "docs/specs/slice-7b-views-writing.md §Reconciliation 1"
+   },
+   "inputs": "Verified draft",
+   "outputs": "Released draft",
+   "method": {
+    "quote": "cannot be released under `systematic`",
+    "source": "docs/specs/01-rigour.md §O, R-130"
+   },
+   "actor": "human-assisted",
+   "check": {
+    "quote": "`writing.audit_label`, `manuscript.audit_label` | human | human | human | human",
+    "source": "docs/specs/slice-M-modules.md §Gates table"
+   },
+   "limits": "not-stated",
+   "practice": {
+    "status": "unknown",
+    "note": "",
+    "evidence": null
+   }
+  },
+  {
+   "id": "V03",
+   "stage": "review-verification",
+   "step": {
+    "quote": "`trace` from any decision back to the question; `check` lists broken links and promotion gaps",
+    "source": "docs/specs/slice-1.md §User flow 11"
+   },
+   "inputs": "Event log",
+   "outputs": "Trace chains; check findings; promotion gap list",
+   "method": {
+    "quote": "`check` fails on any broken link",
+    "source": "docs/specs/01-rigour.md §A, R-01"
+   },
+   "actor": "automated",
+   "check": {
+    "quote": "`trace` works backwards and forwards",
+    "source": "docs/specs/01-rigour.md §A, R-01"
+   },
+   "limits": {
+    "quote": "`check` calls `read_all` over the whole log (cost grows with the log)",
+    "source": "docs/backlog.md §IDEA-18"
+   },
+   "practice": {
+    "status": "unknown",
+    "note": "",
+    "evidence": null
+   }
+  },
+  {
+   "id": "V04",
+   "stage": "review-verification",
+   "step": {
+    "quote": "Retractions, withdrawals, corrections and expressions of concern of dependent works are recorded with source and date",
+    "source": "docs/specs/01-rigour.md §L, R-104"
+   },
+   "inputs": "Notices on works the project depends on",
+   "outputs": "Computed effects on dependents; human assessment",
+   "method": {
+    "quote": "require a human assessment; nothing is deleted",
+    "source": "docs/specs/01-rigour.md §L, R-104"
+   },
+   "actor": "human-assisted",
+   "check": {
+    "quote": "no agent judges it",
+    "source": "docs/specs/01-rigour.md §L, R-105"
+   },
+   "limits": "not-stated",
+   "practice": {
+    "status": "unknown",
+    "note": "",
+    "evidence": null
+   }
+  },
+  {
+   "id": "V05",
+   "stage": "review-verification",
+   "step": {
+    "quote": "Before any output leaves the factory (review, hypothesis set, paper), it is defended.",
+    "source": "docs/specs/01-rigour.md §I"
+   },
+   "inputs": "Review, hypothesis set or paper",
+   "outputs": "Self-appraisal, simulated peer review, viva, sign-off",
+   "method": {
+    "quote": "Self-appraisal with the instruments reviewers use",
+    "source": "docs/specs/01-rigour.md §I, R-70"
+   },
+   "actor": "human-assisted",
+   "check": {
+    "quote": "unanswerable points go to the limitations, not away",
+    "source": "docs/specs/01-rigour.md §I, R-72"
+   },
+   "limits": {
+    "quote": "Defence stage (proposed)",
+    "source": "docs/specs/01-rigour.md §I heading"
+   },
+   "practice": {
+    "status": "not-piloted",
+    "note": "Section I is marked proposed in the rigour document.",
+    "evidence": {
+     "quote": "Defence stage (proposed)",
+     "source": "docs/specs/01-rigour.md §I heading"
+    }
+   }
+  },
+  {
+   "id": "O01",
+   "stage": "other",
+   "step": {
+    "quote": "The platform is a deterministic Python service that stores, validates, schedules and logs research work. It never calls a model.",
+    "source": "docs/specs/00-system.md §1 Scope"
+   },
+   "inputs": "Researcher's instructions, agent judgement through MCP tools",
+   "outputs": "Validated events",
+   "method": {
+    "quote": "Append-only JSON Lines files in git",
+    "source": "docs/specs/00-system.md §4.1"
+   },
+   "actor": "automated",
+   "check": {
+    "quote": "Rebuild is deterministic: two rebuilds from the same events give the same state hash.",
+    "source": "docs/specs/00-system.md §4.4"
+   },
+   "limits": "not-stated",
+   "practice": {
+    "status": "unknown",
+    "note": "",
+    "evidence": null
+   }
+  },
+  {
+   "id": "O02",
+   "stage": "other",
+   "step": {
+    "quote": "`input_blob`: the exact task content the agent saw, stored as a blob (auditability). Required for agent events",
+    "source": "docs/specs/00-system.md §4.2"
+   },
+   "inputs": "Agent act",
+   "outputs": "Event with model, skill and input blob",
+   "method": {
+    "quote": "Every agent action records model version, skill/prompt version (hash of the skill text) and the exact input it saw",
+    "source": "docs/specs/01-rigour.md §A, R-04"
+   },
+   "actor": "automated",
+   "check": {
+    "quote": "`model` is reported by the agent unless supplied by the harness",
+    "source": "docs/specs/00-system.md §4.2"
+   },
+   "limits": {
+    "quote": "`model` is reported by the agent unless supplied by the harness",
+    "source": "docs/specs/00-system.md §4.2"
+   },
+   "practice": {
+    "status": "unknown",
+    "note": "",
+    "evidence": null
+   }
+  },
+  {
+   "id": "O03",
+   "stage": "other",
+   "step": {
+    "quote": "An agent records a suggestion set for one decision: a short list of items, each with its text, its grounds",
+    "source": "docs/specs/slice-8-develop.md §The loop"
+   },
+   "inputs": "Scientist's decision at a level (goal, questions, plan, seeds, probe, protocol)",
+   "outputs": "Suggestion set; selection event; rendered formal document",
+   "method": {
+    "quote": "The scientist ticks the items to keep and may add items of their own",
+    "source": "docs/specs/slice-8-develop.md §The loop"
+   },
+   "actor": "human-assisted",
+   "check": {
+    "quote": "Each item names its grounds",
+    "source": "docs/specs/slice-8-develop.md §Rules learned"
+   },
+   "limits": "not-stated",
+   "practice": {
+    "status": "differs",
+    "note": "Slice 8 records that the scientist's changes at every level were not captured by the factory before the suggest-and-select loop.",
+    "evidence": {
+     "quote": "the result changed at every level",
+     "source": "docs/specs/slice-8-develop.md §Problem"
+    }
+   }
+  },
+  {
+   "id": "O04",
+   "stage": "other",
+   "step": {
+    "quote": "Every decision gate has a declared policy (explicit or preset) recorded with the protocol",
+    "source": "docs/specs/01-rigour.md §P, R-140"
+   },
+   "inputs": "Gate policy in the protocol",
+   "outputs": "Autonomy label per output; methods statement of the policy",
+   "method": {
+    "quote": "`inbox.withdraw` | human | human | human | human",
+    "source": "docs/specs/slice-M-modules.md §Gates table"
+   },
+   "actor": "automated",
+   "check": {
+    "quote": "every output's autonomy is computable from events",
+    "source": "docs/specs/01-rigour.md §P, R-140"
+   },
+   "limits": "not-stated",
+   "practice": {
+    "status": "unknown",
+    "note": "",
+    "evidence": null
+   }
+  },
+  {
+   "id": "O05",
+   "stage": "other",
+   "step": {
+    "quote": "On a hosted project every event names an authenticated user (directly or as the agent's principal)",
+    "source": "docs/specs/01-rigour.md §M, R-111"
+   },
+   "inputs": "Hosted project acts",
+   "outputs": "Attributed events",
+   "method": {
+    "quote": "acts on a human-act permission are refused to agents",
+    "source": "docs/specs/01-rigour.md §M, R-111"
+   },
+   "actor": "automated",
+   "check": {
+    "quote": "relayed human acts are counted and reported",
+    "source": "docs/specs/01-rigour.md §M, R-111"
+   },
+   "limits": {
+    "quote": "multi-user authentication",
+    "source": "docs/specs/00-system.md §1"
+   },
+   "practice": {
+    "status": "unknown",
+    "note": "",
+    "evidence": null
+   }
+  },
+  {
+   "id": "O06",
+   "stage": "other",
+   "step": {
+    "quote": "Slice 7a admits one exception: generated, read-only reports (Markdown, a self-contained HTML file, JSON)",
+    "source": "docs/specs/00-system.md §1"
+   },
+   "inputs": "Event log",
+   "outputs": "Portfolio and reports",
+   "method": {
+    "quote": "they add no server and no interactive editing",
+    "source": "docs/specs/00-system.md §1"
+   },
+   "actor": "automated",
+   "check": "not-stated",
+   "limits": "not-stated",
+   "practice": {
+    "status": "unknown",
+    "note": "",
+    "evidence": null
+   }
+  }
+ ]
+}
