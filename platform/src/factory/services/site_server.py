@@ -46,13 +46,13 @@ import secrets
 import threading
 import time
 from collections.abc import Callable
-from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, Final, NamedTuple
 
 from pydantic import TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
+from sqlalchemy import text
 
 from factory.errors import FactoryError, FactoryValidationError, ValidationIssue
 from factory.model.feed import FeedNote, FeedReaction
@@ -61,7 +61,7 @@ from factory.services import pipeline as pipeline_service
 from factory.services import resume as resume_service
 from factory.services import runner as runner_service
 from factory.services import site as site_service
-from factory.services import work_layers, work_queue
+from factory.services import site_portal, work_layers, work_queue
 from factory.services.access import authorize_command
 from factory.services.context import Project
 from factory.sources.fulltext.registry import default_routes
@@ -74,6 +74,12 @@ MAX_BODY: Final = 16 * 1024
 TOKEN_HEADER: Final = "X-Factory-Token"
 _ACTION_PAGES: Final = ("feed", "queue", "explorer")
 _TOKEN_META: Final = "<meta name='factory-token' content='{}'>"
+_API_META: Final = "<meta name='factory-api' content='{}'>"
+PORTAL_LINK: Final = (
+    "<a href='/' style='position:fixed;right:12px;bottom:10px;z-index:9;font:12px sans-serif;"
+    "padding:4px 8px;border:1px solid #888;border-radius:4px;background:#111;color:#ddd;"
+    "text-decoration:none'>All projects</a>"
+)
 _LOG: Final = logging.getLogger(__name__)
 
 
@@ -415,19 +421,48 @@ class Rebuilder:
             self._stop.wait(self._poll)
 
 
-def make_server(
-    project: Project, port: int = DEFAULT_PORT, *, min_gap: float = 300.0, background: bool = True
-) -> tuple[ThreadingHTTPServer, Rebuilder]:
-    """A server for `<project>/site/` on 127.0.0.1:`port` (0 picks a free port) and its rebuilder
-    (started when `background`). The hub page is written first, so the server never starts empty."""
-    root = site_service.site_dir(project)
-    root.mkdir(parents=True, exist_ok=True)
-    site_service.render_hub(project)
-    rebuilder = Rebuilder(project, min_gap=min_gap)
-    token = secrets.token_urlsafe(32)
-    write_lock = threading.Lock()
-    advance_gate = threading.Lock()
-    resumer = ResumeRunner()
+class Slot:
+    """One project's live parts inside a server: its built `site/` folder, rebuilder, write lock,
+    advance gate and resume runner. A write for one project never takes another's lock."""
+
+    def __init__(self, project: Project, *, min_gap: float) -> None:
+        self.project = project
+        self.slug = project.paths.slug
+        self.root = site_service.site_dir(project)
+        self.rebuilder = Rebuilder(project, min_gap=min_gap)
+        self.write_lock = threading.Lock()
+        self.advance_gate = threading.Lock()
+        self.resumer = ResumeRunner()
+
+    def prepare(self) -> None:
+        """Write the project's hub page, so a served project is never without its hub."""
+        self.root.mkdir(parents=True, exist_ok=True)
+        site_service.render_hub(self.project)
+
+
+class Mount(NamedTuple):
+    """Where a request lands: the project's slot, the path inside its site folder (query kept)
+    and the URL prefix the project is served under ("" alone, "/p/<slug>" in the main server)."""
+
+    slot: Slot
+    rel: str
+    prefix: str
+
+
+def project_token(secret: bytes, slug: str) -> str:
+    """The write token of one project: derived from the server's secret and the slug, so a token
+    read from one project's pages authorises nothing on another's."""
+    return hmac.new(secret, slug.encode(), "sha256").hexdigest()
+
+
+def _handler_class(
+    resolve: Callable[[str], Mount | None],
+    secret: bytes,
+    portal: Callable[[str], tuple[int, str, bytes] | None] | None,
+    port_of: Callable[[], int],
+) -> type[SimpleHTTPRequestHandler]:
+    """The request handler. `resolve` maps a URL path to a `Mount` (None: not a project path);
+    `portal` answers the paths that belong to no project (status, content type, body) or None."""
 
     class Handler(SimpleHTTPRequestHandler):
         def _deny(self, code: int, message: str) -> None:
@@ -459,14 +494,21 @@ def make_server(
             origin = self.headers.get("Origin")
             if origin is None:
                 return True
-            port = httpd.server_address[1]
-            return origin in {f"http://{name}:{port}" for name in _LOOPBACK}
+            return origin in {f"http://{name}:{port_of()}" for name in _LOOPBACK}
 
-        def _feed_page(self) -> Path | None:
-            """The built HTML file this GET names under `/feed/` or `/queue/`, if it is one."""
-            url = self.path.split("?", 1)[0].split("#", 1)[0]
+        def _html(self, text: str) -> None:
+            body = text.encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _feed_page(self, url: str, slot: Slot) -> Path | None:
+            """The built HTML file `url` names under `/feed/`, `/queue/` or `/explorer/`, if any."""
             if not any(url == f"/{name}" or url.startswith(f"/{name}/") for name in _ACTION_PAGES):
                 return None
+            self.directory = str(slot.root)
             target = Path(self.translate_path(url))
             if target.is_dir():
                 target = target / "index.html"
@@ -478,51 +520,71 @@ def make_server(
             if not self._host_ok():
                 self._deny(403, "forbidden")
                 return
-            page = self._feed_page()
+            full = self.path.split("?", 1)[0].split("#", 1)[0]
+            mount = resolve(self.path)
+            if mount is None:
+                answer = None if portal is None else portal(full)
+                if answer is None:
+                    self._deny(404, "not found")
+                    return
+                code, kind, body = answer
+                self.send_response(code)
+                if code in (301, 302):
+                    self.send_header("Location", kind)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                self.send_header("Content-Type", kind)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            slot = mount.slot
+            url = mount.rel.split("?", 1)[0].split("#", 1)[0]
+            page = self._feed_page(url, slot)
             if page is not None:
                 text = page.read_text(encoding="utf-8")
-                meta = _TOKEN_META.format(token)
+                meta = _TOKEN_META.format(project_token(secret, slot.slug)) + _API_META.format(
+                    mount.prefix
+                )
                 text = (
                     text.replace("<head>", "<head>" + meta, 1) if "<head>" in text else meta + text
                 )
-                body = text.encode()
-                self.send_response(200)
-                self.send_header("Content-Type", "text/html; charset=utf-8")
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
+                self._html(text)
                 return
-            if self.path.split("?", 1)[0] == "/api/status":
-                body = json.dumps(
+            if mount.prefix and url in ("/", "/index.html"):
+                hub = slot.root / "index.html"
+                if hub.is_file():
+                    text = hub.read_text(encoding="utf-8")
+                    self._html(text.replace("</body>", PORTAL_LINK + "</body>", 1))
+                    return
+            if url == "/api/status":
+                self._json(
+                    200,
                     {
-                        "building": rebuilder.building,
-                        "error": rebuilder.last_error,
-                        "products": [s.model_dump(mode="json") for s in rebuilder.statuses()],
-                    }
-                ).encode()
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json; charset=utf-8")
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
+                        "building": slot.rebuilder.building,
+                        "error": slot.rebuilder.last_error,
+                        "products": [s.model_dump(mode="json") for s in slot.rebuilder.statuses()],
+                    },
+                )
                 return
-            if self.path.split("?", 1)[0] == "/api/queue/interrupted":
+            if url == "/api/queue/interrupted":
                 try:
-                    payload = interrupted_payload(project)
+                    payload = interrupted_payload(slot.project)
                 except FactoryError as exc:
                     self._json(500, _issues(ValidationIssue("interrupted", str(exc))))
                     return
-                self._json(200, {**payload, "last_resume": resumer.last})
+                self._json(200, {**payload, "last_resume": slot.resumer.last})
                 return
-            if self.path.split("?", 1)[0] == "/api/layers":
+            if url == "/api/layers":
                 try:
-                    self._json(200, layers_payload(project))
+                    self._json(200, layers_payload(slot.project))
                 except FactoryError as exc:
                     self._json(500, _issues(ValidationIssue("layers", str(exc))))
                 return
-            if self.path.split("?", 1)[0] == "/api/queue/runs":
-                runs = runner_service.run_status(project, reconcile=False)
-                pipelines = pipeline_service.pipeline_status(project)
+            if url == "/api/queue/runs":
+                runs = runner_service.run_status(slot.project, reconcile=False)
+                pipelines = pipeline_service.pipeline_status(slot.project)
                 self._json(
                     200,
                     {
@@ -531,21 +593,25 @@ def make_server(
                     },
                 )
                 return
+            self.directory = str(slot.root)
+            self.path = mount.rel
             super().do_GET()
 
         def _refuse(self) -> None:
             self._deny(405, "read-only")
 
         def do_POST(self) -> None:
-            route = _ROUTES.get(self.path.split("?", 1)[0])
+            mount = resolve(self.path)
             if not self._host_ok() or not self._origin_ok():
                 self._deny(403, "forbidden")
                 return
-            if route is None:
+            route = None if mount is None else _ROUTES.get(mount.rel.split("?", 1)[0])
+            if mount is None or route is None:
                 self._deny(404, "not found")
                 return
+            slot = mount.slot
             sent = self.headers.get(TOKEN_HEADER) or ""
-            if not hmac.compare_digest(sent.encode(), token.encode()):
+            if not hmac.compare_digest(sent.encode(), project_token(secret, slot.slug).encode()):
                 self._deny(403, "forbidden")
                 return
             kind = (self.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
@@ -568,17 +634,18 @@ def make_server(
             if not isinstance(body, dict):
                 self._json(400, _issues(ValidationIssue("body", "must be a JSON object")))
                 return
+            project = slot.project
             if route in (feed_react, mine_work, mine_layer, move_layer):
-                with write_lock:
+                with slot.write_lock:
                     code, payload = route(project, body)
             elif route is queue_resume:
-                code, payload = queue_resume(project, body, resumer)
+                code, payload = queue_resume(project, body, slot.resumer)
             else:
                 # no lock: `feed add` looks the paper up over the network, and each service
                 # serialises its own index work (`send` and the lookup take the index lock)
                 code, payload = route(project, body)
             if code == 200 and route is feed_add:
-                _start_advance(project, advance_gate)
+                _start_advance(project, slot.advance_gate)
             # the feed product turns stale by the event log; the background rebuild picks it up
             self._json(code, payload)
 
@@ -587,7 +654,148 @@ def make_server(
         def log_message(self, format: str, *args: object) -> None:
             return
 
-    httpd = ThreadingHTTPServer((HOST, port), partial(Handler, directory=str(root)))
+    return Handler
+
+
+def make_server(
+    project: Project, port: int = DEFAULT_PORT, *, min_gap: float = 300.0, background: bool = True
+) -> tuple[ThreadingHTTPServer, Rebuilder]:
+    """A server for `<project>/site/` on 127.0.0.1:`port` (0 picks a free port) and its rebuilder
+    (started when `background`). The hub page is written first, so the server never starts empty."""
+    slot = Slot(project, min_gap=min_gap)
+    slot.prepare()
+    secret = secrets.token_bytes(32)
+    holder: list[ThreadingHTTPServer] = []
+    handler = _handler_class(
+        lambda path: Mount(slot, path, ""), secret, None, lambda: holder[0].server_address[1]
+    )
+    httpd = ThreadingHTTPServer((HOST, port), handler)
+    holder.append(httpd)
     if background:
-        rebuilder.start()
-    return httpd, rebuilder
+        slot.rebuilder.start()
+    return httpd, slot.rebuilder
+
+
+PROJECT_PREFIX: Final = "/p/"
+
+
+class MainHub:
+    """The parts of the main server that know several projects: which exist (scanned under the
+    factory root, each time), their slots (opened on first use, each with its hub written at once)
+    and the portal page. `open_project` opens and authorises one project by slug."""
+
+    def __init__(
+        self,
+        root: Path,
+        slugs: Callable[[], list[str]],
+        open_project: Callable[[str], Project],
+        *,
+        min_gap: float,
+        background: bool,
+    ) -> None:
+        self._root = root
+        self._slugs = slugs
+        self._open = open_project
+        self._min_gap = min_gap
+        self._background = background
+        self._slots: dict[str, Slot] = {}
+        self._lock = threading.Lock()
+
+    def slot(self, slug: str) -> Slot | None:
+        """The slot of a scanned project (None for an unknown slug), opened and prepared once."""
+        with self._lock:
+            found = self._slots.get(slug)
+            if found is not None:
+                return found
+            if slug not in self._slugs():
+                return None
+            fresh = Slot(self._open(slug), min_gap=self._min_gap)
+            fresh.prepare()
+            if self._background:
+                fresh.rebuilder.start()
+            self._slots[slug] = fresh
+            return fresh
+
+    def prepare_all(self) -> list[str]:
+        """Open every scanned project and write its hub (done at start: a project is never
+        served without its hub); returns the slugs."""
+        slugs = self._slugs()
+        for slug in slugs:
+            self.slot(slug)
+        return slugs
+
+    def resolve(self, path: str) -> Mount | None:
+        """`/p/<slug>/<rest>` to its mount; anything else (and `/p/<slug>` alone) is None."""
+        if not path.startswith(PROJECT_PREFIX):
+            return None
+        url, _, query = path.partition("?")
+        slug, sep, rest = url[len(PROJECT_PREFIX) :].partition("/")
+        if not sep or not slug:
+            return None
+        found = self.slot(slug)
+        if found is None:
+            return None
+        rel = "/" + rest + ("?" + query if query else "")
+        return Mount(found, rel, PROJECT_PREFIX + slug)
+
+    def rows(self) -> list[site_portal.PortalRow]:
+        out: list[site_portal.PortalRow] = []
+        registry = site_portal.load_registry(self._root)
+        for slug, title in site_portal.listed(self._slugs(), registry):
+            found = self.slot(slug)
+            if found is None:
+                continue
+            with found.project.index.connect() as conn:
+                events = int(conn.execute(text("SELECT COUNT(*) FROM events")).scalar_one())
+            states = found.rebuilder.statuses()
+            out.append(
+                site_portal.PortalRow(
+                    slug=slug,
+                    title=title,
+                    events=events,
+                    stale=sum(s.stale or s.error is not None for s in states),
+                    built=sum(s.built for s in states),
+                    hub_ready=(found.root / "index.html").is_file(),
+                )
+            )
+        return out
+
+    def portal(self, path: str) -> tuple[int, str, bytes] | None:
+        """The answer for a path that belongs to no project: (status, content type or, for a
+        redirect, the location, body), or None."""
+        if path in ("/", "/index.html"):
+            page = site_portal.render_portal(self.rows())
+            return 200, "text/html; charset=utf-8", page.encode()
+        if path == "/api/projects":
+            body = json.dumps(
+                {"projects": [r._asdict() for r in self.rows()]}, ensure_ascii=False
+            ).encode()
+            return 200, "application/json; charset=utf-8", body
+        if path.startswith(PROJECT_PREFIX) and "/" not in path[len(PROJECT_PREFIX) :]:
+            slug = path[len(PROJECT_PREFIX) :]
+            if slug and self.slot(slug) is not None:
+                return 301, f"{PROJECT_PREFIX}{slug}/", b""
+        return None
+
+    def stop(self) -> None:
+        for found in list(self._slots.values()):
+            found.rebuilder.stop()
+
+
+def make_main_server(
+    hub: MainHub, port: int = DEFAULT_PORT, *, secret: bytes | None = None
+) -> ThreadingHTTPServer:
+    """The main server on 127.0.0.1:`port`: the portal at `/` and each project at `/p/<slug>/`.
+    Every scanned project's hub is written before the first request. Each project has its own
+    write token, so a token from one project's pages writes to no other."""
+    hub.prepare_all()
+    holder: list[ThreadingHTTPServer] = []
+    handler = _handler_class(
+        hub.resolve,
+        secret or secrets.token_bytes(32),
+        hub.portal,
+        lambda: holder[0].server_address[1],
+    )
+    httpd = ThreadingHTTPServer((HOST, port), handler)
+    holder.append(httpd)
+    return httpd

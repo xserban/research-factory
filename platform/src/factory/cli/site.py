@@ -70,11 +70,44 @@ def site_serve_cmd(
         int,
         typer.Option("--every", help="Seconds between background rebuilds of stale products."),
     ] = 300,
+    all_projects: Annotated[
+        bool,
+        typer.Option(
+            "--all",
+            help="Serve every project under the root: a portal at / and each hub at /p/<slug>/.",
+        ),
+    ] = False,
 ) -> None:
     """Serve the hub on 127.0.0.1 and rebuild stale products in the background."""
-    from factory.cli.main import _reporting_errors, _resolve_project, _state
+    from factory.cli.main import _authorized, _reporting_errors, _resolve_project, _state
+    from factory.services.context import list_projects, open_project
 
     state = _state(ctx)
+    if all_projects:
+        hub = server_service.MainHub(
+            state.settings.root,
+            lambda: list_projects(state.settings),
+            lambda slug: _authorized(
+                state,
+                open_project(state.settings, slug, session=state.session, clock=state.clock),
+            ),
+            min_gap=float(every),
+            background=True,
+        )
+        with _reporting_errors():
+            main_server = server_service.make_main_server(hub, port)
+        typer.echo(
+            f"hub of {len(hub.prepare_all())} project(s) on "
+            f"http://{server_service.HOST}:{main_server.server_port}/ (Ctrl-C to stop)"
+        )
+        try:
+            main_server.serve_forever()
+        except KeyboardInterrupt:
+            pass
+        finally:
+            hub.stop()
+            main_server.server_close()
+        return
     with _reporting_errors():
         project = _resolve_project(state)
     httpd, rebuilder = server_service.make_server(project, port, min_gap=float(every))

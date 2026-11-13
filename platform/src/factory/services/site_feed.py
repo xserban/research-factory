@@ -64,6 +64,7 @@ ACTIONS: tuple[tuple[str, str], ...] = (
 FEED_SCRIPT = """
 (function(){
 var m=document.querySelector('meta[name=factory-token]');
+var API=(document.querySelector('meta[name=factory-api]')||{}).content||'';
 var feed=document.getElementById('feed');
 if(!m||!feed||location.protocol==='file:')return;
 var token=m.content,ranking=feed.dataset.rankingId;
@@ -82,7 +83,7 @@ feed.querySelectorAll('button[data-act]').forEach(function(b){
     if(!add)body.reaction=act;
     var btns=card.querySelectorAll('button');
     btns.forEach(function(x){x.disabled=true;});
-    fetch(add?'/api/feed/add':'/api/feed/react',{method:'POST',
+    fetch(API+(add?'/api/feed/add':'/api/feed/react'),{method:'POST',
       headers:{'Content-Type':'application/json','X-Factory-Token':token},body:JSON.stringify(body)})
     .then(function(r){return r.json().catch(function(){return {ok:false,issues:[{field:'response',reason:'status '+r.status}]};});})
     .then(function(r){

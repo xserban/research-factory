@@ -103,10 +103,10 @@ function paperLink(w){return w.doi?`<a href="https://doi.org/${esc(w.doi)}" targ
 const SUMF=[['problem_gap','Problem and gap'],['core_innovation','Core innovation'],['contribution_type','Contribution type'],['innovation_axis','Novelty is about'],['builds_on','Builds on'],['builds_on_relation','Relation'],['improves_over','Improves over'],['improvement_aspect','Improves'],['benchmark_role','Benchmark'],['benchmark_named','Benchmark named'],['headline_result','Headline result'],['validation_level','Validation'],['claimed_discovery','Claimed discovery'],['failure_modes','Failure modes'],['limitations','Limitations'],['future_work','Future work'],['availability','Availability'],['cost_compute','Cost and compute']];
 function sumHtml(w){const s=w.sum||{};if(!Object.keys(s).length)return '<h3>Structured summary</h3><div class="dim">not extracted for this paper yet</div>';
  return '<h3>Structured summary</h3><div class="dim" style="font-size:12px">Sentences quoted from the paper; enum values are backed by a quote.</div>'+SUMF.filter(([k])=>s[k]).map(([k,l])=>{const o=s[k];const isq=o.q&&o.q===o.v.slice(0,o.q.length)||(o.q&&o.v.length>40);return `<div class="sumrow"><b>${esc(l)}</b>${isq||!o.q?esc(o.v):`<span class="tag">${esc(o.v)}</span><div class="q">“${esc(o.q)}” <span class="dim">${esc(o.a)}</span></div>`}${isq&&o.a?` <span class="dim">${esc(o.a)}</span>`:''}</div>`;}).join('');}
-const TOKEN=(document.querySelector('meta[name=factory-token]')||{}).content||'';let LAYERS={layers:[],works:{}};
+const TOKEN=(document.querySelector('meta[name=factory-token]')||{}).content||'';const API=(document.querySelector('meta[name=factory-api]')||{}).content||'';let LAYERS={layers:[],works:{}};
 function layerPost(path,body,out){if(!TOKEN){out.textContent='Open this page with factory site serve to use this.';return;}
  out.textContent='sending...';
- fetch(path,{method:'POST',headers:{'Content-Type':'application/json','X-Factory-Token':TOKEN},body:JSON.stringify(body)})
+ fetch(API+path,{method:'POST',headers:{'Content-Type':'application/json','X-Factory-Token':TOKEN},body:JSON.stringify(body)})
  .then(r=>r.json().catch(()=>({ok:false,issues:[{field:'response',reason:'status '+r.status}]})))
  .then(r=>{out.textContent=r.ok?'recorded ('+(r.request_id||r.event_id)+')':(r.issues||[]).map(i=>i.field+': '+i.reason).join('; ');})
  .catch(e=>{out.textContent='request failed: '+e;});}
@@ -120,7 +120,7 @@ function layerAct(act){const box=$('#layact'),out=$('#layout'),reason=$('#layrea
  else layerPost('/api/layers/move',{work_id:w,layer:$('#laysel').value,reason:reason},out);}
 function mineLayer(l,el){layerPost('/api/mine/layer',{layer:l},el.nextElementSibling);}
 function layerSide(){if(!LAYERS.layers.length)return '';return '<h3>Layers</h3>'+LAYERS.layers.map(l=>{const n=Object.values(LAYERS.works).filter(x=>x.layer===l).length;return `<div>${esc(l)} <span class="n">${n}</span> <button onclick="mineLayer(this.dataset.l,this)" data-l="${esc(l)}">Mine this layer</button><span class="dim"></span></div>`;}).join('');}
-if(TOKEN)fetch('/api/layers').then(r=>r.json()).then(d=>{if(d&&d.layers){LAYERS=d;drawSide();}}).catch(()=>{});
+if(TOKEN)fetch(API+'/api/layers').then(r=>r.json()).then(d=>{if(d&&d.layers){LAYERS=d;drawSide();}}).catch(()=>{});
 function actionsHtml(w){const P=DATA.project||'PROJECT';const cmds=['factory --project '+P+' document read '+w.id,'factory --project '+P+' trace '+w.id];
  const row=c=>`<div style="display:flex;gap:6px;margin:3px 0"><code style="flex:1;overflow-x:auto;white-space:nowrap;background:var(--bg);border:1px solid var(--line);border-radius:4px;padding:2px 6px;font-size:12px">${esc(c)}</code><button onclick="navigator.clipboard.writeText(this.dataset.c)" data-c="${esc(c)}">Copy</button></div>`;
  return `<h3>What you can do</h3><div class="dim" style="font-size:12px">Open the original or its conversion, or run a command in a terminal.</div><div style="margin:4px 0"><a href="../conversion/doc/${esc(w.slug)}.html" target="_blank">Conversion inspector</a> · <a href="../wiki/works/${esc(w.slug)}.md" target="_blank">Wiki note</a></div>${cmds.map(row).join('')}`;}

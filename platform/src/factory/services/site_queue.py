@@ -51,6 +51,7 @@ QUEUE_CSS += (
 QUEUE_SCRIPT = """
 (function(){
 var m=document.querySelector('meta[name=factory-token]');
+var API=(document.querySelector('meta[name=factory-api]')||{}).content||'';
 if(!m||location.protocol==='file:')return;
 var token=m.content,btns=document.querySelectorAll('button[data-stage]');
 var box=document.getElementById('runstatus'),busy=false;
@@ -59,7 +60,7 @@ function issues(r){
   return (r.issues||[]).map(function(i){return i.field+': '+i.reason;}).join('; ')||'refused';
 }
 function poll(){
-  fetch('/api/queue/runs').then(function(r){return r.json();}).then(function(r){
+  fetch(API+'/api/queue/runs').then(function(r){return r.json();}).then(function(r){
     var runs=r.runs||[],open=runs.filter(function(x){return x.status==='running';})[0];
     var pls=r.pipelines||[],pl=pls.filter(function(x){return x.status==='running';})[0];
     busy=!!open||!!pl;
@@ -128,14 +129,14 @@ function resultLines(r){
   return lines.length?lines:['nothing started'];
 }
 function refreshInterrupted(){
-  fetch('/api/queue/interrupted').then(function(r){return r.json();}).then(function(d){
+  fetch(API+'/api/queue/interrupted').then(function(r){return r.json();}).then(function(d){
     if(intrBox)textOf(intrBox,summary(d));
     clean=!!d.is_clean;resumeLast=d.last_resume||null;
     if(go)go.disabled=!token||clean||busy;
   }).catch(function(e){if(intrBox)textOf(intrBox,['unavailable: '+e]);});
 }
 function postResume(body){
-  return fetch('/api/queue/resume',{method:'POST',
+  return fetch(API+'/api/queue/resume',{method:'POST',
     headers:{'Content-Type':'application/json','X-Factory-Token':token},
     body:JSON.stringify(body)})
   .then(function(r){
@@ -164,7 +165,7 @@ if(token&&location.protocol!=='file:'){refreshInterrupted();setInterval(refreshI
 btns.forEach(function(b){
   b.addEventListener('click',function(){
     btns.forEach(function(x){x.disabled=true;});
-    fetch('/api/queue/process',{method:'POST',
+    fetch(API+'/api/queue/process',{method:'POST',
       headers:{'Content-Type':'application/json','X-Factory-Token':token},
       body:JSON.stringify({stage:b.dataset.stage})})
     .then(function(r){
