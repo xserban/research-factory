@@ -203,35 +203,35 @@ Status: triaged · Added: 2026-11-03 · Slice: after slice 2 (outline: [specs/ou
 ## Plan A review carry-over (added 2026-11-03)
 
 ### IDEA-25 — Source-changed warning never clears
-Status: new · Added: 2026-11-03 · Slice: — · Depends on: decision 46 item 8; decision 48
+Status: built (plan FL, before 2026-11-13): `resolve_source_change` (`services/fulltext.py`), event `fulltext.source_resolved` (human only, names document and hash, `keep-original` or `accept-new-version`), CLI `factory fulltext resolve`; `check` lists only open changes. Evidence in tests: `tests/test_fulltext_restore_followups.py` (agent refused, human resolves) (verified 2026-11-14 on branch `test-baseline-2`; entry text below describes the state before the fix) · Added: 2026-11-03 · Slice: — · Depends on: decision 46 item 8; decision 48
 **What:** a `fulltext.source_changed` finding (in `check` and the `source-changed` status) stays forever; no event resolves it.
 **Why:** a corpus with one changed source never reads as clean, so the warning stops carrying information.
 **Rigour notes:** resolution must be a recorded human decision that names the document and the hash it accepts or rejects; the original bytes stay referenced; no silent overwrite.
 **Open questions:** whether acceptance supersedes the document or marks the existing one; who may resolve.
 
 ### IDEA-26 — First-page identifier misattribution in researcher import
-Status: new · Added: 2026-11-03 · Slice: — · Depends on: decision 46 item 7
+Status: built (commit 49bb0f2, PD-5): first-page identifiers are cross-checked against the title; `ambiguous` and `identity_unchecked` files are reported with `candidates` and attach only on the researcher's `accept` (`services/fulltext_import.py`, `tests/test_fulltext_import.py`) (verified 2026-11-14 on branch `test-baseline-2`; entry text below describes the state before the fix) · Added: 2026-11-03 · Slice: — · Depends on: decision 46 item 7
 **What:** the researcher import collects every identifier on page one. When the paper's own identifier is absent there, a single cited DOI or arXiv ID (a reference, a related paper) is taken as its identity and can attach the PDF to the wrong promoted work.
 **Why:** a mis-attached document is silent provenance corruption for the work it lands on.
 **Rigour notes:** an attachment must be checkable by the researcher before it becomes a document; ambiguous identifiers are reported, not guessed.
 **Open questions:** label proximity ("DOI:", "arXiv:") versus requiring the first identifier only; a title match against the work as a check.
 
 ### IDEA-27 — `restore --missing` is not idempotent and stops at the first error
-Status: new · Added: 2026-11-03 · Slice: — · Depends on: decision 48 item 4
+Status: built (plan FL): `restore_missing` yields one outcome per document and catches each exception (`failed: <class>`); a document with an unresolved change returns `source-changed-unresolved` with no request and no event; `unavailable` changes no document. Evidence: `tests/test_fulltext_restore_followups.py` (verified 2026-11-14 on branch `test-baseline-2`; entry text below describes the state before the fix) · Added: 2026-11-03 · Slice: — · Depends on: decision 48 item 4
 **What:** after a source change or an `unavailable` result, a repeated `restore --missing` re-requests the same documents, and `restore --missing` builds all results before printing, so one unexpected exception prints nothing.
 **Why:** a researcher cannot finish a restore of a library with a few unreachable sources.
 **Rigour notes:** each document gets its own outcome in the report; an unavailable or changed result changes no document and is reported as such.
 **Open questions:** whether to skip documents with an unresolved `source-changed` (depends on IDEA-25).
 
 ### IDEA-28 — `refresh` cannot page through the corpus when `limit` is below the promoted count
-Status: new · Added: 2026-11-03 · Slice: — · Depends on: decision 48 item 5
+Status: built (plan FL, ruling 3): a revisit rotates by last attempt, oldest first, then id (`_targets`, `_last_attempts`), so a small `limit` reaches the whole corpus; no new field. Evidence: `tests/test_fulltext_restore_followups.py::test_refresh_with_small_limit_reaches_every_work_by_rotation` (verified 2026-11-14 on branch `test-baseline-2`; entry text below describes the state before the fix) · Added: 2026-11-03 · Slice: — · Depends on: decision 48 item 5
 **What:** `refresh` selects every promoted work sorted by id and takes the first `limit`, so works after that prefix are never reached by `refresh`. Explicit `work_ids` beyond `limit` are now refused, so the caller cannot split the work by hand either.
 **Why:** a large corpus cannot be revisited in full with a small `limit`.
 **Rigour notes:** the choice of works in each call stays deterministic and recorded in `fulltext.fetch_started`.
 **Open questions:** a cursor on the tool, or a rotation by time of last attempt.
 
 ### IDEA-29 — Same hash with a different `source_version` restores silently
-Status: new · Added: 2026-11-03 · Slice: — · Depends on: decision 46 item 9
+Status: built (plan FL): identical bytes under another version record `version_differs` on the restored attempt, and `check` reports `source-version-differs`. Evidence: `tests/test_fulltext_restore_followups.py` (verified 2026-11-14 on branch `test-baseline-2`; entry text below describes the state before the fix) · Added: 2026-11-03 · Slice: — · Depends on: decision 46 item 9
 **What:** `restore_document` compares only the raw hash. If the route serves identical bytes under another version string, the attempt is recorded `restored` and the document's recorded version is not updated or flagged.
 **Why:** the version of record can differ from what the source now reports, with no event saying so.
 **Rigour notes:** a version mismatch with identical bytes is recorded or refused, never silent.
@@ -410,7 +410,7 @@ Status: new · Added: 2026-11-08 · Slice: — · Depends on: screening outcomes
 **Open questions:** whether this is a screening verdict or a flag on an exclusion; whether background works need full-text acquisition; how it relates to the intuition layer's background concepts (slice 3c); whether the snowball plan names background sources explicitly.
 
 ### IDEA-48 — Remove line-number paragraphs from converted PDFs
-Status: new · Added: 2026-11-09 · Slice: — · Depends on: docling converter (decision 49), `factory document convert`
+Status: built 2026-11-14 on branch `test-baseline-2`, not reviewed: filter `document/linenumbers.py` (run of at least 5 adjacent 1 to 4 digit paragraphs counting up by one; page breaks do not end a run; numbers interleaved with text lines are not caught), docling converter version 1.2, coverage ignores bare-number tokens (`conversion_coverage.content_words`). A version bump adds a conversion and keeps the old one (tested); re-converting the pilot PDFs is the researcher's to start. Open: whether a plain `document convert` should skip documents whose latest conversion is an older version of the same converter unless asked (today it adds the new conversion) · Added: 2026-11-09 · Slice: — · Depends on: docling converter (decision 49), `factory document convert`
 **What:** a post-filter after docling that drops paragraphs consisting only of 1 to 4 digits that sit in a run counting up by one (the margin line numbers of a review-format preprint), before anchors are assigned. The converter version is bumped and the affected PDFs re-converted. The automatic coverage check (`factory document coverage`) could also ignore bare-number tokens, so these PDFs stop appearing as low recall.
 **Why:** on 2026-11-09 the lowest-recall PDFs of the agentic-science pilot (for example 607 to 914 bare-number paragraphs in each of the three worst) were line-numbered preprints: each line number became its own paragraph with its own anchor. The text is intact; the numbers inflate the paragraph count and break word 5-grams at every line, which lowers recall and precision. The researcher chose to leave the conversions as they are for now.
 **Rigour notes:** a bare number can be a real paragraph (a table value, a page number), so the rule needs the run condition; dropping paragraphs renumbers the anchors, so it is a converter version change and must come before anything cites them; the filter is recorded in the converter version.

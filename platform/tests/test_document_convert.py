@@ -136,6 +136,22 @@ def test_version_bump_writes_second_conversion(project: Project, corpus: None) -
     assert versions == ["1.0+a", "1.0+b"]
 
 
+def test_version_bump_keeps_the_old_conversion_referenced(project: Project, corpus: None) -> None:
+    """A converter version bump (IDEA-48) adds a conversion; the old one, its events and its blobs
+    stay, so anchors cited against it still resolve. Nothing is replaced or deleted."""
+    fetched_document(project, promoted_works(project)[0], ARTICLE)
+    run_convert(project, make_registry(StubConverter(version="1.0+a")))
+    old = Converted.model_validate(events_of_type(project, "document.converted")[0].payload)
+    before = event_bytes(project)
+
+    run_convert(project, make_registry(StubConverter(version="1.0+b")))
+
+    after = event_bytes(project)
+    assert all(after[path].startswith(data) for path, data in before.items())  # append-only
+    assert project.library.exists(old.markdown_hash) and project.library.exists(old.manifest_hash)
+    assert len(events_of_type(project, "document.converted")) == 2
+
+
 def test_no_converter_records_failure(project: Project, corpus: None) -> None:
     work = promoted_works(project)[0]
     with project.index.exclusive():

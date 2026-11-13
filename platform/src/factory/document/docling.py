@@ -18,10 +18,14 @@ from pathlib import Path
 from typing import Any
 
 from factory.document.converter import ConverterUnavailable
+from factory.document.linenumbers import drop_line_numbers
 
 PDF = "application/pdf"
 MODELS_ENV = "FACTORY_DOCLING_MODELS"
-CONVERTER_VERSION = "1.1"
+CONVERTER_VERSION = "1.2"
+"""1.2: margin line-number paragraphs are dropped after conversion (`linenumbers`, IDEA-48). The
+filter changes paragraph numbering, so it is part of the version; documents converted by 1.1 keep
+their recorded conversion and anchors."""
 
 
 _HASH_CACHE: dict[tuple[str, tuple[tuple[str, int, int], ...]], str] = {}
@@ -76,6 +80,17 @@ def models_dir() -> Path | None:
         return None
     path = Path(configured)
     return path if path.is_dir() else None
+
+
+def postprocess(markdown: str) -> tuple[str, tuple[str, ...]]:
+    """Docling's Markdown without margin line-number paragraphs, and a warning counting them
+    (counts only, no document text)."""
+    filtered = drop_line_numbers(markdown)
+    if not filtered.dropped:
+        return markdown, ()
+    return filtered.text, (
+        f"dropped {filtered.dropped} line-number paragraphs in {filtered.runs} runs",
+    )
 
 
 class DoclingConverter:
@@ -133,4 +148,5 @@ class DoclingConverter:
             else:
                 os.environ["HF_HUB_OFFLINE"] = previous
         text = str(result.document.export_to_markdown(page_break_placeholder="\f"))
-        return text, (f"docling status: {result.status.value}",)
+        text, notes = postprocess(text)
+        return text, (f"docling status: {result.status.value}", *notes)
