@@ -32,10 +32,12 @@ from factory.services.resume import (
     AutomaticLeft,
     ExpiredLeases,
     Interrupted,
+    InterruptedPipeline,
     InterruptedRun,
     ResumePlan,
     ResumeResult,
     RunResume,
+    StalePass,
 )
 from factory.services.site import site_dir
 from tests.helpers import SESSION, T0
@@ -383,7 +385,62 @@ def test_dashboard_counts_the_interrupted_work(project: Project) -> None:
         "fetch": 0,
         "convert": 0,
         "limit_runs": [],
+        "details": [],
     }
+
+
+def test_dashboard_lists_each_interrupted_item(
+    project: Project, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """IDEA-63 (2): the Interrupted panel names each item, not only the counts."""
+    found = Interrupted(
+        runs=[
+            InterruptedRun(
+                run_id="rnr_1",
+                stage="screen",
+                model="haiku",
+                prompt_blob="b",
+                started_at="t",
+                kind="lost",
+                stage_pending=True,
+            )
+        ],
+        pipelines=[
+            InterruptedPipeline(
+                pipeline_id="pip_1",
+                started_at="t",
+                kind="failed",
+                stopped_at=None,
+                stages_left=["extract", "convert"],
+                reason=None,
+            )
+        ],
+        leases=[ExpiredLeases(kind="screen_a", count=2, task_ids=["t1", "t2"])],
+        passes=[
+            StalePass(
+                module="screening",
+                stage="title-abstract",
+                scope=None,
+                label="A",
+                session="s1",
+                task_kind="screen_a",
+                pending=5,
+                last_activity="t",
+            )
+        ],
+        automatic=AutomaticLeft(),
+    )
+    monkeypatch.setattr(resume_service, "interrupted", lambda p, **_: found)
+
+    counts = dashboard_service._interrupted(project)
+
+    assert isinstance(counts, dict)
+    assert counts["details"] == [
+        {"category": "run", "id": "rnr_1", "text": "screen, lost"},
+        {"category": "pipeline", "id": "pip_1", "text": "failed, left: extract, convert"},
+        {"category": "lease", "id": "screen_a", "text": "2 expired"},
+        {"category": "pass", "id": "screening A", "text": "title-abstract, 5 pending"},
+    ]
 
 
 def test_dashboard_lists_limit_runs_with_stage_and_reset(
