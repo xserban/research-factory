@@ -98,9 +98,7 @@ def test_audit_label_takes_the_composed_spelling(
     # it; the sample check is narrowed to the stored id to isolate the resolution step.
     sampled = audit_sample(project, human, random_seed=7, stage=TA)
     monkeypatch.setattr(audit, "_sampled", lambda project, audit_id, work_id: work_id == stored)
-    audit_record(
-        project, human, sampled.audit_id, _composed(stored), "include", None, Channel.CLI
-    )
+    audit_record(project, human, sampled.audit_id, _composed(stored), "include", None, Channel.CLI)
     (payload,) = _payloads(project, "audit.labelled")
     assert payload["work_id"] == stored
 
@@ -175,9 +173,7 @@ def test_lead_record_takes_the_composed_spelling(
 def test_a_cited_work_in_a_row_takes_the_stored_spelling(stored: str) -> None:
     from factory.services.extraction import _cited_as_stored
 
-    row = ExtractedRowInput(
-        fields={"cites": FieldInput(value="x", cited_work=_composed(stored))}
-    )
+    row = ExtractedRowInput(fields={"cites": FieldInput(value="x", cited_work=_composed(stored))})
     checked, issues = _cited_as_stored(row, {stored, "rf:other-00000000"})
     assert issues == []
     assert checked.fields["cites"].cited_work == stored
