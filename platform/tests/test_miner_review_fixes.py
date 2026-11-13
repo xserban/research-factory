@@ -148,10 +148,14 @@ def test_a_gold_relayer_cannot_mine_or_judge_any_version(
     _relay_gold(project, human, cal.calibration_id, cal.works[0], SESSION_X)
     relayer = miner_actor(SESSION_X, "claude-haiku-5")
     with pytest.raises(FactoryValidationError):
-        mine_next(project, relayer, VISION_NAME, 1, A, exploratory=True)  # production of the same version
+        mine_next(
+            project, relayer, VISION_NAME, 1, A, exploratory=True
+        )  # production of the same version
     _v2(project, agent, cal.spec)
     with pytest.raises(FactoryValidationError):
-        mine_next(project, relayer, VISION_NAME, 2, A, exploratory=True)  # production of the next version
+        mine_next(
+            project, relayer, VISION_NAME, 2, A, exploratory=True
+        )  # production of the next version
     draw_miner_calibration(project, human, VISION_NAME, 2, random_seed=11)
     with pytest.raises(FactoryValidationError) as raised:
         mine_next(project, relayer, VISION_NAME, 2, A, calibration=True)  # judging the next
@@ -206,7 +210,9 @@ def test_a_released_calibration_claim_still_marks_the_session(
     release_task(project, JUDGE, batch.task_id, "stepping away")
     assert JUDGE.session in calibration_sessions(project, VISION_NAME)
     with pytest.raises(FactoryValidationError):
-        mine_next(project, JUDGE, VISION_NAME, 1, A, exploratory=True)  # still no production for the judge
+        mine_next(
+            project, JUDGE, VISION_NAME, 1, A, exploratory=True
+        )  # still no production for the judge
 
 
 # --- 3: evidence admission is a human act ---

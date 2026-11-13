@@ -209,7 +209,7 @@ def _taxonomy_issues(project: Project, spec: MinerSpec) -> list[ValidationIssue]
     if ref is None:
         return []
     # late imports: services.taxonomies imports this package's peers
-    from factory.mining.derive import derive_miner
+    from factory.mining.derive import derive_miner, row_key_rule
     from factory.services.taxonomies import layer_categories, taxonomy_row
 
     field = "spec.taxonomy"
@@ -225,10 +225,20 @@ def _taxonomy_issues(project: Project, spec: MinerSpec) -> list[ValidationIssue]
     missing = [d for d in ref.dimensions if d not in known]
     if missing:
         return [ValidationIssue(field, f"the taxonomy has no dimension {d}") for d in missing]
+    rule = row_key_rule(spec)
+    if rule is None:
+        return [
+            ValidationIssue(
+                "row_key_fields",
+                "a derived miner keys its rows on the work (no key fields) or on the category "
+                "(`category`)",
+            )
+        ]
     try:
         derived = derive_miner(
             taxonomy,
             ref.dimensions,
+            row_key=rule,
             name=spec.name,
             version=spec.version,
             selector=spec.selector,
@@ -262,8 +272,10 @@ def register_miner(
     reference (`spec.taxonomy`) whose taxonomy version is not registered, whose digest differs
     from the registered one, that names a dimension the taxonomy lacks, or that differs (other than
     in `rationale`) from what `derive_miner` produces for that taxonomy, those dimensions and the
-    spec's own name, version, selector, regime and procedure. Registering the same spec
-    again writes nothing and returns the earlier registration."""
+    spec's own name, version, selector, regime, procedure and row key rule (key rule B: the rule
+    is read from the spec's `row_key_fields`, `work` or `category`, so a version registered under
+    the category key for one single dimension is still accepted; any other key is refused).
+    Registering the same spec again writes nothing and returns the earlier registration."""
     if actor.kind == "system":
         raise FactoryValidationError(
             [ValidationIssue("actor", "an agent or a human registers a miner")]

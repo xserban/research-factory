@@ -170,3 +170,38 @@ def test_layer_case_in_the_calibration_score() -> None:
     new = score(_gold(work, 0), _gold(work, 1), work)
     assert (new.matched, new.unmatched) == (40, 0)
     assert new.field_agreement == pytest.approx(0.85) == new.field_agreement_all
+
+
+# --- Key rule B (IDEA-69 (1), ruling 2026-11-13): the rule is declared in the spec ---
+
+
+def test_derive_takes_the_key_rule_and_defaults_by_dimension() -> None:
+    assert _derive("layer").row_key_fields == ()
+    legacy = derive_miner(
+        TAXONOMY, ("layer",), name="m-test", version=1, selector=SELECTOR, regime=REGIME,
+        layer_ids=LAYERS, row_key="category",
+    )  # fmt: skip
+    assert legacy.row_key_fields == ("category",)
+    assert legacy == replace(_derive("layer"), row_key_fields=("category",))
+
+
+def test_the_work_rule_needs_one_single_dimension() -> None:
+    for dimensions in (("tech",), ("layer", "stage")):
+        with pytest.raises(ValueError, match="work"):
+            derive_miner(
+                TAXONOMY, dimensions, name="m-test", version=1, selector=SELECTOR,
+                regime=REGIME, layer_ids=LAYERS, row_key="work",
+            )  # fmt: skip
+    with pytest.raises(ValueError, match="row key rule"):
+        derive_miner(
+            TAXONOMY, ("layer",), name="m-test", version=1, selector=SELECTOR,
+            regime=REGIME, layer_ids=LAYERS, row_key="anchor",
+        )  # fmt: skip
+
+
+def test_rule_of_reads_the_declared_key() -> None:
+    from factory.mining.derive import row_key_rule
+
+    assert row_key_rule(_derive("layer")) == "work"
+    assert row_key_rule(_derive("tech")) == "category"
+    assert row_key_rule(replace(_derive("layer"), row_key_fields=("quote",))) is None

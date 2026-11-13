@@ -256,7 +256,14 @@ async def test_mcp_relay_is_refused_to_pass_and_proposer_sessions(
 ) -> None:
     install_skill(settings, "rf-extract")
     cal, works = _drawn(project, agent_other, human)  # proposer: session S2
-    mine_next(project, miner_actor(SESSION_M1, "claude-opus-5-5"), VISION_NAME, 1, PassLabel.A, exploratory=True)
+    mine_next(
+        project,
+        miner_actor(SESSION_M1, "claude-opus-5-5"),
+        VISION_NAME,
+        1,
+        PassLabel.A,
+        exploratory=True,
+    )
     before = _events(project)
     for session in (SESSION_M1, agent_other.session):
         out = await _relay(settings, clock, monkeypatch, session, cal, works[0])
