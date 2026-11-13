@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import re
 import unicodedata
+from collections.abc import Iterable
 
 WORK_ID_RE = r"^rf:\S+-[0-9a-f]{8}$"
 TRAILING_PUNCTUATION = ".,;:)]}"
@@ -62,6 +63,21 @@ def normalize_title(title: str) -> str:
     folded = "".join(c for c in folded if not unicodedata.combining(c))
     folded = _PUNCT.sub(" ", folded.casefold())
     return _WS.sub(" ", folded).strip()
+
+
+def nfc_matches(work_id: str, stored: Iterable[str]) -> list[str]:
+    """The stored ids `work_id` names: `[work_id]` when it is stored as given, else every stored
+    id whose NFC form equals its NFC form (IDEA-66).
+
+    `normalize_title` applies NFKD, so a Hangul word of an id is stored as jamo while a model or
+    a person writes it composed; the two look identical and differ as strings. The ids are
+    never rewritten; a caller uses the one match's spelling and refuses several.
+    """
+    pool = list(stored)
+    if work_id in pool:
+        return [work_id]
+    folded = unicodedata.normalize("NFC", work_id)
+    return sorted({w for w in pool if unicodedata.normalize("NFC", w) == folded})
 
 
 def normalize_doi(doi: str) -> str:
