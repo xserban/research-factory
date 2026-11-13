@@ -22,15 +22,23 @@ from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor, ActorKind
 from factory.mining.calibration import sample_size
 from factory.mining.compile import miner_digest
+from factory.mining.spec import Selector
 from factory.model.extraction import MinerScope
 from factory.model.miner_calibration import CalibrationUnit, MinerCalibrationDrawn
 from factory.model.miners import MINER_NAME_RE, MinerRetired
 from factory.quality.stats import draw_uniform
 from factory.services import audit_core
 from factory.services.context import Project
+from factory.services.document_read import default_conversion
 from factory.services.extraction import started_works
 from factory.services.gates import rigor_mode
-from factory.services.mining import MinerRow, population, registered_row, require_listed
+from factory.services.mining import (
+    MinerRow,
+    miner_population,
+    population,
+    registered_row,
+    require_listed,
+)
 from factory.services.protocol import amend_protocol, current_protocol
 
 __all__ = [
@@ -198,6 +206,24 @@ def calibration_by_id(project: Project, calibration_id: str) -> CalibrationRow |
     return _calibration(project, "calibration_id = :c", {"c": calibration_id})
 
 
+def _candidates(
+    project: Project, name: str, selector: Selector, mined: set[str]
+) -> list[tuple[str, str]]:
+    """`(work, conversion)` of the miner's own population that no production pass has started
+    (IDEA-69 (4)): `miner_population` filters by the use's layers; the conversion is the selector
+    population's, or the default one for an on-demand work outside it."""
+    conversions = dict(population(project, selector))
+    out: list[tuple[str, str]] = []
+    for work in miner_population(project, name):
+        conversion = conversions.get(work)
+        if conversion is None:
+            found = default_conversion(project, work)
+            conversion = None if found is None else found.conversion_id
+        if work not in mined and conversion is not None:
+            out.append((work, conversion))
+    return out
+
+
 def draw_miner_calibration(
     project: Project,
     actor: Actor,
@@ -209,9 +235,11 @@ def draw_miner_calibration(
     """Draw and record the calibration sample of a listed miner version (ruling 2); return the
     event payload.
 
-    The sample is `draw_uniform` over the selector's population less the units a production pass
-    of this miner already holds, of `max(regime.calibration_size, floor)` units capped at the
-    population; the seed and the population digest are recorded.
+    The sample is `draw_uniform` over the miner's own population (`miner_population`: the
+    selector's population restricted to the protocol use's `layers`, plus on-demand requests)
+    less the units a production pass of this miner already holds, of
+    `max(regime.calibration_size, floor)` units capped at the population; the seed and the
+    population digest are recorded.
 
     Refused, with nothing written: for a non-human actor (`actor`); a seed outside 0..2**32-1
     (`random_seed`); a miner the protocol does not list (`miners`, `protocol`); a retired version
@@ -240,7 +268,7 @@ def draw_miner_calibration(
                 ]
             )
         mined = started_works(project, scope=MinerScope(name))
-        candidates = [(w, c) for w, c in population(project, spec.selector) if w not in mined]
+        candidates = _candidates(project, name, spec.selector, mined)
         if not candidates:
             raise FactoryValidationError(
                 [ValidationIssue("population", "no unit is left to calibrate on")]

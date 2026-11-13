@@ -9,9 +9,10 @@ from factory.events.reader import read_all
 from factory.mining.spec import spec_to_json
 from factory.model.screening import PassLabel
 from factory.services.context import Project
-from factory.services.extraction import task_content
+from factory.services.extraction import MineBatch
 from factory.services.miners import MinerState, miner_state
 from factory.services.mining import mine_next, register_miner
+from factory.services.tasks import get_task, task_content
 from tests.extraction_helpers import _both, ext_a, ext_b, screened, world  # noqa: F401
 from tests.miner_calibration_helpers import calibrated_world, run_calibration
 from tests.miner_helpers import (
@@ -52,14 +53,12 @@ def test_exploratory_run_serves_and_marks_the_task(
     register_miner(project, agent, spec_to_json(spec))
     list_miner(project, agent, spec)
     batch = mine_next(project, WORKER, VISION_NAME, 1, A, exploratory=True).batch
-    assert batch is not None and batch.exploratory is True
+    assert isinstance(batch, MineBatch) and batch.exploratory is True
     stored = task_content(project, _task(project, batch.task_id))
     assert isinstance(stored, dict) and stored["exploratory"] is True
 
 
 def _task(project: Project, task_id: str):  # type: ignore[no-untyped-def]
-    from factory.services.extraction import get_task
-
     task = get_task(project, task_id)
     assert task is not None
     return task
@@ -72,7 +71,7 @@ def test_passed_calibration_allows_production_unmarked(
     run_calibration(project)
     assert miner_state(project, VISION_NAME, 1) is MinerState.CALIBRATED
     batch = mine_next(project, WORKER, VISION_NAME, 1, A).batch
-    assert batch is not None and batch.exploratory is False
+    assert isinstance(batch, MineBatch) and batch.exploratory is False
 
 
 def test_calibrating_or_unrun_calibration_still_refuses(
