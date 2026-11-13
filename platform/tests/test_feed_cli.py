@@ -189,3 +189,13 @@ def test_run_dry_run_of_an_unconfigured_project_exits_two(tmp_path: Path) -> Non
     _project(tmp_path)
     result = runner.invoke(app, ["feed", "run", "--project", SLUG, "--dry-run"], env=_env(tmp_path))
     assert result.exit_code == 2
+
+
+def test_categories_proposal_is_read_only_and_says_when_there_is_none(tmp_path: Path) -> None:
+    _project(tmp_path)
+    shown = runner.invoke(app, ["feed", "categories", "--project", SLUG], env=_env(tmp_path))
+    assert shown.exit_code == 0, shown.output
+    assert "core works 0" in shown.output and "no proposal" in shown.output
+    assert "configure" not in shown.output  # nothing to accept
+    status = runner.invoke(app, ["feed", "status", "--project", SLUG], env=_env(tmp_path))
+    assert "not configured" in status.output.lower() or "no feed" in status.output.lower()

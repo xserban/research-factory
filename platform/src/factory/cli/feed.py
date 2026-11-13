@@ -147,6 +147,29 @@ def feed_configure_cmd(
     typer.echo(f"feed configured for {opened.paths.slug} ({event_id})")
 
 
+@feed_app.command("categories")
+def feed_categories_cmd(ctx: typer.Context, project: ProjectOpt = None) -> None:
+    """Propose the arXiv categories to follow, from the core layer (read-only; accepting is
+    `feed configure --categories ...`, a human act)."""
+    from factory.services import feed_categories
+
+    opened = _open(ctx, project)
+    with _refusals():
+        proposal = feed_categories.propose_categories(opened)
+    typer.echo(
+        f"core works {proposal.core_works}, with an arXiv category {proposal.with_category}"
+        f" (rule: cover {proposal.coverage:.0%}, {proposal.minimum} to {proposal.maximum})"
+    )
+    for share in proposal.shares[:8]:
+        mark = "*" if share.category in proposal.categories else " "
+        typer.echo(f" {mark} {share.category:<22} {share.works:>4}  {share.share:.0%}")
+    if not proposal.categories:
+        typer.echo("no proposal: no core-layer work has an arXiv category")
+        return
+    typer.echo(f"covered {proposal.covered:.0%}; to accept:")
+    typer.echo("  factory feed configure --categories " + ",".join(proposal.categories))
+
+
 @feed_app.command("run")
 def feed_run_cmd(
     ctx: typer.Context,
