@@ -57,7 +57,7 @@ def vision_result(**over: Any) -> MinerSpec:
             MinerField("evidence", "evidence", QuoteKind(), compared=False),
         ),
         row_key_fields=("metric",),
-        row_anchor_fields=("metric",),
+        row_anchor_fields=(),
         conditionals=(),
         evidence=EvidenceRule(1, True),
         procedure="rf-extract",
