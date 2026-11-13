@@ -121,7 +121,11 @@ def test_an_agent_written_event_changes_nothing_on_rebuild(
 
     works = _world(project, agent, human, mock_sources)
     forged = project.events.make(
-        "work.marked_core", WorkMarkedCore(work_id=works[0]), agent, refs=(works[0],)
+        "work.marked_core",
+        WorkMarkedCore(work_id=works[0]),
+        agent,
+        refs=(works[0],),
+        input_blob=project.blobs.put_json({"forged": True}),
     )
     project.record([forged])
     assert core_marks(project) == []
