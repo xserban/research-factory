@@ -55,6 +55,8 @@ class CalibrationScore:
     verification_rate: float | None
     unmatched: int = 0
     field_agreement_all: float | None = None
+    evidence_overlap: float | None = None
+    """The threshold free-quote fields were compared under (IDEA-52), or None: exact."""
 
 
 def _ratio(numerator: int, denominator: int) -> float | None:
@@ -77,10 +79,13 @@ def score(
     *,
     verified: int | None = None,
     submitted: int | None = None,
+    evidence_overlap: float | None = None,
 ) -> CalibrationScore:
     """Score `agent` rows against `gold` rows, both by unit (work id). Units are those of `gold`;
     agent rows of a unit with no gold entry count as extra. `verified` and `submitted` give the
-    verification rate (None leaves it None)."""
+    verification rate (None leaves it None). With `evidence_overlap` (a threshold, off by default),
+    a free-quote field also agrees when the two quotes rest on the same evidence (IDEA-52); the
+    threshold is recorded in the result."""
     names = _compared(pack)
     gold_rows = sum(len(rows) for rows in gold.values())
     agent_rows = sum(len(rows) for rows in agent.values())
@@ -107,7 +112,11 @@ def score(
                 if a is None and b is None:
                     continue
                 compared += 1
-                if a is not None and b is not None and same_field(pack.field(name), a, b):
+                if (
+                    a is not None
+                    and b is not None
+                    and same_field(pack.field(name), a, b, evidence_overlap=evidence_overlap)
+                ):
                     equal += 1
     return CalibrationScore(
         gold_rows=gold_rows,
@@ -117,6 +126,7 @@ def score(
         field_agreement=_ratio(equal, compared),
         unmatched=unmatched,
         field_agreement_all=_ratio(equal, compared + missed),
+        evidence_overlap=evidence_overlap,
         precision=_ratio(matched, agent_rows),
         verification_rate=(
             None if verified is None or submitted is None else _ratio(verified, submitted)
