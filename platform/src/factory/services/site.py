@@ -167,6 +167,12 @@ def _build_bibliography(project: Project, out: Path) -> None:
     build_bibliography(project, out)
 
 
+def _build_citations(project: Project, out: Path) -> None:
+    from factory.services.site_citations import build_citations
+
+    build_citations(project, out)
+
+
 def _build_explorer(project: Project, out: Path) -> None:
     from factory.services.site_explorer import build_explorer
 
@@ -429,6 +435,16 @@ def products() -> list[Product]:
             entry="index.html",
             inputs=CORPUS_EVENTS,
             build=_build_bibliography,
+        ),
+        Product(
+            id="citations",
+            title="Citations in the corpus",
+            group="Corpus",
+            description="Which works the corpus cites most, per year since publication, and "
+            "the works it cites that it does not hold (snowball candidates).",
+            entry="index.html",
+            inputs=("reference.%", "dedup.%", "search.%"),
+            build=_build_citations,
         ),
         Product(
             id="feed",

@@ -39,6 +39,9 @@ class WorkCitations:
     citers: tuple[str, ...]
     per_year: float | None
     """`cited_by` over the years since publication (the publication year counts as one)."""
+    external: int | None = None
+    """The count stored in the work record (`cited_by_count`, read from OpenAlex when the work was
+    enriched); None when absent. A different measure from `cited_by`, never merged with it."""
 
     @property
     def cited_by_excluding_self(self) -> int | None:
@@ -81,14 +84,15 @@ def _name_key(name: str) -> str:
     return _NON_WORD.sub(" ", folded).strip()
 
 
-def _meta(data: str) -> tuple[str, int | None, frozenset[str]]:
+def _meta(data: str) -> tuple[str, int | None, frozenset[str], int | None]:
     d = json.loads(data)
     published = (d.get("dates") or {}).get("published") or ""
     year = int(published[:4]) if published[:4].isdigit() else None
     names = frozenset(
         k for a in (d.get("authors") or []) if (k := _name_key(str(a.get("name") or "")))
     )
-    return str(d.get("title") or ""), year, names
+    ext = d.get("cited_by_count")
+    return str(d.get("title") or ""), year, names, ext if isinstance(ext, int) else None
 
 
 def citation_report(project: Project, *, as_of_year: int) -> CitationReport:
@@ -135,15 +139,15 @@ def citation_report(project: Project, *, as_of_year: int) -> CitationReport:
         as_of_year=as_of_year,
     )
     for wid in sorted(works):
-        title, year, names = works[wid]
+        title, year, names, ext = works[wid]
         if extractions == 0:
-            report.works.append(WorkCitations(wid, title, year, None, None, (), None))
+            report.works.append(WorkCitations(wid, title, year, None, None, (), None, ext))
             continue
         who = sorted(citers.get(wid, ()))
         own = sum(1 for c in who if c in works and names & works[c][2])
         n = len(who)
         rate = n / max(1, as_of_year - year + 1) if year is not None else None
-        report.works.append(WorkCitations(wid, title, year, n, own, tuple(who), rate))
+        report.works.append(WorkCitations(wid, title, year, n, own, tuple(who), rate, ext))
     for item in cited_items(project).items:
         if any((e.extraction_id, e.ordinal) in resolved_keys for e in item.entries):
             continue

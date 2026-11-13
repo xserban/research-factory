@@ -2,6 +2,7 @@
 test may do because the service only reads it."""
 
 import json
+from pathlib import Path
 
 from sqlalchemy import text
 
@@ -101,3 +102,17 @@ def test_candidates_are_cited_items_not_resolved(project: Project) -> None:
     rep = citation_report(project, as_of_year=2025)
     titles = {c.title for c in rep.candidates}
     assert "Unlinked paper x1 2" in titles and "Unlinked paper x1 1" not in titles
+
+
+def test_page_shows_denominators_and_unknown(project: Project, tmp_path: Path) -> None:
+    from factory.services.site_citations import build_citations
+
+    _work(project, "rf:a", "Alpha paper", 2020, [])
+    build_citations(project, tmp_path)
+    assert "every in-corpus count is unknown" in (tmp_path / "index.html").read_text()
+    _work(project, "rf:b", "Beta paper", 2021, [])
+    _extraction(project, "x1", "rf:b", 1)
+    _link(project, "x1", 1, "resolved", "rf:a")
+    build_citations(project, tmp_path)
+    page = (tmp_path / "index.html").read_text()
+    assert "1 entries, of which 1 resolved" in page and "Alpha paper" in page
