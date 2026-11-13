@@ -226,6 +226,19 @@ class Reviewer(StrictModel):
     duties: str = ""
 
 
+class UnscreenedTolerance(StrictModel):
+    """Pass A works that may stay without a live decision (IDEA-46): they are reported as
+    unscreened, not blocked on. A number `k` of such works is within the tolerance when
+    `k < fewer_than` or `k <= fraction * (size of the pass A queue)`; the two are alternatives
+    (a researcher's ruling, defaults 3 records or 1 percent). Pass A only."""
+
+    fewer_than: int = Field(default=3, ge=0)
+    fraction: float = Field(default=0.01, ge=0, le=1)
+
+    def allows(self, missing: int, queue_size: int) -> bool:
+        return missing < self.fewer_than or missing <= self.fraction * queue_size
+
+
 class ScreeningPlan(StrictModel):
     """How screening is run: passes, dual-coding sample, agreement floor and reviewers."""
 
@@ -250,6 +263,9 @@ class ScreeningPlan(StrictModel):
     run). Set together with `stop_score_run`; left out of every dump while None."""
     stop_score_run: int | None = Field(default=None, ge=1)
     """The run length of the score-based stop; see `stop_below_score`."""
+    unscreened_tolerance: UnscreenedTolerance | None = None
+    """Pass A works that could not be screened and are tolerated (IDEA-46). None tolerates none;
+    left out of every dump, so of every hash, while None."""
 
     @model_serializer(mode="wrap")
     def _omit_unset_options(self, handler: SerializerFunctionWrapHandler) -> dict[str, object]:
@@ -258,7 +274,7 @@ class ScreeningPlan(StrictModel):
             data.pop("calibrate_humans", None)
         if data.get("stop_after_consecutive_excludes") is None:
             data.pop("stop_after_consecutive_excludes", None)
-        for key in ("stop_below_score", "stop_score_run"):
+        for key in ("stop_below_score", "stop_score_run", "unscreened_tolerance"):
             if data.get(key) is None:
                 data.pop(key, None)
         return data

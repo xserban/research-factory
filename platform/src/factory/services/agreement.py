@@ -153,6 +153,9 @@ class Agreement(StrictModel):
     disagreements: list[Disagreement]
     single_pass: list[str]
     cannot_assess_rate: dict[str, float | None]
+    unscreened: list[str] = Field(default_factory=list)
+    """Pass A works without a live decision that the protocol's `unscreened_tolerance` lets
+    through (IDEA-46); excluded from the pairs, never counted as excluded."""
 
 
 @dataclass(frozen=True)
@@ -174,6 +177,18 @@ class _Screen:
     known: bool
     dual: frozenset[str]
     single: frozenset[str]
+
+
+def tolerated_unscreened(screen: _Screen) -> frozenset[str]:
+    """The pass A works with no live decision that the protocol's `unscreened_tolerance` lets
+    through: all of them when their number is within the tolerance, none otherwise (and none
+    when no tolerance is declared). Pass A only (IDEA-46)."""
+    tolerance = screen.plan.unscreened_tolerance
+    queue = screen.queues[PassLabel.A]
+    if tolerance is None or queue is None:
+        return frozenset()
+    missing = queue - screen.decided[PassLabel.A].keys()
+    return missing if tolerance.allows(len(missing), len(queue)) else frozenset()
 
 
 def screen_agreement(project: Project, actor: Actor, *, stage: ScreeningStage = TA) -> Agreement:
@@ -203,9 +218,12 @@ def screen_agreement(project: Project, actor: Actor, *, stage: ScreeningStage = 
                     f"pass {label.value} has {len(open_tasks)} open or claimed screening "
                     "task(s); agreement waits until both passes finish"
                 )
+        tolerated = tolerated_unscreened(screen)
         for label in PassLabel:
             queue = screen.queues[label] or frozenset()
             missing = queue - screen.decided[label].keys()
+            if label is PassLabel.A:
+                missing -= tolerated
             if missing:
                 raise _refuse(
                     f"pass {label.value}: {len(missing)} works still lack a live screening "
@@ -229,7 +247,12 @@ def passes_settled(
         return False
     for label in PassLabel if screen.plan.passes == 2 else (PassLabel.A,):
         queue = screen.queues[label]
-        if queue is None or queue - screen.decided[label].keys():
+        if queue is None:
+            return False
+        missing = queue - screen.decided[label].keys()
+        if label is PassLabel.A:
+            missing -= tolerated_unscreened(screen)
+        if missing:
             return False
         if _blocking_tasks(project, label, stage):
             return False
@@ -496,7 +519,7 @@ def agreement_summary(project: Project, *, stage: ScreeningStage = TA) -> Agreem
     screen = _load(project, stage)
     if screen is None or not screen.known or screen.plan.passes == 1:
         return None
-    for work in screen.dual:
+    for work in screen.dual - tolerated_unscreened(screen):
         if work not in screen.decided[PassLabel.A] or work not in screen.decided[PassLabel.B]:
             return None
     return _agreement(project, screen)
@@ -738,7 +761,8 @@ def _agreement(project: Project, screen: _Screen) -> Agreement:
     disagreements: list[Disagreement] = []
     outcome_pairs: list[tuple[bool, bool]] = []
     criterion_pairs: list[tuple[str | None, str | None]] = []
-    for work in sorted(screen.dual):
+    unscreened = tolerated_unscreened(screen)
+    for work in sorted(screen.dual - unscreened):
         a, b = decided_a[work], decided_b[work]
         outcome_pairs.append((a.verdict.promotes, b.verdict.promotes))
         criterion_pairs.append((_exclusion(a), _exclusion(b)))
@@ -773,6 +797,7 @@ def _agreement(project: Project, screen: _Screen) -> Agreement:
         disagreements=disagreements,
         single_pass=sorted(screen.single),
         cannot_assess_rate=_cannot_assess_rate(screen),
+        unscreened=sorted(unscreened),
     )
 
 
