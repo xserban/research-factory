@@ -10,8 +10,8 @@ Invariants:
   count of every work is `None` (unknown), never 0.
 - Self-citation is a separate figure: a citing work sharing a normalised author name with the
   cited work. `cited_by` includes those citations; `self_cited_by` says how many of them.
-- `uncited_candidates` are cited items (rules of `reference_items`) none of whose entries resolved
-  to a work: cited by the corpus, not in it.
+- `candidates` are cited items (rules of `reference_items`) none of whose entries resolved to a
+  work and that carry a year or an identifier: cited by the corpus, not in it.
 """
 
 from __future__ import annotations
@@ -151,6 +151,8 @@ def citation_report(project: Project, *, as_of_year: int) -> CitationReport:
     for item in cited_items(project).items:
         if any((e.extraction_id, e.ordinal) in resolved_keys for e in item.entries):
             continue
+        if item.year is None and not item.dois and not item.arxivs:
+            continue  # nothing identifies it as a work (converter boilerplate lands here)
         report.candidates.append(
             Candidate(item.key, item.title, item.year, item.citing_count, item.dois, item.arxivs)
         )

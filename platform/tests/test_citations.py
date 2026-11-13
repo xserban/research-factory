@@ -116,3 +116,11 @@ def test_page_shows_denominators_and_unknown(project: Project, tmp_path: Path) -
     build_citations(project, tmp_path)
     page = (tmp_path / "index.html").read_text()
     assert "1 entries, of which 1 resolved" in page and "Alpha paper" in page
+
+
+def test_candidates_skip_items_without_year_or_identifier(project: Project) -> None:
+    _work(project, "rf:a", "A", 2020, [])
+    _extraction(project, "x1", "rf:a", 1)
+    with project.index._engine.begin() as conn:
+        conn.execute(text("UPDATE reference_entries SET year = NULL"))
+    assert citation_report(project, as_of_year=2025).candidates == []
