@@ -282,3 +282,137 @@ def test_the_single_project_server_still_serves_its_feed_folder(project: Project
     finally:
         httpd.shutdown()
         httpd.server_close()
+
+
+# --- part 3 of the brief: the project Settings page and its Accept act ---
+
+
+def _proposal(categories: tuple[str, ...]) -> object:
+    from factory.services.feed_categories import CategoryProposal, CategoryShare
+
+    shares = tuple(
+        CategoryShare(category=c, works=10 - i, share=(10 - i) / 30)
+        for i, c in enumerate(("cs.AI", "cs.CL", "cs.LG"))
+    )
+    return CategoryProposal(
+        categories=categories,
+        shares=shares,
+        core_works=40,
+        with_category=30,
+        covered=0.95,
+        coverage=0.9,
+        minimum=2,
+        maximum=4,
+    )
+
+
+def test_settings_shows_the_proposal_and_no_configuration(
+    served: tuple[int, site_server.MainHub, Scripted], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from factory.services import site_settings
+
+    monkeypatch.setattr(
+        site_settings, "propose_categories", lambda _p: _proposal(("cs.AI", "cs.CL", "cs.LG"))
+    )
+    port, _, _ = served
+    status, page = _req(port, "GET", "/p/demo/settings/")
+    assert status == 200
+    assert "not configured" in page
+    assert "cs.AI" in page and "cs.CL" in page and "cs.LG" in page
+    assert "95%" in page and "of the 30 works" in page and "40 core works" in page
+    assert "data-categories='cs.AI,cs.CL,cs.LG'" in page
+    assert "name='factory-api' content='/p/demo'" in page and "factory-token" in page
+    assert _req(port, "GET", "/p/demo/settings")[0] == 200
+
+
+def test_settings_with_an_empty_proposal_offers_no_accept(
+    served: tuple[int, site_server.MainHub, Scripted], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from factory.services import site_settings
+
+    monkeypatch.setattr(site_settings, "propose_categories", lambda _p: _proposal(()))
+    port, _, _ = served
+    page = _req(port, "GET", "/p/demo/settings/")[1]
+    assert "no proposal" in page and "data-act='accept'" not in page
+
+
+def test_accept_writes_feed_configured_as_the_human_with_the_project_token(
+    served: tuple[int, site_server.MainHub, Scripted], project: Project, two: Project
+) -> None:
+    from factory.services.feed import current_config
+
+    port, _, _ = served
+    page = _req(port, "GET", "/p/demo/settings/")[1]
+    token = _meta_token(page)
+    body = {"categories": ["cs.AI", "cs.CL"]}
+    assert _req(port, "POST", "/p/demo/api/feed/configure", body, None)[0] == 403
+    other_token = _meta_token(_req(port, "GET", "/p/other/settings/")[1])
+    assert _req(port, "POST", "/p/demo/api/feed/configure", body, other_token)[0] == 403
+    assert current_config(project) is None
+    assert _req(port, "POST", "/p/demo/api/feed/configure", body, token)[0] == 200
+    config = current_config(project)
+    assert config is not None and config.categories == ("cs.AI", "cs.CL")
+    assert current_config(two) is None
+    events = [
+        ev
+        for ev in read_all(project.paths.events_dir, project.catalog)
+        if ev.type == "feed.configured"
+    ]
+    assert len(events) == 1 and events[0].actor.kind == "human"
+
+
+def test_a_second_accept_keeps_the_other_settings_of_the_configuration(
+    served: tuple[int, site_server.MainHub, Scripted], project: Project, clock: FixedClock
+) -> None:
+    from datetime import timedelta
+
+    from factory.services.feed import configure, current_config
+
+    port, _, _ = served
+    configure(project, project.human_actor(), {"categories": ["cs.AI"], "shown_per_cycle": 7})
+    clock.advance(timedelta(seconds=5))  # event ids order by time: the later act must sort later
+    token = _meta_token(_req(port, "GET", "/p/demo/settings/")[1])
+    assert (
+        _req(port, "POST", "/p/demo/api/feed/configure", {"categories": ["cs.LG"]}, token)[0] == 200
+    )
+    config = current_config(project)
+    assert config is not None
+    assert config.categories == ("cs.LG",) and config.shown_per_cycle == 7
+    page = _req(port, "GET", "/p/demo/settings/")[1]
+    assert "cs.LG" in page and "shown per cycle" in page and "7" in page
+
+
+@pytest.mark.parametrize(
+    "body", [{}, {"categories": []}, {"categories": "cs.AI"}, {"categories": ["not a category"]}]
+)
+def test_a_bad_accept_is_refused_and_writes_nothing(
+    served: tuple[int, site_server.MainHub, Scripted], project: Project, body: dict[str, object]
+) -> None:
+    port, _, _ = served
+    token = _meta_token(_req(port, "GET", "/p/demo/settings/")[1])
+    assert _req(port, "POST", "/p/demo/api/feed/configure", body, token)[0] == 400
+    assert not [
+        ev
+        for ev in read_all(project.paths.events_dir, project.catalog)
+        if ev.type == "feed.configured"
+    ]
+
+
+def test_the_act_refuses_a_non_human_actor(project: Project) -> None:
+    """The guard is the service's: the page's act cannot be made as the system."""
+    from factory.errors import FactoryValidationError
+    from factory.services.feed import configure
+
+    with pytest.raises(FactoryValidationError):
+        configure(project, project.system_actor(), {"categories": ["cs.AI"]})
+
+
+def test_the_single_project_server_has_a_settings_page_too(project: Project) -> None:
+    httpd, _ = site_server.make_server(project, 0, background=False)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        status, page = _req(httpd.server_address[1], "GET", "/settings/")
+        assert status == 200 and "name='factory-api' content=''" in page
+    finally:
+        httpd.shutdown()
+        httpd.server_close()

@@ -61,7 +61,7 @@ from factory.services import pipeline as pipeline_service
 from factory.services import resume as resume_service
 from factory.services import runner as runner_service
 from factory.services import site as site_service
-from factory.services import site_hub_feed, site_portal, work_layers, work_queue
+from factory.services import site_hub_feed, site_portal, site_settings, work_layers, work_queue
 from factory.services.access import authorize_command
 from factory.services.context import Project
 from factory.sources.fulltext.registry import default_routes
@@ -179,6 +179,35 @@ def feed_add(project: Project, body: dict[str, Any]) -> tuple[int, dict[str, obj
     except FactoryError as exc:
         return 403, _issues(ValidationIssue("permission", str(exc)))
     return 200, {"ok": True, **result.model_dump(mode="json")}
+
+
+def feed_configure(project: Project, body: dict[str, Any]) -> tuple[int, dict[str, object]]:
+    """Record the feed configuration with these categories as the local human (the Settings page's
+    Accept). The other settings of the current configuration are kept. Refusals write nothing."""
+    categories = body.get("categories")
+    bad: list[ValidationIssue] = []
+    if (
+        not isinstance(categories, list)
+        or not categories
+        or not all(isinstance(c, str) for c in categories)
+    ):
+        bad.append(ValidationIssue("categories", "must be a non-empty list of strings"))
+    if bad:
+        return 400, _issues(*bad)
+    assert isinstance(categories, list)
+    try:
+        actor = project.human_actor()
+        authorize_command(project, project.principal, "cli:feed configure")
+        current = feed_service.current_config(project)
+        kept: dict[str, object] = (
+            {} if current is None else current.model_dump(mode="json", exclude={"config_id"})
+        )
+        event_id = feed_service.configure(project, actor, {**kept, "categories": tuple(categories)})
+    except FactoryValidationError as exc:
+        return 400, _issues(*exc.issues)
+    except FactoryError as exc:
+        return 403, _issues(ValidationIssue("permission", str(exc)))
+    return 200, {"ok": True, "event_id": event_id, "categories": categories}
 
 
 class ResumeRunner:
@@ -364,6 +393,7 @@ def layers_payload(project: Project) -> dict[str, object]:
 _ROUTES: Final[dict[str, Callable[..., tuple[int, dict[str, object]]]]] = {
     "/api/feed/react": feed_react,
     "/api/feed/add": feed_add,
+    "/api/feed/configure": feed_configure,
     "/api/queue/process": queue_process,
     "/api/queue/resume": queue_resume,
     "/api/mine/work": mine_work,
@@ -464,6 +494,12 @@ def project_token(secret: bytes, slug: str) -> str:
     return hmac.new(secret, slug.encode(), "sha256").hexdigest()
 
 
+def _with_meta(text: str, token: str, prefix: str) -> str:
+    """`text` with the token and API-prefix `<meta>` tags after `<head>` (an action page's)."""
+    meta = _TOKEN_META.format(token) + _API_META.format(prefix)
+    return text.replace("<head>", "<head>" + meta, 1) if "<head>" in text else meta + text
+
+
 def _handler_class(
     resolve: Callable[[str], Mount | None],
     secret: bytes,
@@ -552,16 +588,19 @@ def _handler_class(
                 return
             slot = mount.slot
             url = mount.rel.split("?", 1)[0].split("#", 1)[0]
+            if url in ("/settings", "/settings/"):
+                self._html(
+                    _with_meta(
+                        site_settings.render_settings(slot.project, slot.slug),
+                        project_token(secret, slot.slug),
+                        mount.prefix,
+                    )
+                )
+                return
             page = self._feed_page(url, slot)
             if page is not None:
                 text = page.read_text(encoding="utf-8")
-                meta = _TOKEN_META.format(project_token(secret, slot.slug)) + _API_META.format(
-                    mount.prefix
-                )
-                text = (
-                    text.replace("<head>", "<head>" + meta, 1) if "<head>" in text else meta + text
-                )
-                self._html(text)
+                self._html(_with_meta(text, project_token(secret, slot.slug), mount.prefix))
                 return
             if mount.prefix and url in ("/", "/index.html"):
                 hub = slot.root / "index.html"
@@ -655,7 +694,7 @@ def _handler_class(
                 return
             assert slot is not None and route is not None
             project = slot.project
-            if route in (feed_react, mine_work, mine_layer, move_layer):
+            if route in (feed_react, feed_configure, mine_work, mine_layer, move_layer):
                 with slot.write_lock:
                     code, payload = route(project, body)
             elif route is queue_resume:
