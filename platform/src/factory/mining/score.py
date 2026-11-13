@@ -8,6 +8,13 @@ Definitions (per unit, rows matched by `row_key`):
 - field agreement: over the matched rows, the compared fields on which gold and agent agree (plan
   D's `same_field` rule: normalised value, unit, `reported_in`, `reproduced`), over the compared
   fields present in either row (a field one side omits disagrees);
+- unmatched slots (IDEA-69 (2)): per unit, the larger of its unmatched gold rows and unmatched
+  agent rows; two rows with different keys on one unit (the passes chose different categories)
+  are one slot, not two;
+- field agreement over all rows: the agreed fields over the compared fields of the matched rows
+  plus the unmatched ones: per unit, the larger of the compared fields present in its unmatched
+  gold rows and in its unmatched agent rows (they never agree). It equals field agreement when
+  every row matches;
 - precision: matched rows over agent rows (extra agent rows lower it; it is reported, never gated,
   as specificity, R-31);
 - verification rate: rows the platform accepted over rows the calibration pass submitted (given by
@@ -46,6 +53,8 @@ class CalibrationScore:
     field_agreement: float | None
     precision: float | None
     verification_rate: float | None
+    unmatched: int = 0
+    field_agreement_all: float | None = None
 
 
 def _ratio(numerator: int, denominator: int) -> float | None:
@@ -54,6 +63,11 @@ def _ratio(numerator: int, denominator: int) -> float | None:
 
 def _compared(pack: Pack) -> tuple[str, ...]:
     return pack.compared_fields or tuple(f.name for f in pack.fields)
+
+
+def _present(rows: Sequence[ScoredRow], names: Sequence[str]) -> int:
+    """The compared fields present over `rows`."""
+    return sum(name in row.fields for row in rows for name in names)
 
 
 def score(
@@ -73,8 +87,16 @@ def score(
     matched = 0
     compared = 0
     equal = 0
+    unmatched = 0
+    missed = 0
     for work, wanted in gold.items():
-        found = {row.row_key: row for row in agent.get(work, ())}
+        offered = agent.get(work, ())
+        found = {row.row_key: row for row in offered}
+        keys = {row.row_key for row in wanted}
+        lone_gold = [row for row in wanted if row.row_key not in found]
+        lone_agent = [row for row in offered if row.row_key not in keys]
+        unmatched += max(len(lone_gold), len(lone_agent))
+        missed += max(_present(lone_gold, names), _present(lone_agent, names))
         for row in wanted:
             other = found.get(row.row_key)
             if other is None:
@@ -93,6 +115,8 @@ def score(
         matched=matched,
         recall=_ratio(matched, gold_rows),
         field_agreement=_ratio(equal, compared),
+        unmatched=unmatched,
+        field_agreement_all=_ratio(equal, compared + missed),
         precision=_ratio(matched, agent_rows),
         verification_rate=(
             None if verified is None or submitted is None else _ratio(verified, submitted)

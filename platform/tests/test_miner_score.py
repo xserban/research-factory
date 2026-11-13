@@ -244,3 +244,61 @@ def test_report_replays(project: Project, agent: Actor, human: Actor, world: lis
 
 
 _ = FieldInput
+
+
+# --- IDEA-68: a unit on a field kind that carries none is ignored; absent equals "none" ---
+
+
+def test_unit_on_enum_and_quote_fields_is_ignored() -> None:
+    noisy = GoldRow(
+        row_key="rk_000000000001",
+        fields={
+            "metric": _field("Lorem", unit="none"),
+            "value": _field("1", canonical="1"),
+            "direction": _field("higher", unit="none"),
+        },
+    )
+    result = score({"w1": GOLD["w1"]}, {"w1": (noisy,)}, PACK)
+    assert result.field_agreement == 1.0
+
+
+def test_unit_still_compared_on_number_fields_but_none_equals_absent() -> None:
+    def valued(unit: str | None) -> GoldRow:
+        return GoldRow(
+            row_key="rk_000000000001",
+            fields={"value": _field("1", canonical="1", unit=unit)},
+        )
+
+    assert score({"w1": (valued("%"),)}, {"w1": (valued("fraction"),)}, PACK).field_agreement == 0
+    assert score({"w1": (valued(None),)}, {"w1": (valued("none"),)}, PACK).field_agreement == 1.0
+    assert score({"w1": (valued(None),)}, {"w1": (valued("None"),)}, PACK).field_agreement == 1.0
+
+
+def test_unitless_kinds_of_the_compiled_pack() -> None:
+    from factory.services.extraction_agreement import carries_unit
+
+    assert carries_unit(PACK.field("value"))
+    assert not carries_unit(PACK.field("direction"))  # enum
+    assert not carries_unit(PACK.field("metric"))  # quote
+    assert carries_unit(None)  # an undeclared field keeps the strict rule
+
+
+# --- IDEA-69 (2): unmatched rows count against the rate over all rows ---
+
+
+def test_unmatched_rows_count_against_the_rate_over_all_rows() -> None:
+    # A layer-style miner: one compared field, rows keyed on the category. The agent chose a
+    # different single value on one work of two: one aligned row, one unmatched slot.
+    gold = {"w1": (_row("rk_00000000000a"),), "w2": (_row("rk_00000000000b"),)}
+    agent = {"w1": (_row("rk_00000000000a"),), "w2": (_row("rk_00000000000c"),)}
+    result = score(gold, agent, PACK)
+    assert result.field_agreement == 1.0  # over aligned rows only, as before
+    assert result.unmatched == 1
+    # 3 compared fields agreed on w1; w2's slot adds 3 compared fields that do not agree.
+    assert result.field_agreement_all == pytest.approx(3 / 6)
+
+
+def test_rate_over_all_rows_equals_aligned_rate_when_everything_aligns() -> None:
+    result = score(GOLD, GOLD, PACK)
+    assert result.unmatched == 0 and result.field_agreement_all == 1.0
+    assert score({}, {}, PACK).field_agreement_all is None

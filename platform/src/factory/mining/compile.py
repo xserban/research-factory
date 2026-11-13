@@ -66,14 +66,20 @@ def _field_def(f: MinerField) -> FieldDef:
     if isinstance(kind, QuoteKind | CitationKind):
         return FieldDef(f.name, f.group, FieldKind.TEXT, none, Check.TEXT_IN_QUOTE)
     if isinstance(kind, AnchorKindRef):
-        return FieldDef(f.name, f.group, FieldKind.TEXT, none, Check.NONE)
+        return FieldDef(f.name, f.group, FieldKind.TEXT, none, Check.NONE, unitless=True)
     if isinstance(kind, WorkRefKind):
         if kind.by == "entry":
-            return FieldDef(f.name, f.group, FieldKind.INTEGER, none, Check.NONE)
+            return FieldDef(f.name, f.group, FieldKind.INTEGER, none, Check.NONE, unitless=True)
         return FieldDef(f.name, f.group, FieldKind.TEXT, none, Check.TEXT_IN_QUOTE)
     return FieldDef(
         f.name, f.group, FieldKind(kind.kind), none, Check.NONE, normaliser=kind.normaliser
     )
+
+
+def keyed_on_work(spec: MinerSpec) -> bool:
+    """Whether `spec` keys each row on its work: a derived miner (taxonomy reference) that
+    declares no row key fields (one single dimension, `derive_miner`; IDEA-69 (1))."""
+    return spec.taxonomy is not None and not spec.row_key_fields
 
 
 def compile_miner(spec: MinerSpec) -> Pack:
@@ -101,6 +107,7 @@ def compile_miner(spec: MinerSpec) -> Pack:
         row_key_fields=spec.row_key_fields,
         row_anchor_fields=spec.row_anchor_fields,
         compared_fields=None if len(compared) == len(spec.fields) else compared,
+        row_per_work=keyed_on_work(spec),
         report=spec.report,
     )
 

@@ -50,6 +50,10 @@ class FieldDef:
     units: tuple[str, ...] = ()
     normaliser: str | None = None
     allowed: tuple[str, ...] = ()
+    unitless: bool = field(default=False, repr=False)
+    """True when the kind carries no unit (an anchor, a reference-list entry); agreement then
+    ignores any unit written into the field (IDEA-68). Outside repr, so pinned pack digests
+    (`repr`) are unchanged."""
 
 
 @dataclass(frozen=True)
@@ -92,8 +96,9 @@ class Pack:
     ``conditionals`` make fields required or forbidden by the value of another field.
     ``row_key_fields`` non-empty makes the row key a hash of those fields' normalised values and
     the anchor of the first present field of ``row_anchor_fields``; empty keeps the plan-D key
-    (the location of the field ``value``). ``compared_fields`` are the fields dual extraction
-    compares; None means every declared field.
+    (the location of the field ``value``), unless ``row_per_work``, which keys every row on its
+    conversion alone (one row per work: a derived miner of one single dimension, IDEA-69 (1)).
+    ``compared_fields`` are the fields dual extraction compares; None means every declared field.
     """
 
     name: str
@@ -106,6 +111,8 @@ class Pack:
     row_key_fields: tuple[str, ...] = ()
     row_anchor_fields: tuple[str, ...] = ()
     compared_fields: tuple[str, ...] | None = None
+    row_per_work: bool = field(default=False, repr=False)
+    """Outside repr, so pinned pack digests (`repr`) are unchanged; no built-in pack sets it."""
     report: ReportSpec | None = field(default=None, repr=False, compare=False, hash=False)
     """Derivation-only report spec (plan E ruling 15): outside repr, equality and the digest."""
 

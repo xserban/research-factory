@@ -63,6 +63,7 @@ from factory.model.extraction import (
 from factory.model.protocol import ExtractionSchema
 from factory.model.screening import Channel, PassLabel
 from factory.packs import NON_COMPARABLE_KEYS, FieldDef, FieldKind, Pack, UnitFamily
+from factory.packs.model import Check
 from factory.services.call_memo import memoised
 from factory.services.context import Project
 from factory.services.document_read import default_conversion
@@ -184,6 +185,9 @@ class ExtractionAgreement(StrictModel):
     rows_unmatched: int
     rates: list[GroupRate]
     overall: float | None
+    unmatched_slots: int = 0
+    overall_all_rows: float | None = None
+    """`overall` with the unmatched rows counted against it (IDEA-69 (2), see `_tally`)."""
     disagreements: list[FieldDisagreement]
     """Unresolved disagreements only."""
     resolved: int
@@ -192,13 +196,16 @@ class ExtractionAgreement(StrictModel):
 
 
 class AgreementOverall(StrictModel):
-    """`overall` = agreed / compared field values of the `rows_aligned` aligned rows."""
+    """`overall` = agreed / compared field values of the `rows_aligned` aligned rows;
+    `overall_all_rows` counts the unmatched rows against it as well (IDEA-69 (2))."""
 
     overall: float | None
     dual: int
     single: int
     rows_aligned: int
     rows_unmatched: int
+    unmatched_slots: int = 0
+    overall_all_rows: float | None = None
 
 
 class FinalField(StrictModel):
@@ -282,9 +289,35 @@ def _view(f: StoredField, extraction_id: str) -> FieldView:
     )
 
 
-def _normalised(definition: FieldDef | None, f: StoredField) -> tuple[str, str]:
-    """The (value, unit) a field is compared and grouped by. Never the raw text of a number."""
+NO_UNIT_TEXT = "none"
+"""A unit written as this text (after normalisation) is the same as no unit (IDEA-68)."""
+
+
+def carries_unit(definition: FieldDef | None) -> bool:
+    """Whether a field's unit is part of its answer. An enum (`allowed`), a quote checked
+    against its evidence (quote, citation, work reference by title) and a field declared
+    `unitless` (anchor, work reference by entry) carry none; an undeclared field and every
+    other kind (numbers included) keep comparing the unit (IDEA-68)."""
+    if definition is None:
+        return True
+    return not (
+        definition.unitless or definition.allowed or definition.check is Check.TEXT_IN_QUOTE
+    )
+
+
+def _unit(definition: FieldDef | None, f: StoredField) -> str:
+    """The normalised unit a field is compared by: empty for a kind that carries none, and for
+    an absent unit or the text `none`."""
+    if not carries_unit(definition):
+        return ""
     unit = normalise_text(f.unit or "")
+    return "" if unit == NO_UNIT_TEXT else unit
+
+
+def _normalised(definition: FieldDef | None, f: StoredField) -> tuple[str, str]:
+    """The (value, unit) a field is compared and grouped by. Never the raw text of a number.
+    The unit is `_unit`'s: ignored where the kind carries none, absent equal to `none`."""
+    unit = _unit(definition, f)
     if definition is None:
         return normalise_text(str(f.value)), unit
     if definition.kind in (FieldKind.NUMBER, FieldKind.INTEGER) and f.canonical is not None:
@@ -735,12 +768,40 @@ class _Tally:
     overall: float | None
     rows_aligned: int
     rows_unmatched: int
+    unmatched_slots: int
+    overall_all_rows: float | None
+
+
+def _present(rows: Sequence[ExtractionRow], names: Collection[str]) -> int:
+    """The compared field values present over `rows`."""
+    return sum(name in row.fields for row in rows for name in names)
+
+
+def _unmatched(state: _State, names: Collection[str]) -> tuple[int, int]:
+    """The unmatched slots and the compared field values they hold (IDEA-69 (2)).
+
+    Per dual work, the non-aligned row keys are split by pass; the work holds as many slots as
+    the larger side has keys (two passes that chose different categories fill one slot, not two)
+    and as many compared values as the larger side's rows hold. None of them agrees."""
+    sides: dict[str, tuple[list[ExtractionRow], list[ExtractionRow], list[int]]] = {}
+    for pair in state.pairs:
+        if not pair.dual or pair.aligned:
+            continue
+        a, b, keys = sides.setdefault(pair.work_id, ([], [], [0, 0]))
+        a.extend(pair.a)
+        b.extend(pair.b)
+        keys[0] += bool(pair.a)
+        keys[1] += bool(pair.b)
+    slots = sum(max(keys) for _, _, keys in sides.values())
+    values = sum(max(_present(a, names), _present(b, names)) for a, b, _ in sides.values())
+    return slots, values
 
 
 def _tally(state: _State) -> _Tally:
     """Per-group and overall agreement over the compared fields of aligned rows, and the row
     counts: aligned pairs, and row keys of dual works that do not align (one pass only, or a
-    pass holding the key twice)."""
+    pass holding the key twice). `overall_all_rows` adds the compared values of the unmatched
+    slots (`_unmatched`) to the denominator: a row only one pass wrote never agrees."""
     groups: dict[str, list[int]] = {}
     compared_fields = set(_compared_fields(state.schema, state.pack))
     for definition in state.pack.fields:
@@ -758,11 +819,14 @@ def _tally(state: _State) -> _Tally:
     ]
     compared = sum(r.compared for r in rates)
     agreed = sum(r.agreed for r in rates)
+    slots, missed = _unmatched(state, compared_fields)
     return _Tally(
         rates=rates,
         overall=agreed / compared if compared else None,
         rows_aligned=sum(p.aligned for p in state.pairs),
         rows_unmatched=sum(p.dual and not p.aligned for p in state.pairs),
+        unmatched_slots=slots,
+        overall_all_rows=agreed / (compared + missed) if compared + missed else None,
     )
 
 
@@ -772,7 +836,8 @@ def agreement_overall(project: Project, *, scope: ScopeKey = Scope.EVIDENCE) -> 
 
     `overall` = agreed / compared field values, where a compared field value is one declared
     field present in either row of an aligned pair (`rows_aligned` pairs of current, live,
-    non-stale rows of dual works); unmatched rows (`rows_unmatched`) are not in the denominator.
+    non-stale rows of dual works); unmatched rows (`rows_unmatched`) are not in its denominator,
+    but are in `overall_all_rows`'s (IDEA-69 (2)).
     `overall` is None while a unit is open or stale, before both passes opened, or when nothing
     is compared. `dual` and `single` are 0 until pass B has opened. It does not check session or
     model independence; `extraction_agreement` does."""
@@ -783,12 +848,15 @@ def agreement_overall(project: Project, *, scope: ScopeKey = Scope.EVIDENCE) -> 
     if state is None:
         return AgreementOverall(overall=None, dual=0, single=0, rows_aligned=0, rows_unmatched=0)
     tally = _tally(state)
+    withheld = state.blocking or not state.known
     return AgreementOverall(
-        overall=None if state.blocking or not state.known else tally.overall,
+        overall=None if withheld else tally.overall,
         dual=len(state.dual),
         single=len(state.single),
         rows_aligned=tally.rows_aligned,
         rows_unmatched=tally.rows_unmatched,
+        unmatched_slots=tally.unmatched_slots,
+        overall_all_rows=None if withheld else tally.overall_all_rows,
     )
 
 
@@ -829,6 +897,8 @@ def extraction_agreement(
         rows_unmatched=tally.rows_unmatched,
         rates=tally.rates,
         overall=tally.overall,
+        unmatched_slots=tally.unmatched_slots,
+        overall_all_rows=tally.overall_all_rows,
         disagreements=[d for p in state.pairs for d in p.open],
         resolved=sum(p.resolved for p in state.pairs),
         dropped=[d for p in state.pairs for d in p.dropped],

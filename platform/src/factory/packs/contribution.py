@@ -43,7 +43,7 @@ CONTRIBUTION_V1 = Pack(
         FieldDef("name", "content", _T, _NONE_U, _TQ),
         FieldDef("statement", "content", _T, _NONE_U, _TQ),
         FieldDef("compared_to", "content", _T, _NONE_U, _TQ),
-        FieldDef("cited_entry", "link", _I, _NONE_U, _NOCHK),
+        FieldDef("cited_entry", "link", _I, _NONE_U, _NOCHK, unitless=True),
         FieldDef("metric", "result", _T, _NONE_U, _TQ),
         FieldDef("value", "result", _N, UnitFamily.SCORE, _NUM, ("%", "fraction", "")),
         FieldDef("result_row", "link", _T, _NONE_U, _NOCHK),

@@ -736,8 +736,9 @@ def miner_listing(project: Project) -> list[MinerListing]:
 
 
 class MineStatus(StrictModel):
-    """One listed miner's units by state and its live rows. `agreement` is the overall agreement
-    of its two passes (None for agents, before both passes finish, or when nothing is compared)."""
+    """One listed miner's units by state and its live rows. `agreement` is the agreement of its
+    two passes over all rows, unmatched rows counted against it (IDEA-69 (2)); None for agents,
+    before both passes finish, or when nothing is compared."""
 
     name: str
     version: int
@@ -748,6 +749,9 @@ class MineStatus(StrictModel):
     rows: int
     stale: int
     agreement: float | None
+    agreement_aligned: float | None = None
+    """`agreement` counts the unmatched rows against the rate (`overall_all_rows`, IDEA-69 (2));
+    `agreement_aligned` is the rate over aligned rows only, as reported before."""
     imported_dual: int = 0
     imported_single: int = 0
     """Imported rows in use, split by whether the source had two agreeing, independent passes."""
@@ -792,10 +796,8 @@ def mine_status(
             if imported and own is None
             else None
         )
-        agreement = (
-            agreement_overall(project, scope=scope).overall
-            if with_agreement and own is None
-            else None
+        overall = (
+            agreement_overall(project, scope=scope) if with_agreement and own is None else None
         )
         out.append(
             MineStatus(
@@ -807,7 +809,8 @@ def mine_status(
                 closed=sum(s.state == "current" for s in states),
                 rows=len([r for r in live if own is None or r.pass_label == own[1]]) + imported,
                 stale=sum(s.state == "stale" for s in states),
-                agreement=agreement,
+                agreement=None if overall is None else overall.overall_all_rows,
+                agreement_aligned=None if overall is None else overall.overall,
                 imported_dual=0 if split is None else split.imported_dual,
                 imported_single=0 if split is None else split.imported_single,
             )

@@ -612,6 +612,8 @@ def test_sample_recorded_with_seed_and_single_extraction_listed(
         single=len(single),
         rows_aligned=len(dual),
         rows_unmatched=0,
+        unmatched_slots=0,
+        overall_all_rows=1.0,
     )
 
 
@@ -959,3 +961,41 @@ def test_model_switch_in_recorded_rows_is_caught(
         extraction_agreement(project, human)
     assert e.value.issues[0].field == "passes"
     assert "model" in e.value.issues[0].reason
+
+
+# --- IDEA-69 (2): unmatched rows count against the rate over all rows ---
+
+
+def test_rate_over_all_rows_counts_unmatched_slots(
+    project: Project, human: Actor, ext_a: Actor, ext_b: Actor, world: list[str]
+) -> None:
+    odd = world[0]
+    # pass B cites another cell on one work: two row keys, one slot, six compared values lost
+    _both(project, ext_a, ext_b, b=lambda w: [_r("2", "t1.r3.c3")] if w == odd else [_r()])
+    ag = extraction_agreement(project, human)
+    n = len(world)
+    assert (ag.rows_aligned, ag.rows_unmatched, ag.unmatched_slots) == (n - 1, 2, 1)
+    assert ag.overall == 1.0
+    assert ag.overall_all_rows == pytest.approx((n - 1) / n)
+    overall = agreement_overall(project)
+    assert (overall.overall_all_rows, overall.unmatched_slots) == (ag.overall_all_rows, 1)
+    from factory.cli.render import agreement_lines
+
+    line = agreement_lines(ag)[1]
+    assert "over all rows" in line and f"aligned {n - 1}" in line and "unmatched slots 1" in line
+
+
+def test_an_extra_row_of_one_pass_is_one_slot(
+    project: Project, human: Actor, ext_a: Actor, ext_b: Actor, world: list[str]
+) -> None:
+    extra = world[0]
+    _both(
+        project,
+        ext_a,
+        ext_b,
+        a=lambda w: [_r(), _r("2", "t1.r3.c3")] if w == extra else [_r()],
+    )
+    ag = extraction_agreement(project, human)
+    n = len(world)
+    assert (ag.unmatched_slots, ag.overall) == (1, 1.0)
+    assert ag.overall_all_rows == pytest.approx(6 * n / (6 * n + 6))

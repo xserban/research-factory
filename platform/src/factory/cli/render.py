@@ -557,9 +557,13 @@ def miner_calibration_lines(report: MinerCalibrationReport) -> list[str]:
         lines.append("score: not computed (waits for every unit to be labelled and mined)")
         return lines
     sc = report.score
-    lines.append(f"gold rows {sc.gold_rows}, agent rows {sc.agent_rows}, matched {sc.matched}")
     lines.append(
-        f"record recall {_rate(sc.recall)}, field agreement {_rate(sc.field_agreement)}, "
+        f"gold rows {sc.gold_rows}, agent rows {sc.agent_rows}, matched {sc.matched}, "
+        f"unmatched {sc.unmatched}"
+    )
+    lines.append(
+        f"record recall {_rate(sc.recall)}, field agreement {_rate(sc.field_agreement)} "
+        f"(over all rows {_rate(sc.field_agreement_all)}), "
         f"precision {_rate(sc.precision)}, verification rate {_rate(sc.verification_rate)}"
     )
     lines.append("result: " + ("passed" if report.passed else "failed"))
@@ -572,7 +576,8 @@ def mine_status_lines(status: list[MineStatus]) -> list[str]:
         return ["no listed miners"]
     return [
         f"{m.name} version {m.version}: units {m.units} (closed {m.closed}, open {m.open}, "
-        f"stale {m.stale}), rows {m.rows}, agreement {_rate(m.agreement)}"
+        f"stale {m.stale}), rows {m.rows}, agreement {_rate(m.agreement)} over all rows "
+        f"({_rate(m.agreement_aligned)} over aligned rows)"
         + (
             f", imported dual {m.imported_dual}, single {m.imported_single}"
             if m.imported_dual or m.imported_single
@@ -607,7 +612,9 @@ def agreement_lines(agreement: ExtractionAgreement) -> list[str]:
         f"dual works {agreement.dual_works}, rows aligned {agreement.rows_aligned}, "
         f"unmatched {agreement.rows_unmatched}, resolved {agreement.resolved}, "
         f"dropped {len(agreement.dropped)}, single-extraction {len(agreement.single_extraction)}",
-        f"overall {_rate(agreement.overall)}",
+        f"overall {_rate(agreement.overall)} over aligned rows; "
+        f"{_rate(agreement.overall_all_rows)} over all rows "
+        f"(aligned {agreement.rows_aligned}, unmatched slots {agreement.unmatched_slots})",
     ]
     lines += [
         f"group {g.group}: {g.agreed}/{g.compared} rate {_rate(g.rate)}" for g in agreement.rates
