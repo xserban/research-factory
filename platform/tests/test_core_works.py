@@ -55,7 +55,7 @@ def test_plan_defaults_keep_current_behaviour_and_hash() -> None:
         {"forward_max_per_work": 0},
         {"forward_topic_filter": "a,b"},
         {"forward_topic_filter": "  "},
-        {"forward_topic_filter": "x" * 301},
+        {"forward_topic_filter": "x" * 1001},
         {"forward_topic_filter": "line\nbreak"},
     ],
 )

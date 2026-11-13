@@ -137,6 +137,7 @@ def test_status_human_output(tmp_path: Path) -> None:
         "pass B: not opened\n"
         "agreement: not available until both passes finish\n"
         "stale decisions: 0\n"
+        "cannot-assess to resolve: title-abstract 0\n"
         "audit: none sampled\n"
         "chase rounds: 0\n"
         "admitted seeds: 0\n"
