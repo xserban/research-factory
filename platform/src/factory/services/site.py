@@ -230,6 +230,12 @@ def _build_lifecycle(project: Project, out: Path) -> None:
     build_lifecycle(project, out)
 
 
+def _build_layers(project: Project, out: Path) -> None:
+    from factory.services.site_layers import build_layers
+
+    build_layers(project, out)
+
+
 def _build_synthesis(project: Project, out: Path) -> None:
     from factory.services.site_synthesis import build_synthesis
 
@@ -355,6 +361,16 @@ def products() -> list[Product]:
             entry="index.html",
             inputs=(*EXPLORER_EVENTS, "work.layer_set"),
             build=_build_lifecycle,
+        ),
+        Product(
+            id="layers",
+            title="Layers",
+            group="Evidence",
+            description="The layer of each work (core, benchmark, applied, adjacent, background, "
+            "off-topic): who set it, the miner or a researcher's move, with counts per layer.",
+            entry="index.html",
+            inputs=(*EXPLORER_EVENTS, "work.layer_set"),
+            build=_build_layers,
         ),
         Product(
             id="synthesis",
