@@ -132,9 +132,9 @@ def _build_dashboard(project: Project, out: Path) -> None:
 
 
 def _build_feed(project: Project, out: Path) -> None:
-    from factory.services.site_feed import build_feed
+    from factory.services.site_feed import build_feed_pointer
 
-    build_feed(project, out)
+    build_feed_pointer(project, out)
 
 
 def _build_queue(project: Project, out: Path) -> None:
@@ -434,11 +434,10 @@ def products() -> list[Product]:
             id="feed",
             title="Daily updates",
             group="Corpus",
-            description="The latest discovery feed ranking: each shown paper with its score, "
-            "whether it explores beyond the core, its nearest core paper, its abstract and its "
-            "reaction. Read-only in this version.",
+            description="The daily updates moved to one page of the main hub, with a tab per "
+            "project: a link to it.",
             entry="index.html",
-            inputs=("feed.%", "inbox.%"),
+            inputs=(),
             build=_build_feed,
         ),
         Product(

@@ -45,7 +45,7 @@ import logging
 import secrets
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Final, NamedTuple
@@ -61,7 +61,7 @@ from factory.services import pipeline as pipeline_service
 from factory.services import resume as resume_service
 from factory.services import runner as runner_service
 from factory.services import site as site_service
-from factory.services import site_portal, work_layers, work_queue
+from factory.services import site_hub_feed, site_portal, work_layers, work_queue
 from factory.services.access import authorize_command
 from factory.services.context import Project
 from factory.sources.fulltext.registry import default_routes
@@ -469,6 +469,8 @@ def _handler_class(
     secret: bytes,
     portal: Callable[[str], tuple[int, str, bytes] | None] | None,
     port_of: Callable[[], int],
+    hub_acts: Mapping[str, Callable[[dict[str, Any]], tuple[int, dict[str, object]]]] | None = None,
+    hub_token: str = "",
 ) -> type[SimpleHTTPRequestHandler]:
     """The request handler. `resolve` maps a URL path to a `Mount` (None: not a project path);
     `portal` answers the paths that belong to no project (status, content type, body) or None."""
@@ -614,13 +616,17 @@ def _handler_class(
             if not self._host_ok() or not self._origin_ok():
                 self._deny(403, "forbidden")
                 return
+            hub_act = (
+                hub_acts.get(self.path.split("?", 1)[0]) if hub_acts and mount is None else None
+            )
             route = None if mount is None else _ROUTES.get(mount.rel.split("?", 1)[0])
-            if mount is None or route is None:
+            if hub_act is None and (mount is None or route is None):
                 self._deny(404, "not found")
                 return
-            slot = mount.slot
+            slot = None if mount is None else mount.slot
+            expected = hub_token if slot is None else project_token(secret, slot.slug)
             sent = self.headers.get(TOKEN_HEADER) or ""
-            if not hmac.compare_digest(sent.encode(), project_token(secret, slot.slug).encode()):
+            if not hmac.compare_digest(sent.encode(), expected.encode()):
                 self._deny(403, "forbidden")
                 return
             kind = (self.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
@@ -643,6 +649,11 @@ def _handler_class(
             if not isinstance(body, dict):
                 self._json(400, _issues(ValidationIssue("body", "must be a JSON object")))
                 return
+            if hub_act is not None:
+                code, payload = hub_act(body)
+                self._json(code, payload)
+                return
+            assert slot is not None and route is not None
             project = slot.project
             if route in (feed_react, mine_work, mine_layer, move_layer):
                 with slot.write_lock:
@@ -766,6 +777,8 @@ class MainHub:
         feed_every: float = FEED_CHECK_EVERY,
     ) -> None:
         self.feed = feed
+        self.secret = secrets.token_bytes(32)
+        """The server's token secret; `make_main_server` may replace it before serving."""
         self._timer = FeedTimer(feed, every=feed_every) if feed is not None and background else None
         self._root = root
         self._slugs = slugs
@@ -846,6 +859,13 @@ class MainHub:
         if path in ("/", "/index.html"):
             page = site_portal.render_portal(self.rows())
             return 200, "text/html; charset=utf-8", page.encode()
+        if path in ("/feed", "/feed/"):
+            if path == "/feed":
+                return 301, "/feed/", b""
+            return 200, "text/html; charset=utf-8", self.feed_page().encode()
+        if path == "/api/feed/runner":
+            body = json.dumps(site_hub_feed.runner_payload(self.feed)).encode()
+            return 200, "application/json; charset=utf-8", body
         if path == "/api/projects":
             body = json.dumps(
                 {"projects": [r._asdict() for r in self.rows()]}, ensure_ascii=False
@@ -856,6 +876,39 @@ class MainHub:
             if slug and self.slot(slug) is not None:
                 return 301, f"{PROJECT_PREFIX}{slug}/", b""
         return None
+
+    def hub_token(self) -> str:
+        """The write token of the hub's own acts (`/api/feed/run`, `/api/feed/refetch`)."""
+        return project_token(self.secret, site_hub_feed.HUB_TOKEN_SLUG)
+
+    def feed_page(self) -> str:
+        """The `/feed/` page, read from every listed project's events at request time."""
+        registry = site_portal.load_registry(self._root)
+        views = []
+        for slug, title in site_portal.listed(self._slugs(), registry):
+            found = self.slot(slug)
+            if found is None:
+                continue
+            views.append(
+                site_hub_feed.collect(found.project, slug, title, project_token(self.secret, slug))
+            )
+        return site_hub_feed.render_feed_page(
+            views, site_hub_feed.runner_payload(self.feed), self.hub_token()
+        )
+
+    def start_feed_run(self, *, refetch: bool) -> tuple[int, dict[str, object]]:
+        """Start one feed run for every project (the hub acts); one at a time."""
+        if self.feed is None:
+            return 503, _issues(ValidationIssue("feed", "the feed runner is off"))
+        if not self.feed.start(refetch=refetch):
+            return 409, _issues(ValidationIssue("feed", "a feed run is already in progress"))
+        return 202, {"ok": True, "started": True, "refetch": refetch}
+
+    def acts(self) -> dict[str, Callable[[dict[str, Any]], tuple[int, dict[str, object]]]]:
+        return {
+            "/api/feed/run": lambda _body: self.start_feed_run(refetch=False),
+            "/api/feed/refetch": lambda _body: self.start_feed_run(refetch=True),
+        }
 
     def start_feed(self) -> None:
         """Start the feed timer (a due run now, then every `feed_every` seconds), if any."""
@@ -877,12 +930,16 @@ def make_main_server(
     write token, so a token from one project's pages writes to no other."""
     hub.prepare_all()
     hub.start_feed()
+    if secret is not None:
+        hub.secret = secret
     holder: list[ThreadingHTTPServer] = []
     handler = _handler_class(
         hub.resolve,
-        secret or secrets.token_bytes(32),
+        hub.secret,
         hub.portal,
         lambda: holder[0].server_address[1],
+        hub.acts(),
+        hub.hub_token(),
     )
     httpd = ThreadingHTTPServer((HOST, port), handler)
     holder.append(httpd)
