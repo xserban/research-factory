@@ -74,7 +74,7 @@ def test_units_exclude_production_mined_units(
     worker = miner_actor(SESSION_M1, "claude-opus-5-5")
     mined = []
     for _ in range(3):
-        batch = mine_next(project, worker, VISION_NAME, 1, PassLabel.A).batch
+        batch = mine_next(project, worker, VISION_NAME, 1, PassLabel.A, exploratory=True).batch
         assert batch is not None
         mine_record(project, worker, batch.task_id, [mine_row()], finish=True)
         mined.append(batch.records[0]["work_id"])

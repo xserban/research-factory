@@ -76,12 +76,12 @@ def test_retired_miner_refuses_tasks_keeps_rows(
 ) -> None:
     list_miner(project, agent)
     worker = miner_actor(SESSION_M1, "claude-opus-5-5")
-    batch = mine_next(project, worker, VISION_NAME, 1, A).batch
+    batch = mine_next(project, worker, VISION_NAME, 1, A, exploratory=True).batch
     assert batch is not None
     mine_record(project, worker, batch.task_id, [mine_row()], finish=True)
     retire_miner(project, agent, VISION_NAME, 1, "retired mid-run")
     with pytest.raises(FactoryValidationError) as raised:
-        mine_next(project, worker, VISION_NAME, 1, A)
+        mine_next(project, worker, VISION_NAME, 1, A, exploratory=True)
     assert raised.value.issues[0].field == "miner"
     assert len(live_rows(project, scope=MinerScope(VISION_NAME))) == 1  # the rows stay
 
@@ -89,7 +89,7 @@ def test_retired_miner_refuses_tasks_keeps_rows(
 def test_retired_miner_refuses_records(project: Project, agent: Actor, world: list[str]) -> None:
     list_miner(project, agent)
     worker = miner_actor(SESSION_M1, "claude-opus-5-5")
-    batch = mine_next(project, worker, VISION_NAME, 1, A).batch
+    batch = mine_next(project, worker, VISION_NAME, 1, A, exploratory=True).batch
     assert batch is not None
     retire_miner(project, agent, VISION_NAME, 1, "retired mid-task")
     with pytest.raises(FactoryValidationError) as raised:

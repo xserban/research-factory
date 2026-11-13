@@ -244,6 +244,7 @@ class MineBatchContent(ExtractBatchContent):
     digest: str
     anchors: tuple[str, ...]
     calibration_id: str | None = None
+    exploratory: bool = False
     field_kinds: dict[str, str] = Field(default_factory=dict)
     descriptions: dict[str, str] = Field(default_factory=dict)
 

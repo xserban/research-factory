@@ -590,6 +590,26 @@ def _kind_note(kind: object) -> str:
     return "free text"
 
 
+def _require_calibrated(project: Project, name: str, version: int) -> None:
+    """Refuse (field `calibration`) a production pass of a version whose calibration has not
+    passed. The message names the version and the exploratory way; no threshold is named."""
+    from factory.services.miners import MinerState, miner_state  # it imports this module
+
+    state = miner_state(project, name, version)
+    if state is MinerState.CALIBRATED:
+        return
+    raise FactoryValidationError(
+        [
+            ValidationIssue(
+                "calibration",
+                f"miner {name} version {version} has no passed calibration (state: {state.value}); "
+                "draw and pass one first, or run the pass exploratory (exploratory=true, no "
+                "quality claim)",
+            )
+        ]
+    )
+
+
 def mine_next(
     project: Project,
     actor: Actor,
@@ -598,6 +618,7 @@ def mine_next(
     label: PassLabel,
     *,
     calibration: bool = False,
+    exploratory: bool = False,
 ) -> ExtractNext:
     """Serve the next task of pass `label` of the listed miner `(name, version)`: `next_unit` with
     the miner's scope and a content hook that adds the miner, its digest, the anchors its selector
@@ -611,11 +632,21 @@ def mine_next(
     pass; a production call is refused likewise to a session that served calibration tasks. Field
     `calibration` when none is drawn, field `pass` for a calibration pass B.
 
+    A production call (no `calibration`) is refused on field `calibration` unless the version's
+    calibration has passed (IDEA-69 (3)): mining first consumes the units a calibration would be
+    drawn from. `exploratory=True` runs it anyway, with no quality claim; the task content carries
+    `exploratory`, so the mark is on the task and no event type or field changes. `exploratory`
+    with `calibration` is refused on field `exploratory`.
+
     Refused, with nothing written, on field `miners` until the protocol lists that registered
     version, and as `next_unit` refuses otherwise."""
     _, _, spec = require_listed(project, name, version)
     require_not_retired(project, name, version)
     calibration_id: str | None = None
+    if calibration and exploratory:
+        raise FactoryValidationError(
+            [ValidationIssue("exploratory", "a calibration pass is not an exploratory run")]
+        )
     if calibration:
         from factory.services.miner_independence import require_calibration_pass
 
@@ -630,6 +661,8 @@ def mine_next(
         from factory.services.miner_independence import require_production_pass
 
         require_production_pass(project, actor, name)
+        if not exploratory:
+            _require_calibrated(project, name, version)
     reopened: frozenset[str] = frozenset()
     if not calibration:
         from factory.services.shared_mining import reopened_works  # it imports this module
@@ -656,6 +689,7 @@ def mine_next(
             digest=digest,
             anchors=anchors,
             calibration_id=calibration_id,
+            exploratory=exploratory,
             field_kinds=notes,
             descriptions=described,
         )

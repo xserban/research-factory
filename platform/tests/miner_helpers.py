@@ -139,7 +139,7 @@ def mine_pass(
     the works mined."""
     done: list[str] = []
     for _ in range(100):
-        batch = mine_next(project, actor, name, version, label).batch
+        batch = mine_next(project, actor, name, version, label, exploratory=True).batch
         if batch is None:
             return done
         work = batch.records[0]["work_id"]
