@@ -224,6 +224,12 @@ def _build_taxonomy(project: Project, out: Path) -> None:
     build_taxonomy(project, out)
 
 
+def _build_lifecycle(project: Project, out: Path) -> None:
+    from factory.services.site_lifecycle import build_lifecycle
+
+    build_lifecycle(project, out)
+
+
 def _build_synthesis(project: Project, out: Path) -> None:
     from factory.services.site_synthesis import build_synthesis
 
@@ -338,6 +344,17 @@ def products() -> list[Product]:
             inputs=EXPLORER_EVENTS,
             build=_build_taxonomy,
             version=1,
+        ),
+        Product(
+            id="lifecycle",
+            title="Lifecycle",
+            group="Evidence",
+            description="The stages of AI research systems as a clickable flow: which stages the "
+            "works automate, which they cover together, and each paper's own stages in its own "
+            "order; every stage and paper links to its quotes.",
+            entry="index.html",
+            inputs=(*EXPLORER_EVENTS, "work.layer_set"),
+            build=_build_lifecycle,
         ),
         Product(
             id="synthesis",
