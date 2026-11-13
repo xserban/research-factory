@@ -42,6 +42,7 @@ class PortalRow(NamedTuple):
     stale: int
     built: int
     hub_ready: bool
+    building: bool = False
 
 
 def load_registry(root: Path) -> dict[str, Entry]:
@@ -98,7 +99,9 @@ def render_portal(rows: list[PortalRow]) -> str:
     cards = []
     for r in rows:
         state = (
-            "<span class=warn>hub not built</span>"
+            "<span class=warn>rebuilding</span>"
+            if r.building
+            else "<span class=warn>hub not built</span>"
             if not r.hub_ready
             else (
                 f"<span class=warn>{r.stale} to rebuild</span>"

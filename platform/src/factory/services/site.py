@@ -524,6 +524,14 @@ def _read_manifest(project: Project) -> dict[str, dict[str, str | None]]:
     return loaded if isinstance(loaded, dict) else {}
 
 
+def built_count(project: Project) -> int:
+    """How many products the manifest records as built, read without any lock: it never waits
+    for a rebuild (a half-written manifest reads as empty)."""
+    return sum(
+        1 for v in _read_manifest(project).values() if isinstance(v, dict) and v.get("built_at")
+    )
+
+
 def _write_manifest(project: Project, manifest: dict[str, dict[str, str | None]]) -> None:
     root = site_dir(project)
     root.mkdir(parents=True, exist_ok=True)

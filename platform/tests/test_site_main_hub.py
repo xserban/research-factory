@@ -242,3 +242,20 @@ def test_a_remote_host_is_refused_on_the_portal_too(
 ) -> None:
     port, _ = served
     assert _get(port, "/", {"Host": "evil.example"})[0] == 403
+
+
+def test_the_portal_answers_while_a_project_is_rebuilding(
+    served: tuple[int, site_server.MainHub],
+) -> None:
+    """A rebuild holds the rebuilder's lock for minutes; the portal must not wait for it."""
+    port, hub = served
+    slot = hub.slot("demo")
+    assert slot is not None
+    with slot.rebuilder._lock:  # what `rebuild_if_stale` holds while it builds
+        status, _, body = _get(port, "/")
+        listing = json.loads(_get(port, "/api/projects")[2])
+    assert status == 200 and "rebuilding" in body
+    demo = next(p for p in listing["projects"] if p["slug"] == "demo")
+    assert demo["building"] is True
+    other = next(p for p in listing["projects"] if p["slug"] == "other")
+    assert other["building"] is False

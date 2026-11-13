@@ -396,6 +396,15 @@ class Rebuilder:
         with self._lock:
             return site_service.status(self._project)
 
+    def try_statuses(self) -> list[site_service.ProductStatus] | None:
+        """The statuses, or None at once when a rebuild holds the lock (it can take minutes)."""
+        if not self._lock.acquire(blocking=False):
+            return None
+        try:
+            return site_service.status(self._project)
+        finally:
+            self._lock.release()
+
     def rebuild_if_stale(self) -> list[str]:
         """Build the stale products now (ignoring `min_gap`); returns the ids built."""
         with self._lock:
@@ -747,15 +756,21 @@ class MainHub:
                 continue
             with found.project.index.connect() as conn:
                 events = int(conn.execute(text("SELECT COUNT(*) FROM events")).scalar_one())
-            states = found.rebuilder.statuses()
+            # never wait for a rebuild: it holds the rebuilder's lock for minutes
+            tried = found.rebuilder.try_statuses()
+            building = tried is None
+            states = tried or []
             out.append(
                 site_portal.PortalRow(
                     slug=slug,
                     title=title,
                     events=events,
                     stale=sum(s.stale or s.error is not None for s in states),
-                    built=sum(s.built for s in states),
+                    built=site_service.built_count(found.project)
+                    if building
+                    else sum(s.built for s in states),
                     hub_ready=(found.root / "index.html").is_file(),
+                    building=building,
                 )
             )
         return out

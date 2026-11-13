@@ -320,7 +320,10 @@ def build_backlog(project: Project, out: Path) -> None:
         return
     ideas = classify(parse_backlog(path.read_text(encoding="utf-8")))
     stamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
-    data = json.dumps({"ideas": ideas, "built": stamp, "notes": area_notes(path.read_text(encoding="utf-8"))}, ensure_ascii=False).replace("</", "<\\/")
+    data = json.dumps(
+        {"ideas": ideas, "built": stamp, "notes": area_notes(path.read_text(encoding="utf-8"))},
+        ensure_ascii=False,
+    ).replace("</", "<\\/")
     body = (
         "<h1>Backlog board</h1>"
         "<p class=legend-note>Every idea of <code>docs/backlog.md</code> (read from "
