@@ -91,7 +91,7 @@ def lifecycle_data(
         )
     )
     return {
-        "stages": [{"id": i, "name": n} for i, n in STAGES],
+        "stages": [{"id": i, "name": f.get("stage_name", ("", "", ""))[0] or f.get("stage_name", ("", "", ""))[1],
         "modes": list(MODES),
         "layers": [{"id": k, "n": v} for k, v in known],
         "works": out,
