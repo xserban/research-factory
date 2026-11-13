@@ -21,10 +21,14 @@ The map of a whole run. It records nothing: it says where to look and which skil
 | `protocol` | The protocol is not ready, or PRESS is not confirmed | `rf-protocol` |
 | `search` | No complete search run | `search_run`, then `dedup_run` |
 | `ta-screening` | Works wait at title and abstract | `rf-screen` |
-| `full-text` | Works wait for retrieval or a full-text outcome | `fulltext_fetch`, `rf-screen` |
+| `full-text` | Works wait for retrieval or a full-text outcome | `library_adoptable`, `library_adopt`, `fulltext_fetch`, `rf-screen` |
 | `extraction` | Extraction units or disagreements are open | `rf-extract`, `rf-mine`, `rf-contributions` |
 | `snowballing` | The stopping rule has not stopped the rounds | `rf-references`, `rf-search` |
 | `reporting` | Nothing above is open | the reports below, then `rf-lineage`, `rf-write` |
+
+At `full-text`, read `library_adoptable` for a work before fetching it: when another project of the
+lab already holds its document, adopt that copy with `library_adopt` instead of fetching again,
+passing the row's `source_project` and its `document_id` as `source_doc`.
 
 `stage` is null in a session that has joined a pass: that session follows its own skill and its
 own batches only.

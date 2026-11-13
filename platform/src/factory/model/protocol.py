@@ -68,6 +68,7 @@ _SORT_KEYS: dict[str, tuple[str, ...]] = {
     "limits": ("field", "value"),
     "library_sources": ("name", "format", "role"),
     "miners": ("name", "version"),
+    "taxonomies": ("name", "version"),
     "grey_sources": ("method", "target", "stopping_rule"),
 }
 _SEARCH_STRATEGY_KEYS = ("sources", "queries", "limits")
@@ -82,6 +83,7 @@ _OMITTED_WHEN_NONE = frozenset(
         "library_sources",
         "gate_policies",
         "miners",
+        "taxonomies",
         "hypothesis_plan",
         "grey_sources",
         "appraisal_instrument",
@@ -89,6 +91,15 @@ _OMITTED_WHEN_NONE = frozenset(
 )
 """Optional sections left out of every hash while unset, so protocols that predate them keep
 their versions. Other `None` values stay in the hash."""
+
+
+class TaxonomyUse(StrictModel):
+    """A protocol's listing of one registered taxonomy version. Defined here, not in
+    `model.taxonomies`, which imports modules that import this one; the name pattern is that
+    module's `TAXONOMY_NAME_RE`."""
+
+    name: str = Field(pattern=r"^t-[a-z0-9][a-z0-9-]*$")
+    version: int = Field(ge=1)
 
 
 class MethodProfile(StrEnum):
@@ -385,6 +396,10 @@ class ProtocolSpec(StrictModel):
     miners: tuple[MinerUse, ...] | None = None
     """The registered miners this protocol runs (slice M, M-C). Absent (None) until declared;
     left out of the hash while unset, and sorted by name and version in it."""
+    taxonomies: tuple[TaxonomyUse, ...] | None = None
+    """The registered taxonomy versions this protocol uses (IDEA-50), listed like miners: every
+    derived miner's taxonomy must appear. Absent (None) until declared; left out of the hash
+    while unset, and sorted by name and version in it."""
     hypothesis_plan: HypothesisPlan | None = None
     """Hypothesis defaults (slice 6): minimum seeds, confidence, test-access limit, conflict
     tolerance. Absent (None) until declared; left out of the hash while unset."""
@@ -465,6 +480,7 @@ AMENDABLE_FIELDS = (
     "library_sources",
     "gate_policies",
     "miners",
+    "taxonomies",
     "hypothesis_plan",
     "grey_sources",
     "appraisal_instrument",
@@ -599,6 +615,17 @@ class ExtractionStale(StrictModel):
 
     all_records: bool
     fields: tuple[str, ...] = ()
+    values: dict[str, tuple[str, ...]] | None = None
+    """Value-level staleness: field name -> values whose rows are stale. A row is stale when it
+    carries one of these values; `all_records` is False when used. Omitted from serialisation
+    when None, so events written before it existed replay identically."""
+
+    @model_serializer(mode="wrap")
+    def _no_values_says_nothing(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        out: dict[str, Any] = handler(self)
+        if self.values is None:
+            out.pop("values", None)
+        return out
 
 
 class MinerStale(StrictModel):

@@ -64,10 +64,11 @@ from factory.index.screening import screening_handlers, screening_tables
 from factory.index.search import search_handlers, search_tables
 from factory.index.seeds import seed_handlers, seed_tables
 from factory.index.tasks import task_handlers, tasks_table
+from factory.index.taxonomies import taxonomy_handlers, taxonomy_tables
 from factory.index.watch import run_started_handler, watch_handlers, watch_tables
 
 # Bump on any change to the tables or handlers below; the index is then rebuilt.
-PROJECTION_VERSION = "83"
+PROJECTION_VERSION = "84"
 
 
 def default_projection(blobs: BlobStore | None = None) -> Projection:
@@ -117,6 +118,7 @@ def default_projection(blobs: BlobStore | None = None) -> Projection:
     feed = feed_tables(metadata)
     runner = runner_tables(metadata)
     miners = miner_tables(metadata)
+    taxonomies = taxonomy_tables(metadata)
     mine_imports = mine_import_tables(metadata)
     hypotheses = hypothesis_tables(metadata, protocol.protocols, project)
     labels = label_tables(metadata)
@@ -173,6 +175,7 @@ def default_projection(blobs: BlobStore | None = None) -> Projection:
         **feed_handlers(feed, blobs),
         **runner_handlers(runner),
         **miner_handlers(miners),
+        **taxonomy_handlers(taxonomies),
         **mine_import_handlers(mine_imports, extraction, conversions, fulltext, miners),
         **hypothesis_handlers(hypotheses),
         **label_handlers(labels),

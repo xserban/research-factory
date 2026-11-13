@@ -7,11 +7,16 @@ seconds after the previous one: the snapshot of the dashboard takes about a minu
 that is being mined makes it stale all the time.
 
 Invariants:
-- Read-only for the browser except four allow-listed acts (decision 119): `POST /api/feed/react`,
+- Read-only for the browser except seven allow-listed acts (decision 119): `POST /api/feed/react`,
   `POST /api/feed/add`, `POST /api/queue/process` (starts the headless runner, which records its
-  own system events) and `POST /api/queue/resume` (plan restart-and-costs, R3). Any other POST
-  path is 404; PUT, DELETE and PATCH are 405. Apart from those acts the server writes nothing but
-  the site folder, through `site.build`.
+  own system events), `POST /api/queue/resume` (plan restart-and-costs, R3) and the researcher's
+  layer acts (IDEA-50): `POST /api/mine/work` (`work_id`, optional `reason`), `POST /api/mine/layer`
+  (`layer`, optional `reason`) and `POST /api/layers/move` (`work_id`, `layer`, `reason` required),
+  which call `work_layers.request_mining` and `work_layers.move_layer` as the local human, as the
+  CLI does (`cli:mine request`, `cli:layers move`). A refusal is a structured error, nothing is
+  written. `GET /api/layers` reads the latest scheme's layer ids and each work's layer. Any
+  other POST path is 404; PUT, DELETE and PATCH are 405. Apart from those acts the server writes
+  nothing but the site folder, through `site.build`.
 - `POST /api/queue/resume` with `dry_run` plans in the request and writes nothing. A real resume
   runs `services.resume.resume` in a daemon thread, one at a time (`ResumeRunner`), because its
   deterministic steps look papers up and convert them and must not run in a request; the reply is
@@ -24,8 +29,8 @@ Invariants:
 - A POST needs, all at once: a loopback Host, the per-start token in `X-Factory-Token` (compared in
   constant time), `Content-Type: application/json`, a body of at most 16 KiB and, if an Origin is
   sent, this server's own origin. Otherwise 403 (413 or 415 for size or type) and nothing is
-  written. The token is made at server start, is injected into `/feed/` and `/queue/` pages only
-  and is never written to the files on disk.
+  written. The token is made at server start, is injected into `/feed/`, `/queue/` and `/explorer/`
+  pages only and is never written to the files on disk.
 - The actor is the local human principal and each act is authorised by its command row
   (`cli:feed react`, `cli:feed add`, `cli:queue process`, `cli:queue resume`), as the CLI does.
 - Loopback only: a request whose Host is not 127.0.0.1, localhost or [::1] is refused.
@@ -56,7 +61,7 @@ from factory.services import pipeline as pipeline_service
 from factory.services import resume as resume_service
 from factory.services import runner as runner_service
 from factory.services import site as site_service
-from factory.services import work_queue
+from factory.services import work_layers, work_queue
 from factory.services.access import authorize_command
 from factory.services.context import Project
 from factory.sources.fulltext.registry import default_routes
@@ -67,7 +72,7 @@ DEFAULT_PORT: Final = 8766
 _LOOPBACK: Final = {"127.0.0.1", "localhost", "[::1]"}
 MAX_BODY: Final = 16 * 1024
 TOKEN_HEADER: Final = "X-Factory-Token"
-_ACTION_PAGES: Final = ("feed", "queue")
+_ACTION_PAGES: Final = ("feed", "queue", "explorer")
 _TOKEN_META: Final = "<meta name='factory-token' content='{}'>"
 _LOG: Final = logging.getLogger(__name__)
 
@@ -267,11 +272,97 @@ def queue_process(project: Project, body: dict[str, Any]) -> tuple[int, dict[str
     return 200, {"ok": True, "run_id": run_id, "stage": stage, "unit_cap": cap}
 
 
+def _layer_act(
+    project: Project,
+    command: str,
+    issues: list[ValidationIssue],
+    act: Callable[[Any], dict[str, object]],
+) -> tuple[int, dict[str, object]]:
+    """Run one layer act as the local human after `issues` (the parse) is empty; returns (status,
+    body). Refusals are structured errors and nothing is written."""
+    if issues:
+        return 400, _issues(*issues)
+    try:
+        actor = project.human_actor()
+        authorize_command(project, project.principal, command)
+        return 200, {"ok": True, **act(actor)}
+    except FactoryValidationError as exc:
+        return 400, _issues(*exc.issues)
+    except FactoryError as exc:
+        return 403, _issues(ValidationIssue("permission", str(exc)))
+
+
+def _required_str(body: dict[str, Any], key: str) -> tuple[str, list[ValidationIssue]]:
+    value = body.get(key)
+    if isinstance(value, str) and value.strip():
+        return value, []
+    return "", [ValidationIssue(key, "required")]
+
+
+def mine_work(project: Project, body: dict[str, Any]) -> tuple[int, dict[str, object]]:
+    """Request mining of one work (`work_layers.request_mining(works=(work_id,))`)."""
+    work_id, bad = _required_str(body, "work_id")
+    reason, more = _optional_str(body, "reason")
+    bad += more
+
+    def act(actor: Any) -> dict[str, object]:
+        request_id = work_layers.request_mining(
+            project, actor, works=(work_id,), reason=reason or None
+        )
+        return {"request_id": request_id, "work_id": work_id}
+
+    return _layer_act(project, "cli:mine request", bad, act)
+
+
+def mine_layer(project: Project, body: dict[str, Any]) -> tuple[int, dict[str, object]]:
+    """Request mining of every included work of one layer (resolved to work ids at recording)."""
+    layer, bad = _required_str(body, "layer")
+    reason, more = _optional_str(body, "reason")
+    bad += more
+
+    def act(actor: Any) -> dict[str, object]:
+        request_id = work_layers.request_mining(project, actor, layer=layer, reason=reason or None)
+        return {"request_id": request_id, "layer": layer}
+
+    return _layer_act(project, "cli:mine request", bad, act)
+
+
+def move_layer(project: Project, body: dict[str, Any]) -> tuple[int, dict[str, object]]:
+    """Move one work to a layer of the latest scheme; the reason is required."""
+    work_id, bad = _required_str(body, "work_id")
+    layer, more = _required_str(body, "layer")
+    reason, again = _required_str(body, "reason")
+    bad += more + again
+
+    def act(actor: Any) -> dict[str, object]:
+        event_id = work_layers.move_layer(project, actor, work_id, layer, reason)
+        return {"event_id": event_id, "work_id": work_id, "layer": layer}
+
+    return _layer_act(project, "cli:layers move", bad, act)
+
+
+def layers_payload(project: Project) -> dict[str, object]:
+    """The latest scheme's layer ids and each known work's layer (read-only; the page's selects)."""
+    from factory.services.reference_layers import current_scheme
+
+    scheme = current_scheme(project)
+    return {
+        "layers": [] if scheme is None else [d.id for d in scheme.layers],
+        "works": {
+            work: {"layer": found.layer, "source": found.source}
+            for work, found in work_layers.layers_of(project).items()
+        },
+    }
+
+
 _ROUTES: Final[dict[str, Callable[..., tuple[int, dict[str, object]]]]] = {
     "/api/feed/react": feed_react,
     "/api/feed/add": feed_add,
     "/api/queue/process": queue_process,
     "/api/queue/resume": queue_resume,
+    "/api/mine/work": mine_work,
+    "/api/mine/layer": mine_layer,
+    "/api/layers/move": move_layer,
 }
 
 
@@ -423,6 +514,12 @@ def make_server(
                     return
                 self._json(200, {**payload, "last_resume": resumer.last})
                 return
+            if self.path.split("?", 1)[0] == "/api/layers":
+                try:
+                    self._json(200, layers_payload(project))
+                except FactoryError as exc:
+                    self._json(500, _issues(ValidationIssue("layers", str(exc))))
+                return
             if self.path.split("?", 1)[0] == "/api/queue/runs":
                 runs = runner_service.run_status(project, reconcile=False)
                 pipelines = pipeline_service.pipeline_status(project)
@@ -471,7 +568,7 @@ def make_server(
             if not isinstance(body, dict):
                 self._json(400, _issues(ValidationIssue("body", "must be a JSON object")))
                 return
-            if route is feed_react:
+            if route in (feed_react, mine_work, mine_layer, move_layer):
                 with write_lock:
                     code, payload = route(project, body)
             elif route is queue_resume:

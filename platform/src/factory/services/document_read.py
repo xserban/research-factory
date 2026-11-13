@@ -30,10 +30,16 @@ Invariants:
   flagged `truncated`.
 - A missing or damaged Markdown or manifest blob is refused, naming `factory document convert
   --restore`. The message never carries document text.
+- Work ids match after NFC normalisation (IDEA-49), as `screen_record` does: a model writes a
+  non-Latin name composed where the stored id may be decomposed (a Hangul surname is stored as
+  jamo). An id that is not a work but whose NFC form equals that of exactly one work is read as
+  that work, and the page carries the stored spelling; the batch and miner membership checks
+  compare NFC forms. An id matching no work, or several, is refused as before.
 """
 
 from __future__ import annotations
 
+import unicodedata
 from dataclasses import dataclass
 from itertools import islice
 
@@ -146,6 +152,7 @@ def document_read(
             ]
         )
     project.index.sync()
+    work_id = _as_stored(project, work_id)
     if session is not None:
         document_id, conversion_id = _gate(project, session, work_id, document_id, conversion_id)
     if work_id not in _promoted(project):
@@ -202,6 +209,28 @@ def _check_arguments(limit: int, max_chars: int, after: str | None, anchor: str 
         issues.append(ValidationIssue("after", "cannot be combined with anchor"))
     if issues:
         raise FactoryValidationError(issues)
+
+
+# --- Work ids (NFC-tolerant, IDEA-49) ---
+
+
+def _nfc(value: str) -> str:
+    return unicodedata.normalize("NFC", value)
+
+
+def _same_work(stored: object, work_id: str) -> bool:
+    """Whether a stored work id names `work_id`, comparing NFC forms."""
+    return isinstance(stored, str) and _nfc(stored) == _nfc(work_id)
+
+
+def _as_stored(project: Project, work_id: str) -> str:
+    """`work_id` spelled as the corpus stores it: itself when it is a work, else the one work
+    whose NFC form equals its NFC form, else itself unchanged (and refused later as before)."""
+    works = final_outcomes(project).keys()
+    if work_id in works:
+        return work_id
+    matches = [w for w in works if _same_work(w, work_id)]
+    return matches[0] if len(matches) == 1 else work_id
 
 
 # --- The pass-independence gate (decision 37) ---
@@ -285,7 +314,7 @@ def _held_selection(
         for record in records if isinstance(records, list) else []:
             if (
                 isinstance(record, dict)
-                and record.get("work_id") == work_id
+                and _same_work(record.get("work_id"), work_id)
                 and record.get("conversion_id") == conversion_id
             ):
                 return frozenset(str(a) for a in anchor_ids)
@@ -349,7 +378,7 @@ def _held_pins(project: Project, session: str, kind: str, work_id: str) -> list[
         for record in records if isinstance(records, list) else []:
             if (
                 isinstance(record, dict)
-                and record.get("work_id") == work_id
+                and _same_work(record.get("work_id"), work_id)
                 and isinstance(record.get("document_id"), str)
                 and isinstance(record.get("conversion_id"), str)
             ):

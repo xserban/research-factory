@@ -21,6 +21,12 @@ Invariants:
   the CLI without waiting, the process may outlive this one; its end is then recorded by the next
   reconcile (`finish_lost`): from the exit status that the launch wrapper (`sh -c`) wrote to the
   `exit` file (`complete` or `failed`), `lost` only when there is none; the same steps follow.
+- The stage `mining` (IDEA-50) is an alias, resolved when a run starts: it becomes `mine:<miner id>`
+  of the first miner (by name) with an open mining need (`work_queue.mining_needs`: requested or
+  layer-filtered works with no current unit), and that resolved key is what the events record.
+  It uses the miner stage's declared model and tools (`mine_next`, `mine_record`, `document_read`
+  and the two reads) and the same cap on units; refused when no miner has a need. The runner
+  records no human act: requests and layer moves are the researcher's, made before the run.
 - Stages: `screen`, `extract`, `appraise`, `contributions`, `intuition` and `mine:<miner id>`; the
   derivation of which apply and the pipeline over them are in `factory.services.pipeline`. The
   child's MCP config carries `FACTORY_UNIT_CAP` and `FACTORY_RUN_ID`: the MCP server then refuses
@@ -65,7 +71,7 @@ from factory.model.runner import RunnerFinished, RunnerOutcome, RunnerStage, Run
 from factory.model.screening import PassLabel
 from factory.services.context import Project
 from factory.services.stages import EXTRACT_KINDS, task_kind
-from factory.services.work_queue import advance, pending_work
+from factory.services.work_queue import advance, mining_needs, pending_work
 from factory.sources.fulltext.registry import default_routes
 from factory.sources.registry import default_sources
 
@@ -180,6 +186,8 @@ STAGES: Final[dict[str, StageSpec]] = {
     ),
 }
 MINE_PREFIX: Final = "mine:"
+MINING_STAGE: Final = "mining"
+"""The alias stage that runs the first miner with an open mining need (see the module docstring)."""
 MINE_SPEC: Final = StageSpec(
     model="claude-haiku-5-5",
     skill="rf-mine",
@@ -241,13 +249,28 @@ def _factory_executable() -> str:
 
 def stage_keys() -> str:
     """The valid stage keys, for a refusal."""
-    return ", ".join([*STAGES, f"{MINE_PREFIX}<miner id>"])
+    return ", ".join([*STAGES, MINING_STAGE, f"{MINE_PREFIX}<miner id>"])
 
 
 def is_stage_key(stage: str) -> bool:
     """Whether `stage` names a stage: a fixed one or `mine:<miner id>` (the miner is looked up
     when the stage is used)."""
-    return stage in STAGES or (stage.startswith(MINE_PREFIX) and len(stage) > len(MINE_PREFIX))
+    return (
+        stage in STAGES
+        or stage == MINING_STAGE
+        or (stage.startswith(MINE_PREFIX) and len(stage) > len(MINE_PREFIX))
+    )
+
+
+def resolve_stage(project: Project, stage: str) -> str:
+    """`stage` itself, except that `mining` becomes `mine:<miner id>` of the first miner with an
+    open mining need; refuses (`stage`) when no miner has one. Read-only."""
+    if stage != MINING_STAGE:
+        return stage
+    needs = mining_needs(project)
+    if not needs:
+        raise _refuse("stage", "no miner has an open mining need (a request or a layer)")
+    return f"{MINE_PREFIX}{sorted(needs)[0]}"
 
 
 def _mine_use(project: Project, miner: str) -> int:
@@ -417,6 +440,7 @@ def _screen_servable(project: Project, stage: ScreeningStage) -> tuple[int, bool
 def pending_units(project: Project, stage: str) -> dict[str, int]:
     """The pending units of `stage` (pass A): per task kind for `screen` and `extract`; for the
     other stages (`factory.services.pipeline.pending_by_stage`) one count under the stage key."""
+    stage = resolve_stage(project, stage)
     spec = STAGES.get(stage)
     if spec is None or not spec.kinds:
         if not is_stage_key(stage):
@@ -804,6 +828,7 @@ def start_run(
     run's recorded prompt, tools and model, and names it in `runner.started`. `unit_cap` then
     defaults to the earlier run's. `prompt_override` replaces the built prompt (and is what a
     resume passes after reading the blob)."""
+    stage = resolve_stage(project, stage)
     spec = stage_spec(project, stage)
     earlier = None
     if resumes is not None:

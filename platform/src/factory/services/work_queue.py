@@ -27,7 +27,17 @@ Invariants:
   lookup failed, or the work is left unscreened by a stopping rule. It is never a judgement.
 - `pending_work` counts the open units per task kind: the tasks `claim_next` would serve now
   (open, or claimed with a lapsed lease), excluding extraction tasks a newer task replaced.
-  Keys are task kinds, so a runner can map each to its stage.
+  Keys are task kinds, so a runner can map each to its stage; the key `mining` is the exception:
+  it counts the works with an open mining need (`mining_needs`), summed over miners.
+- A mining need (IDEA-50): a miner listed in the protocol with `layers` or `on_demand` has a need
+  for each work of its population (`miner_population`: the layer-filtered works and the
+  researcher's requests) that has no `current` pass A unit. `mining_needs` is computed from the
+  protocol, the requests and the unit states; it stores nothing. A feed paper at stage `extracted`
+  whose work has a need is shown at stage `mining`. Limit: the queue has one item per feed send,
+  so a work that did not come through the feed never appears as a queue item; its needs are still
+  counted in `pending_work["mining"]` and listed by `mining_needs`. A use with `on_demand` and
+  no `layers` reads its whole population automatically plus the requested works, so all of them
+  can be needs.
 """
 
 from __future__ import annotations
@@ -44,6 +54,7 @@ from factory.document.registry import default_converters
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.index.inbox import OPEN, WITHDRAWN
 from factory.model.base import StrictModel
+from factory.model.extraction import MinerScope
 from factory.model.fulltext import Route
 from factory.model.inbox import ResolveStatus
 from factory.model.protocol import ScreeningStage
@@ -72,6 +83,7 @@ Stage = Literal[
     "full-text",
     "converted",
     "extracted",
+    "mining",
 ]
 
 STAGES: tuple[Stage, ...] = (
@@ -84,6 +96,7 @@ STAGES: tuple[Stage, ...] = (
     "full-text",
     "converted",
     "extracted",
+    "mining",
 )
 
 _TA = ScreeningStage.TITLE_ABSTRACT
@@ -119,6 +132,8 @@ class _Facts:
     converted: frozenset[str]
     extracted: frozenset[str]
     stopped: frozenset[str]
+    mining: dict[str, tuple[str, ...]]
+    """Work id -> the listed miners with an open mining need for it."""
 
 
 def _facts(project: Project) -> _Facts:
@@ -135,6 +150,7 @@ def _facts(project: Project) -> _Facts:
             if s.pass_label is PassLabel.A and s.state == "current"
         ),
         stopped=frozenset(stop_unscreened(project)),
+        mining=_needs_by_work(project),
     )
 
 
@@ -159,6 +175,9 @@ def _work_stage(work_id: str, facts: _Facts) -> tuple[Stage, bool, str]:
         return "full-text", False, "full text retrieved, not converted"
     if work_id not in facts.extracted:
         return "converted", False, "converted, awaiting extraction"
+    needed = facts.mining.get(work_id)
+    if needed:
+        return "mining", False, "extracted, awaiting mining by " + ", ".join(needed)
     return "extracted", False, "extracted"
 
 
@@ -230,6 +249,45 @@ def _inbox_items(project: Project) -> dict[str, InboxItemView]:
     return found
 
 
+def mining_needs(project: Project) -> dict[str, tuple[str, ...]]:
+    """Miner name -> the works (sorted) that miner has an open need to mine: the works of
+    `miner_population` of each protocol-listed miner that uses `layers` or `on_demand`, less those
+    with a `current` pass A unit. Miners with no need are absent. Read-only; stores nothing; a
+    miner whose population is refused (see `miner_population`) is skipped, not raised."""
+    from factory.services.mining import miner_population  # mining imports the extraction stack
+    from factory.services.protocol import current_protocol
+
+    project.index.sync()
+    protocol = current_protocol(project)
+    if protocol is None:
+        return {}
+    found: dict[str, tuple[str, ...]] = {}
+    for use in protocol.spec.miners or ():
+        if not (use.layers or use.on_demand):
+            continue
+        try:
+            population = miner_population(project, use.name)
+        except FactoryValidationError:
+            continue
+        current = {
+            s.work_id
+            for s in unit_states(project, scope=MinerScope(use.name))
+            if s.pass_label is PassLabel.A and s.state == "current"
+        }
+        open_works = tuple(sorted(set(population) - current))
+        if open_works:
+            found[use.name] = open_works
+    return found
+
+
+def _needs_by_work(project: Project) -> dict[str, tuple[str, ...]]:
+    by_work: dict[str, list[str]] = {}
+    for miner, works in mining_needs(project).items():
+        for work in works:
+            by_work.setdefault(work, []).append(miner)
+    return {work: tuple(sorted(miners)) for work, miners in by_work.items()}
+
+
 def pending_work(project: Project) -> dict[str, int]:
     """The open units per task kind: screening (title/abstract and full text, each pass),
     extraction (evidence and contribution) and mining (registered miners). Every kind is listed,
@@ -242,10 +300,12 @@ def pending_work(project: Project) -> dict[str, int]:
     for scope in all_scopes(project):
         kinds.update(kinds_for(scope).values())
     abandoned = abandoned_task_ids(project)
-    return {
+    counts = {
         kind: sum(1 for task_id in open_task_ids(project, kind) if task_id not in abandoned)
         for kind in sorted(kinds)
     }
+    counts["mining"] = sum(len(works) for works in mining_needs(project).values())
+    return dict(sorted(counts.items()))
 
 
 def queue(project: Project) -> WorkQueue:

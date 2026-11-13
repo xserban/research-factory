@@ -133,6 +133,7 @@ from factory.services.manuscripts import (
     units,
     verdict_rows,
 )
+from factory.services.mcp_lines import mcp_line_hits
 from factory.services.members import members
 from factory.services.methods import MethodsReport, methods_report, render_methods
 from factory.services.miner_report import calibration_passed
@@ -563,6 +564,7 @@ def _run_rules(project: Project) -> list[_Hit]:
         _drafts(project),
         _writer_verified(project),
         _hosting(project),
+        mcp_line_hits(project.settings),
         _relayed_acts(project),
         _future_dated(project),
         _briefings(project),

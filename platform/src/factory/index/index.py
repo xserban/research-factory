@@ -1,9 +1,11 @@
 import fcntl
 import hashlib
 import os
+import socket
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -12,9 +14,11 @@ from sqlalchemy import Engine, Table, create_engine, insert, select
 from sqlalchemy import event as sa_event
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Connection
+from sqlalchemy.exc import DBAPIError
 
 from factory.canonical import canonical_json
-from factory.clock import format_ts
+from factory.clock import format_ts, parse_ts
+from factory.errors import FactoryError
 from factory.events.catalog import EventCatalog
 from factory.events.envelope import Event
 from factory.events.reader import event_files, read_file, relative_name
@@ -190,6 +194,115 @@ their events keeps the state hash it had before they existed."""
 
 _PROJECTION_VERSION = "projection_version"
 _LAST_EVENT_ID = "last_event_id"
+# The holder marker (IDEA-62): which process of `projection_version` last built or synced the
+# index, and when. `meta` is outside the state hash, so the marker never changes it.
+_HOLDER_PID = "holder_pid"
+_HOLDER_HOST = "holder_host"
+_HOLDER_CODE = "holder_code"
+_HELD_AT = "held_at"
+
+DEFAULT_HOLD_WINDOW = timedelta(minutes=10)
+"""How long a version's hold on the index lasts after its last build or sync (IDEA-62)."""
+_MAX_REFRESH = timedelta(seconds=60)
+
+
+class IndexHeldError(FactoryError):
+    """This process's projection version may not rebuild the index now: another code line holds
+    it (IDEA-62). Nothing was written; the events are untouched."""
+
+
+@dataclass(frozen=True)
+class Holder:
+    """The marker an index carries: the version that last built or synced it, by whom, and when."""
+
+    version: str
+    pid: int | None
+    host: str | None
+    code: str | None
+    held_at: datetime | None
+
+
+def code_path() -> str:
+    """Where this process's code lives: the worktree for a `platform/src` checkout, else the
+    directory of the installed `factory` package."""
+    package = Path(__file__).resolve().parent.parent
+    src = package.parent
+    if src.name == "src" and src.parent.name == "platform":
+        return str(src.parent.parent)
+    return str(package)
+
+
+def _version_key(version: str) -> int | None:
+    return int(version) if version.isascii() and version.isdigit() else None
+
+
+def holder_blocks(
+    holder: Holder,
+    version: str,
+    *,
+    now: datetime,
+    window: timedelta,
+    pid: int,
+    host: str,
+    alive: Callable[[int], bool],
+) -> bool:
+    """Whether `holder` forbids a process running projection `version` to rebuild the index.
+
+    The open question of IDEA-62, decided here: inside the window an older version never
+    rebuilds over a newer one, and a newer version always may (the newer code is where the line
+    is heading; the older process is the stray one). Versions that are not both integers have no
+    order, so each refuses the other inside the window.
+
+    Never blocks: the same version; an unmarked index (built before the marker existed); a hold
+    older than `window` (a holder that crashed on another host ages out); this very process; a
+    holder on this host whose process is gone (a crash frees the index at once); a zero window; a
+    `held_at` more than a window ahead of `now` (clock skew or a damaged value must not hold the
+    index for ever).
+    """
+    if holder.version == version or holder.held_at is None or window <= timedelta(0):
+        return False
+    age = now - holder.held_at
+    if age >= window or -age > window:
+        return False
+    if (
+        holder.host == host
+        and holder.pid is not None
+        and (holder.pid == pid or not alive(holder.pid))
+    ):
+        return False
+    mine, theirs = _version_key(version), _version_key(holder.version)
+    return not (mine is not None and theirs is not None and mine > theirs)
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # alive, owned by another user
+    return True
+
+
+def _holder(meta: dict[str, str]) -> Holder | None:
+    version = meta.get(_PROJECTION_VERSION)
+    if version is None:
+        return None
+    pid = meta.get(_HOLDER_PID)
+    held_at = meta.get(_HELD_AT)
+    try:
+        when = parse_ts(held_at) if held_at is not None else None
+    except (ValueError, TypeError, OverflowError):
+        when = None
+    if when is not None and when.utcoffset() is None:
+        when = None  # a naive time cannot be compared; an unmarked index holds nothing
+    return Holder(
+        version=version,
+        pid=int(pid) if pid is not None and pid.isascii() and pid.isdigit() else None,
+        host=meta.get(_HOLDER_HOST),
+        code=meta.get(_HOLDER_CODE),
+        held_at=when,
+    )
 
 
 @dataclass(frozen=True)
@@ -209,7 +322,17 @@ class Index:
         projection: Projection,
         *,
         on_exclusive: Callable[[str | None], None] | None = None,
+        hold_window: timedelta = DEFAULT_HOLD_WINDOW,
+        now: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
+        """`hold_window` is how long another version's last build or sync keeps this one from
+        rebuilding (IDEA-62, `holder_blocks`); `now` is the clock the marker is read and written
+        with."""
+        self._hold_window = hold_window
+        self._now = now
+        self._pid = os.getpid()
+        self._host = socket.gethostname()
+        self._code = code_path()
         self._db_path = db_path
         self._events_dir = events_dir
         self._catalog = catalog
@@ -349,6 +472,7 @@ class Index:
             new.extend(result.events)
             offsets[name] = result.end_offset
         if not new:
+            self._refresh_hold(meta)
             return SyncResult(applied=0, rebuilt=False)
 
         new.sort(key=lambda event: event.id)
@@ -359,7 +483,91 @@ class Index:
         with self._engine.begin() as conn:
             self._write(conn, new, offsets)
             self._set_meta(conn, _LAST_EVENT_ID, new[-1].id)
+            self._mark_holder(conn, _holder(meta))
         return SyncResult(applied=len(new), rebuilt=False)
+
+    def holder(self) -> Holder | None:
+        """The marker of the index on disk, or None when there is no index or no version yet."""
+        with self._locked(shared=True):
+            return self._stored_holder()
+
+    def _stored_holder(self) -> Holder | None:
+        if not self._db_path.exists():
+            return None
+        try:
+            stored = self._read_stored()
+        except DBAPIError:
+            return None  # an unreadable index is rebuilt; it holds nothing
+        return None if stored is None else _holder(stored[0])
+
+    def _guard(self) -> Holder | None:
+        """Refuse to rebuild while another code line holds the index (IDEA-62, `holder_blocks`);
+        otherwise return the stored marker. Callers hold the write lock."""
+        holder = self._stored_holder()
+        if holder is None or not holder_blocks(
+            holder,
+            self._projection.version,
+            now=self._now(),
+            window=self._hold_window,
+            pid=self._pid,
+            host=self._host,
+            alive=_pid_alive,
+        ):
+            return holder
+        assert holder.held_at is not None  # holder_blocks is False without it
+        until = format_ts(holder.held_at + self._hold_window)
+        raise IndexHeldError(
+            f"index {self._db_path} is held by projection version {holder.version} "
+            f"(process {holder.pid} on {holder.host}, code {holder.code}, last at "
+            f"{format_ts(holder.held_at)}); this process runs version "
+            f"{self._projection.version} from {self._code} and will not rebuild over it before "
+            f"{until}. Point this session at the shared runtime (docs/runbook-living.md)."
+        )
+
+    def _refresh_hold(self, meta: dict[str, str]) -> None:
+        """Renew this version's hold when it is older than a minute (or half the window), so an
+        index in use stays held while a sync writes nothing else. Best effort: an index that cannot
+        be written (a read-only file system) is read as before, unrenewed."""
+        held = _holder(meta)
+        step = min(_MAX_REFRESH, self._hold_window / 2)
+        if held is not None and held.held_at is not None:
+            age = self._now() - held.held_at
+            if timedelta(0) <= age < step:
+                return
+        try:
+            with self._engine.begin() as conn:
+                self._mark_holder(conn, held)
+        except DBAPIError:
+            return
+
+    def _mark_holder(self, conn: Connection, stored: Holder | None) -> None:
+        """Write this version's hold. The process named stays the one already named when it runs
+        the same version and is still alive (on this host) or still fresh (on another host), so
+        that a short-lived command of the same version, once exited, does not look like a crash
+        of the long-lived holder and free the index to an older version."""
+        now = self._now()
+        keep = (
+            stored is not None
+            and stored.version == self._projection.version
+            and stored.pid is not None
+            and stored.pid != self._pid
+            and (
+                _pid_alive(stored.pid)
+                if stored.host == self._host
+                else stored.held_at is not None
+                and timedelta(0) <= now - stored.held_at < self._hold_window
+            )
+        )
+        if not keep:
+            self._set_meta(conn, _HOLDER_PID, str(self._pid))
+            self._set_meta(conn, _HOLDER_HOST, self._host)
+            self._set_meta(conn, _HOLDER_CODE, self._code)
+        else:
+            assert stored is not None
+            self._set_meta(conn, _HOLDER_PID, str(stored.pid))
+            self._set_meta(conn, _HOLDER_HOST, stored.host or "")
+            self._set_meta(conn, _HOLDER_CODE, stored.code or "")
+        self._set_meta(conn, _HELD_AT, format_ts(now))
 
     def last_event_id(self) -> str | None:
         """The greatest event id folded into the index, or None while it is empty."""
@@ -416,7 +624,10 @@ class Index:
         return SyncResult(applied=self._build(), rebuilt=True)
 
     def _build(self) -> int:
-        """Build a fresh DB beside the live one, then atomically swap it in."""
+        """Build a fresh DB beside the live one, then atomically swap it in.
+
+        Refused (`IndexHeldError`) while another code line holds the index (IDEA-62)."""
+        stored = self._guard()
         events, offsets = self._read_everything()
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self._db_path.with_name(f"{self._db_path.name}.tmp-{os.getpid()}")
@@ -428,6 +639,7 @@ class Index:
             with engine.begin() as conn:
                 self._write(conn, events, offsets)
                 self._set_meta(conn, _PROJECTION_VERSION, self._projection.version)
+                self._mark_holder(conn, stored)
                 if events:
                     self._set_meta(conn, _LAST_EVENT_ID, events[-1].id)
         except BaseException:

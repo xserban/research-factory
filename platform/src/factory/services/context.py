@@ -191,6 +191,7 @@ def build_project(
         catalog,
         default_projection(blobs),
         on_exclusive=floor_ids,
+        hold_window=settings.index_hold,
     )
     return Project(
         paths=paths,

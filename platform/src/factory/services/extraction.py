@@ -103,6 +103,7 @@ from factory.model.staleness import (
     notice_stale_rows,
     scope_rule,
     stale_rows,
+    stored_values,
     touches,
 )
 from factory.model.task import ReportedUsage, Task, TaskCompleted, TaskStatus
@@ -1844,7 +1845,9 @@ class _Ledger:
             rule = scope_rule(amendment, self.scope)
             if rule is None or when <= closed:
                 continue
-            if rule.all_records or any(touches(rule, tuple(r.fields)) for r in carried):
+            if rule.all_records or any(
+                touches(rule, tuple(r.fields), stored_values(r.fields)) for r in carried
+            ):
                 return "schema"
         state = self.notice_states.get(work_id)
         if state is not None and any(
@@ -1895,7 +1898,7 @@ class _Ledger:
             if (
                 rule is not None
                 and row.event_id < when <= position
-                and touches(rule, tuple(row.fields))
+                and touches(rule, tuple(row.fields), stored_values(row.fields))
             ):
                 return True
         state = self.notice_states.get(row.work_id)
@@ -1939,7 +1942,15 @@ class _Ledger:
         """The live rows an amendment recorded after them stales, or that pin a document other
         than the work's current one."""
         live = [row for rows in (*self.rows.values(), *self.imported.values()) for row in rows]
-        refs = [RowRef(row_id=r.extraction_id, fields=tuple(r.fields), at=r.event_id) for r in live]
+        refs = [
+            RowRef(
+                row_id=r.extraction_id,
+                fields=tuple(r.fields),
+                at=r.event_id,
+                values=stored_values(r.fields),
+            )
+            for r in live
+        ]
         stale = set(
             stale_rows(
                 [a for _, a in self.amendments],

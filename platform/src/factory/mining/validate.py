@@ -6,6 +6,9 @@ Invariants:
   one required field (the identity a disagreement shows) and, when its evidence rule asks for a
   quote, a field that can carry one. A built-in (`built_in=True`) is exempt from those that its
   pack never met.
+- A registered miner's row key shares no field with its row anchor (an anchor in the key unmatches
+  two passes' rows). A derived miner (`taxonomy` set) has no row anchor and its absence values are
+  values of its `category` field; any absence value is a value of some enum field.
 """
 
 from __future__ import annotations
@@ -80,6 +83,13 @@ def validate_miner(spec: MinerSpec, *, built_in: bool = False) -> list[Validatio
             bad("row_key_fields", "declare the fields that identify a record")
         if not any(f.required for f in spec.fields):
             bad("fields", "declare at least one required field")
+        for i, name in enumerate(spec.row_key_fields):
+            if name in spec.row_anchor_fields:
+                bad(
+                    f"row_key_fields[{i}]",
+                    "an anchor in the row key makes two passes' rows fail to align",
+                )
+    _absence_issues(spec, bad)
     for i, c in enumerate(spec.conditionals):
         where = f"conditionals[{i}]"
         if c.field not in known:
@@ -125,6 +135,30 @@ def validate_miner(spec: MinerSpec, *, built_in: bool = False) -> list[Validatio
         if not _compiles(pattern):
             bad(f"citation_patterns[{i}]", "does not compile")
     return issues
+
+
+def _absence_issues(spec: MinerSpec, bad: Callable[[str, str], None]) -> None:
+    """Derived miners key rows on the category and name their absence values in it; any other
+    miner's absence values must be values of some enum field."""
+    if spec.taxonomy is not None:
+        if spec.row_anchor_fields:
+            bad(
+                "row_anchor_fields", "a derived miner keys rows on the category, never on an anchor"
+            )
+        category = spec.field_named("category")
+        allowed = (
+            category.kind.values
+            if category is not None and isinstance(category.kind, EnumKind)
+            else ()
+        )
+        for i, value in enumerate(spec.evidence.absence_values):
+            if value not in allowed:
+                bad(f"evidence.absence_values[{i}]", "not a value of the enum field category")
+        return
+    enum_values = {v for f in spec.fields if isinstance(f.kind, EnumKind) for v in f.kind.values}
+    for i, value in enumerate(spec.evidence.absence_values):
+        if value not in enum_values:
+            bad(f"evidence.absence_values[{i}]", "not a value of any enum field of the miner")
 
 
 def _can_quote(spec: MinerSpec) -> bool:
