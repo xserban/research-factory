@@ -38,9 +38,7 @@ def resolve_work_id(project: Project, work_id: str, *, field: str = "work_id") -
     The caller holds a synced index. An exact id costs one lookup; only a miss scans the ids.
     """
     with project.index.connect() as conn:
-        exact = conn.execute(
-            text("SELECT 1 FROM works WHERE work_id = :w"), {"w": work_id}
-        ).first()
+        exact = conn.execute(text("SELECT 1 FROM works WHERE work_id = :w"), {"w": work_id}).first()
         if exact is not None:
             return work_id
         ids = [str(row[0]) for row in conn.execute(text("SELECT work_id FROM works"))]

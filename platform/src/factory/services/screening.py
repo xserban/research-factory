@@ -47,7 +47,6 @@ import json
 import math
 import random
 import secrets
-import unicodedata
 from collections.abc import Collection, Mapping, Sequence
 from typing import Any, Literal
 
@@ -79,6 +78,7 @@ from factory.model.screening import (
 from factory.model.seed import SeedKind
 from factory.model.task import ReportedUsage, Task, TaskStatus
 from factory.model.work import Work
+from factory.model.work_ids import nfc_matches
 from factory.services import passes
 from factory.services.access import Permission, authorize
 from factory.services.budgets import require_for, task_unit
@@ -1017,8 +1017,7 @@ def _as_stored(
     """
     if item.work_id in records:
         return item
-    folded = unicodedata.normalize("NFC", item.work_id)
-    matches = [w for w in records if unicodedata.normalize("NFC", w) == folded]
+    matches = nfc_matches(item.work_id, records)
     return item if len(matches) != 1 else item.model_copy(update={"work_id": matches[0]})
 
 

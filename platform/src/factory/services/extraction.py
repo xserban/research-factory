@@ -140,6 +140,7 @@ from factory.services.tasks import (
     session_served_kind,
     task_content,
 )
+from factory.services.work_ref import stored_spelling
 
 __all__ = [
     "DUPLICATE_ITEM",
@@ -1565,12 +1566,34 @@ def _row_issues(
         checked = ExtractedRowInput.model_validate(row.model_dump(mode="python"))
     except ValidationError as exc:
         return _loc_issues(exc), None
+    checked, cited_issues = _cited_as_stored(checked, corpus)
+    if cited_issues:
+        return cited_issues, None
     verdict = verify_row_in(
         pack, schema.fields, checked.fields, unit.conversion_id, manifest, corpus
     )
     if verdict.issues or verdict.fields is None or verdict.row_key is None:
         return list(verdict.issues), None
     return [], (verdict.fields, verdict.row_key)
+
+
+def _cited_as_stored(
+    row: ExtractedRowInput, corpus: set[str]
+) -> tuple[ExtractedRowInput, list[ValidationIssue]]:
+    """`row` with each field's `cited_work` spelled as the corpus stores it (IDEA-66); an id
+    matching several works by NFC form is an issue on `fields.<name>.cited_work`."""
+    fields = dict(row.fields)
+    issues: list[ValidationIssue] = []
+    for name, entry in row.fields.items():
+        if entry.cited_work is None or entry.cited_work in corpus:
+            continue
+        try:
+            stored = stored_spelling(entry.cited_work, corpus, field=f"fields.{name}.cited_work")
+        except FactoryValidationError as exc:
+            issues += exc.issues
+            continue
+        fields[name] = entry.model_copy(update={"cited_work": stored})
+    return row.model_copy(update={"fields": fields}), issues
 
 
 def _claim_issues(

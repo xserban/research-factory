@@ -55,6 +55,7 @@ from factory.services.screening_stats import (
 )
 from factory.services.seeds import _rigor_mode
 from factory.services.stages import require_pass_stage, screening_plan
+from factory.services.work_ref import resolve_work_id
 
 
 class AuditItemView(StrictModel):
@@ -170,6 +171,7 @@ def audit_record(
     with project.index.exclusive():
         project.index.sync()
         require_human_channel(project, actor, channel, "audit-label")
+        work_id = resolve_work_id(project, work_id)
         issues = audit_core.human_gate(
             project, actor, channel, noun="screening-label", gate_id="screening.audit_label"
         )

@@ -66,6 +66,7 @@ from factory.services.budgets import remaining as remaining_budget
 from factory.services.budgets import require_for
 from factory.services.context import Project
 from factory.services.search import get_work, list_works
+from factory.services.work_ref import resolve_work_ids
 from factory.sources.fulltext.base import FullTextRoute, RouteResult
 from factory.sources.http import redact
 
@@ -170,6 +171,8 @@ def fetch_fulltext(
     revisit = refresh or only is not None
     with project.index.exclusive():
         project.index.sync()
+        if work_ids is not None:
+            work_ids = resolve_work_ids(project, work_ids)
         corpus = {work.id: work for work in list_works(project)}
         promoted = _promoted(project)
         candidates = _candidates(routes, only)

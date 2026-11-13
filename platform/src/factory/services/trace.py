@@ -72,6 +72,7 @@ from factory.services.contributions import contribution_item
 from factory.services.ideas import idea_view
 from factory.services.lineage import cites_status
 from factory.services.relations import relation_view
+from factory.services.work_ref import resolve_work_id
 
 KINDS: tuple[str, ...] = (
     "question",
@@ -293,6 +294,8 @@ def _trace(
     if direction not in ("back", "forward"):
         raise ValueError(f"direction must be 'back' or 'forward', not {direction!r}")
     project.index.sync()
+    if re.fullmatch(WORK_ID_RE, ref):
+        ref = resolve_work_id(project, ref, field="ref")
     with project.index.connect() as conn:
         walk = _Walk(project, conn, layer, agent=skip is not None)
         key = walk.served_key(ref) or _parse(ref)

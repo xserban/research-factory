@@ -58,6 +58,7 @@ from factory.model.document import (
 )
 from factory.services.agreement import Outcome, final_outcomes
 from factory.services.context import Project
+from factory.services.work_ref import resolve_work_ids
 
 ConversionStatus = Literal["converted", "unchanged", "failed", "raw-missing", "restored"]
 RestoreReason = Literal["version-unavailable", "hash-differs", "store-error"]
@@ -133,6 +134,8 @@ def convert_documents(
     """
     with project.index.exclusive():
         project.index.sync()
+        if work_ids is not None:
+            work_ids = resolve_work_ids(project, work_ids)
         targets = _targets(project, work_ids, document_ids)
     outcomes = [_convert_one(project, registry, doc, override) for doc in targets]
     return _summary(outcomes)

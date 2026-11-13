@@ -48,6 +48,7 @@ from factory.services.gates import gate_issues
 from factory.services.imports import import_records, record_key
 from factory.services.regions import _member_issues
 from factory.services.results import BatchResult, ItemError
+from factory.services.work_ref import resolve_work_id
 
 PAGE = 500
 ORGANISATION = "organisation"
@@ -225,6 +226,17 @@ def _item_issues(
     return []
 
 
+def _works_as_stored(project: Project, item: LabelInput) -> LabelInput:
+    """`item` with a work target and the quote's work spelled as stored (IDEA-66)."""
+    update: dict[str, object] = {}
+    if item.target_type is MemberType.WORK:
+        update["target"] = resolve_work_id(project, item.target, field="target")
+    if item.quote is not None:
+        work = resolve_work_id(project, item.quote.work_id, field="quote.work_id")
+        update["quote"] = item.quote.model_copy(update={"work_id": work})
+    return item.model_copy(update=update) if update else item
+
+
 def _apply(
     project: Project,
     actor: Actor,
@@ -247,6 +259,11 @@ def _apply(
             else None
         )
         for index, item in enumerate(items):
+            try:
+                item = _works_as_stored(project, item)
+            except FactoryValidationError as exc:
+                rejected.append(ItemError(index=index, issues=exc.issues))
+                continue
             issues = _item_issues(project, item, seen, agent=actor.kind == "agent")
             if issues:
                 rejected.append(ItemError(index=index, issues=issues))

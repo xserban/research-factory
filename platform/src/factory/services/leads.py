@@ -39,6 +39,7 @@ from factory.model.hypotheses import (
 from factory.services.context import Project
 from factory.services.hypothesis_gates import may_pass
 from factory.services.trace import dangling_refs
+from factory.services.work_ref import resolve_work_id
 
 LeadState = Literal["open", "promoted", "parked", "discarded"]
 _ALL_STATES: tuple[LeadState, ...] = ("open", "promoted", "parked", "discarded")
@@ -286,6 +287,18 @@ def prior_for(
 # --- Recording and deciding ----------------------------------------------------------------
 
 
+def _works_as_stored(project: Project, item: LeadInput) -> LeadInput:
+    """`item` with each work trigger's ref spelled as stored (IDEA-66; an id matching several
+    works by NFC form is refused on `triggers.<i>`)."""
+    triggers = [
+        t.model_copy(update={"ref": resolve_work_id(project, t.ref, field=f"triggers.{i}")})
+        if t.kind is TriggerKind.WORK
+        else t
+        for i, t in enumerate(item.triggers)
+    ]
+    return item.model_copy(update={"triggers": triggers})
+
+
 def record_lead(project: Project, actor: Actor, item: LeadInput) -> str:
     """Record a lead and return its id. Refused, with nothing written: an actor that is neither
     an agent nor a human (`actor`); a trigger that names no row (`triggers.<i>`: `unknown`) or a
@@ -295,6 +308,7 @@ def record_lead(project: Project, actor: Actor, item: LeadInput) -> str:
         raise _refuse("actor", "only an agent or a human records a lead")
     with project.index.exclusive():
         project.index.sync()
+        item = _works_as_stored(project, item)
         issues = trigger_issues(project, item.triggers)
         if issues:
             raise FactoryValidationError(issues)

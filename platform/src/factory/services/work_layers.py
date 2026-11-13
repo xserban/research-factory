@@ -45,6 +45,7 @@ from factory.services.protocol import current_protocol
 from factory.services.reference_layers import current_scheme
 from factory.services.references import included_works
 from factory.services.taxonomies import registered_taxonomy
+from factory.services.work_ref import resolve_work_id, resolve_work_ids
 
 __all__ = [
     "WorkLayer",
@@ -195,6 +196,7 @@ def move_layer(project: Project, actor: Actor, work_id: str, layer: str, reason:
         raise _refuse("actor", "only the researcher moves a work between layers")
     with project.index.exclusive():
         project.index.sync()
+        work_id = resolve_work_id(project, work_id)
         if work_id not in set(_corpus_works(project)):
             raise _refuse("work_id", f"{work_id} is not a work of the corpus")
         scheme = current_scheme(project)
@@ -265,6 +267,7 @@ def request_mining(
             if not target:
                 raise _refuse("layer", f"no included work is in layer {layer}")
         else:
+            works = resolve_work_ids(project, works, field="works")
             outside = sorted(set(works) - included)
             if outside:
                 raise _refuse("works", f"not included works: {', '.join(outside)}")

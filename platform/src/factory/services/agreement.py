@@ -44,7 +44,6 @@ Invariants:
 
 from __future__ import annotations
 
-import unicodedata
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Literal
@@ -69,6 +68,7 @@ from factory.model.screening import (
     Verdict,
 )
 from factory.model.task import TaskStatus
+from factory.model.work_ids import nfc_matches
 from factory.services.calibration import (
     calibration_items,
     calibration_labels,
@@ -837,10 +837,7 @@ def _open_for_resolution(screen: _Screen) -> set[str]:
 def _as_stored(work_id: str, works: set[str]) -> str:
     """`work_id` spelled as stored: itself when in `works`, else the one work of `works` whose
     NFC form equals its NFC form, else itself unchanged (and refused as before)."""
-    if work_id in works:
-        return work_id
-    folded = unicodedata.normalize("NFC", work_id)
-    matches = [w for w in works if unicodedata.normalize("NFC", w) == folded]
+    matches = nfc_matches(work_id, works)
     return matches[0] if len(matches) == 1 else work_id
 
 

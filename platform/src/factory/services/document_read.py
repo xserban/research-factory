@@ -65,6 +65,7 @@ from factory.services.conversions import (
     resolve_anchor,
 )
 from factory.services.stages import kinds_for, task_kind
+from factory.services.work_ref import stored_spelling
 
 __all__ = [
     "DocumentPage",
@@ -224,13 +225,10 @@ def _same_work(stored: object, work_id: str) -> bool:
 
 
 def _as_stored(project: Project, work_id: str) -> str:
-    """`work_id` spelled as the corpus stores it: itself when it is a work, else the one work
-    whose NFC form equals its NFC form, else itself unchanged (and refused later as before)."""
-    works = final_outcomes(project).keys()
-    if work_id in works:
-        return work_id
-    matches = [w for w in works if _same_work(w, work_id)]
-    return matches[0] if len(matches) == 1 else work_id
+    """`work_id` spelled as the corpus stores it (`work_ref.stored_spelling`): itself when it is
+    a work, else the one work whose NFC form equals its NFC form, else itself unchanged (and
+    refused later as before). An id matching several works is refused (IDEA-66)."""
+    return stored_spelling(work_id, final_outcomes(project).keys())
 
 
 # --- The pass-independence gate (decision 37) ---
