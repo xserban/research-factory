@@ -2,6 +2,7 @@ import shutil
 from datetime import datetime
 from typing import Literal
 
+from pydantic import Field
 from sqlalchemy import text
 
 from factory.clock import Clock, parse_ts
@@ -12,7 +13,13 @@ from factory.model.dedup import MergeStatus
 from factory.model.project import ProjectCreated, RigorMode
 from factory.model.protocol import ProtocolStatus, ScreeningStage
 from factory.model.seed import SeedKind
-from factory.services.agreement import Agreement, PassProgress, pass_progress, screen_agreement
+from factory.services.agreement import (
+    Agreement,
+    PassProgress,
+    cannot_assess_counts,
+    pass_progress,
+    screen_agreement,
+)
 from factory.services.audit import audit_report
 from factory.services.calibration import CalibrationStatus, calibration_status
 from factory.services.chase import chase_rounds
@@ -58,6 +65,9 @@ class ScreeningStatus(StrictModel):
     false_exclusion_rate: float | None
     full_text_passes: dict[str, PassProgress] | None = None
     """Pass progress at full text; None while the protocol declares no full-text plan."""
+    cannot_assess_open: dict[str, int] = Field(default_factory=dict)
+    """Unresolved cannot-assess works per stage (`agreement.cannot_assess_counts`, IDEA-67): a
+    human queue, counted before the passes finish; it blocks nothing."""
 
 
 class InboxCounts(StrictModel):
@@ -244,6 +254,7 @@ def _screening_status(project: Project) -> ScreeningStatus:
             if has_full_text_plan(project)
             else None
         ),
+        cannot_assess_open=cannot_assess_counts(project),
     )
 
 

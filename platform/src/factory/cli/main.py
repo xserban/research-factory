@@ -1158,6 +1158,9 @@ def _screening_lines(screening: ScreeningStatus) -> list[str]:
             f"agreement: kappa {_rate(screening.kappa)}, unresolved disagreements {disagreements}"
         )
     lines.append(f"stale decisions: {screening.stale_decisions}")
+    if screening.cannot_assess_open:
+        counts = ", ".join(f"{k} {v}" for k, v in screening.cannot_assess_open.items())
+        lines.append(f"cannot-assess to resolve: {counts}")
     if screening.audit_sample is None:
         lines.append("audit: none sampled")
     else:
@@ -2329,16 +2332,32 @@ def screen_disagreements(
     ctx: typer.Context, stage: StageOption = StageChoice.TITLE_ABSTRACT
 ) -> None:
     """List the works the two passes disagree on, each pass's decision and quote; at full text,
-    also the unresolved cannot-assess works a human may settle with `screen resolve`."""
+    first the unresolved cannot-assess works a human may settle with `screen resolve` (each
+    pass's decision, the read and resolve commands), listed before both passes finish."""
     state = _state(ctx)
     with _reporting_errors():
         project = _resolve_project(state)
-        agreement = agreement_service.screen_agreement(
-            project, project.human_actor(), stage=_stage(stage)
-        )
-        cannot_assess = agreement_service.cannot_assess_open(project, stage=_stage(stage))
-    for work in cannot_assess:
-        typer.echo(f"{work}  cannot-assess (promoted until resolved)")
+        queue = agreement_service.cannot_assess_queue(project, stage=_stage(stage))
+        try:
+            agreement: agreement_service.Agreement | None = agreement_service.screen_agreement(
+                project, project.human_actor(), stage=_stage(stage)
+            )
+            waiting = None
+        except FactoryValidationError as exc:
+            if _stage(stage) is not ScreeningStage.FULL_TEXT:
+                raise
+            agreement, waiting = None, str(exc)
+    for item in queue:
+        typer.echo(f"{item.work_id}  cannot-assess (promoted until resolved)")
+        for label, view in item.passes.items():
+            for line in render.decision_lines(label, view):
+                typer.echo(line)
+        if item.read_command is not None:
+            typer.echo(f"  read: {item.read_command}")
+        typer.echo(f"  resolve: {item.resolve_command}")
+    if agreement is None:
+        typer.echo(f"disagreements: not available until both passes finish ({waiting})")
+        return
     if not agreement.disagreements:
         typer.echo("no unresolved disagreements")
         return

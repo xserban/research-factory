@@ -31,6 +31,7 @@ from factory.errors import FactoryError, FactoryValidationError
 from factory.model.protocol import ScreeningStage
 from factory.model.screening import PassLabel
 from factory.services import agent_view as agent_view_service
+from factory.services import agreement as agreement_service
 from factory.services import budgets as budgets_service
 from factory.services import conversion_coverage as conversion_coverage_service
 from factory.services import decisions as decisions_service
@@ -395,7 +396,18 @@ def _screening(project: Project, status: JsonValue) -> JsonValue:
         },
         "stale_decisions": screening.get("stale_decisions"),
         "checks": checks,
+        "cannot_assess": _part(lambda: _cannot_assess(project)),
     }
+
+
+def _cannot_assess(project: Project) -> JsonValue:
+    """The unresolved full-text cannot-assess works with each pass's decision and the read and
+    resolve commands (IDEA-67); empty without a full-text plan. Read-only; it blocks nothing."""
+    protocol = protocol_service.current_protocol(project)
+    if protocol is None or protocol.spec.full_text_screening is None:
+        return []
+    queue = agreement_service.cannot_assess_queue(project, stage=ScreeningStage.FULL_TEXT)
+    return [item.model_dump(mode="json") for item in queue]
 
 
 FEED_TOP = 5

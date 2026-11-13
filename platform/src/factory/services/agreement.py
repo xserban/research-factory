@@ -320,6 +320,64 @@ def cannot_assess_open(project: Project, *, stage: ScreeningStage = TA) -> list[
     return [] if screen is None else sorted(_cannot_assess_open(screen))
 
 
+class CannotAssessItem(StrictModel):
+    """One unresolved full-text cannot-assess work as the researcher sees it (IDEA-67): each
+    pass's decision (`A`, then `B` when it decided), the command that reads the document the
+    first pass pinned, and the command that settles the work. Read-only."""
+
+    work_id: str
+    passes: dict[str, DecisionView]
+    read_command: str | None
+    resolve_command: str
+
+
+def cannot_assess_queue(project: Project, *, stage: ScreeningStage = TA) -> list[CannotAssessItem]:
+    """`cannot_assess_open` with each pass's decision and the commands, sorted by work. Available
+    as soon as the passes are opened, before they finish (a single-pass work needs only pass A).
+    Empty at title/abstract. Writes nothing and blocks nothing: whether an unresolved work may
+    reach extraction is the open IDEA-49 ruling."""
+    require_pass_stage(stage)
+    project.index.sync()
+    screen = _load(project, stage)
+    if screen is None:
+        return []
+    items: list[CannotAssessItem] = []
+    for work in sorted(_cannot_assess_open(screen)):
+        views = {
+            label.value: _view(project, decision)
+            for label in PassLabel
+            if (decision := screen.decided[label].get(work)) is not None
+        }
+        pinned = next((v.conversion_id for v in views.values() if v.conversion_id), None)
+        items.append(
+            CannotAssessItem(
+                work_id=work,
+                passes=views,
+                read_command=None
+                if pinned is None
+                else f"factory document read {work} --conversion {pinned}",
+                resolve_command=(
+                    f'factory screen resolve {work} <include|exclude> --reason "..." '
+                    f"[--criterion EXnn] --stage {stage.value}"
+                ),
+            )
+        )
+    return items
+
+
+def cannot_assess_counts(project: Project) -> dict[str, int]:
+    """The number of unresolved cannot-assess works per screening stage (IDEA-67): always 0 at
+    title/abstract (such a work goes on to be read in full); full text only while the protocol
+    declares a full-text plan. Read-only."""
+    counts = {TA.value: 0}
+    protocol = current_protocol(project)
+    if protocol is not None and protocol.spec.full_text_screening is not None:
+        counts[ScreeningStage.FULL_TEXT.value] = len(
+            cannot_assess_open(project, stage=ScreeningStage.FULL_TEXT)
+        )
+    return counts
+
+
 class AgreedWork(StrictModel):
     """A dual-coded work the passes agree on: its outcome, and for an exclusion the bare criteria
     either pass cited (sorted)."""
