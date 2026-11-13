@@ -32,11 +32,17 @@ For each step of the lifecycle, show how it is done (for the literature review: 
 - **Thin descriptions.** Many papers describe a stage in one sentence; the absence policy keeps them visible instead of inventing steps, and the coverage counts say how many systems had anything to compare.
 - **Selection bias.** The core papers are systems that describe themselves; a comparison with them shows what systems claim, not what works. Stated on the page.
 
-## 6. Open questions for the researcher (design choices, one by one)
+## 6. Rulings (researcher, 2026-11-13)
 
-1. **Scope of the first stage:** literature review only, or the whole lifecycle at once (about 8 stages, several times the cost).
-2. **Comparators:** only the core papers, or also the methods literature on how people do the stage (for the literature review: PRISMA, Cochrane, rapid-review guidance), as a second column next to the systems.
-3. **Our process:** drafted from specs and protocol by an agent, or written by the researcher.
-4. **Step granularity:** free-text steps grouped afterwards (recommended), or a fixed list of step types chosen first.
-5. **Fields:** whether `check` and `limits` are wanted at version 1 (they are the harder judgements).
-6. **Passes:** whole text with pass A Haiku and pass B Sonnet on 10 percent, as for `m-lifecycle`, or Sonnet throughout for this miner.
+| Choice | Ruling |
+|---|---|
+| Scope of the first run | Literature review only; the other stages after the comparison has been judged useful |
+| Comparators | Two columns beside our process: the core AI-scientist papers, and the methods literature on how people do a review (PRISMA, Cochrane, rapid-review guidance). The methods sources are chosen and listed by the researcher before part 2 for that column |
+| Our process | An agent drafts the rows from specs and protocol, each citing its section; the researcher checks |
+| Step granularity | Free text, grouped afterwards into step types the researcher registers |
+| Fields and passes | All fields (step, inputs, outputs, method, actor, check, limits; `check` and `limits` are `not-stated` when absent); pass A Haiku on all, pass B Sonnet on 10 percent |
+
+## 7. Still open
+
+1. The list of methods sources for the human-methods column (researcher).
+2. The `m-lifecycle` calibration (gold stages for 10 papers), which gates part 2.
