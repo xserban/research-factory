@@ -91,7 +91,7 @@ def lifecycle_data(
         )
     )
     return {
-        "stages": [{"id": i, "name": f.get("stage_name", ("", "", ""))[0] or f.get("stage_name", ("", "", ""))[1],
+        "stages": [{"id": i, "name": n} for i, n in STAGES],
         "modes": list(MODES),
         "layers": [{"id": k, "n": v} for k, v in known],
         "works": out,
@@ -146,8 +146,8 @@ def own_stage_sequences(project: Project) -> list[dict[str, Any]]:
         per_work[wid].append(
             {
                 "order": f["stage_order"][0],
-                "name": f.get("stage_name", ("", "", ""))[1]
-                or f.get("stage_name", ("", "", ""))[0],
+                "name": f.get("stage_name", ("", "", ""))[0]
+                or f.get("stage_name", ("", "", ""))[1],
                 "actor": f.get("actor", ("", "", ""))[0],
                 "how": f.get("how", ("", "", ""))[1],
                 "next": f.get("next_stage", ("", "", ""))[0],
