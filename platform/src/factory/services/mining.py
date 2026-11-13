@@ -46,6 +46,7 @@ from factory.model.screening import PassLabel
 from factory.model.search import QueryPurpose
 from factory.packs import Pack
 from factory.services.agreement import Outcome, final_outcomes
+from factory.services.call_memo import entering
 from factory.services.context import Project
 from factory.services.conversions import conversion_manifest
 from factory.services.document_read import default_conversion
@@ -762,7 +763,16 @@ def mine_status(
 ) -> list[MineStatus]:
     """The status of every miner the current protocol lists, by name. A session that joined a miner
     pass sees that miner only, and only the units of its own pass; `with_agreement` False leaves
-    the agreement out (agent views carry no rate)."""
+    the agreement out (agent views carry no rate).
+
+    Read-only: it syncs the index once and reads the rest under a snapshot, in one memo scope, so
+    the per-miner reads neither sync again nor refold the screening outcomes (the pilot paid
+    ~1,750 syncs per call before)."""
+    with project.index.snapshot(), entering():
+        return _mine_status(project, session, with_agreement)
+
+
+def _mine_status(project: Project, session: str | None, with_agreement: bool) -> list[MineStatus]:
     protocol = current_protocol(project)
     if protocol is None:
         return []
