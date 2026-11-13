@@ -79,7 +79,8 @@ def validate_miner(spec: MinerSpec, *, built_in: bool = False) -> list[Validatio
             if name not in known:
                 bad(f"{label}[{i}]", "not a field of the miner")
     if not built_in:
-        if not spec.row_key_fields:
+        if not spec.row_key_fields and spec.taxonomy is None:
+            # a derived miner without key fields keys its row on the work (IDEA-69 (1))
             bad("row_key_fields", "declare the fields that identify a record")
         if not any(f.required for f in spec.fields):
             bad("fields", "declare at least one required field")

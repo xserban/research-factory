@@ -82,6 +82,9 @@ def row_key(conversion_id: str, value: StoredField) -> str:
     return f"rk_{digest[:12]}"
 
 
+ROW_PER_WORK = "work"
+"""The fixed key part of a `row_per_work` pack's row key."""
+
 NO_ANCHOR = "-"
 """The anchor part of a keyed row key when no anchor field is present (``not-stated``)."""
 
@@ -92,9 +95,13 @@ def pack_row_key(pack: Pack, conversion_id: str, fields: Mapping[str, StoredFiel
     Keyed packs (``row_key_fields`` non-empty): ``rk_`` plus 12 hex of the hash of the
     conversion, the anchor of the first field of ``row_anchor_fields`` present with an anchor
     (``-`` when none) and ``normalise_for`` of each key field (``""`` when absent), joined by
-    the unit separator. Otherwise `row_key` of the field ``value``; raises ValueError when it
-    is absent.
+    the unit separator. A ``row_per_work`` pack: the hash of the conversion and the fixed text
+    ``work`` (one key per work, whatever the row holds). Otherwise `row_key` of the field
+    ``value``; raises ValueError when it is absent.
     """
+    if pack.row_per_work:
+        digest = hashlib.sha256(f"{conversion_id}\x1f{ROW_PER_WORK}".encode()).hexdigest()
+        return f"rk_{digest[:12]}"
     if not pack.row_key_fields:
         value = fields.get("value")
         if value is None:

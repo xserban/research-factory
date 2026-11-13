@@ -119,7 +119,7 @@ def verify_row_in(
     issues.extend(ValidationIssue(f"fields.{n}", REQUIRED) for n in dict.fromkeys(missing))
     if issues:
         return RowVerdict(None, None, issues)
-    if not pack.row_key_fields and VALUE_FIELD not in stored:
+    if not pack.row_key_fields and not pack.row_per_work and VALUE_FIELD not in stored:
         # the pack does not require `value`: the row has no identity
         return RowVerdict(None, None, [ValidationIssue(f"fields.{VALUE_FIELD}", REQUIRED)])
     return RowVerdict(stored, pack_row_key(pack, conversion_id, stored), [])

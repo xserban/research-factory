@@ -10,7 +10,9 @@ Invariants:
   given `layer_ids`), then its residuals. `described_as` is required for the `other` residuals and
   forbidden for every other value.
 - Rows are keyed on `category` alone (`row_anchor_fields` is empty), so passes never align on a
-  quote (plan §3.2).
+  quote (plan §3.2); except for one chosen dimension of `single` cardinality, whose spec declares
+  no row key fields: its one row per work is keyed on the work (`compile.keyed_on_work`), so two
+  passes that choose different categories align as one row and disagree (IDEA-69 (1)).
 - `absence_values` are the `not-stated` and `not-applicable` residuals of the chosen dimensions.
 - `derive_miner` raises `ValueError` for an unknown or repeated dimension, for no dimension, or
   for a dimension zero without `layer_ids`. Meaning is checked by `validate_miner`, not here.
@@ -49,6 +51,11 @@ def _chosen(taxonomy: TaxonomySpec, dimensions: Sequence[str]) -> tuple[Dimensio
             raise ValueError(f"unknown dimension: {dimension_id}")
     wanted = set(dimensions)
     return tuple(d for d in taxonomy.dimensions if d.id in wanted)
+
+
+def _one_single(chosen: Sequence[Dimension]) -> bool:
+    """Whether the miner holds one row per work: one chosen dimension, of `single` cardinality."""
+    return len(chosen) == 1 and chosen[0].cardinality == "single"
 
 
 def _category_ids(dimension: Dimension, layer_ids: Sequence[str]) -> list[str]:
@@ -118,7 +125,7 @@ def derive_miner(
         version=version,
         selector=selector,
         fields=(category, quote, described_as),
-        row_key_fields=("category",),
+        row_key_fields=() if _one_single(chosen) else ("category",),
         row_anchor_fields=(),
         conditionals=tuple(conditionals),
         evidence=EvidenceRule(
