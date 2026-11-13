@@ -44,6 +44,12 @@ NON_STATE_TABLES: frozenset[str] = frozenset(
 )
 OMITTED_WHEN_EMPTY: frozenset[str] = frozenset(
     {
+        # Taxonomy, mining request and work layer tables (IDEA-50 T1): an old log has none.
+        "taxonomies",
+        "taxonomy_proposals",
+        "mining_requests",
+        "mining_request_works",
+        "work_layer_moves",
         "ledger_confirmations",
         "dedup_pair_decisions",
         "budgets",
