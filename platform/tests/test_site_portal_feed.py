@@ -58,7 +58,8 @@ def test_panel_shows_title_project_score_nearest_work_react_buttons_and_the_link
     top = site_hub_feed.top_entries(
         [_view("a", [_item("2611.0001", 1, 0.912, "A <b>paper</b>")])], 5
     )
-    html = site_hub_feed.render_feed_panel(top, shown_total=30)
+    html = site_hub_feed.render_feed_panel(top, ranked_total=248)
+    assert "See all 248 ranked" in html
     assert "A &lt;b&gt;paper&lt;/b&gt;" in html
     assert "<b>paper</b>" not in html
     assert "0.912" in html
@@ -71,14 +72,14 @@ def test_panel_shows_title_project_score_nearest_work_react_buttons_and_the_link
 
 
 def test_panel_with_no_entries_says_so_and_still_links_to_the_page() -> None:
-    html = site_hub_feed.render_feed_panel([], shown_total=0)
+    html = site_hub_feed.render_feed_panel([], ranked_total=0)
     assert "No new papers yet" in html
     assert "href='/feed/'" in html
 
 
 def test_portal_carries_the_panel_and_the_bar_with_one_toggle() -> None:
     panel = site_hub_feed.render_feed_panel(
-        site_hub_feed.top_entries([_view("a", [_item("1", 1, 0.5)])], 5), shown_total=1
+        site_hub_feed.top_entries([_view("a", [_item("1", 1, 0.5)])], 5), ranked_total=1
     )
     page = site_portal.render_portal([], feed_panel=panel)
     assert "class=hubbar" in page
@@ -102,3 +103,18 @@ def test_feed_page_has_the_bar_with_feed_active_and_one_toggle() -> None:
 def test_portal_palette_follows_an_explicit_choice() -> None:
     page = site_portal.render_portal([])
     assert ':root[data-theme="light"]' in page and ':root[data-theme="dark"]' in page
+
+
+def test_ranked_total_sums_the_ranked_entries_not_the_shown_ones() -> None:
+    from factory.services.feed_page import FeedRankedPage
+
+    def ranked(total: int) -> FeedRankedPage:
+        return FeedRankedPage(
+            ranking_id="rk", total_ranked=total, total_shown=1, further=(), cut=0, cap=300
+        )
+
+    a = _view("a", [_item("1", 1, 0.5)])
+    b = _view("b", [_item("2", 1, 0.5)])
+    with_ranked = site_hub_feed.ProjectFeed("a", "A", "t", listing=a.listing, ranked=ranked(248))
+    plain = site_hub_feed.ProjectFeed("n", "N", "t")
+    assert site_hub_feed.ranked_total([with_ranked, b, plain]) == 249

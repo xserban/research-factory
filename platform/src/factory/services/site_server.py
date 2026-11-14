@@ -922,7 +922,7 @@ class MainHub:
             views = self.feed_views()
             panel = site_hub_feed.render_feed_panel(
                 site_hub_feed.top_entries(views, PORTAL_FEED_ITEMS),
-                shown_total=sum(len(v.listing.items) for v in views if v.listing is not None),
+                ranked_total=site_hub_feed.ranked_total(views),
             )
             page = site_portal.render_portal(
                 self.rows(),

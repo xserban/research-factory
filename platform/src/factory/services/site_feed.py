@@ -211,13 +211,17 @@ def _card(item: FeedListItem, record: Mapping[str, object] | None) -> str:
     )
 
 
-def _authors(record: Mapping[str, object] | None) -> str:
+def _authors_list(record: Mapping[str, object] | None) -> tuple[str, ...]:
     if record is None:
-        return ""
+        return ()
     value = record.get("authors")
     if not isinstance(value, list):
-        return ""
-    return ", ".join(str(a) for a in value if isinstance(a, str) and a.strip())
+        return ()
+    return tuple(str(a) for a in value if isinstance(a, str) and a.strip())
+
+
+def _authors(record: Mapping[str, object] | None) -> str:
+    return ", ".join(_authors_list(record))
 
 
 def _text(record: Mapping[str, object] | None, key: str) -> str:

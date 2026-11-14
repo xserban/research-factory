@@ -30,6 +30,7 @@ from factory.errors import FactoryError
 from factory.events.reader import read_all
 from factory.services.context import Project
 from factory.services.feed import FeedStatus, feed_status
+from factory.services.feed_page import FeedFurtherItem, FeedRankedPage, feed_ranked_page
 from factory.services.feed_read import FeedListing, FeedListItem, feed_list
 from factory.services.site_chrome import with_bar
 from factory.services.site_feed import FEED_CSS, _authors, _entry_records, _text
@@ -68,6 +69,7 @@ class ProjectFeed:
     reference_count: int | None = None
     references: str | None = None
     error: str | None = None
+    ranked: FeedRankedPage | None = None
 
 
 def _int(value: object) -> int:
@@ -82,6 +84,7 @@ def collect(project: Project, slug: str, title: str, token: str) -> ProjectFeed:
             return ProjectFeed(slug, title, token, status=status)
         listing = feed_list(project)
         records = _entry_records(project)
+        ranked = feed_ranked_page(project, records=records)
         last_fetch: LastFetch | None = None
         count: int | None = None
         refs: str | None = None
@@ -113,6 +116,7 @@ def collect(project: Project, slug: str, title: str, token: str) -> ProjectFeed:
             last_fetch=last_fetch,
             reference_count=count,
             references=refs,
+            ranked=ranked,
         )
     except (FactoryError, OSError, ValueError) as exc:
         return ProjectFeed(slug, title, token, error=f"{type(exc).__name__}: {exc}")
@@ -135,6 +139,9 @@ _CSS: Final = (
     ".status{background:var(--card);border:1px solid var(--line);padding:10px 14px;margin:8px 0}"
     ".card{border-color:var(--line);border-left-color:var(--acc)}"
     ".meta{color:var(--mut)}.rank,.score{color:var(--acc)}"
+    ".card.further{border-left-color:var(--line)}.card.further[hidden]{display:none}"
+    ".card.further .rank{color:var(--mut)}"
+    ".more{margin:12px 0}.more button{padding:4px 12px}"
 )
 
 _SCRIPT: Final = """
@@ -172,6 +179,17 @@ panels.forEach(function(panel){
       .catch(function(e){note(card,'request failed: '+e);})
       .then(function(){btns.forEach(function(x){x.disabled=false;});});
     });
+  });
+});
+panels.forEach(function(panel){
+  var btn=panel.querySelector('button[data-more]');if(!btn)return;
+  var step=parseInt(btn.dataset.more,10)||30,out=panel.querySelector('.shown-count');
+  btn.addEventListener('click',function(){
+    var hid=panel.querySelectorAll('.card.further[hidden]');
+    for(var i=0;i<hid.length&&i<step;i++)hid[i].hidden=false;
+    var left=panel.querySelectorAll('.card.further[hidden]').length;
+    if(out)out.textContent=String(panel.querySelectorAll('.card:not([hidden])').length);
+    if(!left)btn.hidden=true;else btn.textContent='Show next '+Math.min(step,left);
   });
 });
 var line=document.getElementById('run-line'),runBtns=document.querySelectorAll('button[data-run]');
@@ -272,6 +290,57 @@ def _card(item: object, record: Mapping[str, object] | None) -> str:
     )
 
 
+FURTHER_BLOCK: Final = 30
+
+
+def _further_card(item: FeedFurtherItem) -> str:
+    """A read-only card: rank, score, title, authors, abstract and links, no action button (the
+    reaction and add services accept shown entries only)."""
+    entry = e(item.entry_id, quote=True)
+    return (
+        f"<article class='card further' hidden data-entry-id='{entry}'>"
+        f"<div><span class=rank>#{item.rank}</span><span class=score>{item.score:.3f}</span>"
+        f"<span class=badge>rank {item.rank}, not in the shown set</span></div>"
+        f"<h3><a href='https://arxiv.org/abs/{entry}'>{e(item.title or item.entry_id)}</a></h3>"
+        + (f"<p class=meta>{e(', '.join(item.authors))}</p>" if item.authors else "")
+        + (
+            f"<details><summary>abstract</summary><p>{e(item.abstract)}</p></details>"
+            if item.abstract
+            else ""
+        )
+        + f"<p class=meta><a href='https://arxiv.org/abs/{entry}'>abstract page</a> "
+        f"<a href='https://arxiv.org/pdf/{entry}'>pdf</a></p></article>"
+    )
+
+
+def _further_html(view: ProjectFeed, shown: int) -> tuple[str, str]:
+    """`(count line, further part)`: the count line, the hidden further cards and the Show next button of a panel."""
+    ranked = view.ranked
+    total = ranked.total_ranked if ranked is not None else shown
+    window = view.last_fetch
+    line = (
+        f"<p class=sub>Showing <span class=shown-count>{shown}</span> of {total} ranked"
+        + (f" &middot; window {e(window.window_from)} to {e(window.window_to)}" if window else "")
+        + "</p>"
+    )
+    if ranked is None or not ranked.further:
+        return line, ""
+    cards = "".join(_further_card(i) for i in ranked.further)
+    cut = (
+        f"<p class=sub>The page lists the first {ranked.cap} ranked entries beyond the shown ones; "
+        f"{ranked.cut} more are not listed.</p>"
+        if ranked.cut
+        else ""
+    )
+    first = min(FURTHER_BLOCK, len(ranked.further))
+    after = (
+        f"<div class=more><button type=button data-more='{FURTHER_BLOCK}'>Show next {first}</button> "
+        "<span class=sub>Further cards give the abstract and links only: a reaction or an add is "
+        "recorded for the shown entries only.</span></div>"
+    )
+    return line, cards + after + cut
+
+
 def _panel(view: ProjectFeed) -> str:
     slug = e(view.slug, quote=True)
     ranking = view.listing.ranking_id if view.listing else None
@@ -291,10 +360,13 @@ def _panel(view: ProjectFeed) -> str:
         )
     records = view.records or {}
     cards = "".join(_card(i, records.get(i.entry_id)) for i in listing.items)
+    count_line, further = _further_html(view, len(listing.items))
     return (
         head
-        + f"<p class=sub>Ranking <code>{e(listing.ranking_id)}</code>, {len(listing.items)} items.</p>"
+        + f"<p class=sub>Ranking <code>{e(listing.ranking_id)}</code>.</p>"
+        + count_line
         + (cards or "<p class=sub>The latest ranking shows no items.</p>")
+        + further
         + "</section>"
     )
 
@@ -396,7 +468,19 @@ document.querySelectorAll('.fp .pe').forEach(function(card){
 """
 
 
-def render_feed_panel(entries: Sequence[TopEntry], *, shown_total: int) -> str:
+def ranked_total(views: Sequence[ProjectFeed]) -> int:
+    """The ranked entries of every project's latest ranking (the shown count where a project's
+    ranked page is not available)."""
+    total = 0
+    for v in views:
+        if v.ranked is not None:
+            total += v.ranked.total_ranked
+        elif v.listing is not None:
+            total += len(v.listing.items)
+    return total
+
+
+def render_feed_panel(entries: Sequence[TopEntry], *, ranked_total: int) -> str:
     """The short New papers list for the portal: each entry with its score, project, nearest core
     work and the like and dislike buttons; the full page has the abstract and Add to inbox."""
     if not entries:
@@ -422,7 +506,7 @@ def render_feed_panel(entries: Sequence[TopEntry], *, shown_total: int) -> str:
             "<button type=button data-act='dislike' disabled>Dislike</button><span class=msg></span></div></div>"
         )
     return (
-        f"<section class=fp><h2>New papers <a href='/feed/'>See all {shown_total} &rarr;</a></h2>"
+        f"<section class=fp><h2>New papers <a href='/feed/'>See all {ranked_total} ranked &rarr;</a></h2>"
         + "".join(rows)
         + f"</section><script>{_PANEL_SCRIPT}</script>"
     )
