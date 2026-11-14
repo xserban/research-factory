@@ -111,8 +111,13 @@ def audit_size(population: int, fraction: float, minimum: int) -> int:
     """Audit sample size `min(N, max(ceil(fraction * N), minimum))` over `N` agreed decisions.
 
     The ceiling is taken after rounding the product to 9 decimals, so float noise in
-    `fraction * N` cannot add a unit.
+    `fraction * N` cannot add a unit. Raises ValueError on a negative population or minimum, or
+    a fraction outside [0, 1].
     """
+    if population < 0 or minimum < 0:
+        raise ValueError("population and minimum must not be negative")
+    if not 0 <= fraction <= 1:
+        raise ValueError("fraction must lie in [0, 1]")
     scaled = math.ceil(round(fraction * population, 9))
     return min(population, max(scaled, minimum))
 
@@ -127,8 +132,11 @@ def draw_audit(
 
     The exclusion target is `floor(0.75 * n + 0.5)`. A short stratum is filled from the
     other, so the result has `min(n, total)` items. Each stratum is sampled from its sorted
-    input, so the draw depends only on the members and the seed. The output is sorted.
+    input, so the draw depends only on the members and the seed. The output is sorted. Raises
+    ValueError on a negative `n`.
     """
+    if n < 0:
+        raise ValueError("n must not be negative")
     n = min(n, len(exclusions) + len(inclusions))
     n_excl = min(math.floor(EXCLUSION_SHARE * n + 0.5), len(exclusions))
     n_incl = min(n - n_excl, len(inclusions))
