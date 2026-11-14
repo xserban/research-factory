@@ -122,11 +122,63 @@ def test_second_run_is_unchanged_and_writes_nothing(project: Project, corpus: No
     assert {p for p in project.paths.library_dir.rglob("*") if p.is_file()} == library_before
 
 
+def test_plain_run_skips_an_older_version_and_reports_it(project: Project, corpus: None) -> None:
+    """IDEA-48: after a version bump a plain run leaves the document alone and reports it."""
+    fetched_document(project, promoted_works(project)[0], ARTICLE)
+    run_convert(project, make_registry(StubConverter(version="1.0+a")))
+    before = event_bytes(project)
+
+    summary = run_convert(project, make_registry(StubConverter(version="1.0+b")), upgrade=False)
+
+    assert _statuses(summary) == ["outdated"]
+    assert summary.outdated == 1
+    assert summary.converted == 0
+    assert summary.outcomes[0].conversion_id is None
+    assert summary.outcomes[0].reason is None
+    assert event_bytes(project) == before
+    assert len(events_of_type(project, "document.converted")) == 1
+
+
+def test_upgrade_reconverts_an_older_version_and_keeps_the_old(
+    project: Project, corpus: None
+) -> None:
+    fetched_document(project, promoted_works(project)[0], ARTICLE)
+    run_convert(project, make_registry(StubConverter(version="1.0+a")))
+    old = Converted.model_validate(events_of_type(project, "document.converted")[0].payload)
+
+    summary = run_convert(project, make_registry(StubConverter(version="1.0+b")), upgrade=True)
+
+    assert _statuses(summary) == ["converted"]
+    assert summary.outdated == 0
+    assert summary.outcomes[0].conversion_id is not None
+    assert project.library.exists(old.markdown_hash) and project.library.exists(old.manifest_hash)
+    versions = [
+        Converted.model_validate(e.payload).converter_version
+        for e in events_of_type(project, "document.converted")
+    ]
+    assert versions == ["1.0+a", "1.0+b"]
+
+
+def test_current_version_is_unchanged_with_or_without_upgrade(
+    project: Project, corpus: None
+) -> None:
+    fetched_document(project, promoted_works(project)[0], ARTICLE)
+    run_convert(project, make_registry(StubConverter(version="1.0+a")))
+    before = event_bytes(project)
+
+    plain = run_convert(project, make_registry(StubConverter(version="1.0+a")), upgrade=False)
+    upgraded = run_convert(project, make_registry(StubConverter(version="1.0+a")), upgrade=True)
+
+    assert _statuses(plain) == ["unchanged"]
+    assert _statuses(upgraded) == ["unchanged"]
+    assert event_bytes(project) == before
+
+
 def test_version_bump_writes_second_conversion(project: Project, corpus: None) -> None:
     fetched_document(project, promoted_works(project)[0], ARTICLE)
     run_convert(project, make_registry(StubConverter(version="1.0+a")))
 
-    summary = run_convert(project, make_registry(StubConverter(version="1.0+b")))
+    summary = run_convert(project, make_registry(StubConverter(version="1.0+b")), upgrade=True)
 
     assert _statuses(summary) == ["converted"]
     versions = [
@@ -144,7 +196,7 @@ def test_version_bump_keeps_the_old_conversion_referenced(project: Project, corp
     old = Converted.model_validate(events_of_type(project, "document.converted")[0].payload)
     before = event_bytes(project)
 
-    run_convert(project, make_registry(StubConverter(version="1.0+b")))
+    run_convert(project, make_registry(StubConverter(version="1.0+b")), upgrade=True)
 
     after = event_bytes(project)
     assert all(after[path].startswith(data) for path, data in before.items())  # append-only

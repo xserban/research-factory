@@ -34,7 +34,6 @@ from factory.model.base import StrictModel
 from factory.model.decisions import DecisionLevel
 from factory.model.grey import GreyMethod, structured_types
 from factory.model.miners import MinerUse
-from factory.model.project import RigorMode
 from factory.model.protocol import (
     ChangeKind,
     CriterionChange,
@@ -62,7 +61,7 @@ from factory.model.watch import CycleStatus
 from factory.modules.presets import Enforcement, enforcement
 from factory.services.context import Project
 from factory.services.decision_binding import bind
-from factory.services.gates import gate_issues
+from factory.services.gates import _rigor_mode, gate_issues
 from factory.services.protocol_rules import (
     criterion_changes,
     extraction_stale,
@@ -1314,15 +1313,6 @@ def _measured_probes(project: Project) -> dict[str, set[str]]:
     for probe_id, source in rows:
         measured.setdefault(str(probe_id), set()).add(str(source))
     return measured
-
-
-def _rigor_mode(project: Project) -> RigorMode:
-    with project.index.connect() as conn:
-        value = conn.execute(
-            text("SELECT rigor_mode FROM project WHERE slug = :slug"),
-            {"slug": project.paths.slug},
-        ).scalar_one()
-    return RigorMode(str(value))
 
 
 def _json_list(stored: object) -> list[object]:

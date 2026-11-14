@@ -200,3 +200,29 @@ def test_read_refuses_after_combined_with_anchor(project: Project, settings: Set
     assert result.stdout == ""
     assert result.stderr == "after: cannot be combined with anchor\n"
     assert event_bytes(project) == before
+
+
+@pytest.mark.usefixtures("corpus", "stub_converters")
+def test_upgrade_flag_reaches_the_service(
+    project: Project, settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """IDEA-48: `--upgrade` is passed to `convert_or_restore`; a plain run passes False."""
+    from factory.services import document_convert as service
+
+    seen: list[bool] = []
+    original = service.convert_or_restore
+
+    def spy(*args: Any, **kwargs: Any) -> Any:
+        seen.append(bool(kwargs.get("upgrade", False)))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(service, "convert_or_restore", spy)
+    work = promoted_works(project)[0]
+    fetched_document(project, work, ARTICLE)
+
+    plain = runner.invoke(app, ["document", "convert"], env=_env(settings.root))
+    upgraded = runner.invoke(app, ["document", "convert", "--upgrade"], env=_env(settings.root))
+
+    assert plain.exit_code == 0, plain.stderr
+    assert upgraded.exit_code == 0, upgraded.stderr
+    assert seen == [False, True]

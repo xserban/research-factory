@@ -201,8 +201,8 @@ def test_payloads_construct() -> None:
         work_ids=("rf:1",),
         random_seed=7,
         population=10,
-        exclusions=4,
-        inclusions=6,
+        exclusions=0,
+        inclusions=1,
     )
     audit_labelled = AuditLabelled(
         audit_id=AUDIT, work_id="rf:1", verdict="include", criterion=None, channel=Channel.CLI
@@ -212,7 +212,7 @@ def test_payloads_construct() -> None:
     assert drawn.work_ids == ("rf:1",) and drawn.protocol_id is None
     assert (labelled.verdict, labelled.channel) == ("exclude", Channel.CLI)
     assert (resolved.reason, resolved.channel) == ("off-topic", Channel.MCP)
-    assert (sampled.population, sampled.exclusions + sampled.inclusions) == (10, 10)
+    assert (sampled.population, sampled.exclusions + sampled.inclusions) == (10, 1)
     assert (audit_labelled.verdict, audit_labelled.criterion) == ("include", None)
 
 
@@ -266,3 +266,27 @@ def test_decision_without_a_score_dumps_as_before() -> None:
     assert scored.model_dump(mode="json")["score"] == 7
     with pytest.raises(ValidationError):
         DecisionRecorded(**_decision(score=11))
+
+
+def _sampled_body(**over: object) -> dict[str, object]:
+    body: dict[str, object] = {
+        "audit_id": AUDIT,
+        "work_ids": ("rf:1", "rf:2"),
+        "random_seed": 1,
+        "population": 5,
+        "exclusions": 1,
+        "inclusions": 1,
+    }
+    body.update(over)
+    return body
+
+
+def test_audit_sampled_counts_must_match_the_sample() -> None:
+    AuditSampled(**_sampled_body())  # type: ignore[arg-type]
+    for over in (
+        {"exclusions": 2},  # counts do not add up to the sample
+        {"population": 1},  # sample larger than the population
+        {"work_ids": ("rf:1", "rf:1")},  # a work sampled twice
+    ):
+        with pytest.raises(ValidationError):
+            AuditSampled(**_sampled_body(**over))  # type: ignore[arg-type]

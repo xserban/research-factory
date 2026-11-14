@@ -646,3 +646,159 @@ def test_screen_pending_is_zero_while_dedup_is_not_current(
         dedup=False,
     )
     assert sum(runner.pending_units(project, "screen").values()) == 0
+
+
+# --- Mine stages: the calibration gate and the exploratory opt-in (IDEA-69 (3)) ---
+
+MINE = "mine:m-alpha"
+
+
+def _mine_stage(project: Project, monkeypatch: pytest.MonkeyPatch, state: object | None) -> None:
+    """A `mine:m-alpha` stage of listed version 2 with 3 pending units; `state` is the lifecycle
+    state `miner_state` returns (None leaves the real function in place)."""
+    from factory.services.miners import MinerState
+
+    install_skill(project.settings, "rf-mine", "MINE SKILL BODY")
+    monkeypatch.setattr(runner, "_mine_use", lambda p, m: 2)
+    monkeypatch.setattr("factory.services.pipeline.unit_pending", lambda p, k: 3)
+    if state is not None:
+        assert isinstance(state, MinerState)
+        monkeypatch.setattr("factory.services.miners.miner_state", lambda p, n, v: state)
+
+
+def _started_payloads(project: Project) -> list[dict[str, Any]]:
+    return [e.payload for e in _events(project) if e.type == "runner.started"]
+
+
+def test_uncalibrated_mine_stage_is_refused_before_launch(
+    project: Project, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from factory.services.miners import MinerState
+
+    _mine_stage(project, monkeypatch, MinerState.REGISTERED)
+    launcher = FakeLauncher()
+    with pytest.raises(FactoryValidationError) as exc:
+        runner.start_run(project, MINE, launcher=launcher)
+    assert launcher.calls == [] and runner.run_status(project) == []
+    assert _started_payloads(project) == []
+    assert [i.field for i in exc.value.issues] == ["stage"]
+    text_out = _issues(exc)
+    assert "m-alpha" in text_out and "version 2" in text_out
+    assert "calibrate it first" in text_out and "exploratory" in text_out
+
+
+def test_exploratory_mine_stage_launches_with_the_instruction(
+    project: Project, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from factory.services.miners import MinerState
+
+    _mine_stage(project, monkeypatch, MinerState.REGISTERED)
+    launcher = FakeLauncher()
+    run_id = runner.start_run(project, MINE, launcher=launcher, exploratory=True)
+    [(_, log_path)] = launcher.calls
+    prompt = (log_path.parent / "prompt.txt").read_text(encoding="utf-8")
+    assert "pass `exploratory` true to every `mine_next` call" in prompt
+    assert "no quality claim" in prompt
+    [started] = _started_payloads(project)
+    assert started["exploratory"] is True
+    _finish_all(launcher, run_id)
+
+
+def test_calibrated_mine_stage_launches_as_before(
+    project: Project, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from factory.services.miners import MinerState
+
+    _mine_stage(project, monkeypatch, MinerState.CALIBRATED)
+    launcher = FakeLauncher()
+    run_id = runner.start_run(project, MINE, launcher=launcher)
+    [(_, log_path)] = launcher.calls
+    prompt = (log_path.parent / "prompt.txt").read_text(encoding="utf-8")
+    assert "exploratory" not in prompt
+    [started] = _started_payloads(project)
+    assert "exploratory" not in started  # omitted when false
+    _finish_all(launcher, run_id)
+
+
+def test_exploratory_on_a_non_mine_stage_is_refused(project: Project) -> None:
+    launcher = FakeLauncher()
+    with pytest.raises(FactoryValidationError) as exc:
+        runner.start_run(project, "screen", launcher=launcher, exploratory=True)
+    assert [i.field for i in exc.value.issues] == ["exploratory"]
+    assert launcher.calls == [] and _started_payloads(project) == []
+
+
+def test_resumed_exploratory_run_keeps_the_flag(
+    project: Project, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from factory.services.miners import MinerState
+
+    _mine_stage(project, monkeypatch, MinerState.REGISTERED)
+    launcher = FakeLauncher(code=1)
+    first = runner.start_run(project, MINE, launcher=launcher, exploratory=True)
+    _finish_all(launcher, first)
+    second = runner.start_run(project, MINE, launcher=launcher, resumes=first)
+    [(_, log_path)] = launcher.calls[1:]
+    prompt = (log_path.parent / "prompt.txt").read_text(encoding="utf-8")
+    assert "pass `exploratory` true" in prompt
+    assert [p["exploratory"] for p in _started_payloads(project)] == [True, True]
+    _finish_all(launcher, second)
+
+
+def test_resume_cannot_turn_a_production_run_exploratory(
+    project: Project, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from factory.services.miners import MinerState
+
+    _mine_stage(project, monkeypatch, MinerState.CALIBRATED)
+    launcher = FakeLauncher(code=1)
+    first = runner.start_run(project, MINE, launcher=launcher)
+    _finish_all(launcher, first)
+    with pytest.raises(FactoryValidationError) as exc:
+        runner.start_run(project, MINE, launcher=launcher, resumes=first, exploratory=True)
+    assert [i.field for i in exc.value.issues] == ["exploratory"]
+    _finish_all(launcher, first)
+
+
+def test_queue_process_passes_exploratory_to_the_service(
+    project: Project, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from typer.testing import CliRunner
+
+    from factory.cli.main import app
+    from tests.cli_helpers import _env
+
+    seen: dict[str, Any] = {}
+
+    def fake_start(opened: Project, stage: str, **kwargs: Any) -> str:
+        seen.update(stage=stage, **kwargs)
+        return "rnr_01ARZ3NDEKTSV4RRFFQ69G5FAV"
+
+    monkeypatch.setattr(runner, "start_run", fake_start)
+    result = CliRunner().invoke(
+        app, ["queue", "process", "--stage", MINE, "--exploratory"], env=_env(project.settings.root)
+    )
+    assert result.exit_code == 0, result.output
+    assert seen["stage"] == MINE and seen["exploratory"] is True
+
+
+def test_runner_started_omits_exploratory_when_false() -> None:
+    """A production run's `runner.started` payload has no `exploratory` key (it reads as before
+    the field existed); an exploratory one carries it; both read back."""
+    from factory.model.runner import RunnerStarted
+
+    fields: dict[str, object] = {
+        "run_id": "rnr_01HZZZZZZZZZZZZZZZZZZZZZZZ",
+        "stage": "mine:m-x",
+        "model": "claude-haiku-5-5",
+        "allowed_tools": ("mcp__factory__mine_next",),
+        "prompt_blob": "sha256:" + "0" * 64,
+        "unit_cap": 1,
+        "counts_before": {"mine:m-x": 1},
+        "command": ("claude",),
+    }
+    plain = RunnerStarted.model_validate(fields).model_dump(mode="json")
+    assert "exploratory" not in plain
+    assert RunnerStarted.model_validate(plain).exploratory is False
+    marked = RunnerStarted.model_validate({**fields, "exploratory": True}).model_dump(mode="json")
+    assert marked["exploratory"] is True

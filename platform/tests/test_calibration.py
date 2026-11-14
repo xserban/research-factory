@@ -313,7 +313,7 @@ def test_audit_sample_takes_agreed_outcome_from_live_decisions(
         work_ids=(agreed, split),
         random_seed=3,
         population=2,
-        exclusions=0,
+        exclusions=1,
         inclusions=1,
     )
     project.record([project.events.make("audit.sampled", sampled, project.system_actor())])

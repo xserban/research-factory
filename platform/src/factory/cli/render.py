@@ -32,7 +32,7 @@ from factory.services.coverage import CoverageReport, Ratio
 from factory.services.dedup import MergeRow
 from factory.services.directions import RegistryPage
 from factory.services.discovery import DiscoveryReport
-from factory.services.document_convert import ConvertSummary, DocumentStatus
+from factory.services.document_convert import ConversionOutcome, ConvertSummary, DocumentStatus
 from factory.services.document_read import DocumentPage
 from factory.services.drafts import DraftRow, SentenceRow, StatusRow
 from factory.services.evaluation_view import EvaluationDetail
@@ -319,16 +319,24 @@ _NEEDS_A_CONVERTER = (FailureReason.NO_CONVERTER, FailureReason.CONVERTER_UNAVAI
 
 
 def convert_lines(summary: ConvertSummary) -> list[str]:
-    """One line per document outcome (document, work, status, reason), then the counts."""
+    """One line per document outcome (document, work, status, reason), then the counts. An
+    `outdated` outcome carries the hint to use `--upgrade`; the count of outdated documents is
+    appended only when it is not zero."""
     lines = [
-        f"{o.document_id}  {o.work_id}  {o.status}  {o.reason if o.reason else '-'}"
-        for o in summary.outcomes
+        f"{o.document_id}  {o.work_id}  {o.status}  {_outcome_reason(o)}" for o in summary.outcomes
     ]
+    outdated = f", outdated {summary.outdated}" if summary.outdated else ""
     lines.append(
         f"converted {summary.converted}, unchanged {summary.unchanged}, failed {summary.failed}, "
-        f"raw-missing {summary.raw_missing}, restored {summary.restored}"
+        f"raw-missing {summary.raw_missing}, restored {summary.restored}{outdated}"
     )
     return lines
+
+
+def _outcome_reason(outcome: ConversionOutcome) -> str:
+    if outcome.status == "outdated":
+        return "older converter version; use --upgrade"
+    return outcome.reason if outcome.reason else "-"
 
 
 def converter_lines(infos: list[ConverterInfo]) -> list[str]:

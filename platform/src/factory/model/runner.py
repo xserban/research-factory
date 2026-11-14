@@ -14,9 +14,9 @@ Pure value types; written by `factory.services.runner`.
 
 from __future__ import annotations
 
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import Field, StringConstraints
+from pydantic import Field, SerializerFunctionWrapHandler, StringConstraints, model_serializer
 
 from factory.model.base import StrictModel
 from factory.model.identity import BLOB_REF_RE, ULID_RE
@@ -54,6 +54,18 @@ class RunnerStarted(StrictModel):
     adopted: bool = False
     """True for a driver started outside the runner and recorded afterwards (`adopt_driver`);
     `allowed_tools` is then what that driver really had. Absent in older events (False)."""
+    exploratory: bool = False
+    """True for a mine stage run with the exploratory opt-in: its miner version has no passed
+    calibration (or the researcher chose it), and its rows carry no quality claim. Absent in older
+    events (False); a resumed run inherits it. Omitted from the dump when false, so a production
+    run's event reads as it did before the field existed."""
+
+    @model_serializer(mode="wrap")
+    def _exploratory_only_when_true(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        out: dict[str, Any] = handler(self)
+        if not self.exploratory:
+            out.pop("exploratory", None)
+        return out
 
 
 class RunnerFinished(StrictModel):

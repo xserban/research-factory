@@ -283,6 +283,37 @@ def _mine_use(project: Project, miner: str) -> int:
     return max(versions)
 
 
+def _require_calibrated_mine(project: Project, spec: StageSpec) -> None:
+    """Refuse (field `stage`) a production run of a mine stage whose listed version has no passed
+    calibration, before any session starts. The rule is `miner_state` (the state the miner pass
+    itself checks: see `factory.services.mining._require_calibrated`); an exploratory run skips it.
+    Read-only."""
+    if spec.miner is None or spec.miner_version is None:
+        return
+    from factory.services.miners import MinerState, miner_state  # miners imports the mining stack
+
+    state = miner_state(project, spec.miner, spec.miner_version)
+    if state is MinerState.CALIBRATED:
+        return
+    raise _refuse(
+        "stage",
+        f"miner {spec.miner} version {spec.miner_version} has no passed calibration "
+        f"(state: {state.value}); calibrate it first, or run exploratory (exploratory=true, "
+        "no quality claim)",
+    )
+
+
+def _recorded_exploratory(project: Project, run_id: str) -> bool:
+    """The `exploratory` flag recorded in the `runner.started` event of `run_id` (False when the
+    event has no such field: every run recorded before the flag). Read-only."""
+    from factory.events.reader import read_all
+
+    for event in read_all(project.paths.events_dir, project.catalog):
+        if event.type == "runner.started" and event.payload.get("run_id") == run_id:
+            return bool(event.payload.get("exploratory", False))
+    return False
+
+
 def stage_spec(project: Project, stage: str) -> StageSpec:
     """The spec of `stage`; for `mine:<id>` the miner and the version the protocol lists."""
     spec = STAGES.get(stage)
@@ -301,7 +332,9 @@ def _skill_text(project: Project, skill: str) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def _prompt(project: Project, stage: str, spec: StageSpec, unit_cap: int) -> str:
+def _prompt(
+    project: Project, stage: str, spec: StageSpec, unit_cap: int, exploratory: bool = False
+) -> str:
     slug = project.paths.slug
     parameters = f"project `{slug}`, pass_label `A`, role `{spec.role}`, model `{spec.model}`, "
     miner = ""
@@ -329,6 +362,11 @@ def _prompt(project: Project, stage: str, spec: StageSpec, unit_cap: int) -> str
             "Proposing background concepts (`concept_propose`, `concept_link`) is out of scope "
             "for this run: interpret the served ideas only, and ignore the skill's concept "
             "steps.\n\n"
+        )
+    if spec.miner is not None and exploratory:
+        extra += (
+            "This run is exploratory: pass `exploratory` true to every `mine_next` call. Its rows "
+            "carry no quality claim; say so in your final line.\n\n"
         )
     return (
         f"You are pass A of stage `{stage}`{miner} for the Research Factory project `{slug}`. "
@@ -378,6 +416,7 @@ def build_command(
     claude: str = "claude",
     run_id: str | None = None,
     prompt_override: str | None = None,
+    exploratory: bool = False,
 ) -> tuple[list[str], dict[str, JsonValue], str]:
     """`(argv, mcp config, prompt)` for one run of `stage`. Pure: starts and writes nothing.
     `prompt_override` is used in place of the built prompt (a resumed run's recorded prompt)."""
@@ -385,7 +424,9 @@ def build_command(
     if not 1 <= unit_cap <= MAX_UNIT_CAP:
         raise _refuse("unit_cap", f"must be between 1 and {MAX_UNIT_CAP}")
     prompt = (
-        prompt_override if prompt_override is not None else _prompt(project, stage, spec, unit_cap)
+        prompt_override
+        if prompt_override is not None
+        else _prompt(project, stage, spec, unit_cap, exploratory)
     )
     argv = [
         claude,
@@ -819,8 +860,15 @@ def start_run(
     pipeline: bool = False,
     resumes: str | None = None,
     prompt_override: str | None = None,
+    exploratory: bool = False,
 ) -> str:
     """Start one run of `stage`; returns its `run_id` once the process is started and recorded.
+
+    `exploratory` (IDEA-69 (3)) is the opt-in for a mine stage whose miner version has no passed
+    calibration: the run is then started with its rows marked exploratory (no quality claim). It is
+    refused on any other stage (field `exploratory`). Without it a mine stage is refused before
+    launch (field `stage`) unless the version's calibration has passed. A resumed run keeps the
+    flag of the run it resumes; asking for exploratory on a resume of a production run is refused.
     Refused while a pipeline runs, unless `pipeline` (the pipeline's own call).
 
     `resumes` names an earlier, not complete run of the same stage (plan restart-and-costs R2): the
@@ -830,6 +878,8 @@ def start_run(
     resume passes after reading the blob)."""
     stage = resolve_stage(project, stage)
     spec = stage_spec(project, stage)
+    if exploratory and spec.miner is None:
+        raise _refuse("exploratory", "applies to a mine stage (mine:<miner id>) only")
     earlier = None
     if resumes is not None:
         earlier = run_record(project, resumes)
@@ -843,6 +893,14 @@ def start_run(
             # a run the usage limit stopped exits 0 and is recorded complete, but is resumable
             if limit_stop(project, resumes, stage_pending=True) is None:
                 raise _refuse("resumes", f"{resumes} completed; there is nothing to resume")
+        earlier_exploratory = _recorded_exploratory(project, resumes)
+        if exploratory and not earlier_exploratory:
+            raise _refuse(
+                "exploratory", f"{resumes} was not exploratory; start a fresh run instead"
+            )
+        exploratory = earlier_exploratory
+    if not exploratory:
+        _require_calibrated_mine(project, spec)
     if unit_cap is None:
         unit_cap = DEFAULT_UNIT_CAP if earlier is None else earlier.unit_cap
     if earlier is not None and prompt_override is None:
@@ -879,6 +937,7 @@ def start_run(
             claude=claude,
             run_id=run_id,
             prompt_override=prompt_override,
+            exploratory=exploratory,
         )
         folder.mkdir(parents=True, exist_ok=True)
         (folder / "starting").write_text(str(time.time()), encoding="utf-8")
@@ -895,6 +954,7 @@ def start_run(
             counts_before=counts,
             command=tuple(recorded),
             resumes=resumes,
+            exploratory=exploratory,
         )
         with project.writing():  # mint under the lock (slice 5 ruling 3)
             project.record([project.events.make("runner.started", started, project.system_actor())])

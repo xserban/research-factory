@@ -168,7 +168,7 @@ btns.forEach(function(b){
     btns.forEach(function(x){x.disabled=true;});
     fetch(API+'/api/queue/process',{method:'POST',
       headers:{'Content-Type':'application/json','X-Factory-Token':token},
-      body:JSON.stringify({stage:b.dataset.stage})})
+      body:JSON.stringify({stage:b.dataset.stage,exploratory:b.dataset.exploratory==='1'})})
     .then(function(r){
       return r.json().catch(function(){
         return {ok:false,issues:[{field:'response',reason:'status '+r.status}]};
@@ -370,6 +370,14 @@ def _pending_html(pending: dict[str, int], plan: list[PipelineStage]) -> str:
         f"<br><button type=button disabled data-stage='{escape(s.key)}'>Process now</button></div>"
         for s in plan
         if s.applies
+    )
+    buttons += "".join(
+        f"<div class=proc><strong>{escape(s.label)}</strong> "
+        f"<span class=dim>{s.pending} pending ({escape(s.model)}); {escape(s.reason)}.</span>"
+        f"<br><button type=button disabled data-stage='{escape(s.key)}' data-exploratory=1>"
+        "Process exploratory</button></div>"
+        for s in plan
+        if s.exploratory_only
     )
     hint = (
         "<p class=dim id=runstatus>Process now works when this page is opened with "

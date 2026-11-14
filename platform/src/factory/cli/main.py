@@ -3817,6 +3817,13 @@ def document_convert_cmd(
             help="Use this converter instead of decision 49's (`factory document converters`).",
         ),
     ] = None,
+    upgrade: Annotated[
+        bool,
+        typer.Option(
+            "--upgrade",
+            help="Re-convert documents whose latest conversion is an older converter version.",
+        ),
+    ] = False,
 ) -> None:
     """Convert the retrieved documents of promoted works, as the researcher.
 
@@ -3824,6 +3831,8 @@ def document_convert_cmd(
     document is recorded and the rest continue. --restore regenerates the stored Markdown of
     recorded conversions that are missing or damaged; it writes no event. --converter adds a
     conversion beside the existing ones, and a later run without it leaves that document alone.
+    A document whose latest conversion is an older version of the same converter is skipped and
+    reported as `outdated`; --upgrade converts it, keeping the old conversion.
     """
     state = _state(ctx)
     with _reporting_errors():
@@ -3836,6 +3845,7 @@ def document_convert_cmd(
             work_ids=work,
             document_ids=document,
             override=converter is not None,
+            upgrade=upgrade,
         )
     for line in render.convert_lines(summary):
         typer.echo(line)

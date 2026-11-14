@@ -159,7 +159,7 @@ def _slice1_log(project: Project) -> dict[str, Any]:
             random_seed=3,
             population=2,
             exclusions=1,
-            inclusions=1,
+            inclusions=0,
         ),
         drop=STAGE_KEY,
         slice1=True,
@@ -225,7 +225,7 @@ def test_slice1_log_rebuilds_identically(project: Project) -> None:
         ],
         "SELECT audit_id, random_seed, population, exclusions, inclusions, population_digest,"
         " pop_exclusions, pop_inclusions FROM audits": [
-            (aud, 3, 2, 1, 1, population_digest([]), 0, 0)
+            (aud, 3, 2, 1, 0, population_digest([]), 0, 0)
         ],
         "SELECT audit_id, work_id, agreed_verdict, agreed_criteria, human_verdict, criterion"
         " FROM audit_items": [(aud, W1, None, None, "include", None)],

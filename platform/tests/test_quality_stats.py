@@ -34,3 +34,17 @@ def test_draw_uniform_matches_extraction_draw() -> None:
         assert stats.draw_uniform(
             items, 9, seed, key=extraction_audit._sort_key
         ) == extraction_audit._draw(items, 9, seed)
+
+
+def test_audit_size_and_draw_audit_refuse_negative_inputs() -> None:
+    import random
+
+    with pytest.raises(ValueError):
+        stats.audit_size(-1, 0.02, 50)
+    with pytest.raises(ValueError):
+        stats.audit_size(10, 0.02, -1)
+    for fraction in (-0.1, 1.5):
+        with pytest.raises(ValueError):
+            stats.audit_size(10, fraction, 5)
+    with pytest.raises(ValueError):
+        stats.draw_audit(["a"], ["b"], -1, random.Random(1))

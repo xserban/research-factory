@@ -236,3 +236,9 @@ Minor review findings parked during the v1 build, to address when iterating from
 - teams-D: a revoked but active member cannot confirm their ledger entry, and no one may for them (services/ledger.py).
 - teams-D: no export refuses on `ledger-unconfirmed` yet (services/check.py).
 - teams-D: the plugin skills do not yet mention `ledger_view`, `budget_status` or `reported_usage`.
+
+## Branch `low-hanging` review minors (2026-11-14)
+- `services/gates.py` `_rigor_mode` is private but imported by four modules; a public name (without the index sync of `rigor_mode`) would be cleaner. `services/seeds.py` and `services/project_stage.py` keep their own copies (they differ).
+- `cli/render.py`: the `outdated` count is appended to the convert summary only when non-zero, so the line format varies.
+- `ConvertOutcome` `outdated` has no reason field; the "use --upgrade" hint exists only in the CLI renderer.
+- `runner._recorded_exploratory` reads the whole event log on each resume.

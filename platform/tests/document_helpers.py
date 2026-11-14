@@ -90,6 +90,9 @@ def make_registry(converter: StubConverter | None = None) -> ConverterRegistry:
 
 
 def run_convert(project: Project, registry: ConverterRegistry, **kwargs: Any) -> ConvertSummary:
+    """Convert as the tests' fixtures expect: a converter at another version adds a conversion
+    (`upgrade=True` by default, IDEA-48). A test of the plain run's skip passes `upgrade=False`."""
+    kwargs.setdefault("upgrade", True)
     return convert_documents(project, registry, **kwargs)
 
 

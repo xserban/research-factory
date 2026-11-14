@@ -57,7 +57,6 @@ from factory.document.quotes import normalise_quote, quote_in_element
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
 from factory.model.budgets import REQUESTS_SEARCH
-from factory.model.project import RigorMode
 from factory.model.references import (
     BINDING_DECISIONS,
     MAX_QUOTE,
@@ -84,7 +83,7 @@ from factory.services.budgets import spent_for
 from factory.services.context import Project
 from factory.services.conversions import conversion_manifest
 from factory.services.dedup import active_merges, canonical_works
-from factory.services.gates import effective_policy
+from factory.services.gates import _rigor_mode, effective_policy
 from factory.services.search import get_work, list_works, register_query, run_query
 from factory.sources.registry import SourceFactory
 
@@ -661,15 +660,6 @@ def lost_human_decisions(project: Project) -> dict[str, int]:
             )
         ).all()
     return {str(rex): int(count) for rex, count in rows}
-
-
-def _rigor_mode(project: Project) -> RigorMode:
-    with project.index.connect() as conn:
-        value = conn.execute(
-            text("SELECT rigor_mode FROM project WHERE slug = :slug"),
-            {"slug": project.paths.slug},
-        ).scalar_one()
-    return RigorMode(str(value))
 
 
 def confirmer_ruling(
