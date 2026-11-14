@@ -1,0 +1,76 @@
+You are miner pass B for the Research Factory project `agentic-science`. Run miner `m-stage-steps` version 1 using the factory MCP tools. EXPLORATORY run: the miner has no calibration; the rows are for reading, not evidence.
+
+Follow the mining skill below (you are pass `B`).
+
+Parameters for every factory call: project `agentic-science`, miner `m-stage-steps`, version 1, pass_label `B`, role `miner`, model `claude-sonnet-5-5`, skill `rf-mine`.
+
+Mine ONE work. Call `mcp__factory__mine_next` (no `calibration`). If no task is served, say so and STOP. Otherwise read the whole paper with `mcp__factory__document_read` using `selected` true, `limit` 200 and `max_chars` 30000 (the work_id and conversion the task names); if the reply has a `next_after`, call again with `after` set to it, until `next_after` is empty. Do not read anything else.
+
+Then record the steps of the system the paper presents, inside each research stage it carries out or supports: ONE row per step, in one `mcp__factory__mine_record` call with `finish` true (all rows together). A stage is one of: literature-review, ideation-hypothesis, experiment-design, implementation-execution, data-analysis, paper-writing, review-verification, lab-automation, other. For each stage the paper's system carries out or supports, list the steps the paper describes for it, in the paper's order. Per row: `stage` (the enum value; its quote is the sentence that shows the step belongs to this stage), `step_order` (the enum text "1", "2", ... the position of the step within its stage in the paper's own account; its quote is the sentence that introduces the step; never two rows with the same stage and number), `step` (the paper's own words for what the step does, copied exactly), `actor` (automated, human-assisted, human, or not-stated; with a quote), and, only when the paper says so: `inputs` (a sentence on what the step takes in), `outputs` (what it produces), `method` (how it is done: technique, tool, prompt design or model), `check` (how the paper validates or checks the result of this step) and `limits` (what the paper says goes wrong or is limited in this step). All enum values are chosen from the allowed values served with the task: write `step_order` as the text "1", not a number. Every quote must be copied exactly, character for character, from one paragraph you read: one clause or one sentence, never joined, never changed. Use the paper's own steps: do not invent a step the paper does not describe, do not fill a field the paper is silent on (omit it), and do not merge or split steps the paper keeps apart. A stage the paper only mentions without describing steps gets no rows. If the paper describes no steps for any stage (a benchmark, a survey, a position paper), do not invent rows: close the work with `mcp__factory__mine_record`, `finish` true, no rows, and a reason saying what the paper is. Leave `unit` empty on every field; never write the text none into it.
+
+Use no other tools. Finally print only: the work, the number of rows recorded by stage, the rows accepted or rejected, and any `blocked` text or error verbatim.
+
+
+=== SKILL rf-mine ===
+---
+name: rf-mine
+description: Use when a registered miner must be run over the corpus, or a miner must be registered: serves miner tasks, records the rows read from the pinned document, and settles disagreements where the gate allows it. Name this skill as a miner's `procedure`.
+stage: [extract]
+---
+
+# rf-mine
+
+Runs one pass of a miner. A miner reads typed fields from selected anchors of a converted document.
+The platform selects the anchors and checks each row; the reading is yours.
+
+## Independence
+
+One session holds one pass. Pass A and pass B of a miner run in separate Claude Code sessions, and
+a session that joined a pass does not read the other pass's rows, any rate or any human label.
+The first `mine_next` call joins this session to the pass. The session that proposed a miner does
+not run its calibration pass, and neither does a session that took part in a production pass or
+recorded a gold label.
+
+## Procedure
+
+Registering, when the miner is new:
+
+1. Call `miner_register` with the spec: name (`m-...`), version, selector, typed fields, row key,
+   evidence rule, procedure skill (`rf-mine`) and regime. A changed spec needs a new version.
+2. Tell the researcher the protocol's `miners` section must list the miner. A registered miner runs
+   only then. Turning `evidence` on is the researcher's act.
+
+Running a pass:
+
+1. Call `mine_status` to see units, open, closed, rows and stale for your miner.
+2. Call `mine_next` with `miner`, `version` and `pass_label`. Read `blocked` if no task comes and
+   report it. Add `calibration` for the miner's calibration pass.
+3. Read the anchors the task names with `document_read`, at the pinned conversion.
+4. Call `mine_record` with one row per item found. Each value comes from the document, with its
+   anchor and verbatim quote. Never compute, convert or infer a value.
+5. Repeat for the work, then close it with `finish`. A work with no rows needs a `reason`.
+6. Correct a row by `supersedes`, mapping the index of the new row to the row it replaces.
+7. If you cannot finish a task, call `task_release`.
+8. Repeat from step 2 until no task is served.
+
+Settling, in a session outside both passes and only where the policy for the gate `mine.resolve`
+lets an agent:
+
+1. Call `mine_disagreements` for the miner.
+2. Call `mine_resolve` with `a`, `b` or `neither` and a reason, after reading the anchors yourself.
+   The miner's proposer does not resolve. When the gate is human, the tools refuse: report it.
+
+## Tool arguments
+
+Every writing tool takes `role`, `model` and `skill` (`rf-mine`). `miner_list` names what is
+registered.
+
+## Never
+
+- Never record a value the document does not state.
+- Never read the other pass's rows, or look for a rate or a label.
+- Never relax a miner's rule by editing a registered spec: register a new version.
+
+## Done when
+
+`mine_status` shows no open or queued unit for this pass, or the session has reported what blocks.

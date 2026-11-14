@@ -1,0 +1,481 @@
+{
+ "spec": {
+  "question_id": "Q@324dda60",
+  "method_profile": "rapid-review",
+  "criteria": [
+   {
+    "id": "IN01",
+    "parent": "slot:Task",
+    "statement": "An AI research system carrying out at least two research stages",
+    "rule": "Include if the record presents, evaluates or benchmarks an AI research system that carries out at least two research stages; evaluations of its outputs, such as ideas, count. The research must be scientific (natural, social, formal or health sciences). Studies that evaluate how an LLM performs one research-stage task (hypothesis generation or ranking, claim or causal-conclusion extraction from scientific literature, idea or claim evaluation) on scientific material also count. When the abstract cannot show whether a record meets IN01 or another inclusion criterion, give the verdict cannot-assess naming that criterion, which passes the record to full text; do not use unsure for this. Benchmarks, datasets and error analyses of research agents count as evaluating an AI research system.",
+    "applies_at": "either",
+    "priority": null,
+    "examples": {
+     "include": [],
+     "exclude": [],
+     "include_cases": [
+      {
+       "work_id": "rf:jingyi2025-scimaster-general-purpose-5fd2c5f3",
+       "text": "\"X-Master\" (SciMaster): include; a tool-augmented agent built to emulate human researchers is a research system, even though its published evaluation is a general exam (HLE).",
+       "source": "calibration"
+      },
+      {
+       "work_id": "rf:monteiro2026-vaar-cryptographically-traceable-cf57adca",
+       "text": "\"VAAR\": include; a protocol for classifying scientific claims in hybrid human-LLM research systems covers a research stage (claim verification) within an LLM-based research system.",
+       "source": "calibration"
+      }
+     ]
+    },
+    "note": ""
+   },
+   {
+    "id": "IN02",
+    "parent": "slot:Method",
+    "statement": "Built on an LLM or foundation model",
+    "rule": "Include if the system is built on an LLM or foundation model. 'Agent' or 'AI' alone does not show the model. When the record otherwise meets the criteria but the abstract is silent on the model, give the verdict cannot-assess naming IN02, which passes the record to full text; do not use unsure for this.",
+    "applies_at": "either",
+    "priority": null,
+    "examples": {
+     "include": [],
+     "exclude": []
+    },
+    "note": ""
+   },
+   {
+    "id": "IN03",
+    "parent": "slot:Data",
+    "statement": "First published on or after 1 January 2025",
+    "rule": "Include if first published on or after 1 January 2025.",
+    "applies_at": "title-abstract",
+    "priority": null,
+    "examples": {
+     "include": [],
+     "exclude": []
+    },
+    "note": ""
+   },
+   {
+    "id": "IN04",
+    "parent": "slot:Data",
+    "statement": "The system's own research work is done in software",
+    "rule": "Include if the system's own research work is done in software; later laboratory validation by humans is allowed.",
+    "applies_at": "either",
+    "priority": null,
+    "examples": {
+     "include": [],
+     "exclude": []
+    },
+    "note": ""
+   },
+   {
+    "id": "EX01",
+    "parent": "slot:Data",
+    "statement": "Not a research paper or preprint",
+    "rule": "Exclude podcasts, books, news items and letters deposited on Zenodo. A title-only record is judged on its title: exclude it when the title names a non-paper (response, letter, editorial, erratum) or no AI research system; otherwise include it for full text.",
+    "applies_at": "title-abstract",
+    "priority": 1,
+    "examples": {
+     "include": [],
+     "exclude": []
+    },
+    "note": ""
+   },
+   {
+    "id": "EX02",
+    "parent": "NG05",
+    "statement": "Survey or review of AI research systems",
+    "rule": "Exclude surveys and reviews of AI research systems; kept as background only. These are recorded as background and snowball sources.",
+    "applies_at": "either",
+    "priority": 2,
+    "examples": {
+     "include": [],
+     "exclude": []
+    },
+    "note": ""
+   },
+   {
+    "id": "EX03",
+    "parent": "NG06",
+    "statement": "Position paper with no system",
+    "rule": "Exclude position papers that describe no system; kept as background for SQ3 only.",
+    "applies_at": "either",
+    "priority": 3,
+    "examples": {
+     "include": [],
+     "exclude": []
+    },
+    "note": ""
+   },
+   {
+    "id": "EX04",
+    "parent": "NG01",
+    "statement": "Single-stage tool",
+    "rule": "Exclude single-stage tools, such as a paper-writing assistant or a literature summariser, that do not run at least two research stages. A system that carries out several kinds of research task on request (analyses, literature search) is not single-stage; exclude tools built for one practical task (writing assistant, summariser, interview or data-extraction tool).",
+    "applies_at": "either",
+    "priority": 4,
+    "examples": {
+     "include": [],
+     "exclude": [],
+     "include_cases": [
+      {
+       "work_id": "rf:b2025-leveraging-large-language-42c76893",
+       "text": "\"Leveraging Large-Language Models As Collaborative Reasoning Partners To Enhance Scientific Workflow\": include; retrieval, reasoning over experimental data and note-taking within one research workflow is more than one stage.",
+       "source": "chk_01M6VS1WD3414DFWKEWY1C2FXB"
+      },
+      {
+       "work_id": "rf:rajwal2026-do-llms-know-2a7f7c1b",
+       "text": "\"Do LLMs Know a Good Hypothesis When They See One? Logit-Based Energy Scoring for Scientific Hypothesis Ranking\": include; hypothesis evaluation for AI research workflows counts even as a single component.",
+       "source": "chk_01M6VS1WD3414DFWKEWY1C2FXB"
+      }
+     ]
+    },
+    "note": "Also kept out by IN01/IN04; named so the reason is explicit."
+   },
+   {
+    "id": "EX05",
+    "parent": "NG02",
+    "statement": "General LLM benchmark with no research workflow",
+    "rule": "Exclude general LLM reasoning or coding benchmarks with no research workflow. This includes generic creativity or idea-similarity metrics evaluated without scientific material. Benchmarks of research agents are not excluded here; this criterion covers general LLM benchmarks with no research workflow.",
+    "applies_at": "either",
+    "priority": 5,
+    "examples": {
+     "include": [],
+     "exclude": [],
+     "include_cases": [
+      {
+       "work_id": "rf:20252025-role-model-prior-c7cbbf50",
+       "text": "\"On the Role of Model Prior in Real-World Inductive Reasoning\": include; it studies how LLMs generate scientific hypotheses (a research stage), so it is not a general LLM benchmark.",
+       "source": "chk_01M6VS1WD3414DFWKEWY1C2FXB"
+      },
+      {
+       "work_id": "rf:wang2026-where-do-deep-e1fe9e66",
+       "text": "\"Where do deep-research agents fail\" (error analysis): include; an error analysis of deep-research agents evaluates an AI research system, so it is not a general LLM benchmark.",
+       "source": "calibration"
+      }
+     ]
+    },
+    "note": "Also kept out by IN01/IN04; named so the reason is explicit."
+   },
+   {
+    "id": "EX06",
+    "parent": "NG03",
+    "statement": "One domain task with no research system",
+    "rule": "Exclude papers applying an LLM to one domain task, such as a property predictor in chemistry, with no research system around it. Also exclude systems whose 'research' is engineering or commercial optimisation outside science (recommender systems, trading, cryptography and security).",
+    "applies_at": "either",
+    "priority": 6,
+    "examples": {
+     "include": [],
+     "exclude": []
+    },
+    "note": "Also kept out by IN01/IN04; named so the reason is explicit."
+   },
+   {
+    "id": "EX07",
+    "parent": "NG04",
+    "statement": "Survey of attitudes to AI with no system",
+    "rule": "Exclude surveys of scientists' attitudes to AI that describe no system or workflow.",
+    "applies_at": "either",
+    "priority": 7,
+    "examples": {
+     "include": [],
+     "exclude": []
+    },
+    "note": "Also kept out by IN01/IN04; named so the reason is explicit."
+   }
+  ],
+  "sources": [
+   {
+    "name": "openalex",
+    "included": true,
+    "probe_id": "prb_01M6VGDCCZXR6YN1NDSEF949GS",
+    "why": "Round 5: main query 4,074 hits, 4 of 4 development seeds; human-role query 27 hits (round 4)"
+   },
+   {
+    "name": "arxiv",
+    "included": true,
+    "probe_id": "prb_01M6VHCSPWYA1Q4FZF61B22HHQ",
+    "why": "Round 6: main query 1,485 hits, 2 of 2 testable development seeds; human-role query 14 hits"
+   }
+  ],
+  "queries": [
+   {
+    "source": "openalex",
+    "kind": "keyword",
+    "text": "(\"AI scientist\" OR \"AI scientists\" OR \"AI-scientist\" OR \"co-scientist\" OR \"co scientist\" OR \"AI co-scientist\" OR \"automated research\" OR \"autonomous research\" OR \"autonomous research agent\" OR \"research agent\" OR \"research agents\" OR \"automated scientific discovery\" OR \"autonomous scientific discovery\" OR \"automated scientific research\" OR \"automating scientific research\" OR \"research ideation\" OR autoresearch OR \"agent laboratory\" OR \"automated experimentation\" OR \"scientific discovery\" OR \"idea generation\" OR \"scientific ideation\" OR \"hypothesis generation\" OR \"research workflow\" OR \"research pipeline\" OR \"end-to-end research\") AND (agent OR agents OR agentic OR \"multi-agent\" OR \"multi agent\" OR LLM OR LLMs OR \"LLM-based\" OR \"large language model\" OR \"large language models\")",
+    "filters": {
+     "from_publication_date": "2025-01-01",
+     "language": "en"
+    }
+   },
+   {
+    "source": "arxiv",
+    "kind": "keyword",
+    "text": "(ti:\"AI scientist\" OR abs:\"AI scientist\" OR ti:\"AI scientists\" OR abs:\"AI scientists\" OR ti:\"AI-scientist\" OR abs:\"AI-scientist\" OR ti:\"co-scientist\" OR abs:\"co-scientist\" OR ti:\"co scientist\" OR abs:\"co scientist\" OR ti:\"AI co-scientist\" OR abs:\"AI co-scientist\" OR ti:\"automated research\" OR abs:\"automated research\" OR ti:\"autonomous research\" OR abs:\"autonomous research\" OR ti:\"autonomous research agent\" OR abs:\"autonomous research agent\" OR ti:\"research agent\" OR abs:\"research agent\" OR ti:\"research agents\" OR abs:\"research agents\" OR ti:\"automated scientific discovery\" OR abs:\"automated scientific discovery\" OR ti:\"autonomous scientific discovery\" OR abs:\"autonomous scientific discovery\" OR ti:\"automated scientific research\" OR abs:\"automated scientific research\" OR ti:\"automating scientific research\" OR abs:\"automating scientific research\" OR ti:\"research ideation\" OR abs:\"research ideation\" OR ti:autoresearch OR abs:autoresearch OR ti:\"agent laboratory\" OR abs:\"agent laboratory\" OR ti:\"automated experimentation\" OR abs:\"automated experimentation\" OR ti:\"scientific discovery\" OR abs:\"scientific discovery\" OR ti:\"idea generation\" OR abs:\"idea generation\" OR ti:\"scientific ideation\" OR abs:\"scientific ideation\" OR ti:\"hypothesis generation\" OR abs:\"hypothesis generation\" OR ti:\"research workflow\" OR abs:\"research workflow\" OR ti:\"research pipeline\" OR abs:\"research pipeline\" OR ti:\"end-to-end research\" OR abs:\"end-to-end research\") AND (ti:agent OR abs:agent OR ti:agents OR abs:agents OR ti:agentic OR abs:agentic OR ti:\"multi-agent\" OR abs:\"multi-agent\" OR ti:\"multi agent\" OR abs:\"multi agent\" OR ti:LLM OR abs:LLM OR ti:LLMs OR abs:LLMs OR ti:\"LLM-based\" OR abs:\"LLM-based\" OR ti:\"large language model\" OR abs:\"large language model\" OR ti:\"large language models\" OR abs:\"large language models\") AND (cat:cs.AI OR cat:cs.CL OR cat:cs.MA OR cat:cs.LG OR cat:cs.HC OR cat:cs.SE OR cat:cs.IR OR cat:cs.DL) AND submittedDate:[202501010000 TO 202611072359]",
+    "filters": {}
+   },
+   {
+    "source": "openalex",
+    "kind": "keyword",
+    "text": "(\"human-in-the-loop\" OR \"human-AI collaboration\") AND (\"research agent\" OR \"AI scientist\")",
+    "filters": {
+     "from_publication_date": "2025-01-01",
+     "language": "en"
+    }
+   },
+   {
+    "source": "arxiv",
+    "kind": "keyword",
+    "text": "(ti:\"human-in-the-loop\" OR abs:\"human-in-the-loop\" OR ti:\"human-AI collaboration\" OR abs:\"human-AI collaboration\") AND (ti:\"research agent\" OR abs:\"research agent\" OR ti:\"AI scientist\" OR abs:\"AI scientist\") AND (cat:cs.AI OR cat:cs.CL OR cat:cs.MA OR cat:cs.LG OR cat:cs.HC OR cat:cs.SE OR cat:cs.IR OR cat:cs.DL) AND submittedDate:[202501010000 TO 202611072359]",
+    "filters": {}
+   }
+  ],
+  "limits": [
+   {
+    "field": "language",
+    "value": "en",
+    "why": "Most work in this field is published in English"
+   },
+   {
+    "field": "from_publication_date",
+    "value": "2025-01-01",
+    "why": "Scope of the question (Data slot)"
+   }
+  ],
+  "screening": {
+   "passes": 2,
+   "dual_sample": 0.1,
+   "kappa_floor": 0.6,
+   "kappa_enforced": false,
+   "calibration_size": 30,
+   "audit_fraction": 0.02,
+   "audit_minimum": 50,
+   "reviewers": [
+    {
+     "role": "reviewer-of-record",
+     "actor": "obd",
+     "kind": "human",
+     "duties": "Calibration labels, tuning and band checks, audit"
+    },
+    {
+     "role": "assisting",
+     "actor": "screener-a",
+     "kind": "agent",
+     "duties": "Pass A, Haiku, 4 parallel sessions"
+    },
+    {
+     "role": "assisting",
+     "actor": "screener-b",
+     "kind": "agent",
+     "duties": "Pass B on 10%, Sonnet"
+    }
+   ],
+   "stop_after_consecutive_excludes": 30,
+   "stop_below_score": 3,
+   "stop_score_run": 30
+  },
+  "full_text_screening": {
+   "passes": 2,
+   "dual_sample": 0.1,
+   "kappa_floor": 0.6,
+   "kappa_enforced": false,
+   "calibration_size": 30,
+   "audit_fraction": 0.02,
+   "audit_minimum": 50,
+   "reviewers": [
+    {
+     "role": "reviewer-of-record",
+     "actor": "obd",
+     "kind": "human",
+     "duties": "Calibration labels, tuning and band checks, audit"
+    },
+    {
+     "role": "assisting",
+     "actor": "screener-a",
+     "kind": "agent",
+     "duties": "Full text, Sonnet"
+    },
+    {
+     "role": "assisting",
+     "actor": "screener-b",
+     "kind": "agent",
+     "duties": "Full text pass B on 10%, Sonnet"
+    }
+   ]
+  },
+  "extraction_schema": {
+   "pack": "ai-research-system",
+   "pack_version": 1,
+   "fields": [
+    "system",
+    "stage",
+    "process_shape",
+    "automated_span",
+    "stage_inputs",
+    "stage_outputs",
+    "approach",
+    "compared_to",
+    "metric",
+    "result",
+    "evidence_grade",
+    "ablation",
+    "human_role",
+    "human_adds",
+    "human_vs_automated",
+    "components_models",
+    "released",
+    "idea_assessment_method",
+    "assessment_reliability",
+    "self_reported"
+   ],
+   "comparability_keys": [
+    "stage",
+    "metric",
+    "approach"
+   ],
+   "dual_extract_sample": 0.2,
+   "audit_fraction": 0.02,
+   "audit_minimum": 50,
+   "claims": true
+  },
+  "snowball_plan": {
+   "max_backward_rounds": 1,
+   "max_forward_rounds": 1,
+   "stop_when_no_new_included": true,
+   "forward_core_only": true,
+   "forward_topic_filter": "\"AI scientist\" OR \"AI scientists\" OR \"AI-scientist\" OR \"co-scientist\" OR \"co scientist\" OR \"AI co-scientist\" OR \"automated research\" OR \"autonomous research\" OR \"autonomous research agent\" OR \"research agent\" OR \"research agents\" OR \"automated scientific discovery\" OR \"autonomous scientific discovery\" OR \"automated scientific research\" OR \"automating scientific research\" OR \"research ideation\" OR autoresearch OR \"agent laboratory\" OR \"automated experimentation\" OR \"scientific discovery\" OR \"idea generation\" OR \"scientific ideation\" OR \"hypothesis generation\" OR \"research workflow\" OR \"research pipeline\" OR \"end-to-end research\"",
+   "forward_max_per_work": 15
+  },
+  "contribution_schema": null,
+  "supplied_links": null,
+  "watch_plan": null,
+  "library_sources": [
+   {
+    "name": "Programme lead's papers",
+    "format": "pdfs",
+    "role": "corpus"
+   }
+  ],
+  "gate_policies": null,
+  "miners": [
+   {
+    "name": "m-descriptors",
+    "version": 3,
+    "dual_extract_sample": 0.1,
+    "audit_fraction": 0.02,
+    "audit_minimum": 50,
+    "evidence": false,
+    "imports": "deny"
+   },
+   {
+    "name": "m-design-approach",
+    "version": 2,
+    "dual_extract_sample": 0.1,
+    "audit_fraction": 0.02,
+    "audit_minimum": 50,
+    "evidence": false,
+    "imports": "deny"
+   },
+   {
+    "name": "m-mapping",
+    "version": 2,
+    "dual_extract_sample": 0.1,
+    "audit_fraction": 0.02,
+    "audit_minimum": 50,
+    "evidence": false,
+    "imports": "deny"
+   },
+   {
+    "name": "m-classification",
+    "version": 1,
+    "dual_extract_sample": 0.1,
+    "audit_fraction": 0.02,
+    "audit_minimum": 50,
+    "evidence": false,
+    "imports": "deny"
+   },
+   {
+    "name": "m-stages",
+    "version": 1,
+    "dual_extract_sample": 0.1,
+    "audit_fraction": 0.02,
+    "audit_minimum": 50,
+    "evidence": false,
+    "imports": "deny"
+   },
+   {
+    "name": "m-summary",
+    "version": 2,
+    "dual_extract_sample": 0.1,
+    "audit_fraction": 0.02,
+    "audit_minimum": 50,
+    "evidence": false,
+    "imports": "deny"
+   },
+   {
+    "name": "m-release",
+    "version": 7,
+    "dual_extract_sample": 0.1,
+    "audit_fraction": 0.02,
+    "audit_minimum": 50,
+    "evidence": false,
+    "imports": "deny",
+    "layers": [
+     "core",
+     "adjacent"
+    ],
+    "on_demand": true,
+    "order": "by-layer"
+   },
+   {
+    "name": "m-layer",
+    "version": 1,
+    "dual_extract_sample": 0.1,
+    "audit_fraction": 0.02,
+    "audit_minimum": 50,
+    "evidence": false,
+    "imports": "deny"
+   },
+   {
+    "name": "m-lifecycle",
+    "version": 2,
+    "dual_extract_sample": 0.1,
+    "audit_fraction": 0.02,
+    "audit_minimum": 50,
+    "evidence": false,
+    "imports": "deny",
+    "layers": [
+     "core"
+    ],
+    "on_demand": true,
+    "order": "by-layer"
+   },
+   {
+    "name": "m-stage-steps",
+    "version": 1,
+    "dual_extract_sample": 0.1,
+    "audit_fraction": 0.02,
+    "audit_minimum": 50,
+    "evidence": false,
+    "imports": "deny",
+    "layers": [
+     "core"
+    ],
+    "on_demand": true,
+    "order": "by-layer"
+   }
+  ],
+  "taxonomies": [
+   {
+    "name": "t-agentic-layer",
+    "version": 1
+   }
+  ],
+  "hypothesis_plan": null,
+  "grey_sources": null,
+  "appraisal_instrument": null,
+  "rationale": "Rapid review (Research Plan v1.0) of AI research systems since 2025, to compile a reference process, graded design approaches, the human role, blueprints and idea-assessment methods (SQ1-SQ5). Title/abstract screening is ranked by SPECTER2 similarity to the development seeds and stops after 30 consecutive excludes or 30 consecutive scores below 3 (lowered from 200 and 50 mid-pass A by the researcher, 2026-11-08); records left are reported in PRISMA. Screener tuning loop before main screening; band check after. Forward snowballing is capped at 15 citing works per core work, filtered by topic. Crossref is not searched (declared shortcut). Search revised after PRESS review prs_01M6VG0PYJHEW3P8J2345VPER1 (probe rounds 4 and 5): wider concept block, LLM terms in the agent block, OpenAlex English only, arXiv limited to cs.AI, cs.CL, cs.MA, cs.LG, cs.HC, cs.SE, cs.IR and cs.DL (re-review prs_01M6VGTDA6T79A5FXEEP87W51J, round 6), the same agent block on both sources, and two supplementary human-role queries. Criteria wording amended after the tuning loop (measurement batch 1)."
+ },
+ "reason": "List m-stage-steps v1 (the steps inside each research stage of an AI research system as each paper describes them; plan 2026-11-13-lifecycle-stage-deep-dive): automatic on core works, on demand for others, whole text, pass A Haiku and pass B Sonnet on 10 percent. EXPLORATORY run (researcher's ruling 2026-11-13): no calibration yet, rows are for reading, not evidence. No evidence admission.",
+ "semantic": true,
+ "effects": {}
+}

@@ -1,0 +1,158 @@
+{
+ "name": "m-stage-steps",
+ "version": 1,
+ "selector": {
+  "population": "included-ft",
+  "elements": [
+   "paragraph"
+  ],
+  "heading_patterns": [],
+  "max_units": null
+ },
+ "fields": [
+  {
+   "name": "stage",
+   "group": "step",
+   "kind": {
+    "type": "enum",
+    "values": [
+     "literature-review",
+     "ideation-hypothesis",
+     "experiment-design",
+     "implementation-execution",
+     "data-analysis",
+     "paper-writing",
+     "review-verification",
+     "lab-automation",
+     "other"
+    ]
+   },
+   "required": true,
+   "description": "The research stage the step belongs to, from the stages the paper's own system carries out or supports: literature-review, ideation-hypothesis, experiment-design, implementation-execution, data-analysis, paper-writing, review-verification, lab-automation, other. Row key with step_order. The quote is the sentence that shows the step belongs to this stage.",
+   "compared": true
+  },
+  {
+   "name": "step_order",
+   "group": "step",
+   "kind": {
+    "type": "enum",
+    "values": [
+     "1",
+     "2",
+     "3",
+     "4",
+     "5",
+     "6",
+     "7",
+     "8",
+     "9",
+     "10",
+     "11",
+     "12"
+    ]
+   },
+   "required": true,
+   "description": "Row key with stage: the position of this step within its stage in the paper's own account, 1 for the first. One row per step, never two rows with the same stage and number. The quote is the sentence that introduces or describes the step.",
+   "compared": true
+  },
+  {
+   "name": "step",
+   "group": "step",
+   "kind": {
+    "type": "quote"
+   },
+   "required": true,
+   "description": "The paper's own words for what the step does, copied exactly (one clause or sentence).",
+   "compared": false
+  },
+  {
+   "name": "inputs",
+   "group": "step",
+   "kind": {
+    "type": "quote"
+   },
+   "required": false,
+   "description": "A sentence that says what the step takes in (documents, a hypothesis, code, data). Omit when the paper does not say.",
+   "compared": false
+  },
+  {
+   "name": "outputs",
+   "group": "step",
+   "kind": {
+    "type": "quote"
+   },
+   "required": false,
+   "description": "A sentence that says what the step produces. Omit when the paper does not say.",
+   "compared": false
+  },
+  {
+   "name": "method",
+   "group": "step",
+   "kind": {
+    "type": "quote"
+   },
+   "required": false,
+   "description": "A sentence that says how the step is done: the technique, tool, prompt design or model used. Omit when the paper does not say.",
+   "compared": false
+  },
+  {
+   "name": "actor",
+   "group": "step",
+   "kind": {
+    "type": "enum",
+    "values": [
+     "automated",
+     "human-assisted",
+     "human",
+     "not-stated"
+    ]
+   },
+   "required": true,
+   "description": "Who carries out the step as the paper describes it: automated (the system alone), human-assisted (a person reviews, approves or steers), human, not-stated.",
+   "compared": true
+  },
+  {
+   "name": "check",
+   "group": "step",
+   "kind": {
+    "type": "quote"
+   },
+   "required": false,
+   "description": "A sentence that says how the paper validates or checks the result of this step (a verifier, a reviewer, a test, a human check). Omit when the paper does not say.",
+   "compared": false
+  },
+  {
+   "name": "limits",
+   "group": "step",
+   "kind": {
+    "type": "quote"
+   },
+   "required": false,
+   "description": "A sentence in which the paper says what goes wrong or is limited in this step (a failure mode, an error rate, a stated limitation). Omit when the paper does not say.",
+   "compared": false
+  }
+ ],
+ "row_key_fields": [
+  "stage",
+  "step_order"
+ ],
+ "row_anchor_fields": [],
+ "conditionals": [],
+ "evidence": {
+  "min_quotes_per_record": 1,
+  "enum_needs_quote": true,
+  "absence_values": [
+   "not-stated"
+  ]
+ },
+ "procedure": "rf-mine",
+ "regime": {
+  "passes": 2,
+  "calibration_size": 10,
+  "recall_min": 0.8,
+  "field_agreement_min": 0.9
+ },
+ "rationale": "v1 (2026-11-14; plan 2026-11-13-lifecycle-stage-deep-dive): the steps inside each research stage of an AI research system as the paper describes them, with inputs, outputs, method, actor, how the step is checked and what limits it; whole text; core works; stage axis is the 9 stages of m-stages v1. EXPLORATORY: no calibration, for reading, not evidence. A paper that describes no steps is closed with no rows and a reason.",
+ "comparability_keys": [],
+ "citation_patterns": []
+}
