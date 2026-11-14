@@ -241,6 +241,7 @@ Minor review findings parked during the v1 build, to address when iterating from
 All four fixed on `low-hanging-2` (merged dbe3d01): `indexed_rigor_mode` public in `gates.py` (eff9963, 67b1338); the convert summary always shows `outdated N` and an outdated outcome carries its reason (15d20ca). `runner._recorded_exploratory` reading the whole log on resume stays open (moved to the list below).
 
 ## Branch `low-hanging-2` review minors (2026-11-14)
+Fixed on `low-hanging-4` (138f304, 2032db3, 9df6cb4, c15dff5): `background_works(criteria=)` reuses the computed criteria; `full_text_boxes` states why it loads twice; `snowball._scope` order documented (no hash over `sources`); the explorer's cited-by tooltip states how many reference lists were extracted. The `usage_limit` and feed lines below stand as written.
 - Explorer `cited_in_corpus`: None vs 0 is decided project-wide (any reference extraction exists), not per work; a work whose citers were never extracted shows 0.
 - `prisma_flow` and `full_text_boxes` call `exclusion_criteria` and then `background_works`, which re-runs `final_outcomes` (double cost).
 - `snowball._scope` appends background sources after the included ones (each group sorted, not the whole list); check any hash taken over `sources`.
@@ -269,3 +270,5 @@ All four fixed on `low-hanging-2` (merged dbe3d01): `indexed_rigor_mode` public 
 - IDEA-48 (`document/linenumbers.py`): when anything is dropped the text is rebuilt from blocks, so runs of blank lines collapse and blank lines inside code blocks go; offsets stay consistent (anchors come after, version bumped).
 - IDEA-48: any run of 5 or more bare 1 to 4 digit paragraphs counting up is dropped, wherever it is (five year paragraphs 2019 to 2023, a numbered listing, a one-number-per-paragraph table); the warning gives counts, not the paragraphs. A value ceiling, or a run starting at 1 or after a page break, would narrow it.
 - IDEA-48: `conversion_coverage.content_words` drops every all-digit token and splits "3.14" into "3" and "14", so loss of numeric table cells is not measured; say so in the docstring or add a numeric-token recall.
+- `low-hanging-4` review: the guard test `test_mcp_work_params_guard.py` sees only top-level parameters whose name contains `work`; ids in `target` or nested in structured parameters are not checked by it.
+- `low-hanging-4`: the overlap tokeniser now splits hyphens and percent signs, so a Jaccard ratio can differ from the earlier one ("top-1 accuracy of 91%" vs "91% top-1 accuracy": 0.75 to 0.80); overlap is off by default.
