@@ -59,6 +59,7 @@ FUTURE_OVERLAY/*LIGHT*/</style></head><body>
 <span class="dim">View</span>
 <button data-v="list" class="on">List</button><button data-v="timeline">Timeline</button><button data-v="chrono">Chronology</button><button data-v="lineage">Lineage</button><button data-v="graph">Graph</button>
 <span class="dim">Group by</span><select id="grp"></select>
+<label class="dim" title="Works of this project whose extracted reference lists resolve to the work. Unknown counts are left out when a number is set.">Cited by <input id="citemin" type="number" min="0" step="1" style="width:64px"> or more corpus works</label>
 <button id="helpbtn">Help</button><!--TOGGLE--><span id="count" class="dim"></span><span class="dim" style="margin-left:auto" id="gen"></span></header>
 <div id="chips" hidden></div>
 <div id="helpbox" hidden><b>What this is.</b> The corpus of the review: every paper included after full-text screening, with what the miners read from it. Every value shown has a quote from the paper behind it.
@@ -74,11 +75,12 @@ const $=s=>document.querySelector(s);
 const esc=s=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 function val(w,d){if(d.src==='meta')return w[d.field]||'';const o=w[d.src];return o&&o[d.field]?o[d.field].v:'';}
 function stagesOf(w){return [...new Set(w.stages.map(s=>s.stage))];}
-const FILT={};const H=new URLSearchParams(location.hash.slice(1));let view=H.get('view')||'list',grp='technique',query=H.get('q')||'',sel=null;
+const FILT={};const H=new URLSearchParams(location.hash.slice(1));let view=H.get('view')||'list',grp='technique',query=H.get('q')||'',sel=null;let citeMin=parseInt(H.get('cite'),10)||0;
 for(const f of H.getAll('f')){const i=f.indexOf(':');if(i>0){const k=f.slice(0,i);(FILT[k]=FILT[k]||new Set()).add(f.slice(i+1));}}
 const palette=['#4e79a7','#f28e2b','#e15759','#76b7b2','#59a14f','#edc948','#b07aa1','#ff9da7','#9c755f','#bab0ac','#1f77b4','#d62728','#2ca02c','#9467bd'];
 const colorMap={};function colorOf(v){if(!(v in colorMap))colorMap[v]=palette[Object.keys(colorMap).length%palette.length];return colorMap[v];}
 function matches(w){
+ if(citeMin>0&&(w.cited_in_corpus==null||w.cited_in_corpus<citeMin))return false;
  if(query){const t=(w.title+' '+w.abstract+' '+Object.values(w.cls).map(x=>x.q).join(' ')+' '+Object.values(w.map).map(x=>x.q).join(' ')).toLowerCase();if(!query.toLowerCase().split(/\s+/).every(x=>t.includes(x)))return false;}
  for(const k in FILT){const s=FILT[k];if(!s.size)continue;
   if(k==='stage'){if(!stagesOf(w).some(x=>s.has(x)))return false;}
@@ -140,9 +142,9 @@ function openWork(w){sel=w;const d=$('#detail');d.classList.add('open');
 function groups(ws){const d=DIMS.find(d=>d.key===grp);const g={};
  for(const w of ws){const vs=grp==='stage'?stagesOf(w):[val(w,d)||'(none)'];for(const v of (vs.length?vs:['(none)']))(g[v]=g[v]||[]).push(w);}
  return Object.entries(g).sort((a,b)=>grp==='year'?a[0].localeCompare(b[0]):b[1].length-a[1].length);}
-function renderList(ws){let h='<table><tr><th>Published</th><th>Title</th><th>Technique</th><th>Field</th><th>Human</th><th>Stages</th></tr>';
+function renderList(ws){let h='<table><tr><th>Published</th><th>Title</th><th>Cited in corpus</th><th>Technique</th><th>Field</th><th>Human</th><th>Stages</th></tr>';
  for(const [g,l] of groups(ws)){h+=`<tr><td colspan="6" class="grp">${esc(g)} <span class="dim">(${l.length})</span></td></tr>`;
-  for(const w of l.sort((a,b)=>a.published.localeCompare(b.published)))h+=`<tr class="w" data-i="${W.indexOf(w)}"><td>${esc(w.published)}</td><td>${esc(w.title)}</td><td>${esc(val(w,DIMS[0]))}</td><td>${esc(val(w,DIMS[1]))}</td><td>${esc(val(w,DIMS[5]))}</td><td>${stagesOf(w).map(s=>`<span class="tag">${esc(s)}</span>`).join('')}</td></tr>`;}
+  for(const w of l.sort((a,b)=>a.published.localeCompare(b.published)))h+=`<tr class="w" data-i="${W.indexOf(w)}"><td>${esc(w.published)}</td><td>${esc(w.title)}</td><td>${w.cited_in_corpus==null?'—':w.cited_in_corpus}</td><td>${esc(val(w,DIMS[0]))}</td><td>${esc(val(w,DIMS[1]))}</td><td>${esc(val(w,DIMS[5]))}</td><td>${stagesOf(w).map(s=>`<span class="tag">${esc(s)}</span>`).join('')}</td></tr>`;}
  $('#view').innerHTML=h+'</table>';$('#view').querySelectorAll('tr.w').forEach(r=>r.onclick=()=>openWork(W[+r.dataset.i]));}
 function renderTimeline(ws){const months=[...new Set(W.map(w=>w.month).filter(Boolean))].sort();
  const d=DIMS.find(d=>d.key===grp)||DIMS[0];
@@ -216,6 +218,7 @@ function renderGraph(ws){const v=$('#view');v.innerHTML='<canvas></canvas><div c
  cv.onwheel=e=>{e.preventDefault();cam.z=Math.min(4,Math.max(.2,cam.z*(e.deltaY<0?1.1:.9)));};}
 function drawChips(){const c=$('#chips');c.replaceChildren();let n=0;
  for(const k in FILT)for(const v of FILT[k]){n++;const b=document.createElement('button');b.className='chip';b.textContent=k.replace('.',' / ')+': '+v+'  \u00d7';b.title='remove this filter';b.onclick=()=>{FILT[k].delete(v);drawSide();render();};c.append(b);}
+ if(citeMin>0){n++;const b=document.createElement('button');b.className='chip';b.textContent='cited by '+citeMin+' or more corpus works  \u00d7';b.onclick=()=>{citeMin=0;$('#citemin').value='';render();};c.append(b);}
  if(query){n++;const b=document.createElement('button');b.className='chip';b.textContent='search: '+query+'  \u00d7';b.onclick=()=>{query='';$('#q').value='';render();};c.append(b);}
  c.hidden=!n;}
 function render(){const ws=filtered();drawChips();$('#count').textContent=ws.length+' of '+W.length+' works';
@@ -223,7 +226,7 @@ function render(){const ws=filtered();drawChips();$('#count').textContent=ws.len
 document.querySelectorAll('header button[data-v]').forEach(b=>b.onclick=()=>{view=b.dataset.v;document.querySelectorAll('header button[data-v]').forEach(x=>x.classList.toggle('on',x===b));render();});
 const gs=$('#grp');for(const d of DIMS.concat([{key:'stage',label:'Lifecycle stage'}]))gs.insertAdjacentHTML('beforeend',`<option value="${d.key}">${esc(d.label)}</option>`);
 gs.onchange=()=>{grp=gs.value;render();};$('#helpbtn').onclick=()=>{const b=$('#helpbox');b.hidden=!b.hidden;};if(query)$('#q').value=query;$('#q').oninput=e=>{query=e.target.value;render();};
-$('#gen').textContent='Generated '+DATA.generated;document.querySelectorAll('header button[data-v]').forEach(x=>x.classList.toggle('on',x.dataset.v===view));if(H.get('grp')){grp=H.get('grp');gs.value=grp;}drawSide();render();if(H.get('open')&&BYS[H.get('open')]!==undefined)openWork(W[BYS[H.get('open')]]);else if(H.get('openfirst')){const w=W.find(x=>x.sum&&Object.keys(x.sum).length>6);if(w)openWork(w);}
+$('#citemin').value=citeMin||'';$('#citemin').oninput=e=>{citeMin=parseInt(e.target.value,10)||0;render();};$('#gen').textContent='Generated '+DATA.generated;document.querySelectorAll('header button[data-v]').forEach(x=>x.classList.toggle('on',x.dataset.v===view));if(H.get('grp')){grp=H.get('grp');gs.value=grp;}drawSide();render();if(H.get('open')&&BYS[H.get('open')]!==undefined)openWork(W[BYS[H.get('open')]]);else if(H.get('openfirst')){const w=W.find(x=>x.sum&&Object.keys(x.sum).length>6);if(w)openWork(w);}
 </script></body></html>
 """
 

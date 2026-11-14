@@ -17,11 +17,13 @@ import json
 import re
 from collections import defaultdict
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from sqlalchemy import text
 
+from factory.services.citations import citation_report
 from factory.services.context import Project
 from factory.services.protocol import current_protocol
 
@@ -126,7 +128,9 @@ def corpus_payload(project: Project) -> dict[str, Any]:
     """Works, miner rows, documents and citation links as one JSON-ready dict.
 
     A work is in scope when a listed miner has a live pass-A row for it. Documents carry the media
-    type and the stored file, so a product can link to the original."""
+    type and the stored file, so a product can link to the original. `cited_in_corpus` is the
+    in-corpus citation count of `citation_report` (computed once per payload); None when no
+    reference list was extracted, so an unknown count is never shown as 0."""
     profile = load_profile(project)
     listed = _listed_schemas(project)
     schemas = sorted({listed[m] for m in profile.roles.values() if m in listed})
@@ -136,6 +140,8 @@ def corpus_payload(project: Project) -> dict[str, Any]:
     works_data: dict[str, dict[str, Any]] = {}
     edges: list[tuple[str, str]] = []
     n_ext = 0
+    report = citation_report(project, as_of_year=datetime.now(UTC).year)
+    in_corpus = {w.work_id: w.cited_by for w in report.works}
     with project.index.connect() as conn:
         for schema in schemas:
             for eid, wid in conn.execute(
@@ -241,6 +247,7 @@ def corpus_payload(project: Project) -> dict[str, Any]:
                 "doi": ids.get("doi"),
                 "arxiv": ids.get("arxiv"),
                 "cited_by": d.get("cited_by_count"),
+                "cited_in_corpus": in_corpus.get(wid),
                 "abstract": (d.get("abstract") or "")[:MAX_ABSTRACT],
                 "cls": _pack(merged(wid, "cls")),
                 "map": _pack(merged(wid, "map")),
