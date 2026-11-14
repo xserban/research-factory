@@ -188,8 +188,12 @@ GLOSSARY = (
     ),
     ("fairer: primary fields", "The same, for the main (non-secondary) fields only."),
     (
-        "platform measure",
-        "The recorded agreement of the `mine agreement` command: rows aligned on the row key, values compared exactly.",
+        "platform: all rows",
+        "The recorded agreement of the `mine agreement` command over all rows: values compared exactly, and a row only one pass wrote counts as disagreement.",
+    ),
+    (
+        "platform: aligned rows",
+        "The same command's rate over aligned rows only (rows matched on the row key), values compared exactly.",
     ),
 )
 
@@ -306,9 +310,9 @@ def build_agreement(project: Project, out: Path) -> None:
 
     protocol = current_protocol(project)
     listed = [(u.name, u.version) for u in (protocol.spec.miners or ())] if protocol else []
-    platform: dict[str, float | None] = {
-        s.name: s.agreement for s in mining_service.mine_status(project)
-    }
+    statuses = mining_service.mine_status(project)
+    platform: dict[str, float | None] = {s.name: s.agreement for s in statuses}
+    platform_aligned: dict[str, float | None] = {s.name: s.agreement_aligned for s in statuses}
     summary_rows: list[str] = []
     chart_items: list[tuple[str, float, str | None]] = []
     for name, version in sorted(listed):
@@ -319,7 +323,7 @@ def build_agreement(project: Project, out: Path) -> None:
         m = measure(spec, _load(project, schema, "A"), _load(project, schema, "B"))
         agreed, total = m.overall()
         p_agreed, p_total = m.overall(primary_only=True)
-        plat = platform.get(name)
+        plat, plat_aligned = platform.get(name), platform_aligned.get(name)
         (out / f"{name}.html").write_text(
             _miner_page(project, name, version, spec, m), encoding="utf-8"
         )
@@ -330,6 +334,7 @@ def build_agreement(project: Project, out: Path) -> None:
             _pct(agreed, total) if total else esc(m.note or "no enum fields"),
             _pct(p_agreed, p_total) if p_total else "n/a",
             "n/a" if plat is None else f"{plat:.3f}",
+            "n/a" if plat_aligned is None else f"{plat_aligned:.3f}",
             str(len(m.disagreements)),
         ]
         if p_total:
@@ -348,7 +353,8 @@ def build_agreement(project: Project, out: Path) -> None:
     glossary = table(["column", "meaning"], [list(g) for g in GLOSSARY])
     summary = (
         "<table><tr><th>miner</th><th>works in both passes</th><th>rows A / B / matched</th>"
-        "<th>fairer: all enum values</th><th>fairer: primary fields</th><th>platform measure</th>"
+        "<th>fairer: all enum values</th><th>fairer: primary fields</th><th>platform: all rows</th>"
+        "<th>platform: aligned rows</th>"
         "<th>disagreements</th></tr>" + "".join(summary_rows) + "</table>"
     )
     (out / "index.html").write_text(

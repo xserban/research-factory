@@ -528,14 +528,19 @@ def _held(project: Project) -> Any:
 def test_the_scrub_holds_seed_ids_and_identifiers_and_at_most_the_seeds_own_work(
     project: Project, corpus: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`include_work_ids` adds `seed.work_id` alone; a work matched by search is never a token."""
+    """`include_work_ids` adds `seed.work_id` and the OpenAlex id of that work (IDEA-19, decision
+    123); a work matched by search is never a token."""
     from factory.services import seeds as seeds_service
+    from factory.services.withholding import _resolved_openalex, normalize_openalex
 
     held = _held(project)
     plain = _held_out_tokens(project, include_work_ids=False)
     assert {held.seed_id, held.doi} <= plain and held.work_id not in plain
-    assert _held_out_tokens(project, include_work_ids=True) == plain | {
-        s.work_id for s in all_seeds(project) if s.role is SeedRole.HELD_OUT and s.work_id
+    works = [s.work_id for s in all_seeds(project) if s.role is SeedRole.HELD_OUT and s.work_id]
+    resolved = _resolved_openalex(project, works)
+    assert resolved, "the fixture's held-out seed resolves to a work with an OpenAlex id"
+    assert _held_out_tokens(project, include_work_ids=True) == plain | set(works) | {
+        token for r in resolved for token in (r, normalize_openalex(r))
     }
     real = seeds_service._load_seeds
     monkeypatch.setattr(

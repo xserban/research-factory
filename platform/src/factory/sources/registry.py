@@ -19,6 +19,7 @@ from factory.sources.http import default_http
 from factory.sources.importlist import NAME as IMPORTLIST
 from factory.sources.importlist import ImportlistReader, ImportlistSource
 from factory.sources.openalex import OpenAlexSource
+from factory.sources.pubmed import PubmedSource, ncbi_api_key
 from factory.sources.reflist import NAME as REFLIST
 from factory.sources.reflist import EntryReader, ReflistSource
 
@@ -45,6 +46,7 @@ INTERFACES: dict[str, str] = {
     "openalex": "OpenAlex REST API (api.openalex.org/works)",
     "crossref": "Crossref REST API (api.crossref.org/works)",
     "arxiv": "arXiv API (export.arxiv.org/api/query)",
+    "pubmed": "PubMed via NCBI E-utilities (eutils.ncbi.nlm.nih.gov)",
     REFLIST: "Stored reference entries of the included documents (offline)",
     IMPORTLIST: "Stored records of an imported library export (offline)",
 }
@@ -100,6 +102,15 @@ def default_sources() -> dict[str, SourceFactory]:
             lambda s, c: ArxivSource(default_http(s), clock=c, mailto=s.mailto),
             window_filter=ArxivSource.window_filter,
             # Its id-list intersection is keyed to the query's own `search_query`.
+            probe_kinds=frozenset({QueryKind.KEYWORD}),
+        ),
+        "pubmed": SourceFactory(
+            PubmedSource.kinds,
+            lambda s, c: PubmedSource(
+                default_http(s), clock=c, mailto=s.mailto, api_key=ncbi_api_key()
+            ),
+            window_filter=PubmedSource.window_filter,
+            # An id-list probe has no meaning: the probe measures what a keyword query finds.
             probe_kinds=frozenset({QueryKind.KEYWORD}),
         ),
     }

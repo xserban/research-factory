@@ -1,3 +1,4 @@
+# ruff: noqa: E501
 """The paper side panel shared by every product page: clicking a paper title opens the explorer's
 detail pane in a slide-over instead of leaving the page.
 
@@ -8,6 +9,7 @@ Invariants:
 - Intercepted: an `<a>` whose href contains `explorer/index.html#open=`, and any element with
   `data-work="<slug>"`. Ctrl, cmd, shift and middle clicks navigate as usual.
 - `window.factoryPanel.open(slug, element)` opens the panel from page code (a canvas click).
+- A "Loading…" marker (`.rfp-ld`) shows from a src change until the iframe's `load`.
 - The script does nothing inside the explorer itself.
 - Colours come from CSS variables of the host page (with a fallback inside `var()`), except the
   overlay's translucent black.
@@ -32,6 +34,12 @@ PANEL_CSS: Final = (
     "padding:3px 9px;cursor:pointer;background:var(--card,var(--panel,var(--bg,#fff)));"
     "color:var(--fg,var(--ink,#222));border:1px solid var(--line,var(--mut,#888));"
     "border-radius:6px}"
+    ".rfp-ld{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);color:var(--mut,#888);"
+    "font-size:14px;pointer-events:none}.rfp-ld[hidden]{display:none}"
+    ".rfp-ld:before{content:'';display:inline-block;width:12px;height:12px;margin-right:8px;"
+    "border:2px solid currentColor;border-right-color:transparent;border-radius:50%;"
+    "vertical-align:-2px;animation:rfp-spin .8s linear infinite}@keyframes rfp-spin{to{transform:rotate(360deg)}}"
+    "@media (prefers-reduced-motion:reduce){.rfp-ld:before{animation:none}}"
     ".rfp iframe{flex:1;width:100%;border:0;background:var(--bg,#fff)}"
     "@media (max-width:700px){.rfp{width:100%;min-width:0}}"
 )
@@ -39,7 +47,7 @@ PANEL_CSS: Final = (
 PANEL_JS: Final = (
     "<script>(function(){var P=location.pathname;"
     "if(/\\/explorer\\/index\\.html$/.test(P)||window.__rfPanel)return;window.__rfPanel=1;"
-    "var DEF='../explorer/index.html',ov,box,fr,xb,from=null;"
+    "var DEF='../explorer/index.html',ov,box,fr,xb,ld,from=null;"
     "function build(){ov=document.createElement('div');ov.className='rfp-ov';"
     "box=document.createElement('div');box.className='rfp';box.setAttribute('role','dialog');"
     "box.setAttribute('aria-modal','true');box.setAttribute('aria-label','Paper detail');"
@@ -47,13 +55,15 @@ PANEL_JS: Final = (
     "xb=document.createElement('button');xb.className='rfp-x';xb.type='button';"
     "xb.setAttribute('aria-label','Close');xb.textContent='\\u00d7';"
     "fr=document.createElement('iframe');fr.title='Paper detail';"
-    "box.appendChild(xb);box.appendChild(fr);"
+    "ld=document.createElement('div');ld.className='rfp-ld';ld.textContent='Loading\u2026';ld.hidden=true;"
+    "fr.addEventListener('load',function(){ld.hidden=true;});"
+    "box.appendChild(xb);box.appendChild(ld);box.appendChild(fr);"
     "document.body.appendChild(ov);document.body.appendChild(box);"
     "ov.addEventListener('click',close);xb.addEventListener('click',close);}"
     "function isOpen(){return !!box&&box.className.indexOf('open')>=0;}"
     "function open(base,slug,el){if(!box)build();from=el||null;"
     "var u=base+'#open='+encodeURIComponent(slug)+'&panel=1';"
-    "if(fr.getAttribute('src')!==u)fr.setAttribute('src',u);"
+    "if(fr.getAttribute('src')!==u){ld.hidden=false;fr.setAttribute('src',u);}"
     "ov.className='rfp-ov open';box.className='rfp open';box.setAttribute('aria-hidden','false');"
     "xb.focus();}"
     "function close(){if(!isOpen())return;ov.className='rfp-ov';box.className='rfp';"

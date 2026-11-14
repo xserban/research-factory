@@ -13,7 +13,13 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal
 
-from pydantic import Field, SerializerFunctionWrapHandler, StringConstraints, model_serializer
+from pydantic import (
+    Field,
+    SerializerFunctionWrapHandler,
+    StringConstraints,
+    model_serializer,
+    model_validator,
+)
 
 from factory.events.blobs import BLOB_REF_RE
 from factory.events.envelope import ActorKind
@@ -81,6 +87,17 @@ class MinerUse(StrictModel):
     """True lets the researcher's mining requests add works beyond `layers`. Omitted when false."""
     order: Literal["id", "by-layer"] = "id"
     """`by-layer` serves works by ring, then work id. Omitted when `id`."""
+    exploratory: bool = False
+    """Declared by a protocol amendment, whose reason is the record (IDEA-69). True allows
+    production mining passes of a version whose calibration has not passed; its rows carry no
+    quality claim and never reach the evidence report, so it is refused together with `evidence`.
+    Omitted when false, so every protocol hash written before it existed is unchanged."""
+
+    @model_validator(mode="after")
+    def _exploratory_is_not_evidence(self) -> MinerUse:
+        if self.exploratory and self.evidence:
+            raise ValueError("an exploratory miner use cannot also be admitted as evidence")
+        return self
 
     @model_serializer(mode="wrap")
     def _defaults_say_nothing(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
@@ -92,4 +109,6 @@ class MinerUse(StrictModel):
             out.pop("on_demand", None)
         if self.order == "id":
             out.pop("order", None)
+        if not self.exploratory:
+            out.pop("exploratory", None)
         return out

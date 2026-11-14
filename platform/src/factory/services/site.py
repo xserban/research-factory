@@ -38,7 +38,7 @@ from sqlalchemy import text
 from factory.model.base import StrictModel
 from factory.services.context import Project
 from factory.services.site_charts import CHART_CSS, activity
-from factory.services.site_chrome import BAR_CSS, hub_bar
+from factory.services.site_chrome import BAR_CSS, CHROME_SCRIPT, CONTAINER_WIDTH, hub_bar
 from factory.services.site_panel import with_panel
 from factory.services.site_theme import LIGHT_CSS, THEME_SCRIPT, THEME_TOGGLE
 
@@ -702,15 +702,15 @@ THEME_CSS: Final = (
 )
 
 
-def page(title: str, body: str, css: str = "") -> str:
+def page(title: str, body: str, css: str = "", *, head: str = "", body_class: str = "") -> str:
     """A themed standalone page for a product that has no page of its own."""
     return with_panel(
         "<!doctype html><html lang=en><head><meta charset=utf-8>"
         "<meta name=viewport content='width=device-width,initial-scale=1'>"
-        f"{THEME_SCRIPT}<title>{html.escape(title)}</title><style>{THEME_CSS}"
-        f"body{{padding:20px 24px;max-width:1100px;margin:0 auto}}.theme-row{{display:flex;justify-content:flex-end;margin:0 0 6px}}"
+        f"{head}{THEME_SCRIPT}<title>{html.escape(title)}</title><style>{THEME_CSS}"
+        f"body{{padding:20px 24px;max-width:{CONTAINER_WIDTH};margin:0 auto}}.theme-row{{display:flex;justify-content:flex-end;margin:0 0 6px}}"
         f"{css}{LIGHT_CSS}</style></head>"
-        f"<body><div class=theme-row>{THEME_TOGGLE}</div>{body}</body></html>"
+        f"<body{f' class={body_class}' if body_class else ''}><div class=theme-row>{THEME_TOGGLE}</div>{body}</body></html>"
     )
 
 
@@ -940,6 +940,7 @@ def render_hub(
             " &middot; <b id=live>SNAPSHOT</b></span>",
             main_hub_only=True,
         )
+        + CHROME_SCRIPT
         + f"<div class=shell><nav><input id=q placeholder='filter modules'>{''.join(nav)}</nav><main>"
         "<iframe id=frame style='display:none' title='product'></iframe>"
         "<div id=home><div class=wrap><h1>Control room</h1>"

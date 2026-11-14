@@ -61,6 +61,7 @@ CSS = (
 SCRIPT = r"""(function(){
 var box=document.getElementById('ly-anim');if(!box)return;
 var raw=document.getElementById('ly-data');if(!raw)return;
+var ld=box.querySelector('.rf-loading');if(ld)ld.remove();
 var D;try{D=JSON.parse(raw.textContent)}catch(e){return}
 var cv=box.querySelector('canvas'),tip=box.querySelector('.ly-tip');
 var btn=box.querySelector('.ly-replay'),rng=box.querySelector('.ly-range'),dateEl=box.querySelector('.ly-date');
@@ -314,7 +315,7 @@ def render_animation(
         + f"<span class=dim><i></i>unlayered {payload['unlayered']}</span>"
     )
     return (
-        "<div id=ly-anim class=ly-anim>"
+        "<div id=ly-anim class=ly-anim><p class='dim rf-loading'>Loading corpus\u2026</p>"
         "<canvas role=img aria-label='Works on concentric layer rings'></canvas><div class=ly-tip></div>"
         "<div class=ly-ctl><button type=button class=ly-replay>Replay</button>"
         "<input type=range class=ly-range min=0 max=0 value=0 aria-label='Replay position'>"

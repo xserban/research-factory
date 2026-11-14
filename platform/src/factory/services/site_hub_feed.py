@@ -35,6 +35,7 @@ from factory.services.context import Project
 from factory.services.feed import FeedStatus, feed_status
 from factory.services.feed_page import FeedFurtherItem, FeedRankedPage, feed_ranked_page
 from factory.services.feed_read import FeedListing, FeedListItem, feed_list
+from factory.services.site import page
 from factory.services.site_chrome import with_bar
 from factory.services.site_feed import FEED_CSS, _authors, _entry_records, _text
 from factory.services.site_portal import _CSS as PORTAL_CSS
@@ -172,17 +173,17 @@ def runner_payload(runner: FeedRunner | None) -> dict[str, object]:
 
 
 _CSS: Final = (
-    FEED_CSS + ".tabs{display:flex;flex-wrap:wrap;gap:6px;margin:14px 0}"
-    ".tab{background:var(--card);border:1px solid var(--line);color:var(--fg);padding:5px 12px;"
-    "border-radius:6px;cursor:pointer;font:inherit}.tab.on{border-color:var(--acc);color:var(--acc)}"
+    FEED_CSS + PORTAL_CSS + ".tabs{display:flex;flex-wrap:wrap;gap:6px;margin:14px 0}"
+    ".tab{background:var(--card);border:1px solid var(--mut);color:var(--fg);padding:5px 12px;"
+    "border-radius:6px;cursor:pointer;font:inherit}.tab.on{border-color:var(--ac);color:var(--ac)}"
     ".bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:12px 0}"
-    ".bar button{padding:4px 12px}.run{color:var(--mut);font-size:13px}"
-    ".err{color:var(--warn)}.pn[hidden]{display:none}"
-    ".status{background:var(--card);border:1px solid var(--line);padding:10px 14px;margin:8px 0}"
-    ".card{border-color:var(--line);border-left-color:var(--acc)}"
-    ".meta{color:var(--mut)}.rank,.score{color:var(--acc)}"
-    ".card.further{border-left-color:var(--line)}.card.further[hidden]{display:none}"
-    ".card.further .rank{color:var(--mut)}"
+    ".bar button{padding:4px 12px}.run{color:var(--dim);font-size:13px}"
+    ".err{color:var(--amber)}.pn[hidden]{display:none}"
+    ".status{background:var(--card);border:1px solid var(--mut);padding:10px 14px;margin:8px 0}"
+    ".card{border-color:var(--mut);border-left-color:var(--ac)}"
+    ".meta{color:var(--dim)}.rank,.score{color:var(--ac)}"
+    ".card.further{border-left-color:var(--mut)}.card.further[hidden]{display:none}"
+    ".card.further .rank{color:var(--dim)}"
     ".more{margin:12px 0}.more button{padding:4px 12px}"
 )
 
@@ -336,22 +337,31 @@ FURTHER_BLOCK: Final = 30
 
 
 def _further_card(item: FeedFurtherItem) -> str:
-    """A read-only card: rank, score, title, authors, abstract and links, no action button (the
-    reaction and add services accept shown entries only)."""
+    """A card of a ranked entry outside the shown set: rank, score, title, authors, abstract,
+    links, reaction state and the same buttons as a shown card (the services record such an action
+    as beyond the shown list)."""
     entry = e(item.entry_id, quote=True)
+    buttons = "".join(
+        f"<button type=button data-act='{act}' disabled>{e(label)}</button>"
+        for act, label in ACTIONS
+    )
+    reaction = e(str(item.reaction)) if item.reaction is not None else "no reaction"
+    added = "<span class='badge added'>added</span>" if item.sent else ""
     return (
         f"<article class='card further' hidden data-entry-id='{entry}'>"
         f"<div><span class=rank>#{item.rank}</span><span class=score>{item.score:.3f}</span>"
-        f"<span class=badge>rank {item.rank}, not in the shown set</span></div>"
+        f"<span class=badge>rank {item.rank}, not in the shown set</span>{added}</div>"
         f"<h3><a href='https://arxiv.org/abs/{entry}'>{e(item.title or item.entry_id)}</a></h3>"
         + (f"<p class=meta>{e(', '.join(item.authors))}</p>" if item.authors else "")
+        + f"<p class=meta>reaction: {reaction}</p>"
         + (
             f"<details><summary>abstract</summary><p>{e(item.abstract)}</p></details>"
             if item.abstract
             else ""
         )
         + f"<p class=meta><a href='https://arxiv.org/abs/{entry}'>abstract page</a> "
-        f"<a href='https://arxiv.org/pdf/{entry}'>pdf</a></p></article>"
+        f"<a href='https://arxiv.org/pdf/{entry}'>pdf</a></p>"
+        + f"<div class=acts>{buttons}</div></article>"
     )
 
 
@@ -377,8 +387,8 @@ def _further_html(view: ProjectFeed, shown: int) -> tuple[str, str]:
     first = min(FURTHER_BLOCK, len(ranked.further))
     after = (
         f"<div class=more><button type=button data-more='{FURTHER_BLOCK}'>Show next {first}</button> "
-        "<span class=sub>Further cards give the abstract and links only: a reaction or an add is "
-        "recorded for the shown entries only.</span></div>"
+        "<span class=sub>A reaction or an add on a further card is recorded with its rank and marked "
+        "as beyond the shown list.</span></div>"
     )
     return line, cards + after + cut
 
@@ -443,14 +453,14 @@ def render_feed_page(
             or "<p class=sub>No project found under the factory root.</p>"
         )
     )
-    return with_bar(
-        "<!doctype html><html lang=en><head><meta charset=utf-8>"
-        f"<meta name='factory-token' content='{e(hub_token, quote=True)}'>"
-        "<meta name=viewport content='width=device-width,initial-scale=1'>"
-        f"<title>New papers</title><style>{PORTAL_CSS}{_CSS}</style></head><body class=portal><main>{body}</main>"
-        f"<script>{_SCRIPT}</script></body></html>",
-        "feed",
+    doc = page(
+        "New papers",
+        f"<main>{body}</main><script>{_SCRIPT}</script>",
+        _CSS,
+        head=f"<meta name='factory-token' content='{e(hub_token, quote=True)}'>",
+        body_class="portal",
     )
+    return with_bar(doc, "feed")
 
 
 def _last_outcome(last: object) -> str:

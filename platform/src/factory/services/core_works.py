@@ -32,6 +32,7 @@ from factory.model.seed import SeedKind
 from factory.model.work_ids import WORK_ID_RE
 from factory.services.context import Project
 from factory.services.seeds import agent_seeds, all_seeds
+from factory.services.work_ref import resolve_work_id
 
 
 class CoreMark(StrictModel):
@@ -95,8 +96,10 @@ def mark_core(project: Project, actor: Actor, work_id: str, note: str | None = N
     invariants say; a blank or overlong note is refused by the model."""
     if actor.kind != "human":
         raise _refuse("actor", "human-only")
-    payload = _payload(WorkMarkedCore, work_id, note)
     with project.writing():
+        project.index.sync()
+        work_id = resolve_work_id(project, work_id)
+        payload = _payload(WorkMarkedCore, work_id, note)
         if not _known(project, work_id):
             raise _refuse("work_id", "unknown")
         if any(m.work_id == work_id for m in core_marks(project)):
@@ -110,8 +113,10 @@ def unmark_core(project: Project, actor: Actor, work_id: str, note: str | None =
     """Take a work's core mark back and return the event id (a seed's work stays core)."""
     if actor.kind != "human":
         raise _refuse("actor", "human-only")
-    payload = _payload(WorkUnmarkedCore, work_id, note)
     with project.writing():
+        project.index.sync()
+        work_id = resolve_work_id(project, work_id)
+        payload = _payload(WorkUnmarkedCore, work_id, note)
         if not any(m.work_id == work_id for m in core_marks(project)):
             raise _refuse("work_id", "not-marked")
         event = project.events.make("work.unmarked_core", payload, actor, refs=(work_id,))

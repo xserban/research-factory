@@ -59,6 +59,16 @@ Checks that the question is searchable, using known papers as targets. Source: r
    - **reframe** when no query reaches the threshold: the question is not answerable by topic
      search, so consider citation chasing or a narrative review.
 
+## PubMed queries
+
+- Write the query in PubMed syntax; it is sent verbatim. Use field tags (`[tiab]`, `[mh]`, `[pt]`)
+  and combine a MeSH block with a free-text block, since recent records are not yet indexed with
+  MeSH.
+- PubMed takes no filters: dates go in the query (`2015:2026[dp]`). Record that in the round.
+- The sample is the first relevance page (`top`), not a random sample; say so when judging noise.
+- A seed is testable on PubMed only if it has a PMID (OpenAlex usually supplies one).
+- A query over 9,999 records cannot be retrieved in one run; split it by `[dp]` before the protocol.
+
 ## Tool arguments
 
 Every mutating tool also takes `project` (the project slug), `role`, and `model` (your own model id), alongside `skill`, which is the bare skill name. The platform computes the skill hash; do not send one. Pass `rf-probe` as `skill`.

@@ -792,7 +792,13 @@ def _scope(
 
     With `background` (a backward round under a plan with `background_sources`), the works kept as
     background join: one with a current extraction is a source; one with a document and none is
-    listed as `BACKGROUND_NOT_EXTRACTED`; one without a document is left out (IDEA-47)."""
+    listed as `BACKGROUND_NOT_EXTRACTED`; one without a document is left out (IDEA-47).
+
+    Order invariant: the included works come first, sorted, then the background works, sorted;
+    the list is not sorted as a whole, and `extraction_ids` runs parallel to `sources`. Both are
+    recorded as given in `SnowballRoundStarted`. No hash or digest is taken over `sources` in
+    the code (the ledger and index store the lists as recorded), so the order is not
+    hash-bearing; it is kept so that a round without background is unchanged."""
     sources: list[str] = []
     extraction_ids: list[str] = []
     unextracted: list[tuple[str, str]] = []

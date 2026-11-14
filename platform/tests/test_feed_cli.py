@@ -127,7 +127,7 @@ def test_react_to_a_fetched_entry_not_in_a_ranking_is_refused(tmp_path: Path) ->
         env=_env(tmp_path),
     )
     assert result.exit_code == 2
-    assert "entry_id: not-shown" in result.output
+    assert "entry_id: not-ranked" in result.output
     assert "reacted" not in result.output
 
 
@@ -163,7 +163,7 @@ def test_send_of_a_fetched_entry_not_in_a_ranking_is_refused(tmp_path: Path) -> 
         env=_env(tmp_path),
     )
     assert result.exit_code == 2
-    assert "entry_id: not-shown" in result.output
+    assert "entry_id: not-ranked" in result.output
     assert "sent " not in result.output
 
 

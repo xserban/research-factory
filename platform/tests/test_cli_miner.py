@@ -74,5 +74,8 @@ def test_mine_status_prints_units_and_agreement(
     code, out, err = _run(settings.root, "mine", "status")
     assert code == 0, err
     units = 2 * len(worked)
-    assert f"{VISION_NAME} version 1: units {units} (closed {units}, open 0, stale 0)" in out
+    assert (
+        f"{VISION_NAME} version 1 (exploratory, declared): units {units} "
+        f"(closed {units}, open 0, stale 0)"
+    ) in out
     assert "rows " + str(units) in out and "agreement 1.00" in out

@@ -224,6 +224,11 @@ def build_miners(project: Project, out: Path) -> None:
                     else "rows are NOT admitted to the evidence report (that needs calibration and the researcher's act)",
                 ],
                 ["imports", use.get("imports", "")],
+                *(
+                    [["status", "exploratory (declared): no quality claim on its rows"]]
+                    if use.get("exploratory")
+                    else []
+                ),
                 [
                     "quote rule",
                     "every enum value needs a supporting quote"

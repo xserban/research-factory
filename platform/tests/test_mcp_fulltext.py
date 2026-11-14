@@ -25,7 +25,14 @@ from tests.route_helpers import StubRoute, always, retrieved
 
 AGENT = {"role": "screener-a", "model": "claude-opus-5-5", "skill": "rf-screen"}
 # by_route counts every Route; lab-library is the lab library route (c52130a).
-ROUTE_NAMES = ["arxiv-html", "arxiv-source", "oa-pdf", "researcher-supplied", "lab-library"]
+ROUTE_NAMES = [
+    "arxiv-html",
+    "arxiv-source",
+    "pmc-jats",
+    "oa-pdf",
+    "researcher-supplied",
+    "lab-library",
+]
 
 
 def _stubs(retrieve: str) -> dict[Route, StubRoute]:
@@ -153,7 +160,7 @@ async def test_mcp_unknown_route_rejected(
         "errors": [
             {
                 "field": "routes.0",
-                "reason": "must be one of: arxiv-html, arxiv-source, oa-pdf",
+                "reason": "must be one of: arxiv-html, arxiv-source, pmc-jats, oa-pdf",
             }
         ],
     }

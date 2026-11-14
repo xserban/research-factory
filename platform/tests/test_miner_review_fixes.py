@@ -38,7 +38,7 @@ from tests.miner_calibration_helpers import (
     calibrated_world,
     run_calibration,
 )
-from tests.miner_helpers import VISION_NAME, mine_pass, mine_row, miner_actor, use
+from tests.miner_helpers import VISION_NAME, mine_exploratory, mine_pass, mine_row, miner_actor, use
 
 SESSION_X = "01JZ9Q3K5M7N8P0R2S4T6V8W2A"
 SESSION_Y = "01JZ9Q3K5M7N8P0R2S4T6V8W2B"
@@ -148,14 +148,10 @@ def test_a_gold_relayer_cannot_mine_or_judge_any_version(
     _relay_gold(project, human, cal.calibration_id, cal.works[0], SESSION_X)
     relayer = miner_actor(SESSION_X, "claude-haiku-5")
     with pytest.raises(FactoryValidationError):
-        mine_next(
-            project, relayer, VISION_NAME, 1, A, exploratory=True
-        )  # production of the same version
+        mine_exploratory(project, relayer, VISION_NAME, 1, A)  # production of the same version
     _v2(project, agent, cal.spec)
     with pytest.raises(FactoryValidationError):
-        mine_next(
-            project, relayer, VISION_NAME, 2, A, exploratory=True
-        )  # production of the next version
+        mine_exploratory(project, relayer, VISION_NAME, 2, A)  # production of the next version
     draw_miner_calibration(project, human, VISION_NAME, 2, random_seed=11)
     with pytest.raises(FactoryValidationError) as raised:
         mine_next(project, relayer, VISION_NAME, 2, A, calibration=True)  # judging the next
@@ -192,8 +188,8 @@ def test_a_judge_may_share_a_model_with_pass_b_in_either_order(
     calibrated_world(project, agent, human)
     producer_a = miner_actor(SESSION_Y, "claude-haiku-5")
     producer_b = miner_actor(SESSION_X, JUDGE.model or "")  # the judge's model, pass B first
-    mine_next(project, producer_a, VISION_NAME, 1, A, exploratory=True)
-    mine_next(project, producer_b, VISION_NAME, 1, B, exploratory=True)
+    mine_exploratory(project, producer_a, VISION_NAME, 1, A)
+    mine_exploratory(project, producer_b, VISION_NAME, 1, B)
     batch = mine_next(project, JUDGE, VISION_NAME, 1, A, calibration=True).batch
     assert batch is not None
 
@@ -210,9 +206,7 @@ def test_a_released_calibration_claim_still_marks_the_session(
     release_task(project, JUDGE, batch.task_id, "stepping away")
     assert JUDGE.session in calibration_sessions(project, VISION_NAME)
     with pytest.raises(FactoryValidationError):
-        mine_next(
-            project, JUDGE, VISION_NAME, 1, A, exploratory=True
-        )  # still no production for the judge
+        mine_exploratory(project, JUDGE, VISION_NAME, 1, A)  # still no production for the judge
 
 
 # --- 3: evidence admission is a human act ---
@@ -263,7 +257,7 @@ def test_a_sample_below_the_floor_cannot_pass(
     producer = miner_actor("01JZ9Q3K5M7N8P0R2S4T6V8W2D", "claude-opus-5-5")
     # production claims eight of the twelve works, so only four are left to calibrate on
     for _ in range(8):
-        batch = mine_next(project, producer, VISION_NAME, 1, A, exploratory=True).batch
+        batch = mine_exploratory(project, producer, VISION_NAME, 1, A).batch
         assert batch is not None
         mine_record(project, producer, batch.task_id, [mine_row()], finish=True)
     drawn = draw_miner_calibration(project, human, VISION_NAME, 1, random_seed=3)

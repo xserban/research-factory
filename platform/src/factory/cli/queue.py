@@ -101,14 +101,6 @@ def queue_process_cmd(
         int, typer.Option("--cap", help="Units the run may handle before it stops.")
     ] = runner.DEFAULT_UNIT_CAP,
     wait: Annotated[bool, typer.Option("--wait", help="Block until the process exits.")] = False,
-    exploratory: Annotated[
-        bool,
-        typer.Option(
-            "--exploratory",
-            help="Run a mine stage whose miner version has no passed calibration, with no quality "
-            "claim on its rows.",
-        ),
-    ] = False,
 ) -> None:
     """Start the headless `claude -p` runner for one stage of the project, or with `--all` for
     every stage in order (foreground, the automatic steps between stages, stops at the first
@@ -116,9 +108,6 @@ def queue_process_cmd(
     opened = _open(ctx, project)
     if all_stages == (stage is not None):
         typer.echo("give exactly one of --stage and --all", err=True)
-        raise typer.Exit(2)
-    if all_stages and exploratory:
-        typer.echo("--exploratory applies to one mine stage, not --all", err=True)
         raise typer.Exit(2)
     if all_stages:
         try:
@@ -135,7 +124,7 @@ def queue_process_cmd(
         return
     assert stage is not None
     try:
-        run_id = runner.start_run(opened, stage, unit_cap=cap, exploratory=exploratory)
+        run_id = runner.start_run(opened, stage, unit_cap=cap)
     except FactoryValidationError as exc:
         for issue in exc.issues:
             typer.echo(f"{issue.field}: {issue.reason}", err=True)

@@ -44,6 +44,7 @@ Invariants:
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import threading
@@ -296,19 +297,14 @@ def queue_process(project: Project, body: dict[str, Any]) -> tuple[int, dict[str
     """Start the headless runner for one stage as the local human; returns (status, body)."""
     stage = body.get("stage")
     cap = body.get("unit_cap", runner_service.DEFAULT_UNIT_CAP)
-    exploratory = body.get("exploratory", False)
     bad: list[ValidationIssue] = []
     if not isinstance(stage, str) or not (stage == "all" or runner_service.is_stage_key(stage)):
         bad.append(ValidationIssue("stage", "must be all or one of " + runner_service.stage_keys()))
     if isinstance(cap, bool) or not isinstance(cap, int):
         bad.append(ValidationIssue("unit_cap", "must be an integer"))
-    if not isinstance(exploratory, bool):
-        bad.append(ValidationIssue("exploratory", "must be true or false"))
-    elif exploratory and stage == "all":
-        bad.append(ValidationIssue("exploratory", "applies to one mine stage, not all"))
     if bad:
         return 400, _issues(*bad)
-    assert isinstance(stage, str) and isinstance(cap, int) and isinstance(exploratory, bool)
+    assert isinstance(stage, str) and isinstance(cap, int)
     try:
         authorize_command(project, project.principal, "cli:queue process")
     except FactoryValidationError as exc:
@@ -319,7 +315,7 @@ def queue_process(project: Project, body: dict[str, Any]) -> tuple[int, dict[str
         if stage == "all":
             pipeline_id = pipeline_service.start_pipeline(project, unit_cap=cap)
             return 200, {"ok": True, "pipeline_id": pipeline_id, "stage": stage, "unit_cap": cap}
-        run_id = runner_service.start_run(project, stage, unit_cap=cap, exploratory=exploratory)
+        run_id = runner_service.start_run(project, stage, unit_cap=cap)
     except FactoryValidationError as exc:
         return 400, _issues(*exc.issues)
     except FactoryError as exc:
@@ -770,6 +766,8 @@ PORTAL_FEED_ITEMS: Final = 5
 """How many New papers entries the portal page lists; the feed page has them all."""
 PROJECT_PREFIX: Final = "/p/"
 FEED_CHECK_EVERY: Final = 1800.0
+WARM_EVERY: Final = 5.0
+"""Seconds between the background reads that keep the feed views of `site_hub_feed.collect` warm."""
 """Seconds between the timer's looks at whether the feed is due (a run is due once per
 `interval_days`, so most looks do nothing)."""
 
@@ -861,6 +859,22 @@ class MainHub:
         self._background = background
         self._slots: dict[str, Slot] = {}
         self._lock = threading.Lock()
+        self._warm_stop = threading.Event()
+        self._warm_every = WARM_EVERY
+
+    def start_warmer(self) -> None:
+        """Read every project's feed view now and again every `WARM_EVERY` seconds, so the first
+        page view after a start or after new events is served from `collect`'s cache instead of
+        paying the read of the whole log. A read that fails is skipped; nothing is written."""
+
+        def loop() -> None:
+            while True:
+                with contextlib.suppress(Exception):  # a background read never takes the hub down
+                    self.feed_views()
+                if self._warm_stop.wait(self._warm_every):
+                    return
+
+        threading.Thread(target=loop, name="feed-warm", daemon=True).start()
 
     def slot(self, slug: str) -> Slot | None:
         """The slot of a scanned project (None for an unknown slug), opened and prepared once."""
@@ -1086,6 +1100,7 @@ class MainHub:
             self._timer.start()
 
     def stop(self) -> None:
+        self._warm_stop.set()
         if self._timer is not None:
             self._timer.stop()
         for found in list(self._slots.values()):
@@ -1111,6 +1126,8 @@ def make_main_server(
     hub.auth = authenticator
     hub.prepare_all()
     hub.start_feed()
+    if hub._background:
+        hub.start_warmer()
     handler = _handler_class(hub.resolve, authenticator, hub.portal, hub.acts())
     httpd = ThreadingHTTPServer((HOST, port), handler)
     holder.append(httpd)

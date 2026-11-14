@@ -137,6 +137,7 @@ class FeedReacted(StrictModel):
     ranking_id: str = Field(pattern=FEED_RANKING_ID_RE)
     rank_shown: int = Field(ge=1)
     score_shown: float
+    beyond_shown: bool = False
 
 
 class FeedSent(StrictModel):
@@ -144,3 +145,4 @@ class FeedSent(StrictModel):
     ranking_id: str = Field(pattern=FEED_RANKING_ID_RE)
     inbox_item_id: str = Field(pattern=INBOX_ID_RE)
     note: FeedNote | None = None
+    beyond_shown: bool = False

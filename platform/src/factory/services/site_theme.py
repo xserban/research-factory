@@ -3,7 +3,8 @@ the explorer.
 
 Each page keeps its own dark palette in a `:root` block. `LIGHT_CSS` sits after it and overrides the
 same variable names: `:root[data-theme="light"]` applies when the reader chose light, and
-`prefers-color-scheme: light` applies when no choice is saved
+`prefers-color-scheme: light` applies only to a page without scripts (with scripts, no saved
+choice means LCARS)
 (`:root:not([data-theme])`, so any explicit choice, dark or a named theme, always wins). The
 dark-only decoration (grid background, glows) is switched off in the light block.
 
@@ -22,6 +23,9 @@ from typing import Final
 from factory.services.site_themes import IDS, THEMES, THEMES_CSS
 
 SAVE_KEY: Final = "factory-theme"
+DEFAULT_THEME: Final = "lcars"
+"""Applied when no choice is saved (the picker's first entry). Without scripts the page keeps its
+own dark palette, or the light one when the system asks for it."""
 
 # The light palette, by variable name. Every name a page uses has a value here, so the light
 # block is the same for every page; a name a page does not use is simply unused.
@@ -85,12 +89,12 @@ _CHOICES: Final = ("dark", "light", *IDS)
 
 THEME_SCRIPT: Final = (
     "<script>(function(){var K='" + SAVE_KEY + "',R=document.documentElement,"
-    "OK=" + repr(list(_CHOICES)) + ";"
+    "OK=" + repr(list(_CHOICES)) + ",D='" + DEFAULT_THEME + "';"
     "function saved(){try{var v=localStorage.getItem(K);return OK.indexOf(v)>=0?v:null}"
     "catch(e){return null}}"
     "function labels(){var v=saved()||'';"
     "document.querySelectorAll('[data-theme-toggle]').forEach(function(b){b.value=v})}"
-    "var s=saved();if(s)R.setAttribute('data-theme',s);"
+    "R.setAttribute('data-theme',saved()||D);"
     "if(window.top!==window.self){var st=document.createElement('style');"
     "st.textContent='[data-theme-toggle],.theme-row{display:none!important}';"
     "document.head.appendChild(st)}"
@@ -98,10 +102,10 @@ THEME_SCRIPT: Final = (
     "document.querySelectorAll('[data-theme-toggle]').forEach(function(b){"
     "b.addEventListener('change',function(){var n=b.value;"
     "if(OK.indexOf(n)>=0){R.setAttribute('data-theme',n);try{localStorage.setItem(K,n)}catch(e){}}"
-    "else{R.removeAttribute('data-theme');try{localStorage.removeItem(K)}catch(e){}}"
+    "else{R.setAttribute('data-theme',D);try{localStorage.removeItem(K)}catch(e){}}"
     "labels()})})});"
     "window.addEventListener('storage',function(ev){if(ev.key!==K)return;var v=saved();"
-    "if(v)R.setAttribute('data-theme',v);else R.removeAttribute('data-theme');labels()});"
+    "R.setAttribute('data-theme',v||D);labels()});"
     "})();</script>"
 )
 """Inline script for `<head>`: applies the saved theme before paint and wires the pickers. Only the
@@ -110,7 +114,7 @@ product in the project hub) hides its pickers: the bar of the page that frames i
 picker, and the choice reaches the frame through the `storage` event."""
 
 _OPTIONS: Final = (
-    "<option value=''>System</option><option value='dark'>Dark</option>"
+    "<option value=''>Default (LCARS)</option><option value='dark'>Dark</option>"
     "<option value='light'>Light</option>"
     + "".join(f"<option value='{t.id}'>{t.label}</option>" for t in THEMES)
 )

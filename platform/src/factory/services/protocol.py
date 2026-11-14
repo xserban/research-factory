@@ -69,7 +69,7 @@ from factory.services.protocol_rules import (
     protocol_issues,
     stale_rules,
 )
-from factory.services.question import current_question, get_question
+from factory.services.question import QuestionVersion, current_question, get_question
 from factory.services.reviews import require_protocol_change
 from factory.services.seeds import all_seeds
 from factory.sources.registry import default_sources, window_filter_sources
@@ -93,19 +93,25 @@ class ProtocolVersion(StrictModel):
     press: Literal["none", "reviewed", "confirmed"]
 
 
-def miner_fields(project: Project) -> dict[tuple[str, int], tuple[str, ...]]:
-    """The field names of every registered miner, by `(name, version)` (the `miners` table)."""
+def miner_fields(
+    project: Project, pending: MinerSpec | None = None
+) -> dict[tuple[str, int], tuple[str, ...]]:
+    """The field names of every registered miner, by `(name, version)` (the `miners` table);
+    `pending` (a spec not yet registered) is counted as registered, for a dry run."""
     from factory.mining.spec import spec_from_json  # a leaf module; keeps protocol import-light
 
     project.index.sync()
     with project.index.connect() as conn:
         rows = conn.execute(text("SELECT name, version, spec_blob FROM miners")).all()
-    return {
+    out = {
         (str(name), int(version)): tuple(
             f.name for f in spec_from_json(project.blobs.get_json(str(blob))).fields
         )
         for name, version, blob in rows
     }
+    if pending is not None:
+        out.setdefault((pending.name, pending.version), tuple(f.name for f in pending.fields))
+    return out
 
 
 def miner_extraction_schema(use: MinerUse, fields: tuple[str, ...]) -> ExtractionSchema:
@@ -180,6 +186,15 @@ def _registered_spec(project: Project, name: str, version: int) -> MinerSpec | N
     return None if blob is None else spec_from_json(project.blobs.get_json(str(blob)))
 
 
+def _spec_or_pending(
+    project: Project, name: str, version: int, pending: MinerSpec | None
+) -> MinerSpec | None:
+    found = _registered_spec(project, name, version)
+    if found is None and pending is not None and (pending.name, pending.version) == (name, version):
+        return pending
+    return found
+
+
 def registered_taxonomy_versions(project: Project) -> set[tuple[str, int]]:
     """Every registered taxonomy `(name, version)` (the `taxonomies` table, read directly like
     `miner_fields`)."""
@@ -190,26 +205,28 @@ def registered_taxonomy_versions(project: Project) -> set[tuple[str, int]]:
 
 
 def miner_taxonomy_refs(
-    project: Project, spec: ProtocolSpec
+    project: Project, spec: ProtocolSpec, pending: MinerSpec | None = None
 ) -> dict[tuple[str, int], tuple[str, int]]:
     """For each listed miner whose registered spec has a taxonomy reference, the referenced
     `(name, version)`."""
     out: dict[tuple[str, int], tuple[str, int]] = {}
     for use in spec.miners or ():
-        miner = _registered_spec(project, use.name, use.version)
+        miner = _spec_or_pending(project, use.name, use.version, pending)
         if miner is not None and miner.taxonomy is not None:
             out[(use.name, use.version)] = (miner.taxonomy.name, miner.taxonomy.version)
     return out
 
 
-def layer_miner_versions(project: Project, spec: ProtocolSpec) -> set[tuple[str, int]]:
+def layer_miner_versions(
+    project: Project, spec: ProtocolSpec, pending: MinerSpec | None = None
+) -> set[tuple[str, int]]:
     """The listed miner versions that are layer miners: derived miners whose taxonomy includes a
     dimension of layer scheme (dimension zero)."""
     from factory.services.taxonomies import registered_taxonomy  # imports this module's peers
 
     out: set[tuple[str, int]] = set()
     for use in spec.miners or ():
-        miner = _registered_spec(project, use.name, use.version)
+        miner = _spec_or_pending(project, use.name, use.version, pending)
         ref = None if miner is None else miner.taxonomy
         if ref is None:
             continue
@@ -489,6 +506,79 @@ class AmendResult(StrictModel):
     prose_only: bool
 
 
+def _state_issues(
+    project: Project,
+) -> tuple[ProtocolVersion | None, QuestionVersion | None, list[ValidationIssue]]:
+    """The current protocol and question, and the issues for a missing or not-ready one."""
+    current = current_protocol(project)
+    question = current_question(project)
+    issues: list[ValidationIssue] = []
+    if current is None or current.status is not ProtocolStatus.READY:
+        issues.append(ValidationIssue("protocol", "only a ready protocol can be amended"))
+    if question is None:
+        issues.append(ValidationIssue("question", "record a question before amending"))
+    return current, question, issues
+
+
+def amendment_issues(
+    project: Project, actor: Actor, spec: ProtocolSpec, pending: MinerSpec | None = None
+) -> list[ValidationIssue]:
+    """The issues that would refuse amending the ready protocol to `spec` on its content, writing
+    nothing; `pending`, a miner spec not yet registered, counts as registered. The one source of
+    the checks `amend_protocol` runs after the review gate. Callers hold `project.index.exclusive()`
+    and a synced index so the answer holds until they write."""
+    current, question, issues = _state_issues(project)
+    if issues or current is None or question is None:
+        return issues
+    admission = agent_admission_issues(actor, current.spec, spec)
+    if admission:
+        return list(admission)
+    spec_question = get_question(project, spec.question_id)
+    if spec_question is None:
+        return [ValidationIssue("question_id", "unknown question")]
+    check = protocol_issues(
+        spec,
+        question=spec_question,
+        current_question_id=question.question_id,
+        mode=indexed_rigor_mode(project),
+        seeds=all_seeds(project),
+        probes=_measured_probes(project),
+        known_sources=set(default_sources()),
+        window_sources=window_filter_sources(),
+        registered_miners=set(miner_fields(project, pending)),
+        calibrated_miners=calibrated_miners(project, spec),
+        layer_miners=layer_miner_versions(project, spec, pending),
+        registered_taxonomies=registered_taxonomy_versions(project),
+        miner_taxonomies=miner_taxonomy_refs(project, spec, pending),
+    )
+    return [*check.errors, *check.gaps]
+
+
+def require_amendment_gate(
+    project: Project,
+    actor: Actor,
+    spec: ProtocolSpec,
+    *,
+    reason: str,
+    semantic: bool,
+    effects: Mapping[str, CriterionEffect],
+    review_request_id: str | None = None,
+) -> None:
+    """Refuse, as `amend_protocol` would, an amendment `actor` may not make (the review gate)."""
+    require_protocol_change(
+        project,
+        actor,
+        ReviewKind.PROTOCOL_AMEND,
+        review_request_id,
+        {
+            "spec": spec.model_dump(mode="json"),
+            "reason": reason,
+            "semantic": semantic,
+            "effects": {cid: effect.value for cid, effect in effects.items()},
+        },
+    )
+
+
 def amend_protocol(
     project: Project,
     actor: Actor,
@@ -510,51 +600,22 @@ def amend_protocol(
         issues.append(ValidationIssue("reason", "must not be empty"))
     with project.index.exclusive():
         project.index.sync()
-        require_protocol_change(
+        require_amendment_gate(
             project,
             actor,
-            ReviewKind.PROTOCOL_AMEND,
-            review_request_id,
-            {
-                "spec": spec.model_dump(mode="json"),
-                "reason": reason,
-                "semantic": semantic,
-                "effects": {cid: effect.value for cid, effect in effects.items()},
-            },
+            spec,
+            reason=reason,
+            semantic=semantic,
+            effects=effects,
+            review_request_id=review_request_id,
         )
-        current = current_protocol(project)
-        question = current_question(project)
-        if current is None or current.status is not ProtocolStatus.READY:
-            issues.append(ValidationIssue("protocol", "only a ready protocol can be amended"))
-        if question is None:
-            issues.append(ValidationIssue("question", "record a question before amending"))
+        current, question, state_issues = _state_issues(project)
+        issues.extend(state_issues)
         if issues or current is None or question is None:
             raise FactoryValidationError(issues)
-        admission = agent_admission_issues(actor, current.spec, spec)
-        if admission:
-            raise FactoryValidationError(admission)
-
-        spec_question = get_question(project, spec.question_id)
-        if spec_question is None:
-            issues.append(ValidationIssue("question_id", "unknown question"))
-            raise FactoryValidationError(issues)
-        check = protocol_issues(
-            spec,
-            question=spec_question,
-            current_question_id=question.question_id,
-            mode=indexed_rigor_mode(project),
-            seeds=all_seeds(project),
-            probes=_measured_probes(project),
-            known_sources=set(default_sources()),
-            window_sources=window_filter_sources(),
-            registered_miners=set(miner_fields(project)),
-            calibrated_miners=calibrated_miners(project, spec),
-            layer_miners=layer_miner_versions(project, spec),
-            registered_taxonomies=registered_taxonomy_versions(project),
-            miner_taxonomies=miner_taxonomy_refs(project, spec),
-        )
-        if check.errors or check.gaps:
-            raise FactoryValidationError([*check.errors, *check.gaps])
+        blockers = amendment_issues(project, actor, spec)
+        if blockers:
+            raise FactoryValidationError(blockers)
 
         changes = criterion_changes(current.spec, spec)
         changed = {cid for cid, kind in changes if kind is ChangeKind.CHANGED}

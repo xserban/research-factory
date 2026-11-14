@@ -71,7 +71,7 @@ FUTURE_OVERLAY/*LIGHT*/</style></head><body>
 <li><b>Filters</b> (left): tick values to narrow every view; counts are for the whole corpus. <b>Search</b> looks in titles, abstracts and quotes.</li>
 <li><b>Click a paper</b> for its detail: the structured summary, classification and stages with the quotes behind them, citations inside the corpus, links to the original, the conversion inspector, and commands to run.</li>
 <li>Links from other pages open here already filtered, for example technique multi-agent.</li></ul></div>
-<main><div id="side"></div><div id="view"></div><div id="detail"></div></main>
+<main><div id="side"></div><div id="view"><p class="dim rf-loading" id="rf-loading">Loading corpus…</p></div><div id="detail"></div></main>
 <script>
 const DATA=/*DATA*/null;
 const W=DATA.works,DIMS=DATA.dims.concat([{key:'layer',label:'Layer',src:'meta',field:'layer'}]);const LORD=DATA.layer_order||[];
@@ -236,7 +236,7 @@ function render(){const ws=filtered();drawChips();$('#count').textContent=ws.len
 document.querySelectorAll('header button[data-v]').forEach(b=>b.onclick=()=>{view=b.dataset.v;document.querySelectorAll('header button[data-v]').forEach(x=>x.classList.toggle('on',x===b));render();});
 const gs=$('#grp');for(const d of DIMS.concat([{key:'stage',label:'Lifecycle stage'}]))gs.insertAdjacentHTML('beforeend',`<option value="${d.key}">${esc(d.label)}</option>`);
 gs.onchange=()=>{grp=gs.value;render();};$('#helpbtn').onclick=()=>{const b=$('#helpbox');b.hidden=!b.hidden;};if(query)$('#q').value=query;$('#q').oninput=e=>{query=e.target.value;render();};
-$('#citemin').value=citeMin||'';$('#citemin').oninput=e=>{citeMin=parseInt(e.target.value,10)||0;render();};$('#gen').textContent='Generated '+DATA.generated;document.querySelectorAll('header button[data-v]').forEach(x=>x.classList.toggle('on',x.dataset.v===view));if(H.get('grp')){grp=H.get('grp');gs.value=grp;}drawSide();render();if(H.get('open')&&BYS[H.get('open')]!==undefined)openWork(W[BYS[H.get('open')]]);else if(H.get('openfirst')){const w=W.find(x=>x.sum&&Object.keys(x.sum).length>6);if(w)openWork(w);}
+$('#citemin').value=citeMin||'';$('#citemin').closest('label').title='Counts only works whose reference lists were extracted ('+DATA.refs_done+' of '+W.length+'); a work whose citers were never extracted shows 0 or a dash, not a known zero.';$('#citemin').oninput=e=>{citeMin=parseInt(e.target.value,10)||0;render();};$('#gen').textContent='Generated '+DATA.generated;document.querySelectorAll('header button[data-v]').forEach(x=>x.classList.toggle('on',x.dataset.v===view));if(H.get('grp')){grp=H.get('grp');gs.value=grp;}drawSide();render();if(H.get('open')&&BYS[H.get('open')]!==undefined)openWork(W[BYS[H.get('open')]]);else if(H.get('openfirst')){const w=W.find(x=>x.sum&&Object.keys(x.sum).length>6);if(w)openWork(w);}
 addEventListener('keydown',e=>{if(e.key==='Escape'&&PANEL&&parent!==window)parent.postMessage('rfp-close',location.origin);});
 addEventListener('hashchange',()=>{H=new URLSearchParams(location.hash.slice(1));PANEL=H.get('panel')==='1';document.documentElement.classList.toggle('panel',PANEL);const o=H.get('open');if(o&&BYS[o]!==undefined)openWork(W[BYS[o]]);});
 </script></body></html>

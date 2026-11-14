@@ -1,7 +1,8 @@
 """Held-out identifiers and their scrubbing (R-20), for every agent-facing surface.
 
-Declares: `WITHHELD`, `withhold`, `held_out_tokens`. A service that stores what it gives an agent
-(the context pack) scrubs before it stores, so this lives below `mcp`. Read-only.
+Declares: `WITHHELD`, `withhold`, `held_out_tokens`, `seed_id_tokens`. A service that stores
+what it gives an agent (the context pack) scrubs before it stores, so this lives below `mcp`.
+Read-only.
 
 Invariant: only a held-out seed's own id and stated identifiers are tokens, unless the caller
 asks for work ids; a tool that names works does not, since a `[withheld]` among work ids would
@@ -83,6 +84,19 @@ def held_out_tokens(project: Project, include_work_ids: bool = True) -> set[str]
     for resolved in _resolved_openalex(project, resolved_of):
         tokens.update((resolved, normalize_openalex(resolved)))
     return tokens
+
+
+def seed_id_tokens(project: Project) -> set[str]:
+    """The id of each held-out seed, and nothing else.
+
+    Invariant: no DOI, arXiv id, OpenAlex id or `rf:` work id is a token. For the feed tools,
+    which are not seed tools: a feed entry that is a held-out seed's paper shows its stated
+    identifiers like any paper's (researcher ruling 2026-11-14; decisions 37 item 9, 81 and 123).
+    The seed's own id (`SEED<n>`) stays a token: it names the seed, not a paper, and no feed
+    entry carries one."""
+    return {
+        seed.seed_id for seed in seeds_service.all_seeds(project) if seed.role is SeedRole.HELD_OUT
+    }
 
 
 def _resolved_openalex(project: Project, work_ids: list[str]) -> list[str]:

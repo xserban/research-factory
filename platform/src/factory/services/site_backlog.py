@@ -349,4 +349,4 @@ def render_backlog() -> str:
         "<div class=tray id=tray></div><div class=drawer id=drawer></div>"
         f"<script id=d type='application/json'>{data}</script><script>{_JS}</script>"
     )
-    return page("Backlog board", body, _CSS).replace("max-width:1100px", "max-width:1500px")
+    return page("Backlog board", body, _CSS)

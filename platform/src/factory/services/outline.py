@@ -24,7 +24,7 @@ Invariants:
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 
 from pydantic import JsonValue
@@ -49,6 +49,7 @@ from factory.services.references import included_works
 from factory.services.relations import list_relations
 from factory.services.search import get_work
 from factory.services.views import to_json
+from factory.services.work_ref import resolve_work_ids
 
 IDEA_ITEM_KINDS = frozenset({"base-idea", "addition", "limitation"})
 _LINEAGE = frozenset({EdgeType.BUILDS_ON, EdgeType.IMPROVES_ON})
@@ -96,6 +97,9 @@ def build_outline(
         as_of = project.index.head()
         population = set(included_works(project))
         if not isinstance(scope.works, str):
+            scope = replace(
+                scope, works=tuple(resolve_work_ids(project, scope.works, field="scope_works"))
+            )
             population &= set(scope.works)
         report = evidence_report(project)
         if agent:

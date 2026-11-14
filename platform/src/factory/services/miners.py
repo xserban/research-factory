@@ -210,16 +210,18 @@ def _candidates(
     project: Project, name: str, selector: Selector, mined: set[str]
 ) -> list[tuple[str, str]]:
     """`(work, conversion)` of the miner's own population that no production pass has started
-    (IDEA-69 (4)): `miner_population` filters by the use's layers; the conversion is the selector
-    population's, or the default one for an on-demand work outside it."""
+    (IDEA-69 (4)): `miner_population` filters by the use's layers; requested on-demand works are
+    excluded: they lie outside the selector population and are not a uniform sample."""
     conversions = dict(population(project, selector))
     out: list[tuple[str, str]] = []
-    for work in miner_population(project, name):
+    for work in miner_population(project, name, include_requested=False):
+        if work in mined:
+            continue
         conversion = conversions.get(work)
         if conversion is None:
             found = default_conversion(project, work)
             conversion = None if found is None else found.conversion_id
-        if work not in mined and conversion is not None:
+        if conversion is not None:
             out.append((work, conversion))
     return out
 
@@ -236,7 +238,7 @@ def draw_miner_calibration(
     event payload.
 
     The sample is `draw_uniform` over the miner's own population (`miner_population`: the
-    selector's population restricted to the protocol use's `layers`, plus on-demand requests)
+    selector's population restricted to the protocol use's `layers`; never the on-demand requests)
     less the units a production pass of this miner already holds, of
     `max(regime.calibration_size, floor)` units capped at the population; the seed and the
     population digest are recorded.

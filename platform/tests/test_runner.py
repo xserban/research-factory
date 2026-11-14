@@ -648,7 +648,7 @@ def test_screen_pending_is_zero_while_dedup_is_not_current(
     assert sum(runner.pending_units(project, "screen").values()) == 0
 
 
-# --- Mine stages: the calibration gate and the exploratory opt-in (IDEA-69 (3)) ---
+# --- Mine stages: the calibration gate and the protocol's exploratory declaration (IDEA-69) ---
 
 MINE = "mine:m-alpha"
 
@@ -684,21 +684,26 @@ def test_uncalibrated_mine_stage_is_refused_before_launch(
     assert [i.field for i in exc.value.issues] == ["stage"]
     text_out = _issues(exc)
     assert "m-alpha" in text_out and "version 2" in text_out
-    assert "calibrate it first" in text_out and "exploratory" in text_out
+    assert "calibrate it first" in text_out and "factory protocol amend" in text_out
 
 
-def test_exploratory_mine_stage_launches_with_the_instruction(
+def _declared(monkeypatch: pytest.MonkeyPatch, value: bool = True) -> None:
+    """The protocol's use of the miner is (not) declared exploratory."""
+    monkeypatch.setattr("factory.services.mining.use_is_exploratory", lambda p, n, v: value)
+
+
+def test_declared_exploratory_mine_stage_launches_and_records_it(
     project: Project, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from factory.services.miners import MinerState
 
     _mine_stage(project, monkeypatch, MinerState.REGISTERED)
+    _declared(monkeypatch)
     launcher = FakeLauncher()
-    run_id = runner.start_run(project, MINE, launcher=launcher, exploratory=True)
+    run_id = runner.start_run(project, MINE, launcher=launcher)
     [(_, log_path)] = launcher.calls
     prompt = (log_path.parent / "prompt.txt").read_text(encoding="utf-8")
-    assert "pass `exploratory` true to every `mine_next` call" in prompt
-    assert "no quality claim" in prompt
+    assert "exploratory" not in prompt  # the task carries the mark, not the prompt
     [started] = _started_payloads(project)
     assert started["exploratory"] is True
     _finish_all(launcher, run_id)
@@ -720,66 +725,32 @@ def test_calibrated_mine_stage_launches_as_before(
     _finish_all(launcher, run_id)
 
 
-def test_exploratory_on_a_non_mine_stage_is_refused(project: Project) -> None:
-    launcher = FakeLauncher()
-    with pytest.raises(FactoryValidationError) as exc:
-        runner.start_run(project, "screen", launcher=launcher, exploratory=True)
-    assert [i.field for i in exc.value.issues] == ["exploratory"]
-    assert launcher.calls == [] and _started_payloads(project) == []
-
-
-def test_resumed_exploratory_run_keeps_the_flag(
+def test_resumed_run_of_a_declared_use_records_it_again(
     project: Project, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from factory.services.miners import MinerState
 
     _mine_stage(project, monkeypatch, MinerState.REGISTERED)
+    _declared(monkeypatch)
     launcher = FakeLauncher(code=1)
-    first = runner.start_run(project, MINE, launcher=launcher, exploratory=True)
+    first = runner.start_run(project, MINE, launcher=launcher)
     _finish_all(launcher, first)
     second = runner.start_run(project, MINE, launcher=launcher, resumes=first)
-    [(_, log_path)] = launcher.calls[1:]
-    prompt = (log_path.parent / "prompt.txt").read_text(encoding="utf-8")
-    assert "pass `exploratory` true" in prompt
     assert [p["exploratory"] for p in _started_payloads(project)] == [True, True]
     _finish_all(launcher, second)
 
 
-def test_resume_cannot_turn_a_production_run_exploratory(
-    project: Project, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from factory.services.miners import MinerState
+def test_start_run_and_queue_process_have_no_exploratory_option() -> None:
+    import inspect
 
-    _mine_stage(project, monkeypatch, MinerState.CALIBRATED)
-    launcher = FakeLauncher(code=1)
-    first = runner.start_run(project, MINE, launcher=launcher)
-    _finish_all(launcher, first)
-    with pytest.raises(FactoryValidationError) as exc:
-        runner.start_run(project, MINE, launcher=launcher, resumes=first, exploratory=True)
-    assert [i.field for i in exc.value.issues] == ["exploratory"]
-    _finish_all(launcher, first)
-
-
-def test_queue_process_passes_exploratory_to_the_service(
-    project: Project, monkeypatch: pytest.MonkeyPatch
-) -> None:
     from typer.testing import CliRunner
 
     from factory.cli.main import app
-    from tests.cli_helpers import _env
 
-    seen: dict[str, Any] = {}
-
-    def fake_start(opened: Project, stage: str, **kwargs: Any) -> str:
-        seen.update(stage=stage, **kwargs)
-        return "rnr_01ARZ3NDEKTSV4RRFFQ69G5FAV"
-
-    monkeypatch.setattr(runner, "start_run", fake_start)
-    result = CliRunner().invoke(
-        app, ["queue", "process", "--stage", MINE, "--exploratory"], env=_env(project.settings.root)
-    )
-    assert result.exit_code == 0, result.output
-    assert seen["stage"] == MINE and seen["exploratory"] is True
+    assert "exploratory" not in inspect.signature(runner.start_run).parameters
+    assert "exploratory" not in inspect.signature(runner.build_command).parameters
+    result = CliRunner().invoke(app, ["queue", "process", "--stage", MINE, "--exploratory"])
+    assert result.exit_code != 0
 
 
 def test_runner_started_omits_exploratory_when_false() -> None:

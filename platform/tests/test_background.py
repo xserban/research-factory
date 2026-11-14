@@ -126,6 +126,25 @@ def test_background_works_and_flow_identities(
     assert "of which kept as background: 1 (EX02)" in words
 
 
+def test_background_works_with_given_criteria_is_identical(
+    project: Project,
+    agent: Actor,
+    human: Actor,
+    mock_sources: SourcesFor,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from factory.services.agreement import exclusion_criteria
+
+    protocol_id = _ready(project, agent, human, mock_sources, dual_sample=1.0)
+    _exclude_agreed(project, agent, protocol_id)
+    _background(monkeypatch, "EX02")
+    stage = ScreeningStage.TITLE_ABSTRACT
+    given = exclusion_criteria(project, stage=stage)
+    assert screening.background_works(project, stage=stage, criteria=given) == (
+        screening.background_works(project, stage=stage)
+    )
+
+
 def test_background_cannot_exceed_excluded() -> None:
     from factory.services.prisma import NOT_RUN_BOXES, FullTextBoxes
 

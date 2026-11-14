@@ -56,6 +56,7 @@ from factory.services.extraction_agreement import extraction_agreement, final_ro
 from factory.services.human_channel import require_human_channel
 from factory.services.protocol import ProtocolVersion, current_protocol
 from factory.services.seeds import _rigor_mode
+from factory.services.work_ref import resolve_work_id
 
 __all__ = [
     "EXTRACTION_ERROR_CEILING",
@@ -325,6 +326,7 @@ def extraction_audit_record(
     with project.index.exclusive():
         project.index.sync()
         require_human_channel(project, actor, channel, "audit-label")
+        work_id = resolve_work_id(project, work_id)
         issues = _gate(project, actor, channel)
         if not _audit_exists(project, audit_id):
             issues.append(ValidationIssue("audit_id", "unknown audit"))

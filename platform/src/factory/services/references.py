@@ -93,6 +93,7 @@ from factory.services.reference_resolve import (
     resolve_entries,
 )
 from factory.services.screening import background_works
+from factory.services.work_ref import resolve_work_id, resolve_work_ids
 from factory.sources.registry import SourceFactory
 
 MAX_PAGE = 100
@@ -250,6 +251,8 @@ def extract_references(
                 [ValidationIssue("work_ids", f"{w!r}: not a work id") for w in bad]
             )
     project.index.sync()
+    if work_ids is not None:
+        work_ids = resolve_work_ids(project, work_ids)
     included = _extractable_works(project)
     skipped: list[Skipped] = []
     scope: list[tuple[str, ConversionRef]] = []
@@ -792,6 +795,8 @@ def list_references(
     if issues:
         raise FactoryValidationError(issues)
     project.index.sync()
+    if work_id is not None:
+        work_id = resolve_work_id(project, work_id)
     scope = (
         f"{_ENTRIES} WHERE (:work IS NULL OR x.work_id = :work) "
         "AND (:state IS NULL OR l.state = :state)"

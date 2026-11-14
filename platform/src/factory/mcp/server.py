@@ -199,7 +199,7 @@ from factory.services.rate_limit import RateLimiter
 from factory.services.results import BatchResult, ItemError
 from factory.services.search import list_works
 from factory.services.seeds import SeedOutcome
-from factory.services.withholding import held_out_tokens
+from factory.services.withholding import held_out_tokens, seed_id_tokens
 from factory.services.workspace import workspace_counts
 from factory.services.xrun_accounting import hidden_acceptances
 from factory.sources.fulltext.base import FullTextRoute
@@ -299,12 +299,14 @@ def build_server(
         rename: Callable[[str], str] = str,
         *,
         include_work_ids: bool = True,
+        seed_ids_only: bool = False,
     ) -> dict[str, JsonValue]:
         """`guarded`, with every agent-facing response scrubbed of held-out identifiers (R-20).
 
         A success is scrubbed by its tool (`_withheld`), and a refusal here, as defence in depth:
         the services never name a held-out seed. Tools that list works pass
-        `include_work_ids=False`; see `_held_out_tokens`."""
+        `include_work_ids=False`; see `_held_out_tokens`. The feed tools pass `seed_ids_only=True`
+        (see `seed_id_tokens`)."""
         result = guarded(fn, rename)
         if result["ok"] is True:
             return result
@@ -312,7 +314,10 @@ def build_server(
             opened = open_project(settings, project_slug, session=session, clock=clock)
         except ProjectNotFoundError:
             return result
-        scrubbed = withhold(result, _held_out_tokens(opened, include_work_ids))
+        tokens = (
+            seed_id_tokens(opened) if seed_ids_only else _held_out_tokens(opened, include_work_ids)
+        )
+        scrubbed = withhold(result, tokens)
         return scrubbed if isinstance(scrubbed, dict) else result
 
     @server.tool()
@@ -539,9 +544,9 @@ def build_server(
             _refuse_pass_session(opened)
             make_agent_actor(settings, session, role, model, skill)
             report = feed_read_service.feed_list(opened, ranking_id=ranking_id, top=top)
-            return _withheld(opened, report.model_dump(mode="json"), include_work_ids=False)
+            return _withheld(opened, report.model_dump(mode="json"), seed_ids_only=True)
 
-        return _reply(project, listing, include_work_ids=False)
+        return _reply(project, listing, seed_ids_only=True)
 
     @server.tool()
     def feed_run(
@@ -565,9 +570,9 @@ def build_server(
                 dry_run=dry_run,
                 actor=actor,
             )
-            return _withheld(opened, result.model_dump(mode="json"))
+            return _withheld(opened, result.model_dump(mode="json"), seed_ids_only=True)
 
-        return _reply(project, run_cycle)
+        return _reply(project, run_cycle, seed_ids_only=True)
 
     @server.tool()
     def feed_status(project: str, role: str, model: str, skill: str) -> dict[str, JsonValue]:
@@ -580,9 +585,9 @@ def build_server(
             _refuse_pass_session(opened)
             make_agent_actor(settings, session, role, model, skill)
             report = feed_service.feed_status(opened)
-            return _withheld(opened, report.model_dump(mode="json"), include_work_ids=False)
+            return _withheld(opened, report.model_dump(mode="json"), seed_ids_only=True)
 
-        return _reply(project, status, include_work_ids=False)
+        return _reply(project, status, seed_ids_only=True)
 
     @server.tool()
     def notice_list(project: str) -> dict[str, JsonValue]:
@@ -1667,11 +1672,12 @@ def build_server(
         limit: int = 20,
     ) -> dict[str, JsonValue]:
         """Fetch full text for promoted works. Routes are tried in order (arxiv-html, arxiv-source,
-        oa-pdf) and each work stops at its first retrieved attempt. `routes` names routes to try
-        instead, all of them, without stopping. `work_ids` defaults to the promoted works that have
-        no document and no attempt yet, so a work whose routes all failed is retried only by
-        `refresh` (every promoted work), `routes`, or by naming it in `work_ids`. `limit` caps the
-        works processed; more `work_ids` than `limit` are refused. Returns each work's attempts and
+        pmc-jats, oa-pdf) and each work stops at its first retrieved attempt. `routes` names routes
+        to try instead, all of them, without stopping. `work_ids` defaults to the promoted works
+        that have no document and no attempt yet, so a work whose routes all failed is retried
+        only by `refresh` (every promoted work), `routes`, or by naming it in `work_ids`.
+        `limit` caps the works processed; more `work_ids` than `limit` are refused. Returns each
+        work's attempts and
         documents, and `remaining`, the promoted works still without a document. A researcher's
         PDF is imported by the researcher, never fetched. Refused to a session that has joined a
         pass."""
@@ -1949,7 +1955,6 @@ def build_server(
         model: str,
         skill: str,
         calibration: bool = False,
-        exploratory: bool = False,
     ) -> dict[str, JsonValue]:
         """Serve the next task of pass A or B of a registered miner to this session, or say why
         none is served. The miner must be registered and listed in the protocol's `miners`
@@ -1959,8 +1964,9 @@ def build_server(
         its first call. With `calibration` the pass is the miner's calibration pass (pass A): the
         units of its drawn sample only, for a session that neither proposed the miner, nor took
         part in a production pass, nor recorded a gold label. A production pass is refused for a
-        version with no passed calibration unless `exploratory` is true (no quality claim; the
-        task carries the mark)."""
+        version with no passed calibration unless the protocol declares that miner use
+        exploratory (a protocol amendment with a reason, made by the researcher; no quality
+        claim; the task carries the mark). You cannot declare it yourself."""
 
         def serve() -> JsonValue:
             with unit_cap.serving() as done:
@@ -1975,7 +1981,6 @@ def build_server(
                     version,
                     label,
                     calibration=calibration,
-                    exploratory=exploratory,
                 )
                 dumped = served.model_dump(mode="json")
                 done(dumped)
@@ -5930,10 +5935,17 @@ def _without_hidden_acceptances(row: GateStatusRow, hidden: int) -> GateStatusRo
 
 
 def _withheld(
-    project: Project, value: JsonValue, include_work_ids: bool = True, same_length: bool = False
+    project: Project,
+    value: JsonValue,
+    include_work_ids: bool = True,
+    same_length: bool = False,
+    seed_ids_only: bool = False,
 ) -> JsonValue:
     """Strip every held-out seed's identifiers from an agent-facing response (R-20). With
-    `same_length` a match is filled with `#` of its own length, so offsets stay exact."""
+    `same_length` a match is filled with `#` of its own length, so offsets stay exact. With
+    `seed_ids_only` (the feed tools) only held-out seed ids are stripped; see `seed_id_tokens`."""
+    if seed_ids_only:
+        return withhold(value, seed_id_tokens(project), same_length)
     return withhold(value, _held_out_tokens(project, include_work_ids), same_length)
 
 

@@ -20,7 +20,6 @@ from factory.model.screening import Channel, PassLabel
 from factory.services.context import Project
 from factory.services.miner_gold import calibration_labels, label_miner_calibration
 from factory.services.miners import calibration_of, draw_miner_calibration
-from factory.services.mining import mine_next
 from tests.cli_helpers import _env
 from tests.extraction_helpers import _both, ext_a, ext_b, screened, world  # noqa: F401
 from tests.helpers import install_skill, open_session
@@ -28,6 +27,7 @@ from tests.miner_helpers import (
     SESSION_M1,
     VISION_NAME,
     list_miner,
+    mine_exploratory,
     mine_row,
     miner_actor,
 )
@@ -101,7 +101,7 @@ def test_pass_session_cannot_relay(
 ) -> None:
     cal, works = _drawn(project, agent, human)
     worker = miner_actor(SESSION_M1, "claude-opus-5-5")
-    mine_next(project, worker, VISION_NAME, 1, PassLabel.A, exploratory=True)  # joins a miner pass
+    mine_exploratory(project, worker, VISION_NAME, 1, PassLabel.A)  # joins a miner pass
     before = _events(project)
     with pytest.raises(FactoryValidationError) as raised:
         label_miner_calibration(
@@ -256,13 +256,8 @@ async def test_mcp_relay_is_refused_to_pass_and_proposer_sessions(
 ) -> None:
     install_skill(settings, "rf-extract")
     cal, works = _drawn(project, agent_other, human)  # proposer: session S2
-    mine_next(
-        project,
-        miner_actor(SESSION_M1, "claude-opus-5-5"),
-        VISION_NAME,
-        1,
-        PassLabel.A,
-        exploratory=True,
+    mine_exploratory(
+        project, miner_actor(SESSION_M1, "claude-opus-5-5"), VISION_NAME, 1, PassLabel.A
     )
     before = _events(project)
     for session in (SESSION_M1, agent_other.session):

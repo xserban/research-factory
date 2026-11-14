@@ -29,6 +29,7 @@ from factory.model.fulltext import Route
 from factory.services.agreement import Outcome, final_outcomes
 from factory.services.context import Project
 from factory.services.dedup import absorbed_by_primary, absorbed_ids
+from factory.services.work_ref import resolve_work_ids
 
 _NOT_RETRIEVED = frozenset({"not-available", "failed"})
 """The attempt outcomes that record a reason and no document (`Attempted`)."""
@@ -82,6 +83,7 @@ def fulltext_status(project: Project, *, work_ids: Sequence[str] | None = None) 
     if work_ids is None:
         scope = sorted(promoted)
     else:
+        work_ids = resolve_work_ids(project, work_ids)
         issues = [
             ValidationIssue(
                 "work_ids",

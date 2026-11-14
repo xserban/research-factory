@@ -17,7 +17,7 @@ import pytest
 from factory.clock import FixedClock
 from factory.config import Settings
 from factory.events.reader import read_all
-from factory.services import site_server
+from factory.services import site_hub_feed, site_server
 from factory.services.context import Project, list_projects, open_project
 from factory.services.feed import FeedRunAll
 from factory.services.project import init_project
@@ -440,12 +440,44 @@ def test_the_page_counts_shown_of_ranked_and_hides_further_cards_read_only(
     further = re.findall(r"<article class='card further' hidden[^>]*>.*?</article>", demo, re.S)
     assert len(further) == 70  # ranks 30..99; rank 100 is the shown exploration pick
     assert "rank 30, not in the shown set" in further[0]
-    assert all("data-act" not in f and "<button" not in f for f in further)
+    assert all(f.count("data-act=") == len(site_hub_feed.ACTIONS) for f in further)
+    assert all("reaction: no reaction" in f for f in further)
     assert "data-more='30'" in demo and "Show next 30" in demo
-    assert "abstract and links only" in demo
+    assert "marked as beyond the shown list" in demo
     assert "Abstract 30 &lt;b&gt;x&lt;/b&gt;" in further[0]
     shown = re.findall(r"<article class=card data-entry-id", demo)
     assert len(shown) == 30
+
+
+def test_a_further_card_shows_its_reaction_and_added_state(
+    served: tuple[int, site_server.MainHub, Scripted],
+    project: Project,
+    stub_titles: None,  # noqa: F811
+) -> None:
+    from factory.events.reader import read_all as _read
+    from factory.model.feed import FeedReaction
+    from factory.services.feed import react, send
+    from tests.test_feed_page import _eid, world
+
+    port, _, _ = served
+    world(project, total=40, shown=5)
+    react(project, project.human_actor(), _eid(10), FeedReaction.LIKE)
+    send(project, project.human_actor(), _eid(11))
+    assert any(
+        e.payload.get("beyond_shown") for e in _read(project.paths.events_dir, project.catalog)
+    )
+    demo = _demo_section(_req(port, "GET", "/feed/")[1])
+    cards = {
+        m.group(1): m.group(0)
+        for m in re.finditer(
+            r"<article class='card further' hidden data-entry-id='([^']*)'>.*?</article>",
+            demo,
+            re.S,
+        )
+    }
+    assert "reaction: like" in cards[_eid(10)] and "badge added" not in cards[_eid(10)]
+    assert "badge added" in cards[_eid(11)]
+    assert "reaction: no reaction" in cards[_eid(12)]
 
 
 def test_the_page_says_when_the_cap_cuts(
