@@ -106,7 +106,7 @@ from factory.model.references import (
 from factory.model.search import QueryKind, QueryPurpose, QuerySpec, RunStatus
 from factory.model.work import Work
 from factory.model.work_ids import arxiv_id_from_doi
-from factory.services.agreement import Outcome, final_outcomes
+from factory.services.agreement import Outcome, cannot_assess_open, final_outcomes
 from factory.services.budgets import budget_issues
 from factory.services.calibration import calibration_items
 from factory.services.chase import (
@@ -737,12 +737,15 @@ def _named(ids: Sequence[str]) -> str:
 
 def _promoted_pending(project: Project) -> set[str]:
     """Ordinary works promoted at title/abstract and pending at full text, when the protocol plans
-    full text screening; else none. Calibration works are left out."""
+    full text screening; else none. Calibration works are left out, and so are the works awaiting
+    classification (an unresolved full-text cannot-assess, IDEA-49): they wait on the researcher's
+    `factory screen resolve`, not on anyone who can screen or convert, so they never block."""
     protocol = current_protocol(project)
     if protocol is None or protocol.spec.full_text_screening is None:
         return set()
     promoted = {w for w, o in final_outcomes(project).items() if o is Outcome.INCLUDED}
     calibration = set(calibration_items(project, stage=ScreeningStage.FULL_TEXT))
+    calibration |= set(cannot_assess_open(project, stage=ScreeningStage.FULL_TEXT))
     return {
         w
         for w, o in final_outcomes(project, stage=ScreeningStage.FULL_TEXT).items()

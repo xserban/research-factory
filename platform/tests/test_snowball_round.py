@@ -1023,3 +1023,37 @@ def test_unqueried_round_does_not_stop_plan(
     assert "previous_round" not in [i.field for i in state.refusals]
     assert state.allowed and state.round_no == 2
     assert any("does not apply to its retry" in note for note in state.notes)
+
+
+def test_awaiting_classification_works_never_block_a_round(
+    project: Project, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unresolved full-text cannot-assess work is the researcher's (`screen resolve`), so it is
+    neither pending for the round nor listed as unextracted (IDEA-49)."""
+    from types import SimpleNamespace
+
+    from factory.model.protocol import ScreeningStage
+    from factory.services.agreement import Outcome
+
+    protocol = SimpleNamespace(spec=SimpleNamespace(full_text_screening=object()))
+    monkeypatch.setattr(snowball, "current_protocol", lambda p: protocol)
+    monkeypatch.setattr(
+        snowball,
+        "final_outcomes",
+        lambda p, stage=None: {
+            "w-ca": Outcome.INCLUDED if stage is None else Outcome.PENDING,
+            "w-ft": Outcome.INCLUDED if stage is None else Outcome.PENDING,
+        },
+    )
+    monkeypatch.setattr(snowball, "calibration_items", lambda p, stage=None: [])
+    monkeypatch.setattr(snowball, "_has_document", lambda p, w: True)
+    asked: list[ScreeningStage] = []
+
+    def open_set(p: Project, *, stage: ScreeningStage) -> list[str]:
+        asked.append(stage)
+        return ["w-ca"]
+
+    monkeypatch.setattr(snowball, "cannot_assess_open", open_set)
+    assert snowball._promoted_pending(project) == {"w-ft"}
+    assert snowball._pending(project) == ["w-ft"]
+    assert asked == [ScreeningStage.FULL_TEXT, ScreeningStage.FULL_TEXT]
