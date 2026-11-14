@@ -285,7 +285,7 @@ def _matrix(data: Mapping[str, Any]) -> str:
             cells += f"<td class=n><a href='{href}'>{n}</a></td>" if n else "<td class=n>0</td>"
         total = sum(1 for w in data["works"] if st["id"] in w["stages"])
         href = f"#layer=all&mode=any&stage={html.escape(str(st['id']), quote=True)}"
-        rows += f"<tr><td>{esc(st['name'])}</td>{cells}<td class=n><a href='{href}'>{total}</a></td></tr>"
+        rows += f"<tr><td>{esc(st['name'])} <small><a href='../steps/index.html#stage-{esc(st['id'])}'>Steps →</a></small></td>{cells}<td class=n><a href='{href}'>{total}</a></td></tr>"
     return f"<table><tr><th>stage</th>{head}<th>all</th></tr>{rows}</table>"
 
 

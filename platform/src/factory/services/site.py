@@ -224,6 +224,12 @@ def _build_lifecycle(project: Project, out: Path) -> None:
     build_lifecycle(project, out)
 
 
+def _build_steps(project: Project, out: Path) -> None:
+    from factory.services.site_steps import build_steps
+
+    build_steps(project, out)
+
+
 def _build_layers(project: Project, out: Path) -> None:
     from factory.services.site_layers import build_layers
 
@@ -257,7 +263,7 @@ def _build_costs(project: Project, out: Path) -> None:
 LAYOUT: Final[dict[str, tuple[str, ...]]] = {
     "Overview": ("dashboard", "prisma", "costs"),
     "Corpus": ("explorer", "bibliography", "citations", "layers", "wiki", "feed"),
-    "Findings": ("results", "synthesis", "lifecycle", "taxonomy"),
+    "Findings": ("results", "synthesis", "lifecycle", "steps", "taxonomy"),
     "Mining": ("miners", "agreement"),
     "Data quality": ("conversion", "acquisition", "queue"),
 }
@@ -350,6 +356,17 @@ def products() -> list[Product]:
             entry="index.html",
             inputs=(*EXPLORER_EVENTS, "work.layer_set"),
             build=_build_lifecycle,
+        ),
+        Product(
+            id="steps",
+            title="Steps",
+            group="Findings",
+            description="Exploratory: the steps an AI research system takes in each lifecycle stage, "
+            "per paper in its own order, with actor, check and limits and the quote behind each; "
+            "the miner is not calibrated, so the rows are for reading only.",
+            entry="index.html",
+            inputs=EXPLORER_EVENTS,
+            build=_build_steps,
         ),
         Product(
             id="layers",
