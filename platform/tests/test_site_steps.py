@@ -142,11 +142,11 @@ def test_render_escapes_everything_and_links_to_the_explorer(project: Project) -
     assert "&lt;/script&gt;&lt;b&gt;" in render_steps(view)
 
 
-def test_the_product_is_registered_after_lifecycle() -> None:
+def test_the_product_is_registered_before_lifecycle() -> None:
     ids = [p.id for p in site.products()]
-    assert ids.index("steps") == ids.index("lifecycle") + 1
+    assert ids.index("steps") == ids.index("lifecycle") - 1
     product = next(p for p in site.products() if p.id == "steps")
-    assert product.group == "Findings" and product.title == "Steps"
+    assert product.group == "Mining" and product.title == "Steps"
     assert "extraction.%" in product.inputs
 
 

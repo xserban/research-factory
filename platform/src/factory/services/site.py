@@ -27,7 +27,7 @@ import html
 import json
 import shutil
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
@@ -264,13 +264,14 @@ def _build_costs(project: Project, out: Path) -> None:
 
 LAYOUT: Final[dict[str, tuple[str, ...]]] = {
     "Overview": ("dashboard", "prisma", "costs"),
-    "Corpus": ("explorer", "bibliography", "citations", "layers", "wiki", "feed"),
-    "Findings": ("results", "synthesis", "lifecycle", "steps", "taxonomy"),
-    "Mining": ("miners", "agreement"),
-    "Data quality": ("conversion", "acquisition", "queue"),
+    "Sources": ("feed", "acquisition", "conversion", "queue"),
+    "Corpus": ("explorer", "bibliography", "citations", "layers", "wiki"),
+    "Mining": ("miners", "agreement", "steps", "lifecycle"),
+    "Findings": ("results", "synthesis", "taxonomy"),
 }
-"""The project hub's sidebar: each group and its products, in order. (The factory-wide pages, the
+"""The project hub's sidebar, in the order the work happens: each group and its products. (The factory-wide pages, the
 backlog and the capabilities, are on the main hub, `site_chrome.HUB_NAV`.)"""
+_GROUP: Final = {pid: g for g, ids in LAYOUT.items() for pid in ids}
 _ORDER: Final = {pid: n for n, pid in enumerate(i for ids in LAYOUT.values() for i in ids)}
 
 
@@ -482,7 +483,7 @@ def products() -> list[Product]:
             build=_build_queue,
         ),
     ]
-    return sorted(items, key=lambda p: _ORDER[p.id])
+    return sorted((replace(p, group=_GROUP[p.id]) for p in items), key=lambda p: _ORDER[p.id])
 
 
 def planned() -> list[Planned]:
