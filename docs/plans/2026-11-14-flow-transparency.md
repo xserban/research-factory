@@ -101,6 +101,14 @@ Inventory of `data/projects/agentic-science/` on 2026-11-14. The hub has 23 prod
 
 Second branch `hub-records` (after validation of the first): the event-only pages of A (one task per page), the document registration event and "Study documents" product (B), the unreferenced-files check (D), the runs index (C).
 
+### Branch 2 tasks (`hub-records`, cut from `flow-transparency` db96864, 2026-11-15)
+
+Already shown by the dashboard product and therefore dropped from A: researcher decisions, protocol view, PRESS reviews, probe rounds. Calibration and audit labels are left for a later pass (the miners product covers miner calibration).
+
+- R1 (rf-builder): hub product "Search and deduplication" (group Sources): per registered query its runs (status, reported, retrieved, notes), archived pages, gaps and skipped records (`flow_skipped`); every merge with both titles, rule, active or reverted; the merged-after-screening conflicts (`dedup.merged_after_screening`).
+- R2 (rf-builder-critical, new event): `file.registered` (path relative to the project folder, sha256, kind: study-document | validation | input | other, title, supersedes); service, CLI `factory files register PATH --kind K [--title T]` and `factory files list`; registration of an unchanged file is idempotent, a changed file is a new version; hub product "Study documents" (group Overview) listing registered files by kind with versions, Markdown rendered as HTML and other files linked.
+- R3 (after R2): `factory check` rule `unreferenced-files`: files under the project folder that no event names (excluding `events/`, `blobs/`, `library/`, `.index/`, `site/`), as a warning with the count by top-level folder; and a "Runs" hub page listing `ops/` agent-run files grouped by batch prefix, linked to a run id where an event names it, others flagged as unlinked.
+
 Tests are written with each task (TDD), but not run while the testing pause holds; mypy and ruff must pass.
 
 ## Researcher rulings (2026-11-14)
