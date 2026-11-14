@@ -6,8 +6,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from factory.services.site_catalog import (
     Catalog,
     ToolSpec,
@@ -149,19 +147,6 @@ def test_single_word_tools_are_matched_to_skills(tmp_path: Path) -> None:
     assert by["check"].stage == "cross"
     assert by["whoami"].stage == "cross"
     assert not [f for f in cat.flags if f.code == "orphan-tool"]
-
-
-def test_catalog_stamp_never_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    from types import SimpleNamespace
-
-    from factory.services import site, site_catalog
-
-    def boom(_settings: object) -> str:
-        raise OSError("unreadable")
-
-    monkeypatch.setattr(site_catalog, "source_hash", boom)
-    project = SimpleNamespace(settings=None)
-    assert site._stamp_catalog(project).startswith("unreadable:")  # type: ignore[arg-type]
 
 
 # --- IDEA-61 ---

@@ -24,6 +24,8 @@ from html import escape as e
 from pathlib import Path
 from typing import Final, NamedTuple
 
+from factory.services.site_chrome import PALETTE_CSS, with_bar
+
 REGISTRY: Final = "registry.json"
 
 
@@ -92,7 +94,13 @@ _CSS: Final = (
     ".m{display:flex;gap:14px;margin-top:10px;font-size:13px}.m b{font-size:16px}"
     ".ok{color:var(--ok)}.warn{color:var(--warn)}.note{color:var(--mut);margin-top:24px;"
     "font-size:13px}"
-)
+    ".fp{margin:0 0 22px}.fp h2{font-size:17px;margin:0 0 8px;display:flex;justify-content:space-between;align-items:baseline}"
+    ".fp h2 a{font-size:13px;font-weight:400;color:var(--acc);text-decoration:none}"
+    ".fp .pe{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:9px 12px;margin:0 0 6px}"
+    ".fp .pe .tt{font-weight:600;color:inherit;text-decoration:none}.fp .pe .tt:hover{color:var(--acc)}"
+    ".fp .pe .mm{color:var(--mut);font-size:13px;margin-top:2px}.fp .pe .sc{color:var(--acc);font-family:ui-monospace,monospace;margin-right:8px}"
+    ".fp .pe .ac{margin-top:6px;display:flex;gap:6px;align-items:center}.fp .pe .ac button{padding:2px 10px}.fp .pe .ac .msg{color:var(--mut);font-size:12px}"
+) + PALETTE_CSS
 
 
 _FORM: Final = (
@@ -124,9 +132,12 @@ f.addEventListener('submit',function(ev){
 """
 
 
-def render_portal(rows: list[PortalRow], *, create_token: str | None = None) -> str:
+def render_portal(
+    rows: list[PortalRow], *, create_token: str | None = None, feed_panel: str = ""
+) -> str:
     """The portal page: one card per project linking to its hub under `/p/<slug>/`. With
-    `create_token` (the hub's write token) it also has the create-project form."""
+    `create_token` (the hub's write token) it also has the create-project form; `feed_panel` is the
+    short New papers list (`site_hub_feed.render_feed_panel`), shown above the cards."""
     cards = []
     for r in rows:
         state = (
@@ -154,14 +165,14 @@ def render_portal(rows: list[PortalRow], *, create_token: str | None = None) -> 
     )
     form = _FORM if create_token else ""
     script = f"<script>{_FORM_SCRIPT}</script>" if create_token else ""
-    return (
+    return with_bar(
         "<!doctype html><html lang=en><head><meta charset=utf-8>"
         + token_meta
         + "<meta name=viewport content='width=device-width,initial-scale=1'>"
         f"<title>Factory projects</title><style>{_CSS}</style></head><body><main>"
-        "<h1>Factory</h1><p class=sub>All projects on this machine. Open one for its hub, or see "
-        "the <a href='/feed/' style='color:var(--acc)'>new papers</a> of all of them.</p>"
-        f"<div class=grid>{body}</div>{form}"
+        "<h1>Factory</h1><p class=sub>All projects on this machine. Open one for its hub.</p>"
+        f"{feed_panel}<div class=grid>{body}</div>{form}"
         "<p class=note>Projects are found by scanning the factory root; "
-        f"<code>registry.json</code> can give a title or hide one.</p></main>{script}</body></html>"
+        f"<code>registry.json</code> can give a title or hide one.</p></main>{script}</body></html>",
+        "projects",
     )

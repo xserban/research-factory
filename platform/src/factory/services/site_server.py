@@ -61,6 +61,9 @@ from factory.services import runner as runner_service
 from factory.services import site as site_service
 from factory.services import (
     site_auth,
+    site_backlog,
+    site_catalog_page,
+    site_chrome,
     site_create,
     site_hub_feed,
     site_portal,
@@ -751,6 +754,8 @@ def make_server(
     return httpd, slot.rebuilder
 
 
+PORTAL_FEED_ITEMS: Final = 5
+"""How many New papers entries the portal page lists; the feed page has them all."""
 PROJECT_PREFIX: Final = "/p/"
 FEED_CHECK_EVERY: Final = 1800.0
 """Seconds between the timer's looks at whether the feed is due (a run is due once per
@@ -914,14 +919,28 @@ class MainHub:
         """The answer for a path that belongs to no project: (status, content type or, for a
         redirect, the location, body), or None."""
         if path in ("/", "/index.html"):
+            views = self.feed_views()
+            panel = site_hub_feed.render_feed_panel(
+                site_hub_feed.top_entries(views, PORTAL_FEED_ITEMS),
+                shown_total=sum(len(v.listing.items) for v in views if v.listing is not None),
+            )
             page = site_portal.render_portal(
-                self.rows(), create_token=self.hub_token() if self._create else None
+                self.rows(),
+                create_token=self.hub_token() if self._create else None,
+                feed_panel=panel,
             )
             return 200, "text/html; charset=utf-8", page.encode()
         if path in ("/feed", "/feed/"):
             if path == "/feed":
                 return 301, "/feed/", b""
             return 200, "text/html; charset=utf-8", self.feed_page().encode()
+        if path in ("/backlog", "/catalog"):
+            return 301, path + "/", b""
+        if path == "/backlog/":
+            doc = site_chrome.with_bar(site_backlog.render_backlog(), "backlog")
+            return 200, "text/html; charset=utf-8", doc.encode()
+        if path == "/catalog/":
+            return 200, "text/html; charset=utf-8", self.catalog_page().encode()
         if path == "/api/feed/runner":
             body = json.dumps(site_hub_feed.runner_payload(self.feed)).encode()
             return 200, "application/json; charset=utf-8", body
@@ -940,8 +959,8 @@ class MainHub:
         """The write token of the hub's own acts (`/api/feed/run`, `/api/feed/refetch`)."""
         return self.auth.page_credential(site_auth.Scope(None))
 
-    def feed_page(self) -> str:
-        """The `/feed/` page, read from every listed project's events at request time."""
+    def feed_views(self) -> list[site_hub_feed.ProjectFeed]:
+        """Every listed project's feed state, read from its events at request time."""
         registry = site_portal.load_registry(self._root)
         views = []
         for slug, title in site_portal.listed(self._slugs(), registry):
@@ -953,8 +972,27 @@ class MainHub:
                     found.project, slug, title, self.auth.page_credential(site_auth.Scope(slug))
                 )
             )
+        return views
+
+    def feed_page(self) -> str:
+        """The `/feed/` page, read from every listed project's events at request time."""
         return site_hub_feed.render_feed_page(
-            views, site_hub_feed.runner_payload(self.feed), self.hub_token()
+            self.feed_views(), site_hub_feed.runner_payload(self.feed), self.hub_token()
+        )
+
+    def catalog_page(self) -> str:
+        """The capability catalog (skills and tools are the factory's, not a project's), derived at
+        request time with the settings of any listed project."""
+        for slug in self._slugs():
+            found = self.slot(slug)
+            if found is not None:
+                doc = site_catalog_page.render_catalog(found.project.settings)
+                return site_chrome.with_bar(doc, "catalog")
+        return site_chrome.with_bar(
+            site_service.page(
+                "Capability catalog", "<p>No project found under the factory root.</p>"
+            ),
+            "catalog",
         )
 
     def start_feed_run(self, *, refetch: bool) -> tuple[int, dict[str, object]]:

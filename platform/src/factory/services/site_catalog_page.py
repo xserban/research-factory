@@ -5,9 +5,8 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from pathlib import Path
 
-from factory.services.context import Project
+from factory.config import Settings
 from factory.services.site_catalog import (
     ACCEPTED_MISMATCH,
     LIFECYCLE,
@@ -184,9 +183,10 @@ def render(catalog: Catalog, built_at: str, code: str) -> str:
     return page("Capability catalog", "".join(body), REPORT_CSS + CATALOG_CSS)
 
 
-def build_catalog_product(project: Project, out: Path) -> None:
+def render_catalog(settings: Settings) -> str:
+    """The capability catalog page as HTML, derived from the skills and tools at the call."""
     from factory.services.site import code_hash
 
-    catalog = build_catalog(project.settings)
+    catalog = build_catalog(settings)
     stamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
-    (out / "index.html").write_text(render(catalog, stamp, code_hash()), encoding="utf-8")
+    return render(catalog, stamp, code_hash())

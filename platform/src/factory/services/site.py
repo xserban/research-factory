@@ -149,18 +149,6 @@ def _build_prisma(project: Project, out: Path) -> None:
     build_prisma(project, out)
 
 
-def _build_backlog(project: Project, out: Path) -> None:
-    from factory.services.site_backlog import build_backlog
-
-    build_backlog(project, out)
-
-
-def _backlog_stamp(project: Project) -> str:
-    from factory.services.site_backlog import backlog_digest
-
-    return backlog_digest()  # the file the board reads outside the event log
-
-
 def _build_bibliography(project: Project, out: Path) -> None:
     from factory.services.site_bibliography import build_bibliography
 
@@ -266,26 +254,21 @@ def _build_costs(project: Project, out: Path) -> None:
     build_costs(project, out)
 
 
-def _build_catalog(project: Project, out: Path) -> None:
-    from factory.services.site_catalog_page import build_catalog_product
-
-    build_catalog_product(project, out)
-
-
-def _stamp_catalog(project: Project) -> str:
-    """Never raises: `fingerprint` runs outside the per-product isolation, so an unreadable skill
-    file must make the catalog stale, not abort the build of every product."""
-    from factory.services.site_catalog import source_hash
-
-    try:
-        return source_hash(project.settings)
-    except OSError as exc:
-        return f"unreadable:{type(exc).__name__}"
+LAYOUT: Final[dict[str, tuple[str, ...]]] = {
+    "Overview": ("dashboard", "prisma", "costs"),
+    "Corpus": ("explorer", "bibliography", "citations", "layers", "wiki", "feed"),
+    "Findings": ("results", "synthesis", "lifecycle", "taxonomy"),
+    "Mining": ("miners", "agreement"),
+    "Data quality": ("conversion", "acquisition", "queue"),
+}
+"""The project hub's sidebar: each group and its products, in order. (The factory-wide pages, the
+backlog and the capabilities, are on the main hub, `site_chrome.HUB_NAV`.)"""
+_ORDER: Final = {pid: n for n, pid in enumerate(i for ids in LAYOUT.values() for i in ids)}
 
 
 def products() -> list[Product]:
-    """The registered products, in hub order."""
-    return [
+    """The registered products, in the sidebar order of `LAYOUT`."""
+    items = [
         Product(
             id="dashboard",
             title="Dashboard (snapshot)",
@@ -319,7 +302,7 @@ def products() -> list[Product]:
         Product(
             id="results",
             title="Results",
-            group="Evidence",
+            group="Findings",
             description="What the miners found: distributions, stages covered, stage by technique, "
             "result rows, the review flow and agent events per model.",
             entry="index.html",
@@ -329,7 +312,7 @@ def products() -> list[Product]:
         Product(
             id="miners",
             title="Miners",
-            group="Evidence",
+            group="Mining",
             description="Each miner explained: what it records, how it reads, its fields and "
             "checks, agreement, example rows with quotes, versions and what you can do.",
             entry="index.html",
@@ -339,7 +322,7 @@ def products() -> list[Product]:
         Product(
             id="agreement",
             title="Miner agreement",
-            group="Evidence",
+            group="Mining",
             description="How closely pass A and the second pass agree, by miner and field: the "
             "platform's measure beside the fairer per-work measure.",
             entry="index.html",
@@ -349,7 +332,7 @@ def products() -> list[Product]:
         Product(
             id="taxonomy",
             title="Taxonomy",
-            group="Evidence",
+            group="Findings",
             description="The project's taxonomy by dimension and how the classification miner "
             "placed the works.",
             entry="index.html",
@@ -360,7 +343,7 @@ def products() -> list[Product]:
         Product(
             id="lifecycle",
             title="Lifecycle",
-            group="Evidence",
+            group="Findings",
             description="The stages of AI research systems as a clickable flow: which stages the "
             "works automate, which they cover together, and each paper's own stages in its own "
             "order; every stage and paper links to its quotes.",
@@ -371,7 +354,7 @@ def products() -> list[Product]:
         Product(
             id="layers",
             title="Layers",
-            group="Evidence",
+            group="Corpus",
             description="The layer of each work (core, benchmark, applied, adjacent, background, "
             "off-topic): who set it, the miner or a researcher's move, with counts per layer.",
             entry="index.html",
@@ -381,7 +364,7 @@ def products() -> list[Product]:
         Product(
             id="synthesis",
             title="Synthesis pages",
-            group="Evidence",
+            group="Findings",
             description="Model-written pages about a technique, stage, field or the whole corpus, "
             "recorded and checked against the quoted rows.",
             entry="index.html",
@@ -392,7 +375,7 @@ def products() -> list[Product]:
         Product(
             id="conversion",
             title="Conversion coverage",
-            group="Quality",
+            group="Data quality",
             description="How much of each original's text survives conversion, lowest first. "
             "Click a document to see the original beside the extracted text, where text was "
             "lost, and how to convert it again.",
@@ -403,7 +386,7 @@ def products() -> list[Product]:
         Product(
             id="acquisition",
             title="Full-text acquisition",
-            group="Quality",
+            group="Data quality",
             description="Which promoted works have a full text, by route; the works without one, "
             "why, and the deviations that declare them not acquired.",
             entry="index.html",
@@ -422,18 +405,6 @@ def products() -> list[Product]:
             build=_build_costs,
         ),
         Product(
-            id="catalog",
-            title="Capability catalog",
-            group="Overview",
-            description="The factory's tools and skills by lifecycle stage: which skill to use "
-            "when, the tools it calls and the steps that call them, with mechanical flags where "
-            "a skill disagrees with the code, the decision log or another skill.",
-            entry="index.html",
-            inputs=(),
-            build=_build_catalog,
-            stamp=_stamp_catalog,
-        ),
-        Product(
             id="prisma",
             title="PRISMA 2020 flow",
             group="Overview",
@@ -446,7 +417,7 @@ def products() -> list[Product]:
         Product(
             id="bibliography",
             title="Bibliography",
-            group="Overview",
+            group="Corpus",
             description="The included works as a sortable list (title, year) and as BibTeX.",
             entry="index.html",
             inputs=CORPUS_EVENTS,
@@ -475,7 +446,7 @@ def products() -> list[Product]:
         Product(
             id="queue",
             title="Work queue",
-            group="Corpus",
+            group="Data quality",
             description="The papers added from the feed, each with the stage it stands at "
             "(lookup, screening, full text, conversion, extraction), and the open units of work "
             "per task kind.",
@@ -491,17 +462,8 @@ def products() -> list[Product]:
             ),
             build=_build_queue,
         ),
-        Product(
-            id="backlog",
-            title="Backlog board",
-            group="Process",
-            description="Every idea of docs/backlog.md as a board (ready, blocked, specified, done) and a dependency tree; select ideas to build and copy the brief.",
-            entry="index.html",
-            inputs=(),
-            build=_build_backlog,
-            stamp=_backlog_stamp,
-        ),
     ]
+    return sorted(items, key=lambda p: _ORDER[p.id])
 
 
 def planned() -> list[Planned]:

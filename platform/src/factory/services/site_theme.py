@@ -84,6 +84,9 @@ THEME_SCRIPT: Final = (
     "function labels(){var t=current()==='light'?'☾ Dark':'☀ Light';"
     "document.querySelectorAll('[data-theme-toggle]').forEach(function(b){b.textContent=t})}"
     "var s=saved();if(s)R.setAttribute('data-theme',s);"
+    "if(window.top!==window.self){var st=document.createElement('style');"
+    "st.textContent='[data-theme-toggle],.theme-row{display:none!important}';"
+    "document.head.appendChild(st)}"
     "document.addEventListener('DOMContentLoaded',function(){labels();"
     "document.querySelectorAll('[data-theme-toggle]').forEach(function(b){"
     "b.addEventListener('click',function(){var n=current()==='light'?'dark':'light';"
@@ -92,7 +95,9 @@ THEME_SCRIPT: Final = (
     "if(v)R.setAttribute('data-theme',v);else R.removeAttribute('data-theme');labels()});"
     "})();</script>"
 )
-"""Inline script for `<head>`: applies the saved theme before paint and wires the toggles."""
+"""Inline script for `<head>`: applies the saved theme before paint and wires the toggles. A page
+shown inside a frame (a product in the project hub) hides its toggles: the bar of the page that
+frames it holds the one toggle, and the choice reaches the frame through the `storage` event."""
 
 THEME_TOGGLE: Final = (
     "<button type=button class=theme-toggle data-theme-toggle aria-label='Switch theme' "

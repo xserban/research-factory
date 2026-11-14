@@ -30,7 +30,8 @@ from factory.errors import FactoryError
 from factory.events.reader import read_all
 from factory.services.context import Project
 from factory.services.feed import FeedStatus, feed_status
-from factory.services.feed_read import FeedListing, feed_list
+from factory.services.feed_read import FeedListing, FeedListItem, feed_list
+from factory.services.site_chrome import with_bar
 from factory.services.site_feed import FEED_CSS, _authors, _entry_records, _text
 from factory.services.site_portal import _CSS as PORTAL_CSS
 
@@ -237,8 +238,6 @@ def _status_line(view: ProjectFeed) -> str:
 
 
 def _card(item: object, record: Mapping[str, object] | None) -> str:
-    from factory.services.feed_read import FeedListItem
-
     assert isinstance(item, FeedListItem)
     entry = e(item.entry_id, quote=True)
     title = e(item.title or item.entry_id)
@@ -330,12 +329,13 @@ def render_feed_page(
             or "<p class=sub>No project found under the factory root.</p>"
         )
     )
-    return (
+    return with_bar(
         "<!doctype html><html lang=en><head><meta charset=utf-8>"
         f"<meta name='factory-token' content='{e(hub_token, quote=True)}'>"
         "<meta name=viewport content='width=device-width,initial-scale=1'>"
         f"<title>New papers</title><style>{PORTAL_CSS}{_CSS}</style></head><body><main>{body}</main>"
-        f"<script>{_SCRIPT}</script></body></html>"
+        f"<script>{_SCRIPT}</script></body></html>",
+        "feed",
     )
 
 
@@ -345,3 +345,84 @@ def _last_outcome(last: object) -> str:
     if "error" in last:
         return f"last run failed: {last['error']}"
     return f"last run{' (refetch)' if last.get('refetch') else ''}: exit {last.get('exit_code')}"
+
+
+@dataclass(frozen=True)
+class TopEntry:
+    """One entry of the portal's short list: the shown item, and whose ranking it came from."""
+
+    slug: str
+    title: str
+    token: str
+    ranking_id: str
+    item: FeedListItem
+
+
+def top_entries(views: Sequence[ProjectFeed], limit: int) -> list[TopEntry]:
+    """The `limit` best-scored shown items over every project's latest ranking. A project with no
+    ranking, no configuration or a read error adds none; equal scores keep project order, then
+    shown order. Scores are the ranker's own: nothing is re-ranked here."""
+    found: list[TopEntry] = []
+    for view in views:
+        listing = view.listing
+        if view.error is not None or listing is None or listing.ranking_id is None:
+            continue
+        found.extend(
+            TopEntry(view.slug, view.title, view.token, listing.ranking_id, i)
+            for i in listing.items
+        )
+    return sorted(found, key=lambda t: -t.item.score)[: max(limit, 0)]
+
+
+_PANEL_SCRIPT: Final = """
+(function(){
+document.querySelectorAll('.fp .pe').forEach(function(card){
+  var slug=card.dataset.slug,token=card.dataset.token,ranking=card.dataset.rankingId;
+  var msg=card.querySelector('.msg');
+  card.querySelectorAll('button[data-act]').forEach(function(b){
+    b.disabled=false;
+    b.addEventListener('click',function(){
+      var btns=card.querySelectorAll('button');btns.forEach(function(x){x.disabled=true;});
+      fetch('/p/'+slug+'/api/feed/react',{method:'POST',headers:{'Content-Type':'application/json','X-Factory-Token':token},
+        body:JSON.stringify({entry_id:card.dataset.entryId,ranking_id:ranking,reaction:b.dataset.act})})
+      .then(function(r){return r.json().catch(function(){return {ok:false,issues:[{field:'response',reason:'status '+r.status}]};});})
+      .then(function(r){msg.textContent=r.ok?('saved: '+r.reaction):((r.issues||[]).map(function(i){return i.field+': '+i.reason;}).join('; ')||'refused');})
+      .catch(function(x){msg.textContent='request failed: '+x;})
+      .then(function(){btns.forEach(function(x){x.disabled=false;});});
+    });
+  });
+});
+})();
+"""
+
+
+def render_feed_panel(entries: Sequence[TopEntry], *, shown_total: int) -> str:
+    """The short New papers list for the portal: each entry with its score, project, nearest core
+    work and the like and dislike buttons; the full page has the abstract and Add to inbox."""
+    if not entries:
+        return (
+            "<section class=fp><h2>New papers <a href='/feed/'>Open the feed</a></h2>"
+            "<p class=sub>No new papers yet: nothing has been fetched for any project.</p></section>"
+        )
+    rows = []
+    for t in entries:
+        item = t.item
+        entry = e(item.entry_id, quote=True)
+        nearest = item.nearest_reference_title or item.nearest_reference
+        reaction = (
+            f" &middot; reaction: {e(str(item.reaction))}" if item.reaction is not None else ""
+        )
+        rows.append(
+            f"<div class=pe data-slug='{e(t.slug, quote=True)}' data-token='{e(t.token, quote=True)}' "
+            f"data-ranking-id='{e(t.ranking_id, quote=True)}' data-entry-id='{entry}'>"
+            f"<div><span class=sc>{item.score:.3f}</span>"
+            f"<a class=tt href='https://arxiv.org/abs/{entry}'>{e(item.title or item.entry_id)}</a></div>"
+            f"<div class=mm>{e(t.title)} &middot; nearest core work: {e(nearest) if nearest else 'none nearby'}{reaction}</div>"
+            "<div class=ac><button type=button data-act='like' disabled>Like</button>"
+            "<button type=button data-act='dislike' disabled>Dislike</button><span class=msg></span></div></div>"
+        )
+    return (
+        f"<section class=fp><h2>New papers <a href='/feed/'>See all {shown_total} &rarr;</a></h2>"
+        + "".join(rows)
+        + f"</section><script>{_PANEL_SCRIPT}</script>"
+    )

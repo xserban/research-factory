@@ -26,8 +26,6 @@ import re
 from pathlib import Path
 from typing import Any
 
-from factory.services.context import Project
-
 _HEADER = re.compile(r"^### (IDEA-(\d+)) — (.+)$")
 _REF = re.compile(r"IDEA-(\d+)")
 _SECTION = re.compile(r"^## (.+?)(?:\s*\((?:added|from)[^)]*\))?\s*$")
@@ -308,7 +306,8 @@ draw();
 """
 
 
-def build_backlog(project: Project, out: Path) -> None:
+def render_backlog() -> str:
+    """The backlog board page as HTML: read from docs/backlog.md at the call, written nowhere."""
     from datetime import UTC, datetime
 
     from factory.services.site import page
@@ -316,8 +315,7 @@ def build_backlog(project: Project, out: Path) -> None:
     path = backlog_path()
     if path is None:
         body = "<h1>Backlog board</h1><p class=dim>The backlog document (docs/backlog.md) was not found. Set FACTORY_BACKLOG to its path and rebuild.</p>"
-        (out / "index.html").write_text(page("Backlog board", body, _CSS), encoding="utf-8")
-        return
+        return page("Backlog board", body, _CSS)
     ideas = classify(parse_backlog(path.read_text(encoding="utf-8")))
     stamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
     data = json.dumps(
@@ -351,7 +349,4 @@ def build_backlog(project: Project, out: Path) -> None:
         "<div class=tray id=tray></div><div class=drawer id=drawer></div>"
         f"<script id=d type='application/json'>{data}</script><script>{_JS}</script>"
     )
-    (out / "index.html").write_text(
-        page("Backlog board", body, _CSS).replace("max-width:1100px", "max-width:1500px"),
-        encoding="utf-8",
-    )
+    return page("Backlog board", body, _CSS).replace("max-width:1100px", "max-width:1500px")
