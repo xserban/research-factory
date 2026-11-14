@@ -24,7 +24,7 @@ from html import escape as e
 from pathlib import Path
 from typing import Final, NamedTuple
 
-from factory.services.site_chrome import PALETTE_CSS, with_bar
+from factory.services.site_chrome import CONTAINER_WIDTH, PALETTE_CSS, with_bar
 
 REGISTRY: Final = "registry.json"
 
@@ -84,7 +84,7 @@ _CSS: Final = (
     "@media (prefers-color-scheme:light){:root{--bg:#f6f8fa;--fg:#1f2933;--mut:#616e7c;"
     "--line:#d0d7de;--card:#fff;--acc:#0b63c5;--ok:#1a7f37;--warn:#9a6700}}"
     "html{background:var(--bg)}"
-    "body{margin:0 auto;padding:20px 24px;max-width:1500px;background:var(--bg);color:var(--fg);"
+    f"body{{margin:0 auto;padding:20px 24px;max-width:{CONTAINER_WIDTH};background:var(--bg);color:var(--fg);"
     "font:15px/1.5 system-ui,sans-serif;--mono:ui-monospace,'JetBrains Mono','Fira Code',"
     "SFMono-Regular,Menlo,Consolas,monospace}"
     "h1,h2,h3,h4,table,button,input,select,nav{font-family:var(--mono)}"

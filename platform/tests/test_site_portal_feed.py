@@ -125,3 +125,14 @@ def test_the_portal_pages_use_the_backlogs_centred_container() -> None:
 
     assert "max-width:1500px" in _CSS and "margin:0 auto" in _CSS
     assert "main{padding:24px 0}" in _CSS and "max-width:960px" not in _CSS
+
+
+def test_every_standalone_page_has_one_container_width() -> None:
+    from factory.services import site
+    from factory.services.site_backlog import render_backlog
+    from factory.services.site_chrome import CONTAINER_WIDTH
+    from factory.services.site_portal import _CSS
+
+    assert f"max-width:{CONTAINER_WIDTH}" in _CSS
+    for doc in (site.page("t", "<p>b</p>"), render_backlog()):
+        assert f"max-width:{CONTAINER_WIDTH}" in doc and "max-width:1100px" not in doc

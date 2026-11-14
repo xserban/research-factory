@@ -22,6 +22,9 @@ from typing import Final
 from factory.services.site_theme import THEME_SCRIPT, THEME_TOGGLE
 from factory.services.site_themes import THEMES_CSS
 
+CONTAINER_WIDTH: Final = "1500px"
+"""The width of the centred container of every standalone page (main hub pages and products)."""
+
 HUB_NAV: Final[tuple[tuple[str, str, str], ...]] = (
     ("projects", "Projects", "/"),
     ("feed", "New papers", "/feed/"),

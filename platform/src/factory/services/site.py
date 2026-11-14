@@ -38,7 +38,7 @@ from sqlalchemy import text
 from factory.model.base import StrictModel
 from factory.services.context import Project
 from factory.services.site_charts import CHART_CSS, activity
-from factory.services.site_chrome import BAR_CSS, CHROME_SCRIPT, hub_bar
+from factory.services.site_chrome import BAR_CSS, CHROME_SCRIPT, CONTAINER_WIDTH, hub_bar
 from factory.services.site_panel import with_panel
 from factory.services.site_theme import LIGHT_CSS, THEME_SCRIPT, THEME_TOGGLE
 
@@ -691,7 +691,7 @@ def page(title: str, body: str, css: str = "") -> str:
         "<!doctype html><html lang=en><head><meta charset=utf-8>"
         "<meta name=viewport content='width=device-width,initial-scale=1'>"
         f"{THEME_SCRIPT}<title>{html.escape(title)}</title><style>{THEME_CSS}"
-        f"body{{padding:20px 24px;max-width:1100px;margin:0 auto}}.theme-row{{display:flex;justify-content:flex-end;margin:0 0 6px}}"
+        f"body{{padding:20px 24px;max-width:{CONTAINER_WIDTH};margin:0 auto}}.theme-row{{display:flex;justify-content:flex-end;margin:0 0 6px}}"
         f"{css}{LIGHT_CSS}</style></head>"
         f"<body><div class=theme-row>{THEME_TOGGLE}</div>{body}</body></html>"
     )
