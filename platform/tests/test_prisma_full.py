@@ -9,6 +9,7 @@ from factory.model.screening import DecisionRecorded, PassLabel, ScreeningPhase,
 from factory.services.agreement import Outcome, final_outcomes
 from factory.services.check import check
 from factory.services.context import Project
+from factory.services.dedup import merged_after_screening
 from factory.services.fulltext_screening import fulltext_queue
 from factory.services.methods import methods_report, render_methods
 from factory.services.prisma import prisma_flow
@@ -235,3 +236,62 @@ def test_rebuild_matches(
     after = prisma_flow(project).model_dump(mode="json")
     assert before == after
     assert json.dumps(before, sort_keys=True) == json.dumps(after, sort_keys=True)
+
+
+_LATE_MERGE = "mrg_01HZX3K4M5N6P7Q8R9S0TVWXYZ"
+
+
+def _merge_late(project: Project, primary: str, *absorbed: str) -> None:
+    """A merge recorded after title/abstract screening, as the cascade does on a later run."""
+    model = project.catalog.get("dedup.merged").payload.model_validate(
+        {
+            "merge_id": _LATE_MERGE,
+            "primary": primary,
+            "absorbed": sorted(absorbed),
+            "rule": "title-identical",
+            "records": 1 + len(absorbed),
+        }
+    )
+    project.record([project.events.make("dedup.merged", model, project.system_actor())])
+
+
+def test_absorbed_promoted_work_is_not_queued_and_boxes_still_sum(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    _ta_world(project, agent, human, mock_sources)
+    before = prisma_flow(project)
+    first, second, *_ = promoted_works(project)
+    _merge_late(project, first, second)
+
+    queue = fulltext_queue(project)
+    queued = {e.work_id for e in queue.eligible} | set(queue.not_retrieved)
+    assert second not in queued and first in queued
+    flow = prisma_flow(project)
+    boxes = flow.full_text
+    # Promoted is a subset of the canonical works: included = not sought + sought.
+    assert boxes.not_sought + boxes.sought == flow.included
+    assert flow.included == before.included - 1
+    assert (
+        boxes.not_sought + boxes.sought == before.full_text.not_sought + before.full_text.sought - 1
+    )
+
+
+def test_merged_after_screening_lists_differing_outcomes_only(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    _ta_world(project, agent, human, mock_sources)
+    outcomes = final_outcomes(project)
+    included = sorted(w for w, o in outcomes.items() if o is Outcome.INCLUDED)
+    excluded = sorted(w for w, o in outcomes.items() if o is Outcome.EXCLUDED)
+    assert merged_after_screening(project) == []  # no merge yet
+    _merge_late(project, excluded[0], included[0], included[1])
+    rows = merged_after_screening(project)
+    assert [(r.primary, r.absorbed) for r in rows] == [
+        (excluded[0], included[0]),
+        (excluded[0], included[1]),
+    ]
+    assert {(r.primary_outcome, r.absorbed_outcome, r.rule) for r in rows} == {
+        ("excluded", "included", "title-identical")
+    }
+    # Read-only: the absorbed works keep their own outcomes.
+    assert final_outcomes(project)[included[0]] is Outcome.INCLUDED

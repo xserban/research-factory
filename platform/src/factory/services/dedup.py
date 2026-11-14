@@ -325,3 +325,56 @@ def _is_active(project: Project, merge_id: str) -> bool:
             text("SELECT status FROM merges WHERE merge_id = :merge"), {"merge": merge_id}
         ).one_or_none()
     return row is not None and row[0] == MergeStatus.ACTIVE.value
+
+
+class MergedAfterScreening(StrictModel):
+    """An absorbed work whose own title/abstract outcome differs from its primary's."""
+
+    merge_id: str
+    rule: str
+    primary: str
+    primary_title: str
+    primary_outcome: str
+    absorbed: str
+    absorbed_title: str
+    absorbed_outcome: str
+
+
+def merged_after_screening(project: Project) -> list[MergedAfterScreening]:
+    """Absorbed works whose own final title/abstract outcome differs from their primary's.
+
+    Read-only, for the researcher's review: the primary's outcome stands in every count and
+    nothing here changes an event. An absorbed work with no decided outcome of its own (pending
+    records are left out by `final_outcomes`) was never screened separately and is not listed.
+    Ordered by merge id, then absorbed id."""
+    from factory.services.agreement import Outcome, final_outcomes  # circular at import time
+
+    outcomes = final_outcomes(project)
+    works = {work.id: work for work in list_works(project)}
+
+    def outcome_of(work_id: str) -> str:
+        return outcomes.get(work_id, Outcome.PENDING).value
+
+    def title_of(work_id: str) -> str:
+        work = works.get(work_id)
+        return "" if work is None else work.title
+
+    rows: list[MergedAfterScreening] = []
+    for merge in active_merges(project):
+        for absorbed in merge.absorbed:
+            own = outcome_of(absorbed)
+            if own == Outcome.PENDING.value or own == outcome_of(merge.primary):
+                continue
+            rows.append(
+                MergedAfterScreening(
+                    merge_id=merge.merge_id,
+                    rule=merge.rule,
+                    primary=merge.primary,
+                    primary_title=title_of(merge.primary),
+                    primary_outcome=outcome_of(merge.primary),
+                    absorbed=absorbed,
+                    absorbed_title=title_of(absorbed),
+                    absorbed_outcome=outcome_of(absorbed),
+                )
+            )
+    return rows
