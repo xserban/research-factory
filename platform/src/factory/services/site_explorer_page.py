@@ -71,7 +71,7 @@ FUTURE_OVERLAY/*LIGHT*/</style></head><body>
 <li><b>Filters</b> (left): tick values to narrow every view; counts are for the whole corpus. <b>Search</b> looks in titles, abstracts and quotes.</li>
 <li><b>Click a paper</b> for its detail: the structured summary, classification and stages with the quotes behind them, citations inside the corpus, links to the original, the conversion inspector, and commands to run.</li>
 <li>Links from other pages open here already filtered, for example technique multi-agent.</li></ul></div>
-<main><div id="side"></div><div id="view"></div><div id="detail"></div></main>
+<main><div id="side"></div><div id="view"><p class="dim rf-loading" id="rf-loading">Loading corpus…</p></div><div id="detail"></div></main>
 <script>
 const DATA=/*DATA*/null;
 const W=DATA.works,DIMS=DATA.dims.concat([{key:'layer',label:'Layer',src:'meta',field:'layer'}]);const LORD=DATA.layer_order||[];
