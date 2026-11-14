@@ -1,8 +1,12 @@
-"""pandoc converter: HTML (`-f html`) and arXiv LaTeX e-prints (`-f latex`) to GFM Markdown.
+"""pandoc converter: HTML (`-f html`), PubMed Central JATS XML (`-f jats`) and arXiv LaTeX e-prints
+(`-f latex`) to GFM Markdown.
 
 pandoc is GPL: it is run only as a subprocess, never linked or bundled. The binary is taken from
 the `FACTORY_PANDOC` environment variable, else `PATH`. The LaTeX e-print converter of decision
-49, listed in `default_converters` after latexml-html, which keeps HTML.
+49, listed in `default_converters` after latexml-html, which keeps HTML. JATS
+(`application/jats+xml`, decision 124, proposed) is read from stdin like HTML; pandoc renders
+sections, tables and xrefs but not the `<ref-list>` entries (the References heading is kept, its
+body is empty).
 
 E-print archives are unpacked in memory (`factory.document.eprint`, with caps and safe names),
 written to a private temporary directory, and the main .tex is converted. Warnings carry counts
@@ -20,6 +24,7 @@ from factory.document.eprint import EprintError, find_main_tex, unpack_eprint
 from factory.document.errors import ConversionToolError
 
 HTML = "text/html"
+JATS = "application/jats+xml"
 EPRINT_TAR = "application/x-eprint-tar"
 EPRINT_SINGLE = "application/x-eprint"
 PANDOC_ENV = "FACTORY_PANDOC"
@@ -50,7 +55,7 @@ class PandocConverter:
     """pandoc as a subprocess. `version` raises `ConverterUnavailable` when it is absent."""
 
     name = "pandoc"
-    accepts = frozenset({HTML, EPRINT_TAR, EPRINT_SINGLE})
+    accepts = frozenset({HTML, JATS, EPRINT_TAR, EPRINT_SINGLE})
 
     def version(self) -> str:
         path = pandoc_path()
@@ -80,9 +85,9 @@ class PandocConverter:
             # Minimal environment: no inherited secrets or config; HOME is the private temp dir.
             env = {"PATH": os.environ.get("PATH", os.defpath), "HOME": tmp}
             try:
-                if media_type == HTML:
+                if media_type in (HTML, JATS):
                     proc = subprocess.run(
-                        [*base, "-f", "html"],
+                        [*base, "-f", "html" if media_type == HTML else "jats"],
                         input=raw,
                         capture_output=True,
                         timeout=TIMEOUT_SECONDS,

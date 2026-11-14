@@ -322,3 +322,51 @@ def test_docling_tree_hash_does_not_follow_symlinks(tmp_path: Path) -> None:
     before = docling_module.tree_hash(root)
     (root / "link").symlink_to(outside, target_is_directory=True)
     assert docling_module.tree_hash(root) == before
+
+
+# --- JATS (PubMed Central) ---------------------------------------------------------------
+
+JATS_SAMPLE = b"""<?xml version="1.0" encoding="UTF-8"?>
+<article article-type="research-article">
+<front><article-meta><title-group><article-title>Effects of tea on sleep</article-title>
+</title-group></article-meta></front>
+<body>
+<sec id="s1"><title>Introduction</title>
+<p>Tea is widely consumed <xref ref-type="bibr" rid="B1">1</xref>.</p></sec>
+<sec id="s2"><title>Results</title><p>See <xref ref-type="table" rid="T1">Table 1</xref>.</p>
+<table-wrap id="T1"><label>Table 1</label><caption><p>Sleep hours</p></caption>
+<table><thead><tr><th>Group</th><th>Hours</th></tr></thead>
+<tbody><tr><td>Tea</td><td>7.5</td></tr><tr><td>Control</td><td>6.9</td></tr></tbody></table>
+</table-wrap></sec>
+</body>
+<back><ref-list><title>References</title>
+<ref id="B1"><label>1</label>
+<mixed-citation>Smith J. Tea and sleep. J Sleep. 2020;5:1-9.</mixed-citation></ref>
+</ref-list></back></article>
+"""
+
+
+def test_default_registry_routes_jats_to_pandoc() -> None:
+    found = default_converters().for_media_type("application/jats+xml")
+    assert found is not None
+    assert found.name == "pandoc"
+
+
+def test_pandoc_jats_keeps_headings_and_table() -> None:
+    if pandoc_module.pandoc_path() is None:
+        pytest.skip("pandoc not installed")
+    result = convert(PandocConverter(), JATS_SAMPLE, "application/jats+xml")
+    assert "# Introduction" in result.markdown
+    assert "# Results" in result.markdown
+    assert "# References" in result.markdown
+    assert "Tea is widely consumed" in result.markdown
+    assert "| Group" in result.markdown
+    assert "| Tea" in result.markdown
+
+
+@pytest.mark.xfail(strict=True, reason="pandoc drops <ref-list> entries without citeproc")
+def test_pandoc_jats_keeps_reference_text() -> None:
+    if pandoc_module.pandoc_path() is None:
+        pytest.skip("pandoc not installed")
+    result = convert(PandocConverter(), JATS_SAMPLE, "application/jats+xml")
+    assert "Tea and sleep" in result.markdown

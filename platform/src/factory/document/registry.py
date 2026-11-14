@@ -47,7 +47,8 @@ class ConverterRegistry:
 
 
 def default_converters() -> ConverterRegistry:
-    """The converters of decision 49: HTML latexml-html, PDF Docling, LaTeX e-prints pandoc.
+    """The converters of decision 49: HTML latexml-html, PDF Docling, LaTeX e-prints pandoc,
+    PubMed Central JATS pandoc (decision 124, proposed).
     `html-generic` (captured web pages, plan SG) takes its own media type, so it competes with none.
 
     The order is load-bearing: pandoc also accepts HTML, so latexml-html must come before it.
