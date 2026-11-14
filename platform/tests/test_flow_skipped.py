@@ -4,6 +4,11 @@ The index and blob reads are exercised on the pilot, not here; these tests pin t
 and the gap rule on fixed input.
 """
 
+import pytest
+
+from factory.services import flow_skipped
+from factory.services.call_memo import entering
+from factory.services.context import Project
 from factory.services.flow_skipped import _arxiv_entries, _gap, _openalex_entries, _Run
 
 _ATOM = """<?xml version="1.0" encoding="UTF-8"?>
@@ -88,3 +93,27 @@ def test_gap_sums_resumed_runs_and_takes_last_reported() -> None:
 def test_gap_is_none_when_no_run_reported_a_total() -> None:
     gap = _gap("qry_x", [_run("run_1", "failed", None, 0)])
     assert (gap.reported, gap.gap) == (None, None)
+
+
+def test_archived_pages_and_runs_are_computed_once_per_call_scope(
+    project: Project, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = {"pages": 0, "runs": 0}
+    real_pages = flow_skipped._archived_pages.__wrapped__  # type: ignore[attr-defined]
+    real_runs = flow_skipped._search_runs.__wrapped__  # type: ignore[attr-defined]
+
+    def pages(p: Project) -> dict[str, list[str]]:
+        calls["pages"] += 1
+        return real_pages(p)  # type: ignore[no-any-return]
+
+    def runs(p: Project) -> list[flow_skipped._Run]:
+        calls["runs"] += 1
+        return real_runs(p)  # type: ignore[no-any-return]
+
+    monkeypatch.setattr(flow_skipped._archived_pages, "__wrapped__", pages)
+    monkeypatch.setattr(flow_skipped._search_runs, "__wrapped__", runs)
+    with entering():
+        flow_skipped.skipped_records(project)
+        flow_skipped.run_gaps(project)
+        flow_skipped._archived_pages(project)
+    assert calls == {"pages": 1, "runs": 1}

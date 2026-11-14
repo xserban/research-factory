@@ -24,6 +24,7 @@ from sqlalchemy import text
 from factory.model.base import StrictModel
 from factory.model.search import QueryPurpose
 from factory.model.work_ids import normalize_arxiv
+from factory.services.call_memo import memoised
 from factory.services.context import Project
 from factory.sources.arxiv import _NS, _feed, _text
 from factory.sources.base import SourceError
@@ -129,6 +130,7 @@ class _Run:
     note: str | None
 
 
+@memoised
 def _search_runs(project: Project) -> list[_Run]:
     """Every run of a search-type query, in run order (probe and status lookups excluded)."""
     project.index.sync()
@@ -157,6 +159,7 @@ def _search_runs(project: Project) -> list[_Run]:
     ]
 
 
+@memoised
 def _archived_pages(project: Project) -> dict[str, list[str]]:
     """The raw blob refs of each run's archived search pages, in page order."""
     with project.index.connect() as conn:
@@ -198,13 +201,15 @@ def _parsed_keys(project: Project) -> set[tuple[str, str, str]]:
     return keys
 
 
+@memoised
 def skipped_records(project: Project) -> list[SkippedRecord]:
     """The raw records of every search run that did not produce a parsed record, in run order.
 
     Records are classified in page order within each run, so a record that repeats an earlier
     titled record of the same run is `duplicate-within-run` and not `unparsed`. A titled record
-    with a native id that has a parsed row for its own run and page is not listed. Raises
-    `BlobNotFoundError` or `BlobIntegrityError` if an archived page is missing or altered.
+    with a native id that has a parsed row for its own run and page is not listed.
+    Memoised within a call scope.
+    Raises `BlobNotFoundError` or `BlobIntegrityError` if an archived page is missing or altered.
     """
     runs = _search_runs(project)
     pages = _archived_pages(project)

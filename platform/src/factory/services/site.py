@@ -478,7 +478,7 @@ def products() -> list[Product]:
             "retrieved, the records that never became works, every merge with its rule and "
             "status, and the merges whose absorbed work was screened differently.",
             entry="index.html",
-            inputs=("query.%", "search.%", "dedup.%", "screening.%"),
+            inputs=(*CORPUS_EVENTS, "calibration.%"),
             build=_build_search,
         ),
         Product(

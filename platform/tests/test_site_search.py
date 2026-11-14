@@ -15,6 +15,7 @@ from factory.services.site_search import MERGED_AFTER_NOTE, _counts, build_paylo
 from factory.services.site_search_page import DATA_MARKER, PAGE
 from tests.fulltext_helpers import _ft_world
 from tests.helpers import SourcesFor
+from tests.screening_helpers import OPENALEX_COPY, PREPRINT, PUBLISHED, _ingest
 
 
 def test_counts_split_each_rule_by_status() -> None:
@@ -51,3 +52,27 @@ def test_embedded_payload_cannot_close_the_script_tag() -> None:
         "</"
     )
     assert DATA_MARKER in PAGE
+
+
+def test_every_reverted_merge_is_counted_with_its_reason_and_time(
+    explore_project: Project, fake_sources: SourcesFor
+) -> None:
+    from factory.services.dedup_incremental import dedup_new
+    from factory.services.search import list_works
+
+    def ingest(records: list[dict[str, Any]]) -> list[str]:
+        before = {w.id for w in list_works(explore_project)}
+        _ingest(explore_project, fake_sources, [records])
+        return [w.id for w in list_works(explore_project) if w.id not in before]
+
+    dedup_new(explore_project, ingest([PUBLISHED, PREPRINT]))
+    dedup_new(explore_project, ingest([OPENALEX_COPY]))  # supersedes the first merge
+    merges = list_merges(explore_project)
+    reverted = [m for m in merges if m.status.value == "reverted"]
+    assert reverted
+    payload = build_payload(explore_project)
+    shown = [m for m in payload["merges"] if m["status"] == "reverted"]
+    assert [m["id"] for m in shown] == [m.merge_id for m in reverted]
+    assert sum(c.get("reverted", 0) for c in payload["rule_counts"].values()) == len(reverted)
+    assert all(m["reason"] and m["rat"] for m in shown)
+    assert all(m["rat"] is None for m in payload["merges"] if m["status"] == "active")

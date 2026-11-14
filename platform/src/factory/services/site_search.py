@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from factory.errors import FactoryError
+from factory.events.reader import read_all
 from factory.services.call_memo import entering
 from factory.services.context import Project
 from factory.services.dedup import list_merges, merged_after_screening
@@ -77,8 +78,21 @@ def _queries(project: Project) -> list[dict[str, Any]]:
     return rows
 
 
+def _revert_times(project: Project) -> dict[str, str]:
+    """The time of the first `dedup.reverted` event of each merge (the one the projection applies),
+    read from the log because the projection keeps the reason but not the time."""
+    times: dict[str, str] = {}
+    for event in read_all(project.paths.events_dir, project.catalog):
+        if event.type == "dedup.reverted":
+            merge_id = event.payload.get("merge_id")
+            if isinstance(merge_id, str):
+                times.setdefault(merge_id, event.ts.strftime("%Y-%m-%d %H:%M"))
+    return times
+
+
 def _merges(project: Project) -> list[dict[str, Any]]:
     """Every merge, active and reverted, with the titles of its primary and absorbed works."""
+    reverted_at = _revert_times(project)
     titles = {w.id: w.title for w in list_works(project)}
     rows: list[dict[str, Any]] = []
     for m in list_merges(project):
@@ -92,6 +106,7 @@ def _merges(project: Project) -> list[dict[str, Any]]:
                 "pt": titles.get(m.primary or "", ""),
                 "absorbed": [[w, titles.get(w, "")] for w in (m.absorbed or ())],
                 "reason": m.reason,
+                "rat": reverted_at.get(m.merge_id) if str(m.status.value) == "reverted" else None,
                 "manual": m.manual,
             }
         )

@@ -75,7 +75,7 @@ function drawRules(){const R=DATA.rule_counts,keys=Object.keys(R);
 function render(){const q=F.q.toLowerCase();
  const rows=M.filter(m=>(!F.r||m.rule===F.r)&&(!F.s||m.status===F.s)&&(!q||(m.id+' '+m.primary+' '+m.pt+' '+m.absorbed.map(a=>a.join(' ')).join(' ')).toLowerCase().includes(q)));
  $('#count').textContent=rows.length+' of '+M.length+' merges';
- $('#merges').innerHTML=rows.slice(0,SHOWN).map(m=>'<tr><td>'+esc(m.id)+'</td><td><span class="tag'+(m.status==='reverted'?' rev':'')+'">'+esc(m.status)+'</span>'+(m.reason?'<div class="dim">'+note(m.reason)+'</div>':'')+'</td><td>'+esc(m.rule)+'</td><td class="n">'+m.records+'</td><td>'+esc(m.pt||m.primary)+'<div class="dim">'+esc(m.primary)+'</div></td><td>'+m.absorbed.map(a=>esc(a[1]||a[0])+' <span class="dim">'+esc(a[0])+'</span>').join('<br>')+'</td></tr>').join('');
+ $('#merges').innerHTML=rows.slice(0,SHOWN).map(m=>'<tr><td>'+esc(m.id)+'</td><td><span class="tag'+(m.status==='reverted'?' rev':'')+'">'+esc(m.status)+'</span>'+(m.rat?'<div class="dim">reverted '+esc(m.rat)+'</div>':'')+(m.reason?'<div class="dim">'+note(m.reason)+'</div>':'')+'</td><td>'+esc(m.rule)+'</td><td class="n">'+m.records+'</td><td>'+esc(m.pt||m.primary)+'<div class="dim">'+esc(m.primary)+'</div></td><td>'+m.absorbed.map(a=>esc(a[1]||a[0])+' <span class="dim">'+esc(a[0])+'</span>').join('<br>')+'</td></tr>').join('');
  $('#more').hidden=rows.length<=SHOWN;}
 $('#more').onclick=()=>{SHOWN+=300;render();};
 $('#q').oninput=e=>{F.q=e.target.value;SHOWN=300;render();};
