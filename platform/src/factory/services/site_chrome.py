@@ -6,6 +6,8 @@ Invariants:
 - Pure string functions: nothing is read or written here, no model is called.
 - The bar's own styles are self-contained (`--hb-*` variables set per theme), so the same bar sits
   on a portal-style page and on a `site.page` product page without either palette's variables.
+- The bar holds a progress strip; its script (`CHROME_SCRIPT`) follows the bar, added by `with_bar`
+  (a page calling `hub_bar` itself adds it). Both are constants.
 - The bar is a div (not a header) so a page's `header` rules never reach it.
 - A page that already carries `THEME_SCRIPT` is not given a second script, and the toggle row of
   `site.page` is removed: the bar's toggle is the only one.
@@ -51,8 +53,58 @@ BAR_CSS: Final = (
     ".hubbar .sp{flex:1}.hubbar .theme-toggle{background:none;border:1px solid var(--hb-line);color:var(--hb-fg);"
     "border-radius:6px;padding:4px 10px;font:inherit;cursor:pointer}"
     ".hubbar~.theme-row{display:none}"
+    ".hubbar .rf-prog{position:fixed;top:0;left:0;height:3px;width:0;background:var(--hb-acc);opacity:0;"
+    "pointer-events:none;z-index:2100}"
+    ".hubbar .rf-prog.on{opacity:1;width:80%;transition:width 8s cubic-bezier(.1,.6,.2,1)}"
+    "@media (prefers-reduced-motion:reduce){.hubbar .rf-prog.on{width:100%;opacity:.7;transition:none}}"
+    "button[data-rf-busy]{cursor:progress}"
 )
 
+
+CHROME_JS: Final = r"""(function(){
+if(window.__rfChrome)return;window.__rfChrome=1;
+var bar=document.querySelector('.rf-prog');
+function hide(){if(bar){bar.className='rf-prog';}}
+function start(){if(!bar)return;bar.className='rf-prog';void bar.offsetWidth;bar.className='rf-prog on';}
+window.addEventListener('pageshow',hide);window.addEventListener('load',hide);
+document.addEventListener('click',function(e){
+ if(e.defaultPrevented||e.button!==0||e.ctrlKey||e.metaKey||e.shiftKey||e.altKey)return;
+ var a=e.target;while(a&&a.nodeType===1&&a.tagName!=='A')a=a.parentNode;
+ if(!a||a.nodeType!==1||!a.getAttribute('href'))return;
+ var h=a.getAttribute('href');if(h.charAt(0)==='#'||(a.target&&a.target!=='_self')||a.hasAttribute('download'))return;
+ var u;try{u=new URL(a.href,location.href);}catch(x){return;}
+ if(u.origin!==location.origin)return;
+ if(u.pathname===location.pathname&&u.search===location.search&&u.hash)return;
+ start();});
+document.addEventListener('submit',function(e){
+ if(e.defaultPrevented)return;var f=e.target;if(f&&f.target&&f.target!=='_self')return;start();});
+var last=null,lastAt=0;
+function mark(b){last=b;lastAt=Date.now();}
+document.addEventListener('click',function(e){var t=e.target;
+ while(t&&t.nodeType===1&&t.tagName!=='BUTTON')t=t.parentNode;
+ if(t&&t.nodeType===1)mark(t);},true);
+document.addEventListener('submit',function(e){var f=e.target,s=e.submitter||
+ (f&&f.querySelector&&f.querySelector('button[type=submit],button:not([type])'));if(s)mark(s);},true);
+function busy(b,p){
+ if(!b||!p||!p.then||b.hasAttribute('data-rf-busy'))return p;
+ var wasOff=b.disabled,label=b.textContent,mine=label+'\u2026',plain=!b.children.length,done=false;
+ b.setAttribute('data-rf-busy','1');if(!wasOff)b.disabled=true;if(plain)b.textContent=mine;
+ function fin(){if(done)return;done=true;b.removeAttribute('data-rf-busy');
+  if(plain&&b.textContent===mine)b.textContent=label;if(!wasOff&&b.disabled)b.disabled=false;}
+ setTimeout(fin,120000);p.then(fin,fin);return p;}
+window.factoryBusy=busy;
+var of=window.fetch;
+if(of)window.fetch=function(i,o){var p=of.apply(window,arguments);
+ var m=String((o&&o.method)||(i&&i.method)||'GET').toUpperCase();
+ if(m==='POST'&&last&&Date.now()-lastAt<1500){var b=last;last=null;busy(b,p);}return p;};
+})();"""
+"""Progress bar on navigation, and the busy state of a button whose click starts a POST.
+`window.factoryBusy(button, promise)` disables the button and appends an ellipsis until the
+promise settles (or 120 s pass); `fetch` is wrapped so a POST started within 1.5 s of a click or
+submit marks that button busy. Only a state this script set is undone."""
+
+CHROME_SCRIPT: Final = f"<script>{CHROME_JS}</script>"
+"""`CHROME_JS` as a script element; a page that builds `hub_bar` itself puts it right after the bar."""
 
 _HIDE_TABS: Final = (
     "<script>if(location.pathname.indexOf('/p/')!==0)"
@@ -72,7 +124,7 @@ def hub_bar(active: str | None, *, context: str = "", main_hub_only: bool = Fals
     )
     return (
         f"<div class=hubbar role=banner><b>FACTORY</b>{tabs}"
-        f"{context}<span class=sp></span>{THEME_TOGGLE}</div>"
+        f"{context}<span class=sp></span>{THEME_TOGGLE}<i class=rf-prog aria-hidden=true></i></div>"
         + (_HIDE_TABS if main_hub_only else "")
     )
 
@@ -92,7 +144,7 @@ def with_bar(doc: str, active: str | None) -> str:
         doc = doc.replace("</head>", style + "</head>", 1)
     else:
         doc = f"<!doctype html><html lang=en><head><meta charset=utf-8>{script}{style}</head><body>{doc}</body></html>"
-    bar = hub_bar(active)
+    bar = hub_bar(active) + CHROME_SCRIPT
     lower = doc.lower()
     at = lower.find("<body")
     if at < 0:

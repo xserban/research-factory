@@ -38,7 +38,7 @@ from sqlalchemy import text
 from factory.model.base import StrictModel
 from factory.services.context import Project
 from factory.services.site_charts import CHART_CSS, activity
-from factory.services.site_chrome import BAR_CSS, hub_bar
+from factory.services.site_chrome import BAR_CSS, CHROME_SCRIPT, hub_bar
 from factory.services.site_panel import with_panel
 from factory.services.site_theme import LIGHT_CSS, THEME_SCRIPT, THEME_TOGGLE
 
@@ -923,6 +923,7 @@ def render_hub(
             " &middot; <b id=live>SNAPSHOT</b></span>",
             main_hub_only=True,
         )
+        + CHROME_SCRIPT
         + f"<div class=shell><nav><input id=q placeholder='filter modules'>{''.join(nav)}</nav><main>"
         "<iframe id=frame style='display:none' title='product'></iframe>"
         "<div id=home><div class=wrap><h1>Control room</h1>"
