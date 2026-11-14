@@ -41,13 +41,19 @@ MAX_RATIONALE = 2000
 class Route(StrEnum):
     ARXIV_HTML = "arxiv-html"
     ARXIV_SOURCE = "arxiv-source"
+    PMC_JATS = "pmc-jats"
     OA_PDF = "oa-pdf"
     RESEARCHER = "researcher-supplied"
     LAB_LIBRARY = "lab-library"
     """A document another project of the lab acquired, adopted by an explicit act (deploy-C)."""
 
 
-ROUTE_ORDER: tuple[Route, ...] = (Route.ARXIV_HTML, Route.ARXIV_SOURCE, Route.OA_PDF)
+ROUTE_ORDER: tuple[Route, ...] = (
+    Route.ARXIV_HTML,
+    Route.ARXIV_SOURCE,
+    Route.PMC_JATS,
+    Route.OA_PDF,
+)
 """The automatic routes in the order they are tried. `RESEARCHER` and `LAB_LIBRARY` are not among
 them."""
 
@@ -55,6 +61,7 @@ them."""
 class Quality(StrEnum):
     STRUCTURED_HTML = "structured-html"
     LATEX = "latex"
+    STRUCTURED_XML = "structured-xml"
     PDF_TEXT = "pdf-text"
 
 
@@ -62,6 +69,7 @@ QUALITY: Mapping[Route, Quality] = MappingProxyType(
     {
         Route.ARXIV_HTML: Quality.STRUCTURED_HTML,
         Route.ARXIV_SOURCE: Quality.LATEX,
+        Route.PMC_JATS: Quality.STRUCTURED_XML,
         Route.OA_PDF: Quality.PDF_TEXT,
         Route.RESEARCHER: Quality.PDF_TEXT,
     }

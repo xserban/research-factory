@@ -310,6 +310,89 @@ def test_no_mailto_sends_no_parameter() -> None:
     assert "mailto" not in str(log[0].url)
 
 
+# Fallback through every OpenAlex location ----------------------------------------------------
+
+
+def _locations_body(urls: list[str], *, best: int = 0) -> bytes:
+    locs = [
+        {"is_oa": True, "pdf_url": u, "license": f"lic{i}", "version": f"v{i}"}
+        for i, u in enumerate(urls)
+    ]
+    return json.dumps({"best_oa_location": locs[best], "locations": locs}).encode()
+
+
+def _by_url(bad: dict[str, httpx.Response], body: bytes) -> tuple[PoliteClient, list[str]]:
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "api.openalex.org":
+            return httpx.Response(200, content=body)
+        seen.append(str(request.url))
+        return bad.get(str(request.url), httpx.Response(200, content=PDF))
+
+    return polite(handler), seen
+
+
+def test_best_location_ok_makes_no_other_request() -> None:
+    urls = [f"https://h{i}.example.org/p.pdf" for i in range(3)]
+    client, seen = _by_url({}, _locations_body(urls))
+    r = OaPdfRoute(client, MAILTO).fetch(work_with(doi=DOI))
+    assert r.outcome is AttemptOutcome.RETRIEVED
+    assert seen == [urls[0]]
+    assert r.metadata is not None
+    assert "attempts" not in json.loads(r.metadata)
+
+
+def test_second_location_used_when_best_is_not_a_pdf() -> None:
+    urls = ["https://a.example.org/p.pdf", "https://b.example.org/p.pdf"]
+    bad = {urls[0]: httpx.Response(200, content=b"<html>landing</html>")}
+    client, seen = _by_url(bad, _locations_body(urls))
+    r = OaPdfRoute(client, MAILTO).fetch(work_with(doi=DOI))
+    assert r.outcome is AttemptOutcome.RETRIEVED
+    assert r.url == urls[1]
+    assert r.source_version == f"{DOI}#v1"
+    assert r.licence == "lic1"
+    assert seen == urls
+    assert r.metadata is not None
+    attempts = json.loads(r.metadata)["attempts"]
+    assert [a["reason"] for a in attempts] == ["not-a-pdf", None]
+
+
+def test_all_locations_fail_reports_best_reason_and_lists_attempts() -> None:
+    urls = ["https://a.example.org/p.pdf", "https://b.example.org/p.pdf"]
+    bad = {
+        urls[0]: httpx.Response(404, content=b"gone"),
+        urls[1]: httpx.Response(200, content=b"<html/>"),
+    }
+    client, _ = _by_url(bad, _locations_body(urls))
+    r = OaPdfRoute(client, MAILTO).fetch(work_with(doi=DOI))
+    assert r.outcome is AttemptOutcome.NOT_AVAILABLE
+    assert r.reason == "http-404"
+    assert r.url == urls[0]
+    assert r.metadata is not None
+    meta = json.loads(r.metadata)
+    assert [a["url"] for a in meta["attempts"]] == urls
+    assert [a["reason"] for a in meta["attempts"]] == ["http-404", "not-a-pdf"]
+    assert meta["lookup"]["best_oa_location"]["pdf_url"] == urls[0]
+
+
+def test_duplicate_urls_are_tried_once() -> None:
+    urls = ["https://a.example.org/p.pdf", "https://a.example.org/p.pdf", "https://b.example.org/p"]
+    bad = {urls[0]: httpx.Response(200, content=b"nope")}
+    client, seen = _by_url(bad, _locations_body(urls))
+    OaPdfRoute(client, MAILTO).fetch(work_with(doi=DOI))
+    assert seen == [urls[0], urls[2]]
+
+
+def test_candidates_are_capped_at_five() -> None:
+    urls = [f"https://h{i}.example.org/p.pdf" for i in range(8)]
+    bad = {u: httpx.Response(200, content=b"nope") for u in urls}
+    client, seen = _by_url(bad, _locations_body(urls))
+    r = OaPdfRoute(client, MAILTO).fetch(work_with(doi=DOI))
+    assert r.outcome is AttemptOutcome.NOT_AVAILABLE
+    assert seen == urls[:5]
+
+
 # Registry ----------------------------------------------------------------------------------
 
 
