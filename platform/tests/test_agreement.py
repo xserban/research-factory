@@ -11,15 +11,18 @@ import pytest
 
 from factory.errors import FactoryValidationError
 from factory.events.envelope import Actor
+from factory.model.protocol import ScreeningPlan, ScreeningStage, UnscreenedTolerance
 from factory.model.screening import Channel, Framing, PassJoined, PassLabel, ScreeningPhase, Verdict
 from factory.services.agreement import (
     Outcome,
     final_outcomes,
+    passes_settled,
     resolve_disagreement,
     screen_agreement,
 )
 from factory.services.calibration import calibration_items, label_calibration
 from factory.services.context import Project
+from factory.services.protocol import ProtocolVersion
 from factory.services.screening import (
     INSTRUCTIONS,
     ScreenBatchContent,
@@ -484,3 +487,92 @@ def test_agreement_counts_extended_works_as_dual_coded(
 
     assert added_work not in agreement.single_pass
     assert single_work in agreement.single_pass
+
+
+# --- Declared tolerance for unscreened pass A works (IDEA-46) ---
+
+
+def _tolerant(monkeypatch: pytest.MonkeyPatch, tolerance: UnscreenedTolerance | None) -> None:
+    import factory.services.agreement as module
+    import factory.services.stages as stages
+
+    real = stages.screening_plan
+
+    def plan(protocol: ProtocolVersion, stage: ScreeningStage) -> ScreeningPlan:
+        return real(protocol, stage).model_copy(update={"unscreened_tolerance": tolerance})
+
+    monkeypatch.setattr(module, "screening_plan", plan)
+
+
+def _leave_unscreened(project: Project, agent: Actor, protocol_id: str) -> str:
+    """Decide every ordinary work in pass B and all but the last in pass A."""
+    *others, last = _ordinary(project)
+    for work in others:
+        _decide(project, agent, work, "A", "screening", "include", None, protocol_id)
+    for work in _b_queue(project):
+        _decide(project, agent, work, "B", "screening", "include", None, protocol_id)
+    return last
+
+
+def test_unscreened_within_tolerance_is_reported_not_blocked(
+    project: Project,
+    agent: Actor,
+    human: Actor,
+    mock_sources: SourcesFor,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    protocol_id = _ready(project, agent, human, mock_sources)
+    last = _leave_unscreened(project, agent, protocol_id)
+    _tolerant(monkeypatch, UnscreenedTolerance())
+
+    agreement = screen_agreement(project, agent)
+
+    assert agreement.unscreened == [last]
+    assert last not in final_outcomes(project) or final_outcomes(project)[last] is Outcome.PENDING
+    assert passes_settled(project)
+
+
+def test_unscreened_without_tolerance_still_blocks(
+    project: Project,
+    agent: Actor,
+    human: Actor,
+    mock_sources: SourcesFor,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    protocol_id = _ready(project, agent, human, mock_sources)
+    _leave_unscreened(project, agent, protocol_id)
+    _tolerant(monkeypatch, None)
+
+    with pytest.raises(FactoryValidationError) as exc:
+        screen_agreement(project, agent)
+
+    assert "still lack" in _reasons(exc)
+    assert not passes_settled(project)
+
+
+def test_unscreened_beyond_tolerance_blocks(
+    project: Project,
+    agent: Actor,
+    human: Actor,
+    mock_sources: SourcesFor,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    protocol_id = _ready(project, agent, human, mock_sources)
+    _leave_unscreened(project, agent, protocol_id)
+    _tolerant(monkeypatch, UnscreenedTolerance(fewer_than=1, fraction=0))
+
+    with pytest.raises(FactoryValidationError):
+        screen_agreement(project, agent)
+
+
+def test_tolerance_rule_and_dump() -> None:
+    tolerance = UnscreenedTolerance()
+    assert tolerance.allows(2, 1000) and not tolerance.allows(3, 100)
+    assert tolerance.allows(10, 1000) and not tolerance.allows(11, 1000)
+    plan = ScreeningPlan(passes=2, reviewers=())
+    assert "unscreened_tolerance" not in plan.model_dump(mode="json")
+    declared = plan.model_copy(update={"unscreened_tolerance": tolerance})
+    assert declared.model_dump(mode="json")["unscreened_tolerance"] == {
+        "fewer_than": 3,
+        "fraction": 0.01,
+    }
