@@ -416,3 +416,51 @@ def test_the_single_project_server_has_a_settings_page_too(project: Project) -> 
     finally:
         httpd.shutdown()
         httpd.server_close()
+
+
+# --- further cards: the ranking beyond the shown items ---
+
+
+def _demo_section(page: str) -> str:
+    return page.split("<section class=pn data-slug='demo'", 1)[1].split("<section", 1)[0]
+
+
+def test_the_page_counts_shown_of_ranked_and_hides_further_cards_read_only(
+    served: tuple[int, site_server.MainHub, Scripted],
+    project: Project,
+    stub_titles: None,  # noqa: F811
+) -> None:
+    from tests.test_feed_page import world
+
+    port, _, _ = served
+    world(project, total=100, shown=29)
+    demo = _demo_section(_req(port, "GET", "/feed/")[1])
+    assert "Showing <span class=shown-count>30</span> of 100 ranked" in demo
+    assert "window 2026-11-10 to 2026-11-11" in demo
+    further = re.findall(r"<article class='card further' hidden[^>]*>.*?</article>", demo, re.S)
+    assert len(further) == 70  # ranks 30..99; rank 100 is the shown exploration pick
+    assert "rank 30, not in the shown set" in further[0]
+    assert all("data-act" not in f and "<button" not in f for f in further)
+    assert "data-more='30'" in demo and "Show next 30" in demo
+    assert "abstract and links only" in demo
+    assert "Abstract 30 &lt;b&gt;x&lt;/b&gt;" in further[0]
+    shown = re.findall(r"<article class=card data-entry-id", demo)
+    assert len(shown) == 30
+
+
+def test_the_page_says_when_the_cap_cuts(
+    served: tuple[int, site_server.MainHub, Scripted],
+    project: Project,
+    stub_titles: None,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from factory.services import feed_page
+    from tests.test_feed_page import world
+
+    port, _, _ = served
+    world(project, total=40, shown=5)
+    monkeypatch.setattr(feed_page, "DEFAULT_CAP", 10)
+    monkeypatch.setattr(feed_page.feed_ranked_page, "__kwdefaults__", {"cap": 10, "records": None})
+    demo = _demo_section(_req(port, "GET", "/feed/")[1])
+    assert "first 10 ranked entries beyond the shown ones" in demo
+    assert "24 more are not listed" in demo
