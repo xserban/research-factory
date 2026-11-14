@@ -1664,10 +1664,11 @@ def build_server(
     ) -> dict[str, JsonValue]:
         """Fetch full text for promoted works. Routes are tried in order (arxiv-html, arxiv-source,
         pmc-jats, oa-pdf) and each work stops at its first retrieved attempt. `routes` names routes
-        to try instead, all of them, without stopping. `work_ids` defaults to the promoted works that have
-        no document and no attempt yet, so a work whose routes all failed is retried only by
-        `refresh` (every promoted work), `routes`, or by naming it in `work_ids`. `limit` caps the
-        works processed; more `work_ids` than `limit` are refused. Returns each work's attempts and
+        to try instead, all of them, without stopping. `work_ids` defaults to the promoted works
+        that have no document and no attempt yet, so a work whose routes all failed is retried
+        only by `refresh` (every promoted work), `routes`, or by naming it in `work_ids`.
+        `limit` caps the works processed; more `work_ids` than `limit` are refused. Returns each
+        work's attempts and
         documents, and `remaining`, the promoted works still without a document. A researcher's
         PDF is imported by the researcher, never fetched. Refused to a session that has joined a
         pass."""
