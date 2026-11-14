@@ -35,6 +35,7 @@ Invariants:
 Everything here is read-only except `resolve_extraction`, which writes one event or nothing.
 """
 
+import re
 from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal
@@ -349,8 +350,10 @@ def is_free_quote(definition: FieldDef | None) -> bool:
     )
 
 
-def _tokens(f: StoredField) -> frozenset[str]:
-    return frozenset(normalise_text(f.quote or str(f.value)).split())
+def _words(f: StoredField) -> list[str]:
+    """The word-character runs of a field's normalised quote (or value): punctuation and hyphens
+    separate words and are dropped."""
+    return re.findall(r"\w+", normalise_text(f.quote or str(f.value)))
 
 
 def evidence_overlaps(fa: StoredField, fb: StoredField, threshold: float) -> bool:
@@ -359,16 +362,16 @@ def evidence_overlaps(fa: StoredField, fb: StoredField, threshold: float) -> boo
     platform stores no character offsets, so containment is its span overlap), or the normalised
     token sets overlap by at least `threshold` (intersection over union). A field with neither a
     quote nor a value of tokens overlaps nothing but its own anchor. Containment is on token
-    boundaries ("ion" is not in "ionization energy"). Pure and symmetric."""
+    boundaries ("ion" is not in "ionization energy"); punctuation and hyphens are ignored
+    ("state-of-the-art" is "state of the art"). Pure and symmetric."""
     if fa.anchor is not None and fa.anchor == fb.anchor:
         return True
-    qa = normalise_text(fa.quote or str(fa.value))
-    qb = normalise_text(fb.quote or str(fb.value))
-    if not qa or not qb:
+    wa, wb = _words(fa), _words(fb)
+    if not wa or not wb:
         return False
-    if _contains_tokens(qa.split(), qb.split()):
+    if _contains_tokens(wa, wb):
         return True
-    ta, tb = _tokens(fa), _tokens(fb)
+    ta, tb = frozenset(wa), frozenset(wb)
     return len(ta & tb) / len(ta | tb) >= threshold
 
 
