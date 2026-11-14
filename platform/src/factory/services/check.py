@@ -171,6 +171,7 @@ from factory.services.status_lookup import (
     unrecovered_failures,
 )
 from factory.services.trace import dangling_refs
+from factory.services.unreferenced_files import unreferenced_files
 from factory.services.versions import link_conflicts, newer_versions, vor_available
 from factory.services.watch import cycles, watch_status
 
@@ -576,9 +577,27 @@ def _run_rules(project: Project) -> list[_Hit]:
         appraisal_hits(project),
         copied_hits(project),
         decision_hits(project),
+        _unreferenced_files(project),
     ]
     flat = [hit for group in groups for hit in group]
     return [replace(hit, seq=seq) for seq, hit in enumerate(flat)]
+
+
+def _unreferenced_files(project: Project) -> list[_Hit]:
+    """`unreferenced-files` (a warning): files of the project folder no event names, counted by
+    top-level folder, with up to 20 example paths in the message."""
+    report = unreferenced_files(project)
+    if report.unreferenced == 0:
+        return []
+    folders = ", ".join(f"{k} {v}" for k, v in sorted(report.by_folder.items()))
+    return [
+        _Hit(
+            "unreferenced-files",
+            (),
+            f"{report.unreferenced} file(s) no event names (by folder: {folders}); "
+            f"examples: {', '.join(report.examples)}",
+        )
+    ]
 
 
 # --- Manuscripts (slice 7b, plan W-C) ---

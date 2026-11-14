@@ -278,7 +278,7 @@ LAYOUT: Final[dict[str, tuple[str, ...]]] = {
     "Overview": ("dashboard", "prisma", "flow", "documents", "costs"),
     "Sources": ("search", "feed", "acquisition", "conversion", "queue"),
     "Corpus": ("explorer", "bibliography", "citations", "layers", "wiki"),
-    "Mining": ("miners", "agreement", "steps", "lifecycle"),
+    "Mining": ("miners", "agreement", "steps", "lifecycle", "runs"),
     "Findings": ("results", "synthesis", "taxonomy"),
 }
 """The project hub's sidebar, in the order the work happens: each group and its products. (The factory-wide pages, the
@@ -291,6 +291,12 @@ def _build_documents(project: Project, out: Path) -> None:
     from factory.services.site_documents import build_documents
 
     build_documents(project, out)
+
+
+def _build_runs(project: Project, out: Path) -> None:
+    from factory.services.site_runs import build_runs
+
+    build_runs(project, out)
 
 
 def products() -> list[Product]:
@@ -484,6 +490,17 @@ def products() -> list[Product]:
             entry="index.html",
             inputs=("file.%",),
             build=_build_documents,
+        ),
+        Product(
+            id="runs",
+            title="Runs",
+            group="Mining",
+            description="The agent-run files under ops/ (prompts, screener scripts, logs) by "
+            "folder and batch prefix, with counts, dates and sizes, and whether a run or task id "
+            "an event names appears in a file name; the others are flagged unlinked.",
+            entry="index.html",
+            inputs=("runner.%", "task.%"),
+            build=_build_runs,
         ),
         Product(
             id="bibliography",

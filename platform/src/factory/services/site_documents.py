@@ -88,7 +88,8 @@ def build_documents(project: Project, out: Path) -> None:
     changed = sum(1 for s in status.values() if s.state == "changed")
     missing = sum(1 for s in status.values() if s.state == "missing")
     summary = note(
-        f"{len(files)} registered file(s); {changed} changed since registration, {missing} missing. "
+        f"{len(files)} registered file(s); {changed} changed since registration, "
+        f"{missing} missing. "
         "Each registration keeps the content it named, so an earlier version stays readable."
     )
     (out / "index.html").write_text(
