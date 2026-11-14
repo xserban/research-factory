@@ -55,7 +55,7 @@ def test_plan_defaults_keep_current_behaviour_and_hash() -> None:
         {"forward_max_per_work": 0},
         {"forward_topic_filter": "a,b"},
         {"forward_topic_filter": "  "},
-        {"forward_topic_filter": "x" * 301},
+        {"forward_topic_filter": "x" * 1001},
         {"forward_topic_filter": "line\nbreak"},
     ],
 )
@@ -121,7 +121,11 @@ def test_an_agent_written_event_changes_nothing_on_rebuild(
 
     works = _world(project, agent, human, mock_sources)
     forged = project.events.make(
-        "work.marked_core", WorkMarkedCore(work_id=works[0]), agent, refs=(works[0],)
+        "work.marked_core",
+        WorkMarkedCore(work_id=works[0]),
+        agent,
+        refs=(works[0],),
+        input_blob=project.blobs.put_json({"forged": True}),
     )
     project.record([forged])
     assert core_marks(project) == []

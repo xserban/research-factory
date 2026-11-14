@@ -517,7 +517,7 @@ class ReviewLinked(StrictModel):
     def _omit_absent_review(self, handler: SerializerFunctionWrapHandler) -> dict[str, object]:
         data: dict[str, object] = handler(self)
         if self.review_request_id is None:
-            del data["review_request_id"]
+            data.pop("review_request_id", None)  # absent already under exclude_defaults
         return data
 
 

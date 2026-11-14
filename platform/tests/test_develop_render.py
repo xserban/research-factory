@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from factory.cli.main import app
 from factory.config import Settings
+from factory.errors import FactoryValidationError
 from factory.events.envelope import Actor
 from factory.events.reader import read_all
 from factory.model.decisions import DecisionItem, DecisionLevel
@@ -105,7 +107,9 @@ def test_a_render_from_an_agent_or_with_a_skipped_version_changes_nothing(
 
     result = svc.render_level(project, DecisionLevel.GOAL)
     base = DocumentRendered(level=DecisionLevel.GOAL, version=2, sources=(), blob=result.blob)
-    forged = project.events.make("document.rendered", base, agent)
+    forged = project.events.make(
+        "document.rendered", base, agent, input_blob=project.blobs.put_json({"forged": True})
+    )
     skipped = project.events.make(
         "document.rendered", base.model_copy(update={"version": 5}), project.system_actor()
     )
@@ -125,8 +129,8 @@ def test_a_malformed_render_payload_changes_nothing_and_rebuild_agrees(
     )
     event = project.events.make("document.rendered", bad, project.system_actor())
     before = project.index.state_hash()
-    with project.writing():
-        project.record([event])
+    with pytest.raises(FactoryValidationError), project.writing():
+        project.record([event])  # refused at the boundary: nothing is written
     assert project.index.state_hash() == before
     assert project.index.rebuild() == before
 

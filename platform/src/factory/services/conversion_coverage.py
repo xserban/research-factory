@@ -7,6 +7,7 @@ of an HTML page) are compared with the words of the stored Markdown, by word 5-g
 - precision: the share of the Markdown's 5-grams found in the original (low: reading order
   scrambled, or text added).
 
+Bare-number tokens are ignored on both sides (IDEA-48).
 Both are noisy: a PDF text layer carries running headers and interleaved columns, an HTML page
 carries alt text and hidden maths. The figures rank documents for a human to look at; they decide
 nothing. LaTeX-source conversions (pandoc) have no comparable plain text and are not measured.
@@ -62,6 +63,12 @@ class CoverageReport(StrictModel):
 
 def words(value: str) -> list[str]:
     return _WORD.findall(value.lower())
+
+
+def content_words(value: str) -> list[str]:
+    """`words` without bare-number tokens (IDEA-48): margin line numbers, page numbers and table
+    cells sit differently in a text layer and in the Markdown, and break 5-grams at every line."""
+    return [w for w in words(value) if not w.isdigit()]
 
 
 def grams(tokens: Sequence[str]) -> set[tuple[str, ...]]:
@@ -121,7 +128,7 @@ def compute(project: Project) -> CoverageReport:
         if source is None:
             skipped[f"no comparable text ({media_type})"] += 1
             continue
-        a, b = words(source), words(_TAG.sub(" ", markdown))
+        a, b = content_words(source), content_words(_TAG.sub(" ", markdown))
         recall, precision = overlap(a, b)
         rows.append(
             CoverageRow(

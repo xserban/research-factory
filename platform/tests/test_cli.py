@@ -126,6 +126,7 @@ def test_status_human_output(tmp_path: Path) -> None:
     assert result.stdout == (
         "project: demo\n"
         "rigor mode: systematic\n"
+        "stage: scoping\n"
         "events: 1\n"
         "question: none\n"
         "protocol: none\n"
@@ -136,6 +137,7 @@ def test_status_human_output(tmp_path: Path) -> None:
         "pass B: not opened\n"
         "agreement: not available until both passes finish\n"
         "stale decisions: 0\n"
+        "cannot-assess to resolve: title-abstract 0\n"
         "audit: none sampled\n"
         "chase rounds: 0\n"
         "admitted seeds: 0\n"
@@ -560,7 +562,8 @@ def test_cli_restore_missing(
 
     assert result.exit_code == 0, result.stderr
     assert f"{document}  restored" in result.stdout.splitlines()
-    assert f"{supplied}  needs re-import (researcher-supplied)" in result.stdout.splitlines()
+    assert f"{supplied}  needs-reimport" in result.stdout.splitlines()
+    assert "1 needs-reimport, 1 restored" in result.stdout.splitlines()
     assert project.library.exists(_library_hash(project, document))
     assert not project.library.exists(_library_hash(project, supplied))
 

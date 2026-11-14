@@ -467,7 +467,29 @@ def _interrupted(project: Project) -> JsonValue:
             for run in found.runs
             if run.kind == "limit"
         ],
+        "details": _interrupted_details(found),
     }
+
+
+def _interrupted_details(found: resume_service.Interrupted) -> list[JsonValue]:
+    """One line per interrupted run, pipeline, expired lease kind and stale pass, so the panel
+    names the work and not only the counts (IDEA-63 item 2)."""
+    rows: list[tuple[str, str, str]] = []
+    rows += [("run", r.run_id, f"{r.stage}, {r.kind}") for r in found.runs]
+    rows += [
+        ("pipeline", p.pipeline_id, f"{p.kind}, left: {', '.join(p.stages_left) or 'none'}")
+        for p in found.pipelines
+    ]
+    rows += [("lease", lease.kind, f"{lease.count} expired") for lease in found.leases]
+    rows += [
+        (
+            "pass",
+            f"{s.module} {s.label}",
+            f"{s.stage or s.scope or 'all'}, {s.pending} pending",
+        )
+        for s in found.passes
+    ]
+    return [{"category": c, "id": i, "text": t} for c, i, t in rows]
 
 
 def _feed_fetch(project: Project, interval_days: int, now: datetime) -> JsonValue:
