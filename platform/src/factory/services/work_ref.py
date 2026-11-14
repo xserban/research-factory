@@ -45,12 +45,6 @@ def resolve_work_id(project: Project, work_id: str, *, field: str = "work_id") -
     return stored_spelling(work_id, ids, field=field)
 
 
-def resolve_synced(project: Project, work_id: str, *, field: str = "work_id") -> str:
-    """`resolve_work_id` after syncing the index, for a caller outside a service's own lock."""
-    project.index.sync()
-    return resolve_work_id(project, work_id, field=field)
-
-
 def resolve_work_ids(
     project: Project, work_ids: Iterable[str], *, field: str = "work_ids"
 ) -> list[str]:
