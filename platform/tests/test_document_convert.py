@@ -128,7 +128,7 @@ def test_plain_run_skips_an_older_version_and_reports_it(project: Project, corpu
     run_convert(project, make_registry(StubConverter(version="1.0+a")))
     before = event_bytes(project)
 
-    summary = run_convert(project, make_registry(StubConverter(version="1.0+b")))
+    summary = run_convert(project, make_registry(StubConverter(version="1.0+b")), upgrade=False)
 
     assert _statuses(summary) == ["outdated"]
     assert summary.outdated == 1
@@ -166,7 +166,7 @@ def test_current_version_is_unchanged_with_or_without_upgrade(
     run_convert(project, make_registry(StubConverter(version="1.0+a")))
     before = event_bytes(project)
 
-    plain = run_convert(project, make_registry(StubConverter(version="1.0+a")))
+    plain = run_convert(project, make_registry(StubConverter(version="1.0+a")), upgrade=False)
     upgraded = run_convert(project, make_registry(StubConverter(version="1.0+a")), upgrade=True)
 
     assert _statuses(plain) == ["unchanged"]
