@@ -266,3 +266,6 @@ All four fixed on `low-hanging-2` (merged dbe3d01): `indexed_rigor_mode` public 
 - IDEA-69 (2): `MineStatus.agreement` changed meaning (aligned to all rows) under the same name in MCP `mine_status` output.
 - IDEA-69 (2) tests missing: `overall_all_rows` withheld while a unit is open; `mine status` lines with both rates; a test pinning that the calibration gate ignores the all-rows rate; a work mined by one pass adds no slot.
 - IDEA-51: `exploratory` is not settable from a `miner add` file (by design: it is a protocol declaration); the docstring should say so.
+- IDEA-48 (`document/linenumbers.py`): when anything is dropped the text is rebuilt from blocks, so runs of blank lines collapse and blank lines inside code blocks go; offsets stay consistent (anchors come after, version bumped).
+- IDEA-48: any run of 5 or more bare 1 to 4 digit paragraphs counting up is dropped, wherever it is (five year paragraphs 2019 to 2023, a numbered listing, a one-number-per-paragraph table); the warning gives counts, not the paragraphs. A value ceiling, or a run starting at 1 or after a page break, would narrow it.
+- IDEA-48: `conversion_coverage.content_words` drops every all-digit token and splits "3.14" into "3" and "14", so loss of numeric table cells is not measured; say so in the docstring or add a numeric-token recall.
