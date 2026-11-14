@@ -426,9 +426,7 @@ def prisma_flow(project: Project) -> PrismaFlow:
     unscreened = stop_unscreened(project)
     tolerated = tolerated_unscreened_works(project) - unscreened
     tolerated_pending: list[str] = []
-    kept = background_works(
-        project, stage=ScreeningStage.TITLE_ABSTRACT, criteria=criteria
-    )
+    kept = background_works(project, stage=ScreeningStage.TITLE_ABSTRACT, criteria=criteria)
     background: dict[str, int] = {}
     for work in canonical:
         methods = {entry.method for entry in work.provenance}
