@@ -24,6 +24,8 @@ from sqlalchemy import text
 
 from factory.services.context import Project
 from factory.services.protocol import current_protocol
+from factory.services.site_layers import LAYER_ORDER
+from factory.services.work_layers import WorkLayer, layers_of
 
 PROFILE_FILE = "site-profile.json"
 DEFAULT_ROLES: dict[str, str] = {
@@ -77,6 +79,23 @@ DESIGN_FIELDS = (
     "value_kind",
     "metric",
 )
+
+
+UNLAYERED = "unlayered"
+"""The layer value of a work with no layer row (pending included): the explorer never says
+`pending`."""
+
+
+def layer_fields(wl: WorkLayer | None) -> dict[str, str]:
+    """The layer keys of one work in the payload: `layer`, and `layer_source` (`miner` or `moved`,
+    empty when unlayered) and `layer_miner` (what the miner said, empty without one)."""
+    if wl is None or wl.layer is None:
+        return {"layer": UNLAYERED, "layer_source": "", "layer_miner": ""}
+    return {
+        "layer": wl.layer,
+        "layer_source": wl.source,
+        "layer_miner": wl.miner_layer or "",
+    }
 
 
 @dataclass(frozen=True)
@@ -194,6 +213,7 @@ def corpus_payload(project: Project) -> dict[str, Any]:
                 out.setdefault(name, tup)
         return out
 
+    layers = layers_of(project)
     works: list[dict[str, Any]] = []
     for wid in sorted(works_data):
         d = works_data[wid]
@@ -250,12 +270,14 @@ def corpus_payload(project: Project) -> dict[str, Any]:
                 "design": design[:30],
                 "n_design": len(design),
                 "doc": doc,
+                **layer_fields(layers.get(wid)),
             }
         )
     by_slug = {w["id"]: w["slug"] for w in works}
     return {
         "dims": [{"key": k, "label": lab, "src": s, "field": f} for k, lab, s, f in profile.dims],
         "works": works,
+        "layer_order": list(LAYER_ORDER),
         "cites": [[by_slug[a], by_slug[b]] for a, b in edges],
         "refs_done": n_ext,
     }
