@@ -131,6 +131,8 @@ def prisma_svg(flow: PrismaFlow) -> str:
         banner = f"Provisional: {open_pending} records pending"
     elif boxes.provisional:
         banner = f"Provisional: {boxes.pending} reports pending"
+        if boxes.awaiting_classification:
+            banner += f", {boxes.awaiting_classification} awaiting classification"
 
     databases = _lines(
         "Records identified from databases",

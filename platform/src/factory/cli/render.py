@@ -137,6 +137,8 @@ def prisma_markdown(flow: PrismaFlow) -> str:
         lines.append(f"- included in the review: {flow.included_in_review}")
     if flow.provisional:
         lines += ["", "The flow is provisional: works are pending."]
+    elif boxes.provisional:
+        lines += ["", "The flow is provisional: reports are pending or awaiting classification."]
     lines.append(f"\nProtocol: {flow.protocol_id or 'none'}")
     return "\n".join(lines) + "\n"
 

@@ -23,7 +23,8 @@ services; no caller can set one. Counts follow plan 5b ruling 2 and decision #38
 - `excluded` / `included` / `pending`: the final outcome of each canonical work, read from
   `agreement.final_outcomes`, which gives a calibration work its human label. `excluded` is
   broken down by the criterion the work was excluded under; `pending` covers works whose
-  decisions are stale under the current protocol. The report is `provisional` while pending > 0.
+  decisions are stale under the current protocol. The report is `provisional` while
+  pending > 0 (the full-text boxes: while works are pending or awaiting classification).
 
 Invariants, enforced by `PrismaFlow`:
 - sum(identified_databases) + sum(identified_other) - duplicates_removed == screened
@@ -139,7 +140,8 @@ class FullTextBoxes(StrictModel):
     dump while 0. They are not `pending` (nothing is left to screen) and not `assessed`.
 
     Invariants: sought == not_retrieved + eligible; eligible == assessed + awaiting_classification
-    + pending; assessed == included + sum(excluded); provisional exactly while pending > 0.
+    + pending; assessed == included + sum(excluded); provisional exactly while pending +
+    awaiting_classification > 0 (an awaiting work can still be included).
     """
 
     sought: int
@@ -187,8 +189,10 @@ class FullTextBoxes(StrictModel):
             raise ValueError("assessed must equal included plus excluded")
         if any(n > self.excluded.get(c, 0) for c, n in self.background.items()):
             raise ValueError("works kept as background are a subset of the excluded")
-        if self.provisional != (self.pending > 0):
-            raise ValueError("full-text boxes are provisional exactly while works are pending")
+        if self.provisional != (self.pending + self.awaiting_classification > 0):
+            raise ValueError(
+                "full-text boxes are provisional exactly while works are pending or awaiting"
+            )
         if not self.stage_run and self.assessed:
             raise ValueError("a full-text stage that has not run has assessed nothing")
         return self
@@ -540,7 +544,7 @@ def full_text_boxes(project: Project, *, only: Collection[str] | None = None) ->
         pending=pending,
         included=included,
         stage_run=run,
-        provisional=pending > 0,
+        provisional=pending + awaiting > 0,
         awaiting_classification=awaiting,
         background=dict(sorted(background.items())),
     )

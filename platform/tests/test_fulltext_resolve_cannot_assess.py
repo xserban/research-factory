@@ -245,6 +245,7 @@ def test_unresolved_cannot_assess_is_awaiting_classification(
 
     boxes = prisma_flow(project).full_text
     assert boxes.awaiting_classification == 1
+    assert boxes.provisional  # included can still change
     assert boxes.pending == len(calibration_items(project, stage=FT))  # unlabelled: pending
     assert boxes.eligible == boxes.assessed + boxes.awaiting_classification + boxes.pending
     assert boxes.included == len(others)
@@ -255,6 +256,7 @@ def test_unresolved_cannot_assess_is_awaiting_classification(
     assert work in extraction_population(project)
     resolved = full_text_boxes(project)
     assert resolved.awaiting_classification == 0
+    assert resolved.provisional == (resolved.pending > 0)
     assert "awaiting_classification" not in resolved.model_dump()
     assert resolved.included == boxes.included + 1
 
