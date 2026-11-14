@@ -47,6 +47,7 @@ from factory.model.work_ids import arxiv_id_from_doi
 from factory.services.budgets import budget_issues
 from factory.services.context import Project
 from factory.services.dedup import active_merges
+from factory.services.gates import indexed_rigor_mode
 from factory.services.import_resolve import surname
 from factory.services.imports import (
     effective_records,
@@ -57,7 +58,6 @@ from factory.services.imports import (
 )
 from factory.services.protocol import current_protocol, search_authorization
 from factory.services.protocol_rules import library_source_gaps
-from factory.services.reference_resolve import _rigor_mode
 from factory.services.search import (
     RunSummary,
     corpus_size,
@@ -330,7 +330,7 @@ def admit_import(
         issues += _blocking(project, import_id)
         done = [s for s in _admission_runs(project, import_id) if s != RunStatus.FAILED.value]
         gaps = _library_gaps(project, row.collection, row.format)
-        if gaps and _rigor_mode(project) is not RigorMode.EXPLORATORY:
+        if gaps and indexed_rigor_mode(project) is not RigorMode.EXPLORATORY:
             issues += gaps
             gaps = []
         plan = _plan(project, import_id)

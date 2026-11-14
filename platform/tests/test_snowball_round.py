@@ -190,7 +190,7 @@ def explore_world(
 ) -> Project:
     """An exploratory project screened like `corpus`, with work A converted and extracted."""
     project = explore_project
-    assert snowball._rigor_mode(project) is RigorMode.EXPLORATORY
+    assert snowball.indexed_rigor_mode(project) is RigorMode.EXPLORATORY
     protocol_id = _setup(project, agent, human, mock_sources, dual_sample=0.5, random_works=0)
     split_seeds(project, random_seed=7)  # a pilot's probe draws the split; exploratory does not
     _draw(project)

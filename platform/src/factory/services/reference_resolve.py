@@ -83,7 +83,7 @@ from factory.services.budgets import spent_for
 from factory.services.context import Project
 from factory.services.conversions import conversion_manifest
 from factory.services.dedup import active_merges, canonical_works
-from factory.services.gates import _rigor_mode, effective_policy
+from factory.services.gates import effective_policy, indexed_rigor_mode
 from factory.services.search import get_work, list_works, register_query, run_query
 from factory.sources.registry import SourceFactory
 
@@ -707,7 +707,9 @@ def _confirmer(
     return confirmer_ruling(
         actor,
         gate_id="reference.link_confirm",
-        policy=effective_policy(project, "reference.link_confirm", mode=_rigor_mode(project)),
+        policy=effective_policy(
+            project, "reference.link_confirm", mode=indexed_rigor_mode(project)
+        ),
         base_state=link.base_state,
         confirmed_by=link.confirmed_by,
         has_proposal=has_proposal,

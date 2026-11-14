@@ -40,7 +40,7 @@ from factory.model.references import (
 )
 from factory.references.match import MATCHER, MATCHER_VERSION
 from factory.services.context import Project
-from factory.services.gates import effective_policy
+from factory.services.gates import effective_policy, indexed_rigor_mode
 from factory.services.imports import (
     effective_records,
     import_row,
@@ -49,7 +49,6 @@ from factory.services.imports import (
     retrieved_keys,
 )
 from factory.services.reference_resolve import (
-    _rigor_mode,
     confirmer_ruling,
     load_corpus,
     resolve_entries,
@@ -323,7 +322,7 @@ def decide_import(
                 actor,
                 gate_id="import.resolution_confirm",
                 policy=effective_policy(
-                    project, "import.resolution_confirm", mode=_rigor_mode(project)
+                    project, "import.resolution_confirm", mode=indexed_rigor_mode(project)
                 ),
                 base_state=link.base_state,
                 confirmed_by=link.confirmed_by,

@@ -96,7 +96,9 @@ class GateAct:
     superseded: bool = False
 
 
-def _rigor_mode(project: Project) -> RigorMode:
+def indexed_rigor_mode(project: Project) -> RigorMode:
+    """The project's rigor mode as the index holds it now, with no sync: for callers that
+    already synced or hold the index. `rigor_mode` syncs first."""
     with project.index.connect() as conn:
         value = conn.execute(
             text("SELECT rigor_mode FROM project WHERE slug = :slug"),
@@ -108,7 +110,7 @@ def _rigor_mode(project: Project) -> RigorMode:
 def rigor_mode(project: Project) -> RigorMode:
     """The project's rigor mode (the index is synced first)."""
     project.index.sync()
-    return _rigor_mode(project)
+    return indexed_rigor_mode(project)
 
 
 def _policies_of(project: Project, protocol_id: str | None) -> GatePolicies | None:
@@ -146,7 +148,7 @@ def effective_policy(
         for entry in policies.entries:
             if entry.gate == gate_id:
                 return entry.as_policy()
-    return preset(mode or _rigor_mode(project), gate_id)
+    return preset(mode or indexed_rigor_mode(project), gate_id)
 
 
 def protocol_at(project: Project, event_id: str) -> str | None:
@@ -483,7 +485,8 @@ def gate_audit_report(project: Project, gate_id: str) -> GateAuditReport | None:
     verdict = audit_core.ceiling_verdict(
         rate,
         GATE_AUDIT_ERROR_CEILING,
-        enforced=enforcement(_rigor_mode(project), "gate.audit_ceiling") is Enforcement.ENFORCED,
+        enforced=enforcement(indexed_rigor_mode(project), "gate.audit_ceiling")
+        is Enforcement.ENFORCED,
     )
     return GateAuditReport(str(audit[0]), gate_id, len(rows), len(labelled), incorrect, verdict)
 

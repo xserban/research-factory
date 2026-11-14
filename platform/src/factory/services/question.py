@@ -27,7 +27,7 @@ from factory.model.question import (
 )
 from factory.services.context import Project
 from factory.services.decision_binding import bind
-from factory.services.gates import _rigor_mode
+from factory.services.gates import indexed_rigor_mode
 
 
 class QuestionResult(StrictModel):
@@ -100,7 +100,7 @@ def record_question(
             raise FactoryValidationError(
                 [ValidationIssue("raw_goal", "state the goal with question.goal_stated first")]
             )
-        issues = _rigor_issues(spec, _rigor_mode(project))
+        issues = _rigor_issues(spec, indexed_rigor_mode(project))
         if issues:
             raise FactoryValidationError(issues)
 

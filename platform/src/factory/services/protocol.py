@@ -61,7 +61,7 @@ from factory.model.watch import CycleStatus
 from factory.modules.presets import Enforcement, enforcement
 from factory.services.context import Project
 from factory.services.decision_binding import bind
-from factory.services.gates import _rigor_mode, gate_issues
+from factory.services.gates import gate_issues, indexed_rigor_mode
 from factory.services.protocol_rules import (
     criterion_changes,
     extraction_stale,
@@ -388,7 +388,7 @@ def record_protocol(
             spec,
             question=spec_question,
             current_question_id=question.question_id,
-            mode=_rigor_mode(project),
+            mode=indexed_rigor_mode(project),
             seeds=all_seeds(project),
             probes=_measured_probes(project),
             known_sources=set(default_sources()),
@@ -542,7 +542,7 @@ def amend_protocol(
             spec,
             question=spec_question,
             current_question_id=question.question_id,
-            mode=_rigor_mode(project),
+            mode=indexed_rigor_mode(project),
             seeds=all_seeds(project),
             probes=_measured_probes(project),
             known_sources=set(default_sources()),
@@ -987,7 +987,7 @@ def search_authorization(
     """
     import_issues = _import_issues(project, spec, import_id)
     if spec.purpose is QueryPurpose.PROBE or (
-        enforcement(_rigor_mode(project), "protocol.ready") is Enforcement.OFF
+        enforcement(indexed_rigor_mode(project), "protocol.ready") is Enforcement.OFF
     ):
         return import_issues
     current = current_protocol(project)

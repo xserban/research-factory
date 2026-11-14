@@ -124,7 +124,7 @@ from factory.services.context import Project
 from factory.services.core_works import forward_core_sources, seed_core_works
 from factory.services.dedup import active_merges
 from factory.services.document_read import default_conversion
-from factory.services.gates import _rigor_mode
+from factory.services.gates import indexed_rigor_mode
 from factory.services.progress import track
 from factory.services.protocol import current_protocol, search_authorization
 from factory.services.protocol_rules import snowball_plan_gaps
@@ -839,7 +839,7 @@ def plan_gaps(project: Project) -> list[ValidationIssue]:
     protocol = current_protocol(project)
     if protocol is None:
         return []
-    return snowball_plan_gaps(protocol.spec, _rigor_mode(project))
+    return snowball_plan_gaps(protocol.spec, indexed_rigor_mode(project))
 
 
 def plan_round(project: Project, direction: Direction) -> RoundPlan:
@@ -850,7 +850,7 @@ def plan_round(project: Project, direction: Direction) -> RoundPlan:
     project.index.sync()
     protocol = current_protocol(project)
     rule = None if protocol is None else protocol.spec.snowball_plan
-    mode = _rigor_mode(project)
+    mode = indexed_rigor_mode(project)
     previous = [r for r in recorded_rounds(project) if r.direction is direction]
     # A forward round is a chase round, and a standalone forward chase uses up a round as well.
     used = len(previous) if direction is Direction.BACKWARD else len(forward_chase_rounds(project))
