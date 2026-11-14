@@ -15,9 +15,10 @@ from collections.abc import Iterable
 
 from pydantic import JsonValue
 
-from factory.model.seed import SeedSpec
+from factory.model.seed import SeedSpec, normalize_openalex
 from factory.services import seeds as seeds_service
 from factory.services.context import Project
+from factory.services.search import get_work
 from factory.services.seeds import SeedRole
 
 WITHHELD = "[withheld]"
@@ -56,7 +57,8 @@ def _scrub(value: JsonValue, pattern: re.Pattern[str], same_length: bool = False
 def held_out_tokens(project: Project, include_work_ids: bool = True) -> set[str]:
     """The id, and every identifier as stated or normalised, of each held-out seed.
 
-    `include_work_ids` adds `seed.work_id`, for the seed tools and the probe. Any tool that names
+    `include_work_ids` adds `seed.work_id` and the OpenAlex id (as stored and normalised) of the
+    work the seed resolved to, for the seed tools and the probe (IDEA-19). Any tool that names
     works leaves it out: a work's id is not a seed's identity, and a `[withheld]`
     among `rf:` ids would mark the work as a seed (decisions 37 item 9 and 81)."""
     tokens: set[str] = set()
@@ -75,4 +77,8 @@ def held_out_tokens(project: Project, include_work_ids: bool = True) -> set[str]
         tokens.update(value for value in (seed.doi, seed.arxiv, seed.openalex) if value)
         if include_work_ids and seed.work_id:
             tokens.add(seed.work_id)
+            work = get_work(project, seed.work_id)
+            resolved = work.identifiers.openalex if work is not None else None
+            if resolved and resolved.strip():
+                tokens.update((resolved, normalize_openalex(resolved)))
     return tokens
