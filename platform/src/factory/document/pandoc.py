@@ -6,7 +6,7 @@ the `FACTORY_PANDOC` environment variable, else `PATH`. The LaTeX e-print conver
 49, listed in `default_converters` after latexml-html, which keeps HTML. JATS
 (`application/jats+xml`, decision 124, proposed) is read from stdin like HTML; pandoc renders
 sections, tables and xrefs but not the `<ref-list>` entries (the References heading is kept, its
-body is empty).
+body is empty); `factory.document.jats_refs` fills it with one paragraph per `<ref>`.
 
 E-print archives are unpacked in memory (`factory.document.eprint`, with caps and safe names),
 written to a private temporary directory, and the main .tex is converted. Warnings carry counts
@@ -22,6 +22,7 @@ from pathlib import Path
 from factory.document.converter import ConverterUnavailable
 from factory.document.eprint import EprintError, find_main_tex, unpack_eprint
 from factory.document.errors import ConversionToolError
+from factory.document.jats_refs import with_reference_list
 
 HTML = "text/html"
 JATS = "application/jats+xml"
@@ -127,6 +128,9 @@ class PandocConverter:
         if skipped:
             warnings.append(f"e-print members skipped: {skipped}")
         try:
-            return proc.stdout.decode("utf-8"), tuple(warnings)
+            markdown = proc.stdout.decode("utf-8")
         except UnicodeDecodeError as exc:
             raise ConversionToolError("pandoc output is not valid UTF-8") from exc
+        if media_type == JATS:
+            markdown = with_reference_list(markdown, raw)
+        return markdown, tuple(warnings)

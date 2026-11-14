@@ -364,9 +364,67 @@ def test_pandoc_jats_keeps_headings_and_table() -> None:
     assert "| Tea" in result.markdown
 
 
-@pytest.mark.xfail(strict=True, reason="pandoc drops <ref-list> entries without citeproc")
 def test_pandoc_jats_keeps_reference_text() -> None:
     if pandoc_module.pandoc_path() is None:
         pytest.skip("pandoc not installed")
     result = convert(PandocConverter(), JATS_SAMPLE, "application/jats+xml")
     assert "Tea and sleep" in result.markdown
+
+    assert "[1] Smith J. Tea and sleep." in result.markdown
+    assert 'id="refs"' not in result.markdown
+
+
+def test_pandoc_jats_reference_entries_parse() -> None:
+    if pandoc_module.pandoc_path() is None:
+        pytest.skip("pandoc not installed")
+    from factory.references.parse import parse_bibliography
+
+    result = convert(PandocConverter(), JATS_SAMPLE, "application/jats+xml")
+    bib = parse_bibliography(result.manifest)
+    assert len(bib.entries) == 1
+    assert bib.entries[0].fields.year == 2020
+
+
+JATS_ELEMENT = b"""<article><body><sec><title>Intro</title><p>Text.</p></sec></body>
+<back><ref-list><ref id="B1"><element-citation publication-type="journal">
+<person-group person-group-type="author"><name><surname>Smith</surname>
+<given-names>J</given-names></name><name><surname>Lee</surname><given-names>K</given-names></name>
+</person-group><year>2020</year><article-title>Tea and sleep</article-title>
+<source>J Sleep</source><volume>5</volume><fpage>1</fpage><lpage>9</lpage>
+<pub-id pub-id-type="doi">10.1000/xyz1</pub-id></element-citation></ref>
+<ref id="B2"><mixed-citation>Second  entry
+ text.</mixed-citation></ref></ref-list></back></article>
+"""
+
+
+def test_pandoc_jats_element_citation_and_ordinal_label() -> None:
+    if pandoc_module.pandoc_path() is None:
+        pytest.skip("pandoc not installed")
+    from factory.references.parse import parse_bibliography
+
+    result = convert(PandocConverter(), JATS_ELEMENT, "application/jats+xml")
+    assert "# References" in result.markdown
+    bib = parse_bibliography(result.manifest)
+    assert [e.label for e in bib.entries] == ["1", "2"]
+    assert "Smith J, Lee K. 2020. Tea and sleep. J Sleep. 5. 1-9. doi:10.1000/xyz1" in (
+        bib.entries[0].text
+    )
+    assert bib.entries[0].fields.doi == "10.1000/xyz1"
+    assert bib.entries[1].text == "[2] Second entry text."
+
+
+def test_reference_entries_without_pandoc() -> None:
+    from factory.document.jats_refs import reference_entries, with_reference_list
+
+    assert reference_entries(JATS_ELEMENT)[1] == "[2] Second entry text."
+    assert reference_entries(b"<not xml") == []
+    assert reference_entries(b"<article><body/></article>") == []
+    # No pandoc heading or refs block: heading and entries are appended.
+    out = with_reference_list("# Intro\n\nText.\n", JATS_ELEMENT)
+    assert out.startswith("# Intro\n\nText.\n\n# References\n\n[1] Smith")
+    # Empty refs block under an existing heading: entries replace the block.
+    out = with_reference_list('# References\n\n<div id="refs">\n\n</div>\n', JATS_ELEMENT)
+    assert out.count("# References") == 1 and "<div" not in out
+    # Block without a heading: heading is added.
+    out = with_reference_list('Text.\n\n<div id="refs">\n\n</div>\n', JATS_ELEMENT)
+    assert "# References\n\n[1] Smith" in out
