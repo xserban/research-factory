@@ -186,8 +186,37 @@ def test_an_uncalibrated_miner_does_not_apply(
     found = {s.key: s for s in pipeline.stages(project)}
     assert found["mine:m-alpha"].applies
     beta = found["mine:m-beta"]
-    assert not beta.applies and beta.pending == 0
+    assert not beta.applies and beta.pending == 4  # counted, for the exploratory button
+    assert "mine:m-beta" not in pipeline.pending_by_stage(project)
     assert "no passed calibration" in beta.reason and "exploratory" in beta.reason
+    assert beta.exploratory_only and not found["mine:m-alpha"].exploratory_only
+
+
+def test_queue_page_offers_exploratory_for_an_uncalibrated_miner() -> None:
+    """The hub lists an uncalibrated miner with its reason and an exploratory button, never a
+    plain Process now button."""
+    from factory.services.pipeline import PipelineStage
+    from factory.services.site_queue import _pending_html
+
+    def stage(key: str, applies: bool, only: bool) -> PipelineStage:
+        return PipelineStage(
+            key=key,
+            label=key,
+            skill="rf-mine",
+            role="miner",
+            model="claude-haiku-5-5",
+            tools=("mcp__factory__mine_next",),
+            pending=3,
+            applies=applies,
+            reason="version 1 has no passed calibration" if only else "listed",
+            exploratory_only=only,
+        )
+
+    html = _pending_html({}, [stage("mine:m-a", True, False), stage("mine:m-b", False, True)])
+    assert "data-stage='mine:m-b' data-exploratory=1" in html
+    assert "Process exploratory" in html and "no passed calibration" in html
+    assert "data-stage='mine:m-a'>Process now" in html
+    assert "data-stage='mine:m-b'>Process now" not in html
 
 
 def test_model_skill_and_role_per_stage(project: Project, configured: dict[str, int]) -> None:

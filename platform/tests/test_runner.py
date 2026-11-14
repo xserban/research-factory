@@ -716,7 +716,7 @@ def test_calibrated_mine_stage_launches_as_before(
     prompt = (log_path.parent / "prompt.txt").read_text(encoding="utf-8")
     assert "exploratory" not in prompt
     [started] = _started_payloads(project)
-    assert started["exploratory"] is False
+    assert "exploratory" not in started  # omitted when false
     _finish_all(launcher, run_id)
 
 
@@ -780,3 +780,25 @@ def test_queue_process_passes_exploratory_to_the_service(
     )
     assert result.exit_code == 0, result.output
     assert seen["stage"] == MINE and seen["exploratory"] is True
+
+
+def test_runner_started_omits_exploratory_when_false() -> None:
+    """A production run's `runner.started` payload has no `exploratory` key (it reads as before
+    the field existed); an exploratory one carries it; both read back."""
+    from factory.model.runner import RunnerStarted
+
+    fields: dict[str, object] = {
+        "run_id": "rnr_01HZZZZZZZZZZZZZZZZZZZZZZZ",
+        "stage": "mine:m-x",
+        "model": "claude-haiku-5-5",
+        "allowed_tools": ("mcp__factory__mine_next",),
+        "prompt_blob": "sha256:" + "0" * 64,
+        "unit_cap": 1,
+        "counts_before": {"mine:m-x": 1},
+        "command": ("claude",),
+    }
+    plain = RunnerStarted.model_validate(fields).model_dump(mode="json")
+    assert "exploratory" not in plain
+    assert RunnerStarted.model_validate(plain).exploratory is False
+    marked = RunnerStarted.model_validate({**fields, "exploratory": True}).model_dump(mode="json")
+    assert marked["exploratory"] is True
