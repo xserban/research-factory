@@ -28,6 +28,7 @@ from factory.services.context import Project
 from factory.services.mining import mine_next, mine_record, register_miner
 from factory.services.protocol import amend_protocol, current_protocol
 from tests.extraction_helpers import _extractor
+from tests.helpers import SESSION
 
 VISION_NAME = "m-vision-result"
 SESSION_M1 = "01JZ9Q3K5M7N8P0R2S4T6V8W1E"
@@ -119,6 +120,48 @@ def list_miner(project: Project, agent: Actor, spec: MinerSpec | None = None) ->
     return chosen
 
 
+_RESEARCHER_AMENDER = Actor(kind="human", id="obd", user="obd", session=SESSION)
+
+
+def declare_exploratory(
+    project: Project, name: str = VISION_NAME, version: int = 1, actor: Actor | None = None
+) -> None:
+    """Amend the protocol so the listed use of `(name, version)` is declared exploratory (the
+    only way to mine an uncalibrated version in production; IDEA-69). Idempotent."""
+    current = current_protocol(project)
+    assert current is not None
+    uses = current.spec.miners or ()
+    if any(u.exploratory for u in uses if (u.name, u.version) == (name, version)):
+        return
+    amended = tuple(
+        u.model_copy(update={"exploratory": True}) if (u.name, u.version) == (name, version) else u
+        for u in uses
+    )
+    amend_protocol(
+        project,
+        actor or _RESEARCHER_AMENDER,
+        current.spec.model_copy(update={"miners": amended}),
+        reason=f"declare {name} version {version} exploratory",
+        semantic=True,
+        effects={},
+    )
+
+
+def mine_exploratory(
+    project: Project,
+    actor: Actor,
+    name: str,
+    version: int,
+    label: PassLabel,
+    *,
+    calibration: bool = False,
+) -> Any:
+    """`mine_next` after declaring the use exploratory in the protocol (the way to mine an
+    uncalibrated version in production)."""
+    declare_exploratory(project, name, version)
+    return mine_next(project, actor, name, version, label, calibration=calibration)
+
+
 def miner_actor(session: str, model: str) -> Actor:
     return _extractor(session, model)
 
@@ -138,8 +181,12 @@ def mine_pass(
     """Serve every task of the pass and record `rows_for(work)` in it, closing each unit; returns
     the works mined."""
     done: list[str] = []
+    from factory.services.miners import MinerState, miner_state
+
+    if miner_state(project, name, version) is not MinerState.CALIBRATED:
+        declare_exploratory(project, name, version)
     for _ in range(100):
-        batch = mine_next(project, actor, name, version, label, exploratory=True).batch
+        batch = mine_next(project, actor, name, version, label).batch
         if batch is None:
             return done
         work = batch.records[0]["work_id"]

@@ -38,6 +38,7 @@ from tests.miner_helpers import (
     VISION_NAME,
     list_miner,
     method_vision,
+    mine_exploratory,
     mine_pass,
     mine_row,
     miner_actor,
@@ -72,12 +73,12 @@ def test_mine_next_refused_until_listed(
     project: Project, agent: Actor, mina: Actor, world: list[str]
 ) -> None:
     with pytest.raises(FactoryValidationError) as raised:
-        mine_next(project, mina, VISION_NAME, 1, A, exploratory=True)  # not registered
+        mine_next(project, mina, VISION_NAME, 1, A)  # not registered
     assert raised.value.issues[0].field == "miners"
     register_miner(project, agent, spec_to_json(method_vision()))
     before = _events(project)
     with pytest.raises(FactoryValidationError) as raised:
-        mine_next(project, mina, VISION_NAME, 1, A, exploratory=True)  # registered, not listed
+        mine_next(project, mina, VISION_NAME, 1, A)  # registered, not listed
     assert raised.value.issues[0].field == "miners"
     assert _events(project) == before  # nothing written: no pass opened, no join
 
@@ -86,7 +87,7 @@ def test_task_content_has_anchor_ids_not_text(
     project: Project, agent: Actor, mina: Actor, world: list[str]
 ) -> None:
     list_miner(project, agent)
-    batch = mine_next(project, mina, VISION_NAME, 1, A, exploratory=True).batch
+    batch = mine_exploratory(project, mina, VISION_NAME, 1, A).batch
     assert isinstance(batch, MineBatch)
     assert (batch.miner, batch.version) == (VISION_NAME, 1)
     assert batch.anchors == ("s3.p1", "t1")
@@ -192,7 +193,7 @@ def test_failed_plan_d_row_reports_only_plan_d_issues(
     project: Project, agent: Actor, mina: Actor, world: list[str]
 ) -> None:
     list_miner(project, agent)
-    batch = mine_next(project, mina, VISION_NAME, 1, A, exploratory=True).batch
+    batch = mine_exploratory(project, mina, VISION_NAME, 1, A).batch
     assert batch is not None
     row = mine_row()
     fields = dict(row.fields)
@@ -217,7 +218,7 @@ def test_the_two_record_tools_refuse_each_others_tasks(
         mine_record(project, ext_a, evidence.task_id, [mine_row()])
     assert raised.value.issues[0].field == "task_id"
     list_miner(project, agent)
-    batch = mine_next(project, mina, VISION_NAME, 1, A, exploratory=True).batch
+    batch = mine_exploratory(project, mina, VISION_NAME, 1, A).batch
     assert batch is not None
     with pytest.raises(FactoryValidationError) as raised:
         extract_record(project, mina, batch.task_id, [mine_row()])

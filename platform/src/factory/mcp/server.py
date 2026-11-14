@@ -1950,7 +1950,6 @@ def build_server(
         model: str,
         skill: str,
         calibration: bool = False,
-        exploratory: bool = False,
     ) -> dict[str, JsonValue]:
         """Serve the next task of pass A or B of a registered miner to this session, or say why
         none is served. The miner must be registered and listed in the protocol's `miners`
@@ -1960,8 +1959,9 @@ def build_server(
         its first call. With `calibration` the pass is the miner's calibration pass (pass A): the
         units of its drawn sample only, for a session that neither proposed the miner, nor took
         part in a production pass, nor recorded a gold label. A production pass is refused for a
-        version with no passed calibration unless `exploratory` is true (no quality claim; the
-        task carries the mark)."""
+        version with no passed calibration unless the protocol declares that miner use
+        exploratory (a protocol amendment with a reason, made by the researcher; no quality
+        claim; the task carries the mark). You cannot declare it yourself."""
 
         def serve() -> JsonValue:
             with unit_cap.serving() as done:
@@ -1976,7 +1976,6 @@ def build_server(
                     version,
                     label,
                     calibration=calibration,
-                    exploratory=exploratory,
                 )
                 dumped = served.model_dump(mode="json")
                 done(dumped)

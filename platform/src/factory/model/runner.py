@@ -55,9 +55,9 @@ class RunnerStarted(StrictModel):
     """True for a driver started outside the runner and recorded afterwards (`adopt_driver`);
     `allowed_tools` is then what that driver really had. Absent in older events (False)."""
     exploratory: bool = False
-    """True for a mine stage run with the exploratory opt-in: its miner version has no passed
-    calibration (or the researcher chose it), and its rows carry no quality claim. Absent in older
-    events (False); a resumed run inherits it. Omitted from the dump when false, so a production
+    """True for a mine stage run whose miner use the protocol declares exploratory (IDEA-69): its
+    version has no passed calibration and its rows carry no quality claim. Set at start from the
+    declaration; absent in older events (False). Omitted from the dump when false, so a production
     run's event reads as it did before the field existed."""
 
     @model_serializer(mode="wrap")

@@ -20,6 +20,7 @@ from tests.miner_helpers import (
     SESSION_M1,
     SESSION_M2,
     VISION_NAME,
+    declare_exploratory,
     list_miner,
     method_vision,
     mine_pass,
@@ -71,6 +72,7 @@ async def test_register_list_and_a_full_record_through_the_tools(
             (VISION_NAME, False)
         ]
     list_miner(project, agent)  # the researcher lists it in the protocol
+    declare_exploratory(project)  # and declares it exploratory (uncalibrated)
     async with open_session(settings, clock) as client:
         served = await client.call(
             "mine_next",
@@ -78,7 +80,6 @@ async def test_register_list_and_a_full_record_through_the_tools(
             miner=VISION_NAME,
             version=1,
             pass_label="A",
-            exploratory=True,
             **AGENT,
         )
         assert served["ok"] is True, served
