@@ -685,15 +685,15 @@ THEME_CSS: Final = (
 )
 
 
-def page(title: str, body: str, css: str = "") -> str:
+def page(title: str, body: str, css: str = "", *, head: str = "", body_class: str = "") -> str:
     """A themed standalone page for a product that has no page of its own."""
     return with_panel(
         "<!doctype html><html lang=en><head><meta charset=utf-8>"
         "<meta name=viewport content='width=device-width,initial-scale=1'>"
-        f"{THEME_SCRIPT}<title>{html.escape(title)}</title><style>{THEME_CSS}"
+        f"{head}{THEME_SCRIPT}<title>{html.escape(title)}</title><style>{THEME_CSS}"
         f"body{{padding:20px 24px;max-width:{CONTAINER_WIDTH};margin:0 auto}}.theme-row{{display:flex;justify-content:flex-end;margin:0 0 6px}}"
         f"{css}{LIGHT_CSS}</style></head>"
-        f"<body><div class=theme-row>{THEME_TOGGLE}</div>{body}</body></html>"
+        f"<body{f' class={body_class}' if body_class else ''}><div class=theme-row>{THEME_TOGGLE}</div>{body}</body></html>"
     )
 
 

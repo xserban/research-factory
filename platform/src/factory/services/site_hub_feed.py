@@ -35,6 +35,7 @@ from factory.services.context import Project
 from factory.services.feed import FeedStatus, feed_status
 from factory.services.feed_page import FeedFurtherItem, FeedRankedPage, feed_ranked_page
 from factory.services.feed_read import FeedListing, FeedListItem, feed_list
+from factory.services.site import page
 from factory.services.site_chrome import with_bar
 from factory.services.site_feed import FEED_CSS, _authors, _entry_records, _text
 from factory.services.site_portal import _CSS as PORTAL_CSS
@@ -172,17 +173,17 @@ def runner_payload(runner: FeedRunner | None) -> dict[str, object]:
 
 
 _CSS: Final = (
-    FEED_CSS + ".tabs{display:flex;flex-wrap:wrap;gap:6px;margin:14px 0}"
-    ".tab{background:var(--card);border:1px solid var(--line);color:var(--fg);padding:5px 12px;"
-    "border-radius:6px;cursor:pointer;font:inherit}.tab.on{border-color:var(--acc);color:var(--acc)}"
+    FEED_CSS + PORTAL_CSS + ".tabs{display:flex;flex-wrap:wrap;gap:6px;margin:14px 0}"
+    ".tab{background:var(--card);border:1px solid var(--mut);color:var(--fg);padding:5px 12px;"
+    "border-radius:6px;cursor:pointer;font:inherit}.tab.on{border-color:var(--ac);color:var(--ac)}"
     ".bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:12px 0}"
-    ".bar button{padding:4px 12px}.run{color:var(--mut);font-size:13px}"
-    ".err{color:var(--warn)}.pn[hidden]{display:none}"
-    ".status{background:var(--card);border:1px solid var(--line);padding:10px 14px;margin:8px 0}"
-    ".card{border-color:var(--line);border-left-color:var(--acc)}"
-    ".meta{color:var(--mut)}.rank,.score{color:var(--acc)}"
-    ".card.further{border-left-color:var(--line)}.card.further[hidden]{display:none}"
-    ".card.further .rank{color:var(--mut)}"
+    ".bar button{padding:4px 12px}.run{color:var(--dim);font-size:13px}"
+    ".err{color:var(--amber)}.pn[hidden]{display:none}"
+    ".status{background:var(--card);border:1px solid var(--mut);padding:10px 14px;margin:8px 0}"
+    ".card{border-color:var(--mut);border-left-color:var(--ac)}"
+    ".meta{color:var(--dim)}.rank,.score{color:var(--ac)}"
+    ".card.further{border-left-color:var(--mut)}.card.further[hidden]{display:none}"
+    ".card.further .rank{color:var(--dim)}"
     ".more{margin:12px 0}.more button{padding:4px 12px}"
 )
 
@@ -443,14 +444,14 @@ def render_feed_page(
             or "<p class=sub>No project found under the factory root.</p>"
         )
     )
-    return with_bar(
-        "<!doctype html><html lang=en><head><meta charset=utf-8>"
-        f"<meta name='factory-token' content='{e(hub_token, quote=True)}'>"
-        "<meta name=viewport content='width=device-width,initial-scale=1'>"
-        f"<title>New papers</title><style>{PORTAL_CSS}{_CSS}</style></head><body class=portal><main>{body}</main>"
-        f"<script>{_SCRIPT}</script></body></html>",
-        "feed",
+    doc = page(
+        "New papers",
+        f"<main>{body}</main><script>{_SCRIPT}</script>",
+        _CSS,
+        head=f"<meta name='factory-token' content='{e(hub_token, quote=True)}'>",
+        body_class="portal",
     )
+    return with_bar(doc, "feed")
 
 
 def _last_outcome(last: object) -> str:

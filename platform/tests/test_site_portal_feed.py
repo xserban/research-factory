@@ -102,7 +102,7 @@ def test_feed_page_has_the_bar_with_feed_active_and_one_toggle() -> None:
 
 def test_portal_palette_follows_an_explicit_choice() -> None:
     page = site_portal.render_portal([])
-    assert ':root[data-theme="light"]' in page and ':root[data-theme="dark"]' in page
+    assert ':root[data-theme="light"]' in page and ':root[data-theme="lcars"]' in page
 
 
 def test_ranked_total_sums_the_ranked_entries_not_the_shown_ones() -> None:
@@ -120,19 +120,21 @@ def test_ranked_total_sums_the_ranked_entries_not_the_shown_ones() -> None:
     assert site_hub_feed.ranked_total([with_ranked, b, plain]) == 249
 
 
-def test_the_portal_pages_use_the_backlogs_centred_container() -> None:
-    from factory.services.site_portal import _CSS
-
-    assert "max-width:1500px" in _CSS and "margin:0 auto" in _CSS
-    assert "main{padding:24px 0}" in _CSS and "max-width:960px" not in _CSS
-
-
-def test_every_standalone_page_has_one_container_width() -> None:
+def test_every_standalone_page_comes_from_the_one_shell() -> None:
     from factory.services import site
     from factory.services.site_backlog import render_backlog
     from factory.services.site_chrome import CONTAINER_WIDTH
-    from factory.services.site_portal import _CSS
 
-    assert f"max-width:{CONTAINER_WIDTH}" in _CSS
-    for doc in (site.page("t", "<p>b</p>"), render_backlog()):
-        assert f"max-width:{CONTAINER_WIDTH}" in doc and "max-width:1100px" not in doc
+    shell = f"max-width:{CONTAINER_WIDTH};margin:0 auto"
+    feed = site_hub_feed.render_feed_page([], {"available": False, "running": False}, "tok")
+    docs = {
+        "portal": site_portal.render_portal([]),
+        "feed": feed,
+        "page": site.page("t", "<p>b</p>"),
+        "backlog": render_backlog(),
+    }
+    for name, doc in docs.items():
+        assert shell in doc, name
+        assert "max-width:1100px" not in doc and "max-width:960px" not in doc, name
+        assert site.THEME_CSS in doc, name  # the same control-room stylesheet as the catalog
+    assert "<body class=portal>" in docs["portal"] and "<body class=portal>" in feed

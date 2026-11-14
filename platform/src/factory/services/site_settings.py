@@ -25,15 +25,16 @@ from factory.errors import FactoryError
 from factory.services.context import Project
 from factory.services.feed import current_config
 from factory.services.feed_categories import CategoryProposal, propose_categories
+from factory.services.site import page
 from factory.services.site_chrome import with_bar
 from factory.services.site_portal import _CSS as PORTAL_CSS
 
 _CSS: Final = (
-    "table{border-collapse:collapse;margin:8px 0}td,th{border:1px solid var(--line);padding:4px 10px;"
-    "text-align:left}th{color:var(--mut);font-weight:600}.pick{color:var(--acc);font-weight:600}"
-    ".box{background:var(--card);border:1px solid var(--line);padding:10px 14px;margin:10px 0}"
+    "table{border-collapse:collapse;margin:8px 0}td,th{border:1px solid var(--mut);padding:4px 10px;"
+    "text-align:left}th{color:var(--dim);font-weight:600}.pick{color:var(--ac);font-weight:600}"
+    ".box{background:var(--card);border:1px solid var(--mut);padding:10px 14px;margin:10px 0}"
     "button{padding:4px 12px}button:disabled{opacity:.45;cursor:not-allowed}"
-    ".msg{color:var(--mut);font-size:13px}.err{color:var(--warn)}"
+    ".msg{color:var(--dim);font-size:13px}.err{color:var(--amber)}"
 )
 
 _SCRIPT: Final = """
@@ -128,10 +129,10 @@ def render_settings(project: Project, slug: str) -> str:
         "<p class=sub>Settings are recorded acts, made as the human; this page has no other store. "
         "<a href='/'>All projects</a></p>" + config_html + proposal_html
     )
-    return with_bar(
-        "<!doctype html><html lang=en><head><meta charset=utf-8>"
-        "<meta name=viewport content='width=device-width,initial-scale=1'>"
-        f"<title>Settings: {e(slug)}</title><style>{PORTAL_CSS}{_CSS}</style></head>"
-        f"<body class=portal><main>{body}</main><script>{_SCRIPT}</script></body></html>",
-        None,
+    doc = page(
+        f"Settings: {e(slug)}",
+        f"<main>{body}</main><script>{_SCRIPT}</script>",
+        PORTAL_CSS + _CSS,
+        body_class="portal",
     )
+    return with_bar(doc, None)
