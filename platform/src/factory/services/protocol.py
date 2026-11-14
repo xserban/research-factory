@@ -93,19 +93,25 @@ class ProtocolVersion(StrictModel):
     press: Literal["none", "reviewed", "confirmed"]
 
 
-def miner_fields(project: Project) -> dict[tuple[str, int], tuple[str, ...]]:
-    """The field names of every registered miner, by `(name, version)` (the `miners` table)."""
+def miner_fields(
+    project: Project, pending: MinerSpec | None = None
+) -> dict[tuple[str, int], tuple[str, ...]]:
+    """The field names of every registered miner, by `(name, version)` (the `miners` table);
+    `pending` (a spec not yet registered) is counted as registered, for a dry run."""
     from factory.mining.spec import spec_from_json  # a leaf module; keeps protocol import-light
 
     project.index.sync()
     with project.index.connect() as conn:
         rows = conn.execute(text("SELECT name, version, spec_blob FROM miners")).all()
-    return {
+    out = {
         (str(name), int(version)): tuple(
             f.name for f in spec_from_json(project.blobs.get_json(str(blob))).fields
         )
         for name, version, blob in rows
     }
+    if pending is not None:
+        out.setdefault((pending.name, pending.version), tuple(f.name for f in pending.fields))
+    return out
 
 
 def miner_extraction_schema(use: MinerUse, fields: tuple[str, ...]) -> ExtractionSchema:
@@ -180,6 +186,15 @@ def _registered_spec(project: Project, name: str, version: int) -> MinerSpec | N
     return None if blob is None else spec_from_json(project.blobs.get_json(str(blob)))
 
 
+def _spec_or_pending(
+    project: Project, name: str, version: int, pending: MinerSpec | None
+) -> MinerSpec | None:
+    found = _registered_spec(project, name, version)
+    if found is None and pending is not None and (pending.name, pending.version) == (name, version):
+        return pending
+    return found
+
+
 def registered_taxonomy_versions(project: Project) -> set[tuple[str, int]]:
     """Every registered taxonomy `(name, version)` (the `taxonomies` table, read directly like
     `miner_fields`)."""
@@ -190,26 +205,28 @@ def registered_taxonomy_versions(project: Project) -> set[tuple[str, int]]:
 
 
 def miner_taxonomy_refs(
-    project: Project, spec: ProtocolSpec
+    project: Project, spec: ProtocolSpec, pending: MinerSpec | None = None
 ) -> dict[tuple[str, int], tuple[str, int]]:
     """For each listed miner whose registered spec has a taxonomy reference, the referenced
     `(name, version)`."""
     out: dict[tuple[str, int], tuple[str, int]] = {}
     for use in spec.miners or ():
-        miner = _registered_spec(project, use.name, use.version)
+        miner = _spec_or_pending(project, use.name, use.version, pending)
         if miner is not None and miner.taxonomy is not None:
             out[(use.name, use.version)] = (miner.taxonomy.name, miner.taxonomy.version)
     return out
 
 
-def layer_miner_versions(project: Project, spec: ProtocolSpec) -> set[tuple[str, int]]:
+def layer_miner_versions(
+    project: Project, spec: ProtocolSpec, pending: MinerSpec | None = None
+) -> set[tuple[str, int]]:
     """The listed miner versions that are layer miners: derived miners whose taxonomy includes a
     dimension of layer scheme (dimension zero)."""
     from factory.services.taxonomies import registered_taxonomy  # imports this module's peers
 
     out: set[tuple[str, int]] = set()
     for use in spec.miners or ():
-        miner = _registered_spec(project, use.name, use.version)
+        miner = _spec_or_pending(project, use.name, use.version, pending)
         ref = None if miner is None else miner.taxonomy
         if ref is None:
             continue
@@ -487,6 +504,42 @@ class AmendResult(StrictModel):
     to_version: str
     stale_rules: list[StaleRule]
     prose_only: bool
+
+
+def amendment_issues(
+    project: Project, actor: Actor, spec: ProtocolSpec, pending: MinerSpec | None = None
+) -> list[ValidationIssue]:
+    """The issues that would refuse amending the ready protocol to `spec` on its content (the
+    admission and protocol rules `amend_protocol` runs), writing nothing; `pending`, a miner spec
+    not yet registered, counts as registered. Does not run the review gate."""
+    current = current_protocol(project)
+    question = current_question(project)
+    if current is None or current.status is not ProtocolStatus.READY:
+        return [ValidationIssue("protocol", "only a ready protocol can be amended")]
+    if question is None:
+        return [ValidationIssue("question", "record a question before amending")]
+    admission = agent_admission_issues(actor, current.spec, spec)
+    if admission:
+        return list(admission)
+    spec_question = get_question(project, spec.question_id)
+    if spec_question is None:
+        return [ValidationIssue("question_id", "unknown question")]
+    check = protocol_issues(
+        spec,
+        question=spec_question,
+        current_question_id=question.question_id,
+        mode=indexed_rigor_mode(project),
+        seeds=all_seeds(project),
+        probes=_measured_probes(project),
+        known_sources=set(default_sources()),
+        window_sources=window_filter_sources(),
+        registered_miners=set(miner_fields(project, pending)),
+        calibrated_miners=calibrated_miners(project, spec),
+        layer_miners=layer_miner_versions(project, spec, pending),
+        registered_taxonomies=registered_taxonomy_versions(project),
+        miner_taxonomies=miner_taxonomy_refs(project, spec, pending),
+    )
+    return [*check.errors, *check.gaps]
 
 
 def amend_protocol(

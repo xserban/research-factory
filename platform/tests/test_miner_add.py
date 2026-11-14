@@ -115,3 +115,39 @@ def test_a_system_actor_is_refused(project: Project, human: Actor, world: list[s
     with pytest.raises(FactoryValidationError) as raised:
         add_miner(project, system, _doc())
     assert raised.value.issues[0].field == "actor"
+
+
+def test_a_use_that_breaks_a_protocol_rule_is_refused_with_nothing_registered(
+    project: Project, human: Actor, world: list[str]
+) -> None:
+    before = _events(project)
+    bad = _doc(layers=["l1"])  # layers need a listed layer miner
+    for check_only in (True, False):
+        with pytest.raises(FactoryValidationError) as raised:
+            add_miner(project, human, bad, check_only=check_only)
+        assert any(i.field.endswith(".layers") for i in raised.value.issues)
+        assert registered_miner(project, VISION_NAME, 1) is None
+        assert _events(project) == before
+    # a corrected file is then accepted (no half-registered state blocks it)
+    assert add_miner(project, human, _doc()).listed
+
+
+def test_replacing_another_version_names_the_dropped_settings(
+    project: Project, human: Actor, world: list[str]
+) -> None:
+    add_miner(project, human, _doc(dual_extract_sample=0.5))
+    v2: dict[str, JsonValue] = {"spec": spec_to_json(method_vision(version=2))}
+    result = add_miner(project, human, v2)
+    assert result.replaced_version == 1
+    assert any("version 1" in n and "dual_extract_sample 0.5 -> 1.0" in n for n in result.notes)
+
+
+def test_readding_with_changed_settings_says_so(
+    project: Project, human: Actor, world: list[str]
+) -> None:
+    add_miner(project, human, _doc(dual_extract_sample=0.5))
+    before = _events(project)
+    result = add_miner(project, human, _doc(dual_extract_sample=0.25))
+    assert not result.listed and _events(project) == before
+    assert any("other use settings" in n and "0.5 -> 0.25" in n for n in result.notes)
+    assert add_miner(project, human, _doc(dual_extract_sample=0.5)).notes == []

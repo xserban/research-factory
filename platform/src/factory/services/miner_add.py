@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from pydantic import JsonValue, ValidationError
+from pydantic import Field, JsonValue, ValidationError
 
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
@@ -35,7 +35,7 @@ from factory.model.miners import MinerUse
 from factory.model.protocol import ProtocolStatus
 from factory.services.context import Project
 from factory.services.mining import _taxonomy_issues, register_miner, registered_row
-from factory.services.protocol import amend_protocol, current_protocol
+from factory.services.protocol import amend_protocol, amendment_issues, current_protocol
 
 __all__ = ["MinerAdded", "add_miner"]
 
@@ -50,6 +50,16 @@ _USE_KEYS = (
 )
 
 
+def _differences(old: MinerUse, new: MinerUse) -> str:
+    """The use settings in which `old` and `new` differ, as `key old -> new`."""
+    a, b = old.model_dump(mode="json"), new.model_dump(mode="json")
+    return ", ".join(
+        f"{k} {a[k]!r} -> {b[k]!r}"
+        for k in sorted(a)
+        if k not in ("name", "version") and a[k] != b[k]
+    )
+
+
 class MinerAdded(StrictModel):
     """What `add_miner` did (or, with `checked_only`, would do)."""
 
@@ -62,6 +72,7 @@ class MinerAdded(StrictModel):
     page: str
     hub_page: str
     checked_only: bool
+    notes: list[str] = Field(default_factory=list)
 
 
 def _refuse(field: str, reason: str) -> FactoryValidationError:
@@ -148,7 +159,28 @@ def add_miner(
         )
     uses = tuple(protocol.spec.miners or ())
     already = any((u.name, u.version) == (spec.name, spec.version) for u in uses)
-    replaced = next((u.version for u in uses if u.name == spec.name and not already), None)
+    replaced_use = next((u for u in uses if u.name == spec.name and not already), None)
+    replaced = None if replaced_use is None else replaced_use.version
+    notes: list[str] = []
+    if replaced_use is not None:
+        dropped = _differences(replaced_use, use)
+        notes.append(
+            f"replaces version {replaced_use.version}'s use"
+            + (f"; its settings dropped: {dropped}" if dropped else "")
+        )
+    same = next((u for u in uses if (u.name, u.version) == (spec.name, spec.version)), None)
+    if same is not None and same != use:
+        notes.append(
+            f"already listed with other use settings ({_differences(same, use)}); "
+            "the listed ones are kept and the file's are ignored"
+        )
+    kept = tuple(u for u in uses if u.name != spec.name)
+    if not already:
+        blockers = amendment_issues(
+            project, actor, protocol.spec.model_copy(update={"miners": (*kept, use)}), spec
+        )
+        if blockers:
+            raise FactoryValidationError(blockers)
     page = f"miners/{spec.name}.html"
     result = MinerAdded(
         name=spec.name,
@@ -160,12 +192,12 @@ def add_miner(
         page=page,
         hub_page=f"/p/{project.paths.slug}/{page}",
         checked_only=check_only,
+        notes=notes,
     )
     if check_only:
         return result
     register_miner(project, actor, raw_spec)
     if not already:
-        kept = tuple(u for u in uses if u.name != spec.name)
         why = (reason or file_reason or "").strip() or (
             f"list miner {spec.name} version {spec.version}"
         )
