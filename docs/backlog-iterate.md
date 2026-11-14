@@ -242,3 +242,11 @@ Minor review findings parked during the v1 build, to address when iterating from
 - `cli/render.py`: the `outdated` count is appended to the convert summary only when non-zero, so the line format varies.
 - `ConvertOutcome` `outdated` has no reason field; the "use --upgrade" hint exists only in the CLI renderer.
 - `runner._recorded_exploratory` reads the whole event log on each resume.
+
+## Branch `low-hanging-2` review minors (2026-11-14)
+- Explorer `cited_in_corpus`: None vs 0 is decided project-wide (any reference extraction exists), not per work; a work whose citers were never extracted shows 0.
+- `prisma_flow` and `full_text_boxes` call `exclusion_criteria` and then `background_works`, which re-runs `final_outcomes` (double cost).
+- `snowball._scope` appends background sources after the included ones (each group sorted, not the whole list); check any hash taken over `sources`.
+- `full_text_boxes` takes `unresolved` from the non-recorded `_load` and outcomes from the recorded one; the identity holds only because `pending` is computed by subtraction.
+- Pre-existing, seen in the IDEA-19 review: `feed_run` and other default-flag tools withhold a held-out seed's stated arXiv id or DOI in their output, so a feed entry that is a held-out seed shows `[withheld]`; decide whether tools that list papers should use `include_work_ids=False` (decision 37 item 9).
+- `usage_limit` rule 1 reads plain log lines; a log that echoes the prompt or quotes the limit phrase in plain text would be a false positive (not seen in 100 normal pilot logs).
