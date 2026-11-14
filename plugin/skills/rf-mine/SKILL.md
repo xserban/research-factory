@@ -30,7 +30,9 @@ Running a pass:
 
 1. Call `mine_status` to see units, open, closed, rows and stale for your miner.
 2. Call `mine_next` with `miner`, `version` and `pass_label`. Read `blocked` if no task comes and
-   report it. Add `calibration` for the miner's calibration pass.
+   report it. Add `calibration` for the miner's calibration pass. A production pass of a version
+   with no passed calibration is refused unless you add `exploratory` true, and only when the
+   researcher has asked for an exploratory run (its rows carry no quality claim).
 3. Read the anchors the task names with `document_read`, at the pinned conversion.
 4. Call `mine_record` with one row per item found. Each value comes from the document, with its
    anchor and verbatim quote. Never compute, convert or infer a value.

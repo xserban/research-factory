@@ -150,6 +150,7 @@ from factory.services import leads as leads_service
 from factory.services import lineage as graph_service
 from factory.services import matching as matching_service
 from factory.services import methods as methods_service
+from factory.services import miner_add as miner_add_service
 from factory.services import miner_gold as miner_gold_service
 from factory.services import miner_report as miner_report_service
 from factory.services import miners as miners_service
@@ -2507,6 +2508,42 @@ def miner_register_cmd(
         project = _resolve_project(state)
         registered = mining_service.register_miner(project, project.human_actor(), body)
     typer.echo(f"registered {registered.name} version {registered.version} ({registered.digest})")
+
+
+@miner_app.command("add")
+def miner_add_cmd(
+    ctx: typer.Context,
+    document: Annotated[
+        Path,
+        typer.Argument(help="A JSON file: {spec, use, reason}, or a bare miner specification."),
+    ],
+    check: Annotated[
+        bool, typer.Option("--check", help="Validate and report; write nothing.")
+    ] = False,
+    reason: Annotated[
+        str | None, typer.Option("--reason", help="The protocol amendment's reason.")
+    ] = None,
+) -> None:
+    """Validate, register and list a miner in one step, and name its hub page (IDEA-51)."""
+    state = _state(ctx)
+    try:
+        body = json.loads(document.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        _fail(f"{document}: cannot read a JSON file ({exc})", 1)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        added = miner_add_service.add_miner(
+            project, project.human_actor(), body, reason=reason, check_only=check
+        )
+    verb = ("would register", "would list") if check else ("registered", "listed")
+    label = f"{added.name} version {added.version}"
+    typer.echo(f"{verb[0] if added.registered else 'already registered'} {label}")
+    if added.listed:
+        extra = f" (replaces version {added.replaced_version})" if added.replaced_version else ""
+        typer.echo(f"{verb[1]} in the protocol{extra}")
+    else:
+        typer.echo("already listed in the protocol")
+    typer.echo(f"page: {added.page} (main hub: {added.hub_page})")
 
 
 @miner_app.command("adopt")

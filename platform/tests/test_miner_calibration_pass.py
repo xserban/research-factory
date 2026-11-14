@@ -127,14 +127,16 @@ def test_production_session_cannot_calibrate_and_back(
 ) -> None:
     _setup(project, agent, human)
     producer = miner_actor(SESSION_M1, "claude-opus-5-5")
-    mine_next(project, producer, VISION_NAME, 1, A)  # joins a production pass
+    mine_next(project, producer, VISION_NAME, 1, A, exploratory=True)  # joins a production pass
     with pytest.raises(FactoryValidationError) as raised:
         mine_next(project, producer, VISION_NAME, 1, A, calibration=True)
     assert raised.value.issues[0].field == "session"
     judge = miner_actor(SESSION_C, "claude-sonnet-5-5")
     assert _calibrate(project, judge)
     with pytest.raises(FactoryValidationError) as raised:
-        mine_next(project, judge, VISION_NAME, 1, A)  # a calibration session does not produce
+        mine_next(
+            project, judge, VISION_NAME, 1, A, exploratory=True
+        )  # a calibration session does not produce
     assert raised.value.issues[0].field == "session"
 
 
@@ -226,7 +228,9 @@ def test_units_queued_for_production_before_the_draw_are_calibrated_apart(
     register_miner(project, PROPOSER, spec_to_json(spec))
     list_miner(project, agent, spec)
     producer = miner_actor(SESSION_M1, "claude-opus-5-5")
-    held = mine_next(project, producer, VISION_NAME, 1, A).batch  # queues every unit, claims one
+    held = mine_next(
+        project, producer, VISION_NAME, 1, A, exploratory=True
+    ).batch  # queues every unit, claims one
     assert held is not None
     drawn = draw_miner_calibration(project, human, VISION_NAME, 1, random_seed=2)
     assert held.records[0]["work_id"] not in {u.work_id for u in drawn.units}

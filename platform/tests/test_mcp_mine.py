@@ -73,7 +73,13 @@ async def test_register_list_and_a_full_record_through_the_tools(
     list_miner(project, agent)  # the researcher lists it in the protocol
     async with open_session(settings, clock) as client:
         served = await client.call(
-            "mine_next", project="demo", miner=VISION_NAME, version=1, pass_label="A", **AGENT
+            "mine_next",
+            project="demo",
+            miner=VISION_NAME,
+            version=1,
+            pass_label="A",
+            exploratory=True,
+            **AGENT,
         )
         assert served["ok"] is True, served
         batch = served["data"]["batch"]

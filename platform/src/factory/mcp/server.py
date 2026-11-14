@@ -1945,6 +1945,7 @@ def build_server(
         model: str,
         skill: str,
         calibration: bool = False,
+        exploratory: bool = False,
     ) -> dict[str, JsonValue]:
         """Serve the next task of pass A or B of a registered miner to this session, or say why
         none is served. The miner must be registered and listed in the protocol's `miners`
@@ -1953,7 +1954,9 @@ def build_server(
         selects; `blocked` says why ordinary work waits. Joins this session to the miner's pass on
         its first call. With `calibration` the pass is the miner's calibration pass (pass A): the
         units of its drawn sample only, for a session that neither proposed the miner, nor took
-        part in a production pass, nor recorded a gold label."""
+        part in a production pass, nor recorded a gold label. A production pass is refused for a
+        version with no passed calibration unless `exploratory` is true (no quality claim; the
+        task carries the mark)."""
 
         def serve() -> JsonValue:
             with unit_cap.serving() as done:
@@ -1962,7 +1965,13 @@ def build_server(
                 _require_pass_opened(opened, "miner")
                 actor = make_agent_actor(settings, session, role, model, skill)
                 served = mining_service.mine_next(
-                    opened, actor, miner, version, label, calibration=calibration
+                    opened,
+                    actor,
+                    miner,
+                    version,
+                    label,
+                    calibration=calibration,
+                    exploratory=exploratory,
                 )
                 dumped = served.model_dump(mode="json")
                 done(dumped)

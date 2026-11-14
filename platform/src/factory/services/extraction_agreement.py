@@ -188,6 +188,9 @@ class ExtractionAgreement(StrictModel):
     unmatched_slots: int = 0
     overall_all_rows: float | None = None
     """`overall` with the unmatched rows counted against it (IDEA-69 (2), see `_tally`)."""
+    evidence_overlap: float | None = None
+    """The token-overlap threshold under which free-quote fields were compared by evidence
+    overlap (IDEA-52), or None: exact. The disagreement list below is always the exact one."""
     disagreements: list[FieldDisagreement]
     """Unresolved disagreements only."""
     resolved: int
@@ -206,6 +209,8 @@ class AgreementOverall(StrictModel):
     rows_unmatched: int
     unmatched_slots: int = 0
     overall_all_rows: float | None = None
+    evidence_overlap: float | None = None
+    """The evidence-overlap threshold the rates were computed under, or None (exact)."""
 
 
 class FinalField(StrictModel):
@@ -329,17 +334,64 @@ def _normalised(definition: FieldDef | None, f: StoredField) -> tuple[str, str]:
     return normalise_text(str(f.value)), unit
 
 
-def _same(definition: FieldDef | None, fa: StoredField, fb: StoredField) -> bool:
+def is_free_quote(definition: FieldDef | None) -> bool:
+    """Whether a field is a free quote: text checked against its evidence, with no fixed values
+    (a quote or citation field; not an enum, an anchor or a number)."""
     return (
-        fa.reported_in is fb.reported_in
-        and fa.reproduced == fb.reproduced
-        and _normalised(definition, fa) == _normalised(definition, fb)
+        definition is not None
+        and definition.kind is FieldKind.TEXT
+        and definition.check is Check.TEXT_IN_QUOTE
+        and not definition.allowed
     )
 
 
-def same_field(definition: FieldDef | None, fa: StoredField, fb: StoredField) -> bool:
-    """Whether two stored fields agree under plan D's rule (also the calibration score's)."""
-    return _same(definition, fa, fb)
+def _tokens(f: StoredField) -> frozenset[str]:
+    return frozenset(normalise_text(f.quote or str(f.value)).split())
+
+
+def evidence_overlaps(fa: StoredField, fb: StoredField, threshold: float) -> bool:
+    """Whether two free-quote fields rest on the same evidence (IDEA-52). True when they cite the
+    same anchor, or one normalised quote contains the other (the platform stores no character
+    offsets, so containment is its span overlap), or the normalised token sets overlap by at
+    least `threshold` (intersection over union). A field with neither a quote nor a value of
+    tokens overlaps nothing but its own anchor. Pure and symmetric."""
+    if fa.anchor is not None and fa.anchor == fb.anchor:
+        return True
+    qa = normalise_text(fa.quote or str(fa.value))
+    qb = normalise_text(fb.quote or str(fb.value))
+    if not qa or not qb:
+        return False
+    if qa in qb or qb in qa:
+        return True
+    ta, tb = _tokens(fa), _tokens(fb)
+    return len(ta & tb) / len(ta | tb) >= threshold
+
+
+def _same(
+    definition: FieldDef | None,
+    fa: StoredField,
+    fb: StoredField,
+    overlap: float | None = None,
+) -> bool:
+    """Plan D's rule; with `overlap` (a threshold), a free-quote field also agrees when the two
+    quotes rest on the same evidence (`evidence_overlaps`). Off (None) by default."""
+    if fa.reported_in is not fb.reported_in or fa.reproduced != fb.reproduced:
+        return False
+    if _normalised(definition, fa) == _normalised(definition, fb):
+        return True
+    return overlap is not None and is_free_quote(definition) and evidence_overlaps(fa, fb, overlap)
+
+
+def same_field(
+    definition: FieldDef | None,
+    fa: StoredField,
+    fb: StoredField,
+    *,
+    evidence_overlap: float | None = None,
+) -> bool:
+    """Whether two stored fields agree under plan D's rule (also the calibration score's); with
+    `evidence_overlap` a threshold, free-quote fields compare by evidence overlap (IDEA-52)."""
+    return _same(definition, fa, fb, evidence_overlap)
 
 
 def _compare(
@@ -797,11 +849,13 @@ def _unmatched(state: _State, names: Collection[str]) -> tuple[int, int]:
     return slots, values
 
 
-def _tally(state: _State) -> _Tally:
-    """Per-group and overall agreement over the compared fields of aligned rows, and the row
-    counts: aligned pairs, and row keys of dual works that do not align (one pass only, or a
-    pass holding the key twice). `overall_all_rows` adds the compared values of the unmatched
-    slots (`_unmatched`) to the denominator: a row only one pass wrote never agrees."""
+def _tally(state: _State, evidence_overlap: float | None = None) -> _Tally:
+    """Per-group and overall agreement over the compared fields of aligned rows (with
+    `evidence_overlap`, a free-quote field also agrees when its quotes rest on the same
+    evidence, IDEA-52; the exact comparison otherwise), and the row counts: aligned pairs, and
+    row keys of dual works that do not align (one pass only, or a pass holding the key twice).
+    `overall_all_rows` adds the compared values of the unmatched slots (`_unmatched`) to the
+    denominator: a row only one pass wrote never agrees."""
     groups: dict[str, list[int]] = {}
     compared_fields = set(_compared_fields(state.schema, state.pack))
     for definition in state.pack.fields:
@@ -812,7 +866,13 @@ def _tally(state: _State) -> _Tally:
             found = state.pack.field(name)
             counts = groups.setdefault(found.group if found else "other", [0, 0])
             counts[0] += 1
-            counts[1] += disagreement is None
+            agreed_here = disagreement is None
+            if not agreed_here and evidence_overlap is not None and pair.aligned:
+                fa, fb = pair.a[0].fields.get(name), pair.b[0].fields.get(name)
+                agreed_here = (
+                    fa is not None and fb is not None and _same(found, fa, fb, evidence_overlap)
+                )
+            counts[1] += agreed_here
     rates = [
         GroupRate(group=g, compared=c, agreed=a, rate=a / c if c else None)
         for g, (c, a) in groups.items()
@@ -830,7 +890,12 @@ def _tally(state: _State) -> _Tally:
     )
 
 
-def agreement_overall(project: Project, *, scope: ScopeKey = Scope.EVIDENCE) -> AgreementOverall:
+def agreement_overall(
+    project: Project,
+    *,
+    scope: ScopeKey = Scope.EVIDENCE,
+    evidence_overlap: float | None = None,
+) -> AgreementOverall:
     """Overall agreement, the dual and single work counts and the row counts. Read-only, needs
     no actor and never raises.
 
@@ -847,7 +912,7 @@ def agreement_overall(project: Project, *, scope: ScopeKey = Scope.EVIDENCE) -> 
         state = None
     if state is None:
         return AgreementOverall(overall=None, dual=0, single=0, rows_aligned=0, rows_unmatched=0)
-    tally = _tally(state)
+    tally = _tally(state, evidence_overlap)
     withheld = state.blocking or not state.known
     return AgreementOverall(
         overall=None if withheld else tally.overall,
@@ -857,11 +922,16 @@ def agreement_overall(project: Project, *, scope: ScopeKey = Scope.EVIDENCE) -> 
         rows_unmatched=tally.rows_unmatched,
         unmatched_slots=tally.unmatched_slots,
         overall_all_rows=None if withheld else tally.overall_all_rows,
+        evidence_overlap=evidence_overlap,
     )
 
 
 def extraction_agreement(
-    project: Project, actor: Actor, *, scope: ScopeKey = Scope.EVIDENCE
+    project: Project,
+    actor: Actor,
+    *,
+    scope: ScopeKey = Scope.EVIDENCE,
+    evidence_overlap: float | None = None,
 ) -> ExtractionAgreement:
     """The agreement of the two extraction passes, with the unresolved disagreements (both
     fields shown), the resolved and dropped items and the single-extraction works. Read-only.
@@ -889,7 +959,7 @@ def extraction_agreement(
             "extraction units are still open, stale or queued; agreement waits until both "
             "passes finish"
         )
-    tally = _tally(state)
+    tally = _tally(state, evidence_overlap)
     return ExtractionAgreement(
         passes=views,
         dual_works=len(state.dual),
@@ -899,6 +969,7 @@ def extraction_agreement(
         overall=tally.overall,
         unmatched_slots=tally.unmatched_slots,
         overall_all_rows=tally.overall_all_rows,
+        evidence_overlap=evidence_overlap,
         disagreements=[d for p in state.pairs for d in p.open],
         resolved=sum(p.resolved for p in state.pairs),
         dropped=[d for p in state.pairs for d in p.dropped],

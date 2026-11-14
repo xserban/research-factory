@@ -57,7 +57,7 @@ def vision_result(**over: Any) -> MinerSpec:
             MinerField("evidence", "evidence", QuoteKind(), compared=False),
         ),
         row_key_fields=("metric",),
-        row_anchor_fields=("metric",),
+        row_anchor_fields=(),
         conditionals=(),
         evidence=EvidenceRule(1, True),
         procedure="rf-extract",
@@ -139,7 +139,7 @@ def mine_pass(
     the works mined."""
     done: list[str] = []
     for _ in range(100):
-        batch = mine_next(project, actor, name, version, label).batch
+        batch = mine_next(project, actor, name, version, label, exploratory=True).batch
         if batch is None:
             return done
         work = batch.records[0]["work_id"]
