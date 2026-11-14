@@ -125,3 +125,9 @@ def test_a_title_cannot_break_out_of_the_embedded_data() -> None:
     data = lifecycle_data(works, {})
     payload = json.dumps(data, ensure_ascii=False).replace("</", "<\\/")
     assert "</script>" not in payload
+
+
+def test_each_stage_row_links_to_the_steps_page(project: Project, tmp_path: Path) -> None:
+    next(p for p in site.products() if p.id == "lifecycle").build(project, tmp_path)
+    page = (tmp_path / "index.html").read_text(encoding="utf-8")
+    assert "../steps/index.html#stage-literature-review" in page
