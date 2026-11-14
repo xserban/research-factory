@@ -246,5 +246,12 @@ All four fixed on `low-hanging-2` (merged dbe3d01): `indexed_rigor_mode` public 
 - `snowball._scope` appends background sources after the included ones (each group sorted, not the whole list); check any hash taken over `sources`.
 - `full_text_boxes` takes `unresolved` from the non-recorded `_load` and outcomes from the recorded one; the identity holds only because `pending` is computed by subtraction.
 - `runner._recorded_exploratory` reads the whole event log on each resume (from the `low-hanging` review).
-- Ruled 2026-11-14 (researcher: feed shows ids; build on branch `low-hanging-3`). Pre-existing, seen in the IDEA-19 review: `feed_run` and other default-flag tools withhold a held-out seed's stated arXiv id or DOI in their output, so a feed entry that is a held-out seed shows `[withheld]`; decide whether tools that list papers should use `include_work_ids=False` (decision 37 item 9).
+- Ruled 2026-11-14 (researcher: feed shows ids) and built on `low-hanging-3` (f59a24d: feed tools scrub only seed ids, `withholding.seed_id_tokens`; reviewed). Pre-existing, seen in the IDEA-19 review: `feed_run` and other default-flag tools withhold a held-out seed's stated arXiv id or DOI in their output, so a feed entry that is a held-out seed shows `[withheld]`; decide whether tools that list papers should use `include_work_ids=False` (decision 37 item 9).
 - `usage_limit` rule 1 reads plain log lines; a log that echoes the prompt or quotes the limit phrase in plain text would be a false positive (not seen in 100 normal pilot logs).
+
+## Branch `low-hanging-3` review minors (2026-11-14)
+- On an unhosted project an agent still holds `protocol:change` (`services/access.py` `AGENT_PROPOSES_ONLY` applies only when hosted), so it could declare a miner use exploratory through `protocol_amend` itself; the amendment is recorded under the agent with its reason. The same holds for every protocol change; the pilot is unhosted.
+- A use declared exploratory keeps its mark after its version passes calibration (and `evidence` stays refused) until the researcher amends it away; nothing prompts that.
+- `runner.started.exploratory` is fixed at start while task marks are read at serve time; an amendment during a run makes them differ (cosmetic).
+- `services/miners.py` `_candidates`: the `default_conversion` fallback is close to dead code now that requested works are excluded.
+- Test helper `mine_pass` declares the use exploratory (a protocol amendment) when the miner is uncalibrated; a test that asserts protocol versions after `mine_pass` would see one more.
