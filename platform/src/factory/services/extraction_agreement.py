@@ -354,20 +354,37 @@ def _tokens(f: StoredField) -> frozenset[str]:
 
 def evidence_overlaps(fa: StoredField, fb: StoredField, threshold: float) -> bool:
     """Whether two free-quote fields rest on the same evidence (IDEA-52). True when they cite the
-    same anchor, or one normalised quote contains the other (the platform stores no character
+    same anchor, or one normalised quote's tokens are a contiguous run of the other's (the platform stores no character
     offsets, so containment is its span overlap), or the normalised token sets overlap by at
     least `threshold` (intersection over union). A field with neither a quote nor a value of
-    tokens overlaps nothing but its own anchor. Pure and symmetric."""
+    tokens overlaps nothing but its own anchor. Containment is on token boundaries ("ion" is not in
+    "ionization energy"). Pure and symmetric."""
     if fa.anchor is not None and fa.anchor == fb.anchor:
         return True
     qa = normalise_text(fa.quote or str(fa.value))
     qb = normalise_text(fb.quote or str(fb.value))
     if not qa or not qb:
         return False
-    if qa in qb or qb in qa:
+    if _contains_tokens(qa.split(), qb.split()):
         return True
     ta, tb = _tokens(fa), _tokens(fb)
     return len(ta & tb) / len(ta | tb) >= threshold
+
+
+def _contains_tokens(a: Sequence[str], b: Sequence[str]) -> bool:
+    """Whether the shorter token list is a contiguous run inside the longer (token boundaries,
+    never a substring of a token)."""
+    short, long = (a, b) if len(a) <= len(b) else (b, a)
+    n = len(short)
+    return any(list(long[i : i + n]) == list(short) for i in range(len(long) - n + 1))
+
+
+def check_overlap_threshold(threshold: float | None) -> None:
+    """Refuse an evidence-overlap threshold outside `0 < t <= 1` (None means off)."""
+    if threshold is not None and not 0 < threshold <= 1:
+        raise FactoryValidationError(
+            [ValidationIssue("evidence_overlap", "must be greater than 0 and at most 1")]
+        )
 
 
 def _same(
@@ -871,7 +888,9 @@ def _tally(state: _State, evidence_overlap: float | None = None) -> _Tally:
     evidence, IDEA-52; the exact comparison otherwise), and the row counts: aligned pairs, and
     row keys of dual works that do not align (one pass only, or a pass holding the key twice).
     `overall_all_rows` adds the compared values of the unmatched slots (`_unmatched`) to the
-    denominator: a row only one pass wrote never agrees."""
+    denominator: a row only one pass wrote never agrees. Refuses a threshold outside
+    `0 < t <= 1`."""
+    check_overlap_threshold(evidence_overlap)
     groups: dict[str, list[int]] = {}
     compared_fields = set(_compared_fields(state.schema, state.pack))
     for definition in state.pack.fields:

@@ -169,3 +169,24 @@ def test_the_pass_agreement_differs_and_the_default_is_exact() -> None:
     assert overlap.overall == pytest.approx((4 + 6) / 12)
     assert (overlap.rows_aligned, overlap.rows_unmatched) == (6, 0)
     assert [g.compared for g in overlap.rates] == [g.compared for g in exact.rates]
+
+
+def test_containment_is_on_token_boundaries() -> None:
+    assert not evidence_overlaps(_f("ion", "s1.p1"), _f("ionization energy", "s2.p1"), 0.5)
+    assert not evidence_overlaps(_f("3", "s1.p1"), _f("13 samples", "s2.p1"), 0.5)
+    # a contained phrase still overlaps, at any threshold and in either order
+    short, long = _f("mean accuracy", "s1.p1"), _f("the mean accuracy over many runs", "s2.p1")
+    assert evidence_overlaps(short, long, 1.0) and evidence_overlaps(long, short, 1.0)
+    # the shorter's tokens must be contiguous in the longer
+    assert not evidence_overlaps(_f("mean runs", "s1.p1"), long, 1.0)
+
+
+@pytest.mark.parametrize("bad", [0.0, -0.1, 1.5])
+def test_the_threshold_is_bounded(bad: float) -> None:
+    from factory.errors import FactoryValidationError
+
+    with pytest.raises(FactoryValidationError):
+        score({}, {}, PACK, evidence_overlap=bad)
+    with pytest.raises(FactoryValidationError):
+        _tally(_state(PACK), bad)
+    assert score({}, {}, PACK, evidence_overlap=1.0).evidence_overlap == 1.0
