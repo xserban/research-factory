@@ -48,6 +48,7 @@ from factory.services.finders import ConflictPage, ContradictionView, GapReport
 from factory.services.flow_ledger import TOTAL, FlowCounts, LedgerRow
 from factory.services.flow_query import FlowPage
 from factory.services.flow_skipped import RunGap, SkippedRecord
+from factory.services.flow_trails import TrailStep
 from factory.services.fulltext import FetchSummary
 from factory.services.fulltext_import import ImportReport
 from factory.services.fulltext_status import FulltextStatus
@@ -1947,6 +1948,17 @@ def flow_works_lines(page: FlowPage) -> list[str]:
         lines.append("no work matches these filters")
     if page.next_cursor is not None:
         lines.append(f"next cursor: {page.next_cursor}")
+    return lines
+
+
+def flow_trail_lines(work_id: str, steps: Sequence[TrailStep]) -> list[str]:
+    """One line per step, in time order: its time, its kind, then its details."""
+    lines = [f"# Trail of {work_id}", ""]
+    for step in steps:
+        details = ", ".join(f"{key}: {value}" for key, value in step.d.items())
+        lines.append(f"- {step.at} {step.kind}" + (f" ({details})" if details else ""))
+    if not steps:
+        lines.append("no steps")
     return lines
 
 

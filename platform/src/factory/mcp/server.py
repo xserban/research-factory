@@ -1319,9 +1319,9 @@ def build_server(
         `update` adds the update flow of a living review: `last` (since the last snapshot) or a
         snapshot id (the update that snapshot closed). `by_source` adds the flow's counts per source
         group (`by_source`) and the ledger's reconciliation with the flow (`reconciles`, empty when
-        they agree); both are withheld with a notice until a screening pass opens. Refused to a
-        session that has joined a pass: the flow's included, pending and per-criterion exclusion
-        counts derive from the final outcomes (human labels and both passes)."""
+        they agree). Refused to a session that has joined a pass: the flow's included, pending and
+        per-criterion exclusion counts derive from the final outcomes (human labels and both
+        passes)."""
 
         def report() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
@@ -4769,10 +4769,9 @@ def build_server(
         duplicate), with its source group, its title/abstract state and its full-text state. Filter
         by `source_group` (as `report_prisma(by_source=true)` names them), by `step`
         (`title-abstract`, `full-text-retrieval` or `full-text`), by that step's `outcome`, and by
-        `criterion` (with `step`, and `outcome` `excluded`). Unknown filters are refused with the
-        field named. One page of `limit` (at most 50); `next_cursor` continues it. Withheld with a
-        notice until a screening pass opens. Read-only. Refused to a session that has joined a
-        pass."""
+        `criterion` (with `step`, and `outcome` `excluded`). Unknown filters, a cursor past the
+        end and a limit above 50 are refused with the field named. One page of `limit` (at most
+        50); `next_cursor` continues it. Read-only. Refused to a session that has joined a pass."""
 
         def listing() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
@@ -4793,8 +4792,7 @@ def build_server(
     def flow_skipped(project: str) -> dict[str, JsonValue]:
         """The raw records that never became works (`untitled`, `duplicate-within-run` or
         `unparsed`), and each query's runs against the total its source reported (`run_gaps`).
-        Withheld with a notice until a screening pass opens. Read-only. Refused to a session that
-        has joined a pass."""
+        Read-only. Refused to a session that has joined a pass."""
 
         def skipped() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
@@ -4802,6 +4800,20 @@ def build_server(
             return agent_view_service.flow_skipped_view(opened)
 
         return _reply(project, skipped, include_work_ids=False)
+
+    @server.tool()
+    def flow_trail(project: str, work_id: str) -> dict[str, JsonValue]:
+        """The trail of one work: what happened to it, in time order (where it was found, merges
+        and their reversal, screening and full-text decisions, and the extraction and claim counts),
+        read from the events. An unknown work id is refused with the field named. Read-only.
+        Refused to a session that has joined a pass."""
+
+        def trail() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            return agent_view_service.flow_trail_view(opened, work_id)
+
+        return _reply(project, trail, include_work_ids=False)
 
     @server.tool()
     def extraction_status(

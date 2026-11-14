@@ -3522,8 +3522,9 @@ def report_flow(
         if not _full_view(project):
             typer.echo(json.dumps(agent_view_service.by_source_view(project)))
             return
-        counts = flow_ledger_service.flow_by_source(project)
-        mismatches = flow_ledger_service.ledger_reconciles(project)
+        rows = flow_ledger_service.flow_ledger(project)
+        counts = flow_ledger_service.flow_by_source(project, rows)
+        mismatches = flow_ledger_service.ledger_reconciles(project, rows)
     if as_json:
         payload = {
             "by_source": {key: value.model_dump(mode="json") for key, value in counts.items()},
@@ -3591,6 +3592,27 @@ def report_flow_works(
             limit=limit,
         )
     typer.echo(page.model_dump_json() if as_json else "\n".join(render.flow_works_lines(page)))
+
+
+@report_app.command("flow-trail")
+def report_flow_trail(
+    ctx: typer.Context,
+    work_id: Annotated[str, typer.Argument(help="The work's id.")],
+    as_json: _JSON = False,
+) -> None:
+    """The trail of one work: what happened to it, in time order."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        if not _full_view(project):
+            typer.echo(json.dumps(agent_view_service.flow_trail_view(project, work_id)))
+            return
+        steps = flow_query_service.flow_trail(project, work_id)
+    if as_json:
+        payload = {"work_id": work_id, "steps": [step.model_dump(mode="json") for step in steps]}
+        typer.echo(json.dumps(payload))
+        return
+    typer.echo("\n".join(render.flow_trail_lines(work_id, steps)))
 
 
 @report_app.command("flow-skipped")

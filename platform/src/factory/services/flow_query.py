@@ -1,17 +1,18 @@
-"""The filtered, paged reading of the work ledger (flow transparency, task 7).
+"""The filtered, paged reading of the work ledger, and the trail of one work (flow transparency).
 
 Invariants:
 - Read-only: nothing is written, and the rows are those of `flow_ledger`, unchanged.
 - A row is selected under the conditions `flow_by_source` counts it under: a title/abstract
-  outcome only for a screened row (canonical, not a non-canonical promoted work), and a full-text
-  state or outcome for any row that has one. A filtered total therefore reconciles with the flow
-  table.
+  outcome only for a screened row (canonical, not an absorbed duplicate), and a full-text state or
+  outcome for any row that has one. A filtered total therefore reconciles with the flow table.
 - Every filter is validated before the page is cut. An unknown step, an outcome not of its step,
   an unknown source group or criterion, an outcome without a step, a criterion without a step or
-  with an outcome other than `excluded`, a malformed cursor and a non-positive limit each raise
-  `FactoryValidationError` with the field named, and nothing is returned.
+  with an outcome other than `excluded`, a malformed cursor, a cursor past the end of the listing,
+  a non-positive limit and a limit above `PAGE_LIMIT` each raise `FactoryValidationError` with the
+  field named, and nothing is returned.
 - Pages are offsets in the ledger order (by work id): the cursor is the decimal offset of the next
-  row, as `mcp.conventions.paginate` reads it.
+  row, as `mcp.conventions.paginate` reads it, except that a cursor past the end is refused.
+- The ledger is computed once per call; nothing is cached across calls.
 """
 
 import re
@@ -19,8 +20,10 @@ from typing import Final
 
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.model.base import StrictModel
+from factory.services.call_memo import memoised
 from factory.services.context import Project
 from factory.services.flow_ledger import LedgerRow, flow_ledger
+from factory.services.flow_trails import TrailStep, flow_trails
 
 PAGE_LIMIT: Final = 50
 TITLE_ABSTRACT: Final = "title-abstract"
@@ -33,6 +36,9 @@ STEPS: Final[dict[str, frozenset[str]]] = {
     FULL_TEXT: frozenset({"included", "excluded", "pending", "awaiting"}),
 }
 
+_ledger = memoised(flow_ledger)
+"""The ledger within an open call memo scope (`call_memo.entering`); a plain call otherwise."""
+
 
 class FlowPage(StrictModel):
     """One page of ledger rows; `next_cursor` continues the listing, None on the last page."""
@@ -44,7 +50,7 @@ class FlowPage(StrictModel):
 def _state_at(row: LedgerRow, step: str) -> str | None:
     """The state of a row at a step, as `flow_by_source` buckets it; None when it has none."""
     if step == TITLE_ABSTRACT:
-        if row.noncanonical_promoted or row.canonical_id is not None:
+        if row.canonical_id is not None:
             return None
         if row.ta_outcome is not None and row.ta_outcome.value in {"included", "excluded"}:
             return row.ta_outcome.value
@@ -121,6 +127,8 @@ def _check_shape(
         issues.append(ValidationIssue("cursor", "must be a decimal offset"))
     if limit < 1:
         issues.append(ValidationIssue("limit", "must be at least 1"))
+    elif limit > PAGE_LIMIT:
+        issues.append(ValidationIssue("limit", f"must be at most {PAGE_LIMIT}"))
     return issues
 
 
@@ -134,25 +142,34 @@ def flow_works(
     cursor: str | None = None,
     limit: int = PAGE_LIMIT,
 ) -> FlowPage:
-    """The ledger rows matching the filters, one page at a time (at most `PAGE_LIMIT`).
+    """The ledger rows matching the filters, one page at a time (`limit` at most `PAGE_LIMIT`).
 
     `step` is `title-abstract`, `full-text-retrieval` or `full-text`; `outcome` is one of that
     step's states; `criterion` needs a step and selects the rows excluded at it by that criterion.
-    Raises `FactoryValidationError` on any invalid filter.
+    Raises `FactoryValidationError` on any invalid filter, cursor or limit.
     """
     issues = _check_shape(step, outcome, criterion, cursor, limit)
     if issues:
         raise FactoryValidationError(issues)
-    rows = flow_ledger(project)
+    rows = _ledger(project)
     issues = _check_filters(rows, source_group, step, outcome, criterion)
     if issues:
         raise FactoryValidationError(issues)
-    start = 0 if cursor is None else int(cursor)
-    size = min(limit, PAGE_LIMIT)
     selected = [row for row in rows if _selected(row, source_group, step, outcome, criterion)]
-    page = selected[start : start + size]
-    following = str(start + size) if start + size < len(selected) else None
+    start = 0 if cursor is None else int(cursor)
+    if start >= len(selected) and cursor is not None:
+        raise FactoryValidationError([ValidationIssue("cursor", "is past the end of the listing")])
+    page = selected[start : start + limit]
+    following = str(start + limit) if start + limit < len(selected) else None
     return FlowPage(items=page, next_cursor=following)
+
+
+def flow_trail(project: Project, work_id: str) -> list[TrailStep]:
+    """The time-ordered trail of one work (see `flow_trails`). An id that names no work of the
+    ledger is refused as `unknown work id`; a work with no recorded step has an empty trail."""
+    if work_id not in {row.work_id for row in _ledger(project)}:
+        raise FactoryValidationError([ValidationIssue("work_id", "unknown work id")])
+    return flow_trails(project).get(work_id, [])
 
 
 __all__ = [
@@ -162,5 +179,6 @@ __all__ = [
     "STEPS",
     "TITLE_ABSTRACT",
     "FlowPage",
+    "flow_trail",
     "flow_works",
 ]
