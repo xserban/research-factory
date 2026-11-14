@@ -207,7 +207,9 @@ cv.addEventListener('mousemove',function(ev){
 cv.addEventListener('mouseleave',function(){hov=null;tip.style.display='none';need=true;if(reduce)draw()});
 cv.addEventListener('click',function(ev){
   var h=hit(ev);
-  if(h.d&&h.d.w.s)location.href=D.open+encodeURIComponent(h.d.w.s);
+  if(h.d&&h.d.w.s){var fp=window.factoryPanel;
+    if(fp&&ev.button===0&&!ev.ctrlKey&&!ev.metaKey&&!ev.shiftKey&&!ev.altKey)fp.open(h.d.w.s,cv);
+    else location.href=D.open+encodeURIComponent(h.d.w.s)}
   else if(h.ring>=0)location.href=D.links[h.ring];
 });
 /* theme and size */

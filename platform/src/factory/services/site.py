@@ -39,6 +39,7 @@ from factory.model.base import StrictModel
 from factory.services.context import Project
 from factory.services.site_charts import CHART_CSS, activity
 from factory.services.site_chrome import BAR_CSS, hub_bar
+from factory.services.site_panel import with_panel
 from factory.services.site_theme import LIGHT_CSS, THEME_SCRIPT, THEME_TOGGLE
 
 SITE_DIR: Final = "site"
@@ -685,7 +686,7 @@ THEME_CSS: Final = (
 
 def page(title: str, body: str, css: str = "") -> str:
     """A themed standalone page for a product that has no page of its own."""
-    return (
+    return with_panel(
         "<!doctype html><html lang=en><head><meta charset=utf-8>"
         "<meta name=viewport content='width=device-width,initial-scale=1'>"
         f"{THEME_SCRIPT}<title>{html.escape(title)}</title><style>{THEME_CSS}"

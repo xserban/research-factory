@@ -22,6 +22,7 @@ from __future__ import annotations
 
 from html import escape
 from pathlib import Path
+from urllib.parse import quote
 
 from factory.services.context import Project
 from factory.services.pipeline import CellState, PipelineStage, paper_progress, stages
@@ -200,12 +201,38 @@ def build_queue(project: Project, out: Path) -> None:
     )
 
 
+def _slugs(project: Project) -> dict[str, str]:
+    """Explorer slug by work id; empty when the corpus cannot be read (the titles then link out)."""
+    from factory.services.site_corpus import corpus_payload
+
+    try:
+        return {str(w["id"]): str(w["slug"]) for w in corpus_payload(project)["works"]}
+    except Exception:  # a title link must never take the page down
+        return {}
+
+
+def _title_link(item: QueueItem, slugs: dict[str, str]) -> str:
+    """The paper's title: the paper panel when its work is in the explorer, else its arXiv page,
+    else plain text."""
+    label = escape(item.title or item.entry_id)
+    if item.work_id and item.work_id in slugs:
+        href = escape(f"../explorer/index.html#open={quote(slugs[item.work_id], safe='')}")
+        return f"<a href='{href}'>{label}</a>"
+    if item.entry_id:
+        return (
+            f"<a href='https://arxiv.org/abs/{escape(quote(item.entry_id, safe='/'))}' "
+            f"target=_blank rel=noopener>{label}</a>"
+        )
+    return label
+
+
 def _body(work: WorkQueue, plan: list[PipelineStage], project: Project) -> str:
     progress = paper_progress(project, work.items, plan) if work.items else {}
+    slugs = _slugs(project) if work.items else {}
     return (
         "<h1>Work queue</h1>"
-        + _added_html(work.items)
-        + _progress_html(work.items, plan, progress)
+        + _added_html(work.items, slugs)
+        + _progress_html(work.items, plan, progress, slugs)
         + "<h2>Pending work</h2>"
         + _pending_html(work.pending, plan)
         + _interrupted_html(project)
@@ -269,7 +296,10 @@ def _interrupted_html(project: Project) -> str:
 
 
 def _progress_html(
-    items: list[QueueItem], plan: list[PipelineStage], progress: dict[str, dict[str, CellState]]
+    items: list[QueueItem],
+    plan: list[PipelineStage],
+    progress: dict[str, dict[str, CellState]],
+    slugs: dict[str, str] | None = None,
 ) -> str:
     """One row per added paper, one column per applicable stage with a per-paper reading."""
     columns = [s for s in plan if s.applies and s.key != "intuition"]
@@ -277,7 +307,7 @@ def _progress_html(
         return ""
     head = "".join(f"<th>{escape(s.label)}</th>" for s in columns)
     rows = "".join(
-        f"<tr><td>{escape(item.title or item.entry_id)}</td>"
+        f"<tr><td>{_title_link(item, slugs or {})}</td>"
         + "".join(
             f"<td><span class='cell {cell}'>{escape(cell)}</span></td>"
             for cell in (progress.get(item.entry_id, {}).get(s.key, "n/a") for s in columns)
@@ -291,13 +321,13 @@ def _progress_html(
     )
 
 
-def _added_html(items: list[QueueItem]) -> str:
+def _added_html(items: list[QueueItem], slugs: dict[str, str] | None = None) -> str:
     if not items:
         return "<p class=dim>No paper has been added from the feed yet.</p>"
     rows = "".join(
         "<tr>"
         f"<td>{escape(item.entry_id)}</td>"
-        f"<td>{escape(item.title)}</td>"
+        f"<td>{_title_link(item, slugs or {})}</td>"
         f"<td>{_stage_badge(item)}</td>"
         f"<td class=dim>{escape(item.detail)}</td>"
         f"<td class=dim>{escape(item.sent_at)}</td>"
