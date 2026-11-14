@@ -442,8 +442,10 @@ def final_outcomes(project: Project, *, stage: ScreeningStage = TA) -> dict[str,
     PENDING. At full text only the promoted works (title/abstract INCLUDED) have an outcome; every
     other work is PENDING, and so is an unresolved `cannot-assess` work (`cannot_assess_open`): it
     is awaiting classification until the researcher resolves it (IDEA-49), neither included nor
-    excluded. Title/abstract is unchanged: there `cannot-assess` promotes. An absorbed record that would be PENDING is left out: it awaits
-    nothing, so read with `.get` any work that may be absorbed."""
+    excluded. Title/abstract is unchanged: there `cannot-assess` promotes.
+
+    An absorbed record that would be PENDING is left out: it awaits nothing,
+    so read with `.get` any work that may be absorbed."""
     require_pass_stage(stage)
     labels = calibration_labels(project, stage=stage)
     calibration = set(calibration_items(project, stage=stage))
