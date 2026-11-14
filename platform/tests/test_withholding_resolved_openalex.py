@@ -72,3 +72,18 @@ def test_held_out_seed_without_work_adds_nothing(
     assert bare < full
     for _seed, oa in _ids(project, SeedRole.HELD_OUT):
         assert normalize_openalex(oa).lower() not in {t.lower() for t in bare}
+
+
+def test_held_out_pmid_is_a_token_in_both_modes(
+    project: Project, agent: Actor, mock_sources: SourcesFor, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _seed_six(project, agent, mock_sources)
+    held = _ids(project, SeedRole.HELD_OUT)[0][0]
+    records = [
+        s.model_copy(update={"pmid": "31452104" if s.seed_id == held.seed_id else None})
+        for s in all_seeds(project)
+    ]
+    monkeypatch.setattr(seeds_service, "all_seeds", lambda _p: records)
+    for include in (True, False):
+        tokens = held_out_tokens(project, include_work_ids=include)
+        assert "31452104" in tokens

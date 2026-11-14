@@ -74,10 +74,11 @@ def held_out_tokens(project: Project, include_work_ids: bool = True) -> set[str]
             doi=seed.doi,
             arxiv=seed.arxiv,
             openalex=seed.openalex,
+            pmid=seed.pmid,
         )
         tokens.add(seed.seed_id)
         tokens.update(stated.identity_keys().values())
-        tokens.update(value for value in (seed.doi, seed.arxiv, seed.openalex) if value)
+        tokens.update(value for value in (seed.doi, seed.arxiv, seed.openalex, seed.pmid) if value)
         if include_work_ids and seed.work_id:
             tokens.add(seed.work_id)
             resolved_of.append(seed.work_id)

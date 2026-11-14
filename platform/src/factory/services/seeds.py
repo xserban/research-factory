@@ -71,7 +71,7 @@ class SeedOutcome(StrictModel):
 
 
 _KIND_PREFIX = {SeedKind.POSITIVE: "SEED", SeedKind.NEGATIVE: "NEG"}
-_IDENTITY_FIELDS = ("arxiv", "doi", "openalex")
+_IDENTITY_FIELDS = ("arxiv", "doi", "openalex", "pmid")
 
 
 def add_seeds(
@@ -191,7 +191,8 @@ def _unresolved(
 
 
 def _lookup_query(spec: SeedSpec, purpose: QueryPurpose = QueryPurpose.PROBE) -> QuerySpec:
-    """The query that finds a seed: arXiv by id where one is known, else OpenAlex by DOI or id.
+    """The query that finds a seed: arXiv by id where one is known, else OpenAlex by DOI or id,
+    else PubMed by PMID (a seed with only a PMID).
 
     `purpose` is PROBE for the add-time lookup and SEED for an admission. The source adapters map
     SEED to the `seed-admission` provenance method.
@@ -209,6 +210,13 @@ def _lookup_query(spec: SeedSpec, purpose: QueryPurpose = QueryPurpose.PROBE) ->
             source="openalex",
             kind=QueryKind.FILTER,
             text=f"doi:{keys['doi']}",
+            purpose=purpose,
+        )
+    if "openalex" not in keys:
+        return QuerySpec(
+            source="pubmed",
+            kind=QueryKind.ID_LIST,
+            text=keys["pmid"],
             purpose=purpose,
         )
     return QuerySpec(
@@ -246,7 +254,7 @@ def _spec_issues(spec: SeedSpec, existing: list[tuple[str, SeedSpec]]) -> list[V
     """
     keys = spec.identity_keys()
     if not keys:
-        return [ValidationIssue("identifier", "give at least one of doi, arxiv or openalex")]
+        return [ValidationIssue("identifier", "give at least one of doi, arxiv, openalex or pmid")]
     for field in _IDENTITY_FIELDS:
         if field not in keys:
             continue
@@ -304,6 +312,7 @@ class SeedRecord(StrictModel):
     doi: str | None
     arxiv: str | None
     openalex: str | None
+    pmid: str | None
     work_id: str | None
     unresolved_reason: str | None
     role: SeedRole
@@ -593,6 +602,7 @@ def all_seeds(project: Project) -> list[SeedRecord]:
             doi=seed.spec.doi,
             arxiv=seed.spec.arxiv,
             openalex=seed.spec.openalex,
+            pmid=seed.spec.pmid,
             work_id=seed.work_id,
             unresolved_reason=seed.unresolved_reason,
             role=roles[seed.seed_id],
@@ -658,9 +668,12 @@ def _positive_matches(project: Project) -> list[tuple[_Seed, SeedRole, str | Non
     admitted = _admitted(project)
     by_doi: dict[str, str] = {}
     by_arxiv: dict[str, str] = {}
+    by_pmid: dict[str, str] = {}
     for work in corpus:
         if work.identifiers.doi:
             by_doi.setdefault(work.identifiers.doi, work.id)
+        if work.identifiers.pmid:
+            by_pmid.setdefault(work.identifiers.pmid, work.id)
         arxiv = _work_arxiv(work)
         if arxiv:
             by_arxiv.setdefault(arxiv, work.id)
@@ -670,7 +683,9 @@ def _positive_matches(project: Project) -> list[tuple[_Seed, SeedRole, str | Non
         if seed.spec.kind is not SeedKind.POSITIVE:
             continue
         found = seed.work_id if seed.work_id is not None else admitted.get(seed.seed_id)
-        matched = _matching_work(seed.spec.identity_keys(), found, by_doi, by_arxiv, position)
+        matched = _matching_work(
+            seed.spec.identity_keys(), found, by_doi, by_arxiv, by_pmid, position
+        )
         out.append((seed, roles[seed.seed_id], matched))
     return out
 
@@ -691,14 +706,14 @@ def _held_out_sets(project: Project) -> tuple[set[str], set[str]]:
 
 
 def _stated_keys(identifiers: Identifiers) -> tuple[str, ...]:
-    """The DOI, arXiv id and OpenAlex id an identifier set states, in seed-key form."""
+    """The DOI, arXiv id, OpenAlex id and PMID an identifier set states, in seed-key form."""
     arxiv = (
         normalize_arxiv(identifiers.arxiv)
         if identifiers.arxiv
         else (arxiv_id_from_doi(identifiers.doi) if identifiers.doi else None)
     )
     openalex = normalize_openalex(identifiers.openalex) if identifiers.openalex else None
-    return tuple(value for value in (identifiers.doi, arxiv, openalex) if value)
+    return tuple(value for value in (identifiers.doi, arxiv, openalex, identifiers.pmid) if value)
 
 
 def held_out_seed_matcher(project: Project) -> Callable[[Work], bool]:
@@ -813,16 +828,18 @@ def _matching_work(
     found: str | None,
     by_doi: Mapping[str, str],
     by_arxiv: Mapping[str, str],
+    by_pmid: Mapping[str, str],
     position: Mapping[str, int],
 ) -> str | None:
     """The corpus work that is the seed: the first, in corpus order, that `found` names or that
-    shares its DOI or arXiv id. `found` is the work the seed's lookup or admission resolved to."""
+    shares its DOI, arXiv id or PMID. `found` is the work the seed's lookup or admission found."""
     candidates = [
         work_id
         for work_id in (
             found if found in position else None,
             by_doi.get(keys["doi"]) if "doi" in keys else None,
             by_arxiv.get(keys["arxiv"]) if "arxiv" in keys else None,
+            by_pmid.get(keys["pmid"]) if "pmid" in keys else None,
         )
         if work_id is not None
     ]

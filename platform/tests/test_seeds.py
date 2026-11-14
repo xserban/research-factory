@@ -10,7 +10,7 @@ from factory.errors import FactoryValidationError
 from factory.events.envelope import Actor
 from factory.events.reader import read_all
 from factory.model.decisions import DecisionLevel
-from factory.model.search import QueryKind, QuerySpec
+from factory.model.search import QueryKind, QueryPurpose, QuerySpec
 from factory.model.seed import SeedKind, SeedSpec
 from factory.model.work import ProvenanceMethod
 from factory.model.work_ids import arxiv_id_from_doi
@@ -486,3 +486,74 @@ def test_seed_check_equals_the_pairwise_loop(
     checks = seed_check(explore_project)
     assert [c.matched_work for c in checks] == [oracle(s) for s in specs]
     assert sum(c.matched_work is not None for c in checks) >= 2
+
+
+# --- seeds by PMID (plan pmid-seeds S1)
+
+
+def test_pmid_only_seed_is_valid_and_normalised() -> None:
+    spec = SeedSpec(kind=SeedKind.POSITIVE, cite="Doe 2020", pmid=" PMID: 31452104 ")
+    assert spec.pmid == "31452104"
+    assert spec.identity_keys() == {"pmid": "31452104"}
+    assert SeedSpec(kind=SeedKind.POSITIVE, cite="x", pmid="pmid:7").pmid == "7"
+
+
+@pytest.mark.parametrize("bad", ["", "abc", "12a", "PMID 12", "-5", "1.5", "PMC123"])
+def test_bad_pmid_is_refused_at_the_boundary(bad: str) -> None:
+    with pytest.raises(ValidationError):
+        SeedSpec(kind=SeedKind.POSITIVE, cite="x", doi="10.1000/a", pmid=bad)
+
+
+def test_pmid_joins_the_other_identity_keys() -> None:
+    keys = SeedSpec(kind=SeedKind.POSITIVE, cite="x", doi="10.1000/A", pmid="12").identity_keys()
+    assert keys == {"doi": "10.1000/a", "pmid": "12"}
+
+
+def test_dump_omits_an_absent_pmid_so_old_events_are_unchanged() -> None:
+    spec = SeedSpec(kind=SeedKind.POSITIVE, cite="Zhou 2023", doi="10.1000/xyz")
+    dumped = spec.model_dump(mode="json")
+    assert "pmid" not in dumped
+    assert dumped == {
+        "kind": "positive",
+        "cite": "Zhou 2023",
+        "doi": "10.1000/xyz",
+        "arxiv": None,
+        "openalex": None,
+        "why": "",
+    }
+    old = SeedSpec.model_validate(dumped)
+    assert old == spec and old.model_dump_json() == spec.model_dump_json()
+    with_pmid = SeedSpec(kind=SeedKind.POSITIVE, cite="x", pmid="5").model_dump(mode="json")
+    assert with_pmid["pmid"] == "5"
+
+
+def test_pmid_seed_resolves_through_pubmed_id_list() -> None:
+    from factory.services.seeds import _lookup_query
+
+    spec = _positive(pmid="31452104")
+    query = _lookup_query(spec)
+    assert (query.source, query.kind, query.text) == ("pubmed", QueryKind.ID_LIST, "31452104")
+    assert _lookup_query(spec, QueryPurpose.SEED).purpose is QueryPurpose.SEED
+
+
+def test_pmid_is_the_last_route() -> None:
+    from factory.services.seeds import _lookup_query
+
+    assert _lookup_query(_positive(pmid="1", arxiv="2301.01234")).source == "arxiv"
+    assert _lookup_query(_positive(pmid="1", doi="10.1000/a")).source == "openalex"
+    assert _lookup_query(_positive(pmid="1", openalex="W3")).source == "openalex"
+
+
+def test_duplicate_pmid_is_rejected() -> None:
+    existing = [("SEED01", _positive(pmid="31452104"))]
+    issues = _spec_issues(_positive(pmid="PMID:31452104"), existing)
+    assert [(i.field, i.reason) for i in issues] == [("pmid", "duplicate of SEED01")]
+
+
+def test_seed_is_matched_to_a_corpus_work_by_pmid() -> None:
+    from factory.services.seeds import _matching_work
+
+    keys = _positive(pmid="12").identity_keys()
+    position = {"rf:a": 0, "rf:b": 1}
+    assert _matching_work(keys, None, {}, {}, {"12": "rf:b"}, position) == "rf:b"
+    assert _matching_work(keys, None, {}, {}, {"13": "rf:b"}, position) is None

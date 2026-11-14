@@ -32,6 +32,7 @@ def _seed(seed_id: str, role: SeedRole) -> SeedRecord:
         doi=None,
         arxiv=None,
         openalex=None,
+        pmid=None,
         work_id=None,
         unresolved_reason=None,
         role=role,
