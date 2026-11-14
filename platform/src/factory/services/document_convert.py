@@ -9,8 +9,11 @@ Invariants:
 - Per document: an already-converted (converter, version) gives `unchanged`, checked first and
   with no event. So does, unless the command named a converter (`override`), a document whose
   latest conversion this run could not replace: its converter is absent or cannot run here, or
-  the latest conversion comes from another converter, which a plain run must not displace. Then a
-  missing raw blob gives `raw-missing`, with no event. Then a missing converter or an unavailable
+  the latest conversion comes from another converter, which a plain run must not displace.
+- A document whose latest conversion is by this converter at another version gives `outdated`,
+  with no event, unless `upgrade` is set (IDEA-48): a plain run never re-converts the corpus after
+  a version bump. With `upgrade` it is converted, and the old conversion is kept. Then a missing
+  raw blob gives `raw-missing`, with no event. Then a missing converter or an unavailable
   tool records one `document.conversion_failed` event. A conversion runs outside the write lock,
   and its result is recorded under the lock after a re-check.
 - Conversion events carry hashes, counts and warnings, never document text. A failure carries the
@@ -60,7 +63,9 @@ from factory.services.agreement import Outcome, final_outcomes
 from factory.services.context import Project
 from factory.services.work_ref import resolve_work_ids
 
-ConversionStatus = Literal["converted", "unchanged", "failed", "raw-missing", "restored"]
+ConversionStatus = Literal[
+    "converted", "unchanged", "outdated", "failed", "raw-missing", "restored"
+]
 RestoreReason = Literal["version-unavailable", "hash-differs", "store-error"]
 OutcomeReason = FailureReason | RestoreReason
 """The reason of a `failed` outcome: a conversion failure, or a restore failure."""
@@ -83,6 +88,7 @@ class ConvertSummary(StrictModel):
     outcomes: list[ConversionOutcome]
     converted: int
     unchanged: int
+    outdated: int
     failed: int
     raw_missing: int
     restored: int
@@ -120,6 +126,7 @@ def convert_documents(
     work_ids: Sequence[str] | None = None,
     document_ids: Sequence[str] | None = None,
     override: bool = False,
+    upgrade: bool = False,
 ) -> ConvertSummary:
     """Convert the documents in scope and record each outcome.
 
@@ -130,14 +137,16 @@ def convert_documents(
     Raises `FactoryValidationError` (issues on `work_ids` or `document_ids`) with nothing written
     if a named work is not promoted or a named document is unknown or superseded. `override` says
     the researcher named the converter of `registry`, so it may add a conversion beside another
-    converter's; see the module invariants.
+    converter's; see the module invariants. `upgrade` says the researcher asked to re-convert a
+    document whose latest conversion is an older version of this converter (IDEA-48); without it
+    such a document is `outdated`.
     """
     with project.index.exclusive():
         project.index.sync()
         if work_ids is not None:
             work_ids = resolve_work_ids(project, work_ids)
         targets = _targets(project, work_ids, document_ids)
-    outcomes = [_convert_one(project, registry, doc, override) for doc in targets]
+    outcomes = [_convert_one(project, registry, doc, override, upgrade) for doc in targets]
     return _summary(outcomes)
 
 
@@ -167,6 +176,7 @@ def convert_or_restore(
     work_ids: Sequence[str] | None = None,
     document_ids: Sequence[str] | None = None,
     override: bool = False,
+    upgrade: bool = False,
 ) -> ConvertSummary:
     """Restore damaged conversions, or convert the documents in scope, as one command.
 
@@ -179,7 +189,12 @@ def convert_or_restore(
     if restore:
         return restore_conversions(project, registry)
     return convert_documents(
-        project, registry, work_ids=work_ids, document_ids=document_ids, override=override
+        project,
+        registry,
+        work_ids=work_ids,
+        document_ids=document_ids,
+        override=override,
+        upgrade=upgrade,
     )
 
 
@@ -510,7 +525,7 @@ class _Ready:
 
 
 def _convert_one(
-    project: Project, registry: ConverterRegistry, doc: _Doc, override: bool
+    project: Project, registry: ConverterRegistry, doc: _Doc, override: bool, upgrade: bool
 ) -> ConversionOutcome:
     """Decide under the write lock, convert outside it, then re-check and record under it again.
 
@@ -519,7 +534,7 @@ def _convert_one(
     """
     with project.index.exclusive():
         project.index.sync()
-        decided = _decide(project, registry, doc, override)
+        decided = _decide(project, registry, doc, override, upgrade)
     if isinstance(decided, ConversionOutcome):
         return decided
 
@@ -543,14 +558,19 @@ def _convert_one(
 
 
 def _decide(
-    project: Project, registry: ConverterRegistry, doc: _Doc, override: bool
+    project: Project,
+    registry: ConverterRegistry,
+    doc: _Doc,
+    override: bool,
+    upgrade: bool,
 ) -> ConversionOutcome | _Ready:
     """Under the lock, the document's outcome if nothing needs converting, else what to convert.
 
     Order: already converted at this converter and version gives `unchanged`, as does a converted
-    document this run may not or cannot replace (the module invariants); a missing raw blob gives
-    `raw-missing` (no event, even when there is no converter or it is unavailable); then the
-    no-converter and converter-unavailable failures are recorded.
+    document this run may not or cannot replace (the module invariants); a latest conversion by
+    this converter at another version gives `outdated` unless `upgrade` is set (IDEA-48); a missing
+    raw blob gives `raw-missing` (no event, even when there is no converter or it is unavailable);
+    then the no-converter and converter-unavailable failures are recorded.
     """
     converter = registry.for_media_type(doc.media_type)
     version = _version_or_none(converter) if converter is not None else None
@@ -567,6 +587,8 @@ def _decide(
         and (converter is None or version is None or latest != converter.name)
     ):
         return _outcome(doc, "unchanged")
+    if not upgrade and converter is not None and version is not None and latest == converter.name:
+        return _outcome(doc, "outdated")
     if not project.library.exists(doc.raw_hash):
         return _outcome(doc, "raw-missing")
     if converter is None:
@@ -721,6 +743,7 @@ def _summary(outcomes: list[ConversionOutcome]) -> ConvertSummary:
         outcomes=outcomes,
         converted=counts["converted"],
         unchanged=counts["unchanged"],
+        outdated=counts["outdated"],
         failed=counts["failed"],
         raw_missing=counts["raw-missing"],
         restored=counts["restored"],
