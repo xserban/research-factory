@@ -152,7 +152,12 @@ def prisma_svg(flow: PrismaFlow) -> str:
         _reasons(boxes.not_retrieved_reasons),
     )
     if ran:
-        assessed = _lines(_count("Reports assessed for eligibility", boxes.assessed), [])
+        assessed = _lines(
+            _count("Reports assessed for eligibility", boxes.assessed),
+            [_count("Awaiting classification", boxes.awaiting_classification)]
+            if boxes.awaiting_classification
+            else [],
+        )
         ft_excluded = _lines(
             _count("Reports excluded", boxes.excluded_total), _reasons(boxes.excluded)
         )

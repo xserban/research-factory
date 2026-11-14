@@ -928,9 +928,14 @@ def _full_text(report: MethodsReport) -> str:
         if boxes.not_retrieved_reasons.get(UNCONVERTED)
         else ""
     )
+    awaiting = (
+        f"{boxes.awaiting_classification} awaiting classification, "
+        if boxes.awaiting_classification
+        else ""
+    )
     state = (
         f"{boxes.assessed} assessed, {boxes.included} included, {boxes.excluded_total} excluded, "
-        f"{boxes.pending} pending. Exclusions by criterion: {excluded or NONE_RECORDED}."
+        f"{awaiting}{boxes.pending} pending. Exclusions by criterion: {excluded or NONE_RECORDED}."
         if boxes.stage_run
         else "No full-text decision has been recorded; the stage has not run."
     )

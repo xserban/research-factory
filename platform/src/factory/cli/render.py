@@ -111,6 +111,8 @@ def prisma_markdown(flow: PrismaFlow) -> str:
     if boxes.stage_run:
         lines.append(f"- reports assessed for eligibility: {boxes.assessed}")
         lines += [f"- excluded, {criterion}: {n}" for criterion, n in boxes.excluded.items()]
+        if boxes.awaiting_classification:
+            lines.append(f"- awaiting classification: {boxes.awaiting_classification}")
         lines.append(f"- pending at full text: {boxes.pending}")
         lines.append(f"- included at full text: {boxes.included}")
     else:

@@ -48,7 +48,12 @@ from factory.model.references import Direction, Via
 from factory.model.screening import ScreeningPhase
 from factory.model.search import QueryKind, QueryPurpose, RunStatus
 from factory.model.work import ProvenanceMethod, Work
-from factory.services.agreement import Outcome, exclusion_criteria, final_outcomes
+from factory.services.agreement import (
+    Outcome,
+    cannot_assess_open,
+    exclusion_criteria,
+    final_outcomes,
+)
 from factory.services.context import Project
 from factory.services.dedup import active_merges, canonical_works
 from factory.services.fulltext_screening import fulltext_queue
@@ -128,8 +133,12 @@ class FullTextBoxes(StrictModel):
     full-text decision exists, when `assessed`, `included` and `excluded` are 0 and every eligible
     work is pending.
 
-    Invariants: sought == not_retrieved + eligible; eligible == assessed + pending; assessed ==
-    included + sum(excluded); provisional exactly while pending > 0.
+    `awaiting_classification` counts eligible works with an unresolved `cannot-assess` verdict
+    (IDEA-49): neither included nor excluded until the researcher resolves them; left out of the
+    dump while 0. They are not `pending` (nothing is left to screen) and not `assessed`.
+
+    Invariants: sought == not_retrieved + eligible; eligible == assessed + awaiting_classification
+    + pending; assessed == included + sum(excluded); provisional exactly while pending > 0.
     """
 
     sought: int
@@ -143,6 +152,14 @@ class FullTextBoxes(StrictModel):
     included: int
     stage_run: bool
     provisional: bool
+    awaiting_classification: int = 0
+
+    @model_serializer(mode="wrap")
+    def _omit_awaiting(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        out: dict[str, Any] = handler(self)
+        if not self.awaiting_classification:
+            out.pop("awaiting_classification", None)
+        return out
 
     @property
     def excluded_total(self) -> int:
@@ -154,8 +171,12 @@ class FullTextBoxes(StrictModel):
             raise ValueError("sought must equal not retrieved plus eligible")
         if sum(self.not_retrieved_reasons.values()) != self.not_retrieved:
             raise ValueError("not-retrieved reasons must count each not-retrieved work once")
-        if self.eligible != self.assessed + self.pending:
-            raise ValueError("eligible must equal assessed plus pending")
+        if self.awaiting_classification < 0:
+            raise ValueError("works awaiting classification cannot be negative")
+        if self.eligible != self.assessed + self.awaiting_classification + self.pending:
+            raise ValueError(
+                "eligible must equal assessed plus awaiting classification plus pending"
+            )
         if self.assessed != self.included + self.excluded_total:
             raise ValueError("assessed must equal included plus excluded")
         if self.provisional != (self.pending > 0):
@@ -442,11 +463,16 @@ def full_text_boxes(project: Project, *, only: Collection[str] | None = None) ->
     run = has_full_text_plan(project) and _has_full_text_decision(project)
     excluded: dict[str, int] = {}
     included = 0
+    awaiting = 0
     if run:
         stage = ScreeningStage.FULL_TEXT
         outcomes = final_outcomes(project, stage=stage)
         criteria = exclusion_criteria(project, stage=stage)
+        unresolved = set(cannot_assess_open(project, stage=stage))
         for work in eligible:
+            if work in unresolved:
+                awaiting += 1
+                continue
             outcome = outcomes.get(work, Outcome.PENDING)  # an absorbed record may have none
             if outcome is Outcome.INCLUDED:
                 included += 1
@@ -454,7 +480,7 @@ def full_text_boxes(project: Project, *, only: Collection[str] | None = None) ->
                 criterion = criteria.get(work) or UNSPECIFIED
                 excluded[criterion] = excluded.get(criterion, 0) + 1
     assessed = included + sum(excluded.values())
-    pending = len(eligible) - assessed
+    pending = len(eligible) - assessed - awaiting
     return FullTextBoxes(
         sought=sought,
         not_retrieved=len(missing),
@@ -467,6 +493,7 @@ def full_text_boxes(project: Project, *, only: Collection[str] | None = None) ->
         included=included,
         stage_run=run,
         provisional=pending > 0,
+        awaiting_classification=awaiting,
     )
 
 
