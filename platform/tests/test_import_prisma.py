@@ -32,6 +32,8 @@ FLOW_KEYS = [
     "identified_other",
     "identified_other_detail",
     "duplicates_removed",
+    "version_pair_merges",
+    "identical_title_merges",
     "screened",
     "excluded",
     "pending",
@@ -69,6 +71,8 @@ def test_prisma_unchanged_without_imports(project: Project, corpus: None) -> Non
     """No import queries: the flow and the report carry exactly the keys they had before."""
     flow = json.loads(prisma_flow(project).model_dump_json())
     assert list(flow) == FLOW_KEYS
+    # The merge notes (decision 117) are computed from dedup merges, not from imports: zero here.
+    assert flow["version_pair_merges"] == 0 and flow["identical_title_merges"] == 0
     assert list(flow["identified_other"]) == OTHER_KEYS
     report = json.loads(search_report(project).model_dump_json())
     assert report["rows"] and all(list(row) == ROW_KEYS for row in report["rows"])

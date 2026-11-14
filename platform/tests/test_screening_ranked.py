@@ -103,7 +103,7 @@ def _ranked_world(
         agent,
         old.spec.model_copy(update={"screening": plan}),
         reason="stop rule",
-        semantic=False,
+        semantic=n is not None,
         effects={},
     )
     protocol = current_protocol(project)
@@ -135,7 +135,16 @@ def test_stop_withholds_unscreened_works_and_says_so(
     from tests.screening_helpers import _decide
 
     for work, verdict in zip(ordered, ["include", "exclude", "exclude"], strict=False):
-        _decide(project, agent, work, "A", "screening", verdict, None, protocol_id)
+        _decide(
+            project,
+            agent,
+            work,
+            "A",
+            "screening",
+            verdict,
+            "EX01" if verdict == "exclude" else None,
+            protocol_id,
+        )
     status = screening_stop(project)
     assert status is not None and status.stopped and status.run == 2
     assert status.not_screened == len(ordered) - 3
@@ -169,7 +178,16 @@ def test_an_inclusion_breaks_the_run_and_serving_continues(
     from tests.screening_helpers import _decide
 
     for work, verdict in zip(ordered, ["exclude", "include", "exclude"], strict=False):
-        _decide(project, agent, work, "A", "screening", verdict, None, protocol_id)
+        _decide(
+            project,
+            agent,
+            work,
+            "A",
+            "screening",
+            verdict,
+            "EX01" if verdict == "exclude" else None,
+            protocol_id,
+        )
     status = screening_stop(project)
     assert status is not None and not status.stopped
     result = screen_next(project, agent, PassLabel.A)
@@ -251,7 +269,7 @@ def test_score_stop_withholds_unscreened_works_and_is_stored(
         agent,
         old.spec.model_copy(update={"screening": plan}),
         reason="score stop",
-        semantic=False,
+        semantic=True,
         effects={},
     )
     current = current_protocol(project)
@@ -260,7 +278,8 @@ def test_score_stop_withholds_unscreened_works_and_is_stored(
     assert len(ordered) > 3
     for work, score in zip(ordered, [8, 2, 3], strict=False):
         _decide(project, agent, work, "A", "screening", "exclude", "EX01", protocol_id, score=score)
-    assert [d.score for d in live_decisions(project, PassLabel.A)] == [8, 2, 3]
+    scored = [d.score for d in live_decisions(project, PassLabel.A) if d.phase.value == "screening"]
+    assert scored == [8, 2, 3]
     status = screening_stop(project)
     assert status is not None and status.stopped and status.rule == "stop_below_score"
     assert status.run == 2 and status.not_screened == len(ordered) - 3
