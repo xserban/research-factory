@@ -29,7 +29,7 @@ main{flex:1;display:flex;min-height:0}
 .f{display:flex;gap:6px;align-items:center;font-size:13px;padding:1px 0;cursor:pointer}.f span.n{margin-left:auto;color:var(--dim)}
 #view{flex:1;overflow:auto;position:relative;min-width:0}
 #detail{width:420px;overflow:auto;border-left:1px solid var(--line);padding:12px 14px;background:var(--panel);display:none}
-#detail.open{display:block}#detail h2{font-size:16px;margin:0 0 4px}.dim{color:var(--dim)}
+#detail.open{display:block}.lybadge{font-size:11px;letter-spacing:.08em;text-transform:uppercase;border:1px solid var(--line);border-radius:4px;padding:0 6px;color:var(--acc)}#detail h2{font-size:16px;margin:0 0 4px}.dim{color:var(--dim)}
 table{border-collapse:collapse;width:100%}td,th{padding:4px 8px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
 tr.w:hover{background:var(--hi);cursor:pointer}th{position:sticky;top:0;background:var(--panel);font-size:12px;color:var(--dim)}
 .grp{background:var(--bg);font-weight:600;padding:6px 8px;border-bottom:1px solid var(--line);cursor:pointer}
@@ -69,7 +69,11 @@ FUTURE_OVERLAY/*LIGHT*/</style></head><body>
 <main><div id="side"></div><div id="view"></div><div id="detail"></div></main>
 <script>
 const DATA=/*DATA*/null;
-const W=DATA.works,DIMS=DATA.dims;const BYS={};W.forEach((w,i)=>BYS[w.slug]=i);const OUT={},INN={};(DATA.cites||[]).forEach(([a,b])=>{(OUT[a]=OUT[a]||[]).push(b);(INN[b]=INN[b]||[]).push(a);});
+const W=DATA.works,DIMS=DATA.dims.concat([{key:'layer',label:'Layer',src:'meta',field:'layer'}]);const LORD=DATA.layer_order||[];
+function lrank(v){if(v==='unlayered'||v==='pending')return [2,0,''];const i=LORD.indexOf(v);return i>=0?[0,i,'']:[1,0,v];}
+function lcmp(a,b){const x=lrank(a),y=lrank(b);return x[0]-y[0]||x[1]-y[1]||x[2].localeCompare(y[2]);}
+function layerBadge(w){const l=w.layer||'unlayered';const src=w.layer_source==='moved'?' (moved by the researcher'+(w.layer_miner?'; the miner said '+esc(w.layer_miner):'')+')':(w.layer_source==='miner'?' (from the miner)':'');return `<div class="dim">Layer <span class="lybadge">${esc(l)}</span>${src}</div>`;}
+const BYS={};W.forEach((w,i)=>BYS[w.slug]=i);const OUT={},INN={};(DATA.cites||[]).forEach(([a,b])=>{(OUT[a]=OUT[a]||[]).push(b);(INN[b]=INN[b]||[]).push(a);});
 const $=s=>document.querySelector(s);
 const esc=s=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 function val(w,d){if(d.src==='meta')return w[d.field]||'';const o=w[d.src];return o&&o[d.field]?o[d.field].v:'';}
@@ -91,7 +95,7 @@ function drawSide(){
  const dims=DIMS.filter(d=>d.key!=='year').concat([{key:'stage',label:'Lifecycle stage'}]);
  for(const d of dims){
   const c={};for(const w of W){const vs=d.key==='stage'?stagesOf(w):[val(w,d)];for(const v of vs)if(v)c[v]=(c[v]||0)+1;}
-  const ks=Object.keys(c).sort((a,b)=>c[b]-c[a]);
+  const ks=Object.keys(c).sort(d.key==='layer'?lcmp:(a,b)=>c[b]-c[a]);
   h+=`<h3>${esc(d.label)}</h3>`;
   for(const k of ks){const on=FILT[d.key]&&FILT[d.key].has(k);h+=`<label class="f"><input type="checkbox" data-d="${d.key}" data-v="${esc(k)}" ${on?'checked':''}><span style="color:${colorOf(k)}">●</span> ${esc(k)}<span class="n">${c[k]}</span></label>`;}
  }
@@ -129,6 +133,7 @@ function openWork(w){sel=w;const d=$('#detail');d.classList.add('open');
  const row=(o)=>Object.keys(o).map(k=>`<div><b>${esc(k)}</b>: ${esc(o[k].v)}${o[k].q&&o[k].q!==o[k].v?`<div class="q">“${esc(o[k].q)}” <span class="dim">${esc(o[k].a)}</span></div>`:''}</div>`).join('');
  d.innerHTML=`<button onclick="document.querySelector('#detail').classList.remove('open')" style="float:right">×</button><h2>${esc(w.title)}</h2>
  <div class="dim">${esc(w.authors.join(', '))} · ${esc(w.published)} · ${esc(w.venue)}${w.cited_by!=null?' · cited by '+w.cited_by:''}</div>
+ ${layerBadge(w)}
  <p>${docLink(w)} · ${paperLink(w)}</p>
  <details><summary><b>Abstract</b></summary><p>${esc(w.abstract)||'—'}</p></details>
  ${sumHtml(w)}${cit(w)}<h3>Lifecycle stages</h3>${w.stages.map(s=>`<div><span class="tag" style="border-color:${colorOf(s.stage)}">${esc(s.stage)}</span> <span class="dim">${esc(s.mode)}</span><div class="q">“${esc(s.quote)}” <span class="dim">${esc(s.anchor)}</span></div></div>`).join('')||'<div class="dim">none recorded</div>'}
