@@ -50,6 +50,8 @@ from factory.services.work_ref import resolve_work_id, resolve_work_ids
 __all__ = [
     "WorkLayer",
     "layer_dimension",
+    "layer_history",
+    "layer_moves",
     "layer_of",
     "layers_of",
     "move_layer",
@@ -137,6 +139,25 @@ def _moves(project: Project) -> dict[str, tuple[str, int]]:
             )
         ).all()
     return {str(r[0]): (str(r[1]), int(r[2])) for r in rows}
+
+
+def layer_history(
+    rows: Iterable[tuple[str, str, str, str]],
+) -> list[tuple[str, str, str, str]]:
+    """The layer moves as `(ts, work_id, layer, who)` in time order, from `(ts, event_id, work_id,
+    layer)` rows. Pure. Only the researcher moves a work (`move_layer`), so `who` is
+    `researcher`."""
+    ordered = sorted(rows, key=lambda r: (r[0], r[1]))
+    return [(ts, work, layer, "researcher") for ts, _event, work, layer in ordered]
+
+
+def layer_moves(project: Project) -> list[tuple[str, str, str, str]]:
+    """Every `work.layer_set` event of the project as `(ts, work_id, layer, who)`, in time order.
+    Read-only."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        rows = conn.execute(text("SELECT ts, event_id, work_id, layer FROM work_layer_moves")).all()
+    return layer_history((str(r[0]), str(r[1]), str(r[2]), str(r[3])) for r in rows)
 
 
 def layers_of(project: Project) -> dict[str, WorkLayer]:
