@@ -255,3 +255,14 @@ All four fixed on `low-hanging-2` (merged dbe3d01): `indexed_rigor_mode` public 
 - `runner.started.exploratory` is fixed at start while task marks are read at serve time; an amendment during a run makes them differ (cosmetic).
 - `services/miners.py` `_candidates`: the `default_conversion` fallback is close to dead code now that requested works are excluded.
 - Test helper `mine_pass` declares the use exploratory (a protocol amendment) when the miner is uncalibrated; a test that asserts protocol versions after `mine_pass` would see one more.
+
+## Reviews of merged, unreviewed work (2026-11-14, branch `low-hanging-4`)
+- IDEA-66: `agreement._as_stored` and `screening._as_stored` return the id unchanged when several works share its NFC form, so the caller says "unknown" instead of "matches several works"; `stored_spelling` would give the right refusal.
+- IDEA-66: `resolve_work_id` checks the whole `works` table (merged works included), `document_read` the outcome keys, `screen resolve` the resolvable set; an id matching a merged and a live work is ambiguous in some paths only.
+- IDEA-66: several resolutions read the index before `project.writing()`; negligible with one writer.
+- IDEA-68: the evidence-pack (non-miner) agreement also takes the new unit rule, and units on enum, quote and anchor key cells leave report group keys (`_normalised`, `cell_key`); not stored, but groups may merge.
+- IDEA-68: a numeric field marked `TEXT_IN_QUOTE` would lose its unit comparison (none today).
+- IDEA-69 (2): `mining/score.py` docstring says agent rows with no gold entry count as extra, but `unmatched` iterates gold works only.
+- IDEA-69 (2): `MineStatus.agreement` changed meaning (aligned to all rows) under the same name in MCP `mine_status` output.
+- IDEA-69 (2) tests missing: `overall_all_rows` withheld while a unit is open; `mine status` lines with both rates; a test pinning that the calibration gate ignores the all-rows rate; a work mined by one pass adds no slot.
+- IDEA-51: `exploratory` is not settable from a `miner add` file (by design: it is a protocol declaration); the docstring should say so.
