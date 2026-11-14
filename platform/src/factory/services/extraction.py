@@ -180,6 +180,7 @@ __all__ = [
     "record_unit",
     "recorded_row",
     "require_schema",
+    "scope_ledger",
     "scope_population",
     "scope_rows",
     "screening_session",
@@ -1749,7 +1750,7 @@ class _UnitTask:
         return record["document_id"], record["conversion_id"]
 
 
-@dataclass
+@dataclass(eq=False)  # identity hash: a memo key (`extraction_agreement._whole_state`)
 class _Ledger:
     """What staleness is judged from, read once (the caller has synced the index).
 
@@ -2080,8 +2081,21 @@ def _completion_positions(project: Project, task_ids: set[str]) -> dict[str, str
     return {t: completed.get(t, created.get(t, "")) for t in task_ids}
 
 
+def scope_ledger(project: Project, scope: ScopeKey) -> _Ledger:
+    """The ledger of `scope` (no calibration), to pass as `ledger=` to the readers that take one
+    (`stale_extractions`, `unit_states`, `filled_imports`, `agreement_overall`, `final_rows`), so
+    a read-only caller that makes several reads builds it once. It is never kept: a caller reads
+    under one unchanged index and does not mutate it."""
+    project.index.sync()
+    return _ledger(project, scope)
+
+
 def stale_extractions(
-    project: Project, *, scope: ScopeKey = Scope.EVIDENCE, calibration_id: str | None = None
+    project: Project,
+    *,
+    scope: ScopeKey = Scope.EVIDENCE,
+    calibration_id: str | None = None,
+    ledger: _Ledger | None = None,
 ) -> set[str]:
     """The live rows of `scope` that are stale: made stale by an amendment of the scope's section
     recorded after the row (ruling 12, compared by event ID as `model.staleness` does, so a
@@ -2090,7 +2104,7 @@ def stale_extractions(
     current G1 extraction. It ignores the population: rows of works no longer included are
     filtered downstream. Read-only."""
     project.index.sync()
-    return _ledger(project, scope, calibration_id).stale_rows()
+    return (ledger or _ledger(project, scope, calibration_id)).stale_rows()
 
 
 def all_scopes(project: Project) -> list[ScopeKey]:
@@ -2171,7 +2185,11 @@ def stale_documents(project: Project, *, scope: ScopeKey = Scope.EVIDENCE) -> li
 
 
 def unit_states(
-    project: Project, *, scope: ScopeKey = Scope.EVIDENCE, calibration_id: str | None = None
+    project: Project,
+    *,
+    scope: ScopeKey = Scope.EVIDENCE,
+    calibration_id: str | None = None,
+    ledger: _Ledger | None = None,
 ) -> list[UnitState]:
     """One state per unit of `scope`, by work then pass: every work of `scope_population` in pass
     A, and in pass B the works of its dual sample once pass B has opened (every work before then
@@ -2197,7 +2215,7 @@ def unit_states(
         sample = set(population)
     else:
         sample = set()
-    ledger = _ledger(project, scope, calibration_id)
+    ledger = ledger or _ledger(project, scope, calibration_id)
     out: list[UnitState] = []
     for work_id in population:
         out.append(ledger.state(work_id, PassLabel.A, schema, pack))
@@ -2275,13 +2293,15 @@ def imports_policy(project: Project, scope: ScopeKey) -> Literal["allow", "deny"
     return "deny" if use is None else use.imports
 
 
-def filled_imports(project: Project, scope: ScopeKey) -> dict[str, list[ExtractionRow]]:
+def filled_imports(
+    project: Project, scope: ScopeKey, *, ledger: _Ledger | None = None
+) -> dict[str, list[ExtractionRow]]:
     """The imported rows in use, by work: of the units an import fills (`_Ledger.filled`), so never
     a stale row, a row shadowed by local mining, or one the protocol declines. Read-only."""
     project.index.sync()
     if not imported_rows(project, scope):
         return {}
-    ledger = _ledger(project, scope)
+    ledger = ledger or _ledger(project, scope)
     return {work: ledger.imported[work] for work in sorted(ledger.filled())}
 
 

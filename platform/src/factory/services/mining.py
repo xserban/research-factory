@@ -59,6 +59,7 @@ from factory.services.extraction import (
     live_rows,
     next_unit,
     record_unit,
+    scope_ledger,
     stale_extractions,
     unit_states,
 )
@@ -841,19 +842,28 @@ def _mine_status(project: Project, session: str | None, with_agreement: bool) ->
         if spec is None:
             continue
         scope = MinerScope(use.name)
+        ledger = scope_ledger(project, scope)  # read once; no reader below mutates it
         states = [
-            s for s in unit_states(project, scope=scope) if own is None or s.pass_label == own[1]
+            s
+            for s in unit_states(project, scope=scope, ledger=ledger)
+            if own is None or s.pass_label == own[1]
         ]
-        stale = stale_extractions(project, scope=scope)
+        stale = stale_extractions(project, scope=scope, ledger=ledger)
         live = [r for r in live_rows(project, scope=scope) if r.extraction_id not in stale]
-        imported = 0 if own is not None else sum(map(len, filled_imports(project, scope).values()))
+        imported = (
+            0
+            if own is not None
+            else sum(map(len, filled_imports(project, scope, ledger=ledger).values()))
+        )
         split = (
-            independence_counts(final_rows(project, scope=scope))
+            independence_counts(final_rows(project, scope=scope, ledger=ledger))
             if imported and own is None
             else None
         )
         overall = (
-            agreement_overall(project, scope=scope) if with_agreement and own is None else None
+            agreement_overall(project, scope=scope, ledger=ledger)
+            if with_agreement and own is None
+            else None
         )
         out.append(
             MineStatus(

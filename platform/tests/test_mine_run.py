@@ -271,3 +271,39 @@ def test_a_half_sample_reports_the_works_mined_once(
     single = [f for f in check(project).findings if f.code == "mine-single"]
     assert len(single) == 1 and single[0].severity == "warning"
     assert 0 < len(single[0].refs) < len(world)
+
+
+def test_mine_status_reads_each_ledger_once_per_scope(
+    project: Project,
+    agent: Actor,
+    mina: Actor,
+    minb: Actor,
+    world: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """IDEA-70: one ledger per miner scope, same numbers as the readers give one by one."""
+    from factory.services import extraction
+
+    list_miner(project, agent)
+    list_miner(project, agent, method_vision(name="m-other"))
+    worked = mine_pass(project, mina, A, lambda w: [mine_row()])
+    mine_pass(project, minb, B, lambda w: [mine_row("lower" if w == worked[0] else "higher")])
+    plain = mine_status(project)  # warm nothing: a fresh call each time
+    real = extraction._ledger
+    scopes: list[object] = []
+
+    def counting(*args: object, **kwargs: object) -> object:
+        scopes.append(args[1] if len(args) > 1 else kwargs.get("scope"))
+        return real(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(extraction, "_ledger", counting)
+    counted = mine_status(project)
+    assert counted == plain
+    assert len(counted) == 2
+    assert sorted(s.name for s in scopes) == sorted(m.name for m in counted)  # type: ignore[attr-defined]
+    for status in counted:
+        scope = MinerScope(status.name)
+        states = unit_states(project, scope=scope)
+        assert status.units == len(states)
+        assert status.closed == sum(s.state == "current" for s in states)
+        assert status.stale == sum(s.state == "stale" for s in states)
