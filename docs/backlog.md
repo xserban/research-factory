@@ -182,7 +182,7 @@ Status: triaged · Added: 2026-11-03 · Slice: when a project needs it (required
 **Open questions:** first instruments (ML evidence checklist from NeurIPS M14; RoB 2 / PROBAST for biomedical projects).
 
 ### IDEA-22 — PubMed search and PMC full-text route
-Status: triaged · Added: 2026-11-03 · Slice: first biomedical project (TAVI, ND)
+Status: built (branch `pubmed`, plan `2026-11-14-pubmed.md`, decision 124; not reviewed, tests not run) · Added: 2026-11-03 · Slice: first biomedical project (TAVI, ND)
 **What:** PubMed source adapter (PRISMA-S fields, no truncation) and PMC OA JATS route to Markdown.
 
 ### IDEA-23 — Consistency check of copied results
@@ -737,3 +737,24 @@ Status: new · Added: 2026-11-14 · Slice: — · Depends on: IDEA-71, the hypot
 **Why:** the programme view should say whether the line of inquiry is still producing, not only what it contains.
 **Rigour notes:** no verdict is typed: every number is a count of recorded events; "progressive" and "degenerating" are labels the researcher applies to the counts, not computed; the ledger shows a change of the belt together with the test that provoked it.
 **Open questions:** how a belt change is recorded (a hypothesis amendment with a reason, or a new event); what counts as a novel prediction (registered before the test, with the date); whether a study's protocol amendments count as belt changes.
+
+### IDEA-75 — PubMed date slicing above the 9,999 cap
+Status: new · Added: 2026-11-14 · Slice: — · Depends on: IDEA-22
+**What:** the adapter splits a PubMed query whose count exceeds 9,999 into `[dp]` windows and retrieves each, so the run is complete rather than partial.
+**Why:** broad biomedical queries routinely exceed the E-utilities ceiling.
+**Rigour notes:** each window is archived and counted; the sum of window counts is reported against the unsplit count, and a difference is noted (R-23).
+**Open questions:** fixed windows or recursive halving.
+
+### IDEA-76 — PubMed in watch cycles, the inbox and seeds
+Status: new · Added: 2026-11-14 · Slice: — · Depends on: IDEA-22
+**What:** a `listed_since` window for PubMed (`[edat]`), PubMed and PMC links in the inbox parser, seeds and import admission by PMID.
+**Why:** a biomedical project lives in PMIDs; today a seed or link needs a DOI, arXiv or OpenAlex id.
+**Rigour notes:** a PMID seed is resolved and recorded like the other kinds; held-out withholding covers the PMID.
+**Open questions:** whether the seed model takes `pmid` as a fourth key or resolves through OpenAlex.
+
+### IDEA-77 — Europe PMC as a second JATS route; MeSH suggestions in the probe
+Status: new · Added: 2026-11-14 · Slice: — · Depends on: IDEA-22
+**What:** (a) Europe PMC full-text XML for articles NCBI's bucket does not serve; (b) the probe suggests MeSH descriptors harvested from the seeds' PubMed records as tick items.
+**Why:** (a) widens open full text; (b) controlled vocabulary is the best input to term harvesting.
+**Rigour notes:** (a) licence recorded per attempt; (b) suggestions only, the researcher selects.
+**Open questions:** —
