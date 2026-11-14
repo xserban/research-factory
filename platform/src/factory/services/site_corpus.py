@@ -24,7 +24,6 @@ from sqlalchemy import text
 
 from factory.services.context import Project
 from factory.services.protocol import current_protocol
-from factory.services.site_layers import LAYER_ORDER
 from factory.services.work_layers import WorkLayer, layers_of
 
 PROFILE_FILE = "site-profile.json"
@@ -273,6 +272,8 @@ def corpus_payload(project: Project) -> dict[str, Any]:
                 **layer_fields(layers.get(wid)),
             }
         )
+    from factory.services.site_layers import LAYER_ORDER  # site_layers imports this module
+
     by_slug = {w["id"]: w["slug"] for w in works}
     return {
         "dims": [{"key": k, "label": lab, "src": s, "field": f} for k, lab, s, f in profile.dims],
