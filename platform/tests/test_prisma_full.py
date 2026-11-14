@@ -2,6 +2,7 @@
 
 import json
 
+import pytest
 from sqlalchemy import text
 
 from factory.events.envelope import Actor
@@ -81,7 +82,7 @@ def test_slice1_flow_unchanged_before_full_text_runs(
     assert boxes.assessed == boxes.included == 0 and boxes.excluded == {}
     assert boxes.pending == boxes.eligible > 0
     assert boxes.eligible == boxes.assessed + boxes.pending
-    assert boxes.sought == flow.included
+    assert boxes.not_sought + boxes.sought == flow.included
     assert flow.included_in_review is None
     # The title/abstract numbers are exactly those of a protocol with no full-text plan.
     assert flow.included + flow.excluded_total + flow.pending == flow.screened
@@ -282,12 +283,21 @@ def test_absorbed_promoted_work_is_not_queued_and_boxes_still_sum(
 
 
 def test_merged_after_screening_lists_differing_outcomes_only(
-    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+    project: Project,
+    agent: Actor,
+    human: Actor,
+    mock_sources: SourcesFor,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _ta_world(project, agent, human, mock_sources)
-    outcomes = final_outcomes(project)
-    included = sorted(w for w, o in outcomes.items() if o is Outcome.INCLUDED)
-    excluded = sorted(w for w, o in outcomes.items() if o is Outcome.EXCLUDED)
+    real = dict(final_outcomes(project))
+    included = sorted(w for w, o in real.items() if o is Outcome.INCLUDED)
+    # The title/abstract world includes every work: mark one excluded so the merge differs.
+    excluded, included = included[:1], included[1:]
+    real[excluded[0]] = Outcome.EXCLUDED
+    import factory.services.agreement as agreement
+
+    monkeypatch.setattr(agreement, "final_outcomes", lambda *_a, **_k: real)
     assert merged_after_screening(project) == []  # no merge yet
     _merge_late(project, excluded[0], included[0], included[1])
     rows = merged_after_screening(project)

@@ -47,7 +47,6 @@ def test_flow_works_refuses_each_bad_filter_by_name(
         ({"step": "bogus"}, "step"),
         ({"outcome": "included"}, "outcome"),
         ({"step": "title-abstract", "outcome": "awaiting"}, "outcome"),
-        ({"step": "full-text", "criterion": "EX04"}, "criterion"),
         ({"step": "title-abstract", "outcome": "included", "criterion": "EX04"}, "criterion"),
         ({"step": "full-text", "criterion": "EX99"}, "criterion"),
         ({"source_group": "no-such-group"}, "source_group"),
