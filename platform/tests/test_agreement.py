@@ -576,3 +576,44 @@ def test_tolerance_rule_and_dump() -> None:
         "fewer_than": 3,
         "fraction": 0.01,
     }
+
+
+def test_tolerated_unscreened_work_is_reported_in_the_flow(
+    project: Project,
+    agent: Actor,
+    human: Actor,
+    mock_sources: SourcesFor,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from factory.cli.render import prisma_markdown
+    from factory.exports.prisma_svg import prisma_svg
+    from factory.services.methods import methods_report, render_methods
+    from factory.services.prisma import prisma_flow
+
+    protocol_id = _ready(project, agent, human, mock_sources)
+    last = _leave_unscreened(project, agent, protocol_id)
+
+    undeclared = prisma_flow(project)
+    assert undeclared.unscreened_tolerated == 0
+    assert "unscreened_tolerated" not in undeclared.model_dump(mode="json")
+    assert undeclared.provisional
+
+    _tolerant(monkeypatch, UnscreenedTolerance())
+    flow = prisma_flow(project)
+    assert flow.unscreened_tolerated == 1 and flow.unscreened_tolerated_works == [last]
+    assert flow.unscreened_tolerated <= flow.pending
+    assert flow.excluded_total + flow.pending + flow.included == flow.screened
+    assert last not in flow.excluded
+    assert flow.provisional == (flow.pending - 1 > 0)
+    dump = flow.model_dump(mode="json")
+    assert dump["unscreened_tolerated"] == 1 and dump["unscreened_tolerated_works"] == [last]
+    markdown = prisma_markdown(flow)
+    assert "left unscreened within the declared tolerance" in markdown and last in markdown
+    assert "unscreened (declared tolerance)" in prisma_svg(flow)
+
+    report = methods_report(project)
+    statement = render_methods(
+        report.model_copy(update={"unscreened_tolerance": "fewer than 3 records"})
+    )
+    assert "declared tolerance" in statement and "1 were, listed in the report" in statement
+    assert "declared tolerance" not in render_methods(report)

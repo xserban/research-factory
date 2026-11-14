@@ -192,6 +192,14 @@ def tolerated_unscreened(screen: _Screen) -> frozenset[str]:
     return missing if tolerance.allows(len(missing), len(queue)) else frozenset()
 
 
+def tolerated_unscreened_works(project: Project) -> frozenset[str]:
+    """The title/abstract pass A works left unscreened within the declared tolerance (IDEA-46),
+    for reports; empty without a protocol, a pass A or a tolerance. Read-only."""
+    project.index.sync()
+    screen = _load(project, TA)
+    return frozenset() if screen is None else tolerated_unscreened(screen)
+
+
 def screen_agreement(project: Project, actor: Actor, *, stage: ScreeningStage = TA) -> Agreement:
     """The agreement of the two passes: κ, per-criterion κ, disagreements, single-pass works and
     the cannot-assess rate per criterion (R-36, R-38).

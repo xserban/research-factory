@@ -53,6 +53,7 @@ from factory.services.agreement import (
     cannot_assess_open,
     exclusion_criteria,
     final_outcomes,
+    tolerated_unscreened_works,
 )
 from factory.services.context import Project
 from factory.services.dedup import active_merges, canonical_works
@@ -234,6 +235,12 @@ class PrismaFlow(StrictModel):
     not_screened_stop: int = 0
     """Pending works that were not screened because the stopping rule stopped serving: a subset of
     `pending`, computed. They do not make the flow provisional."""
+    unscreened_tolerated: int = 0
+    """Pass A works left without a decision within the protocol's declared `unscreened_tolerance`
+    (IDEA-46): a subset of `pending`, disjoint from `not_screened_stop`, computed. They do not make
+    the flow provisional. Left out of the dump, with the works, while 0."""
+    unscreened_tolerated_works: list[str] = Field(default_factory=list)
+    """The works counted in `unscreened_tolerated`, sorted, for the full report."""
 
     @model_serializer(mode="wrap")
     def _omit_stop(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
@@ -241,6 +248,9 @@ class PrismaFlow(StrictModel):
         if self.stop_rule is None:
             out.pop("stop_rule", None)
             out.pop("not_screened_stop", None)
+        if not self.unscreened_tolerated:
+            out.pop("unscreened_tolerated", None)
+            out.pop("unscreened_tolerated_works", None)
         return out
 
     @property
@@ -257,7 +267,15 @@ class PrismaFlow(StrictModel):
             raise ValueError("excluded, pending and included must sum to screened")
         if not 0 <= self.not_screened_stop <= self.pending:
             raise ValueError("works not screened because of the stop are a subset of pending")
-        if self.provisional != (self.pending - self.not_screened_stop > 0):
+        if len(self.unscreened_tolerated_works) != self.unscreened_tolerated:
+            raise ValueError("the tolerated unscreened works must be as many as their count")
+        if not 0 <= self.not_screened_stop + self.unscreened_tolerated <= self.pending:
+            raise ValueError(
+                "works left unscreened (stop, tolerance) are a disjoint subset of pending"
+            )
+        if self.provisional != (
+            self.pending - self.not_screened_stop - self.unscreened_tolerated > 0
+        ):
             raise ValueError("a flow is provisional exactly while works are pending")
         chased = self.identified_other.get(ProvenanceMethod.CITATION_CHASE.value, 0)
         if self.identified_other_detail and sum(self.identified_other_detail.values()) != chased:
@@ -387,6 +405,8 @@ def prisma_flow(project: Project) -> PrismaFlow:
     excluded: dict[str, int] = {}
     included = pending = not_screened = 0
     unscreened = stop_unscreened(project)
+    tolerated = tolerated_unscreened_works(project) - unscreened
+    tolerated_pending: list[str] = []
     for work in canonical:
         methods = {entry.method for entry in work.provenance}
         if ProvenanceMethod.DATABASE in methods:
@@ -403,6 +423,8 @@ def prisma_flow(project: Project) -> PrismaFlow:
         elif outcome is Outcome.PENDING:
             pending += 1
             not_screened += work.id in unscreened
+            if work.id in tolerated:
+                tolerated_pending.append(work.id)
         else:
             criterion = criteria.get(work.id) or UNSPECIFIED
             excluded[criterion] = excluded.get(criterion, 0) + 1
@@ -425,10 +447,12 @@ def prisma_flow(project: Project) -> PrismaFlow:
         included=included,
         full_text=boxes,
         included_in_review=boxes.included if boxes.stage_run else None,
-        provisional=pending - not_screened > 0,
+        provisional=pending - not_screened - len(tolerated_pending) > 0,
         protocol_id=None if protocol is None else protocol.protocol_id,
         stop_rule=stop_rules_text(stops) if stops else None,
         not_screened_stop=not_screened,
+        unscreened_tolerated=len(tolerated_pending),
+        unscreened_tolerated_works=sorted(tolerated_pending),
     )
 
 

@@ -19,7 +19,7 @@ from sqlalchemy import TextClause, text
 from factory.model.base import StrictModel
 from factory.model.budgets import Budget
 from factory.model.grey import GreySource
-from factory.model.protocol import ScreeningStage, SnowballPlan
+from factory.model.protocol import ScreeningPlan, ScreeningStage, SnowballPlan
 from factory.model.references import Direction
 from factory.references.match import MATCHER_VERSION
 from factory.references.parse import PARSER, PARSER_VERSION
@@ -233,6 +233,9 @@ class MethodsReport(StrictModel):
     ranking_weights_hash: str | None = None
     """The latest ranking's model and weights (slice 8, IDEA-42); None, and left out of the dump
     with the paragraph, while no ranking was computed."""
+    unscreened_tolerance: str | None = None
+    """The declared tolerance for unscreened pass A works, in words (IDEA-46); None, and left out of
+    the dump, while the protocol declares none."""
     imported_units: int = 0
     imported_rows: int = 0
     imported_sources: list[str] = Field(default_factory=list)
@@ -247,6 +250,8 @@ class MethodsReport(StrictModel):
         if self.ranking_model_id is None:
             out.pop("ranking_model_id", None)
             out.pop("ranking_weights_hash", None)
+        if self.unscreened_tolerance is None:
+            out.pop("unscreened_tolerance", None)
         if not self.imported_rows:
             for name in (
                 "imported_units",
@@ -328,6 +333,7 @@ def methods_report(project: Project) -> MethodsReport:
         prisma=flow,
         ranking_model_id=None if ranking is None else ranking.model_id,
         ranking_weights_hash=None if ranking is None else ranking.weights_hash,
+        unscreened_tolerance=_tolerance_text(plan),
         screening_pairs=_screening_pairs(project),
         full_text_passes=0 if full_text is None else full_text.passes,
         full_text_dual_sample=None if full_text is None else full_text.dual_sample,
@@ -838,6 +844,17 @@ def _deduplication(report: MethodsReport) -> str:
     )
 
 
+def _tolerance_text(plan: ScreeningPlan | None) -> str | None:
+    """The declared unscreened-works tolerance in words; None when none is declared."""
+    tolerance = None if plan is None else plan.unscreened_tolerance
+    if tolerance is None:
+        return None
+    return (
+        f"fewer than {tolerance.fewer_than} records or at most "
+        f"{tolerance.fraction * 100:.4g}% of the pass-A queue"
+    )
+
+
 def _screening(report: MethodsReport) -> str:
     flow = report.prisma
     breakdown = ", ".join(f"{criterion} ({n})" for criterion, n in flow.excluded.items())
@@ -848,11 +865,17 @@ def _screening(report: MethodsReport) -> str:
         if others
         else ""
     )
+    tolerance = (
+        " A declared tolerance let title/abstract records remain unscreened for a technical reason "
+        f"({report.unscreened_tolerance}); {flow.unscreened_tolerated} were, listed in the report."
+        if report.unscreened_tolerance is not None and flow.unscreened_tolerated
+        else ""
+    )
     return (
         f"Screening of {flow.screened} works: {flow.included} included, "
         f"{flow.excluded_total} excluded, {flow.pending} pending.{provisional} "
         "Exclusions by criterion: "
-        f"{breakdown or NONE_RECORDED}. "
+        f"{breakdown or NONE_RECORDED}.{tolerance} "
         "Screening decisions were made by Claude models (as reported by the agent: "
         f"{_list(report.screening_models)}) following the skills {_list(report.skills)}; "
         f"the platform made no model calls.{other_steps}"

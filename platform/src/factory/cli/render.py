@@ -101,6 +101,12 @@ def prisma_markdown(flow: PrismaFlow) -> str:
             f"- of which not screened because of the stop: {flow.not_screened_stop} "
             f"(rule: {flow.stop_rule})"
         )
+    if flow.unscreened_tolerated:
+        lines.append(
+            "- of which left unscreened within the declared tolerance (a technical reason): "
+            f"{flow.unscreened_tolerated}"
+        )
+        lines += [f"  - {work}" for work in flow.unscreened_tolerated_works]
     boxes = flow.full_text
     lines += ["", "## Full-text assessment"]
     lines.append(f"- reports sought: {boxes.sought}")
