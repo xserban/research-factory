@@ -21,6 +21,7 @@ from factory.cli.dashboard import dashboard_app
 from factory.cli.decisions import decide_app
 from factory.cli.develop import develop_app
 from factory.cli.feed import feed_app
+from factory.cli.files import files_app
 from factory.cli.ledger import budget_app, ledger_cmd
 from factory.cli.library import library_app
 from factory.cli.manuscripts import manuscript_app
@@ -568,6 +569,7 @@ app.add_typer(dashboard_app)
 app.add_typer(site_app)
 app.add_typer(costs_app)
 app.add_typer(pages_app)
+app.add_typer(files_app)
 app.add_typer(develop_app)
 app.add_typer(screen_check_app)
 app.add_typer(taxonomy_app)

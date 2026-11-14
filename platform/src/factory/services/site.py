@@ -275,7 +275,7 @@ def _build_costs(project: Project, out: Path) -> None:
 
 
 LAYOUT: Final[dict[str, tuple[str, ...]]] = {
-    "Overview": ("dashboard", "prisma", "flow", "costs"),
+    "Overview": ("dashboard", "prisma", "flow", "documents", "costs"),
     "Sources": ("search", "feed", "acquisition", "conversion", "queue"),
     "Corpus": ("explorer", "bibliography", "citations", "layers", "wiki"),
     "Mining": ("miners", "agreement", "steps", "lifecycle"),
@@ -285,6 +285,12 @@ LAYOUT: Final[dict[str, tuple[str, ...]]] = {
 backlog and the capabilities, are on the main hub, `site_chrome.HUB_NAV`.)"""
 _GROUP: Final = {pid: g for g, ids in LAYOUT.items() for pid in ids}
 _ORDER: Final = {pid: n for n, pid in enumerate(i for ids in LAYOUT.values() for i in ids)}
+
+
+def _build_documents(project: Project, out: Path) -> None:
+    from factory.services.site_documents import build_documents
+
+    build_documents(project, out)
 
 
 def products() -> list[Product]:
@@ -467,6 +473,17 @@ def products() -> list[Product]:
             entry="index.html",
             inputs=(*CORPUS_EVENTS, "extraction.%", "reference.%"),
             build=_build_flow,
+        ),
+        Product(
+            id="documents",
+            title="Study documents",
+            group="Overview",
+            description="The study's own files registered with their hash (plan, protocol "
+            "documents, validation reports), by kind, with versions and whether each changed "
+            "since registration.",
+            entry="index.html",
+            inputs=("file.%",),
+            build=_build_documents,
         ),
         Product(
             id="bibliography",
