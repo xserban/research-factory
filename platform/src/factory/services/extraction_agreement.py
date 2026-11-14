@@ -355,8 +355,8 @@ def _tokens(f: StoredField) -> frozenset[str]:
 def evidence_overlaps(fa: StoredField, fb: StoredField, threshold: float) -> bool:
     """Whether two free-quote fields rest on the same evidence (IDEA-52). True when they cite the
     same anchor, or one normalised quote's tokens are a contiguous run of the other's (the platform
-    stores no character offsets, so containment is its span overlap), or the normalised token sets overlap by at
-    least `threshold` (intersection over union). A field with neither a quote nor a value of
+    stores no character offsets, so containment is its span overlap), or the normalised token
+    sets overlap by at least `threshold` (intersection over union). A field with neither a quote nor a value of
     tokens overlaps nothing but its own anchor. Containment is on token boundaries ("ion" is not in
     "ionization energy"). Pure and symmetric."""
     if fa.anchor is not None and fa.anchor == fb.anchor:
