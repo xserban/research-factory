@@ -25,6 +25,7 @@ from factory.mcp.server import build_server
 from factory.mcp.unit_cap import UnitCap
 from factory.services import pipeline, runner
 from factory.services.context import Project
+from factory.services.miners import MinerState
 from factory.services.mining import MinerListing
 from factory.services.work_queue import QueueItem
 from tests.helpers import install_skill
@@ -96,6 +97,9 @@ def configured(project: Project, monkeypatch: pytest.MonkeyPatch) -> dict[str, i
     monkeypatch.setattr(runner, "_factory_executable", lambda: "/venv/bin/factory")
     monkeypatch.setattr(runner, "_advance_after", lambda p: None)
     monkeypatch.setattr(pipeline, "automatic_steps", lambda p, **kw: None)
+    monkeypatch.setattr(
+        "factory.services.miners.miner_state", lambda p, name, version: MinerState.CALIBRATED
+    )
     return pending
 
 
@@ -168,6 +172,22 @@ def test_an_unlisted_miner_does_not_apply(
     found = {s.key: s for s in pipeline.stages(project)}
     assert found["mine:m-alpha"].applies
     assert not found["mine:m-beta"].applies and found["mine:m-beta"].pending == 0
+
+
+def test_an_uncalibrated_miner_does_not_apply(
+    project: Project, configured: dict[str, int], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """IDEA-69 (3): a listed version without a passed calibration is skipped by a pipeline (the
+    runner would refuse it), with the reason shown, instead of stopping the pipeline."""
+    states = {"m-alpha": MinerState.CALIBRATED, "m-beta": MinerState.REGISTERED}
+    monkeypatch.setattr(
+        "factory.services.miners.miner_state", lambda p, name, version: states[name]
+    )
+    found = {s.key: s for s in pipeline.stages(project)}
+    assert found["mine:m-alpha"].applies
+    beta = found["mine:m-beta"]
+    assert not beta.applies and beta.pending == 0
+    assert "no passed calibration" in beta.reason and "exploratory" in beta.reason
 
 
 def test_model_skill_and_role_per_stage(project: Project, configured: dict[str, int]) -> None:

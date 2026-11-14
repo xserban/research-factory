@@ -177,18 +177,37 @@ def _stage(project: Project, key: str, applies: bool, reason: str) -> PipelineSt
 
 def _miner_stages(project: Project) -> list[tuple[str, bool, str]]:
     """One `(key, applies, reason)` per registered miner name, by name: the version listed in the
-    protocol, else not applicable."""
-    listed: dict[str, bool] = {}
+    protocol applies when its calibration has passed; a listed version without a passed
+    calibration does not apply (the runner would refuse it; IDEA-69 (3)), so a pipeline skips it
+    instead of stopping there. An exploratory run is started by hand. Unlisted: not applicable."""
+    from factory.services.miners import MinerState, miner_state  # miners imports the mining stack
+
+    names: set[str] = set()
+    listed: dict[str, int] = {}
     for entry in miner_listing(project):
-        listed[entry.name] = listed.get(entry.name, False) or entry.listed
-    return [
-        (
-            f"{runner.MINE_PREFIX}{name}",
-            on,
-            "the protocol lists the miner" if on else "the miner is not listed in the protocol",
-        )
-        for name, on in sorted(listed.items())
-    ]
+        names.add(entry.name)
+        if entry.listed:
+            listed[entry.name] = entry.version
+    plan: list[tuple[str, bool, str]] = []
+    for name in sorted(names):
+        key = f"{runner.MINE_PREFIX}{name}"
+        version = listed.get(name)
+        if version is None:
+            plan.append((key, False, "the miner is not listed in the protocol"))
+            continue
+        state = miner_state(project, name, version)
+        if state is not MinerState.CALIBRATED:
+            plan.append(
+                (
+                    key,
+                    False,
+                    f"version {version} has no passed calibration (state: {state.value}); "
+                    "calibrate it, or run it exploratory from the queue",
+                )
+            )
+            continue
+        plan.append((key, True, "the protocol lists the miner"))
+    return plan
 
 
 def stages(project: Project) -> list[PipelineStage]:
